@@ -51,7 +51,7 @@ let healthSnapshotTests =
         MemoryMB = 64
       }
       let health = DaemonHealth.overallStatus snapshot
-      health |> Expect.equal "no sessions = unhealthy" OverallHealth.Unhealthy
+      health |> Expect.equal "no sessions = healthy (idle)" OverallHealth.Healthy
   ]
 
 [<Tests>]

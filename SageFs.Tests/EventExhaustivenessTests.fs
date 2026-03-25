@@ -73,18 +73,4 @@ let eventExhaustivenessTests = testList "Event exhaustiveness" [
         result |> ignore
       }
   ]
-
-  testList "EventTracking.formatEvent handles every case without exception" [
-    for evt in allEventCases do
-      let caseName =
-        let c, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(evt, typeof<SageFsEvent>)
-        c.Name
-      test (sprintf "formatEvent handles %s" caseName) {
-        let ts = DateTimeOffset.UtcNow
-        let (dt, source, content) = SageFs.EventTracking.formatEvent (ts, evt)
-        dt |> ignore
-        source |> Expect.isNotNull (sprintf "%s has source" caseName)
-        content |> Expect.isNotNull (sprintf "%s has content" caseName)
-      }
-  ]
 ]

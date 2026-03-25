@@ -100,12 +100,11 @@ let private toSessionId (s: string) =
 // ---------------------------------------------------------------------------
 
 /// Infrastructure created once at daemon startup.
-/// Groups logger, HTTP client, persistence, cancellation, and state-change event.
+/// Groups logger, HTTP client, friction store, cancellation, and state-change event.
 type DaemonInfra = {
   Log: ILogger
   LoggerFactory: ILoggerFactory
   HttpClient: Net.Http.HttpClient
-  Persistence: SageFs.EventStore.EventPersistence
   FrictionStore: SageFs.Features.FrictionSqlite.FrictionStore option
   DaemonStreamId: string
   Cts: CancellationTokenSource
@@ -116,31 +115,7 @@ type DaemonInfra = {
   DashboardFetchTimeoutSec: float
 }
 
-/// Event append — returns the Task so callers can await on critical paths (e.g. shutdown).
-/// Non-critical callers may discard the Task; it logs errors internally.
-let appendEventsAsync (infra: DaemonInfra) (events: Features.Events.SageFsEvent list) =
-  let t = System.Threading.Tasks.Task.Run(fun () ->
-    task {
-      try
-        match! infra.Persistence.AppendEvents infra.DaemonStreamId events with
-        | Ok () -> ()
-        | Error err ->
-          match err.Contains("duplicate key") || err.Contains("version") with
-          | true -> infra.Log.LogDebug("Audit trail append skipped (already exists): {Error}", err)
-          | false -> infra.Log.LogWarning("Event append failed: {Error}", err)
-      with
-      | :? OperationCanceledException -> ()  // shutdown race — safe to swallow
-    } :> System.Threading.Tasks.Task)
-  // Ensure fire-and-forget faults are surfaced in the log rather than silently swallowed
-  t.ContinueWith(
-    (fun (task: System.Threading.Tasks.Task) ->
-      if task.IsFaulted then
-        let ex = task.Exception
-        infra.Log.LogError("appendEventsAsync faulted: {Message}", if isNull ex then "unknown" else ex.Message)),
-    System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted) |> ignore
-  t
-
-/// Create one-time daemon infrastructure (logger, HTTP client, persistence, CTS).
+/// Create one-time daemon infrastructure (logger, HTTP client, friction store, CTS).
 let createDaemonInfrastructure () : DaemonInfra =
   let otelConfigured = DaemonInfo.otelConfigured
   let loggerFactory =
@@ -173,8 +148,6 @@ let createDaemonInfrastructure () : DaemonInfra =
     log.LogInformation("ThreadPool min threads: {Old} → {New}", minWorker, desiredMin)
   | false -> ()
 
-  let persistence = SageFs.EventStore.EventPersistence.noop
-
   // Create durable SQLite friction store at ~/.SageFs/friction.db
   let frictionStore =
     try
@@ -200,7 +173,6 @@ let createDaemonInfrastructure () : DaemonInfra =
     Log = log
     LoggerFactory = loggerFactory
     HttpClient = httpClient
-    Persistence = persistence
     FrictionStore = frictionStore
     DaemonStreamId = "daemon-sessions"
     Cts = new CancellationTokenSource()
@@ -604,9 +576,6 @@ let performGracefulShutdown
   (log: ILogger)
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (getModel: unit -> SageFsModel)
-  (persistence: SageFs.EventStore.EventPersistence)
-  (daemonStreamId: string)
-  (appendEventsAsync: Features.Events.SageFsEvent list -> System.Threading.Tasks.Task)
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
   = task {
   // W25(R12): Read snapshot ONCE — pass as value throughout to ensure a consistent view
@@ -634,22 +603,8 @@ let performGracefulShutdown
         1L, System.Collections.Generic.KeyValuePair("format", box "stc1"))
       log.LogWarning("Failed to save test cache: {Error}", err)
 
-  // W29(R12): Append stop events BEFORE saving manifest — ordering trap for real EventStore.
-  // When EventStore gains real persistence, the manifest must reflect events already appended.
-  let appendTasks =
-    activeSessions
-    |> List.map (fun info ->
-      appendEventsAsync [
-        Features.Events.SageFsEvent.DaemonSessionStopped
-          {| SessionId = WorkerProtocol.SessionId.value info.Id; StoppedAt = DateTimeOffset.UtcNow |}
-      ])
-  // W21(R11): Check and log if stop-event append times out— silently discarding false means
-  // ghost sessions could reappear on next restart when EventStore gains real persistence.
-  let whenAll = System.Threading.Tasks.Task.WhenAll(appendTasks)
-  let! append_winner = System.Threading.Tasks.Task.WhenAny(whenAll, System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds 5.0))
-  match System.Object.ReferenceEquals(append_winner, whenAll) with
-  | false -> log.LogWarning("Shutdown stop-event append timed out after 5s — session stop events may not be durable")
-  | true -> ()
+  // W29(R12): Event append to daemon stream removed — using binary manifest only for persistence.
+  // Session stop events are recorded in the manifest instead.
 
   // Persist session manifest for binary-first resume
   // W4(R9) + W10(R10): Use mergeManifestWithExisting shared helper — loads existing manifest,
@@ -983,9 +938,7 @@ let createLiveTestWatcher
 
 /// Get previous sessions: active from CQRS snapshot + historical from binary manifest.
 let getPreviousSessions
-  (readSnapshot: unit -> SessionManager.QuerySnapshot)
-  (persistence: SageFs.EventStore.EventPersistence)
-  (daemonStreamId: string) = task {
+  (readSnapshot: unit -> SessionManager.QuerySnapshot) = task {
   let snapshot = readSnapshot()
   let activeSessions =
     SessionManager.QuerySnapshot.allSessions snapshot
@@ -1057,7 +1010,6 @@ let resumePreviousSessions
   (onSessionResumed: unit -> unit)
   = task {
   let log = infra.Log
-  let appendEventsAsync events = appendEventsAsync infra events
   let startupSw = System.Diagnostics.Stopwatch.StartNew()
   let startupSpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.startup" []
 
@@ -1135,21 +1087,8 @@ let resumePreviousSessions
     let keptIds =
       uniqueByDir |> List.map (fun r -> r.SessionId) |> Set.ofList
     let prunedCount = (Set.difference staleIds keptIds).Count
-    // W14(R10): Collect and await dedup stop-event tasks — matches the shutdown path pattern.
-    // Previously |> ignore discarded the Task; if EventStore gains real persistence,
-    // those stop events for pruned sessions would be silently lost on write failures.
-    let pruneTasks =
-      [ for staleId in Set.difference staleIds keptIds do
-          yield appendEventsAsync [
-            Features.Events.SageFsEvent.DaemonSessionStopped
-              {| SessionId = staleId; StoppedAt = DateTimeOffset.UtcNow |} ] ]
-    // W21(R11): Check and log if dedup stop-event tasks time out — un-appended stop events
-    // mean pruned sessions reappear as active on next startup, triggering another dedup pass.
-    let whenAllPrune = System.Threading.Tasks.Task.WhenAll(pruneTasks)
-    let! prune_winner = System.Threading.Tasks.Task.WhenAny(whenAllPrune, System.Threading.Tasks.Task.Delay(5_000))
-    match System.Object.ReferenceEquals(prune_winner, whenAllPrune) with
-    | false -> log.LogWarning("Dedup stop-event append timed out — ghost sessions may reappear on next startup")
-    | true -> ()
+    // W14(R10): Session dedup stop-event persistence removed — binary manifest is sole source of truth.
+    // Pruned sessions are no longer recorded as events.
     match prunedCount > 0 with
     | true -> Instrumentation.daemonDuplicatesPruned.Add(int64 prunedCount)
     | false -> ()
@@ -1179,11 +1118,8 @@ let resumePreviousSessions
         match result with
         | Ok info ->
           Instrumentation.daemonSessionsResumed.Add(1L)
-          // Stop the OLD session ID so it doesn't resurrect on next restart
-          do! appendEventsAsync [
-            Features.Events.SageFsEvent.DaemonSessionStopped
-              {| SessionId = prev.SessionId; StoppedAt = DateTimeOffset.UtcNow |}
-          ]
+          // W32(R13): Stop-event persistence removed — no longer tracking session stop in events.
+          // Binary manifest is the sole source of truth for session state.
           log.LogInformation("Resumed session {Info} (retired old id {OldSessionId})", info, prev.SessionId)
           onSessionResumed ()
         | Error err ->
@@ -1348,7 +1284,6 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       createDaemonInfrastructure ())
   let log = infra.Log
   let httpClient = infra.HttpClient
-  let persistence = infra.Persistence
   let frictionStore = infra.FrictionStore
   let daemonStreamId = infra.DaemonStreamId
   let mcpFetchTimeoutSec = infra.McpFetchTimeoutSec
@@ -1356,8 +1291,6 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let stateChangedEvent = infra.StateChangedEvent
 
   log.LogInformation("SageFs daemon v{Version} starting on port {Port}", version, mcpPort)
-
-  let appendEventsAsync events = appendEventsAsync infra events
 
   // Handle --prune: mark all alive sessions as stopped and exit
   // W36+W42(R14): handlePrune now returns Result<bool,string> and takes Task-returning checkFn.
@@ -1390,7 +1323,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       (fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress)
       (fun sid error -> stateChangedEvent.Trigger (SessionFaulted (WorkerProtocol.SessionId.value sid, error)))
 
-  let sessionOps = createSessionOps sessionManager readSnapshot (fun events -> appendEventsAsync events |> ignore)
+  let sessionOps = createSessionOps sessionManager readSnapshot (fun _ -> ())  // Event tracking removed — no callback needed
   // String-to-SessionId adapters for proxyToSession (which takes string callbacks)
   let getProxyStr s = sessionOps.GetProxy (toSessionId s)
   let notifyWorkerDiedStr s = sessionOps.NotifyWorkerDied (toSessionId s)
@@ -1481,7 +1414,6 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     McpServer.startMcpServer {
       DiagnosticsChanged = diagnosticsChanged.Publish
       StateChanged = Some stateChangedEvent.Publish
-      Persistence = persistence
       FrictionStore = frictionStore
       Port = mcpPort
       SessionOps = sessionOps
@@ -1614,7 +1546,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
     GetElmRegions = fun () -> ElmDaemon.renderRegionsOnDemand elmRuntime |> Some
     GetPreviousSessions = fun () ->
-      getPreviousSessions readSnapshot persistence daemonStreamId
+      getPreviousSessions readSnapshot
     GetAllSessions = fun () -> task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
     GetStandbyInfo = sessionOps.GetStandbyInfo
     GetSessionStandbyInfo = fun sessionId ->
@@ -2106,7 +2038,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   with :? System.ObjectDisposedException -> ()
   (liveTestWatcherManager :> System.IDisposable).Dispose()
   try
-    do! performGracefulShutdown log readSnapshot elmRuntime.GetModel persistence daemonStreamId appendEventsAsync sessionManager
+    do! performGracefulShutdown log readSnapshot elmRuntime.GetModel sessionManager
   with ex ->
     log.LogWarning("Shutdown cleanup error: {Error}", ex.Message)
 }

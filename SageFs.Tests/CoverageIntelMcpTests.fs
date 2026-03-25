@@ -43,8 +43,7 @@ let private mkInstrumentationMap (slots: SequencePoint array) = {
 /// Create a minimal McpContext that returns a specific SageFsModel.
 let private mkCtxWithModel (model: SageFsModel) : McpContext =
   let diagEvent = Event<Features.DiagnosticsStore.T>()
-  { Persistence = EventStore.EventPersistence.noop
-    FrictionStore = None
+  { FrictionStore = None
     DiagnosticsChanged = diagEvent.Publish
     StateChanged = None
     SessionOps = SessionManagementOps.stub

@@ -3,7 +3,6 @@ module SageFs.Features.McpFrictionRecorder
 open System
 open System.Text.Json
 open System.Threading.Tasks
-open SageFs.EventStore
 open SageFs.Features.FrictionTelemetryTypes
 open SageFs.Features.FrictionTelemetry
 
@@ -313,44 +312,4 @@ module Recorder =
         match envelopeResult with
         | Ok envelope -> Ok (Summaries.frictionReport envelope.Events envelope.Feedback)
         | Error err -> Error (sprintf "Friction store read failed: %s" err)
-    }
-
-  // ── EventPersistence KV-backed operations (fallback, noop-capable) ──
-
-  let appendEvent (persistence: EventPersistence) (event: FrictionEvent) =
-    task {
-      let! existing = persistence.GetValue StoreKey
-      let envelope = existing |> Option.map Codec.deserialize |> Option.defaultValue Codec.empty
-      let updated = { envelope with Events = envelope.Events @ [ event ] }
-      return! persistence.SetValue StoreKey (Codec.serialize updated)
-    }
-
-  let appendFeedback (persistence: EventPersistence) (feedback: ExplicitFeedback) =
-    task {
-      let! existing = persistence.GetValue StoreKey
-      let envelope = existing |> Option.map Codec.deserialize |> Option.defaultValue Codec.empty
-      let updated = { envelope with Feedback = envelope.Feedback @ [ feedback ] }
-      return! persistence.SetValue StoreKey (Codec.serialize updated)
-    }
-
-  let readEnvelope (persistence: EventPersistence) =
-    task {
-      let! existing = persistence.GetValue StoreKey
-      return existing |> Option.map Codec.deserialize |> Option.defaultValue Codec.empty
-    }
-
-  let summarize (persistence: EventPersistence) =
-    task {
-      let! envelope = readEnvelope persistence
-      return
-        [ yield sprintf "Top blockers: %d" (Summaries.topBlockers envelope.Events |> List.length)
-          yield sprintf "Tracked tools: %d" (Summaries.toolSummaries envelope.Events |> List.length)
-          yield sprintf "Explicit feedback items: %d" envelope.Feedback.Length ]
-        |> String.concat "\n"
-    }
-
-  let report (persistence: EventPersistence) =
-    task {
-      let! envelope = readEnvelope persistence
-      return Summaries.frictionReport envelope.Events envelope.Feedback
     }

@@ -162,6 +162,7 @@
         <Compile Include="PersistenceComplianceTests.fs" />
         <Compile Include="McpStateHandlerTests.fs" />
         <Compile Include="CompilationContextTests.fs" />
+        <Compile Include="CompilationContextPropertyTests.fs" />
         <Compile Include="SageFsErrorClassificationTests.fs" />
         <Compile Include="SageFsErrorJsonTests.fs" />
         <Compile Include="SageFsErrorPropertyTests.fs" />

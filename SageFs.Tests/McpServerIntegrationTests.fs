@@ -29,32 +29,21 @@ let tests =
         printfn "Result: %s" result
         Expect.stringContains result "val x" "Should execute successfully"
 
-        Expect.isGreaterThan (SageFs.EventTracking.getEventCount ctx.Persistence ctx.SessionMap.["test"] |> fun t -> t.GetAwaiter().GetResult()) 0 "Should track events"
-
         printfn "sendFSharpCode tool test passed"
       }
       |> Async.AwaitTask
       |> Async.RunSynchronously
 
-    testCase "sendFSharpCode tracks events for MCP and console to see"
+    testCase "sendFSharpCode tool does not require event tracking"
     <| fun _ ->
       task {
-        printfn "Testing event tracking..."
+        printfn "Testing sendFSharpCode without event tracking..."
         let ctx = sharedCtxWith (SessionId.newId())
 
-        // MCP tool executes code
-        let! _ = sendFSharpCode ctx "claude" "let aiValue = 100" OutputFormat.Text None None None None None None
+        let! result = sendFSharpCode ctx "claude" "let aiValue = 100" OutputFormat.Text None None None None None None
+        Expect.stringContains result "val aiValue" "Should still execute successfully"
 
-        // Check events are tracked
-        let! events = SageFs.EventTracking.getAllEvents ctx.Persistence ctx.SessionMap.["test"]
-        Expect.isGreaterThanOrEqual events.Length 2 "Should have input and output events"
-
-        let (_, src, _) =
-          events |> List.find (fun (_, src, _) -> src.ToString().Contains("claude"))
-
-        Expect.equal (src.ToString()) "mcp:claude" "Should show MCP source"
-
-        printfn "Event tracking test passed"
+        printfn "Non-event-tracking test passed"
       }
       |> Async.AwaitTask
       |> Async.RunSynchronously
@@ -65,15 +54,13 @@ let tests =
         printfn "Testing getRecentEvents tool..."
         let ctx = sharedCtxWith (SessionId.newId())
 
-        // Generate some events
         let! _ = sendFSharpCode ctx "agent1" "let a = 1" OutputFormat.Text None None None None None None
         let! _ = sendFSharpCode ctx "agent2" "let b = 2" OutputFormat.Text None None None None None None
 
-        // Get recent events
         let! result = getRecentEvents ctx "test" 5 None
 
         printfn "Events result: %s" result
-        Expect.stringContains result "mcp:agent" "Should show MCP sources"
+        Expect.equal result "Recent events: none recorded" "Should return stub response when event tracking is removed"
 
         printfn "getRecentEvents tool test passed"
       }
@@ -91,6 +78,7 @@ let tests =
         printfn "Status: %s" result
         Expect.stringContains result "status-session" "Should show session ID"
         Expect.stringContains result "send_fsharp_code" "Should list available tools"
+        Expect.stringContains result "Events: 0" "Should report zero tracked events"
 
         printfn "getStatus tool test passed"
       }
@@ -155,15 +143,6 @@ let tests =
         let! result2 = sendFSharpCode ctx "agent2" "List.sum sharedData" OutputFormat.Text None None None None None None
         Expect.stringContains result2 "6" "Agent 2 should use Agent 1's data"
 
-        // Check all events are tracked
-        let! events = SageFs.EventTracking.getAllEvents ctx.Persistence ctx.SessionMap.["test"]
-
-        let sources =
-          events |> List.map (fun (_, src, _) -> src.ToString()) |> List.distinct
-
-        Expect.contains sources "mcp:agent1" "Should have agent1 events"
-        Expect.contains sources "mcp:agent2" "Should have agent2 events"
-
         printfn "Multi-agent collaboration test passed"
       }
       |> Async.AwaitTask
@@ -176,9 +155,6 @@ let tests =
         let actor = globalActorResult.Value.Actor
         let ctx = sharedCtxWith (SessionId.newId())
 
-        // Simulate console user input
-        do! SageFs.EventTracking.trackInput ctx.Persistence ctx.SessionMap.["test"] Console "let userValue = 42"
-
         let request1 = {
           Code = "let userValue = 42"
           Args = Map.empty
@@ -189,15 +165,6 @@ let tests =
         // MCP tool uses console user's value
         let! result = sendFSharpCode ctx "ai-helper" "userValue * 2" OutputFormat.Text None None None None None None
         Expect.stringContains result "84" "MCP should use console value"
-
-        // Check mixed sources
-        let! events = SageFs.EventTracking.getAllEvents ctx.Persistence ctx.SessionMap.["test"]
-
-        let sources =
-          events |> List.map (fun (_, src, _) -> src.ToString()) |> List.distinct
-
-        Expect.contains sources "console" "Should have console events"
-        Expect.contains sources "mcp:ai-helper" "Should have MCP events"
 
         printfn "Console+MCP collaboration test passed"
       }
@@ -215,9 +182,6 @@ let tests =
         printfn "Error result: %s" result
         Expect.stringContains result "Error:" "Should return error message"
 
-        // Should still track the failed attempt
-        Expect.isGreaterThan (SageFs.EventTracking.getEventCount ctx.Persistence ctx.SessionMap.["test"] |> fun t -> t.GetAwaiter().GetResult()) 0 "Should track error event"
-
         printfn "Compilation error test passed"
       }
       |> Async.AwaitTask
@@ -232,8 +196,7 @@ let tests =
         let! result = sendFSharpCode ctx "test-agent" "1 / 0" OutputFormat.Text None None None None None None
 
         printfn "Runtime error result: %s" result
-        // Division by zero might be caught at compile time or runtime, either way should track it
-        Expect.isGreaterThan (SageFs.EventTracking.getEventCount ctx.Persistence ctx.SessionMap.["test"] |> fun t -> t.GetAwaiter().GetResult()) 0 "Should track execution"
+        Expect.isNotEmpty result "Should return some result or error output"
 
         printfn "Runtime error test passed"
       }

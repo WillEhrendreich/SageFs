@@ -15,36 +15,21 @@ let quietLogger =
       member _.LogWarning msg = ()
   }
 
-/// An in-memory EventPersistence that actually stores events.
-/// Use in tests that verify event-append behavior (unlike noop which silently drops all writes).
-let inMemoryPersistence () : SageFs.EventStore.EventPersistence =
-  let store = ConcurrentDictionary<string, ResizeArray<SageFs.Features.Events.SageFsEvent>>()
-  let kv = ConcurrentDictionary<string, string>()
-  { AppendEvents = fun stream events ->
-      System.Threading.Tasks.Task.FromResult(
-        let bucket = store.GetOrAdd(stream, fun _ -> ResizeArray())
-        lock bucket (fun () ->
-          bucket.AddRange(events)
-          Ok ()))
-    FetchStream = fun stream ->
-      System.Threading.Tasks.Task.FromResult(
-        match store.TryGetValue(stream) with
-        | true, bucket ->
-          lock bucket (fun () ->
-            bucket |> Seq.map (fun e -> System.DateTimeOffset.UtcNow, e) |> List.ofSeq)
-        | _ -> [])
-    CountEvents = fun stream ->
-      System.Threading.Tasks.Task.FromResult(
-        match store.TryGetValue(stream) with
-        | true, bucket -> lock bucket (fun () -> bucket.Count)
-        | _ -> 0)
-    SetValue = fun key value ->
-      kv.[key] <- value
-      System.Threading.Tasks.Task.FromResult(Ok ())
-    GetValue = fun key ->
-      match kv.TryGetValue(key) with
-      | true, value -> System.Threading.Tasks.Task.FromResult(Some value)
-      | _ -> System.Threading.Tasks.Task.FromResult(None) }
+/// Create a temporary file-based SQLite friction store for tests.
+/// Each call creates a new database file in the temp directory.
+/// The file is NOT automatically cleaned up — tests should delete it if needed,
+/// or rely on OS temp cleanup. For most unit tests, leaving small temp files
+/// is acceptable (they'll be cleaned eventually).
+let tempFrictionStore () : SageFs.Features.FrictionSqlite.FrictionStore =
+  let dbPath =
+    System.IO.Path.Combine(
+      System.IO.Path.GetTempPath(),
+      sprintf "sagefs-test-friction-%s.db" (System.Guid.NewGuid().ToString("N")))
+  let connStr = sprintf "Data Source=%s" dbPath
+  let store = SageFs.Features.FrictionSqlite.Store.create connStr
+  match store.Initialize() with
+  | Ok () -> store
+  | Error err -> failwithf "Failed to initialize test friction store: %s" err
 
 /// Poll a condition with 10ms intervals until it returns true or timeout expires.
 /// Returns the final condition value.
@@ -113,8 +98,7 @@ let sharedCtx () =
   let sessionId = SageFs.WorkerProtocol.SessionId.newId()
   let sessionMap = ConcurrentDictionary<string, string>()
   sessionMap.["test"] <- SageFs.WorkerProtocol.SessionId.value sessionId
-  { Persistence = SageFs.EventStore.EventPersistence.noop
-    FrictionStore = None
+  { FrictionStore = Some (tempFrictionStore())
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
     SessionOps = mkTestSessionOps result sessionId
@@ -132,8 +116,7 @@ let sharedCtxWith (sessionId: SageFs.WorkerProtocol.SessionId) =
   let result = globalActorResult.Value
   let sessionMap = ConcurrentDictionary<string, string>()
   sessionMap.["test"] <- SageFs.WorkerProtocol.SessionId.value sessionId
-  { Persistence = SageFs.EventStore.EventPersistence.noop
-    FrictionStore = None
+  { FrictionStore = Some (tempFrictionStore())
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
     SessionOps = mkTestSessionOps result sessionId

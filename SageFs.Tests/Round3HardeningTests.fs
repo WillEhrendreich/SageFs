@@ -1,9 +1,14 @@
-// Round 3 hardening tests have been distributed into their respective test files:
+// Round 3 hardening tests — some distributed, some remain here:
+// DISTRIBUTED:
 // - BinaryFormatTests.fs     : W4 readLpString overflow guard
 // - DevReloadMiddlewareTests.fs : W3 addNonceToCsp directive safety, W5 jsStringEscape
 // - StandbyPoolTests.fs      : W9 StandbyKey case-insensitive WorkingDir
 // - DaemonModeProxyTests.fs  : W8 AggregateException(ObjectDisposedException) handling
-// This file is intentionally empty — kept to avoid breaking any external references.
+//
+// REMAINING IN THIS FILE:
+// - StandbyPool.decideRestart exhaustive match tests (6 tests)
+// - ElmLoop cancellation propagation and effect error logging (3 tests)
+// - LiveTestingExecutors timeout handling (2 tests)
 module SageFs.Tests.Round3HardeningTests
 
 

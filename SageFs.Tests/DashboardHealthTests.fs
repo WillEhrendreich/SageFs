@@ -63,10 +63,10 @@ let daemonHealthViewTests =
       let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
       Expect.equal view.OverallHealth OverallHealth.Degraded "degraded with faulted session"
 
-    testCase "fromSnapshot returns Unhealthy when no sessions" <| fun () ->
+    testCase "fromSnapshot returns Healthy when no sessions (idle)" <| fun () ->
       let snap = defaultSnap ()
       let view = DashboardTypes.DaemonHealthView.fromSnapshot snap
-      Expect.equal view.OverallHealth OverallHealth.Unhealthy "unhealthy with no sessions"
+      Expect.equal view.OverallHealth OverallHealth.Healthy "healthy when idle (no sessions)"
 
     testCase "fromSnapshot populates SessionCount" <| fun () ->
       let sessions =

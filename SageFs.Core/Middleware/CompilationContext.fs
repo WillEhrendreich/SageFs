@@ -194,34 +194,76 @@ let parseFileStructureCached
 // Block location resolution
 // ─────────────────────────────────────────────────────────────────
 
-/// Find the deepest container whose declaration range includes blockStartLine.
+/// Returns true when a container represents a real, named module or namespace
+/// that can be used as a wrapping context in FSI.
+/// FCS parses code fragments that have no module declaration as an anonymous
+/// module named "Tmp" (SynModuleOrNamespaceKind.AnonModule).  These must never
+/// reach transformBlock — wrapping in "module Tmp =" always fails in FSI
+/// because "Tmp" is not a real module in the session.
+let isNamedContainer (c: ModuleContainer) =
+  match c.Kind with
+  | SynModuleOrNamespaceKind.AnonModule -> false
+  | _ -> true
+
+/// Find the full ancestor path (root-first) to the deepest container that
+/// contains blockStartLine.  Returns the empty list when the file structure
+/// only contains anonymous (Tmp) containers — the caller should pass code
+/// through unmodified rather than wrapping in a broken "module Tmp =" context.
+///
+/// WHY a list instead of option:
+///   For a block inside "module Outer > module Inner", FSI requires
+///     module Outer =
+///       module Inner =
+///         <code>
+///   "module Outer.Inner =" is NOT valid F# module-binding syntax — only
+///   single-identifier names are accepted after "module".  The full path
+///   gives transformBlock the ancestor chain it needs to emit proper nesting.
 let locateBlock (fs: FileStructure) (blockStartLine: int option)
-    : ModuleContainer option =
+    : ModuleContainer list =
+  // Ignore any structure that only has anonymous FCS placeholder containers.
+  // This is the defensive guard against the "module Tmp =" bug: if someone
+  // accidentally passes block code to parseFileStructure instead of the full
+  // file, locateBlock returns [] rather than producing a broken Tmp wrapper.
+  let namedContainers = fs.Containers |> List.filter isNamedContainer
+  match namedContainers with
+  | [] -> []
+  | _ ->
+
   match blockStartLine with
   | Some startLine ->
-    let rec findDeepest (containers: ModuleContainer list) =
+    // Walk the tree accumulating the ancestor path.  At each level we check
+    // DeclarationRanges; namespace containers don't list child ranges in their
+    // own DeclarationRanges, so we always recurse into children regardless.
+    //
+    // Returns Some path if any container in the tree contains startLine,
+    // None otherwise.
+    let rec findPath (containers: ModuleContainer list) (acc: ModuleContainer list) : ModuleContainer list option =
       containers |> List.tryPick (fun c ->
         let inRange =
           c.DeclarationRanges
           |> List.exists (fun (s, e) -> startLine >= s && startLine <= e)
-        match inRange with
-        | true ->
-          match findDeepest c.Children with
-          | Some child -> Some child
-          | None -> Some c
-        | false ->
-          // always check children — namespace containers don't list
-          // nested module ranges in their own DeclarationRanges
-          findDeepest c.Children)
-    findDeepest fs.Containers
+        if inRange then
+          let pathHere = acc @ [c]
+          // See if a child is a deeper (more specific) match.
+          match findPath c.Children pathHere with
+          | Some deeper -> Some deeper
+          | None -> Some pathHere
+        else
+          // Recurse into children even when this container isn't in range —
+          // namespace containers don't register nested-module ranges in their
+          // own DeclarationRanges.
+          findPath c.Children (acc @ [c]))
+    findPath namedContainers [] |> Option.defaultValue []
+
   | None ->
-    match fs.Containers with
+    // No line hint: fall back to the single unambiguous container.
+    match namedContainers with
     | [ single ] ->
       match single.Children with
-      | [ onlyChild ] -> Some onlyChild
-      | _ -> Some single
-    // Multiple top-level containers (multi-namespace): ambiguous without line info
-    | _ -> None
+      | [ onlyChild ] -> [ single; onlyChild ]
+      | _ -> [ single ]
+    // Multiple top-level containers without line info: ambiguous — pass through
+    | _ -> []
 
 // ─────────────────────────────────────────────────────────────────
 // Whole-file transformation
@@ -277,40 +319,87 @@ let transformWholeFile (fs: FileStructure) (code: string) : PreprocessResult =
 // ─────────────────────────────────────────────────────────────────
 
 let transformBlock
-    (container: ModuleContainer)
+    (path: ModuleContainer list)
     (evaluatedModules: Set<string>)
     (code: string)
     : PreprocessResult =
-  match container.Kind with
-  | SynModuleOrNamespaceKind.DeclaredNamespace
-  | SynModuleOrNamespaceKind.GlobalNamespace ->
-    // Namespace container: emit opens but don't wrap in a module
+
+  // Split path into namespace containers (skipped as wrappers) and module containers
+  // (each one becomes a `module X =` nesting level).
+  let isNamespace (c: ModuleContainer) =
+    match c.Kind with
+    | SynModuleOrNamespaceKind.DeclaredNamespace
+    | SynModuleOrNamespaceKind.GlobalNamespace -> true
+    | _ -> false
+
+  let moduleContainers = path |> List.filter (fun c -> not (isNamespace c))
+
+  match moduleContainers with
+  | [] ->
+    // Only namespace containers in path (or empty path) — emit opens from the
+    // deepest container in the path, but no module wrapper.
+    let opens =
+      path
+      |> List.collect (fun c -> c.Opens)
+      |> List.distinct
     let wrapper =
-      [ yield! container.Opens
+      [ yield! opens
         yield code ]
       |> String.concat "\n"
-    let linesAdded = container.Opens.Length
+    let linesAdded = opens.Length
     { Code = wrapper
       LineOffset = linesAdded
       ColumnOffset = 0
       OriginalFilePath = None }
+
   | _ ->
-    let needsOpen = Set.contains container.QualifiedName evaluatedModules
+    // The deepest module container drives the `open` and `EvaluatedModules` logic.
+    let deepest = moduleContainers |> List.last
+
+    // Emit `open <deepest>` before the outermost wrapper when this module has
+    // already been evaluated (FSI requires it to re-enter the module scope).
+    let needsOpen = Set.contains deepest.QualifiedName evaluatedModules
     let openLine =
       match needsOpen with
-      | true -> [ sprintf "open %s" container.QualifiedName ]
+      | true -> [ sprintf "open %s" deepest.QualifiedName ]
       | false -> []
-    let indentedCode = indentCode code
+
+    // Collect all `open` directives from every container in the path.
+    let allOpens =
+      path
+      |> List.collect (fun c -> c.Opens)
+      |> List.distinct
+
+    // Build the nested `module X =` wrappers from outermost → innermost.
+    // Each wrapper adds 2 spaces of indentation and one header line.
+    // e.g. for path [Outer; Inner]:
+    //   module Outer =
+    //     module Inner =
+    //       <indented code>
+    let wrappedCode =
+      moduleContainers
+      |> List.rev   // innermost first so we fold outside-in
+      |> List.fold (fun innerCode (c: ModuleContainer) ->
+        let indented = indentCode innerCode
+        sprintf "module %s =\n%s" c.LeafName indented
+      ) code
+
+    // Total lines prepended before the user's code:
+    //   open line (0 or 1) + allOpens + one line per nesting level
+    let linesAdded = openLine.Length + allOpens.Length + moduleContainers.Length
+
+    // Column offset = 2 spaces per nesting level
+    let colOffset = moduleContainers.Length * 2
+
     let wrapper =
       [ yield! openLine
-        yield! container.Opens
-        yield sprintf "module %s =" container.QualifiedName
-        yield indentedCode ]
+        yield! allOpens
+        yield wrappedCode ]
       |> String.concat "\n"
-    let linesAdded = openLine.Length + container.Opens.Length + 1
+
     { Code = wrapper
       LineOffset = linesAdded
-      ColumnOffset = 2
+      ColumnOffset = colOffset
       OriginalFilePath = None }
 
 // ─────────────────────────────────────────────────────────────────
@@ -358,16 +447,29 @@ let preprocessForFsi
       updatedModules
 
     | false ->
-      let container = locateBlock fs blockStartLine
-      match container with
-      | None ->
+      let path = locateBlock fs blockStartLine
+      match path with
+      | [] ->
         { Code = code; LineOffset = 0; ColumnOffset = 0
           OriginalFilePath = Some fs.FilePath },
         evaluatedModules
-      | Some c ->
-        let result = transformBlock c evaluatedModules code
+      | _ ->
+        let result = transformBlock path evaluatedModules code
+        // Track only the deepest module container's qualified name.
+        let moduleContainers =
+          path |> List.filter (fun c ->
+            match c.Kind with
+            | SynModuleOrNamespaceKind.DeclaredNamespace
+            | SynModuleOrNamespaceKind.GlobalNamespace -> false
+            | _ -> true)
+        let updatedModules =
+          match moduleContainers with
+          | [] -> evaluatedModules
+          | containers ->
+            let deepest = containers |> List.last
+            Set.add deepest.QualifiedName evaluatedModules
         { result with OriginalFilePath = Some fs.FilePath },
-        Set.add c.QualifiedName evaluatedModules
+        updatedModules
 
 // ─────────────────────────────────────────────────────────────────
 // Diagnostic line mapping

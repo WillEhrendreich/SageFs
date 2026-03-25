@@ -81,9 +81,8 @@
         <Compile Include="Features\Diagnostician.fs" />
         <Compile Include="RetryPolicy.fs" />
         <Compile Include="SseWriter.fs" />
-        <Compile Include="Features\FeatureHooks.fs" />
-        <Compile Include="EventStore.fs" />
-        <Compile Include="Features\FrictionTelemetryTypes.fs" />
+    <Compile Include="Features\FeatureHooks.fs" />
+    <Compile Include="Features\FrictionTelemetryTypes.fs" />
         <Compile Include="Features\FrictionTelemetry.fs" />
         <Compile Include="Features\FrictionSqlite.fs" />
         <Compile Include="Features\FrictionOtelProjection.fs" />

@@ -21,11 +21,27 @@ let ok = function
   | Error err -> failwith err
 
 let classifyFrictionOutcome (result: string) =
+  let oi = System.StringComparison.OrdinalIgnoreCase
   match result.StartsWith("Blocked:") || result.StartsWith("Error:") with
-  | true when result.Contains("exact", System.StringComparison.OrdinalIgnoreCase) && result.Contains("match", System.StringComparison.OrdinalIgnoreCase) ->
+  | true when result.Contains("exact", oi) && result.Contains("match", oi) ->
     SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.ExactTestNotFound
-  | true when result.Contains("session", System.StringComparison.OrdinalIgnoreCase) && result.Contains("warm", System.StringComparison.OrdinalIgnoreCase) ->
+  | true when result.Contains("TypeLoadException", oi) || result.Contains("type identity", oi) ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.TypeIdentityCompromised
+  | true when result.Contains("session", oi) && result.Contains("warm", oi) ->
     SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming
+  | true when result.Contains("Multiple sessions match", oi) ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionAmbiguous
+  | true when result.Contains("No sessions match", oi)
+          || result.Contains("No active session", oi)
+          || result.Contains("not found", oi)
+          || result.Contains("no longer running", oi) ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionMissing
+  | true when result.Contains("output", oi) && result.Contains("large", oi) ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.OutputTooLarge
+  | true when result.Contains("stale", oi) || result.Contains("out of date", oi) ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.LoadedStateStale
+  | true when result.Contains("affordance", oi) || result.Contains("not available", oi) && result.Contains("tool", oi) ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.AffordanceMismatch
   | true ->
     SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   | false ->
@@ -42,8 +58,13 @@ let recordToolResult (ctx: McpContext) (toolName: string) (result: string) (elap
       FollowUp = SageFs.Features.FrictionTelemetryTypes.FollowUp.NoFollowUpYet
       ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused }
   match ctx.FrictionStore with
-  | Some store -> SageFs.Features.McpFrictionRecorder.Recorder.appendEventDirect store event
-  | None -> SageFs.Features.McpFrictionRecorder.Recorder.appendEvent ctx.Persistence event
+  | Some store -> 
+    task {
+      let! _ = SageFs.Features.McpFrictionRecorder.Recorder.appendEventDirect store event
+      return ()
+    }
+  | None -> 
+    task { return () }  // FrictionStore is required — no fallback
 
 let feedbackKindText = function
   | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolOutputWasTooLarge -> "ToolOutputWasTooLarge"
@@ -797,16 +818,16 @@ This reads only local friction intelligence. It does not phone home.""")>]
     member _.get_friction_summary() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_friction_summary called")
         match ctx.FrictionStore with
-        | Some store ->
-          task {
-            let! result = SageFs.Features.McpFrictionRecorder.Recorder.summarizeDirect store
-            return
-              match result with
-              | Ok summary -> summary
-              | Error err -> sprintf "Error: Friction store read failed: %s" err
-          } |> withEcho ctx "get_friction_summary"
-        | None ->
-          SageFs.Features.McpFrictionRecorder.Recorder.summarize ctx.Persistence |> withEcho ctx "get_friction_summary"
+         | Some store ->
+           task {
+             let! result = SageFs.Features.McpFrictionRecorder.Recorder.summarizeDirect store
+             return
+               match result with
+               | Ok summary -> summary
+               | Error err -> sprintf "Error: Friction store read failed: %s" err
+           } |> withEcho ctx "get_friction_summary"
+         | None ->
+           task { return "No friction store configured" } |> withEcho ctx "get_friction_summary"
 
     [<McpServerTool>]
     [<Description("""Get a structured local MCP friction report that an agent can act on.
@@ -820,22 +841,21 @@ OUTPUT:
 - each ranked tool includes a suggested remediation target
 
 This is a local read model over recorded friction, not a self-healing system.""")>]
-    member _.get_friction_report() : Task<string> =
-        logger.LogDebug("MCP-TOOL: get_friction_report called")
-        match ctx.FrictionStore with
-        | Some store ->
-          task {
-            let! result = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store
-            return
-              match result with
-              | Ok report -> frictionReportJson report
-              | Error err -> sprintf "Error: Friction store read failed: %s" err
-          } |> withEcho ctx "get_friction_report"
-        | None ->
-          task {
-            let! report = SageFs.Features.McpFrictionRecorder.Recorder.report ctx.Persistence
-            return frictionReportJson report
-          } |> withEcho ctx "get_friction_report"
+     member _.get_friction_report() : Task<string> =
+         logger.LogDebug("MCP-TOOL: get_friction_report called")
+         match ctx.FrictionStore with
+         | Some store ->
+           task {
+             let! result = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store
+             return
+               match result with
+               | Ok report -> frictionReportJson report
+               | Error err -> sprintf "Error: Friction store read failed: %s" err
+           } |> withEcho ctx "get_friction_report"
+         | None ->
+           task {
+             return "{}"  // No friction store configured
+           } |> withEcho ctx "get_friction_report"
 
     [<McpServerTool>]
     [<Description("""Report structured local MCP friction so SageFs can learn what is confusing.
@@ -888,8 +908,7 @@ This stores local feedback only.""")>]
               | Ok () -> "Recorded local friction feedback."
               | Error err -> sprintf "Error: Failed to persist friction feedback: %s" err
           | None ->
-            let! _ = SageFs.Features.McpFrictionRecorder.Recorder.appendFeedback ctx.Persistence feedback
-            return "Recorded local friction feedback."
+            return "No friction store configured — feedback not recorded."
         } |> withEcho ctx "report_friction"
 
     [<Description("""Explain why a test was selected to run. Shows the trigger reason, which changed symbols cover the test, duration from last run, and flaky status.

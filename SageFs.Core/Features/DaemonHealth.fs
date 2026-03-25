@@ -74,7 +74,7 @@ module DaemonHealth =
   /// Determine overall health from snapshot.
   let overallStatus (snap: HealthSnapshot) : OverallHealth =
     match snap.SessionSummaries with
-    | [] -> OverallHealth.Unhealthy
+    | [] -> OverallHealth.Healthy  // Idle daemon is healthy — no sessions yet
     | sessions ->
       let hasFaulted =
         sessions |> List.exists (fun s -> s.Status = SessionHealthStatus.Faulted)

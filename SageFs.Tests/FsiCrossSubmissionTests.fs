@@ -20,8 +20,7 @@ let private isolatedCtx (sessionId: SageFs.WorkerProtocol.SessionId) =
   let result = dedicatedActor.Value
   let sessionMap = ConcurrentDictionary<string, string>()
   sessionMap.["test"] <- SageFs.WorkerProtocol.SessionId.value sessionId
-  { Persistence = SageFs.EventStore.EventPersistence.noop
-    FrictionStore = None
+  { FrictionStore = None
     DiagnosticsChanged = result.DiagnosticsChanged
     StateChanged = None
     SessionOps = mkTestSessionOps result sessionId

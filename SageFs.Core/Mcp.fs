@@ -647,76 +647,6 @@ Available: %s%s
       sprintf """{"success":false,"error":"%s","diagnostics":[]}"""
         (escapeJson (sprintf "Unexpected response: %A" other))
 
-/// Event tracking for collaborative MCP mode — backed by binary persistence
-module EventTracking =
-
-  open SageFs.Features.Events
-
-  /// Track an input event (code submitted by user/agent/file)
-  let trackInput (p: EventStore.EventPersistence) (streamId: string) (source: EventSource) (content: string) =
-    let evt = McpInputReceived {| Source = source; Content = content |}
-    task {
-      let! _ = p.AppendEvents streamId [evt]
-      return ()
-    }
-
-  /// Track an output event (result sent back to user/agent)
-  let trackOutput (p: EventStore.EventPersistence) (streamId: string) (source: EventSource) (content: string) =
-    let evt = McpOutputSent {| Source = source; Content = content |}
-    task {
-      let! _ = p.AppendEvents streamId [evt]
-      return ()
-    }
-
-  /// Format an event for display
-  let formatEvent (ts: DateTimeOffset, evt: SageFsEvent) =
-    let source, content =
-      match evt with
-      | McpInputReceived e -> e.Source.ToString(), e.Content
-      | McpOutputSent e -> e.Source.ToString(), e.Content
-      | EvalRequested e -> e.Source.ToString(), e.Code
-      | EvalCompleted e -> "eval", e.Result
-      | EvalFailed e -> "eval", e.Error
-      | DiagnosticsChecked e -> e.Source.ToString(), sprintf "%d diagnostics" e.Diagnostics.Length
-      | ScriptLoaded e -> e.Source.ToString(), sprintf "loaded %s (%d statements)" e.FilePath e.StatementCount
-      | ScriptLoadFailed e -> "system", sprintf "failed to load %s: %s" e.FilePath e.Error
-      | SessionStarted _ -> "system", "session started"
-      | SessionWarmUpCompleted _ -> "system", "warm-up completed"
-      | SessionWarmUpProgress e -> "system", sprintf "warm-up [%d/%d] %s" e.Step e.Total e.Message
-      | SessionReady -> "system", "session ready"
-      | SessionFaulted e -> "system", e.Error
-      | SessionReset -> "system", "session reset"
-      | SessionHardReset e -> "system", sprintf "hard reset (rebuild=%b)" e.Rebuild
-      | DiagnosticsCleared -> "system", "diagnostics cleared"
-      | DaemonSessionCreated e -> "daemon", sprintf "session %s created" e.SessionId
-      | DaemonSessionStopped e -> "daemon", sprintf "session %s stopped" e.SessionId
-      | DaemonSessionSwitched e -> "daemon", sprintf "switched to %s" e.ToId
-      | EvalTraced e -> "eval", sprintf "%d stages, %.1fms total" e.Stages.Length e.TotalMs
-    (ts.UtcDateTime, source, content)
-
-  /// Get recent events from the session stream
-  let getRecentEvents (p: EventStore.EventPersistence) (streamId: string) (count: int) =
-    task {
-      let! events = p.FetchStream streamId
-      return
-        events
-        |> List.map formatEvent
-        |> List.rev
-        |> List.truncate count
-        |> List.rev
-    }
-
-  /// Get all events from the session stream
-  let getAllEvents (p: EventStore.EventPersistence) (streamId: string) =
-    task {
-      let! events = p.FetchStream streamId
-      return events |> List.map formatEvent
-    }
-
-  /// Count events in the session stream
-  let getEventCount (p: EventStore.EventPersistence) (streamId: string) =
-    p.CountEvents streamId
-
 /// MCP tool implementations — all tools route through SessionManager.
 /// There is no "local embedded session" — every session is a worker.
 module McpTools =
@@ -724,9 +654,7 @@ module McpTools =
   open System.Threading
 
   type McpContext = {
-    Persistence: EventStore.EventPersistence
     /// SQLite-backed friction store for durable telemetry persistence.
-    /// When Some, McpFrictionRecorder uses this directly instead of the EventPersistence KV fallback.
     FrictionStore: Features.FrictionSqlite.FrictionStore option
     DiagnosticsChanged: IEvent<Features.DiagnosticsStore.T>
     /// Fires serialized JSON whenever the Elm model changes.
@@ -763,6 +691,13 @@ module McpTools =
   /// Per-session compilation context state (evaluated modules, file cache).
   let compilationStates =
     Collections.Concurrent.ConcurrentDictionary<string, Middleware.CompilationContext.CompilationState>()
+
+  /// Per-session TypeLoadException diagnostic.
+  /// When a TypeLoadException poisons an FSI session, the diagnostic string is stored here
+  /// so that targeted_verify and get_fsi_status can report the compromised type identity.
+  /// Cleared on hard_reset_fsi_session (which creates a fresh FSI session).
+  let typeIdentityDiagnostics =
+    Collections.Concurrent.ConcurrentDictionary<string, string>()
 
   /// Temporal dedup cache — prevents re-evaluating identical code within 2s window.
   let evalDedupCache = Features.EvalDedup.DedupCache.defaultCache ()
@@ -1113,8 +1048,15 @@ module McpTools =
             with ex -> Log.warn "Failed to deserialize assembly load errors: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()
         | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
+          let errText = SageFsError.describe err
+          // Track TypeLoadException so targeted_verify can flag the session as compromised.
+          match ErrorMessages.categorize errText with
+          | ErrorMessages.ErrorCategory.TypeLoad ->
+            typeIdentityDiagnostics.[sid] <- errText
+            Log.warn "TypeLoadException detected for session %s — type identity compromised" sid
+          | _ -> ()
           notifyElm ctx (
-            SageFsEvent.EvalFailed (sid, SageFsError.describe err))
+            SageFsEvent.EvalFailed (sid, errText))
         | _ -> ()
         formatted
       | Error msg ->
@@ -1174,7 +1116,6 @@ module McpTools =
       Instrumentation.fsiStatements.Add(int64 statements.Length)
       let span = Instrumentation.startSpan Instrumentation.mcpSource "fsi.eval"
                    ["fsi.agent.name", box agentName; "fsi.statement.count", box statements.Length; "fsi.session.id", box sid]
-      do! EventTracking.trackInput ctx.Persistence sid (Features.Events.McpAgent agentName) code
       // Record agent activity for multi-agent coordination
       AgentActivityTracker.recordToolCall ctx.ActivityTracker agentName sid filePath intent DateTime.UtcNow
 
@@ -1192,7 +1133,6 @@ module McpTools =
           String.concat "\n\n" (List.rev allOutputs)
         | _ -> allOutputs |> List.tryHead |> Option.defaultValue ""
 
-      do! EventTracking.trackOutput ctx.Persistence sid (Features.Events.McpAgent agentName) finalOutput
       Features.EvalDedup.DedupCache.record evalDedupCache sid code finalOutput (DateTimeOffset.UtcNow)
       Instrumentation.succeedSpan span
       // Compute file-overlap advisory AFTER caching raw output
@@ -1208,13 +1148,12 @@ module McpTools =
 
   let getRecentEvents (ctx: McpContext) (agent: string) (count: int) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun sid -> task {
-      let! events = EventTracking.getRecentEvents ctx.Persistence sid count
-      return McpAdapter.formatEvents events
+      return "Recent events: none recorded"
     })
 
   let getStatus (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     withSession ctx agent sessionId workingDirectory (fun sid -> task {
-      let! eventCount = EventTracking.getEventCount ctx.Persistence sid
+      let eventCount = 0  // EventTracking removed — event count not tracked
       let! routeResult =
         routeToSession ctx sid
           (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
@@ -1417,6 +1356,7 @@ module McpTools =
       | true ->
         do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Restarting
         compilationStates.TryRemove(sid) |> ignore
+        typeIdentityDiagnostics.TryRemove(sid) |> ignore
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         notifyElm ctx (
           SageFsEvent.WarmupProgress (1, 4, "Building project..."))
@@ -1442,6 +1382,7 @@ module McpTools =
           |> Option.defaultValue WorkerProtocol.SessionStatus.Ready
         do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Restarting
         compilationStates.TryRemove(sid) |> ignore
+        typeIdentityDiagnostics.TryRemove(sid) |> ignore
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         let! routeResult =
           routeToSession ctx sid
@@ -1620,13 +1561,21 @@ module McpTools =
   /// Create a new session and bind it to the requesting agent.
   let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflow: WorkflowTypes.SessionWorkflow) : Task<string> =
     task {
-      // Guard: warn if a session for the same project(s) already exists
+      // Guard: warn if a session for the same project(s) already exists.
+      // Compare full normalized paths so different repos with the same project
+      // filename (e.g. two separate "Tests.fsproj" files) don't collide.
       let! existing = ctx.SessionOps.GetAllSessions()
-      let normalizedProjects = projects |> List.map (fun p -> System.IO.Path.GetFileName(p).ToLowerInvariant()) |> Set.ofList
+      let normalizedProjects =
+        projects
+        |> List.map (fun p -> normalizePath (System.IO.Path.GetFullPath(p, workingDir)))
+        |> Set.ofList
       let duplicates =
         existing
         |> List.filter (fun s ->
-          let sessionProjects = s.Projects |> List.map (fun p -> System.IO.Path.GetFileName(p).ToLowerInvariant()) |> Set.ofList
+          let sessionProjects =
+            s.Projects
+            |> List.map (fun p -> normalizePath (System.IO.Path.GetFullPath(p, s.WorkingDirectory)))
+            |> Set.ofList
           Set.intersect normalizedProjects sessionProjects |> Set.isEmpty |> not)
       match duplicates with
       | dup :: _ ->
@@ -1682,13 +1631,8 @@ module McpTools =
         let! info = ctx.SessionOps.GetSessionInfo validId
         match info with
         | Some _ ->
-          let prev = activeSessionId ctx agent
+          let _prev = activeSessionId ctx agent
           setActiveSessionId ctx agent sessionId
-          // Persist switch to daemon stream
-          let! _ = ctx.Persistence.AppendEvents "daemon-sessions" [
-            Features.Events.SageFsEvent.DaemonSessionSwitched
-              {| FromId = Some prev; ToId = sessionId; SwitchedAt = DateTimeOffset.UtcNow |}
-          ]
           return sprintf "Switched to session '%s'" sessionId
         | None ->
           return sprintf "Error: Session '%s' not found" sessionId
@@ -2550,7 +2494,10 @@ module McpTools =
         { MatchingSessionIds = [ sid ]
           SessionStatus = status
           LoadedState = sessionLoadedState
-          TypeIdentityDiagnostic = None }
+          TypeIdentityDiagnostic =
+            match typeIdentityDiagnostics.TryGetValue(sid) with
+            | true, diag -> Some diag
+            | _ -> None }
       let request : Features.Verification.TargetedVerificationRequest =
         { Intent =
             Features.Verification.VerificationIntent.VerifyChangedBehavior (behavior, Features.Verification.RegressionRisk.SharedContract)

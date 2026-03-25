@@ -27,12 +27,14 @@ module ErrorMessages =
   let getSuggestion (category: ErrorCategory) =
     match category with
     | ErrorCategory.TypeLoad ->
-      "⛔ TypeLoadException detected. This almost always means you used '#r' on an assembly that was already loaded by the '--proj' session startup. " +
-      "Do NOT reset the session — it is NOT corrupted. " +
-      "1. Call get_startup_info to see which assemblies are already loaded via the project graph. " +
-      "2. Remove the '#r' directive — do NOT '#r' any assembly listed there. " +
-      "3. If the duplicate context is stuck, use hard_reset_fsi_session with rebuild=false (not reset_fsi_session) to clear it. " +
-      "4. Reference project types directly without '#r'. The types are already in scope."
+      "⛔ TypeLoadException detected — the session's type identity is now compromised. " +
+      "All subsequent evals referencing the affected type will fail. " +
+      "Common causes: (1) You used '#r' on an assembly already loaded by the '--proj' session startup — " +
+      "call get_startup_info to check which assemblies are loaded and remove the '#r'. " +
+      "(2) You redefined a type in the REPL that collides with a type in the project DLL — " +
+      "this happens when your .fs source has uncommitted/unbuilt type changes that differ from the loaded DLL. " +
+      "Recovery: use hard_reset_fsi_session with rebuild=true to rebuild the project and get a fresh session " +
+      "with up-to-date DLLs. Do NOT use soft reset (reset_fsi_session) — it cannot fix type identity issues."
     | ErrorCategory.EarlierError ->
       "⚠️ This 'earlier error' means a PREVIOUS statement had a compile error, so its definitions were never created. " +
       "The session is NOT corrupted — all successfully evaluated statements are still valid. " +

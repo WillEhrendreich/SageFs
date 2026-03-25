@@ -342,7 +342,6 @@ let setSseHeaders (ctx: Microsoft.AspNetCore.Http.HttpContext) =
 type McpServerConfig = {
   DiagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>
   StateChanged: IEvent<DaemonStateChange> option
-  Persistence: SageFs.EventStore.EventPersistence
   FrictionStore: SageFs.Features.FrictionSqlite.FrictionStore option
   Port: int
   SessionOps: SageFs.SessionManagementOps
@@ -362,7 +361,7 @@ let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> op
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { Persistence = cfg.Persistence; FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; ActivityTracker = cfg.ActivityTracker }
+  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; ActivityTracker = cfg.ActivityTracker }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 
@@ -1546,10 +1545,6 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
             d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sidStr)))
             d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
           | None -> ()
-          let! _ = rctx.McpContext.Persistence.AppendEvents "daemon-sessions" [
-            SageFs.Features.Events.SageFsEvent.DaemonSessionSwitched
-              {| FromId = None; ToId = sidStr; SwitchedAt = System.DateTimeOffset.UtcNow |}
-          ]
           do! jsonResponse ctx 200 {| success = true; sessionId = sidStr |}
         | None ->
           do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sidStr |}
@@ -1824,25 +1819,6 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
         | _ -> 20
       let! result = SageFs.McpTools.getRecentEvents rctx.McpContext "http" count None
       do! rawJsonResponse ctx result
-    } :> Task
-  ) |> ignore
-  app.MapGet("/api/sessions/{sid}/export-fsx", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    task {
-      let raw = ctx.Request.RouteValues.["sid"] |> string
-      match SageFs.WorkerProtocol.SessionId.validate raw with
-      | Error msg ->
-        do! jsonResponse ctx 400 {| success = false; error = msg |}
-      | Ok sid ->
-        let! events = rctx.McpContext.Persistence.FetchStream (SageFs.WorkerProtocol.SessionId.value sid)
-        let replayState =
-          events
-          |> SageFs.Features.Replay.SessionReplayState.replayStream
-        match replayState.EvalHistory with
-        | [] ->
-          do! jsonResponse ctx 200 {| content = ""; evalCount = 0 |}
-        | _ ->
-          let fsx = SageFs.Features.Replay.SessionReplayState.exportAsFsx replayState
-          do! jsonResponse ctx 200 {| content = fsx; evalCount = replayState.EvalHistory.Length |}
     } :> Task
   ) |> ignore
 

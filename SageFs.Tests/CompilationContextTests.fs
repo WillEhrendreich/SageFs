@@ -345,41 +345,41 @@ let locateBlockTests =
 
     test "locates block in file-level module by line number" {
       let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
-      let container = locateBlock fs (Some 8)
-      container |> Expect.isSome "should find container"
-      container.Value.QualifiedName
+      let path = locateBlock fs (Some 8)
+      path |> Expect.isNonEmpty "should find container"
+      (path |> List.last).QualifiedName
       |> Expect.equal "should be GameOfLife" "GameOfLife"
     }
 
     test "locates block in nested module by line number" {
       let fs = parseFs "Domain.fs" Fixtures.namespacePlusModule
-      let container = locateBlock fs (Some 7)
-      container |> Expect.isSome "should find nested module"
-      container.Value.QualifiedName
+      let path = locateBlock fs (Some 7)
+      path |> Expect.isNonEmpty "should find nested module"
+      (path |> List.last).QualifiedName
       |> Expect.equal "should be qualified" "MyApp.Domain.GameOfLife"
     }
 
     test "locates block in second module of multi-module file" {
       let fs = parseFs "Domain.fs" Fixtures.namespaceMultiModule
-      let container = locateBlock fs (Some 10)
-      container |> Expect.isSome "should find Rendering"
-      container.Value.QualifiedName
+      let path = locateBlock fs (Some 10)
+      path |> Expect.isNonEmpty "should find Rendering"
+      (path |> List.last).QualifiedName
       |> Expect.equal "should be Rendering" "MyApp.Domain.Rendering"
     }
 
     test "falls back to top-level when no line number" {
       let fs = parseFs "GameOfLife.fs" Fixtures.fileLevelModule
-      let container = locateBlock fs None
-      container |> Expect.isSome "should fall back to top-level"
-      container.Value.QualifiedName
+      let path = locateBlock fs None
+      path |> Expect.isNonEmpty "should fall back to top-level"
+      (path |> List.last).QualifiedName
       |> Expect.equal "should be GameOfLife" "GameOfLife"
     }
 
     test "namespace+module with no line falls back to single child" {
       let fs = parseFs "Domain.fs" Fixtures.namespacePlusModule
-      let container = locateBlock fs None
-      container |> Expect.isSome "should find single child"
-      container.Value.QualifiedName
+      let path = locateBlock fs None
+      path |> Expect.isNonEmpty "should find single child"
+      (path |> List.last).QualifiedName
       |> Expect.equal "should be the nested module" "MyApp.Domain.GameOfLife"
     }
   ]
@@ -691,7 +691,384 @@ namespace Second
 let b = 2"""
       let fs = parseFs "Multi.fs" multiNs
       let container = locateBlock fs None
-      container |> Expect.isNone "ambiguous without line info"
+      container |> Expect.isEmpty "ambiguous without line info"
+    }
+  ]
+
+// ─────────────────────────────────────────────────────────────────
+// 9. Block-eval module context tests
+//    WHY: When a user evaluates a selected block from a file that has
+//    a file-level module, SageFs must wrap that block in the correct
+//    module — not in an anonymous "Tmp" module produced by parsing
+//    the block code in isolation.
+//
+//    The root scenario: pong.fs has `module Pong` at the top. The
+//    user evaluates just the `update` function. The wrapper MUST be
+//    `module Pong =` so FSI can see State, paddleHeight, etc.
+// ─────────────────────────────────────────────────────────────────
+
+module BlockEvalFixtures =
+
+  /// Exactly the pong.fs module header pattern that triggered the bug:
+  /// file-level module with a trailing comment on the module line.
+  let pongFileContent = """module Pong 
+  // All coordinates normalized 0.0–1.0
+  // Pure functions — every one is a hot-reload target
+
+type State =
+  { BallX: float; BallY: float
+    BallVX: float; BallVY: float
+    LeftY: float; RightY: float
+    LeftScore: int; RightScore: int
+    Trail: (float * float) list }
+
+let init () =
+  { BallX = 0.5; BallY = 0.5
+    BallVX = 0.6; BallVY = 0.4
+    LeftY = 0.5; RightY = 0.5
+    LeftScore = 0; RightScore = 0
+    Trail = [] }
+
+let paddleHeight () = 0.15
+let maxTrail () = 3
+
+let update (dt: float) (state: State) =
+  let aiSpeed = 1.0
+  state"""
+
+  /// The selected block text the user actually sends — just the update function.
+  /// This is what `code` contains in the Mcp.fs sendFSharpCode call.
+  let updateBlockOnly = """let update (dt: float) (state: State) =
+  let aiSpeed = 1.0
+  state"""
+
+  /// A file-level module without comments on the module line — should also work.
+  let simpleFileLevelModule = """module Calculator
+
+let add x y = x + y
+let subtract x y = x - y
+let multiply x y = x * y"""
+
+  let addBlockOnly = "let add x y = x + y"
+
+  /// Namespace + nested module — block from inside the nested module.
+  let namespacedModuleContent = """namespace MyGame.Domain
+
+module Physics =
+  let gravity = 9.8
+  let applyGravity v = v + gravity"""
+
+  let gravityBlockOnly = "let gravity = 9.8"
+
+  /// Two levels of nesting: outer module contains inner module.
+  /// Block selected inside Inner — path should be [Outer; Outer.Inner].
+  let twoLevelNestedContent = """module Outer
+
+module Inner =
+  let helper x = x + 1
+  let compute x = helper x * 2"""
+
+  let innerComputeBlock = "let compute x = helper x * 2"
+
+  /// Three levels of nesting: module A > module B > module C.
+  /// Block selected inside C — path should be [A; A.B; A.B.C].
+  let threeLevelNestedContent = """module A
+
+module B =
+  module C =
+    let deepFn x = x * 3"""
+
+  let deepFnBlock = "let deepFn x = x * 3"
+
+  /// Namespace with two levels of nested modules:
+  /// namespace MyNs, module Outer, module Inner.
+  let namespaceTwoLevelContent = """namespace MyNs
+
+module Outer =
+  module Inner =
+    let value = 42"""
+
+  let valueBlock = "let value = 42"
+
+let blockEvalModuleContextTests =
+  testList "block eval resolves correct module context from full file" [
+
+    // ── THE CORE BUG SCENARIO ────────────────────────────────────────
+
+    test "REPL intent: evaluating update from pong.fs wraps in 'module Pong', not 'module Tmp'" {
+      // WHY: When the user selects the `update` function and hits eval,
+      // SageFs must use the FULL FILE STRUCTURE to determine the enclosing
+      // module — not parse the selected block text in isolation.
+      // Parsing the block alone produces AnonModule "Tmp" (FCS default for
+      // code with no module declaration), which is invalid in FSI context.
+      let fullFileFs = parseFs "pong.fs" BlockEvalFixtures.pongFileContent
+      let result, _ =
+        preprocessForFsi
+          (Some fullFileFs) Block (Some 20) Set.empty
+          BlockEvalFixtures.updateBlockOnly
+      result.Code
+      |> Expect.stringContains
+          "should wrap in Pong module, not Tmp"
+          "module Pong ="
+      result.Code
+      |> Expect.stringContains "update function inside wrapper" "let update"
+    }
+
+    test "REPL intent: the wrapper 'module Pong =' is not 'module Tmp ='" {
+      // WHY: The literal error the user saw was because transformBlock
+      // wrapped in "module Tmp =" — FSI rejected it with
+      // "The namespace or module 'Tmp' is not defined."
+      // This test makes that regression impossible to reintroduce.
+      let fullFileFs = parseFs "pong.fs" BlockEvalFixtures.pongFileContent
+      let result, _ =
+        preprocessForFsi
+          (Some fullFileFs) Block (Some 20) Set.empty
+          BlockEvalFixtures.updateBlockOnly
+      result.Code.Contains("module Tmp")
+      |> Expect.isFalse "should never emit 'module Tmp' for a named module file"
+    }
+
+    test "REPL intent: second block eval from pong.fs opens Pong before redefining it" {
+      // WHY: After the first eval, Pong is in EvaluatedModules.
+      // The second eval must emit 'open Pong' so prior bindings
+      // (State, paddleHeight, etc.) are accessible inside the new wrapper.
+      let fullFileFs = parseFs "pong.fs" BlockEvalFixtures.pongFileContent
+      let alreadyEvaluated = Set.singleton "Pong"
+      let result, _ =
+        preprocessForFsi
+          (Some fullFileFs) Block (Some 20) alreadyEvaluated
+          BlockEvalFixtures.updateBlockOnly
+      result.Code
+      |> Expect.stringContains
+          "should open Pong for second block eval"
+          "open Pong"
+      result.Code
+      |> Expect.stringContains "should still have module wrapper" "module Pong ="
+    }
+
+    // ── GENERALISED: ANY FILE-LEVEL MODULE ──────────────────────────
+
+    test "block from any file-level module uses that module's name" {
+      // WHY: The fix must be general — not specific to 'Pong'.
+      // Any file with 'module Foo' at the top and a block selected
+      // inside must produce 'module Foo =' in the wrapper.
+      let fullFileFs = parseFs "Calculator.fs" BlockEvalFixtures.simpleFileLevelModule
+      let result, _ =
+        preprocessForFsi
+          (Some fullFileFs) Block (Some 3) Set.empty
+          BlockEvalFixtures.addBlockOnly
+      result.Code
+      |> Expect.stringContains "should wrap in Calculator" "module Calculator ="
+      result.Code.Contains("module Tmp")
+      |> Expect.isFalse "should never produce Tmp"
+    }
+
+    test "block from nested module uses fully-qualified name" {
+      // WHY: namespace + nested module is the other common case.
+      // Block from inside 'module Physics' under 'namespace MyGame.Domain'
+      // must produce 'module MyGame.Domain.Physics ='.
+      let fullFileFs = parseFs "Physics.fs" BlockEvalFixtures.namespacedModuleContent
+      let result, _ =
+        preprocessForFsi
+          (Some fullFileFs) Block (Some 4) Set.empty
+          BlockEvalFixtures.gravityBlockOnly
+      result.Code
+      |> Expect.stringContains
+          "should use fully-qualified name"
+          "module MyGame.Domain.Physics ="
+    }
+
+    // ── PARSING ISOLATION: the bug precondition ──────────────────────
+
+    test "parsing the block code IN ISOLATION produces AnonModule Tmp" {
+      // WHY: This documents the exact precondition for the bug.
+      // If this test starts failing, it means FCS changed behaviour
+      // and the defensive guards can be re-evaluated.
+      let blockOnlyFs = parseFs "pong.fs" BlockEvalFixtures.updateBlockOnly
+      blockOnlyFs.Containers |> Expect.hasLength "one anon container" 1
+      blockOnlyFs.Containers.[0].QualifiedName
+      |> Expect.equal "FCS names it Tmp" "Tmp"
+      blockOnlyFs.Containers.[0].Kind
+      |> Expect.equal "AnonModule kind" Fantomas.FCS.Syntax.SynModuleOrNamespaceKind.AnonModule
+    }
+
+    test "preprocessForFsi fed block-parsed structure passes through unchanged" {
+      // WHY: When the file structure comes from the block text (legacy/fallback
+      // path), we must NOT wrap in 'module Tmp ='. The code should pass through
+      // unmodified so the caller can decide what to do.
+      // This is the 'worst case' defensive behaviour — better than a broken wrap.
+      let blockOnlyFs = parseFs "pong.fs" BlockEvalFixtures.updateBlockOnly
+      let result, _ =
+        preprocessForFsi
+          (Some blockOnlyFs) Block (Some 1) Set.empty
+          BlockEvalFixtures.updateBlockOnly
+      result.Code.Contains("module Tmp")
+      |> Expect.isFalse
+          "AnonModule Tmp container must never produce 'module Tmp =' wrapper"
+    }
+
+    // ── locateBlock: AnonModule containers ───────────────────────────
+
+    test "locateBlock returns None when file structure only contains AnonModule" {
+      // WHY: An AnonModule is a signal that the file structure was parsed
+      // from a code fragment, not the actual source file. locateBlock must
+      // treat this as 'context unknown' (None) so preprocessForFsi passes
+      // code through rather than wrapping in Tmp.
+      let blockOnlyFs = parseFs "pong.fs" BlockEvalFixtures.updateBlockOnly
+      let result = locateBlock blockOnlyFs (Some 1)
+      result |> Expect.isEmpty
+          "AnonModule-only structure should return None from locateBlock"
+    }
+
+    test "locateBlock returns None for fallback path when only AnonModule present" {
+      // WHY: The no-line-number fallback path also must not return the
+      // AnonModule container as a valid target for wrapping.
+      let blockOnlyFs = parseFs "pong.fs" BlockEvalFixtures.updateBlockOnly
+      let result = locateBlock blockOnlyFs None
+      result |> Expect.isEmpty
+          "no-line fallback should also reject AnonModule as context"
+    }
+
+    // ── Module tracking integrity ─────────────────────────────────────
+
+    test "Pong module is tracked in EvaluatedModules after block eval with full file context" {
+      // WHY: After correct wrapping in 'module Pong =', the session must
+      // record that 'Pong' was evaluated so the next block eval gets
+      // 'open Pong' prepended. If this is wrong, the second block eval
+      // will redefine without opening, losing all prior bindings.
+      let fullFileFs = parseFs "pong.fs" BlockEvalFixtures.pongFileContent
+      let _, evaluatedModules =
+        preprocessForFsi
+          (Some fullFileFs) Block (Some 20) Set.empty
+          BlockEvalFixtures.updateBlockOnly
+      evaluatedModules |> Set.contains "Pong"
+      |> Expect.isTrue "Pong should be recorded after block eval"
+    }
+
+    test "Tmp is never recorded in EvaluatedModules" {
+      // WHY: If 'Tmp' were ever added to EvaluatedModules, subsequent
+      // block evals would emit 'open Tmp' which always fails in FSI.
+      let fullFileFs = parseFs "pong.fs" BlockEvalFixtures.pongFileContent
+      let _, evaluatedModules =
+        preprocessForFsi
+          (Some fullFileFs) Block (Some 20) Set.empty
+          BlockEvalFixtures.updateBlockOnly
+      evaluatedModules |> Set.contains "Tmp"
+      |> Expect.isFalse "Tmp should never appear in EvaluatedModules"
+    }
+
+    // ── SUB-MODULE NESTING ────────────────────────────────────────────
+
+    test "block from two-level nested module wraps in nested module syntax" {
+      // WHY: 'module Outer.Inner =' is NOT valid F# syntax for a module
+      // binding — only dotted file-level declarations are allowed at the top.
+      // The wrapper MUST be:
+      //   module Outer =
+      //     module Inner =
+      //       let compute ...
+      // If we emit 'module Outer.Inner =' the compiler rejects it.
+      let fs = parseFs "Nested.fs" BlockEvalFixtures.twoLevelNestedContent
+      let result, _ =
+        preprocessForFsi
+          (Some fs) Block (Some 5) Set.empty
+          BlockEvalFixtures.innerComputeBlock
+      // Outer wrapper must be present
+      result.Code
+      |> Expect.stringContains "should have outer module wrapper" "module Outer ="
+      // Inner wrapper must be present
+      result.Code
+      |> Expect.stringContains "should have inner module wrapper" "module Inner ="
+      // The block code itself must appear
+      result.Code
+      |> Expect.stringContains "should contain the block code" "let compute"
+      // Must NOT use dotted one-liner syntax
+      result.Code.Contains("module Outer.Inner =")
+      |> Expect.isFalse "dotted single-line module binding is invalid F# syntax"
+    }
+
+    test "locateBlock path for two-level nesting has two containers, deepest last" {
+      // WHY: locateBlock now returns a path (ancestor list), not a single
+      // container. The path must be [Outer; Outer.Inner] — ancestors first,
+      // deepest container last. If the list is just [Outer.Inner], we lose
+      // the information needed to emit the outer 'module Outer =' wrapper.
+      let fs = parseFs "Nested.fs" BlockEvalFixtures.twoLevelNestedContent
+      let path = locateBlock fs (Some 5)
+      path |> Expect.hasLength "path should have two elements" 2
+      path.[0].QualifiedName
+      |> Expect.equal "first element is Outer" "Outer"
+      path.[1].QualifiedName
+      |> Expect.equal "second element is Outer.Inner" "Outer.Inner"
+    }
+
+    test "block from three-level nested module emits three-level nesting" {
+      // WHY: The nesting must be arbitrarily deep, not just one or two levels.
+      // module A =
+      //   module B =
+      //     module C =
+      //       let deepFn ...
+      let fs = parseFs "Deep.fs" BlockEvalFixtures.threeLevelNestedContent
+      let result, _ =
+        preprocessForFsi
+          (Some fs) Block (Some 5) Set.empty
+          BlockEvalFixtures.deepFnBlock
+      result.Code |> Expect.stringContains "outer A" "module A ="
+      result.Code |> Expect.stringContains "mid B" "module B ="
+      result.Code |> Expect.stringContains "inner C" "module C ="
+      result.Code |> Expect.stringContains "block code" "let deepFn"
+      result.Code.Contains("module A.B.C =")
+      |> Expect.isFalse "dotted three-level module binding is not valid syntax"
+    }
+
+    test "block from namespace+two-level module skips namespace in nesting, wraps only modules" {
+      // WHY: Namespace containers must NOT become 'module Ns =' wrappers —
+      // 'module MyNs =' is invalid when MyNs is a namespace, not a module.
+      // Only the named module containers in the path get wrapped.
+      // The namespace itself is implicit context for FSI (it was opened when
+      // the whole file was first evaluated, or it's just a qualification).
+      let fs = parseFs "NsNested.fs" BlockEvalFixtures.namespaceTwoLevelContent
+      let result, _ =
+        preprocessForFsi
+          (Some fs) Block (Some 5) Set.empty
+          BlockEvalFixtures.valueBlock
+      result.Code |> Expect.stringContains "outer module" "module Outer ="
+      result.Code |> Expect.stringContains "inner module" "module Inner ="
+      result.Code |> Expect.stringContains "block" "let value"
+      result.Code.Contains("module MyNs =")
+      |> Expect.isFalse "namespace must not become a 'module X =' wrapper"
+    }
+
+    test "second eval of nested block emits 'open' with deepest qualified name first" {
+      // WHY: After the first eval wraps in Outer.Inner, EvaluatedModules
+      // contains "Outer.Inner". The second eval must open it so prior bindings
+      // (like 'helper') are visible to 'compute' inside the new wrapper.
+      // The open must appear OUTSIDE the new nested wrapper.
+      let fs = parseFs "Nested.fs" BlockEvalFixtures.twoLevelNestedContent
+      let alreadyEvaluated = Set.singleton "Outer.Inner"
+      let result, _ =
+        preprocessForFsi
+          (Some fs) Block (Some 5) alreadyEvaluated
+          BlockEvalFixtures.innerComputeBlock
+      // open must come before the module wrapper
+      let openIdx = result.Code.IndexOf("open Outer.Inner")
+      let moduleIdx = result.Code.IndexOf("module Outer =")
+      (openIdx, 0) |> Expect.isGreaterThanOrEqual "open should be present"
+      (moduleIdx, 0) |> Expect.isGreaterThanOrEqual "outer module wrapper present"
+      (openIdx < moduleIdx)
+      |> Expect.isTrue "open must appear before the outer module wrapper"
+    }
+
+    test "EvaluatedModules records deepest qualified name for nested block" {
+      // WHY: We want 'open Outer.Inner' (not 'open Outer') on the next eval.
+      // The deepest container's QualifiedName is the correct open target.
+      let fs = parseFs "Nested.fs" BlockEvalFixtures.twoLevelNestedContent
+      let _, updatedModules =
+        preprocessForFsi
+          (Some fs) Block (Some 5) Set.empty
+          BlockEvalFixtures.innerComputeBlock
+      updatedModules |> Set.contains "Outer.Inner"
+      |> Expect.isTrue "deepest module 'Outer.Inner' should be tracked"
+      updatedModules |> Set.contains "Outer"
+      |> Expect.isFalse "intermediate 'Outer' should NOT be in EvaluatedModules — open Outer is always available via nesting"
     }
   ]
 
@@ -712,4 +1089,5 @@ let allCompilationContextTests =
     perfMeasurementTests
     evalModeTests
     namespaceContainerTests
+    blockEvalModuleContextTests
   ]

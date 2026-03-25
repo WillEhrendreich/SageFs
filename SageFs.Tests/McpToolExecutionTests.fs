@@ -52,8 +52,7 @@ let tests =
       }
 
       let ctx : McpContext =
-        { Persistence = inMemoryPersistence ()
-          FrictionStore = None
+        { FrictionStore = None
           DiagnosticsChanged = result.DiagnosticsChanged
           StateChanged = None
           SessionOps = ops

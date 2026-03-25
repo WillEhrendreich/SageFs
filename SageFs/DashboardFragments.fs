@@ -218,8 +218,12 @@ let renderDaemonHealth (view: DaemonHealthView) =
         Some (sprintf "⚠️ %d sessions · %d degraded: %s" summaries.Length problems.Length names)
   Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] [
     Elem.span [ Attr.style "font-weight: bold;" ] [
-      Text.raw (sprintf "%s %s · SageFs %s · up %s · %dMB"
-        emoji label view.Version view.UptimeLabel view.MemoryMB)
+      let statusText =
+        match view.SessionSummaries with
+        | [] -> sprintf "%s Ready · No active sessions" emoji
+        | _ -> sprintf "%s %s" emoji label
+      Text.raw (sprintf "%s · SageFs %s · up %s · %dMB"
+        statusText view.Version view.UptimeLabel view.MemoryMB)
     ]
     match sessionSummaryText view.SessionSummaries with
     | None -> ()
