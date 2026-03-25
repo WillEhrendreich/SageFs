@@ -25,6 +25,7 @@ open Expecto
 open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
+open Fantomas.FCS.Syntax
 open SageFs.Middleware.CompilationContext
 
 // ─────────────────────────────────────────────────────────────────
@@ -351,7 +352,7 @@ let compilationContextPropertyTests =
         )
       )
 
-    // ── I-2: locateBlock path length = named-module depth ────────
+    // ── I-2: locateBlock module-path length = named-module depth ────
 
     testPropertyWithConfig propCfg
       "I-2 locateBlock path length equals named-module nesting depth at target line" <|
@@ -364,7 +365,15 @@ let compilationContextPropertyTests =
           let oraclePath = oraclePathAt annotated targetLine
           let oracleModDepth =
             oraclePath |> List.filter (function ModEntry _ -> true | NsEntry _ -> false) |> List.length
-          path |> List.length = oracleModDepth
+          // locateBlock returns the full path including namespace containers;
+          // filter to module containers only, matching how transformBlock does it.
+          let pathModCount =
+            path |> List.filter (fun c ->
+              match c.Kind with
+              | SynModuleOrNamespaceKind.DeclaredNamespace
+              | SynModuleOrNamespaceKind.GlobalNamespace -> false
+              | _ -> true) |> List.length
+          pathModCount = oracleModDepth
         )
       )
 

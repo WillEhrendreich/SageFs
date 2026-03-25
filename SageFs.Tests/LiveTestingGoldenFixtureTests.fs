@@ -6,7 +6,7 @@ open Expecto
 open Expecto.Flip
 
 let private fixturePath name =
-  Path.Combine(__SOURCE_DIRECTORY__, "Fixtures", "LiveTesting", name)
+  Path.Combine(__SOURCE_DIRECTORY__, "fixtures", "LiveTesting", name)
 
 let private readFixture name = File.ReadAllText(fixturePath name)
 

@@ -255,8 +255,8 @@ let preprocessForFsiTests =
           preprocessForFsi (Some fs) (Block) (Some 7) Set.empty
             Fixtures.blockFromNamespacedModule
         result.Code
-        |> Expect.stringContains "should use qualified name"
-            "module MyApp.Domain.GameOfLife ="
+        |> Expect.stringContains "should use leaf name for nested wrapper"
+            "module GameOfLife ="
         evaluatedModules |> Set.contains "MyApp.Domain.GameOfLife"
         |> Expect.isTrue "should track qualified"
       }
@@ -863,10 +863,11 @@ let blockEvalModuleContextTests =
       |> Expect.isFalse "should never produce Tmp"
     }
 
-    test "block from nested module uses fully-qualified name" {
+    test "block from nested module uses leaf name for nested wrapper" {
       // WHY: namespace + nested module is the other common case.
       // Block from inside 'module Physics' under 'namespace MyGame.Domain'
-      // must produce 'module MyGame.Domain.Physics ='.
+      // must produce 'module Physics =' (leaf name, since dotted module
+      // bindings are only valid as file-level declarations).
       let fullFileFs = parseFs "Physics.fs" BlockEvalFixtures.namespacedModuleContent
       let result, _ =
         preprocessForFsi
@@ -874,8 +875,8 @@ let blockEvalModuleContextTests =
           BlockEvalFixtures.gravityBlockOnly
       result.Code
       |> Expect.stringContains
-          "should use fully-qualified name"
-          "module MyGame.Domain.Physics ="
+          "should use leaf name for nested wrapper"
+          "module Physics ="
     }
 
     // ── PARSING ISOLATION: the bug precondition ──────────────────────
