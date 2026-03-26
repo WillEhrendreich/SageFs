@@ -42,6 +42,15 @@ let classifyFrictionOutcome (result: string) =
     SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.LoadedStateStale
   | true when result.Contains("affordance", oi) || result.Contains("not available", oi) && result.Contains("tool", oi) ->
     SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.AffordanceMismatch
+  | true when result.Contains("transport", oi)
+          || result.Contains("pipe closed", oi)
+          || result.Contains("worker process", oi) && result.Contains("crash", oi) ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
+  | true when result.Contains("failed", oi)
+          || result.Contains("Reset failed", oi)
+          || result.Contains("Hard reset failed", oi)
+          || result.Contains("Build failed", oi) ->
+    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | true ->
     SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   | false ->

@@ -1152,37 +1152,54 @@ module McpTools =
     })
 
   let getStatus (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
-    withSession ctx agent sessionId workingDirectory (fun sid -> task {
-      let eventCount = 0  // EventTracking removed — event count not tracked
-      let! routeResult =
-        routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
-      match routeResult with
-      | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
-        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-        let baseStatus =
-          match info with
-          | Some sessionInfo ->
-            McpAdapter.formatProxyStatus sid eventCount snapshot sessionInfo ctx.McpPort
-          | None ->
-            let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
-            McpAdapter.formatEnhancedStatus sid eventCount state None None
-        // Enrich with multi-agent coordination data
-        let occupants = SessionOperations.SessionOccupancy.forSession ctx.SessionMap sid
-        let guidance = SessionOperations.SessionGuidance.compute occupants snapshot.Status
-        let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
-        let enriched =
-          baseStatus
-          |> SessionOperations.CoordinationEnrichment.enrichStatusWithGuidance guidance
-          |> SessionOperations.CoordinationEnrichment.enrichStatusWithPresences DateTime.UtcNow presences
-        // Also record this status check as agent activity
-        AgentActivityTracker.recordToolCall ctx.ActivityTracker agent sid None None DateTime.UtcNow
-        return enriched
-      | Ok other ->
-        return sprintf "Unexpected response: %A" other
-      | Error msg ->
-        return sprintf "Error getting status: %s" (routeErrorMessage msg)
-    })
+    task {
+      let! resolved = resolveSessionId ctx agent sessionId workingDirectory
+      match resolved with
+      | Error _noSessionMsg ->
+        // No session found — return useful status instead of an error.
+        // This prevents SessionMissing friction on the most-called tool.
+        let! sessions = ctx.SessionOps.GetAllSessions()
+        let sessionCount = sessions |> List.length
+        let availableTools = Affordances.availableTools SessionState.Uninitialized
+        return
+          System.Text.Json.JsonSerializer.Serialize(
+            {| state = "NoSession"
+               message =
+                 match sessionCount with
+                 | 0 -> "No sessions exist. Use create_session to load a project, or get_available_projects to discover .fsproj files."
+                 | _ -> sprintf "%d session(s) exist but none matched the working directory. Use list_sessions to see them, or switch_session to select one." sessionCount
+               available = availableTools |})
+      | Ok sid ->
+        let eventCount = 0  // EventTracking removed — event count not tracked
+        let! routeResult =
+          routeToSession ctx sid
+            (fun replyId -> WorkerProtocol.WorkerMessage.GetStatus (WorkerProtocol.SessionId.value replyId))
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
+          let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+          let baseStatus =
+            match info with
+            | Some sessionInfo ->
+              McpAdapter.formatProxyStatus sid eventCount snapshot sessionInfo ctx.McpPort
+            | None ->
+              let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
+              McpAdapter.formatEnhancedStatus sid eventCount state None None
+          // Enrich with multi-agent coordination data
+          let occupants = SessionOperations.SessionOccupancy.forSession ctx.SessionMap sid
+          let guidance = SessionOperations.SessionGuidance.compute occupants snapshot.Status
+          let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+          let enriched =
+            baseStatus
+            |> SessionOperations.CoordinationEnrichment.enrichStatusWithGuidance guidance
+            |> SessionOperations.CoordinationEnrichment.enrichStatusWithPresences DateTime.UtcNow presences
+          // Also record this status check as agent activity
+          AgentActivityTracker.recordToolCall ctx.ActivityTracker agent sid None None DateTime.UtcNow
+          return enriched
+        | Ok other ->
+          return sprintf "Unexpected response: %A" other
+        | Error msg ->
+          return sprintf "Error getting status: %s" (routeErrorMessage msg)
+    }
 
   let getStartupInfo (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun sid -> task {
@@ -1240,13 +1257,20 @@ module McpTools =
         return """{"status": "initializing", "message": "Session is still warming up. This typically takes 15-30s. Use get_recent_fsi_events to monitor warmup progress. Do NOT sleep-poll or create a new session."}"""
     })
 
-  let getAvailableProjects (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
-      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-      let workingDir =
-        match info with
-        | Some sessionInfo -> sessionInfo.WorkingDirectory
-        | None -> Environment.CurrentDirectory
+  let getAvailableProjects (ctx: McpContext) (_agent: string) (workingDirectory: string option) : Task<string> =
+    task {
+      // Resolve working directory without requiring a session.
+      // Try: explicit working_directory → active session's directory → Environment.CurrentDirectory
+      let! workingDir = task {
+        match workingDirectory with
+        | Some wd when not (String.IsNullOrWhiteSpace wd) -> return wd
+        | _ ->
+          // Try to get the working directory from any active session, but don't fail if none exists
+          let! sessions = ctx.SessionOps.GetAllSessions()
+          match sessions with
+          | [ single ] -> return single.WorkingDirectory
+          | _ -> return Environment.CurrentDirectory
+      }
 
       let projects =
         try
@@ -1269,7 +1293,7 @@ module McpTools =
         | _ -> [||]
 
       return McpAdapter.formatAvailableProjects workingDir projects solutions
-    })
+    }
 
   let loadFSharpScript (ctx: McpContext) (agentName: string) (filePath: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     withSession ctx agentName sessionId workingDirectory (fun sid -> task {

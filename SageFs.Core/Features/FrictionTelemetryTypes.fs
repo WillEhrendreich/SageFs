@@ -60,6 +60,8 @@ type BlockerKind =
   | ExactTestNotFound
   | OutputTooLarge
   | AffordanceMismatch
+  | TransportFailure
+  | OperationFailed
   | InvalidRequest
 
 [<RequireQualifiedAccess>]

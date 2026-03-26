@@ -819,26 +819,38 @@ module SessionManager =
               // Poll worker until it reports Ready, then update snapshot.
               // Uses while loop with CT check to stop cleanly on daemon shutdown
               // or when the session terminates before becoming Ready.
+              // Watchdog: faults the session if it hasn't become Ready within the timeout.
               Async.Start(async {
                 let mutable done' = false
+                let started = DateTime.UtcNow
+                let timeout = Timeouts.warmupReadyPollMax
                 while not done' && not ct.IsCancellationRequested do
                   do! Async.Sleep 1000
-                  try
-                    let rid = Guid.NewGuid().ToString("N").[..7]
-                    let! resp = proxy (WorkerMessage.GetStatus rid)
-                    match resp with
-                    | WorkerResponse.StatusResult(_, snapshot) ->
-                      match snapshot.Status with
-                      | SessionStatus.Ready ->
-                        inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Ready))
-                        done' <- true
-                      | SessionStatus.Faulted
-                      | SessionStatus.Stopped -> done' <- true
+                  let elapsed = DateTime.UtcNow - started
+                  match elapsed > timeout with
+                  | true ->
+                    let reason = sprintf "Session warmup timed out after %.0fs — worker did not reach Ready state. Use hard_reset_fsi_session with rebuild=true to retry." elapsed.TotalSeconds
+                    Log.warn "[SessionManager] %s (session %s)" reason (SessionId.value id)
+                    inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Faulted))
+                    onSessionFaulted id reason
+                    done' <- true
+                  | false ->
+                    try
+                      let rid = Guid.NewGuid().ToString("N").[..7]
+                      let! resp = proxy (WorkerMessage.GetStatus rid)
+                      match resp with
+                      | WorkerResponse.StatusResult(_, snapshot) ->
+                        match snapshot.Status with
+                        | SessionStatus.Ready ->
+                          inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Ready))
+                          done' <- true
+                        | SessionStatus.Faulted
+                        | SessionStatus.Stopped -> done' <- true
+                        | _ -> ()
                       | _ -> ()
-                    | _ -> ()
-                  with ex ->
-                      Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)\n%s" (SessionId.value id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-                      done' <- true  // Transport error — WorkerExited event handles cleanup
+                    with ex ->
+                        Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)\n%s" (SessionId.value id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                        done' <- true  // Transport error — WorkerExited event handles cleanup
               }, ct)
               // Request initial test discovery from the worker
               Async.Start(async {
@@ -1142,8 +1154,13 @@ module SessionManager =
         | SessionCommand.UpdateSessionStatus(id, newStatus) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
+            let faultReason =
+              match newStatus with
+              | SessionStatus.Faulted when session.Info.FaultReason.IsNone ->
+                Some "Session warmup timed out — worker did not reach Ready state."
+              | _ -> session.Info.FaultReason
             let updated =
-              { session with Info = { session.Info with Status = newStatus } }
+              { session with Info = { session.Info with Status = newStatus; FaultReason = faultReason } }
             let newState = ManagerState.addSession id updated state
             onStandbyProgressChanged ()
             return! loop newState

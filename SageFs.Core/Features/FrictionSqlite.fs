@@ -72,6 +72,8 @@ module private Decoding =
     | "ExactTestNotFound" -> Ok BlockerKind.ExactTestNotFound
     | "OutputTooLarge" -> Ok BlockerKind.OutputTooLarge
     | "AffordanceMismatch" -> Ok BlockerKind.AffordanceMismatch
+    | "TransportFailure" -> Ok BlockerKind.TransportFailure
+    | "OperationFailed" -> Ok BlockerKind.OperationFailed
     | "InvalidRequest" -> Ok BlockerKind.InvalidRequest
     | other -> Error (sprintf "Unknown blocker kind '%s'." other)
 

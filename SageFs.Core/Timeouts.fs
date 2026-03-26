@@ -104,3 +104,6 @@ module Timeouts =
   // -- Session Lifecycle --
   let sessionDispose = TimeSpan.FromSeconds(10.0)
   let staleSessionThreshold = TimeSpan.FromMinutes(10.0)
+  /// Maximum time to poll a worker waiting for Ready status after spawn/restart.
+  /// If exceeded, the session is faulted to prevent infinite WarmingUp states.
+  let warmupReadyPollMax = envOrDefault "SAGEFS_WARMUP_READY_POLL_SECONDS" 120.0

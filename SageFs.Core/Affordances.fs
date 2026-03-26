@@ -41,9 +41,11 @@ module EvalStats =
 let availableTools (state: SessionState) : string list =
   match state with
   | Uninitialized ->
-    [ "get_fsi_status"; "get_friction_report" ]
+    [ "get_fsi_status"; "get_friction_report"; "get_available_projects"
+      "list_sessions"; "create_session" ]
   | WarmingUp ->
-    [ "get_fsi_status"; "get_recent_fsi_events"; "get_friction_report" ]
+    [ "get_fsi_status"; "get_recent_fsi_events"; "get_friction_report"
+      "get_available_projects"; "list_sessions" ]
   | Ready ->
     [ "send_fsharp_code"
       "get_fsi_status"
@@ -66,11 +68,16 @@ let availableTools (state: SessionState) : string list =
       "get_fsi_status"
       "get_recent_fsi_events"
       "get_friction_report"
+      "get_available_projects"
+      "list_sessions"
       "check_fsharp_code" ]
   | Faulted ->
     [ "get_fsi_status"
       "get_recent_fsi_events"
       "get_friction_report"
+      "get_available_projects"
+      "list_sessions"
+      "create_session"
       "reset_fsi_session"
       "hard_reset_fsi_session" ]
 
