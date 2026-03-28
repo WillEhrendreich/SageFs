@@ -24,17 +24,19 @@ Welcome! SageFs is an open-source project and we genuinely appreciate contributi
 ```bash
 git clone https://github.com/WillEhrendreich/SageFs.git
 cd SageFs
-dotnet build
+dotnet fsi build.fsx
 ```
 
-That's it. No Docker required, no external databases, no npm install for the core project. SageFs is a single `dotnet build` away from running.
+The build script (one step) clones the [forked MCP SDK](https://github.com/WillEhrendreich/ModelContextProtocolSdk), packs it into a local `mcp-sdk-nupkg/` directory, and builds the solution. This is necessary because `NuGet.Config` points at that local directory as a package source.
 
-### Build Script (Alternative)
+> **Why a forked MCP SDK?** SageFs depends on a fork of `ModelContextProtocol` with additional features not yet upstream. The fork is public. The build script clones and packs it automatically — no manual steps needed.
 
-For a full build including the MCP SDK dependency, tests, packaging, and editor extensions:
+After the first run, `dotnet build` works normally (the `mcp-sdk-nupkg/` directory persists). If you get `NU1301: The local source 'mcp-sdk-nupkg' doesn't exist`, re-run `dotnet fsi build.fsx` to regenerate it.
+
+### Build Script
 
 ```bash
-dotnet fsi build.fsx              # fetch MCP SDK + build
+dotnet fsi build.fsx              # fetch MCP SDK + build (first-time setup)
 dotnet fsi build.fsx -- test      # build + run tests
 dotnet fsi build.fsx -- install   # build + pack + install as global tool
 dotnet fsi build.fsx -- ext       # build + package + install editor extensions

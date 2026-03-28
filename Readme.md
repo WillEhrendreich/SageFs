@@ -66,17 +66,17 @@ SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) serv
 Start SageFs once. Connect from VS Code, Neovim, Visual Studio, a terminal TUI, a GPU-rendered Raylib GUI, a web dashboard, or an AI agent. Open them all at the same time — they share the same live session. Switch editors without switching tools.
 
 ```mermaid
-graph TB
+flowchart TB
     D[SageFs Daemon]
 
-    D --- VS[VS Code]
-    D --- NV[Neovim]
-    D --- VI[Visual Studio]
-    D --- TU[Terminal TUI]
-    D --- GU[Raylib GUI]
-    D --- WB[Web Dashboard]
-    D --- AI[AI Agents]
-    D --- JP[Jupyter Kernel]
+    D <--> VS[VS Code]
+    D <--> NV[Neovim]
+    D <--> VI[Visual Studio]
+    D <--> TU[Terminal TUI]
+    D <--> GU[Raylib GUI]
+    D <--> WB[Web Dashboard]
+    D <--> AI[AI Agents]
+    D <--> JP[Jupyter Kernel]
 
     style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
     style VS fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
@@ -213,7 +213,7 @@ When SageFs detects web-oriented packages in your project (Falco.Datastar, Giraf
 SageFs has exactly **three concepts**: a daemon, sessions, and clients.
 
 ```mermaid
-graph TB
+flowchart TB
     subgraph D[SageFs Daemon - one per machine]
         S1[Session Worker 1 - MyApp]
         S2[Session Worker 2 - Tests]
@@ -221,10 +221,10 @@ graph TB
         SVC[MCP / Dashboard / File Watcher / Hot Reload]
     end
 
-    D --- VS[VS Code]
-    D --- NV[Neovim]
-    D --- TU[Terminal TUI]
-    D --- AI[AI Agent - MCP]
+    D <--> VS[VS Code]
+    D <--> NV[Neovim]
+    D <--> TU[Terminal TUI]
+    D <--> AI[AI Agent - MCP]
 
     style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
     style S1 fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
