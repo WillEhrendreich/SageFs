@@ -78,6 +78,27 @@ let endpointContractTests = testList "EndpointContracts" [
       apiVersion
       |> Expect.equal "apiVersion should be 2 for current contract" 2
     }
+
+    test "VS Code extension expectedApiVersion matches daemon apiVersion" {
+      // Cross-boundary contract test: reads the Fable source to extract the
+      // literal expectedApiVersion and asserts it matches the daemon's value.
+      // This prevents the exact mismatch bug reported as "apiVersion=2 is
+      // incompatible with this extension (requires v1)".
+      let clientFs =
+        System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "sagefs-vscode", "src", "SageFsClient.fs")
+        |> System.IO.File.ReadAllText
+      let m =
+        System.Text.RegularExpressions.Regex.Match(
+          clientFs,
+          @"let\s+\[<Literal>\]\s+expectedApiVersion\s*=\s*(\d+)")
+      m.Success
+      |> Expect.isTrue "should find expectedApiVersion literal in SageFsClient.fs"
+      let extensionVersion = int m.Groups.[1].Value
+      extensionVersion
+      |> Expect.equal
+        "VS Code extension expectedApiVersion must match EndpointContracts.apiVersion"
+        apiVersion
+    }
   ]
 
   testList "Endpoint registry" [

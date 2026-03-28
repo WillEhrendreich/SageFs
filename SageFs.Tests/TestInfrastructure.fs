@@ -109,6 +109,7 @@ let sharedCtx () =
     GetElmRegions = None
     GetWarmupContext = None
     GetFeatureState = None
+    CancelAmbientTestRun = None
     ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
 
 /// Create a McpContext with a custom session ID backed by the global shared actor
@@ -127,4 +128,5 @@ let sharedCtxWith (sessionId: SageFs.WorkerProtocol.SessionId) =
     GetElmRegions = None
     GetWarmupContext = None
     GetFeatureState = None
+    CancelAmbientTestRun = None
     ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext

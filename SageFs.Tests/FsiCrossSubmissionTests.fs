@@ -31,6 +31,7 @@ let private isolatedCtx (sessionId: SageFs.WorkerProtocol.SessionId) =
     GetElmRegions = None
     GetWarmupContext = None
     GetFeatureState = None
+    CancelAmbientTestRun = None
     ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
 
 /// Unique ID per test invocation — prevents type name collisions

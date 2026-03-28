@@ -321,7 +321,6 @@ PATH:
 WHEN TO USE:
 - After an unexpected error to understand what just happened and in what order.
 - To audit which code was evaluated and by which agent (MCP, editor plugin, etc.).
-- To check whether a hot-reload occurred (look for 'FileChanged' or 'ScriptLoaded' events).
 - As a lightweight alternative to get_fsi_status when you only want the recent activity log.
 
 OUTPUT FORMAT: Each event shows timestamp, event type (Eval, Error, Load, Reset), source agent name, and a brief description. Events are newest-last.""")>]
@@ -445,16 +444,13 @@ optionally rebuild the project, and create a fresh session. ALL definitions are 
 ⚠️ THIS IS ALMOST NEVER WHAT YOU WANT. Before calling this, ask yourself:
 - "Did I get an eval error?" → That's YOUR code's bug. Fix your code. Do NOT hard reset.
 - "Did I get 'earlier error'?" → A previous submission failed. Fix and resubmit it. Do NOT hard reset.
-- "I want to pick up code changes in .fs files" → The file watcher auto-reloads .fs/.fsx changes via #load (~100ms). You probably don't need this. Use rebuild=true ONLY if you need the project rebuilt (e.g., new file added to .fsproj, package reference changed).
+- "I want to pick up code changes in .fs files" → Use rebuild=true ONLY if you need the project rebuilt (e.g., new file added to .fsproj, package reference changed).
 - "The warm-up itself failed with module load errors on session start?" → Then yes, hard reset may help.
 
 VALID REASONS (rare):
 - New files added to .fsproj or package references changed (rebuild=true needed)
 - Module opens failed during warm-up (cascade of errors on EVERY eval, even '1+1;;')
 - Soft reset (reset_fsi_session) didn't fix a genuine session-level problem
-
-NOTE: The file watcher automatically detects .fs/.fsx changes and reloads them via FSI #load (~100ms).
-You do NOT need hard_reset just because you edited a source file.
 
 INVALID REASONS (common mistakes):
 - Your code had a syntax error or type error → fix your code
@@ -742,9 +738,6 @@ Use pattern to filter by test name. By default this is a substring match on Full
 Prefix pattern with 'exact:' to run one exact full test name without fuzzy matching.
 Use category to filter by test category: unit, integration, browser, benchmark, architecture, property.
 Use timeout_seconds to wait for results (default 30). Set to 0 for fire-and-forget.
-
-HOT RELOAD SAFETY:
-- If a file edit / hot reload is still in progress when this is called, it automatically waits up to 15 seconds for the reload to finish before running tests. This ensures results always reflect the latest code. A '⏳ Waited Xms for hot reload' note is prepended to the result if a wait occurred.
 
 PATTERN MATCHING:
 - pattern is a SUBSTRING match by default — 'login' matches 'should login user', 'LoginService tests', etc.

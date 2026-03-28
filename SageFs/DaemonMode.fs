@@ -1236,37 +1236,42 @@ let createElmRuntime
           match !watcherManagerRef with
           | Some mgr -> mgr.RemoveDirectory(directory)
           | None -> () }
-  ElmDaemon.startHeadless effectDeps (fun model _regions ->
-    let activeBuf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
-    let outputCount = activeBuf.Count
-    let diagCount =
-      model.Diagnostics |> Map.values |> Seq.sumBy List.length
-    try
-      let json = SseDedupKey.fromModel model
-      match json <> lastStateJson with
-      | true ->
-        lastStateJson <- json
-        let significantOutputChange = abs (outputCount - lastLoggedOutputCount) >= 50
-        let diagChanged = diagCount <> lastLoggedDiagCount
-        match (not TerminalUIState.IsActive) && (significantOutputChange || diagChanged) with
-        | true ->
-          lastLoggedOutputCount <- outputCount
-          lastLoggedDiagCount <- diagCount
-          let latest =
-            match activeBuf.IsEmpty with
-            | true -> ""
-            | false -> activeBuf.[0].Text
-          Log.info "[elm] output=%d diags=%d | %s"
-            outputCount diagCount latest
-        | false -> ()
-        System.Threading.ThreadPool.QueueUserWorkItem(fun _ ->
-          stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))) |> ignore
-      | false -> ()
-    with ex -> Log.error "[elm] State change propagation error: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue ""))
-    (fun phase msg ->
-      Log.warn "[elm] 🚨 System alarm [%s]: %s" phase msg
-      stateChangedEvent.Trigger (SystemAlarm (phase, msg)))
-    ct
+  let cancelAmbientTestRun () = effectDeps.TestCycleCancellation.TestRun.next() |> ignore
+  let runtime =
+    ElmDaemon.startHeadless
+      effectDeps
+      (fun model _regions ->
+        let activeBuf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
+        let outputCount = activeBuf.Count
+        let diagCount =
+          model.Diagnostics |> Map.values |> Seq.sumBy List.length
+        try
+          let json = SseDedupKey.fromModel model
+          match json <> lastStateJson with
+          | true ->
+            lastStateJson <- json
+            let significantOutputChange = abs (outputCount - lastLoggedOutputCount) >= 50
+            let diagChanged = diagCount <> lastLoggedDiagCount
+            match (not TerminalUIState.IsActive) && (significantOutputChange || diagChanged) with
+            | true ->
+              lastLoggedOutputCount <- outputCount
+              lastLoggedDiagCount <- diagCount
+              let latest =
+                match activeBuf.IsEmpty with
+                | true -> ""
+                | false -> activeBuf.[0].Text
+              Log.info "[elm] output=%d diags=%d | %s"
+                outputCount diagCount latest
+            | false -> ()
+            System.Threading.ThreadPool.QueueUserWorkItem(fun _ ->
+              stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))) |> ignore
+          | false -> ()
+        with ex -> Log.error "[elm] State change propagation error: %s (%s)\n%s" ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue ""))
+      (fun phase msg ->
+        Log.warn "[elm] 🚨 System alarm [%s]: %s" phase msg
+        stateChangedEvent.Trigger (SystemAlarm (phase, msg)))
+      ct
+  runtime, cancelAmbientTestRun
 
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
@@ -1338,7 +1343,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   // Create EffectDeps from SessionManager + start Elm loop
   let watcherManagerRef = ref (None: LiveTestWatcherManager option)
-  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef cts.Token
+  let elmRuntime, cancelAmbientTestRun = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef cts.Token
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
@@ -1423,6 +1428,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       SharedBindingScope = sharedBindingScope
       SharedFeatureState = Some sharedFeatureState
       ActivityTracker = activityTracker
+      CancelAmbientTestRun = Some cancelAmbientTestRun
     }
 
   let liveTestTickMs = 25

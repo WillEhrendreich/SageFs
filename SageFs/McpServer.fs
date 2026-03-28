@@ -354,6 +354,8 @@ type McpServerConfig = {
   SharedFeatureState: SageFs.Features.FeatureHooks.FeaturePushState ref option
   /// In-memory agent activity tracker for multi-agent coordination.
   ActivityTracker: SageFs.AgentActivityTracker.Tracker
+  /// Cancel any in-flight ambient test run. Wired to TestCycleCancellation.TestRun.next() in daemon mode.
+  CancelAmbientTestRun: (unit -> unit) option
 }
 
 // Create shared MCP context (private — called only by startMcpServer)
@@ -361,7 +363,7 @@ let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> op
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; ActivityTracker = cfg.ActivityTracker }
+  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; ActivityTracker = cfg.ActivityTracker; CancelAmbientTestRun = cfg.CancelAmbientTestRun }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 
@@ -950,13 +952,12 @@ let configureMcpProtocol (builder: WebApplicationBuilder) (mcpContext: McpContex
         "When starting or restarting SageFs, ALWAYS use Start-Process to launch in a visible console window, NEVER detach or run in background."
         "You OWN the full development cycle: pack, stop, reinstall, restart, test. Never ask the user to do these steps."
         "The MCP connection is SSE (push-based) \u2014 do not poll or sleep. Tools become available when SageFs is ready."
-        "SageFs pushes structured notifications (notifications/message) for important events: session faults, warmup completion, file reloads, eval failures."
+        "SageFs pushes structured notifications (notifications/message) for important events: session faults, warmup completion, eval failures."
         "Tool responses return only Result: or Error: with diagnostics \u2014 no code echo (you already know what you sent)."
         "SageFs is affordance-driven: get_fsi_status shows available tools for the current session state. Only invoke listed tools."
         "If a tool returns an error about session state, check get_fsi_status for available alternatives."
         "Use send_fsharp_code for incremental, small code blocks. End statements with ';;' for evaluation."
-        "FILE WATCHING: SageFs automatically watches .fs/.fsx source files and reloads changes via #load (~100ms). You do NOT need hard_reset to pick up source file edits."
-        "hard_reset_fsi_session with rebuild=true is ONLY needed when .fsproj changes (new files, packages) or warm-up fails. The file watcher handles .fs/.fsx changes automatically."
+        "hard_reset_fsi_session with rebuild=true is ONLY needed when .fsproj changes (new files, packages) or warm-up fails."
         "Use cancel_eval to stop a running evaluation. Use reset_fsi_session only if warm-up failed."
       ]
     )

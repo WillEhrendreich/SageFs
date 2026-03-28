@@ -63,6 +63,7 @@ let tests =
           GetElmRegions = None
           GetWarmupContext = None
           GetFeatureState = None
+          CancelAmbientTestRun = None
           ActivityTracker = SageFs.AgentActivityTracker.create() }
 
       let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)

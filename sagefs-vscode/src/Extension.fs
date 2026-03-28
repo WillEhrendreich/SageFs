@@ -2461,7 +2461,6 @@ let activate (context: ExtensionContext) =
   out.appendLine (sprintf "SageFs v%s activating (mcpPort=%d, dashboardPort=%d, autoStart=%b)" extVersion c.mcpPort c.dashboardPort autoStart)
   promise {
     try
-      out.appendLine "Checking for running daemon..."
       let! _ = discoverDaemonPorts c
       let! running = Client.isRunning c
       match running with
@@ -2477,11 +2476,10 @@ let activate (context: ExtensionContext) =
       | false ->
         match autoStart with
         | true ->
-          out.appendLine "Daemon not found, auto-starting..."
           let! projPath = findProject ()
           match projPath with
           | Some proj ->
-            out.appendLine (sprintf "Starting daemon for %s" proj)
+            out.appendLine (sprintf "Starting SageFs daemon for %s..." proj)
             do! startDaemon ()
           | None ->
             out.appendLine "No .fsproj/.sln found, skipping auto-start."

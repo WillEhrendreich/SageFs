@@ -676,6 +676,10 @@ module McpTools =
     GetFeatureState: (unit -> Features.FeatureHooks.FeaturePushState) option
     /// In-memory agent activity tracker for multi-agent coordination.
     ActivityTracker: AgentActivityTracker.Tracker
+    /// Cancel any in-flight ambient test run and return a fresh cancellation token.
+    /// Wired to TestCycleCancellation.TestRun.next() in daemon mode.
+    /// Returns None when not in daemon mode (no ambient test runs to cancel).
+    CancelAmbientTestRun: (unit -> unit) option
   }
 
   /// Get the active session ID for a specific agent/client.
@@ -1019,6 +1023,11 @@ module McpTools =
           | Text -> formatWorkerEvalResult workflow response
         match response with
         | WorkerProtocol.WorkerResponse.EvalResult(_, Ok _, diags, metadata) ->
+          // A successful eval proves the session can still function.
+          // If a previous TypeLoadException was recorded, clear it — the session recovered.
+          match typeIdentityDiagnostics.TryRemove(sid) with
+          | true, _ -> Log.info "Session %s recovered from TypeLoadException (successful eval cleared the diagnostic)" sid
+          | false, _ -> ()
           notifyElm ctx (
             SageFsEvent.EvalCompleted (sid, formatted, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic))
           match metadata |> Map.tryFind "liveTestHookResult" with
@@ -2682,73 +2691,52 @@ module McpTools =
       | Some getModel, Some dispatch ->
         let model = getModel ()
         let state = model.LiveTesting.TestState
-        // Guard: prevent overlapping test runs (MCP retry can trigger double dispatch)
-        match Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases with
+        // If a background (ambient) test run is in progress, cancel it — explicit MCP
+        // requests take priority over speculative ambient runs.
+        let mutable currentlyRunning = Features.LiveTesting.TestRunPhase.isAnyRunning state.RunPhases
+        match currentlyRunning with
+        | true ->
+          match ctx.CancelAmbientTestRun with
+          | Some cancel ->
+            cancel ()
+            // Brief settle time for cancellation to propagate through the test runner
+            do! Task.Delay 500
+            currentlyRunning <- Features.LiveTesting.TestRunPhase.isAnyRunning (getModel ()).LiveTesting.TestState.RunPhases
+          | None ->
+            // No cancellation wired (non-daemon mode) — wait briefly then give up
+            let runWaitDeadline = DateTime.UtcNow.AddSeconds(float (min timeoutSeconds 15))
+            while currentlyRunning && DateTime.UtcNow < runWaitDeadline do
+              do! Task.Delay 250
+              currentlyRunning <- Features.LiveTesting.TestRunPhase.isAnyRunning (getModel ()).LiveTesting.TestState.RunPhases
+        | false -> ()
+        match currentlyRunning with
         | true -> return RunTestsResult.format AlreadyRunning
         | false ->
-          // Wait for any in-progress hot reload to complete before running tests.
-          // If run_tests is called immediately after saving a .fs file, the session may still
-          // be reloading the changed assembly — running tests now would yield stale results.
-          let reloadWaitStart = DateTime.UtcNow
-          let reloadDeadline = reloadWaitStart.AddSeconds(15.0)
-          let mutable reloadDone = false
-          while not reloadDone && DateTime.UtcNow < reloadDeadline do
-            let! sessions = ctx.SessionOps.GetAllSessions()
-            let anyBusy =
-              sessions
-              |> List.exists (fun s ->
-                match s.Status with
-                | WorkerProtocol.SessionStatus.Evaluating
-                | WorkerProtocol.SessionStatus.Building _ -> true
-                | _ -> false)
-            match anyBusy with
-            | false -> reloadDone <- true
-            | true -> do! Task.Delay 100
-          let waitedMs = (DateTime.UtcNow - reloadWaitStart).TotalMilliseconds |> int
-          // Secondary wait: after a hot-reload, TestsDiscovered fires asynchronously and updates
-          // DiscoveredTests. Snapshot the discovery timestamp before waiting, then poll until
-          // it advances — meaning discovery completed and we have fresh test metadata.
-          let discoveryTimeBefore = (getModel ()).LiveTesting.TestState.LastDiscoveryTime
-          let mutable discoveryWaitedMs = 0
-          match waitedMs > 200 with
+        let currentState = (getModel ()).LiveTesting.TestState
+        let category =
+          match categoryFilter with
+          | Some c ->
+            match c.ToLowerInvariant() with
+            | "unit" -> Some Features.LiveTesting.TestCategory.Unit
+            | "integration" -> Some Features.LiveTesting.TestCategory.Integration
+            | "browser" -> Some Features.LiveTesting.TestCategory.Browser
+            | "benchmark" -> Some Features.LiveTesting.TestCategory.Benchmark
+            | "architecture" -> Some Features.LiveTesting.TestCategory.Architecture
+            | "property" -> Some Features.LiveTesting.TestCategory.Property
+            | other -> Some (Features.LiveTesting.TestCategory.Custom other)
+          | None -> None
+        match selectTestsForExplicitRun currentState patternFilter category with
+        | Error selectionError ->
+          return RunTestsResult.format selectionError
+        | Ok tests ->
+          let testIds = tests |> Array.map (fun tc -> tc.Id)
+          dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
+          match timeoutSeconds = 0 with
           | true ->
-            let discoveryDeadline = DateTime.UtcNow.AddSeconds(3.0)
-            let mutable discoveryDone = false
-            while not discoveryDone && DateTime.UtcNow < discoveryDeadline do
-              let currentDiscovery = (getModel ()).LiveTesting.TestState.LastDiscoveryTime
-              match currentDiscovery > discoveryTimeBefore with
-              | true -> discoveryDone <- true
-              | false -> do! Task.Delay 50
-            discoveryWaitedMs <- (DateTime.UtcNow - reloadWaitStart).TotalMilliseconds |> int
-          | false -> ()
-          let waitNote =
-            match waitedMs > 200 with
-            | true -> sprintf "⏳ Waited %dms for hot reload + %dms for discovery refresh.\n" waitedMs discoveryWaitedMs
-            | false -> ""
-          let category =
-            match categoryFilter with
-            | Some c ->
-              match c.ToLowerInvariant() with
-              | "unit" -> Some Features.LiveTesting.TestCategory.Unit
-              | "integration" -> Some Features.LiveTesting.TestCategory.Integration
-              | "browser" -> Some Features.LiveTesting.TestCategory.Browser
-              | "benchmark" -> Some Features.LiveTesting.TestCategory.Benchmark
-              | "architecture" -> Some Features.LiveTesting.TestCategory.Architecture
-              | "property" -> Some Features.LiveTesting.TestCategory.Property
-              | other -> Some (Features.LiveTesting.TestCategory.Custom other)
-            | None -> None
-          match selectTestsForExplicitRun state patternFilter category with
-          | Error selectionError ->
-            return waitNote + RunTestsResult.format selectionError
-          | Ok tests ->
-            let testIds = tests |> Array.map (fun tc -> tc.Id)
-            dispatch (SageFsMsg.Event (SageFsEvent.RunTestsRequested tests))
-            match timeoutSeconds = 0 with
-            | true ->
-              return sprintf "%sTriggered %d tests for execution. Use get_live_test_status to check progress." waitNote tests.Length
-            | false ->
-              let! result = pollForTestCompletion getModel testIds timeoutSeconds
-              return waitNote + RunTestsResult.format result
+            return sprintf "Triggered %d tests for execution. Use get_live_test_status to check progress." tests.Length
+          | false ->
+            let! result = pollForTestCompletion getModel testIds timeoutSeconds
+            return RunTestsResult.format result
     }
 
   // ── Feature Analysis MCP Tools (P15–P19) ─────────────────────
