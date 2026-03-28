@@ -354,8 +354,6 @@ type McpServerConfig = {
   SharedFeatureState: SageFs.Features.FeatureHooks.FeaturePushState ref option
   /// In-memory agent activity tracker for multi-agent coordination.
   ActivityTracker: SageFs.AgentActivityTracker.Tracker
-  /// Cancel any in-flight ambient test run. Wired to TestCycleCancellation.TestRun.next() in daemon mode.
-  CancelAmbientTestRun: (unit -> unit) option
 }
 
 // Create shared MCP context (private — called only by startMcpServer)
@@ -363,7 +361,7 @@ let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> op
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; ActivityTracker = cfg.ActivityTracker; CancelAmbientTestRun = cfg.CancelAmbientTestRun }
+  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; ActivityTracker = cfg.ActivityTracker }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 
@@ -1692,39 +1690,6 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
         | false -> Some fp
       let! result = SageFs.McpTools.getLiveTestStatus rctx.McpContext "http" fileParam
       do! rawJsonResponse ctx result
-    } :> Task
-  ) |> ignore
-  app.MapPost("/api/live-testing/run", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
-    task {
-      use! json = readJsonBody ctx
-      let pattern =
-        match json.RootElement.TryGetProperty("pattern") with
-        | true, v ->
-          let s = v.GetString()
-          match System.String.IsNullOrWhiteSpace s with
-          | true -> None
-          | false -> Some s
-        | false, _ -> None
-      let category =
-        match json.RootElement.TryGetProperty("category") with
-        | true, v ->
-          let s = v.GetString()
-          match System.String.IsNullOrWhiteSpace s with
-          | true -> None
-          | false -> Some s
-        | false, _ -> None
-      let timeout =
-        match json.RootElement.TryGetProperty("timeout_seconds") with
-        | true, v -> match v.TryGetInt32() with true, i -> i | _ -> 30
-        | false, _ -> 30
-      let! result = SageFs.McpTools.runTests rctx.McpContext pattern category timeout
-      let success, reason =
-        match result with
-        | r when r.Contains("disabled") -> false, Some "live_testing_disabled"
-        | r when r.Contains("No active") -> false, Some "no_session"
-        | r when r.Contains("Error") || r.Contains("error") -> false, None
-        | _ -> true, None
-      do! jsonResponse ctx 200 {| success = success; reason = reason; message = result |}
     } :> Task
   ) |> ignore
   app.MapGet("/api/live-testing/test-trace", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

@@ -54,7 +54,6 @@ let private mkCtxWithModel (model: SageFsModel) : McpContext =
     GetElmRegions = None
     GetWarmupContext = None
     GetFeatureState = None
-    CancelAmbientTestRun = None
     ActivityTracker = SageFs.AgentActivityTracker.create() }
 
 /// Build a SageFsModel with one discovered+failing test and a failure narrative.

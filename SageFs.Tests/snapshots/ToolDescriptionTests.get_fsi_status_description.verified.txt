@@ -23,4 +23,4 @@ KEY SIGNALS IN OUTPUT:
 
 IMPORTANT:
 - This is the MCP-facing worker/session readiness tool.
-- Use this to decide whether explicit MCP actions like send_fsharp_code, run_tests, or targeted_verify are safe to route right now.
+- Use this to decide whether explicit MCP actions like send_fsharp_code or targeted_verify are safe to route right now.

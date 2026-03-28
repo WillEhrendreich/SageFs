@@ -1,5 +1,5 @@
 ﻿Session: test-session | Events: 10 | State: Ready | Projects: Test.fsproj
-Available: send_fsharp_code, get_fsi_status, get_recent_fsi_events, get_friction_report, check_fsharp_code, targeted_verify, list_tests, run_tests, explain_test_failure, list_sessions, switch_session, create_session, get_available_projects, reset_fsi_session, hard_reset_fsi_session, cancel_eval
+Available: send_fsharp_code, get_fsi_status, get_recent_fsi_events, get_friction_report, check_fsharp_code, targeted_verify, list_tests, explain_test_failure, list_sessions, switch_session, create_session, get_available_projects, reset_fsi_session, hard_reset_fsi_session, cancel_eval
 
 📋 Startup Information:
 - Working Directory: /code/test

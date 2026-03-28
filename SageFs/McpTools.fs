@@ -360,7 +360,7 @@ KEY SIGNALS IN OUTPUT:
 
 IMPORTANT:
 - This is the MCP-facing worker/session readiness tool.
-- Use this to decide whether explicit MCP actions like send_fsharp_code, run_tests, or targeted_verify are safe to route right now.""")>]
+- Use this to decide whether explicit MCP actions like send_fsharp_code or targeted_verify are safe to route right now.""")>]
     member _.get_fsi_status(
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
         working_directory: string
@@ -727,58 +727,6 @@ OUTPUT: A text rendering of each named UI region (header, editor, output, test p
         getElmState ctx |> withEcho ctx "get_elm_state"
 
     [<McpServerTool>]
-    [<Description("""Run tests explicitly. Without parameters, runs all discovered unit tests.
-
-THIS IS AN EXPLICIT VERIFICATION TOOL:
-- It runs tests on demand for MCP clients.
-- It is separate from ambient editor/live-testing feedback.
-- If no tests are discovered, inspect your loaded projects/session state rather than assuming a live-testing toggle is required.
-
-Use pattern to filter by test name. By default this is a substring match on FullName or DisplayName.
-Prefix pattern with 'exact:' to run one exact full test name without fuzzy matching.
-Use category to filter by test category: unit, integration, browser, benchmark, architecture, property.
-Use timeout_seconds to wait for results (default 30). Set to 0 for fire-and-forget.
-
-PATTERN MATCHING:
-- pattern is a SUBSTRING match by default — 'login' matches 'should login user', 'LoginService tests', etc.
-- prefix with 'exact:' for exact full-name matching — e.g. 'exact:MyModule.Tests.should login user'.
-- Empty or omitted pattern runs all tests in the selected category.
-- If pattern matches nothing, returns a message saying no tests were found — it does NOT fall back to running all tests.
-- To run all tests in a specific module, use the module name as the pattern.
-
-CATEGORY FILTER:
-- Omit to run only 'unit' tests (the default safe set).
-- Use category='integration' for integration tests (slower, may have side effects).
-- Use category='property' for FsCheck/FsCheck.Xunit property-based tests.
-- Use category='benchmark' to run performance benchmarks (returns timing data, very slow).
-
-TIMEOUT BEHAVIOR:
-- timeout_seconds is how long THIS CALL waits for results — not a per-test execution limit.
-- timeout_seconds=0: fires the run and returns immediately.
-- Increase beyond 30 for integration or end-to-end tests that legitimately take longer.
-
-COMMON MISTAKES:
-- Calling run_tests against the wrong session or before the relevant test project is loaded.
-- Creating new sessions when tests are slow → resource starvation spiral. Wait for existing sessions.
-
-RETURN VALUE:
-- On completion: summary with pass/fail counts and names of any failing tests with failure messages.
-- On timeout: a message indicating tests are still running; call run_tests again later or use a shorter, narrower explicit test selection next time.""")>]
-    member _.run_tests(
-        [<Description("Optional test filter. Default: case-insensitive substring on FullName/DisplayName. Prefix with 'exact:' to require an exact full test name. Omit to run all tests in the category.")>]
-        pattern: string,
-        [<Description("Optional category filter: unit, integration, browser, benchmark, architecture, property. Omit for 'unit'.")>]
-        category: string,
-        [<Description("Seconds to wait for results before returning (default 30). Use 0 to fire-and-forget.")>]
-        timeout_seconds: int
-    ) : Task<string> =
-        let p = match System.String.IsNullOrWhiteSpace pattern with | true -> None | false -> Some pattern
-        let c = match System.String.IsNullOrWhiteSpace category with | true -> None | false -> Some category
-        let t = match timeout_seconds <= 0 with | true -> 0 | false -> timeout_seconds
-        logger.LogDebug("MCP-TOOL: run_tests called, pattern={Pattern}, category={Category}, timeout={Timeout}", pattern, category, t)
-        runTests ctx p c t |> withEcho ctx "run_tests"
-
-    [<McpServerTool>]
     [<Description("""Plan a trustworthy targeted verification pass for one changed behavior.
 
 USE CASE:
@@ -1003,7 +951,7 @@ RETURN VALUE:
 - Returns narratives for ALL matching tests that have a recent Passed→Failed transition.
 - Returns a 'no recent failures found' message if none of the matched tests have transitioned recently.
 
-WORKFLOW: When run_tests reports a failure, call explain_test_failure with the test name to see what changed and why it broke — without manually diffing recent commits.""")>]
+WORKFLOW: When live testing reports a failure, call explain_test_failure with the test name to see what changed and why it broke — without manually diffing recent commits.""")>]
     member _.explain_test_failure(
         [<Description("Test name or substring to match against FullName or DisplayName")>]
         test_name: string
@@ -1283,7 +1231,7 @@ Parameters:
 
 OUTPUT: JSON with TotalCount, Returned, FilterApplied, Summary, and GroupedByFile with StartLine/EndLine for each test.
 
-WORKFLOW: Use this before run_tests to discover what tests exist, or to build a filtered test run.""")>]
+WORKFLOW: Use this to discover what tests exist, or to build a pattern for send_fsharp_code-based test runs.""")>]
     member _.list_tests(
         [<Description("Optional substring filter on test name (empty for all tests)")>]
         pattern: string,

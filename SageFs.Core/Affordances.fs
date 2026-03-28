@@ -54,7 +54,6 @@ let availableTools (state: SessionState) : string list =
       "check_fsharp_code"
       "targeted_verify"
       "list_tests"
-      "run_tests"
       "explain_test_failure"
       "list_sessions"
       "switch_session"

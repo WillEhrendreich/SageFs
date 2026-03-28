@@ -139,20 +139,6 @@ let staleCellsContextTests =
 let testsContextTests =
   testList "FeatureDiscovery.discover with tests" [
 
-    testCase "run_tests boosted to Essential when tests discovered" <| fun _ ->
-      let ctx = withTests 10
-      let r = FeatureDiscovery.discover ctx
-      match findTool "run_tests" r with
-      | Some s -> s |> isEssential |> Expect.isTrue "essential with tests"
-      | None   -> failtest "run_tests should be present"
-
-    testCase "run_tests WhyNow mentions test count" <| fun _ ->
-      let ctx = withTests 42
-      let r = FeatureDiscovery.discover ctx
-      match findTool "run_tests" r with
-      | Some s -> s.WhyNow |> Expect.stringContains "count in message" "42"
-      | None   -> failtest "missing tool"
-
     testCase "context summary includes test count" <| fun _ ->
       let ctx = withTests 8
       let r = FeatureDiscovery.discover ctx

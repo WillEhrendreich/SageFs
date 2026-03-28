@@ -55,7 +55,6 @@ module McpSessionIsolation =
         GetElmRegions = None
         GetWarmupContext = None
         GetFeatureState = None
-        CancelAmbientTestRun = None
         ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
     ctx, dispatched
 
@@ -153,7 +152,6 @@ module McpSessionIsolation =
           GetElmRegions = None
           GetWarmupContext = None
           GetFeatureState = None
-          CancelAmbientTestRun = None
           ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
 
       let! result = switchSession ctx "test" "ffff0001"
@@ -292,7 +290,7 @@ module WorkingDirRoutingPriority =
           NotifyWorkerDied = fun _ -> () }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
-      GetFeatureState = None; CancelAmbientTestRun = None; ActivityTracker = SageFs.AgentActivityTracker.create() }
+      GetFeatureState = None; ActivityTracker = SageFs.AgentActivityTracker.create() }
 
   let tests = testSequenced <| testList "workingDirectory routing priority" [
     testTask "workingDirectory should override cached session" {
@@ -460,7 +458,6 @@ module ResetIsolation =
         GetElmRegions = None
         GetWarmupContext = None
         GetFeatureState = None
-        CancelAmbientTestRun = None
         ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
     ctx, restartLog, routedSessions
 
@@ -546,7 +543,6 @@ module ResetIsolation =
         GetElmRegions = None
         GetWarmupContext = None
         GetFeatureState = None
-        CancelAmbientTestRun = None
         ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
     ctx, sidStr, resetStarted, allowResetFinish
 
@@ -622,7 +618,6 @@ module ResetIsolation =
         GetElmRegions = None
         GetWarmupContext = None
         GetFeatureState = None
-        CancelAmbientTestRun = None
         ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
     ctx, sidStr, workerDied, registryStatus
 
@@ -691,7 +686,6 @@ module ResetIsolation =
           GetElmRegions = None
           GetWarmupContext = None
           GetFeatureState = None
-          CancelAmbientTestRun = None
           ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
 
       let hardResetTask = hardResetSession ctx "agent1" true (Some "aaa00001") None

@@ -27,7 +27,6 @@ let private mkCtxWithState (state: LiveTestState) : McpContext =
     GetElmRegions = None
     GetWarmupContext = None
     GetFeatureState = None
-    CancelAmbientTestRun = None
     ActivityTracker = SageFs.AgentActivityTracker.create() }
 
 let private jsonBoolField (fieldName: string) (root: JsonElement) =

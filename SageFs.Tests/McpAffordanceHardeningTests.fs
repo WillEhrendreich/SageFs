@@ -404,7 +404,7 @@ let stateTransitionSafetyTests =
                 state tool ex.Message))
         tested
         |> Expect.equal
-          "should test 5 states × 18 tools = 90" 90
+          "should test 5 states × 17 tools = 85" 85
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

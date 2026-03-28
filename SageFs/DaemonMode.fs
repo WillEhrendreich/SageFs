@@ -1236,7 +1236,6 @@ let createElmRuntime
           match !watcherManagerRef with
           | Some mgr -> mgr.RemoveDirectory(directory)
           | None -> () }
-  let cancelAmbientTestRun () = effectDeps.TestCycleCancellation.TestRun.next() |> ignore
   let runtime =
     ElmDaemon.startHeadless
       effectDeps
@@ -1271,7 +1270,7 @@ let createElmRuntime
         Log.warn "[elm] 🚨 System alarm [%s]: %s" phase msg
         stateChangedEvent.Trigger (SystemAlarm (phase, msg)))
       ct
-  runtime, cancelAmbientTestRun
+  runtime
 
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
@@ -1343,7 +1342,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   // Create EffectDeps from SessionManager + start Elm loop
   let watcherManagerRef = ref (None: LiveTestWatcherManager option)
-  let elmRuntime, cancelAmbientTestRun = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef cts.Token
+  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef cts.Token
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
@@ -1428,7 +1427,6 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       SharedBindingScope = sharedBindingScope
       SharedFeatureState = Some sharedFeatureState
       ActivityTracker = activityTracker
-      CancelAmbientTestRun = Some cancelAmbientTestRun
     }
 
   let liveTestTickMs = 25

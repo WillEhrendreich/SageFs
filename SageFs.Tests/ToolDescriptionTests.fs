@@ -118,23 +118,6 @@ let descriptionPropertyTests =
       |> Expect.isTrue
         "Should explain that errors don't corrupt session state"
 
-    testCase "run_tests description teaches exact full-name matching"
-    <| fun _ ->
-      let desc =
-        toolDescriptions
-        |> List.find (fun (name, _) -> name = "run_tests")
-        |> snd
-      desc |> Expect.stringContains "should mention exact prefix" "exact:"
-
-    testCase "run_tests description stays separate from live-testing controls"
-    <| fun _ ->
-      let desc =
-        toolDescriptions
-        |> List.find (fun (name, _) -> name = "run_tests")
-        |> snd
-      desc.Contains("enable_live_testing", StringComparison.OrdinalIgnoreCase)
-      |> Expect.isFalse "run_tests should not teach MCP agents to rely on live-testing toggles"
-
     testCase "get_fsi_status description stays focused on worker readiness"
     <| fun _ ->
       let desc =
@@ -154,5 +137,5 @@ let descriptionPropertyTests =
 
     testCase "reduced MCP surface keeps the tool count surgical"
     <| fun _ ->
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 18
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 17
   ]
