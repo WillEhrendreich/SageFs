@@ -28,7 +28,8 @@ module ErrorMessages =
     match category with
     | ErrorCategory.TypeLoad ->
       "⚠️ TypeLoadException detected — this MAY indicate a type identity conflict. " +
-      "Try fixing your code first: remove duplicate '#r' directives, fix 'open' collisions, " +
+      "Do NOT immediately reset — try fixing your code first. " +
+      "Remove duplicate '#r' directives, fix 'open' collisions, " +
       "or resubmit without the offending code. If a subsequent eval succeeds, the session is fine. " +
       "If ALL subsequent evals fail with TypeLoadException, the session is genuinely poisoned — " +
       "use hard_reset_fsi_session with rebuild=true to recover. " +

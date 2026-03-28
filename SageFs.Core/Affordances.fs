@@ -45,7 +45,7 @@ let availableTools (state: SessionState) : string list =
       "list_sessions"; "create_session" ]
   | WarmingUp ->
     [ "get_fsi_status"; "get_recent_fsi_events"; "get_friction_report"
-      "get_available_projects"; "list_sessions" ]
+      "get_available_projects"; "list_sessions"; "create_session" ]
   | Ready ->
     [ "send_fsharp_code"
       "get_fsi_status"

@@ -14,7 +14,9 @@ let affordanceTests =
       testCase "Uninitialized state offers status and local friction report"
       <| fun _ ->
         availableTools Uninitialized
-        |> Expect.equal "status and friction report" [ "get_fsi_status"; "get_friction_report" ]
+        |> Expect.containsAll "status, friction, session tools"
+          [ "get_fsi_status"; "get_friction_report"; "get_available_projects"
+            "list_sessions"; "create_session" ]
 
       testCase "WarmingUp state offers get_fsi_status and get_recent_fsi_events"
       <| fun _ ->
