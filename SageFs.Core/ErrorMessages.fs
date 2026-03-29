@@ -27,14 +27,14 @@ module ErrorMessages =
   let getSuggestion (category: ErrorCategory) =
     match category with
     | ErrorCategory.TypeLoad ->
-      "⚠️ TypeLoadException detected — this MAY indicate a type identity conflict. " +
-      "Do NOT immediately reset — try fixing your code first. " +
-      "Remove duplicate '#r' directives, fix 'open' collisions, " +
-      "or resubmit without the offending code. If a subsequent eval succeeds, the session is fine. " +
-      "If ALL subsequent evals fail with TypeLoadException, the session is genuinely poisoned — " +
-      "use hard_reset_fsi_session with rebuild=true to recover. " +
-      "Common causes: (1) '#r' on an assembly already loaded by '--proj' startup " +
-      "(call get_startup_info to check). (2) Redefining a type that collides with a project DLL type."
+      "⚠️ TypeLoadException detected — most likely cause: a '#r' directive on an assembly already " +
+      "loaded by '--proj' startup (call get_startup_info to check). " +
+      "PRIMARY FIX: remove the duplicate '#r' directive from your code and resubmit — this resolves it 90% of the time. " +
+      "Do NOT reset the session yet. " +
+      "Try submitting a trivial expression (e.g. '1 + 1;;') — if it succeeds, your session is fine. " +
+      "Only if completely unrelated, trivial evals ALSO fail with TypeLoadException should you consider " +
+      "hard_reset_fsi_session with rebuild=true as a last resort. " +
+      "Other causes: (2) Redefining a type that collides with a project DLL type — fix 'open' collisions or rename your type."
     | ErrorCategory.EarlierError ->
       "⚠️ This 'earlier error' means a PREVIOUS statement had a compile error, so its definitions were never created. " +
       "The session is NOT corrupted — all successfully evaluated statements are still valid. " +

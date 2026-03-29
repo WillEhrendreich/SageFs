@@ -658,6 +658,7 @@ WHEN TO USE:
         logger.LogDebug("MCP-TOOL: list_sessions called")
         listSessions ctx |> withEcho ctx "list_sessions"
 
+    [<McpServerTool>]
     [<Description("""Stop an active FSI session by its ID. The worker process is gracefully shut down and its resources are released.
 
 WHEN TO USE:
