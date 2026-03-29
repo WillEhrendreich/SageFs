@@ -24,6 +24,8 @@ on:
         required: true
       SAGEFS_NVIM_PAT:
         required: false
+      OVSX_PAT:
+        required: false
 
 jobs:
   publish:
@@ -60,7 +62,7 @@ jobs:
         node-version: 20
 
     - name: Install marketplace CLIs
-      run: npm install -g @vscode/vsce tfx-cli
+      run: npm install -g @vscode/vsce tfx-cli ovsx
 
     - name: Download release bundle
       uses: actions/download-artifact@v4
@@ -97,6 +99,13 @@ jobs:
         VSCE_PAT: ${{ secrets.VSCE_PAT }}
       run: |
         npx @vscode/vsce publish --packagePath "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --skip-duplicate
+
+    - name: Publish VS Code extension to Open VSX
+      continue-on-error: true
+      env:
+        OVSX_PAT: ${{ secrets.OVSX_PAT }}
+      run: |
+        npx ovsx publish "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --pat $env:OVSX_PAT
 
     - name: Patch Visual Studio VSIX manifest
       id: vsix_patch

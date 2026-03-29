@@ -13,13 +13,13 @@
     <!-- VS Editor MEF packages — version-pinned; this project opts out of central package management.
          PrivateAssets="all" is CRITICAL: VS SDK types have identity issues if loaded twice.
          Without this, the VSIX's copy and the MEF assembly's copy conflict and cause mysterious crashes. -->
-    <PackageReference Include="Microsoft.VisualStudio.Text.UI.Wpf" Version="17.12.40595.6" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.VisualStudio.Text.UI" Version="17.12.40595.6" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.VisualStudio.CoreUtility" Version="17.12.40595.6" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.VisualStudio.Text.Data" Version="17.12.40595.6" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Text.UI.Wpf" Version="17.13.226" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Text.UI" Version="17.13.226" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.CoreUtility" Version="17.13.226" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Text.Data" Version="17.13.226" PrivateAssets="all" />
     <PackageReference Include="Microsoft.VisualStudio.Language" Version="17.13.226" PrivateAssets="all" />
     <!-- Shell.15.0 provides ThreadHelper, ServiceProvider, IVsStatusbar, SVsStatusbar for StatusBarService. -->
-    <PackageReference Include="Microsoft.VisualStudio.Shell.15.0" Version="17.12.40595.6" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.VisualStudio.Shell.15.0" Version="17.13.40008" PrivateAssets="all" />
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
   <ItemGroup>

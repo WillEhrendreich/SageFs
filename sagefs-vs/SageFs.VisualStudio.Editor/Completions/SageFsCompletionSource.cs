@@ -216,12 +216,8 @@ internal sealed class SageFsCompletionSource : IAsyncCompletionSource
     /// Returns true when the trigger text should initiate completion.
     /// Triggers on "." (dot) or text of length ≥ <see cref="MinTriggerLength"/>.
     /// </summary>
-    internal static bool ShouldTriggerForText(string? triggerText)
-    {
-        if (string.IsNullOrEmpty(triggerText)) return false;
-        if (triggerText == ".") return true;
-        return triggerText.Length >= MinTriggerLength;
-    }
+    internal static bool ShouldTriggerForText(string? triggerText) =>
+        triggerText == "." || triggerText?.Length >= MinTriggerLength;
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
