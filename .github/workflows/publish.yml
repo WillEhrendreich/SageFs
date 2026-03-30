@@ -100,12 +100,21 @@ jobs:
       run: |
         npx @vscode/vsce publish --packagePath "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --skip-duplicate
 
+    - name: Create Open VSX namespace (idempotent)
+      continue-on-error: true
+      env:
+        OVSX_PAT: ${{ secrets.OVSX_PAT }}
+      run: |
+        Write-Host "Creating Open VSX namespace 'willehrendreich' (will warn if already exists)..."
+        npx ovsx create-namespace willehrendreich --pat $env:OVSX_PAT
+        Write-Host "Namespace step complete (exit $LASTEXITCODE — non-zero is expected if namespace already exists)"
+
     - name: Publish VS Code extension to Open VSX
       continue-on-error: true
       env:
         OVSX_PAT: ${{ secrets.OVSX_PAT }}
       run: |
-        npx ovsx publish "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --pat $env:OVSX_PAT
+        npx ovsx publish "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --pat $env:OVSX_PAT --skip-duplicate
 
     - name: Patch Visual Studio VSIX manifest
       id: vsix_patch

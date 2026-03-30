@@ -17,14 +17,14 @@ SageFs brings live evaluation, instant test feedback, and coverage visualization
 | **Hot Reload** | Method-level patching — change code, see results without restart |
 | **Eval Performance** | Status bar sparkline with P50/P95/P99 eval latencies |
 
-> **Note:** This extension is not yet published on the VS Marketplace. See [Installing](#installing) below.
+> **Available on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) and [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs).**
 
 ---
 
 ## 🚀 Quick Start
 
 1. **Install SageFs CLI**: `dotnet tool install --global SageFs`
-2. **Install this extension**: Download `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases) → Extensions sidebar → `...` → Install from VSIX
+2. **Install this extension**: Search **SageFs** in the Extensions sidebar, or `code --install-extension willehrendreich.sagefs`
 3. **Open an F# project** in VS Code
 4. **Press `Alt+Enter`** on any expression — the daemon starts automatically and results appear inline
 
@@ -159,9 +159,17 @@ Click the daemon status item to open the dashboard.
 
 ## Installing
 
-> The SageFs VS Code extension is **not published on the VS Marketplace** yet. Install manually:
+**Option A: VS Code Marketplace (recommended)**
 
-**Option A: Download from GitHub Releases (recommended)**
+Search for **SageFs** in the Extensions sidebar, or install from the command line:
+
+```bash
+code --install-extension willehrendreich.sagefs
+```
+
+Also available on [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs) for VSCodium and other compatible editors.
+
+**Option B: Download from GitHub Releases**
 
 Each [GitHub Release](https://github.com/WillEhrendreich/SageFs/releases) includes a `.vsix` file:
 
@@ -171,7 +179,7 @@ code --install-extension sagefs-<version>.vsix
 
 Or: open the Extensions sidebar → click `...` (top-right) → "Install from VSIX..." → select the downloaded file.
 
-**Option B: Build from source**
+**Option C: Build from source**
 
 ```bash
 cd sagefs-vscode
