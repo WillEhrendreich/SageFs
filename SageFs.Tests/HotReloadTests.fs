@@ -6,6 +6,7 @@ open Expecto
 open SageFs.FileWatcher
 open SageFs.AppState
 open SageFs.Middleware.HotReloading
+open Microsoft.Extensions.Logging.Abstractions
 
 let private makeState () : AppState =
   {
@@ -673,6 +674,69 @@ let endswithPrefilterTests =
     }
   ]
 
+/// WHY tests: handleNewAsmFromRepl MUST gate the dangerous .ParameterType
+/// reflection behind hotReloadEnabled. Without this gate, every normal REPL
+/// eval (define type in block 1, reference it in block 2) triggers
+/// TypeLoadException from stale FSI compilation units.
+let handleNewAsmFromReplGatingTests =
+  testList "WHY — handleNewAsmFromRepl gating" [
+    test "WHY — hotReloadEnabled=false returns empty updatedMethods because ParameterType reflection causes TypeLoadException on stale FSI types" {
+      // Arrange: use a real assembly with methods that have parameters
+      let asm = typeof<Expecto.TestCode>.Assembly
+      let emptyState : State = {
+        Methods = Map.empty
+        LastOpenModules = []
+        LastAssembly = None
+        ProjectAssemblies = []
+        AssemblyLoadErrors = []
+        LiveTestInit = LiveTestInit.Pending
+      }
+      // Act: call with hotReloadEnabled=false
+      let _, updatedMethods =
+        handleNewAsmFromRepl NullLogger.Instance false asm emptyState
+      // Assert: no methods should be reported as "updated" (no replacement pairs)
+      updatedMethods
+      |> Flip.Expect.isEmpty
+        "hotReloadEnabled=false must never produce replacement pairs — ParameterType access causes TypeLoadException on stale FSI types"
+    }
+
+    test "WHY — hotReloadEnabled=false still merges methods for live testing discovery" {
+      // Even with hot-reload disabled, the method merge MUST happen so that
+      // live testing can discover tests via getAllMethods on subsequent evals.
+      let asm = typeof<Expecto.TestCode>.Assembly
+      let emptyState : State = {
+        Methods = Map.empty
+        LastOpenModules = []
+        LastAssembly = None
+        ProjectAssemblies = []
+        AssemblyLoadErrors = []
+        LiveTestInit = LiveTestInit.Pending
+      }
+      let newState, _ =
+        handleNewAsmFromRepl NullLogger.Instance false asm emptyState
+      newState.Methods.IsEmpty
+      |> Flip.Expect.isFalse
+        "method merge must still happen when hot-reload is disabled — live testing needs the method registry"
+    }
+
+    test "WHY — hotReloadEnabled=false sets LastAssembly for duplicate detection" {
+      let asm = typeof<Expecto.TestCode>.Assembly
+      let emptyState : State = {
+        Methods = Map.empty
+        LastOpenModules = []
+        LastAssembly = None
+        ProjectAssemblies = []
+        AssemblyLoadErrors = []
+        LiveTestInit = LiveTestInit.Pending
+      }
+      let newState, _ =
+        handleNewAsmFromRepl NullLogger.Instance false asm emptyState
+      newState.LastAssembly
+      |> Flip.Expect.isSome
+        "LastAssembly must be set so duplicate assembly detection works on next eval"
+    }
+  ]
+
 [<Tests>]
 let allHotReloadTests =
   testList "Hot Reload Integration" [
@@ -694,4 +758,5 @@ let allHotReloadTests =
     highestVersionResolutionTests
     moduleScoringMaxTests
     endswithPrefilterTests
+    handleNewAsmFromReplGatingTests
   ]

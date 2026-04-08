@@ -953,8 +953,10 @@ let renderSessionFilmstrip (entries: FilmstripEntry list) =
       ]
   ]
 
-/// Render current FSI diagnostics as a live panel with emoji severity icons and a count badge.
+/// Render current FSI diagnostics as a collapsible panel with emoji severity icons and a count badge.
 /// Silent when there are no diagnostics — clean state needs no confirmation.
+/// Uses <details>/<summary> so the user can collapse the error wall — consistent with
+/// failure narratives and filmstrip panels. The count badge stays visible when collapsed.
 let renderCurrentDiagnostics (diags: Diagnostic list) =
   let errorCount = diags |> List.filter (fun d -> d.Severity = DiagError) |> List.length
   let warnCount = diags |> List.filter (fun d -> d.Severity = DiagWarning) |> List.length
@@ -962,20 +964,28 @@ let renderCurrentDiagnostics (diags: Diagnostic list) =
     match diags.IsEmpty with
     | true -> ()
     | false ->
-      Elem.span [ Attr.class' "diag-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
+      let badgeText =
         match errorCount, warnCount with
-        | e, 0 -> Text.raw (sprintf "🔴 %d error%s" e (if e = 1 then "" else "s"))
-        | 0, w -> Text.raw (sprintf "⚠️ %d warning%s" w (if w = 1 then "" else "s"))
-        | e, w -> Text.raw (sprintf "🔴 %d error%s · ⚠️ %d warning%s" e (if e = 1 then "" else "s") w (if w = 1 then "" else "s"))
+        | e, 0 -> sprintf "🔴 %d error%s" e (if e = 1 then "" else "s")
+        | 0, w -> sprintf "⚠️ %d warning%s" w (if w = 1 then "" else "s")
+        | e, w -> sprintf "🔴 %d error%s · ⚠️ %d warning%s" e (if e = 1 then "" else "s") w (if w = 1 then "" else "s")
+      Elem.details [] [
+        Elem.summary [ Attr.style disclosureSummaryStyle ] [
+          Elem.span [ Attr.class' "diag-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
+            Text.raw badgeText
+          ]
+        ]
+        Elem.div [ Attr.style "margin-top: 0.25rem;" ] [
+          yield! diags |> List.map (fun diag ->
+            let icon = match diag.Severity with DiagError -> "🔴" | DiagWarning -> "⚠️"
+            Elem.div [ Attr.class' (sprintf "diag %s" (DiagSeverity.toCssClass diag.Severity)) ] [
+              Elem.span [ Attr.class' "diag-icon" ] [ Text.raw icon ]
+              if diag.Line > 0 || diag.Col > 0 then
+                Elem.span [ Attr.class' "diag-loc" ] [ Text.raw (sprintf " L%d:%d " diag.Line diag.Col) ]
+              Elem.span [ Attr.class' "diag-msg" ] [ Text.raw diag.Message ]
+            ])
+        ]
       ]
-      yield! diags |> List.map (fun diag ->
-        let icon = match diag.Severity with DiagError -> "🔴" | DiagWarning -> "⚠️"
-        Elem.div [ Attr.class' (sprintf "diag %s" (DiagSeverity.toCssClass diag.Severity)) ] [
-          Elem.span [ Attr.class' "diag-icon" ] [ Text.raw icon ]
-          if diag.Line > 0 || diag.Col > 0 then
-            Elem.span [ Attr.class' "diag-loc" ] [ Text.raw (sprintf " L%d:%d " diag.Line diag.Col) ]
-          Elem.span [ Attr.class' "diag-msg" ] [ Text.raw diag.Message ]
-        ])
   ]
 
 /// Render the full dynamic content of the dashboard as a single <div id="main">.

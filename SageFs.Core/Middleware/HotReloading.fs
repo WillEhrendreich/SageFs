@@ -383,34 +383,71 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
   match st.LastAssembly with
   | Some prev when prev = asm -> st, []
   | _ ->
-    let scoreCandidate (newMethod: Method) (existingMethod: Method) =
-      let moduleCandidate =
-        st.LastOpenModules
-        |> Seq.map (fun o ->
-          match existingMethod.FullName.EndsWith(o + "." + newMethod.FullName,
-            StringComparison.Ordinal) with
-          | true -> 2
-          | false -> 0)
-        |> Seq.fold max 0
-      let noModuleCandidate =
-        match existingMethod.FullName.EndsWith(newMethod.FullName,
-          StringComparison.Ordinal) with
-        | true -> 1
-        | false -> 0
-      max moduleCandidate noModuleCandidate
+    // Compute getAllMethods once — used for both method merge and hot-reload matching.
+    // getAllMethods has internal try/catch for ReflectionTypeLoadException so this is safe.
+    let newMethods = getAllMethods asm
 
+    // Merge new assembly's methods into Methods so future evals can patch functions
+    // defined in FSI (not in project DLLs). Without this, only project-DLL methods
+    // are ever patchable; FSI-first-defined functions are invisible to Harmony.
+    // This merge is safe (no .ParameterType access) and needed for live testing
+    // discovery regardless of hot-reload state.
+    let newMethodsByName =
+      newMethods
+      |> List.groupBy (fun m -> m.MethodInfo.Name)
+      |> List.map (fun (name, methods) -> name, methods)
+      |> Map.ofList
+
+    let mergedMethods =
+      newMethodsByName |> Map.fold (fun acc k v -> Map.add k v acc) st.Methods
+
+    // Chesterton's fence: replacementPairs computation accesses .ParameterType and
+    // .ReturnType on MethodInfo — these trigger TypeLoadException when parameters
+    // reference types from older FSI compilation units that were redefined.
+    // This MUST be gated behind hotReloadEnabled. Without this gate, every normal
+    // REPL eval (define type in block 1, use it in block 2) triggers the exception.
     let replacementPairs =
-      getAllMethods asm
-      |> Seq.choose (fun newMethod ->
-        Map.tryFind newMethod.MethodInfo.Name st.Methods
-        |> Option.bind (
-          Seq.filter (fun existingMethod ->
-               let getParams m =
-                 m.MethodInfo.GetParameters() |> Array.map _.ParameterType
+      match hotReloadEnabled with
+      | false -> []
+      | true ->
+        let scoreCandidate (newMethod: Method) (existingMethod: Method) =
+          let moduleCandidate =
+            st.LastOpenModules
+            |> Seq.map (fun o ->
+              match existingMethod.FullName.EndsWith(o + "." + newMethod.FullName,
+                StringComparison.Ordinal) with
+              | true -> 2
+              | false -> 0)
+            |> Seq.fold max 0
+          let noModuleCandidate =
+            match existingMethod.FullName.EndsWith(newMethod.FullName,
+              StringComparison.Ordinal) with
+            | true -> 1
+            | false -> 0
+          max moduleCandidate noModuleCandidate
 
-               getParams existingMethod = getParams newMethod
-               && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
-               && existingMethod.FullName.EndsWith(newMethod.FullName, StringComparison.Ordinal))
+        newMethods
+        |> Seq.choose (fun newMethod ->
+          Map.tryFind newMethod.MethodInfo.Name st.Methods
+          |> Option.bind (
+            Seq.filter (fun existingMethod ->
+              // Chesterton's fence: .ParameterType/.ReturnType can throw
+              // TypeLoadException when FSI redefines a type across compilation
+              // units. Even with the hotReloadEnabled gate, this can happen for
+              // hot-reload workflows that redefine types. Catch and skip gracefully.
+              try
+                let getParams m =
+                  m.MethodInfo.GetParameters() |> Array.map _.ParameterType
+
+                getParams existingMethod = getParams newMethod
+                && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
+                && existingMethod.FullName.EndsWith(newMethod.FullName, StringComparison.Ordinal)
+              with
+              | :? TypeLoadException as ex ->
+                logger.LogDebug(
+                  sprintf "Hot-reload param comparison skipped (TypeLoadException): %s — %s"
+                    newMethod.FullName ex.Message)
+                false)
             // Chesterton's fence: exact qualified-name matching replaces FuzzySharp.
             // Fuzzy string matching for method identity is a heuristic that can match
             // the wrong method (e.g. `getUser` vs `getUsers` have high Fuzz.Ratio).
@@ -432,31 +469,13 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
                       newMethod.FullName arr[0].FullName arr[1].FullName s0)
                 | false -> ()
                 Some arr[0])
-        |> Option.map (fun oldMethod -> oldMethod, newMethod))
-      |> Seq.toList
+          |> Option.map (fun oldMethod -> oldMethod, newMethod))
+        |> Seq.toList
 
-    // Only apply Harmony detours when hot-reload is explicitly enabled.
-    // Without this gate, every eval triggers MonoMod patching — causing
-    // TypeLoadException on stale FSI types even when users never asked
-    // for hot-reload.
-    match hotReloadEnabled with
-    | true ->
-      for methodToReplace, newMethod in replacementPairs do
-        logger.LogDebug <| "Updating method " + methodToReplace.FullName
-        detourMethod logger methodToReplace.MethodInfo newMethod.MethodInfo
-    | false -> ()
-
-    // Merge new assembly's methods into Methods so future evals can patch functions
-    // defined in FSI (not in project DLLs). Without this, only project-DLL methods
-    // are ever patchable; FSI-first-defined functions are invisible to Harmony.
-    let newMethodsByName =
-      getAllMethods asm
-      |> List.groupBy (fun m -> m.MethodInfo.Name)
-      |> List.map (fun (name, methods) -> name, methods)
-      |> Map.ofList
-
-    let mergedMethods =
-      newMethodsByName |> Map.fold (fun acc k v -> Map.add k v acc) st.Methods
+    // Apply Harmony detours — already gated by replacementPairs being [] when disabled.
+    for methodToReplace, newMethod in replacementPairs do
+      logger.LogDebug <| "Updating method " + methodToReplace.FullName
+      detourMethod logger methodToReplace.MethodInfo newMethod.MethodInfo
 
     { st with LastAssembly = Some asm; Methods = mergedMethods },
     List.map (fst >> _.FullName) replacementPairs
