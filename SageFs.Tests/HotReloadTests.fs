@@ -6,7 +6,7 @@ open Expecto
 open SageFs.FileWatcher
 open SageFs.AppState
 open SageFs.Middleware.HotReloading
-open Microsoft.Extensions.Logging.Abstractions
+open SageFs.Utils
 
 let private makeState () : AppState =
   {
@@ -693,7 +693,7 @@ let handleNewAsmFromReplGatingTests =
       }
       // Act: call with hotReloadEnabled=false
       let _, updatedMethods =
-        handleNewAsmFromRepl NullLogger.Instance false asm emptyState
+        handleNewAsmFromRepl (Log.asILogger()) false asm emptyState
       // Assert: no methods should be reported as "updated" (no replacement pairs)
       updatedMethods
       |> Flip.Expect.isEmpty
@@ -713,7 +713,7 @@ let handleNewAsmFromReplGatingTests =
         LiveTestInit = LiveTestInit.Pending
       }
       let newState, _ =
-        handleNewAsmFromRepl NullLogger.Instance false asm emptyState
+        handleNewAsmFromRepl (Log.asILogger()) false asm emptyState
       newState.Methods.IsEmpty
       |> Flip.Expect.isFalse
         "method merge must still happen when hot-reload is disabled — live testing needs the method registry"
@@ -730,7 +730,7 @@ let handleNewAsmFromReplGatingTests =
         LiveTestInit = LiveTestInit.Pending
       }
       let newState, _ =
-        handleNewAsmFromRepl NullLogger.Instance false asm emptyState
+        handleNewAsmFromRepl (Log.asILogger()) false asm emptyState
       newState.LastAssembly
       |> Flip.Expect.isSome
         "LastAssembly must be set so duplicate assembly detection works on next eval"
