@@ -2283,8 +2283,12 @@ let activate (context: ExtensionContext) =
         | "finalizing" ->
           warmupPhase <- None
           warmupDetail <- None
+          refreshStatus ()
         | _ -> ()
       OnWarmupCompleted = fun projectName ->
+        warmupPhase <- None
+        warmupDetail <- None
+        refreshStatus ()
         Window.showInformationMessage
           (sprintf "SageFs: warmup complete for %s — session ready" projectName)
           [||]
