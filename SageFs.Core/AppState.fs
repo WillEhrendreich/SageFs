@@ -320,6 +320,20 @@ let cleanStdout (raw: string) =
     | false -> ()
   sb.ToString()
 
+let tryGetEvalAvailabilityError sessionState (st: AppState) =
+  match sessionState with
+  | SessionState.Faulted ->
+    Some "Session is faulted. Run hard_reset_fsi_session to recover."
+  | _ ->
+    match isNull (box st.Session) with
+    | true ->
+      Some "FSI session is unavailable. Run hard_reset_fsi_session to recover."
+    | false ->
+      match isNull (box st.OutStream) with
+      | true ->
+        Some "Output recorder is unavailable. Run hard_reset_fsi_session to recover."
+      | false -> None
+
 let evalFn (token: CancellationToken) =
   fun ({ Code = code }, st) ->
     // Capture Console.Out separately so we can reorder: val bindings first, stdout last
@@ -969,27 +983,41 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           st.OutStream.Enable()
           return! loop st middleware sessionState evalStats
         | EvalRun(request, cts, reply) ->
-          let sessionState' = SessionState.Evaluating
-          publishSnapshot st Evaluating evalStats
-          let sw = System.Diagnostics.Stopwatch.StartNew()
-          emit (Events.EvalRequested {| Code = request.Code; Source = Events.System |})
-          let pipeline = pipelineBuildFn (wrapErrorMiddleware :: middleware) (evalFn cts.Token)
-          // Run eval on a dedicated thread so the actor stays responsive
-          // to CancelEval, HardReset, etc. while the eval is in progress.
-          let evalThread = Thread(fun () ->
-            try
-              let res, newSt = pipeline (request, st)
-              mailbox.Post(EvalFinished(Ok(res, newSt), sw, request.Code, reply))
-            with ex ->
-              mailbox.Post(EvalFinished(Error ex, sw, request.Code, reply))
-          )
-          evalThread.IsBackground <- true
-          evalThread.Name <- sprintf "sagefs-eval-%d" (evalStats.EvalCount + 1)
-          currentEvalThread.Value <- Some evalThread
-          evalThread.Start()
-          return! loop st middleware sessionState' evalStats
+          match tryGetEvalAvailabilityError sessionState st with
+          | Some message ->
+            currentEvalCts.Value <- None
+            let errResponse = {
+              EvaluationResult = Error (InvalidOperationException message)
+              Diagnostics = [||]
+              EvaluatedCode = request.Code
+              Metadata = Map.empty
+            }
+            emit (Events.EvalFailed {| Code = request.Code; Error = message; Diagnostics = [] |})
+            reply.Reply errResponse
+            return! loop st middleware sessionState evalStats
+          | None ->
+            let sessionState' = SessionState.Evaluating
+            publishSnapshot st Evaluating evalStats
+            let sw = System.Diagnostics.Stopwatch.StartNew()
+            emit (Events.EvalRequested {| Code = request.Code; Source = Events.System |})
+            let pipeline = pipelineBuildFn (wrapErrorMiddleware :: middleware) (evalFn cts.Token)
+            // Run eval on a dedicated thread so the actor stays responsive
+            // to CancelEval, HardReset, etc. while the eval is in progress.
+            let evalThread = Thread(fun () ->
+              try
+                let res, newSt = pipeline (request, st)
+                mailbox.Post(EvalFinished(Ok(res, newSt), sw, request.Code, reply))
+              with ex ->
+                mailbox.Post(EvalFinished(Error ex, sw, request.Code, reply))
+            )
+            evalThread.IsBackground <- true
+            evalThread.Name <- sprintf "sagefs-eval-%d" (evalStats.EvalCount + 1)
+            currentEvalThread.Value <- Some evalThread
+            evalThread.Start()
+            return! loop st middleware sessionState' evalStats
         | EvalFinished(result, sw, code, reply) ->
           sw.Stop()
+          currentEvalCts.Value <- None
           currentEvalThread.Value <- None
           match result with
           | Ok(res, newSt) ->

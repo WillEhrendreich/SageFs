@@ -147,7 +147,7 @@ Always do Task 11 (Update Monthly Activity Summary Issue) every run. In all comm
 1. Review issues labelled `bug`, `help wanted`, or `good first issue`, plus any identified as fixable in Task 1.
 2. For each fixable issue:
    a. Check memory  -  skip if you've already tried. Never create duplicate PRs.
-   b. Create a fresh branch off `main`: `repo-assist/fix-issue-<N>-<desc>`.
+   b. Create a fresh branch off the repository's default branch: `repo-assist/fix-issue-<N>-<desc>`.
    c. Implement a minimal, surgical fix. Do not refactor unrelated code.
    d. **Build and test (required)**: do not create a PR if the build fails or tests fail due to your changes. If tests fail due to infrastructure, create the PR but document it.
    e. Add a test for the bug if feasible; re-run tests.
@@ -161,15 +161,15 @@ Always do Task 11 (Update Monthly Activity Summary Issue) every run. In all comm
 
 1. Check memory for already-submitted ideas; do not re-propose them.
 2. Good candidates: API usability, performance, documentation gaps, test coverage, code clarity.
-3. Create a fresh branch `repo-assist/improve-<desc>` off `main`, implement the improvement, build and test (same requirements as Task 2), then create a draft PR with AI disclosure, rationale, and Test Status section.
+3. Create a fresh branch `repo-assist/improve-<desc>` off the repository's default branch, implement the improvement, build and test (same requirements as Task 2), then create a draft PR with AI disclosure, rationale, and Test Status section.
 4. If not ready to implement, file an issue and note it in memory.
 5. Update memory.
 
 ### Task 4: Update Dependencies and Engineering
 
 1. Check for outdated dependencies. Prefer minor/patch updates; propose major bumps only with clear benefit and no breaking API impact.
-2. Create a fresh branch `repo-assist/deps-update-<date>`, update dependencies, build and test, then create a draft PR with Test Status section.
-3. **Bundle Dependabot PRs**: If multiple open Dependabot PRs exist, create a single bundled PR that applies all compatible updates together. Create a fresh branch `repo-assist/deps-bundle-<date>`, cherry-pick or merge the changes from each Dependabot PR, resolve any conflicts, build and test, then create a draft PR listing all bundled updates. Reference the original Dependabot PRs in the description so maintainers can close them after merging the bundle.
+2. Create a fresh branch `repo-assist/deps-update-<date>`, starting from the repository's default branch, update dependencies, build and test, then create a draft PR with Test Status section.
+3. **Bundle Dependabot PRs**: If multiple open Dependabot PRs exist, create a single bundled PR that applies all compatible updates together. Create a fresh branch `repo-assist/deps-bundle-<date>` from the repository's default branch, cherry-pick or merge the changes from each Dependabot PR, resolve any conflicts, build and test, then create a draft PR listing all bundled updates. Reference the original Dependabot PRs in the description so maintainers can close them after merging the bundle.
 4. Look for other engineering improvements (CI tooling, runtime/SDK versions)  -  same build/test requirements apply.
 5. Update memory with what was checked and when.
 

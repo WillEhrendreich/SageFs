@@ -71,7 +71,7 @@ sagefs gui                # GPU-rendered Raylib window
 SageFs.Core/       — Shared types, rendering abstraction, KeyMap, Theme (start here!)
 SageFs/            — CLI tool, daemon, SageTUI client (SageTuiClient.fs) + legacy TUI (TuiClient.fs)
 SageFs.Gui/        — Raylib GPU-rendered GUI client
-SageFs.Tests/      — Expecto test project (3500+ tests)
+SageFs.Tests/      — Expecto test project (6200+ tests)
 sagefs-vscode/     — VS Code extension (F# via Fable → JavaScript)
 sagefs-vs/         — Visual Studio extension (C# shim + F# core)
 docs/              — GitHub Pages documentation site
