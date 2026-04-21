@@ -136,6 +136,15 @@ let endpointContractTests = testList "EndpointContracts" [
       |> Expect.isTrue "daemon must expose a session-scoped buffer changed endpoint for unsaved editor content"
     }
 
+    test "live-testing run route is mapped in McpServer" {
+      let serverFs =
+        System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs", "McpServer.fs")
+      let source = System.IO.File.ReadAllText serverFs
+
+      source.Contains("app.MapPost(\"/api/live-testing/run\"")
+      |> Expect.isTrue "McpServer must map POST /api/live-testing/run"
+    }
+
     test "endpoint count pinned — update contracts when adding endpoints" {
       // CI GATE: This count is pinned. When you add a daemon endpoint:
       // 1. Add it to the appropriate list in EndpointContracts.fs

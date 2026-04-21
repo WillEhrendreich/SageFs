@@ -1659,6 +1659,77 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       do! jsonResponse ctx 200 {| success = true; message = result |}
     } :> Task
   ) |> ignore
+  app.MapPost("/api/live-testing/run", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      use! json = readJsonBody ctx
+      let root = json.RootElement
+      let patternFilter = tryGetJsonStringAliases root [ "pattern" ]
+      let fileFilter = tryGetJsonStringAliases root [ "file"; "filePath"; "file_path" ]
+      let categoryFilter =
+        tryGetJsonStringAliases root [ "category" ]
+        |> Option.bind (fun category ->
+          match category.Trim().ToLowerInvariant() with
+          | "" -> None
+          | "unit" -> Some TestCategory.Unit
+          | "integration" -> Some TestCategory.Integration
+          | "browser" -> Some TestCategory.Browser
+          | "benchmark" -> Some TestCategory.Benchmark
+          | "architecture" -> Some TestCategory.Architecture
+          | "property" -> Some TestCategory.Property
+          | other -> Some (TestCategory.Custom other))
+
+      match rctx.Dispatch, rctx.SseContext.GetElmModel with
+      | None, _ ->
+          do! jsonResponse ctx 503 {| success = false; error = "Cannot run tests — Elm loop not started." |}
+      | _, None ->
+          do! jsonResponse ctx 503 {| success = false; error = "Cannot run tests — Elm model unavailable." |}
+      | Some dispatch, Some getModel ->
+          let model = getModel()
+          let discoveredTests = model.LiveTesting.TestState.DiscoveredTests
+
+          match Array.isEmpty discoveredTests with
+          | true ->
+              do! jsonResponse ctx 409 {|
+                success = false
+                error = "No tests discovered yet. Enable live testing and wait for DiscoveryState=ready_with_tests."
+              |}
+          | false ->
+              let tests =
+                LiveTestCycleState.filterTestsForExplicitRun
+                  discoveredTests
+                  fileFilter
+                  patternFilter
+                  categoryFilter
+
+              match Array.isEmpty tests with
+              | true ->
+                  let filterSummary =
+                    [ match patternFilter with
+                      | Some pattern -> yield sprintf "pattern=%s" pattern
+                      | None -> ()
+                      match fileFilter with
+                      | Some file -> yield sprintf "file=%s" file
+                      | None -> ()
+                      match categoryFilter with
+                      | Some category -> yield sprintf "category=%A" category
+                      | None -> () ]
+                    |> function
+                      | [] -> "no filters"
+                      | parts -> String.concat ", " parts
+
+                  do! jsonResponse ctx 404 {|
+                    success = false
+                    error = sprintf "No discovered tests matched the explicit run filters (%s)." filterSummary
+                  |}
+              | false ->
+                  dispatch (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.RunTestsRequested tests))
+                  do! jsonResponse ctx 200 {|
+                    success = true
+                    queued = tests.Length
+                    message = sprintf "Queued %d test(s) for explicit run." tests.Length
+                  |}
+    } :> Task
+  ) |> ignore
   app.MapGet("/api/live-testing/file-annotations", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let fileParam = ctx.Request.Query.["file"].ToString()
