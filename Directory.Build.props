@@ -2,8 +2,8 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <NoWarn>$(NoWarn);NU1608</NoWarn>
-    <Version>0.6.246</Version>
+    <NoWarn>$(NoWarn);NU1608;NU1902</NoWarn>
+    <Version>0.6.247</Version>
   </PropertyGroup>
 </Project>
 
