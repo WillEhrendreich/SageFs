@@ -30,9 +30,9 @@ on:
   reaction: "eyes"
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+  contents: read
+  pull-requests: read
+  issues: read
 
 network:
   allowed:
@@ -44,9 +44,7 @@ network:
     - "leanlang.org"
     - "lean-lang.org"
     - ocaml
-    - "releaseassets.githubusercontent.com"
-    - "raw.githubusercontent.com"  # required: elan installer bootstrap script
-    - "mirror.ctan.org"              # required: LaTeX packages for paper compilation
+    - "mirror.ctan.org"
     - "ctan.org"
   
 checkout:
