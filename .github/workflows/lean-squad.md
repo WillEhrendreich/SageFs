@@ -29,7 +29,10 @@ on:
     name: lean-squad
   reaction: "eyes"
 
-permissions: read-all
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
 
 network:
   allowed:
