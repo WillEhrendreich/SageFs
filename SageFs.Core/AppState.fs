@@ -980,7 +980,15 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
 
         match cmd with
         | EvalEnableStdout ->
-          st.OutStream.Enable()
+          match sessionState with
+          | SessionState.Faulted ->
+            logger.LogWarning "EnableStdout requested on faulted session; ignoring"
+          | _ ->
+            match isNull (box st.OutStream) with
+            | true ->
+              logger.LogWarning "EnableStdout requested but OutStream unavailable"
+            | false ->
+              st.OutStream.Enable()
           return! loop st middleware sessionState evalStats
         | EvalRun(request, cts, reply) ->
           match tryGetEvalAvailabilityError sessionState st with

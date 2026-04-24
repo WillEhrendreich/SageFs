@@ -39,4 +39,19 @@ let faultedEvalTests =
 
       result.GetSessionState()
       |> Expect.equal "faulted eval should not transition the session back to ready" SessionState.Faulted
-  ]
+
+    testCase "faulted session rejects enablestdout without crashing" <| fun _ ->
+      let result = createFaultedActorResult ()
+      let becameFaulted =
+        SageFs.Tests.TestInfrastructure.waitFor 5000 (fun () -> result.GetSessionState() = SessionState.Faulted)
+      becameFaulted
+      |> Expect.isTrue "actor should enter faulted state when warmup fails"
+
+      try
+        result.Actor.Post(EnableStdout)
+        Thread.Sleep(100)
+        result.GetSessionState()
+        |> Expect.equal "enablestdout on faulted should not transition session" SessionState.Faulted
+      with ex ->
+        failtestf "enablestdout on faulted session should not throw, but got: %s" ex.Message
+   ]
