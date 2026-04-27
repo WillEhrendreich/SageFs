@@ -3,15 +3,15 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-04-23 19:55 UTC
-- **Commit**: `c4784d68d4f0c69c21dd4e7255f042868fa3fc80`
+- **Date**: 2026-04-25
+- **Commit**: (current run — branch lean-squad/fv-task5-push-aging-and-resultex)
 
 ---
 
 | # | Target | Source File | Phase | Status | Notes |
 |---|--------|-------------|-------|--------|-------|
-| 1 | `RingBuffer` | `SageFs.Core/RingBuffer.fs` | 2 | 🔄 Informal spec written | Pure functional ring buffer; count/capacity/ordering invariants |
-| 2 | `ResultEx` | `SageFs.Core/ResultEx.fs` | 1 | ⬜ Identified | Functor/monad/applicative laws for `Result<'T,'E>` |
+| 1 | `RingBuffer` | `SageFs.Core/RingBuffer.fs` | 5 | ✅ All 20 theorems proved (0 sorry) | push_aging proved this run |
+| 2 | `ResultEx` | `SageFs.Core/ResultEx.fs` | 3 | 🔄 Lean spec written (2 sorry) | Functor/monad/applicative laws; 2 sorry on accumulator lemmas |
 | 3 | `Affordances.availableTools` | `SageFs.Core/Affordances.fs` | 1 | ⬜ Identified | Finite state machine; all properties decidable |
 | 4 | `RetryPolicy.decide` | `SageFs.Core/RetryPolicy.fs` | 1 | ⬜ Identified | Pure retry decision; case analysis |
 | 5 | `RestartPolicy.decide` | `SageFs.Core/RestartPolicy.fs` | 1 | ⬜ Identified | Exponential backoff; monotonicity/cap properties |
@@ -28,4 +28,5 @@
 
 ## Open Issues / PRs
 
-*(None yet — first run)*
+- Issue #54: Lean Squad Status (tracking issue)
+- ResultEx: 2 `sorry` remain — `resSequence_length` and `resPartition_length` require accumulator induction
