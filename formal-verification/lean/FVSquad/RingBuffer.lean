@@ -250,6 +250,43 @@ theorem toList_length (buf : RingBuffer α) (hw : WellFormed buf) :
     exact hl x (List.mem_cons.mpr (Or.inr hx))
 
 -- ============================================================
+-- Helper lemmas for push_aging
+-- ============================================================
+
+/-- `(a % n + b) % n = (a + b) % n` — mod distributes over addition. -/
+private theorem mod_add_left (a b n : Nat) (hn : 0 < n) : (a % n + b) % n = (a + b) % n := by
+  rw [Nat.add_mod (a % n) b n, Nat.mod_eq_of_lt (Nat.mod_lt a hn), ← Nat.add_mod]
+
+/-- After push, the ring-buffer index for age `k+1` equals the index for age `k`
+    in the original buffer. -/
+private theorem index_after_push (h k n : Nat) (hn : 0 < n) :
+    ((h + n - 1) % n + (k + 1)) % n = (h + k) % n := by
+  rw [mod_add_left _ _ _ hn]
+  have : h + n - 1 + (k + 1) = h + k + n := by omega
+  rw [this, Nat.add_mod_right]
+
+/-- When `k + 1 < n`, the post-push head index differs from the age-`k` slot,
+    so the push does not overwrite the element we want to read. -/
+private theorem newHead_ne_index (h k n : Nat) (hn : 0 < n) (hk2 : k + 1 < n) (hh : h < n) :
+    (h + n - 1) % n ≠ (h + k) % n := by
+  intro heq
+  rcases Nat.eq_zero_or_pos h with rfl | hh0
+  · -- h = 0: newHead = n − 1, age-k index = k
+    simp only [Nat.zero_add] at heq
+    rw [Nat.mod_eq_of_lt (by omega : n - 1 < n),
+        Nat.mod_eq_of_lt (by omega : k < n)] at heq
+    omega
+  · -- h > 0: newHead = h − 1
+    have hnH : h + n - 1 = h - 1 + n := by omega
+    rw [hnH, Nat.add_mod_right, Nat.mod_eq_of_lt (by omega : h - 1 < n)] at heq
+    rcases Nat.lt_or_ge (h + k) n with hlt | hge
+    · rw [Nat.mod_eq_of_lt hlt] at heq; omega
+    · have hlt2 : h + k - n < n := by omega
+      rw [show h + k = h + k - n + n from by omega,
+          Nat.add_mod_right, Nat.mod_eq_of_lt hlt2] at heq
+      omega
+
+-- ============================================================
 -- Theorems: push semantics
 -- ============================================================
 
@@ -272,8 +309,48 @@ theorem push_tryGet_zero (x : α) (buf : RingBuffer α) (hw : WellFormed buf) :
              Nat.add_zero, Nat.mod_eq_of_lt hh, Array.getElem_set_self hh]
 
 /-- push ages prior items: `tryGet (k+1) (push x buf) = tryGet k buf`
-    for all `k < buf.count`. Requires modular arithmetic over `%`. -/
+    for all `k < buf.count` where `k + 1 < capacity` (the item is not evicted).
+
+    Note: when `buf.count = capacity` and `k = capacity − 1`, the push evicts the
+    oldest item, so `tryGet k buf` returns `some v` but `tryGet (k+1) (push x buf)`
+    returns `none`.  The extra hypothesis `hk2` excludes that edge case. -/
 theorem push_aging (x : α) (buf : RingBuffer α) (hw : WellFormed buf)
-    (k : Nat) (hk : k < buf.count) :
+    (k : Nat) (hk : k < buf.count) (hk2 : k + 1 < buf.items.size) :
     rbTryGet (k + 1) (rbPush x buf) = rbTryGet k buf := by
-  sorry
+  obtain ⟨hcap, hhd, hcnt, htot⟩ := hw
+  have hh := rbPush_newHead_lt buf hcap
+  -- k+1 is within the pushed buffer's count
+  have hk1_lt : k + 1 < (buf.count + 1).min buf.items.size :=
+    Nat.lt_min.mpr ⟨by omega, hk2⟩
+  -- the age-k index in the original buffer
+  have hidx : (buf.head + k) % buf.items.size < buf.items.size := Nat.mod_lt _ hcap
+  -- index for age k+1 after push equals index for age k before push
+  have hindex_eq :
+      ((buf.head + buf.items.size - 1) % buf.items.size + (k + 1)) % buf.items.size =
+      (buf.head + k) % buf.items.size :=
+    index_after_push buf.head k buf.items.size hcap
+  -- the push writes to a different slot than the age-k slot
+  have hne :
+      (buf.head + buf.items.size - 1) % buf.items.size ≠
+      (buf.head + k) % buf.items.size :=
+    newHead_ne_index buf.head k buf.items.size hcap hk2 hhd
+  -- expand rbPush
+  have hpush : rbPush x buf =
+      { items := buf.items.set ((buf.head + buf.items.size - 1) % buf.items.size) x hh
+        head  := (buf.head + buf.items.size - 1) % buf.items.size
+        count := (buf.count + 1).min buf.items.size
+        total := buf.total + 1 } := by
+    simp [rbPush, dif_pos hh]
+  -- simplify RHS
+  have hrhs : rbTryGet k buf =
+      some (buf.items[(buf.head + k) % buf.items.size]'hidx) := by
+    unfold rbTryGet; simp [if_pos hk, dif_pos hcap]
+  rw [hrhs, hpush]
+  -- simplify LHS
+  unfold rbTryGet
+  simp only [Array.size_set hh, if_pos hk1_lt, dif_pos hcap]
+  congr 1
+  -- rewrite the index using hindex_eq (simp handles dependent rewrites)
+  simp only [hindex_eq]
+  -- the push does not touch this slot
+  exact Array.getElem_set_ne hh hidx hne
