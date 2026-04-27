@@ -3,8 +3,8 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-04-25
-- **Commit**: (current run — branch lean-squad/fv-task5-push-aging-and-resultex)
+- **Date**: 2026-04-27
+- **Commit**: (current run — branch lean-squad/fv-task3-restartpolicy-833513b)
 
 ---
 
@@ -14,7 +14,7 @@
 | 2 | `ResultEx` | `SageFs.Core/ResultEx.fs` | 3 | 🔄 Lean spec written (2 sorry) | Functor/monad/applicative laws; 2 sorry on accumulator lemmas |
 | 3 | `Affordances.availableTools` | `SageFs.Core/Affordances.fs` | 1 | ⬜ Identified | Finite state machine; all properties decidable |
 | 4 | `RetryPolicy.decide` | `SageFs.Core/RetryPolicy.fs` | 1 | ⬜ Identified | Pure retry decision; case analysis |
-| 5 | `RestartPolicy.decide` | `SageFs.Core/RestartPolicy.fs` | 1 | ⬜ Identified | Exponential backoff; monotonicity/cap properties |
+| 5 | `RestartPolicy.decide` | `SageFs.Core/RestartPolicy.fs` | 3 | 🔄 Lean spec written (1 sorry) | Exponential backoff; 7/8 theorems proved; 1 sorry (ge_base needs nlinarith) |
 
 ## Phase Legend
 
