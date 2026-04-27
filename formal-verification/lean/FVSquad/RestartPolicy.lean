@@ -81,21 +81,30 @@ theorem nextBackoffMs_le_max (policy : RPPolicy) (count : Nat) (h : 0 < count) :
   simp only [nextBackoffMs, if_neg hne]
   exact Nat.min_le_right _ _
 
+-- Helper: 2^n ≥ 1 for all n (proved by induction, no Mathlib needed).
+private theorem one_le_two_pow (n : Nat) : 1 ≤ 2 ^ n := by
+  induction n with
+  | zero => simp
+  | succ k ih =>
+    simp only [Nat.pow_succ]
+    omega
+
 -- nextBackoffMs: the result is at least baseMs (when policy.baseMs ≤ policy.maxMs)
--- Proof requires baseMs * 2^n ≥ baseMs which needs baseMs ≤ baseMs * 2^n.
--- This holds when baseMs > 0 (since 2^n ≥ 1), but is vacuously true for baseMs = 0.
--- Without Mathlib's nlinarith, we leave the multiplication inequality as sorry.
 theorem nextBackoffMs_ge_base (policy : RPPolicy) (count : Nat) (h : 0 < count)
     (hpol : policy.baseMs ≤ policy.maxMs) :
     policy.baseMs ≤ nextBackoffMs policy count := by
   have hne : ¬(count = 0) := by omega
   simp only [nextBackoffMs, if_neg hne]
-  -- Need: baseMs ≤ min (baseMs * 2^(min count 20 - 1)) maxMs
-  -- Equivalently: baseMs ≤ baseMs * 2^n  ∧  baseMs ≤ maxMs
-  -- The second conjunct is hpol; the first requires baseMs ≤ baseMs * 2^n.
-  -- This holds when baseMs = 0 (trivially) or when 1 ≤ 2^n (always true).
-  -- Without Mathlib nlinarith/positivity we use sorry here.
-  sorry
+  -- Goal: policy.baseMs ≤ min (policy.baseMs * 2^(min count 20 - 1)) policy.maxMs
+  -- We prove both: baseMs ≤ baseMs * 2^n  and  baseMs ≤ maxMs
+  rw [Nat.le_min]
+  refine ⟨?_, hpol⟩
+  -- baseMs ≤ baseMs * 2^(min count 20 - 1)
+  -- Since 2^n ≥ 1, we have baseMs * 1 ≤ baseMs * 2^n, i.e. baseMs ≤ baseMs * 2^n.
+  have hpow : 1 ≤ 2 ^ (min count 20 - 1) := one_le_two_pow _
+  calc policy.baseMs = policy.baseMs * 1 := (Nat.mul_one _).symm
+    _ ≤ policy.baseMs * 2 ^ (min count 20 - 1) :=
+        Nat.mul_le_mul_left _ hpow
 
 -- ── rbDecide correctness theorems ───────────────────────────────────────────
 
