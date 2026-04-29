@@ -157,10 +157,10 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
 
   [|
     "fsi"
-    // "--multiemit-" disables FSI multi-assembly mode, which prevents type
-    // redefinition in the REPL. Only pass when Harmony/hot-reload is active,
-    // because MonoMod's JIT hook causes TypeLoadException on cross-assembly refs.
-    if hotReload then "--multiemit-"
+    // "--multiemit-" disables FSI multi-assembly mode, keeping all code in a single
+    // assembly. This prevents the canonical F# pattern (type T + module T) from breaking
+    // across submission boundaries. Always enable to ensure type references remain valid.
+    "--multiemit-"
     yield! allDlls |> Seq.map (sprintf "-r:%s")
     yield! sln.LibPaths |> Seq.map (sprintf "--lib:%s")
     yield! sln.OtherArgs

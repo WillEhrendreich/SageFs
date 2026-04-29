@@ -1327,8 +1327,16 @@ module McpTools =
       notifyElm ctx (
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
       let! routeResult =
-        routeToSession ctx sid
-          (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession (WorkerProtocol.SessionId.value replyId))
+        task {
+          try
+            let resetTask =
+              routeToSession ctx sid
+                (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession (WorkerProtocol.SessionId.value replyId))
+            return! resetTask.WaitAsync(Timeouts.softResetCancellation)
+          with
+          | :? OperationCanceledException ->
+            return Result.Error (Message (sprintf "Session '%s' did not respond to reset after %A. The session may be stuck. Try recovery: use stop_session followed by create_session to force a fresh start." sid Timeouts.softResetCancellation))
+        }
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
         do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
