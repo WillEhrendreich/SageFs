@@ -91,11 +91,11 @@ let allTests =
         |> Array.length
         |> Expect.equal "exactly one --multiemit-" 1
 
-      testCase "solutionToFsiArgs with hotReload=false omits --multiemit-" <| fun _ ->
+      testCase "solutionToFsiArgs with hotReload=false includes --multiemit-" <| fun _ ->
         let args = solutionToFsiArgs quietLogger false false emptySolution
         args
         |> Array.exists (fun a -> a = "--multiemit-")
-        |> Expect.isFalse "--multiemit- must be absent when hotReload=false"
+        |> Expect.isTrue "--multiemit- must always be present (even when hotReload=false) to enable cross-submission type+module pattern"
 
       testCase "solutionToFsiArgs with hotReload=false still starts with fsi" <| fun _ ->
         let args = solutionToFsiArgs quietLogger false false emptySolution
