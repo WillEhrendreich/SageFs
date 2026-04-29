@@ -1,0 +1,6 @@
+name = "FVSquad"
+version = "0.1.0"
+defaultTargets = ["FVSquad"]
+
+[[lean_lib]]
+name = "FVSquad"
