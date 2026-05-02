@@ -8,8 +8,8 @@ known divergence so that the validity of the associated proofs can be assessed h
 
 ## Last Updated
 
-- **Date**: 2026-04-28 09:30 UTC
-- **Commit**: `833513b25ab7b8c754043e6bb4faf4000b39c026`
+- **Date**: 2026-05-21 UTC
+- **Commit**: `85bd059`
 
 ---
 
@@ -369,12 +369,98 @@ All 19 theorems are proved by `decide` (fully enumerated over the finite `Sessio
 
 ---
 
+## HotReloadState
+
+**Lean file**: `formal-verification/lean/FVSquad/HotReloadState.lean`
+**F# source**: `SageFs.Core/HotReloadState.fs`
+
+### Type correspondence
+
+| Lean name | F# name | F# file + location | Correspondence | Notes |
+|---|---|---|---|---|
+| `HRS` | `HotReloadState.T` | `SageFs.Core/HotReloadState.fs` | **Abstraction** | F# uses `Set<string>` (a balanced BST giving O(log n) membership and uniqueness by construction). Lean models this as `List String` with idempotent `watch` (no-op if already present) to enforce absence of duplicates. Ordering is not preserved — only membership matters for the verified properties. |
+| `HRS.watched` | `T.Watched : Set<string>` | `SageFs.Core/HotReloadState.fs` | **Approximation** | `Set<string>` has no duplicates and has a defined ordering; `List String` may have duplicates only in states produced by `unwatch` after prior direct list manipulation (impossible via the public API). All public operations preserve no-duplicate invariant. |
+
+### Function correspondence
+
+| Lean name | F# name | F# file | Correspondence level | Notes |
+|---|---|---|---|---|
+| `empty` | `HotReloadState.empty` | `HotReloadState.fs` | **Exact** | Both return the empty state. |
+| `isWatched p s` | `HotReloadState.isWatched p s` | `HotReloadState.fs` | **Exact** | Both test membership: `s.watched.contains p` vs `Set.contains p s.Watched`. |
+| `watch p s` | `HotReloadState.watch p s` | `HotReloadState.fs` | **Exact** | Idempotent add: no-op if already present. F# uses `Set.add` (inherently idempotent); Lean checks `contains` then prepends. |
+| `unwatch p s` | `HotReloadState.unwatch p s` | `HotReloadState.fs` | **Exact** | Remove all occurrences: F# uses `Set.remove`; Lean uses `List.filter (fun x => x != p)`. Both are no-ops when absent. |
+| `toggle p s` | `HotReloadState.toggle p s` | `HotReloadState.fs` | **Exact** | Toggle membership. F# uses `if Set.contains p then Set.remove else Set.add`; Lean mirrors this logic. |
+| `watchMany ps s` | `HotReloadState.watchMany ps s` | `HotReloadState.fs` | **Exact** | Left fold of `watch` over `ps`. Identical algorithm. |
+| `unwatchAll` | `HotReloadState.unwatchAll` | `HotReloadState.fs` | **Exact** | Returns `empty`. |
+| `watchAll ps` | `HotReloadState.watchAll ps` | `HotReloadState.fs` | **Exact** | Ignores prior state, folds `watch` over `ps` from `empty`. |
+| `watchedCount s` | `HotReloadState.watchedCount s` | `HotReloadState.fs` | **Approximation** | F# uses `Set.count` (O(n) walk); Lean uses `List.length`. For lists without duplicates (maintained by the public API) these are equal. With duplicates, Lean would overcount — but the public API never creates duplicates. |
+| `dirOf p` | *(path helper)* | `HotReloadState.fs` | **Approximation** | Lean model: split on `"/"`, drop last component, rejoin. F# uses `System.IO.Path.GetDirectoryName` (handles Windows `\` separators, drive letters, UNC paths, etc.). The Lean model is correct only for Unix-style `/`-separated paths. |
+| `watchByDirectory dir allPaths s` | `HotReloadState.watchByDirectory` | `HotReloadState.fs` | **Abstraction** | Lean matches on `dirOf p == dir ∨ dirOf p.startsWith (dir ++ "/")`. F# uses the same logic but with `System.IO.Path`-based helpers. |
+| `unwatchByDirectory dir s` | `HotReloadState.unwatchByDirectory` | `HotReloadState.fs` | **Abstraction** | Same abstraction as `watchByDirectory`. |
+| `watchedInDirectory dir s` | `HotReloadState.watchedInDirectory` | `HotReloadState.fs` | **Abstraction** | Lists watched paths whose `dirOf` matches. |
+
+### Theorems proved (all without `sorry`)
+
+| Theorem | Property |
+|---|---|
+| `watch_makes_watched` | `watch p s` makes `p` watched |
+| `watch_idempotent` | `watch p (watch p s) = watch p s` |
+| `watch_preserves_other` | `watch` does not affect other paths |
+| `unwatch_not_watched` | After `unwatch p`, `p` is not watched |
+| `unwatch_preserves_other` | `unwatch` does not affect other paths |
+| `unwatch_watch_new` | `unwatch p (watch p s) = s` when `p` was not watched |
+| `toggle_adds_unwatched` | Toggle adds when not present |
+| `toggle_removes_watched` | Toggle removes when present |
+| `toggle_involution` | `toggle p (toggle p s)` has same membership as `s` |
+| `watchMany_makes_watched` | `watchMany` with `p ∈ ps` makes `p` watched |
+| `watchMany_preserves_watched` | `watchMany` preserves existing membership |
+| `watchMany_nil` | `watchMany [] s = s` |
+| `unwatchAll_is_empty` | `unwatchAll` returns `empty` |
+| `unwatchAll_clears` | Nothing is watched after `unwatchAll` |
+| `watchAll_ignores_prior` | `watchAll ps s1 = watchAll ps s2` for any `s1, s2` |
+| `watchAll_nil` | `watchAll [] s = empty` |
+| `watchAll_makes_watched` | `watchAll` with `p ∈ ps` makes `p` watched |
+| `watchedCount_empty` | Empty state has count 0 |
+| `watchedCount_watch_new` | Watching a new path increments count |
+| `watchedCount_watch_existing` | Re-watching preserves count |
+| `unwatchByDirectory_removes` | `unwatchByDirectory` removes a path matching the dir |
+| `watchByDirectory_adds` | `watchByDirectory` adds a path matching the dir |
+| `watchedInDirectory_spec` | Paths in `watchedInDirectory` are in `watched` |
+
+### Known divergences
+
+#### D1 — `Set<string>` vs `List String`
+
+- **Lean model**: `watched : List String`. Membership is O(n); no structural ordering.
+- **F# source**: `Watched : Set<string>`. Membership is O(log n) in an AVL tree; elements are ordered and unique.
+- **Impact on proofs**: All membership theorems hold regardless of representation. `watchedCount` theorems assume no duplicates in `watched`, which holds for all states reachable via the public API — but is not explicitly stated as an invariant in the current Lean model.
+- **Recommendation**: Add a `NoDuplicates s` predicate and prove it is preserved by all operations. This would make the `watchedCount` theorems unconditionally valid.
+
+#### D2 — `normalize` is modelled as identity
+
+- **Lean model**: All path comparisons use literal string equality.
+- **F# source**: `normalize` canonicalises paths (case folding on Windows, resolving `.`/`..` components, etc.).
+- **Impact**: Theorems about paths with different representations for the same logical path (e.g., `/foo/./bar` vs `/foo/bar`) are not captured. All theorems are correct for already-normalised paths.
+
+#### D3 — `dirOf` vs `System.IO.Path.GetDirectoryName`
+
+- **Lean model**: Splits on `"/"` only.
+- **F# source**: Uses .NET's `Path.GetDirectoryName`, which handles `\` on Windows, drive letters, and UNC paths.
+- **Impact**: `watchByDirectory`/`unwatchByDirectory` theorems hold only for Unix-style paths. Windows-style paths are not captured.
+
+### Validation evidence
+
+No Aeneas-generated Lean file or separate test harness exists yet (Task 8 not yet run for this target).
+The Lean model has been manually cross-referenced against `SageFs.Core/HotReloadState.fs` line by line.
+
+---
+
 ## Other Targets
 
 The following targets have informal specs or are identified in `TARGETS.md` but have
 no Lean files yet. Correspondence will be documented here as each target reaches Phase 4.
 
-- `EvalPipeline` (Phase 2 — informal spec written this run)
+- `HotReloadState` (Phase 3 — Lean spec written and all proofs pass; see entry above)
 - `KeyMap` (Phase 1 — research only)
 - `Theme` (Phase 1 — research only)
 - `BinaryManifest` (Phase 1 — research only)
