@@ -665,80 +665,34 @@ let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : X
                 ]
               | false -> () ]) ]
 
-/// Render a hierarchical tree view of a binding value.
-/// Handles simple values, records, lists, and nested structures.
-let rec renderValueTree (value: string) (depth: int) : XmlNode list =
-  let indent = String.replicate (depth * 2) " "
-  let isComplex = value.Contains("{") || value.Contains("[") || value.Contains("(") && value.Contains(")")
-  
-  match isComplex with
-  | false ->
-    // Simple scalar value — render on one line with full text (no truncation)
-    [ Elem.span
-        [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;word-break:break-word;" ]
-        [ Text.raw (sprintf "%s" value) ] ]
-  | true ->
-    // Complex value — try to parse structure for better display
-    let lines = value.Split([|'\n'|]) |> Array.filter (fun s -> s.Trim().Length > 0)
-    match lines.Length with
-    | 1 ->
-      // Single line but complex — show as-is with word wrapping
-      [ Elem.span
-          [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;word-break:break-word;white-space:pre-wrap;" ]
-          [ Text.raw value ] ]
-    | _ ->
-      // Multi-line — render with proper formatting
-      lines 
-      |> Array.map (fun line ->
-        Elem.div
-          [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;font-family:monospace;white-space:pre-wrap;word-break:break-word;" ]
-          [ Text.raw line ])
-      |> Array.toList
-
-/// Render per-session bound values explorer as a hierarchical tree view.
+/// Render per-session bound values explorer (collapsible, with values)
 let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array) : XmlNode =
   match bindings.Length with
   | 0 -> Elem.div [] []
   | _ ->
-    Elem.div [ Attr.style "font-size: 0.72rem; max-height: 300px; overflow-y: auto; font-family: monospace;" ] [
-      for i, b in bindings |> Array.indexed do
-        let bindingId = sprintf "binding-%d" i
-        Elem.details
-          [ Attr.id bindingId
-            Attr.style "margin: 4px 0; padding: 4px; border: 1px solid var(--border-normal,#333); border-radius: 2px; background: var(--bg-focus,#1a1a1a);" ]
-          [ Elem.summary
-              [ Attr.style "cursor: pointer; user-select: none; padding: 2px 4px; margin: -2px -4px;" ]
-              [ Elem.code
-                  [ Attr.style "color:var(--fg-cyan,#56b6c2);font-weight:bold;font-size:0.7rem;" ]
-                  [ Text.raw b.Name ]
-                Elem.span
-                  [ Attr.style "color:var(--fg-dim,#666);font-size:0.65rem;margin-left:0.5em;" ]
-                  [ Text.raw (sprintf ": %s" b.TypeSig) ]
-                match b.Value with
-                | Some v when v.Length < 50 ->
-                  Elem.span
-                    [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;margin-left:0.5em;" ]
-                    [ Text.raw (sprintf "= %s" v) ]
-                | Some _ ->
-                  Elem.span
-                    [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;margin-left:0.5em;" ]
-                    [ Text.raw "= ..." ]
-                | None -> () ]
+    Elem.div [ Attr.style "font-size: 0.72rem; max-height: 200px; overflow-y: auto;" ] [
+      for b in bindings do
+        Elem.div
+          [ Attr.style "display:flex;align-items:baseline;gap:0.4em;padding:2px 0;border-bottom:1px solid var(--border-normal,#333);" ]
+          [ Elem.code
+              [ Attr.style "color:var(--fg-cyan,#56b6c2);font-weight:bold;white-space:nowrap;font-size:0.7rem;" ]
+              [ Text.raw b.Name ]
+            Elem.span
+              [ Attr.style "color:var(--fg-dim,#666);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" ]
+              [ Text.raw (sprintf ": %s" b.TypeSig) ]
             match b.Value with
             | Some v ->
-              Elem.div
-                [ Attr.style "margin-top: 6px; padding: 6px; background: var(--bg-default,#000); border-radius: 2px; border-left: 2px solid var(--fg-green,#98c379);" ]
-                (renderValueTree v 1)
-            | None ->
-              Elem.div
-                [ Attr.style "margin-top: 6px; color: var(--fg-dim,#666); font-style: italic;" ]
-                [ Text.raw "(no value)" ]
-            match b.ReferencedIn with
-            | [] -> ()
-            | refs ->
-              Elem.div
-                [ Attr.style "margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border-normal,#333); color: var(--fg-yellow,#e5c07b); font-size: 0.6rem;" ]
-                [ Text.raw (sprintf "Referenced in %d cells" refs.Length) ] ]
+              Elem.span
+                [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;"
+                  Attr.title v ]
+                [ Text.raw (sprintf "= %s" v) ]
+            | None -> ()
+            match b.ReferencedIn.Length with
+            | 0 -> ()
+            | n ->
+              Elem.span
+                [ Attr.style "color:var(--fg-yellow,#e5c07b);font-size:0.6rem;white-space:nowrap;" ]
+                [ Text.raw (sprintf "→%d" n) ] ]
     ]
 
 /// Render sessions as an HTML fragment with action buttons.
