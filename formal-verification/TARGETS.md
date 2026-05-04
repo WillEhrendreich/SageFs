@@ -43,3 +43,8 @@
 - Issue #54: Lean Squad Status (tracking issue, always-open dashboard)
 - ResultEx: 2 `sorry` remain — `resSequence_length` and `resPartition_length` require accumulator induction
 - Next: Consider `EvalPipeline` or `SessionLifecycle` state machine as next target
+
+## Theme (Task 2+3)
+- theorems: 74
+- sorry: 0
+- status: MERGED
