@@ -1397,13 +1397,11 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       | DaemonStateChange.ModelChanged (outputCount, _) when outputCount <> lastBindingOutputCount.Value ->
         lastBindingOutputCount.Value <- outputCount
         let model = elmRuntime.GetModel()
-        let activeId =
-          ActiveSession.sessionId model.Sessions.ActiveSessionId
-          |> Option.map WorkerProtocol.SessionId.value
-          |> Option.defaultValue ""
+        // Use GetActiveBuffer (not GetBuffer) to handle AwaitingSession → staging buffer case.
+        // GetBuffer(sessionId) returns empty if session not found; GetActiveBuffer uses staging as fallback.
+        let activeBuf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
         let rawOutput =
-          model.RecentOutput.GetBuffer(activeId).FilterToList(fun o ->
-            o.Kind = OutputKind.Result)
+          activeBuf.FilterToList(fun o -> o.Kind = OutputKind.Result)
           |> List.rev
           |> List.map (fun o -> o.Text)
           |> String.concat "\n"
