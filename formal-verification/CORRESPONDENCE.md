@@ -8,8 +8,8 @@ known divergence so that the validity of the associated proofs can be assessed h
 
 ## Last Updated
 
-- **Date**: 2026-05-21 UTC
-- **Commit**: `85bd059`
+- **Date**: 2026-05-04 UTC
+- **Commit**: `9e401be`
 
 ---
 
@@ -462,6 +462,63 @@ no Lean files yet. Correspondence will be documented here as each target reaches
 
 - `HotReloadState` (Phase 3 — Lean spec written and all proofs pass; see entry above)
 - `KeyMap` (Phase 1 — research only)
-- `Theme` (Phase 1 — research only)
+- `Theme` (Phase 5 — 74 theorems, 0 sorry; see entry below)
 - `BinaryManifest` (Phase 1 — research only)
 - `StateMachine` (Phase 1 — research only)
+
+---
+
+## Theme
+
+**Lean file**: `formal-verification/lean/FVSquad/Theme.lean`
+**F# source**: `SageFs.Core/Theme.fs`
+
+### Scope
+
+Two functions are modelled:
+
+1. **`withOverrides`** — applies a partial color override map onto a base `ThemeConfig`.
+2. **`tokenColorOfCapture`** — maps a tree-sitter capture name to a hex color.
+
+The 34-field `ThemeConfig` record is modelled exactly (all field names match the F# camelCase keys).
+
+### Lean definitions
+
+| Lean name | F# name | Correspondence |
+|-----------|---------|----------------|
+| `ThemeConfig` | `SageFs.ThemeConfig` (record) | Exact — all 34 fields, same names |
+| `withOverrides` | `Theme.withOverrides` | Abstraction — F# `Map<string,string>` modelled as `String → Option String` |
+| `tokenColorOfCapture` | `Theme.tokenColorOfCapture` | Exact — same prefix-match priority order |
+
+### Theorems proved (74 total, 0 sorry)
+
+| Theorem | Description |
+|---------|-------------|
+| `getD_idempotent` | Helper: `o.getD (o.getD v) = o.getD v` |
+| `withOverrides_identity` | Empty overrides is a no-op |
+| `withOverrides_idempotent` | Applying same overrides twice = once |
+| `withOverrides_override_fgDefault` … `withOverrides_override_synProperty` | Each of 34 fields: if key present, field is set (34 theorems) |
+| `withOverrides_preserve_fgDefault` … `withOverrides_preserve_synProperty` | Each of 34 fields: if key absent, field preserved (34 theorems) |
+| `tokenColorOfCapture_keyword` | `"keyword"` → `synKeyword` |
+| `tokenColorOfCapture_string` | `"string"` → `synString` |
+| `tokenColorOfCapture_variable_parameter` | `"variable.parameter"` → `synVariable` (priority check) |
+| `tokenColorOfCapture_unknown` | Unknown capture → `fgDefault` |
+
+### Known divergences
+
+#### D1 — Map abstraction
+
+- **Lean model**: `withOverrides` takes `g : String → Option String` (a lookup oracle).
+- **F# source**: `withOverrides` takes `overrides : Map<string, string>` (an immutable ordered map).
+- **Impact**: The Lean model is strictly more general — it proves properties for any lookup function, not just those arising from `Map.ofList`. All correctness properties that hold for the model also hold for the F# implementation (which is a special case).
+
+#### D2 — `tokenColorOfCapture` prefix semantics
+
+- **Lean model**: Uses `String.startsWith`.
+- **F# source**: Uses `.StartsWith(prefix, StringComparison.Ordinal)`.
+- **Impact**: Identical semantics — both are ordinal (byte-level) prefix matching. No divergence.
+
+### Validation evidence
+
+No Aeneas-generated Lean file or separate test harness exists yet (Task 8 not yet run for this target).
+The Lean model has been manually cross-referenced against `SageFs.Core/Theme.fs` line by line.

@@ -11,10 +11,14 @@
 | # | Target | Source File | Phase | Status | Notes |
 |---|--------|-------------|-------|--------|-------|
 | 1 | `RingBuffer` | `SageFs.Core/RingBuffer.fs` | 5 | ✅ 20/20 proved (0 sorry) | Complete. All invariants, ordering, eviction accounting verified. |
-| 2 | `ResultEx` | `SageFs.Core/ResultEx.fs` | 3–4 | 🔄 15/17 proved (2 sorry) | Monad/functor laws done. 2 sorry on accumulator-length lemmas. |
-| 3 | `RetryPolicy.decide` | `SageFs.Core/RetryPolicy.fs` | 3–5 | ✅ 12/12 proved (0 sorry) | Complete this run. Decision correctness + delay monotonicity fully verified. |
-| 4 | `RestartPolicy.decide` | `SageFs.Core/RestartPolicy.fs` | 5 | ✅ 8/8 proved (0 sorry) | Complete this run. ge_base sorry resolved with one_le_two_pow helper. |
-| 5 | `Affordances.availableTools` | `SageFs.Core/Affordances.fs` | 5 | ✅ 19/19 proved (0 sorry) | Complete. Tool-gating policy fully verified: always-on tools, code-exec guard, reset safety, no-duplicate. |
+| 2 | `ResultEx` | `SageFs.Core/ResultEx.fs` | 5 | ✅ 17/17 proved (0 sorry) | Complete. Monad/functor laws + sequence/partition length lemmas. |
+| 3 | `RetryPolicy.decide` | `SageFs.Core/RetryPolicy.fs` | 5 | ✅ 13/13 proved (0 sorry) | Complete. Decision correctness + delay monotonicity fully verified. |
+| 4 | `RestartPolicy.decide` | `SageFs.Core/RestartPolicy.fs` | 5 | ✅ 9/9 proved (0 sorry) | Complete. |
+| 5 | `Affordances.availableTools` | `SageFs.Core/Affordances.fs` | 5 | ✅ 19/19 proved (0 sorry) | Complete. Tool-gating policy verified. |
+| 6 | `EvalPipeline` | `SageFs.Core/EvalPipeline.fs` | 5 | ✅ 17/17 proved (0 sorry) | Complete. |
+| 7 | `SessionLifecycle` | `SageFs.Core/SessionLifecycle.fs` | 5 | ✅ 16/16 proved (0 sorry) | KEY FINDING: `toState_never_uninitialized` — Uninitialized unreachable from any phase. |
+| 8 | `HotReloadState` | `SageFs.Core/HotReloadState.fs` | 5 | ✅ 23/23 proved (0 sorry) | Complete. |
+| 9 | `Theme` | `SageFs.Core/Theme.fs` | 5 | ✅ 74/74 proved (0 sorry) | Complete. Identity, idempotence, all 34 fields override/preserve, tokenColorOfCapture. |
 
 ## Phase Legend
 
@@ -31,12 +35,15 @@
 | File | Theorems | Sorry | Phase |
 |------|----------|-------|-------|
 | `lean/FVSquad/RingBuffer.lean` | 20 | 0 | 5 ✅ |
-| `lean/FVSquad/ResultEx.lean` | 17 | 2 | 3–4 🔄 |
-| `lean/FVSquad/RestartPolicy.lean` | 8 | 0 | 5 ✅ |
-| `lean/FVSquad/RetryPolicy.lean` | 12 | 0 | 3–5 ✅ |
+| `lean/FVSquad/ResultEx.lean` | 17 | 0 | 5 ✅ |
+| `lean/FVSquad/RestartPolicy.lean` | 9 | 0 | 5 ✅ |
+| `lean/FVSquad/RetryPolicy.lean` | 13 | 0 | 5 ✅ |
 | `lean/FVSquad/Affordances.lean` | 19 | 0 | 5 ✅ |
-| `lean/FVSquad/Affordances.lean` | 19 | 0 | 5 ✅ |
-| **Total** | **76** | **2** | — |
+| `lean/FVSquad/EvalPipeline.lean` | 17 | 0 | 5 ✅ |
+| `lean/FVSquad/SessionLifecycle.lean` | 16 | 0 | 5 ✅ |
+| `lean/FVSquad/HotReloadState.lean` | 23 | 0 | 5 ✅ |
+| `lean/FVSquad/Theme.lean` | 74 | 0 | 5 ✅ |
+| **Total** | **208** | **0** | — |
 
 ## Open Issues / PRs
 
