@@ -3,8 +3,8 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-04-23 19:55 UTC
-- **Commit**: `c4784d68d4f0c69c21dd4e7255f042868fa3fc80`
+- **Date**: 2026-04-27 09:00 UTC
+- **Commit**: `460650525a57cfd40c9fd24a57bde43c00f712b3`
 
 ---
 
@@ -52,7 +52,9 @@ SageFs is a live F# development environment — a REPL-powered daemon with edito
 **Spec size**: ~80 Lean lines (types + theorems)
 **Proof tractability**: Mostly `omega` / `simp` / `decide` for bounded cases. Induction on push count for the general case. Index-wrap arithmetic requires `omega` or `Nat.mod_cast`.
 **Approximations**: The Lean model uses `List` rather than a mutable array; this models the pure input/output semantics but not the physical memory layout.
-**Phase**: 1 (Research identified) → targeting Phase 2 (Informal Spec)
+**Phase**: 5 ✅ **Complete** — 20/20 theorems proved, 0 sorry remaining.
+All core invariants, ordering, eviction accounting, and list-length properties are fully verified.
+See `formal-verification/lean/FVSquad/RingBuffer.lean`.
 
 ---
 
@@ -79,7 +81,10 @@ SageFs is a live F# development environment — a REPL-powered daemon with edito
 **Spec size**: ~100 Lean lines
 **Proof tractability**: Nearly all can be proved by `cases` or `simp` — monad/functor laws on a two-constructor type are essentially trivial in Lean 4. `sequence` requires induction on the list.
 **Approximations**: The Lean proofs work over the abstract `Result` type; the specific `SageFsError` type is not needed for algebraic laws.
-**Phase**: 1 (Research identified)
+**Phase**: 3–4 🔄 **In progress** — 15/17 theorems proved, 2 sorry remaining.
+Monad/functor laws fully proved. `resSequence_length` and `resPartition_length` require
+accumulator-based induction and are guarded with `sorry` for future resolution.
+See `formal-verification/lean/FVSquad/ResultEx.lean`.
 
 ---
 
@@ -102,7 +107,9 @@ SageFs is a live F# development environment — a REPL-powered daemon with edito
 **Spec size**: ~60 Lean lines
 **Proof tractability**: All can be proved by `decide` or `cases` — pure case analysis.
 **Approximations**: `backoffMs` with random jitter is not modelled; only the deterministic non-random branch is captured.
-**Phase**: 1 (Research identified)
+**Phase**: 3–5 ✅ **Complete** — 12/12 theorems proved, 0 sorry.
+Decision correctness, base-delay formula, monotonicity, and edge cases fully verified.
+Jitter abstracted away (deterministic model). See `formal-verification/lean/FVSquad/RetryPolicy.lean`.
 
 ---
 
@@ -124,7 +131,9 @@ SageFs is a live F# development environment — a REPL-powered daemon with edito
 **Spec size**: ~80 Lean lines
 **Proof tractability**: `linarith` / `norm_num` for the delay bound. Case analysis for decision properties. `DateTime` arithmetic requires some modelling.
 **Approximations**: `DateTime` is modelled as abstract `Int` (ticks or seconds); the reset window check is abstracted.
-**Phase**: 1 (Research identified)
+**Phase**: 5 ✅ **Complete** — 8/8 theorems proved, 0 sorry.
+`nextBackoffMs_ge_base` proved this run using a custom `one_le_two_pow` helper (no Mathlib needed).
+See `formal-verification/lean/FVSquad/RestartPolicy.lean`.
 
 ---
 
@@ -149,19 +158,34 @@ SageFs is a live F# development environment — a REPL-powered daemon with edito
 **Spec size**: ~80 Lean lines (define state DU + tool lists + theorems)
 **Proof tractability**: All `decide` since the domain is finite and concrete. Very tractable.
 **Approximations**: Tool names are modelled as `String` literals — exact match. State transitions are not modelled (would require SessionManager).
-**Phase**: 1 (Research identified)
+**Phase**: 1 (Research identified) — next target for formal spec writing.
+
+---
+
+## FV Toolchain Notes (2026-04-27)
+
+**Network constraint**: `lakecache.blob.core.windows.net` is blocked by the CI sandbox
+firewall. Mathlib download is not possible. All Lean files use **pure Lean 4 stdlib only**
+(no `import Mathlib`). This restricts available tactics — no `linarith`, `nlinarith`,
+`positivity`, `conv_rhs`, or `split_ifs`. Workarounds:
+- Use `omega` for linear Nat/Int arithmetic
+- Prove exponential lemmas by manual induction (`one_le_two_pow` helper)
+- Use `cases`, `rcases`, `simp`, `simp only`, `rw` for structural proofs
+- Use `Nat.mul_le_mul_left`, `Nat.le_min`, `Nat.pos_pow_of_pos` — verify exact names in Lean 4.30
+
+**Lean version**: `leanprover/lean4:v4.30.0-rc2` (pinned in `lean-toolchain`)
 
 ---
 
 ## Summary Priority Order
 
-| # | Target | File | Benefit | Tractability | Priority |
-|---|--------|------|---------|-------------|----------|
-| 1 | RingBuffer | `SageFs.Core/RingBuffer.fs` | Invariant correctness, rich existing tests | High (omega+simp) | **Highest** |
-| 2 | ResultEx | `SageFs.Core/ResultEx.fs` | Monad/functor laws, algebraic correctness | Very high (cases/simp) | High |
-| 3 | Affordances | `SageFs.Core/Affordances.fs` | Security-relevant, finite decidable domain | Very high (decide) | High |
-| 4 | RetryPolicy | `SageFs.Core/RetryPolicy.fs` | Decision correctness, backoff properties | High (cases/omega) | Medium |
-| 5 | RestartPolicy | `SageFs.Core/RestartPolicy.fs` | Backoff monotonicity, cap invariant | Medium (linarith) | Medium |
+| # | Target | File | Benefit | Tractability | Priority | Phase |
+|---|--------|------|---------|-------------|----------|-------|
+| 1 | RingBuffer | `SageFs.Core/RingBuffer.fs` | Invariant correctness, rich existing tests | High (omega+simp) | **Complete** ✅ | 5 |
+| 2 | ResultEx | `SageFs.Core/ResultEx.fs` | Monad/functor laws, algebraic correctness | Very high (cases/simp) | **In progress** 🔄 | 3–4 |
+| 3 | RetryPolicy | `SageFs.Core/RetryPolicy.fs` | Decision correctness, backoff properties | High (cases/omega) | **Complete** ✅ | 3–5 |
+| 4 | RestartPolicy | `SageFs.Core/RestartPolicy.fs` | Backoff monotonicity, cap invariant | Medium (linarith) | **Complete** ✅ | 5 |
+| 5 | Affordances | `SageFs.Core/Affordances.fs` | Security-relevant, finite decidable domain | Very high (decide) | **Next** | 1 |
 
 ---
 

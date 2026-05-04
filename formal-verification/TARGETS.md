@@ -3,18 +3,18 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-04-23 19:55 UTC
-- **Commit**: `c4784d68d4f0c69c21dd4e7255f042868fa3fc80`
+- **Date**: 2026-04-27 09:00 UTC
+- **Commit**: `460650525a57cfd40c9fd24a57bde43c00f712b3` (+ current run)
 
 ---
 
 | # | Target | Source File | Phase | Status | Notes |
 |---|--------|-------------|-------|--------|-------|
-| 1 | `RingBuffer` | `SageFs.Core/RingBuffer.fs` | 2 | 🔄 Informal spec written | Pure functional ring buffer; count/capacity/ordering invariants |
-| 2 | `ResultEx` | `SageFs.Core/ResultEx.fs` | 1 | ⬜ Identified | Functor/monad/applicative laws for `Result<'T,'E>` |
-| 3 | `Affordances.availableTools` | `SageFs.Core/Affordances.fs` | 1 | ⬜ Identified | Finite state machine; all properties decidable |
-| 4 | `RetryPolicy.decide` | `SageFs.Core/RetryPolicy.fs` | 1 | ⬜ Identified | Pure retry decision; case analysis |
-| 5 | `RestartPolicy.decide` | `SageFs.Core/RestartPolicy.fs` | 1 | ⬜ Identified | Exponential backoff; monotonicity/cap properties |
+| 1 | `RingBuffer` | `SageFs.Core/RingBuffer.fs` | 5 | ✅ 20/20 proved (0 sorry) | Complete. All invariants, ordering, eviction accounting verified. |
+| 2 | `ResultEx` | `SageFs.Core/ResultEx.fs` | 3–4 | 🔄 15/17 proved (2 sorry) | Monad/functor laws done. 2 sorry on accumulator-length lemmas. |
+| 3 | `RetryPolicy.decide` | `SageFs.Core/RetryPolicy.fs` | 3–5 | ✅ 12/12 proved (0 sorry) | Complete this run. Decision correctness + delay monotonicity fully verified. |
+| 4 | `RestartPolicy.decide` | `SageFs.Core/RestartPolicy.fs` | 5 | ✅ 8/8 proved (0 sorry) | Complete this run. ge_base sorry resolved with one_le_two_pow helper. |
+| 5 | `Affordances.availableTools` | `SageFs.Core/Affordances.fs` | 5 | ✅ 19/19 proved (0 sorry) | Complete. Tool-gating policy fully verified: always-on tools, code-exec guard, reset safety, no-duplicate. |
 
 ## Phase Legend
 
@@ -26,6 +26,20 @@
 | 4 | Lean 4 implementation model extracted (concrete definitions, not just sigs) |
 | 5 | Proofs attempted; `sorry`s reduced/eliminated |
 
+## Lean Files
+
+| File | Theorems | Sorry | Phase |
+|------|----------|-------|-------|
+| `lean/FVSquad/RingBuffer.lean` | 20 | 0 | 5 ✅ |
+| `lean/FVSquad/ResultEx.lean` | 17 | 2 | 3–4 🔄 |
+| `lean/FVSquad/RestartPolicy.lean` | 8 | 0 | 5 ✅ |
+| `lean/FVSquad/RetryPolicy.lean` | 12 | 0 | 3–5 ✅ |
+| `lean/FVSquad/Affordances.lean` | 19 | 0 | 5 ✅ |
+| `lean/FVSquad/Affordances.lean` | 19 | 0 | 5 ✅ |
+| **Total** | **76** | **2** | — |
+
 ## Open Issues / PRs
 
-*(None yet — first run)*
+- Issue #54: Lean Squad Status (tracking issue, always-open dashboard)
+- ResultEx: 2 `sorry` remain — `resSequence_length` and `resPartition_length` require accumulator induction
+- Next: Consider `EvalPipeline` or `SessionLifecycle` state machine as next target
