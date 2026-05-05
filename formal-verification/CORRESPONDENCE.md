@@ -8,8 +8,8 @@ known divergence so that the validity of the associated proofs can be assessed h
 
 ## Last Updated
 
-- **Date**: 2026-05-21 UTC
-- **Commit**: `85bd059`
+- **Date**: 2026-05-05 17:00 UTC
+- **Commit**: `73ad055`
 
 ---
 
@@ -36,7 +36,7 @@ known divergence so that the validity of the associated proofs can be assessed h
 | `rbCreate default cap h` | `RingBuffer.create` | `SageFs.Core/RingBuffer.fs` | **Exact** | Returns empty buffer with `Array.replicate cap default`. Lean requires `h : 0 < cap` explicitly; F# raises an exception. |
 | `rbPush x buf` | `RingBuffer.push` | `SageFs.Core/RingBuffer.fs` | **Abstraction** | F# mutates `Items[newHead] <- x` in place; Lean uses `Array.set` to produce a new array. Observable input/output semantics are identical. Eviction (when `Count = Capacity`) is captured: `count = min (count+1) size`. |
 | `rbTryGet age buf` | `RingBuffer.tryGet` | `SageFs.Core/RingBuffer.fs` | **Exact** | Both return `None`/`none` for `age ≥ count` and `Some items[(head + age) % capacity]` otherwise. |
-| `rbClear buf` | `RingBuffer.clear` | `SageFs.Core/RingBuffer.fs` | **Abstraction** | Lean resets `head=0`, `count=0`, `total=0`, preserves `items` (keeps capacity). F# may reset items contents; Lean preserves the array object. `total` reset is modelled for simplicity; F# preserves `Total`. See divergence below. |
+| `rbClear buf` | `RingBuffer.clear` | `SageFs.Core/RingBuffer.fs` | **Exact** | Lean preserves `total`, resets `head=0`, `count=0`. Matches F# `clear` behaviour. |
 | `rbToList buf` | *(not a direct F# function)* | `SageFs.Core/RingBuffer.fs` | **Abstraction** | No direct F# equivalent; models the observable contents as a `List α` ordered from most-recent to oldest. Useful for stating and proving invariants about the sequence of pushed values. |
 
 ### Known divergences
@@ -55,13 +55,13 @@ known divergence so that the validity of the associated proofs can be assessed h
 - **Impact**: The Lean model captures the pure input-to-output mapping. Proofs about what `tryGet` returns after `push` remain valid because the observable state (contents at each age slot) is identical.
 - **Proof impact**: None for the proved theorems (all are about values, not identity/sharing).
 
-#### D3 — `rbClear` resets `total`
+#### D3 — `rbClear` total handling ✅ RESOLVED
 
-- **Lean model**: `rbClear` resets `total` to 0.
-- **F# source**: `clear` preserves `Total` (it only resets `Head`, `Count`, and item slots).
-- **Impact**: The theorems `clear_total` and `clear_count` are stated for the Lean model; `clear_total` would be false for the F# implementation. This divergence is a **known inaccuracy** in the Lean model.
-- **Proof impact**: `clear_total` should be revised or removed; it does not reflect F# behaviour.
-- **Action**: A future run should fix `rbClear` to preserve `total` and update `clear_total`.
+- **Previous state**: an earlier version of `rbClear` reset `total` to 0, diverging from F#.
+- **Current state**: `rbClear` preserves `total` (`total := buf.total`). The F# `clear` also
+  preserves `Total`. The divergence is **resolved**.
+- **`clear_total` theorem**: correctly states `(rbClear default buf).total = buf.total`.
+- **Proof impact**: No inaccuracy remains. All theorems involving `rbClear` are valid vs F#.
 
 #### D4 — `rbCreate` preserves item contents
 
@@ -97,7 +97,7 @@ All theorems below are proved by `lake build` with Lean 4.30.0-rc2 (no `sorry`),
 | `count_nonneg` | count ≥ 0 (trivial for Nat) | ✅ Yes (trivial) |
 | `create_total_zero` | new buffer has total 0 | ✅ Yes |
 | `push_total` | `rbPush` increments total | ✅ Yes |
-| `clear_total` | `rbClear` resets total to 0 | ⚠️ **No** — F# preserves `Total` (see D3) |
+| `clear_total` | `rbClear` preserves total | ✅ Yes — F# also preserves `Total` (D3 resolved) |
 | `total_ge_count` | total ≥ count | ✅ Yes |
 | `evictedCount_eq` | evicted = total - count | ✅ Yes |
 | `evictedCount_nonneg` | evicted ≥ 0 | ✅ Yes |
@@ -364,7 +364,7 @@ All 19 theorems are proved by `decide` (fully enumerated over the finite `Sessio
 
 | Target | Lean definition | F# function | Issue | Severity |
 |---|---|---|---|---|
-| `RingBuffer.rbClear` | Resets `total` to 0 | F# `clear` preserves `Total` | See D3 in RingBuffer section | Medium — `clear_total` theorem is false for F# |
+| `RingBuffer.rbClear` | Preserves `total` ✅ | F# `clear` preserves `Total` | D3 resolved — no divergence | None |
 | `RetryPolicy.baseDelay` | Jitter-free formula | F# adds ±50% random jitter | See D1 in RetryPolicy section | Low — `baseDelay_formula` is an approximation |
 
 ---

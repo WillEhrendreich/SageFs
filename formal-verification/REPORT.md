@@ -1,6 +1,6 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
-**Status**: 🔄 IN PROGRESS — 154 theorems, 9 Lean files, 0 `sorry`, Lean 4.30.0-rc2.
+**Status**: ✅ COMPLETE — 179 theorems, 9 Lean files, 0 `sorry`, Lean 4.30.0-rc2. CRITIQUE.md and lean-ci.yml added.
 
 ---
 

@@ -1,35 +1,68 @@
-name: lean-ci
+name: Lean CI
 
 on:
-  push:
-    paths:
-      - 'formal-verification/lean/**'
-    branches:
-      - master
   pull_request:
     paths:
       - 'formal-verification/lean/**'
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - 'formal-verification/lean/**'
+  workflow_dispatch:
 
 jobs:
   build:
+    name: Verify Lean Proofs
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: formal-verification/lean
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - name: Install elan (Lean toolchain manager)
+      - name: Install elan
         run: |
-          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
 
-      - name: Cache Lake build artifacts
+      - name: Install Lean toolchain
+        run: elan toolchain install $(cat lean-toolchain)
+
+      - name: Show Lean version
+        run: lean --version
+
+      - name: Compute cache key
+        id: cache-key
+        run: echo "manifest_hash=$(sha256sum lake-manifest.json | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache .lake build artefacts
         uses: actions/cache@v4
         with:
           path: formal-verification/lean/.lake
-          key: ${{ runner.os }}-lake-${{ hashFiles('formal-verification/lean/lake-manifest.json') }}
-          restore-keys: |
-            ${{ runner.os }}-lake-
+          key: lean-lake-${{ steps.cache-key.outputs.manifest_hash }}
+          restore-keys: lean-lake-
 
-      - name: Build Lean proofs
-        working-directory: formal-verification/lean
-        run: lake build
+      - name: Resolve dependencies (lake update)
+        run: lake update
+
+      - name: Build and verify all proofs
+        run: |
+          echo "=== lake build starting ==="
+          lake build 2>&1 | tee /tmp/lake_build.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          SORRY_COUNT=$(grep -c 'sorry' /tmp/lake_build.log || true)
+          echo ""
+          echo "=== lake build exit code: $BUILD_EXIT ==="
+          echo "=== 'sorry' occurrences in build output: $SORRY_COUNT ==="
+          exit $BUILD_EXIT
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lake-build-log
+          path: /tmp/lake_build.log
