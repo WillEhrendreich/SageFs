@@ -325,4 +325,4 @@ let allTests =
 
 // Run
 let summary = runTests defaultConfig allTests
-exit (if summary |> function | 0 -> 0 | _ -> 1 then 1 else 0)
+exit (match summary with | 0 -> 0 | _ -> 1)
