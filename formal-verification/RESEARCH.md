@@ -3,8 +3,8 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-04-27 09:00 UTC
-- **Commit**: `460650525a57cfd40c9fd24a57bde43c00f712b3`
+- **Date**: 2026-05-06 16:52 UTC
+- **Commit**: `43b86f4b04a978f42c607bb339664297dd102c2e`
 
 ---
 
@@ -24,6 +24,11 @@ SageFs is a live F# development environment — a REPL-powered daemon with edito
 - Prefer decidable propositions where possible
 
 **Mathlib relevance**: `Mathlib.Data.List.Basic`, `Mathlib.Data.Nat.Basic`, `Mathlib.Logic.Basic` cover most of what we need for list/count/arithmetic properties.
+
+> **Note (2026-05-06)**: Mathlib is blocked in CI (firewall blocks `lakecache.blob.core.windows.net`).
+> All FVSquad files use **pure Lean 4 stdlib only** — no `import Mathlib`. The tactics available are:
+> `omega`, `simp`/`simp only`, `decide`/`native_decide`, `cases`, `rcases`, `induction`, `rw`, `exact`.
+> Tactic workarounds for missing Mathlib are documented in §FV Toolchain Notes below.
 
 ---
 
@@ -182,10 +187,71 @@ firewall. Mathlib download is not possible. All Lean files use **pure Lean 4 std
 | # | Target | File | Benefit | Tractability | Priority | Phase |
 |---|--------|------|---------|-------------|----------|-------|
 | 1 | RingBuffer | `SageFs.Core/RingBuffer.fs` | Invariant correctness, rich existing tests | High (omega+simp) | **Complete** ✅ | 5 |
-| 2 | ResultEx | `SageFs.Core/ResultEx.fs` | Monad/functor laws, algebraic correctness | Very high (cases/simp) | **In progress** 🔄 | 3–4 |
-| 3 | RetryPolicy | `SageFs.Core/RetryPolicy.fs` | Decision correctness, backoff properties | High (cases/omega) | **Complete** ✅ | 3–5 |
+| 2 | ResultEx | `SageFs.Core/ResultEx.fs` | Monad/functor laws, algebraic correctness | Very high (cases/simp) | **Complete** ✅ | 5 |
+| 3 | RetryPolicy | `SageFs.Core/RetryPolicy.fs` | Decision correctness, backoff properties | High (cases/omega) | **Complete** ✅ | 5 |
 | 4 | RestartPolicy | `SageFs.Core/RestartPolicy.fs` | Backoff monotonicity, cap invariant | Medium (linarith) | **Complete** ✅ | 5 |
-| 5 | Affordances | `SageFs.Core/Affordances.fs` | Security-relevant, finite decidable domain | Very high (decide) | **Next** | 1 |
+| 5 | Affordances | `SageFs.Core/Affordances.fs` | Security-relevant, finite decidable domain | Very high (decide) | **Complete** ✅ | 5 |
+| 6 | EvalPipeline | `SageFs.Core/EvalPipeline.fs` | Trace structure, error propagation | High (simp/cases) | **Complete** ✅ | 5 |
+| 7 | HotReloadState | `SageFs.Core/HotReloadState.fs` | Watch/unwatch/toggle invariants | High (simp/decide) | **Complete** ✅ | 5 |
+| 8 | SessionLifecycle | `SageFs.Core/AppState.fs` | Phase→state projection, unreachable Uninitialized | High (cases/simp) | **Complete** ✅ | 5 |
+| 9 | Theme | `SageFs.Core/Theme.fs` | withOverrides identity/idempotency/isolation | High (decide/simp) | **Complete** ✅ | 5 |
+| 10 | **Composition** | `FVSquad/Composition.lean` | Cross-module system-level properties | High (simp/decide) | **Complete** ✅ | 5 |
+
+---
+
+## Critique-Driven Research Notes (2026-05-06)
+
+The CRITIQUE.md (Task 7) identified the following gaps and informed this run's Task 1 research:
+
+### Addressed this run: Cross-file composition theorems
+
+`CRITIQUE.md §Concerns` flagged: *"No cross-file composition theorems — each Lean file is self-contained."*
+
+**Action taken**: `FVSquad/Composition.lean` was created this run (Task 5), establishing:
+- A canonical isomorphism bridge between `SessionLifecycle.State` and `Affordances.SessionState`
+- System-level theorems proving the evaluation gate end-to-end:
+  - `send_fsharp_code_iff_ready_phase`: code submission available ↔ Phase.Active _ .Idle
+  - `evaluating_cannot_send_code`: reentrancy guard correct end-to-end
+  - `faulted_can_hard_reset`: recovery always possible from Faulted
+  - `cancel_eval_available_iff_evaluating_or_ready`: cancel gate correct end-to-end
+  - `hard_reset_available_iff_ready_or_faulted`: hard reset gate correct end-to-end
+
+**All 12 composition theorems proved (0 sorry), `lake build` passes.**
+
+### New research target: Session phase transition model
+
+`CRITIQUE.md §Gap 3` flagged: *"SessionLifecycle.lean does not prove anything about valid transitions between phases."*
+
+**Recommended new target** (phase 1 → 2): Write an informal spec and then a Lean spec for the session phase transition relation. Concretely:
+- Define a `validTransition : Phase α → Phase α → Prop` predicate
+- Key property: `Faulted` cannot transition directly to `Active` (must go through `Initializing`)
+- Key property: `Initializing` can only go to `Active` or `Faulted`
+- Key property: `Active Idle` ↔ `Active Evaluating` are the only intra-Active transitions
+- This would subsume a large class of potential state machine bugs
+
+**Source**: `SageFs.Core/SessionManager.fs` (the only place transitions are enacted).
+**Tractability**: `decide` over the finite state space, or inductive `Prop`.
+**Priority**: Medium — high value for correctness, tractable once the transition relation is formalised.
+
+### New research target: Theme field completeness
+
+`CRITIQUE.md §Gap 5` flagged: *"The 18 `withOverrides_*_preserves_*` theorems are weak — each pair is independent."*
+
+**Recommended improvement**: Replace or supplement the 18 pairwise theorems with a single theorem:
+```
+∀ k v base, ∀ field ≠ k, (withOverrides [(k, v)] base).field = base.field
+```
+This requires decidable equality on field names (or a tagless encoding), but would be a stronger and more useful single property that subsumes all 18 theorems. The `decide` tactic may be able to close it for the finite field set.
+
+**Priority**: Low — the current theorems are correct; this is a quality-of-proof improvement.
+
+### Ongoing: EvalPipeline correctness depth
+
+`CRITIQUE.md §Gap 4` flagged: *"EvalPipeline theorems prove only structural properties of the trace model."*
+
+**Recommended**: Add error-classification properties — e.g. "a code submission containing `;;` always produces an `Error` result in the trace." This requires modelling the FSI output parser, which is more complex. Lower priority until the simpler gaps are addressed.
+
+---
 
 ---
 
