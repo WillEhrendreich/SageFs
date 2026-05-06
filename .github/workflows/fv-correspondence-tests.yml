@@ -19,12 +19,24 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Checkout forked MCP SDK
+        uses: actions/checkout@v5
+        with:
+          repository: WillEhrendreich/ModelContextProtocolSdk
+          path: mcp-sdk
+
       - name: Install Dotnet
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: |
             10.0.x
           dotnet-quality: preview
+
+      - name: Build forked MCP SDK packages
+        run: |
+          dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+          dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+          dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
 
       - name: Run RingBuffer correspondence tests
         run: dotnet fsi formal-verification/tests/ringbuffer/run.fsx
