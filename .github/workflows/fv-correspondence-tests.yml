@@ -1,0 +1,30 @@
+name: fv-correspondence-tests
+
+on:
+  push:
+    paths:
+      - 'formal-verification/tests/**'
+      - 'SageFs.Core/**'
+    branches:
+      - master
+  pull_request:
+    paths:
+      - 'formal-verification/tests/**'
+      - 'SageFs.Core/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Dotnet
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            10.0.x
+          dotnet-quality: preview
+
+      - name: Run RingBuffer correspondence tests
+        run: dotnet fsi formal-verification/tests/ringbuffer/run.fsx

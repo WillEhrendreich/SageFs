@@ -1,0 +1,35 @@
+name: lean-ci
+
+on:
+  push:
+    paths:
+      - 'formal-verification/lean/**'
+    branches:
+      - master
+  pull_request:
+    paths:
+      - 'formal-verification/lean/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install elan (Lean toolchain manager)
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Lake build artifacts
+        uses: actions/cache@v4
+        with:
+          path: formal-verification/lean/.lake
+          key: ${{ runner.os }}-lake-${{ hashFiles('formal-verification/lean/lake-manifest.json') }}
+          restore-keys: |
+            ${{ runner.os }}-lake-
+
+      - name: Build Lean proofs
+        working-directory: formal-verification/lean
+        run: lake build
