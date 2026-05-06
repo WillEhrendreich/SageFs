@@ -1182,10 +1182,15 @@ module McpTools =
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
           let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+          match info with
+          | Some sessionInfo when sessionInfo.Status <> snapshot.Status ->
+            do! ctx.SessionOps.UpdateSessionStatus (toSessionId sid) snapshot.Status
+          | _ -> ()
           let baseStatus =
             match info with
             | Some sessionInfo ->
-              McpAdapter.formatProxyStatus sid eventCount snapshot sessionInfo ctx.McpPort
+              let syncedInfo = { sessionInfo with Status = snapshot.Status }
+              McpAdapter.formatProxyStatus sid eventCount snapshot syncedInfo ctx.McpPort
             | None ->
               let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
               McpAdapter.formatEnhancedStatus sid eventCount state None None

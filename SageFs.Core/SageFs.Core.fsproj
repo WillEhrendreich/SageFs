@@ -42,6 +42,7 @@
         <Compile Include="Features\TestCachePersistence.fs" />
         <Compile Include="Features\CoverageInstrumenter.fs" />
         <Compile Include="Features\LiveTestingInstrumentation.fs" />
+        <Compile Include="Features\ReflectionDiscovery.fs" />
         <Compile Include="Features\LiveTestingExecutors.fs" />
         <Compile Include="Features\TestTreeSitter.fs" />
         <Compile Include="Features\AutoCompletion.fs" />

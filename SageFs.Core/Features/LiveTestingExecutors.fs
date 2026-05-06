@@ -123,6 +123,9 @@ module ReflectionExecutor =
 
 module AttributeDiscovery =
 
+  let exportedTypesForDiscovery (asm: Assembly) : Type array =
+    SageFs.Features.ReflectionDiscovery.exportedTypes asm
+
   let hasTestAttribute (attrs: string list) (mi: MethodInfo) : bool =
     mi.GetCustomAttributes(true)
     |> Array.exists (fun attr ->
@@ -197,16 +200,12 @@ module AttributeDiscovery =
     (category: TestCategory)
     (asm: Assembly)
     : TestCase list =
-    try
-      asm.GetExportedTypes()
-      |> Array.collect (fun t ->
-        t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
-        |> Array.filter (hasTestAttribute desc.TestAttributes))
-      |> Array.collect (fun mi -> toTestCases desc.Name category theoryAttrNames mi |> List.toArray)
-      |> Array.toList
-    with
-    | :? ReflectionTypeLoadException -> []
-    | :? TypeLoadException -> []
+    exportedTypesForDiscovery asm
+    |> Array.collect (fun t ->
+      t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
+      |> Array.filter (hasTestAttribute desc.TestAttributes))
+    |> Array.collect (fun mi -> toTestCases desc.Name category theoryAttrNames mi |> List.toArray)
+    |> Array.toList
 
   /// Discover tests with their runner closures retained for execution wiring.
   /// Theory+InlineData methods are expanded: each data row becomes a separate
@@ -218,34 +217,30 @@ module AttributeDiscovery =
     (categoryFn: MethodInfo -> TestCategory)
     (asm: Assembly)
     : (TestCase * Async<TestResult>) list =
-    try
-      asm.GetExportedTypes()
-      |> Array.collect (fun t ->
-        t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
-        |> Array.filter (hasTestAttribute ae.Description.TestAttributes)
-        |> Array.collect (fun mi ->
-          let category = categoryFn mi
-          match isTheoryMethod ae.TheoryAttributes mi with
-          | false ->
+    exportedTypesForDiscovery asm
+    |> Array.collect (fun t ->
+      t.GetMethods(BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
+      |> Array.filter (hasTestAttribute ae.Description.TestAttributes)
+      |> Array.collect (fun mi ->
+        let category = categoryFn mi
+        match isTheoryMethod ae.TheoryAttributes mi with
+        | false ->
+          let tc = toTestCase ae.Description.Name category mi
+          let runner = ae.Execute mi
+          [| (tc, runner) |]
+        | true ->
+          match getInlineDataRows mi with
+          | [||] ->
+            // Theory without InlineData (e.g. MemberData) — one case, no args
             let tc = toTestCase ae.Description.Name category mi
             let runner = ae.Execute mi
             [| (tc, runner) |]
-          | true ->
-            match getInlineDataRows mi with
-            | [||] ->
-              // Theory without InlineData (e.g. MemberData) — one case, no args
-              let tc = toTestCase ae.Description.Name category mi
-              let runner = ae.Execute mi
-              [| (tc, runner) |]
-            | rows ->
-              rows |> Array.map (fun args ->
-                let tc = toTheoryTestCase ae.Description.Name category mi args
-                let runner = ReflectionExecutor.executeMethodWithArgs mi args
-                (tc, runner))))
-      |> Array.toList
-    with
-    | :? ReflectionTypeLoadException -> []
-    | :? TypeLoadException -> []
+          | rows ->
+            rows |> Array.map (fun args ->
+              let tc = toTheoryTestCase ae.Description.Name category mi args
+              let runner = ReflectionExecutor.executeMethodWithArgs mi args
+              (tc, runner))))
+    |> Array.toList
 
 // --- Built-in framework executors ---
 
@@ -559,7 +554,7 @@ module BuiltInExecutors =
     /// Build a lookup from FullName → ReflectedFlatTest for leaf-level execution.
     let buildLookup (cache: ReflectionCache) (asm: Assembly) : Map<string, ReflectedFlatTest> =
       try
-        asm.GetExportedTypes()
+        AttributeDiscovery.exportedTypesForDiscovery asm
         |> Array.collect (fun t ->
           getTestBindings cache t
           |> Array.collect (fun binding ->
@@ -588,7 +583,7 @@ module BuiltInExecutors =
     /// Discover individual leaf-level tests from all public Expecto test bindings.
     let discoverLeafTests (cache: ReflectionCache) (asm: Assembly) : TestCase list =
       try
-        asm.GetExportedTypes()
+        AttributeDiscovery.exportedTypesForDiscovery asm
         |> Array.collect (fun t ->
           getTestBindings cache t
           |> Array.collect (fun binding ->
@@ -617,6 +612,7 @@ module BuiltInExecutors =
       with
       | :? ReflectionTypeLoadException -> []
       | :? TypeLoadException -> []
+      | :? NotSupportedException -> []
 
   let expecto : TestExecutor =
     TestExecutor.Custom {

@@ -49,6 +49,17 @@ let builtInDescriptionTests = testList "BuiltInExecutors.descriptions" [
 ]
 
 let attributeDiscoveryTests = testList "AttributeDiscovery" [
+  test "WHY — live testing discovery — skips dynamic assemblies because FSI submissions must not crash REPL evaluation" {
+    let asm =
+      System.Reflection.Emit.AssemblyBuilder.DefineDynamicAssembly(
+        AssemblyName("sagefs-dynamic-discovery-probe"),
+        System.Reflection.Emit.AssemblyBuilderAccess.Run)
+
+    SageFs.Features.ReflectionDiscovery.exportedTypes asm
+    |> Array.length
+    |> Expect.equal "dynamic assemblies should be treated as having no discoverable test types" 0
+  }
+
   test "discovers Expecto [Tests] properties via custom executor" {
     let testsAsm =
       System.AppDomain.CurrentDomain.GetAssemblies()

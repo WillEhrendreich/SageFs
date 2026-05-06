@@ -770,6 +770,20 @@ module ResetIsolation =
         "reset"
     }
 
+    testTask "WHY — getStatus — synchronizes registry with worker status because agents compare list_sessions and get_fsi_status before trusting REPL readiness" {
+      let ctx, _, resetStarted, _ = mkStatusSyncCtx ()
+
+      resetStarted.TrySetResult(()) |> ignore
+
+      let! _ = getStatus ctx "agent1" None (Some @"C:\Code\Repos\SageFs")
+
+      let! listed = listSessions ctx
+      listed
+      |> Expect.stringContains
+        "listSessions should no longer report Ready when live worker status is still warming"
+        "Starting"
+    }
+
     testTask "hardResetSession surfaces transport failures without throwing" {
       let ctx, sid, workerDied, registryStatus = mkTransportFailureCtx ()
 
