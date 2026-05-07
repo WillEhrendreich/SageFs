@@ -8,8 +8,8 @@ known divergence so that the validity of the associated proofs can be assessed h
 
 ## Last Updated
 
-- **Date**: 2026-05-05 17:00 UTC
-- **Commit**: `73ad055`
+- **Date**: 2026-05-07 01:20 UTC
+- **Commit**: `8bd5097`
 
 ---
 
@@ -455,13 +455,297 @@ The Lean model has been manually cross-referenced against `SageFs.Core/HotReload
 
 ---
 
+## EvalPipeline
+
+**Lean file**: `formal-verification/lean/FVSquad/EvalPipeline.lean`
+**F# source**: `SageFs.Core/EvalPipeline.fs`
+
+### Type correspondence
+
+| Lean name | F# name | F# file + location | Correspondence | Notes |
+|---|---|---|---|---|
+| `EPOutcome` | `StageOutcome` | `SageFs.Core/EvalPipeline.fs` | **Abstraction** | F# `StageOutcome.Failed` carries a `SageFsError` payload; Lean `EPOutcome.failed` carries `Unit`. Error payloads are irrelevant to structural trace properties. |
+| `EPStage` | `CompletedStage` | `SageFs.Core/EvalPipeline.fs` | **Abstraction** | F# struct includes `ElapsedMs : float<ms>`; Lean omits timing (it is a measured side effect). Both have `name : string` / `Name : string` and an outcome field. |
+| `EPTracked α` | `TrackedResult<'T>` | `SageFs.Core/EvalPipeline.fs` | **Abstraction** | F# struct includes `ElapsedMs`; Lean omits it. F# uses `Result<'T, SageFsError>`; Lean uses `Except Unit α`. |
+| `EPTrace α` | `PipelineTrace<'T>` | `SageFs.Core/EvalPipeline.fs` | **Exact** | Same structure: `result` + `stages` (F# list, Lean list). |
+
+### Function correspondence
+
+| Lean name | F# name | F# file | Correspondence level | Notes |
+|---|---|---|---|---|
+| `epBind tracked f` | `PipelineBuilder.Bind` | `EvalPipeline.fs` | **Exact** | Both record a completed stage; on success thread through to `f v`; on error short-circuit with a single-element stage list. |
+| `epReturn x` | `PipelineBuilder.Return` | `EvalPipeline.fs` | **Exact** | Both produce an empty-stage trace with an `Ok` result. |
+| `epZero` | `PipelineBuilder.Zero` | `EvalPipeline.fs` | **Exact** | Both produce `Ok ()` with empty stages. |
+| `epSucceeded t` | `PipelineTrace<'T>.succeeded` *(inlined)* | `EvalPipeline.fs` | **Exact** | Boolean test on result being `Ok`. |
+
+### Known divergences
+
+#### D1 — `ElapsedMs` omitted
+
+- **Lean model**: `EPStage` and `EPTracked` have no timing field.
+- **F# source**: Both `CompletedStage` and `TrackedResult` carry `ElapsedMs : float<ms>`.
+- **Impact**: All proved theorems concern structural trace shape (stage counts, order, result propagation), not timing values. No theorem is invalidated by this omission.
+- **Proof impact**: None.
+
+#### D2 — Error payload abstracted to `Unit`
+
+- **Lean model**: `EPTracked.value : Except Unit α`; error carries no information.
+- **F# source**: `TrackedResult.Value : Result<'T, SageFsError>`; errors carry typed error data.
+- **Impact**: Theorems about *which* error is propagated are not provable in the current model. Theorems about *structural* error propagation (an error short-circuits; the stage is recorded as `failed`) remain valid because the error payload is ignored.
+- **Proof impact**: Structural theorems are unaffected.
+
+#### D3 — `stage` and `stageOk` not modelled
+
+- **Lean model**: Proofs work directly with `epBind` and `epReturn`.
+- **F# source**: `EvalPipeline.stage` and `EvalPipeline.stageOk` wrap `IO` timing. They are pipeline-entry points, not part of the pure CE semantics.
+- **Impact**: The stage/stageOk functions are not modelled because they involve side effects; the pure structural core is fully captured.
+
+### Theorems proved (all without `sorry`)
+
+| Theorem | Property |
+|---|---|
+| `epReturn_stages_empty` | `epReturn` produces empty stage list |
+| `epReturn_result_ok` | `epReturn x` has `Ok x` result |
+| `epZero_stages_empty` | `epZero` has empty stage list |
+| `epSucceeded_iff_ok` | `epSucceeded t ↔ ∃ v, t.result = Ok v` |
+| `epReturn_succeeded` | `epReturn` always succeeds |
+| `epBind_ok_stages` | Success path prepends `succeeded` stage |
+| `epBind_ok_result` | Success path propagates downstream result |
+| `epBind_error_stages` | Error path produces exactly one `failed` stage |
+| `epBind_error_stages_length` | Error path stage list has length 1 |
+| `epBind_error_result` | Error path propagates the error |
+| `epBind_error_not_succeeded` | Error path never sets `succeeded` |
+| `two_step_first_fails_one_stage` | Two-stage trace: first stage fails → 1-stage trace |
+| `two_step_first_ok_stages` | Two-stage trace: first stage succeeds → 2-stage trace |
+
+### Validation evidence
+
+No Aeneas-generated Lean file or runnable correspondence test harness exists yet.
+The Lean model has been manually cross-referenced against `SageFs.Core/EvalPipeline.fs`
+line by line.
+
+---
+
+## SessionLifecycle
+
+**Lean file**: `formal-verification/lean/FVSquad/SessionLifecycle.lean`
+**F# source**: `SageFs.Core/AppState.fs`, `SageFs.Core/SessionState.fs`
+
+### Type correspondence
+
+| Lean name | F# name | F# file + location | Correspondence | Notes |
+|---|---|---|---|---|
+| `Activity` | `SessionActivity` | `SageFs.Core/AppState.fs:156–161` | **Exact** | Two constructors: `Idle`/`Evaluating`. Lean `deriving DecidableEq, Repr`. |
+| `Phase α` | `SessionPhase` | `SageFs.Core/AppState.fs:163–166` | **Abstraction** | F# carries a concrete `AppState` inside `Active`; Lean abstracts it to a type variable `α`. The internal AppState fields are irrelevant to lifecycle state machine properties. |
+| `State` | `SessionState` | `SageFs.Core/SessionState.fs` | **Exact** | Five constructors: `Uninitialized / WarmingUp / Ready / Evaluating / Faulted`. Same semantics. |
+
+### Function correspondence
+
+| Lean name | F# name | F# file | Correspondence level | Notes |
+|---|---|---|---|---|
+| `toState p` | `SessionPhase.toSessionState` | `AppState.fs:170–174` | **Exact** | Pattern match is identical: `Initializing _ → WarmingUp`, `Active(_, Idle) → Ready`, `Active(_, Evaluating) → Evaluating`, `Faulted → Faulted`. |
+| `tryAppState p` | `SessionPhase.tryAppState` | `AppState.fs:178–180` | **Exact** | `Active(st, _) → Some st`, all else → `None`. |
+| `State.label` | `SessionState.label` | `SessionState.fs` | **Exact** | Same label strings. |
+
+### Known divergences
+
+#### D1 — `α` abstraction for AppState
+
+- **Lean model**: `Phase α` uses a type variable `α` for the session content.
+- **F# source**: `SessionPhase.Active` carries a concrete `AppState` record.
+- **Impact**: Theorems about AppState field values (e.g., loaded solutions, open files) are not provable in the current model. Lifecycle state-machine theorems are fully valid.
+- **Proof impact**: None for proved theorems — all are about phase/state structure, not AppState fields.
+
+### Theorems proved (all without `sorry`)
+
+| Theorem | Property |
+|---|---|
+| `toState_initializing` | `Initializing _ → WarmingUp` |
+| `toState_active_idle` | `Active _ Idle → Ready` |
+| `toState_active_evaluating` | `Active _ Evaluating → Evaluating` |
+| `toState_faulted` | `Faulted → Faulted` |
+| `tryAppState_active` | Returns `Some s` for any Active phase |
+| `tryAppState_initializing` | Returns `None` for Initializing |
+| `tryAppState_faulted` | Returns `None` for Faulted |
+| `toState_never_uninitialized` | 🌟 `Uninitialized` is unreachable via `toState` |
+| `tryAppState_some_iff_active` | `tryAppState ≠ None ↔ ∃ s a, p = Active s a` |
+| `ready_iff_active_idle` | `toState p = Ready ↔ ∃ s, p = Active s Idle` |
+| `evaluating_iff_active_evaluating` | `toState p = Evaluating ↔ ∃ s, p = Active s Evaluating` |
+| `faulted_iff` | `toState p = Faulted ↔ p = Faulted` |
+| `warming_up_iff` | `toState p = WarmingUp ↔ ∃ m, p = Initializing m` |
+| `tryAppState_some_implies_active_state` | `tryAppState = Some → Ready ∨ Evaluating` |
+| `active_state_implies_tryAppState_some` | `Ready ∨ Evaluating → tryAppState = Some` |
+| `State.label_injective` | Labels uniquely identify states |
+
+### Validation evidence
+
+No Aeneas-generated Lean file or runnable test harness exists. The Lean model
+has been manually cross-referenced against `SageFs.Core/AppState.fs` (lines
+163–180) and `SageFs.Core/SessionState.fs`.
+
+---
+
+## Theme
+
+**Lean file**: `formal-verification/lean/FVSquad/Theme.lean`
+**F# source**: `SageFs.Core/Theme.fs`
+
+### Type correspondence
+
+| Lean name | F# name | F# file + location | Correspondence | Notes |
+|---|---|---|---|---|
+| `ThemeConfig` | `ThemeConfig` | `SageFs.Core/Theme.fs` | **Exact** | All 34 color fields present in both. F# uses `PascalCase` fields (e.g. `FgDefault`); Lean uses `camelCase` (e.g. `fgDefault`). Field order matches. |
+| `defaults` | `Theme.defaults` | `SageFs.Core/Theme.fs` | **Exact** | All 34 hex string values are identical between Lean and F#. |
+
+### Function correspondence
+
+| Lean name | F# name | F# file | Correspondence level | Notes |
+|---|---|---|---|---|
+| `lookupOr key overrides default` | *(inline in withOverrides)* | `Theme.fs` | **Exact** | First-match association list lookup with a fallback default. Mirrors the inline `Map.tryFind k overrides` logic. |
+| `withOverrides overrides base` | `Theme.withOverrides` | `Theme.fs` | **Exact** | Applies a `List (String × String)` override map to `ThemeConfig`, using `lookupOr` per field. F# uses `Map<string, string>`; Lean uses an association list with identical first-match semantics. |
+
+### Known divergences
+
+#### D1 — `Map<string, string>` vs `List (String × String)`
+
+- **Lean model**: `withOverrides` takes `overrides : List (String × String)` — an association list.
+- **F# source**: `Theme.withOverrides` takes `Map<string, string>` (a sorted, functional map).
+- **Impact**: Both have first-match semantics for lookups. `Map` has O(log n) lookups; the Lean association list is O(n). The observable input/output semantics are identical for any valid override map (no duplicate keys). Theorems about `withOverrides` correctness are unaffected.
+- **Proof impact**: None for proved theorems.
+
+#### D2 — Field name casing
+
+- **Lean model**: `camelCase` fields (e.g. `fgDefault`, `bgPanel`).
+- **F# source**: `PascalCase` fields (e.g. `FgDefault`, `BgPanel`).
+- **Impact**: Naming only; semantics are identical.
+
+### Theorems proved (all without `sorry`)
+
+| Theorem | Property |
+|---|---|
+| `lookupOr_empty` | Lookup in empty list returns default |
+| `lookupOr_hit` | Lookup of existing key returns value |
+| `lookupOr_miss` | Lookup of missing key returns default |
+| `withOverrides_empty_id` | `withOverrides [] base = base` |
+| `withOverrides_idempotent_single` | `withOverrides [(k,v)] (withOverrides [(k,v)] base)` = `withOverrides [(k,v)] base` |
+| `withOverrides_*_preserves_*` (×many) | Targeted override preserves all other fields |
+| `withOverrides_unrelated_key_*` | Override of key `k` leaves field for key `k'` unchanged |
+| `withOverrides_stack_*` | Stacked overrides compose correctly |
+| `defaults_hex_lengths_fg_*` | Default fg colors have length 7 |
+| `defaults_hex_lengths_bg_*` | Default bg colors have length 7 |
+| `defaults_fg_colors_nonempty` | Default fg color fields are non-empty |
+
+### Validation evidence
+
+No Aeneas-generated Lean file or runnable test harness exists. The Lean model
+has been manually cross-referenced against `SageFs.Core/Theme.fs`.
+
+---
+
+## Composition
+
+**Lean file**: `formal-verification/lean/FVSquad/Composition.lean`
+**F# source**: `SageFs.Core/AppState.fs`, `SageFs.Core/SessionState.fs`, `SageFs.Core/Affordances.fs`
+
+This file is a cross-module composition file; it does not introduce new F# types, but
+bridges the `SessionLifecycle` and `Affordances` models.
+
+### Type / function correspondence
+
+| Lean name | F# source | Correspondence | Notes |
+|---|---|---|---|
+| `stateToSessionState` | Implicit identity in F# (`toSessionState` → `availableTools`) | **Abstraction** | In F#, `SessionPhase.toSessionState` returns a `SessionState` value, and `availableTools` is called directly on that. This Lean function makes the conversion explicit for composition theorem purposes. |
+
+### Theorems proved (all without `sorry`)
+
+| Theorem | Property | Level |
+|---|---|---|
+| `stateToSessionState_injective` | Bridge is injective | Mid |
+| `stateToSessionState_surjective` | Bridge is surjective | Mid |
+| `stateToSessionState_bijective` | Bridge is a bijection | Mid |
+| `active_idle_can_send_code` | Phase.Active _ Idle → `send_fsharp_code` available | High |
+| `evaluating_cannot_send_code` | Phase.Active _ Evaluating → code denied | High |
+| `faulted_can_hard_reset` | Faulted → `hard_reset_fsi_session` always available | High |
+| `warming_up_cannot_send_code` | Initializing _ → code denied | Mid |
+| `uninitialized_cannot_send_code` | Uninitialized state → code denied | Low |
+| `send_fsharp_code_iff_ready_phase` | 🌟 Central gate: code ↔ Phase.Active _ Idle | High |
+| `cancel_eval_available_iff_evaluating_or_ready` | Cancel ↔ Evaluating ∨ Ready | High |
+| `hard_reset_available_iff_ready_or_faulted` | Hard reset ↔ Ready ∨ Faulted | High |
+| `tools_always_available` | Every phase has at least one available tool | Mid |
+
+### Validation evidence
+
+No separate correspondence test harness exists for Composition (it exercises abstract types).
+The bridge function `stateToSessionState` was manually verified to match the F# call chain:
+`SessionPhase.toSessionState` → `Affordances.availableTools`.
+
+---
+
+## PhaseTransition
+
+**Lean file**: `formal-verification/lean/FVSquad/PhaseTransition.lean`
+**F# source**: `SageFs.Core/AppState.fs` (eval actor, EvalReset, EvalHardReset handlers)
+
+This file defines a formal `validTransition` relation that captures which phase-to-phase
+transitions are permitted in the SageFs session actor, and proves safety invariants about it.
+
+### Transition relation correspondence
+
+| `validTransition` case | F# source action | Location | Notes |
+|---|---|---|---|
+| `initToInit` | Progress message update (`publishPhase (Initializing (Some …))`) | `AppState.fs:1099, 1294` | Multiple progress messages during warm-up |
+| `initToReady` | Warm-up completes (`publishSnapshot newSt Idle evalStats'`) | `AppState.fs:~1050, 1118` | Normal session start |
+| `initToFaulted` | Warm-up fails (`publishPhase Faulted evalStats`) | `AppState.fs:1130` | Startup failure |
+| `readyToEval` | EvalRun received (`publishSnapshot st Evaluating evalStats`) | `AppState.fs:1001` | Code submission |
+| `evalToReady` | EvalFinished (`publishSnapshot newSt Idle evalStats'`) | `AppState.fs:1055, 1072` | Eval complete |
+| `readyToInit` | EvalReset from Ready (`publishPhase (Initializing None)`) | `AppState.fs:1083` | Soft or hard reset |
+| `evalToInit` | EvalHardReset during eval (`publishPhase (Initializing None)`) | `AppState.fs:1135` | Hard reset during evaluation |
+| `faultedToInit` | EvalHardReset from Faulted (`publishPhase (Initializing None)`) | `AppState.fs:1135` | Recovery |
+
+### Known divergences
+
+#### D1 — Concurrency and cancellation not modelled
+
+- **Lean model**: `validTransition` is a pure inductive relation; no concurrency.
+- **F# source**: The eval actor uses `MailboxProcessor`, `CancellationTokenSource`, thread joins, and `CancelEval` messages.
+- **Impact**: Race conditions, cancellation interleaving, and timeout edge cases are not captured. The transition relation models the *intended* sequential behavior.
+
+#### D2 — `cancelEval` path collapsed into `evalToInit`
+
+- **Lean model**: `evalToInit` represents any hard reset during evaluation.
+- **F# source**: `CancelEval` can interrupt a running eval and restart the session.
+- **Impact**: The cancelEval path and the hard-reset path have the same phase outcome (both go to Initializing), so the Lean abstraction is sound for lifecycle safety properties.
+
+### Theorems proved (all without `sorry`)
+
+| Theorem | Property | Level |
+|---|---|---|
+| `faulted_only_recovers_to_init` | Faulted → only Initializing | High |
+| `faulted_cannot_directly_become_active` | No Faulted → Active edge | High |
+| `eval_cannot_fault_directly` | Evaluating → not directly Faulted | High |
+| `evaluating_next_phases` | Evaluating successor: Active(Idle) ∨ Initializing | High |
+| `ready_next_phases` | Ready successor: Active(Eval) ∨ Initializing | High |
+| `ready_cannot_fault_directly` | No Ready → Faulted edge | High |
+| `uninitialized_unreachable_as_target` | No transition reaches Uninitialized | Mid |
+| `active_transition_preserves_state_or_restarts` | Active always goes to Active or Initializing | High |
+| `faulted_transition_state_is_warming` | Faulted→? always has WarmingUp external state | High |
+| `evaluating_successor_state` | Evaluating→? external state: Ready or WarmingUp | High |
+| `ready_successor_state` | Ready→? external state: Evaluating or WarmingUp | High |
+
+### Validation evidence
+
+No runnable test harness. The transition relation was manually derived from the
+F# session actor pattern matches in `SageFs.Core/AppState.fs`, cross-referenced
+against the EvalRun, EvalFinished, EvalReset, EvalHardReset, and EvalEnableStdout
+message handlers (approximately lines 984–1350).
+
+---
+
 ## Other Targets
 
-The following targets have informal specs or are identified in `TARGETS.md` but have
-no Lean files yet. Correspondence will be documented here as each target reaches Phase 4.
+The following targets have been identified in `TARGETS.md` but have no Lean files yet.
+Correspondence will be documented here as each target reaches Phase 4.
 
-- `HotReloadState` (Phase 3 — Lean spec written and all proofs pass; see entry above)
 - `KeyMap` (Phase 1 — research only)
-- `Theme` (Phase 1 — research only)
 - `BinaryManifest` (Phase 1 — research only)
 - `StateMachine` (Phase 1 — research only)
