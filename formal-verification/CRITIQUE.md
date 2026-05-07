@@ -4,24 +4,22 @@
 
 ## Last Updated
 
-- **Date**: 2026-05-05 16:55 UTC
-- **Commit**: `73ad0550d04f075dcd6bb731fac77759167f7e27`
+- **Date**: 2026-05-07 09:15 UTC
+- **Commit**: `f5b7f4b`
 
 ---
 
 ## Overall Assessment
 
-The SageFs formal verification project has reached a mature first milestone: 179
-theorems proved across nine Lean 4 files, zero `sorry`, stdlib-only (no Mathlib due
-to CI network constraints). The theorems range from low-level monad laws and
-arithmetic identities to mid-level invariant-preservation results for the
-`RingBuffer` and `HotReloadState` state machines. The most valuable finding to date
-is structural: `toState_never_uninitialized` proves that `SessionState.Uninitialized`
-is unreachable through the normal `toState` projection, which confirms a key design
-invariant in `AppState.fs`. One known-incorrect theorem (`clear_total` in
-`RingBuffer.lean`) must be fixed — the Lean model diverges from the F# source on
-this point. The next highest-priority work is adding runnable correspondence tests
-(Task 8) and fixing the D3 divergence.
+The SageFs formal verification project has 177 theorems proved across 11 Lean 4 files,
+zero `sorry`, stdlib-only (no Mathlib). The project has progressed from individual-
+module invariants to system-level composition proofs. `Composition.lean` proves the
+end-to-end evaluation gate connecting `SessionLifecycle` and `Affordances`.
+`PhaseTransition.lean` formalises the session state-machine transition relation with
+safety invariants confirming key design decisions (eval failure → Ready, not Faulted).
+The major gap from the previous critique ("No cross-file composition theorems") is now
+closed. Next priorities are the conference paper, additional correspondence tests, and
+a deeper EvalPipeline model. No implementation bugs have been found.
 
 ---
 
@@ -130,47 +128,49 @@ this point. The next highest-priority work is adding runnable correspondence tes
 
 Priority order (highest first):
 
-### 1. Runnable correspondence tests (Task 8) — **CRITICAL**
+### 1. Conference paper (Task 11) — **HIGH**
 
-None of the nine Lean models have runnable cross-tests against the F#
-implementation. The current correspondence is validated only by code review.
-A property-based test harness (e.g., using FsCheck) that exercises the F#
-functions and compares outputs against the Lean model's predictions would
-significantly increase confidence. `RingBuffer` and `HotReloadState` are the
-highest-value targets due to their non-trivial state.
+The project has 177 theorems, 11 files, system-level composition proofs, and
+correspondence tests. A conference paper summarising the methodology, findings, and
+lessons learned is the next high-impact deliverable.
 
-### 2. CI for Lean proofs (Task 9) — **CRITICAL** *(now fixed this run)*
+### 2. Runnable correspondence tests (Task 8) — **HIGH**
 
-No `lean-ci.yml` existed before this run. `lean-ci.yml` has been created as part of
-this run (Task 9) and included in this PR. Going forward, every PR touching
-`formal-verification/lean/**` will trigger `lake build` automatically.
+The `RingBuffer` now has 50 passing correspondence tests (Task 8, Route B). However,
+`HotReloadState`, `SessionLifecycle`, `Affordances`, and `Theme` still lack runnable
+cross-tests. `HotReloadState` is the highest-value next target due to its non-trivial
+stateful behaviour.
 
-### 3. Session phase transition proofs — **MEDIUM**
+### 3. CI for Lean proofs (Task 9) — ✅ **DONE**
 
-`SessionLifecycle.lean` proves that individual states are classified correctly,
-but does not prove anything about *valid transitions* between phases. For example:
-can a `Faulted` session transition to `Active` directly, or must it go through
-`Initializing` first? A state-machine transition relation model would significantly
-increase the verification value here.
+`lean-ci.yml` exists and is active. Every PR touching `formal-verification/lean/**`
+triggers `lake build` automatically. The correspondence-test workflow
+`fv-correspondence-tests.yml` also runs on test and source changes.
 
-### 4. EvalPipeline: actual evaluation correctness — **MEDIUM**
+### 4. Session phase transition proofs — ✅ **DONE** (`PhaseTransition.lean`)
+
+`PhaseTransition.lean` defines the `validTransition` inductive relation with all
+8 transition cases and proves all key safety invariants. The gap is closed.
+
+### 5. Cross-file composition theorems — ✅ **DONE** (`Composition.lean`)
+
+`Composition.lean` proves the evaluation gate end-to-end with `send_fsharp_code_iff_ready_phase`
+and 11 additional composition theorems. The gap is closed.
+
+### 6. EvalPipeline: actual evaluation correctness — **MEDIUM**
 
 The `EvalPipeline` theorems prove structural properties of the computation-
 expression trace model (stage concatenation, error propagation), but nothing
 about the *correctness* of what F# Interactive actually evaluates. The model
 abstracts away the FSI session entirely. A more valuable next target would be
-the error-classification logic inside the pipeline (e.g., proving that a
-specific input shape always produces a `Faulted` trace).
+the error-classification logic inside the pipeline.
 
-### 5. Theme field-isolation theorems — **LOW**
+### 7. Theme field-isolation theorems — **LOW**
 
 The 18 `withOverrides_*_preserves_*` theorems each verify that overriding one
 specific field preserves one other specific field. This is a correct but weak
-coverage strategy: each pair is verified independently, not the whole record at
-once. A stronger property would prove that `withOverrides [(k, v)] base` agrees
-with `base` on *all* fields except the one named `k`. This would require
-decidable equality on field names and a case split, but would subsume all 18
-individual theorems.
+coverage strategy. A stronger property would prove that `withOverrides [(k, v)] base`
+agrees with `base` on *all* fields except the one named `k`.
 
 ---
 
@@ -181,7 +181,7 @@ individual theorems.
 CORRESPONDENCE.md §RingBuffer §D3 documented a previous divergence where `rbClear`
 reset `total` to 0. The current `rbClear` definition preserves `total` (`total :=
 buf.total`) and `clear_total` correctly proves `(rbClear default buf).total =
-buf.total`. CORRESPONDENCE.md should be updated to mark D3 as resolved.
+buf.total`. Resolved.
 
 ### ⚠️ `defaults_hex_lengths` theorems are low-value constant checks
 
@@ -199,13 +199,12 @@ error classification, and state updates. The Lean proofs touch only the
 pure-functional trace structure — a significant portion of the pipeline's
 correctness is unmodelled.
 
-### ⚠️ No cross-file composition theorems
+### ⚠️ PhaseTransition concurrency not modelled
 
-Each Lean file is self-contained; no theorem in one file imports or references
-definitions from another. The system-level property "a well-formed session
-accepts code evaluation, the pipeline runs, and the session returns to Ready" is
-not captured anywhere. This is the next natural target for a composition
-theorem once the individual modules are stable.
+`PhaseTransition.lean` does not model the async mailbox processor in `AppState.fs`.
+The `cancelEval` message is collapsed into the existing transitions rather than
+modelled separately. Proofs hold for the sequential state-transition abstraction,
+but not under concurrent reset/cancel racing with evaluation.
 
 ---
 
@@ -219,6 +218,19 @@ design invariant: `Uninitialized` is a sentinel for "not yet initialised" and
 is intentionally absent from the normal session lifecycle. This would catch a
 regression if a developer added a new `Phase` variant that could project to
 `Uninitialized`.
+
+### 🌟 `send_fsharp_code_iff_ready_phase` — system-level evaluation gate proved end-to-end
+
+`Composition.lean` proves that code submission is available *if and only if* the
+session phase is `Active·Idle`, unifying `SessionLifecycle` and `Affordances` in
+a single cross-file theorem. This is the project's first multi-module composition
+proof and confirms the evaluation gate is correctly specified at the system level.
+
+### 🌟 `eval_cannot_fault_directly` — key safety invariant confirmed at transition level
+
+`PhaseTransition.lean` proves that evaluation failure always returns to `Ready`,
+never directly to `Faulted`. This confirms the F# `EvalFinished(Error ex)` handler
+design: Faulted is only reachable via explicit reset operations.
 
 ### ✅ `push_aging` — non-trivial modular arithmetic proved
 
@@ -250,15 +262,15 @@ These are security-relevant gate conditions verified to match the declared polic
 
 | File | Theorems | Sorry | Level | Key result | Bug-catching |
 |------|----------|-------|-------|------------|-------------|
-| `RingBuffer.lean` | 28 | 0 ⚠️¹ | High | `push_aging`, `toList_length` | High |
-| `ResultEx.lean` | 21 | 0 | Mid | `resBind_assoc`, `resSequence_length` | Medium |
+| `RingBuffer.lean` | 20 | 0 | High | `push_aging`, `toList_length` | High |
+| `ResultEx.lean` | 17 | 0 | Mid | `resBind_assoc`, `resSequence_length` | Medium |
 | `RetryPolicy.lean` | 13 | 0 | Mid | `baseDelay_mono`, `rtDecide_*` | High |
-| `RestartPolicy.lean` | 12 | 0 | Mid | Backoff correctness | Medium |
+| `RestartPolicy.lean` | 9 | 0 | Mid | Backoff correctness | Medium |
 | `Affordances.lean` | 19 | 0 | High | Access-control gating | High |
 | `EvalPipeline.lean` | 17 | 0 | Mid | Trace structure | Medium |
-| `HotReloadState.lean` | 30 | 0 | High | `toggle_involution`, directory ops | High |
-| `SessionLifecycle.lean` | 18 | 0 | High | `toState_never_uninitialized` | High |
-| `Theme.lean` | 21 | 0 | Low–Mid | `withOverrides` identity/isolation | Low–Medium |
-| **Total** | **179** | **0** | — | — | — |
-
-¹ `clear_total` is proved but incorrect relative to F# source (D3 divergence).
+| `HotReloadState.lean` | 23 | 0 | High | `toggle_involution`, directory ops | High |
+| `SessionLifecycle.lean` | 16 | 0 | High | `toState_never_uninitialized` | High |
+| `Theme.lean` | 20 | 0 | Low–Mid | `withOverrides` identity/isolation | Low–Medium |
+| `Composition.lean` | 12 | 0 | High | `send_fsharp_code_iff_ready_phase` | High |
+| `PhaseTransition.lean` | 11 | 0 | High | `eval_cannot_fault_directly` | High |
+| **Total** | **177** | **0** | — | — | — |
