@@ -11,3 +11,4 @@ import FVSquad.Composition
 import FVSquad.PhaseTransition
 import FVSquad.SmartReset
 import FVSquad.SageFsError
+import FVSquad.SseReplayBuffer
