@@ -6,7 +6,8 @@
 - **Date**: 2026-05-05 01:15 UTC
 - **Date**: 2026-05-05 17:00 UTC
 - **Date**: 2026-05-06 00:00 UTC
-- **Commit**: `2770ebd`
+- **Date**: 2026-05-08 09:00 UTC
+- **Commit**: `c4087f7`
 
 ---
 
@@ -24,6 +25,7 @@
 | 10 | `Composition` | `SageFs.Core/Composition.fs` | 5 | ✅ 12 proved (0 sorry) | Function composition laws verified. |
 | 11 | `PhaseTransition` | `SageFs.Core/AppState.fs` | 5 | ✅ 14 proved (0 sorry) | Session lifecycle safety: no direct Faulted←Eval, successor coverage, always-successor. |
 | 12 | `SmartReset` | `SageFs.Core/SmartReset.fs` | 5 | ✅ 8 proved (0 sorry) | Escalation logic: outcome biconditionals + negative cases fully proved. |
+| 13 | `SageFsError` | `SageFs.Core/SageFsError.fs` | 5 | ✅ 26 proved (0 sorry) | Error category partition + HTTP status consistency + log severity proved. |
 
 ## Phase Legend
 
@@ -51,12 +53,14 @@
 | `lean/FVSquad/Composition.lean` | 12 | 0 | 5 ✅ |
 | `lean/FVSquad/PhaseTransition.lean` | 14 | 0 | 5 ✅ |
 | `lean/FVSquad/SmartReset.lean` | 8 | 0 | 5 ✅ |
-| **Total** | **191** | **0** | — |
+| `lean/FVSquad/SageFsError.lean` | 26 | 0 | 5 ✅ |
+| **Total** | **217** | **0** | — |
 
 ## Open Issues / PRs
 
 - Task 8 (Correspondence): No runnable test harnesses yet — HIGH PRIORITY
-- Task 7 (Critique): ✅ DONE this run — CRITIQUE.md created
-- Task 9 (CI): ✅ DONE this run — lean-ci.yml created
+- Task 7 (Critique): ✅ DONE — CRITIQUE.md created
+- Task 9 (CI): ✅ DONE — lean-ci.yml created
+- Task 4+5 (SageFsError): ✅ DONE this run — 26 theorems, 0 sorry
 
 
