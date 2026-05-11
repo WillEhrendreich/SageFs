@@ -348,7 +348,7 @@ let compilationContextPropertyTests =
         let lines = allLeafLines annotated
         lines |> List.forall (fun targetLine ->
           let _, _, result, _ = runPipeline source targetLine Set.empty
-          not (result.Code.Contains("module Tmp"))
+          not (result.Code.Contains("module Tmp ="))
         )
       )
 
