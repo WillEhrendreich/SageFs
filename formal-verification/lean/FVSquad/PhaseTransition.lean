@@ -173,4 +173,44 @@ theorem ready_successor_state {α : Type} (s : α) (p2 : Phase α)
   · left; simp [toState]
   · right; simp [toState]
 
+-- ── Initializing transition properties ──────────────────────────────────────
+
+/-- From any Initializing state, the only valid next phases are:
+    another Initializing (progress update), Active(Idle) (warm-up success),
+    or Faulted (warm-up failure). There is no shortcut to Active(Evaluating). -/
+theorem initializing_next_phases {α : Type} (m : Option String) (p2 : Phase α)
+    (h : validTransition (.Initializing m) p2) :
+    (∃ m2, p2 = .Initializing m2) ∨ (∃ s, p2 = .Active s .Idle) ∨ p2 = .Faulted := by
+  cases h with
+  | initToInit _ m2 => left; exact ⟨m2, rfl⟩
+  | initToReady _ s => right; left; exact ⟨s, rfl⟩
+  | initToFaulted _ => right; right; rfl
+
+/-- The external state after any Initializing transition is WarmingUp, Ready, or Faulted.
+    Initializing can never skip to Evaluating without first reaching Ready. -/
+theorem initializing_successor_state {α : Type} (m : Option String) (p2 : Phase α)
+    (h : validTransition (.Initializing m) p2) :
+    toState p2 = State.WarmingUp ∨ toState p2 = State.Ready ∨ toState p2 = State.Faulted := by
+  rcases initializing_next_phases m p2 h with ⟨m2, rfl⟩ | ⟨s, rfl⟩ | rfl
+  · left; simp [toState]
+  · right; left; simp [toState]
+  · right; right; simp [toState]
+
+-- ── Liveness ─────────────────────────────────────────────────────────────────
+
+/-- Every phase has at least one valid successor (liveness).
+    This shows the session is never permanently stuck — it can always
+    make a transition:
+    - Initializing can stay in Initializing (progress update)
+    - Active(Idle) can move to Active(Evaluating) (receive EvalRun)
+    - Active(Evaluating) can return to Active(Idle) (EvalFinished)
+    - Faulted can go to Initializing (hard reset)  -/
+theorem phase_always_has_successor {α : Type} (p1 : Phase α) :
+    ∃ p2, validTransition p1 p2 := by
+  match p1 with
+  | .Initializing m => exact ⟨.Initializing none, .initToInit m none⟩
+  | .Active s .Idle => exact ⟨.Active s .Evaluating, .readyToEval s⟩
+  | .Active s .Evaluating => exact ⟨.Active s .Idle, .evalToReady s s⟩
+  | .Faulted => exact ⟨.Initializing none, .faultedToInit none⟩
+
 end PhaseTransition

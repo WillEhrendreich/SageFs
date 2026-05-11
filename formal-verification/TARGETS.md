@@ -64,5 +64,8 @@
 - Task 4+5 (TimeTravel): ✅ DONE this run — 30 theorems, 0 sorry (run 25661826548)
 - Task 6 (Correspondence): ✅ DONE this run — TimeTravel section added to CORRESPONDENCE.md
 - Task 8 (Correspondence): No runnable test harnesses yet — HIGH PRIORITY
+- Task 7 (Critique): ✅ DONE — CRITIQUE.md created
+- Task 9 (CI): ✅ DONE — lean-ci.yml created
+- Task 4+5 (SageFsError): ✅ DONE this run — 26 theorems, 0 sorry
 
 
