@@ -7,3 +7,4 @@ import FVSquad.EvalPipeline
 import FVSquad.SessionLifecycle
 import FVSquad.HotReloadState
 import FVSquad.Theme
+import FVSquad.Composition
