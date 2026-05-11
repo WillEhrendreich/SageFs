@@ -3,8 +3,8 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-05-06 16:52 UTC
-- **Commit**: `43b86f4b04a978f42c607bb339664297dd102c2e`
+- **Date**: 2026-05-11 17:10 UTC
+- **Commit**: `545fe0d6bc4961ea08fd0feea2f002b3b5130e23`
 
 ---
 
@@ -252,6 +252,107 @@ This requires decidable equality on field names (or a tagless encoding), but wou
 **Recommended**: Add error-classification properties — e.g. "a code submission containing `;;` always produces an `Error` result in the trace." This requires modelling the FSI output parser, which is more complex. Lower priority until the simpler gaps are addressed.
 
 ---
+
+---
+
+## New Target Survey (2026-05-11 — Run 25685202317)
+
+All 16 previously identified targets are now at Phase 5 (complete) following the TimeTravel integration in run 25661826548. This section identifies the next wave of FV-amenable targets from the remaining 64 unexplored F# source files.
+
+### New Target 17: `BinaryFormat.Crc32` — `SageFs.Core/BinaryFormat.fs`
+
+**Description**: A pure CRC-32 implementation (ISO 3309 / Ethernet / ZIP polynomial 0xEDB88320) used to validate binary manifest integrity. Two entry points: `compute offset length` and `computeAll` (which calls `compute 0 data.Length`).
+
+**Why FV-amenable**:
+- Entirely pure: no I/O, no mutation visible to callers, no external state
+- The table is a deterministic precomputed constant — fully decidable for small cases
+- CRC-32 has well-known algebraic properties: `computeAll []` = 0x00000000 (with standard complement), self-consistency between `compute` and `computeAll`
+- Security-adjacent: CRC mismatches trigger binary-format reload, so correctness matters
+- The relationship `computeAll data = compute data 0 data.Length` is the most immediately valuable property to verify
+
+**Properties to verify**:
+1. `computeAll data = compute data 0 data.Length` — consistency between the two entry points
+2. `compute [] _ 0 = 0x00000000u` — empty range yields the complement-finalized zero: CRC32 of empty bytes is 0x00000000
+3. Table completeness: `table.Length = 256` (always, since it is `[| for i in 0u..255u do ... |]`)
+4. Table entry ranges: each entry `≤ 0xFFFFFFFFu` (trivially true for UInt32, verifiable by `decide` for small samples)
+5. `compute data 0 (data.Length) ≠ compute (data ++ [b]) 0 (data.Length + 1)` for at least one choice — demonstrates sensitivity (non-trivial)
+
+**Spec size**: ~70 Lean lines
+**Proof tractability**:
+- Properties 1 and 2: `simp` + `rfl` once the Lean model mirrors the F# loop
+- Table length: trivially `decide`
+- Full CRC correctness over arbitrary byte arrays: requires induction on array length; tractable with standard loop-invariant encoding
+**Approximations**:
+- The Lean model will use `List UInt8` instead of `Array UInt8` — pure functional semantics captured; physical layout (mutation of `crc` variable) abstracted away
+- The Lean model will represent the 256-entry table as a pure function or `Array.ofList` — computable and deterministic, same values
+
+**Priority**: **HIGH** — pure algorithm, first truly algorithmic target (prior targets were mostly DUs and combinators), good proof showcase
+**Phase**: 1 (research only)
+
+---
+
+### New Target 18: `WorkflowTypes.SessionWorkflow` — `SageFs.Core/WorkflowTypes.fs`
+
+**Description**: A discriminated union encoding the hot-reload / REPL tradeoff at the type level. Two cases: `Interactive` (full REPL, no hot reload) and `WebLive cfg` (restricted REPL, Harmony patching). The key invariant is structural: "hot reload + full REPL" is an illegal state that cannot be constructed.
+
+**Why FV-amenable**:
+- The core safety guarantee is structural / type-theoretic: exhaustive `match` coverage in Lean will mirror the DU
+- `replCapability` is a total deterministic function with exactly two outputs; `decide` can verify all its properties
+- `feedbackStrategy` is likewise total and testable — derivable fully from `SessionWorkflow`
+- `fsiArgs Interactive = []` and `fsiArgs (WebLive _) = ["--multiemit-"]` are byte-for-byte verifiable
+- `isHotReloadActive` is a boolean indicator that should be consistent with `fsiArgs` (hot reload ↔ `--multiemit-` present)
+
+**Properties to verify**:
+1. `replCapability Interactive = ReplCapability.Full`
+2. `replCapability (WebLive cfg) = ReplCapability.ExpressionOnly`
+3. `isHotReloadActive ↔ fsiArgs ≠ []` — hot reload indicator ↔ extra FSI args
+4. `feedbackStrategy Interactive = FeedbackStrategy.ReplDriven`
+5. `feedbackStrategy (WebLive cfg) = FeedbackStrategy.SaveDriven cfg`
+6. The illegal state theorem: `∀ wf, ¬ (isHotReloadActive wf ∧ replCapability wf = Full)` — the core safety invariant
+7. `fromHotReloadBool true` and `fromHotReloadBool false` both round-trip through `isHotReloadActive`
+
+**Spec size**: ~80 Lean lines
+**Proof tractability**: Almost everything decidable by `cases`/`simp`/`decide` — finite cases. The illegal-state theorem is a one-liner: `cases wf <;> simp [isHotReloadActive, replCapability]`.
+**Approximations**: `BrowserRefreshConfig` is abstracted as an opaque type — `WatchPatterns` contents not modelled (not needed for the safety properties).
+
+**Priority**: **HIGH** — the illegal-state invariant is exactly the kind of structural safety property that type-theory-based FV excels at; will make an excellent demonstration in the conference paper
+**Phase**: 1 (research only)
+
+---
+
+### New Target 19: `ValidTimeout` — `SageFs.Core/Timeouts.fs`
+
+**Description**: A simple validated wrapper type. `ValidTimeout.create` enforces the range [1s, 10min] and returns `Result<ValidTimeout, string>`. `ValidTimeout.value` unwraps it. Used in `Timeouts.setPerTestTimeout` to safely update mutable timeout settings.
+
+**Why FV-amenable**:
+- Simple, pure, and self-contained
+- The range invariant is the canonical correctness property: if `create t = Ok v` then `value v = t` and `t ∈ [1s, 10min]`
+- Complementarily: if `t < 1s` or `t > 10min`, `create t` must return `Err _`
+- Round-trip: `create (value v) = Ok v` for any well-constructed `ValidTimeout`
+- Good vehicle for demonstrating constrained constructor verification — a common pattern in safe APIs
+
+**Properties to verify**:
+1. `create t = Ok v → value v = t` — unwrap identity
+2. `create t = Ok v → t ≥ minTimeout ∧ t ≤ maxTimeout` — construction implies valid range
+3. `t < minTimeout ∨ t > maxTimeout → ∃ e, create t = Error e` — out-of-range → error
+4. `∀ v, create (value v) = Ok v` — round-trip (requires abstracting over the opaque type)
+5. `create t = Ok v₁ → create t = Ok v₂ → v₁ = v₂` — uniqueness (deterministic)
+
+**Spec size**: ~50 Lean lines
+**Proof tractability**: All properties close by `simp` / `omega` (using `ℚ` or `ℝ` arithmetic for TimeSpan; or modelling as rational seconds). The key challenge is modelling `TimeSpan` — we can represent it as `ℕ` (nanoseconds) or `ℚ` (seconds) with clear approximation documentation.
+**Approximations**: `TimeSpan` modelled as `Int64` ticks or `Nat` seconds to avoid floating-point. The `1s–10min` range becomes `100_000_000 ≤ ticks ≤ 6_000_000_000` in tick units.
+
+**Priority**: **MEDIUM** — clean example of validated constructor pattern; good for teaching value but lower research novelty than Crc32 or WorkflowTypes
+**Phase**: 1 (research only)
+
+---
+
+### Critique Feedback Incorporated (run 25685202317)
+
+The prior critique (from merged CRITIQUE.md) highlighted these ongoing gaps:
+- **No algorithmic targets**: all prior specs verify DUs, combinators, and state machines; `Crc32` fills this gap
+- **Structural safety properties**: `WorkflowTypes` directly addresses the critique's suggestion to verify the hot-reload/REPL illegal-state invariant
+- **Validated constructor patterns**: `ValidTimeout` adds a new category (constrained construction)
 
 ---
 
