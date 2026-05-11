@@ -8,8 +8,8 @@ known divergence so that the validity of the associated proofs can be assessed h
 
 ## Last Updated
 
-- **Date**: 2026-05-07 01:20 UTC
-- **Commit**: `8bd5097`
+- **Date**: 2026-05-08 17:01 UTC
+- **Commit**: `3f04792`
 
 ---
 
@@ -788,6 +788,64 @@ No runnable test harness yet (Task 8). The Lean model was derived directly from
 `SageFs.Core/SmartReset.fs` lines 1–26. The three-case DU and the escalation
 decision (`match softResult with | .ok () => … | .error e => match hardResult …`)
 are structurally identical in both F# and Lean.
+
+---
+
+## SseReplayBuffer
+
+**Lean file**: `formal-verification/lean/FVSquad/SseReplayBuffer.lean`
+**F# source**: `SageFs.Core/SseReplayBuffer.fs`
+**Informal spec**: `formal-verification/specs/ssereplaybuffer_informal.md`
+
+### Type correspondence
+
+| Lean name | F# name | F# file + location | Correspondence | Notes |
+|---|---|---|---|---|
+| `SseBuffer` | `Buffer` (inner record of `SseReplayBuffer`) | `SageFs.Core/SseReplayBuffer.fs` | **Abstraction** | F# Buffer wraps a `RingBuffer<SequencedSseEvent>`; Lean abstracts to `(total, count, cap)` — the three fields that drive replay logic. Event content (`Payload`, `Timestamp`) is omitted. |
+| `SseWellFormed` | — (implicit invariant) | `SageFs.Core/SseReplayBuffer.fs` | **Abstraction** | Codifies `cap > 0`, `count ≤ cap`, and `count ≤ total` as a Lean Prop. |
+| `ReplayResult` | `ReplayResult` DU | `SageFs.Core/SseReplayBuffer.fs` | **Exact** | `Replayed n` / `GapDetected firstAvail` — same two cases; event list abstracted to count `n`. |
+| `sseCreate` | `SseReplayBuffer.create` | `SageFs.Core/SseReplayBuffer.fs` | **Exact** | Zero-initialised buffer; takes `cap` and positivity proof. |
+| `ssePush` | `SseReplayBuffer.push` | `SageFs.Core/SseReplayBuffer.fs` | **Abstraction** | F# mutates the inner `RingBuffer` and emits the event with `DateTimeOffset`; Lean returns `(seqId, newBuffer)` purely. |
+| `sseReplayFrom` | `SseReplayBuffer.replayFrom` | `SageFs.Core/SseReplayBuffer.fs` | **Exact** | The four-branch conditional is structurally identical. Event list is abstracted to count. |
+| `applyPushN` | — (reasoning helper) | — | **N/A** | Not in F#; used for inductive arguments about `n` pushes. |
+
+### Known divergences
+
+1. **Mutable vs immutable**: F# `SseReplayBuffer` is a mutable wrapper; Lean `SseBuffer` is a pure value. All proved properties concern the functional semantics, not mutation order.
+2. **Event content omitted**: `SequencedSseEvent` (type, payload, timestamp, seqId) is abstracted to just the seqId encoded in `total`. Properties about event content are out of scope.
+3. **Error handling omitted**: F# `push` and `replayFrom` return `Result` in some variants; Lean models the happy path only.
+4. **`DateTimeOffset` timestamps omitted**: No FV-relevant ordering properties for timestamps.
+
+### Theorems proved (all without `sorry`)
+
+| Theorem | Property | Level |
+|---|---|---|
+| `sseCreate_total_zero` | Fresh buffer has total = 0 | High |
+| `sseCreate_wf` | Fresh buffer is well-formed | High |
+| `ssePush_seqId` | seqId = b.total + 1 (1-based) | High |
+| `ssePush_total` | new total = old total + 1 | High |
+| `ssePush_seqId_eq_new_total` | seqId equals new total | High |
+| `ssePush_count_le_cap` | count ≤ cap after push (unconditional) | High |
+| `ssePush_count_mono` | count non-decreasing under push | High |
+| `ssePush_wf` | push preserves well-formedness | High |
+| `applyPushN_total` | n pushes increase total by n | High |
+| `sseCreate_push_n_total` | n pushes from fresh buffer → total = n | High |
+| `seqId_one_based` | first seqId issued is 1 | High |
+| `replayFrom_up_to_date` | client current → empty replay | High |
+| `replayFrom_empty_ring` | ring empty → GapDetected(total+1) | High |
+| `replayFrom_gap` | gap present → GapDetected(oldestAvail) | High |
+| `replayFrom_no_gap` | no gap → Replayed(total − lastSeen) | High |
+| `replayFrom_no_gap_count_pos` | replayed count is positive | Mid |
+| `replayFrom_no_gap_count_le_ring` | replayed count ≤ ring count | High |
+| `replayFrom_fresh_always_empty` | fresh buffer always replays 0 | High |
+| `replayFrom_after_one_push` | one push then replay from 0 → Replayed 1 | High |
+
+### Validation evidence
+
+No runnable test harness yet (Task 8). The Lean model was derived directly from
+`SageFs.Core/SseReplayBuffer.fs`. The four-case `replayFrom` branch structure is
+structurally identical in both F# and Lean. All 19 theorems verified by
+`lake build` with Lean 4 v4.30.0-rc2 (0 sorry).
 
 ---
 

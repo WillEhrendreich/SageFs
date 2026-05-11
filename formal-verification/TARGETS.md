@@ -26,6 +26,7 @@
 | 11 | `PhaseTransition` | `SageFs.Core/AppState.fs` | 5 | ✅ 14 proved (0 sorry) | Session lifecycle safety: no direct Faulted←Eval, successor coverage, always-successor. |
 | 12 | `SmartReset` | `SageFs.Core/SmartReset.fs` | 5 | ✅ 8 proved (0 sorry) | Escalation logic: outcome biconditionals + negative cases fully proved. |
 | 13 | `SageFsError` | `SageFs.Core/SageFsError.fs` | 5 | ✅ 26 proved (0 sorry) | Error category partition + HTTP status consistency + log severity proved. |
+| 14 | `SseReplayBuffer` | `SageFs.Core/SseReplayBuffer.fs` | 5 | ✅ 19 proved (0 sorry) | seqId monotonicity, well-formedness preservation, 4 exhaustive replay cases proved. |
 
 ## Phase Legend
 
@@ -54,7 +55,8 @@
 | `lean/FVSquad/PhaseTransition.lean` | 14 | 0 | 5 ✅ |
 | `lean/FVSquad/SmartReset.lean` | 8 | 0 | 5 ✅ |
 | `lean/FVSquad/SageFsError.lean` | 26 | 0 | 5 ✅ |
-| **Total** | **217** | **0** | — |
+| `lean/FVSquad/SseReplayBuffer.lean` | 19 | 0 | 5 ✅ |
+| **Total** | **236** | **0** | — |
 
 ## Open Issues / PRs
 
