@@ -195,3 +195,33 @@ theorem two_step_first_ok_stages {β : Type}
     (epBind t1 (fun _ => epBind t2 f)).stages.length =
       1 + (epBind t2 f).stages.length := by
   simp [epBind, List.length_cons]
+
+/-- When both steps in a two-step pipeline succeed and `f` returns `epReturn v`,
+    the overall result is `.ok v`.  Demonstrates that success propagates end-to-end. -/
+theorem two_step_both_ok_result {β : Type}
+    (s1 s2 : String) (v : β) (f : Unit → EPTrace β)
+    (hf : f () = epReturn v) :
+    let t1 : EPTracked Unit := { value := .ok (), stageName := s1 }
+    let t2 : EPTracked Unit := { value := .ok (), stageName := s2 }
+    (epBind t1 (fun _ => epBind t2 f)).result = .ok v := by
+  simp [epBind, hf, epReturn]
+
+/-- The name of the first stage recorded by `epBind` is always the tracked item's name,
+    regardless of success or failure.  This confirms the stage trace always starts
+    with the stage that was actually executed. -/
+theorem epBind_stage_name_is_tracked_name {α β : Type}
+    (tracked : EPTracked α) (f : α → EPTrace β) :
+    ((epBind tracked f).stages.head?).map (·.name) = some tracked.stageName := by
+  simp only [epBind]
+  cases tracked.value with
+  | ok v  => simp
+  | error _ => simp
+
+/-- On the success path, `epSucceeded` of the bind equals `epSucceeded` of the
+    downstream trace.  The current stage does not affect the overall success flag —
+    only the final outcome of the pipeline matters. -/
+theorem epSucceeded_bind_ok_eq {α β : Type}
+    (tracked : EPTracked α) (v : α) (f : α → EPTrace β)
+    (hv : tracked.value = .ok v) :
+    epSucceeded (epBind tracked f) = epSucceeded (f v) := by
+  simp [epBind, epSucceeded, hv]
