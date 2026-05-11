@@ -8,8 +8,8 @@ known divergence so that the validity of the associated proofs can be assessed h
 
 ## Last Updated
 
-- **Date**: 2026-05-08 17:01 UTC
-- **Commit**: `3f04792`
+- **Date**: 2026-05-11 09:41 UTC
+- **Commit**: `bb95c100`
 
 ---
 
@@ -846,6 +846,83 @@ No runnable test harness yet (Task 8). The Lean model was derived directly from
 `SageFs.Core/SseReplayBuffer.fs`. The four-case `replayFrom` branch structure is
 structurally identical in both F# and Lean. All 19 theorems verified by
 `lake build` with Lean 4 v4.30.0-rc2 (0 sorry).
+
+---
+
+## TimeTravel
+
+**Lean file**: `formal-verification/lean/FVSquad/TimeTravel.lean`
+**F# source**: `SageFs.Core/TimeTravel.fs`, `SageFs.Core/ModelSnapshot.fs`
+
+### Type correspondence
+
+| Lean name | F# name | F# file + location | Correspondence | Notes |
+|---|---|---|---|---|
+| `Mode` | `TimeTravelMode` | `SageFs.Core/TimeTravel.fs` | **Exact** | Both have `Live` and `Viewing` (with age payload). Lean uses `Nat` for age; F# uses `int`. Age ≥ 1 invariant is made explicit in Lean. |
+| `TTState` | *(internal state record)* | `SageFs.Core/TimeTravel.fs` | **Abstraction** | Lean models only `mode`, `count` (number of recorded snapshots), and `capacity`. The underlying ring buffer array is not represented — only its logical count matters for mode transitions. |
+| `WellFormed s` | *(implicit invariant)* | `SageFs.Core/TimeTravel.fs` | **Abstraction** | Explicit Lean predicate capturing: `count ≤ capacity`, viewing age ≥ 1. Made explicit in Lean; implicit by construction in F#. |
+| `isLive s` | *(pattern match on mode)* | `SageFs.Core/TimeTravel.fs` | **Exact** | `true` iff `s.mode = Mode.Live`. |
+| `viewingAge s` | *(pattern match on mode)* | `SageFs.Core/TimeTravel.fs` | **Exact** | Returns `some age` when Viewing, `none` when Live. |
+
+### Function correspondence
+
+| Lean name | F# name | F# file | Correspondence level | Notes |
+|---|---|---|---|---|
+| `create cap` | `RingBuffer.create` + initial state | `SageFs.Core/TimeTravel.fs` | **Exact** | Creates state with `mode=Live`, `count=0`, `capacity=cap`. |
+| `record s` | push to ring buffer | `SageFs.Core/TimeTravel.fs` | **Abstraction** | Lean models only the `count` update (capped at `capacity`). Actual snapshot data is not represented. Viewing mode is a no-op in both. |
+| `stepBack s` | `stepBack` / scroll-back | `SageFs.Core/TimeTravel.fs` | **Exact** | Live+count>1 → Viewing 1; Live+count≤1 → no-op; Viewing age+1<count → Viewing(age+1); Viewing at oldest → no-op. |
+| `stepForward s` | `stepForward` / scroll-forward | `SageFs.Core/TimeTravel.fs` | **Exact** | Viewing 1 → Live; Viewing age>1 → Viewing(age-1); Live → no-op. |
+| `goLive s` | `goLive` / return-to-live | `SageFs.Core/TimeTravel.fs` | **Exact** | Always returns to Live mode, preserving count and capacity. |
+
+### Known divergences
+
+#### D1 — `int` vs `Nat` for age/count/capacity
+
+- **Lean model**: `age`, `count`, `capacity` are `Nat` (non-negative natural numbers).
+- **F# source**: these values are `int` (signed 64-bit integers).
+- **Impact**: The `WellFormed` predicate ensures these values are non-negative. Arithmetic overflow at `Int.MaxValue` snapshots is not modelled; this is inconsequential in practice.
+- **Proof impact**: All theorems proved assuming `WellFormed` remain valid for the F# implementation under normal usage.
+
+#### D2 — Ring buffer contents not modelled
+
+- **Lean model**: `TTState` does not contain the actual ring buffer array; only `count` is tracked.
+- **F# source**: The real implementation maintains a `RingBuffer<ModelSnapshot>` with actual snapshot data.
+- **Impact**: Properties about snapshot data retrieval (e.g., "the snapshot retrieved at age `k` is the one recorded `k` steps ago") are not provable from this model. Only structural mode-transition properties are verified.
+- **Proof impact**: Theorems about mode transitions are unaffected. Content-correctness would require a richer model (Task 4 extension).
+
+### Theorems overview (30 total, 0 sorry)
+
+| Theorem | Property class | High value? |
+|---|---|---|
+| `create_isLive` | initial state | Yes |
+| `create_count_zero` | initial state | Yes |
+| `create_mode_live` | initial state | Yes |
+| `isLive_live` / `isLive_viewing` | mode predicates | Yes |
+| `viewingAge_live` / `viewingAge_viewing` | mode predicates | Yes |
+| `record_viewing_noop` | record invariant | Yes |
+| `record_mode_unchanged` | record invariant | Yes |
+| `record_live_below_capacity` / `record_live_at_capacity` | count semantics | High |
+| `stepBack_live_noop` / `stepBack_live_to_viewing_1` | step-back semantics | High |
+| `stepBack_viewing_increments` / `stepBack_viewing_oldest_noop` | step-back semantics | High |
+| `stepBack_count_unchanged` | count invariant | Yes |
+| `stepForward_live_noop` / `stepForward_viewing_1_to_live` | step-forward semantics | High |
+| `stepForward_viewing_decrements` | step-forward semantics | High |
+| `stepForward_count_unchanged` | count invariant | Yes |
+| `goLive_is_live` / `goLive_idempotent` | goLive semantics | High |
+| `goLive_count_unchanged` | count invariant | Yes |
+| `stepForward_stepBack_live_roundtrip` | roundtrip | High |
+| `stepForward_stepBack_viewing_roundtrip` | roundtrip | High |
+| `goLive_after_stepBack_is_live` | invariant | Yes |
+| `record_viewing_stable` | record stability | Yes |
+| `create_stepBack_noop` / `create_stepForward_noop` | boundary conditions | Yes |
+| `one_record_stepBack_noop` | boundary conditions | Yes |
+
+### Validation evidence
+
+No runnable test harness yet (Task 8). The Lean model was derived directly from
+`SageFs.Core/TimeTravel.fs`. The five-case mode-transition structure (stepBack and
+stepForward branching) is structurally identical in both F# and Lean. All 30 theorems
+verified by `lake build` with Lean 4 v4.30.0-rc2 (0 sorry).
 
 ---
 

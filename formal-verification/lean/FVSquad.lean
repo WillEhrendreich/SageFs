@@ -12,3 +12,5 @@ import FVSquad.PhaseTransition
 import FVSquad.SmartReset
 import FVSquad.SageFsError
 import FVSquad.SseReplayBuffer
+import FVSquad.FsiRewrite
+import FVSquad.TimeTravel

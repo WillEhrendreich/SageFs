@@ -3,11 +3,8 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-05-05 01:15 UTC
-- **Date**: 2026-05-05 17:00 UTC
-- **Date**: 2026-05-06 00:00 UTC
-- **Date**: 2026-05-08 09:00 UTC
-- **Commit**: `c4087f7`
+- **Date**: 2026-05-11 09:41 UTC
+- **Commit**: `bb95c100`
 
 ---
 
@@ -27,6 +24,8 @@
 | 12 | `SmartReset` | `SageFs.Core/SmartReset.fs` | 5 | ✅ 8 proved (0 sorry) | Escalation logic: outcome biconditionals + negative cases fully proved. |
 | 13 | `SageFsError` | `SageFs.Core/SageFsError.fs` | 5 | ✅ 26 proved (0 sorry) | Error category partition + HTTP status consistency + log severity proved. |
 | 14 | `SseReplayBuffer` | `SageFs.Core/SseReplayBuffer.fs` | 5 | ✅ 19 proved (0 sorry) | seqId monotonicity, well-formedness preservation, 4 exhaustive replay cases proved. |
+| 15 | `FsiRewrite` | `SageFs/FsiRewrite.fs` | 5 | ✅ proved (0 sorry) | FsiRewrite transformation correctness. |
+| 16 | `TimeTravel` | `SageFs.Core/TimeTravel.fs` | 5 | ✅ 30 proved (0 sorry) | Mode transitions, roundtrip, count invariants, boundary conditions all proved. |
 
 ## Phase Legend
 
@@ -56,10 +55,14 @@
 | `lean/FVSquad/SmartReset.lean` | 8 | 0 | 5 ✅ |
 | `lean/FVSquad/SageFsError.lean` | 26 | 0 | 5 ✅ |
 | `lean/FVSquad/SseReplayBuffer.lean` | 19 | 0 | 5 ✅ |
-| **Total** | **236** | **0** | — |
+| `lean/FVSquad/FsiRewrite.lean` | 17 | 0 | 5 ✅ |
+| `lean/FVSquad/TimeTravel.lean` | 30 | 0 | 5 ✅ |
+| **Total** | **283** | **0** | — |
 
 ## Open Issues / PRs
 
+- Task 4+5 (TimeTravel): ✅ DONE this run — 30 theorems, 0 sorry (run 25661826548)
+- Task 6 (Correspondence): ✅ DONE this run — TimeTravel section added to CORRESPONDENCE.md
 - Task 8 (Correspondence): No runnable test harnesses yet — HIGH PRIORITY
 - Task 7 (Critique): ✅ DONE — CRITIQUE.md created
 - Task 9 (CI): ✅ DONE — lean-ci.yml created
