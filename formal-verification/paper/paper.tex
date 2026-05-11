@@ -1,0 +1,544 @@
+% SageFs Formal Verification — Conference Paper
+% Lean Squad automated formal verification for WillEhrendreich/SageFs
+%
+% ⚠️ LaTeX not available in CI sandbox — PDF not compiled.
+%    Compile with: cd formal-verification/paper && latexmk -pdf paper.tex
+
+\documentclass[sigconf,11pt]{acmart}
+
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{microtype}
+
+%% Lean 4 listing style
+\lstdefinelanguage{Lean4}{
+  keywords={theorem, def, lemma, example, structure, inductive, where,
+            import, open, namespace, end, sorry, by, have, let, in,
+            match, with, if, then, else, do, return, partial, Type,
+            Prop, fun, forall, exists, And, Or, Not, True, False},
+  sensitive=true,
+  morecomment=[l]{--},
+  morecomment=[n]{/-}{-/},
+  morestring=[b]",
+}
+\lstset{
+  language=Lean4,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries,
+  commentstyle=\itshape\color{gray!70},
+  stringstyle=\color{red!70!black},
+  breaklines=true,
+  frame=single,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  xleftmargin=2em,
+  framexleftmargin=1.5em,
+}
+
+\title{Formal Verification of an F\# Live Development Environment with Lean~4}
+\subtitle{177 Theorems, 11 Files, and a Compositional Evaluation-Gate Proof}
+
+\author{Lean Squad}
+\affiliation{%
+  \institution{Automated Formal Verification Agent}
+  \country{GitHub Actions}}
+\email{lean-squad@github-actions.bot}
+
+\begin{abstract}
+We report on a formal verification effort for SageFs, a live F\# development
+environment consisting of a REPL daemon, editor integrations, and a state-driven
+evaluation pipeline. Using Lean~4 with the standard library (no Mathlib, due to CI
+network constraints), we produced 11 specification files containing 177 theorems
+proved with zero \texttt{sorry}. The verification covers nine core modules
+individually---including a circular ring buffer, railway-oriented error combinators,
+retry/restart policy models, a tool-gating affordance layer, a computation-expression
+evaluation trace, a file-watching state machine, a session phase projector, and a
+theme configuration overlay---and two cross-cutting files that reason about the system
+compositionally. The central system-level result is the evaluation-gate theorem
+\texttt{send\_fsharp\_code\_iff\_ready\_phase}, which proves that code submission is
+available \emph{if and only if} the session phase is \texttt{Active·Idle}, unifying
+two independent modules into a single formal statement. A \texttt{validTransition}
+inductive relation models all eight session state-machine transitions and establishes
+safety invariants including ``evaluation failure never leads directly to the Faulted
+state.'' No implementation bugs were found; rather, the proofs confirmed key design
+invariants and revealed structural properties such as the unreachability of
+\texttt{SessionState.Uninitialized} via the normal lifecycle. Runnable correspondence
+tests (50 cases) validate the ring-buffer model against the F\# implementation.
+\end{abstract}
+
+%%
+%% Keywords
+\keywords{formal verification, Lean 4, F\#, functional programming, state machines,
+  proof assistant, developer tools, session lifecycle}
+
+\maketitle
+
+%% ============================================================
+\section{Introduction}
+%% ============================================================
+
+Developer tooling is increasingly complex: a modern live development environment
+orchestrates a long-running language interpreter, file-system watchers, editor
+integrations, an evaluation pipeline, and a state machine governing session lifecycle.
+Correctness properties that seem obvious by inspection---``code evaluation is only
+available when the session is ready''---span multiple subsystems and are easy to
+violate during refactoring.
+
+SageFs~\cite{sagefs} is an F\# live development environment providing a persistent
+F\# Interactive (FSI) session, Hot Reload, a terminal UI, Raylib GUI client, and
+editor integrations for VS~Code, Visual Studio, and Neovim. Its core logic in
+\texttt{SageFs.Core} includes:
+\begin{itemize}
+  \item A \texttt{RingBuffer<'T>} circular buffer for storing evaluation history.
+  \item Railway-oriented combinators (\texttt{ResultEx}) for error threading.
+  \item Retry and restart policy models with exponential backoff.
+  \item An \texttt{Affordances} module gating tool availability by session state.
+  \item An \texttt{EvalPipeline} computation-expression for traced execution.
+  \item \texttt{HotReloadState} file-watching state machine.
+  \item A session lifecycle model (\texttt{AppState}) with five phases.
+  \item A \texttt{Theme} configuration overlay combinator.
+\end{itemize}
+
+We apply Lean~4 formal verification to this codebase with three goals: (1) confirm
+correctness of key data-structure invariants and policy decisions; (2) establish
+system-level composition theorems connecting independent modules; and (3) detect any
+implementation defects through proof failure or counterexample.
+
+\paragraph{Contributions.}
+\begin{enumerate}
+  \item 177 Lean~4 theorems covering nine SageFs core modules, proved with zero
+    \texttt{sorry}.
+  \item The first cross-file composition theorem in the project:
+    \texttt{send\_fsharp\_code\_iff\_ready\_phase} unifies the session lifecycle and
+    tool-affordance subsystems.
+  \item A \texttt{validTransition} inductive relation formalising all eight
+    session state-machine transitions with safety invariants.
+  \item 50 runnable correspondence tests validating the ring-buffer Lean model against
+    the F\# implementation.
+  \item A methodology for applying Lean~4 stdlib-only verification to an effectful
+    functional codebase, including explicit documentation of all modelling
+    approximations.
+\end{enumerate}
+
+%% ============================================================
+\section{Background}
+%% ============================================================
+
+\subsection{The SageFs Codebase}
+
+SageFs is implemented in F\# targeting \texttt{net10.0}. The project uses a daemon
+architecture: a long-running FSI session managed by a mailbox processor
+(\texttt{AppState.fs}), which transitions through five phases: \texttt{Uninitialized},
+\texttt{Initializing}, \texttt{Active(Idle)}, \texttt{Active(Evaluating)}, and
+\texttt{Faulted}. Editor communication uses an MCP server; the terminal UI uses
+SageTUI's Elm Architecture. The core library (\texttt{SageFs.Core}) contains the
+modules targeted for formal verification.
+
+\subsection{Lean 4 and the Standard Library}
+
+Lean~4~\cite{lean4} is a dependently typed theorem prover and functional programming
+language. It supports both tactic-based and term-mode proofs, with a rich standard
+library including decidable propositions, natural number arithmetic (\texttt{Nat}),
+lists, arrays, and \texttt{Except} for error handling.
+
+We use Lean~4 stdlib only (version 4.30.0-rc2, toolchain
+\texttt{leanprover/lean4:v4.30.0-rc2}). Mathlib~\cite{mathlib4} is unavailable due to
+CI network constraints (the Azure blob cache endpoint is blocked). This constrains our
+automation to \texttt{decide}, \texttt{omega}, \texttt{simp}, and \texttt{cases}/\texttt{induction},
+with no access to Mathlib's extended tactic library.
+
+\subsection{Related Work}
+
+Formal verification of functional programming languages and their runtimes has a rich
+history. The CompCert~\cite{compcert} project verified a C compiler; several efforts
+have targeted Haskell~\cite{liquidhaskell} and OCaml~\cite{ocaml-fv} core libraries.
+Lean~4 itself has been used to verify mathematical results in Mathlib and to target
+systems software~\cite{lean4-systems}. To our knowledge, no prior work has targeted an
+F\# live development environment, nor the specific class of session state-machine and
+tool-affordance properties we verify here.
+
+%% ============================================================
+\section{Methodology}
+%% ============================================================
+
+\subsection{Target Selection}
+
+We surveyed \texttt{SageFs.Core} for FV-amenable targets: pure or nearly-pure
+functions, data structure invariants, and policy-enforcement logic. We applied
+the following criteria:
+\begin{itemize}
+  \item \textbf{Pure functional core}: the target should have a clear input/output
+    mapping separable from I/O and mutation.
+  \item \textbf{Testable invariants}: existing tests, documentation, or naming
+    conventions signal which properties must hold.
+  \item \textbf{Security or safety relevance}: access-control policies and session
+    state machines have high bug-catching potential.
+  \item \textbf{Non-trivial structure}: targets that require reasoning about
+    modular arithmetic, list membership, or state transitions are more valuable
+    than trivially decidable ones.
+\end{itemize}
+
+Nine primary targets were identified (Table~\ref{tab:targets}), plus two
+cross-cutting files added after the individual modules matured.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{llp{4.5cm}}
+\toprule
+Module & Theorems & Primary property \\
+\midrule
+\texttt{RingBuffer} & 20 & \texttt{WellFormed} invariant, push/get correctness \\
+\texttt{ResultEx} & 17 & Monad/functor laws, sequence/partition \\
+\texttt{RetryPolicy} & 13 & Decision correctness, delay monotonicity \\
+\texttt{RestartPolicy} & 9 & Exponential backoff correctness \\
+\texttt{Affordances} & 19 & Tool-gating access-control policy \\
+\texttt{EvalPipeline} & 17 & Computation-expression trace structure \\
+\texttt{HotReloadState} & 23 & Watch/unwatch/toggle invariants \\
+\texttt{SessionLifecycle} & 16 & Phase projection, state reachability \\
+\texttt{Theme} & 20 & Override identity and idempotency \\
+\texttt{Composition} & 12 & Cross-file evaluation gate \\
+\texttt{PhaseTransition} & 11 & Transition relation + safety invariants \\
+\midrule
+\textbf{Total} & \textbf{177} & — \\
+\bottomrule
+\end{tabular}
+\caption{Verified modules and theorem counts.}
+\label{tab:targets}
+\end{table}
+
+\subsection{Specification Strategy}
+
+For each target we followed a two-phase approach:
+\begin{enumerate}
+  \item \textbf{Informal spec extraction}: we wrote a Markdown document
+    (\texttt{formal-verification/specs/<name>\_informal.md}) describing preconditions,
+    postconditions, invariants, edge cases, and open questions inferred from the code.
+  \item \textbf{Lean formalisation}: we translated the informal spec into Lean~4 type
+    definitions, function stubs, and \texttt{theorem} declarations, initially guarded
+    by \texttt{sorry}, then progressively proved.
+\end{enumerate}
+
+\subsection{Modelling Choices}
+
+Each F\# module is modelled as a pure functional Lean definition. The key
+approximations, documented in \texttt{CORRESPONDENCE.md}, are:
+
+\begin{itemize}
+  \item \textbf{Immutability}: F\# mutable records and arrays become immutable Lean
+    structures and \texttt{Array} values. The observable input/output semantics are
+    preserved.
+  \item \textbf{Integer types}: F\# \texttt{int} (signed 64-bit) becomes Lean \texttt{Nat}
+    (non-negative). The \texttt{WellFormed} predicate ensures non-negativity; overflow
+    at $2^{63}$ is not modelled.
+  \item \textbf{I/O and effects}: file system access, FSI session communication, and
+    timing are omitted entirely. Proofs apply to the pure functional core.
+  \item \textbf{Concurrency}: the mailbox processor and async transitions in
+    \texttt{AppState.fs} are modelled as sequential transitions. Concurrent
+    \texttt{cancelEval} racing with evaluation is not captured.
+  \item \textbf{Parametric abstraction}: the session phase type \texttt{Phase α} is
+    kept polymorphic; the type parameter is not constrained.
+\end{itemize}
+
+\subsection{Proof Approach}
+
+We applied Lean~4 tactics in order of increasing complexity:
+\begin{enumerate}
+  \item \textbf{Decidable propositions}: \texttt{decide} closes goals over finite,
+    concrete values (string lengths, specific constants).
+  \item \textbf{Arithmetic}: \texttt{omega} for natural-number arithmetic and
+    \texttt{simp\_arith} for combined simplification.
+  \item \textbf{Structural}: \texttt{simp only [...]} with explicit lemma lists to
+    unfold definitions; \texttt{cases} and \texttt{induction} for sum types and
+    inductive propositions.
+  \item \textbf{Case splits}: \texttt{by\_cases (key' == key)} for Boolean predicates;
+    \texttt{constructor}/\texttt{intro}/\texttt{apply}/\texttt{exact} for logical
+    connectives.
+  \item \textbf{Modular arithmetic}: manual lemmas (\texttt{index\_after\_push},
+    \texttt{newHead\_ne\_index}) for the ring-buffer head-position proofs.
+\end{enumerate}
+
+\subsection{Model Validation}
+
+To validate correspondence between the Lean ring-buffer model and the F\# source,
+we wrote a runnable test harness in F\# script (\texttt{run.fsx}) under
+\texttt{formal-verification/tests/ringbuffer/}. The harness exercises 50 test cases
+covering normal behaviour, edge cases (eviction, clear, single-element buffer),
+and property-based tests (20 sequential pushes). All 50 tests pass.
+
+Continuous integration is provided by \texttt{.github/workflows/lean-ci.yml}, which
+runs \texttt{lake build} on every PR touching \texttt{formal-verification/lean/**},
+and \texttt{fv-correspondence-tests.yml}, which runs the F\# correspondence tests on
+changes to source or test files.
+
+%% ============================================================
+\section{Results}
+%% ============================================================
+
+\subsection{Proof Inventory}
+
+Table~\ref{tab:theorems} lists the key proved theorems by module and property.
+All 177 theorems are proved with zero \texttt{sorry}; \texttt{lake build} passes
+with Lean 4.30.0-rc2.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{p{4.2cm}lp{3.8cm}}
+\toprule
+Theorem & File & Property \\
+\midrule
+\texttt{push\_wellFormed} & RingBuffer & Invariant preserved by push \\
+\texttt{push\_aging} & RingBuffer & Modular-arithmetic aging \\
+\texttt{toList\_length} & RingBuffer & List length = count \\
+\texttt{resBind\_assoc} & ResultEx & Bind associativity (monad law) \\
+\texttt{resSequence\_length} & ResultEx & Sequence preserves length \\
+\texttt{baseDelay\_mono} & RetryPolicy & Delay grows monotonically \\
+\texttt{rtDecide\_giveup\_exhausted} & RetryPolicy & Give up when retries gone \\
+\texttt{send\_fsharp\_code\_iff\_ready} & Affordances & Eval gate ↔ Ready state \\
+\texttt{hard\_reset\_denied\_when\_eval} & Affordances & Reset denied during eval \\
+\texttt{two\_step\_first\_fails\_one\_stage} & EvalPipeline & Trace on early failure \\
+\texttt{toggle\_involution} & HotReloadState & Double toggle = identity \\
+\texttt{watch\_idempotent} & HotReloadState & Watch is idempotent \\
+\texttt{toState\_never\_uninitialized} & SessionLifecycle & Unreachability finding \\
+\texttt{ready\_iff\_active\_idle} & SessionLifecycle & State classification \\
+\texttt{withOverrides\_empty\_id} & Theme & Empty override = identity \\
+\texttt{withOverrides\_idempotent\_single} & Theme & Single override idempotency \\
+\texttt{stateToSessionState\_bijective} & Composition & Bridge isomorphism \\
+\texttt{send\_fsharp\_code\_iff\_ready\_phase} & Composition & End-to-end eval gate \\
+\texttt{evaluating\_cannot\_send\_code} & Composition & Reentrancy guard \\
+\texttt{tools\_always\_available} & Composition & Tool always accessible \\
+\texttt{faulted\_only\_recovers\_to\_init} & PhaseTransition & Recovery path constraint \\
+\texttt{eval\_cannot\_fault\_directly} & PhaseTransition & Eval failure → Ready \\
+\texttt{uninitialized\_unreachable\_as\_target} & PhaseTransition & Transition safety \\
+\bottomrule
+\end{tabular}
+\caption{Selected key theorems from all 177 proved.}
+\label{tab:theorems}
+\end{table}
+
+\subsection{Composition Theorems}
+
+The two cross-cutting files represent a qualitative step beyond individual-module
+verification.
+
+\paragraph{Composition.lean.}
+\texttt{Composition.lean} imports both \texttt{FVSquad.SessionLifecycle} and
+\texttt{FVSquad.Affordances}. It proves that the two \texttt{State}/\texttt{SessionState}
+inductives (independently defined in each module) are isomorphic via
+\texttt{stateToSessionState}, and then leverages this bridge to state system-level
+properties:
+
+\begin{lstlisting}[language=Lean4,caption={Central evaluation gate theorem.}]
+theorem send_fsharp_code_iff_ready_phase
+    {α : Type} (p : Phase α) :
+    checkToolAvailability
+      (stateToSessionState (toState p))
+      "send_fsharp_code" ↔
+    ∃ s, p = Phase.Active s Activity.Idle := by
+  cases p <;> simp [toState, stateToSessionState,
+                    checkToolAvailability,
+                    availableTools]
+\end{lstlisting}
+
+This theorem is the first formal statement in the project connecting the lifecycle
+and affordance subsystems. It asserts that code submission is available \emph{exactly
+when} the session is in the \texttt{Active·Idle} state.
+
+\paragraph{PhaseTransition.lean.}
+\texttt{PhaseTransition.lean} defines a \texttt{validTransition} inductive
+relation with eight constructors derived from the eval actor's message handlers in
+\texttt{AppState.fs} (Table~\ref{tab:transitions}).
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+Constructor & From & To \\
+\midrule
+\texttt{initToInit} & Initializing & Initializing \\
+\texttt{initToReady} & Initializing & Active(Idle) \\
+\texttt{initToFaulted} & Initializing & Faulted \\
+\texttt{readyToEval} & Active(Idle) & Active(Evaluating) \\
+\texttt{evalToReady} & Active(Evaluating) & Active(Idle) \\
+\texttt{readyToInit} & Active(Idle) & Initializing \\
+\texttt{evalToInit} & Active(Evaluating) & Initializing \\
+\texttt{faultedToInit} & Faulted & Initializing \\
+\bottomrule
+\end{tabular}
+\caption{\texttt{validTransition} cases and their F\# counterparts.}
+\label{tab:transitions}
+\end{table}
+
+The key safety invariant \texttt{eval\_cannot\_fault\_directly} proves:
+
+\begin{lstlisting}[language=Lean4,caption={Evaluation never leads directly to Faulted.}]
+theorem eval_cannot_fault_directly
+    {α : Type} (s : Session α)
+    (t : Phase α) :
+    validTransition
+      (Phase.Active s Activity.Evaluating) t →
+    t ≠ Phase.Faulted := by
+  intro h; cases h <;> simp
+\end{lstlisting}
+
+This confirms the F\# design: the \texttt{EvalFinished(Error ex)} handler sets
+\texttt{sessionState'' = SessionState.Ready}, not Faulted. Faulted is only
+reachable via explicit reset operations.
+
+\subsection{Structural Finding: Uninitialized is Unreachable}
+
+A notable structural finding from \texttt{SessionLifecycle.lean} is that
+\texttt{SessionState.Uninitialized} (a 5-case state type used by the Affordances
+layer) is unreachable via the \texttt{toState} projection from the lifecycle's
+\texttt{Phase} type:
+
+\begin{lstlisting}[language=Lean4,caption={Unreachability of Uninitialized.}]
+theorem toState_never_uninitialized
+    {α : Type} (p : Phase α) :
+    toState p ≠ State.Uninitialized := by
+  cases p <;> simp [toState]
+\end{lstlisting}
+
+This confirms that the external API cannot observe \texttt{Uninitialized} from a
+well-typed session phase. The \texttt{validTransition} relation corroborates this
+at the transition level: \texttt{uninitialized\_unreachable\_as\_target} proves
+no valid transition leads to \texttt{Uninitialized}.
+
+\subsection{Bugs and Findings}
+
+No implementation bugs were found in any of the nine primary targets. All stated
+properties hold for the Lean functional models.
+
+One \textbf{model inaccuracy} was discovered and corrected during development (D3
+in CORRESPONDENCE.md): an early version of \texttt{rbClear} reset \texttt{total}
+to 0, diverging from the F\# \texttt{clear} which preserves \texttt{Total}. This
+was caught during correspondence review and corrected before any theorem relied on
+it.
+
+\subsection{Coverage Assessment}
+
+Table~\ref{tab:coverage} summarises which aspects of each module are covered.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lp{3.5cm}p{3cm}}
+\toprule
+Module & Covered & Omitted \\
+\midrule
+RingBuffer & Invariants, push/get/clear semantics & Mutable arrays, overflow \\
+ResultEx & Monad/functor laws, sequence/partition & Exception types \\
+RetryPolicy & Decision logic, delay formula & Wall-clock time \\
+RestartPolicy & Backoff correctness & Window expiry \\
+Affordances & Tool-gating policy & Role-based auth \\
+EvalPipeline & Trace structure & FSI I/O, timing \\
+HotReloadState & Watch/unwatch/toggle & File system events \\
+SessionLifecycle & Phase projection, reachability & Async transitions \\
+Theme & Override semantics & File-based loading \\
+Composition & Eval gate, bridge isomorphism & Side effects \\
+PhaseTransition & All 8 transitions, safety invariants & Concurrency \\
+\bottomrule
+\end{tabular}
+\caption{Coverage summary per module.}
+\label{tab:coverage}
+\end{table}
+
+The primary gap is concurrency: the mailbox processor and async cancel/reset
+racing are not modelled. The proofs establish correctness of the sequential
+state-machine abstraction; additional work would be needed to handle interleaving.
+
+%% ============================================================
+\section{Discussion}
+%% ============================================================
+
+\subsection{Proof Utility}
+
+The highest-value theorems are those connecting independently specified subsystems:
+\texttt{send\_fsharp\_code\_iff\_ready\_phase} and the \texttt{validTransition}
+safety invariants. These would catch regressions introduced by refactoring that
+changes the session phase logic or the tool-gating policy in isolation. The
+lower-value theorems---monad laws, string-length checks---are correct but add
+little beyond what unit tests already provide.
+
+A concern noted in CRITIQUE.md is that the 18 \texttt{withOverrides\_*\_preserves\_*}
+theorems in \texttt{Theme.lean} each verify a pair of fields independently rather
+than the whole record. A stronger field-completeness theorem would subsume all 18
+but requires decidable equality on field names.
+
+\subsection{Automation and Effort}
+
+The project was produced entirely by the Lean Squad automated agent across
+approximately 11 runs. Human effort was limited to reviewing and merging PRs.
+The most time-consuming proofs were the ring-buffer modular arithmetic lemmas
+(requiring manual helper lemmas) and the Theme field-isolation theorems (requiring
+18 separate case-split instances). The composition theorems, by contrast, were
+surprisingly simple once the bridge function was defined: most closed with
+\texttt{cases p <\&> simp [...]}.
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item \textbf{No Mathlib}: the absence of Mathlib limits automation. Several proofs
+    that would be one-line \texttt{simp} calls with Mathlib lemmas required manual
+    helper lemmas.
+  \item \textbf{Concurrency not modelled}: the async session lifecycle is abstracted
+    to a sequential transition relation.
+  \item \textbf{No extraction}: we do not extract Lean code to F\# or generate
+    certified implementations. The proofs are post-hoc verification of a
+    hand-written model.
+  \item \textbf{Correspondence by code review}: for most modules, the correspondence
+    between the Lean model and the F\# source is validated by manual inspection and
+    the ring-buffer correspondence tests. Automated extraction (e.g., via Aeneas for
+    a Rust codebase) is not applicable here.
+\end{itemize}
+
+\subsection{Lessons Learned}
+
+\begin{enumerate}
+  \item \textbf{Start with invariants, not algorithms}: the most tractable early
+    targets were data-structure invariants (\texttt{WellFormed}, \texttt{toList\_length})
+    rather than full functional correctness.
+  \item \textbf{Compose late}: individual-module proofs are easier to write in
+    isolation; composition theorems should be added once the modules are stable.
+  \item \textbf{Document approximations immediately}: the D3 divergence (rbClear total
+    reset) was caught early because the correspondence review happened alongside proof
+    writing. Deferring this review would have allowed incorrect theorems to accumulate.
+  \item \textbf{Stdlib-only is viable}: without Mathlib, proofs require more manual
+    lemmas, but the approach scales to 177 theorems with manageable effort per theorem.
+\end{enumerate}
+
+%% ============================================================
+\section{Conclusion}
+%% ============================================================
+
+We have presented a formal verification effort for SageFs, an F\# live development
+environment, using Lean~4 with the standard library. The project produced 177 proved
+theorems across 11 files, with zero \texttt{sorry} and CI-checked builds. The central
+contribution is the system-level evaluation-gate theorem
+\texttt{send\_fsharp\_code\_iff\_ready\_phase}, which unifies the session lifecycle
+and tool-affordance subsystems in a single formal statement. The
+\texttt{validTransition} relation establishes safety invariants for the session
+state machine, and 50 runnable correspondence tests validate the ring-buffer model
+against the F\# implementation.
+
+No implementation bugs were found, but the process revealed a model inaccuracy
+(D3, ring-buffer clear semantics) and the structural unreachability of
+\texttt{SessionState.Uninitialized} via the normal lifecycle. Future work includes
+modelling the async session transitions, adding correspondence tests for
+\texttt{HotReloadState} and \texttt{Affordances}, and strengthening the Theme
+field-isolation coverage.
+
+The project demonstrates that Lean~4 formal verification is practical for a
+real-world F\# developer tool, even without Mathlib and with a fully automated
+verification agent.
+
+%% ============================================================
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{paper}
+
+\end{document}
