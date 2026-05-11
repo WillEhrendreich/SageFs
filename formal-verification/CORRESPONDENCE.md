@@ -741,6 +741,56 @@ message handlers (approximately lines 984–1350).
 
 ---
 
+## Target 12: SmartReset
+
+- **Lean file**: `formal-verification/lean/FVSquad/SmartReset.lean`
+- **F# source**: `SageFs.Core/SmartReset.fs`
+- **Phase**: 5 ✅ (all theorems proved, 0 sorry)
+
+### Key functions
+
+| Lean name | F# name | F# location | Correspondence | Notes |
+|---|---|---|---|---|
+| `SROutcome` | `SmartReset.Outcome` | `SmartReset.fs:1–5` | **Exact** | Three-case DU maps directly: `SoftResetSucceeded`, `EscalatedToHardReset`, `AllResetsFailed` |
+| `smartResetLogic` | `SmartReset.execute` (pure logic) | `SmartReset.fs:7–17` | **Abstraction** | `Task<_>` async execution modelled as pure synchronous function; `SageFsError` abstracted as `String` |
+| `srDescribe` | `SmartReset.describe` | `SmartReset.fs:20–26` | **Exact** | String descriptions match the F# implementation |
+
+### Known divergences
+
+#### D1 — Async `Task<_>` modelled as pure function
+
+- **Lean model**: `smartResetLogic soft hard` is a pure function of two synchronous results.
+- **F# source**: `execute` returns `Task<Outcome>`, awaiting two async operations sequentially.
+- **Impact**: Race conditions, cancellation, and timeout are not modelled. The pure logic of the escalation decision is fully captured.
+
+#### D2 — `SageFsError` abstracted as `String`
+
+- **Lean model**: Both error cases use `String`.
+- **F# source**: Errors are `SageFsError` (a structured union type with more context).
+- **Impact**: Error-message content properties cannot be stated. Structural correctness of outcome selection is not affected.
+
+### Theorems proved (all without `sorry`)
+
+| Theorem | Property | Level |
+|---|---|---|
+| `smartReset_soft_ok` | Soft ok → `SoftResetSucceeded` | High |
+| `smartReset_escalated` | Soft fail + hard ok → `EscalatedToHardReset msg` | High |
+| `smartReset_all_failed` | Both fail → `AllResetsFailed e1 e2` | High |
+| `smartReset_succeeded_iff` | `SoftResetSucceeded` ↔ `soft = .ok ()` | High |
+| `smartReset_soft_fail_never_succeeded` | Soft error never → `SoftResetSucceeded` | Mid |
+| `smartReset_soft_ok_not_all_failed` | Soft ok never → `AllResetsFailed` | Mid |
+| `smartReset_all_failed_iff` | `AllResetsFailed e1 e2` ↔ both errored | High |
+| `smartReset_escalated_iff` | `EscalatedToHardReset msg` ↔ soft errored ∧ hard ok | High |
+
+### Validation evidence
+
+No runnable test harness yet (Task 8). The Lean model was derived directly from
+`SageFs.Core/SmartReset.fs` lines 1–26. The three-case DU and the escalation
+decision (`match softResult with | .ok () => … | .error e => match hardResult …`)
+are structurally identical in both F# and Lean.
+
+---
+
 ## Other Targets
 
 The following targets have been identified in `TARGETS.md` but have no Lean files yet.

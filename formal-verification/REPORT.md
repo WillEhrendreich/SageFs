@@ -6,26 +6,28 @@
 
 ## Last Updated
 
-- **Date**: 2026-05-07 09:15 UTC
-- **Commit**: `f5b7f4b`
+- **Date**: 2026-05-05 01:15 UTC
+- **Date**: 2026-05-06 00:00 UTC
+- **Commit**: `2770ebd`
 
 ---
 
 ## Executive Summary
 
-The SageFs Lean Squad has produced eleven Lean 4 formal specification files covering
+The SageFs Lean Squad has produced twelve Lean 4 formal specification files covering
 the core data structures, state machines, and system-level composition properties in
-`SageFs.Core`. A total of 177 theorems have been stated and proved with zero `sorry`
+`SageFs.Core`. A total of **191 theorems** have been stated and proved with zero `sorry`
 remaining. The nine base modules verify individual components: `RingBuffer` (20),
 `ResultEx` (17), `RetryPolicy` (13), `RestartPolicy` (9), `Affordances` (19),
-`EvalPipeline` (17), `HotReloadState` (23), `SessionLifecycle` (16), and `Theme`
-(20). Two new cross-cutting files add system-level verification: `Composition.lean`
-(12 theorems) proves the evaluation-gate end-to-end — a session accepts code iff its
-phase is `Active·Idle` — and `PhaseTransition.lean` (11 theorems) defines and proves
-a `validTransition` inductive relation covering all 8 state-machine edges, with safety
-invariants such as "evaluation failure never leads directly to Faulted". No
-implementation bugs have been found. The project uses stdlib-only Lean 4 (no Mathlib)
-due to CI network constraints.
+`EvalPipeline` (20), `HotReloadState` (23), `SessionLifecycle` (16), and `Theme`
+(20). Three cross-cutting files add system-level verification: `Composition.lean`
+(12 theorems) proves the evaluation-gate end-to-end, `PhaseTransition.lean` (14 theorems)
+defines and proves a `validTransition` inductive relation covering all 8 state-machine
+edges with safety invariants, and the new `SmartReset.lean` (8 theorems) extracts and
+fully verifies the pure escalation logic of `SmartReset.execute` — proving biconditional
+characterizations of all three outcomes (`SoftResetSucceeded`, `EscalatedToHardReset`,
+`AllResetsFailed`). No implementation bugs have been found. The project uses stdlib-only
+Lean 4 (no Mathlib) due to CI network constraints.
 
 ---
 
@@ -35,7 +37,7 @@ due to CI network constraints.
 graph TD
   A["Layer 1 — Core Primitives<br/>ResultEx · RetryPolicy · RestartPolicy · Theme"]
   B["Layer 2 — Data Structures<br/>RingBuffer"]
-  C["Layer 3 — Application Logic<br/>Affordances · EvalPipeline"]
+  C["Layer 3 — Application Logic<br/>Affordances · EvalPipeline · SmartReset"]
   D["Layer 4 — State Machines<br/>SessionLifecycle · HotReloadState"]
   E["Layer 5 — Cross-cutting Composition<br/>Composition · PhaseTransition"]
   A --> C
@@ -88,12 +90,13 @@ graph LR
 - `push_tryGet_head`: most recent item is always retrievable immediately after push
 - `tryGet_bound`: retrieval of out-of-range ages returns `none`
 
-### Layer 3 — Application Logic (2 files, 36 theorems)
+### Layer 3 — Application Logic (3 files, 47 theorems)
 
 ```mermaid
 graph LR
   AF["Affordances.lean<br/>19 theorems<br/>tool-gating policy"]
-  EP["EvalPipeline.lean<br/>17 theorems<br/>CE trace structure"]
+  EP["EvalPipeline.lean<br/>20 theorems<br/>CE trace structure + stage tracking"]
+  SR["SmartReset.lean<br/>8 theorems<br/>escalation logic biconditionals"]
 ```
 
 **Key results**:
@@ -102,7 +105,11 @@ graph LR
 - `codeExec_gated`: code-execution tool present iff `allowCodeExec = true`
 - `epReturn_stages_empty`: `epReturn` produces no stage trace entries
 - `epBind_error_stages_length`: a failed bind contributes exactly 1 stage
-- `two_step_first_fails_one_stage`: early failure halts pipeline after 1 stage
+- `epBind_stage_name_is_tracked_name`: first stage name always equals the tracked item's name
+- `epSucceeded_bind_ok_eq`: on the success path, success flag propagates correctly
+- `smartReset_succeeded_iff`: `SoftResetSucceeded` ↔ `soft = .ok ()`
+- `smartReset_all_failed_iff`: `AllResetsFailed e1 e2` ↔ both resets errored
+- `smartReset_escalated_iff`: `EscalatedToHardReset msg` ↔ soft failed ∧ hard succeeded
 
 ### Layer 4 — State Machines (2 files, 39 theorems)
 
@@ -120,12 +127,12 @@ graph LR
 - `toggle_involution`: toggling twice returns to the original state
 - `watchedCount_watch_new`: watching a new path increments count by 1
 
-### Layer 5 — Cross-cutting Composition (2 files, 23 theorems)
+### Layer 5 — Cross-cutting Composition (2 files, 26 theorems)
 
 ```mermaid
 graph LR
   CO["Composition.lean<br/>12 theorems<br/>evaluation gate end-to-end"]
-  PT["PhaseTransition.lean<br/>11 theorems<br/>validTransition relation + safety"]
+  PT["PhaseTransition.lean<br/>14 theorems<br/>validTransition relation + safety"]
   SL["SessionLifecycle.lean"] --> CO
   AF["Affordances.lean"] --> CO
 ```
@@ -147,6 +154,7 @@ graph LR
 - `eval_cannot_fault_directly`: evaluation failure always returns to Ready
 - `uninitialized_unreachable_as_target`: no valid transition leads to Uninitialized
 - `active_transition_preserves_state_or_restarts`: Active always stays Active or restarts
+- `phase_always_has_successor`: every phase has at least one valid successor (no deadlocks)
 
 ---
 
@@ -157,13 +165,14 @@ graph LR
 | `RetryPolicy.lean` | 13 | 5 ✅ | `retryDecide_correct`, `delay_monotone` |
 | `RestartPolicy.lean` | 9 | 5 ✅ | backoff correctness |
 | `Affordances.lean` | 19 | 5 ✅ | tool-gating policy fully verified |
-| `EvalPipeline.lean` | 17 | 5 ✅ | CE trace structural properties |
+| `EvalPipeline.lean` | 20 | 5 ✅ | CE trace structural + stage tracking |
 | `HotReloadState.lean` | 23 | 5 ✅ | watch/unwatch/toggle invariants |
 | `SessionLifecycle.lean` | 16 | 5 ✅ | phase→state projection + reachability |
 | `Theme.lean` | 20 | 5 ✅ | `withOverrides` identity + idempotency |
 | `Composition.lean` | 12 | 5 ✅ | evaluation gate end-to-end |
-| `PhaseTransition.lean` | 11 | 5 ✅ | `validTransition` + safety invariants |
-| **Total** | **177** | — | **0 sorry** |
+| `PhaseTransition.lean` | 14 | 5 ✅ | `validTransition` + safety + successor coverage |
+| `SmartReset.lean` | 8 | 5 ✅ | escalation logic biconditionals |
+| **Total** | **191** | — | **0 sorry** |
 
 ---
 
