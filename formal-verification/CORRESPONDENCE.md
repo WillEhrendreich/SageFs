@@ -8,8 +8,8 @@ known divergence so that the validity of the associated proofs can be assessed h
 
 ## Last Updated
 
-- **Date**: 2026-05-11 09:41 UTC
-- **Commit**: `bb95c100`
+- **Date**: 2026-05-12 01:20 UTC
+- **Commit**: `a7a1d91`
 
 ---
 
@@ -931,6 +931,71 @@ verified by `lake build` with Lean 4 v4.30.0-rc2 (0 sorry).
 The following targets have been identified in `TARGETS.md` but have no Lean files yet.
 Correspondence will be documented here as each target reaches Phase 4.
 
-- `KeyMap` (Phase 1 — research only)
-- `BinaryManifest` (Phase 1 — research only)
-- `StateMachine` (Phase 1 — research only)
+- `WorkflowTypes.SessionWorkflow` (Phase 1 — research only)
+- `ValidTimeout` (Phase 1 — research only)
+
+---
+
+## BinaryFormat.Crc32
+
+**Lean file**: `formal-verification/lean/FVSquad/BinaryFormat.lean`
+**F# source**: `SageFs.Core/BinaryFormat.fs`, module `SageFs.Crc32`
+
+### Type and function correspondence
+
+| Lean name | F# name | F# file | Correspondence | Notes |
+|---|---|---|---|---|
+| `crcTableEntry (b : UInt8) : UInt32` | `table.[i]` (array element) | `BinaryFormat.fs` | **Exact** | F# builds a `uint32[]` array; Lean computes each entry as a pure function using the same 8-step polynomial loop. Both produce identical values for every byte `0..255`. |
+| `crcStep (crc : UInt32) (b : UInt8) : UInt32` | Inner loop body of `compute` | `BinaryFormat.fs` | **Exact** | Same computation: `(crc >>> 8) XOR table[(crc XOR b) AND 0xFF]`. Lean uses `UInt32` wrapping arithmetic which matches F# `uint32`. |
+| `crc32Bytes (bs : List UInt8) : UInt32` | `Crc32.compute` (inner loop + finalization) | `BinaryFormat.fs` | **Abstraction** | F# iterates over a `byte[]` slice; Lean folds over `List UInt8`. The XOR-init (`0xFFFFFFFF`) and XOR-final (`0xFFFFFFFF`) are identical. No offset/length exception paths are modelled. |
+| `crc32All (data : List UInt8) : UInt32` | `Crc32.computeAll` | `BinaryFormat.fs` | **Exact** | Both compute CRC-32 of the entire input (offset 0, full length). |
+| `crc32Compute data offset length` | `Crc32.compute data offset length` | `BinaryFormat.fs` | **Abstraction** | Lean uses `List.drop offset |>.take length` slicing; F# indexes directly into the array. Semantically equivalent for valid inputs. Out-of-bounds access (which throws in F#) is not modelled. |
+
+### Known divergences
+
+#### D1 — `byte[]` vs `List UInt8`
+- **Lean model**: uses `List UInt8`; indexing is via `List.drop`/`List.take`.
+- **F# source**: uses `byte[]` (mutable array) with integer offset/length parameters.
+- **Impact**: The Lean model is equivalent on all valid inputs. Out-of-bounds access is not modelled; Lean functions are total but do not model the F# `IndexOutOfRangeException`.
+- **Proof impact**: Theorems only apply to valid-range inputs. No proved theorem relies on error handling.
+
+#### D2 — Table as function vs array
+- **Lean model**: `crcTableEntry` is a pure function that computes any table entry on demand.
+- **F# source**: the `table` is eagerly computed once as a `uint32[256]` array.
+- **Impact**: None. The computed values are identical for every byte value (verified by `native_decide` for representative entries and by the standard test vector).
+- **Proof impact**: None.
+
+#### D3 — Informal spec correction: CRC-32 of `[0x00]`
+- **Informal spec claim**: `binaryformat_crc32_informal.md` stated `crc32All [0x00u] = 0x2144DF1Cu`.
+- **Correct value**: Standard CRC-32 (ISO 3309 polynomial 0xEDB88320, init/final XOR 0xFFFFFFFF) of the single byte `0x00` is `0xD202EF8Du`.
+- This is confirmed by the Lean model (`native_decide`), by standard reference tables, and by the standard test vector (CRC-32 of "123456789" = `0xCBF43926u`).
+- The informal spec figure was a copy-paste error. The Lean spec uses the correct value.
+
+### Theorems overview (16 total, 0 sorry)
+
+| Theorem | Property | Proof method |
+|---|---|---|
+| `crc32All_eq_compute` | `computeAll ≡ compute data 0 data.length` | `simp` |
+| `crc32All_empty` | CRC of empty list = 0 | `native_decide` |
+| `crc32Compute_empty` | `compute [] 0 0 = 0` | `native_decide` |
+| `crc32_single_zero` | CRC of `[0x00]` = `0xD202EF8D` | `native_decide` |
+| `crc32_single_ff` | CRC of `[0xFF]` = `0xFF000000` | `native_decide` |
+| `crc32_test_vector` | CRC of "123456789" = `0xCBF43926` | `native_decide` |
+| `crc32_deterministic` | Pure function is deterministic | `rfl` |
+| `crcTableEntry_zero` | `crcTableEntry 0 = 0` | `native_decide` |
+| `crcTableEntry_one` | `crcTableEntry 1 = 0x77073096` | `native_decide` |
+| `crcTableEntry_ff` | `crcTableEntry 0xFF = 0x2D02EF8D` | `native_decide` |
+| `crc32_slicing_consistency` | Slice CRC = CRC of extracted sub-list | `simp` + list lemmas |
+| `crc32Compute_zero_length` | Length-0 slice = 0 | `simp` |
+| `crc32Bytes_def` | Exposes fold+final-XOR structure | `rfl` |
+| `crc32Fold_empty` | Empty fold = init | `rfl` |
+| `crc32Fold_single` | Single-element fold = `crcStep` | `rfl` |
+| `crcTableEntry_toNat_lt` | Table entries fit in UInt32 | `toNat_lt` |
+
+### Validation evidence
+
+No runnable test harness yet (Task 8). The Lean model was derived directly from
+`SageFs.Core/BinaryFormat.fs`. Correspondence is evidenced by:
+1. `crc32_test_vector`: the universally agreed standard CRC-32 test vector "123456789" → `0xCBF43926u` passes by `native_decide`.
+2. `crc32_single_ff`: the `[0xFF]` reference value `0xFF000000u` is verified.
+3. All 16 theorems verified by `lake build` with Lean 4 v4.30.0-rc2 (0 sorry).
