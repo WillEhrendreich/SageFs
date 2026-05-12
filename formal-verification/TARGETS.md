@@ -3,8 +3,8 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-05-11 09:41 UTC
-- **Commit**: `bb95c100`
+- **Date**: 2026-05-12 09:17 UTC
+- **Commit**: `ef86a4f`
 
 ---
 
@@ -22,10 +22,14 @@
 | 10 | `Composition` | `SageFs.Core/Composition.fs` | 5 | ✅ 12 proved (0 sorry) | Function composition laws verified. |
 | 11 | `PhaseTransition` | `SageFs.Core/AppState.fs` | 5 | ✅ 14 proved (0 sorry) | Session lifecycle safety: no direct Faulted←Eval, successor coverage, always-successor. |
 | 12 | `SmartReset` | `SageFs.Core/SmartReset.fs` | 5 | ✅ 8 proved (0 sorry) | Escalation logic: outcome biconditionals + negative cases fully proved. |
-| 13 | `SageFsError` | `SageFs.Core/SageFsError.fs` | 5 | ✅ 26 proved (0 sorry) | Error category partition + HTTP status consistency + log severity proved. |
+| 13 | `SageFsError` | `SageFs.Core/SageFsError.fs` | 5 | ✅ 23 proved (0 sorry) | Error category partition + HTTP status consistency + log severity proved. |
 | 14 | `SseReplayBuffer` | `SageFs.Core/SseReplayBuffer.fs` | 5 | ✅ 19 proved (0 sorry) | seqId monotonicity, well-formedness preservation, 4 exhaustive replay cases proved. |
-| 15 | `FsiRewrite` | `SageFs/FsiRewrite.fs` | 5 | ✅ proved (0 sorry) | FsiRewrite transformation correctness. |
+| 15 | `FsiRewrite` | `SageFs/FsiRewrite.fs` | 5 | ✅ 17 proved (0 sorry) | FsiRewrite transformation correctness; 52 correspondence tests. |
 | 16 | `TimeTravel` | `SageFs.Core/TimeTravel.fs` | 5 | ✅ 30 proved (0 sorry) | Mode transitions, roundtrip, count invariants, boundary conditions all proved. |
+| 17 | `BinaryFormat.Crc32` | `SageFs.Core/BinaryFormat.fs` | 5 | ✅ 16 proved (0 sorry) | CRC-32 standard test vector, slicing consistency, determinism; spec correction. |
+| 18 | `WorkflowTypes.SessionWorkflow` | `SageFs.Core/WorkflowTypes.fs` | 1 | ⬜ Research done, no spec yet | DU invariant: hot-reload + full REPL is unrepresentable; `feedbackStrategy`/`replCapability` total. |
+| 19 | `ValidTimeout` | `SageFs.Core/Timeouts.fs` | 1 | ⬜ Research done, no spec yet | Validated constructor: range invariant, round-trip, boundary error cases. |
+| 20 | `DirectoryConfig.LoadStrategy` | `SageFs.Core/DirectoryConfig.fs` | 1 | ⬜ New — research only | Pure DU + record defaults; `empty` defaults, LoadStrategy coverage, config merging. |
 
 ## Phase Legend
 
@@ -53,19 +57,19 @@
 | `lean/FVSquad/Composition.lean` | 12 | 0 | 5 ✅ |
 | `lean/FVSquad/PhaseTransition.lean` | 14 | 0 | 5 ✅ |
 | `lean/FVSquad/SmartReset.lean` | 8 | 0 | 5 ✅ |
-| `lean/FVSquad/SageFsError.lean` | 26 | 0 | 5 ✅ |
+| `lean/FVSquad/SageFsError.lean` | 23 | 0 | 5 ✅ |
 | `lean/FVSquad/SseReplayBuffer.lean` | 19 | 0 | 5 ✅ |
 | `lean/FVSquad/FsiRewrite.lean` | 17 | 0 | 5 ✅ |
 | `lean/FVSquad/TimeTravel.lean` | 30 | 0 | 5 ✅ |
-| **Total** | **283** | **0** | — |
+| `lean/FVSquad/BinaryFormat.lean` | 16 | 0 | 5 ✅ |
+| **Total** | **296** | **0** | — |
 
 ## Open Issues / PRs
 
-- Task 4+5 (TimeTravel): ✅ DONE this run — 30 theorems, 0 sorry (run 25661826548)
-- Task 6 (Correspondence): ✅ DONE this run — TimeTravel section added to CORRESPONDENCE.md
-- Task 8 (Correspondence): No runnable test harnesses yet — HIGH PRIORITY
-- Task 7 (Critique): ✅ DONE — CRITIQUE.md created
-- Task 9 (CI): ✅ DONE — lean-ci.yml created
-- Task 4+5 (SageFsError): ✅ DONE this run — 26 theorems, 0 sorry
+- Task 1+10 (Research + Report): ✅ DONE this run — TARGETS.md + REPORT.md updated (run 25725081687)
+- Task 2+3 (WorkflowTypes): ⬜ NEXT — informal spec + Lean spec for target 18
+- Task 2+3 (ValidTimeout): ⬜ NEXT — informal spec + Lean spec for target 19
+- Task 2+3 (DirectoryConfig): ⬜ RESEARCH — informal spec for target 20
+- Task 8 (BinaryFormat): ⬜ HIGH — correspondence tests (Route B) for CRC-32 round-trips
 
 
