@@ -3,8 +3,8 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-05-11 17:10 UTC
-- **Commit**: `545fe0d6bc4961ea08fd0feea2f002b3b5130e23`
+- **Date**: 2026-05-12 09:17 UTC
+- **Commit**: `ef86a4f`
 
 ---
 
@@ -347,12 +347,41 @@ All 16 previously identified targets are now at Phase 5 (complete) following the
 
 ---
 
-### Critique Feedback Incorporated (run 25685202317)
+### New Target 20: `DirectoryConfig.LoadStrategy` — `SageFs.Core/DirectoryConfig.fs`
 
-The prior critique (from merged CRITIQUE.md) highlighted these ongoing gaps:
-- **No algorithmic targets**: all prior specs verify DUs, combinators, and state machines; `Crc32` fills this gap
-- **Structural safety properties**: `WorkflowTypes` directly addresses the critique's suggestion to verify the hot-reload/REPL illegal-state invariant
-- **Validated constructor patterns**: `ValidTimeout` adds a new category (constrained construction)
+**Description**: A discriminated union (`LoadStrategy`) encoding how a session loads projects — `Solution`, `Projects`, `AutoDetect`, or `NoLoad`. Combined with a `DirectoryConfig` record holding load strategy, init script, default args, and keybindings. The module exposes an `empty` default and path-computing helpers.
+
+**Why FV-amenable**:
+- `LoadStrategy` is a pure 4-case DU — all case-analysis proofs close trivially
+- `empty` is a ground-term default record; all field values are constants
+- `configDir` and `configPath` are pure string-manipulation functions amenable to property proofs
+- Logical invariant: `AutoDetect` and `NoLoad` have no embedded paths; `Solution` embeds exactly one; `Projects` embeds zero or more
+- The `isRoot` flag and `AutoOpenNamespaces` are boolean fields with simple toggling invariants
+
+**Properties to verify**:
+1. `loadStrategy_cases` — exhaustive: every `LoadStrategy` is one of the four cases
+2. `empty_loadStrategy` — `empty.Load = AutoDetect`
+3. `empty_autoOpen` — `empty.AutoOpenNamespaces = true`
+4. `configPath_suffix` — `configPath dir` ends with `".fsx"`
+5. `solution_not_projects` — `Solution p ≠ Projects ps` (injectivity across constructors)
+6. Optionally: `configDir_prefix` — `configDir d` is a subpath of `d` (string prefix property)
+
+**Spec size**: ~60 Lean lines
+**Proof tractability**: All properties close by `decide` (for finite cases) or `simp`/`rfl` for concrete evaluations. String suffix/prefix properties require `String.endsWith` equivalences — straightforward.
+**Approximations**: `KeyMap` (alias for `Map<string, byte>`) abstracted as opaque; `ThemeOverrides` similarly. `Path.Combine` modelled as string concatenation (a known approximation for cross-platform paths).
+
+**Priority**: **MEDIUM** — adds DU exhaustiveness and record-defaults verification; straightforward but pedagogically clean
+**Phase**: 1 (research only)
+
+---
+
+### Critique Feedback Incorporated (run 25725081687)
+
+The CRITIQUE.md (2026-05-07) highlights these ongoing gaps:
+- **EvalPipeline gap**: the `EPTrace` model covers only the pure computation-expression structure; the real evaluation path (FSI submission, output parsing, error classification) is unmodelled. This is a known, documented limitation — increasing the model fidelity is a long-term goal but requires significant approximation work.
+- **PhaseTransition concurrency**: the async mailbox-processor concurrency model is not captured. This is an acknowledged limitation; formal modelling of concurrent transitions would require a separate `ConcurrentPhaseTransition.lean` using CCS or a trace-based model.
+- **`defaults_hex_lengths` are low-value**: three `Theme.lean` theorems verify hardcoded string literals. These should eventually be strengthened to a universal quantifier over all default colors.
+- **Next targets**: `WorkflowTypes.SessionWorkflow` (T18) and `ValidTimeout` (T19) are the highest-priority unstarted targets. `DirectoryConfig.LoadStrategy` (T20) is a new addition identified this run for its DU exhaustiveness properties.
 
 ---
 
