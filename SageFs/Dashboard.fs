@@ -429,7 +429,11 @@ let createStreamHandler
       // Push initial state (catch all exceptions — don't let a transient failure kill the stream)
       try
         do! pushState ()
-      with ex ->
+      with
+      | :? OperationCanceledException -> ()
+      | :? System.IO.IOException -> ()
+      | :? ObjectDisposedException -> ()
+      | ex ->
         Log.error "[Dashboard SSE] Initial pushState failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
       match infra.StateChanged with
