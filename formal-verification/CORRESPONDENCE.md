@@ -8,8 +8,8 @@ known divergence so that the validity of the associated proofs can be assessed h
 
 ## Last Updated
 
-- **Date**: 2026-05-12 01:20 UTC
-- **Commit**: `a7a1d91`
+- **Date**: 2026-05-12 17:00 UTC
+- **Commit**: `af4c029`
 
 ---
 
@@ -999,3 +999,64 @@ No runnable test harness yet (Task 8). The Lean model was derived directly from
 1. `crc32_test_vector`: the universally agreed standard CRC-32 test vector "123456789" → `0xCBF43926u` passes by `native_decide`.
 2. `crc32_single_ff`: the `[0xFF]` reference value `0xFF000000u` is verified.
 3. All 16 theorems verified by `lake build` with Lean 4 v4.30.0-rc2 (0 sorry).
+
+---
+
+## WorkflowTypes.SessionWorkflow
+
+**Lean file**: `formal-verification/lean/FVSquad/WorkflowTypes.lean`
+**F# source**: `SageFs.Core/WorkflowTypes.fs`
+
+### Summary
+
+Models the `SessionWorkflow` discriminated union and its projection functions.
+The key structural property — that "hot reload + full REPL" is unrepresentable —
+is directly encoded in the DU by construction. All projection functions are total.
+
+### Correspondence table
+
+| Lean name | F# name | File + location | Level | Notes |
+|---|---|---|---|---|
+| `BrowserRefreshConfig` | `BrowserRefreshConfig` | `WorkflowTypes.fs` | abstraction | `watchPatterns : List String`; `StandbyReady` and `TimeSpan` omitted |
+| `FeedbackStrategy` | `FeedbackStrategy` | `WorkflowTypes.fs` | exact | Both cases represented |
+| `ReplCapability` | `ReplCapability` | `WorkflowTypes.fs` | exact | Both cases represented |
+| `SessionWorkflow` | `SessionWorkflow` | `WorkflowTypes.fs` | exact | Both cases; `BrowserRefreshConfig` abstracted |
+| `feedbackStrategy` | `SessionWorkflow.feedbackStrategy` | `WorkflowTypes.fs` | exact | Total function |
+| `replCapability` | `SessionWorkflow.replCapability` | `WorkflowTypes.fs` | exact | Derived via `feedbackStrategy` |
+| `fsiArgs` | `SessionWorkflow.fsiArgs` | `WorkflowTypes.fs` | exact | Returns `List String` |
+| `label` | `SessionWorkflow.label` | `WorkflowTypes.fs` | exact | Returns `String` |
+| `isHotReloadActive` | `SessionWorkflow.isHotReloadActive` | `WorkflowTypes.fs` | exact | Returns `Bool` |
+| `fromHotReloadBool` | `SessionWorkflow.fromHotReloadBool` | `WorkflowTypes.fs` | exact | Round-trip constructor |
+| `TransitionCost` | `TransitionCost` | `WorkflowTypes.fs` | abstraction | `definitionsLost`/`cellsLost` as `Nat`; `EstimatedRestart : TimeSpan` omitted |
+| `TransitionCost.isZeroCost` | `TransitionCost.isZeroCost` | `WorkflowTypes.fs` | exact | Checks both numeric fields = 0 |
+| `WorkflowSwitchOutcome` | `WorkflowSwitchOutcome` | `WorkflowTypes.fs` | exact | All 3 cases; `sessionId` is `String` not `Guid` |
+| `WorkflowSwitchOutcome.cost` | `WorkflowSwitchOutcome.cost` | `WorkflowTypes.fs` | exact | Extracts `TransitionCost` from any case |
+| `WorkflowSwitchOutcome.sessionId` | `WorkflowSwitchOutcome.sessionId` | `WorkflowTypes.fs` | exact | `Option String` |
+| `WorkflowSwitchOutcome.wasExecuted` | `WorkflowSwitchOutcome.wasExecuted` | `WorkflowTypes.fs` | exact | Bool predicate |
+
+### Known divergences
+
+1. **`TransitionCost.EstimatedRestart`** (`System.TimeSpan`) is omitted — the Lean model
+   only captures the fields used in `isZeroCost`.
+2. **`BrowserRefreshConfig.WatchPatterns`** is modelled as `List String` (not validated as
+   file glob patterns). Only `defaults` is used in proofs.
+3. **`sessionId`** is `String` in Lean vs. likely `string` in F# (equivalent; no Guid-specific
+   format constraint is verified).
+4. **`WorkflowDetection.suggest`** and `extractPackageNames` are not modelled — they do
+   string-based package detection and are not pure enough to be tractable as Lean definitions.
+
+### Impact on proofs
+
+The omissions do not affect the correctness of the proved properties:
+- `no_hotReload_and_fullRepl` (theorem 12) holds by exhaustion over DU cases — valid
+  regardless of record field completeness.
+- All projection-function proofs (`feedbackStrategy_*`, `replCapability_*`, etc.) are
+  proved by `rfl` or simple `cases`/`simp` — they depend only on the DU structure.
+- `fromHotReloadBool_roundtrip` depends on `BrowserRefreshConfig.defaults` being defined,
+  which it is.
+
+### Validation evidence
+
+Correspondence validated by direct inspection of the F# source and the Lean model.
+All 20 theorems verified by `lake build` with Lean 4 v4.30.0-rc2 (0 sorry).
+No runnable test harness yet (Task 8 candidate).
