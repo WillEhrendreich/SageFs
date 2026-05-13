@@ -3,8 +3,8 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-05-12 17:00 UTC
-- **Commit**: `af4c029`
+- **Date**: 2026-05-13 09:35 UTC
+- **Commit**: `68b5eb8`
 
 ---
 
@@ -29,7 +29,7 @@
 | 17 | `BinaryFormat.Crc32` | `SageFs.Core/BinaryFormat.fs` | 5 | ✅ 16 proved (0 sorry) | CRC-32 standard test vector, slicing consistency, determinism; spec correction. |
 | 18 | `WorkflowTypes.SessionWorkflow` | `SageFs.Core/WorkflowTypes.fs` | 5 | ✅ 20 proved (0 sorry) | Illegal-state unrepresentable; feedbackStrategy/replCapability/fsiArgs/label/isHotReloadActive all verified. |
 | 19 | `ValidTimeout` | `SageFs.Core/Timeouts.fs` | 1 | ⬜ Research done, no spec yet | Validated constructor: range invariant, round-trip, boundary error cases. |
-| 20 | `DirectoryConfig.LoadStrategy` | `SageFs.Core/DirectoryConfig.fs` | 1 | ⬜ New — research only | Pure DU + record defaults; `empty` defaults, LoadStrategy coverage, config merging. |
+| 20 | `DirectoryConfig.LoadStrategy` | `SageFs.Core/DirectoryConfig.fs` | 2 | 🔄 Informal spec written | 4-case DU + record defaults; `empty` defaults, `LoadStrategy` exhaustiveness, `configPath` suffix invariant. See `specs/directoryconfig_loadstrategy_informal.md`. |
 
 ## Phase Legend
 
@@ -68,8 +68,8 @@
 ## Open Issues / PRs
 
 - Task 2+5 (WorkflowTypes): ✅ DONE run 25749476031 — informal spec + 20 theorems (0 sorry)
-- Task 2+3 (ValidTimeout): ⬜ NEXT — informal spec + Lean spec for target 19
-- Task 2+3 (DirectoryConfig): ⬜ NEXT — informal spec for target 20
-- Task 8 (BinaryFormat): ⬜ HIGH — correspondence tests (Route B) for CRC-32 round-trips
-
+- Task 7 (Critique): 🔄 IN PROGRESS run 25790040914 — full critique of all 18 files
+- Task 2 (DirectoryConfig.LoadStrategy): 🔄 IN PROGRESS run 25790040914 — informal spec extracted
+- Task 2+3+5 (ValidTimeout): ⬜ NEXT — informal spec + Lean spec for target 19
+- Task 3+5 (DirectoryConfig.LoadStrategy): ⬜ NEXT — Lean spec for target 20
 
