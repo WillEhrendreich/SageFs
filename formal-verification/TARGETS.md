@@ -3,8 +3,8 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
 ## Last Updated
-- **Date**: 2026-05-12 09:17 UTC
-- **Commit**: `ef86a4f`
+- **Date**: 2026-05-12 17:00 UTC
+- **Commit**: `af4c029`
 
 ---
 
@@ -27,7 +27,7 @@
 | 15 | `FsiRewrite` | `SageFs/FsiRewrite.fs` | 5 | ✅ 17 proved (0 sorry) | FsiRewrite transformation correctness; 52 correspondence tests. |
 | 16 | `TimeTravel` | `SageFs.Core/TimeTravel.fs` | 5 | ✅ 30 proved (0 sorry) | Mode transitions, roundtrip, count invariants, boundary conditions all proved. |
 | 17 | `BinaryFormat.Crc32` | `SageFs.Core/BinaryFormat.fs` | 5 | ✅ 16 proved (0 sorry) | CRC-32 standard test vector, slicing consistency, determinism; spec correction. |
-| 18 | `WorkflowTypes.SessionWorkflow` | `SageFs.Core/WorkflowTypes.fs` | 1 | ⬜ Research done, no spec yet | DU invariant: hot-reload + full REPL is unrepresentable; `feedbackStrategy`/`replCapability` total. |
+| 18 | `WorkflowTypes.SessionWorkflow` | `SageFs.Core/WorkflowTypes.fs` | 5 | ✅ 20 proved (0 sorry) | Illegal-state unrepresentable; feedbackStrategy/replCapability/fsiArgs/label/isHotReloadActive all verified. |
 | 19 | `ValidTimeout` | `SageFs.Core/Timeouts.fs` | 1 | ⬜ Research done, no spec yet | Validated constructor: range invariant, round-trip, boundary error cases. |
 | 20 | `DirectoryConfig.LoadStrategy` | `SageFs.Core/DirectoryConfig.fs` | 1 | ⬜ New — research only | Pure DU + record defaults; `empty` defaults, LoadStrategy coverage, config merging. |
 
@@ -62,14 +62,14 @@
 | `lean/FVSquad/FsiRewrite.lean` | 17 | 0 | 5 ✅ |
 | `lean/FVSquad/TimeTravel.lean` | 30 | 0 | 5 ✅ |
 | `lean/FVSquad/BinaryFormat.lean` | 16 | 0 | 5 ✅ |
-| **Total** | **296** | **0** | — |
+| `lean/FVSquad/WorkflowTypes.lean` | 20 | 0 | 5 ✅ |
+| **Total** | **316** | **0** | — |
 
 ## Open Issues / PRs
 
-- Task 1+10 (Research + Report): ✅ DONE this run — TARGETS.md + REPORT.md updated (run 25725081687)
-- Task 2+3 (WorkflowTypes): ⬜ NEXT — informal spec + Lean spec for target 18
+- Task 2+5 (WorkflowTypes): ✅ DONE run 25749476031 — informal spec + 20 theorems (0 sorry)
 - Task 2+3 (ValidTimeout): ⬜ NEXT — informal spec + Lean spec for target 19
-- Task 2+3 (DirectoryConfig): ⬜ RESEARCH — informal spec for target 20
+- Task 2+3 (DirectoryConfig): ⬜ NEXT — informal spec for target 20
 - Task 8 (BinaryFormat): ⬜ HIGH — correspondence tests (Route B) for CRC-32 round-trips
 
 
