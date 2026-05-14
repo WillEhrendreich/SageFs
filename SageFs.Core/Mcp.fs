@@ -1405,15 +1405,26 @@ module McpTools =
         // Fire-and-forget: build + restart happens in background.
         // Return immediately so MCP tool call doesn't time out (~30s build).
         // Client polls get_fsi_status or list_sessions to check completion.
+        // IMPORTANT: Always update snapshot status on both success and error,
+        // and catch exceptions. Without this, a failed RestartSession silently
+        // leaves the snapshot stuck in Restarting — causing subsequent tool calls
+        // to fail with "still warming up" or SessionMissing friction.
         task {
-          let! result = ctx.SessionOps.RestartSession (toSessionId sid) true
-          match result with
-          | Ok msg ->
+          try
+            let! result = ctx.SessionOps.RestartSession (toSessionId sid) true
+            match result with
+            | Ok msg ->
+              do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
+              notifyElm ctx (
+                SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+            | Error err ->
+              do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+              notifyElm ctx (
+                SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+          with ex ->
+            do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
             notifyElm ctx (
-              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-          | Error err ->
-            notifyElm ctx (
-              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (sprintf "Hard reset threw: %s" ex.Message)))
         } |> ignore
         return "Hard reset initiated — rebuilding project. Use get_fsi_status to check when ready."
       | false ->

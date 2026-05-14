@@ -805,6 +805,162 @@ module ResetIsolation =
         WorkerProtocol.SessionStatus.Faulted
     }
 
+    testTask "WHY — hardResetSession with rebuild=true — updates snapshot to Faulted when RestartSession returns Error because stale Restarting snapshot causes subsequent tool calls to fail silently" {
+      // Create context where RestartSession can be controlled via TCS
+      let result = globalActorResult.Value
+      let sidStr = "aaa00001"
+      let sessionMap = ConcurrentDictionary<string, string>()
+      sessionMap.["agent1"] <- sidStr
+      let statuses = ResizeArray<WorkerProtocol.SessionStatus>()
+      let restartResult = TaskCompletionSource<Result<string, SageFsError>>()
+      let faultedSignal = TaskCompletionSource<unit>()
+
+      let ops : SessionManagementOps = {
+        CreateSession = fun _ _ _ -> Task.FromResult(Ok "new-session")
+        ListSessions = fun () -> Task.FromResult("No sessions")
+        StopSession = fun _ -> Task.FromResult(Ok "stopped")
+        RestartSession = fun _ _ -> restartResult.Task
+        GetProxy = fun _ -> Task.FromResult(None)
+        GetSessionInfo = fun id ->
+          Task.FromResult(Some {
+            Id = id
+            Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
+            Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None
+            FaultReason = None
+            Workflow = WorkflowTypes.SessionWorkflow.Interactive
+            CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
+          })
+        GetAllSessions = fun () -> Task.FromResult([])
+        UpdateSessionStatus = fun _ status ->
+          statuses.Add(status)
+          if status = WorkerProtocol.SessionStatus.Faulted then
+            faultedSignal.TrySetResult(()) |> ignore
+          Task.FromResult(())
+        GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
+        NotifyWorkerDied = fun _ -> ()
+      }
+
+      let ctx =
+        { FrictionStore = None
+          DiagnosticsChanged = result.DiagnosticsChanged
+          StateChanged = None
+          SessionOps = ops
+          SessionMap = sessionMap
+          McpPort = 0
+          Dispatch = None
+          GetElmModel = None
+          GetElmRegions = None
+          GetWarmupContext = None
+          GetFeatureState = None
+          ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+
+      // Act: call hardReset — this returns immediately after setting Restarting
+      let! message = hardResetSession ctx "agent1" true (Some sidStr) None
+
+      message
+      |> Expect.stringContains "should return immediately with status message" "Hard reset initiated"
+
+      // Restarting should have been set synchronously
+      statuses |> Seq.toList
+      |> Expect.contains "Restarting should be set before returning" WorkerProtocol.SessionStatus.Restarting
+
+      // Signal the RestartSession to fail
+      restartResult.TrySetResult(Error (SageFsError.HardResetFailed "build failed"))
+      |> Expect.isTrue "should be able to complete restart TCS"
+
+      // Poll for Faulted status update (fire-and-forget task is async)
+      let sw = System.Diagnostics.Stopwatch.StartNew()
+      let mutable gotFaulted = false
+      while not gotFaulted && sw.ElapsedMilliseconds < 5000L do
+        do! Task.Delay(50)
+        gotFaulted <- faultedSignal.Task.IsCompleted
+
+      gotFaulted |> Expect.isTrue
+        "snapshot should be updated to Faulted within timeout — without this fix the snapshot stays stuck in Restarting"
+
+      // Final snapshot should have been Faulted (last status update)
+      statuses |> Seq.toList
+      |> Expect.contains "snapshot should be Faulted after RestartSession error" WorkerProtocol.SessionStatus.Faulted
+    }
+
+    testTask "WHY — hardResetSession with rebuild=true — updates snapshot to Faulted when RestartSession throws because unhandled exceptions in fire-and-forget tasks leave the session stuck Restarting indefinitely" {
+      let result = globalActorResult.Value
+      let sidStr = "aaa00001"
+      let sessionMap = ConcurrentDictionary<string, string>()
+      sessionMap.["agent1"] <- sidStr
+      let statuses = ResizeArray<WorkerProtocol.SessionStatus>()
+      let restartCalled = TaskCompletionSource<unit>()
+      let faultedSignal = TaskCompletionSource<unit>()
+
+      let ops : SessionManagementOps = {
+        CreateSession = fun _ _ _ -> Task.FromResult(Ok "new-session")
+        ListSessions = fun () -> Task.FromResult("No sessions")
+        StopSession = fun _ -> Task.FromResult(Ok "stopped")
+        RestartSession = fun _ _ ->
+          restartCalled.TrySetResult(()) |> ignore
+          // This exception should be caught by the fire-and-forget task
+          raise (InvalidOperationException "unexpected crash in RestartSession")
+        GetProxy = fun _ -> Task.FromResult(None)
+        GetSessionInfo = fun id ->
+          Task.FromResult(Some {
+            Id = id
+            Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
+            Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None
+            FaultReason = None
+            Workflow = WorkflowTypes.SessionWorkflow.Interactive
+            CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
+          })
+        GetAllSessions = fun () -> Task.FromResult([])
+        UpdateSessionStatus = fun _ status ->
+          statuses.Add(status)
+          if status = WorkerProtocol.SessionStatus.Faulted then
+            faultedSignal.TrySetResult(()) |> ignore
+          Task.FromResult(())
+        GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
+        NotifyWorkerDied = fun _ -> ()
+      }
+
+      let ctx =
+        { FrictionStore = None
+          DiagnosticsChanged = result.DiagnosticsChanged
+          StateChanged = None
+          SessionOps = ops
+          SessionMap = sessionMap
+          McpPort = 0
+          Dispatch = None
+          GetElmModel = None
+          GetElmRegions = None
+          GetWarmupContext = None
+          GetFeatureState = None
+          ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+
+      let! message = hardResetSession ctx "agent1" true (Some sidStr) None
+
+      message
+      |> Expect.stringContains "should return immediately" "Hard reset initiated"
+
+      // Wait for RestartSession to be called (it will throw)
+      let swCall = System.Diagnostics.Stopwatch.StartNew()
+      let mutable gotCalled = false
+      while not gotCalled && swCall.ElapsedMilliseconds < 5000L do
+        do! Task.Delay(50)
+        gotCalled <- restartCalled.Task.IsCompleted
+      gotCalled |> Expect.isTrue "RestartSession should be invoked"
+
+      // Poll for Faulted status update
+      let swFault = System.Diagnostics.Stopwatch.StartNew()
+      let mutable gotFaulted = false
+      while not gotFaulted && swFault.ElapsedMilliseconds < 5000L do
+        do! Task.Delay(50)
+        gotFaulted <- faultedSignal.Task.IsCompleted
+
+      gotFaulted |> Expect.isTrue
+        "snapshot should be Faulted after RestartSession throws — fire-and-forget must not silently swallow exceptions"
+
+      statuses |> Seq.toList
+      |> Expect.contains "snapshot should be Faulted after exception" WorkerProtocol.SessionStatus.Faulted
+    }
+
     testTask "concurrent agents: resetting one never touches the other's session" {
       let ctx, restartLog, routedSessions = mkTrackingCtx ()
 
