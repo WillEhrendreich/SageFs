@@ -480,7 +480,9 @@ let getCompletions (code: string) (cursorPosition: int) (workingDirectory: strin
         {| code = code
            cursor_position = cursorPosition
            working_directory = workingDirectory |> Option.defaultValue "" |}
-      let! resp = dashHttpPost c "/dashboard/completions" (jsonStringify payload) 10000
+      // The dashboard endpoint is SSE for its live dropdown. Editor clients
+      // need the JSON contract exposed by the MCP HTTP API.
+      let! resp = httpPost c "/api/completions" (jsonStringify payload) 10000
       match resp.statusCode with
       | 200 ->
         let parsed = jsonParse resp.body

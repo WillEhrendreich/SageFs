@@ -1904,6 +1904,14 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     // Start a watchdog — if graceful shutdown takes too long, force exit
     System.Threading.Tasks.Task.Delay(5000).ContinueWith(fun (_: System.Threading.Tasks.Task) ->
       log.LogWarning("Graceful shutdown timed out — forcing exit")
+      // StopAll has its own graceful budget, but timer and watcher cleanup can
+      // consume the watchdog window before it runs. Sweep the session PIDs from
+      // the lock-free snapshot before exiting so the daemon never leaves its
+      // workers behind when graceful shutdown is delayed or wedged.
+      readSnapshot()
+      |> SessionManager.QuerySnapshot.allSessions
+      |> List.choose (fun session -> session.WorkerPid)
+      |> SessionManager.killWorkerPids
       Environment.Exit(1)) |> ignore
     try cts.Cancel() with :? ObjectDisposedException -> ())
 

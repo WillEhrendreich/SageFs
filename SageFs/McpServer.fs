@@ -1795,8 +1795,8 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
         | None -> raise (System.Text.Json.JsonException("Missing required cursorPosition/cursor_position"))
       let workingDirectory =
         tryGetJsonStringAliases root [ "workingDirectory"; "working_directory" ]
-      let! result = SageFs.McpTools.getCompletions rctx.McpContext "http" code cursor workingDirectory
-      do! rawJsonResponse ctx result
+      let! items = SageFs.McpTools.getCompletionsItems rctx.McpContext "http" code cursor workingDirectory
+      do! rawJsonResponse ctx (SageFs.McpAdapter.formatCompletionsJson items)
     } :> Task
   ) |> ignore
   app.MapGet("/api/dependency-graph", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

@@ -327,7 +327,7 @@ module SessionManager =
           try
             proc.StandardError.ReadToEnd()
           with _ -> ""
-        try proc.Kill() with ex2 ->
+        try proc.Kill(entireProcessTree = true) with ex2 ->
           Log.warn "[SessionManager] Kill on startup timeout: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
@@ -346,7 +346,7 @@ module SessionManager =
           try
             proc.StandardError.ReadToEnd()
           with _ -> ""
-        try proc.Kill() with ex2 ->
+        try proc.Kill(entireProcessTree = true) with ex2 ->
           Log.warn "[SessionManager] Kill on spawn failure: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
@@ -359,22 +359,54 @@ module SessionManager =
                | false -> sprintf "\nstderr:\n%s" stderrSummary)))
     }, ct)
 
-  /// Stop a worker gracefully: send Shutdown, wait, then kill.
+  /// Stop a worker gracefully: send Shutdown with a bounded wait, then kill the
+  /// whole process tree. The bounded wait is essential — HttpWorkerClient.httpProxy
+  /// has no request timeout, so a hung worker would otherwise block daemon shutdown
+  /// forever (StopAll times out and the daemon exits, orphaning workers — issue #126).
+  /// Kill uses entireProcessTree so any child processes (dotnet restore, compiler
+  /// server) spawned by the worker die with it instead of lingering on Windows.
   let stopWorker (session: ManagedSession) = async {
     try
-      let! _ = session.Proxy WorkerMessage.Shutdown
+      let shutdownTask =
+        session.Proxy WorkerMessage.Shutdown
+        |> Async.StartAsTask
+      let! completed =
+        System.Threading.Tasks.Task.WhenAny(
+          [| shutdownTask :> System.Threading.Tasks.Task
+             System.Threading.Tasks.Task.Delay(Timeouts.workerShutdownDelay) |])
+        |> Async.AwaitTask
+      if obj.ReferenceEquals(completed, shutdownTask) then
+        let! _ = shutdownTask |> Async.AwaitTask
+        ()
       let exited = session.Process.WaitForExit(3000)
       match exited with
       | false ->
-        try session.Process.Kill() with ex -> Log.warn "[SessionManager] Kill after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        try session.Process.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try session.Process.WaitForExit(2000) |> ignore with ex -> Log.warn "[SessionManager] WaitForExit after kill: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       | true -> ()
     with ex ->
       Log.warn "[SessionManager] Graceful shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-      try session.Process.Kill() with ex2 -> Log.warn "[SessionManager] Force kill failed: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      try session.Process.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Force kill failed: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
       try session.Process.WaitForExit(2000) |> ignore with ex2 -> Log.warn "[SessionManager] WaitForExit after force kill: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
     try session.Process.Dispose() with :? ObjectDisposedException -> ()
   }
+
+  /// Force-kill a set of worker process trees by PID, tolerating already-exited
+  /// or reaped PIDs. Used by the daemon's force-exit watchdog so a shutdown that
+  /// exceeds the graceful budget still kills every worker (issue #126: "sessions
+  /// not ending when main SageFs exit").
+  let killWorkerPids (pids: int list) : unit =
+    for pid in pids do
+      if pid > 0 then
+        try
+          use proc = Process.GetProcessById(pid)
+          if not proc.HasExited then
+            proc.Kill(entireProcessTree = true)
+        with
+        | :? ArgumentException -> ()   // no such process
+        | :? InvalidOperationException -> () // already exited
+        | ex ->
+          Log.warn "[SessionManager] KillWorkerPids failed for pid %d: %s\n%s" pid ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
   /// Run `dotnet build` for the primary project.
   /// Called from the daemon process (worker is already stopped).
@@ -487,7 +519,7 @@ module SessionManager =
       with
       | :? OperationCanceledException when not ct.IsCancellationRequested ->
         // Linked CTS fired: per-standby startup timeout, NOT daemon shutdown.
-        try proc.Kill() with ex2 ->
+        try proc.Kill(entireProcessTree = true) with ex2 ->
           Log.warn "[SessionManager] Kill standby on startup timeout: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
@@ -499,7 +531,7 @@ module SessionManager =
                (set SAGEFS_WORKER_STARTUP_TIMEOUT_MS to adjust)"
               SageFsConfig.WorkerStartupTimeoutMs))
       | ex ->
-        try proc.Kill() with ex2 -> Log.warn "[SessionManager] Kill standby on spawn failure: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        try proc.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Kill standby on spawn failure: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
         try proc.Dispose() with :? ObjectDisposedException -> ()
         inbox.Post(
           SessionCommand.StandbySpawnFailed(
@@ -507,22 +539,33 @@ module SessionManager =
             sprintf "Standby failed: %s" ex.Message))
     }, ct)
 
-  /// Stop a standby worker process (fire-and-forget).
+  /// Stop a standby worker process (fire-and-forget). Shutdown is bounded like
+  /// stopWorker so a hung standby cannot stall StopAll; kills use the whole tree.
   let stopStandbyWorker (standby: StandbySession) = async {
     try
       match standby.Proxy with
       | Some proxy ->
-        let! _ = proxy WorkerMessage.Shutdown
+        let shutdownTask =
+          proxy WorkerMessage.Shutdown
+          |> Async.StartAsTask
+        let! completed =
+          System.Threading.Tasks.Task.WhenAny(
+            [| shutdownTask :> System.Threading.Tasks.Task
+               System.Threading.Tasks.Task.Delay(Timeouts.workerShutdownDelay) |])
+          |> Async.AwaitTask
+        if obj.ReferenceEquals(completed, shutdownTask) then
+          let! _ = shutdownTask |> Async.AwaitTask
+          ()
         let exited = standby.Process.WaitForExit(3000)
         match exited with
         | false ->
-          try standby.Process.Kill() with ex -> Log.warn "[SessionManager] Kill standby after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+          try standby.Process.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill standby after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         | true -> ()
       | None ->
-        try standby.Process.Kill() with ex -> Log.warn "[SessionManager] Kill standby (no proxy): %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        try standby.Process.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill standby (no proxy): %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
     with ex ->
       Log.warn "[SessionManager] Standby shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-      try standby.Process.Kill() with ex2 -> Log.warn "[SessionManager] Force kill standby: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      try standby.Process.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Force kill standby: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
     try standby.Process.Dispose() with :? ObjectDisposedException -> ()
   }
 

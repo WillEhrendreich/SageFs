@@ -841,9 +841,13 @@ let httpApiRoutingTests =
 
         let status, body = postJson client "/api/completions" payload |> Async.AwaitTask |> Async.RunSynchronously
         status |> Expect.equal "200 OK" 200
-        body.StartsWith("Error:", StringComparison.Ordinal)
-        |> Expect.isFalse (sprintf "completions should route via workingDirectory, got: %s" body)
-        body |> Expect.stringContains "should include a System completion" "String"
+        use doc = JsonDocument.Parse(body)
+        let labels =
+          doc.RootElement.GetProperty("completions").EnumerateArray()
+          |> Seq.map (fun item -> item.GetProperty("label").GetString())
+          |> Seq.toList
+        labels |> List.contains "String"
+        |> Expect.isTrue (sprintf "completions should route via workingDirectory, got: %s" body)
       finally
         client.Dispose()
         killDaemon proc
@@ -873,9 +877,13 @@ let httpApiRoutingTests =
 
         let status, body = postJson client "/api/completions" payload |> Async.AwaitTask |> Async.RunSynchronously
         status |> Expect.equal "200 OK" 200
-        body.StartsWith("Error:", StringComparison.Ordinal)
-        |> Expect.isFalse (sprintf "completions should accept snake_case cursor_position, got: %s" body)
-        body |> Expect.stringContains "should include a System completion" "String"
+        use doc = JsonDocument.Parse(body)
+        let labels =
+          doc.RootElement.GetProperty("completions").EnumerateArray()
+          |> Seq.map (fun item -> item.GetProperty("label").GetString())
+          |> Seq.toList
+        labels |> List.contains "String"
+        |> Expect.isTrue (sprintf "completions should accept snake_case cursor_position, got: %s" body)
       finally
         client.Dispose()
         killDaemon proc

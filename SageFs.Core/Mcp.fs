@@ -1657,6 +1657,53 @@ module McpTools =
         | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
     })
 
+  /// Infer a conservative editor completion kind from the labels returned by
+  /// the worker transport. The worker currently sends display labels only, so
+  /// preserve useful VS Code metadata without pretending this is FCS glyph data.
+  let completionKindForLabel (label: string) : Features.AutoCompletion.CompletionKind =
+    match System.String.IsNullOrWhiteSpace label with
+    | true -> Features.AutoCompletion.CompletionKind.Variable
+    | false when label.Contains("(", System.StringComparison.Ordinal) ->
+      Features.AutoCompletion.CompletionKind.Method
+    | false when System.Char.IsUpper label[0] ->
+      Features.AutoCompletion.CompletionKind.Class
+    | false -> Features.AutoCompletion.CompletionKind.Variable
+
+  /// Get structured completion items for HTTP/editor clients. Unlike the MCP
+  /// tool's human-readable response, this path must always serialize as JSON.
+  let getCompletionsItems
+    (ctx: McpContext)
+    (agent: string)
+    (code: string)
+    (cursorPosition: int)
+    (workingDirectory: string option)
+    : Task<Features.AutoCompletion.CompletionItem list> =
+    task {
+      let! resolution = resolveSessionId ctx agent None workingDirectory
+      match resolution with
+      | Routable sid ->
+        let! routeResult =
+          routeToSession ctx sid
+            (fun replyId ->
+              WorkerProtocol.WorkerMessage.GetCompletions(
+                code,
+                cursorPosition,
+                WorkerProtocol.SessionId.value replyId))
+        return
+          match routeResult with
+          | Ok (WorkerProtocol.WorkerResponse.CompletionResult(_, completions)) ->
+            completions
+            |> List.map (fun label ->
+              let item : Features.AutoCompletion.CompletionItem =
+                { DisplayText = label
+                  ReplacementText = label
+                  Kind = completionKindForLabel label
+                  GetDescription = None }
+              item)
+          | _ -> []
+      | _ -> return []
+    }
+
   let exploreQualifiedName (ctx: McpContext) (agent: string) (qualifiedName: string) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun sid -> task {
       let code = sprintf "%s." qualifiedName
