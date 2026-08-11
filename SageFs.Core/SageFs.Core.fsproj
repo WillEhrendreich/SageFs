@@ -202,6 +202,11 @@
         <PackageReference Include="FSharp.SystemTextJson" />
         <PackageReference Include="FsToolkit.ErrorHandling" />
         <PackageReference Include="Microsoft.Data.Sqlite" />
+        <!-- Direct reference to the native SQLite library: pins the transitive
+             SQLitePCLRaw.lib.e_sqlite3 to a version bundling SQLite >= 3.50.2,
+             resolving CVE-2025-6965 (GHSA-2m69-gcr7-jv3q). The 2.1.x managed
+             provider is ABI-compatible with the patched native lib. -->
+        <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="Mono.Cecil" GeneratePathProperty="true" />
     </ItemGroup>

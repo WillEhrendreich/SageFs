@@ -46,6 +46,12 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.58.0" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="9.0.1" />
+    <!-- CVE-2025-6965 (GHSA-2m69-gcr7-jv3q): SQLitePCLRaw.lib.e_sqlite3 <= 2.1.11
+         bundles SQLite < 3.50.2 (memory corruption, high severity). 2.1.12 is the
+         first patched release; Microsoft.Data.Sqlite still resolves the bundle
+         to 2.1.11 transitively, so the native lib is pinned directly (see
+         SageFs.Core.fsproj). -->
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
     <PackageVersion Include="NetMQ" Version="4.0.2.2" />
     <PackageVersion Include="Raylib-cs" Version="7.0.2" />
     <PackageVersion Include="SageTUI" Version="0.9.4" />
