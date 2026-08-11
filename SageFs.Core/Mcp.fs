@@ -751,14 +751,19 @@ module McpTools =
   type RouteError =
     | Message of string
     | TransportFailure of string
+    /// Session is deliberately starting/restarting; transport unavailability is
+    /// expected and must not be treated as a crash.
+    | RestartInProgress of string
 
   let routeErrorMessage = function
     | Message msg -> msg
     | TransportFailure msg -> msg
+    | RestartInProgress msg -> msg
 
   let routeErrorIsTransportFailure = function
     | TransportFailure _ -> true
     | Message _ -> false
+    | RestartInProgress _ -> false
 
   let innermostException (ex: exn) =
     let rec loop (current: exn) =
@@ -832,20 +837,95 @@ module McpTools =
           | ex ->
             match tryMapTransportFailure sessionId ex with
             | Some transportError ->
-              ctx.SessionOps.NotifyWorkerDied validId
-              do! ctx.SessionOps.UpdateSessionStatus validId WorkerProtocol.SessionStatus.Faulted
-              return Result.Error transportError
+              // INVARIANT (reader cannot fault a starting/restarting session):
+              // a transport failure observed while the SessionManager is
+              // deliberately respawning the worker is expected — the worker is
+              // being swapped. It must NOT NotifyWorkerDied (which posts a
+              // synthetic WorkerExited(pid=-1) that the stale-pid guards do not
+              // catch and which can schedule a second restart) and must NOT mark
+              // the session Faulted. Only the restart owner faults a restarting
+              // session.
+              // Discriminator: a daemon-owned restart sets Status to
+              // Starting/Restarting AND clears WorkerPid (SessionManager cold-
+              // restart path). A caller-driven reset (resetSession / hardReset
+              // rebuild=false) flips Status via UpdateSessionStatus, which
+              // PRESERVES WorkerPid — so a transport failure there is a real
+              // worker death and must trigger NotifyWorkerDied recovery.
+              let! info = ctx.SessionOps.GetSessionInfo validId
+              match info with
+              | Some i when (i.Status = WorkerProtocol.SessionStatus.Starting
+                            || i.Status = WorkerProtocol.SessionStatus.Restarting)
+                          && i.WorkerPid.IsNone ->
+                return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Poll get_fsi_status every 5-10s; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionStatus.label i.Status)))
+              | _ ->
+                ctx.SessionOps.NotifyWorkerDied validId
+                do! ctx.SessionOps.UpdateSessionStatus validId WorkerProtocol.SessionStatus.Faulted
+                return Result.Error transportError
             | None ->
               return raise ex
     }
 
+  /// Typed outcome of resolving which session a tool call should target.
+  /// Guidance text is a pure function of this union: a session that exists in
+  /// the registry is never reported as gone. `Gone` is produced only when the
+  /// session is genuinely absent (never created, or explicitly stopped).
+  type SessionResolution =
+    | Routable of sessionId: string
+    | WarmingUp of sessionId: string * status: WorkerProtocol.SessionStatus
+    | Unroutable of sessionId: string * status: WorkerProtocol.SessionStatus
+    | FaultedSession of sessionId: string
+    | Gone of message: string
+
+  /// Pure classification: decide the resolution from registry knowledge.
+  /// INVARIANT: `Gone` is produced only when the session is absent from the
+  /// registry; an existing session is always Routable, WarmingUp, Unroutable,
+  /// or FaultedSession — never Gone.
+  let classifySessionAvailability
+    (info: WorkerProtocol.SessionInfo option)
+    (proxyAvailable: bool)
+    : SessionResolution =
+    match info with
+    | Some i when proxyAvailable -> Routable (WorkerProtocol.SessionId.value i.Id)
+    | Some i ->
+      match i.Status with
+      | WorkerProtocol.SessionStatus.Starting
+      | WorkerProtocol.SessionStatus.Restarting ->
+        WarmingUp (WorkerProtocol.SessionId.value i.Id, i.Status)
+      | WorkerProtocol.SessionStatus.Faulted
+      | WorkerProtocol.SessionStatus.Stopped ->
+        FaultedSession (WorkerProtocol.SessionId.value i.Id)
+      | _ ->
+        Unroutable (WorkerProtocol.SessionId.value i.Id, i.Status)
+    | None ->
+      Gone "Session is no longer running. Use create_session to start a new one."
+
+  /// Pure guidance: the agent-facing message for a resolution.
+  /// INVARIANT: "create_session" and "no longer running" appear only in the
+  /// Gone case — an existing session is never presented as missing.
+  let formatSessionResolution = function
+    | Routable _ -> ""
+    | WarmingUp (sid, status) ->
+      sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionStatus.label status)
+    | Unroutable (sid, status) ->
+      sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_fsi_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionStatus.label status)
+    | FaultedSession sid ->
+      sprintf "Session '%s' is faulted. Run reset_fsi_session or hard_reset_fsi_session to recover." sid
+    | Gone msg -> msg
+
   /// Route to the active session or the specified session.
   /// When no agent mapping exists, resolves by the caller's working directory.
-  /// Returns Error with a user-friendly message when no session is available.
-  let resolveSessionId (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<Result<string, string>> =
+  /// Returns a typed SessionResolution — never a lying string.
+  let resolveSessionId (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<SessionResolution> =
     task {
       match sessionId with
-      | Some sid -> return Ok sid
+      | Some sid ->
+        let validId = toSessionId sid
+        let! proxy = ctx.SessionOps.GetProxy validId
+        match proxy with
+        | Some _ -> return Routable sid
+        | None ->
+          let! info = ctx.SessionOps.GetSessionInfo validId
+          return classifySessionAvailability info false
       | None ->
         let! candidateResult =
           task {
@@ -865,26 +945,29 @@ module McpTools =
               return Ok (activeSessionId ctx agent)
           }
         match candidateResult with
-        | Error msg ->
-          return Error msg
+        | Error msg -> return Gone msg
         | Ok candidate when candidate <> "" ->
           let validCandidate = toSessionId candidate
           let! proxy = ctx.SessionOps.GetProxy validCandidate
           match proxy with
-          | Some _ -> return Ok candidate
+          | Some _ -> return Routable candidate
           | None ->
-            // Proxy not available — check if session is still starting up
             let! info = ctx.SessionOps.GetSessionInfo validCandidate
             match info with
             | Some i when i.Status = WorkerProtocol.SessionStatus.Starting
                        || i.Status = WorkerProtocol.SessionStatus.Restarting ->
-              return Error (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Use get_recent_fsi_events to monitor warmup progress. Do NOT use sleep loops or create a new session — it will compete for resources and make warmup slower." candidate (WorkerProtocol.SessionStatus.label i.Status))
-            | Some _ ->
               setActiveSessionId ctx agent ""
-              return Error "Session is no longer running. Use create_session to start a new one."
+              return WarmingUp (candidate, i.Status)
+            | Some i when i.Status = WorkerProtocol.SessionStatus.Faulted
+                       || i.Status = WorkerProtocol.SessionStatus.Stopped ->
+              setActiveSessionId ctx agent ""
+              return FaultedSession candidate
+            | Some i ->
+              setActiveSessionId ctx agent ""
+              return Unroutable (candidate, i.Status)
             | None ->
               setActiveSessionId ctx agent ""
-              return Error "Session is no longer running. Use create_session to start a new one."
+              return Gone "Session is no longer running. Use create_session to start a new one."
         | Ok _ ->
           let! sessions = ctx.SessionOps.GetAllSessions()
           let currentDir = Environment.CurrentDirectory
@@ -893,26 +976,58 @@ module McpTools =
           | [ currentDirSession ] ->
             let sid = WorkerProtocol.SessionId.value currentDirSession.Id
             setActiveSessionId ctx agent sid
-            return Ok sid
+            let! proxy = ctx.SessionOps.GetProxy (toSessionId sid)
+            match proxy with
+            | Some _ -> return Routable sid
+            | None ->
+              let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+              return classifySessionAvailability info false
           | _ :: _ :: _ as matches ->
-            return Error (formatWorkingDirectoryAmbiguity "Multiple sessions match the current working directory" currentDir matches)
+            return Gone (formatWorkingDirectoryAmbiguity "Multiple sessions match the current working directory" currentDir matches)
           | [] ->
             match sessions with
             | [ singleSession ] ->
               let sid = WorkerProtocol.SessionId.value singleSession.Id
               setActiveSessionId ctx agent sid
-              return Ok sid
+              let! proxy = ctx.SessionOps.GetProxy (toSessionId sid)
+              match proxy with
+              | Some _ -> return Routable sid
+              | None ->
+                let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+                return classifySessionAvailability info false
             | _ ->
-              return Error "No active session. Use create_session to create one first."
+              return Gone "No active session. Use create_session to create one first."
     }
 
   /// Helper: run a function with the resolved session ID, or return the error message.
   let withSession (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) (f: string -> Task<string>) : Task<string> =
     task {
-      let! resolved = resolveSessionId ctx agent sessionId workingDirectory
-      match resolved with
-      | Ok sid -> return! f sid
-      | Error msg -> return sprintf "Error: %s" msg
+      let! resolution = resolveSessionId ctx agent sessionId workingDirectory
+      match resolution with
+      | Routable sid -> return! f sid
+      | other -> return sprintf "Error: %s" (formatSessionResolution other)
+    }
+
+  /// Recovery variant for tools that must be able to reach a session that
+  /// needs recovery even when its worker proxy is not installed:
+  /// reset_fsi_session and hard_reset_fsi_session are exactly how an agent
+  /// recovers from Faulted, so FaultedSession routes through to the handler
+  /// (which re-spawns via SessionManager). Unroutable (status Ready/Evaluating/
+  /// Building but no proxy — the transitional window where the registry is
+  /// ahead of proxy installation) also routes through: the reset path goes via
+  /// SessionManagementOps, not the worker proxy, so it does not need the proxy;
+  /// a rebuild=false reset on a proxy-less session fails gracefully through the
+  /// transport-error path.
+  /// ONLY WarmingUp (Starting/Restarting) blocks — restarting a session that is
+  /// already restarting is the bug we are preventing.
+  let withSessionAllowFaulted (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) (f: string -> Task<string>) : Task<string> =
+    task {
+      let! resolution = resolveSessionId ctx agent sessionId workingDirectory
+      match resolution with
+      | Routable sid -> return! f sid
+      | FaultedSession sid -> return! f sid
+      | Unroutable (sid, _) -> return! f sid
+      | other -> return sprintf "Error: %s" (formatSessionResolution other)
     }
 
   /// Overload without sessionId parameter (uses None).
@@ -1158,9 +1273,9 @@ module McpTools =
 
   let getStatus (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     task {
-      let! resolved = resolveSessionId ctx agent sessionId workingDirectory
-      match resolved with
-      | Error _noSessionMsg ->
+      let! resolution = resolveSessionId ctx agent sessionId workingDirectory
+      match resolution with
+      | Gone msg ->
         // No session found — return useful status instead of an error.
         // This prevents SessionMissing friction on the most-called tool.
         let! sessions = ctx.SessionOps.GetAllSessions()
@@ -1174,7 +1289,27 @@ module McpTools =
                  | 0 -> "No sessions exist. Use create_session to load a project, or get_available_projects to discover .fsproj files."
                  | _ -> sprintf "%d session(s) exist but none matched the working directory. Use list_sessions to see them, or switch_session to select one." sessionCount
                available = availableTools |})
-      | Ok sid ->
+      | WarmingUp (sid, status) | Unroutable (sid, status) ->
+        // INVARIANT (get_fsi_status is total): a session that exists but is
+        // starting, restarting, or not yet routable is reported as a structured
+        // "Rebuilding" state — never as a transport error and never as missing.
+        let availableTools = Affordances.availableTools SessionState.WarmingUp
+        return
+          System.Text.Json.JsonSerializer.Serialize(
+            {| state = "Rebuilding"
+               sessionId = sid
+               status = WorkerProtocol.SessionStatus.label status
+               message = formatSessionResolution resolution
+               available = availableTools |})
+      | FaultedSession sid ->
+        let availableTools = Affordances.availableTools SessionState.Faulted
+        return
+          System.Text.Json.JsonSerializer.Serialize(
+            {| state = "Faulted"
+               sessionId = sid
+               message = formatSessionResolution resolution
+               available = availableTools |})
+      | Routable sid ->
         let eventCount = 0  // EventTracking removed — event count not tracked
         let! routeResult =
           routeToSession ctx sid
@@ -1207,6 +1342,16 @@ module McpTools =
           return enriched
         | Ok other ->
           return sprintf "Unexpected response: %A" other
+        | Error (RestartInProgress msg) ->
+          // Session became unroutable mid-flight (e.g., worker swapped under us).
+          // Report it as Rebuilding, not as a crash.
+          let availableTools = Affordances.availableTools SessionState.WarmingUp
+          return
+            System.Text.Json.JsonSerializer.Serialize(
+              {| state = "Rebuilding"
+                 sessionId = sid
+                 message = msg
+                 available = availableTools |})
         | Error msg ->
           return sprintf "Error getting status: %s" (routeErrorMessage msg)
     }
@@ -1322,7 +1467,7 @@ module McpTools =
     })
 
   let resetSession (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
-    withSession ctx agent sessionId workingDirectory (fun sid -> task {
+    withSessionAllowFaulted ctx agent sessionId workingDirectory (fun sid -> task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
       let previousStatus =
         info
@@ -1391,7 +1536,7 @@ module McpTools =
     })
 
   let hardResetSession (ctx: McpContext) (agent: string) (rebuild: bool) (sessionId: string option) (workingDirectory: string option) : Task<string> =
-    withSession ctx agent sessionId workingDirectory (fun sid -> task {
+    withSessionAllowFaulted ctx agent sessionId workingDirectory (fun sid -> task {
       notifyElm ctx (
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
       match rebuild with
@@ -1411,16 +1556,31 @@ module McpTools =
         // to fail with "still warming up" or SessionMissing friction.
         task {
           try
-            let! result = ctx.SessionOps.RestartSession (toSessionId sid) true
-            match result with
-            | Ok msg ->
-              do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
+            // Second-line defense against competing restarts: the primary guard
+            // (resolveSessionId → WarmingUp/Unroutable) stops a reader from even
+            // entering hardReset while a session is starting or restarting. This
+            // check covers the narrow race where this tool call was admitted just
+            // before another restart marked the registry `Restarting`: if so, that
+            // restart owns the recovery — do NOT schedule a competing RestartSession
+            // (SessionManager serializes them, but a queued second restart would
+            // discard the first one's brand-new worker for no reason).
+            let! inFlightInfo = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+            match inFlightInfo with
+            | Some i when i.Status = WorkerProtocol.SessionStatus.Restarting ->
               notifyElm ctx (
-                SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-            | Error err ->
-              do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
-              notifyElm ctx (
-                SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+                SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
+              ()
+            | _ ->
+              let! result = ctx.SessionOps.RestartSession (toSessionId sid) true
+              match result with
+              | Ok msg ->
+                do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
+                notifyElm ctx (
+                  SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+              | Error err ->
+                do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+                notifyElm ctx (
+                  SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
           with ex ->
             do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
             notifyElm ctx (
@@ -1715,10 +1875,11 @@ module McpTools =
         return sprintf "Error: unknown workflow '%s'. Valid values: 'interactive' (REPL), 'weblive' (Live)" targetStr
       | Some target ->
       // 2. Resolve session from working directory
-      let! resolved = resolveSessionId ctx agent None workingDirectory
-      match resolved with
-      | Error msg -> return msg
-      | Ok sid ->
+      let! resolution = resolveSessionId ctx agent None workingDirectory
+      match resolution with
+      | WarmingUp _ | Unroutable _ | FaultedSession _ | Gone _ as other ->
+        return sprintf "Error: %s" (formatSessionResolution other)
+      | Routable sid ->
       // 3. Get session info for current workflow
       let validId = toSessionId sid
       let! info = ctx.SessionOps.GetSessionInfo validId

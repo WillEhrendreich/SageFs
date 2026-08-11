@@ -299,14 +299,14 @@ module WorkingDirRoutingPriority =
       let ctx = mkCtx [s1;s2] (Map.ofList ["5a6e0001",dummyProxy;"4a120002",dummyProxy])
       setActiveSessionId ctx "mcp" "5a6e0001"
       let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
-      resolved |> Expect.equal "should route to Harmony based on workingDirectory" (Ok "4a120002")
+      resolved |> Expect.equal "should route to Harmony based on workingDirectory" (Routable "4a120002")
     }
     testTask "workingDirectory routes correctly when no cached session" {
       let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
       let s2 = mkInfo (testSessionId "4a120002") @"C:\Code\Repos\Harmony"
       let ctx = mkCtx [s1;s2] (Map.ofList ["5a6e0001",dummyProxy;"4a120002",dummyProxy])
       let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Harmony")
-      resolved |> Expect.equal "should route to Harmony via workingDirectory" (Ok "4a120002")
+      resolved |> Expect.equal "should route to Harmony via workingDirectory" (Routable "4a120002")
     }
     testTask "workingDirectory returns an ambiguity error when multiple sessions share the same directory" {
       let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
@@ -315,21 +315,23 @@ module WorkingDirRoutingPriority =
       setActiveSessionId ctx "mcp" "5a6e0001"
       let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\SageFs")
       match resolved with
-      | Ok sid ->
+      | Routable sid ->
         failtestf "expected workingDirectory ambiguity error but resolved '%s'" sid
-      | Error msg ->
+      | Gone msg ->
         msg |> Expect.stringContains "should describe the ambiguity" "Multiple sessions match workingDirectory"
         msg |> Expect.stringContains "should list the first matching session" "5a6e0001"
         msg |> Expect.stringContains "should list the second matching session" "4a120002"
         activeSessionId ctx "mcp"
         |> Expect.equal "cached session should remain unchanged after ambiguity" "5a6e0001"
+      | other ->
+        failtestf "expected Gone ambiguity error but got %A" other
     }
     testTask "explicit sessionId always wins over workingDirectory" {
       let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
       let s2 = mkInfo (testSessionId "4a120002") @"C:\Code\Repos\Harmony"
       let ctx = mkCtx [s1;s2] (Map.ofList ["5a6e0001",dummyProxy;"4a120002",dummyProxy])
       let! resolved = resolveSessionId ctx "mcp" (Some "5a6e0001") (Some @"C:\Code\Repos\Harmony")
-      resolved |> Expect.equal "explicit sessionId takes priority" (Ok "5a6e0001")
+      resolved |> Expect.equal "explicit sessionId takes priority" (Routable "5a6e0001")
     }
     testTask "workingDirectory updates the cached session" {
       let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
@@ -344,13 +346,13 @@ module WorkingDirRoutingPriority =
       let ctx = mkCtx [s1] (Map.ofList ["5a6e0001",dummyProxy])
       setActiveSessionId ctx "mcp" "5a6e0001"
       let! resolved = resolveSessionId ctx "mcp" None None
-      resolved |> Expect.equal "should fall back to cached when no workingDirectory" (Ok "5a6e0001")
+      resolved |> Expect.equal "should fall back to cached when no workingDirectory" (Routable "5a6e0001")
     }
     testTask "falls back to the only session when no active session is cached" {
       let s1 = mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs"
       let ctx = mkCtx [s1] (Map.ofList ["5a6e0001",dummyProxy])
       let! resolved = resolveSessionId ctx "mcp" None None
-      resolved |> Expect.equal "single session should be used automatically" (Ok "5a6e0001")
+      resolved |> Expect.equal "single session should be used automatically" (Routable "5a6e0001")
       activeSessionId ctx "mcp" |> Expect.equal "single session should become cached" "5a6e0001"
     }
     testTask "returns an explicit error when workingDirectory does not match any session" {
@@ -358,10 +360,12 @@ module WorkingDirRoutingPriority =
       let ctx = mkCtx [s1] (Map.ofList ["5a6e0001",dummyProxy])
       let! resolved = resolveSessionId ctx "mcp" None (Some @"C:\Code\Repos\Other")
       match resolved with
-      | Ok sid -> failtestf "expected workingDirectory mismatch error, got session '%s'" sid
-      | Error msg ->
+      | Routable sid -> failtestf "expected workingDirectory mismatch error, got session '%s'" sid
+      | Gone msg ->
         msg |> Expect.stringContains "should explain mismatch" "No sessions match workingDirectory"
-      activeSessionId ctx "mcp" |> Expect.equal "cached session should remain unchanged" ""
+        activeSessionId ctx "mcp" |> Expect.equal "cached session should remain unchanged" ""
+      | other ->
+        failtestf "expected Gone mismatch error but got %A" other
     }
     testTask "falls back to the session matching the daemon current directory" {
       let originalDir = Environment.CurrentDirectory
@@ -377,7 +381,7 @@ module WorkingDirRoutingPriority =
         let ctx =
           mkCtx [currentSession; otherSession] (Map.ofList ["5a6e0001",dummyProxy; "4a120002",dummyProxy])
         let! resolved = resolveSessionId ctx "mcp" None None
-        resolved |> Expect.equal "current directory session should be selected" (Ok "5a6e0001")
+        resolved |> Expect.equal "current directory session should be selected" (Routable "5a6e0001")
         activeSessionId ctx "mcp" |> Expect.equal "current directory session should become cached" "5a6e0001"
       finally
         Environment.CurrentDirectory <- originalDir
@@ -399,14 +403,16 @@ module WorkingDirRoutingPriority =
           mkCtx [currentA; currentB; otherSession] (Map.ofList ["5a6e0001",dummyProxy; "4a120002",dummyProxy; "8c340003",dummyProxy])
         let! resolved = resolveSessionId ctx "mcp" None None
         match resolved with
-        | Ok sid ->
+        | Routable sid ->
           failtestf "expected current directory ambiguity error but resolved '%s'" sid
-        | Error msg ->
+        | Gone msg ->
           msg |> Expect.stringContains "should describe the ambiguity" "Multiple sessions match the current working directory"
           msg |> Expect.stringContains "should list the first matching session" "5a6e0001"
           msg |> Expect.stringContains "should list the second matching session" "4a120002"
           activeSessionId ctx "mcp"
           |> Expect.equal "cache should remain empty after ambiguity" ""
+        | other ->
+          failtestf "expected Gone ambiguity error but got %A" other
       finally
         Environment.CurrentDirectory <- originalDir
         try Directory.Delete(root, true) with _ -> ()
@@ -563,7 +569,12 @@ module ResetIsolation =
         SolutionRoot = None
         Status = !registryStatus
         FaultReason = None
-        WorkerPid = None
+        // A Ready worker has a live process. WorkerPid discriminates a
+        // caller-driven reset (UpdateSessionStatus preserves WorkerPid) from a
+        // SessionManager-owned restart (cold restart clears WorkerPid): a
+        // transport failure on a worker with a pid is a REAL death and must
+        // trigger NotifyWorkerDied recovery, not the restart-in-progress path.
+        WorkerPid = Some 4242
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow }
@@ -712,7 +723,10 @@ module ResetIsolation =
 
       let! _ = hardResetSession ctx "agent1" false (Some "aaa00001") None
 
-      routedSessions |> Seq.toList
+      // GetProxy is consulted twice: once by session resolution (to classify
+      // routability) and once by routeToSession (to send). Both lookups are on
+      // the SAME session — the invariant is that no OTHER session is touched.
+      routedSessions |> Seq.toList |> Seq.distinct |> Seq.toList
       |> Expect.equal "only session-AAA routed" ["aaa00001"]
 
       restartLog.Count
@@ -727,7 +741,9 @@ module ResetIsolation =
 
       let! _ = resetSession ctx "agent1" (Some "aaa00001") None
 
-      routedSessions |> Seq.toList
+      // See above: resolution + routing each consult the proxy, both on the
+      // same targeted session.
+      routedSessions |> Seq.toList |> Seq.distinct |> Seq.toList
       |> Expect.equal "only session-AAA routed" ["aaa00001"]
 
       restartLog.Count
@@ -803,6 +819,108 @@ module ResetIsolation =
       |> Expect.equal
         "transport failures should leave the snapshot faulted"
         WorkerProtocol.SessionStatus.Faulted
+    }
+
+    testTask "transport failure during a daemon-owned restart returns poll guidance without faulting the session" {
+      // Scenario: the SessionManager is mid-restart (Status=Restarting AND
+      // WorkerPid=None — the cold-restart registry shape). A reader that
+      // captured a stale proxy observes a transport failure. This must NOT
+      // NotifyWorkerDied (would schedule a competing restart) and must NOT
+      // mark the session Faulted (only the restart owner faults a restarting
+      // session).
+      let result = globalActorResult.Value
+      let sid = testSessionId "aaa00001"
+      let sidStr = WorkerProtocol.SessionId.value sid
+      let sessionMap = ConcurrentDictionary<string, string>()
+      sessionMap.["agent1"] <- sidStr
+      let statuses = ResizeArray<WorkerProtocol.SessionStatus>()
+      let workerDied = System.Collections.Generic.List<string>()
+
+      let transportFailure =
+        let connectionClosed =
+          System.IO.IOException(
+            "Unable to read data from the transport connection: An existing connection was forcibly closed by the remote host.")
+        System.Net.Http.HttpRequestException("An error occurred while sending the request.", connectionClosed)
+
+      let sessionInfo () : WorkerProtocol.SessionInfo =
+        { Id = sid
+          Name = None
+          Projects = []
+          WorkingDirectory = @"C:\Code\Repos\SageFs"
+          SolutionRoot = None
+          Status = WorkerProtocol.SessionStatus.Restarting
+          FaultReason = None
+          // Daemon-owned restart shape: WorkerPid cleared by the cold-restart path.
+          WorkerPid = None
+          Workflow = WorkflowTypes.SessionWorkflow.Interactive
+          CreatedAt = DateTime.UtcNow
+          LastActivity = DateTime.UtcNow }
+
+      let proxy : WorkerProtocol.SessionProxy =
+        fun msg ->
+          async {
+            match msg with
+            | WorkerProtocol.WorkerMessage.HardResetSession _ ->
+              return raise (AggregateException transportFailure)
+            | other ->
+              return failwithf "unexpected worker message in restart-in-progress test: %A" other
+          }
+
+      let ops : SessionManagementOps = {
+        CreateSession = fun _ _ _ -> Task.FromResult(Ok "new-session")
+        ListSessions = fun () -> Task.FromResult("No sessions")
+        StopSession = fun _ -> Task.FromResult(Ok "stopped")
+        RestartSession = fun _ _ -> Task.FromResult(Ok "restarted")
+        GetProxy = fun sessionId ->
+          match sessionId = sid with
+          | true -> Task.FromResult(Some proxy)
+          | false -> Task.FromResult(None)
+        GetSessionInfo = fun sessionId ->
+          match sessionId = sid with
+          | true -> Task.FromResult(Some (sessionInfo ()))
+          | false -> Task.FromResult(None)
+        GetAllSessions = fun () -> Task.FromResult([ sessionInfo () ])
+        UpdateSessionStatus = fun _ status ->
+          statuses.Add(status)
+          Task.FromResult(())
+        GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
+        NotifyWorkerDied = fun sessionId ->
+          workerDied.Add(WorkerProtocol.SessionId.value sessionId) }
+
+      let ctx =
+        { FrictionStore = None
+          DiagnosticsChanged = result.DiagnosticsChanged
+          StateChanged = None
+          SessionOps = ops
+          SessionMap = sessionMap
+          McpPort = 0
+          Dispatch = None
+          GetElmModel = None
+          GetElmRegions = None
+          GetWarmupContext = None
+          GetFeatureState = None
+          ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+
+      let! result = hardResetSession ctx "agent1" false (Some sidStr) None
+
+      result
+      |> Expect.stringContains
+        "restart-in-progress guidance should tell the agent to poll and not retry"
+        "do NOT retry hard_reset_fsi_session"
+
+      workerDied |> Seq.toList
+      |> Expect.equal
+        "a daemon-owned restart must not post NotifyWorkerDied"
+        []
+
+      statuses |> Seq.toList
+      |> Expect.contains
+        "a daemon-owned restart keeps the session Restarting"
+        WorkerProtocol.SessionStatus.Restarting
+
+      statuses.Contains WorkerProtocol.SessionStatus.Faulted
+      |> Expect.isFalse
+        "a daemon-owned restart must not be marked Faulted by a reader"
     }
 
     testTask "WHY — hardResetSession with rebuild=true — updates snapshot to Faulted when RestartSession returns Error because stale Restarting snapshot causes subsequent tool calls to fail silently" {
@@ -972,8 +1090,14 @@ module ResetIsolation =
       restartLog |> Seq.toList
       |> Expect.equal "only AAA was restarted" [("aaa00001", true)]
 
+      // Lookup pattern per operation, with the typed resolver in play:
+      // agent1's rebuild hard reset consults the proxy once during session
+      // resolution (no proxy routing — rebuild goes via SessionManager ops).
+      // agent2's soft reset consults the proxy once during resolution and once
+      // during routing. Both operations touch ONLY their own session — any
+      // cross-session lookup would change this exact list.
       routedSessions |> Seq.toList
-      |> Expect.equal "only BBB was routed for soft reset" ["bbb00002"]
+      |> Expect.equal "only AAA and BBB touched, each by its own operation" ["aaa00001"; "bbb00002"; "bbb00002"]
 
       ctx.SessionMap.["agent1"]
       |> Expect.equal "agent1 still on AAA" "aaa00001"

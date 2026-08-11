@@ -700,8 +700,23 @@ module SessionManager =
                   Async.Start(runtime.StopStandbyWorker s, ct)
                   PoolState.removeStandby key state.Pool
                 | None -> state.Pool
+              // INVARIANT (registry preservation): a session undergoing a hard reset
+              // stays registered for the whole restart, marked `Restarting`, so no
+              // reader can observe a missing session mid-restart — that previously
+              // produced "Session is no longer running. Use create_session" guidance
+              // and duplicate-session churn. WorkerPid is cleared so the old worker's
+              // real exit event is ignored by the WorkerExited stale-pid guard.
+              // Mirrors the crash-recovery path (ExitOutcome.RestartAfter → Restarting).
               let stateAfterStop =
-                { ManagerState.removeSession id state with Pool = poolAfterKill }
+                let restarting =
+                  { session with
+                      Info = { session.Info with Status = SessionStatus.Restarting; WorkerPid = None }
+                      Proxy = pendingProxy
+                      WorkerBaseUrl = "" }
+                let afterMark = ManagerState.addSession id restarting state
+                { afterMark with
+                    Pool = poolAfterKill
+                    WarmupProgress = Map.remove id afterMark.WarmupProgress }
               let! buildResult =
                 match rebuild with
                 | true -> runtime.RunBuildAsync session.Projects session.WorkingDir
