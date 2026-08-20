@@ -257,7 +257,10 @@ module SessionManager =
       Error (SageFsError.WorkerSpawnFailed "Failed to start worker process")
     | true ->
       let workerPid = proc.Id
-      proc.Exited.Add(fun _ -> onExited workerPid proc.ExitCode)
+      proc.Exited.Add(fun _ ->
+        try
+          onExited workerPid proc.ExitCode
+        with _ -> ())
       Ok proc
 
   /// Read the worker's stdout until WORKER_PORT is reported, then post
@@ -295,7 +298,8 @@ module SessionManager =
               stderrLines.ToArray()
               |> Array.truncate 20
               |> String.concat "\n"
-            try proc.Dispose() with :? ObjectDisposedException -> ()
+            try proc.EnableRaisingEvents <- false with _ -> ()
+            try proc.Dispose() with _ -> ()
             inbox.Post(
               SessionCommand.WorkerSpawnFailed(
                 sessionId,
@@ -328,8 +332,9 @@ module SessionManager =
             proc.StandardError.ReadToEnd()
           with _ -> ""
         try proc.Kill(entireProcessTree = true) with ex2 ->
-          Log.warn "[SessionManager] Kill on startup timeout: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        try proc.Dispose() with :? ObjectDisposedException -> ()
+          Log.warn "[SessionManager] Kill on startup timeout: %s" ex2.Message
+        try proc.EnableRaisingEvents <- false with _ -> ()
+        try proc.Dispose() with _ -> ()
         inbox.Post(
           SessionCommand.WorkerSpawnFailed(
             sessionId,
@@ -347,8 +352,9 @@ module SessionManager =
             proc.StandardError.ReadToEnd()
           with _ -> ""
         try proc.Kill(entireProcessTree = true) with ex2 ->
-          Log.warn "[SessionManager] Kill on spawn failure: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        try proc.Dispose() with :? ObjectDisposedException -> ()
+          Log.warn "[SessionManager] Kill on spawn failure: %s" ex2.Message
+        try proc.EnableRaisingEvents <- false with _ -> ()
+        try proc.Dispose() with _ -> ()
         inbox.Post(
           SessionCommand.WorkerSpawnFailed(
             sessionId, proc.Id,
@@ -366,29 +372,41 @@ module SessionManager =
   /// Kill uses entireProcessTree so any child processes (dotnet restore, compiler
   /// server) spawned by the worker die with it instead of lingering on Windows.
   let stopWorker (session: ManagedSession) = async {
-    try
-      let shutdownTask =
-        session.Proxy WorkerMessage.Shutdown
-        |> Async.StartAsTask
-      let! completed =
-        System.Threading.Tasks.Task.WhenAny(
-          [| shutdownTask :> System.Threading.Tasks.Task
-             System.Threading.Tasks.Task.Delay(Timeouts.workerShutdownDelay) |])
-        |> Async.AwaitTask
-      if obj.ReferenceEquals(completed, shutdownTask) then
-        let! _ = shutdownTask |> Async.AwaitTask
-        ()
-      let exited = session.Process.WaitForExit(3000)
-      match exited with
-      | false ->
-        try session.Process.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        try session.Process.WaitForExit(2000) |> ignore with ex -> Log.warn "[SessionManager] WaitForExit after kill: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-      | true -> ()
-    with ex ->
-      Log.warn "[SessionManager] Graceful shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-      try session.Process.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Force kill failed: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-      try session.Process.WaitForExit(2000) |> ignore with ex2 -> Log.warn "[SessionManager] WaitForExit after force kill: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-    try session.Process.Dispose() with :? ObjectDisposedException -> ()
+    let proc = session.Process
+    let hasExited = try proc.HasExited with _ -> true
+    match hasExited with
+    | true ->
+      try proc.EnableRaisingEvents <- false with _ -> ()
+      try proc.Dispose() with _ -> ()
+    | false ->
+      try
+        let shutdownTask =
+          session.Proxy WorkerMessage.Shutdown
+          |> Async.StartAsTask
+        let! completed =
+          System.Threading.Tasks.Task.WhenAny(
+            [| shutdownTask :> System.Threading.Tasks.Task
+               System.Threading.Tasks.Task.Delay(Timeouts.workerShutdownDelay) |])
+          |> Async.AwaitTask
+        if obj.ReferenceEquals(completed, shutdownTask) then
+          let! _ = shutdownTask |> Async.AwaitTask
+          ()
+        let exited = proc.WaitForExit(3000)
+        match exited with
+        | false ->
+          try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+          try proc.WaitForExit(2000) |> ignore with ex -> Log.warn "[SessionManager] WaitForExit after kill: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        | true -> ()
+      with ex ->
+        Log.warn "[SessionManager] Graceful shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        let procAlive = try proc.HasExited with _ -> true |> not
+        match procAlive with
+        | true ->
+          try proc.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Force kill failed: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
+          try proc.WaitForExit(2000) |> ignore with ex2 -> Log.warn "[SessionManager] WaitForExit after force kill: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        | false -> ()
+      try proc.EnableRaisingEvents <- false with _ -> ()
+      try proc.Dispose() with _ -> ()
   }
 
   /// Force-kill a set of worker process trees by PID, tolerating already-exited
@@ -494,7 +512,8 @@ module SessionManager =
           match isNull line with
           | true ->
             let workerPid = proc.Id
-            try proc.Dispose() with :? ObjectDisposedException -> ()
+            try proc.EnableRaisingEvents <- false with _ -> ()
+            try proc.Dispose() with _ -> ()
             inbox.Post(
               SessionCommand.StandbySpawnFailed(
                 key,
@@ -520,8 +539,9 @@ module SessionManager =
       | :? OperationCanceledException when not ct.IsCancellationRequested ->
         // Linked CTS fired: per-standby startup timeout, NOT daemon shutdown.
         try proc.Kill(entireProcessTree = true) with ex2 ->
-          Log.warn "[SessionManager] Kill standby on startup timeout: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        try proc.Dispose() with :? ObjectDisposedException -> ()
+          Log.warn "[SessionManager] Kill standby on startup timeout: %s" ex2.Message
+        try proc.EnableRaisingEvents <- false with _ -> ()
+        try proc.Dispose() with _ -> ()
         inbox.Post(
           SessionCommand.StandbySpawnFailed(
             key,
@@ -531,8 +551,9 @@ module SessionManager =
                (set SAGEFS_WORKER_STARTUP_TIMEOUT_MS to adjust)"
               SageFsConfig.WorkerStartupTimeoutMs))
       | ex ->
-        try proc.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Kill standby on spawn failure: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        try proc.Dispose() with :? ObjectDisposedException -> ()
+        try proc.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Kill standby on spawn failure: %s" ex2.Message
+        try proc.EnableRaisingEvents <- false with _ -> ()
+        try proc.Dispose() with _ -> ()
         inbox.Post(
           SessionCommand.StandbySpawnFailed(
             key, proc.Id,
@@ -542,31 +563,43 @@ module SessionManager =
   /// Stop a standby worker process (fire-and-forget). Shutdown is bounded like
   /// stopWorker so a hung standby cannot stall StopAll; kills use the whole tree.
   let stopStandbyWorker (standby: StandbySession) = async {
-    try
-      match standby.Proxy with
-      | Some proxy ->
-        let shutdownTask =
-          proxy WorkerMessage.Shutdown
-          |> Async.StartAsTask
-        let! completed =
-          System.Threading.Tasks.Task.WhenAny(
-            [| shutdownTask :> System.Threading.Tasks.Task
-               System.Threading.Tasks.Task.Delay(Timeouts.workerShutdownDelay) |])
-          |> Async.AwaitTask
-        if obj.ReferenceEquals(completed, shutdownTask) then
-          let! _ = shutdownTask |> Async.AwaitTask
-          ()
-        let exited = standby.Process.WaitForExit(3000)
-        match exited with
-        | false ->
-          try standby.Process.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill standby after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        | true -> ()
-      | None ->
-        try standby.Process.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill standby (no proxy): %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-    with ex ->
-      Log.warn "[SessionManager] Standby shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-      try standby.Process.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Force kill standby: %s\n%s" ex2.Message (ex2.StackTrace |> Option.ofObj |> Option.defaultValue "")
-    try standby.Process.Dispose() with :? ObjectDisposedException -> ()
+    let proc = standby.Process
+    let hasExited = try proc.HasExited with _ -> true
+    match hasExited with
+    | true ->
+      try proc.EnableRaisingEvents <- false with _ -> ()
+      try proc.Dispose() with _ -> ()
+    | false ->
+      try
+        match standby.Proxy with
+        | Some proxy ->
+          let shutdownTask =
+            proxy WorkerMessage.Shutdown
+            |> Async.StartAsTask
+          let! completed =
+            System.Threading.Tasks.Task.WhenAny(
+              [| shutdownTask :> System.Threading.Tasks.Task
+                 System.Threading.Tasks.Task.Delay(Timeouts.workerShutdownDelay) |])
+            |> Async.AwaitTask
+          if obj.ReferenceEquals(completed, shutdownTask) then
+            let! _ = shutdownTask |> Async.AwaitTask
+            ()
+          let exited = proc.WaitForExit(3000)
+          match exited with
+          | false ->
+            try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill standby after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+          | true -> ()
+        | None ->
+          try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill standby (no proxy): %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      with ex ->
+        Log.warn "[SessionManager] Standby shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        let procAlive = try proc.HasExited with _ -> true |> not
+        match procAlive with
+        | true ->
+          try proc.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Force kill standby: %s\n%s" ex2.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+        | false -> ()
+      try proc.EnableRaisingEvents <- false with _ -> ()
+      try proc.Dispose() with _ -> ()
   }
 
   let private faultedTombstone (reason: string option) (session: ManagedSession) =
@@ -1016,6 +1049,8 @@ module SessionManager =
               Instrumentation.succeedSpan span
               let updated =
                 { session with
+                    Proxy = pendingProxy
+                    WorkerBaseUrl = ""
                     RestartState = newRestartState
                     Info = { session.Info with Status = newStatus } }
               let newState = ManagerState.addSession id updated state
@@ -1042,6 +1077,7 @@ module SessionManager =
                 { session with
                     Process = proc
                     Proxy = pendingProxy
+                    WorkerBaseUrl = ""
                     Info =
                       { session.Info with
                           Status = SessionStatus.Starting
@@ -1091,6 +1127,8 @@ module SessionManager =
                 Instrumentation.succeedSpan recoverySpan
                 let updated =
                   { session with
+                      Proxy = pendingProxy
+                      WorkerBaseUrl = ""
                       RestartState = newRestartState }
                 let newState = ManagerState.addSession id updated state
                 Async.Start(async {
