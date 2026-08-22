@@ -1,6 +1,7 @@
 module SageFs.Server.McpTools
 
 open System.ComponentModel
+open System.Runtime.InteropServices
 open System.Threading.Tasks
 open ModelContextProtocol.Server
 open Microsoft.Extensions.Logging
@@ -257,6 +258,7 @@ ERROR HANDLING (CRITICAL):
 - The session is NOT corrupted by errors. Do NOT call reset_fsi_session or hard_reset_fsi_session because of eval errors. Fix your code instead.
 - Submit smaller pieces (one definition per call) to isolate which part has the error.
 - NEVER use '#r' for assemblies loaded via '--proj'. Call get_startup_info to see which assembly names are already loaded. Using '#r' on a loaded assembly creates a duplicate .NET load context causing TypeLoadException on ALL subsequent evals — this is not a session bug, it is your '#r' directive that must be removed.
+- RUNTIME FileNotFoundException for Microsoft.AspNetCore.* or other shared-framework assemblies means FSI cannot execute them (installed ref packs are metadata-only; framework version mismatches surface as manifest errors). This is an environment limit, not a code bug — run that scenario externally instead (dotnet test / dotnet run) and bring results back into the REPL.
 
 RETURN VALUE:
 - On success: the printed output of the evaluated code (stdout, printfn output, or the auto-printed value).
@@ -269,20 +271,25 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         agentName: string,
         code: string,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string,
         [<Description("Absolute path to the source file this code came from. Enables module context detection — SageFs wraps the code in the correct module/namespace for FSI evaluation.")>]
+        [<Optional; DefaultParameterValue("")>]
         file_path: string,
         [<Description("How the code is being evaluated: 'file' for whole-file send, 'block' for a selected region. When omitted, auto-detected from code content.")>]
+        [<Optional; DefaultParameterValue("")>]
         eval_mode: string,
-        [<Description("1-based line number where the selected block starts in the source file. Helps resolve which module the block belongs to in multi-module files.")>]
-        block_start_line: System.Nullable<int>,
+        [<Description("1-based line number where the selected block starts in the source file. Helps resolve which module the block belongs to in multi-module files. Omit or pass 0 when unknown.")>]
+        [<Optional; DefaultParameterValue(0)>]
+        block_start_line: int,
         [<Description("Optional description of what this code is for (e.g. 'refactoring warmup pipeline', 'writing property tests'). Shown in the dashboard so humans and other agents can see what you're working on. Preserved across calls until overwritten by a new non-empty value.")>]
+        [<Optional; DefaultParameterValue("")>]
         intent: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let fp = match System.String.IsNullOrWhiteSpace file_path with | true -> None | false -> Some file_path
         let em = match System.String.IsNullOrWhiteSpace eval_mode with | true -> None | false -> Some eval_mode
-        let bsl = match block_start_line.HasValue with | true -> Some block_start_line.Value | false -> None
+        let bsl = match block_start_line with | 0 -> None | n -> Some n
         let intentOpt = match System.String.IsNullOrWhiteSpace intent with | true -> None | false -> Some intent
         logger.LogDebug("MCP-TOOL: send_fsharp_code called by {AgentName}: {Code}", agentName, code)
         SageFs.Instrumentation.mcpToolInvocations.Add(1L)
@@ -309,8 +316,9 @@ PATH:
         agentName: string,
         filePath: string,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
-    ) : Task<string> = 
+    ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: load_fsharp_script called: {FilePath}", filePath)
         loadFSharpScript ctx agentName filePath None wd |> withEcho ctx "load_fsharp_script"
@@ -325,12 +333,15 @@ WHEN TO USE:
 
 OUTPUT FORMAT: Each event shows timestamp, event type (Eval, Error, Load, Reset), source agent name, and a brief description. Events are newest-last.""")>]
     member _.get_recent_fsi_events(
-        count: int option,
+        [<Description("Number of recent events to return (default 10)")>]
+        [<Optional; DefaultParameterValue(10)>]
+        count: int,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> = 
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        let eventCount = defaultArg count 10
+        let eventCount = count
         logger.LogDebug("MCP-TOOL: get_recent_fsi_events called: count={Count}", eventCount)
         getRecentEvents ctx "mcp" eventCount wd |> withEcho ctx "get_recent_fsi_events"
     
@@ -363,6 +374,7 @@ IMPORTANT:
 - Use this to decide whether explicit MCP actions like send_fsharp_code or targeted_verify are safe to route right now.""")>]
     member _.get_fsi_status(
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -381,6 +393,7 @@ WHEN TO USE:
 - When investigating environment differences ("was live testing enabled when this was launched?").""")>]
     member _.get_startup_info(
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -398,6 +411,7 @@ WHEN TO USE:
 NOTE: This does NOT load any projects — it only lists what is available on disk. Use create_session or hard_reset_fsi_session with rebuild=true to actually load a project.""")>]
     member _.get_available_projects(
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -431,6 +445,7 @@ WHEN NOT TO USE (common mistake):
 This is a SOFT reset — DLL locks are retained. Use hard_reset_fsi_session only if modules failed to load during warm-up.""")>]
     member _.reset_fsi_session(
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -467,12 +482,15 @@ IMPORTANT:
 WORKFLOW: For test-only changes, use this with rebuild=true instead of the full pack/reinstall cycle.
 The full pack/reinstall cycle is only needed when SageFs's own source code changes (SageFs\ or SageFs.Server\).""")>]
     member _.hard_reset_fsi_session(
-        rebuild: bool option,
+        [<Description("Set rebuild=true to run 'dotnet build' before reloading (default false)")>]
+        [<Optional; DefaultParameterValue(false)>]
+        rebuild: bool,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        let doRebuild = defaultArg rebuild false
+        let doRebuild = rebuild
         logger.LogDebug("MCP-TOOL: hard_reset_fsi_session called, rebuild={Rebuild}", doRebuild)
         let execute = hardResetSession ctx "mcp" doRebuild None wd
         match doRebuild with
@@ -498,6 +516,7 @@ WHEN NOT TO USE:
     member _.check_fsharp_code(
         code: string,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -519,6 +538,7 @@ BEHAVIOR:
 - Returns 'true' if a running eval was found and cancelled, 'false' if nothing was running.""")>]
     member _.cancel_eval(
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -544,6 +564,7 @@ WHEN TO USE:
         [<Description("The F# code to get completions for")>] code: string,
         [<Description("Cursor position (0-based character offset) where completions are requested")>] cursor_position: int,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -567,6 +588,7 @@ TIPS:
     member _.explore_namespace(
         [<Description("Fully-qualified namespace to explore (e.g. 'System.IO', 'Microsoft.FSharp.Collections')")>] namespaceName: string,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -588,6 +610,7 @@ TIPS:
     member _.explore_type(
         [<Description("Fully-qualified type name to explore (e.g. 'System.String', 'System.IO.File')")>] typeName: string,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -609,6 +632,7 @@ OUTPUT: JSON containing case names, fields per case, which cases are entry point
     member _.visualize_domain_model(
         [<Description("Fully-qualified DU type name to visualize (e.g. 'MyNamespace.OrderState')")>] typeName: string,
         [<Description("Working directory of the MCP client.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -639,6 +663,7 @@ projects: Comma-separated list of absolute or relative .fsproj file paths.""")>]
         [<Description("Comma-separated list of .fsproj files to load")>] projects: string,
         [<Description("Working directory for the session")>] working_directory: string,
         [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Used for session routing and multi-agent coordination. Defaults to 'mcp' if omitted.")>]
+        [<Optional; DefaultParameterValue("")>]
         agentName: string
     ) : Task<string> =
         let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "mcp" | false -> agentName
@@ -746,8 +771,10 @@ TRUST MODEL:
         [<Description("Behavior or symbol under change (for example 'UserPreferences.loadFromFile').")>]
         behavior: string,
         [<Description("Optional exact full test name to use as the regression guard after local proof.")>]
+        [<Optional; DefaultParameterValue("")>]
         exact_guard: string,
         [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
@@ -830,7 +857,9 @@ This stores local feedback only.""")>]
         [<Description("Tool name that caused friction.")>] tool_name: string,
         [<Description("Feedback kind: output_too_large, intent_unclear, name_misleading, needed_another_tool, trust_not_established")>] feedback_kind: string,
         [<Description("Short human-readable explanation of the friction.")>] short_reason: string,
-        [<Description("Optional alternative tool that resolved the issue.")>] alternative_tool: string
+        [<Description("Optional alternative tool that resolved the issue.")>]
+        [<Optional; DefaultParameterValue("")>]
+        alternative_tool: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: report_friction called, tool={Tool}, kind={Kind}", tool_name, feedback_kind)
         let kind =
@@ -1235,8 +1264,10 @@ OUTPUT: JSON with TotalCount, Returned, FilterApplied, Summary, and GroupedByFil
 WORKFLOW: Use this to discover what tests exist, or to build a pattern for send_fsharp_code-based test runs.""")>]
     member _.list_tests(
         [<Description("Optional substring filter on test name (empty for all tests)")>]
+        [<Optional; DefaultParameterValue("")>]
         pattern: string,
         [<Description("Optional file path filter (empty for all files)")>]
+        [<Optional; DefaultParameterValue("")>]
         file_path: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: list_tests called, pattern={Pattern}, file={File}", pattern, file_path)

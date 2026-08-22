@@ -122,16 +122,33 @@ let createServerCaptureFilter (tracker: McpServerTracker) =
         | false -> ()
         result
 
-      let vt = next.Invoke(ctx, ct)
-      match vt.IsCompleted with
-      | true ->
-        ValueTask<CallToolResult>(appendEvents vt.Result)
-      | false ->
-        ValueTask<CallToolResult>(
-          task {
-            let! result = vt.AsTask()
+      /// WHY — the caller of an MCP tool is usually a language model whose only
+      /// recovery mechanism is reading error text and retrying correctly. A thrown
+      /// exception gives it nothing (observed 2026-08: a missing-argument
+      /// ArgumentException escaped as an unhandled server exception). Because —
+      /// every tool failure is translated into an IsError result the agent can act on.
+      let buildErrorResult (ex: exn) =
+        let logger =
+          ctx.Services.GetService(typeof<ILoggerFactory>)
+          |> Option.ofObj
+          |> Option.map (fun f -> (f :?> ILoggerFactory).CreateLogger("SageFs.McpServer.Filter"))
+        match logger with
+        | Some l -> l.LogError(ex, "MCP tool call threw; returning error result to client")
+        | None -> ()
+        let message = sprintf "Error in tool call: %s: %s" (ex.GetType().Name) ex.Message
+        let result = CallToolResult()
+        result.IsError <- Nullable true
+        result.Content.Add(TextContentBlock(Text = message))
+        result
+
+      ValueTask<CallToolResult>(
+        task {
+          try
+            let! result = next.Invoke(ctx, ct).AsTask()
             return appendEvents result
-          })))
+          with ex ->
+            return buildErrorResult ex
+        })))
 
 /// Raised when a request body exceeds the 4 MB hard limit.
 /// withErrorHandling catches this and swallows it (413 already committed).

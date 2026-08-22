@@ -125,6 +125,8 @@ Expecto.Tests.runTestsWithCLIArgs [] [||] SageFs.Tests.SomeModule.tests;;
 Expecto.Tests.runTestsWithCLIArgs [] [||] SageFs.Tests.AllTests.tests;;
 ```
 
+> **Signature note:** `runTestsWithCLIArgs` takes `(cliArguments: string list, argv: string[], test: Test)` — the **third argument is a single `Test` value**, not an array. A `[<Tests>]` module binding like `SomeModule.tests` is already a single combined `Test`; do NOT wrap it in `[| ... |]`. Passing an array lands it in the `argv` slot and produces the confusing error `expected string but got Test`.
+
 **5. Check test output** in the SageFs console window. Exit code 0 = all passed. Exit code 2 = passed but no TTY detected (cosmetic, ignore it). Exit code 1 = actual failures.
 
 ### Debugging with Breakpoints

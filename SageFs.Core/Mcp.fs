@@ -721,6 +721,41 @@ module McpTools =
     sessions
     |> List.filter (fun s -> normalizePath s.WorkingDirectory = target)
 
+  /// WHY — agents call tools with the directory they are WORKING IN, which is
+  /// often a subdirectory of the registered session root (e.g. repo\tests while
+  /// the session is rooted at repo). Exact-only matching turned that into
+  /// "No sessions match" while list_sessions showed the session plainly present;
+  /// status and list disagreed and only an explicit switch_session recovered
+  /// (friction report 2026-08). Because — matching falls back to sessions whose
+  /// registered directory is a path-boundary ancestor of the requested one, so a
+  /// request from inside a session's tree routes to that session instead of vanishing.
+  let sessionsMatchingWorkingDirDeep (sessions: WorkerProtocol.SessionInfo list) (workingDir: string) =
+    let target = normalizePath workingDir
+    match sessionsMatchingWorkingDir sessions workingDir with
+    | [] ->
+      let isPathAncestorOf (ancestor: string) (candidate: string) =
+        candidate.StartsWith(ancestor + "\\", StringComparison.Ordinal)
+        || candidate.StartsWith(ancestor + "/", StringComparison.Ordinal)
+      sessions
+      |> List.filter (fun s ->
+        let baseDir = normalizePath s.WorkingDirectory
+        not (String.IsNullOrWhiteSpace baseDir) && isPathAncestorOf baseDir target)
+    | matched -> matched
+
+  /// Honest failure: when working-directory routing finds nothing, say what DOES
+  /// exist so the agent can reconcile the disagreement without a second tool call.
+  let formatExistingSessionsHint (sessions: WorkerProtocol.SessionInfo list) =
+    match sessions with
+    | [] -> "(none running)"
+    | _ ->
+      sessions
+      |> List.map (fun s ->
+        sprintf "%s (%s, dir: %s)"
+          (WorkerProtocol.SessionId.value s.Id)
+          (WorkerProtocol.SessionStatus.label s.Status)
+          s.WorkingDirectory)
+      |> String.concat "; "
+
   /// Find a session whose WorkingDirectory matches the given path.
   /// Convenience helper only — authoritative callers must detect ambiguity
   /// before selecting a single session.
@@ -932,13 +967,13 @@ module McpTools =
             match workingDirectory with
             | Some wd when not (System.String.IsNullOrWhiteSpace wd) ->
               let! sessions = ctx.SessionOps.GetAllSessions()
-              match sessionsMatchingWorkingDir sessions wd with
+              match sessionsMatchingWorkingDirDeep sessions wd with
               | [ matched ] ->
                 let matchedId = WorkerProtocol.SessionId.value matched.Id
                 setActiveSessionId ctx agent matchedId
                 return Ok matchedId
               | [] ->
-                return Error (sprintf "No sessions match workingDirectory '%s'. Use create_session with that directory, or switch_session to an existing matching session." wd)
+                return Error (sprintf "No sessions match workingDirectory '%s'. Running sessions: %s. Use create_session with that directory, or switch_session to an existing matching session." wd (formatExistingSessionsHint sessions))
               | matches ->
                 return Error (formatWorkingDirectoryAmbiguity "Multiple sessions match workingDirectory" wd matches)
             | _ ->

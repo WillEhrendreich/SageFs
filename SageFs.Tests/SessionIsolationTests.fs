@@ -256,6 +256,62 @@ module SessionResolutionByWorkingDir =
     }
   ]
 
+module WorkingDirDeepMatching =
+  /// WHY — friction report 2026-08: an agent working in a subdirectory of a
+  /// registered session got "No sessions match" from get_fsi_status while
+  /// list_sessions showed the session. Deep matching routes subdirectory
+  /// requests to the owning session instead of reporting it missing.
+
+  open SageFs.McpTools
+
+  let mkInfo id workDir : WorkerProtocol.SessionInfo =
+    { Id = id; Name = None; Projects = []
+      WorkingDirectory = workDir; SolutionRoot = None
+      Status = WorkerProtocol.SessionStatus.Ready
+      FaultReason = None
+      WorkerPid = None
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      CreatedAt = System.DateTime.UtcNow
+      LastActivity = System.DateTime.UtcNow }
+
+  let tests = testList "sessionsMatchingWorkingDirDeep" [
+
+    test "WHY — subdirectory routing — an agent calling from repo\\tests reaches the session rooted at repo because exact-only matching reported existing sessions as missing"
+    <| fun _ ->
+      let sessions = [ mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs" ]
+      sessionsMatchingWorkingDirDeep sessions @"C:\Code\Repos\SageFs\tests"
+      |> List.map (fun s -> s.Id)
+      |> Expect.equal "subdirectory of session root should match the session" [ testSessionId "aa000001" ]
+
+    test "WHY — path-boundary safety — 'SageFsExtra' is NOT inside 'SageFs' so prefix matching must not cross directory-name boundaries"
+    <| fun _ ->
+      let sessions = [ mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs" ]
+      sessionsMatchingWorkingDirDeep sessions @"C:\Code\Repos\SageFsExtra"
+      |> Expect.isEmpty "sibling with shared name prefix must not match"
+
+    test "WHY — sibling isolation — a different repo's agent must not silently route into another repo's session"
+    <| fun _ ->
+      let sessions = [ mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs" ]
+      sessionsMatchingWorkingDirDeep sessions @"C:\Code\Repos\SageTech"
+      |> Expect.isEmpty "unrelated sibling directory must not match"
+
+    test "exact match still wins and is not duplicated by ancestor fallback"
+    <| fun _ ->
+      let sessions = [
+        mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs"
+        mkInfo (testSessionId "bb000002") @"C:\Code\Repos"
+      ]
+      sessionsMatchingWorkingDirDeep sessions @"C:\Code\Repos\SageFs"
+      |> List.map (fun s -> s.Id)
+      |> Expect.equal "exact match should be the only result" [ testSessionId "aa000001" ]
+
+    test "sessions with empty WorkingDirectory never match by ancestor"
+    <| fun _ ->
+      let sessions = [ mkInfo (testSessionId "aa000001") "" ]
+      sessionsMatchingWorkingDirDeep sessions @"C:\Code\Repos\SageFs\tests"
+      |> Expect.isEmpty "empty base dir must not act as root-of-everything"
+  ]
+
 module WorkingDirRoutingPriority =
 
   open System.Threading.Tasks

@@ -66,7 +66,7 @@ let tests =
           ActivityTracker = SageFs.AgentActivityTracker.create() }
 
       let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
-      let toolTask = tools.hard_reset_fsi_session(Some true, "")
+      let toolTask = tools.hard_reset_fsi_session(true, "")
       let! completed = Task.WhenAny(toolTask, Task.Delay(1000))
 
       obj.ReferenceEquals(completed, toolTask)
