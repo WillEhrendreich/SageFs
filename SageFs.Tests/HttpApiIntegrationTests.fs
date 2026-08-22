@@ -887,6 +887,43 @@ let httpApiRoutingTests =
       finally
         client.Dispose()
         killDaemon proc
+
+    testCase "WHY — POST /api/completions — a cursor past end-of-string is clamped instead of silently returning zero items because editors and agents routinely send end-relative offsets (smoke-test failure 2026-08)" <| fun _ ->
+      let port = reserveLoopbackPort (Some (38700 + (Random().Next(100))))
+      let proc, client =
+        startDaemonWithArgs port repoRoot []
+        |> Async.AwaitTask |> Async.RunSynchronously
+      try
+        let createStatus, createBody =
+          createSession client smokeSampleProject smokeSampleProjectDir
+          |> Async.AwaitTask |> Async.RunSynchronously
+        createStatus |> Expect.equal "session create should succeed" 200
+
+        let ready, sessionsBody =
+          waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
+          |> Async.AwaitTask |> Async.RunSynchronously
+
+        ready
+        |> Expect.isTrue (sprintf "explicitly created session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
+
+        // "System." is 7 chars; 99 is far past the end and must clamp to 7.
+        let payload =
+          {| code = "System."
+             cursorPosition = 99
+             workingDirectory = smokeSampleProjectDir |}
+
+        let status, body = postJson client "/api/completions" payload |> Async.AwaitTask |> Async.RunSynchronously
+        status |> Expect.equal "200 OK" 200
+        use doc = JsonDocument.Parse(body)
+        let labels =
+          doc.RootElement.GetProperty("completions").EnumerateArray()
+          |> Seq.map (fun item -> item.GetProperty("label").GetString())
+          |> Seq.toList
+        labels |> List.contains "String"
+        |> Expect.isTrue (sprintf "out-of-range cursor should clamp to end-of-string, got: %s" body)
+      finally
+        client.Dispose()
+        killDaemon proc
   ]
 
 [<Tests>]

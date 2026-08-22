@@ -472,9 +472,10 @@ try {
   if (-not $sessionReady) {
     Fail "completions" "No session reached Ready within ${SessionWarmupSeconds}s. Last statuses: $(Format-SessionStatusSummary $latestSessionsResponse)"
   } else {
+    # "let x = List." is 13 chars; cursor 13 = end of string (after the '.')
     $completionBody = [PSCustomObject]@{
       code             = "let x = List."
-      cursorPosition   = 14
+      cursorPosition   = 13
       workingDirectory = $sessionWorkDir
     } | ConvertTo-Json
 
@@ -483,9 +484,12 @@ try {
       -ContentType "application/json" `
       -TimeoutSec 15
     $completionResponse = $resp
-    # Response is either a JSON array or a plain-text/error string
+    # Response is either a bare JSON array, an object { completions, count },
+    # or a plain-text/error string
     if ($resp -is [array] -and $resp.Count -gt 0) {
       Pass "completions" "Completions returned $($resp.Count) items"
+    } elseif ($null -ne $resp.completions -and $resp.count -gt 0) {
+      Pass "completions" "Completions returned $($resp.count) items"
     } elseif ($resp -is [string] -and $resp -notmatch "^Error:") {
       Pass "completions" "Completions returned results"
     } else {

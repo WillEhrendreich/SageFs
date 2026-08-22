@@ -38,5 +38,8 @@ jobs:
           dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
           dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
 
+      - name: Build SageFs.Core for correspondence tests
+        run: dotnet build SageFs.Core/SageFs.Core.fsproj -c Debug --nologo -p:NuGetAudit=false
+
       - name: Run RingBuffer correspondence tests
         run: dotnet fsi formal-verification/tests/ringbuffer/run.fsx

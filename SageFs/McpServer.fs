@@ -1810,6 +1810,12 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
         match tryGetJsonIntAliases root [ "cursorPosition"; "cursor_position" ] with
         | Some value -> value
         | None -> raise (System.Text.Json.JsonException("Missing required cursorPosition/cursor_position"))
+      // WHY — editors and agents routinely send a cursor one past the end of the
+      // code string (or negative on malformed input). An out-of-range cursor made
+      // completions silently return zero items (smoke-test failure 2026-08).
+      // Because — clamping to [0, code.Length] keeps the completion request total.
+      let code = match code with | null -> "" | c -> c
+      let cursor = System.Math.Max(0, System.Math.Min(cursor, code.Length))
       let workingDirectory =
         tryGetJsonStringAliases root [ "workingDirectory"; "working_directory" ]
       let! items = SageFs.McpTools.getCompletionsItems rctx.McpContext "http" code cursor workingDirectory

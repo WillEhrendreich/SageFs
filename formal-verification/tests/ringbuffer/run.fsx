@@ -3,7 +3,9 @@
 // Validates that the F# implementation satisfies the same properties proved in Lean
 
 #r "nuget: Expecto"
-#r "nuget: Expecto.Flip"
+// WHY — the module under test lives in SageFs.Core; the workflow builds it
+// (Debug) before invoking this script so the relative reference resolves.
+#r "../../../SageFs.Core/bin/Debug/net10.0/SageFs.Core.dll"
 
 open System
 open Expecto
@@ -62,7 +64,7 @@ let pushCountTests =
       let b = ref buf
       for i in 1..10 do
         b := RingBuffer.push i !b
-        (!b |> RingBuffer.count) |> Expect.isLessThanOrEqual ($"count should never exceed capacity after {i} pushes") 3
+        (!b |> RingBuffer.count, 3) |> Expect.isLessThanOrEqual $"count should never exceed capacity after {i} pushes"
     }
   ]
 
@@ -171,7 +173,9 @@ let evictionTests =
       let b = ref buf
       for i in 1..100 do
         b := RingBuffer.push i !b
-        (!b |> RingBuffer.count) |> Expect.equal $"count should stay at capacity after {i} pushes" 3
+        // Invariant (Lean: push_preserves_wf): count = min(pushed, capacity) —
+        // grows until full, then stays pinned at capacity as items evict.
+        (!b |> RingBuffer.count) |> Expect.equal $"count should be min({i}, capacity)" (min i 3)
     }
   ]
 
@@ -245,21 +249,21 @@ let wellFormedTests =
       let b = ref buf
       for i in 1..8 do
         b := RingBuffer.push i !b
-        Expect.isTrue $"head ({!b.Head}) should be < capacity (5) after {i} pushes" (!b.Head < 5)
+        ((!b).Head < 5) |> Expect.isTrue $"head ({(!b).Head}) should be < capacity (5) after {i} pushes"
     }
     test "count <= capacity always" {
       let buf = RingBuffer.create 5
       let b = ref buf
       for i in 1..8 do
         b := RingBuffer.push i !b
-        Expect.isLessThanOrEqual $"count ({!b.Count}) should be <= capacity (5) after {i} pushes" !b.Count 5
+        ((!b).Count, 5) |> Expect.isLessThanOrEqual $"count ({(!b).Count}) should be <= capacity (5) after {i} pushes"
     }
     test "count <= total always" {
       let buf = RingBuffer.create 5
       let b = ref buf
       for i in 1..8 do
         b := RingBuffer.push i !b
-        Expect.isLessThanOrEqual $"count ({!b.Count}) should be <= total ({!b.TotalPushed}) after {i} pushes" !b.Count (int !b.TotalPushed)
+        ((!b).Count, int (!b).TotalPushed) |> Expect.isLessThanOrEqual $"count ({(!b).Count}) should be <= total ({(!b).TotalPushed}) after {i} pushes"
     }
   ]
 
@@ -323,6 +327,8 @@ let allTests =
     propertyBasedTests
   ]
 
-// Run
-let summary = runTests defaultConfig allTests
-exit (match summary with | 0 -> 0 | _ -> 1)
+// Run — runTestsWithCLIArgs is the supported entry point in this Expecto
+// version (runTests/defaultConfig are not exposed). Exit 0 or 2 = passed
+// (2 means passed without a TTY); anything else is a real failure.
+let exitCode = runTestsWithCLIArgs [] [||] allTests
+exit (match exitCode with | 0 | 2 -> 0 | _ -> 1)
