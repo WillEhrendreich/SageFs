@@ -71,6 +71,32 @@ type OpenAttemptResult =
   | OpenSuccess of durationMs: float
   | OpenFailed of errorMessage: string * diagnostics: WarmupFcsDiagnostic list * durationMs: float
 
+/// WHY — warmup used to report success without checking that project references
+/// actually loaded into the FSI AppDomain, producing "Ready" sessions where every
+/// open failed with 'not defined' (friction report 2026-08). Because — comparing
+/// expected assembly names against actually-loaded names classifies the session's
+/// real state so callers can fault it honestly instead of lying Ready.
+type AssemblyLoadVerification =
+  | AllExpectedLoaded
+  /// Some references did not load; names exactly as expected-but-absent.
+  | PartiallyLoaded of missing: string list
+  /// Not one expected assembly loaded — the session cannot do anything useful.
+  | NothingLoaded
+
+let classifyAssemblyLoad
+  (expectedAssemblyNames: string list)
+  (loadedAssemblyNames: string list)
+  : AssemblyLoadVerification =
+  match expectedAssemblyNames with
+  | [] -> AllExpectedLoaded
+  | first :: _ ->
+    let loaded = loadedAssemblyNames |> Set.ofList
+    let missing = expectedAssemblyNames |> List.filter (fun n -> not (Set.contains n loaded))
+    match missing with
+    | [] -> AllExpectedLoaded
+    | m when m.Length = expectedAssemblyNames.Length -> NothingLoaded
+    | m -> PartiallyLoaded m
+
 [<Literal>]
 let DefaultOpenBatchSize = 8
 

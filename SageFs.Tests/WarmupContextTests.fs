@@ -33,6 +33,38 @@ let sampleCtx: WarmupContext = {
 }
 
 [<Tests>]
+let warmupAssemblyVerificationTests = testList "Warmup assembly verification" [
+
+  /// WHY — friction report 2026-08: hard_reset reported success, get_fsi_status
+  /// showed Ready + warmup complete, but AppDomain.GetAssemblies() contained ZERO
+  /// project assemblies — 'open SageTech' failed with 'not defined'. Warmup never
+  /// verified that references actually loaded. Because — classification of
+  /// expected-vs-actually-loaded assembly names must distinguish all three
+  /// outcomes so a dead session can be reported as Faulted instead of Ready.
+
+  testCase "WHY — no expected assemblies means nothing to verify (bare sessions stay valid)"
+  <| fun _ ->
+    WarmUp.classifyAssemblyLoad [] ["Anything"]
+    |> Expect.equal "empty expectation is trivially satisfied" WarmUp.AllExpectedLoaded
+
+  testCase "WHY — every expected assembly present means the session genuinely loaded the project"
+  <| fun _ ->
+    WarmUp.classifyAssemblyLoad ["SageTech"; "Expecto"] ["SageTech"; "Expecto"; "System.Runtime"]
+    |> Expect.equal "all loaded" WarmUp.AllExpectedLoaded
+
+  testCase "WHY — partially loaded must name exactly which assemblies are missing so failures are attributable"
+  <| fun _ ->
+    WarmUp.classifyAssemblyLoad ["SageTech"; "SageTech.Tests"] ["SageTech.Tests"]
+    |> Expect.equal "one missing"
+        (WarmUp.PartiallyLoaded [ "SageTech" ])
+
+  testCase "WHY — zero loaded is the false-positive signature: warmup claimed success while nothing worked, so it must classify as NothingLoaded and fault the session"
+  <| fun _ ->
+    WarmUp.classifyAssemblyLoad ["SageTech"; "SageTech.Tests"] []
+    |> Expect.equal "none loaded" WarmUp.NothingLoaded
+]
+
+[<Tests>]
 let warmupContextTests = testList "WarmupContext" [
   testCase "empty has zero counts" <| fun _ ->
     let ctx = WarmupContext.empty

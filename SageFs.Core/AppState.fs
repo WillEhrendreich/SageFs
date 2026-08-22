@@ -788,6 +788,38 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
           logger.LogWarning (sprintf "    FS%04d %s — %s" d.ErrorNumber loc d.Message)
     | true -> ()
 
+    // WHY — verify project references actually loaded into the AppDomain. FSI
+    // surfaces -r load failures only as init stderr warnings, which previously
+    // produced "Ready" sessions where every project open failed with 'not
+    // defined' while get_fsi_status claimed warmup was complete (friction
+    // report 2026-08). Because — a session with zero project assemblies is dead;
+    // reporting it Ready destroys agent trust in every downstream signal.
+    let expectedAssemblies =
+      sln.Projects
+      |> List.map (fun p -> Path.GetFileNameWithoutExtension p.TargetPath)
+      |> List.distinct
+    let loadedAssemblyNames =
+      System.AppDomain.CurrentDomain.GetAssemblies()
+      |> Array.map (fun a -> a.GetName().Name)
+      |> Array.toList
+    match WarmUp.classifyAssemblyLoad expectedAssemblies loadedAssemblyNames with
+    | WarmUp.AllExpectedLoaded -> ()
+    | WarmUp.PartiallyLoaded missing ->
+      logger.LogWarning
+        (sprintf "  ⚠️ Assembly verification: %d/%d project assemblies loaded; MISSING: %s — code touching these will fail with 'not defined'"
+          (expectedAssemblies.Length - missing.Length)
+          expectedAssemblies.Length
+          (String.concat ", " missing))
+    | WarmUp.NothingLoaded ->
+      let fsiErrors = fsiErrorWriter.ToString()
+      let msg =
+        sprintf "Warmup verification failed: NONE of %d project assemblies loaded into FSI (expected: %s).%s"
+          expectedAssemblies.Length
+          (String.concat ", " expectedAssemblies)
+          (match fsiErrors.Length > 0 with | true -> sprintf " FSI init errors: %s" fsiErrors | false -> "")
+      logger.LogError (sprintf "  ❌ %s" msg)
+      failwith msg
+
     let warmupCtx =
       WarmupContext.completeWarmup
         warmupStartedAt

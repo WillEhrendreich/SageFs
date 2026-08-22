@@ -276,26 +276,26 @@ module WorkingDirDeepMatching =
 
   let tests = testList "sessionsMatchingWorkingDirDeep" [
 
-    test "WHY — subdirectory routing — an agent calling from repo\\tests reaches the session rooted at repo because exact-only matching reported existing sessions as missing"
+    testCase "WHY — subdirectory routing — an agent calling from repo\\tests reaches the session rooted at repo because exact-only matching reported existing sessions as missing"
     <| fun _ ->
       let sessions = [ mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs" ]
       sessionsMatchingWorkingDirDeep sessions @"C:\Code\Repos\SageFs\tests"
       |> List.map (fun s -> s.Id)
       |> Expect.equal "subdirectory of session root should match the session" [ testSessionId "aa000001" ]
 
-    test "WHY — path-boundary safety — 'SageFsExtra' is NOT inside 'SageFs' so prefix matching must not cross directory-name boundaries"
+    testCase "WHY — path-boundary safety — 'SageFsExtra' is NOT inside 'SageFs' so prefix matching must not cross directory-name boundaries"
     <| fun _ ->
       let sessions = [ mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs" ]
       sessionsMatchingWorkingDirDeep sessions @"C:\Code\Repos\SageFsExtra"
       |> Expect.isEmpty "sibling with shared name prefix must not match"
 
-    test "WHY — sibling isolation — a different repo's agent must not silently route into another repo's session"
+    testCase "WHY — sibling isolation — a different repo's agent must not silently route into another repo's session"
     <| fun _ ->
       let sessions = [ mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs" ]
       sessionsMatchingWorkingDirDeep sessions @"C:\Code\Repos\SageTech"
       |> Expect.isEmpty "unrelated sibling directory must not match"
 
-    test "exact match still wins and is not duplicated by ancestor fallback"
+    testCase "exact match still wins and is not duplicated by ancestor fallback"
     <| fun _ ->
       let sessions = [
         mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs"
@@ -305,7 +305,7 @@ module WorkingDirDeepMatching =
       |> List.map (fun s -> s.Id)
       |> Expect.equal "exact match should be the only result" [ testSessionId "aa000001" ]
 
-    test "sessions with empty WorkingDirectory never match by ancestor"
+    testCase "sessions with empty WorkingDirectory never match by ancestor"
     <| fun _ ->
       let sessions = [ mkInfo (testSessionId "aa000001") "" ]
       sessionsMatchingWorkingDirDeep sessions @"C:\Code\Repos\SageFs\tests"
