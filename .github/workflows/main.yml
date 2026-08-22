@@ -253,6 +253,21 @@ jobs:
         $version = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
         "version=$version" >> $env:GITHUB_OUTPUT
 
+    - name: Verify release version alignment
+      shell: pwsh
+      run: |
+        # WHY — publish reads release-manifest.json (Directory.Build.props version)
+        # to locate sagefs-vscode-<version>.vsix, but the VSIX is named from
+        # sagefs-vscode/package.json. When those drift, publish fails with ENOENT
+        # after a 12-minute build (observed 2026-08: props 0.6.277 vs pkg 0.6.276).
+        # Because — fail here, at the start of packaging, with an actionable message.
+        $propsVersion = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
+        $pkg = Get-Content sagefs-vscode/package.json -Raw | ConvertFrom-Json
+        if ($pkg.version -ne $propsVersion) {
+          throw "Version drift: Directory.Build.props is $propsVersion but sagefs-vscode/package.json is $($pkg.version). Run scripts/pre-commit or bump package.json to $propsVersion."
+        }
+        Write-Host "Versions aligned at $propsVersion"
+
     - name: Ensure release directory exists
       run: New-Item -ItemType Directory -Force release | Out-Null
 
