@@ -458,6 +458,20 @@ h1 {
   color: white;
 }
 
+.session-btn-warn:hover {
+  background: var(--fg-yellow);
+  color: var(--bg-default);
+}
+
+.session-stopping {
+  color: var(--fg-dim);
+  font-style: italic;
+  cursor: default;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .session-selected {
   background: var(--bg-selection);
   border-left: 3px solid var(--border-focus);

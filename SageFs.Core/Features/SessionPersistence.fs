@@ -503,6 +503,19 @@ module SessionFile =
       with ex ->
         Error (sprintf "Failed to read session: %s" ex.Message)
 
+  /// Delete the .sagefs replay file for a session id.
+  /// Missing file is Ok (idempotent) — mirrors "delete obj/bin" semantics.
+  let delete (sageFsDir: string) (sessionId: string) : Result<unit, string> =
+    let path = sessionPath sageFsDir sessionId
+    match IO.File.Exists(path) with
+    | false -> Ok ()
+    | true ->
+      try
+        IO.File.Delete(path)
+        Ok ()
+      with ex ->
+        Error (sprintf "Failed to delete session file: %s" ex.Message)
+
   /// List all saved session IDs.
   let listSaved (sageFsDir: string) : string list =
     let dir = sessionDir sageFsDir

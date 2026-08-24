@@ -712,16 +712,80 @@ let createResetHandler
   }
 
 /// Create the session action handler (switch/stop).
+/// If `teardown` is true (stop/dispose/purge), it:
+///   - immediately replaces the session's card with "⏳ Stopping session id:[id]..."
+///   - clears the output + eval-result if that session is the one being viewed
+///   - after the action resolves, auto-switches to the next session in the list
+///     (or shows the session picker if none remain)
 let createSessionActionHandler
+  (q: DashboardQueries)
   (action: string -> Threading.Tasks.Task<Result<string, string>>)
+  (teardown: bool)
   : string -> HttpHandler =
   fun sessionId ctx -> task {
     try
-      let! result = action sessionId
+      // Read the signals so we know which session is currently being viewed.
+      let viewingId =
+        try
+          use doc = readSignalsJsonSized ctx |> Async.AwaitTask |> Async.RunSynchronously
+          getSignalString doc Signals.ViewingSessionId "viewing-session-id"
+        with _ -> ""
       Response.sseStartResponse ctx |> ignore
-      // Push sessionId so eval form targets the new session
-      do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) sessionId
-      do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) sessionId
+      let isViewingStopped = viewingId = sessionId
+      // Immediate feedback: swap the card for the "Stopping…" message.
+      if teardown then
+        do! ssePatchNode ctx (renderStoppingCard sessionId)
+        if isViewingStopped then
+          // Clear the output display + eval result of the session being unloaded.
+          let clearedOutput =
+            Elem.div [ Attr.id DomIds.OutputPanel ] [
+              Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [ Text.raw "No output yet" ]
+            ]
+          do! ssePatchNode ctx clearedOutput
+          do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.EvalResult ] [])
+      let! result = action sessionId
+      // After a successful teardown, select the next session (or show the picker).
+      let! nextId =
+        match teardown && Result.isOk result with
+        | false -> task { return None }
+        | true ->
+          task {
+            let! sessions = q.GetAllSessions ()
+            let remainingIds =
+              sessions
+              |> List.map (fun (s: WorkerProtocol.SessionInfo) -> WorkerProtocol.SessionId.value s.Id)
+              |> List.filter (fun id -> id <> sessionId)
+            // Sidebar order comes from the Elm sessions region — use it for "next in list".
+            let orderedIds =
+              match q.GetElmRegions () with
+              | Some regions ->
+                regions
+                |> List.tryFind (fun r -> r.Id = "sessions")
+                |> Option.map (fun r -> parseSessionLines r.Content |> List.map (fun s -> s.Id))
+                |> Option.defaultValue remainingIds
+              | None -> remainingIds
+            let orderedRemaining = orderedIds |> List.filter (fun id -> List.contains id remainingIds)
+            match orderedRemaining with
+            | [] -> return None
+            | ids ->
+              match List.tryFindIndex ((=) sessionId) orderedIds with
+              | Some idx when idx < List.length ids -> return Some ids.[idx]
+              | _ -> return Some (List.head ids)
+          }
+      match nextId with
+      | Some nextSession ->
+        // Auto-switch: display + select the next session.
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) nextSession
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) nextSession
+      | None when teardown && Result.isOk result ->
+        // No sessions remain — show the session picker (with Resume Previous).
+        let! previous = q.GetPreviousSessions ()
+        do! ssePatchNode ctx (renderSessionPicker previous)
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
+      | None ->
+        // Switch path (or failed teardown): eval form targets the requested session.
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) sessionId
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) sessionId
       let msg, cssClass =
         match result with
         | Ok m -> m, "output-line output-info"
@@ -1151,13 +1215,13 @@ let createEndpoints
     | Some handler ->
       yield mapPost "/dashboard/session/switch/{id}"
         (fun (r: RequestData) -> r.GetString("id", ""))
-        (fun sid -> createSessionActionHandler handler sid)
+        (fun sid -> createSessionActionHandler q handler false sid)
     | None -> ()
     match a.StopSession with
     | Some handler ->
       yield mapPost "/dashboard/session/stop/{id}"
         (fun (r: RequestData) -> r.GetString("id", ""))
-        (fun sid -> createSessionActionHandler handler sid)
+        (fun sid -> createSessionActionHandler q handler true sid)
       yield post "/dashboard/session/stop-others" (fun ctx -> task {
         let! sessions = q.GetAllSessions ()
         let activeId = q.GetActiveSessionId ()
@@ -1177,6 +1241,18 @@ let createEndpoints
           ]
         do! ssePatchNode ctx resultHtml
       })
+    | None -> ()
+    match a.DisposeSession with
+    | Some handler ->
+      yield mapPost "/dashboard/session/dispose/{id}"
+        (fun (r: RequestData) -> r.GetString("id", ""))
+        (fun sid -> createSessionActionHandler q handler true sid)
+    | None -> ()
+    match a.PurgeSession with
+    | Some handler ->
+      yield mapPost "/dashboard/session/purge/{id}"
+        (fun (r: RequestData) -> r.GetString("id", ""))
+        (fun sid -> createSessionActionHandler q handler true sid)
     | None -> ()
     // Daemon info endpoint for client discovery (replaces daemon.json)
     yield get "/api/daemon-info" (fun ctx -> task {

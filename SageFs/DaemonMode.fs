@@ -283,6 +283,56 @@ let createSessionOps
           |> Result.map (fun () ->
             sprintf "Session '%s' stopped." sessionId)
       }
+    DisposeSession = fun sessionId ->
+      task {
+        let! result =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.StopSession(toSessionId sessionId, reply))
+          |> Async.StartAsTask
+        match result with
+        | Ok () ->
+          appendEvents [
+            Features.Events.SageFsEvent.DaemonSessionStopped
+              {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
+          ]
+          // Clear the session's saved replay memory — must be rebuilt anew on resume.
+          match Features.DaemonPersistence.deleteSessionFile DaemonState.SageFsDir sessionId with
+          | Ok () -> ()
+          | Error err ->
+            Log.warn "[DaemonMode] Dispose session %s: %s" sessionId err
+        | Error _ -> ()
+        return
+          result
+          |> Result.map (fun () ->
+            sprintf "Session '%s' disposed — saved memory cleared." sessionId)
+      }
+    PurgeSession = fun sessionId ->
+      task {
+        let! result =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.StopSession(toSessionId sessionId, reply))
+          |> Async.StartAsTask
+        match result with
+        | Ok () ->
+          appendEvents [
+            Features.Events.SageFsEvent.DaemonSessionStopped
+              {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
+          ]
+          // Clear saved replay memory AND remove the manifest entry entirely.
+          match Features.DaemonPersistence.deleteSessionFile DaemonState.SageFsDir sessionId with
+          | Ok () -> ()
+          | Error err ->
+            Log.warn "[DaemonMode] Purge session %s (delete .sagefs): %s" sessionId err
+          match Features.DaemonPersistence.removeManifestEntry DaemonState.SageFsDir sessionId with
+          | Ok () -> ()
+          | Error err ->
+            Log.warn "[DaemonMode] Purge session %s (remove manifest entry): %s" sessionId err
+        | Error _ -> ()
+        return
+          result
+          |> Result.map (fun () ->
+            sprintf "Session '%s' purged — binaries and saved state removed." sessionId)
+      }
     RestartSession = fun sessionId rebuild ->
       task {
         let! result =
@@ -1823,6 +1873,16 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     })
     StopSession = Some (fun (sid: string) -> task {
       let! result = sessionOps.StopSession sid
+      elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+      return result |> Result.mapError SageFsError.describe
+    })
+    DisposeSession = Some (fun (sid: string) -> task {
+      let! result = sessionOps.DisposeSession sid
+      elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+      return result |> Result.mapError SageFsError.describe
+    })
+    PurgeSession = Some (fun (sid: string) -> task {
+      let! result = sessionOps.PurgeSession sid
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
       return result |> Result.mapError SageFsError.describe
     })

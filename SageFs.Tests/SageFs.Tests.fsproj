@@ -163,6 +163,7 @@
         <Compile Include="BinaryFormatTests.fs" />
         <Compile Include="ManifestPersistenceTests.fs" />
         <Compile Include="PersistenceComplianceTests.fs" />
+        <Compile Include="SessionTeardownPersistenceTests.fs" />
         <Compile Include="McpStateHandlerTests.fs" />
         <Compile Include="CompilationContextTests.fs" />
         <Compile Include="CompilationContextPropertyTests.fs" />

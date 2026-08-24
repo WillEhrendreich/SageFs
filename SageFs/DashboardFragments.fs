@@ -695,6 +695,20 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
                 [ Text.raw (sprintf "→%d" n) ] ]
     ]
 
+/// Render the "⏳ Stopping session id:[id]..." card that replaces a session's
+/// display card while it unloads/disposes itself.
+/// Shares the session-card-<id> DOM id with the card in renderSessions so
+/// Datastar morphs the card in place.
+let renderStoppingCard (sessionId: string) =
+  Elem.div
+    [ Attr.id (sprintf "session-card-%s" sessionId)
+      Attr.class' "session-row session-stopping"
+      Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal);" ]
+    [ Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw sessionId ]
+      Elem.span [ Attr.class' "meta"; Attr.style "margin-left: 0.5rem;" ] [
+        Text.raw (sprintf "⏳ Stopping session id:%s..." sessionId)
+      ] ]
+
 /// Render sessions as an HTML fragment with action buttons.
 let renderSessions (sessions: ParsedSession list) (creating: bool) =
   Elem.div [ Attr.id DomIds.SessionsPanel ] [
@@ -723,7 +737,8 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
           | true -> sprintf " %s" s.GuidanceCssClass
           | false -> ""
         Elem.div
-          [ Attr.class' (sprintf "session-row flex-between %s%s" cls guidanceCls)
+          [ Attr.id (sprintf "session-card-%s" s.Id)
+            Attr.class' (sprintf "session-row flex-between %s%s" cls guidanceCls)
             Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
             Ds.class' ("session-selected", sprintf "$%s === '%s'" Signals.ViewingSessionId s.Id)
             Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId s.Id s.Id) ]
@@ -865,8 +880,19 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
               | true -> ()
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
+                  Attr.title "Stop — unload the session (saved memory kept)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/stop/%s" s.Id)) ]
                 [ Text.raw "■" ]
+              Elem.button
+                [ Attr.class' "session-btn session-btn-warn"
+                  Attr.title "Dispose — stop and clear saved memory (must rebuild anew)"
+                  Ds.onClick (Ds.post (sprintf "/dashboard/session/dispose/%s" s.Id)) ]
+                [ Text.raw "⌫" ]
+              Elem.button
+                [ Attr.class' "session-btn session-btn-danger"
+                  Attr.title "Purge — dispose and delete binaries + manifest entry (corrupt state)"
+                  Ds.onClick (Ds.post (sprintf "/dashboard/session/purge/%s" s.Id)) ]
+                [ Text.raw "✖" ]
             ]
             // Collapsible test treemap (WizTree-style: area = test duration)
             match s.TestTreemapEntries.Length with
@@ -899,7 +925,7 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
       [ Attr.style "display: flex; justify-content: space-between; align-items: center; font-size: 0.7rem; color: var(--fg-dim); padding: 4px 0; margin-top: 4px;" ]
       [
         Elem.span [] [
-          Text.raw "⇄ switch · ■ stop · X stop others"
+          Text.raw "⇄ switch · ■ stop · ⌫ dispose · ✖ purge"
         ]
         match sessions.Length > 1 with
         | true ->

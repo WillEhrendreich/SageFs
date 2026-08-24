@@ -572,6 +572,10 @@ type DashboardActions = {
   Dispatch: SageFsMsg -> unit
   SwitchSession: (string -> Threading.Tasks.Task<Result<string, string>>) option
   StopSession: (string -> Threading.Tasks.Task<Result<string, string>>) option
+  /// Dispose — stop + clear the session's saved replay memory (.sagefs).
+  DisposeSession: (string -> Threading.Tasks.Task<Result<string, string>>) option
+  /// Purge — dispose + remove the session's .sagefm manifest entry (gone from resume picker).
+  PurgeSession: (string -> Threading.Tasks.Task<Result<string, string>>) option
   CreateSession: (string list -> string -> Threading.Tasks.Task<Result<string, string>>) option
   ShutdownCallback: (unit -> unit) option
 }
