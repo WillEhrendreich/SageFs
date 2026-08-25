@@ -14,6 +14,7 @@
     <PackageVersion Include="Fantomas.Core" Version="8.0.0-alpha-002" />
     <PackageVersion Include="FsCheck" Version="3.3.2" />
     <PackageVersion Include="FSharp.Compiler.Service" Version="43.10.101" />
+    <PackageVersion Include="FSharp.Data.Adaptive" Version="1.2.26" />
     <PackageVersion Include="FSharp.SystemTextJson" Version="1.4.36" />
     <PackageVersion Include="FsToolkit.ErrorHandling" Version="5.2.0" />
     <PackageVersion Include="FuzzySharp" Version="2.0.2" />

@@ -676,6 +676,9 @@ module McpTools =
     GetFeatureState: (unit -> Features.FeatureHooks.FeaturePushState) option
     /// In-memory agent activity tracker for multi-agent coordination.
     ActivityTracker: AgentActivityTracker.Tracker
+    /// Receives the live bound-value snapshot after each successful eval
+    /// (daemon wires this to the adaptive live-bindings store; None in tests).
+    LiveSnapshotSink: (string -> Features.LiveValueTree.LiveValueSnapshot -> unit) option
   }
 
   /// Get the active session ID for a specific agent/client.
@@ -1191,6 +1194,21 @@ module McpTools =
               | false -> notifyElm ctx (SageFsEvent.AffectedTestsComputed hookResult.AffectedTestIds)
               | true -> ()
             with ex -> Log.warn "Failed to deserialize hook result: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+          | None -> ()
+          // Live bound-value snapshot → adaptive live-bindings store (dashboard watch window).
+          match metadata |> Map.tryFind "liveValueSnapshotError" with
+          | Some err -> Log.warn "[Mcp.evalSingleStatement] liveValueSnapshot capture error: %s" err
+          | None -> ()
+          match metadata |> Map.tryFind "liveValueSnapshot" with
+          | Some json ->
+            try
+              let snap =
+                WorkerProtocol.Serialization.deserialize<Features.LiveValueTree.LiveValueSnapshot> json
+              match ctx.LiveSnapshotSink with
+              | Some sink ->
+                sink sid { snap with SessionId = sid }
+              | None -> ()
+            with ex -> Log.warn "Failed to deserialize live value snapshot: %s" ex.Message
           | None -> ()
           match metadata |> Map.tryFind "assemblyLoadErrors" with
           | Some json ->

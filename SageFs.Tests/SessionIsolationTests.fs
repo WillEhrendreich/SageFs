@@ -57,7 +57,8 @@ module McpSessionIsolation =
         GetElmRegions = None
         GetWarmupContext = None
         GetFeatureState = None
-        ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+        ActivityTracker = SageFs.AgentActivityTracker.create()
+        LiveSnapshotSink = None } : McpContext
     ctx, dispatched
 
   /// Call switchSession and return result, ignoring event store errors.
@@ -156,7 +157,8 @@ module McpSessionIsolation =
           GetElmRegions = None
           GetWarmupContext = None
           GetFeatureState = None
-          ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+          ActivityTracker = SageFs.AgentActivityTracker.create()
+          LiveSnapshotSink = None } : McpContext
 
       let! result = switchSession ctx "test" "ffff0001"
 
@@ -352,7 +354,8 @@ module WorkingDirRoutingPriority =
           NotifyWorkerDied = fun _ -> () }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
-      GetFeatureState = None; ActivityTracker = SageFs.AgentActivityTracker.create() }
+      GetFeatureState = None; ActivityTracker = SageFs.AgentActivityTracker.create()
+      LiveSnapshotSink = None }
 
   let tests = testSequenced <| testList "workingDirectory routing priority" [
     testTask "workingDirectory should override cached session" {
@@ -528,7 +531,8 @@ module ResetIsolation =
         GetElmRegions = None
         GetWarmupContext = None
         GetFeatureState = None
-        ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+        ActivityTracker = SageFs.AgentActivityTracker.create()
+        LiveSnapshotSink = None } : McpContext
     ctx, restartLog, routedSessions
 
   let mkStatusSyncCtx () =
@@ -615,7 +619,8 @@ module ResetIsolation =
         GetElmRegions = None
         GetWarmupContext = None
         GetFeatureState = None
-        ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+        ActivityTracker = SageFs.AgentActivityTracker.create()
+        LiveSnapshotSink = None } : McpContext
     ctx, sidStr, resetStarted, allowResetFinish
 
   let mkTransportFailureCtx () =
@@ -697,7 +702,8 @@ module ResetIsolation =
         GetElmRegions = None
         GetWarmupContext = None
         GetFeatureState = None
-        ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+        ActivityTracker = SageFs.AgentActivityTracker.create()
+        LiveSnapshotSink = None } : McpContext
     ctx, sidStr, workerDied, registryStatus
 
   let tests = testList "[Integration] Reset isolation" [
@@ -767,7 +773,8 @@ module ResetIsolation =
           GetElmRegions = None
           GetWarmupContext = None
           GetFeatureState = None
-          ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+          ActivityTracker = SageFs.AgentActivityTracker.create()
+          LiveSnapshotSink = None } : McpContext
 
       let hardResetTask = hardResetSession ctx "agent1" true (Some "aaa00001") None
       let! completed = Task.WhenAny(hardResetTask, Task.Delay(1000))
@@ -971,7 +978,8 @@ module ResetIsolation =
           GetElmRegions = None
           GetWarmupContext = None
           GetFeatureState = None
-          ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+          ActivityTracker = SageFs.AgentActivityTracker.create()
+          LiveSnapshotSink = None } : McpContext
 
       let! result = hardResetSession ctx "agent1" false (Some sidStr) None
 
@@ -1044,7 +1052,8 @@ module ResetIsolation =
           GetElmRegions = None
           GetWarmupContext = None
           GetFeatureState = None
-          ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+          ActivityTracker = SageFs.AgentActivityTracker.create()
+          LiveSnapshotSink = None } : McpContext
 
       // Act: call hardReset — this returns immediately after setting Restarting
       let! message = hardResetSession ctx "agent1" true (Some sidStr) None
@@ -1126,7 +1135,8 @@ module ResetIsolation =
           GetElmRegions = None
           GetWarmupContext = None
           GetFeatureState = None
-          ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+          ActivityTracker = SageFs.AgentActivityTracker.create()
+          LiveSnapshotSink = None } : McpContext
 
       let! message = hardResetSession ctx "agent1" true (Some sidStr) None
 

@@ -169,6 +169,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetSessionCoverageSummary = fun _ -> None
       GetSessionTestTreemap = fun _ -> [||]
       GetSessionBindings = fun _ -> [||]
+      GetLiveBindings = fun _ -> None
       GetBindingScopeSnapshot = fun () -> None
       GetLiveTestingStatus = fun () -> statusLabel
       GetLiveTestingActive = fun () -> isActive
@@ -196,6 +197,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       SystemAlarmBuffer = ref []
       TriggerStateChange = None
       ActivityTracker = None
+      LiveBindingsAdaptive = None
     }
 
   testTask "buildDashboardSnapshot carries rebuilding status into the live testing panel" {

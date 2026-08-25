@@ -411,6 +411,10 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         callbacks.OnDomainModel data
       | "diagnosis_ready" ->
         callbacks.OnDiagnosisReady data
+      | "live_bindings" ->
+        // Live bound-value watch window — intentionally a no-op for now;
+        // the dashboard consumes this event. Handled explicitly for parity.
+        ()
       | _ ->
         ())
 

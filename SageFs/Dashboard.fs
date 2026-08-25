@@ -354,7 +354,11 @@ let buildDashboardSnapshot
         | None -> renderSessionContextEmpty
       | false -> renderSessionContextEmpty
     let bindingsPanel =
-      renderBindingsPanel (resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings sessionId))
+      // Live watch window takes priority; fall back to the text-parsed panel
+      // for sessions that haven't produced a live snapshot yet.
+      match q.GetLiveBindings sessionId with
+      | Some liveSnap -> renderLiveBindingsPanel (Some liveSnap)
+      | None -> renderBindingsPanel (resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings sessionId))
     let liveTestingActive = q.GetLiveTestingActive ()
     let liveTestingStatus = q.GetLiveTestingStatus ()
     let (ltPassed, ltFailed) =
@@ -502,7 +506,39 @@ let createStreamHandler
         use _sub = evt.Subscribe(fun change ->
           try pushAgent.Post(change)
           with :? ObjectDisposedException -> ())
+        // Adaptive live-bindings subscription: patch ONLY the bindings panel when
+        // the session's snapshot changes (debugger watch window). Fires only on
+        // real change (FSharp.Data.Adaptive dedup), so no redundant renders.
+        let mutable liveBindingsSub : IDisposable option = None
+        let subscribeLiveBindings (sessionId: string) =
+          liveBindingsSub |> Option.iter (fun d -> d.Dispose())
+          liveBindingsSub <-
+            infra.LiveBindingsAdaptive
+            |> Option.bind (fun store ->
+              if String.IsNullOrEmpty(sessionId) then None
+              else
+                Some (SageFs.Features.LiveBindingsAdaptive.subscribe store sessionId (fun snap ->
+                  let panel =
+                    renderLiveBindingsPanel (Some snap)
+                  try
+                    ssePatchNode ctx panel |> Async.AwaitTask |> Async.RunSynchronously
+                  with
+                  | :? System.IO.IOException -> ()
+                  | :? ObjectDisposedException -> ()
+                  | :? OperationCanceledException -> ())))
+        subscribeLiveBindings currentSessionId
+        // Re-subscribe when the user switches sessions.
+        let sessionSwitchReg =
+          evt.Subscribe(fun change ->
+            match change with
+            | SessionSwitched sid ->
+              subscribeLiveBindings sid
+              try pushAgent.Post(change)
+              with :? ObjectDisposedException -> ()
+            | _ -> ())
         do! tcs.Task
+        liveBindingsSub |> Option.iter (fun d -> d.Dispose())
+        sessionSwitchReg.Dispose()
       | None ->
         // Fallback: poll every second
         while not ctx.RequestAborted.IsCancellationRequested do

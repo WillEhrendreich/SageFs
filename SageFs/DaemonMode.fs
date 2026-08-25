@@ -1436,6 +1436,9 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let sharedBindingScope : SageFs.Features.BindingExplorer.BindingScopeSnapshot option ref = ref None
   // Shared feature push state — gives Dashboard access to EvalTimeline sparkline data.
   let sharedFeatureState : SageFs.Features.FeatureHooks.FeaturePushState ref = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
+  // Adaptive live-bindings store — per-session cval cells updated after each eval;
+  // subscribers fire only when the snapshot actually changed (FSharp.Data.Adaptive).
+  let liveBindingsAdaptive = SageFs.Features.LiveBindingsAdaptive.create ()
 
   // Permanent binding-scope subscriber — updates sharedBindingScope on every eval completion
   // regardless of MCP SSE client connectivity. Fixes the dashboard "0 bindings" problem when
@@ -1475,6 +1478,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       SharedBindingScope = sharedBindingScope
       SharedFeatureState = Some sharedFeatureState
       ActivityTracker = activityTracker
+      LiveSnapshotSink = Some (fun sid snap ->
+        SageFs.Features.LiveBindingsAdaptive.update liveBindingsAdaptive sid snap)
     }
 
   let liveTestTickMs = 25
@@ -1690,6 +1695,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         | false -> [||]
       | None -> [||]
     GetBindingScopeSnapshot = fun () -> System.Threading.Volatile.Read(&sharedBindingScope.contents)
+    GetLiveBindings = fun sessionId ->
+      SageFs.Features.LiveBindingsAdaptive.tryGet liveBindingsAdaptive sessionId
     GetLiveTestingStatus = fun () ->
       let model = elmRuntime.GetModel()
       let activeId =
@@ -1833,18 +1840,31 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let dashboardActions : DashboardActions = {
     EvalCode = fun sid code -> task {
       let! result = proxyToSession getProxyStr notifyWorkerDiedStr sid (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
-      return
-        match result with
-        | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _)) ->
-          elmRuntime.Dispatch (SageFsMsg.Event (
-            SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
-          Ok msg
-        | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
-          let msg = SageFsError.describe err
-          elmRuntime.Dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed (sid, msg)))
-          Error msg
-        | Ok other -> Error (sprintf "Unexpected: %A" other)
-        | Error e -> Error (SageFsError.describe e)
+      match result with
+      | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, metadata)) ->
+        elmRuntime.Dispatch (SageFsMsg.Event (
+          SageFsEvent.EvalCompleted (sid, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
+        // Live binding watch window: feed the reflection-walked snapshot into the
+        // adaptive store. Subscribers fire only on real change; the existing
+        // EvalCompleted → ModelChanged morph re-renders the dashboard panel.
+        match metadata |> Map.tryFind "liveValueSnapshot" with
+        | Some json ->
+          try
+            let snap =
+              System.Text.Json.JsonSerializer.Deserialize<SageFs.Features.LiveValueTree.LiveValueSnapshot>(
+                json,
+                System.Text.Json.JsonSerializerOptions(PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase))
+            SageFs.Features.LiveBindingsAdaptive.update liveBindingsAdaptive sid { snap with SessionId = sid }
+          with ex ->
+            Log.warn "[DaemonMode] Failed to parse live value snapshot for %s: %s" sid ex.Message
+        | None -> ()
+        return Ok msg
+      | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
+        let msg = SageFsError.describe err
+        elmRuntime.Dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed (sid, msg)))
+        return Error msg
+      | Ok other -> return Error (sprintf "Unexpected: %A" other)
+      | Error e -> return Error (SageFsError.describe e)
     }
     ResetSession = fun sid -> task {
       let! result = proxyToSession getProxyStr notifyWorkerDiedStr sid (WorkerProtocol.WorkerMessage.ResetSession "dash")
@@ -1917,6 +1937,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       buf
     TriggerStateChange = Some (fun () -> stateChangedEvent.Trigger (ModelChanged (0, 0)))
     ActivityTracker = Some activityTracker
+    LiveBindingsAdaptive = Some liveBindingsAdaptive
     GetCompletions = Some (fun (sessionId: string) (code: string) (cursorPos: int) -> task {
       match String.IsNullOrEmpty(sessionId) with
       | true -> return []
@@ -1976,7 +1997,16 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     try cts.Cancel() with :? ObjectDisposedException -> ())
 
   AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
-    log.LogInformation("Daemon stopped"))
+    log.LogInformation("Daemon stopped")
+    // Belt-and-suspenders for issue #126: if the process is exiting through a
+    // path that skipped the graceful StopAll (e.g. Environment.Exit elsewhere,
+    // taskkill without /F), sweep worker PIDs so they don't become orphans.
+    // The worker-side parent-death watchdog (WorkerMain.ParentMonitor) is the
+    // primary defense for hard kills that skip ProcessExit entirely.
+    readSnapshot()
+    |> SessionManager.QuerySnapshot.allSessions
+    |> List.choose (fun session -> session.WorkerPid)
+    |> SessionManager.killWorkerPids)
 
   // Start MCP and dashboard servers FIRST so ports are listening
   let mcpRunning =

@@ -247,6 +247,18 @@ let formatBindingsSnapshotEvent
     |> injectSessionId sessionId
   formatSseEvent "bindings_snapshot" json
 
+/// Format a live bindings snapshot (the reflection-walked watch-window tree)
+/// as an SSE event string.
+let formatLiveBindingsEvent
+  (opts: JsonSerializerOptions)
+  (sessionId: string option)
+  (snapshot: Features.LiveValueTree.LiveValueSnapshot)
+  : string =
+  let json =
+    JsonSerializer.Serialize(snapshot, opts)
+    |> injectSessionId sessionId
+  formatSseEvent "live_bindings" json
+
 /// Format a test trace as an SSE event string
 let formatTestTraceEvent (sessionId: string option) (traceJson: string) : string =
   let json = injectSessionId sessionId traceJson
@@ -398,6 +410,7 @@ let allSseEventTypes : string list = [
   "failure_narratives"
   "test_source_locations"
   "bindings_snapshot"
+  "live_bindings"
   "test_trace"
   "eval_diff"
   "eval_started"

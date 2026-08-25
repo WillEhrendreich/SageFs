@@ -136,6 +136,12 @@ let handleMessage
           match v with
           | :? SageFs.Features.LiveTesting.LiveTestHookResultDto as dto ->
             acc |> Map.add k (WorkerProtocol.Serialization.serialize dto)
+          | :? string as s when k = "liveValueSnapshot" ->
+            // Live binding watch window — already a serialized JSON tree.
+            acc |> Map.add k s
+          | :? string as s when k = "liveValueSnapshotError" ->
+            // Diagnostic: capture failed — surface the reason to the daemon log.
+            acc |> Map.add k s
           | _ -> acc) Map.empty
       // Capture RunTest closure from the latest discovery
       let metaKeys = response.Metadata |> Map.toList |> List.map fst |> String.concat ", "

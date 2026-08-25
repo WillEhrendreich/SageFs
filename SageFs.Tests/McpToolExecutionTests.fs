@@ -65,7 +65,8 @@ let tests =
           GetElmRegions = None
           GetWarmupContext = None
           GetFeatureState = None
-          ActivityTracker = SageFs.AgentActivityTracker.create() }
+          ActivityTracker = SageFs.AgentActivityTracker.create()
+          LiveSnapshotSink = None }
 
       let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
       let toolTask = tools.hard_reset_fsi_session(true, "")

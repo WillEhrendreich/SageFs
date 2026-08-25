@@ -1006,6 +1006,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
   // Eval actor: owns AppState, serializes evals and session mutations.
   // Publishes immutable snapshots to query actor after each state change.
   let evalActor = MailboxProcessor<EvalCommand>.Start(fun mailbox ->
+    // Monotonic generation for live binding snapshots — lets consumers ignore
+    // stale/out-of-order snapshots.
+    let liveValueGeneration = ref 0L
     let rec loop st middleware sessionState evalStats =
       async {
         let! cmd = mailbox.Receive()
@@ -1064,7 +1067,36 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             let sessionState'' = SessionState.Ready
             let evalStats' = Affordances.EvalStats.record sw.Elapsed evalStats
             publishSnapshot newSt Idle evalStats'
-            match res.EvaluationResult with
+            // Live binding watch window: capture the REAL bound values from the
+            // FSI session (not the printed text) and attach a serialized tree to
+            // the response metadata so the daemon can update its adaptive store.
+            let resWithLiveValues =
+              try
+                // Session id is stamped by the worker/daemon boundary — the
+                // daemon keys its adaptive store by the session id it knows.
+                let boundValues =
+                  newSt.Session.GetBoundValues()
+                  |> List.map (fun bv ->
+                    let value =
+                      try bv.Value.ReflectionValue
+                      with _ -> null
+                    let typeSig =
+                      try
+                        match bv.Value.ReflectionType with
+                        | null -> ""
+                        | t -> t.Name
+                      with _ -> ""
+                    (bv.Name, typeSig, value))
+                let generation = System.Threading.Interlocked.Increment(&liveValueGeneration.contents)
+                let snap = Features.LiveValueTree.buildSnapshot "" generation boundValues
+                // Use WorkerProtocol.Serialization (FSharp.SystemTextJson) so the
+                // NodeKind DU and other F# types serialize correctly.
+                let json = WorkerProtocol.Serialization.serialize snap
+                { res with Metadata = res.Metadata |> Map.add "liveValueSnapshot" (box json) }
+              with ex ->
+                Log.warn "[AppState] Live value snapshot capture failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                { res with Metadata = res.Metadata |> Map.add "liveValueSnapshotError" (box ex.Message) }
+            match resWithLiveValues.EvaluationResult with
             | Ok result ->
               emit (Events.EvalCompleted {|
                 Code = code
@@ -1088,7 +1120,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                 emit (Events.EvalTraced {| Code = code; Stages = stages; TotalMs = totalMs |})
               | _ -> ()
             | None -> ()
-            reply.Reply res
+            reply.Reply resWithLiveValues
             return! loop newSt middleware sessionState'' evalStats'
           | Error ex ->
             let errResponse = {

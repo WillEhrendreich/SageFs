@@ -1629,6 +1629,79 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
     ]
   ]
 
+/// Render the live bindings watch window — a recursive, fully-delineated tree
+/// of the actual bound values in the FSI session (debugger-style).
+/// Each binding shows name : type + compact preview, with expandable children.
+let renderLiveBindingsPanel (snapshot: SageFs.Features.LiveValueTree.LiveValueSnapshot option) =
+  let kindBadge (node: SageFs.Features.LiveValueTree.LiveValueNode) =
+    match node.Kind with
+    | SageFs.Features.LiveValueTree.NodeKind.Closure ->
+      [ Elem.span [ Attr.class' "live-closure-badge"; Attr.title "Best-effort expansion of captured values" ] [ Text.raw "~(best-effort)" ] ]
+    | SageFs.Features.LiveValueTree.NodeKind.Cycle ->
+      [ Elem.span [ Attr.class' "live-cycle" ] [ Text.raw "↩ (cycle)" ] ]
+    | SageFs.Features.LiveValueTree.NodeKind.Truncated ->
+      [ Elem.span [ Attr.class' "live-truncated" ] [ Text.raw "… (truncated)" ] ]
+    | _ -> []
+  let rec renderNode (node: SageFs.Features.LiveValueTree.LiveValueNode) =
+    let hasChildren = not (List.isEmpty node.Children)
+    let row =
+      Elem.div [ Attr.class' "live-binding-node"; Attr.style (sprintf "padding-left: %dem;" (node.Depth)) ] [
+        Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [ Text.raw node.Label ]
+        Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; margin-left: 0.4em;" ] [ Text.raw node.TypeName ]
+        Elem.span [ Attr.class' "live-preview"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.7rem; margin-left: 0.4em; overflow-wrap: anywhere;" ] [
+          Text.raw (sprintf "= %s" node.Preview)
+        ]
+        yield! kindBadge node
+      ]
+    match hasChildren with
+    | false -> row
+    | true ->
+      Elem.details [ Attr.style "font-size: 0.75rem;" ] [
+        Elem.summary [ Attr.style "cursor: pointer; user-select: none; list-style: none;" ] [ row ]
+        Elem.div [ Attr.style "margin-top: 2px;" ] [
+          yield! node.Children |> List.map renderNode
+        ]
+      ]
+  let count = snapshot |> Option.map (fun s -> s.Bindings.Length) |> Option.defaultValue 0
+  let gen = snapshot |> Option.map (fun s -> s.Generation) |> Option.defaultValue 0L
+  let captured =
+    snapshot
+    |> Option.map (fun s -> s.CapturedAt.ToLocalTime().ToString("HH:mm:ss"))
+    |> Option.defaultValue ""
+  Elem.div [ Attr.id DomIds.BindingsPanel; Attr.class' "panel" ] [
+    Elem.details [] [
+      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;" ] [
+        Text.raw (sprintf "🔴 Live Bindings (%d)" count)
+        match snapshot with
+        | Some _ ->
+          Elem.span [ Attr.style "color: var(--fg-dim, #666); font-weight: normal; font-size: 0.65rem; margin-left: 0.5em;" ] [
+            Text.raw (sprintf "gen %d · %s" gen captured)
+          ]
+        | None -> ()
+      ]
+      match snapshot with
+      | None ->
+        Elem.div [ Attr.class' "meta" ] [ Text.raw "No live bindings yet — evaluate some code" ]
+      | Some s ->
+        match s.Bindings with
+        | [] ->
+          Elem.div [ Attr.class' "meta" ] [ Text.raw "No active bindings" ]
+        | bindings ->
+          Elem.div [ Attr.style "font-size: 0.75rem; max-height: 24em; overflow-y: auto;" ] [
+            yield! bindings |> List.map (fun b ->
+              Elem.div [ Attr.style "border-bottom: 1px solid var(--border, #333); padding: 2px 0;" ] [
+                renderNode b.Root
+              ])
+          ]
+          match s.Truncated with
+          | true ->
+            Elem.div [ Attr.class' "live-truncated"; Attr.style "font-size: 0.65rem; margin-top: 4px;" ] [
+              Text.raw "Some values truncated (depth/children limits)"
+            ]
+          | false -> ()
+    ]
+  ]
+
 /// Create the SSE stream handler that pushes Elm state to the browser.
 
 let private renderDiscoveredProjectsBody (discovered: DiscoveredProjects) = [

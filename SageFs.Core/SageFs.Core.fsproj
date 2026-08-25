@@ -70,6 +70,8 @@
         <Compile Include="Features\SessionFilmstrip.fs" />
         <Compile Include="Features\FsiOutputParser.fs" />
         <Compile Include="Features\BindingExplorer.fs" />
+        <Compile Include="Features\LiveValueTree.fs" />
+        <Compile Include="Features\LiveBindingsAdaptive.fs" />
         <Compile Include="Features\DomainModelViz.fs" />
         <Compile Include="Features\EvalTimeline.fs" />
         <Compile Include="Features\NotebookExport.fs" />
@@ -191,6 +193,7 @@
 
     <ItemGroup>
         <PackageReference Include="FSharp.Compiler.Service" />
+        <PackageReference Include="FSharp.Data.Adaptive" />
         <PackageReference Include="TreeSitter.DotNet" />
 
         <PackageReference Include="FuzzySharp" />

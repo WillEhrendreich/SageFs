@@ -540,6 +540,9 @@ type DashboardQueries = {
   GetSessionCoverageSummary: string -> Features.LiveTesting.CoverageSummary option
   GetSessionTestTreemap: string -> Features.LiveTesting.TestTreemapEntry array
   GetSessionBindings: string -> Features.BindingExplorer.BindingInfo array
+  /// Live reflection-walked binding tree for a session (debugger watch window),
+  /// from the adaptive store. None until the first eval snapshot arrives.
+  GetLiveBindings: string -> Features.LiveValueTree.LiveValueSnapshot option
   GetBindingScopeSnapshot: unit -> Features.BindingExplorer.BindingScopeSnapshot option
   GetLiveTestingStatus: unit -> string
   /// Whether live testing is currently Active or Inactive.
@@ -596,6 +599,9 @@ type DashboardInfra = {
   TriggerStateChange: (unit -> unit) option
   /// Agent activity tracker for multi-agent coordination.
   ActivityTracker: AgentActivityTracker.Tracker option
+  /// Adaptive live-bindings store — the dashboard stream subscribes to a
+  /// session's cell and patches only the bindings panel on change.
+  LiveBindingsAdaptive: Features.LiveBindingsAdaptive.State option
 }
 
 /// Complete snapshot of all dashboard state needed for a single full-page render.

@@ -472,6 +472,42 @@ h1 {
   gap: 0.5rem;
 }
 
+/* ── Live Bindings Watch Window ──────────────────────────────────── */
+
+.live-binding-node {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4em;
+  padding: 2px 0;
+  flex-wrap: wrap;
+}
+
+.live-preview {
+  color: var(--fg-green);
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
+}
+
+.live-closure-badge {
+  color: var(--fg-yellow);
+  font-size: 0.65rem;
+  font-style: italic;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+
+.live-cycle {
+  color: var(--fg-red);
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+
+.live-truncated {
+  color: var(--fg-dim);
+  font-size: 0.65rem;
+  font-style: italic;
+}
+
 .session-selected {
   background: var(--bg-selection);
   border-left: 3px solid var(--border-focus);

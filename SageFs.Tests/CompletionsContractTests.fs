@@ -52,7 +52,8 @@ let private mkCtxWithWorkerResponse (workerResponse: WorkerProtocol.WorkerRespon
     GetElmRegions = None
     GetWarmupContext = None
     GetFeatureState = None
-    ActivityTracker = SageFs.AgentActivityTracker.create() } : McpContext
+    ActivityTracker = SageFs.AgentActivityTracker.create()
+    LiveSnapshotSink = None } : McpContext
 
 [<Tests>]
 let completionsContractTests =

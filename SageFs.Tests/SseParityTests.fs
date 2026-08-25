@@ -55,6 +55,7 @@ let vscodeHandledEvents : Set<string> =
     "session_faulted"
     "domain_model"
     "diagnosis_ready"
+    "live_bindings"
   ]
 
 // ── Neovim EVENT_MAP key set ─────────────────────────────────────────────────
@@ -106,6 +107,7 @@ let neovimHandledEvents : Set<string> =
     "session"
     "domain_model"
     "diagnosis_ready"
+    "live_bindings"
   ]
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -113,14 +115,14 @@ let neovimHandledEvents : Set<string> =
 [<Tests>]
 let sseParityTests = testList "SSE Parity" [
 
-  test "allDaemonSseEvents contains 19 entries (17 SseWriter + session + state)" {
+  test "allDaemonSseEvents contains 20 entries (18 SseWriter + session + state)" {
     allDaemonSseEvents
-    |> Expect.hasLength "should have 19 daemon SSE event types" 19
+    |> Expect.hasLength "should have 20 daemon SSE event types" 20
   }
 
-  test "SseWriter.allSseEventTypes contains exactly 17 formatter event types" {
+  test "SseWriter.allSseEventTypes contains exactly 18 formatter event types" {
     SseWriter.allSseEventTypes
-    |> Expect.hasLength "SseWriter exposes 17 event type names" 17
+    |> Expect.hasLength "SseWriter exposes 18 event type names" 18
   }
 
   test "no duplicate entries in allDaemonSseEvents" {
@@ -173,6 +175,6 @@ let sseParityTests = testList "SSE Parity" [
     allDaemonSseEvents.Length
     |> Expect.equal
          "if this fails, you added a daemon SSE event — update vscodeHandledEvents, neovimHandledEvents, and this test"
-         19
+         20
   }
 ]
