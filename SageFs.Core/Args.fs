@@ -48,6 +48,9 @@ type WorkerConfig = {
   /// Interactive = full REPL (default). WebLive = save-driven hot reload.
   /// Derived from SAGEFS_HOT_RELOAD env var for backward compat.
   Workflow: WorkflowTypes.SessionWorkflow
+  /// PID of the daemon that spawned this worker (None when run standalone,
+  /// e.g. tests or manual worker invocation).
+  DaemonPid: int option
 }
   with
     /// Backward-compatible accessor.
@@ -59,6 +62,10 @@ module WorkerConfig =
   let noWatchEnvVar = "SAGEFS_NO_WATCH"
   let autoOpenNamespacesEnvVar = "SAGEFS_AUTO_OPEN_NAMESPACES"
   let hotReloadEnvVar = "SAGEFS_HOT_RELOAD"
+  /// PID of the daemon process that spawned this worker. Workers monitor this
+  /// so they can exit when the daemon is killed hard (Task Manager, taskkill /F,
+  /// crash) instead of becoming orphans (issue #126).
+  let daemonPidEnvVar = "SAGEFS_DAEMON_PID"
 
   /// Pure core — reads config via an injected env reader.
   let fromEnvironmentWith
@@ -86,6 +93,13 @@ module WorkerConfig =
       match getEnv hotReloadEnvVar with
       | "1" | "true" -> true
       | _ -> false
+    let daemonPid =
+      match getEnv daemonPidEnvVar with
+      | null | "" -> None
+      | s ->
+        match Int32.TryParse(s) with
+        | true, pid when pid > 0 -> Some pid
+        | _ -> None
     { SessionId = sessionId
       HttpPort = httpPort
       Projects = projects
@@ -93,7 +107,8 @@ module WorkerConfig =
       IsBare = isBare
       NoWatch = noWatch
       AutoOpenNamespaces = autoOpenNamespaces
-      Workflow = WorkflowTypes.SessionWorkflow.fromHotReloadBool hotReloadEnabled }
+      Workflow = WorkflowTypes.SessionWorkflow.fromHotReloadBool hotReloadEnabled
+      DaemonPid = daemonPid }
 
   /// Impure shell — reads from real environment.
   let fromEnvironment sessionId httpPort =
@@ -121,6 +136,8 @@ module ProjectLoadConfig =
 
 /// Pure function: builds worker spawn arguments + env vars.
 /// Extracted from SessionManager for testability.
+/// `daemonPid` is the PID of the daemon spawning the worker — workers monitor it
+/// so they self-exit when the daemon dies (issue #126: orphaned worker sessions).
 let buildWorkerSpawnConfig
   (sessionId: string)
   (projects: string list)
@@ -132,6 +149,7 @@ let buildWorkerSpawnConfig
   let args = sprintf "worker --session-id %s --http-port 0" sessionId
   let envVars = [
     WorkerConfig.envVar, (projects |> String.concat ";")
+    WorkerConfig.daemonPidEnvVar, string Environment.ProcessId
     if isBare then WorkerConfig.bareEnvVar, "1"
     if noWatch then WorkerConfig.noWatchEnvVar, "1"
     if not autoOpenNamespaces then WorkerConfig.autoOpenNamespacesEnvVar, "0"

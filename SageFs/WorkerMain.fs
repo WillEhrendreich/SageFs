@@ -8,6 +8,55 @@ open SageFs.WorkerProtocol
 open SageFs.AppState
 open SageFs.WarmUp
 
+/// Parent-death monitor: workers self-exit when the daemon dies.
+/// When the daemon is killed hard (Task Manager, taskkill /F, crash, OS
+/// shutdown), no Shutdown message ever arrives — without this, worker
+/// processes become orphans that outlive the daemon (issue #126).
+/// Pure decision logic, separated for testability.
+module ParentMonitor =
+  /// Decide whether the given daemon PID is still alive.
+  /// A PID that no longer exists (or was never valid) means the daemon is gone.
+  /// Any lookup failure is treated as "dead" — fail-closed so a worker can
+  /// never be orphaned by a monitor error.
+  let isDaemonAlive (getProcessById: int -> System.Diagnostics.Process option) (daemonPid: int) : bool =
+    try
+      match getProcessById daemonPid with
+      | None -> false
+      | Some p -> not p.HasExited
+    with _ -> false
+
+  /// Poll interval between daemon liveness checks.
+  let pollIntervalMs = 2000
+
+  /// Run the monitor loop. Cancels the provided CTS when the daemon dies,
+  /// which unwinds the worker's main wait (tcs in WorkerMain.run) and shuts
+  /// down the HTTP server, file watcher, and actor.
+  let run
+    (getProcessById: int -> System.Diagnostics.Process option)
+    (daemonPid: int)
+    (cts: CancellationTokenSource)
+    (log: string -> unit)
+    : Async<unit> =
+    async {
+      let mutable daemonGone = false
+      while not daemonGone && not cts.IsCancellationRequested do
+        do! Async.Sleep pollIntervalMs
+        match isDaemonAlive getProcessById daemonPid with
+        | true -> ()
+        | false ->
+          log (sprintf "Daemon (PID %d) no longer alive — worker exiting to avoid orphan" daemonPid)
+          daemonGone <- true
+          try cts.Cancel() with :? ObjectDisposedException -> ()
+    }
+
+  /// Real process lookup for production use.
+  let getProcessById (pid: int) : System.Diagnostics.Process option =
+    try
+      Some (System.Diagnostics.Process.GetProcessById(pid))
+    with
+    | :? ArgumentException -> None   // no such process — daemon gone
+    | :? InvalidOperationException -> None  // process already exited
+
 /// Convert internal Diagnostic to WorkerDiagnostic for transport.
 let toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiagnostic =
   { Severity = d.Severity
@@ -514,6 +563,19 @@ let run (sessionId: string) (port: int) = async {
 
   AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
     try cts.Cancel() with :? ObjectDisposedException -> ())
+
+  // Parent-death monitor: when the daemon is killed hard (Task Manager,
+  // taskkill /F, crash, OS shutdown), no Shutdown message ever arrives.
+  // Watching the daemon PID lets the worker self-exit instead of becoming
+  // an orphan (issue #126).
+  match workerConfig.DaemonPid with
+  | Some daemonPid ->
+    Log.info "Worker %s monitoring daemon PID %d (parent-death watchdog)" sessionId daemonPid
+    Async.Start(
+      ParentMonitor.run ParentMonitor.getProcessById daemonPid cts (fun msg ->
+        Log.warn "%s" msg))
+  | None ->
+    Log.debug "Worker %s has no daemon PID — parent-death watchdog disabled" sessionId
 
   try
     // Start HTTP server on requested port (0 = OS-assigned)

@@ -102,6 +102,21 @@ let workerConfigTests =
       let config = WorkerConfig.fromEnvironmentWith getEnv "abc123" 5050
       config.SessionId |> Expect.equal "should pass session id" "abc123"
       config.HttpPort |> Expect.equal "should pass port" 5050
+
+    testCase "SAGEFS_DAEMON_PID parses to Some" <| fun () ->
+      let getEnv = fakeEnv [ WorkerConfig.daemonPidEnvVar, "4242" ]
+      let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
+      config.DaemonPid |> Expect.equal "should parse daemon pid" (Some 4242)
+
+    testCase "missing SAGEFS_DAEMON_PID defaults to None" <| fun () ->
+      let getEnv = fakeEnv []
+      let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
+      config.DaemonPid |> Expect.equal "should default to None" None
+
+    testCase "invalid SAGEFS_DAEMON_PID defaults to None" <| fun () ->
+      let getEnv = fakeEnv [ WorkerConfig.daemonPidEnvVar, "not-a-pid" ]
+      let config = WorkerConfig.fromEnvironmentWith getEnv "test-id" 0
+      config.DaemonPid |> Expect.equal "should default to None on garbage" None
   ]
 
 // === Test Group 3: ProjectLoadConfig from WorkerConfig (pure) ===
@@ -115,6 +130,7 @@ let projectLoadConfigTests =
         WorkingDir = "."
         Projects = ["MyApp.fsproj"; "Solution.sln"; "Other.slnx"; "Lib.fsproj"]
         Workflow = SessionWorkflow.Interactive
+        DaemonPid = None
       }
       let plc = ProjectLoadConfig.fromWorkerConfig wc
       plc.Solutions
@@ -127,6 +143,7 @@ let projectLoadConfigTests =
         SessionId = "x"; HttpPort = 0; IsBare = false; NoWatch = false; AutoOpenNamespaces = true
         WorkingDir = "/tmp"; Projects = []
         Workflow = SessionWorkflow.Interactive
+        DaemonPid = None
       }
       let plc = ProjectLoadConfig.fromWorkerConfig wc
       plc.Projects |> Expect.isEmpty "no projects"
@@ -148,6 +165,13 @@ let workerSpawnConfigTests =
       |> List.tryFind (fun (k, _) -> k = WorkerConfig.envVar)
       |> Option.map snd
       |> Expect.equal "projects env" (Some "MyApp.fsproj")
+
+    testCase "sets SAGEFS_DAEMON_PID to the spawning process id" <| fun () ->
+      let _, envVars = buildWorkerSpawnConfig "s" [] false false true SessionWorkflow.Interactive
+      envVars
+      |> List.tryFind (fun (k, _) -> k = WorkerConfig.daemonPidEnvVar)
+      |> Option.map snd
+      |> Expect.equal "daemon pid env" (Some (string System.Environment.ProcessId))
 
     testCase "multiple projects semicolon-separated" <| fun () ->
       let _, envVars = buildWorkerSpawnConfig "s" ["A.fsproj"; "B.sln"] false false true SessionWorkflow.Interactive
