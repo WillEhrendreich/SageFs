@@ -43,6 +43,10 @@ let tests =
       
     testCase "after patch using Harmony"
     <| fun _ ->
+      // Harmony 2.4.2 does not support CoreCLR 11 (net11 preview) — skip
+      // there; the patch flow is covered on net10.
+      if Environment.Version.Major >= 11 then
+        skiptest "Harmony does not support CoreCLR 11 yet"
       TestMethods.IsPatched <- false
       let harmony = new Harmony("test.patch.prefix")
       let original = typeof<TestMethods>.GetMethod("MethodToPatch")
