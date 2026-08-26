@@ -5,6 +5,10 @@
         <IsPackable>false</IsPackable>
         <AssemblyName>SageFs.Host</AssemblyName>
         <RootNamespace>SageFs.Host</RootNamespace>
+        <!-- *.runtimeconfig.dev.json is a Debug-only hot-reload artifact, not in
+             the vetted manifest closure — disable its generation so the
+             fail-closed startup check never sees an unexpected file. -->
+        <GenerateRuntimeConfigDevFile>false</GenerateRuntimeConfigDevFile>
     </PropertyGroup>
 
     <ItemGroup>
@@ -40,11 +44,10 @@
         </PropertyGroup>
         <ItemGroup>
             <!-- Vetted closure: every file the host dir may contain. Includes
-                 the extensionless native host binary (Linux/macOS: SageFs.Host)
-                 and excludes Debug-only *.runtimeconfig.dev.json (not emitted
-                 in Release, and not in the closure). -->
+                 the extensionless native host binary (Linux/macOS: SageFs.Host).
+                 *.runtimeconfig.dev.json is a Debug-only MSBuild artifact and is
+                 deleted post-build (below), so it is never in the closure. -->
             <HostManifestFiles Include="$(TargetDir)*.dll;$(TargetDir)*.exe;$(TargetDir)*.pdb;$(TargetDir)*.deps.json;$(TargetDir)*.runtimeconfig.json;$(TargetDir)SageFs.Host" />
-            <HostManifestFiles Remove="$(TargetDir)*.runtimeconfig.dev.json" />
         </ItemGroup>
         <PropertyGroup>
             <HostManifestFilesList>@(HostManifestFiles-&gt;'&quot;%(Filename)%(Extension)&quot;', ',')</HostManifestFilesList>

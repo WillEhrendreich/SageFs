@@ -81,8 +81,8 @@ let private spawnHost (sessionId: string) =
       while line <> null do
         line <- proc.StandardError.ReadLine()
     with _ -> ())
-  let ok = portLine.Task.Wait(TimeSpan.FromSeconds(30.0))
-  Expect.isTrue "host should print WORKER_PORT within 30s" ok
+  let ok = portLine.Task.Wait(TimeSpan.FromSeconds(120.0))
+  Expect.isTrue "host should print WORKER_PORT within 120s" ok
   let baseUrl = portLine.Task.Result.TrimEnd('/')
   let proxy = HttpWorkerClient.httpProxy baseUrl
   proc, proxy
@@ -96,11 +96,16 @@ let private evalOk (proxy: WorkerProtocol.SessionProxy) (code: string) =
 let private waitReady (proxy: WorkerProtocol.SessionProxy) =
   let mutable ready = false
   let sw = Stopwatch.StartNew()
-  while not ready && sw.ElapsedMilliseconds < 60000 do
-    match proxy (WorkerProtocol.WorkerMessage.GetStatus(Guid.NewGuid().ToString("N"))) |> Async.RunSynchronously with
-    | WorkerProtocol.WorkerResponse.StatusResult (_, s) when s.Status = SessionStatus.Ready -> ready <- true
-    | _ -> Thread.Sleep 250
-  Expect.isTrue "session should reach Ready within 60s" ready
+  // Cold CI runners (Linux) can take >60s to warm up FSI + load the project.
+  // Transient HTTP errors are expected while Kestrel is coming up — retry.
+  while not ready && sw.ElapsedMilliseconds < 180000 do
+    try
+      match proxy (WorkerProtocol.WorkerMessage.GetStatus(Guid.NewGuid().ToString("N"))) |> Async.RunSynchronously with
+      | WorkerProtocol.WorkerResponse.StatusResult (_, s) when s.Status = SessionStatus.Ready -> ready <- true
+      | _ -> Thread.Sleep 500
+    with _ ->
+      Thread.Sleep 500
+  Expect.isTrue "session should reach Ready within 180s" ready
 
 let private httpGet (port: int) (path: string) =
   use client = new HttpClient()
