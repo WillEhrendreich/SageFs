@@ -303,6 +303,7 @@
         <Compile Include="VariantSelectorTests.fs" />
         <Compile Include="HostAdaptationTests.fs" />
         <Compile Include="SupervisorPortHandshakeTests.fs" />
+        <Compile Include="WebAppHotReloadVerificationTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

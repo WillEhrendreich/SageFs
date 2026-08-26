@@ -108,19 +108,61 @@
               PackagePath="runtimes\linux-arm64\native"
               CopyToOutputDirectory="PreserveNewest"
               Link="runtimes\linux-arm64\native\libtree-sitter-fsharp.so" />
+
+        <!-- The FSI host is a build-time dependency: the daemon spawns
+             SageFs.Host.exe from its own dir (Args.hostExePath). Reference
+             with PrivateAssets so the host exe + its DLLs ride in the tool's
+             normal tools/<tfm>/any/ payload (no subdir, no installer tricks). -->
+        <ProjectReference Include="..\SageFs.Host\SageFs.Host.fsproj"
+                          PrivateAssets="all"
+                          ReferenceOutputAssembly="false" />
+
+        <!-- PackAsTool drops the daemon's own exe when a referenced project
+             also produces an exe (the pack mis-identifies SageFs.Host.exe as
+             the tool). Explicitly include the daemon exe in the payload. -->
+        <None Include="$(TargetDir)SageFs.exe"
+              Pack="true"
+              PackagePath="tools\$(TargetFramework)\any" />
+
+        <!-- The FSI host runs from its OWN host/ subdir (the whole point of
+             isolation — the host must not share a dir with the daemon's files,
+             or its fail-closed manifest check rightly refuses). Pack the host's
+             full output under tools/<tfm>/any/host/; the daemon spawns
+             host/SageFs.Host.exe (Args.hostExePath). No ProjectReference — it
+             would copy the host flat into the daemon's dir (recreating the
+             collision) and break the tool's exe detection. Build ordering is
+             via the BuildHostForDaemon target below. -->
+        <None Include="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*"
+              Exclude="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*.runtimeconfig.dev.json"
+              Condition="Exists('..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\SageFs.Host.dll')"
+              Pack="true"
+              PackagePath="tools\$(TargetFramework)\any\host"
+              LinkBase="hostout" />
     </ItemGroup>
 
     <!--
       Ship the FSI host alongside the daemon. The daemon spawns
       SageFs.Host.exe relative to its own base dir (Args.hostExePath), so the
-      host's build output must land in the daemon's output dir AND in the
-      tool package (tools/<tfm>/any/host/).
+      host's build output must land in the daemon's output dir (dev) AND in
+      the tool package under tools/<tfm>/any/host/ (installed tool).
     -->
+    <Target Name="BuildHostForDaemon" BeforeTargets="Build;Pack">
+        <MSBuild Projects="..\SageFs.Host\SageFs.Host.fsproj"
+                 Targets="Build"
+                 Properties="Configuration=$(Configuration)" />
+    </Target>
+
     <Target Name="CopyHostOutput" AfterTargets="Build">
         <ItemGroup>
+            <!-- Exclude the Debug-only *.runtimeconfig.dev.json — it is not in
+                 the vetted manifest and the host's fail-closed check would
+                 refuse to start with it present. -->
             <HostFiles Include="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*"
+                        Exclude="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*.runtimeconfig.dev.json"
                         Condition="Exists('..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)')" />
         </ItemGroup>
+        <!-- Copy the host's FULL output into the daemon's host/ subdir so the
+             daemon spawns host/SageFs.Host.exe with its isolated closure. -->
         <Copy SourceFiles="@(HostFiles)"
               DestinationFiles="@(HostFiles->'$(TargetDir)host\%(RecursiveDir)%(Filename)%(Extension)')"
               SkipUnchangedFiles="true" />
