@@ -37,11 +37,9 @@
         <Compile Include="Dashboard.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpServer.fs" />
-        <Compile Include="WorkerHttpTransport.fs" />
-        <Compile Include="DevReloadMiddleware.fs" />
+                <Compile Include="DevReloadMiddleware.fs" />
         <Compile Include="DevReloadInjector.fs" />
-        <Compile Include="WorkerMain.fs" />
-        <Compile Include="ConsoleInput.fs" />
+                <Compile Include="ConsoleInput.fs" />
         <Compile Include="TerminalMode.fs" />
         <Compile Include="TuiClient.fs" />
         <Compile Include="SageTuiClient.fs" />
@@ -49,6 +47,8 @@
         <Compile Include="WatchdogRunner.fs" />
         <Compile Include="JupyterTransport.fs" />
         <Compile Include="EnvCheck.fs" />
+    <Compile Include="..\SageFs.Worker\WorkerHttpTransport.fs" Link="WorkerHttpTransport.fs" />
+    <Compile Include="..\SageFs.Worker\WorkerMain.fs" Link="WorkerMain.fs" />
         <Compile Include="Program.fs" />
         <None Include="..\Readme.md">
           <Pack>true</Pack>
