@@ -222,6 +222,11 @@ jobs:
     - name: Push to NuGet
       run: dotnet nuget push "release/SageFs.${{ steps.manifest.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
+    - name: Checkout source (for release notes)
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
     - name: Generate release notes
       id: release_notes
       shell: pwsh
@@ -229,12 +234,24 @@ jobs:
         # Build real release notes from the conventional commits between the
         # previous release tag and this release's source SHA. The notes
         # explain the PROBLEMS SOLVED, not just a commit list.
-        git fetch --tags --depth 200 origin
-        $prevTag = git describe --tags --abbrev=0 "${{ steps.manifest.outputs.source_sha }}"^ 2>$null
-        if (-not $prevTag) { $prevTag = $(git tag --sort=-creatordate | Select-Object -First 1) }
+        # git failures must not fail the step: every call is wrapped so a
+        # missing repo/tag yields empty results (release notes degrade to
+        # "capabilities only" instead of blocking the publish).
+        git fetch --tags --depth 200 origin 2>$null | Out-Null
+        $prevTag = $null
+        try {
+          $prevTag = git describe --tags --abbrev=0 "${{ steps.manifest.outputs.source_sha }}"^ 2>$null
+        } catch { $prevTag = $null }
+        if (-not $prevTag) {
+          try { $prevTag = (git tag --sort=-creatordate 2>$null | Select-Object -First 1) } catch { $prevTag = $null }
+        }
         $range = if ($prevTag) { "$prevTag..${{ steps.manifest.outputs.source_sha }}" } else { "${{ steps.manifest.outputs.source_sha }}" }
-        $commits = git log --pretty=format:"%s" $range 2>$null
-        if (-not $commits) { $commits = git log --pretty=format:"%s" -20 }
+        $commits = $null
+        try { $commits = git log --pretty=format:"%s" $range 2>$null } catch { $commits = $null }
+        if (-not $commits) {
+          try { $commits = git log --pretty=format:"%s" -20 2>$null } catch { $commits = $null }
+        }
+        if (-not $commits) { $commits = @() }
 
         $feats = @(); $fixes = @(); $chores = @(); $tests = @()
         foreach ($c in $commits) {
@@ -289,6 +306,9 @@ jobs:
         Set-Content -Path $notesPath -Value $sb.ToString() -Encoding UTF8
         Write-Host "Release notes generated ($($commits.Count) commits since $prevTag)"
         "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
+        # Never let a git command's exit code fail the step (git failures are
+        # already handled above as empty results).
+        exit 0
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
