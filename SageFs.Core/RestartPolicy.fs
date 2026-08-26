@@ -19,6 +19,13 @@ module RestartPolicy =
     /// Window for counting restarts. Restarts older than this are forgotten.
     /// Prevents permanent give-up after spaced-out transient failures.
     ResetWindow: TimeSpan
+    /// Circuit breaker: a crash within this window of the previous restart is
+    /// a STARTUP crash (host failing to come up). Startup crashes back off 4x
+    /// and give up at a lower ceiling — a host that fails to start is almost
+    /// always a permanent config error, so fail fast rather than burn cycles.
+    StartupCrashWindow: TimeSpan
+    /// Ceiling for startup-crash loops (lower than MaxRestarts).
+    StartupCrashMaxRestarts: int
   }
 
   /// Per-session restart tracking state.
@@ -50,6 +57,8 @@ module RestartPolicy =
     BackoffBase = TimeSpan.FromSeconds 1.0
     BackoffMax = TimeSpan.FromSeconds 30.0
     ResetWindow = TimeSpan.FromMinutes 5.0
+    StartupCrashWindow = TimeSpan.FromSeconds 10.0
+    StartupCrashMaxRestarts = 3
   }
 
   /// Calculate the backoff delay for a given restart count.
@@ -68,8 +77,11 @@ module RestartPolicy =
   ///
   /// Rules:
   /// 1. If the reset window has expired since the first restart, counts reset to zero.
-  /// 2. If restart count has reached max, give up.
-  /// 3. Otherwise, restart with exponential backoff delay.
+  /// 2. Circuit breaker: if the previous crash was a STARTUP crash (within
+  ///    StartupCrashWindow of the prior restart), the ceiling drops to
+  ///    StartupCrashMaxRestarts and the backoff multiplies by 4x.
+  /// 3. If restart count has reached the (effective) max, give up.
+  /// 4. Otherwise, restart with exponential backoff delay.
   let decide
     (policy: Policy)
     (state: State)
@@ -82,7 +94,20 @@ module RestartPolicy =
         emptyState
       | _ -> state
 
-    match effectiveState.RestartCount >= policy.MaxRestarts with
+    // Circuit breaker: is this a startup-crash loop? The previous restart was
+    // recent (within StartupCrashWindow of now) — the host keeps dying right
+    // after starting.
+    let isStartupCrash =
+      match effectiveState.LastRestartAt with
+      | Some last when (now - last) <= policy.StartupCrashWindow -> true
+      | _ -> false
+
+    let maxRestarts =
+      match isStartupCrash with
+      | true -> policy.StartupCrashMaxRestarts
+      | false -> policy.MaxRestarts
+
+    match effectiveState.RestartCount >= maxRestarts with
     | true ->
       let error =
         SageFsError.RestartLimitExceeded(
@@ -91,7 +116,14 @@ module RestartPolicy =
       Decision.GiveUp error, effectiveState
     | false ->
       let newCount = effectiveState.RestartCount + 1
-      let delay = nextBackoff policy newCount
+      // Startup crashes back off at a fixed 4x base (circuit breaker): the
+      // second startup-crash backoff is 4x the first (1s -> 4s), not 2x.
+      let delay =
+        match isStartupCrash with
+        | true ->
+          let multiplied = policy.BackoffBase.TotalMilliseconds * 4.0
+          TimeSpan.FromMilliseconds(min multiplied policy.BackoffMax.TotalMilliseconds)
+        | false -> nextBackoff policy newCount
       let newState = {
         RestartCount = newCount
         LastRestartAt = Some now

@@ -1389,6 +1389,8 @@ let restartPolicyTests = testList "RestartPolicy" [
     BackoffBase = TimeSpan.FromSeconds 1.0
     BackoffMax = TimeSpan.FromSeconds 30.0
     ResetWindow = TimeSpan.FromMinutes 1.0
+    StartupCrashWindow = TimeSpan.FromSeconds 10.0
+    StartupCrashMaxRestarts = 3
   }
   testList "nextBackoff" [
     test "count 0 returns base delay" {
@@ -2254,7 +2256,9 @@ let private mkWatchdogConfig maxRestarts (grace: float) =
       { Policy.MaxRestarts = maxRestarts
         BackoffBase = TimeSpan.FromSeconds(1.0: float)
         BackoffMax = TimeSpan.FromSeconds(30.0: float)
-        ResetWindow = TimeSpan.FromMinutes(5.0: float) }
+        ResetWindow = TimeSpan.FromMinutes(5.0: float)
+        StartupCrashWindow = TimeSpan.FromSeconds(10.0)
+        StartupCrashMaxRestarts = 3 }
     GracePeriod = TimeSpan.FromSeconds(grace) }
 
 let private mkWatchdogState pid lastStarted =

@@ -20,11 +20,14 @@ let genPolicy =
     let! backoffBaseMs = Gen.choose (100, 5000)
     let! backoffMaxMs = Gen.choose (backoffBaseMs, 60000)
     let! resetWindowMin = Gen.choose (1, 30)
+    let! startupCrashWindowMs = Gen.choose (100, 10000)
     return {
       RestartPolicy.Policy.MaxRestarts = maxRestarts
       RestartPolicy.Policy.BackoffBase = TimeSpan.FromMilliseconds(float backoffBaseMs)
       RestartPolicy.Policy.BackoffMax = TimeSpan.FromMilliseconds(float backoffMaxMs)
       RestartPolicy.Policy.ResetWindow = TimeSpan.FromMinutes(float resetWindowMin)
+      RestartPolicy.Policy.StartupCrashWindow = TimeSpan.FromMilliseconds(float startupCrashWindowMs)
+      RestartPolicy.Policy.StartupCrashMaxRestarts = 3
     }
   }
 

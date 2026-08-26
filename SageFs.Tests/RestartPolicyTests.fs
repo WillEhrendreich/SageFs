@@ -59,8 +59,12 @@ let decideTests = testList "decide" [
   }
 
   test "successive restarts increase backoff" {
+    // Restarts spaced beyond the startup-crash window (10s) are steady-state
+    // crashes: backoff grows 2x (1s -> 2s). (Rapid restarts within the window
+    // hit the circuit breaker and back off 4x — covered by
+    // RestartPolicyCircuitBreakerTests.)
     let _, s1 = decide defaultPolicy emptyState now
-    let d2, s2 = decide defaultPolicy s1 (now.AddSeconds(2.0))
+    let d2, s2 = decide defaultPolicy s1 (now.AddSeconds(30.0))
     match d2 with
     | Decision.Restart delay ->
       Expect.equal "2s delay" (TimeSpan.FromSeconds 2.0) delay
@@ -70,11 +74,13 @@ let decideTests = testList "decide" [
   }
 
   test "gives up after max restarts" {
+    // Steady-state restarts (spaced beyond the startup window) hit the full
+    // MaxRestarts ceiling of 5.
     let mutable state = emptyState
     for i in 1..5 do
-      let _, s = decide defaultPolicy state (now.AddSeconds(float i))
+      let _, s = decide defaultPolicy state (now.AddSeconds(float i * 30.0))
       state <- s
-    let decision, _ = decide defaultPolicy state (now.AddSeconds(6.0))
+    let decision, _ = decide defaultPolicy state (now.AddSeconds(6.0 * 30.0))
     match decision with
     | Decision.GiveUp error ->
       let desc = SageFsError.describe error
@@ -86,7 +92,7 @@ let decideTests = testList "decide" [
   test "window reset allows restart after cooldown" {
     let mutable state = emptyState
     for i in 1..5 do
-      let _, s = decide defaultPolicy state (now.AddSeconds(float i))
+      let _, s = decide defaultPolicy state (now.AddSeconds(float i * 30.0))
       state <- s
     // 6 minutes later — beyond the 5 minute reset window
     let decision, newState =
@@ -126,7 +132,9 @@ let propertyTests = testList "properties" [
 
   testPropertyWithConfig propConfig "decide: restart count increases monotonically" <|
     fun (PositiveInt n) ->
-      let steps = min n 4
+      // Cap at the startup-crash ceiling (3) — beyond that the circuit
+      // breaker gives up (count stops increasing), which is correct.
+      let steps = min n 3
       let mutable state = emptyState
       for i in 1..steps do
         let _, s = decide defaultPolicy state (now.AddSeconds(float i))
