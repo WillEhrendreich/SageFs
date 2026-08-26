@@ -4,6 +4,7 @@ open System
 open System.Diagnostics
 open System.IO
 open System.Net.Http
+open System.Text
 open System.Threading
 open System.Threading.Tasks
 open Expecto
@@ -44,7 +45,8 @@ let private freePort () =
 /// The fixture project is passed EXPLICITLY via SAGEFS_SESSION_PROJECTS so
 /// the host never walks up to the repo root and loads SageFs.slnx (which
 /// would warm up 200+ namespaces and make the test take minutes).
-let private spawnHost (sessionId: string) =
+/// `hostLog` accumulates the host's stdout/stderr for failure diagnostics.
+let private spawnHost (sessionId: string) (hostLog: StringBuilder) =
   let exe = hostExePath ()
   let args, envVars = Args.buildWorkerSpawnConfig sessionId [] false false true (SageFs.WorkflowTypes.SessionWorkflow.WebLive SageFs.WorkflowTypes.BrowserRefreshConfig.defaults)
   let psi = ProcessStartInfo(exe, args)
@@ -71,6 +73,7 @@ let private spawnHost (sessionId: string) =
     try
       let mutable line = proc.StandardOutput.ReadLine()
       while line <> null do
+        lock hostLog (fun () -> hostLog.AppendLine(line) |> ignore)
         if line.StartsWith("WORKER_PORT=", StringComparison.Ordinal) then
           portLine.TrySetResult(line.Substring("WORKER_PORT=".Length)) |> ignore
         line <- proc.StandardOutput.ReadLine()
@@ -79,10 +82,12 @@ let private spawnHost (sessionId: string) =
     try
       let mutable line = proc.StandardError.ReadLine()
       while line <> null do
+        lock hostLog (fun () -> hostLog.AppendLine(line) |> ignore)
         line <- proc.StandardError.ReadLine()
     with _ -> ())
   let ok = portLine.Task.Wait(TimeSpan.FromSeconds(120.0))
-  Expect.isTrue "host should print WORKER_PORT within 120s" ok
+  if not ok then
+    failwithf "host did not print WORKER_PORT within 120s. Host log:\n%s" (hostLog.ToString())
   let baseUrl = portLine.Task.Result.TrimEnd('/')
   let proxy = HttpWorkerClient.httpProxy baseUrl
   proc, proxy
@@ -93,7 +98,7 @@ let private evalOk (proxy: WorkerProtocol.SessionProxy) (code: string) =
   | WorkerProtocol.WorkerResponse.EvalResult (_, Error err, _, _) -> failwithf "eval failed: %A" err
   | other -> failwithf "unexpected response: %A" other
 
-let private waitReady (proxy: WorkerProtocol.SessionProxy) =
+let private waitReady (proxy: WorkerProtocol.SessionProxy) (hostLog: StringBuilder) =
   let mutable ready = false
   let sw = Stopwatch.StartNew()
   // Cold CI runners (Linux) can take >60s to warm up FSI + load the project.
@@ -105,7 +110,8 @@ let private waitReady (proxy: WorkerProtocol.SessionProxy) =
       | _ -> Thread.Sleep 500
     with _ ->
       Thread.Sleep 500
-  Expect.isTrue "session should reach Ready within 180s" ready
+  if not ready then
+    failwithf "session did not reach Ready within 180s. Host log:\n%s" (hostLog.ToString())
 
 let private httpGet (port: int) (path: string) =
   use client = new HttpClient()
@@ -127,10 +133,11 @@ let webAppHotReloadVerificationTests =
       Expect.isTrue "fixture App.fs should exist" (File.Exists appSource)
 
       let sessionId = sprintf "webapp-verify-%s" (Guid.NewGuid().ToString("N"))
-      let proc, proxy = spawnHost sessionId
+      let hostLog = StringBuilder()
+      let proc, proxy = spawnHost sessionId hostLog
       try
         // 1. Wait for the session to be Ready.
-        waitReady proxy
+        waitReady proxy hostLog
 
         // 2. Load the fixture source into the FSI session.
         let loadResult = evalOk proxy (sprintf "#load @\"%s\"" appSource)
