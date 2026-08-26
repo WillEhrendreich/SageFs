@@ -104,7 +104,7 @@ module RestartPolicy =
 
     let maxRestarts =
       match isStartupCrash with
-      | true -> policy.StartupCrashMaxRestarts
+      | true -> min policy.StartupCrashMaxRestarts policy.MaxRestarts
       | false -> policy.MaxRestarts
 
     match effectiveState.RestartCount >= maxRestarts with

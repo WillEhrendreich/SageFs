@@ -276,7 +276,11 @@ let sessionManagerRestartTombstoneTests =
       withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
 
-        for attempt in 1 .. RestartPolicy.defaultPolicy.MaxRestarts do
+        // Rapid (back-to-back) crashes are STARTUP crashes: the circuit
+        // breaker faults at the startup ceiling (3), not MaxRestarts (5).
+        let startupCeiling = RestartPolicy.defaultPolicy.StartupCrashMaxRestarts
+
+        for attempt in 1 .. startupCeiling do
           let sessionBeforeCrash = getManagedSession harness info.Id
           let workerPid = getWorkerPid sessionBeforeCrash
 
@@ -399,7 +403,11 @@ let sessionManagerRestartTombstoneTests =
         |> Option.map (fun session -> session.Info.Status)
         |> Expect.equal "worker exit should move the session into restarting state" (Some SessionStatus.Restarting)
 
-        for attempt in 1 .. (RestartPolicy.defaultPolicy.MaxRestarts - 1) do
+        // Rapid crashes are STARTUP crashes: the circuit breaker faults at
+        // the startup ceiling (3), not MaxRestarts (5).
+        let startupCeiling = RestartPolicy.defaultPolicy.StartupCrashMaxRestarts
+
+        for attempt in 1 .. (startupCeiling - 1) do
           harness.Mailbox.Post(SessionCommand.ScheduleRestart info.Id)
 
           let session = getManagedSession harness info.Id

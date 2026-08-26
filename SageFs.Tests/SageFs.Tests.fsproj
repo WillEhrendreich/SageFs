@@ -301,6 +301,7 @@
         <Compile Include="RestartPolicyCircuitBreakerTests.fs" />
         <Compile Include="HostManifestTests.fs" />
         <Compile Include="VariantSelectorTests.fs" />
+        <Compile Include="HostAdaptationTests.fs" />
         <Compile Include="SupervisorPortHandshakeTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
