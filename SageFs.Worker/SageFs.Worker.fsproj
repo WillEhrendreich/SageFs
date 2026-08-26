@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsPackable>false</IsPackable>
+        <AssemblyName>SageFs.Worker</AssemblyName>
+        <RootNamespace>SageFs.Worker</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="WorkerHttpTransport.fs" />
+        <Compile Include="WorkerMain.fs" />
+        <Compile Include="Program.fs" />
+    </ItemGroup>
+
+</Project>
