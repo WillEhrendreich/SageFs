@@ -229,7 +229,10 @@ module SessionManager =
     (onExited: int -> int -> unit)
     : Result<Process, SageFsError> =
     let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) projects false false autoOpenNamespaces workflow
-    let exePath = Process.GetCurrentProcess().MainModule.FileName
+    // Spawn the FSI HOST exe (separate minimal-closure process), resolved
+    // relative to the daemon's own location. No more in-process `worker`
+    // dispatch — the host is its own process (see plan: fsi-host-supervisor).
+    let exePath = Args.hostExePath (System.AppContext.BaseDirectory)
 
     let psi = ProcessStartInfo()
     psi.FileName <- exePath
@@ -240,9 +243,9 @@ module SessionManager =
     psi.RedirectStandardOutput <- true
     psi.RedirectStandardError <- true
 
-    // Propagate OTel env vars so workers export to the same collector
-    for (key, value) in Instrumentation.workerOtelEnvVars (SessionId.value sessionId) do
-      psi.Environment.[key] <- value
+    // The host's stdout carries the WORKER_PORT= ready line (validated by the
+    // supervisor); its stderr carries diagnostics (forwarded to the daemon log).
+    // No OTel env vars — the host carries no OpenTelemetry (minimal closure).
 
     // Propagate session config as env vars so worker startup stays independent of daemon CLI flags
     for (key, value) in envVars do

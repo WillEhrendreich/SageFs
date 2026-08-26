@@ -161,10 +161,17 @@ let workerSpawnConfigTests =
       args |> Expect.stringContains "should have session id" "sess1"
       (args.Contains "--proj")
       |> Expect.isFalse "no --proj in args"
+      (args.Contains "--session-id")
+      |> Expect.isFalse "host takes positional args, not --session-id"
+      args |> Expect.stringEnds "host takes positional httpPort (0 = ephemeral)" "0"
       envVars
       |> List.tryFind (fun (k, _) -> k = WorkerConfig.envVar)
       |> Option.map snd
       |> Expect.equal "projects env" (Some "MyApp.fsproj")
+
+    testCase "hostExePath resolves relative to the daemon base dir" <| fun () ->
+      let path = hostExePath @"C:\daemon\bin"
+      Expect.equal "host exe path" @"C:\daemon\bin\SageFs.Host.exe" path
 
     testCase "sets SAGEFS_DAEMON_PID to the spawning process id" <| fun () ->
       let _, envVars = buildWorkerSpawnConfig "s" [] false false true SessionWorkflow.Interactive

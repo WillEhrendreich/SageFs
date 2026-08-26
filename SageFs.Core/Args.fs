@@ -138,6 +138,10 @@ module ProjectLoadConfig =
 /// Extracted from SessionManager for testability.
 /// `daemonPid` is the PID of the daemon spawning the worker — workers monitor it
 /// so they self-exit when the daemon dies (issue #126: orphaned worker sessions).
+///
+/// The FSI host takes POSITIONAL args: `<sessionId> <httpPort>` (see
+/// SageFs.Host/Program.fs). The port is OS-assigned (`0` = ephemeral); the
+/// host prints `WORKER_PORT=<url>` on stdout and the supervisor validates it.
 let buildWorkerSpawnConfig
   (sessionId: string)
   (projects: string list)
@@ -146,7 +150,7 @@ let buildWorkerSpawnConfig
   (autoOpenNamespaces: bool)
   (workflow: WorkflowTypes.SessionWorkflow)
   : string * (string * string) list =
-  let args = sprintf "worker --session-id %s --http-port 0" sessionId
+  let args = sprintf "%s 0" sessionId
   let envVars = [
     WorkerConfig.envVar, (projects |> String.concat ";")
     WorkerConfig.daemonPidEnvVar, string Environment.ProcessId
@@ -156,6 +160,13 @@ let buildWorkerSpawnConfig
     if WorkflowTypes.SessionWorkflow.isHotReloadActive workflow then WorkerConfig.hotReloadEnvVar, "1"
   ]
   args, envVars
+
+/// Resolve the FSI host exe path relative to the daemon's own location.
+/// Dev layout: <repo>/SageFs/bin/<cfg>/<tfm>/SageFs.Host.exe (built alongside).
+/// Tool layout: <tool store>/tools/<tfm>/any/SageFs.Host.exe (packaged with the tool).
+/// Pure: takes the daemon's base directory so tests can pin the resolution.
+let hostExePath (daemonBaseDir: string) : string =
+  Path.Combine(daemonBaseDir, "SageFs.Host.exe")
 
 
 
