@@ -257,33 +257,55 @@ let run (sessionId: string) (port: int) = async {
   match projectBinDirs with
   | [] -> ()
   | dirs ->
-    let projectOwnNames =
-      loadConfig.Projects
-      |> List.map (fun p -> System.IO.Path.GetFileNameWithoutExtension p)
-      |> Set.ofList
-    let preloaded =
+    // ALC-equivalent isolation: the worker process's own directory bundles
+    // SageFs's dashboard-only dependencies (Falco 5.2.0, Falco.Datastar, ...).
+    // Those assemblies are NEVER used by the worker code path (only the daemon
+    // renders the dashboard), but their presence in the base dir makes FSI's
+    // runtime probe bind them FIRST — so a user project using a DIFFERENT
+    // version (e.g. Falco 6.0.0-beta1) fails with 0x80131040 on #load.
+    // Quarantine: before FSI init, move any worker-bundled DLL that the
+    // project's bin also provides into a subdir. The project's versions then
+    // resolve cleanly — exactly the isolation a separate ALC would give.
+    let projectBinNames =
       dirs
       |> List.collect (fun dir ->
         System.IO.Directory.EnumerateFiles(dir, "*.dll", System.IO.SearchOption.TopDirectoryOnly)
+        |> Seq.map System.IO.Path.GetFileName
         |> Seq.toList)
-      |> List.filter (fun dll ->
-        let name = System.IO.Path.GetFileName dll
+      |> Set.ofList
+    let baseDir = System.AppContext.BaseDirectory
+    let quarantineDir = System.IO.Path.Combine(baseDir, "_sagefs_quarantine")
+    // NEVER quarantine runtime-critical assemblies the worker itself needs to
+    // function (FSharp.Core is the prime example — the FSI session loads it
+    // from the worker's base dir and must get the worker's own version).
+    let criticalNames =
+      Set.ofList [
+        "FSharp.Core.dll"
+        // The worker's JSON/DU serialization uses FSharp.SystemTextJson —
+        // quarantining it breaks worker<->daemon message transport.
+        "FSharp.SystemTextJson.dll"
+      ]
+    let quarantined =
+      projectBinNames
+      |> Seq.filter (fun name ->
         not (name.EndsWith(".resources.dll", System.StringComparison.OrdinalIgnoreCase))
-        && not (name.Contains("aspnetcorev2", System.StringComparison.OrdinalIgnoreCase)))
-      // Load the project's OWN assemblies LAST: loading them first would make
-      // the CLR resolve their dependencies (Falco, Marten, ...) from SageFs's
-      // bundled copies. Loading deps first binds the project's versions.
-      |> List.sortBy (fun dll ->
-        let name = System.IO.Path.GetFileNameWithoutExtension dll
-        if projectOwnNames.Contains name then 1 else 0)
-      |> List.fold (fun (ok, failed) dll ->
-        try
-          System.Reflection.Assembly.LoadFrom(dll) |> ignore
-          ok + 1, failed
-        with ex -> ok, (dll, ex.Message) :: failed) (0, [])
-    Log.info "Worker %s: pre-loaded %d project assemblies from %d bin dir(s) (project-first binding); %d failed" sessionId (fst preloaded) dirs.Length (List.length (snd preloaded))
-    for dll, msg in snd preloaded |> List.truncate 10 do
-      Log.warn "Worker %s: pre-load failed for %s: %s" sessionId (System.IO.Path.GetFileName dll) msg
+        && not (criticalNames.Contains name))
+      |> Seq.choose (fun name ->
+        let own = System.IO.Path.Combine(baseDir, name)
+        match System.IO.File.Exists own with
+        | false -> None
+        | true ->
+          try
+            System.IO.Directory.CreateDirectory quarantineDir |> ignore
+            let dest = System.IO.Path.Combine(quarantineDir, name)
+            if System.IO.File.Exists dest then System.IO.File.Delete dest
+            System.IO.File.Move(own, dest)
+            Some name
+          with _ -> None)
+      |> Seq.toList
+    if not (List.isEmpty quarantined) then
+      Log.info "Worker %s: quarantined %d worker-bundled assembly(ies) that collide with project deps: %s"
+        sessionId quarantined.Length (String.concat ", " quarantined)
 
   let logger =
     { new Utils.ILogger with

@@ -273,7 +273,13 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
         StartupFiles = []
         References = refs
         LibPaths = binLibPaths
-        OtherArgs = []
+        // Match the language version a normal build would use. FSI defaults to
+        // an older language version than the SDK's default, which rejects
+        // modern constructs (e.g. "A type parameter is missing a constraint
+        // 'when 'T: not struct'" from try/with null patterns). With the manual
+        // fallback there are no ProjectOptions to carry --langversion, so set
+        // it explicitly.
+        OtherArgs = [ "--langversion:preview" ]
       }
     | _ ->
       let fcsProjectOptions = List.ofSeq <| FCS.mapManyOptions loadedProjects
