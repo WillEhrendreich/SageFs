@@ -25,9 +25,13 @@ let private hostExePath () =
   let root = here.Parent.Parent.Parent.Parent.FullName // repo root
   let cfg =
     if AppContext.BaseDirectory.Contains("Release") then "Release" else "Debug"
-  let daemonHost = Path.Combine(root, "SageFs", "bin", cfg, "net11.0", "host", "SageFs.Host.exe")
-  if File.Exists daemonHost then daemonHost
-  else failwithf "Could not locate SageFs.Host.exe at %s" daemonHost
+  let hostDir = Path.Combine(root, "SageFs", "bin", cfg, "net11.0", "host")
+  // Windows: SageFs.Host.exe; Linux/macOS: extensionless SageFs.Host.
+  let exe = Path.Combine(hostDir, "SageFs.Host.exe")
+  let noExt = Path.Combine(hostDir, "SageFs.Host")
+  if File.Exists exe then exe
+  elif File.Exists noExt then noExt
+  else failwithf "Could not locate SageFs.Host at %s or %s" exe noExt
 
 let private freePort () =
   let l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0)

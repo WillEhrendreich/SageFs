@@ -11,7 +11,10 @@ open SageFs.Tests.TestInfrastructure
 
 /// Spawn a real, long-running child process that the tests can kill.
 /// Uses `cmd /c ping -n N 127.0.0.1` which lives for roughly N-1 seconds.
+/// Windows-only: cmd.exe does not exist on Linux/macOS (the tests error there).
 let spawnLongRunning (label: string) =
+  if not (OperatingSystem.IsWindows()) then
+    skiptest "Windows-only: spawns cmd.exe /c ping"
   let psi = ProcessStartInfo()
   psi.FileName <- "cmd.exe"
   psi.Arguments <- "/c ping -n 30 127.0.0.1 > nul"

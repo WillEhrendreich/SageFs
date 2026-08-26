@@ -39,7 +39,12 @@
             <HostManifestJson>{"version":"$(Version)","targetFramework":"$(TargetFramework)","allowedFiles":[</HostManifestJson>
         </PropertyGroup>
         <ItemGroup>
-            <HostManifestFiles Include="$(TargetDir)*.dll;$(TargetDir)*.exe;$(TargetDir)*.pdb;$(TargetDir)*.deps.json;$(TargetDir)*.runtimeconfig.json" />
+            <!-- Vetted closure: every file the host dir may contain. Includes
+                 the extensionless native host binary (Linux/macOS: SageFs.Host)
+                 and excludes Debug-only *.runtimeconfig.dev.json (not emitted
+                 in Release, and not in the closure). -->
+            <HostManifestFiles Include="$(TargetDir)*.dll;$(TargetDir)*.exe;$(TargetDir)*.pdb;$(TargetDir)*.deps.json;$(TargetDir)*.runtimeconfig.json;$(TargetDir)SageFs.Host" />
+            <HostManifestFiles Remove="$(TargetDir)*.runtimeconfig.dev.json" />
         </ItemGroup>
         <PropertyGroup>
             <HostManifestFilesList>@(HostManifestFiles-&gt;'&quot;%(Filename)%(Extension)&quot;', ',')</HostManifestFilesList>
