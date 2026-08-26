@@ -27,6 +27,17 @@ let main args =
       eprintfn "SageFs.Host: missing httpPort argument"
       exit 2
 
+  let hostDir = System.AppContext.BaseDirectory
+
+  // Fail-closed: the host refuses to start if its own directory contains
+  // anything outside the vetted manifest. A mis-packaged host must never
+  // serve — it exits loudly so the supervisor can surface the reason.
+  match SageFs.HostManifest.check hostDir with
+  | Ok () -> ()
+  | Error msg ->
+    eprintfn "SageFs.Host: REFUSING TO START — %s" msg
+    exit 3
+
   SageFs.Server.WorkerMain.run sessionId httpPort
   |> Async.RunSynchronously
   0

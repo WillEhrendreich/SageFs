@@ -101,6 +101,7 @@
         <Compile Include="StandbyPool.fs" />
         <Compile Include="SessionMode.fs" />
         <Compile Include="HttpWorkerClient.fs" />
+        <Compile Include="HostManifest.fs" />
         <Compile Include="RestartPolicy.fs" />
         <Compile Include="SmartReset.fs" />
         <Compile Include="Watchdog.fs" />

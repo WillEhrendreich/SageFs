@@ -8,6 +8,10 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="SageFs.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
     </ItemGroup>
@@ -23,5 +27,27 @@
     <ItemGroup>
         <EmbeddedResource Include="Resources\devreload.js" />
     </ItemGroup>
+
+    <!--
+      Generate host-manifest.json from the ACTUAL build output. This is the
+      vetted-closure guarantee: the manifest always matches what was built,
+      and the host's startup check refuses to run if the dir drifts from it.
+    -->
+    <Target Name="GenerateHostManifest" AfterTargets="Build">
+        <PropertyGroup>
+            <HostManifestPath>$(TargetDir)host-manifest.json</HostManifestPath>
+            <HostManifestJson>{"version":"$(Version)","targetFramework":"$(TargetFramework)","allowedFiles":[</HostManifestJson>
+        </PropertyGroup>
+        <ItemGroup>
+            <HostManifestFiles Include="$(TargetDir)*.dll;$(TargetDir)*.exe;$(TargetDir)*.pdb;$(TargetDir)*.deps.json;$(TargetDir)*.runtimeconfig.json" />
+        </ItemGroup>
+        <PropertyGroup>
+            <HostManifestFilesList>@(HostManifestFiles-&gt;'&quot;%(Filename)%(Extension)&quot;', ',')</HostManifestFilesList>
+        </PropertyGroup>
+        <WriteLinesToFile
+            File="$(HostManifestPath)"
+            Lines="$([System.String]::Concat('$(HostManifestJson)','$(HostManifestFilesList)',']}'))"
+            Overwrite="true" />
+    </Target>
 
 </Project>
