@@ -1,6 +1,7 @@
 module SageFs.Tests.VariantSelectorTests
 
 open Expecto
+open SageFs
 
 /// Phase 0 RED: prove there is no version-variant selection today.
 ///
@@ -59,8 +60,8 @@ let tests =
       // Two projects in one solution pinning different Fantomas versions is
       // a genuine conflict → refuse with a message naming both.
       let pins =
-        [ { Library = "Fantomas"; Version = "6.0.0" }
-          { Library = "Fantomas"; Version = "8.0.0" } ]
+        [ ("Fantomas", "6.0.0")
+          ("Fantomas", "8.0.0") ]
 
       let selected =
         VariantSelector.selectForSolution

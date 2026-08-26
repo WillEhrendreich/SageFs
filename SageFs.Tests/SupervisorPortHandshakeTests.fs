@@ -1,6 +1,7 @@
 module SageFs.Tests.SupervisorPortHandshakeTests
 
 open Expecto
+open SageFs
 
 /// Phase 0 RED: prove there is no verified port handshake today.
 ///
