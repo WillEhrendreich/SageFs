@@ -222,6 +222,74 @@ jobs:
     - name: Push to NuGet
       run: dotnet nuget push "release/SageFs.${{ steps.manifest.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
+    - name: Generate release notes
+      id: release_notes
+      shell: pwsh
+      run: |
+        # Build real release notes from the conventional commits between the
+        # previous release tag and this release's source SHA. The notes
+        # explain the PROBLEMS SOLVED, not just a commit list.
+        git fetch --tags --depth 200 origin
+        $prevTag = git describe --tags --abbrev=0 "${{ steps.manifest.outputs.source_sha }}"^ 2>$null
+        if (-not $prevTag) { $prevTag = $(git tag --sort=-creatordate | Select-Object -First 1) }
+        $range = if ($prevTag) { "$prevTag..${{ steps.manifest.outputs.source_sha }}" } else { "${{ steps.manifest.outputs.source_sha }}" }
+        $commits = git log --pretty=format:"%s" $range 2>$null
+        if (-not $commits) { $commits = git log --pretty=format:"%s" -20 }
+
+        $feats = @(); $fixes = @(); $chores = @(); $tests = @()
+        foreach ($c in $commits) {
+          if ($c -match '^feat(\([^)]*\))?:') { $feats += $c }
+          elseif ($c -match '^fix(\([^)]*\))?:') { $fixes += $c }
+          elseif ($c -match '^test(\([^)]*\))?:') { $tests += $c }
+          elseif ($c -match '^(chore|docs|refactor|perf|build|ci)(\([^)]*\))?:') { $chores += $c }
+        }
+
+        $sb = [System.Text.StringBuilder]::new()
+        [void]$sb.AppendLine("## SageFs v${{ steps.manifest.outputs.version }}")
+        [void]$sb.AppendLine("")
+        $headline =
+          if ($fixes.Count -gt 0 -and $feats.Count -gt 0) {
+            "This release fixes $($fixes.Count) issue(s) and adds $($feats.Count) capability/capabilities. Highlights below."
+          } elseif ($fixes.Count -gt 0) {
+            "This release fixes $($fixes.Count) issue(s). Highlights below."
+          } else {
+            "This release adds $($feats.Count) capability/capabilities. Highlights below."
+          }
+        [void]$sb.AppendLine($headline)
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("### Problems solved")
+        [void]$sb.AppendLine("")
+        if ($fixes.Count -gt 0) {
+          [void]$sb.AppendLine("**Fixes**")
+          foreach ($f in $fixes) { [void]$sb.AppendLine("- $f") }
+          [void]$sb.AppendLine("")
+        }
+        if ($feats.Count -gt 0) {
+          [void]$sb.AppendLine("**New capabilities**")
+          foreach ($f in $feats) { [void]$sb.AppendLine("- $f") }
+          [void]$sb.AppendLine("")
+        }
+        if ($tests.Count -gt 0) {
+          [void]$sb.AppendLine("**Testing / proof**")
+          foreach ($t in $tests) { [void]$sb.AppendLine("- $t") }
+          [void]$sb.AppendLine("")
+        }
+        if ($chores.Count -gt 0) {
+          [void]$sb.AppendLine("**Maintenance**")
+          foreach ($c in $chores) { [void]$sb.AppendLine("- $c") }
+          [void]$sb.AppendLine("")
+        }
+        [void]$sb.AppendLine("### Downloads")
+        [void]$sb.AppendLine("- **NuGet**: `dotnet tool install --global SageFs`")
+        [void]$sb.AppendLine("- **VS Code Extension**: `code --install-extension sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix`")
+        [void]$sb.AppendLine("- **Visual Studio Extension**: double-click the VSIX to install in Visual Studio 2022+")
+        [void]$sb.AppendLine("- **Neovim**: see [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim)")
+
+        $notesPath = Join-Path $env:RUNNER_TEMP "RELEASE_NOTES.md"
+        Set-Content -Path $notesPath -Value $sb.ToString() -Encoding UTF8
+        Write-Host "Release notes generated ($($commits.Count) commits since $prevTag)"
+        "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
+
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
@@ -231,14 +299,7 @@ jobs:
         files: |
           release/*.nupkg
           release/*.vsix
-        body: |
-          ## SageFs v${{ steps.manifest.outputs.version }}
-
-          ### Downloads
-          - **NuGet**: `dotnet tool install --global SageFs`
-          - **VS Code Extension** (`sagefs-vscode-*.vsix`): Install via `code --install-extension sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix`
-          - **Visual Studio Extension** (`sagefs-visualstudio-*.vsix`): Double-click to install in Visual Studio 2022+
-          - **Neovim**: See [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim)
+        body_path: ${{ steps.release_notes.outputs.notes_path }}
         make_latest: true
 
     - name: Sync sagefs.nvim version tag
