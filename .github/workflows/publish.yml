@@ -48,6 +48,14 @@ jobs:
       VS_MARKETPLACE_PUBLISHER: willehrendreich
 
     steps:
+    # Checkout FIRST so the workspace is a git repo with full history (the
+    # release-notes step needs tags) AND so `release/` (downloaded below)
+    # stays under the workspace root — later steps reference relative paths.
+    - name: Checkout source
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
     - name: Install Dotnet
       uses: actions/setup-dotnet@v5
       with:
