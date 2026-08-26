@@ -14,10 +14,6 @@ open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.Extensions.DependencyInjection
 open Microsoft.AspNetCore.ResponseCompression
 open Microsoft.Extensions.Logging
-open OpenTelemetry.Logs
-open OpenTelemetry.Metrics
-open OpenTelemetry.Resources
-open OpenTelemetry.Trace
 open SageFs.Utils
 open SageFs.WorkerProtocol
 
@@ -85,54 +81,8 @@ module WorkerHttpTransport =
         opts.Level <- System.IO.Compression.CompressionLevel.Fastest
       ) |> ignore
 
-      // Configure OTel for worker process when OTEL endpoint is available
-      let otelEndpoint =
-        Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
-        |> Option.ofObj
-        |> Option.filter (fun s -> not (String.IsNullOrEmpty s))
-      let otelConfigured =
-        match otelEndpoint with
-        | Some _ -> true
-        | None -> false
-      match otelEndpoint with
-      | Some _ ->
-        let svcName =
-          Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME")
-          |> Option.ofObj
-          |> Option.defaultValue "sagefs-worker"
-        builder.Services.AddOpenTelemetry()
-          .ConfigureResource(fun resource ->
-            resource
-              .AddService(svcName)
-              .AddAttributes([
-                KeyValuePair<string, obj>("worker.pid", Environment.ProcessId :> obj)
-              ]) |> ignore)
-          .WithTracing(fun tracing ->
-            for source in SageFs.Instrumentation.allSources do
-              tracing.AddSource(source) |> ignore
-            tracing.AddAspNetCoreInstrumentation(fun opts ->
-                opts.Filter <- fun ctx ->
-                  SageFs.Instrumentation.shouldFilterHttpSpan (ctx.Request.Path.ToString())
-              ) |> ignore
-            tracing.AddOtlpExporter() |> ignore)
-          .WithMetrics(fun metrics ->
-            for meter in SageFs.Instrumentation.allMeters do
-              metrics.AddMeter(meter) |> ignore
-            metrics.AddAspNetCoreInstrumentation() |> ignore
-            metrics.SetExemplarFilter(OpenTelemetry.Metrics.ExemplarFilterType.TraceBased) |> ignore
-            metrics.AddOtlpExporter() |> ignore)
-        |> ignore
-      | None -> ()
-
-      // Wire ILogger → OTEL structured logs for worker process
-      match otelConfigured with
-      | true ->
-        builder.Logging.AddOpenTelemetry(fun otel ->
-          otel.IncludeFormattedMessage <- true
-          otel.IncludeScopes <- true
-          otel.AddOtlpExporter() |> ignore
-        ) |> ignore
-      | false -> ()
+      // The host process carries NO OpenTelemetry dependency (minimal closure —
+      // see plan: fsi-host-supervisor-isolation). The daemon owns OTel.
 
       let app = builder.Build()
 

@@ -68,7 +68,6 @@ type CliCommand =
   | Stop
   | Status
   | Check
-  | Worker of workerArgs: string list
   | Tui of remainingArgs: string array
   | Gui of remainingArgs: string array
   | Daemon of args: string array
@@ -83,7 +82,6 @@ module CliCommand =
     | _ when args.Length > 0 && args.[0] = "stop" -> Stop
     | _ when args.Length > 0 && args.[0] = "status" -> Status
     | _ when args.Length > 0 && args.[0] = "check" -> Check
-    | _ when args.Length > 0 && args.[0] = "worker" -> Worker (args.[1..] |> Array.toList)
     | _ when args.Length > 0 && args.[0] = "tui" -> Tui args
     | _ when args.Length > 0 && args.[0] = "gui" -> Gui args
     | _ when hasFlag "--jupyter" ->
@@ -191,7 +189,6 @@ let main args =
     printfn "       SageFs --jupyter <conn.json>    Run as Jupyter kernel"
     printfn "       SageFs stop                     Stop running daemon"
     printfn "       SageFs status                   Show daemon info"
-    printfn "       SageFs worker [options]         Internal: worker process"
     printfn ""
     printfn "Options:"
     printfn "  --version, -v          Show version information"
@@ -304,31 +301,6 @@ let main args =
     match failures with
     | 0 -> 0
     | _ -> 1
-
-  | Worker workerArgs ->
-    let sessionId =
-      workerArgs
-      |> List.tryFindIndex (fun a -> a = "--session-id")
-      |> Option.bind (fun i ->
-        match i + 1 < workerArgs.Length with
-        | true -> Some workerArgs.[i + 1]
-        | false -> None)
-      |> Option.defaultValue (System.Guid.NewGuid().ToString("N").[..7])
-    let httpPort =
-      workerArgs
-      |> List.tryFindIndex (fun a -> a = "--http-port")
-      |> Option.bind (fun i ->
-        match i + 1 < workerArgs.Length with
-        | true ->
-          match System.Int32.TryParse(workerArgs.[i + 1]) with
-          | true, p -> Some p
-          | _ -> None
-        | false -> None)
-      |> Option.defaultValue 0
-    // Projects, bare, no-watch now come from env vars — no CLI parsing needed
-    WorkerMain.run sessionId httpPort
-    |> Async.RunSynchronously
-    0
 
   | Tui tuiArgs ->
     let useLegacy = tuiArgs |> Array.exists (fun a -> a = "--legacy-tui")

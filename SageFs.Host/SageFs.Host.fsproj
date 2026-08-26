@@ -3,18 +3,25 @@
     <PropertyGroup>
         <OutputType>Exe</OutputType>
         <IsPackable>false</IsPackable>
-        <AssemblyName>SageFs.Worker</AssemblyName>
-        <RootNamespace>SageFs.Worker</RootNamespace>
+        <AssemblyName>SageFs.Host</AssemblyName>
+        <RootNamespace>SageFs.Host</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="DevReloadMiddleware.fs" />
+        <Compile Include="DevReloadInjector.fs" />
         <Compile Include="WorkerHttpTransport.fs" />
         <Compile Include="WorkerMain.fs" />
         <Compile Include="Program.fs" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="Resources\devreload.js" />
     </ItemGroup>
 
 </Project>
