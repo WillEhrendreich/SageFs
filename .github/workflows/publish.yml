@@ -280,8 +280,8 @@ jobs:
           [void]$sb.AppendLine("")
         }
         [void]$sb.AppendLine("### Downloads")
-        [void]$sb.AppendLine("- **NuGet**: `dotnet tool install --global SageFs`")
-        [void]$sb.AppendLine("- **VS Code Extension**: `code --install-extension sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix`")
+        [void]$sb.AppendLine("- **NuGet**: ``dotnet tool install --global SageFs``")
+        [void]$sb.AppendLine("- **VS Code Extension**: ``code --install-extension sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix``")
         [void]$sb.AppendLine("- **Visual Studio Extension**: double-click the VSIX to install in Visual Studio 2022+")
         [void]$sb.AppendLine("- **Neovim**: see [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim)")
 
