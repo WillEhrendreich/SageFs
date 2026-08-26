@@ -1,6 +1,7 @@
 module SageFs.Tests.ArgsCleanupTests
 
 open System.Collections.Generic
+open System.IO
 open Expecto
 open Expecto.Flip
 open SageFs.Args
@@ -170,8 +171,12 @@ let workerSpawnConfigTests =
       |> Expect.equal "projects env" (Some "MyApp.fsproj")
 
     testCase "hostExePath resolves relative to the daemon base dir" <| fun () ->
-      let path = hostExePath @"C:\daemon\bin"
-      Expect.equal "host exe path" @"C:\daemon\bin\SageFs.Host.exe" path
+      // Platform-agnostic: the expected path is built with Path.Combine so
+      // separators match whatever hostExePath produced on this OS.
+      let daemonDir = Path.Combine("daemon", "bin")
+      let path = hostExePath daemonDir
+      let expected = Path.Combine("daemon", "bin", "host", "SageFs.Host.exe")
+      Expect.equal "host exe path" expected path
 
     testCase "sets SAGEFS_DAEMON_PID to the spawning process id" <| fun () ->
       let _, envVars = buildWorkerSpawnConfig "s" [] false false true SessionWorkflow.Interactive

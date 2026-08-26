@@ -6,6 +6,7 @@
   </Configurations>
   <Project Path="SageFs.Core/SageFs.Core.fsproj" />
   <Project Path="SageFs/SageFs.fsproj" />
+  <Project Path="SageFs.Host/SageFs.Host.fsproj" />
   <Project Path="SageFs.Tests/SageFs.Tests.fsproj" />
   <Project Path="SageFs.Gui/SageFs.Gui.fsproj" />
   <Folder Name="/Samples/">

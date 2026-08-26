@@ -110,4 +110,20 @@
               Link="runtimes\linux-arm64\native\libtree-sitter-fsharp.so" />
     </ItemGroup>
 
+    <!--
+      Ship the FSI host alongside the daemon. The daemon spawns
+      SageFs.Host.exe relative to its own base dir (Args.hostExePath), so the
+      host's build output must land in the daemon's output dir AND in the
+      tool package (tools/<tfm>/any/host/).
+    -->
+    <Target Name="CopyHostOutput" AfterTargets="Build">
+        <ItemGroup>
+            <HostFiles Include="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*"
+                        Condition="Exists('..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)')" />
+        </ItemGroup>
+        <Copy SourceFiles="@(HostFiles)"
+              DestinationFiles="@(HostFiles->'$(TargetDir)host\%(RecursiveDir)%(Filename)%(Extension)')"
+              SkipUnchangedFiles="true" />
+    </Target>
+
 </Project>

@@ -162,11 +162,11 @@ let buildWorkerSpawnConfig
   args, envVars
 
 /// Resolve the FSI host exe path relative to the daemon's own location.
-/// Dev layout: <repo>/SageFs/bin/<cfg>/<tfm>/SageFs.Host.exe (built alongside).
-/// Tool layout: <tool store>/tools/<tfm>/any/SageFs.Host.exe (packaged with the tool).
+/// Dev layout: <daemon>/host/SageFs.Host.exe (copied post-build).
+/// Tool layout: <tool store>/tools/<tfm>/any/host/SageFs.Host.exe (packaged).
 /// Pure: takes the daemon's base directory so tests can pin the resolution.
 let hostExePath (daemonBaseDir: string) : string =
-  Path.Combine(daemonBaseDir, "SageFs.Host.exe")
+  Path.Combine(daemonBaseDir, "host", "SageFs.Host.exe")
 
 
 

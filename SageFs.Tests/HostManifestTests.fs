@@ -12,9 +12,27 @@ open System.IO
 /// GREEN: the SageFs.Host project's output dir must contain ONLY the vetted
 /// manifest closure (no Falco, no OpenTelemetry), and a host-manifest.json
 /// must exist and verify clean (fail-closed).
+///
+/// The host dir is derived from the TEST assembly's own output location
+/// (SageFs.Tests/bin/<cfg>/<tfm>/ -> ../../SageFs.Host/bin/<cfg>/<tfm>/),
+/// so it matches whatever configuration the tests run under, on any OS.
 let hostDir =
-  Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Host", "bin", "Debug", "net10.0")
-  |> Path.GetFullPath
+  let testDir = System.AppContext.BaseDirectory
+  // AppContext.BaseDirectory is repo/SageFs.Tests/bin/<cfg>/<tfm>/
+  // Up 4 = the repo root; then into SageFs.Host/bin. The config/tfm subdirs
+  // are discovered below (newest wins) so Debug/Release both work.
+  Path.GetFullPath(Path.Combine(testDir, "..", "..", "..", "..", "SageFs.Host", "bin"))
+  |> fun root ->
+    match Directory.Exists root with
+    | false -> root
+    | true ->
+      Directory.GetDirectories(root, "*", SearchOption.TopDirectoryOnly)
+      |> Array.collect (fun cfg ->
+        Directory.GetDirectories(cfg, "*", SearchOption.TopDirectoryOnly)
+        |> Array.map (fun tfm -> tfm))
+      |> Array.sortDescending
+      |> Array.tryHead
+      |> Option.defaultValue root
 
 [<Tests>]
 let tests =
@@ -51,7 +69,7 @@ let tests =
 
       Expect.isTrue
         (File.Exists manifestPath)
-        "host-manifest.json must exist in the host dir"
+        (sprintf "host-manifest.json must exist in the host dir (%s)" hostDir)
 
       match HostManifest.check hostDir with
       | Ok () -> ()
