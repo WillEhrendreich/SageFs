@@ -1,9 +1,13 @@
 <Project>
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- F# nullness analysis: surfaces nullability warnings at compile time
+         (requires the newer FCS/SDK — the whole point of keeping those current).
+         NoWarn NU1608/NU1902 for the pre-1.0/known-audited transitive pins. -->
+    <CheckNulls>true</CheckNulls>
     <NoWarn>$(NoWarn);NU1608;NU1902</NoWarn>
-    <Version>0.6.293</Version>
+    <Version>0.6.294</Version>
   </PropertyGroup>
 </Project>
 

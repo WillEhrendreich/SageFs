@@ -13,7 +13,7 @@
     <PackageVersion Include="Falco.Markup" Version="1.4.0" />
     <PackageVersion Include="Fantomas.Core" Version="8.0.0-alpha-002" />
     <PackageVersion Include="FsCheck" Version="3.3.2" />
-    <PackageVersion Include="FSharp.Compiler.Service" Version="43.10.101" />
+    <PackageVersion Include="FSharp.Compiler.Service" Version="43.13.101-preview7.26381.103" />
     <PackageVersion Include="FSharp.Data.Adaptive" Version="1.2.26" />
     <PackageVersion Include="FSharp.SystemTextJson" Version="1.4.36" />
     <PackageVersion Include="FsToolkit.ErrorHandling" Version="5.2.0" />
@@ -28,13 +28,13 @@
     <PackageVersion Include="Microsoft.NET.StringTools" Version="18.0.2" />
     <PackageVersion Include="ModelContextProtocol" Version="1.0.0-rc.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.0.0-rc.1" />
-    <PackageVersion Include="OpenTelemetry" Version="1.15.0" />
-    <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.15.0" />
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.0" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.0" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.18.0" />
     <PackageVersion Include="Serilog" Version="4.1.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="8.0.0" />
     <PackageVersion Include="Serilog.Extensions.Logging.File" Version="9.0.0-dev-02303" />
@@ -60,7 +60,7 @@
     <PackageVersion Include="Fable.Promise" Version="3.2.0" />
     <PackageVersion Include="Fable.Node" Version="1.2.0" />
     <PackageVersion Include="Fable.Browser.Dom" Version="2.16.0" />
-    <PackageVersion Include="FSharp.Core" Version="10.0.103" />
+    <PackageVersion Include="FSharp.Core" Version="11.0.101-preview7.26359.118" />
     <PackageVersion Include="Microsoft.VisualStudio.Extensibility.Sdk" Version="17.14.40608" />
     <PackageVersion Include="Microsoft.VisualStudio.Extensibility.Build" Version="17.14.40608" />
     <!-- VS Extension Tests -->

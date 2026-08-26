@@ -170,13 +170,14 @@ let workerSpawnConfigTests =
       |> Option.map snd
       |> Expect.equal "projects env" (Some "MyApp.fsproj")
 
-    testCase "hostExePath resolves relative to the daemon base dir" <| fun () ->
-      // Platform-agnostic: the expected path is built with Path.Combine so
-      // separators match whatever hostExePath produced on this OS.
-      let daemonDir = Path.Combine("daemon", "bin")
-      let path = hostExePath daemonDir
-      let expected = Path.Combine("daemon", "bin", "host", "SageFs.Host.exe")
-      Expect.equal "host exe path" expected path
+    testCase "hostExePath resolves host/SageFs.Host.exe beside the daemon" <| fun () ->
+      let tmp = Path.Combine(Path.GetTempPath(), sprintf "sagefs-hostpath-%s" (System.Guid.NewGuid().ToString("N")))
+      Directory.CreateDirectory tmp |> ignore
+      try
+        let path = hostExePath tmp
+        Expect.equal "host exe path" (Path.Combine(tmp, "host", "SageFs.Host.exe")) path
+      finally
+        try Directory.Delete(tmp, true) with _ -> ()
 
     testCase "sets SAGEFS_DAEMON_PID to the spawning process id" <| fun () ->
       let _, envVars = buildWorkerSpawnConfig "s" [] false false true SessionWorkflow.Interactive

@@ -27,7 +27,7 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: |
-          10.0.x
+          11.0.x
         dotnet-quality: preview
 
     - name: Build forked MCP SDK packages
@@ -65,7 +65,7 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: |
-          10.0.x
+          11.0.x
         dotnet-quality: preview
 
     - name: Setup Node.js
@@ -132,7 +132,7 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: |
-          10.0.x
+          11.0.x
         dotnet-quality: preview
 
     - name: Build forked MCP SDK packages
@@ -172,7 +172,7 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: |
-          10.0.x
+          11.0.x
           8.0.x
         dotnet-quality: preview
 
@@ -237,7 +237,7 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: |
-          10.0.x
+          11.0.x
         dotnet-quality: preview
 
     - name: Build forked MCP SDK packages

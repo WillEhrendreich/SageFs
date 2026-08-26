@@ -2,6 +2,7 @@ module SageFs.Args
 
 open System
 open System.IO
+open System.IO.Compression
 
 // === New types: the real daemon-worker contract ===
 
@@ -162,9 +163,10 @@ let buildWorkerSpawnConfig
   args, envVars
 
 /// Resolve the FSI host exe path relative to the daemon's own location.
-/// Dev layout: <daemon>/host/SageFs.Host.exe (copied post-build).
-/// Tool layout: <tool store>/tools/<tfm>/any/host/SageFs.Host.exe (packaged).
-/// Pure: takes the daemon's base directory so tests can pin the resolution.
+/// The host runs from its OWN host/ subdir (isolated closure — it must not
+/// share a dir with the daemon's files or its fail-closed manifest check
+/// rightly refuses). Dev: <daemon>/host/ (copied post-build). Tool:
+/// <store>/.../tools/<tfm>/any/host/. Pure: takes the daemon's base dir.
 let hostExePath (daemonBaseDir: string) : string =
   Path.Combine(daemonBaseDir, "host", "SageFs.Host.exe")
 
