@@ -20,6 +20,7 @@
         <Compile Include="McpServerIntegrationTests.fs" />
         <Compile Include="McpToolExecutionTests.fs" />
         <Compile Include="McpLlmInteropTests.fs" />
+        <Compile Include="ManualProjectParseTests.fs" />
         <Compile Include="SharedSageFsFixture.fs" />
         <Compile Include="SharedGenerators.fs" />
         <Compile Include="McpFormatterPropertyTests.fs" />

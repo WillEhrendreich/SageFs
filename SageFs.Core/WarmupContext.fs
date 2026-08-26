@@ -123,6 +123,9 @@ type SessionContext = {
   Warmup: WarmupContext
   FileStatuses: FileStatus list
   Workflow: WorkflowTypes.SessionWorkflow
+  /// Whether warmup auto-open is enabled for this session's directory
+  /// (from .SageFs/config.fsx). Drives the context-aware toggle button.
+  AutoOpenNamespaces: bool
 }
 
 module SessionContext =

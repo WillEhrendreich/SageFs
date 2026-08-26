@@ -1235,6 +1235,7 @@ let createElmRuntime
             Warmup = warmup
             FileStatuses = []
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
+            AutoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory (info |> Option.map (fun i -> i.WorkingDirectory) |> Option.defaultValue "")
           }
         | _ -> return None
       with

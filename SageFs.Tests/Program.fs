@@ -16,6 +16,14 @@ let main argv =
 
   let configureVerify () =
     VerifierSettings.DisableRequireUniquePrefix()
+    // Global line-ending scrub: normalize CRLF to LF on BOTH the received and
+    // verified content so snapshot comparisons are immune to git autocrlf /
+    // editor line-ending differences. Verified files are committed with LF;
+    // on Windows checkouts they may be materialized as CRLF — without this,
+    // every text snapshot fails with a spurious line-ending mismatch.
+    VerifierSettings.AddScrubber(fun builder ->
+      // Verify passes the content via StringBuilder; normalize \r\n → \n.
+      builder.Replace("\r\n", "\n") |> ignore)
     let isCI =
       not (String.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")))
       || not (String.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")))

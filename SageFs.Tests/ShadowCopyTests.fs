@@ -158,7 +158,7 @@ let tests =
         safeDelete shadowDir
         safeDelete srcDir
 
-    testCase "shadowCopySolution rewrites References" <| fun _ ->
+    testCase "shadowCopySolution keeps References in place" <| fun _ ->
       let shadowDir = SageFs.ShadowCopy.createShadowDir ()
       let srcDir = createTestDir ()
       try
@@ -169,12 +169,8 @@ let tests =
         let result = SageFs.ShadowCopy.shadowCopySolution shadowDir sln
         result.References
         |> List.head
-        |> fun r -> r.StartsWith shadowDir
-        |> Expect.isTrue "Reference should point to shadow dir"
-        result.References
-        |> List.head
-        |> File.Exists
-        |> Expect.isTrue "shadow-copied reference DLL should exist"
+        |> fun r -> r = refDll
+        |> Expect.isTrue "References should stay in place (shadowing them breaks FSI #load transitive resolution)"
       finally
         safeDelete shadowDir
         safeDelete srcDir

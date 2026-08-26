@@ -44,6 +44,7 @@ let mkHotPathSessionContext
       { Path = "Domain.fs"; Readiness = readiness; LastLoadedAt = lastLoadedAt; IsWatched = isWatched }
     ]
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    AutoOpenNamespaces = true
   }
 
 let mkLiveTestCase

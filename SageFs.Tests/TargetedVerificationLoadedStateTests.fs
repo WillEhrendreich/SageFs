@@ -13,7 +13,8 @@ let private mkSessionCtx files : SessionContext =
     Status = "Ready"
     Warmup = WarmupContext.empty
     FileStatuses = files
-    Workflow = WorkflowTypes.SessionWorkflow.Interactive }
+    Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    AutoOpenNamespaces = true }
 
 let private mkFile path readiness loadedAt watched =
   { Path = path

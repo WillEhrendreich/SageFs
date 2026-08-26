@@ -234,6 +234,57 @@ let handleMessage
 let run (sessionId: string) (port: int) = async {
   let workerConfig = Args.WorkerConfig.fromEnvironment sessionId port
   let loadConfig = Args.ProjectLoadConfig.fromWorkerConfig workerConfig
+
+  // The worker process bundles SageFs's OWN dependency versions (e.g. Falco
+  // 5.2.0 for the dashboard). When the user's project uses a DIFFERENT version
+  // of the same library, FSI's runtime probe would load SageFs's copy and #load
+  // of project sources fails with 0x80131040 (assembly manifest mismatch).
+  // Pre-load the project's bin assemblies BEFORE FSI starts so the project's
+  // versions bind first. The worker itself doesn't use Falco/Marten/etc. — the
+  // bundled copies exist only because the daemon does — so pre-loading the
+  // project's versions is safe.
+  let projectBinDirs =
+    loadConfig.Projects
+    |> List.map (fun projPath ->
+      let binDir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath projPath), "bin")
+      if System.IO.Directory.Exists binDir then
+        System.IO.Directory.EnumerateDirectories binDir
+        |> Seq.sortByDescending (fun d -> System.IO.Directory.GetLastWriteTimeUtc d)
+        |> Seq.tryHead
+        |> Option.map (fun d -> System.IO.Path.GetFullPath d)
+      else None)
+    |> List.choose id
+  match projectBinDirs with
+  | [] -> ()
+  | dirs ->
+    let projectOwnNames =
+      loadConfig.Projects
+      |> List.map (fun p -> System.IO.Path.GetFileNameWithoutExtension p)
+      |> Set.ofList
+    let preloaded =
+      dirs
+      |> List.collect (fun dir ->
+        System.IO.Directory.EnumerateFiles(dir, "*.dll", System.IO.SearchOption.TopDirectoryOnly)
+        |> Seq.toList)
+      |> List.filter (fun dll ->
+        let name = System.IO.Path.GetFileName dll
+        not (name.EndsWith(".resources.dll", System.StringComparison.OrdinalIgnoreCase))
+        && not (name.Contains("aspnetcorev2", System.StringComparison.OrdinalIgnoreCase)))
+      // Load the project's OWN assemblies LAST: loading them first would make
+      // the CLR resolve their dependencies (Falco, Marten, ...) from SageFs's
+      // bundled copies. Loading deps first binds the project's versions.
+      |> List.sortBy (fun dll ->
+        let name = System.IO.Path.GetFileNameWithoutExtension dll
+        if projectOwnNames.Contains name then 1 else 0)
+      |> List.fold (fun (ok, failed) dll ->
+        try
+          System.Reflection.Assembly.LoadFrom(dll) |> ignore
+          ok + 1, failed
+        with ex -> ok, (dll, ex.Message) :: failed) (0, [])
+    Log.info "Worker %s: pre-loaded %d project assemblies from %d bin dir(s) (project-first binding); %d failed" sessionId (fst preloaded) dirs.Length (List.length (snd preloaded))
+    for dll, msg in snd preloaded |> List.truncate 10 do
+      Log.warn "Worker %s: pre-load failed for %s: %s" sessionId (System.IO.Path.GetFileName dll) msg
+
   let logger =
     { new Utils.ILogger with
         member _.LogInfo msg = Log.info "%s" msg

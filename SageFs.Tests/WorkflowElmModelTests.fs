@@ -115,6 +115,7 @@ let currentWorkflowReflectsSessionContext =
       Warmup = WarmupContext.empty
       FileStatuses = []
       Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+      AutoOpenNamespaces = true
     }
     let model = { defaultModel with SessionContext = Some ctx }
 

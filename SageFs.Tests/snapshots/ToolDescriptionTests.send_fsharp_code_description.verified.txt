@@ -1,4 +1,4 @@
-﻿Send F# code to the FSI REPL session. Each ';;' marks a transaction boundary.
+Send F# code to the FSI REPL session. Each ';;' marks a transaction boundary.
 
 RULES:
 - End every statement with ';;'
@@ -20,6 +20,7 @@ ERROR HANDLING (CRITICAL):
 - The session is NOT corrupted by errors. Do NOT call reset_fsi_session or hard_reset_fsi_session because of eval errors. Fix your code instead.
 - Submit smaller pieces (one definition per call) to isolate which part has the error.
 - NEVER use '#r' for assemblies loaded via '--proj'. Call get_startup_info to see which assembly names are already loaded. Using '#r' on a loaded assembly creates a duplicate .NET load context causing TypeLoadException on ALL subsequent evals — this is not a session bug, it is your '#r' directive that must be removed.
+- RUNTIME FileNotFoundException for Microsoft.AspNetCore.* or other shared-framework assemblies means FSI cannot execute them (installed ref packs are metadata-only; framework version mismatches surface as manifest errors). This is an environment limit, not a code bug — run that scenario externally instead (dotnet test / dotnet run) and bring results back into the REPL.
 
 RETURN VALUE:
 - On success: the printed output of the evaluated code (stdout, printfn output, or the auto-printed value).

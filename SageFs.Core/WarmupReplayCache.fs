@@ -10,7 +10,7 @@ open SageFs.WarmUp
 
 module internal WarmupReplayCache =
   [<Literal>]
-  let SchemaVersion = 2
+  let SchemaVersion = 3
 
   type FileStamp = {
     Path: string
@@ -38,6 +38,11 @@ module internal WarmupReplayCache =
     SourceFilesScanned: int
     AssembliesLoaded: LoadedAssembly list
     NamesToOpen: NameToOpen list
+    /// Non-fatal problems found during discovery that the user should see
+    /// (e.g. project DLL missing so its namespaces could not be scanned, or
+    /// auto-open was ON but zero namespaces were discovered). Surfaced in the
+    /// dashboard so warmup never fails silently.
+    DiscoveryWarnings: string list
   }
 
   let private jsonOptions =
@@ -113,7 +118,7 @@ module internal WarmupReplayCache =
       (sourceFilesForSolution sln)
       (assemblyFilesForSolution sln)
 
-  let createPlan fingerprint sourceFilesScanned assembliesLoaded namesToOpen =
+  let createPlan fingerprint sourceFilesScanned assembliesLoaded namesToOpen discoveryWarnings =
     {
       Fingerprint = fingerprint
       SourceFilesScanned = sourceFilesScanned
@@ -125,6 +130,7 @@ module internal WarmupReplayCache =
             Name = name
             Kind = kind
           })
+      DiscoveryWarnings = discoveryWarnings
     }
 
   let namePairs (plan: ReplayPlan) =

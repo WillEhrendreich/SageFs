@@ -1267,6 +1267,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         WorkingDir = "/code"; Status = "Ready"
         Warmup = warmup; FileStatuses = []
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        AutoOpenNamespaces = true
       }
     }
     let deps : EffectDeps = {

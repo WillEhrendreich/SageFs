@@ -90,20 +90,12 @@ let resolveBindingsPanelSnapshot
 /// Shows a banner on failure, polls for recovery.
 let connectionMonitorScript () =
   Elem.script [] [ Text.raw (sprintf """
-    (function() {
-      var origFetch = window.fetch;
-      window.fetch = function(url) {
-        var p = origFetch.apply(this, arguments);
-        if (typeof url === 'string' && url.indexOf('/dashboard/stream') !== -1) {
-          var b = document.getElementById('%s');
-          p.then(function(resp) {
-            if (b) { b.style.display = resp.ok ? 'none' : ''; b.textContent = resp.ok ? '' : '\u274c Server error (' + resp.status + ')'; if (!resp.ok) b.className = 'conn-banner conn-disconnected'; }
-          }).catch(function() {
-            if (b) { b.className = 'conn-banner conn-disconnected'; b.textContent = '\u274c Server disconnected \u2014 reconnecting...'; b.style.display = ''; }
-          });
-        }
-        return p;
-      };
+    (function(){
+      var f=window.fetch;window.fetch=function(u){var p=f.apply(this,arguments);
+      if(typeof u==='string'&&u.indexOf('/dashboard/stream')!==-1){var b=document.getElementById('%s');
+      p.then(function(r){if(b){b.style.display=r.ok?'none':'';b.textContent=r.ok?'':'\u274c Server error ('+r.status+')';if(!r.ok)b.className='conn-banner conn-disconnected';}})
+      .catch(function(){if(b){b.className='conn-banner conn-disconnected';b.textContent='\u274c Server disconnected \u2014 reconnecting...';b.style.display='';}});}
+      return p;};
     })();
   """ DomIds.ServerStatus) ]
 
@@ -128,10 +120,8 @@ let completionInsertScript () =
 /// Auto-scroll output panel to bottom when new content arrives via SSE morph.
 let autoScrollScript () =
   Elem.script [] [ Text.raw (sprintf """
-    new MutationObserver(function() {
-      var panel = document.getElementById('%s');
-      if (panel) panel.scrollTop = panel.scrollHeight;
-    }).observe(document.getElementById('%s') || document.body, { childList: true, subtree: true });
+    new MutationObserver(function(){var p=document.getElementById('%s');if(p)p.scrollTop=p.scrollHeight;})
+      .observe(document.getElementById('%s')||document.body,{childList:true,subtree:true});
   """ DomIds.OutputPanel DomIds.Main) ]
 
 /// Details toggle — update arrow indicator when eval section opens/closes.
@@ -177,21 +167,20 @@ let keyboardHandlerScript () =
           }
         }
       });
-      var handle = document.getElementById('%s');
-      var sidebar = document.getElementById('%s');
-      if (handle && sidebar) {
-        var dragging = false;
-        handle.addEventListener('mousedown', function(e) {
-          dragging = true; handle.classList.add('dragging');
-          e.preventDefault();
-        });
-        document.addEventListener('mousemove', function(e) {
-          if (!dragging) return;
-          var w = Math.max(200, Math.min(600, window.innerWidth - e.clientX));
-          sidebar.style.width = w + 'px';
-        });
+      var h = document.getElementById('%s');
+      var s = document.getElementById('%s');
+      if (h && s) {
+        // Persist via CSS var on <html> — Datastar morphs #main (incl. sidebar) on every change, wiping inline styles.
+        var K = 'sagefs.sidebarWidth';
+        function setW(w) { document.documentElement.style.setProperty('--sidebar-width', w + 'px'); }
+        try { var v = localStorage.getItem(K); if (v) { var n = parseInt(v, 10); if (n >= 200 && n <= 600) setW(n); } } catch (e) {}
+        var d = false;
+        h.addEventListener('mousedown', function(e) { d = true; e.preventDefault(); });
+        document.addEventListener('mousemove', function(e) { if (d) setW(Math.max(200, Math.min(600, window.innerWidth - e.clientX))); });
         document.addEventListener('mouseup', function() {
-          if (dragging) { dragging = false; handle.classList.remove('dragging'); }
+          if (d) { d = false;
+            try { localStorage.setItem(K, document.documentElement.style.getPropertyValue('--sidebar-width').replace('px','').trim()); } catch (e) {}
+          }
         });
       }
     })();
@@ -350,7 +339,8 @@ let buildDashboardSnapshot
               Status = SessionState.label (q.GetSessionState sessionId)
               Warmup = ctx'
               FileStatuses = fileStatuses
-              Workflow = WorkflowTypes.SessionWorkflow.Interactive }
+              Workflow = WorkflowTypes.SessionWorkflow.Interactive
+              AutoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory (q.GetSessionWorkingDir sessionId) }
         | None -> renderSessionContextEmpty
       | false -> renderSessionContextEmpty
     let bindingsPanel =
@@ -923,11 +913,24 @@ let createCreateSessionHandler
     | :? System.ObjectDisposedException -> ()
   }
 
-let createDisableWarmupAutoOpenHandler : HttpHandler =
+/// Toggle warmup auto-open for the session's working directory and re-init the
+/// session so the new setting takes effect immediately.
+///
+/// Disable: writes the .SageFs/config.fsx opt-out, stops the current session,
+/// and re-opens a BARE session (no projects, nothing auto-loaded). No warmup
+/// status is reported — the response is just "auto open disabled".
+///
+/// Enable: rewrites the config back to default, stops the current session, and
+/// re-creates it (warmup runs with auto-open again).
+let createToggleWarmupAutoOpenHandler
+  (a: DashboardActions)
+  (enable: bool)
+  : HttpHandler =
   fun ctx -> task {
     try
       use! doc = readSignalsJsonSized ctx
       let dir = getSignalString doc "newSessionDir" "new-session-dir"
+      let sessionId = getSignalString doc "sessionId" "session-id"
       let configResultNode message cssClass =
         Elem.div [ Attr.id DomIds.EvalResult ] [
           Elem.pre [ Attr.class' (sprintf "output-line %s" cssClass); Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
@@ -941,24 +944,56 @@ let createDisableWarmupAutoOpenHandler : HttpHandler =
       | false, false ->
         do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
       | false, true ->
-        match DirectoryConfig.ensureAutoOpenNamespacesOptOut dir with
-        | Ok (AutoOpenNamespacesOptOutResult.Created path) ->
-          do! ssePatchNode ctx (
-            configResultNode
-              (sprintf "Created %s with AutoOpenNamespaces = false. New sessions from this directory will skip warmup auto-open." path)
-              "output-result")
-        | Ok (AutoOpenNamespacesOptOutResult.AlreadyDisabled path) ->
-          do! ssePatchNode ctx (
-            configResultNode
-              (sprintf "Warmup auto-open is already disabled in %s." path)
-              "output-result")
-        | Ok (AutoOpenNamespacesOptOutResult.RequiresManualEdit path) ->
-          do! ssePatchNode ctx (
-            configResultNode
-              (sprintf "Existing config found at %s. Edit it manually and set AutoOpenNamespaces = false; it was not overwritten." path)
-              "output-error")
+        // 1) Write the config so FUTURE sessions pick up the setting.
+        let configWrite : Result<unit, string> =
+          match enable with
+          | false ->
+            DirectoryConfig.ensureAutoOpenNamespacesOptOut dir
+            |> Result.map (fun _ -> ())
+          | true ->
+            DirectoryConfig.ensureAutoOpenNamespacesOptIn dir
+            |> Result.map (fun _ -> ())
+        match configWrite with
         | Error msg ->
           do! ssePatchNode ctx (evalResultError msg)
+        | Ok _ ->
+          // 2) Stop the current session for this directory (if any) so the
+          //    re-created session starts clean with the new setting.
+          match a.StopSession with
+          | Some stop ->
+            match sessionId with
+            | sid when sid.Length > 0 ->
+              let! _ = stop sid in ()
+            | _ -> ()
+          | None -> ()
+          // 3) Re-create: bare (no projects) when disabled — nothing loads and
+          //    no warmup happens. With projects (auto-detected) when enabled.
+          match a.CreateSession with
+          | Some create ->
+            let projects =
+              match enable with
+              | false -> []
+              | true ->
+                resolveSessionProjects dir ""
+                |> List.truncate 1
+            let! result = create projects dir
+            match result with
+            | Ok newSessionId ->
+              match a.SwitchSession with
+              | Some switch -> let! _ = switch newSessionId in ()
+              | None -> ()
+              do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") newSessionId
+              do! Response.ssePatchSignal ctx (SignalPath.sp "viewingSessionId") newSessionId
+              // 4) Concise confirmation — no warmup status spam.
+              let message =
+                match enable with
+                | false -> "auto open disabled"
+                | true -> "auto open enabled"
+              do! ssePatchNode ctx (configResultNode message "output-result")
+            | Error msg ->
+              do! ssePatchNode ctx (evalResultError (sprintf "Failed to re-init session: %s" msg))
+          | None ->
+            do! ssePatchNode ctx (configResultNode (if enable then "auto open enabled" else "auto open disabled") "output-result")
         do! pushDiscoverResults ctx dir
     with
     | :? RequestTooLargeException -> ()
@@ -1246,7 +1281,8 @@ let createEndpoints
     | Some handler ->
       yield post "/dashboard/session/create" (createCreateSessionHandler handler a.SwitchSession)
     | None -> ()
-    yield post "/dashboard/config/disable-auto-open" createDisableWarmupAutoOpenHandler
+    yield post "/dashboard/config/disable-auto-open" (createToggleWarmupAutoOpenHandler a false)
+    yield post "/dashboard/config/enable-auto-open" (createToggleWarmupAutoOpenHandler a true)
     match a.SwitchSession with
     | Some handler ->
       yield mapPost "/dashboard/session/switch/{id}"

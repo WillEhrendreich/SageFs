@@ -32,7 +32,8 @@ let private mkSessionContext sid files =
     Status = "Ready"
     Warmup = WarmupContext.empty
     FileStatuses = files
-    Workflow = WorkflowTypes.SessionWorkflow.Interactive }
+    Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    AutoOpenNamespaces = true }
 
 let private mkFile path readiness =
   { Path = path

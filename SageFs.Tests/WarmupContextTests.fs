@@ -141,6 +141,7 @@ let sampleSession: SessionContext = {
     { Path = "Old.fs"; Readiness = Stale; LastLoadedAt = Some (System.DateTimeOffset.UtcNow.AddHours(-1)); IsWatched = true }
   ]
   Workflow = WorkflowTypes.SessionWorkflow.Interactive
+  AutoOpenNamespaces = true
 }
 
 [<Tests>]
@@ -201,6 +202,7 @@ let sampleTuiSession: SessionContext = {
     { Path = "src/Broken.fs"; Readiness = LoadFailed; LastLoadedAt = None; IsWatched = false }
   ]
   Workflow = WorkflowTypes.SessionWorkflow.Interactive
+  AutoOpenNamespaces = true
 }
 
 [<Tests>]
@@ -218,6 +220,7 @@ let sessionContextTuiTests= testList "SessionContextTui" [
       SessionId = "x"; ProjectNames = []; WorkingDir = "."
       Status = "Starting"; Warmup = WarmupContext.empty; FileStatuses = []
       Workflow = SessionWorkflow.Interactive
+      AutoOpenNamespaces = true
     }
     let line = SessionContextTui.summaryLine empty
     line |> Expect.stringContains "zero files" "0/0"
@@ -262,6 +265,7 @@ let sessionContextTuiTests= testList "SessionContextTui" [
       SessionId = "m"; ProjectNames = []; WorkingDir = "."
       Status = "Ready"; Warmup = WarmupContext.empty; FileStatuses = []
       Workflow = SessionWorkflow.Interactive
+      AutoOpenNamespaces = true
     }
     let lines = SessionContextTui.detailLines minimal
     lines |> List.exists (fun l -> l.Contains("Assemblies")) |> Expect.isFalse "no assemblies section"
@@ -296,6 +300,7 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
       }
       FileStatuses = [mkLlmFile "a.fs" Loaded; mkLlmFile "b.fs" Loaded]
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      AutoOpenNamespaces = true
     }
     let result = formatWarmupDetailForLlm ctx
     result |> Expect.stringContains "asm1""📦 Asm1 (3 ns, 1 modules)"
@@ -319,6 +324,7 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
       }
       FileStatuses = [mkLlmFile "good.fs" Loaded]
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      AutoOpenNamespaces = true
     }
     let result = formatWarmupDetailForLlm ctx
     result |> Expect.stringContains "summary ratio" "1/2 namespaces opened"
@@ -341,6 +347,7 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
       }
       FileStatuses = [mkLlmFile "good.fs" Loaded; mkLlmFile "broken.fs" LoadFailed]
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      AutoOpenNamespaces = true
     }
     let result = formatWarmupDetailForLlm ctx
     result |> Expect.stringContains "files header""Files (1/2 loaded):"
@@ -356,6 +363,7 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
       Warmup = WarmupContext.empty
       FileStatuses = []
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      AutoOpenNamespaces = true
     }
     let result = formatWarmupDetailForLlm ctx
     result |> Expect.stringContains "zero summary""0 assemblies, 0/0 namespaces opened, 0ms"
@@ -378,6 +386,7 @@ let formatWarmupDetailForLlmTests = testList "formatWarmupDetailForLlm" [
       }
       FileStatuses = []
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      AutoOpenNamespaces = true
     }
     let result = formatWarmupDetailForLlm ctx
     result |> Expect.stringContains "module kind" "open MyModule // module"

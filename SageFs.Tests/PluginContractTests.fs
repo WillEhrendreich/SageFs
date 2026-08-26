@@ -38,7 +38,8 @@ let mkTestSessionCtx id projects warmup files : SessionContext =
     Status = "Ready"
     Warmup = warmup
     FileStatuses = files
-    Workflow = WorkflowTypes.SessionWorkflow.Interactive }
+    Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    AutoOpenNamespaces = true }
 
 let mkDiag msg sev line col : Diagnostic =
   { Message = msg

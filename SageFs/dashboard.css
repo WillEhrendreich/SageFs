@@ -445,6 +445,7 @@ h1 {
   padding: 2px 8px;
   cursor: pointer;
   font-size: 0.8rem;
+  flex-shrink: 0;
   transition: background 0.15s;
 
   &:hover {
@@ -463,6 +464,89 @@ h1 {
   color: var(--bg-default);
 }
 
+/* Warmup auto-open state icon on session cards */
+.session-btn-autoopen {
+  background: transparent;
+  border: 1px solid var(--border-normal);
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 1px 5px;
+
+  &:hover {
+    background: var(--bg-focus);
+    color: inherit;
+  }
+}
+
+/* ── Session cards: pinnacle of responsive design ──────────────────
+   The card is a grid: [body | actions]. The body column is
+   minmax(0,1fr) so it always gets the remaining width and the actions
+   column NEVER squeezes it. Every content row wraps; nothing is
+   allowed to spill or overlap. When the card gets narrow, the actions
+   drop onto their own line below the body. */
+
+.session-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 6px 8px;
+}
+
+.session-row .session-card-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-row .session-card-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.5rem;
+  min-width: 0;
+}
+
+.session-row .session-card-actions {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+/* When the sidebar is narrow (or many badges appear), the actions
+   stack onto their own row beneath the body instead of squeezing it. */
+@media (max-width: 420px) {
+  .session-row {
+    grid-template-columns: 1fr;
+  }
+
+  .session-row .session-card-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* Badges (project tags, agent badges, status) must truncate gracefully
+   rather than forcing the card wider or spilling out. */
+.session-row .badge,
+.session-row .meta,
+.session-row .session-card-status-row > span {
+  flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Long unbroken content (status messages, working dirs) wraps instead
+   of overflowing the card. */
+.session-row .session-card-status-row .status-msg,
+.session-row .session-card-body .session-dir {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
 .session-stopping {
   color: var(--fg-dim);
   font-style: italic;
@@ -470,6 +554,26 @@ h1 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* New Session collapsible panel */
+.new-session-panel {
+  summary {
+    list-style: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &::before {
+      content: "▸ ";
+      color: var(--fg-dim);
+    }
+  }
+
+  &[open] summary::before {
+    content: "▾ ";
+  }
 }
 
 /* ── Live Bindings Watch Window ──────────────────────────────────── */

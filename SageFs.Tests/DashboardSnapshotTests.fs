@@ -381,7 +381,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     Expect.stringContains html "Discover" "has Discover button"
     Expect.stringContains html "fsproj" "has fsproj placeholder"
     Expect.stringContains html "Create" "has Create Session button"
-    Expect.stringContains html "Disable Warmup Auto-Open" "has auto-open opt-out button"
+    Expect.stringContains html "New Session" "new session section is a collapsible details"
   }
 
   test "server-status banner has no data-show attribute" {

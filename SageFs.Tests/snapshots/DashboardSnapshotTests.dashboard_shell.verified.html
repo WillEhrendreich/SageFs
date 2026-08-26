@@ -1,18 +1,10 @@
 ﻿<html><head><title>SageFs Dashboard</title><script>
-    (function() {
-      var origFetch = window.fetch;
-      window.fetch = function(url) {
-        var p = origFetch.apply(this, arguments);
-        if (typeof url === 'string' && url.indexOf('/dashboard/stream') !== -1) {
-          var b = document.getElementById('server-status');
-          p.then(function(resp) {
-            if (b) { b.style.display = resp.ok ? 'none' : ''; b.textContent = resp.ok ? '' : '\u274c Server error (' + resp.status + ')'; if (!resp.ok) b.className = 'conn-banner conn-disconnected'; }
-          }).catch(function() {
-            if (b) { b.className = 'conn-banner conn-disconnected'; b.textContent = '\u274c Server disconnected \u2014 reconnecting...'; b.style.display = ''; }
-          });
-        }
-        return p;
-      };
+    (function(){
+      var f=window.fetch;window.fetch=function(u){var p=f.apply(this,arguments);
+      if(typeof u==='string'&&u.indexOf('/dashboard/stream')!==-1){var b=document.getElementById('server-status');
+      p.then(function(r){if(b){b.style.display=r.ok?'none':'';b.textContent=r.ok?'':'\u274c Server error ('+r.status+')';if(!r.ok)b.className='conn-banner conn-disconnected';}})
+      .catch(function(){if(b){b.className='conn-banner conn-disconnected';b.textContent='\u274c Server disconnected \u2014 reconnecting...';b.style.display='';}});}
+      return p;};
     })();
   </script><script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.7/bundles/datastar.js"></script><link rel="stylesheet" href="/dashboard/dashboard.css" /></head><body data-on:pageshow.window="evt?.persisted && window.location.reload()"><div data-init="@get('/dashboard/stream')" data-signals:help-visible="'false'" data-signals:sidebar-open="'true'" data-signals:session-id="''" data-signals:viewing-session-id="''" data-signals:code="''" data-signals:new-session-dir="''" data-signals:manual-projects="''" data-signals:theme="''" data-signals:cursor-pos="'0'" data-signals:test-filter="'all'" data-signals:expanded-dashboard="'false'"></div><div id="server-status" class="conn-banner conn-disconnected" style="display:none">⏳ Connecting to server...</div><div id="main"><div></div></div><script>
     window._insertComp = function(text, reqPos) {
@@ -28,10 +20,8 @@
       ta.focus();
     };
   </script><script>
-    new MutationObserver(function() {
-      var panel = document.getElementById('output-panel');
-      if (panel) panel.scrollTop = panel.scrollHeight;
-    }).observe(document.getElementById('main') || document.body, { childList: true, subtree: true });
+    new MutationObserver(function(){var p=document.getElementById('output-panel');if(p)p.scrollTop=p.scrollHeight;})
+      .observe(document.getElementById('main')||document.body,{childList:true,subtree:true});
   </script><script>
     document.addEventListener('toggle', function(e) {
       if (e.target.id !== 'evaluate-section') return;
@@ -69,21 +59,20 @@
           }
         }
       });
-      var handle = document.getElementById('sidebar-resize');
-      var sidebar = document.getElementById('sidebar');
-      if (handle && sidebar) {
-        var dragging = false;
-        handle.addEventListener('mousedown', function(e) {
-          dragging = true; handle.classList.add('dragging');
-          e.preventDefault();
-        });
-        document.addEventListener('mousemove', function(e) {
-          if (!dragging) return;
-          var w = Math.max(200, Math.min(600, window.innerWidth - e.clientX));
-          sidebar.style.width = w + 'px';
-        });
+      var h = document.getElementById('sidebar-resize');
+      var s = document.getElementById('sidebar');
+      if (h && s) {
+        // Persist via CSS var on <html> — Datastar morphs #main (incl. sidebar) on every change, wiping inline styles.
+        var K = 'sagefs.sidebarWidth';
+        function setW(w) { document.documentElement.style.setProperty('--sidebar-width', w + 'px'); }
+        try { var v = localStorage.getItem(K); if (v) { var n = parseInt(v, 10); if (n >= 200 && n <= 600) setW(n); } } catch (e) {}
+        var d = false;
+        h.addEventListener('mousedown', function(e) { d = true; e.preventDefault(); });
+        document.addEventListener('mousemove', function(e) { if (d) setW(Math.max(200, Math.min(600, window.innerWidth - e.clientX))); });
         document.addEventListener('mouseup', function() {
-          if (dragging) { dragging = false; handle.classList.remove('dragging'); }
+          if (d) { d = false;
+            try { localStorage.setItem(K, document.documentElement.style.getPropertyValue('--sidebar-width').replace('px','').trim()); } catch (e) {}
+          }
         });
       }
     })();

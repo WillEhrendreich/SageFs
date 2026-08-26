@@ -427,6 +427,11 @@ let private discoverWarmupReplayPlan
     let namesToOpen = System.Collections.Generic.List<string>()
     let moduleNames = System.Collections.Generic.HashSet<string>()
     let loadedAssemblies = System.Collections.Generic.List<LoadedAssembly>()
+    // Problems discovered during warmup planning that the user must see
+    // (missing project DLLs, zero namespaces found despite auto-open ON).
+    // Surfaced through ReplayPlan.DiscoveryWarnings → WarmupContext.FailedOpens
+    // so the dashboard always explains why nothing was opened.
+    let discoveryWarnings = System.Collections.Generic.List<string>()
     let stableAssemblyPaths =
       originalSln.Projects
       |> Seq.map (fun project -> project.ProjectFileName, project.TargetPath)
@@ -493,7 +498,9 @@ let private discoverWarmupReplayPlan
       try
         match System.IO.File.Exists(project.TargetPath) with
         | false ->
-          Log.warn "[Warmup] DLL not found: %s — run 'dotnet build' first." project.TargetPath
+          let msg = sprintf "Project assembly not found: %s — run 'dotnet build' first. Namespaces/modules from this project could not be auto-opened." project.TargetPath
+          Log.warn "[Warmup] %s" msg
+          discoveryWarnings.Add(msg)
         | true ->
           let asm = reflectionAlc.LoadFromAssemblyPath(project.TargetPath)
           let types =
@@ -578,6 +585,20 @@ let private discoverWarmupReplayPlan
 
     reflectionAlc.Unload()
 
+    // Auto-open is ON but nothing was discovered to open. This is either a
+    // project with genuinely no namespaces/modules (bare/empty) or a discovery
+    // problem. The user must see WHICH, so surface it as a warning instead of
+    // silently reporting a "successful" warmup that opened nothing.
+    match autoOpenNamespaces, namesToOpen.Count, fileCount with
+    | true, 0, 0 ->
+      discoveryWarnings.Add(
+        "Auto-open was enabled but no source files were found for this project. " +
+        "Nothing could be auto-opened — check that the project path is correct and the .fs/.fsx files exist.")
+    | true, 0, n when n > 0 ->
+      discoveryWarnings.Add(
+        sprintf "Auto-open was enabled and %d source file(s) were scanned, but no namespaces/modules were found to open. If the project defines modules, ensure they are compiled into the project assembly (dotnet build) and are not hidden behind RequireQualifiedAccess." n)
+    | _ -> ()
+
     let namePairs =
       namesToOpen
       |> Seq.map (fun name ->
@@ -593,6 +614,7 @@ let private discoverWarmupReplayPlan
         fileCount
         (Seq.toList loadedAssemblies)
         namePairs
+        (Seq.toList discoveryWarnings)
   }
 
 /// Creates a fresh FSI session with warm-up: loads startup files and opens namespaces.
@@ -820,13 +842,29 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
       logger.LogError (sprintf "  ❌ %s" msg)
       failwith msg
 
+    // Surface discovery warnings (missing project DLLs, zero namespaces found
+    // despite auto-open ON) through the same "Failed Opens" channel the
+    // dashboard already renders — warmup must never fail silently.
+    let failedWithWarnings =
+      let warningFailures =
+        replayPlan.DiscoveryWarnings
+        |> List.map (fun msg -> {
+          Name = "(auto-open discovery)"
+          Kind = OpenableKind.Namespace
+          ErrorMessage = msg
+          Diagnostics = []
+          RetryCount = 1
+          DurationMs = 0.0
+        })
+      failed @ warningFailures
+
     let warmupCtx =
       WarmupContext.completeWarmup
         warmupStartedAt
         fileCount
         loadedAssemblies
         succeeded
-        failed
+        failedWithWarnings
         scanPhaseMs
         assemblyPhaseMs
         openPhaseMs

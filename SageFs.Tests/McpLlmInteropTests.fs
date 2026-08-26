@@ -407,7 +407,7 @@ module ShadowCopyTests =
         finally
           if Directory.Exists shadowDir then Directory.Delete(shadowDir, true)
 
-      testCase "shadowCopySolution rewrites TargetPaths to shadow dir"
+      testCase "shadowCopySolution keeps References in place"
       <| fun _ ->
         let shadowDir = SageFs.ShadowCopy.createShadowDir ()
         let srcDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-test-sln-%s" (Guid.NewGuid().ToString("N").[..7]))
@@ -425,8 +425,7 @@ module ShadowCopyTests =
         try
           let result = SageFs.ShadowCopy.shadowCopySolution shadowDir sln
           Expect.isNonEmpty result.References "Should have references"
-          Expect.isTrue (result.References.[0].StartsWith shadowDir) "Reference should point to shadow dir"
-          Expect.isTrue (File.Exists result.References.[0]) "Shadow DLL should exist"
+          Expect.equal result.References.[0] fakeDll "References should stay in place (shadowing breaks FSI #load resolution)"
         finally
           if Directory.Exists shadowDir then Directory.Delete(shadowDir, true)
           if Directory.Exists srcDir then Directory.Delete(srcDir, true)

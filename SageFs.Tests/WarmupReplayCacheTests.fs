@@ -44,7 +44,7 @@ let private sampleAssembly (path: string) : LoadedAssembly = {
 }
 
 let private makePlan fingerprint sourceFilesScanned assembliesLoaded namesToOpen =
-  createPlan fingerprint sourceFilesScanned assembliesLoaded namesToOpen
+  createPlan fingerprint sourceFilesScanned assembliesLoaded namesToOpen []
 
 [<Tests>]
 let warmupReplayCacheTests =
@@ -312,4 +312,28 @@ let warmupReplayCacheTests =
 
         tryLoadValidPlan cachePath freshFingerprint
         |> Expect.isSome "stale cache entries should be replaced with the fresh replay plan"
+
+    testCase "discovery warnings survive save/load round-trip" <| fun _ ->
+      withTempDir <| fun dir ->
+        let cachePath = Path.Combine(dir, "warmup-replay-cache.json")
+        let fp =
+          buildFingerprint
+            true
+            [| "fsi"; "--multiemit-" |]
+            []
+            []
+            []
+
+        let warnings = [ "Auto-open was enabled but no source files were found for this project." ]
+
+        // Build a plan WITH warnings via createPlan directly (makePlan passes []).
+        createPlan fp 0 [] [] warnings
+        |> save cachePath
+
+        match tryLoadValidPlan cachePath fp with
+        | Some plan ->
+          plan.DiscoveryWarnings
+          |> Expect.equal "warnings should round-trip through the cache" warnings
+        | None ->
+          failtest "plan with warnings should load from cache"
   ]

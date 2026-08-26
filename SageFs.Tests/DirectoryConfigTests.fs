@@ -41,6 +41,14 @@ let evaluateTests = testSequenced <| testList "DirectoryConfig.evaluate" [
     let config = evalOk """{ DirectoryConfig.empty with AutoOpenNamespaces = false }"""
     Expect.equal config.AutoOpenNamespaces false "should parse AutoOpenNamespaces")
 
+  testCase "opt-out template evaluates (single-line, no offside error)" (fun () ->
+    // Regression: the template used to be a multi-line record update starting
+    // at column 1, which FSI rejects with "this token is offside of context
+    // started at position (1:3)" — so the disable button wrote a config that
+    // could never load, silently keeping auto-open ON.
+    let config = evalOk DirectoryConfig.autoOpenNamespacesOptOutTemplate
+    Expect.equal config.AutoOpenNamespaces false "template should disable auto-open")
+
   testCase "loads full config" (fun () ->
     let config = evalOk """
 { DirectoryConfig.empty with

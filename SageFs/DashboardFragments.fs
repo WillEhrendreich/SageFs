@@ -175,16 +175,51 @@ let renderAlarmBanner (alarms: SystemAlarmEntry list) =
       ]
     ]
 
-let private renderDisableWarmupAutoOpenButton (style: string) =
+/// Small color-coded auto-open state icon for a session card.
+/// Green = auto-open ON (namespaces/modules will be opened during warmup),
+/// dim/red = OFF (skipped). The tooltip spells out the state and action;
+/// clicking toggles the per-directory config.
+let renderAutoOpenToggleIcon (enabled: bool) =
+  let endpoint, glyph, color, tooltip =
+    match enabled with
+    | true ->
+      "/dashboard/config/disable-auto-open",
+      "◎",
+      "var(--fg-green)",
+      "Warmup auto-open is ON — namespaces/modules in this project are opened automatically during warmup. Click to disable (writes .SageFs/config.fsx with AutoOpenNamespaces = false)."
+    | false ->
+      "/dashboard/config/enable-auto-open",
+      "◌",
+      "var(--fg-red)",
+      "Warmup auto-open is OFF — namespaces/modules are NOT opened automatically during warmup. Click to enable (rewrites .SageFs/config.fsx back to AutoOpenNamespaces = true)."
+  Elem.button
+    [ Attr.class' "session-btn session-btn-autoopen"
+      Attr.title tooltip
+      Attr.style (sprintf "color: %s;" color)
+      Ds.onClick (Ds.post endpoint) ]
+    [ Text.raw glyph ]
+
+/// Context-aware warmup auto-open toggle (full-width variant).
+/// Kept for potential use in panels where a labeled button fits better than
+/// the compact card icon (renderAutoOpenToggleIcon).
+let renderAutoOpenToggleButton (enabled: bool) (style: string) =
+  let endpoint, label =
+    match enabled with
+    | true ->
+      "/dashboard/config/disable-auto-open",
+      Elem.span [] [ Text.raw "✓ Auto-Open On — click to disable" ]
+    | false ->
+      "/dashboard/config/enable-auto-open",
+      Elem.span [] [ Text.raw "✗ Auto-Open Off — click to enable" ]
   Elem.button
     [ Attr.class' "eval-btn"
       Attr.style style
       Ds.indicator Signals.ConfigLoading
       Ds.attr' ("disabled", "$configLoading")
-      Ds.onClick (Ds.post "/dashboard/config/disable-auto-open") ]
+      Ds.onClick (Ds.post endpoint) ]
     [ Elem.span [ Ds.show "$configLoading" ] [ Text.raw "⏳ " ]
       Elem.span [ Ds.show "!$configLoading" ] [ Text.raw "⚙ " ]
-      Text.raw "Disable Warmup Auto-Open" ]
+      label ]
 
 /// Render daemon health as an HTML panel — shows status, uptime, memory, sessions, and tests.
 let renderDaemonHealth (view: DaemonHealthView) =
@@ -505,7 +540,6 @@ let renderSessionPicker (previous: PreviousSession list) =
                   Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ " ]
                   Text.raw "Create" ]
             ]
-            renderDisableWarmupAutoOpenButton "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
             Elem.div [ Attr.id DomIds.DiscoveredProjects ] []
           ]
         ]
@@ -738,14 +772,14 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
           | false -> ""
         Elem.div
           [ Attr.id (sprintf "session-card-%s" s.Id)
-            Attr.class' (sprintf "session-row flex-between %s%s" cls guidanceCls)
+            Attr.class' (sprintf "session-row %s%s" cls guidanceCls)
             Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
             Ds.class' ("session-selected", sprintf "$%s === '%s'" Signals.ViewingSessionId s.Id)
             Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId s.Id s.Id) ]
           [
-            Elem.div [ Attr.style "flex: 1; min-width: 0;" ] [
+            Elem.div [ Attr.class' "session-card-body" ] [
               // Row 1: session ID + status + active indicator
-              Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem;" ] [
+              Elem.div [ Attr.class' "session-card-status-row" ] [
                 Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw s.Id ]
                 Elem.span
                   [ Attr.class' (sprintf "status badge %s" statusClass) ]
@@ -753,7 +787,8 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                 match s.StatusMessage with
                 | Some msg ->
                   Elem.span
-                    [ Attr.style "font-size: 0.65rem; color: var(--fg-yellow); font-style: italic;" ]
+                    [ Attr.class' "status-msg"
+                      Attr.style "font-size: 0.65rem; color: var(--fg-yellow); font-style: italic;" ]
                     [ Text.raw (sprintf "⏳ %s" msg) ]
                 | None -> ()
                 match s.IsActive with
@@ -796,7 +831,8 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
               match s.WorkingDir.Length > 0 with
               | true ->
                 Elem.div
-                  [ Attr.style "font-size: 0.75rem; color: var(--fg-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                  [ Attr.class' "session-dir"
+                    Attr.style "font-size: 0.75rem; color: var(--fg-dim); margin-top: 2px;"
                     Attr.title s.WorkingDir ]
                   [ Text.raw (sprintf "📁 %s" s.WorkingDir) ]
               | false -> ()
@@ -870,7 +906,11 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                 | false -> ()
               ]
             ]
-            Elem.div [ Attr.style "display: flex; gap: 4px; margin-left: 8px;" ] [
+            Elem.div [ Attr.class' "session-card-actions" ] [
+              // Warmup auto-open state icon (color-coded on/off, tooltip explains, click toggles)
+              (match s.WorkingDir.Length with
+               | 0 -> renderAutoOpenToggleIcon true
+               | _ -> renderAutoOpenToggleIcon (DirectoryConfig.autoOpenNamespacesForDirectory s.WorkingDir))
               match s.IsActive with
               | false ->
                 Elem.button
@@ -1155,50 +1195,51 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             snap.BindingsPanel
             snap.SessionContextPanel
           ]
-          Elem.div [ Attr.class' "panel" ] [
-            Elem.h2 [] [ Text.raw "New Session" ]
-            Elem.div [] [
-              Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [
-                Text.raw "Working Directory"
+          Elem.details
+            [ Attr.class' "panel new-session-panel" ]
+            [
+              Elem.summary
+                [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none; color: var(--fg-blue);" ]
+                [ Text.raw "➕ New Session" ]
+              Elem.div [ Attr.style "margin-top: 0.5rem;" ] [
+                Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [
+                  Text.raw "Working Directory"
+                ]
+                Elem.input
+                  [ Attr.class' "eval-input"
+                    Attr.style "min-height: auto; height: 2rem;"
+                    Ds.bind Signals.NewSessionDir
+                    Attr.create "placeholder" @"C:\path\to\project" ]
+                Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
+                  Elem.button
+                    [ Attr.class' "eval-btn"
+                      Attr.style "flex: 1; height: 2rem; padding: 0 0.5rem; font-size: 0.8rem;"
+                      Ds.indicator Signals.DiscoverLoading
+                      Ds.attr' ("disabled", "$discoverLoading")
+                      Ds.onClick (Ds.post "/dashboard/discover-projects") ]
+                    [ Elem.span [ Ds.show "$discoverLoading" ] [ Text.raw "⏳ " ]
+                      Elem.span [ Ds.show "!$discoverLoading" ] [ Text.raw "🔍 " ]
+                      Text.raw "Discover" ]
+                ]
+                Elem.div [ Attr.id DomIds.DiscoveredProjects ] []
+                Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px; margin-top: 0.5rem;" ] [
+                  Text.raw "Projects (comma-sep)"
+                ]
+                Elem.input
+                  [ Attr.class' "eval-input"
+                    Attr.style "min-height: auto; height: 2rem;"
+                    Ds.bind Signals.ManualProjects
+                    Attr.create "placeholder" "MyProject.fsproj" ]
+                Elem.button
+                  [ Attr.class' "eval-btn"
+                    Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
+                    Ds.indicator Signals.CreateLoading
+                    Ds.attr' ("disabled", "$createLoading")
+                    Ds.onClick (Ds.post "/dashboard/session/create") ]
+                  [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ Creating... " ]
+                    Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ Create" ] ]
               ]
-              Elem.input
-                [ Attr.class' "eval-input"
-                  Attr.style "min-height: auto; height: 2rem;"
-                  Ds.bind Signals.NewSessionDir
-                  Attr.create "placeholder" @"C:\path\to\project" ]
             ]
-            Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
-              Elem.button
-                [ Attr.class' "eval-btn"
-                  Attr.style "flex: 1; height: 2rem; padding: 0 0.5rem; font-size: 0.8rem;"
-                  Ds.indicator Signals.DiscoverLoading
-                  Ds.attr' ("disabled", "$discoverLoading")
-                  Ds.onClick (Ds.post "/dashboard/discover-projects") ]
-                [ Elem.span [ Ds.show "$discoverLoading" ] [ Text.raw "⏳ " ]
-                  Elem.span [ Ds.show "!$discoverLoading" ] [ Text.raw "🔍 " ]
-                  Text.raw "Discover" ]
-            ]
-            renderDisableWarmupAutoOpenButton "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
-            Elem.div [ Attr.id DomIds.DiscoveredProjects ] []
-            Elem.div [ Attr.style "margin-top: 0.5rem;" ] [
-              Elem.label [ Attr.class' "meta"; Attr.style "display: block; margin-bottom: 4px;" ] [
-                Text.raw "Projects (comma-sep)"
-              ]
-              Elem.input
-                [ Attr.class' "eval-input"
-                  Attr.style "min-height: auto; height: 2rem;"
-                  Ds.bind Signals.ManualProjects
-                  Attr.create "placeholder" "MyProject.fsproj" ]
-            ]
-            Elem.button
-              [ Attr.class' "eval-btn"
-                Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
-                Ds.indicator Signals.CreateLoading
-                Ds.attr' ("disabled", "$createLoading")
-                Ds.onClick (Ds.post "/dashboard/session/create") ]
-              [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ Creating... " ]
-                Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ Create" ] ]
-          ]
         ]
       ]
     ]

@@ -30,19 +30,20 @@ let shadowCopyFile (shadowDir: string) (sourcePath: string) : string =
     | false -> ()
     destPath
 
-/// Rewrites a Solution's assembly references to point at shadow copies.
-/// Project TargetPaths and explicit References are shadow-copied.
+/// Rewrites a Solution's project TargetPaths to point at shadow copies.
+/// References (dependency DLLs) are intentionally left in place — see below.
 let shadowCopySolution (shadowDir: string) (sln: Solution) : Solution =
   let shadowProjects =
     sln.Projects
     |> List.map (fun po ->
       { po with TargetPath = shadowCopyFile shadowDir po.TargetPath })
-  let shadowRefs =
-    sln.References
-    |> List.map (shadowCopyFile shadowDir)
+  // Only the project's OWN assemblies get shadow-copied (for IL coverage
+  // instrumentation). Dependency/reference DLLs (NuGet + framework) must stay
+  // in place: shadowing them breaks FSI #load resolution — FSI needs to
+  // resolve transitive dependencies from their original locations, and the
+  // shadow dir only contains the top-level DLLs.
   { sln with
-      Projects = shadowProjects
-      References = shadowRefs }
+      Projects = shadowProjects }
 
 /// Tries to remove the shadow directory and all its contents.
 /// If deletion fails (e.g., DLLs still loaded by CLR), schedules for cleanup on exit.
