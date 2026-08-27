@@ -233,6 +233,12 @@ let handleMessage
 /// Run the worker process: create actor, start HTTP server, handle messages.
 let run (sessionId: string) (port: int) = async {
   let workerConfig = Args.WorkerConfig.fromEnvironment sessionId port
+  // Tell DevReload Harmony patches which port to inject into user scripts.
+  // Set BEFORE warmup/init: init scripts may start the user's WebApplication,
+  // and the Harmony RunAsync prefix consults workerPort — if it's still 0 the
+  // middleware injection is skipped. The host binds exactly to `port`, so it's
+  // known before the server even starts.
+  DevReloadInjector.setWorkerPort port
   let loadConfig = Args.ProjectLoadConfig.fromWorkerConfig workerConfig
 
   // The worker process bundles SageFs's OWN dependency versions (e.g. Falco
