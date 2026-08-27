@@ -126,18 +126,12 @@
 
         <!-- The FSI host runs from its OWN host/ subdir (the whole point of
              isolation — the host must not share a dir with the daemon's files,
-             or its fail-closed manifest check rightly refuses). Pack the host's
-             full output under tools/<tfm>/any/host/; the daemon spawns
-             host/SageFs.Host.exe (Args.hostExePath). No ProjectReference — it
-             would copy the host flat into the daemon's dir (recreating the
-             collision) and break the tool's exe detection. Build ordering is
-             via the BuildHostForDaemon target below. -->
-        <None Include="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*"
-              Exclude="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*.runtimeconfig.dev.json"
-              Condition="Exists('..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\SageFs.Host.dll')"
-              Pack="true"
-              PackagePath="tools\$(TargetFramework)\any\host"
-              LinkBase="hostout" />
+             or its fail-closed manifest check rightly refuses). The host's
+             output is packed under tools/<tfm>/any/host/ via the
+             PackHostForDaemon target below (NOT a static None item: on a fresh
+             CI checkout the host bin dir does not exist at evaluation time, so
+             a static item with an Exists() condition would silently pack
+             nothing and the installed tool would have no host/ dir). -->
     </ItemGroup>
 
     <!--
@@ -150,6 +144,25 @@
         <MSBuild Projects="..\SageFs.Host\SageFs.Host.fsproj"
                  Targets="Build"
                  Properties="Configuration=$(Configuration)" />
+    </Target>
+
+    <!-- Pack the host's full output into tools/<tfm>/any/host/. Runs after
+         BuildHostForDaemon has produced it AND before the pack target
+         collects package files (_GetPackageFiles is where Pack reads the
+         None items), so the glob sees real files even on a fresh CI
+         checkout. -->
+    <Target Name="PackHostForDaemon" BeforeTargets="_GetPackageFiles" AfterTargets="BuildHostForDaemon">
+        <ItemGroup>
+            <HostPackFiles Include="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*"
+                           Exclude="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*.runtimeconfig.dev.json"
+                           Condition="Exists('..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\SageFs.Host.dll')" />
+        </ItemGroup>
+        <ItemGroup>
+            <None Include="@(HostPackFiles)"
+                  Pack="true"
+                  PackagePath="tools\$(TargetFramework)\any\host\%(RecursiveDir)"
+                  LinkBase="hostout" />
+        </ItemGroup>
     </Target>
 
     <Target Name="CopyHostOutput" AfterTargets="Build">
