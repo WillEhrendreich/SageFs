@@ -1,5 +1,24 @@
 # SageFs Hot Reload Status
 
+> ## 🚧 Status: In Progress
+>
+> Hot reload is **not yet fully working end-to-end**. The pipeline (file watch →
+> preprocess → FSI eval → SSE broadcast) is proven live, but changes do **not**
+> yet propagate into the running app for **module-declared, route-captured apps**
+> (the common Falco/ASP.NET pattern: `module App.Program` + `let routes = [...]`
+> captured by value at startup). Re-eval'ing the file creates new FSI functions,
+> but the running route table still points at the old closures — the Harmony
+> detour matching finds no name match because CompilationContext strips the
+> module declaration, so the re-eval'd functions land in a different FSI module.
+>
+> **Current status:**
+> - ✅ Works: file watcher, CompilationContext preprocessing, FSI eval (returns Ok), SSE reload broadcast, DevReload script injection into served HTML
+> - ❌ Not working: the detoured methods do not rewire the running app's captured handlers — the served content is unchanged after a save
+> - 🔧 The fix is being worked: make detour name matching find the module-stripped functions (or record the init-loaded methods so re-evals can match them)
+>
+> Until this is resolved, treat hot reload as **experimental**. The REPL,
+> live testing, and all other SageFs features are unaffected.
+
 ## ✅ What Works
 
 ### 6. Browser Auto-Refresh via DevReload (v0.5.579+)
@@ -197,9 +216,15 @@ SageFs --no-watch
 
 ## ✨ Summary
 
-**Hot reload is fully wired and working!** The system:
+> **⚠️ In progress — see the banner at the top of this file.**
+
+The system:
 - Watches project directories for `.fs`/`.fsx`/`.fsproj` changes
 - Debounces (500ms) to avoid thrashing
 - Sends `#load` with `hotReload=true` to FSI
 - Harmony library detours method pointers at runtime
 - No restart, no manual intervention — just edit and save
+
+**However:** the detour propagation into running apps is not complete for
+module-declared apps (see the status banner). Work is ongoing to make it
+fully live.

@@ -1,5 +1,12 @@
 # 🔥 Hot Reload — How It Works
 
+> ## 🚧 Status: In Progress
+>
+> The pipeline described below is wired and runs live, but hot reload is **not
+> fully working yet**: changes do not yet propagate into the running app for
+> module-declared apps (see [internal status](internal/HOT_RELOAD_STATUS.md)).
+> Treat it as experimental until the status banner there is removed.
+
 > **Prerequisite:** Hot reload requires **Live mode**. If you're in REPL mode (the default), browser hot reload is not active. See [Workflow Modes](workflow-modes.md) for how to switch.
 
 1. File watcher detects `.fs`/`.fsx` changes (~500ms debounce)

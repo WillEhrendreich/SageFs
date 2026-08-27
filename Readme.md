@@ -63,6 +63,8 @@ SageFs is a live F# development engine. Start it once, connect any editor — VS
 
 ### ⚡ Hot Reload — Save and It's Live
 
+> **🚧 Status: In progress** — the reload pipeline (watch → eval → SSE refresh) is live, but propagating changes into a *running* app is still being completed for module-declared apps. See [docs/hot-reload.md](docs/hot-reload.md) for the current status.
+
 Save a `.fs` file. SageFs reloads it in ~100ms via [Harmony](https://github.com/pardeike/Harmony) runtime patching. No rebuild. No restart. Connected browsers auto-refresh via SSE. Your web app is already showing the new code before your fingers leave the keyboard.
 
 ### 🤖 AI-Native — Your Agent Can Compile
@@ -187,10 +189,12 @@ SageFs sessions run in one of two modes.The tradeoff is a physical constraint of
 
 **Live mode** enables browser hot reload — save a `.fs` file and connected browsers update instantly via SSE, with no manual refresh. To make this work, SageFs uses runtime patching to inject code changes into the running app. That patching requires a single-assembly FSI mode, which means you **cannot redefine types** (you'll get FS0037 errors). Expressions, function bodies, and let bindings work fine.
 
+> **🚧 Hot reload is in progress** — the pipeline runs, but changes may not yet propagate into a running module-declared app. See [docs/hot-reload.md](docs/hot-reload.md).
+
 | | REPL (default) | Live |
 |:---|:---|:---|
 | **Type redefinition** | ✅ Full — redefine types freely | ❌ FS0037 — expression-level changes only |
-| **Browser hot reload** | ❌ Manual refresh required | ✅ Save → patch → SSE push |
+| **Browser hot reload** | ❌ Manual refresh required | 🚧 In progress — pipeline live, app propagation being completed |
 | **Live testing** | ⚠️ Available in both — still stabilizing | ⚠️ Available in both — still stabilizing |
 | **Best for** | Prototyping, domain modeling, exploration | Web apps with Falco, Datastar, ASP.NET |
 
@@ -421,7 +425,7 @@ Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Arc
 
 ## Under the Hood
 
-**Hot Reload** — File changes are detected, sent to FSI via `#load`, and [Harmony](https://github.com/pardeike/Harmony) patches method pointers at runtime. Connected browsers auto-refresh via SSE. [Full details →](docs/hot-reload.md)
+**Hot Reload** — File changes are detected, sent to FSI via `#load`, and [Harmony](https://github.com/pardeike/Harmony) patches method pointers at runtime. Connected browsers auto-refresh via SSE. *Status: in progress — see [docs/hot-reload.md](docs/hot-reload.md).* [Full details →](docs/hot-reload.md)
 
 **Multi-Session** — Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
