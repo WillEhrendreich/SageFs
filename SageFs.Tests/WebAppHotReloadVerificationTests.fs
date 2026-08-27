@@ -124,7 +124,7 @@ let private httpGet (port: int) (path: string) =
 let webAppHotReloadVerificationTests =
   testList "WebApp hot-reload verification" [
 
-    testCase "host starts, loads web fixture source, serves HTTP, and hot-reloads the greeting" <| fun () ->
+    testCase "[Integration] host starts, loads web fixture source, serves HTTP, and hot-reloads the greeting" <| fun () ->
       let fixtureDir =
         let here = DirectoryInfo(AppContext.BaseDirectory)
         let root = here.Parent.Parent.Parent.Parent.FullName
