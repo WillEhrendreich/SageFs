@@ -442,9 +442,17 @@ h1 {
   color: var(--fg-default);
   border: none;
   border-radius: 4px;
-  padding: 2px 8px;
+  /* Uniform square buttons: every action glyph (◎ ■ ⌫ ✖) renders in the
+     same box, centered — no more size drift between icons. */
+  width: 28px;
+  height: 28px;
+  padding: 0;
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
   transition: background 0.15s;
 
@@ -464,13 +472,13 @@ h1 {
   color: var(--bg-default);
 }
 
-/* Warmup auto-open state icon on session cards */
+/* Warmup auto-open state icon on session cards — same box metrics as
+   the other session buttons so the row looks uniform. */
 .session-btn-autoopen {
   background: transparent;
   border: 1px solid var(--border-normal);
   font-size: 0.85rem;
   line-height: 1;
-  padding: 1px 5px;
 
   &:hover {
     background: var(--bg-focus);
@@ -479,50 +487,41 @@ h1 {
 }
 
 /* ── Session cards: pinnacle of responsive design ──────────────────
-   The card is a grid: [body | actions]. The body column is
-   minmax(0,1fr) so it always gets the remaining width and the actions
-   column NEVER squeezes it. Every content row wraps; nothing is
-   allowed to spill or overlap. When the card gets narrow, the actions
-   drop onto their own line below the body. */
+   The card is a SINGLE column: [body] on top, [actions] beneath it.
+   The actions never sit beside the body, so horizontal resizing can
+   only ever wrap the body's content — the body is never squeezed by a
+   side rail, and no blank space can appear beside the buttons. When
+   the card gets narrow, the body rows wrap and the button row wraps
+   too; when it widens, everything spreads naturally. One layout that
+   flows, no breakpoints, nothing to go wrong. */
 
 .session-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 6px 8px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
 }
 
 .session-row .session-card-body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 7px;
 }
 
 .session-row .session-card-status-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 0.3rem 0.5rem;
+  gap: 0.5rem 0.65rem;
   min-width: 0;
+  line-height: 1.4;
 }
 
 .session-row .session-card-actions {
   display: flex;
-  gap: 3px;
-  flex-shrink: 0;
-}
-
-/* When the sidebar is narrow (or many badges appear), the actions
-   stack onto their own row beneath the body instead of squeezing it. */
-@media (max-width: 420px) {
-  .session-row {
-    grid-template-columns: 1fr;
-  }
-
-  .session-row .session-card-actions {
-    justify-content: flex-start;
-  }
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 /* Badges (project tags, agent badges, status) must truncate gracefully
@@ -540,7 +539,7 @@ h1 {
 
 /* Long unbroken content (status messages, working dirs) wraps instead
    of overflowing the card. */
-.session-row .session-card-status-row .status-msg,
+.session-row .session-card-body .status-msg,
 .session-row .session-card-body .session-dir {
   overflow-wrap: anywhere;
   word-break: break-word;

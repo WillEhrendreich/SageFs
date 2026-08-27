@@ -773,7 +773,7 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
         Elem.div
           [ Attr.id (sprintf "session-card-%s" s.Id)
             Attr.class' (sprintf "session-row %s%s" cls guidanceCls)
-            Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
+            Attr.style "padding: 10px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
             Ds.class' ("session-selected", sprintf "$%s === '%s'" Signals.ViewingSessionId s.Id)
             Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId s.Id s.Id) ]
           [
@@ -784,13 +784,6 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                 Elem.span
                   [ Attr.class' (sprintf "status badge %s" statusClass) ]
                   [ Text.raw s.Status ]
-                match s.StatusMessage with
-                | Some msg ->
-                  Elem.span
-                    [ Attr.class' "status-msg"
-                      Attr.style "font-size: 0.65rem; color: var(--fg-yellow); font-style: italic;" ]
-                    [ Text.raw (sprintf "⏳ %s" msg) ]
-                | None -> ()
                 match s.IsActive with
                 | true ->
                   Elem.span [ Attr.style "color: var(--fg-green);" ] [ Text.raw "● active" ]
@@ -827,17 +820,26 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                   ]
                 | false -> ()
               ]
+              // Transient status message (warmup, discovery, etc.) on its own
+              // line so it never cramps the badges row
+              match s.StatusMessage with
+              | Some msg ->
+                Elem.div
+                  [ Attr.class' "status-msg"
+                    Attr.style "font-size: 0.7rem; color: var(--fg-yellow); font-style: italic;" ]
+                  [ Text.raw (sprintf "⏳ %s" msg) ]
+              | None -> ()
               // Row 2: working directory
               match s.WorkingDir.Length > 0 with
               | true ->
                 Elem.div
                   [ Attr.class' "session-dir"
-                    Attr.style "font-size: 0.75rem; color: var(--fg-dim); margin-top: 2px;"
+                    Attr.style "font-size: 0.75rem; color: var(--fg-dim);"
                     Attr.title s.WorkingDir ]
                   [ Text.raw (sprintf "📁 %s" s.WorkingDir) ]
               | false -> ()
               // Row 3: projects as tags + evals + last activity
-              Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem; margin-top: 2px; flex-wrap: wrap;" ] [
+              Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem; flex-wrap: wrap;" ] [
                 match s.ProjectsText.Length > 0 with
                 | true ->
                   let projNames =
