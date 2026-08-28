@@ -250,9 +250,9 @@ let stateOverrideTests =
       let r = open' (fun _ -> SessionState.Faulted) [mk "s1" "running"]
       Expect.equal (List.head r).Status "faulted" "Faulted = faulted")
 
-    testCase "Uninitialized maps to stopped" (fun () ->
+    testCase "Uninitialized maps to lost" (fun () ->
       let r = open' (fun _ -> SessionState.Uninitialized) [mk "s1" "running"]
-      Expect.equal (List.head r).Status "stopped" "Uninitialized = stopped")
+      Expect.equal (List.head r).Status "lost" "Uninitialized = lost (worker gone, needs restart)")
 
     testCase "overrides each session independently" (fun () ->
       let sessions = [ mk "live" "starting"; mk "dead" "running" ]
@@ -429,8 +429,10 @@ let stoppedSessionFilterTests =
   let parse = SageFs.Server.DashboardTypes.parseSessionLines
   let override' getState = SageFs.Server.DashboardTypes.overrideSessionStatuses getState (fun _ -> None)
   testList "Stopped session filtering" [
-    testCase "stopped sessions are filtered from rendered list" (fun () ->
-      // Simulate: two sessions parsed from TUI, one has live state Uninitialized (= stopped)
+    testCase "lost sessions are KEPT visible (worker gone, user can restart)" (fun () ->
+      // Uninitialized now maps to "lost" (not "stopped"). The sidebar keeps
+      // lost sessions visible with a yellow border so the user can see
+      // which ones need a restart, rather than silently hiding them.
       let input = "  sess-a [running] *\n  sess-b [running]"
       let parsed = parse input
       let getState id =
@@ -438,8 +440,10 @@ let stoppedSessionFilterTests =
         else SageFs.SessionState.Ready
       let corrected = override' getState parsed
       let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
-      Expect.equal visible.Length 1 "stopped session filtered out"
-      Expect.equal visible.[0].Id "sess-a" "only running session remains")
+      Expect.equal visible.Length 2 "lost session is NOT filtered out"
+      let visibleLost = corrected |> List.filter (fun s -> s.Status = "lost")
+      Expect.equal visibleLost.Length 1 "sess-b has lost status"
+      Expect.equal visibleLost.[0].Id "sess-b" "lost session identified")
 
     testCase "faulted sessions are kept visible" (fun () ->
       let input = "  sess-a [running] *\n  sess-b [running]"
@@ -451,13 +455,18 @@ let stoppedSessionFilterTests =
       let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
       Expect.equal visible.Length 2 "faulted session stays visible")
 
-    testCase "all stopped results in empty list" (fun () ->
+    testCase "all-lost sessions remain visible (no longer hidden)" (fun () ->
+      // Previously Uninitialized mapped to "stopped" and was hidden.
+      // Now it maps to "lost" and stays visible.
       let input = "  sess-a [running]\n  sess-b [starting]"
       let parsed = parse input
       let getState _ = SageFs.SessionState.Uninitialized
       let corrected = override' getState parsed
       let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
-      Expect.isEmpty visible "all stopped = empty list")
+      Expect.equal visible.Length 2 "lost sessions are NOT filtered out"
+      Expect.equal (List.length visible) (List.length corrected) "all sessions remain visible"
+      let lostCount = visible |> List.filter (fun s -> s.Status = "lost") |> List.length
+      Expect.equal lostCount 2 "both sessions show as lost")
   ]
 
 [<Tests>]
