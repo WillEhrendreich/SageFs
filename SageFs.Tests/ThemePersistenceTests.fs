@@ -447,55 +447,63 @@ let themeSwitchDetectionTests = testList "theme switch detection" [
 
 // ─── Unit: resolveThemePush pure logic ───────────────────────────────────────
 
+/// Test helper: build a themes dict with keys in the canonical form that
+/// `saveThemes` (via the set-theme handler) would actually store them in.
+/// `resolveThemePush` canonicalizes its lookup key, so the dict must match.
+let themesWith (entries: (string * string) list) : System.Collections.Generic.IDictionary<string, string> =
+  let d = System.Collections.Generic.Dictionary<string, string>()
+  for k, v in entries do d.[canonicalizeThemeKey k] <- v
+  d :> System.Collections.Generic.IDictionary<_,_>
+
 let resolveThemePushTests = testList "resolveThemePush" [
   // --- Basic happy paths ---
   test "pushes stored theme when workingDir changes" {
-    let themes = dict [| @"C:\Proj2", "Nordic" |] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith [ @"C:\Proj2", "Nordic" ]
     let result = resolveThemePush themes "s2" @"C:\Proj2" "s1" @"C:\Proj1"
     Expect.equal result (Some "Nordic") "should push stored theme for new dir"
   }
 
   test "pushes default when workingDir changes to unknown dir" {
-    let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith []
     let result = resolveThemePush themes "s2" @"C:\Unknown" "s1" @"C:\Proj1"
     Expect.equal result (Some "Kanagawa") "should push default for unknown dir"
   }
 
   test "no push when nothing changes" {
-    let themes = dict [| @"C:\Proj1", "Dracula" |] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith [ @"C:\Proj1", "Dracula" ]
     let result = resolveThemePush themes "s1" @"C:\Proj1" "s1" @"C:\Proj1"
     Expect.isNone result "same session, same dir should not push"
   }
 
   // --- Bug 1: same workingDir, different session SHOULD push ---
   test "pushes when session changes but workingDir is same" {
-    let themes = dict [| @"C:\SageFs", "Nordic" |] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith [ @"C:\SageFs", "Nordic" ]
     let result = resolveThemePush themes "session-B" @"C:\SageFs" "session-A" @"C:\SageFs"
     Expect.equal result (Some "Nordic") "different session same dir should push theme"
   }
 
   test "pushes default when session changes, same dir, no stored theme" {
-    let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith []
     let result = resolveThemePush themes "s2" @"C:\Proj" "s1" @"C:\Proj"
     Expect.equal result (Some "Kanagawa") "session change with no stored theme should push default"
   }
 
   // --- Bug 2: empty workingDir (faulted session) should push default ---
   test "pushes default when switching to empty workingDir session" {
-    let themes = dict [| @"C:\Proj1", "Nordic" |] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith [ @"C:\Proj1", "Nordic" ]
     let result = resolveThemePush themes "faulted-session" "" "s1" @"C:\Proj1"
     Expect.equal result (Some "Kanagawa") "empty workingDir should push default theme"
   }
 
   test "pushes default when both previous and current workingDir empty but session changes" {
-    let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith []
     let result = resolveThemePush themes "s2" "" "s1" ""
     Expect.equal result (Some "Kanagawa") "session change with both dirs empty should push default"
   }
 
   // --- Bug 3: switching back from empty workingDir restores theme ---
   test "restores stored theme when switching back from empty-dir session" {
-    let themes = dict [| @"C:\Proj1", "Gruvbox" |] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith [ @"C:\Proj1", "Gruvbox" ]
     // Was on Proj1 (Gruvbox), switched to faulted (empty), now switching back
     let result = resolveThemePush themes "s1" @"C:\Proj1" "faulted" ""
     Expect.equal result (Some "Gruvbox") "should restore Gruvbox when returning from empty-dir session"
@@ -503,10 +511,7 @@ let resolveThemePushTests = testList "resolveThemePush" [
 
   // --- Full round-trip scenario ---
   test "full round trip: set Nordic, switch away, switch back" {
-    let themes =
-      System.Collections.Concurrent.ConcurrentDictionary<string, string>()
-      :> System.Collections.Generic.IDictionary<_,_>
-    themes.[@"C:\SageFs"] <- "Nordic"
+    let themes = themesWith [ @"C:\SageFs", "Nordic" ]
 
     // Step 1: initial push for session A
     let r1 = resolveThemePush themes "sA" @"C:\SageFs" "" ""
@@ -525,10 +530,7 @@ let resolveThemePushTests = testList "resolveThemePush" [
   }
 
   test "round trip with shared workingDir sessions" {
-    let themes =
-      System.Collections.Concurrent.ConcurrentDictionary<string, string>()
-      :> System.Collections.Generic.IDictionary<_,_>
-    themes.[@"C:\SageFs"] <- "Nordic"
+    let themes = themesWith [ @"C:\SageFs", "Nordic" ]
 
     // Session A at C:\SageFs
     let r1 = resolveThemePush themes "sA" @"C:\SageFs" "" ""
@@ -549,19 +551,19 @@ let resolveThemePushTests = testList "resolveThemePush" [
 
   // --- Edge cases ---
   test "no push when currentSessionId is empty" {
-    let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith []
     let result = resolveThemePush themes "" @"C:\Proj" "s1" @"C:\Proj"
     Expect.isNone result "empty currentSessionId should not push"
   }
 
   test "initial push on first connection (both previous empty)" {
-    let themes = dict [| @"C:\Proj", "Dracula" |] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith [ @"C:\Proj", "Dracula" ]
     let result = resolveThemePush themes "s1" @"C:\Proj" "" ""
     Expect.equal result (Some "Dracula") "first connection should push stored theme"
   }
 
   test "initial push with no stored theme defaults to Kanagawa" {
-    let themes = dict [||] :> System.Collections.Generic.IDictionary<_,_>
+    let themes = themesWith []
     let result = resolveThemePush themes "s1" @"C:\NewProj" "" ""
     Expect.equal result (Some "Kanagawa") "first connection, no stored theme should push default"
   }
