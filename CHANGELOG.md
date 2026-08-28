@@ -7,7 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes._
+> **What's New**: Dashboard redesign aligned with **sagetech.dev** aesthetic
+> (flat panels, sharp corners, tabline/statusline/cmdline), **per-client
+> viewing session** made structurally impossible to get wrong, and **per-project
+> theme persistence** with path canonicalization. 6,778 tests green.
+
+### Highlights
+
+- 🎨 **Dashboard redesign** — flat panel aesthetic matching sagetech.dev: fixed top tabline (brand left, session status center, theme picker + expand toggle right), bottom statusline, bottom cmdline (`> SageFs --ready`), bracket-style buttons (`[CLEAR]`, `[EVAL]`, `[RESET]`, `[HARD_RESET]`), sharp corners everywhere, CRT scanline overlay, thin scrollbars, dynamic sidebar collapse/expand at the top of the sessions pane
+- 🛡️ **Per-client viewing session (structural)** — removed `GetActiveSessionId` and `GetElmRegions` from `DashboardQueries`. The compiler now rejects any code that tries to read a daemon-global active session from the dashboard layer. Two browser tabs, an MCP client, and the TUI each have their own viewing session. The TUI switching sessions no longer changes what a dashboard tab is displaying
+- 🎨 **Per-project theme persistence** — theme picker is per-client via the Datastar theme signal. Working-dir keys are canonicalized (`Path.GetFullPath` + lowercase on Windows + trim trailing separators), so `C:\Foo`, `c:\foo`, and `C:/Foo` all map to the same entry. 8 themes: One Dark, Kanagawa, Tokyo Night, Gruvbox, Catppuccin Mocha, Monokai, Dracula, Nordic
+- 🚨 **"Lost" session state** — when the daemon's actor doesn't know about a session (worker process died), the sidebar shows it as "lost" with a yellow left border rather than hiding it as "stopped". Users can see which sessions need a restart
+
+### Changed
+
+#### Dashboard
+- Replaced inline-JS header with structured tabline + statusline + cmdline
+- Moved theme picker to tabline right side, removed redundant sidebar toggle from tabline
+- Connection-status banner now uses `MutationObserver` on `#main` for accurate health signal (primary) plus a `fetch` interceptor (secondary fallback)
+- `set-theme` handler reads from per-client `viewingSessionId` signal with no global fallback — prevents cross-client theme overwrites
+- `pushState` patches the `theme` signal on every session switch AND every theme-name change so the picker always tracks the active session
+- Initial `/dashboard` render honors `?session=` query param for deep-links
+- `/api/state` JSON stream (for TUI) uses `?sessionId=` per-connection param instead of reading the global
+- EvalStats avg/min/max now appears in the tabline (was an empty div)
+
+#### Rendering
+- `ElmDaemon.renderRegionsForSession` added — renders a specific session's `OutputRingBuffer` instead of the Elm runtime's global active session
+- `overrideSessionStatuses` maps `SessionState.Uninitialized` → `"lost"` (was `"stopped"`)
+- Sidebar keeps "lost" sessions visible (was hiding them as "stopped")
+
+### Fixed
+
+- **Friction report `send_fsharp_code`**: dashboard showed "Server disconnected" and stale "Uninitialized" state after inactivity. Connection banner now clears on every SSE push via MutationObserver; "Uninitialized" sessions are now clearly labeled as "lost" with a restart action
+- **Per-client output coupling**: TUI switching sessions used to also change the dashboard's output panel. Now structurally impossible — output is sourced from the viewing session's buffer
+
+### Developer Notes
+- `AGENTS.md` now includes a "STOP" section at the top with three restatements of the rule against blocking on long-running daemon processes. The model repeatedly violated this despite prior corrections.
 
 ## [0.8.0] - 2026-03-10
 
