@@ -155,6 +155,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetSessionState = fun _ -> SessionState.Ready
       GetStatusMsg = fun _ -> None
       GetEvalStats = fun _ -> System.Threading.Tasks.Task.FromResult(SageFs.Affordances.EvalStats.empty)
+      GetFrictionStore = fun () -> System.Threading.Tasks.Task.FromResult None
       GetSessionWorkingDir = fun _ -> @"C:\Code\Repos\SageFs"
       GetElmRegionsForSession = fun _ -> None
       GetPreviousSessions = fun () -> System.Threading.Tasks.Task.FromResult([])

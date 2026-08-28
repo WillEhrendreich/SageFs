@@ -1598,6 +1598,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetSessionState = getSessionState
     GetStatusMsg = getStatusMsg
     GetEvalStats = getEvalStatsAsync
+    GetFrictionStore = fun () -> task { return frictionStore }
     GetSessionWorkingDir = getSessionWorkingDir
     GetElmRegionsForSession = fun sessionId ->
       ElmDaemon.renderRegionsForSession elmRuntime sessionId |> Some

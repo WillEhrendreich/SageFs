@@ -1,0 +1,26 @@
+name = "sagefs-friction-receiver"
+main = "src/index.ts"
+compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# R2 bucket for friction submissions. One object per submission, keyed by
+# YYYY/MM/DD/<timestamp>-<random>.json. The user-facing dashboard (R2 listing)
+# can browse these by date.
+[[r2_buckets]]
+binding = "FRICTION_BUCKET"
+bucket_name = "sagefs-friction"
+preview_bucket_name = "sagefs-friction-preview"
+
+# Secrets — set with `wrangler secret put DISCORD_WEBHOOK_URL` and
+# `wrangler secret put INGEST_TOKEN`. Both are OPTIONAL.
+# - DISCORD_WEBHOOK_URL: if set, a notification is posted on each submission.
+# - INGEST_TOKEN: if set, submissions must include this token in the
+#   `X-SageFs-Token` header. Prevents random internet noise from filling
+#   the bucket. The user's daemon stores a copy of the token locally so
+#   the same token works from any machine they configure.
+
+# Vars — non-secret configuration. Override with `wrangler secret put` or
+# in the dashboard.
+# - MAX_PAYLOAD_BYTES: reject submissions larger than this (default 64KB).
+[vars]
+MAX_PAYLOAD_BYTES = "65536"

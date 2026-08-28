@@ -441,11 +441,11 @@ let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list
     nodes |> Seq.toList
 
 /// Render output lines as an HTML fragment.
-let renderOutput (lines: OutputLine list) =
+let renderOutput (lines: OutputLine list) (placeholder: string) =
   Elem.div [ Attr.id DomIds.OutputPanel ] [
     match lines.IsEmpty with
     | true ->
-      Elem.span [ Attr.class' "meta" ] [ Text.raw "No output yet" ]
+      Elem.span [ Attr.class' "meta" ] [ Text.raw placeholder ]
     | false ->
       yield! lines |> List.map (fun line ->
         let css = OutputLineKind.toCssClass line.Kind
@@ -1300,7 +1300,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
 
 let renderRegionForSse (getSessionState: string -> SessionState) (getStatusMsg: string -> string option) (getSessionStandbyInfo: string -> StandbyInfo) (region: RenderRegion) =
   match region.Id with
-  | "output" -> Some (renderOutput (parseOutputLines region.Content))
+  | "output" -> Some (renderOutput (parseOutputLines region.Content) "No output yet")
   | "sessions" ->
     let parsed = parseSessionLines region.Content
     let corrected = overrideSessionStatuses getSessionState getStatusMsg parsed

@@ -1,0 +1,19 @@
+{
+  "name": "sagefs-friction-receiver",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker that receives sanitized SageFs friction reports and stores them in R2, with optional Discord notification.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx src/sanitize.test.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240821.0",
+    "@types/node": "^26.4.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^3.78.0"
+  }
+}

@@ -34,6 +34,8 @@ module SageFs.Server.Dashboard
 
 open System
 open System.IO
+open System.Net.Http
+open System.Security.Cryptography
 open Falco
 open Falco.Markup
 open Falco.Routing
@@ -46,6 +48,7 @@ open SageFs.Affordances
 open SageFs.Utils
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
+open SageFs.Features.FrictionSqlite
 
 module FalcoResponse = Falco.Response
 
@@ -227,9 +230,20 @@ let renderShell (version: string) (initialSessionId: string) (initialContent: Xm
 let private buildOutputPanels
   (q: DashboardQueries)
   (sessionId: string)
+  (sessionState: string)
+  (warmupProgress: string)
   : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode> =
   task {
     let! previous = q.GetPreviousSessions ()
+    // Build a meaningful placeholder so the output panel always shows SOMETHING
+    // when the session exists but hasn't produced eval output yet.
+    let emptyPlaceholder =
+      match warmupProgress.Length > 0 with
+      | true -> sprintf "⏳ %s" warmupProgress
+      | false ->
+        match sessionState with
+        | "Ready" -> "Ready — type code in the evaluator below, or use the MCP tools"
+        | state -> sprintf "%s" state
     let computeResult () =
       // Per-session regions: use the caller's sessionId, NOT the Elm
       // runtime's global active session. This is the structural fix
@@ -240,8 +254,12 @@ let private buildOutputPanels
         let outputRegion = regions |> List.tryFind (fun r -> r.Id = "output")
         let outNode =
           match outputRegion with
-          | Some r -> renderOutput (parseOutputLines r.Content)
-          | None -> renderOutput []
+          | Some r ->
+            let lines = parseOutputLines r.Content
+            match lines.IsEmpty with
+            | true -> renderOutput lines emptyPlaceholder
+            | false -> renderOutput lines "No output yet"
+          | None -> renderOutput [] emptyPlaceholder
         let sessRegion = regions |> List.tryFind (fun r -> r.Id = "sessions")
         match sessRegion with
         | Some r ->
@@ -274,7 +292,7 @@ let private buildOutputPanels
         | None ->
           (outNode, renderSessions [] false, renderSessionPickerEmpty)
       | None ->
-        (renderOutput [], renderSessions [] false, renderSessionPickerEmpty)
+        (renderOutput [] emptyPlaceholder, renderSessions [] false, renderSessionPickerEmpty)
     return computeResult ()
   }
 
@@ -379,13 +397,14 @@ let buildDashboardSnapshot
       | None -> (None, None)
     let liveTestingPanel = renderLiveTestingPanel liveTestingActive liveTestingStatus ltPassed ltFailed
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
-    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanels q sessionId
+    let warmupProgress = q.GetWarmupProgress sessionId
+    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanels q sessionId stateStr warmupProgress
     let snap : DashboardSnapshot = {
       Version = infra.Version
       SessionState = stateStr
       SessionId = sessionId
       WorkingDir = workingDir
-      WarmupProgress = q.GetWarmupProgress sessionId
+      WarmupProgress = warmupProgress
       WorkflowLabel = q.GetSessionWorkflow sessionId |> WorkflowTypes.SessionWorkflow.label
       EvalStats = evalStatsView
       AlarmPanel = alarmPanel
@@ -949,6 +968,120 @@ let createClearOutputHandler : HttpHandler =
     do! ssePatchNode ctx emptyOutput
   }
 
+/// Result of a friction send attempt. Rendered into the dashboard so
+/// the user sees success/failure inline in the friction panel.
+let private frictionSendResultDom (ok: bool) (error: string) (reportId: string) =
+  let statusClass = if ok then "friction-send-ok" else "friction-send-err"
+  let statusText =
+    if ok
+    then sprintf "Sent (report id: %s)" (if reportId.Length > 0 then reportId else "?")
+    else sprintf "Failed: %s" (if error.Length > 0 then error else "unknown error")
+  Elem.div [ Attr.class' (sprintf "friction-send-status %s" statusClass); Attr.id DomIds.FrictionSendStatus ] [
+    Elem.pre [ Attr.style "margin: 0; white-space: pre-wrap; font-size: 0.8rem;" ] [ Text.raw statusText ]
+  ]
+
+/// SHA-256 of the endpoint URL, hex-encoded. We hash rather than store
+/// the URL so the local SQLite friction store doesn't accumulate secrets
+/// the user might rotate (e.g. rotate a Discord webhook URL).
+let private frictionEndpointHash (url: string) : string =
+  use sha = System.Security.Cryptography.SHA256.Create()
+  let bytes = System.Text.Encoding.UTF8.GetBytes(url)
+  let hash = sha.ComputeHash(bytes)
+  System.Convert.ToHexString(hash).ToLowerInvariant()
+
+/// POST /dashboard/friction/send — receive a sanitized report from the
+/// client, POST it to the user's configured Cloudflare Worker endpoint,
+/// and record the send in the local FrictionStore so the dashboard can
+/// show "you already sent 3 reports this week".
+let createFrictionSendHandler
+  (q: DashboardQueries)
+  : HttpHandler =
+  fun ctx -> task {
+    try
+      use! doc = readSignalsJsonSized ctx
+      // The client signals the endpoint URL, ingest token, sanitized
+      // payload JSON, and a few metadata fields. Everything is per-client:
+      // the server has no opinion about where reports go.
+      let endpoint =
+        match doc.RootElement.TryGetProperty("frictionEndpoint") with
+        | true, prop -> prop.GetString()
+        | _ -> ""
+      let token =
+        match doc.RootElement.TryGetProperty("frictionToken") with
+        | true, prop -> prop.GetString()
+        | _ -> ""
+      let payloadJson =
+        match doc.RootElement.TryGetProperty("frictionPayload") with
+        | true, prop -> prop.GetRawText()
+        | _ -> ""
+      let sageFsVersion =
+        match doc.RootElement.TryGetProperty("frictionVersion") with
+        | true, prop -> prop.GetString()
+        | _ -> ""
+      let totalEvents =
+        match doc.RootElement.TryGetProperty("frictionTotalEvents") with
+        | true, prop -> prop.GetInt32()
+        | _ -> 0
+      let totalFeedback =
+        match doc.RootElement.TryGetProperty("frictionTotalFeedback") with
+        | true, prop -> prop.GetInt32()
+        | _ -> 0
+      Response.sseStartResponse ctx |> ignore
+      match endpoint.Length, payloadJson.Length with
+      | 0, _ | _, 0 ->
+        do! ssePatchNode ctx (frictionSendResultDom false "missing endpoint or payload" "")
+      | _ ->
+        let urlHash = frictionEndpointHash endpoint
+        let mutable attemptError : string option = None
+        let mutable reportId = ""
+        try
+          use http = new HttpClient()
+          try
+            let req = new HttpRequestMessage(HttpMethod.Post, endpoint)
+            req.Content <- new StringContent(payloadJson, System.Text.Encoding.UTF8, "application/json")
+            if token.Length > 0 then
+              req.Headers.Add("X-SageFs-Token", token)
+            let! resp = http.SendAsync(req) |> Async.AwaitTask
+            let! body = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+            if resp.IsSuccessStatusCode then
+              try
+                use respDoc = System.Text.Json.JsonDocument.Parse(body)
+                let root = respDoc.RootElement
+                reportId <-
+                  match root.TryGetProperty("reportId") with
+                  | true, p -> p.GetString()
+                  | _ -> ""
+              with _ -> ()
+              let sentAt = System.DateTimeOffset.UtcNow
+              let sent =
+                { ReportId = if reportId.Length > 0 then reportId else System.Guid.NewGuid().ToString("N").[..12]
+                  SentAtUtc = sentAt
+                  SageFsVersion = sageFsVersion
+                  TotalEvents = totalEvents
+                  TotalFeedbackItems = totalFeedback
+                  DestinationKind = "cloudflare-worker"
+                  DestinationUrlHash = urlHash }
+              let! store = q.GetFrictionStore () |> Async.AwaitTask
+              match store with
+              | Some s ->
+                match s.RecordSentReport sent with
+                | Ok () -> ()
+                | Error e -> Log.warn "[friction] failed to record sent report: %s" e
+              | None -> ()
+              do! ssePatchNode ctx (frictionSendResultDom true "" reportId)
+            else
+              attemptError <- Some (sprintf "worker returned %d: %s" (int resp.StatusCode) (if body.Length > 200 then body.[..200] + "..." else body))
+          finally
+            http.Dispose()
+        with ex ->
+          attemptError <- Some ex.Message
+        match attemptError with
+        | Some err -> do! ssePatchNode ctx (frictionSendResultDom false err "")
+        | None -> ()
+    with
+    | :? RequestTooLargeException -> ()
+    | ex -> Log.warn "[friction] send failed: %s" ex.Message
+  }
 
 /// Create the discover-projects POST handler.
 let createDiscoverHandler : HttpHandler =
@@ -1312,6 +1445,7 @@ let createEndpoints
     yield post "/dashboard/hard-reset" (createResetHandler a.HardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
+    yield post "/dashboard/friction/send" (createFrictionSendHandler q)
     // Dismiss all system alarms — clears the shared buffer and re-triggers SSE push.
     yield post "/dashboard/dismiss-alarm" (fun ctx -> task {
       infra.SystemAlarmBuffer.Value <- []

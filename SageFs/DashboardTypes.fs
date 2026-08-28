@@ -41,6 +41,8 @@ module DomIds =
   let [<Literal>] KeyboardHelpWrapper = "keyboard-help-wrapper"
   let [<Literal>] ConnectionCounts = "connection-counts"
   let [<Literal>] EditorArea = "editor-area"
+  let [<Literal>] FrictionSendStatus = "friction-send-status"
+  let [<Literal>] FrictionPanel = "friction-panel"
   let [<Literal>] OutputSection = "output-section"
   let [<Literal>] Sidebar = "sidebar"
   let [<Literal>] SidebarResize = "sidebar-resize"
@@ -546,6 +548,7 @@ type DashboardQueries = {
   GetSessionState: string -> SessionState
   GetStatusMsg: string -> string option
   GetEvalStats: string -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>
+  GetFrictionStore: unit -> Threading.Tasks.Task<SageFs.Features.FrictionSqlite.FrictionStore option>
   GetSessionWorkingDir: string -> string
   /// Per-session render regions. The dashboard MUST call this with the
   /// per-client viewing session id. The output region's content is

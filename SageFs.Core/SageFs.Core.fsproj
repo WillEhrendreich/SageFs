@@ -88,6 +88,7 @@
     <Compile Include="Features\FrictionTelemetryTypes.fs" />
         <Compile Include="Features\FrictionTelemetry.fs" />
         <Compile Include="Features\FrictionSqlite.fs" />
+        <Compile Include="Features\FrictionSanitize.fs" />
         <Compile Include="Features\FrictionOtelProjection.fs" />
         <Compile Include="Features\McpFrictionRecorder.fs" />
         <Compile Include="FsiRewrite.fs" />

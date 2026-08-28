@@ -5,12 +5,24 @@ open Microsoft.Data.Sqlite
 open SageFs.Features.FrictionTelemetryTypes
 open SageFs.Features.FrictionTelemetry
 
+type SentReport = {
+  ReportId: string
+  SentAtUtc: DateTimeOffset
+  SageFsVersion: string
+  TotalEvents: int
+  TotalFeedbackItems: int
+  DestinationKind: string
+  DestinationUrlHash: string
+}
+
 type FrictionStore = {
   Initialize: unit -> Result<unit, string>
   AppendEvent: FrictionEvent -> Result<unit, string>
   AppendFeedback: ExplicitFeedback -> Result<unit, string>
   ReadEvents: unit -> Result<FrictionEvent list, string>
   ReadFeedback: unit -> Result<ExplicitFeedback list, string>
+  RecordSentReport: SentReport -> Result<unit, string>
+  ListSentReports: unit -> Result<SentReport list, string>
 }
 
 module private Encoding =
@@ -225,7 +237,18 @@ CREATE TABLE IF NOT EXISTS explicit_feedback (
   alternative_kind TEXT NOT NULL,
   alternative_tool_name TEXT NULL,
   sagefs_version TEXT NOT NULL DEFAULT ''
-);"
+);
+CREATE TABLE IF NOT EXISTS sent_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  report_id TEXT NOT NULL,
+  sent_at_utc TEXT NOT NULL,
+  sagefs_version TEXT NOT NULL,
+  total_events INTEGER NOT NULL,
+  total_feedback_items INTEGER NOT NULL,
+  destination_kind TEXT NOT NULL,
+  destination_url_hash TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sent_reports_report_id ON sent_reports (report_id);"
         command.ExecuteNonQuery() |> ignore
         // Migrate existing tables that lack the sagefs_version column.
         // SQLite raises an error if the column already exists, so we catch that.
@@ -357,11 +380,59 @@ ORDER BY id;"
         Ok (List.rev feedback)
       with ex -> Error ex.Message
 
+    let recordSentReport report =
+      try
+        use connection = openConnection ()
+        use command = connection.CreateCommand()
+        command.CommandText <- "
+INSERT INTO sent_reports (
+  report_id, sent_at_utc, sagefs_version, total_events, total_feedback_items,
+  destination_kind, destination_url_hash)
+VALUES ($report_id, $sent_at_utc, $sagefs_version, $total_events, $total_feedback_items,
+  $destination_kind, $destination_url_hash);"
+        command.Parameters.AddWithValue("$report_id", report.ReportId) |> ignore
+        command.Parameters.AddWithValue("$sent_at_utc", report.SentAtUtc.ToString("O")) |> ignore
+        command.Parameters.AddWithValue("$sagefs_version", report.SageFsVersion) |> ignore
+        command.Parameters.AddWithValue("$total_events", report.TotalEvents) |> ignore
+        command.Parameters.AddWithValue("$total_feedback_items", report.TotalFeedbackItems) |> ignore
+        command.Parameters.AddWithValue("$destination_kind", report.DestinationKind) |> ignore
+        command.Parameters.AddWithValue("$destination_url_hash", report.DestinationUrlHash) |> ignore
+        command.ExecuteNonQuery() |> ignore
+        Ok ()
+      with ex -> Error ex.Message
+
+    let listSentReports () =
+      try
+        use connection = openConnection ()
+        use command = connection.CreateCommand()
+        command.CommandText <- "
+SELECT report_id, sent_at_utc, sagefs_version, total_events, total_feedback_items,
+       destination_kind, destination_url_hash
+FROM sent_reports
+ORDER BY id DESC;"
+        use reader = command.ExecuteReader()
+        let mutable reports = []
+        while reader.Read() do
+          reports <-
+            {
+              ReportId = reader.GetString(0)
+              SentAtUtc = DateTimeOffset.Parse(reader.GetString(1))
+              SageFsVersion = reader.GetString(2)
+              TotalEvents = reader.GetInt32(3)
+              TotalFeedbackItems = reader.GetInt32(4)
+              DestinationKind = reader.GetString(5)
+              DestinationUrlHash = reader.GetString(6)
+            } :: reports
+        Ok (List.rev reports)
+      with ex -> Error ex.Message
+
     { Initialize = initialize
       AppendEvent = appendEvent
       AppendFeedback = appendFeedback
       ReadEvents = readEvents
-      ReadFeedback = readFeedback }
+      ReadFeedback = readFeedback
+      RecordSentReport = recordSentReport
+      ListSentReports = listSentReports }
   let private parseIntent = function
     | "VerifyChangedBehavior" -> Ok IntentKind.VerifyChangedBehavior
     | "RunExactTest" -> Ok IntentKind.RunExactTest
