@@ -9,14 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **What's New**: Dashboard redesign aligned with **sagetech.dev** aesthetic
 > (flat panels, sharp corners, tabline/statusline/cmdline), **per-client
-> viewing session** made structurally impossible to get wrong, and **per-project
-> theme persistence** with path canonicalization. 6,778 tests green.
+> viewing session** made structurally impossible to get wrong, **per-project
+> theme persistence** with path canonicalization, and **opt-in friction
+> report submission** to a Cloudflare Worker + R2 destination you control.
+> 6,778 tests green.
 
 ### Highlights
 
 - 🎨 **Dashboard redesign** — flat panel aesthetic matching sagetech.dev: fixed top tabline (brand left, session status center, theme picker + expand toggle right), bottom statusline, bottom cmdline (`> SageFs --ready`), bracket-style buttons (`[CLEAR]`, `[EVAL]`, `[RESET]`, `[HARD_RESET]`), sharp corners everywhere, CRT scanline overlay, thin scrollbars, dynamic sidebar collapse/expand at the top of the sessions pane
 - 🛡️ **Per-client viewing session (structural)** — removed `GetActiveSessionId` and `GetElmRegions` from `DashboardQueries`. The compiler now rejects any code that tries to read a daemon-global active session from the dashboard layer. Two browser tabs, an MCP client, and the TUI each have their own viewing session. The TUI switching sessions no longer changes what a dashboard tab is displaying
 - 🎨 **Per-project theme persistence** — theme picker is per-client via the Datastar theme signal. Working-dir keys are canonicalized (`Path.GetFullPath` + lowercase on Windows + trim trailing separators), so `C:\Foo`, `c:\foo`, and `C:/Foo` all map to the same entry. 8 themes: One Dark, Kanagawa, Tokyo Night, Gruvbox, Catppuccin Mocha, Monokai, Dracula, Nordic
+- 📡 **Opt-in friction reports** — new `friction-receiver/` Cloudflare Worker (TypeScript) that stores sanitized reports in R2, with an optional Discord webhook notification on each submit. Fully opt-in: no destination is configured by default, the user pastes their Worker URL into the dashboard, the user reviews and edits free-text fields before sending, nothing is ever sent automatically. Free tier covers everything (100k Worker req/day, 10GB R2, 10M R2 ops/month). F# side: new `FrictionSanitize` module, `sent_reports` table in the existing friction SQLite store, `POST /dashboard/friction/send` handler with SHA-256 endpoint hashing. 31 sanitization unit tests cover paths/IPs/emails/session-ids/round-trip. The dashboard UI drawer is a follow-up — the data path is wired end-to-end now
+
 - 🚨 **"Lost" session state** — when the daemon's actor doesn't know about a session (worker process died), the sidebar shows it as "lost" with a yellow left border rather than hiding it as "stopped". Users can see which sessions need a restart
 
 ### Changed
