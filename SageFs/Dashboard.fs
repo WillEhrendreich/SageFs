@@ -87,14 +87,21 @@ let resolveBindingsPanelSnapshot
 // ---------------------------------------------------------------------------
 
 /// SSE connection monitor — intercepts fetch to detect stream lifecycle.
-/// Shows a banner on failure, polls for recovery.
+/// Shows a banner on SSE fetch failure. The Datastar SSE client uses
+/// EventSource (not fetch), so this probe is only a secondary signal.
+/// The primary connection-health signal is the MutationObserver on #main:
+/// every successful SSE push replaces the main content, which clears the
+/// banner.
 let connectionMonitorScript () =
   Elem.script [] [ Text.raw (sprintf """
     (function(){
+      var b=document.getElementById('%s');
+      var m=document.getElementById('main');
+      if(b&&m){new MutationObserver(function(){b.style.display='none';}).observe(m,{childList:true});}
       var f=window.fetch;window.fetch=function(u){var p=f.apply(this,arguments);
-      if(typeof u==='string'&&u.indexOf('/dashboard/stream')!==-1){var b=document.getElementById('%s');
-      p.then(function(r){if(b){b.style.display=r.ok?'none':'';b.textContent=r.ok?'':'\u274c Server error ('+r.status+')';if(!r.ok)b.className='conn-banner conn-disconnected';}})
-      .catch(function(){if(b){b.className='conn-banner conn-disconnected';b.textContent='\u274c Server disconnected \u2014 reconnecting...';b.style.display='';}});}
+      if(typeof u==='string'&&u.indexOf('/dashboard/stream')!==-1){
+        p.then(function(r){if(b){if(r.ok){b.style.display='none';}else{b.textContent='\u274c Server error ('+r.status+')';b.style.display='';}}});
+        .catch(function(){if(b){b.textContent='\u274c Server disconnected \u2014 reconnecting...';b.style.display='';}});}
       return p;};
     })();
   """ DomIds.ServerStatus) ]
@@ -174,9 +181,13 @@ let keyboardHandlerScript () =
         var K = 'sagefs.sidebarWidth';
         function setW(w) { document.documentElement.style.setProperty('--sidebar-width', w + 'px'); }
         try { var v = localStorage.getItem(K); if (v) { var n = parseInt(v, 10); if (n >= 200 && n <= 600) setW(n); } } catch (e) {}
-        var d = false;
+        var d = false, raf = null, pending = 0;
         h.addEventListener('mousedown', function(e) { d = true; e.preventDefault(); });
-        document.addEventListener('mousemove', function(e) { if (d) setW(Math.max(200, Math.min(600, window.innerWidth - e.clientX))); });
+        document.addEventListener('mousemove', function(e) {
+          if (!d) return;
+          pending = Math.max(200, Math.min(600, window.innerWidth - e.clientX));
+          if (!raf) raf = requestAnimationFrame(function() { setW(pending); raf = null; });
+        });
         document.addEventListener('mouseup', function() {
           if (d) { d = false;
             try { localStorage.setItem(K, document.documentElement.style.getPropertyValue('--sidebar-width').replace('px','').trim()); } catch (e) {}
@@ -195,6 +206,9 @@ let renderShell (version: string) (initialSessionId: string) (initialContent: Xm
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
       connectionMonitorScript ()
       Ds.cdnScript
+      Elem.link [ Attr.rel "preconnect"; Attr.href "https://fonts.googleapis.com" ]
+      Elem.link [ Attr.rel "preconnect"; Attr.href "https://fonts.gstatic.com"; Attr.create "crossorigin" "" ]
+      Elem.link [ Attr.rel "stylesheet"; Attr.href "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" ]
       Elem.link [ Attr.rel "stylesheet"; Attr.href "/dashboard/dashboard.css" ]
     ]
     Elem.body [ Ds.safariStreamingFix ] [
@@ -212,11 +226,16 @@ let renderShell (version: string) (initialSessionId: string) (initialContent: Xm
 
 let private buildOutputPanels
   (q: DashboardQueries)
+  (sessionId: string)
   : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode> =
   task {
     let! previous = q.GetPreviousSessions ()
     let computeResult () =
-      match q.GetElmRegions () with
+      // Per-session regions: use the caller's sessionId, NOT the Elm
+      // runtime's global active session. This is the structural fix
+      // for the bug where the TUI switching sessions would also
+      // change the dashboard's output panel.
+      match q.GetElmRegionsForSession sessionId with
       | Some regions ->
         let outputRegion = regions |> List.tryFind (fun r -> r.Id = "output")
         let outNode =
@@ -360,7 +379,7 @@ let buildDashboardSnapshot
       | None -> (None, None)
     let liveTestingPanel = renderLiveTestingPanel liveTestingActive liveTestingStatus ltPassed ltFailed
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
-    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanels q
+    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanels q sessionId
     let snap : DashboardSnapshot = {
       Version = infra.Version
       SessionState = stateStr
@@ -411,11 +430,26 @@ let createStreamHandler
     let pushState () = task {
       let! snap, newSessionId, newThemeName =
         buildDashboardSnapshot q infra currentSessionId lastSessionId lastWorkingDir lastThemeName
+      let sessionChanged = newSessionId <> lastSessionId
+      // Patch the theme signal on session switch (always), or when the
+      // resolved theme name changed. This keeps the picker in sync with
+      // the server's source of truth.
+      let themeChanged = newThemeName <> lastThemeName
+      let shouldPatchTheme = sessionChanged || themeChanged
+      Log.info "[pushState] cur=%s last=%s newTheme=%s lastTheme=%s sessionChanged=%b themeChanged=%b"
+        currentSessionId lastSessionId newThemeName lastThemeName sessionChanged themeChanged
       currentSessionId <- newSessionId
       lastSessionId <- newSessionId
       lastWorkingDir <- q.GetSessionWorkingDir newSessionId
       lastThemeName <- newThemeName
       do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") currentSessionId
+      // When the active session changes OR the resolved theme name differs
+      // from the last theme the server pushed, patch the theme signal so
+      // Datastar's data-bind-theme on the <select> stays in sync with the
+      // server-rendered <option selected>.
+      match shouldPatchTheme with
+      | true -> do! Response.ssePatchSignal ctx (SignalPath.sp Signals.Theme) newThemeName
+      | false -> ()
       do! ssePatchNode ctx (renderMainContent snap)
     }
 
@@ -443,18 +477,30 @@ let createStreamHandler
             let! msg = inbox.TryReceive(15_000)
             match msg with
             | None ->
-              // Idle timeout — send SSE keepalive comment
+              // Idle timeout — send SSE keepalive comment. The 15s interval
+              // matches the Datastar client's expected heartbeat and stays
+              // well under Kestrel's default keep-alive timeout. The write
+              // is wrapped to swallow connection-closed exceptions so the
+              // loop survives transient client disconnects (Datastar will
+              // reconnect via a new EventSource).
               try
-                let bytes = System.Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
-                do! ctx.Response.Body.AsyncWrite(bytes, 0, bytes.Length)
-                do! ctx.Response.Body.FlushAsync() |> Async.AwaitTask
+                if not ctx.RequestAborted.IsCancellationRequested then
+                  let bytes = System.Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
+                  do! ctx.Response.Body.AsyncWrite(bytes, 0, bytes.Length)
+                  do! ctx.Response.Body.FlushAsync() |> Async.AwaitTask
               with
               | :? System.IO.IOException -> ()
               | :? ObjectDisposedException -> ()
               | :? OperationCanceledException -> ()
               | :? System.ArgumentOutOfRangeException -> ()
               | :? System.InvalidOperationException -> ()
-              return! loop ()
+              | _ -> ()
+              // If the client cancelled, exit the loop. The MailboxProcessor
+              // was started with ctx.RequestAborted so it's also being torn
+              // down, but exiting explicitly lets the handler return cleanly.
+              match ctx.RequestAborted.IsCancellationRequested with
+              | true -> ()
+              | false -> return! loop ()
             | Some (SessionSwitched sid) ->
               // Session switch is user-interactive — update tracking and push immediately
               currentSessionId <- sid
@@ -783,7 +829,7 @@ let createSessionActionHandler
               |> List.filter (fun id -> id <> sessionId)
             // Sidebar order comes from the Elm sessions region — use it for "next in list".
             let orderedIds =
-              match q.GetElmRegions () with
+              match q.GetElmRegionsForSession sessionId with
               | Some regions ->
                 regions
                 |> List.tryFind (fun r -> r.Id = "sessions")
@@ -803,6 +849,37 @@ let createSessionActionHandler
         // Auto-switch: display + select the next session.
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) nextSession
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) nextSession
+        // Sync the output, sessions panel, and statusline to the auto-selected next session.
+        match q.GetElmRegionsForSession nextSession with
+        | Some regions ->
+          match regions |> List.tryFind (fun r -> r.Id = "output") with
+          | Some outputRegion ->
+            do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content))
+          | None -> ()
+          match regions |> List.tryFind (fun r -> r.Id = "sessions") with
+          | Some sessRegion ->
+            let parsed = parseSessionLines sessRegion.Content
+            let corrected = overrideSessionStatuses q.GetSessionState q.GetStatusMsg parsed
+            let visible =
+              corrected
+              |> List.filter (fun s -> s.Status <> "stopped")
+              |> List.map (fun s ->
+                let info = q.GetSessionStandbyInfo s.Id
+                { s with StandbyLabel = StandbyInfo.label info })
+            do! ssePatchNode ctx (renderSessions visible false)
+          | None -> ()
+        | None -> ()
+        let stateLabel = q.GetSessionState nextSession |> SessionState.label
+        do! ssePatchNode ctx (
+          Elem.div [ Attr.id DomIds.SessionStatus ] [
+            Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ Text.raw stateLabel ]
+          ])
+        let switchedDir = q.GetSessionWorkingDir nextSession
+        do! ssePatchNode ctx (
+          Elem.div [ Attr.id "statusline-left" ] [
+            Elem.div [ Attr.id "statusline-branch" ] [ Text.raw stateLabel ]
+            Elem.div [ Attr.id "statusline-file" ] [ Text.raw switchedDir ]
+          ])
       | None when teardown && Result.isOk result ->
         // No sessions remain — show the session picker (with Resume Previous).
         let! previous = q.GetPreviousSessions ()
@@ -812,6 +889,40 @@ let createSessionActionHandler
         // Switch path (or failed teardown): eval form targets the requested session.
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) sessionId
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) sessionId
+        // Immediately sync the output, sessions panel, and statusline to the
+        // newly-selected session so the display matches the sidebar highlight.
+        match q.GetElmRegionsForSession sessionId with
+        | Some regions ->
+          match regions |> List.tryFind (fun r -> r.Id = "output") with
+          | Some outputRegion ->
+            do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content))
+          | None -> ()
+          match regions |> List.tryFind (fun r -> r.Id = "sessions") with
+          | Some sessRegion ->
+            let parsed = parseSessionLines sessRegion.Content
+            let corrected = overrideSessionStatuses q.GetSessionState q.GetStatusMsg parsed
+            let visible =
+              corrected
+              |> List.filter (fun s -> s.Status <> "stopped")
+              |> List.map (fun s ->
+                let info = q.GetSessionStandbyInfo s.Id
+                { s with StandbyLabel = StandbyInfo.label info })
+            do! ssePatchNode ctx (renderSessions visible false)
+          | None -> ()
+        | None -> ()
+        // Patch the tabline status with the switched-to session's state.
+        let stateLabel = q.GetSessionState sessionId |> SessionState.label
+        do! ssePatchNode ctx (
+          Elem.div [ Attr.id DomIds.SessionStatus ] [
+            Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ Text.raw stateLabel ]
+          ])
+        // Patch the statusline with the switched-to session's working dir + state.
+        let switchedDir = q.GetSessionWorkingDir sessionId
+        do! ssePatchNode ctx (
+          Elem.div [ Attr.id "statusline-left" ] [
+            Elem.div [ Attr.id "statusline-branch" ] [ Text.raw stateLabel ]
+            Elem.div [ Attr.id "statusline-file" ] [ Text.raw switchedDir ]
+          ])
       let msg, cssClass =
         match result with
         | Ok m -> m, "output-line output-info"
@@ -1023,12 +1134,15 @@ let createApiStateHandler
     infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Terminal, connSessionId))
 
     let pushJson () = task {
-      let activeSid = q.GetActiveSessionId ()
+      // Use THIS connection's session (set via ?sessionId= query param),
+      // not a daemon global. Each TUI/dashboard SSE connection has its own
+      // sessionId, so the push reflects what THAT client is viewing.
+      let activeSid = connSessionId
       let activeDir = q.GetSessionWorkingDir activeSid
       let state = q.GetSessionState activeSid
       let! (stats : SageFs.Affordances.EvalStats) = q.GetEvalStats activeSid
       let regions =
-        match q.GetElmRegions () with
+        match q.GetElmRegionsForSession activeSid with
         | Some r ->
           r |> List.map (fun region ->
             {| id = region.Id
@@ -1162,20 +1276,24 @@ let createEndpoints
   (infra: DashboardInfra)
   : HttpEndpoint list =
   [
-    // Static CSS — served from embedded resource with aggressive caching
+    // Static CSS — served from embedded resource. No immutable caching so
+    // dashboard.css changes propagate without requiring a browser hard-refresh.
     yield get "/dashboard/dashboard.css" (fun ctx -> task {
       ctx.Response.ContentType <- "text/css; charset=utf-8"
-      ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "public, max-age=31536000, immutable"
+      ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "no-cache, must-revalidate"
       do! ctx.Response.WriteAsync(dashboardCss)
     })
     yield get "/dashboard" (fun ctx -> task {
       try
         let! sessions = q.GetAllSessions ()
+        // Initial session for a fresh page load: prefer a ?session= query
+        // param so deep-links work, then fall back to the first available
+        // session. There is intentionally NO global "active session" read
+        // here — that concept does not exist at the dashboard layer.
         let initialSessionId =
-          let active = q.GetActiveSessionId ()
-          match active.Length > 0 with
-          | true -> active
-          | false ->
+          match ctx.Request.Query.TryGetValue("session") with
+          | true, v when v.Count > 0 && not (String.IsNullOrEmpty(v.[0])) -> v.[0]
+          | _ ->
             sessions |> List.tryHead |> Option.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Option.defaultValue ""
         let! snap, resolvedId, _ = buildDashboardSnapshot q infra initialSessionId "" "" defaultThemeName
         let html = renderShell infra.Version resolvedId (renderMainContent snap)
@@ -1203,13 +1321,33 @@ let createEndpoints
     })
     yield post "/dashboard/set-theme" (fun ctx -> task {
       try
+        // Theme is passed in the POST body by the select's onchange handler
+        // (see renderThemePicker). We also read it from the signals JSON as
+        // a fallback for legacy clients that only had data-bind.
         use! doc = readSignalsJsonSized ctx
         let theme =
-          match doc.RootElement.TryGetProperty(Signals.Theme) with
+          match ctx.Request.Query.ContainsKey "theme" with
+          | true -> ctx.Request.Query.["theme"].ToString()
+          | false ->
+            match doc.RootElement.TryGetProperty(Signals.Theme) with
+            | true, prop -> prop.GetString()
+            | _ -> ""
+        // Per-client viewing session: the session the user is looking at in
+        // THIS browser tab. There is NO global fallback — if the client
+        // didn't send a viewing-session signal, we don't know which session
+        // the picker belongs to, and we must NOT silently route to a
+        // daemon global (that would let one client's choice overwrite
+        // another client's project theme).
+        let viewingId =
+          match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
           | true, prop -> prop.GetString()
           | _ -> ""
-        let activeId = q.GetActiveSessionId ()
-        let workingDir = q.GetSessionWorkingDir activeId
+        let rawDir =
+          match String.IsNullOrEmpty viewingId with
+          | false -> q.GetSessionWorkingDir viewingId
+          | true -> ""
+        let workingDir = canonicalizeThemeKey rawDir
+        Log.info "[set-theme] theme=%s viewingId=%s rawDir=%s key=%s" theme viewingId rawDir workingDir
         match workingDir.Length > 0 && theme.Length > 0 with
         | true ->
           infra.SessionThemes.[workingDir] <- theme
@@ -1220,6 +1358,10 @@ let createEndpoints
         Response.sseStartResponse ctx |> ignore
         do! ssePatchNode ctx (renderThemeVars theme)
         do! ssePatchNode ctx (renderThemePicker theme)
+        // Patch the theme signal so Datastar's data-bind-theme matches the
+        // server-rendered <option selected>, preventing the binding from
+        // immediately re-overriding the picker with a stale client value.
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.Theme) theme
       with
       | :? RequestTooLargeException -> ()
       | ex ->
@@ -1296,10 +1438,22 @@ let createEndpoints
         (fun sid -> createSessionActionHandler q handler true sid)
       yield post "/dashboard/session/stop-others" (fun ctx -> task {
         let! sessions = q.GetAllSessions ()
-        let activeId = q.GetActiveSessionId ()
+        // "Others" = everyone except the session THIS client is viewing.
+        // Read from the per-client viewing-session signal, not a global,
+        // so two tabs with different viewing sessions can independently
+        // click "stop others" without interfering.
+        let! doc = readSignalsJsonSized ctx
+        let viewingId =
+          match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
+          | true, prop -> prop.GetString()
+          | _ -> ""
+        let keepId =
+          match String.IsNullOrEmpty viewingId with
+          | false -> viewingId
+          | true -> sessions |> List.tryHead |> Option.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Option.defaultValue ""
         let others =
           sessions
-          |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> WorkerProtocol.SessionId.value s.Id <> activeId)
+          |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> WorkerProtocol.SessionId.value s.Id <> keepId)
         for s in others do
           let! _ = handler (WorkerProtocol.SessionId.value s.Id)
           ()

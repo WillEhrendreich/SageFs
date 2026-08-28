@@ -127,6 +127,42 @@ let renderRegionsOnDemand
   runtime.GetModel()
   |> SageFsRender.render
 
+/// Render regions for a SPECIFIC session, not the Elm runtime's
+/// currently-active session. This is the per-client path: the
+/// dashboard's viewing session drives the output buffer that gets
+/// rendered, so the TUI switching sessions doesn't change what a
+/// dashboard tab is displaying. The other regions (sessions list,
+/// diagnostics for the session, etc.) are filtered/selected for the
+/// given session where applicable.
+let renderRegionsForSession
+  (runtime: ElmRuntime<SageFsModel, SageFsMsg, RenderRegion>)
+  (sessionId: string)
+  : RenderRegion list =
+  let model = runtime.GetModel()
+  let all = SageFsRender.render model
+  // Override the output region with the buffer for the requested session.
+  // The default render uses model.Sessions.ActiveSessionId; we replace
+  // it with the caller's session so the dashboard's output matches
+  // the session it's viewing, regardless of what the TUI has selected.
+  all
+  |> List.map (fun region ->
+    match region.Id with
+    | "output" ->
+      let buf = model.RecentOutput.GetBuffer sessionId
+      { region with Content = buf.RenderAllCached() }
+    | "diagnostics" ->
+      let diags =
+        model.Diagnostics
+        |> Map.tryFind sessionId
+        |> Option.defaultValue []
+        |> List.map (fun d ->
+          sprintf "[%s] (%d,%d) %s"
+            (Features.Diagnostics.DiagnosticSeverity.label d.Severity)
+            d.Range.StartLine d.Range.StartColumn d.Message)
+        |> String.concat "\n"
+      { region with Content = diags }
+    | _ -> region)
+
 /// Dispatch a message and wait for the model to update.
 /// Returns the model state after the dispatch has been processed.
 let dispatchAndWait

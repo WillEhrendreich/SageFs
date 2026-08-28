@@ -1599,10 +1599,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetStatusMsg = getStatusMsg
     GetEvalStats = getEvalStatsAsync
     GetSessionWorkingDir = getSessionWorkingDir
-    GetActiveSessionId = fun () ->
-      let model = elmRuntime.GetModel()
-      ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
-    GetElmRegions = fun () -> ElmDaemon.renderRegionsOnDemand elmRuntime |> Some
+    GetElmRegionsForSession = fun sessionId ->
+      ElmDaemon.renderRegionsForSession elmRuntime sessionId |> Some
     GetPreviousSessions = fun () ->
       getPreviousSessions readSnapshot
     GetAllSessions = fun () -> task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }

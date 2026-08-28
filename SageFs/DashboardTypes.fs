@@ -499,20 +499,25 @@ let parseDiagLines (content: string) : Diagnostic list =
 
 /// Override parsed session statuses with live SessionState data.
 /// The TUI text may be stale — live state is the source of truth.
+/// Uninitialized here means "the actor doesn't know about this session"
+/// (e.g. the worker process died, or the session was never fully started).
+/// We surface it explicitly as "lost" rather than "stopped" so the user
+/// can distinguish a session that was deliberately stopped from one
+/// whose worker is gone, and decide to restart or dispose it.
 let overrideSessionStatuses
   (getState: string -> SessionState)
   (getStatusMsg: string -> string option)
   (sessions: ParsedSession list) : ParsedSession list =
   sessions
   |> List.map (fun (s: ParsedSession) ->
-    let liveStatus =
+    let liveStatus, guidanceCls =
       match getState s.Id with
-      | SessionState.Ready -> "running"
-      | SessionState.Evaluating -> "running"
-      | SessionState.WarmingUp -> "starting"
-      | SessionState.Faulted -> "faulted"
-      | SessionState.Uninitialized -> "stopped"
-    { s with Status = liveStatus; StatusMessage = getStatusMsg s.Id })
+      | SessionState.Ready -> "running", ""
+      | SessionState.Evaluating -> "running", ""
+      | SessionState.WarmingUp -> "starting", ""
+      | SessionState.Faulted -> "faulted", "session-faulted"
+      | SessionState.Uninitialized -> "lost", "session-lost"
+    { s with Status = liveStatus; GuidanceCssClass = guidanceCls; StatusMessage = getStatusMsg s.Id })
 
 /// A single system alarm entry — phase name, exception message, and when it fired.
 type SystemAlarmEntry = {
@@ -522,13 +527,32 @@ type SystemAlarmEntry = {
 }
 
 /// State queries — always-present read accessors for dashboard rendering.
+///
+/// IMPORTANT: there is intentionally NO `GetActiveSessionId` and NO
+/// global `GetElmRegions` on this type. "Active session" is a per-client
+/// concept (which session is THIS browser tab / MCP connection / TUI
+/// currently viewing), and the output region is per-session in the
+/// underlying `SessionOutputStore`. Dashboard code MUST:
+///   - read the viewing session from the per-connection `viewingSessionId`
+///     Datastar signal (or from the `?sessionId=` query param for HTTP
+///     JSON state streams), never from a daemon global
+///   - call `GetElmRegionsForSession sessionId` with THAT session id,
+///     never a global accessor
+/// The Elm runtime's `ActiveSessionId` is the TUI's own state and is
+/// not exposed to the dashboard layer. If you find yourself wanting to
+/// add "just a quick global" to this type, don't — route it through
+/// the per-client path or add a dedicated TUI-only query type.
 type DashboardQueries = {
   GetSessionState: string -> SessionState
   GetStatusMsg: string -> string option
   GetEvalStats: string -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>
   GetSessionWorkingDir: string -> string
-  GetActiveSessionId: unit -> string
-  GetElmRegions: unit -> RenderRegion list option
+  /// Per-session render regions. The dashboard MUST call this with the
+  /// per-client viewing session id. The output region's content is
+  /// sourced from the requested session's `OutputRingBuffer`, not from
+  /// the Elm runtime's global active session — so the TUI switching
+  /// sessions doesn't change what a dashboard tab is displaying.
+  GetElmRegionsForSession: string -> RenderRegion list option
   GetPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>
   GetAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>
   GetStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>
@@ -726,7 +750,26 @@ let parseEditorAction (actionName: string) (value: string option) : EditorAction
 // Theme persistence helpers
 // ---------------------------------------------------------------------------
 
-/// Save theme preferences to ~/.SageFs/themes.json
+/// Canonicalize a working-directory for use as a theme key.
+/// Resolves . and .., normalizes separators, lowercases on Windows,
+/// and strips trailing separators. Two different string forms of the
+/// same directory (e.g. "C:\Foo", "c:\foo\", "C:/Foo") collapse to one key.
+let canonicalizeThemeKey (workingDir: string) : string =
+  match String.IsNullOrWhiteSpace workingDir with
+  | true -> ""
+  | false ->
+    try
+      let full = Path.GetFullPath workingDir
+      let trimmed = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+      // On Windows, paths are case-insensitive — normalize to lower.
+      if OperatingSystem.IsWindows() then trimmed.ToLowerInvariant()
+      else trimmed
+    with _ -> workingDir
+
+/// Save theme preferences to ~/.SageFs/themes.json.
+/// Existing entries with non-canonicalized keys are preserved as-is for
+/// backward compatibility, but new writes go through canonicalizeThemeKey
+/// (handled at the call site).
 let saveThemes (sageFsDir: string) (themes: Collections.Concurrent.ConcurrentDictionary<string, string>) =
   try
     match Directory.Exists sageFsDir with
