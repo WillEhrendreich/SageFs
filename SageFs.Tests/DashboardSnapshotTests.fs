@@ -156,8 +156,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetStatusMsg = fun _ -> None
       GetEvalStats = fun _ -> System.Threading.Tasks.Task.FromResult(SageFs.Affordances.EvalStats.empty)
       GetSessionWorkingDir = fun _ -> @"C:\Code\Repos\SageFs"
-      GetActiveSessionId = fun () -> "session-1"
-      GetElmRegions = fun () -> None
+      GetElmRegionsForSession = fun _ -> None
       GetPreviousSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
       GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult StandbyInfo.NoPool
@@ -367,8 +366,8 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
 
   test "reset and hard reset buttons are present" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    Expect.stringContains html "Reset" "has Reset button"
-    Expect.stringContains html "Hard Reset" "has Hard Reset button"
+    Expect.stringContains html "[RESET]" "has [RESET] button"
+    Expect.stringContains html "[HARD_RESET]" "has [HARD_RESET] button"
   }
 
   test "clear output button in panel header" {

@@ -40,12 +40,12 @@ let renderCompletionDropdown (items: Features.AutoCompletion.CompletionItem list
   | [] ->
     Elem.div
       [ Attr.id DomIds.CompletionDropdown
-        Attr.style "display:none; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg-default); border:1px solid var(--bg-selection); border-radius:4px; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
+        Attr.style "display:none; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg-default); border:1px solid var(--bg-selection); border-radius:0; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
       []
   | items ->
     Elem.div
       [ Attr.id DomIds.CompletionDropdown
-        Attr.style "display:block; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg-default); border:1px solid var(--bg-selection); border-radius:4px; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
+        Attr.style "display:block; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg-default); border:1px solid var(--bg-selection); border-radius:0; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
       (items |> List.mapi (fun i item ->
         Elem.div
           [ Attr.class' "comp-item"
@@ -77,7 +77,9 @@ let renderThemePicker (selectedTheme: string) =
     [ Attr.id DomIds.ThemePicker
       Attr.class' "theme-select"
       Ds.bind Signals.Theme
-      Ds.onEvent ("change", "@post('/dashboard/set-theme')") ]
+      // Send the freshly-selected value (not the signal, which is updated
+      // async by data-bind) by reading the select element at event time.
+      Ds.onEvent ("change", "var t=this.value; @post('/dashboard/set-theme', {theme: t})") ]
     (ThemePresets.all |> List.map (fun (name, _) ->
       Elem.option
         ([ Attr.value name ] @ (match name = selectedTheme with | true -> [ Attr.create "selected" "selected" ] | false -> []))
@@ -623,14 +625,14 @@ let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) :
       [ Attr.class' "test-filter-btn"
         Ds.onEvent ("click", sprintf "$testFilter = '%s'" value)
         Ds.show (sprintf "$testFilter !== '%s'" value)
-        Attr.style (sprintf "background:transparent;border:1px solid %s;color:%s;padding:1px 5px;font-size:0.6rem;border-radius:3px;cursor:pointer;margin-right:2px;" color color) ]
+        Attr.style (sprintf "background:transparent;border:1px solid %s;color:%s;padding:1px 5px;font-size:0.6rem;border-radius:0;cursor:pointer;margin-right:2px;" color color) ]
       [ Text.raw (sprintf "%s %d" label count) ]
   let activeBtn (label: string) (value: string) (count: int) (color: string) =
     Elem.button
       [ Attr.class' "test-filter-btn test-filter-active"
         Ds.onEvent ("click", "$testFilter = 'all'")
         Ds.show (sprintf "$testFilter === '%s'" value)
-        Attr.style (sprintf "background:%s;color:#fff;padding:1px 5px;font-size:0.6rem;border-radius:3px;cursor:pointer;margin-right:2px;border:1px solid %s;" color color) ]
+        Attr.style (sprintf "background:%s;color:#fff;padding:1px 5px;font-size:0.6rem;border-radius:0;cursor:pointer;margin-right:2px;border:1px solid %s;" color color) ]
       [ Text.raw (sprintf "%s %d ✕" label count) ]
   Elem.div
     [ Attr.class' "test-filter-bar"
@@ -663,7 +665,7 @@ let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : X
   | _ ->
     let rects = Features.LiveTesting.TestTreemap.layout 320.0 180.0 entries
     Elem.div
-      [ Attr.style "position:relative;width:320px;height:180px;border-radius:4px;overflow:hidden;background:var(--bg-focus,#1a1a1a);margin-top:4px;" ]
+      [ Attr.style "position:relative;width:320px;height:180px;border-radius:0;overflow:hidden;background:var(--bg-focus,#1a1a1a);margin-top:4px;" ]
       [ yield! rects |> Array.map (fun r ->
           let bgColor =
             match r.Entry.Status with
@@ -761,6 +763,7 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
           match s.Status with
           | "running" -> "status-ready"
           | "starting" | "restarting" -> "status-warming"
+          | "lost" -> "status-faulted"  // Uninitialized: worker gone, needs restart
           | _ -> "status-faulted"
         let cls =
           match s.IsActive with
@@ -892,7 +895,7 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
                   let title = sprintf "Coverage: %s (%d/%d probes)" pct cs.CoveredProbes cs.TotalProbes
                   Elem.span [ Attr.style "display:inline-flex;align-items:center;gap:2px;" ] [
                     Elem.span
-                      [ Attr.style (sprintf "display:inline-block;width:48px;height:8px;border-radius:2px;background:linear-gradient(to right,%s);" gradientStops)
+                      [ Attr.style (sprintf "display:inline-block;width:48px;height:8px;border-radius:0;background:linear-gradient(to right,%s);" gradientStops)
                         Attr.title title ]
                       []
                     Elem.span
@@ -1073,18 +1076,31 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
   Elem.div [ Attr.id DomIds.Main; Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard) ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
-    // App header — version, status, stats, theme, sidebar toggle
+    // App header — tabline style like sagetech.dev
     Elem.div [ Attr.class' "app-header" ] [
-      Elem.h1 [] [ Text.raw (sprintf "🧙 SageFs v%s" snap.Version) ]
-      Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.75rem; align-items: center;" ] [
-        renderSessionStatus snap.SessionState snap.SessionId snap.WorkingDir snap.WarmupProgress snap.WorkflowLabel
-        renderEvalStats snap.EvalStats
-        snap.ThemePicker
+      // Brand tab — left side
+      Elem.div [ Attr.class' "tabline-brand"; Attr.style "display:flex;align-items:center;gap:8px;padding:0 16px;height:100%;border-right:1px solid var(--border-normal);" ] [
+        Elem.span [ Attr.style "font-weight:700;color:var(--fg-blue);font-size:14px;" ] [ Text.raw "🧙 SageFs" ]
+      ]
+      // Status tabs — center
+      Elem.div [ Attr.class' "tabline-menu"; Attr.style "display:flex;align-items:center;height:100%;flex:1;min-width:0;" ] [
+        Elem.div [ Attr.id DomIds.SessionStatus; Attr.class' "tabline-status"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);font-size:12px;" ] [
+          Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ Text.raw snap.SessionState ]
+        ]
+        Elem.div [ Attr.class' "tabline-info"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:12px;white-space:nowrap;" ] [
+          Text.raw (sprintf "Session: %s" snap.SessionId)
+        ]
+        Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "tabline-info"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:12px;" ] [ renderEvalStats snap.EvalStats ]
+      ]
+      // Right side — expand toggle, theme picker
+      Elem.div [ Attr.class' "tabline-right"; Attr.style "display:flex;align-items:center;height:100%;margin-left:auto;" ] [
         Elem.button
-          [ Attr.class' "sidebar-toggle"
-            Ds.onEvent ("click", "$sidebarOpen = !$sidebarOpen")
-            Ds.text "$sidebarOpen ? '✕ Panel' : '☰ Panel'" ]
+          [ Attr.class' "expand-toggle-btn"
+            Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.ExpandedDashboard Signals.ExpandedDashboard)
+            Ds.text (sprintf "$%s ? '✕' : '⋯'" Signals.ExpandedDashboard)
+            Attr.title "Toggle extra panels (Hot Reload, Live Testing, Bindings)" ]
           []
+        snap.ThemePicker
       ]
     ]
     // Daemon health bar — version, uptime, memory, session health
@@ -1104,18 +1120,20 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         Elem.div [ Attr.id DomIds.EditorArea ] [
           Elem.div [ Attr.id DomIds.OutputSection; Attr.class' "output-area" ] [
             Elem.div [ Attr.class' "output-header" ] [
-              Elem.h2 [] [ Text.raw "Output" ]
+              Elem.div [ Attr.style "display:flex;align-items:center;gap:16px;" ] [
+                Elem.h2 [] [ Text.raw "Output" ]
+              ]
               Elem.button
                 [ Attr.class' "panel-header-btn"
                   Ds.onClick (Ds.post "/dashboard/clear-output") ]
-                [ Text.raw "Clear" ]
+                [ Text.raw "[CLEAR]" ]
             ]
             snap.OutputPanel
           ]
           // Eval area — collapsed by default via <details>
           Elem.create "details" [ Attr.id DomIds.EvaluateSection; Attr.class' "eval-area" ] [
             Elem.create "summary" [ Attr.class' "flex-between"; Attr.style "cursor: pointer;" ] [
-              Elem.span [ Attr.style "color: var(--fg-blue); font-weight: bold; font-size: 0.9rem;" ] [ Text.raw "▸ Evaluate" ]
+              Elem.span [ Attr.style "color: var(--fg-blue); font-weight: bold; font-size: 0.85rem;" ] [ Text.raw "▸ Evaluate" ]
               Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
                 Elem.span [ Ds.text """$code ? ($code.split('\\n').length + 'L ' + $code.length + 'c') : ''""" ] []
               ]
@@ -1143,7 +1161,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 []
               Elem.div
                 [ Attr.id DomIds.CompletionDropdown
-                  Attr.style "display:none; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg-default); border:1px solid var(--bg-selection); border-radius:4px; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
+                  Attr.style "display:none; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg-default); border:1px solid var(--bg-selection); border-radius:0; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
                 []
             ]
             Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;" ] [
@@ -1154,17 +1172,17 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                   Ds.onClick (Ds.post "/dashboard/eval") ]
                 [ Elem.span [ Ds.show "$evalLoading" ] [ Text.raw "⏳ " ]
                   Elem.span [ Ds.show "!$evalLoading" ] [ Text.raw "▶ " ]
-                  Text.raw "Eval" ]
+                  Text.raw "[EVAL]" ]
               Elem.button
                 [ Attr.class' "eval-btn"
                   Attr.style "background: var(--fg-green);"
                   Ds.onClick (Ds.post "/dashboard/reset") ]
-                [ Text.raw "↻ Reset" ]
+                [ Text.raw "[RESET]" ]
               Elem.button
                 [ Attr.class' "eval-btn"
                   Attr.style "background: var(--fg-red);"
                   Ds.onClick (Ds.post "/dashboard/hard-reset") ]
-                [ Text.raw "⟳ Hard Reset" ]
+                [ Text.raw "[HARD_RESET]" ]
               Elem.label
                 [ Attr.class' "eval-btn"
                   Attr.style "background: var(--fg-blue); cursor: pointer; display: inline-flex; align-items: center;" ]
@@ -1183,10 +1201,20 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       Elem.div [ Attr.class' "resize-handle"; Attr.id DomIds.SidebarResize ] []
       // Sidebar — sessions, panels, new session at bottom
       Elem.div [ Attr.id DomIds.Sidebar; Attr.class' "sidebar"; Ds.class' ("collapsed", "!$sidebarOpen") ] [
+        // Sidebar header — title + dynamic collapse/expand toggle (always visible)
+        Elem.div [ Attr.class' "sidebar-header" ] [
+          Elem.h2 [] [ Text.raw "Sessions" ]
+          Elem.button
+            [ Attr.class' "sidebar-header-btn"
+              Attr.id "sidebar-toggle-btn"
+              Ds.onEvent ("click", "$sidebarOpen = !$sidebarOpen")
+              Ds.text "$sidebarOpen ? '✕' : '☰'"
+              Attr.title "$sidebarOpen ? 'Collapse panel' : 'Expand panel'" ]
+            []
+        ]
         Elem.div [ Attr.class' "sidebar-inner" ] [
           // Sessions panel (with context + bindings inline per row)
           Elem.div [ Attr.class' "panel" ] [
-            Elem.h2 [] [ Text.raw "Sessions" ]
             connectionNode
             snap.SessionsPanel
           ]
@@ -1245,12 +1273,29 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         ]
       ]
     ]
-    // Floating expand/collapse toggle — always visible, bottom-right corner
-    Elem.button
-      [ Attr.class' "expand-toggle-btn"
-        Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.ExpandedDashboard Signals.ExpandedDashboard)
-        Ds.text (sprintf "$%s ? '✕ collapse' : '⋯ expand'" Signals.ExpandedDashboard) ]
-      []
+    // Bottom statusline — fixed position
+    Elem.div [ Attr.class' "statusline" ] [
+      Elem.div [ Attr.id "statusline-left"; Attr.class' "statusline-left" ] [
+        Elem.div [ Attr.id "statusline-branch"; Attr.class' "statusline-branch" ] [ Text.raw snap.SessionState ]
+        Elem.div [ Attr.id "statusline-file"; Attr.class' "statusline-file" ] [ Text.raw (sprintf "%s" snap.WorkingDir) ]
+      ]
+      Elem.div [ Attr.class' "statusline-info" ] [
+        Text.raw (sprintf "\"%s\" — SageFs v%s —ready" snap.WorkingDir snap.Version)
+      ]
+      Elem.div [ Attr.class' "statusline-right" ] [
+        Elem.div [ Attr.class' "statusline-stat" ] [
+          Text.raw (sprintf "%d evals" snap.EvalStats.Count)
+        ]
+        Elem.div [ Attr.class' "statusline-stat-accent" ] [
+          Text.raw (sprintf "v%s" snap.Version)
+        ]
+      ]
+    ]
+    // Bottom command line — evaluate input as cmdline
+    Elem.div [ Attr.class' "cmdline" ] [
+      Elem.span [ Attr.class' "cmdline-prompt" ] [ Text.raw ">" ]
+      Elem.span [ Attr.class' "cmdline-text" ] [ Text.raw "SageFs --ready" ]
+    ]
   ]
 
 let renderRegionForSse (getSessionState: string -> SessionState) (getStatusMsg: string -> string option) (getSessionStandbyInfo: string -> StandbyInfo) (region: RenderRegion) =
@@ -1297,6 +1342,10 @@ let pushRegions
 /// Decides whether a theme push is needed after a state change.
 /// Returns Some themeName if push needed, None otherwise.
 /// Pure function — no side effects — for testability.
+/// The themes dictionary is expected to use canonical keys (see
+/// `canonicalizeThemeKey` in DashboardTypes.fs); the lookup key here
+/// is canonicalized before the dictionary read so different string
+/// forms of the same directory collapse to one entry.
 let resolveThemePush
   (themes: System.Collections.Generic.IDictionary<string, string>)
   (currentSessionId: string)
@@ -1312,9 +1361,13 @@ let resolveThemePush
   | true ->
     match currentWorkingDir.Length > 0 with
     | true ->
-      match themes.TryGetValue(currentWorkingDir) with
-      | true, n -> Some n
-      | false, _ -> Some defaultThemeName
+      let key = canonicalizeThemeKey currentWorkingDir
+      match key.Length > 0 with
+      | true ->
+        match themes.TryGetValue(key) with
+        | true, n -> Some n
+        | false, _ -> Some defaultThemeName
+      | false -> Some defaultThemeName
     | false ->
       Some defaultThemeName
   | false ->
@@ -1553,7 +1606,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
             Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5em;" ] [
               Elem.span [ Attr.style "min-width: 120px;" ] [ Text.raw label ]
               Elem.div [ Attr.class' "progress-track" ] [
-                Elem.div [ Attr.style (sprintf "width: %.1f%%; height: 100%%; background: var(--fg-blue); border-radius: 4px;" pct) ] []
+                Elem.div [ Attr.style (sprintf "width: %.1f%%; height: 100%%; background: var(--fg-blue); border-radius: 0;" pct) ] []
               ]
               Elem.span [ Attr.style "min-width: 50px; text-align: right; color: var(--fg-dim);" ] [
                 Text.raw (sprintf "%dms" ms)
