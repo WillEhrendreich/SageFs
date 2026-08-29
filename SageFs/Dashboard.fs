@@ -332,7 +332,7 @@ let buildDashboardSnapshot
     let diagnosticsPanel = renderCurrentDiagnostics (q.GetCurrentDiagnostics())
     let filmstripPanel = renderSessionFilmstrip (q.GetFilmstripEntries())
     let themeName =
-      match resolveThemePush infra.SessionThemes sessionId workingDir lastSessionId lastWorkingDir with
+      match resolveThemePush infra.SessionThemes sessionId workingDir lastSessionId lastWorkingDir lastThemeName with
       | Some name -> name
       | None -> lastThemeName
     let connectionLabel =

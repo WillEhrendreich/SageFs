@@ -1352,13 +1352,14 @@ let resolveThemePush
   (currentWorkingDir: string)
   (previousSessionId: string)
   (previousWorkingDir: string)
+  (lastThemeName: string)
   : string option =
   let sessionChanged =
     currentSessionId.Length > 0 && currentSessionId <> previousSessionId
   let workingDirChanged =
     currentWorkingDir.Length > 0 && currentWorkingDir <> previousWorkingDir
-  match sessionChanged || workingDirChanged with
-  | true ->
+  // Look up the server-side theme for the current working dir
+  let serverTheme =
     match currentWorkingDir.Length > 0 with
     | true ->
       let key = canonicalizeThemeKey currentWorkingDir
@@ -1366,12 +1367,22 @@ let resolveThemePush
       | true ->
         match themes.TryGetValue(key) with
         | true, n -> Some n
-        | false, _ -> Some defaultThemeName
-      | false -> Some defaultThemeName
-    | false ->
-      Some defaultThemeName
+        | false, _ -> None
+      | false -> None
+    | false -> None
+  match sessionChanged || workingDirChanged with
+  | true ->
+    // Session changed — use the server-side theme or fall back to default
+    match serverTheme with
+    | Some n -> Some n
+    | None -> Some defaultThemeName
   | false ->
-    None
+    // Session didn't change — only push if the server-side theme
+    // differs from what was last pushed (handles set-theme without
+    // a session switch)
+    match serverTheme with
+    | Some n when n <> lastThemeName -> Some n
+    | _ -> None
 
 /// Render the hot-reload panel with a file list grouped by directory.
 let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: bool |} list) (watchedCount: int) =
