@@ -43,6 +43,8 @@ module DomIds =
   let [<Literal>] EditorArea = "editor-area"
   let [<Literal>] FrictionSendStatus = "friction-send-status"
   let [<Literal>] FrictionPanel = "friction-panel"
+  let [<Literal>] FrictionDrawer = "friction-drawer"
+  let [<Literal>] FrictionDrawerOverlay = "friction-drawer-overlay"
   let [<Literal>] OutputSection = "output-section"
   let [<Literal>] Sidebar = "sidebar"
   let [<Literal>] SidebarResize = "sidebar-resize"
@@ -70,6 +72,10 @@ module Signals =
   let [<Literal>] CursorPos = "cursorPos"
   let [<Literal>] TestFilter = "testFilter"
   let [<Literal>] ExpandedDashboard = "expandedDashboard"
+  let [<Literal>] FrictionDrawerOpen = "frictionDrawerOpen"
+  let [<Literal>] FrictionEndpoint = "frictionEndpoint"
+  let [<Literal>] FrictionToken = "frictionToken"
+  let [<Literal>] FrictionSending = "frictionSending"
 
 /// Precomputed syntax-color RGB → CSS class lookup (eliminates 12-branch if/elif chain)
 let syntaxColorLookup =
@@ -397,53 +403,30 @@ let parseSessionLines (content: string) =
     | true -> v.Substring(prefix.Length).Trim()
     | false -> ""
   content.Split('\n')
-  |> Array.filter (fun (l: string) ->
-    l.Length > 0
-    && not (l.StartsWith("───", StringComparison.Ordinal))
-    && not (l.StartsWith("⏳", StringComparison.Ordinal))
-    && not (l.Contains("↑↓ nav"))
-    && not (l.Contains("Enter switch"))
-    && not (l.Contains("Ctrl+Tab cycle")))
-  |> Array.map (fun (l: string) ->
+  |> Array.choose (fun (l: string) ->
     let m = sessionRegex.Match(l)
-    match m.Success with
-    | true ->
+    if not m.Success then None
+    else
       let evalsMatch = Regex.Match(m.Groups.[6].Value, @"evals:(\d+)")
-      { Id = m.Groups.[2].Value
-        Status = m.Groups.[3].Value
-        StatusMessage = None
-        IsActive = m.Groups.[4].Value.Contains("*")
-        IsSelected = m.Groups.[1].Value = ">"
-        ProjectsText = m.Groups.[5].Value.Trim()
-        EvalCount = match evalsMatch.Success with | true -> int evalsMatch.Groups.[1].Value | false -> 0
-        Uptime = extractTag "up:" m.Groups.[7].Value
-        WorkingDir = extractTag "dir:" m.Groups.[8].Value
-        LastActivity = extractTag "last:" m.Groups.[9].Value
-        StandbyLabel = ""
-        TestSummary = None
-        CoverageSummary = None
-        TestTreemapEntries = [||]
-        BindingEntries = [||]
-        AgentBadges = []
-        GuidanceCssClass = "" }
-    | false ->
-      { Id = l.Trim()
-        Status = "unknown"
-        StatusMessage = None
-        IsActive = false
-        IsSelected = false
-        ProjectsText = ""
-        EvalCount = 0
-        Uptime = ""
-        WorkingDir = ""
-        LastActivity = ""
-        StandbyLabel = ""
-        TestSummary = None
-        CoverageSummary = None
-        TestTreemapEntries = [||]
-        BindingEntries = [||]
-        AgentBadges = []
-        GuidanceCssClass = "" })
+      let session =
+        { Id = m.Groups.[2].Value
+          Status = m.Groups.[3].Value
+          StatusMessage = None
+          IsActive = m.Groups.[4].Value.Contains("*")
+          IsSelected = m.Groups.[1].Value = ">"
+          ProjectsText = m.Groups.[5].Value.Trim()
+          EvalCount = match evalsMatch.Success with | true -> int evalsMatch.Groups.[1].Value | false -> 0
+          Uptime = extractTag "up:" m.Groups.[7].Value
+          WorkingDir = extractTag "dir:" m.Groups.[8].Value
+          LastActivity = extractTag "last:" m.Groups.[9].Value
+          StandbyLabel = ""
+          TestSummary = None
+          CoverageSummary = None
+          TestTreemapEntries = [||]
+          BindingEntries = [||]
+          AgentBadges = []
+          GuidanceCssClass = "" }
+      Some session)
   |> Array.toList
 
 let isCreatingSession (content: string) =
@@ -657,6 +640,7 @@ type DashboardSnapshot = {
   ThemePicker: XmlNode
   ThemeVars: XmlNode
   BindingsPanel: XmlNode
+  FrictionPanel: XmlNode
 }
 
 type DaemonInfoContract = {

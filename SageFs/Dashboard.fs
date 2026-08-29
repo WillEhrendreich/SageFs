@@ -423,6 +423,7 @@ let buildDashboardSnapshot
       ThemePicker = renderThemePicker themeName
       ThemeVars = renderThemeVars themeName
       BindingsPanel = bindingsPanel
+      FrictionPanel = Elem.div [] []
     }
     return snap, sessionId, themeName
   }
@@ -873,7 +874,7 @@ let createSessionActionHandler
         | Some regions ->
           match regions |> List.tryFind (fun r -> r.Id = "output") with
           | Some outputRegion ->
-            do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content))
+            do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content) "No output yet")
           | None -> ()
           match regions |> List.tryFind (fun r -> r.Id = "sessions") with
           | Some sessRegion ->
@@ -914,7 +915,7 @@ let createSessionActionHandler
         | Some regions ->
           match regions |> List.tryFind (fun r -> r.Id = "output") with
           | Some outputRegion ->
-            do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content))
+            do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content) "No output yet")
           | None -> ()
           match regions |> List.tryFind (fun r -> r.Id = "sessions") with
           | Some sessRegion ->

@@ -170,6 +170,7 @@ let diagnosticsPanelSnapshotTests =
         SessionPicker = Elem.div [] []; ThemePicker = Elem.div [] []
         ThemeVars = Elem.div [] []; BindingsPanel = Elem.div [] []
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
+        FrictionPanel = Elem.div [] []
       }
       let html = snap.DiagnosticsPanel |> renderToString
       Expect.isTrue (html.Length > 0) "DiagnosticsPanel should render non-empty HTML"
@@ -187,6 +188,7 @@ let diagnosticsPanelSnapshotTests =
         SessionPicker = Elem.div [] []; ThemePicker = Elem.div [] []
         ThemeVars = Elem.div [] []; BindingsPanel = Elem.div [] []
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
+        FrictionPanel = Elem.div [] []
       }
       let html = renderMainContent snap |> renderToString
       Expect.stringContains html DomIds.DiagnosticsPanel "main content should include diagnostics panel"

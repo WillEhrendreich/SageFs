@@ -47,12 +47,12 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
       { Timestamp = None; Kind = InfoLine; Text = "Loading..." }
       { Timestamp = Some "12:30:47"; Kind = SystemLine; Text = "Hot reload" }
     ]
-    let html = renderOutput lines |> renderNode
+    let html = renderOutput lines "No output yet" |> renderNode
     do! verifyDashboard "dashboard_output_mixed" html
   }
 
   testTask "renderOutput empty" {
-    let html = renderOutput [] |> renderNode
+    let html = renderOutput [] "No output yet" |> renderNode
     do! verifyDashboard "dashboard_output_empty" html
   }
 
@@ -264,7 +264,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
     if not (SyntaxHighlight.isAvailable()) then
       Tests.skiptest "tree-sitter not available; snapshot was generated with syntax highlighting"
     let lines = [ { Timestamp = Some "14:00:00"; Kind = ResultLine; Text = "val it: int = 0" } ]
-    let html = renderOutput lines |> renderNode
+    let html = renderOutput lines "No output yet" |> renderNode
     do! verifyDashboard "dashboard_output_singleResult" html
   }
 ]
@@ -347,7 +347,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     OutputPanel = Elem.div [] []
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
     ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-    BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] [] }
+    BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] [] }
 
   test "renderMainContent shows version" {
     let html = renderMainContent (mkSnap "1.2.3") |> renderNode
@@ -902,7 +902,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] [] }
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] [] }
     let html = renderMainContent snap |> renderNode
     let mustHaveIds =
       [ DomIds.Main; DomIds.SessionStatus; DomIds.EvalStats
@@ -941,7 +941,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] [] }
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] [] }
     let html = renderMainContent snap |> renderNode
     Expect.isTrue (html.StartsWith("<div id=\"main\""))"must start with div#main"
   }
@@ -958,7 +958,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] [] }
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] [] }
   test "Version appears in rendered output" {
     let html = mkSnap "1.2.3" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
     Expect.stringContains html "1.2.3" "version should appear"

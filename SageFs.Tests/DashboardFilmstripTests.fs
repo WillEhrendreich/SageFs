@@ -104,6 +104,7 @@ let filmstripSnapshotTests =
         SessionPicker = Elem.div [] []; ThemePicker = Elem.div [] []
         ThemeVars = Elem.div [] []; BindingsPanel = Elem.div [] []
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
+        FrictionPanel = Elem.div [] []
       }
       let html = snap.FilmstripPanel |> render
       Expect.isTrue (html.Length > 0) "FilmstripPanel should render non-empty HTML"
@@ -122,6 +123,7 @@ let filmstripSnapshotTests =
         SessionPicker = Elem.div [] []; ThemePicker = Elem.div [] []
         ThemeVars = Elem.div [] []; BindingsPanel = Elem.div [] []
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
+        FrictionPanel = Elem.div [] []
       }
       let html = renderMainContent snap |> render
       Expect.stringContains html DomIds.FilmstripPanel "main content should include filmstrip panel"
