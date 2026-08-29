@@ -210,7 +210,7 @@ module SessionStateOverride =
   open SageFs.Server.Dashboard
   open SageFs.Server.DashboardTypes
 
-  let mkSession id status =
+  let mkSession (id: WorkerProtocol.SessionId) (status: SessionDisplayStatus) =
     { ParsedSession.Id = id
       Status = status
       StatusMessage = None
@@ -228,39 +228,40 @@ module SessionStateOverride =
       BindingEntries = [||]
       AgentBadges = []
       GuidanceCssClass = "" }
-
 [<Tests>]
 let stateOverrideTests =
   let open' getState = SageFs.Server.DashboardTypes.overrideSessionStatuses getState (fun _ -> None)
   let mk = SessionStateOverride.mkSession
+  let s1 = WorkerProtocol.SessionId.validate "s1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+  let s2 = WorkerProtocol.SessionId.validate "s2" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
   testList "Session state override" [
     testCase "Ready maps to running" (fun () ->
-      let r = open' (fun _ -> SessionState.Ready) [mk "s1" "starting"]
-      Expect.equal (List.head r).Status "running" "Ready = running")
+      let r = open' (fun _ -> SessionState.Ready) [mk s1 SessionDisplayStatus.Starting]
+      Expect.equal (List.head r).Status SessionDisplayStatus.Running "Ready = running")
 
     testCase "Evaluating maps to running" (fun () ->
-      let r = open' (fun _ -> SessionState.Evaluating) [mk "s1" "starting"]
-      Expect.equal (List.head r).Status "running" "Evaluating = running")
+      let r = open' (fun _ -> SessionState.Evaluating) [mk s1 SessionDisplayStatus.Starting]
+      Expect.equal (List.head r).Status SessionDisplayStatus.Running "Evaluating = running")
 
     testCase "WarmingUp maps to starting" (fun () ->
-      let r = open' (fun _ -> SessionState.WarmingUp) [mk "s1" "running"]
-      Expect.equal (List.head r).Status "starting" "WarmingUp = starting")
+      let r = open' (fun _ -> SessionState.WarmingUp) [mk s1 SessionDisplayStatus.Running]
+      Expect.equal (List.head r).Status SessionDisplayStatus.Starting "WarmingUp = starting")
 
     testCase "Faulted maps to faulted" (fun () ->
-      let r = open' (fun _ -> SessionState.Faulted) [mk "s1" "running"]
-      Expect.equal (List.head r).Status "faulted" "Faulted = faulted")
+      let r = open' (fun _ -> SessionState.Faulted) [mk s1 SessionDisplayStatus.Running]
+      Expect.equal (List.head r).Status SessionDisplayStatus.Faulted "Faulted = faulted")
 
     testCase "Uninitialized maps to lost" (fun () ->
-      let r = open' (fun _ -> SessionState.Uninitialized) [mk "s1" "running"]
-      Expect.equal (List.head r).Status "lost" "Uninitialized = lost (worker gone, needs restart)")
+      let r = open' (fun _ -> SessionState.Uninitialized) [mk s1 SessionDisplayStatus.Running]
+      Expect.equal (List.head r).Status SessionDisplayStatus.Lost "Uninitialized = lost (worker gone, needs restart)")
 
     testCase "overrides each session independently" (fun () ->
-      let sessions = [ mk "live" "starting"; mk "dead" "running" ]
-      let getState sid =
-        if sid = "live" then SessionState.Ready else SessionState.Faulted
+      let sessions = [ mk s1 SessionDisplayStatus.Starting; mk s2 SessionDisplayStatus.Running ]
+      let getState (sid: WorkerProtocol.SessionId) =
+        if WorkerProtocol.SessionId.value sid = (WorkerProtocol.SessionId.value s1) then SessionState.Ready else SessionState.Faulted
       let r = open' getState sessions
-      Expect.equal (List.head r).Status "running" "live becomes running"
-      Expect.equal (r |> List.item 1).Status "faulted" "dead becomes faulted")
+      Expect.equal (List.head r).Status SessionDisplayStatus.Running "s1 becomes running"
+      Expect.equal (r |> List.item 1).Status SessionDisplayStatus.Faulted "s2 becomes faulted")
   ]
 
 /// Tests for TUI chrome filtering in session parsing (Bug #2)
@@ -268,27 +269,27 @@ let stateOverrideTests =
 let ghostSessionTests =
   testList "Ghost session filtering (Bug #2)" [
     testCase "filters TUI keyboard shortcut lines" (fun () ->
-      let input = "  session-abc [running] *\n↑↓ nav · Enter switch"
+      let input = "  0a2b3c4d [running] *\n↑↓ nav · Enter switch"
       let sessions = SageFs.Server.DashboardTypes.parseSessionLines input
       Expect.equal sessions.Length 1 "only real session, no ghost from shortcuts")
 
     testCase "filters box-drawing border lines" (fun () ->
-      let input = "  session-abc [running] *\n──────────"
+      let input = "  0a2b3c4d [running] *\n──────────"
       let sessions = SageFs.Server.DashboardTypes.parseSessionLines input
       Expect.equal sessions.Length 1 "border lines filtered")
 
     testCase "filters spinner lines" (fun () ->
-      let input = "  session-abc [running] *\n⏳ Loading..."
+      let input = "  0a2b3c4d [running] *\n⏳ Loading..."
       let sessions = SageFs.Server.DashboardTypes.parseSessionLines input
       Expect.equal sessions.Length 1 "spinner lines filtered")
 
     testCase "filters Ctrl+Tab cycle lines" (fun () ->
-      let input = "  session-abc [running] *\nCtrl+Tab cycle sessions"
+      let input = "  0a2b3c4d [running] *\nCtrl+Tab cycle sessions"
       let sessions = SageFs.Server.DashboardTypes.parseSessionLines input
       Expect.equal sessions.Length 1 "Ctrl+Tab line filtered")
 
     testCase "preserves all valid sessions" (fun () ->
-      let input = "  session-abc [running] *\n  session-def [starting]"
+      let input = "  0a2b3c4d [running] *\n  0a2b3c4e [starting]"
       let sessions = SageFs.Server.DashboardTypes.parseSessionLines input
       Expect.equal sessions.Length 2 "both valid sessions kept")
   ]
@@ -428,44 +429,45 @@ let connectionCountTests =
 let stoppedSessionFilterTests =
   let parse = SageFs.Server.DashboardTypes.parseSessionLines
   let override' getState = SageFs.Server.DashboardTypes.overrideSessionStatuses getState (fun _ -> None)
+  let sessB = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
   testList "Stopped session filtering" [
     testCase "lost sessions are KEPT visible (worker gone, user can restart)" (fun () ->
       // Uninitialized now maps to "lost" (not "stopped"). The sidebar keeps
       // lost sessions visible with a yellow border so the user can see
       // which ones need a restart, rather than silently hiding them.
-      let input = "  sess-a [running] *\n  sess-b [running]"
+      let input = "  0a2b3c4d [running] *\n  0a2b3c4e [running]"
       let parsed = parse input
-      let getState id =
-        if id = "sess-b" then SageFs.SessionState.Uninitialized
+      let getState (sid: WorkerProtocol.SessionId) =
+        if WorkerProtocol.SessionId.value sid = (WorkerProtocol.SessionId.value sessB) then SageFs.SessionState.Uninitialized
         else SageFs.SessionState.Ready
       let corrected = override' getState parsed
-      let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
+      let visible = corrected |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
       Expect.equal visible.Length 2 "lost session is NOT filtered out"
-      let visibleLost = corrected |> List.filter (fun s -> s.Status = "lost")
-      Expect.equal visibleLost.Length 1 "sess-b has lost status"
-      Expect.equal visibleLost.[0].Id "sess-b" "lost session identified")
+      let visibleLost = corrected |> List.filter (fun s -> s.Status = SessionDisplayStatus.Lost)
+      Expect.equal visibleLost.Length 1 "0a2b3c4e has lost status"
+      Expect.equal (WorkerProtocol.SessionId.value visibleLost.[0].Id) "0a2b3c4e" "lost session identified")
 
     testCase "faulted sessions are kept visible" (fun () ->
-      let input = "  sess-a [running] *\n  sess-b [running]"
+      let input = "  0a2b3c4d [running] *\n  0a2b3c4e [running]"
       let parsed = parse input
-      let getState id =
-        if id = "sess-b" then SageFs.SessionState.Faulted
+      let getState (sid: WorkerProtocol.SessionId) =
+        if WorkerProtocol.SessionId.value sid = (WorkerProtocol.SessionId.value sessB) then SageFs.SessionState.Faulted
         else SageFs.SessionState.Ready
       let corrected = override' getState parsed
-      let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
+      let visible = corrected |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
       Expect.equal visible.Length 2 "faulted session stays visible")
 
     testCase "all-lost sessions remain visible (no longer hidden)" (fun () ->
       // Previously Uninitialized mapped to "stopped" and was hidden.
       // Now it maps to "lost" and stays visible.
-      let input = "  sess-a [running]\n  sess-b [starting]"
+      let input = "  0a2b3c4d [running]\n  0a2b3c4e [starting]"
       let parsed = parse input
       let getState _ = SageFs.SessionState.Uninitialized
       let corrected = override' getState parsed
-      let visible = corrected |> List.filter (fun s -> s.Status <> "stopped")
+      let visible = corrected |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
       Expect.equal visible.Length 2 "lost sessions are NOT filtered out"
       Expect.equal (List.length visible) (List.length corrected) "all sessions remain visible"
-      let lostCount = visible |> List.filter (fun s -> s.Status = "lost") |> List.length
+      let lostCount = visible |> List.filter (fun s -> s.Status = SessionDisplayStatus.Lost) |> List.length
       Expect.equal lostCount 2 "both sessions show as lost")
   ]
 
@@ -474,12 +476,12 @@ let perSessionTestSummaryTests =
   let parse = SageFs.Server.DashboardTypes.parseSessionLines
   testList "Per-session test summary" [
     testCase "parsed sessions have TestSummary = None by default" (fun () ->
-      let input = "  sess-a [running] *"
+      let input = "  0a2b3c4d [running] *"
       let sessions = parse input
       Expect.isNone sessions.[0].TestSummary "parsed sessions start with no test summary")
 
     testCase "TestSummary can be injected via record update" (fun () ->
-      let input = "  sess-a [running] *"
+      let input = "  0a2b3c4d [running] *"
       let sessions = parse input
       let summary =
         { SageFs.Features.LiveTesting.TestSummary.empty with
@@ -494,8 +496,8 @@ let perSessionTestSummaryTests =
         { SageFs.Features.LiveTesting.TestSummary.empty with
             Total = 10; Passed = 8; Failed = 2 }
       let session : ParsedSession =
-        { Id = "sess-a"
-          Status = "running"
+        { Id = WorkerProtocol.SessionId.validate "sess-a" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+          Status = SessionDisplayStatus.Running
           StatusMessage = None
           IsActive = true
           IsSelected = false
@@ -519,8 +521,8 @@ let perSessionTestSummaryTests =
 
     testCase "no badge when TestSummary is None" (fun () ->
       let session : ParsedSession =
-        { Id = "sess-a"
-          Status = "running"
+        { Id = WorkerProtocol.SessionId.validate "sess-a" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+          Status = SessionDisplayStatus.Running
           StatusMessage = None
           IsActive = true
           IsSelected = false
@@ -552,8 +554,8 @@ let perSessionCoverageTests =
             TotalProbes = 64; CoveredProbes = 48; CoveragePercent = 75.0
             DensityStrip = [| 1.0; 0.8; 0.5; 0.0 |] }
       let session : ParsedSession =
-        { Id = "sess-cov"
-          Status = "running"
+        { Id = WorkerProtocol.SessionId.validate "sess-cov" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+          Status = SessionDisplayStatus.Running
           StatusMessage = None
           IsActive = true
           IsSelected = false
@@ -577,8 +579,8 @@ let perSessionCoverageTests =
 
     testCase "no coverage strip when CoverageSummary is None" (fun () ->
       let session : ParsedSession =
-        { Id = "sess-nocov"
-          Status = "running"
+        { Id = WorkerProtocol.SessionId.validate "sess-nocov" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+          Status = SessionDisplayStatus.Running
           StatusMessage = None
           IsActive = true
           IsSelected = false

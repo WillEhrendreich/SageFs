@@ -375,9 +375,51 @@ type AgentBadge = {
   DetailLabel: string
 }
 
+/// Display-level session status for the dashboard sidebar.
+/// Distinct from SessionState (daemon lifecycle) and WorkerProtocol.SessionStatus (wire protocol).
+/// Every case is explicit — no stringly-typed fallback.
+[<RequireQualifiedAccess>]
+type SessionDisplayStatus =
+  | Running
+  | Starting
+  | Faulted
+  | Lost
+  | Stopped
+
+module SessionDisplayStatus =
+  let label = function
+    | SessionDisplayStatus.Running -> "running"
+    | SessionDisplayStatus.Starting -> "starting"
+    | SessionDisplayStatus.Faulted -> "faulted"
+    | SessionDisplayStatus.Lost -> "lost"
+    | SessionDisplayStatus.Stopped -> "stopped"
+
+  let ofTuiString (raw: string) =
+    match raw.Trim().ToLowerInvariant() with
+    | "running" -> SessionDisplayStatus.Running
+    | "starting" | "restarting" -> SessionDisplayStatus.Starting
+    | "faulted" | "error" -> SessionDisplayStatus.Faulted
+    | "lost" -> SessionDisplayStatus.Lost
+    | "stopped" -> SessionDisplayStatus.Stopped
+    | _ -> SessionDisplayStatus.Running
+
+  let ofSessionState = function
+    | SessionState.Ready -> SessionDisplayStatus.Running
+    | SessionState.Evaluating -> SessionDisplayStatus.Running
+    | SessionState.WarmingUp -> SessionDisplayStatus.Starting
+    | SessionState.Faulted -> SessionDisplayStatus.Faulted
+    | SessionState.Uninitialized -> SessionDisplayStatus.Lost
+
+  let cssClass = function
+    | SessionDisplayStatus.Running -> "status-ready"
+    | SessionDisplayStatus.Starting -> "status-warming"
+    | SessionDisplayStatus.Faulted -> "status-faulted"
+    | SessionDisplayStatus.Lost -> "status-faulted"
+    | SessionDisplayStatus.Stopped -> "status-faulted"
+
 type ParsedSession = {
-  Id: string
-  Status: string
+  Id: WorkerProtocol.SessionId
+  Status: SessionDisplayStatus
   StatusMessage: string option
   IsActive: bool
   IsSelected: bool
@@ -410,41 +452,34 @@ let parseSessionLines (content: string) =
     && not (l.Contains("↑↓ nav"))
     && not (l.Contains("Enter switch"))
     && not (l.Contains("Ctrl+Tab cycle")))
-  |> Array.map (fun (l: string) ->
+  |> Array.choose (fun (l: string) ->
     let m = sessionRegex.Match(l)
-    let emptySession =
-      { Id = l.Trim()
-        Status = "unknown"
-        StatusMessage = None
-        IsActive = false
-        IsSelected = false
-        ProjectsText = ""
-        EvalCount = 0
-        Uptime = ""
-        WorkingDir = ""
-        LastActivity = ""
-        StandbyLabel = ""
-        TestSummary = None
-        CoverageSummary = None
-        TestTreemapEntries = [||]
-        BindingEntries = [||]
-        AgentBadges = []
-        GuidanceCssClass = "" }
     match m.Success with
+    | false -> None
     | true ->
       let evalsMatch = Regex.Match(m.Groups.[6].Value, @"evals:(\d+)")
-      { emptySession
-          with
-          Id = m.Groups.[2].Value
-          Status = m.Groups.[3].Value
-          IsActive = m.Groups.[4].Value.Contains("*")
-          IsSelected = m.Groups.[1].Value = ">"
-          ProjectsText = m.Groups.[5].Value.Trim()
-          EvalCount = match evalsMatch.Success with | true -> int evalsMatch.Groups.[1].Value | false -> 0
-          Uptime = extractTag "up:" m.Groups.[7].Value
-          WorkingDir = extractTag "dir:" m.Groups.[8].Value
-          LastActivity = extractTag "last:" m.Groups.[9].Value }
-    | false -> emptySession)
+      let rawId = m.Groups.[2].Value
+      match WorkerProtocol.SessionId.validate rawId with
+      | Error _ -> None
+      | Ok sessionId ->
+        Some
+          { Id = sessionId
+            Status = SessionDisplayStatus.ofTuiString m.Groups.[3].Value
+            StatusMessage = None
+            IsActive = m.Groups.[4].Value.Contains("*")
+            IsSelected = m.Groups.[1].Value = ">"
+            ProjectsText = m.Groups.[5].Value.Trim()
+            EvalCount = match evalsMatch.Success with | true -> int evalsMatch.Groups.[1].Value | false -> 0
+            Uptime = extractTag "up:" m.Groups.[7].Value
+            WorkingDir = extractTag "dir:" m.Groups.[8].Value
+            LastActivity = extractTag "last:" m.Groups.[9].Value
+            StandbyLabel = ""
+            TestSummary = None
+            CoverageSummary = None
+            TestTreemapEntries = [||]
+            BindingEntries = [||]
+            AgentBadges = []
+            GuidanceCssClass = "" })
   |> Array.toList
 
 let isCreatingSession (content: string) =
@@ -508,18 +543,17 @@ let parseDiagLines (content: string) : Diagnostic list =
 /// can distinguish a session that was deliberately stopped from one
 /// whose worker is gone, and decide to restart or dispose it.
 let overrideSessionStatuses
-  (getState: string -> SessionState)
-  (getStatusMsg: string -> string option)
+  (getState: WorkerProtocol.SessionId -> SessionState)
+  (getStatusMsg: WorkerProtocol.SessionId -> string option)
   (sessions: ParsedSession list) : ParsedSession list =
   sessions
   |> List.map (fun (s: ParsedSession) ->
-    let liveStatus, guidanceCls =
-      match getState s.Id with
-      | SessionState.Ready -> "running", ""
-      | SessionState.Evaluating -> "running", ""
-      | SessionState.WarmingUp -> "starting", ""
-      | SessionState.Faulted -> "faulted", "session-faulted"
-      | SessionState.Uninitialized -> "lost", "session-lost"
+    let liveStatus = getState s.Id |> SessionDisplayStatus.ofSessionState
+    let guidanceCls =
+      match liveStatus with
+      | SessionDisplayStatus.Faulted -> "session-faulted"
+      | SessionDisplayStatus.Lost -> "session-lost"
+      | _ -> ""
     { s with Status = liveStatus; GuidanceCssClass = guidanceCls; StatusMessage = getStatusMsg s.Id })
 
 /// A single system alarm entry — phase name, exception message, and when it fired.
@@ -546,31 +580,31 @@ type SystemAlarmEntry = {
 /// add "just a quick global" to this type, don't — route it through
 /// the per-client path or add a dedicated TUI-only query type.
 type DashboardQueries = {
-  GetSessionState: string -> SessionState
-  GetStatusMsg: string -> string option
-  GetEvalStats: string -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>
+  GetSessionState: WorkerProtocol.SessionId -> SessionState
+  GetStatusMsg: WorkerProtocol.SessionId -> string option
+  GetEvalStats: WorkerProtocol.SessionId -> Threading.Tasks.Task<SageFs.Affordances.EvalStats>
   GetFrictionStore: unit -> Threading.Tasks.Task<SageFs.Features.FrictionSqlite.FrictionStore option>
-  GetSessionWorkingDir: string -> string
+  GetSessionWorkingDir: WorkerProtocol.SessionId -> string
   /// Per-session render regions. The dashboard MUST call this with the
   /// per-client viewing session id. The output region's content is
   /// sourced from the requested session's `OutputRingBuffer`, not from
   /// the Elm runtime's global active session — so the TUI switching
   /// sessions doesn't change what a dashboard tab is displaying.
-  GetElmRegionsForSession: string -> RenderRegion list option
+  GetElmRegionsForSession: WorkerProtocol.SessionId -> RenderRegion list option
   GetPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>
   GetAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>
   GetStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>
-  GetSessionStandbyInfo: string -> StandbyInfo
-  GetHotReloadState: string -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>
-  GetWarmupContext: string -> Threading.Tasks.Task<WarmupContext option>
-  GetWarmupProgress: string -> string
-  GetSessionTestSummary: string -> Features.LiveTesting.TestSummary option
-  GetSessionCoverageSummary: string -> Features.LiveTesting.CoverageSummary option
-  GetSessionTestTreemap: string -> Features.LiveTesting.TestTreemapEntry array
-  GetSessionBindings: string -> Features.BindingExplorer.BindingInfo array
+  GetSessionStandbyInfo: WorkerProtocol.SessionId -> StandbyInfo
+  GetHotReloadState: WorkerProtocol.SessionId -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>
+  GetWarmupContext: WorkerProtocol.SessionId -> Threading.Tasks.Task<WarmupContext option>
+  GetWarmupProgress: WorkerProtocol.SessionId -> string
+  GetSessionTestSummary: WorkerProtocol.SessionId -> Features.LiveTesting.TestSummary option
+  GetSessionCoverageSummary: WorkerProtocol.SessionId -> Features.LiveTesting.CoverageSummary option
+  GetSessionTestTreemap: WorkerProtocol.SessionId -> Features.LiveTesting.TestTreemapEntry array
+  GetSessionBindings: WorkerProtocol.SessionId -> Features.BindingExplorer.BindingInfo array
   /// Live reflection-walked binding tree for a session (debugger watch window),
   /// from the adaptive store. None until the first eval snapshot arrives.
-  GetLiveBindings: string -> Features.LiveValueTree.LiveValueSnapshot option
+  GetLiveBindings: WorkerProtocol.SessionId -> Features.LiveValueTree.LiveValueSnapshot option
   GetBindingScopeSnapshot: unit -> Features.BindingExplorer.BindingScopeSnapshot option
   GetLiveTestingStatus: unit -> string
   /// Whether live testing is currently Active or Inactive.
@@ -588,26 +622,26 @@ type DashboardQueries = {
   /// Read resolved test source locations from the Elm model.
   GetTestSourceLocations: unit -> Features.LiveTesting.TestSourceLocation list
   /// Get pre-formatted agent badges for a session from the activity tracker.
-  GetSessionAgentBadges: string -> AgentBadge list
+  GetSessionAgentBadges: WorkerProtocol.SessionId -> AgentBadge list
   /// Get the CSS class for session guidance (ambient row styling).
-  GetSessionGuidanceCss: string -> string
+  GetSessionGuidanceCss: WorkerProtocol.SessionId -> string
   /// Get the workflow for a session — returns Interactive as default.
-  GetSessionWorkflow: string -> WorkflowTypes.SessionWorkflow
+  GetSessionWorkflow: WorkerProtocol.SessionId -> WorkflowTypes.SessionWorkflow
 }
 
 /// Commands that mutate session state.
 type DashboardActions = {
-  EvalCode: string -> string -> Threading.Tasks.Task<Result<string, string>>
-  ResetSession: string -> Threading.Tasks.Task<Result<string, string>>
-  HardResetSession: string -> Threading.Tasks.Task<Result<string, string>>
+  EvalCode: WorkerProtocol.SessionId -> string -> Threading.Tasks.Task<Result<string, string>>
+  ResetSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
+  HardResetSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   Dispatch: SageFsMsg -> unit
-  SwitchSession: (string -> Threading.Tasks.Task<Result<string, string>>) option
-  StopSession: (string -> Threading.Tasks.Task<Result<string, string>>) option
+  SwitchSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
+  StopSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   /// Dispose — stop + clear the session's saved replay memory (.sagefs).
-  DisposeSession: (string -> Threading.Tasks.Task<Result<string, string>>) option
+  DisposeSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   /// Purge — dispose + remove the session's .sagefm manifest entry (gone from resume picker).
-  PurgeSession: (string -> Threading.Tasks.Task<Result<string, string>>) option
-  CreateSession: (string list -> string -> Threading.Tasks.Task<Result<string, string>>) option
+  PurgeSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
+  CreateSession: string list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>
   ShutdownCallback: (unit -> unit) option
 }
 
@@ -618,13 +652,13 @@ type DashboardInfra = {
   StateChanged: IEvent<DaemonStateChange> option
   ConnectionTracker: ConnectionTracker option
   SessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>
-  GetCompletions: (string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>) option
+  GetCompletions: WorkerProtocol.SessionId -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>
   GetSessionCount: unit -> Threading.Tasks.Task<int>
   /// Shared alarm buffer — populated when ElmLoop fires OnSystemAlarm.
   /// Shared across all SSE connections; first-dismiss clears for all.
   SystemAlarmBuffer: SystemAlarmEntry list ref
   /// Triggers a state-change push on all connected SSE streams (used by dismiss route).
-  TriggerStateChange: (unit -> unit) option
+  TriggerStateChange: unit -> unit
   /// Agent activity tracker for multi-agent coordination.
   ActivityTracker: AgentActivityTracker.Tracker option
   /// Adaptive live-bindings store — the dashboard stream subscribes to a

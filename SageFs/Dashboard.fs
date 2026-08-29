@@ -229,7 +229,7 @@ let renderShell (version: string) (initialSessionId: string) (initialContent: Xm
 
 let private buildOutputPanels
   (q: DashboardQueries)
-  (sessionId: string)
+  (sessionId: WorkerProtocol.SessionId)
   (sessionState: string)
   (warmupProgress: string)
   : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode> =
@@ -267,7 +267,7 @@ let private buildOutputPanels
           let corrected = overrideSessionStatuses q.GetSessionState q.GetStatusMsg parsed
           let visible =
             corrected
-            |> List.filter (fun s -> s.Status <> "stopped")
+            |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
             |> List.map (fun s ->
               let info = q.GetSessionStandbyInfo s.Id
               let testSummary = q.GetSessionTestSummary s.Id
@@ -303,13 +303,15 @@ let private buildOutputPanels
 let buildDashboardSnapshot
   (q: DashboardQueries)
   (infra: DashboardInfra)
-  (currentSessionId: string)
-  (lastSessionId: string)
+  (currentSessionId: WorkerProtocol.SessionId)
+  (lastSessionId: WorkerProtocol.SessionId)
   (lastWorkingDir: string)
   (lastThemeName: string)
-  : System.Threading.Tasks.Task<DashboardSnapshot * string * string> =
+  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string> =
   task {
     let sessionId = currentSessionId
+    let sid = WorkerProtocol.SessionId.value sessionId
+    let lastSid = WorkerProtocol.SessionId.value lastSessionId
     let state = q.GetSessionState sessionId
     let stateStr = SessionState.label state
     let workingDir = q.GetSessionWorkingDir sessionId
@@ -332,7 +334,7 @@ let buildDashboardSnapshot
     let diagnosticsPanel = renderCurrentDiagnostics (q.GetCurrentDiagnostics())
     let filmstripPanel = renderSessionFilmstrip (q.GetFilmstripEntries())
     let themeName =
-      match resolveThemePush infra.SessionThemes sessionId workingDir lastSessionId lastWorkingDir lastThemeName with
+      match resolveThemePush infra.SessionThemes sid workingDir lastSid lastWorkingDir lastThemeName with
       | Some name -> name
       | None -> lastThemeName
     let connectionLabel =
@@ -348,14 +350,14 @@ let buildDashboardSnapshot
         | false -> Some (String.Join(" ", parts))
       | None -> None
     let hrPanel =
-      match sessionId.Length > 0 with
+      match sid.Length > 0 with
       | true ->
         match hrState with
-        | Some hr -> renderHotReloadPanel sessionId hr.files hr.watchedCount
+        | Some hr -> renderHotReloadPanel sid hr.files hr.watchedCount
         | None -> renderHotReloadEmpty
       | false -> renderHotReloadEmpty
     let scPanel =
-      match sessionId.Length > 0 with
+      match sid.Length > 0 with
       | true ->
         match wCtx with
         | Some ctx' ->
@@ -370,7 +372,7 @@ let buildDashboardSnapshot
                 { Path = f.path; Readiness = readiness; LastLoadedAt = None; IsWatched = f.watched })
             | None -> []
           renderSessionContextPanel
-            { SessionId = sessionId
+            { SessionId = sid
               ProjectNames = []
               WorkingDir = q.GetSessionWorkingDir sessionId
               Status = SessionState.label (q.GetSessionState sessionId)
@@ -402,7 +404,7 @@ let buildDashboardSnapshot
     let snap : DashboardSnapshot = {
       Version = infra.Version
       SessionState = stateStr
-      SessionId = sessionId
+      SessionId = sid
       WorkingDir = workingDir
       WarmupProgress = warmupProgress
       WorkflowLabel = q.GetSessionWorkflow sessionId |> WorkflowTypes.SessionWorkflow.label
@@ -440,16 +442,25 @@ let createStreamHandler
     let clientId = Guid.NewGuid().ToString("N").[..7]
     // Resolve initial session: first available session (observer behavior — don't create)
     let! sessions = q.GetAllSessions ()
-    let mutable currentSessionId =
-      sessions |> List.tryHead |> Option.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Option.defaultValue ""
-    infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionId))
-    let mutable lastSessionId = ""
+    let mutable currentSessionOpt =
+      sessions |> List.tryHead |> Option.map (fun s -> s.Id)
+    let currentSessionStr = currentSessionOpt |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
+    infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionStr))
+    let mutable lastSessionId = currentSessionOpt |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
     let mutable lastWorkingDir = ""
     let mutable lastThemeName = defaultThemeName
 
     let pushState () = task {
+      match currentSessionOpt with
+      | None ->
+        // No sessions — push session picker
+        let! previous = q.GetPreviousSessions ()
+        do! ssePatchNode ctx (renderSessionPicker previous)
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) ""
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
+      | Some sessionId ->
       let! snap, newSessionId, newThemeName =
-        buildDashboardSnapshot q infra currentSessionId lastSessionId lastWorkingDir lastThemeName
+        buildDashboardSnapshot q infra sessionId lastSessionId lastWorkingDir lastThemeName
       let sessionChanged = newSessionId <> lastSessionId
       // Patch the theme signal on session switch (always), or when the
       // resolved theme name changed. This keeps the picker in sync with
@@ -457,12 +468,12 @@ let createStreamHandler
       let themeChanged = newThemeName <> lastThemeName
       let shouldPatchTheme = sessionChanged || themeChanged
       Log.info "[pushState] cur=%s last=%s newTheme=%s lastTheme=%s sessionChanged=%b themeChanged=%b"
-        currentSessionId lastSessionId newThemeName lastThemeName sessionChanged themeChanged
-      currentSessionId <- newSessionId
+        (WorkerProtocol.SessionId.value sessionId) (WorkerProtocol.SessionId.value lastSessionId) newThemeName lastThemeName sessionChanged themeChanged
+      currentSessionOpt <- Some newSessionId
       lastSessionId <- newSessionId
       lastWorkingDir <- q.GetSessionWorkingDir newSessionId
       lastThemeName <- newThemeName
-      do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") currentSessionId
+      do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") (WorkerProtocol.SessionId.value newSessionId)
       // When the active session changes OR the resolved theme name differs
       // from the last theme the server pushed, patch the theme signal so
       // Datastar's data-bind-theme on the <select> stays in sync with the
@@ -523,7 +534,7 @@ let createStreamHandler
               | false -> return! loop ()
             | Some (SessionSwitched sid) ->
               // Session switch is user-interactive — update tracking and push immediately
-              currentSessionId <- sid
+              currentSessionOpt <- Some sid
               try
                 do! pushState () |> Async.AwaitTask
               with
@@ -539,13 +550,13 @@ let createStreamHandler
               while inbox.CurrentQueueLength > 0 do
                 let! c = inbox.Receive()
                 match c with
-                | SessionSwitched sid -> currentSessionId <- sid
+                | SessionSwitched sid -> currentSessionOpt <- Some sid
                 | _ -> ()
               do! Async.Sleep 100
               while inbox.CurrentQueueLength > 0 do
                 let! c = inbox.Receive()
                 match c with
-                | SessionSwitched sid -> currentSessionId <- sid
+                | SessionSwitched sid -> currentSessionOpt <- Some sid
                 | _ -> ()
               try
                 do! pushState () |> Async.AwaitTask
@@ -566,14 +577,13 @@ let createStreamHandler
         // the session's snapshot changes (debugger watch window). Fires only on
         // real change (FSharp.Data.Adaptive dedup), so no redundant renders.
         let mutable liveBindingsSub : IDisposable option = None
-        let subscribeLiveBindings (sessionId: string) =
+        let subscribeLiveBindings (sessionId: WorkerProtocol.SessionId) =
           liveBindingsSub |> Option.iter (fun d -> d.Dispose())
+          let sidStr = WorkerProtocol.SessionId.value sessionId
           liveBindingsSub <-
             infra.LiveBindingsAdaptive
             |> Option.bind (fun store ->
-              if String.IsNullOrEmpty(sessionId) then None
-              else
-                Some (SageFs.Features.LiveBindingsAdaptive.subscribe store sessionId (fun snap ->
+                Some (SageFs.Features.LiveBindingsAdaptive.subscribe store sidStr (fun snap ->
                   let panel =
                     renderLiveBindingsPanel (Some snap)
                   try
@@ -582,7 +592,9 @@ let createStreamHandler
                   | :? System.IO.IOException -> ()
                   | :? ObjectDisposedException -> ()
                   | :? OperationCanceledException -> ())))
-        subscribeLiveBindings currentSessionId
+        match currentSessionOpt with
+        | Some sid -> subscribeLiveBindings sid
+        | None -> ()
         // Re-subscribe when the user switches sessions.
         let sessionSwitchReg =
           evt.Subscribe(fun change ->
@@ -610,7 +622,7 @@ let createStreamHandler
 
 /// Create the eval POST handler.
 let createEvalHandler
-  (evalCode: string -> string -> Threading.Tasks.Task<Result<string, string>>)
+  (evalCode: WorkerProtocol.SessionId -> string -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
     try
@@ -619,7 +631,7 @@ let createEvalHandler
         match doc.RootElement.TryGetProperty("code") with
         | true, prop -> prop.GetString()
         | _ -> ""
-      let sessionId =
+      let sessionIdStr =
         match doc.RootElement.TryGetProperty("sessionId") with
         | true, prop -> prop.GetString()
         | _ -> ""
@@ -628,37 +640,42 @@ let createEvalHandler
         Response.sseStartResponse ctx |> ignore
         do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
       | false ->
-        let codeWithTerminator =
-          let trimmed = code.TrimEnd()
-          match trimmed.EndsWith(";;") with
-          | true -> code
-          | false -> sprintf "%s;;" trimmed
-        let! result = evalCode sessionId codeWithTerminator
-        Response.sseStartResponse ctx |> ignore
-        do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
-        let displayResult, cssClass =
-          match result with
-          | Ok msg -> msg, "output-line output-result"
-          | Error err ->
-            err
-              .Replace("FSharp.Compiler.Interactive.Shell+FsiCompilationException: ", "")
-              .Replace("Evaluation failed: ", "⚠ "),
-            "output-line output-error"
-        let resultHtml =
-          Elem.div [ Attr.id DomIds.EvalResult ] [
-            Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              Text.raw displayResult
+        match WorkerProtocol.SessionId.validate sessionIdStr with
+        | Error _ ->
+          Response.sseStartResponse ctx |> ignore
+          do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
+        | Ok sessionId ->
+          let codeWithTerminator =
+            let trimmed = code.TrimEnd()
+            match trimmed.EndsWith(";;") with
+            | true -> code
+            | false -> sprintf "%s;;" trimmed
+          let! result = evalCode sessionId codeWithTerminator
+          Response.sseStartResponse ctx |> ignore
+          do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
+          let displayResult, cssClass =
+            match result with
+            | Ok msg -> msg, "output-line output-result"
+            | Error err ->
+              err
+                .Replace("FSharp.Compiler.Interactive.Shell+FsiCompilationException: ", "")
+                .Replace("Evaluation failed: ", "⚠ "),
+              "output-line output-error"
+          let resultHtml =
+            Elem.div [ Attr.id DomIds.EvalResult ] [
+              Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+                Text.raw displayResult
+              ]
             ]
-          ]
-        do! ssePatchNode ctx resultHtml
+          do! ssePatchNode ctx resultHtml
     with
     | :? RequestTooLargeException -> ()  // 413 already written by readSignalsJsonSized
     | :? System.IO.IOException -> ()
     | :? System.ObjectDisposedException -> ()
   }
 let createEvalFileHandler
-  (getSessionWorkingDir: string -> string)
-  (evalCode: string -> string -> Threading.Tasks.Task<Result<string, string>>)
+  (getSessionWorkingDir: WorkerProtocol.SessionId -> string)
+  (evalCode: WorkerProtocol.SessionId -> string -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
     try
@@ -671,50 +688,55 @@ let createEvalFileHandler
         match doc.RootElement.TryGetProperty("path") with
         | true, prop -> prop.GetString()
         | _ -> ""
-      let sessionId =
+      let sessionIdStr =
         match doc.RootElement.TryGetProperty("sessionId") with
         | true, prop -> prop.GetString()
         | _ -> ""
-      // W1: Canonicalize and confirm the requested file is inside the session's working directory.
-      // This prevents path traversal attacks like {"path":"C:/Users/.ssh/id_rsa"}.
-      // W1(R7): Use ResolveLinkTarget(returnFinalTarget=true) to handle directory symlinks too.
-      // W1(R8): Hoist canonical before isContained check so the SAME value is used for both
-      //         the containment check and the actual read (eliminates TOCTOU/invariant violation).
-      let workingDir = getSessionWorkingDir sessionId
-      let resolveRealPath (p: string) : string =
-        let full = Path.GetFullPath p
-        let fsi : System.IO.FileSystemInfo =
-          match Directory.Exists(full) with
-          | true -> DirectoryInfo(full) :> System.IO.FileSystemInfo
-          | false -> FileInfo(full) :> System.IO.FileSystemInfo
-        match fsi.ResolveLinkTarget(returnFinalTarget = true) with
-        | null -> full
-        | resolved -> resolved.FullName
-      let canonical = resolveRealPath filePath
-      let canonicalDir = resolveRealPath workingDir
-      let isContained =
-        not (String.IsNullOrWhiteSpace filePath || String.IsNullOrWhiteSpace workingDir)
-        && (canonical.StartsWith(
-              canonicalDir + string Path.DirectorySeparatorChar,
-              StringComparison.OrdinalIgnoreCase)
-            || canonical.Equals(canonicalDir, StringComparison.OrdinalIgnoreCase))
-      match isContained && File.Exists canonical with
-      | false ->
-        ctx.Response.StatusCode <- 403
-        do! ctx.Response.WriteAsJsonAsync({| error = "File not found or outside session working directory" |})
-      | true ->
-        let! code = File.ReadAllTextAsync(canonical)
-        let codeWithTerminator =
-          let trimmed = code.TrimEnd()
-          match trimmed.EndsWith(";;") with
-          | true -> code
-          | false -> sprintf "%s;;" trimmed
-        let! result = evalCode sessionId codeWithTerminator
-        match result with
-        | Ok msg -> do! ctx.Response.WriteAsJsonAsync({| success = true; result = msg |})
-        | Error err ->
-          ctx.Response.StatusCode <- 422
-          do! ctx.Response.WriteAsJsonAsync({| success = false; error = err |})
+      match WorkerProtocol.SessionId.validate sessionIdStr with
+      | Error _ ->
+        ctx.Response.StatusCode <- 400
+        do! ctx.Response.WriteAsJsonAsync({| error = "Invalid session ID" |})
+      | Ok sessionId ->
+        // W1: Canonicalize and confirm the requested file is inside the session's working directory.
+        // This prevents path traversal attacks like {"path":"C:/Users/.ssh/id_rsa"}.
+        // W1(R7): Use ResolveLinkTarget(returnFinalTarget=true) to handle directory symlinks too.
+        // W1(R8): Hoist canonical before isContained check so the SAME value is used for both
+        //         the containment check and the actual read (eliminates TOCTOU/invariant violation).
+        let workingDir = getSessionWorkingDir sessionId
+        let resolveRealPath (p: string) : string =
+          let full = Path.GetFullPath p
+          let fsi : System.IO.FileSystemInfo =
+            match Directory.Exists(full) with
+            | true -> DirectoryInfo(full) :> System.IO.FileSystemInfo
+            | false -> FileInfo(full) :> System.IO.FileSystemInfo
+          match fsi.ResolveLinkTarget(returnFinalTarget = true) with
+          | null -> full
+          | resolved -> resolved.FullName
+        let canonical = resolveRealPath filePath
+        let canonicalDir = resolveRealPath workingDir
+        let isContained =
+          not (String.IsNullOrWhiteSpace filePath || String.IsNullOrWhiteSpace workingDir)
+          && (canonical.StartsWith(
+                canonicalDir + string Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase)
+              || canonical.Equals(canonicalDir, StringComparison.OrdinalIgnoreCase))
+        match isContained && File.Exists canonical with
+        | false ->
+          ctx.Response.StatusCode <- 403
+          do! ctx.Response.WriteAsJsonAsync({| error = "File not found or outside session working directory" |})
+        | true ->
+          let! code = File.ReadAllTextAsync(canonical)
+          let codeWithTerminator =
+            let trimmed = code.TrimEnd()
+            match trimmed.EndsWith(";;") with
+            | true -> code
+            | false -> sprintf "%s;;" trimmed
+          let! result = evalCode sessionId codeWithTerminator
+          match result with
+          | Ok msg -> do! ctx.Response.WriteAsJsonAsync({| success = true; result = msg |})
+          | Error err ->
+            ctx.Response.StatusCode <- 422
+            do! ctx.Response.WriteAsJsonAsync({| success = false; error = err |})
     with
     | :? RequestTooLargeException -> ()  // 413 already written
     | ex ->
@@ -722,7 +744,7 @@ let createEvalFileHandler
       do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
   }
 let createCompletionsHandler
-  (getCompletions: string -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>)
+  (getCompletions: WorkerProtocol.SessionId -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>)
   : HttpHandler =
   fun ctx -> task {
     try
@@ -742,7 +764,7 @@ let createCompletionsHandler
             | false, _ -> -1
           | _ -> -1
         | _ -> -1
-      let sessionId =
+      let sessionIdStr =
         match doc.RootElement.TryGetProperty(Signals.SessionId) with
         | true, prop -> prop.GetString()
         | _ -> ""
@@ -751,8 +773,12 @@ let createCompletionsHandler
       | true ->
         do! ssePatchNode ctx (renderCompletionDropdown [] 0)
       | false ->
-        let! items = getCompletions sessionId code cursorPos
-        do! ssePatchNode ctx (renderCompletionDropdown items cursorPos)
+        match WorkerProtocol.SessionId.validate sessionIdStr with
+        | Error _ ->
+          do! ssePatchNode ctx (renderCompletionDropdown [] 0)
+        | Ok sessionId ->
+          let! items = getCompletions sessionId code cursorPos
+          do! ssePatchNode ctx (renderCompletionDropdown items cursorPos)
     with
     | :? RequestTooLargeException -> ()
     | ex ->
@@ -762,41 +788,52 @@ let createCompletionsHandler
 
 /// Create the reset POST handler.
 let createResetHandler
-  (resetSession: string -> Threading.Tasks.Task<Result<string, string>>)
+  (resetSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
     try
-      let! sessionId = task {
+      let! sessionIdResult = task {
         try
           use! doc = readSignalsJsonSized ctx
           match doc.RootElement.TryGetProperty("sessionId") with
-          | true, prop -> return prop.GetString()
-          | _ -> return ""
+          | true, prop -> return WorkerProtocol.SessionId.validate (prop.GetString())
+          | _ -> return Error "Missing sessionId"
         with ex ->
           Log.warn "[Dashboard] Session ID extraction from JSON failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-          return ""
+          return Error "Failed to parse request"
       }
-      let! result = resetSession sessionId
-      Response.sseStartResponse ctx |> ignore
-      let msg =
-        match result with
-        | Ok m -> m
-        | Error e -> sprintf "Failed: %s" e
-      let resultHtml =
-        Elem.div [ Attr.id DomIds.EvalResult ] [
-          Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            Text.raw (sprintf "Reset: %s" msg)
+      match sessionIdResult with
+      | Error errMsg ->
+        Response.sseStartResponse ctx |> ignore
+        let resultHtml =
+          Elem.div [ Attr.id DomIds.EvalResult ] [
+            Elem.pre [ Attr.class' "output-line output-error"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+              Text.raw (sprintf "Reset: %s" errMsg)
+            ]
           ]
-        ]
-      do! ssePatchNode ctx resultHtml
-      // Clear stale output after reset (Bug #5)
-      let clearedOutput =
-        Elem.div [ Attr.id DomIds.OutputPanel ] [
-          Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [
-            Text.raw (sprintf "Reset: %s" msg)
+        do! ssePatchNode ctx resultHtml
+      | Ok sessionId ->
+        let! result = resetSession sessionId
+        Response.sseStartResponse ctx |> ignore
+        let msg =
+          match result with
+          | Ok m -> m
+          | Error e -> sprintf "Failed: %s" e
+        let resultHtml =
+          Elem.div [ Attr.id DomIds.EvalResult ] [
+            Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+              Text.raw (sprintf "Reset: %s" msg)
+            ]
           ]
-        ]
-      do! ssePatchNode ctx clearedOutput
+        do! ssePatchNode ctx resultHtml
+        // Clear stale output after reset (Bug #5)
+        let clearedOutput =
+          Elem.div [ Attr.id DomIds.OutputPanel ] [
+            Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [
+              Text.raw (sprintf "Reset: %s" msg)
+            ]
+          ]
+        do! ssePatchNode ctx clearedOutput
     with
     | :? RequestTooLargeException -> ()
     | :? System.IO.IOException -> ()
@@ -811,11 +848,12 @@ let createResetHandler
 ///     (or shows the session picker if none remain)
 let createSessionActionHandler
   (q: DashboardQueries)
-  (action: string -> Threading.Tasks.Task<Result<string, string>>)
+  (action: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>)
   (teardown: bool)
-  : string -> HttpHandler =
+  : WorkerProtocol.SessionId -> HttpHandler =
   fun sessionId ctx -> task {
     try
+      let sid = WorkerProtocol.SessionId.value sessionId
       // Read the signals so we know which session is currently being viewed.
       let viewingId =
         try
@@ -823,7 +861,7 @@ let createSessionActionHandler
           getSignalString doc Signals.ViewingSessionId "viewing-session-id"
         with _ -> ""
       Response.sseStartResponse ctx |> ignore
-      let isViewingStopped = viewingId = sessionId
+      let isViewingStopped = viewingId = sid
       // Immediate feedback: swap the card for the "Stopping…" message.
       if teardown then
         do! ssePatchNode ctx (renderStoppingCard sessionId)
@@ -845,7 +883,7 @@ let createSessionActionHandler
             let! sessions = q.GetAllSessions ()
             let remainingIds =
               sessions
-              |> List.map (fun (s: WorkerProtocol.SessionInfo) -> WorkerProtocol.SessionId.value s.Id)
+              |> List.map (fun s -> s.Id)
               |> List.filter (fun id -> id <> sessionId)
             // Sidebar order comes from the Elm sessions region — use it for "next in list".
             let orderedIds =
@@ -867,8 +905,8 @@ let createSessionActionHandler
       match nextId with
       | Some nextSession ->
         // Auto-switch: display + select the next session.
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) nextSession
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) nextSession
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) (WorkerProtocol.SessionId.value nextSession)
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value nextSession)
         // Sync the output, sessions panel, and statusline to the auto-selected next session.
         match q.GetElmRegionsForSession nextSession with
         | Some regions ->
@@ -882,7 +920,7 @@ let createSessionActionHandler
             let corrected = overrideSessionStatuses q.GetSessionState q.GetStatusMsg parsed
             let visible =
               corrected
-              |> List.filter (fun s -> s.Status <> "stopped")
+              |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
               |> List.map (fun s ->
                 let info = q.GetSessionStandbyInfo s.Id
                 { s with StandbyLabel = StandbyInfo.label info })
@@ -907,8 +945,8 @@ let createSessionActionHandler
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | None ->
         // Switch path (or failed teardown): eval form targets the requested session.
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) sessionId
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) sessionId
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) (WorkerProtocol.SessionId.value sessionId)
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value sessionId)
         // Immediately sync the output, sessions panel, and statusline to the
         // newly-selected session so the display matches the sidebar highlight.
         match q.GetElmRegionsForSession sessionId with
@@ -923,7 +961,7 @@ let createSessionActionHandler
             let corrected = overrideSessionStatuses q.GetSessionState q.GetStatusMsg parsed
             let visible =
               corrected
-              |> List.filter (fun s -> s.Status <> "stopped")
+              |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
               |> List.map (fun s ->
                 let info = q.GetSessionStandbyInfo s.Id
                 { s with StandbyLabel = StandbyInfo.label info })
@@ -1114,8 +1152,8 @@ let createDiscoverHandler : HttpHandler =
 
 /// Create the create-session POST handler.
 let createCreateSessionHandler
-  (createSession: string list -> string -> Threading.Tasks.Task<Result<string, string>>)
-  (switchSession: (string -> Threading.Tasks.Task<Result<string, string>>) option)
+  (createSession: string list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>)
+  (switchSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
     try
@@ -1138,15 +1176,13 @@ let createCreateSessionHandler
           match result with
           | Ok newSessionId ->
             // Switch to the new session so the SSE stream picks it up
-            match switchSession with
-            | Some switch -> let! _ = switch newSessionId in ()
-            | None -> ()
+            let! _ = switchSession newSessionId
             // Push the new session's ID so the eval form targets it
-            do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") newSessionId
+            do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") (WorkerProtocol.SessionId.value newSessionId)
             do! ssePatchNode ctx (
               Elem.div [ Attr.id DomIds.EvalResult ] [
                 Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
-                  Text.raw (sprintf "Session '%s' created. Switched to it." newSessionId)
+                  Text.raw (sprintf "Session '%s' created. Switched to it." (WorkerProtocol.SessionId.value newSessionId))
                 ]
               ])
           | Error msg ->
@@ -1204,41 +1240,31 @@ let createToggleWarmupAutoOpenHandler
         | Ok _ ->
           // 2) Stop the current session for this directory (if any) so the
           //    re-created session starts clean with the new setting.
-          match a.StopSession with
-          | Some stop ->
-            match sessionId with
-            | sid when sid.Length > 0 ->
-              let! _ = stop sid in ()
-            | _ -> ()
-          | None -> ()
+          match WorkerProtocol.SessionId.validate sessionId with
+          | Ok sid -> let! _ = a.StopSession sid in ()
+          | Error _ -> ()
           // 3) Re-create: bare (no projects) when disabled — nothing loads and
           //    no warmup happens. With projects (auto-detected) when enabled.
-          match a.CreateSession with
-          | Some create ->
-            let projects =
+          let projects =
+            match enable with
+            | false -> []
+            | true ->
+              resolveSessionProjects dir ""
+              |> List.truncate 1
+          let! result = a.CreateSession projects dir
+          match result with
+          | Ok newSessionId ->
+            let! _ = a.SwitchSession newSessionId in ()
+            do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") (WorkerProtocol.SessionId.value newSessionId)
+            do! Response.ssePatchSignal ctx (SignalPath.sp "viewingSessionId") (WorkerProtocol.SessionId.value newSessionId)
+            // 4) Concise confirmation — no warmup status spam.
+            let message =
               match enable with
-              | false -> []
-              | true ->
-                resolveSessionProjects dir ""
-                |> List.truncate 1
-            let! result = create projects dir
-            match result with
-            | Ok newSessionId ->
-              match a.SwitchSession with
-              | Some switch -> let! _ = switch newSessionId in ()
-              | None -> ()
-              do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") newSessionId
-              do! Response.ssePatchSignal ctx (SignalPath.sp "viewingSessionId") newSessionId
-              // 4) Concise confirmation — no warmup status spam.
-              let message =
-                match enable with
-                | false -> "auto open disabled"
-                | true -> "auto open enabled"
-              do! ssePatchNode ctx (configResultNode message "output-result")
-            | Error msg ->
-              do! ssePatchNode ctx (evalResultError (sprintf "Failed to re-init session: %s" msg))
-          | None ->
-            do! ssePatchNode ctx (configResultNode (if enable then "auto open enabled" else "auto open disabled") "output-result")
+              | false -> "auto open disabled"
+              | true -> "auto open enabled"
+            do! ssePatchNode ctx (configResultNode message "output-result")
+          | Error msg ->
+            do! ssePatchNode ctx (evalResultError (sprintf "Failed to re-init session: %s" msg))
         do! pushDiscoverResults ctx dir
     with
     | :? RequestTooLargeException -> ()
@@ -1271,7 +1297,8 @@ let createApiStateHandler
       // Use THIS connection's session (set via ?sessionId= query param),
       // not a daemon global. Each TUI/dashboard SSE connection has its own
       // sessionId, so the push reflects what THAT client is viewing.
-      let activeSid = connSessionId
+      let activeSidStr = connSessionId
+      let activeSid = WorkerProtocol.SessionId.validate activeSidStr |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
       let activeDir = q.GetSessionWorkingDir activeSid
       let state = q.GetSessionState activeSid
       let! (stats : SageFs.Affordances.EvalStats) = q.GetEvalStats activeSid
@@ -1301,7 +1328,7 @@ let createApiStateHandler
       let workflow = q.GetSessionWorkflow activeSid
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
-          {| sessionId = activeSid
+          {| sessionId = activeSidStr
              sessionState = SessionState.label state
              evalCount = stats.EvalCount
              avgMs = if stats.EvalCount > 0 then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount else 0.0
@@ -1426,11 +1453,12 @@ let createEndpoints
         // here — that concept does not exist at the dashboard layer.
         let initialSessionId =
           match ctx.Request.Query.TryGetValue("session") with
-          | true, v when v.Count > 0 && not (String.IsNullOrEmpty(v.[0])) -> v.[0]
+          | true, v when v.Count > 0 && not (String.IsNullOrEmpty(v.[0])) ->
+            v.[0] |> WorkerProtocol.SessionId.validate |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
           | _ ->
-            sessions |> List.tryHead |> Option.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Option.defaultValue ""
-        let! snap, resolvedId, _ = buildDashboardSnapshot q infra initialSessionId "" "" defaultThemeName
-        let html = renderShell infra.Version resolvedId (renderMainContent snap)
+            sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
+        let! snap, resolvedId, _ = buildDashboardSnapshot q infra initialSessionId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName
+        let html = renderShell infra.Version (WorkerProtocol.SessionId.value resolvedId) (renderMainContent snap)
         return! FalcoResponse.ofHtml html ctx
       with _ ->
         let html = renderShell infra.Version "" (Elem.div [] [])
@@ -1439,9 +1467,7 @@ let createEndpoints
     yield get "/dashboard/stream" (createStreamHandler q infra)
     yield post "/dashboard/eval" (createEvalHandler a.EvalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)
-    match infra.GetCompletions with
-    | Some gc -> yield post "/dashboard/completions" (createCompletionsHandler gc)
-    | None -> ()
+    yield post "/dashboard/completions" (createCompletionsHandler infra.GetCompletions)
     yield post "/dashboard/reset" (createResetHandler a.ResetSession)
     yield post "/dashboard/hard-reset" (createResetHandler a.HardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
@@ -1450,7 +1476,7 @@ let createEndpoints
     // Dismiss all system alarms — clears the shared buffer and re-triggers SSE push.
     yield post "/dashboard/dismiss-alarm" (fun ctx -> task {
       infra.SystemAlarmBuffer.Value <- []
-      infra.TriggerStateChange |> Option.iter (fun trigger -> trigger ())
+      infra.TriggerStateChange ()
       Response.sseStartResponse ctx |> ignore
       do! ssePatchNode ctx (renderAlarmBanner [])
     })
@@ -1479,7 +1505,10 @@ let createEndpoints
           | _ -> ""
         let rawDir =
           match String.IsNullOrEmpty viewingId with
-          | false -> q.GetSessionWorkingDir viewingId
+          | false ->
+            match WorkerProtocol.SessionId.validate viewingId with
+            | Ok sid -> q.GetSessionWorkingDir sid
+            | Error _ -> ""
           | true -> ""
         let workingDir = canonicalizeThemeKey rawDir
         Log.info "[set-theme] theme=%s viewingId=%s rawDir=%s key=%s" theme viewingId rawDir workingDir
@@ -1504,117 +1533,99 @@ let createEndpoints
         do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
     })
     // Create session in temp directory
-    match a.CreateSession with
-    | Some handler ->
-      yield post "/dashboard/session/create-temp" (fun ctx -> task {
-        let tempDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-%s" (Guid.NewGuid().ToString("N").[..7]))
-        Directory.CreateDirectory(tempDir) |> ignore
-        Response.sseStartResponse ctx |> ignore
-        let! result = handler [] tempDir
-        match result with
-        | Ok msg ->
-          a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-          do! ssePatchNode ctx (
-            Elem.div [ Attr.id DomIds.EvalResult ] [
-              Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-                Text.raw msg
-              ]
-            ])
-        | Error err ->
-          do! ssePatchNode ctx (evalResultError err)
-      })
-    | None -> ()
+    yield post "/dashboard/session/create-temp" (fun ctx -> task {
+      let tempDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-%s" (Guid.NewGuid().ToString("N").[..7]))
+      Directory.CreateDirectory(tempDir) |> ignore
+      Response.sseStartResponse ctx |> ignore
+      let! result = a.CreateSession [] tempDir
+      match result with
+      | Ok sessionId ->
+        a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+        do! ssePatchNode ctx (
+          Elem.div [ Attr.id DomIds.EvalResult ] [
+            Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+              Text.raw (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value sessionId))
+            ]
+          ])
+      | Error err ->
+        do! ssePatchNode ctx (evalResultError err)
+    })
     // Resume previous session (re-creates in same working dir)
-    match a.CreateSession with
-    | Some handler ->
-      yield mapPost "/dashboard/session/resume/{id}"
-        (fun (r: RequestData) -> r.GetString("id", ""))
-        (fun sessionId -> fun ctx -> task {
-          let! previous = q.GetPreviousSessions ()
-          match previous |> List.tryFind (fun s -> s.Id = sessionId) with
-          | Some prev ->
-            Response.sseStartResponse ctx |> ignore
-            let! result = handler prev.Projects prev.WorkingDir
-            match result with
-            | Ok msg ->
-              a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-              do! ssePatchNode ctx (
-                Elem.div [ Attr.id DomIds.EvalResult ] [
-                  Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-                    Text.raw msg
-                  ]
-                ])
-            | Error err ->
-              do! ssePatchNode ctx (evalResultError err)
-          | None ->
-            Response.sseStartResponse ctx |> ignore
-            do! ssePatchNode ctx (evalResultError (sprintf "Previous session '%s' not found" sessionId))
-        })
-    | None -> ()
+    yield mapPost "/dashboard/session/resume/{id}"
+      (fun (r: RequestData) -> r.GetString("id", ""))
+      (fun sessionId -> fun ctx -> task {
+        let! previous = q.GetPreviousSessions ()
+        match previous |> List.tryFind (fun s -> s.Id = sessionId) with
+        | Some prev ->
+          Response.sseStartResponse ctx |> ignore
+          let! result = a.CreateSession prev.Projects prev.WorkingDir
+          match result with
+          | Ok sessionId ->
+            a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+            do! ssePatchNode ctx (
+              Elem.div [ Attr.id DomIds.EvalResult ] [
+                Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+                  Text.raw (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value sessionId))
+                ]
+              ])
+          | Error err ->
+            do! ssePatchNode ctx (evalResultError err)
+        | None ->
+          Response.sseStartResponse ctx |> ignore
+          do! ssePatchNode ctx (evalResultError (sprintf "Previous session '%s' not found" sessionId))
+      })
     // TUI client API
     yield get "/api/state" (createApiStateHandler q infra)
     yield post "/api/dispatch" (createApiDispatchHandler a.Dispatch)
-    match a.CreateSession with
-    | Some handler ->
-      yield post "/dashboard/session/create" (createCreateSessionHandler handler a.SwitchSession)
-    | None -> ()
+    yield post "/dashboard/session/create" (createCreateSessionHandler a.CreateSession a.SwitchSession)
     yield post "/dashboard/config/disable-auto-open" (createToggleWarmupAutoOpenHandler a false)
     yield post "/dashboard/config/enable-auto-open" (createToggleWarmupAutoOpenHandler a true)
-    match a.SwitchSession with
-    | Some handler ->
-      yield mapPost "/dashboard/session/switch/{id}"
-        (fun (r: RequestData) -> r.GetString("id", ""))
-        (fun sid -> createSessionActionHandler q handler false sid)
-    | None -> ()
-    match a.StopSession with
-    | Some handler ->
-      yield mapPost "/dashboard/session/stop/{id}"
-        (fun (r: RequestData) -> r.GetString("id", ""))
-        (fun sid -> createSessionActionHandler q handler true sid)
-      yield post "/dashboard/session/stop-others" (fun ctx -> task {
-        let! sessions = q.GetAllSessions ()
-        // "Others" = everyone except the session THIS client is viewing.
-        // Read from the per-client viewing-session signal, not a global,
-        // so two tabs with different viewing sessions can independently
-        // click "stop others" without interfering.
-        let! doc = readSignalsJsonSized ctx
-        let viewingId =
-          match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
-          | true, prop -> prop.GetString()
-          | _ -> ""
-        let keepId =
-          match String.IsNullOrEmpty viewingId with
-          | false -> viewingId
-          | true -> sessions |> List.tryHead |> Option.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Option.defaultValue ""
-        let others =
-          sessions
-          |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> WorkerProtocol.SessionId.value s.Id <> keepId)
-        for s in others do
-          let! _ = handler (WorkerProtocol.SessionId.value s.Id)
-          ()
-        a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-        Response.sseStartResponse ctx |> ignore
-        let resultHtml =
-          Elem.div [ Attr.id DomIds.EvalResult ] [
-            Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              Text.raw (sprintf "Stopped %d other session(s)" others.Length)
-            ]
+    yield mapPost "/dashboard/session/switch/{id}"
+      (fun (r: RequestData) -> r.GetString("id", ""))
+      (fun sid -> createSessionActionHandler q a.SwitchSession false (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+    yield mapPost "/dashboard/session/stop/{id}"
+      (fun (r: RequestData) -> r.GetString("id", ""))
+      (fun sid -> createSessionActionHandler q a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+    yield post "/dashboard/session/stop-others" (fun ctx -> task {
+      let! sessions = q.GetAllSessions ()
+      // "Others" = everyone except the session THIS client is viewing.
+      // Read from the per-client viewing-session signal, not a global,
+      // so two tabs with different viewing sessions can independently
+      // click "stop others" without interfering.
+      let! doc = readSignalsJsonSized ctx
+      let viewingId =
+        match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
+        | true, prop -> prop.GetString()
+        | _ -> ""
+      let keepId =
+        match String.IsNullOrEmpty viewingId with
+        | false ->
+          match WorkerProtocol.SessionId.validate viewingId with
+          | Ok sid -> sid
+          | Error _ -> sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
+        | true -> sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
+      let others =
+        sessions
+        |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> s.Id <> keepId)
+      for s in others do
+        let! _ = a.StopSession s.Id
+        ()
+      a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+      Response.sseStartResponse ctx |> ignore
+      let resultHtml =
+        Elem.div [ Attr.id DomIds.EvalResult ] [
+          Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
+            Text.raw (sprintf "Stopped %d other session(s)" others.Length)
           ]
-        do! ssePatchNode ctx resultHtml
-      })
-    | None -> ()
-    match a.DisposeSession with
-    | Some handler ->
-      yield mapPost "/dashboard/session/dispose/{id}"
-        (fun (r: RequestData) -> r.GetString("id", ""))
-        (fun sid -> createSessionActionHandler q handler true sid)
-    | None -> ()
-    match a.PurgeSession with
-    | Some handler ->
-      yield mapPost "/dashboard/session/purge/{id}"
-        (fun (r: RequestData) -> r.GetString("id", ""))
-        (fun sid -> createSessionActionHandler q handler true sid)
-    | None -> ()
+        ]
+      do! ssePatchNode ctx resultHtml
+    })
+    yield mapPost "/dashboard/session/dispose/{id}"
+      (fun (r: RequestData) -> r.GetString("id", ""))
+      (fun sid -> createSessionActionHandler q a.DisposeSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+    yield mapPost "/dashboard/session/purge/{id}"
+      (fun (r: RequestData) -> r.GetString("id", ""))
+      (fun sid -> createSessionActionHandler q a.PurgeSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
     // Daemon info endpoint for client discovery (replaces daemon.json)
     yield get "/api/daemon-info" (fun ctx -> task {
       let startedAt =

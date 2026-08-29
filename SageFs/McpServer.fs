@@ -537,22 +537,23 @@ let wireSessionEventSubscription
         |> ignore
       | DaemonStateChange.SessionReady sid ->
         ctx.ServerTracker.AccumulateEvent(PushEvent.WarmupCompleted)
+        let sidStr = SageFs.WorkerProtocol.SessionId.value sid
         task {
           try
-            match sid.Length > 0 with
+            match sidStr.Length > 0 with
             | true ->
-              let! ctxOpt = getCtx sid
+              let! ctxOpt = getCtx sidStr
               match ctxOpt with
               | Some wctx ->
-                let evt = SageFs.SessionEvents.WarmupContextSnapshot(sid, wctx)
+                let evt = SageFs.SessionEvents.WarmupContextSnapshot(sidStr, wctx)
                 ctx.SessionEventBroadcast.Trigger(SageFs.SessionEvents.formatSessionSseEvent evt)
               | None -> ()
               match ctx.GetHotReloadState with
               | Some getHr ->
-                let! hrOpt = getHr sid
+                let! hrOpt = getHr sidStr
                 match hrOpt with
                 | Some watchedFiles ->
-                  let hrEvt = SageFs.SessionEvents.HotReloadSnapshot(sid, watchedFiles)
+                  let hrEvt = SageFs.SessionEvents.HotReloadSnapshot(sidStr, watchedFiles)
                   ctx.SessionEventBroadcast.Trigger(SageFs.SessionEvents.formatSessionSseEvent hrEvt)
                 | None -> ()
               | None -> ()
@@ -575,7 +576,8 @@ let wireSessionEventSubscription
           | false -> ())
         |> ignore
       | DaemonStateChange.WarmupProgress(sid, step, total, msg) ->
-        let sseFrame = SageFs.SseWriter.formatWarmupProgressEvent ctx.SseJsonOpts (Some sid) step total msg
+        let sidStr = SageFs.WorkerProtocol.SessionId.value sid
+        let sseFrame = SageFs.SseWriter.formatWarmupProgressEvent ctx.SseJsonOpts (Some sidStr) step total msg
         ctx.SessionEventBroadcast.Trigger(sseFrame)
       | DaemonStateChange.FileReloaded path ->
         ctx.ServerTracker.AccumulateEvent(PushEvent.FileReloaded path)

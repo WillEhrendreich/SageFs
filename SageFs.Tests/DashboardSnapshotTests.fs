@@ -72,8 +72,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
 
   testTask "renderSessions with active and inactive" {
     let sessions : ParsedSession list = [
-      { Id = "session-abc"
-        Status = "running"
+      { Id = WorkerProtocol.SessionId.validate "0a2b3c4d" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+        Status = SessionDisplayStatus.Running
         StatusMessage = None
         IsActive = true
         IsSelected = true
@@ -86,8 +86,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
-      { Id = "session-def"
-        Status = "stopped"
+      { Id = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+        Status = SessionDisplayStatus.Stopped
         StatusMessage = None
         IsActive = false
         IsSelected = false
@@ -192,17 +192,17 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       StateChanged = None
       ConnectionTracker = None
       SessionThemes = System.Collections.Concurrent.ConcurrentDictionary<string, string>()
-      GetCompletions = None
+      GetCompletions = fun _ _ _ -> System.Threading.Tasks.Task.FromResult []
       GetSessionCount = fun () -> System.Threading.Tasks.Task.FromResult 0
       SystemAlarmBuffer = ref []
-      TriggerStateChange = None
+      TriggerStateChange = fun () -> ()
       ActivityTracker = None
       LiveBindingsAdaptive = None
     }
 
   testTask "buildDashboardSnapshot carries rebuilding status into the live testing panel" {
     let! snap, _, _ =
-      buildDashboardSnapshot (mkQueries true "🔨 Rebuilding 2 tests") (mkInfra ()) "session-1" "" "" "default"
+      buildDashboardSnapshot (mkQueries true "🔨 Rebuilding 2 tests") (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default"
     let html = snap.LiveTestingPanel |> renderNode
     Expect.stringContains html "Live Testing: ON" "dashboard should show live testing as active"
     Expect.stringContains html "🔨 Rebuilding 2 tests" "dashboard should tell users that tests are waiting on compilation"
@@ -219,8 +219,8 @@ let keyboardHelpSnapshotTests = testList "keyboard help snapshots" [
 let edgeCaseSnapshotTests = testList "edge case snapshots" [
   testTask "renderSessions single active session" {
     let sessions : ParsedSession list = [
-      { Id = "session-xyz"
-        Status = "running"
+      { Id = WorkerProtocol.SessionId.validate "0a2b3c4d" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+        Status = SessionDisplayStatus.Running
         StatusMessage = None
         IsActive = true
         IsSelected = true
@@ -430,7 +430,7 @@ let standbyBadgeSseTests = testList "SSE standby badge" [
     let getState _ = SessionState.Ready
     let getMsg _ = None
     let getStandby _ = StandbyInfo.Ready
-    let r = mkRegion "sessions" "active s1 SageFs.Tests.fsproj C:\\Code\\Repos\\SageFs 42 1m Ready 0"
+    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
     let html = renderRegionForSse getState getMsg getStandby r |> Option.map renderNode |> Option.defaultValue ""
     Expect.isTrue (html.Contains "standby") "should contain standby"
     Expect.isTrue (html.Contains "var(--fg-green)") "ready standby should use green"
@@ -440,7 +440,7 @@ let standbyBadgeSseTests = testList "SSE standby badge" [
     let getState _ = SessionState.Ready
     let getMsg _ = None
     let getStandby _ = StandbyInfo.Warming ""
-    let r = mkRegion "sessions" "active s1 SageFs.Tests.fsproj C:\\Code\\Repos\\SageFs 42 1m Ready 0"
+    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
     let html = renderRegionForSse getState getMsg getStandby r |> Option.map renderNode |> Option.defaultValue ""
     Expect.isTrue (html.Contains "standby") "should contain standby"
     Expect.isTrue (html.Contains "var(--fg-yellow)") "warming standby should use yellow"
@@ -450,7 +450,7 @@ let standbyBadgeSseTests = testList "SSE standby badge" [
     let getState _ = SessionState.Ready
     let getMsg _ = None
     let getStandby _ = StandbyInfo.Invalidated
-    let r = mkRegion "sessions" "active s1 SageFs.Tests.fsproj C:\\Code\\Repos\\SageFs 42 1m Ready 0"
+    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
     let html = renderRegionForSse getState getMsg getStandby r |> Option.map renderNode |> Option.defaultValue ""
     Expect.isTrue (html.Contains "standby") "should contain standby"
     Expect.isTrue (html.Contains "var(--fg-red)") "invalidated standby should use red"
@@ -460,7 +460,7 @@ let standbyBadgeSseTests = testList "SSE standby badge" [
     let getState _ = SessionState.Ready
     let getMsg _ = None
     let getStandby _ = StandbyInfo.NoPool
-    let r = mkRegion "sessions" "active s1 SageFs.Tests.fsproj C:\\Code\\Repos\\SageFs 42 1m Ready 0"
+    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
     let html = renderRegionForSse getState getMsg getStandby r |> Option.map renderNode |> Option.defaultValue ""
     Expect.isFalse (html.Contains "standby") "NoPool should not show standby badge"
   }
@@ -496,7 +496,7 @@ let warmupProgressSseTests = testList "Standby warmup progress SSE" [
     let getState _ = SessionState.Ready
     let getMsg _ = None
     let getStandby _ = StandbyInfo.Warming "2/4 Scanned 12 files"
-    let r = mkRegion "sessions" "No sessions"
+    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
     let result = renderRegionForSse getState getMsg getStandby r
     match result with
     | Some node ->
@@ -508,7 +508,7 @@ let warmupProgressSseTests = testList "Standby warmup progress SSE" [
     let getState _ = SessionState.Ready
     let getMsg _ = None
     let getStandby _ = StandbyInfo.Warming ""
-    let r = mkRegion "sessions" "No sessions"
+    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
     let result = renderRegionForSse getState getMsg getStandby r
     match result with
     | Some node ->

@@ -1,16 +1,18 @@
 namespace SageFs.Server
 
+open SageFs
+
 /// Typed state-change events for SSE subscribers.
 /// Replaces stringly-typed JSON routing — compiler catches missing handlers.
 type DaemonStateChange =
   | StandbyProgress
-  | SessionReady of sessionId: string
-  | SessionSwitched of sessionId: string
+  | SessionReady of sessionId: WorkerProtocol.SessionId
+  | SessionSwitched of sessionId: WorkerProtocol.SessionId
   | HotReloadChanged
   | FileReloaded of path: string
-  | SessionFaulted of sessionId: string * error: string
+  | SessionFaulted of sessionId: WorkerProtocol.SessionId * error: string
   | ModelChanged of outputCount: int * diagCount: int
-  | WarmupProgress of sessionId: string * step: int * total: int * message: string
+  | WarmupProgress of sessionId: WorkerProtocol.SessionId * step: int * total: int * message: string
   | SystemAlarm of phase: string * message: string
 
 module DaemonStateChange =
@@ -20,14 +22,15 @@ module DaemonStateChange =
   let toJson = function
     | ModelChanged (outputCount, diagCount) ->
       sprintf """{"outputCount":%d,"diagCount":%d}""" outputCount diagCount
-    | SessionReady sid -> sprintf """{"sessionReady":"%s"}""" sid
-    | SessionSwitched sid -> sprintf """{"sessionSwitched":"%s"}""" sid
+    | SessionReady sid -> sprintf """{"sessionReady":"%s"}""" (WorkerProtocol.SessionId.value sid)
+    | SessionSwitched sid -> sprintf """{"sessionSwitched":"%s"}""" (WorkerProtocol.SessionId.value sid)
     | HotReloadChanged -> """{"hotReloadChanged":true}"""
     | FileReloaded path -> sprintf """{"fileReloaded":"%s"}""" (path.Replace("\\", "\\\\"))
-    | SessionFaulted (sid, err) -> sprintf """{"sessionFaulted":"%s","error":"%s"}""" sid (err.Replace("\"", "\\\""))
+    | SessionFaulted (sid, err) ->
+      sprintf """{"sessionFaulted":"%s","error":"%s"}""" (WorkerProtocol.SessionId.value sid) (err.Replace("\"", "\\\""))
     | StandbyProgress -> """{"standbyProgress":true}"""
     | WarmupProgress (sid, step, total, _msg) ->
-      sprintf """{"warmupProgress":true,"sessionId":"%s","step":%d,"total":%d}""" sid step total
+      sprintf """{"warmupProgress":true,"sessionId":"%s","step":%d,"total":%d}""" (WorkerProtocol.SessionId.value sid) step total
     | SystemAlarm (phase, msg) ->
       sprintf """{"systemAlarm":true,"phase":"%s","message":"%s"}""" phase (msg.Replace("\"", "\\\""))
 

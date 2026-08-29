@@ -735,14 +735,15 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
 /// display card while it unloads/disposes itself.
 /// Shares the session-card-<id> DOM id with the card in renderSessions so
 /// Datastar morphs the card in place.
-let renderStoppingCard (sessionId: string) =
+let renderStoppingCard (sessionId: WorkerProtocol.SessionId) =
+  let sid = WorkerProtocol.SessionId.value sessionId
   Elem.div
-    [ Attr.id (sprintf "session-card-%s" sessionId)
+    [ Attr.id (sprintf "session-card-%s" sid)
       Attr.class' "session-row session-stopping"
       Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal);" ]
-    [ Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw sessionId ]
+    [ Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw sid ]
       Elem.span [ Attr.class' "meta"; Attr.style "margin-left: 0.5rem;" ] [
-        Text.raw (sprintf "⏳ Stopping session id:%s..." sessionId)
+        Text.raw (sprintf "⏳ Stopping session id:%s..." sid)
       ] ]
 
 /// Render sessions as an HTML fragment with action buttons.
@@ -759,12 +760,8 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
       Text.raw "No sessions"
     | false ->
       yield! sessions |> List.mapi (fun i (s: ParsedSession) ->
-        let statusClass =
-          match s.Status with
-          | "running" -> "status-ready"
-          | "starting" | "restarting" -> "status-warming"
-          | "lost" -> "status-faulted"  // Uninitialized: worker gone, needs restart
-          | _ -> "status-faulted"
+        let statusClass = SessionDisplayStatus.cssClass s.Status
+        let sid = WorkerProtocol.SessionId.value s.Id
         let cls =
           match s.IsActive with
           | true -> "output-result"
@@ -774,19 +771,19 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
           | true -> sprintf " %s" s.GuidanceCssClass
           | false -> ""
         Elem.div
-          [ Attr.id (sprintf "session-card-%s" s.Id)
+          [ Attr.id (sprintf "session-card-%s" sid)
             Attr.class' (sprintf "session-row %s%s" cls guidanceCls)
             Attr.style "padding: 10px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
-            Ds.class' ("session-selected", sprintf "$%s === '%s'" Signals.ViewingSessionId s.Id)
-            Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId s.Id s.Id) ]
+            Ds.class' ("session-selected", sprintf "$%s === '%s'" Signals.ViewingSessionId sid)
+            Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId sid sid) ]
           [
             Elem.div [ Attr.class' "session-card-body" ] [
               // Row 1: session ID + status + active indicator
               Elem.div [ Attr.class' "session-card-status-row" ] [
-                Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw s.Id ]
+                Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw sid ]
                 Elem.span
                   [ Attr.class' (sprintf "status badge %s" statusClass) ]
-                  [ Text.raw s.Status ]
+                  [ Text.raw (SessionDisplayStatus.label s.Status) ]
                 match s.IsActive with
                 | true ->
                   Elem.span [ Attr.style "color: var(--fg-green);" ] [ Text.raw "● active" ]
@@ -920,23 +917,23 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
               | false ->
                 Elem.button
                   [ Attr.class' "session-btn"
-                    Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId s.Id s.Id) ]
+                    Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId sid sid) ]
                   [ Text.raw "⇄" ]
               | true -> ()
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.title "Stop — unload the session (saved memory kept)"
-                  Ds.onClick (Ds.post (sprintf "/dashboard/session/stop/%s" s.Id)) ]
+                  Ds.onClick (Ds.post (sprintf "/dashboard/session/stop/%s" sid)) ]
                 [ Text.raw "■" ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-warn"
                   Attr.title "Dispose — stop and clear saved memory (must rebuild anew)"
-                  Ds.onClick (Ds.post (sprintf "/dashboard/session/dispose/%s" s.Id)) ]
+                  Ds.onClick (Ds.post (sprintf "/dashboard/session/dispose/%s" sid)) ]
                 [ Text.raw "⌫" ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.title "Purge — dispose and delete binaries + manifest entry (corrupt state)"
-                  Ds.onClick (Ds.post (sprintf "/dashboard/session/purge/%s" s.Id)) ]
+                  Ds.onClick (Ds.post (sprintf "/dashboard/session/purge/%s" sid)) ]
                 [ Text.raw "✖" ]
             ]
             // Collapsible test treemap (WizTree-style: area = test duration)
@@ -1298,7 +1295,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     ]
   ]
 
-let renderRegionForSse (getSessionState: string -> SessionState) (getStatusMsg: string -> string option) (getSessionStandbyInfo: string -> StandbyInfo) (region: RenderRegion) =
+let renderRegionForSse (getSessionState: WorkerProtocol.SessionId -> SessionState) (getStatusMsg: WorkerProtocol.SessionId -> string option) (getSessionStandbyInfo: WorkerProtocol.SessionId -> StandbyInfo) (region: RenderRegion) =
   match region.Id with
   | "output" -> Some (renderOutput (parseOutputLines region.Content) "No output yet")
   | "sessions" ->
@@ -1306,7 +1303,7 @@ let renderRegionForSse (getSessionState: string -> SessionState) (getStatusMsg: 
     let corrected = overrideSessionStatuses getSessionState getStatusMsg parsed
     let visible =
       corrected
-      |> List.filter (fun s -> s.Status <> "stopped")
+      |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
       |> List.map (fun s ->
         let info = getSessionStandbyInfo s.Id
         { s with StandbyLabel = StandbyInfo.label info })
@@ -1317,9 +1314,9 @@ let pushRegions
   (ctx: HttpContext)
   (regions: RenderRegion list)
   (getPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>)
-  (getSessionState: string -> SessionState)
-  (getStatusMsg: string -> string option)
-  (getSessionStandbyInfo: string -> StandbyInfo)
+  (getSessionState: WorkerProtocol.SessionId -> SessionState)
+  (getStatusMsg: WorkerProtocol.SessionId -> string option)
+  (getSessionStandbyInfo: WorkerProtocol.SessionId -> StandbyInfo)
   = task {
     for region in regions do
       match renderRegionForSse getSessionState getStatusMsg getSessionStandbyInfo region with
