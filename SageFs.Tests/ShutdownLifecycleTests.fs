@@ -39,6 +39,7 @@ let mkHangingSession (proc: Process) =
         Status = WorkerProtocol.SessionStatus.Ready
         FaultReason = None
         WorkerPid = Some proc.Id
+        WorkerPort = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow }

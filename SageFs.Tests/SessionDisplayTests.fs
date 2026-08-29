@@ -20,6 +20,7 @@ let mkInfo (id: SessionId) status lastActive : SessionInfo =
     Status = status
     FaultReason = None
     WorkerPid = Some 1234
+    WorkerPort = None
     Workflow = WorkflowTypes.SessionWorkflow.Interactive }
 
 [<Tests>]

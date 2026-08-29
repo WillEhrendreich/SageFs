@@ -279,6 +279,7 @@ let workerProtocolTests =
           Status = SessionStatus.Ready
           FaultReason = None
           WorkerPid = Some 1234
+          WorkerPort = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
         SessionInfo.displayName info
@@ -297,6 +298,7 @@ let workerProtocolTests =
           Status = SessionStatus.Ready
           FaultReason = None
           WorkerPid = None
+          WorkerPort = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
         SessionInfo.displayName info
@@ -350,6 +352,7 @@ let workerProtocolTests =
           Status = SessionStatus.Evaluating
           FaultReason = None
           WorkerPid = Some 5678
+          WorkerPort = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
         let _, result = roundTrip<SessionInfo> info

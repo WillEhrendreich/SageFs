@@ -664,6 +664,7 @@ module SessionManager =
               Status = SessionStatus.Starting
               FaultReason = None
               WorkerPid = Some proc.Id
+              WorkerPort = None
               Workflow = workflow
             }
             let managed = {
@@ -738,6 +739,7 @@ module SessionManager =
                 Status = SessionStatus.Ready
                 FaultReason = None
                 WorkerPid = Some readyStandby.Process.Id
+                WorkerPort = session.Info.WorkerPort
                 Workflow = session.Workflow
               }
               let swapped = {
@@ -789,7 +791,7 @@ module SessionManager =
               let stateAfterStop =
                 let restarting =
                   { session with
-                      Info = { session.Info with Status = SessionStatus.Restarting; WorkerPid = None }
+                      Info = { session.Info with Status = SessionStatus.Restarting; WorkerPid = None; WorkerPort = None }
                       Proxy = pendingProxy
                       WorkerBaseUrl = "" }
                 let afterMark = ManagerState.addSession id restarting state
@@ -825,6 +827,7 @@ module SessionManager =
                     Status = SessionStatus.Starting
                     FaultReason = None
                     WorkerPid = Some proc.Id
+                    WorkerPort = None
                     Workflow = session.Workflow
                   }
                   let restarted = {
@@ -898,8 +901,16 @@ module SessionManager =
               onSessionFaulted id msg
               return! loop newState
             | true ->
+              let workerPort =
+                let mutable u : System.Uri = null
+                match System.Uri.TryCreate(baseUrl, System.UriKind.Absolute, &u) with
+                | true when u.Port > 0 -> Some u.Port
+                | _ -> None
               let updated =
-                { session with Proxy = proxy; WorkerBaseUrl = baseUrl }
+                { session with
+                    Proxy = proxy
+                    WorkerBaseUrl = baseUrl
+                    Info = { session.Info with WorkerPort = workerPort } }
               let newState =
                 { ManagerState.addSession id updated state with
                     WarmupProgress = Map.remove id state.WarmupProgress }
@@ -1086,6 +1097,7 @@ module SessionManager =
                           Status = SessionStatus.Starting
                           FaultReason = None
                           WorkerPid = Some proc.Id
+                          WorkerPort = None
                           LastActivity = DateTime.UtcNow } }
               let newState = ManagerState.addSession id restarted state
               runtime.AwaitWorkerPort id proc inbox ct

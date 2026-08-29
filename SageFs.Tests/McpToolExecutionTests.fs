@@ -44,6 +44,7 @@ let tests =
                    Status = WorkerProtocol.SessionStatus.Ready
                    FaultReason = None
                    WorkerPid = None
+                   WorkerPort = None
                    Workflow = WorkflowTypes.SessionWorkflow.Interactive
                    CreatedAt = DateTime.UtcNow
                    LastActivity = DateTime.UtcNow })

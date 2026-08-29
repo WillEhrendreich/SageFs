@@ -27,6 +27,7 @@ module ElmDaemonTestHelpers =
       Status = SessionStatus.Ready
       FaultReason = None
       WorkerPid = Some 999
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let proxy (msg: WorkerMessage) =

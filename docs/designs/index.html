@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SageFs — Redesign Options</title>
+<style>
+  :root { --bg: #0e0e10; --text: #ebe7dc; --dim: #7a7669; --rule: #2a2a32; --accent: #c8a951; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; font-size: 14px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 16px 28px; border-bottom: 1px solid var(--rule); background: #15151a; }
+  .topbar h1 { font-family: 'Playfair Display', Georgia, serif; font-size: 20px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .topbar h1 em { font-style: italic; color: var(--dim); font-size: 0.7em; margin-left: 4px; }
+  .topbar .sub { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .nav { display: flex; gap: 8px; }
+  .nav button { background: transparent; color: var(--text); border: 1px solid var(--rule); padding: 8px 16px; font-family: 'Inter', system-ui, sans-serif; font-size: 12px; cursor: pointer; border-radius: 4px; }
+  .nav button.active { border-color: var(--accent); color: var(--accent); }
+  .nav button:hover { border-color: var(--accent); }
+  .frame { width: 100%; height: calc(100vh - 64px); border: 0; display: block; }
+  .legend { padding: 14px 28px; background: #15151a; border-top: 1px solid var(--rule); display: none; }
+  .legend h2 { font-family: 'Playfair Display', Georgia, serif; font-size: 18px; font-weight: 600; margin: 0 0 6px; }
+  .legend p { color: var(--dim); margin: 0 0 6px; line-height: 1.6; font-size: 13px; }
+  .legend .meta { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--dim); }
+  .legend .meta b { color: var(--accent); font-weight: 500; }
+  .legend.show { display: block; }
+  .footer { padding: 10px 28px; background: #0a0a0c; border-top: 1px solid var(--rule); font-size: 10.5px; color: var(--dim); display: flex; justify-content: space-between; }
+  iframe { width: 100%; height: calc(100vh - 64px - 110px); border: 0; display: block; background: #0a0a0c; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div>
+      <h1>SageFs Dashboard <em>— Redesign Directions</em></h1>
+      <div class="sub">Four dark redesigns. The current dashboard is dark — three were rebuilt after the light variants were rejected.</div>
+    </div>
+    <div class="nav">
+      <button data-idx="1">1 · Terminal Noir</button>
+      <button data-idx="2">2 · Dark Editorial</button>
+      <button data-idx="3">3 · Dark Blueprint</button>
+      <button data-idx="4">4 · Dark Studio</button>
+    </div>
+  </div>
+
+  <div class="legend" id="legend">
+    <h2 id="legend-title"></h2>
+    <p id="legend-desc"></p>
+    <div class="meta" id="legend-meta"></div>
+  </div>
+
+  <iframe id="frame" src="01-terminal-noir.html"></iframe>
+
+  <div class="footer">
+    <span>1440 × 900 · real HTML, real fonts, real CSS</span>
+    <span>Read the full design rationale in <code>README.md</code></span>
+  </div>
+
+  <script>
+    const directions = {
+      '1': {
+        file: '01-terminal-noir.html',
+        title: '1 · Terminal Noir',
+        desc: 'Deep black, JetBrains Mono everywhere, a single mint accent. The signature is a blinking block cursor in the eval input and the status bar. The risk: monospace for *everything*, no exceptions.',
+        meta: 'palette <b>#0A0A0F · #14141F · #00D4AA</b> · type <b>JetBrains Mono</b> · resize anim <b>snappy · 0ms</b>'
+      },
+      '2': {
+        file: '02-ink-paper.html',
+        title: '2 · Dark Editorial',
+        desc: 'The same editorial commitment (Playfair Display masthead, Source Serif 4 body, italic captions) on a deep ink background. The brass accent stays but is dimmed to a warmer copper so it glows against the ink instead of shouting. Signature: italic captions and § section markers; a single brass hairline under the active session row.',
+        meta: 'palette <b>#0C0C10 · #E8E2D0 · #C8A951</b> · type <b>Playfair · Source Serif · JetBrains Mono · Inter</b> · resize anim <b>soft · 120ms ease-out</b>'
+      },
+      '3': {
+        file: '03-architectural-grid.html',
+        title: '3 · Dark Blueprint',
+        desc: 'The same engineering-drawing commitment (corner marks, § numbered sections, monospace, hairline rules) on a deep charcoal background. A single signal-green accent replaces the forest green so the rules glow on the grid the way traces glow on a CRT. Signature: a faint 80px grid behind the transcript and corner ticks on every panel.',
+        meta: 'palette <b>#0A0E12 · #D6DEE5 · #7FD1A0</b> · type <b>Space Grotesk · JetBrains Mono</b> · resize anim <b>binary · snap</b>'
+      },
+      '4': {
+        file: '04-studio-oblique.html',
+        title: '4 · Dark Studio',
+        desc: 'The same studio commitment (Caveat hand-script, asymmetric layout, terracotta accent, tilted slabs) on a charcoal surface with an oxblood/burgundy slab. Terracotta survives the dark pivot because it works against dark too. Signature: hand-script labels in the rail and on the eval band, a tilted terracotta bar floating off the right edge.',
+        meta: 'palette <b>#0F0D10 · #EFE6DF · #D97757 · #6E1F24</b> · type <b>Inter · JetBrains Mono · Caveat · DM Serif</b> · resize anim <b>spring · overshoot</b>'
+      }
+    };
+
+    const buttons = document.querySelectorAll('.nav button');
+    const frame = document.getElementById('frame');
+    const legend = document.getElementById('legend');
+    const title = document.getElementById('legend-title');
+    const desc = document.getElementById('legend-desc');
+    const meta = document.getElementById('legend-meta');
+
+    function show(idx) {
+      const d = directions[idx];
+      frame.src = d.file;
+      title.textContent = d.title;
+      desc.textContent = d.desc;
+      meta.innerHTML = d.meta;
+      legend.classList.add('show');
+      buttons.forEach(b => b.classList.toggle('active', b.dataset.idx === idx));
+    }
+
+    buttons.forEach(b => b.addEventListener('click', () => show(b.dataset.idx)));
+    show('1');
+  </script>
+</body>
+</html>

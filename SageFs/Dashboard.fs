@@ -467,8 +467,14 @@ let createStreamHandler
       // the server's source of truth.
       let themeChanged = newThemeName <> lastThemeName
       let shouldPatchTheme = sessionChanged || themeChanged
-      Log.info "[pushState] cur=%s last=%s newTheme=%s lastTheme=%s sessionChanged=%b themeChanged=%b"
-        (WorkerProtocol.SessionId.value sessionId) (WorkerProtocol.SessionId.value lastSessionId) newThemeName lastThemeName sessionChanged themeChanged
+      // Only log when something actually changed. Without this guard the log
+      // floods with one entry per SSE poll (each poll pushes a snapshot even
+      // when nothing changed), drowning out the signal.
+      match shouldPatchTheme with
+      | true ->
+        Log.info "[pushState] cur=%s last=%s newTheme=%s lastTheme=%s sessionChanged=%b themeChanged=%b"
+          (WorkerProtocol.SessionId.value sessionId) (WorkerProtocol.SessionId.value lastSessionId) newThemeName lastThemeName sessionChanged themeChanged
+      | false -> ()
       currentSessionOpt <- Some newSessionId
       lastSessionId <- newSessionId
       lastWorkingDir <- q.GetSessionWorkingDir newSessionId

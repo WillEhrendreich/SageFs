@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SageFs — Dark Editorial</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700;800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #0c0c10; --surface: #14141b; --raised: #1c1c24; --rule: #2a2a35; --rule-soft: #1f1f29; --text: #e8e2d0; --dim: #7a7466; --dimmer: #54504a; --accent: #c8a951; --accent-soft: #2a2418; --accent-dim: #8a7437; --error: #d97757; --green: #7d9b6a; --font-display: 'Playfair Display', Georgia, 'Times New Roman', serif; --font-body: 'Source Serif 4', Georgia, 'Times New Roman', serif; --font-mono: 'JetBrains Mono', ui-monospace, monospace; --font-utility: 'Inter', system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-body); font-size: 15px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+  body { display: grid; grid-template-rows: 96px 1fr 36px; height: 100vh; overflow: hidden; }
+  header { display: flex; align-items: flex-end; justify-content: space-between; padding: 26px 40px 18px; border-bottom: 1px solid var(--rule); background: linear-gradient(180deg, #100f15 0%, var(--bg) 100%); }
+  .masthead-left h1 { font-family: var(--font-display); font-size: 34px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.0; color: var(--text); margin: 0; }
+  .masthead-left h1 em { font-family: var(--font-display); font-weight: 500; font-style: italic; color: var(--accent); font-size: 0.55em; margin-left: 8px; letter-spacing: 0; }
+  .masthead-left .sub { font-family: var(--font-utility); font-size: 10.5px; color: var(--dim); letter-spacing: 0.14em; text-transform: uppercase; margin-top: 8px; }
+  .masthead-left .sub b { font-family: var(--font-mono); color: var(--text); font-weight: 500; letter-spacing: 0.02em; }
+  .masthead-left .sub .sep { color: var(--accent); margin: 0 8px; }
+  .masthead-right { display: flex; align-items: center; gap: 14px; font-family: var(--font-utility); font-size: 11px; color: var(--dim); padding-bottom: 4px; }
+  .badge { border: 1px solid var(--rule); padding: 4px 12px; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+  .badge.run { border-color: var(--accent-dim); color: var(--accent); background: var(--accent-soft); }
+  main { display: grid; grid-template-columns: 1fr 380px; overflow: hidden; min-height: 0; }
+  .col-left { border-right: 1px solid var(--rule); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .col-right { background: var(--surface); overflow-y: auto; padding: 28px 26px; }
+  .output-area { flex: 1; overflow-y: auto; padding: 32px 36px 24px; }
+  .output-area .kicker { font-family: var(--font-utility); font-size: 10px; color: var(--accent); letter-spacing: 0.18em; text-transform: uppercase; margin-bottom: 6px; }
+  .output-area h2 { font-family: var(--font-display); font-size: 32px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 8px; color: var(--text); font-style: italic; }
+  .output-area .lead { font-family: var(--font-body); font-style: italic; color: var(--dim); font-size: 14px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--rule); }
+  .line { padding: 4px 0; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; color: var(--text); }
+  .line .ts { color: var(--dimmer); font-size: 11px; margin-right: 12px; font-family: var(--font-utility); letter-spacing: 0.04em; }
+  .line .tag { color: var(--accent); font-weight: 500; margin-right: 6px; }
+  .line.result { color: var(--green); }
+  .line.err { color: var(--error); background: rgba(217,119,87,0.06); border-left: 2px solid var(--error); padding-left: 8px; }
+  .line.dim { color: var(--dim); }
+  .line.info { color: #7a8aa0; }
+  .eval-band { border-top: 1px solid var(--rule); padding: 20px 36px 22px; background: linear-gradient(180deg, var(--surface) 0%, #16161e 100%); }
+  .eval-band h3 { font-family: var(--font-display); font-size: 22px; font-weight: 600; font-style: italic; letter-spacing: -0.01em; margin: 0 0 4px; }
+  .eval-band h3 .meta { font-family: var(--font-body); font-weight: 400; font-style: italic; color: var(--accent); font-size: 14px; margin-left: 8px; }
+  .eval-band .kicker { font-family: var(--font-utility); font-size: 10px; color: var(--accent); letter-spacing: 0.18em; text-transform: uppercase; margin-bottom: 12px; }
+  .eval-band textarea { width: 100%; min-height: 80px; padding: 14px 16px; border: 1px solid var(--rule); background: #0a0a0e; color: var(--text); font-family: var(--font-mono); font-size: 13px; line-height: 1.6; resize: vertical; outline: 0; border-radius: 0; }
+  .eval-band textarea:focus { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .eval-band .row { display: flex; gap: 10px; margin-top: 14px; align-items: center; }
+  .btn { background: transparent; color: var(--accent); border: 1px solid var(--accent-dim); padding: 9px 18px; font-family: var(--font-display); font-size: 13px; font-weight: 600; font-style: italic; letter-spacing: 0.02em; cursor: pointer; }
+  .btn:hover { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .btn.secondary { background: transparent; color: var(--text); border: 1px solid var(--rule); font-family: var(--font-utility); font-style: normal; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; }
+  .btn.secondary:hover { border-color: var(--accent); color: var(--accent); }
+  .ledger { margin-bottom: 32px; }
+  .ledger .kicker { font-family: var(--font-utility); font-size: 9.5px; color: var(--accent); letter-spacing: 0.2em; text-transform: uppercase; margin-bottom: 8px; }
+  .ledger h3 { font-family: var(--font-display); font-size: 26px; font-weight: 600; font-style: italic; letter-spacing: -0.01em; margin: 0 0 4px; color: var(--text); }
+  .ledger .sub { font-family: var(--font-body); font-style: italic; color: var(--dim); font-size: 13px; margin-bottom: 18px; }
+  .ledger-row { display: grid; grid-template-columns: 1fr auto; gap: 14px; padding: 16px 0; border-bottom: 0.5px solid var(--rule-soft); font-family: var(--font-utility); font-size: 12px; align-items: center; }
+  .ledger-row.active { border-bottom: 1px solid var(--accent-dim); }
+  .ledger-row .id { font-family: var(--font-mono); font-weight: 500; color: var(--text); letter-spacing: 0.02em; font-size: 12.5px; }
+  .ledger-row .dir { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ledger-row .status { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.1em; padding: 2px 8px; border: 0.5px solid var(--rule); }
+  .ledger-row .status.run { border-color: var(--accent-dim); color: var(--accent); background: var(--accent-soft); }
+  .ledger-row .status.idle { border-color: var(--rule); color: var(--dim); }
+  .ledger-row .status.warm { border-color: var(--accent-dim); color: var(--accent); background: var(--accent-soft); }
+  .signature { font-family: var(--font-display); font-style: italic; font-size: 15px; color: var(--dim); padding-top: 16px; border-top: 0.5px solid var(--rule); margin-top: 4px; line-height: 1.5; }
+  .signature .rule { display: inline-block; width: 28px; height: 1px; background: var(--accent); vertical-align: middle; margin-right: 8px; }
+  footer { display: flex; align-items: center; justify-content: space-between; padding: 0 40px; border-top: 1px solid var(--rule); background: var(--surface); font-family: var(--font-utility); font-size: 10.5px; color: var(--dim); }
+  footer .page { font-family: var(--font-display); font-style: italic; color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div class="masthead-left">
+    <h1>SageFs <em>— dark editorial</em></h1>
+    <div class="sub">Live F# REPL <span class="sep">·</span> Session <b>e0fcb2a4</b> <span class="sep">·</span> REPL</div>
+  </div>
+  <div class="masthead-right">
+    <span class="badge run">running</span>
+    <span class="badge">120 evals · avg 14ms</span>
+    <span class="badge">Theme <strong>Editorial</strong></span>
+  </div>
+</header>
+
+<main>
+  <div class="col-left">
+    <div class="output-area">
+      <div class="kicker">Vol. I · Issue 14</div>
+      <h2>Output.</h2>
+      <div class="lead">A live transcription of the current FSI session — typeset in ink, dated and timestamped.</div>
+      <div class="line dim"><span class="ts">16:21:00</span><span class="tag">⏳</span>[1/4] FSI session created</div>
+      <div class="line dim"><span class="ts">16:21:00</span><span class="tag">⏳</span>[2/4] Scanned 3 source files</div>
+      <div class="line dim"><span class="ts">16:21:01</span><span class="tag">⏳</span>[3/4] Scanned assemblies, opening 8 namespaces</div>
+      <div class="line dim"><span class="ts">16:21:01</span><span class="tag">⏳</span>[1/8] ? open System (116ms)</div>
+      <div class="line dim"><span class="ts">16:21:01</span><span class="tag">⏳</span>[2/8] ? open System.Reflection (116ms)</div>
+      <div class="line dim"><span class="ts">16:21:01</span><span class="tag">⏳</span>[3/8] ? open Falco (116ms)</div>
+      <div class="line dim"><span class="ts">16:21:01</span><span class="tag">⏳</span>[4/8] ? open Falco.Routing (116ms)</div>
+      <div class="line dim"><span class="ts">16:21:01</span><span class="tag">⏳</span>[5/8] ? open Falco.Markup (116ms)</div>
+      <div class="line dim"><span class="ts">16:21:01</span><span class="tag">⏳</span>[6/8] ? open Falco.Datastar (116ms)</div>
+      <div class="line info"><span class="ts">16:21:01</span><span class="tag">✓</span>warm-up complete · 3 838ms · 8 namespaces</div>
+      <div class="line"><span class="ts">16:21:15</span><span class="tag">›</span>let greet name = sprintf "hello, %s" name</div>
+      <div class="line result"><span class="ts">16:21:15</span><span class="tag">val</span>greet : name:string → string</div>
+      <div class="line"><span class="ts">16:21:18</span><span class="tag">›</span>greet "ada"</div>
+      <div class="line result"><span class="ts">16:21:18</span><span class="tag">→</span>"hello, ada"</div>
+      <div class="line"><span class="ts">16:21:24</span><span class="tag">›</span>type Cart = { items: string list; total: decimal }</div>
+      <div class="line result"><span class="ts">16:21:24</span><span class="tag">type</span>Cart = { items: string list; total: decimal }</div>
+      <div class="line"><span class="ts">16:21:31</span><span class="tag">›</span>let add (c: Cart) item = { c with items = item :: c.items; total = c.total + 9.99m }</div>
+      <div class="line result"><span class="ts">16:21:31</span><span class="tag">val</span>add : c:Cart → item:string → Cart</div>
+      <div class="line"><span class="ts">16:21:33</span><span class="tag">›</span>{ items = []; total = 0m } |&gt; add "book" |&gt; add "pen"</div>
+      <div class="line result"><span class="ts">16:21:33</span><span class="tag">→</span>{ items = ["pen"; "book"]; total = 19.98M }</div>
+      <div class="line info"><span class="ts">16:21:40</span><span class="tag">⚠</span>0 tests discovered · enable Live Testing to scan</div>
+      <div class="line err"><span class="ts">16:21:48</span><span class="tag">✗</span>error FS0039: The type 'EntryPoint' is not defined</div>
+    </div>
+    <div class="eval-band">
+      <div class="kicker">§ Evaluate</div>
+      <h3>An entry for the page <span class="meta">— fsi › e0fcb2a4</span></h3>
+      <textarea spellcheck="false">let total (c: Cart) = c.items |&gt; List.length, c.total</textarea>
+      <div class="row">
+        <button class="btn">Run · ⌘⏎</button>
+        <button class="btn secondary">Save to file</button>
+        <button class="btn secondary">History</button>
+        <span style="margin-left:auto; font-family:var(--font-utility); font-size:11px; color:var(--dim)">Alt+Enter to eval · Tab to indent · ↑ history</span>
+      </div>
+    </div>
+  </div>
+
+  <aside class="col-right">
+    <div class="ledger">
+      <div class="kicker">§ I — Sessions</div>
+      <h3>Session Ledger</h3>
+      <div class="sub">An ordered record of every FSI session, in progress.</div>
+      <div class="ledger-row active">
+        <div><div class="id">e0fcb2a4</div><div class="dir">~/samples/demos/WebappDatastar</div></div>
+        <div class="status run">run</div>
+      </div>
+      <div class="ledger-row">
+        <div><div class="id">87ec774d</div><div class="dir">~/samples/demos/WebappDatastar</div></div>
+        <div class="status idle">idle</div>
+      </div>
+      <div class="ledger-row">
+        <div><div class="id">99f843b9</div><div class="dir">~/repos/SageTech</div></div>
+        <div class="status warm">warm</div>
+      </div>
+    </div>
+
+    <div class="ledger">
+      <div class="kicker">§ II — Controls</div>
+      <h3>Instruments</h3>
+      <div class="sub">Toggle, watch, run.</div>
+      <div style="font-family:var(--font-utility); font-size:12px; color:var(--dim); line-height:1.7; padding: 8px 0; border-top: 0.5px solid var(--rule-soft); border-bottom: 0.5px solid var(--rule-soft);">
+        <strong style="color:var(--text); font-family: var(--font-display); font-style: italic; font-size: 14px;">Hot Reload</strong><br>
+        <span style="font-size:11px;">OFF · 0/2 files watched</span>
+        <div style="margin-top: 10px; display: flex; gap: 6px;">
+          <button class="btn secondary" style="padding: 5px 12px; font-size: 10px;">Watch all</button>
+          <button class="btn secondary" style="padding: 5px 12px; font-size: 10px;">Unwatch all</button>
+        </div>
+      </div>
+      <div style="font-family:var(--font-utility); font-size:12px; color:var(--dim); line-height:1.7; padding: 12px 0 8px; border-bottom: 0.5px solid var(--rule-soft);">
+        <strong style="color:var(--text); font-family: var(--font-display); font-style: italic; font-size: 14px;">Live Testing</strong><br>
+        <span style="font-size:11px;">OFF · 0 tests found</span>
+        <div style="margin-top: 10px;">
+          <button class="btn secondary" style="padding: 5px 12px; font-size: 10px;">Enable</button>
+        </div>
+      </div>
+      <div style="font-family:var(--font-utility); font-size:12px; color:var(--dim); line-height:1.7; padding: 12px 0 0;">
+        <strong style="color:var(--text); font-family: var(--font-display); font-style: italic; font-size: 14px;">Bindings</strong> 0
+        &nbsp;·&nbsp;
+        <strong style="color:var(--text); font-family: var(--font-display); font-style: italic; font-size: 14px;">Context</strong> Ready · 8 ns
+      </div>
+    </div>
+
+    <div class="signature">
+      <span class="rule"></span> A session ledger, typeset on dark — each row a working session, kept in order, separated by a single hairline. The design treats session management as a reference document, not a control panel.
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <span>Healthy · SageFs 0.6.303.0 · up 9m · 10 240MB · 2 projects loaded</span>
+  <span><span class="page">p. 1</span> &nbsp;·&nbsp; awaiting input · fsi ready</span>
+</footer>
+</body>
+</html>

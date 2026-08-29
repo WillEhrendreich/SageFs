@@ -56,6 +56,7 @@ module TestDeps =
       Status = SessionStatus.Ready
       FaultReason = None
       WorkerPid = Some 999
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let proxy (msg: WorkerMessage) =
@@ -131,6 +132,7 @@ module TestDeps =
             Status = SessionStatus.Starting
             FaultReason = None
             WorkerPid = None
+            WorkerPort = None
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
           }
           return Result.Ok info
@@ -515,6 +517,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Status = status
       FaultReason = None
       WorkerPid = Some 999
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let deps : EffectDeps = {
@@ -608,6 +611,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Status = status
       FaultReason = None
       WorkerPid = Some 999
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let deps : EffectDeps = {
@@ -701,6 +705,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Status = status
       FaultReason = None
       WorkerPid = Some 999
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let deps : EffectDeps = {
@@ -788,6 +793,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Status = status
       FaultReason = None
       WorkerPid = Some 999
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let deps : EffectDeps = {
@@ -881,6 +887,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Status = status
       FaultReason = None
       WorkerPid = Some 999
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let deps : EffectDeps = {
@@ -1000,6 +1007,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Status = status
       FaultReason = None
       WorkerPid = Some 999
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let deps : EffectDeps = {
@@ -1097,6 +1105,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Status = status
       FaultReason = None
       WorkerPid = Some 999
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
     let deps : EffectDeps = {
@@ -1299,6 +1308,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       WorkingDirectory = "/code"; SolutionRoot = None
       CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
       Status = SessionStatus.Ready; WorkerPid = Some 42
+      WorkerPort = None
       FaultReason = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
     }
@@ -1369,6 +1379,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   WorkingDirectory = "."; SolutionRoot = None
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
                   Status = SessionStatus.Ready; WorkerPid = Some 1
+                  WorkerPort = None
                   FaultReason = None
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
       }
@@ -1410,6 +1421,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   WorkingDirectory = "."; SolutionRoot = None
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
                   Status = SessionStatus.Starting; WorkerPid = None
+                  WorkerPort = None
                   FaultReason = None
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
       }

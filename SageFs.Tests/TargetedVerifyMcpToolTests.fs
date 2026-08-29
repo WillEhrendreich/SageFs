@@ -23,6 +23,7 @@ let private mkSessionInfo status =
     Status = status
     FaultReason = None
     WorkerPid = None
+    WorkerPort = None
     Workflow = WorkflowTypes.SessionWorkflow.Interactive }
 
 let private mkSessionContext sid files =

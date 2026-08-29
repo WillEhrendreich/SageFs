@@ -42,6 +42,7 @@ module McpSessionIsolation =
                      Status = WorkerProtocol.SessionStatus.Ready
                      FaultReason = None
                      WorkerPid = None
+                     WorkerPort = None
                      Workflow = WorkflowTypes.SessionWorkflow.Interactive
                      CreatedAt = System.DateTime.UtcNow
                      LastActivity = System.DateTime.UtcNow })
@@ -196,6 +197,7 @@ module SessionResolutionByWorkingDir =
       Status = WorkerProtocol.SessionStatus.Ready
       FaultReason = None
       WorkerPid = None
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
       LastActivity = System.DateTime.UtcNow }
@@ -276,6 +278,7 @@ module WorkingDirDeepMatching =
       Status = WorkerProtocol.SessionStatus.Ready
       FaultReason = None
       WorkerPid = None
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
       LastActivity = System.DateTime.UtcNow }
@@ -328,6 +331,7 @@ module WorkingDirRoutingPriority =
       Status = WorkerProtocol.SessionStatus.Ready
       FaultReason = None
       WorkerPid = Some 1234
+      WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
       LastActivity = System.DateTime.UtcNow }
@@ -511,6 +515,7 @@ module ResetIsolation =
           Some { WorkerProtocol.SessionInfo.Id = id
                  Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
                  Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None
+                 WorkerPort = None
                  FaultReason = None
                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
                  CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
@@ -554,6 +559,7 @@ module ResetIsolation =
         Status = !registryStatus
         FaultReason = None
         WorkerPid = None
+        WorkerPort = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow }
@@ -646,6 +652,7 @@ module ResetIsolation =
         // transport failure on a worker with a pid is a REAL death and must
         // trigger NotifyWorkerDied recovery, not the restart-in-progress path.
         WorkerPid = Some 4242
+        WorkerPort = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow }
@@ -750,6 +757,7 @@ module ResetIsolation =
                    Status = WorkerProtocol.SessionStatus.Ready
                    FaultReason = None
                    WorkerPid = None
+                   WorkerPort = None
                    Workflow = WorkflowTypes.SessionWorkflow.Interactive
                    CreatedAt = DateTime.UtcNow
                    LastActivity = DateTime.UtcNow })
@@ -929,6 +937,7 @@ module ResetIsolation =
           FaultReason = None
           // Daemon-owned restart shape: WorkerPid cleared by the cold-restart path.
           WorkerPid = None
+          WorkerPort = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           CreatedAt = DateTime.UtcNow
           LastActivity = DateTime.UtcNow }
@@ -1025,7 +1034,7 @@ module ResetIsolation =
           Task.FromResult(Some {
             Id = id
             Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
-            Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None
+            Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None; WorkerPort = None
             FaultReason = None
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
@@ -1108,7 +1117,7 @@ module ResetIsolation =
           Task.FromResult(Some {
             Id = id
             Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
-            Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None
+            Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None; WorkerPort = None
             FaultReason = None
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow

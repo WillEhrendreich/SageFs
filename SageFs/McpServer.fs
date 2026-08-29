@@ -89,10 +89,51 @@ type McpServerTracker() =
   member _.Count = servers.Count
   member _.PendingEvents = accumulator.Count
 
+/// Auto-save a friction report when a tool call throws. The user's directive:
+/// "no matter what we shouldn't throw exceptions... a really great idea would
+/// be to automatically have sagefs save it's own friction report upon hitting
+/// any kind of exception." This gives us a durable post-mortem record without
+/// requiring the agent (or user) to manually report the failure.
+let recordToolFailure (ctx: McpContext) (tracker: McpServerTracker) (ex: exn) =
+  // Best-effort tool name extraction. The AIFunctionFactory doesn't surface
+  // the called tool's name in the exception path, so we fall back to a
+  // hint parsed from the exception message.
+  let toolName =
+    match ex.Message with
+    | m when m.Contains "'code'" -> "unknown (missing 'code' argument)"
+    | m when m.Contains "argument" -> "unknown (missing argument)"
+    | _ -> "unknown"
+  let event : SageFs.Features.FrictionTelemetryTypes.FrictionEvent =
+    { OccurredAtUtc = System.DateTimeOffset.UtcNow
+      Session = SageFs.Features.FrictionTelemetryTypes.SessionRef.create "mcp" |> McpTools.ok
+      Tool = SageFs.Features.FrictionTelemetryTypes.ToolName.create toolName |> McpTools.ok
+      Intent = SageFs.Features.FrictionTelemetryTypes.IntentKind.ExploreCode
+      Outcome =
+        SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker
+          SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
+      Duration = SageFs.Features.FrictionTelemetryTypes.DurationMs.create 0 |> McpTools.ok
+      FollowUp = SageFs.Features.FrictionTelemetryTypes.FollowUp.NoFollowUpYet
+      ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused
+      SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current () }
+  // Write to the durable SQLite store if available.
+  match ctx.FrictionStore with
+  | Some store ->
+    task {
+      let! _ = SageFs.Features.McpFrictionRecorder.Recorder.appendEventDirect store event
+      return ()
+    }
+    |> Async.AwaitTask
+    |> ignore
+  | None -> ()
+  // Note: we deliberately do NOT push this to the in-memory PushEvent tracker.
+  // PushEvent is for SSE state broadcasts (file reloads, test results, etc.)
+  // not for friction reporting. Friction lives in the durable SQLite store
+  // and is queryable via the dashboard.
+
 /// CallToolFilter that captures the McpServer and appends accumulated events
 /// to tool responses. This ensures the LLM sees events even if the client
 /// doesn't surface MCP notifications directly.
-let createServerCaptureFilter (tracker: McpServerTracker) =
+let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
   let mutable logged = 0  // 0 = not logged; use Interlocked to ensure atomicity
   McpRequestFilter<CallToolRequestParams, CallToolResult>(fun next ->
     McpRequestHandler<CallToolRequestParams, CallToolResult>(fun ctx ct ->
@@ -135,7 +176,31 @@ let createServerCaptureFilter (tracker: McpServerTracker) =
         match logger with
         | Some l -> l.LogError(ex, "MCP tool call threw; returning error result to client")
         | None -> ()
-        let message = sprintf "Error in tool call: %s: %s" (ex.GetType().Name) ex.Message
+        // Per the user directive: never throw — translate every exception into a
+        // structured IsError result the agent can read and act on. Parse the
+        // exception to provide a helpful hint rather than a raw stack-shaped
+        // message.
+        let message =
+          match box ex with
+          | :? System.ArgumentException as argEx ->
+            // The most common case: a tool was called without a required parameter.
+            // Surface the parameter name in the message so the agent can retry correctly.
+            sprintf "Missing or invalid argument: %s. %s"
+              (if String.IsNullOrEmpty(argEx.ParamName) then "(unknown parameter)" else argEx.ParamName)
+              argEx.Message
+          | :? System.Reflection.TargetInvocationException as tie ->
+            // The AIFunctionFactory wraps target invocations in this; unwrap.
+            match tie.InnerException with
+            | null -> sprintf "Tool call failed: %s" ex.Message
+            | inner -> sprintf "Tool call failed: %s" inner.Message
+          | _ ->
+            sprintf "Tool call failed: %s: %s" (ex.GetType().Name) ex.Message
+        // Also auto-save a friction report on any exception so we have a record
+        // for post-mortem debugging. Never throw from this path — the whole
+        // point is to surface errors cleanly.
+        try
+          recordToolFailure mcpCtx tracker ex
+        with _ -> ()
         let result = CallToolResult()
         result.IsError <- Nullable true
         result.Content.Add(TextContentBlock(Text = message))
@@ -986,7 +1051,7 @@ let configureMcpProtocol (builder: WebApplicationBuilder) (mcpContext: McpContex
     )
     .WithTools<SageFs.Server.McpTools.SageFsTools>()
     .WithRequestFilters(fun filters ->
-      filters.AddCallToolFilter(createServerCaptureFilter serverTracker) |> ignore
+      filters.AddCallToolFilter(createServerCaptureFilter mcpContext serverTracker) |> ignore
     )
   |> ignore
 

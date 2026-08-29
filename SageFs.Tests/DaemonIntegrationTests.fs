@@ -62,6 +62,7 @@ let managerStateTests =
         Status = SessionStatus.Ready
         FaultReason = None
         WorkerPid = Some 1234
+        WorkerPort = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -94,6 +95,7 @@ let managerStateTests =
         Status = SessionStatus.Ready
         FaultReason = None
         WorkerPid = None
+        WorkerPort = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -127,6 +129,7 @@ let managerStateTests =
           Status = SessionStatus.Ready
           FaultReason = None
           WorkerPid = None
+          WorkerPort = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
         }
         { Info = info

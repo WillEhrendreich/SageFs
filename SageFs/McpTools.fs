@@ -545,6 +545,152 @@ BEHAVIOR:
         logger.LogDebug("MCP-TOOL: cancel_eval called")
         cancelEval ctx "mcp" wd |> withEcho ctx "cancel_eval"
 
+    [<McpServerTool>]
+    [<Description("""Enable hot reload (browser auto-refresh) for this session.
+
+This installs Harmony patches on WebApplication.Run/RunAsync() so that when a
+.fs file changes, the browser auto-refreshes. Designed for use after the
+session was created in Interactive workflow and the user later wants to run
+a Falco/Datastar webapp with live reload — without destroying the session.
+
+WORKFLOW:
+1. Call this tool. It returns a JSON with `patched`, `workerPort`, `health`,
+   `disabledByEnvVar`, and `nextSteps`.
+2. If a webapp is already running (webapp.Run() is blocking an eval), call
+   `cancel_eval` to stop it.
+3. Re-evaluate your `webapp.Run()` call. The Harmony patches now fire on
+   this Run() call, the DevReloadMiddleware is injected, and subsequent file
+   changes will hot-reload the browser.
+
+Idempotent: safe to call multiple times. The patches only apply to future
+webapp.Run() calls; existing in-flight webapps are unaffected.
+
+If the env var SAGEFS_DEVRELOAD=0 is set, the tool returns `disabledByEnvVar:
+true` and does NOT install patches. This is intentional — the env var is the
+process-wide kill switch for hot reload.""")>]
+    member _.enable_hot_reload(
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        let resultJson (patched: bool) (workerPort: int) (health: string) (disabledByEnvVar: bool) (nextSteps: string[]) =
+            let result = JsonObject()
+            result.["patched"] <- JsonValue.Create(patched)
+            result.["workerPort"] <- JsonValue.Create(workerPort)
+            result.["health"] <- JsonValue.Create(health)
+            result.["disabledByEnvVar"] <- JsonValue.Create(disabledByEnvVar)
+            result.["nextSteps"] <- JsonValue.Create(nextSteps)
+            result.ToJsonString()
+        let disabledByEnvVar =
+            match System.Environment.GetEnvironmentVariable("SAGEFS_DEVRELOAD") with
+            | "0" | "false" -> true
+            | _ -> false
+        let healthToString (h: SageFs.DevReload.DevReloadHealth) =
+            match h with
+            | SageFs.DevReload.PatchPending -> "PatchPending"
+            | SageFs.DevReload.PatchFailed r -> sprintf "PatchFailed: %s" r
+            | SageFs.DevReload.Injected -> "Injected"
+            | SageFs.DevReload.Active _ -> "Active"
+            | SageFs.DevReload.Degraded r -> sprintf "Degraded: %s" r
+            | SageFs.DevReload.Disabled -> "Disabled"
+        // The DevReloadInjector module lives in the SageFs.Host assembly, which
+        // is a different assembly than SageFs.dll. We can't `open` it directly
+        // because it's a higher-level project (SageFs references SageFs.Host, not
+        // vice versa). The F# compiler treats SageFs.Host's modules as
+        // unreachable from SageFs.dll, even though the assembly is referenced.
+        // Workaround: load the type via reflection.
+        let devReloadType : System.Type option =
+          System.AppDomain.CurrentDomain.GetAssemblies()
+          |> Array.tryPick (fun a ->
+            a.GetType("SageFs.DevReloadInjector") |> Option.ofObj)
+        let invokeStatic (name: string) (args: obj[]) =
+          match devReloadType with
+          | Some t ->
+            t.GetMethod(name, System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.Static)
+            |> Option.ofObj
+            |> Option.iter (fun m -> m.Invoke(null, args) |> ignore)
+          | None -> ()
+        // Resolve the session via working directory, then look up its worker port.
+        // We need the port to wire the DevReload SSE URL; if it's missing the
+        // user hasn't finished warm-up, so surface PatchFailed and tell them.
+        logger.LogDebug("MCP-TOOL: enable_hot_reload called")
+        withSessionWd ctx "mcp" wd (fun sidStr -> task {
+            let sid = match SageFs.WorkerProtocol.SessionId.validate sidStr with
+                       | Ok s -> s
+                       | Error _ -> SageFs.WorkerProtocol.SessionId.newId ()
+            let! infoOpt = ctx.SessionOps.GetSessionInfo sid
+            let workerPort = infoOpt |> Option.bind (fun i -> i.WorkerPort) |> Option.defaultValue 0
+            if disabledByEnvVar then
+                SageFs.DevReload.DevReloadHealthTracker.transition SageFs.DevReload.Disabled
+                return resultJson false workerPort "Disabled (SAGEFS_DEVRELOAD env var)" true
+                    [| "unset SAGEFS_DEVRELOAD or set it to '1' and call enable_hot_reload again" |]
+            elif workerPort <= 0 then
+                return resultJson false 0 "PatchFailed: worker port not yet set" false
+                    [| "Wait for the worker to report WORKER_PORT= on stdout (happens during warm-up), then retry." |]
+            elif Option.isNone devReloadType then
+                return resultJson false workerPort "PatchFailed: SageFs.DevReloadInjector type not loaded" false
+                    [| "This tool runs in the SageFs daemon process. SageFs.Host is normally loaded by the worker. If you see this, the architecture is broken." |]
+            else
+                invokeStatic "setWorkerPort" [| box workerPort |]
+                invokeStatic "install" [||]
+                return resultJson true workerPort (healthToString (SageFs.DevReload.DevReloadHealthTracker.current ())) false
+                    [| "If a webapp is currently running (webapp.Run() blocking), call cancel_eval to stop it."
+                       "Re-evaluate webapp.Run() — Harmony will inject DevReloadMiddleware on this call."
+                       "Edit any .fs file under the watched root; browser auto-refresh should fire." |]
+        })
+        |> withEcho ctx "enable_hot_reload"
+
+    [<McpServerTool>]
+    [<Description("""Disable hot reload for this session.
+
+This transitions the DevReload health state to Disabled. The Harmony patches
+remain installed in the process but the prefix check will refuse to inject
+the DevReloadMiddleware into future webapp.Run() calls.
+
+WORKFLOW:
+1. Call this tool. It returns a JSON with `disabled: true` and `health`.
+2. If a webapp is already running, you do NOT need to restart it — the
+   middleware is already injected and the SSE channel is established.
+   However, future webapp.Run() calls will not get the middleware.
+3. To re-enable, call `enable_hot_reload` and then re-evaluate webapp.Run().
+
+This is the runtime analog of the SAGEFS_DEVRELOAD=0 env var. Unlike the env
+var, this is per-session and reversible. The env var, if set, takes precedence.""")>]
+    member _.disable_hot_reload(
+        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
+    ) : Task<string> =
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        logger.LogDebug("MCP-TOOL: disable_hot_reload called")
+        withSessionWd ctx "mcp" wd (fun _ -> task {
+            // Reflection-based call to disableForSession (SageFs.Host module).
+            let devReloadType : System.Type option =
+              System.AppDomain.CurrentDomain.GetAssemblies()
+              |> Array.tryPick (fun a ->
+                a.GetType("SageFs.DevReloadInjector") |> Option.ofObj)
+            match devReloadType with
+            | Some t ->
+              t.GetMethod("disableForSession", System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.Static)
+              |> Option.ofObj
+              |> Option.iter (fun m -> m.Invoke(null, [||]) |> ignore)
+            | None -> ()
+            let health =
+                match SageFs.DevReload.DevReloadHealthTracker.current () with
+                | SageFs.DevReload.Disabled -> "Disabled"
+                | SageFs.DevReload.PatchPending -> "PatchPending (unexpected — disable should transition to Disabled)"
+                | SageFs.DevReload.PatchFailed r -> sprintf "PatchFailed: %s" r
+                | SageFs.DevReload.Injected -> "Injected (unexpected)"
+                | SageFs.DevReload.Active _ -> "Active (unexpected)"
+                | SageFs.DevReload.Degraded r -> sprintf "Degraded: %s" r
+            let result = JsonObject()
+            result.["disabled"] <- JsonValue.Create(true)
+            result.["health"] <- JsonValue.Create(health)
+            return result.ToJsonString()
+        })
+        |> withEcho ctx "disable_hot_reload"
+
     [<Description("""Get code completions at a cursor position. Returns available completions (types, functions, members) for the code at the given position. Useful for discovering APIs before writing code.
 
 CURSOR POSITION:

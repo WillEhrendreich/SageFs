@@ -223,6 +223,9 @@ module WorkerProtocol =
     Status: SessionStatus
     FaultReason: string option
     WorkerPid: int option
+    /// HTTP port the worker process listens on, for DevReload SSE URL wiring.
+    /// None until the worker reports WORKER_PORT= on stdout.
+    WorkerPort: int option
     Workflow: WorkflowTypes.SessionWorkflow
   }
 

@@ -33,6 +33,7 @@ let private mkCtxWithWorkerResponse (workerResponse: WorkerProtocol.WorkerRespon
                Status = WorkerProtocol.SessionStatus.Ready
                FaultReason = None
                WorkerPid = Some 4242
+               WorkerPort = None
                Workflow = WorkflowTypes.SessionWorkflow.Interactive
                CreatedAt = DateTime.UtcNow
                LastActivity = DateTime.UtcNow })

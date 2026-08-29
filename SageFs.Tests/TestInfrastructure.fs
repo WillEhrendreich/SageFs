@@ -110,6 +110,7 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
           Status = SageFs.WorkerProtocol.SessionStatus.Ready
           FaultReason = None
           WorkerPid = None
+          WorkerPort = None
           Workflow = SessionWorkflow.Interactive
           CreatedAt = System.DateTime.UtcNow
           LastActivity = System.DateTime.UtcNow

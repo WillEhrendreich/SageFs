@@ -40,6 +40,8 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "cancel_eval"
       "check_fsharp_code"
       "create_session"
+      "disable_hot_reload"
+      "enable_hot_reload"
       "explain_test_failure"
       "get_available_projects"
       "get_friction_report"

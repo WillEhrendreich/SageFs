@@ -29,6 +29,7 @@ let mkSessionInfo (id: SessionId) status =
     Status = status
     FaultReason = None
     WorkerPid = None
+    WorkerPort = None
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
   }
 

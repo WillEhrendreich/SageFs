@@ -19,6 +19,7 @@ let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo =
   Status = status
   FaultReason = None
   WorkerPid = Some 100
+  WorkerPort = None
   Workflow = WorkflowTypes.SessionWorkflow.Interactive
 }
 
@@ -156,6 +157,7 @@ let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) pid : Se
   Status = status
   FaultReason = None
   WorkerPid = pid
+  WorkerPort = None
   Workflow = WorkflowTypes.SessionWorkflow.Interactive
 }
 
