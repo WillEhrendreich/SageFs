@@ -18,8 +18,14 @@ type DaemonInfo = {
 module DaemonState =
 
   let SageFsDir =
-    let home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
-    Path.Combine(home, ".SageFs")
+    // SAGEFS_DATA_DIR isolates the daemon's persisted state (manifest, test
+    // cache, themes, friction store). Tests use it to avoid polluting and
+    // being polluted by the real ~/.SageFs state.
+    match Environment.GetEnvironmentVariable("SAGEFS_DATA_DIR") with
+    | value when not (String.IsNullOrWhiteSpace value) -> Path.GetFullPath value
+    | _ ->
+      let home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+      Path.Combine(home, ".SageFs")
 
   let defaultMcpPort = 37749
 

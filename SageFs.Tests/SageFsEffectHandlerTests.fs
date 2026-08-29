@@ -1,6 +1,7 @@
 module SageFs.Tests.SageFsEffectHandlerTests
 
 open System
+open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open Microsoft.FSharp.Reflection
@@ -147,6 +148,31 @@ module TestDeps =
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
 
+  /// Await a condition with a hard ceiling, without sleep-polling.
+  /// Yields via Task.Delay so the thread pool is never hogged; returns true
+  /// only when the condition was satisfied before the ceiling elapsed.
+  let awaitCondition (timeoutMs: int) (condition: unit -> bool) =
+    task {
+      let sw = System.Diagnostics.Stopwatch.StartNew()
+      let mutable ok = false
+      while not ok && sw.ElapsedMilliseconds < int64 timeoutMs do
+        if condition () then ok <- true
+        else do! Task.Delay 10
+      return ok
+    }
+
+  /// Await a TaskCompletionSource with a hard ceiling. Completes the TCS with
+  /// false when the timeout elapses, so a timed-out wait fails the test with a
+  /// clear signal instead of hanging.
+  let awaitTcs (timeoutMs: int) (tcs: TaskCompletionSource<bool>) =
+    task {
+      let! winner =
+        Task.WhenAny(tcs.Task, Task.Delay(timeoutMs))
+      let completed = obj.ReferenceEquals(winner, tcs.Task)
+      if not completed then tcs.TrySetResult false |> ignore
+      return completed
+    }
+
 let private makeRequestFcsTypeCheckEffect
   (targetSession: string option)
   (filePath: string)
@@ -186,8 +212,7 @@ let private makeCancelRebuildEffect
 
 [<Tests>]
 let effectHandlerTests = testList "SageFsEffectHandler" [
-  testCase "RequestEval sends code to worker and dispatches result"
-    <| fun _ ->
+  testTask "RequestEval sends code to worker and dispatches result" {
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun msg ->
       match msg with
@@ -197,10 +222,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
         WorkerResponse.WorkerError (
           SageFsError.Unexpected (exn "unexpected")))
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestEval "let x = 42"))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor (EditorEffect.RequestEval "let x = 42"))
     log.EvalCalls
     |> Expect.hasLength "should call eval" 1
     snd log.EvalCalls.[0]
@@ -210,8 +234,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       sid |> Expect.equal "session" "a1b2c3d4"
       output |> Expect.equal "output" "val x = 42"
     | other -> failtestf "expected EvalCompleted, got %A" other
+  }
 
-  testCase "RequestEval error dispatches EvalFailed" <| fun _ ->
+  testTask "RequestEval error dispatches EvalFailed" {
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun msg ->
       match msg with
@@ -223,24 +248,23 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       | _ ->
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestEval "bad"))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor (EditorEffect.RequestEval "bad"))
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.EvalFailed (_, err)) ->
       err |> Expect.stringContains "err" "type mismatch"
     | other -> failtestf "expected EvalFailed, got %A" other
+  }
 
-  testCase "RequestConfigureWarmupAutoOpen dispatches output message" <| fun _ ->
+  testTask "RequestConfigureWarmupAutoOpen dispatches output message" {
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun _ ->
       WorkerResponse.WorkerError (SageFsError.Unexpected (exn "unused")))
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestConfigureWarmupAutoOpen @"C:\Code\Repos\TestProject"))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor (EditorEffect.RequestConfigureWarmupAutoOpen @"C:\Code\Repos\TestProject"))
     log.ConfigureAutoOpenCalls
     |> Expect.equal "should call config helper" [@"C:\Code\Repos\TestProject"]
     match dispatched with
@@ -249,8 +273,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       line.Text |> Expect.stringContains "should describe the opt-out" "Disabled warmup auto-open"
     | other ->
       failtestf "expected OutputEmitted, got %A" other
+  }
 
-  testCase "RequestEval converts worker diagnostics" <| fun _ ->
+  testTask "RequestEval converts worker diagnostics" {
     let log = TestDeps.createLog ()
     let diag : WorkerDiagnostic = {
       Severity = DiagnosticSeverity.Error
@@ -265,10 +290,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       | _ ->
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestEval "code"))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor (EditorEffect.RequestEval "code"))
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.EvalCompleted (_, _, diags)) ->
       diags |> Expect.hasLength "1 diag" 1
@@ -276,8 +300,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       diags.[0].Severity |> Expect.equal "sev" DiagnosticSeverity.Error
     | other ->
       failtestf "expected EvalCompleted with diags, got %A" other
+  }
 
-  testCase "RequestCompletion dispatches items" <| fun _ ->
+  testTask "RequestCompletion dispatches items" {
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun msg ->
       match msg with
@@ -286,17 +311,17 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       | _ ->
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestCompletion ("x.", 2)))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor (EditorEffect.RequestCompletion ("x.", 2)))
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.CompletionReady items) ->
       items |> Expect.hasLength "2 items" 2
       items.[0].Label |> Expect.equal "first" "ToString"
     | other -> failtestf "expected CompletionReady, got %A" other
+  }
 
-  testCase "RequestInitialDiscovery asks the worker for test discovery" <| fun _ ->
+  testTask "RequestInitialDiscovery asks the worker for test discovery" {
     let log = TestDeps.createLog ()
     let discovered : Features.LiveTesting.TestCase =
       { Id = Features.LiveTesting.TestId.create "MyModule.test1" Features.LiveTesting.TestFramework.Expecto
@@ -313,10 +338,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       | _ ->
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "unexpected")))
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.TestCycle Features.LiveTesting.TestCycleEffect.RequestInitialDiscovery)
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.TestCycle Features.LiveTesting.TestCycleEffect.RequestInitialDiscovery)
     log.SessionListCalls |> Expect.equal "should enumerate sessions for discovery" 1
     log.TestDiscoveryCalls |> Expect.hasLength "should request discovery once" 1
     dispatched
@@ -326,56 +350,56 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
         sid = "a1b2c3d4" && tests.Length = 1
       | _ -> false)
     |> Expect.isTrue "should dispatch discovered tests back into the Elm loop"
+  }
 
-  testCase "RequestEval with no sessions dispatches error" <| fun _ ->
+  testTask "RequestEval with no sessions dispatches error" {
     let deps = TestDeps.noSessions ()
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestEval "x"))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor (EditorEffect.RequestEval "x"))
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.EvalFailed (_, err)) ->
       err |> Expect.stringContains "no sessions" "No active"
     | other -> failtestf "expected error, got %A" other
+  }
 
-  testCase "RequestSessionList dispatches snapshots" <| fun _ ->
+  testTask "RequestSessionList dispatches snapshots" {
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun _ ->
       WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor EditorEffect.RequestSessionList)
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor EditorEffect.RequestSessionList)
     log.SessionListCalls |> Expect.equal "called" 1
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.SessionsRefreshed snaps) ->
       snaps |> Expect.hasLength "one session" 1
       snaps.[0].Id |> Expect.equal "id" (testSessionId "a1b2c3d4")
     | other -> failtestf "expected SessionsRefreshed, got %A" other
+  }
 
-  testCase "RequestSessionSwitch dispatches switch" <| fun _ ->
+  testTask "RequestSessionSwitch dispatches switch" {
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute (TestDeps.noSessions ())
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestSessionSwitch "s2"))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute (TestDeps.noSessions ())
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor (EditorEffect.RequestSessionSwitch "s2"))
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.SessionSwitched (_, toId)) ->
       toId |> Expect.equal "to" "s2"
     | other -> failtestf "expected SessionSwitched, got %A" other
+  }
 
-  testCase "RequestSessionCreate dispatches created" <| fun _ ->
+  testTask "RequestSessionCreate dispatches created" {
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun _ ->
       WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor
-        (EditorEffect.RequestSessionCreate ["New.fsproj"]))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor
+            (EditorEffect.RequestSessionCreate ["New.fsproj"]))
     log.SessionCreateCalls |> Expect.hasLength "called" 1
     // dispatched is prepend-order: [SessionSwitched; SessionCreated]
     let created =
@@ -386,23 +410,24 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     | Some snap ->
       snap.Projects |> Expect.equal "projects" ["Test.fsproj"]
     | None -> failtestf "expected SessionCreated in dispatched, got %A" dispatched
+  }
 
-  testCase "RequestSessionStop dispatches stopped" <| fun _ ->
+  testTask "RequestSessionStop dispatches stopped" {
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun _ ->
       WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestSessionStop "00000001"))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor (EditorEffect.RequestSessionStop "00000001"))
     log.SessionStopCalls |> Expect.equal "called" [testSessionId "00000001"]
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.SessionStopped sid) ->
       sid |> Expect.equal "id" "00000001"
     | other -> failtestf "expected SessionStopped, got %A" other
+  }
 
-  testCase "RequestSessionStop failure dispatches error" <| fun _ ->
+  testTask "RequestSessionStop failure dispatches error" {
     let deps = {
       TestDeps.noSessions () with
         StopSession = fun _ ->
@@ -411,16 +436,16 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           }
     }
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor (EditorEffect.RequestSessionStop "00000001"))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor (EditorEffect.RequestSessionStop "00000001"))
     match dispatched.[0] with
     | SageFsMsg.Event (SageFsEvent.EvalFailed (_, err)) ->
       err |> Expect.stringContains "fail" "Stop failed"
     | other -> failtestf "expected error, got %A" other
+  }
 
-  testCase "RequestFcsTypeCheck uses provided buffer content instead of rereading disk" <| fun _ ->
+  testTask "RequestFcsTypeCheck uses provided buffer content instead of rereading disk" {
     let log = TestDeps.createLog ()
     let tempFile = IO.Path.GetTempFileName()
     let staleDiskContent = "module Sample\nlet answer = 1"
@@ -446,10 +471,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           TimeSpan.Zero
 
       let mutable dispatched : SageFsMsg list = []
-      SageFsEffectHandler.execute deps
-        (fun msg -> dispatched <- msg :: dispatched)
-        (SageFsEffect.TestCycle effect)
-      |> Async.RunSynchronously
+      do! SageFsEffectHandler.execute deps
+            (fun msg -> dispatched <- msg :: dispatched)
+            (SageFsEffect.TestCycle effect)
 
       observedCode
       |> Expect.equal
@@ -462,10 +486,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     finally
       if IO.File.Exists tempFile then
         IO.File.Delete tempFile
+  }
 
-  testCase "RequestRebuild waits for restarted session proxy before reporting success" <| fun _ ->
+  testTask "RequestRebuild waits for restarted session proxy before reporting success" {
     let sid = testSessionId "a1b2c3d4"
     let mutable dispatched : SageFsMsg list = []
+    let completed = TaskCompletionSource<bool>()
     let mutable restartCalls : (SessionId * bool) list = []
     let mutable listCalls = 0
     let mutable proxyCalls = 0
@@ -520,27 +546,29 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
                | false -> SessionStatus.Starting)
           ]
         }
-      SleepMs = fun _ -> async { return () }
+      SleepMs = fun delay -> async { do! Async.Sleep delay }
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- dispatched @ [m])
-      (SageFsEffect.TestCycle (
-        Features.LiveTesting.TestCycleEffect.RequestRebuild(
-          1L,
-          { Tests = [| tc |]
-            Trigger = Features.LiveTesting.RunTrigger.FileSave
-            TreeSitterElapsed = TimeSpan.Zero
-            FcsElapsed = TimeSpan.Zero
-            SessionId = Some (SessionId.value sid)
-            InstrumentationMaps = [||] })))
-    |> Async.RunSynchronously
-    let sw = Diagnostics.Stopwatch.StartNew()
-    while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
-      Threading.Thread.Sleep 10
+    do! SageFsEffectHandler.execute deps
+          (fun m ->
+            dispatched <- dispatched @ [m]
+            match m with
+            | SageFsMsg.RebuildCompleted _ -> completed.TrySetResult true |> ignore
+            | _ -> ())
+          (SageFsEffect.TestCycle (
+            Features.LiveTesting.TestCycleEffect.RequestRebuild(
+              1L,
+              { Tests = [| tc |]
+                Trigger = Features.LiveTesting.RunTrigger.FileSave
+                TreeSitterElapsed = TimeSpan.Zero
+                FcsElapsed = TimeSpan.Zero
+                SessionId = Some (SessionId.value sid)
+                InstrumentationMaps = [||] })))
+    let! doneSignal = TestDeps.awaitTcs 5000 completed
+    doneSignal |> Expect.isTrue "rebuild should complete"
     restartCalls
     |> Expect.hasLength "should restart the targeted session once" 1
     restartCalls.Head
@@ -551,10 +579,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     |> Expect.isTrue "should wait for the streaming proxy before completing rebuild"
     dispatched
     |> Expect.equal "should report rebuild completion only after readiness" [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 1L, Ok ())]
+  }
 
-  testCase "RequestRebuild keeps waiting while restarted session is still starting" <| fun _ ->
+  testTask "RequestRebuild keeps waiting while restarted session is still starting" {
     let sid = testSessionId "d4c3b2a1"
     let mutable dispatched : SageFsMsg list = []
+    let completed = TaskCompletionSource<bool>()
     let mutable restartCalls : (SessionId * bool) list = []
     let mutable listCalls = 0
     let mutable proxyCalls = 0
@@ -609,27 +639,29 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
                | false -> SessionStatus.Starting)
           ]
         }
-      SleepMs = fun _ -> async { return () }
+      SleepMs = fun delay -> async { do! Async.Sleep delay }
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- dispatched @ [m])
-      (SageFsEffect.TestCycle (
-        Features.LiveTesting.TestCycleEffect.RequestRebuild(
-          1L,
-          { Tests = [| tc |]
-            Trigger = Features.LiveTesting.RunTrigger.FileSave
-            TreeSitterElapsed = TimeSpan.Zero
-            FcsElapsed = TimeSpan.Zero
-            SessionId = Some (SessionId.value sid)
-            InstrumentationMaps = [||] })))
-    |> Async.RunSynchronously
-    let sw = Diagnostics.Stopwatch.StartNew()
-    while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
-      Threading.Thread.Sleep 10
+    do! SageFsEffectHandler.execute deps
+          (fun m ->
+            dispatched <- dispatched @ [m]
+            match m with
+            | SageFsMsg.RebuildCompleted _ -> completed.TrySetResult true |> ignore
+            | _ -> ())
+          (SageFsEffect.TestCycle (
+            Features.LiveTesting.TestCycleEffect.RequestRebuild(
+              1L,
+              { Tests = [| tc |]
+                Trigger = Features.LiveTesting.RunTrigger.FileSave
+                TreeSitterElapsed = TimeSpan.Zero
+                FcsElapsed = TimeSpan.Zero
+                SessionId = Some (SessionId.value sid)
+                InstrumentationMaps = [||] })))
+    let! doneSignal = TestDeps.awaitTcs 5000 completed
+    doneSignal |> Expect.isTrue "rebuild should complete"
     restartCalls
     |> Expect.hasLength "should restart the targeted session once" 1
     restartCalls.Head
@@ -640,10 +672,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     |> Expect.isTrue "should keep polling until the streaming proxy is finally ready"
     dispatched
     |> Expect.equal "should report rebuild success once the long startup finishes" [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 1L, Ok ())]
+  }
 
-  testCase "RequestRebuild uses a short poll cadence during the first second of readiness wait" <| fun _ ->
+  testTask "RequestRebuild uses a short poll cadence during the first second of readiness wait" {
     let sid = testSessionId "c0ffee01"
     let mutable dispatched : SageFsMsg list = []
+    let completed = TaskCompletionSource<bool>()
     let mutable listCalls = 0
     let mutable proxyCalls = 0
     let sleepCalls = ResizeArray<int>()
@@ -704,29 +738,33 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       DisposeFileWatcher = fun _ _ -> ()
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- dispatched @ [m])
-      (SageFsEffect.TestCycle (
-        Features.LiveTesting.TestCycleEffect.RequestRebuild(
-          1L,
-          { Tests = [| tc |]
-            Trigger = Features.LiveTesting.RunTrigger.FileSave
-            TreeSitterElapsed = TimeSpan.Zero
-            FcsElapsed = TimeSpan.Zero
-            SessionId = Some (SessionId.value sid)
-            InstrumentationMaps = [||] })))
-    |> Async.RunSynchronously
-    let sw = Diagnostics.Stopwatch.StartNew()
-    while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
-      Threading.Thread.Sleep 10
+    do! SageFsEffectHandler.execute deps
+          (fun m ->
+            dispatched <- dispatched @ [m]
+            match m with
+            | SageFsMsg.RebuildCompleted _ -> completed.TrySetResult true |> ignore
+            | _ -> ())
+          (SageFsEffect.TestCycle (
+            Features.LiveTesting.TestCycleEffect.RequestRebuild(
+              1L,
+              { Tests = [| tc |]
+                Trigger = Features.LiveTesting.RunTrigger.FileSave
+                TreeSitterElapsed = TimeSpan.Zero
+                FcsElapsed = TimeSpan.Zero
+                SessionId = Some (SessionId.value sid)
+                InstrumentationMaps = [||] })))
+    let! doneSignal = TestDeps.awaitTcs 5000 completed
+    doneSignal |> Expect.isTrue "rebuild should complete"
     sleepCalls |> Seq.toList
     |> Expect.equal "fast startup should stay on the short poll cadence" [50; 50; 50; 50]
     dispatched
     |> Expect.equal "fast startup should still complete successfully" [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 1L, Ok ())]
+  }
 
-  testCase "RequestRebuild switches to a slower poll cadence after the first second" <| fun _ ->
+  testTask "RequestRebuild switches to a slower poll cadence after the first second" {
     let sid = testSessionId "c0ffee02"
     let mutable dispatched : SageFsMsg list = []
+    let completed = TaskCompletionSource<bool>()
     let mutable listCalls = 0
     let mutable proxyCalls = 0
     let sleepCalls = ResizeArray<int>()
@@ -787,21 +825,23 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       DisposeFileWatcher = fun _ _ -> ()
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- dispatched @ [m])
-      (SageFsEffect.TestCycle (
-        Features.LiveTesting.TestCycleEffect.RequestRebuild(
-          1L,
-          { Tests = [| tc |]
-            Trigger = Features.LiveTesting.RunTrigger.FileSave
-            TreeSitterElapsed = TimeSpan.Zero
-            FcsElapsed = TimeSpan.Zero
-            SessionId = Some (SessionId.value sid)
-            InstrumentationMaps = [||] })))
-    |> Async.RunSynchronously
-    let sw = Diagnostics.Stopwatch.StartNew()
-    while dispatched.IsEmpty && sw.ElapsedMilliseconds < 2000L do
-      Threading.Thread.Sleep 10
+    do! SageFsEffectHandler.execute deps
+          (fun m ->
+            dispatched <- dispatched @ [m]
+            match m with
+            | SageFsMsg.RebuildCompleted _ -> completed.TrySetResult true |> ignore
+            | _ -> ())
+          (SageFsEffect.TestCycle (
+            Features.LiveTesting.TestCycleEffect.RequestRebuild(
+              1L,
+              { Tests = [| tc |]
+                Trigger = Features.LiveTesting.RunTrigger.FileSave
+                TreeSitterElapsed = TimeSpan.Zero
+                FcsElapsed = TimeSpan.Zero
+                SessionId = Some (SessionId.value sid)
+                InstrumentationMaps = [||] })))
+    let! doneSignal = TestDeps.awaitTcs 5000 completed
+    doneSignal |> Expect.isTrue "rebuild should complete"
     let recordedSleeps = sleepCalls |> Seq.toList
     recordedSleeps.Length
     |> Expect.equal "long startup should keep polling until the ready/proxy pair finally arrives" 21
@@ -811,10 +851,12 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     |> Expect.equal "polling should slow down once the first second has elapsed" 250
     dispatched
     |> Expect.equal "long startup should still complete successfully" [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 1L, Ok ())]
+  }
 
-  testCase "superseded RequestRebuild suppresses stale completion from the older rebuild" <| fun _ ->
+  testTask "superseded RequestRebuild suppresses stale completion from the older rebuild" {
     let sid = testSessionId "c0ffee03"
     let mutable dispatched : SageFsMsg list = []
+    let completed = TaskCompletionSource<bool>()
     let mutable restartCalls : (SessionId * bool) list = []
     let gate = obj()
     let mutable rebuildGeneration = 0
@@ -872,7 +914,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
               | false -> SessionStatus.Starting)
           return [sessionInfo status]
         }
-      SleepMs = fun _ -> async { return () }
+      SleepMs = fun delay -> async { do! Async.Sleep delay }
       GetWarmupContext = None
       RegisterFileWatcher = fun _ _ -> ()
       DisposeFileWatcher = fun _ _ -> ()
@@ -899,40 +941,40 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
             SessionId = Some (SessionId.value sid)
             InstrumentationMaps = [||] }))
 
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- dispatched @ [m])
-      firstRequest
-    |> Async.RunSynchronously
+    let dispatch m =
+      dispatched <- dispatched @ [m]
+      match m with
+      | SageFsMsg.RebuildCompleted _ -> completed.TrySetResult true |> ignore
+      | _ -> ()
 
-    let firstStart = Diagnostics.Stopwatch.StartNew()
-    while restartCalls.Length < 1 && firstStart.ElapsedMilliseconds < 2000L do
-      Threading.Thread.Sleep 10
+    do! SageFsEffectHandler.execute deps dispatch firstRequest
+
+    let! firstStarted = TestDeps.awaitCondition 2000 (fun () ->
+      restartCalls.Length >= 1)
+    firstStarted |> Expect.isTrue "first rebuild should start promptly"
     restartCalls.Length
     |> Expect.equal "first rebuild should start promptly" 1
 
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- dispatched @ [m])
-      secondRequest
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps dispatch secondRequest
 
-    let secondStart = Diagnostics.Stopwatch.StartNew()
-    while restartCalls.Length < 2 && secondStart.ElapsedMilliseconds < 2000L do
-      Threading.Thread.Sleep 10
+    let! secondStarted = TestDeps.awaitCondition 2000 (fun () ->
+      restartCalls.Length >= 2)
+    secondStarted |> Expect.isTrue "second rebuild should supersede the first"
     restartCalls.Length
     |> Expect.equal "second rebuild should supersede the first" 2
 
     lock gate (fun () -> readyGeneration <- rebuildGeneration)
 
-    let completionWindow = Diagnostics.Stopwatch.StartNew()
-    while dispatched.Length < 2 && completionWindow.ElapsedMilliseconds < 250L do
-      Threading.Thread.Sleep 10
+    let! doneSignal = TestDeps.awaitTcs 5000 completed
+    doneSignal |> Expect.isTrue "second rebuild should complete"
 
     dispatched
     |> Expect.equal
         "only the latest rebuild should report completion after superseding the older one"
         [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 2L, Ok ())]
+  }
 
-  testCase "CancelRebuild cancels an in-flight RequestRebuild without dispatching RebuildCompleted" <| fun _ ->
+  testTask "CancelRebuild cancels an in-flight RequestRebuild without dispatching RebuildCompleted" {
     let sid = testSessionId "fadecafe"
     let mutable dispatched : SageFsMsg list = []
     let gate = obj()
@@ -994,43 +1036,44 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
 
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- dispatched @ [m])
-      (SageFsEffect.TestCycle (
-        Features.LiveTesting.TestCycleEffect.RequestRebuild(
-          1L,
-          { Tests = [| tc |]
-            Trigger = Features.LiveTesting.RunTrigger.FileSave
-            TreeSitterElapsed = TimeSpan.Zero
-            FcsElapsed = TimeSpan.Zero
-            SessionId = Some (SessionId.value sid)
-            InstrumentationMaps = [||] })))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- dispatched @ [m])
+          (SageFsEffect.TestCycle (
+            Features.LiveTesting.TestCycleEffect.RequestRebuild(
+              1L,
+              { Tests = [| tc |]
+                Trigger = Features.LiveTesting.RunTrigger.FileSave
+                TreeSitterElapsed = TimeSpan.Zero
+                FcsElapsed = TimeSpan.Zero
+                SessionId = Some (SessionId.value sid)
+                InstrumentationMaps = [||] })))
 
-    let restartWindow = Diagnostics.Stopwatch.StartNew()
-    while restartCalls < 1 && restartWindow.ElapsedMilliseconds < 2000L do
-      Threading.Thread.Sleep 10
+    let! restarted = TestDeps.awaitCondition 2000 (fun () ->
+      restartCalls >= 1)
+    restarted |> Expect.isTrue "rebuild should have started before cancellation"
     restartCalls
     |> Expect.equal "rebuild should have started before cancellation" 1
 
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- dispatched @ [m])
-      (SageFsEffect.TestCycle (makeCancelRebuildEffect (Some (SessionId.value sid)) 1L))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- dispatched @ [m])
+          (SageFsEffect.TestCycle (makeCancelRebuildEffect (Some (SessionId.value sid)) 1L))
 
     lock gate (fun () -> ready <- true)
 
-    let completionWindow = Diagnostics.Stopwatch.StartNew()
-    while dispatched.IsEmpty && completionWindow.ElapsedMilliseconds < 250L do
-      Threading.Thread.Sleep 10
+    // Give the cancelled rebuild's polling loop a bounded chance to run; it
+    // must never dispatch a stale completion.
+    let! completed = TestDeps.awaitCondition 250 (fun () ->
+      dispatched.Length > 0)
 
     dispatched
     |> Expect.isEmpty
         "explicit cancellation should suppress stale RebuildCompleted dispatch"
+  }
 
-  testCase "CancelRebuild for an older generation does not cancel the newer rebuild" <| fun _ ->
+  testTask "CancelRebuild for an older generation does not cancel the newer rebuild" {
     let sid = testSessionId "beadfeed"
     let mutable dispatched : SageFsMsg list = []
+    let completed = TaskCompletionSource<bool>()
     let gate = obj()
     let mutable restartCalls = 0
     let mutable ready = false
@@ -1090,54 +1133,56 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       TestCycleCancellation = Features.LiveTesting.TestCycleCancellation.create ()
     }
 
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- dispatched @ [m])
-      (SageFsEffect.TestCycle (
-        Features.LiveTesting.TestCycleEffect.RequestRebuild(
-          2L,
-          { Tests = [| tc |]
-            Trigger = Features.LiveTesting.RunTrigger.FileSave
-            TreeSitterElapsed = TimeSpan.Zero
-            FcsElapsed = TimeSpan.Zero
-            SessionId = Some (SessionId.value sid)
-            InstrumentationMaps = [||] })))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m ->
+            dispatched <- dispatched @ [m]
+            match m with
+            | SageFsMsg.RebuildCompleted _ -> completed.TrySetResult true |> ignore
+            | _ -> ())
+          (SageFsEffect.TestCycle (
+            Features.LiveTesting.TestCycleEffect.RequestRebuild(
+              2L,
+              { Tests = [| tc |]
+                Trigger = Features.LiveTesting.RunTrigger.FileSave
+                TreeSitterElapsed = TimeSpan.Zero
+                FcsElapsed = TimeSpan.Zero
+                SessionId = Some (SessionId.value sid)
+                InstrumentationMaps = [||] })))
 
-    let restartWindow = Diagnostics.Stopwatch.StartNew()
-    while restartCalls < 1 && restartWindow.ElapsedMilliseconds < 2000L do
-      Threading.Thread.Sleep 10
+    let! restarted = TestDeps.awaitCondition 2000 (fun () ->
+      restartCalls >= 1)
+    restarted |> Expect.isTrue "newer rebuild should have started"
     restartCalls
     |> Expect.equal "newer rebuild should have started" 1
 
-    SageFsEffectHandler.execute deps
-      (fun m -> dispatched <- dispatched @ [m])
-      (SageFsEffect.TestCycle (makeCancelRebuildEffect (Some (SessionId.value sid)) 1L))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute deps
+          (fun m -> dispatched <- dispatched @ [m])
+          (SageFsEffect.TestCycle (makeCancelRebuildEffect (Some (SessionId.value sid)) 1L))
 
     lock gate (fun () -> ready <- true)
 
-    let completionWindow = Diagnostics.Stopwatch.StartNew()
-    while dispatched.IsEmpty && completionWindow.ElapsedMilliseconds < 2000L do
-      Threading.Thread.Sleep 10
+    let! doneSignal = TestDeps.awaitTcs 5000 completed
+    doneSignal |> Expect.isTrue "newer rebuild should complete"
 
     dispatched
     |> Expect.equal
         "a stale cancel should not stop the newer rebuild from completing"
         [SageFsMsg.RebuildCompleted (Some (SessionId.value sid), 2L, Ok ())]
+  }
 
-  testCase "RequestHistory is a no-op" <| fun _ ->
+  testTask "RequestHistory is a no-op" {
     let mutable dispatched : SageFsMsg list = []
-    SageFsEffectHandler.execute (TestDeps.noSessions ())
-      (fun m -> dispatched <- m :: dispatched)
-      (SageFsEffect.Editor
-        (EditorEffect.RequestHistory HistoryDirection.Previous))
-    |> Async.RunSynchronously
+    do! SageFsEffectHandler.execute (TestDeps.noSessions ())
+          (fun m -> dispatched <- m :: dispatched)
+          (SageFsEffect.Editor
+            (EditorEffect.RequestHistory HistoryDirection.Previous))
     dispatched |> Expect.isEmpty "no dispatch"
+  }
 ]
 
 [<Tests>]
 let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
-  testCase "submit → eval → worker → result dispatched back" <| fun _ ->
+  testTask "submit → eval → worker → result dispatched back" {
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun msg ->
       match msg with
@@ -1148,6 +1193,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable lastModel : SageFsModel option = None
     let mutable lastRegions : RenderRegion list = []
+    let resultArrived = TaskCompletionSource<bool>()
     let program :
       ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> = {
       Update = SageFsUpdate.update
@@ -1156,64 +1202,64 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       OnModelChanged = fun model regions ->
         lastModel <- Some model
         lastRegions <- regions
+        let hasResult () =
+          let active = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
+          let testSess = model.RecentOutput.GetBuffer("a1b2c3d4")
+          active |> Seq.exists (fun o -> o.Text.Contains "val it = 42")
+          || testSess |> Seq.exists (fun o -> o.Text.Contains "val it = 42")
+        if hasResult () then resultArrived.TrySetResult true |> ignore
       OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '4'))
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '2'))
     dispatch (SageFsMsg.Editor EditorAction.Submit)
-    let sw = System.Diagnostics.Stopwatch.StartNew()
-    while log.EvalCalls.Length < 1 && sw.ElapsedMilliseconds < 2000L do
-      System.Threading.Thread.Sleep 10
+    let! doneSignal = TestDeps.awaitTcs 5000 resultArrived
+    doneSignal |> Expect.isTrue "should have eval result in output"
     log.EvalCalls |> Expect.hasLength "1 eval" 1
-    let sw2 = System.Diagnostics.Stopwatch.StartNew()
-    let hasResult () =
-      match lastModel with
-      | None -> false
-      | Some m ->
-        let active = m.RecentOutput.GetActiveBuffer(m.Sessions.ActiveSessionId)
-        let testSess = m.RecentOutput.GetBuffer("a1b2c3d4")
-        active |> Seq.exists (fun o -> o.Text.Contains "val it = 42")
-        || testSess |> Seq.exists (fun o -> o.Text.Contains "val it = 42")
-    while not (hasResult()) && sw2.ElapsedMilliseconds < 2000L do
-      System.Threading.Thread.Sleep 10
-    hasResult() |> Expect.isTrue "should have eval result in output"
     lastRegions
     |> List.exists (fun r -> r.Id = "output")
     |> Expect.isTrue "should have output region"
+  }
 
-  testCase "session create → stop full cycle" <| fun _ ->
+  testTask "session create → stop full cycle" {
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun _ ->
       WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable lastModel : SageFsModel option = None
+    let created = TaskCompletionSource<bool>()
+    let stopped = TaskCompletionSource<bool>()
+    let mutable hadSession = false
     let program :
       ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> = {
       Update = SageFsUpdate.update
       Render = SageFsRender.render
       ExecuteEffect = SageFsEffectHandler.execute deps
-      OnModelChanged = fun model _ -> lastModel <- Some model
+      OnModelChanged = fun model _ ->
+        lastModel <- Some model
+        if model.Sessions.Sessions.Length >= 1 then
+          hadSession <- true
+          created.TrySetResult true |> ignore
+        if hadSession && model.Sessions.Sessions.Length = 0 then
+          stopped.TrySetResult true |> ignore
       OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor
       (EditorAction.CreateSession ["New.fsproj"]))
-    let sw = System.Diagnostics.Stopwatch.StartNew()
-    while (lastModel.IsNone || lastModel.Value.Sessions.Sessions.Length < 1)
-          && sw.ElapsedMilliseconds < 2000L do
-      System.Threading.Thread.Sleep 10
+    let! createdSignal = TestDeps.awaitTcs 5000 created
+    createdSignal |> Expect.isTrue "should create the session"
     lastModel.Value.Sessions.Sessions
     |> Expect.hasLength "1 session" 1
     dispatch (SageFsMsg.Editor
       (EditorAction.StopSession "a1b2c3d4"))
-    let sw2 = System.Diagnostics.Stopwatch.StartNew()
-    while lastModel.Value.Sessions.Sessions.Length > 0
-          && sw2.ElapsedMilliseconds < 2000L do
-      System.Threading.Thread.Sleep 10
+    let! stoppedSignal = TestDeps.awaitTcs 5000 stopped
+    stoppedSignal |> Expect.isTrue "should stop the session"
     lastModel.Value.Sessions.Sessions
     |> Expect.isEmpty "0 sessions"
+  }
 
-  testCase "completion request flows through full loop" <| fun _ ->
+  testTask "completion request flows through full loop" {
     let log = TestDeps.createLog ()
     let deps = TestDeps.singleSession log (fun msg ->
       match msg with
@@ -1223,24 +1269,27 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       | _ ->
         WorkerResponse.WorkerError (SageFsError.Unexpected (exn "x")))
     let mutable lastModel : SageFsModel option = None
+    let menuArrived = TaskCompletionSource<bool>()
     let program :
       ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> = {
       Update = SageFsUpdate.update
       Render = SageFsRender.render
       ExecuteEffect = SageFsEffectHandler.execute deps
-      OnModelChanged = fun model _ -> lastModel <- Some model
+      OnModelChanged = fun model _ ->
+        lastModel <- Some model
+        if model.Editor.CompletionMenu.IsSome then
+          menuArrived.TrySetResult true |> ignore
       OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor EditorAction.TriggerCompletion)
-    let sw = System.Diagnostics.Stopwatch.StartNew()
-    while (lastModel.IsNone || lastModel.Value.Editor.CompletionMenu.IsNone)
-          && sw.ElapsedMilliseconds < 2000L do
-      System.Threading.Thread.Sleep 10
+    let! menuSignal = TestDeps.awaitTcs 5000 menuArrived
+    menuSignal |> Expect.isTrue "should have menu"
     lastModel.Value.Editor.CompletionMenu
     |> Expect.isSome "should have menu"
     lastModel.Value.Editor.CompletionMenu.Value.Items
     |> Expect.hasLength "3 items" 3
+  }
 
   testAsync "RequestSessionList dispatches WarmupContextUpdated for Ready session" {
     let mutable dispatched : SageFsMsg list = []

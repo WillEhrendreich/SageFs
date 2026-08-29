@@ -85,32 +85,36 @@ let createSimActor (slowMs: int) (initial: SimState) =
 
 let cqrsPatternTests = testList "CQRS pattern" [
 
-  test "mailbox read blocks behind slow write (demonstrates the problem)" {
+  testTask "mailbox read blocks behind slow write (demonstrates the problem)" {
     let initial = { Items = Map.ofList [ "s1", "ready" ] }
     let agent, mailboxRead, _snapshotRead = createSimActor 3000 initial
 
-    let _slowTask =
+    let slowTask =
       agent.PostAndAsyncReply(fun reply -> SlowWrite("s2", reply))
       |> Async.StartAsTask
 
-    Thread.Sleep(50)
+    // Give the slow write a chance to be in-flight.
+    do! Task.Delay 50
 
     let readTask = mailboxRead "s1"
-    let completed = readTask.Wait(500)
+    let! winner = Task.WhenAny(readTask, Task.Delay 500)
+    let completed = obj.ReferenceEquals(winner, readTask)
 
     completed
     |> Expect.isFalse "mailbox read should be blocked behind slow write (see SessionManager.fs header)"
+    slowTask |> ignore
   }
 
-  test "snapshot read completes instantly during slow write" {
+  testTask "snapshot read completes instantly during slow write" {
     let initial = { Items = Map.ofList [ "s1", "ready" ] }
     let agent, _mailboxRead, snapshotRead = createSimActor 3000 initial
 
-    let _slowTask =
+    let slowTask =
       agent.PostAndAsyncReply(fun reply -> SlowWrite("s2", reply))
       |> Async.StartAsTask
 
-    Thread.Sleep(50)
+    // Give the slow write a chance to be in-flight.
+    do! Task.Delay 50
 
     let sw = Stopwatch.StartNew()
     let result = snapshotRead "s1"
@@ -119,6 +123,7 @@ let cqrsPatternTests = testList "CQRS pattern" [
     result |> Expect.equal "snapshot read instant during slow write — CQRS bypass (see SessionManager.fs header)" (Some "ready")
     (sw.ElapsedMilliseconds, 10L)
     |> Expect.isLessThan "snapshot read < 10ms — lock-free CQRS (see SessionManager.fs header)"
+    slowTask |> ignore
   }
 
   test "snapshot eventually updates after write completes" {
@@ -133,45 +138,48 @@ let cqrsPatternTests = testList "CQRS pattern" [
     |> Expect.equal "new item visible after write" (Some "written")
   }
 
-  test "snapshot is stale during write but returns old data" {
+  testTask "snapshot is stale during write but returns old data" {
     let initial = { Items = Map.ofList [ "x", "original" ] }
     let agent, _mailboxRead, snapshotRead = createSimActor 3000 initial
 
-    let _slowTask =
+    let slowTask =
       agent.PostAndAsyncReply(fun reply -> SlowWrite("y", reply))
       |> Async.StartAsTask
 
-    Thread.Sleep(50)
+    // Give the slow write a chance to be in-flight.
+    do! Task.Delay 50
 
     snapshotRead "x"
     |> Expect.equal "existing item visible" (Some "original")
 
     snapshotRead "y"
     |> Expect.equal "new item not yet visible" None
+    slowTask |> ignore
   }
 
-  test "100 concurrent snapshot reads complete instantly" {
+  testTask "100 concurrent snapshot reads complete instantly" {
     let items = [ for i in 1..100 -> sprintf "s%d" i, sprintf "val%d" i ] |> Map.ofList
     let initial = { Items = items }
     let agent, _mailboxRead, snapshotRead = createSimActor 5000 initial
 
-    let _slowTask =
+    let slowTask =
       agent.PostAndAsyncReply(fun reply -> SlowWrite("new", reply))
       |> Async.StartAsTask
 
-    Thread.Sleep(50)
+    // Give the slow write a chance to be in-flight.
+    do! Task.Delay 50
 
     let sw = Stopwatch.StartNew()
-    let results =
+    let! results =
       [| for i in 1..100 ->
           Task.Run(fun () -> snapshotRead (sprintf "s%d" i)) |]
       |> Task.WhenAll
-      |> fun t -> t.Result
     sw.Stop()
 
     results |> Array.iter (fun r -> r |> Expect.isSome "concurrent snapshot reads must succeed (see SessionManager.fs header)")
     (sw.ElapsedMilliseconds, 100L)
     |> Expect.isLessThan "100 concurrent reads < 100ms — lock-free CQRS (see SessionManager.fs header)"
+    slowTask |> ignore
   }
 ]
 

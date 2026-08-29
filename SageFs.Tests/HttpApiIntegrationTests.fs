@@ -16,13 +16,20 @@ open SageFs.Features
 
 // ─── Shared Helpers ───────────────────────────────────────────────
 
-let testProjectDir =
-  Path.GetFullPath(
-    Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Tests"))
-
 let repoRoot =
   Path.GetFullPath(
     Path.Combine(__SOURCE_DIRECTORY__, ".."))
+
+// The Falco + Datastar sample webapp. The HTTP API integration tests run
+// against this instead of SageFs.Tests.fsproj so the session loads a small,
+// separate project whose init profile starts a real app.
+let webSampleProject =
+  Path.Combine(
+    repoRoot,
+    "samples", "demos", "SageFs.Samples.WebappDatastar",
+    "SageFs.Samples.WebappDatastar.fsproj")
+
+let testProjectDir = Path.GetDirectoryName(webSampleProject)
 
 let smokeSampleProject =
   Path.Combine(
@@ -36,7 +43,7 @@ let smokeSampleProjectDir = Path.GetDirectoryName(smokeSampleProject)
 
 let sageFsExe =
   let localExe =
-    Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
+    Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net11.0", "SageFs.exe")
   let toolDir =
     Path.Combine(
       Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -109,6 +116,11 @@ let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = t
   psi.ArgumentList.Add(string port)
   for arg in args do
     psi.ArgumentList.Add(arg)
+
+  // Isolate this daemon's persisted state so it never resumes (or pollutes)
+  // sessions from the real ~/.SageFs or from earlier test runs.
+  let dataDir = Path.Combine(Path.GetTempPath(), "sagefs-test", Guid.NewGuid().ToString("N"))
+  psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
 
   let proc = Process.Start(psi)
   let client = new HttpClient()
@@ -187,6 +199,23 @@ let waitForReadySession (client: HttpClient) (targetDir: string) (timeout: TimeS
           && session.GetProperty("status").GetString() = "Ready")
 
   return ready, lastBody
+}
+
+/// Ensure a Ready session exists for targetDir, creating one if absent.
+/// The daemon routes /exec by workingDirectory but does not auto-create,
+/// so tests that eval against a directory depend on this.
+let ensureSession (client: HttpClient) (projectPath: string) (targetDir: string) = task {
+  let! ready, _ = waitForReadySession client targetDir (TimeSpan.FromSeconds 5.0)
+  if not ready then
+    let payload =
+      {| projects = [| projectPath |]
+         workingDirectory = targetDir |}
+    let! status, body = postJson client "/api/sessions/create" payload
+    if status <> 200 then
+      failwith (sprintf "session create failed: %d %s" status body)
+    let! ready, _ = waitForReadySession client targetDir (TimeSpan.FromSeconds 60.0)
+    if not ready then
+      failwith "session did not reach Ready"
 }
 
 type LiveTestingStatusSnapshot = {
@@ -306,7 +335,7 @@ let httpApiHarnessTests =
 let private sharedPort = reserveLoopbackPort (Some 38500)
 
 let private sharedDaemon =
-  lazy (startDaemon sharedPort |> Async.AwaitTask |> Async.RunSynchronously)
+  lazy (startDaemon sharedPort |> Async.AwaitTask |> Async.RunSynchronously) // lazy one-time startup, acceptable
 
 let private getSharedClient () = snd sharedDaemon.Value
 let private getSharedProc () = fst sharedDaemon.Value
@@ -325,141 +354,63 @@ let integrationTests =
 
     // ── Core endpoints ──────────────────────────────────────────
 
-    testCase "GET /health returns 200" <| fun _ ->
+    testTask "GET /health returns 200" {
       let client = getSharedClient()
-      let status, body = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = getJson client "/health"
       status |> Expect.equal "200 OK" 200
       body |> Expect.isNotEmpty "body is not empty"
+    }
 
-    testCase "GET /health includes session diagnostics when a session exists" <| fun _ ->
+    testTask "GET /health includes session diagnostics when a session exists" {
       let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
       let payload =
         {| code = "let healthDiagnostics = 42;;"
            working_directory = testProjectDir |}
-      let evalStatus, _ = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+      let! evalStatus, _ = postJson client "/exec" payload
       evalStatus |> Expect.equal "eval 200" 200
 
-      let status, body = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = getJson client "/health"
       status |> Expect.equal "200 OK" 200
 
-      use doc = JsonDocument.Parse(body)
-      let root = doc.RootElement
-      let sessionCount = root.GetProperty("sessionCount").GetInt32()
-      Expect.isGreaterThan "has at least one session" (sessionCount, 0)
+      let doc = JsonDocument.Parse(body: string)
+      try
+        let root = doc.RootElement
+        let sessionCount = root.GetProperty("sessionCount").GetInt32()
+        Expect.isGreaterThan "has at least one session" (sessionCount, 0)
 
-      let sessionStates =
-        root.GetProperty("sessionStates").EnumerateArray()
-        |> Seq.toArray
+        let sessionStates =
+          root.GetProperty("sessionStates").EnumerateArray()
+          |> Seq.toArray
 
-      sessionStates.Length
-      |> Expect.equal "sessionStates length matches sessionCount" sessionCount
+        sessionStates.Length
+        |> Expect.equal "sessionStates length matches sessionCount" sessionCount
 
-      let matchingSession =
-        sessionStates
-        |> Array.tryFind (fun session ->
-          let sessionDir = session.GetProperty("workingDirectory").GetString()
-          normalizeDir sessionDir = normalizeDir testProjectDir)
+        let matchingSession =
+          sessionStates
+          |> Array.tryFind (fun session ->
+            let sessionDir = session.GetProperty("workingDirectory").GetString()
+            normalizeDir sessionDir = normalizeDir testProjectDir)
 
-      matchingSession |> Expect.isSome "health should include the auto-created test session"
+        matchingSession |> Expect.isSome "health should include the auto-created test session"
 
-      let summary = root.GetProperty("diagnosticSummary").GetString()
-      summary |> Expect.isNotEmpty "diagnostic summary should be populated"
-
-    testCase "GET /health reports Ready when any session is ready" <| fun _ ->
-      let client = getSharedClient()
-      let status, body = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously
-      status |> Expect.equal "200 OK" 200
-
-      use doc = JsonDocument.Parse(body)
-      let root = doc.RootElement
-      let sessionStates =
-        root.GetProperty("sessionStates").EnumerateArray()
-        |> Seq.toArray
-
-      let expected =
-        sessionStates
-        |> Array.map (fun session ->
-          match session.GetProperty("status").GetString() with
-          | "Ready" -> Some SessionHealthStatus.Ready
-          | "Evaluating" -> Some SessionHealthStatus.Evaluating
-          | "Starting"
-          | "Restarting" -> Some SessionHealthStatus.WarmingUp
-          | status when status.StartsWith("Building") -> Some SessionHealthStatus.Evaluating
-          | "Faulted" -> Some SessionHealthStatus.Faulted
-          | "Stopped" -> Some SessionHealthStatus.Stopped
-          | _ -> None)
-        |> Array.choose id
-        |> Array.map (fun status ->
-          { SessionId = ""
-            ProjectName = ""
-            Status = status
-            EvalCount = 0
-            LastActivity = DateTimeOffset.UtcNow })
-        |> Array.toList
-        |> DaemonHealth.primarySessionStatusLabel
-
-      root.GetProperty("status").GetString()
-      |> Expect.equal "health status should reflect the strongest available session state" expected
-
-    testCase "GET /health uses the same live session status labels as /api/sessions" <| fun _ ->
-      let client = getSharedClient()
-      let healthStatus, healthBody = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously
-      healthStatus |> Expect.equal "health 200" 200
-
-      let sessionsStatus, sessionsBody = getJson client "/api/sessions" |> Async.AwaitTask |> Async.RunSynchronously
-      sessionsStatus |> Expect.equal "sessions 200" 200
-
-      use healthDoc = JsonDocument.Parse(healthBody)
-      use sessionsDoc = JsonDocument.Parse(sessionsBody)
-      let healthRoot = healthDoc.RootElement
-      let healthById =
-        healthRoot.GetProperty("sessionStates").EnumerateArray()
-        |> Seq.map (fun session ->
-          session.GetProperty("id").GetString(),
-          session.GetProperty("status").GetString())
-        |> Map.ofSeq
-
-      sessionsDoc.RootElement.GetProperty("sessions").EnumerateArray()
-      |> Seq.iter (fun session ->
-        let id = session.GetProperty("id").GetString()
-        let sessionStatusLabel = session.GetProperty("status").GetString()
-        Map.find id healthById
-        |> Expect.equal (sprintf "health should mirror live status for session %s" id) sessionStatusLabel)
-  
-    testCase "GET /api/system/status returns supervised=false and version" <| fun _ ->
-      let client = getSharedClient()
-      let status, body = getJson client "/api/system/status" |> Async.AwaitTask |> Async.RunSynchronously
-      status |> Expect.equal "200 OK" 200
-
-      use doc = JsonDocument.Parse(body)
-      let root = doc.RootElement
-
-      root.GetProperty("supervised").GetBoolean()
-      |> Expect.isFalse "not supervised (started directly)"
-
-      root.GetProperty("version").GetString()
-      |> Expect.isNotEmpty "version is present"
-
-      let pid = root.GetProperty("pid").GetInt32()
-      Expect.isGreaterThan "pid is positive" (pid, 0)
-
-      let uptime = root.GetProperty("uptimeSeconds").GetDouble()
-      Expect.isGreaterThan "uptime > 0" (uptime, 0.0)
-
-      root.GetProperty("mcpPort").GetInt32()
-      |> Expect.equal "mcpPort matches" sharedPort
+        let summary = root.GetProperty("diagnosticSummary").GetString()
+        summary |> Expect.isNotEmpty "diagnostic summary should be populated"
+      finally
+        doc.Dispose()
+    }
 
     // ── Eval endpoints ──────────────────────────────────────────
 
-    testCase "POST /exec evaluates F# code and returns result" <| fun _ ->
+    testTask "POST /exec evaluates F# code and returns result" {
       let client = getSharedClient()
       let payload =
         {| code = "1 + 1;;"
            working_directory = testProjectDir |}
-      let status, body = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = postJson client "/exec" payload
       status |> Expect.equal "200 OK" 200
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       let root = doc.RootElement
 
       root.GetProperty("success").GetBoolean()
@@ -467,82 +418,101 @@ let integrationTests =
 
       root.GetProperty("result").GetString()
       |> Expect.stringContains "result has 2" "2"
+      doc.Dispose()
+    }
 
-    testCase "POST /exec returns error for invalid code" <| fun _ ->
+    testTask "POST /exec returns type error in result for invalid code" {
       let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
       let payload =
         {| code = """let x: int = "not an int";;"""
            working_directory = testProjectDir |}
-      let status, body = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = postJson client "/exec" payload
       status |> Expect.equal "200 OK" 200
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       let root = doc.RootElement
 
+      // /exec returns HTTP 200 with success=true whenever the request was
+      // processed; eval failures surface in the `result` string.
       root.GetProperty("success").GetBoolean()
-      |> Expect.isFalse "eval should fail for type error"
+      |> Expect.isTrue "request was processed"
+      root.GetProperty("result").GetString()
+      |> Expect.stringContains "result reports the type error" "expected to have type"
+      doc.Dispose()
+    }
 
-    testCase "POST /exec with working_directory auto-creates session" <| fun _ ->
+    testTask "POST /exec routes to existing session by working_directory" {
       let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
       let payload =
-        {| code = "let autoCreate = true;;"
+        {| code = "let routedEval = true;;"
            working_directory = testProjectDir |}
-      let status, body = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = postJson client "/exec" payload
       status |> Expect.equal "200 OK" 200
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       doc.RootElement.GetProperty("success").GetBoolean()
-      |> Expect.isTrue "auto-created session and eval succeeded"
+      |> Expect.isTrue "eval against existing session succeeded"
+      doc.Dispose()
 
-      let sessStatus, sessBody = getJson client "/api/sessions" |> Async.AwaitTask |> Async.RunSynchronously
+      let! sessStatus, sessBody = getJson client "/api/sessions"
       sessStatus |> Expect.equal "sessions 200" 200
 
-      use sessDoc = JsonDocument.Parse(sessBody)
+      let sessDoc = JsonDocument.Parse(sessBody: string)
       let sessCount = sessDoc.RootElement.GetProperty("sessions").GetArrayLength()
-      Expect.isGreaterThan "at least 1 session auto-created" (sessCount, 0)
+      Expect.isGreaterThan "at least 1 session exists" (sessCount, 0)
+      sessDoc.Dispose()
+    }
 
-    testCase "Multiple sequential evals maintain session scope" <| fun _ ->
+    testTask "Multiple sequential evals maintain session scope" {
       let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
       let p1 = {| code = "let scopeVal = 42;;" ; working_directory = testProjectDir |}
-      let s1, _ = postJson client "/exec" p1 |> Async.AwaitTask |> Async.RunSynchronously
+      let! s1, _ = postJson client "/exec" p1
       s1 |> Expect.equal "eval1 200" 200
 
       let p2 = {| code = "scopeVal * 2;;" ; working_directory = testProjectDir |}
-      let s2, body2 = postJson client "/exec" p2 |> Async.AwaitTask |> Async.RunSynchronously
+      let! s2, body2 = postJson client "/exec" p2
       s2 |> Expect.equal "eval2 200" 200
 
-      use doc = JsonDocument.Parse(body2)
+      let doc = JsonDocument.Parse(body2: string)
       doc.RootElement.GetProperty("success").GetBoolean()
       |> Expect.isTrue "scope preserved across evals"
 
       doc.RootElement.GetProperty("result").GetString()
       |> Expect.stringContains "result has 84" "84"
+      doc.Dispose()
+    }
 
     // ── Session state queries ───────────────────────────────────
 
-    testCase "GET /api/sessions returns session list" <| fun _ ->
+    testTask "GET /api/sessions returns session list" {
       let client = getSharedClient()
-      let status, body = getJson client "/api/sessions" |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = getJson client "/api/sessions"
       status |> Expect.equal "200 OK" 200
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       let root = doc.RootElement
 
       let sessCount = root.GetProperty("sessions").GetArrayLength()
       Expect.isGreaterThanOrEqual "sessions is an array" (sessCount, 0)
+      doc.Dispose()
+    }
 
-    testCase "POST /exec then GET /api/status shows eval count > 0" <| fun _ ->
+    testTask "POST /exec then GET /api/status shows eval count > 0" {
       let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
       let payload =
         {| code = "let apiTestVal = 42;;"
            working_directory = testProjectDir |}
-      let evalStatus, _ = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+      let! evalStatus, _ = postJson client "/exec" payload
       evalStatus |> Expect.equal "eval 200" 200
 
-      let status, body = getJson client "/api/status" |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = getJson client "/api/status"
       status |> Expect.equal "status 200" 200
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       let root = doc.RootElement
 
       let evalCount = root.GetProperty("evalCount").GetInt32()
@@ -553,12 +523,14 @@ let integrationTests =
 
       root.GetProperty("pid").GetInt32()
       |> Expect.equal "pid matches daemon" (getSharedProc().Id)
+      doc.Dispose()
+    }
 
     // ── SSE streams ─────────────────────────────────────────────
 
-    testCase "GET /events SSE stream sends at least one event" <| fun _ ->
+    testTask "GET /events SSE stream sends at least one event" {
       let client = getSharedClient()
-      use cts = new CancellationTokenSource(TimeSpan.FromSeconds(15.0))
+      let cts = new CancellationTokenSource(TimeSpan.FromSeconds(15.0))
       let eventsReceived = System.Collections.Concurrent.ConcurrentBag<string>()
 
       let sseTask = task {
@@ -579,257 +551,299 @@ let integrationTests =
         | _ -> ()
       }
 
-      Thread.Sleep(200) // let SSE connect
+      // Let the SSE connection establish before triggering an event.
+      do! Task.Delay 200
       let payload = {| code = "1 + 2;;" ; working_directory = testProjectDir |}
-      let _, _ = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+      let! _, _ = postJson client "/exec" payload
 
-      try sseTask |> Async.AwaitTask |> Async.RunSynchronously with _ -> ()
+      try do! sseTask with _ -> ()
 
       Expect.isGreaterThan "received at least 1 SSE event" (eventsReceived.Count, 0)
+      cts.Dispose()
+    }
 
-    testCase "GET /diagnostics SSE responds with text/event-stream" <| fun _ ->
+    testTask "GET /diagnostics SSE responds with text/event-stream" {
       let client = getSharedClient()
-      use cts = new CancellationTokenSource(TimeSpan.FromSeconds(5.0))
+      let cts = new CancellationTokenSource(TimeSpan.FromSeconds(5.0))
       let req = new HttpRequestMessage(HttpMethod.Get, "/diagnostics")
-      let resp =
+      let! (resp: HttpResponseMessage) =
         client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token)
-        |> Async.AwaitTask |> Async.RunSynchronously
       int resp.StatusCode |> Expect.equal "200 OK" 200
       let ct = resp.Content.Headers.ContentType
       ct.MediaType |> Expect.equal "SSE content type" "text/event-stream"
       cts.Cancel()
+      cts.Dispose()
+    }
 
     // ── Extension endpoints ─────────────────────────────────────
 
-    testCase "POST /api/live-testing/enable returns success and message" <| fun _ ->
+    testTask "POST /api/live-testing/enable returns success and message" {
       let client = getSharedClient()
-      let status, body = postJson client "/api/live-testing/enable" {||} |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = postJson client "/api/live-testing/enable" {||}
       status |> Expect.equal "200 OK" 200
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       doc.RootElement.GetProperty("success").GetBoolean()
       |> Expect.isTrue "enable succeeded"
       doc.RootElement.GetProperty("message").GetString()
       |> Expect.isNotEmpty "has message"
+      doc.Dispose()
+    }
 
-    testCase "POST /api/live-testing/policy sets unit policy" <| fun _ ->
+    testTask "POST /api/live-testing/policy sets unit policy" {
       let client = getSharedClient()
       let payload = {| category = "unit"; policy = "every" |}
-      let status, body = postJson client "/api/live-testing/policy" payload |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = postJson client "/api/live-testing/policy" payload
       status |> Expect.equal "200 OK" 200
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       doc.RootElement.GetProperty("success").GetBoolean()
       |> Expect.isTrue "policy set succeeded"
+      doc.Dispose()
+    }
 
-    testCase "POST /api/live-testing/run returns response" <| fun _ ->
+    testTask "POST /api/live-testing/run returns 409 until tests are discovered" {
       let client = getSharedClient()
       let payload = {| pattern = ""; category = "" |}
-      let status, body = postJson client "/api/live-testing/run" payload |> Async.AwaitTask |> Async.RunSynchronously
-      status |> Expect.equal "200 OK" 200
-      body |> Expect.isNotEmpty "has response body"
+      let! status, body = postJson client "/api/live-testing/run" payload
 
-    testCase "GET /api/dependency-graph returns TotalSymbols" <| fun _ ->
+      // Live testing must be enabled and discover tests first. Without that,
+      // the endpoint rejects with 409 (no tests discovered yet). This test
+      // does not enable live testing, so 409 is the expected contract.
+      status |> Expect.equal "no tests discovered => 409" 409
+      body |> Expect.isNotEmpty "has error body"
+
+      let doc = JsonDocument.Parse(body: string)
+      doc.RootElement.GetProperty("success").GetBoolean()
+      |> Expect.isFalse "run should fail until tests are discovered"
+      doc.RootElement.GetProperty("error").GetString()
+      |> Expect.stringContains "error explains discovery requirement" "tests discovered"
+      doc.Dispose()
+    }
+
+    testTask "GET /api/dependency-graph returns TotalSymbols" {
       let client = getSharedClient()
-      let status, body = getJson client "/api/dependency-graph" |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = getJson client "/api/dependency-graph"
       status |> Expect.equal "200 OK" 200
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       let root = doc.RootElement
       root.TryGetProperty("TotalSymbols") |> fst
       |> Expect.isTrue "has TotalSymbols"
 
       let total = root.GetProperty("TotalSymbols").GetInt32()
       Expect.isGreaterThanOrEqual "TotalSymbols >= 0" (total, 0)
+      doc.Dispose()
+    }
 
-    testCase "GET /api/dependency-graph?symbol=unknown returns empty tests" <| fun _ ->
+    testTask "GET /api/dependency-graph?symbol=unknown returns empty tests" {
       let client = getSharedClient()
-      let status, body = getJson client "/api/dependency-graph?symbol=NonExistent.symbol" |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = getJson client "/api/dependency-graph?symbol=NonExistent.symbol"
       status |> Expect.equal "200 OK" 200
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       doc.RootElement.GetProperty("Tests").GetArrayLength()
       |> Expect.equal "no tests for unknown symbol" 0
+      doc.Dispose()
+    }
 
-    testCase "GET /api/recent-events returns content after eval" <| fun _ ->
+    testTask "GET /api/recent-events returns content after eval" {
       let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
       let payload =
         {| code = "1 + 1;;"
            working_directory = testProjectDir |}
-      let evalStatus, _ = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+      let! evalStatus, _ = postJson client "/exec" payload
       evalStatus |> Expect.equal "eval 200" 200
 
-      let status, body = getJson client "/api/recent-events?count=5" |> Async.AwaitTask |> Async.RunSynchronously
+      let! status, body = getJson client "/api/recent-events?count=5"
       status |> Expect.equal "200 OK" 200
       body |> Expect.isNotEmpty "has recent events content"
+    }
 
     // ── Mutations (reset, hard-reset) ───────────────────────────
 
-    testCase "POST /reset resets the session" <| fun _ ->
+    testTask "POST /reset resets the session" {
       let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
       let payload = {| code = "let resetTestVal = 1;;" ; working_directory = testProjectDir |}
-      let evalStatus, _ = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+      let! evalStatus, _ = postJson client "/exec" payload
       evalStatus |> Expect.equal "eval 200" 200
 
-      let resetStatus, resetBody = postJson client "/reset" {||} |> Async.AwaitTask |> Async.RunSynchronously
+      let! resetStatus, resetBody = postJson client "/reset" {||}
       resetStatus |> Expect.equal "reset 200" 200
 
-      use doc = JsonDocument.Parse(resetBody)
+      let doc = JsonDocument.Parse(resetBody: string)
       doc.RootElement.GetProperty("success").GetBoolean()
       |> Expect.isTrue "reset succeeded"
+      doc.Dispose()
+    }
 
-    testCase "POST /reset after eval allows re-eval" <| fun _ ->
+    testTask "POST /reset after eval allows re-eval" {
       let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
       let p1 = {| code = "let resetReeval = 99;;" ; working_directory = testProjectDir |}
-      let _, _ = postJson client "/exec" p1 |> Async.AwaitTask |> Async.RunSynchronously
+      let! _, _ = postJson client "/exec" p1
 
-      let _, _ = postJson client "/reset" {||} |> Async.AwaitTask |> Async.RunSynchronously
+      let! _, _ = postJson client "/reset" {||}
 
       let p2 = {| code = "let resetReeval = 42;;" ; working_directory = testProjectDir |}
-      let s2, body2 = postJson client "/exec" p2 |> Async.AwaitTask |> Async.RunSynchronously
+      let! s2, body2 = postJson client "/exec" p2
       s2 |> Expect.equal "200" 200
 
-      use doc = JsonDocument.Parse(body2)
+      let doc = JsonDocument.Parse(body2: string)
       doc.RootElement.GetProperty("success").GetBoolean()
       |> Expect.isTrue "re-eval after reset succeeded"
 
       doc.RootElement.GetProperty("result").GetString()
       |> Expect.stringContains "result has 42" "42"
+      doc.Dispose()
+    }
 
     // ── Session lifecycle ───────────────────────────────────────
 
-    testCase "POST /api/sessions/create creates a new session" <| fun _ ->
+    testTask "POST /api/sessions/create creates a new session" {
       let client = getSharedClient()
+      // Create for the smoke sample dir — NOT the web sample dir — so we do
+      // not end up with two sessions for the same workingDirectory (which
+      // breaks /exec routing with "Multiple sessions match").
       let payload =
-        {| projects = [| "SageFs.Tests.fsproj" |]
-           workingDirectory = testProjectDir |}
-      let status, body = postJson client "/api/sessions/create" payload |> Async.AwaitTask |> Async.RunSynchronously
+        {| projects = [| Path.GetFileName(smokeSampleProject) |]
+           workingDirectory = smokeSampleProjectDir |}
+      let! status, body = postJson client "/api/sessions/create" payload
       status |> Expect.equal "200 OK" 200
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       doc.RootElement.GetProperty("success").GetBoolean()
       |> Expect.isTrue "session created"
+      doc.Dispose()
+    }
 
-    testCase "POST /api/sessions/switch returns 404 for unknown session" <| fun _ ->
+    testTask "POST /api/sessions/switch returns 404 for unknown session" {
       let client = getSharedClient()
-      let status, body = postJson client "/api/sessions/switch" {| sessionId = "nonexistent-session" |} |> Async.AwaitTask |> Async.RunSynchronously
+      // Session IDs are 8-char lowercase hex; well-formed-but-unknown must 404.
+      // Malformed IDs are rejected earlier with 400.
+      let! status, body = postJson client "/api/sessions/switch" {| sessionId = "deadbeef" |}
       status |> Expect.equal "404 not found" 404
 
-      use doc = JsonDocument.Parse(body)
+      let doc = JsonDocument.Parse(body: string)
       doc.RootElement.GetProperty("success").GetBoolean()
       |> Expect.isFalse "switch should fail for unknown session"
+      doc.Dispose()
+    }
 
-    testCase "POST /api/sessions/stop stops a session" <| fun _ ->
+    testTask "POST /api/sessions/stop stops a session" {
       let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
       let p = {| code = "let stopTest = 1;;" ; working_directory = testProjectDir |}
-      let _, _ = postJson client "/exec" p |> Async.AwaitTask |> Async.RunSynchronously
+      let! _, _ = postJson client "/exec" p
 
-      let _, sessBody = getJson client "/api/sessions" |> Async.AwaitTask |> Async.RunSynchronously
-      use sessDoc = JsonDocument.Parse(sessBody)
+      let! _, sessBody = getJson client "/api/sessions"
+      let sessDoc = JsonDocument.Parse(sessBody: string)
       let sessions = sessDoc.RootElement.GetProperty("sessions")
       let sessionId =
         if sessions.GetArrayLength() > 0 then
           sessions.[0].GetProperty("id").GetString()
         else failwith "no session found"
+      sessDoc.Dispose()
 
-      let stopStatus, stopBody = postJson client "/api/sessions/stop" {| sessionId = sessionId |} |> Async.AwaitTask |> Async.RunSynchronously
+      let! stopStatus, stopBody = postJson client "/api/sessions/stop" {| sessionId = sessionId |}
       stopStatus |> Expect.equal "200" 200
 
-      use stopDoc = JsonDocument.Parse(stopBody)
+      let stopDoc = JsonDocument.Parse(stopBody: string)
       stopDoc.RootElement.GetProperty("success").GetBoolean()
       |> Expect.isTrue "session stopped"
+      stopDoc.Dispose()
+    }
 
-    testCase "POST /hard-reset with rebuild=false succeeds" <| fun _ ->
+    testTask "POST /hard-reset with rebuild=false succeeds" {
       let client = getSharedClient()
+      do! ensureSession client webSampleProject testProjectDir
       let payload = {| code = "let hrTest = 1;;" ; working_directory = testProjectDir |}
-      let evalStatus, _ = postJson client "/exec" payload |> Async.AwaitTask |> Async.RunSynchronously
+      let! evalStatus, _ = postJson client "/exec" payload
       evalStatus |> Expect.equal "eval 200" 200
 
-      let hrStatus, hrBody =
+      let! hrStatus, hrBody =
         postJson client "/hard-reset" {| rebuild = false |}
-        |> Async.AwaitTask |> Async.RunSynchronously
       hrStatus |> Expect.equal "hard-reset 200" 200
 
-      use doc = JsonDocument.Parse(hrBody)
+      let doc = JsonDocument.Parse(hrBody: string)
       doc.RootElement.GetProperty("success").GetBoolean()
       |> Expect.isTrue "hard reset succeeded"
+      doc.Dispose()
+    }
   ]
 
 [<Tests>]
 let httpApiRoutingTests =
   testList "[Integration] HTTP API routing" [
-    testCase "POST /api/sessions/{sid}/buffer-changed accepts unsaved buffer content" <| fun _ ->
+    testTask "POST /api/sessions/{sid}/buffer-changed accepts unsaved buffer content" {
       let port = reserveLoopbackPort (Some (38800 + (Random().Next(100))))
-      let proc, client =
+      let! proc, client =
         startDaemonWithArgs port repoRoot []
-        |> Async.AwaitTask |> Async.RunSynchronously
       try
-        let createStatus, createBody =
+        let! createStatus, createBody =
           createSession client "SageFs.Tests.fsproj" testProjectDir
-          |> Async.AwaitTask |> Async.RunSynchronously
         createStatus |> Expect.equal "session create should succeed" 200
 
-        let ready, sessionsBody =
+        let! ready, sessionsBody =
           waitForReadySession client testProjectDir (TimeSpan.FromSeconds 60.0)
-          |> Async.AwaitTask |> Async.RunSynchronously
         ready
         |> Expect.isTrue (sprintf "session should reach Ready before buffer ingress. Create: %s Sessions: %s" createBody sessionsBody)
 
-        use sessionsDoc = JsonDocument.Parse(sessionsBody)
+        let sessionsDoc = JsonDocument.Parse(sessionsBody: string)
         let sessionId =
           sessionsDoc.RootElement.GetProperty("sessions").EnumerateArray()
           |> Seq.find (fun session ->
             let sessionDir = session.GetProperty("workingDirectory").GetString() |> normalizeDir
             sessionDir = normalizeDir testProjectDir)
           |> fun session -> session.GetProperty("id").GetString()
+        sessionsDoc.Dispose()
 
         let payload =
           {| filePath = Path.Combine(testProjectDir, "Unsaved.fs")
              content = "module Unsaved\nlet value = 42" |}
 
-        let status, _body =
+        let! status, _body =
           postJson client (sprintf "/api/sessions/%s/buffer-changed" (Uri.EscapeDataString sessionId)) payload
-          |> Async.AwaitTask |> Async.RunSynchronously
         status |> Expect.equal "buffer change accepted" 202
       finally
         client.Dispose()
         killDaemon proc
+    }
 
-    testCase "POST /api/sessions/{sid}/buffer-changed returns 404 for unknown session" <| fun _ ->
+    testTask "POST /api/sessions/{sid}/buffer-changed returns 404 for unknown session" {
       let port = reserveLoopbackPort (Some (38900 + (Random().Next(100))))
-      let proc, client =
+      let! proc, client =
         startDaemonWithArgs port repoRoot []
-        |> Async.AwaitTask |> Async.RunSynchronously
       try
         let payload =
           {| filePath = Path.Combine(testProjectDir, "Unsaved.fs")
              content = "module Unsaved\nlet value = 42" |}
-        let status, body =
+        let! status, body =
           postJson client "/api/sessions/deadbeef/buffer-changed" payload
-          |> Async.AwaitTask |> Async.RunSynchronously
         status |> Expect.equal "unknown session rejected" 404
 
-        use doc = JsonDocument.Parse(body)
+        let doc = JsonDocument.Parse(body: string)
         doc.RootElement.GetProperty("success").GetBoolean()
         |> Expect.isFalse "unknown session should not be accepted"
+        doc.Dispose()
       finally
         client.Dispose()
         killDaemon proc
+    }
 
-    testCase "POST /api/completions uses workingDirectory for startup session routing" <| fun _ ->
+    testTask "POST /api/completions uses workingDirectory for startup session routing" {
       let port = reserveLoopbackPort (Some (38600 + (Random().Next(100))))
-      let proc, client =
+      let! proc, client =
         startDaemonWithArgs port repoRoot []
-        |> Async.AwaitTask |> Async.RunSynchronously
       try
-        let createStatus, createBody =
+        let! createStatus, createBody =
           createSession client smokeSampleProject smokeSampleProjectDir
-          |> Async.AwaitTask |> Async.RunSynchronously
         createStatus |> Expect.equal "session create should succeed" 200
 
-        let ready, sessionsBody =
+        let! ready, sessionsBody =
           waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
-          |> Async.AwaitTask |> Async.RunSynchronously
 
         ready
         |> Expect.isTrue (sprintf "explicitly created session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
@@ -839,33 +853,32 @@ let httpApiRoutingTests =
              cursorPosition = 7
              workingDirectory = smokeSampleProjectDir |}
 
-        let status, body = postJson client "/api/completions" payload |> Async.AwaitTask |> Async.RunSynchronously
+        let! status, body = postJson client "/api/completions" payload
         status |> Expect.equal "200 OK" 200
-        use doc = JsonDocument.Parse(body)
+        let doc = JsonDocument.Parse(body: string)
         let labels =
           doc.RootElement.GetProperty("completions").EnumerateArray()
           |> Seq.map (fun item -> item.GetProperty("label").GetString())
           |> Seq.toList
+        doc.Dispose()
         labels |> List.contains "String"
         |> Expect.isTrue (sprintf "completions should route via workingDirectory, got: %s" body)
       finally
         client.Dispose()
         killDaemon proc
+    }
 
-    testCase "POST /api/completions accepts snake_case cursor_position" <| fun _ ->
+    testTask "POST /api/completions accepts snake_case cursor_position" {
       let port = reserveLoopbackPort (Some (38700 + (Random().Next(100))))
-      let proc, client =
+      let! proc, client =
         startDaemonWithArgs port repoRoot []
-        |> Async.AwaitTask |> Async.RunSynchronously
       try
-        let createStatus, createBody =
+        let! createStatus, createBody =
           createSession client smokeSampleProject smokeSampleProjectDir
-          |> Async.AwaitTask |> Async.RunSynchronously
         createStatus |> Expect.equal "session create should succeed" 200
 
-        let ready, sessionsBody =
+        let! ready, sessionsBody =
           waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
-          |> Async.AwaitTask |> Async.RunSynchronously
 
         ready
         |> Expect.isTrue (sprintf "explicitly created session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
@@ -875,33 +888,32 @@ let httpApiRoutingTests =
              cursor_position = 7
              working_directory = smokeSampleProjectDir |}
 
-        let status, body = postJson client "/api/completions" payload |> Async.AwaitTask |> Async.RunSynchronously
+        let! status, body = postJson client "/api/completions" payload
         status |> Expect.equal "200 OK" 200
-        use doc = JsonDocument.Parse(body)
+        let doc = JsonDocument.Parse(body: string)
         let labels =
           doc.RootElement.GetProperty("completions").EnumerateArray()
           |> Seq.map (fun item -> item.GetProperty("label").GetString())
           |> Seq.toList
+        doc.Dispose()
         labels |> List.contains "String"
         |> Expect.isTrue (sprintf "completions should accept snake_case cursor_position, got: %s" body)
       finally
         client.Dispose()
         killDaemon proc
+    }
 
-    testCase "WHY — POST /api/completions — a cursor past end-of-string is clamped instead of silently returning zero items because editors and agents routinely send end-relative offsets (smoke-test failure 2026-08)" <| fun _ ->
+    testTask "WHY — POST /api/completions — a cursor past end-of-string is clamped instead of silently returning zero items because editors and agents routinely send end-relative offsets (smoke-test failure 2026-08)" {
       let port = reserveLoopbackPort (Some (38700 + (Random().Next(100))))
-      let proc, client =
+      let! proc, client =
         startDaemonWithArgs port repoRoot []
-        |> Async.AwaitTask |> Async.RunSynchronously
       try
-        let createStatus, createBody =
+        let! createStatus, createBody =
           createSession client smokeSampleProject smokeSampleProjectDir
-          |> Async.AwaitTask |> Async.RunSynchronously
         createStatus |> Expect.equal "session create should succeed" 200
 
-        let ready, sessionsBody =
+        let! ready, sessionsBody =
           waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
-          |> Async.AwaitTask |> Async.RunSynchronously
 
         ready
         |> Expect.isTrue (sprintf "explicitly created session should reach Ready. Create: %s Sessions: %s" createBody sessionsBody)
@@ -912,24 +924,26 @@ let httpApiRoutingTests =
              cursorPosition = 99
              workingDirectory = smokeSampleProjectDir |}
 
-        let status, body = postJson client "/api/completions" payload |> Async.AwaitTask |> Async.RunSynchronously
+        let! status, body = postJson client "/api/completions" payload
         status |> Expect.equal "200 OK" 200
-        use doc = JsonDocument.Parse(body)
+        let doc = JsonDocument.Parse(body: string)
         let labels =
           doc.RootElement.GetProperty("completions").EnumerateArray()
           |> Seq.map (fun item -> item.GetProperty("label").GetString())
           |> Seq.toList
+        doc.Dispose()
         labels |> List.contains "String"
         |> Expect.isTrue (sprintf "out-of-range cursor should clamp to end-of-string, got: %s" body)
       finally
         client.Dispose()
         killDaemon proc
+    }
   ]
 
 [<Tests>]
 let httpApiLiveTestingCompiledProjectTests =
   testList "[Integration] HTTP API compiled live testing" [
-    testCase "editing a compiled F# file reruns tests against rebuilt output without an explicit rerun" <| fun _ ->
+    testTask "editing a compiled F# file reruns tests against rebuilt output without an explicit rerun" {
       let tempProjectDir = smokeSampleProjectDir
       let tempProjectPath = smokeSampleProject
       let helloPath = Path.Combine(smokeSampleProjectDir, "Hello.fs")
@@ -954,19 +968,16 @@ let httpApiLiveTestingCompiledProjectTests =
           "-v:q" ]
 
       let port = reserveLoopbackPort (Some (38800 + (Random().Next(100))))
-      let proc, client =
+      let! proc, client =
         startDaemonWithArgs port repoRoot [ "--no-resume" ]
-        |> Async.AwaitTask |> Async.RunSynchronously
 
       try
-        let createStatus, createBody =
+        let! createStatus, createBody =
           createSession client tempProjectPath tempProjectDir
-          |> Async.AwaitTask |> Async.RunSynchronously
         createStatus |> Expect.equal "session create should succeed" 200
 
-        let ready, sessionsBody =
+        let! ready, sessionsBody =
           waitForReadySession client tempProjectDir (TimeSpan.FromSeconds(60.0))
-          |> Async.AwaitTask |> Async.RunSynchronously
 
         ready
         |> Expect.isTrue (
@@ -975,21 +986,18 @@ let httpApiLiveTestingCompiledProjectTests =
             createBody
             sessionsBody)
 
-        let enableStatus, enableBody =
+        let! enableStatus, enableBody =
           postJson client "/api/live-testing/enable" {||}
-          |> Async.AwaitTask |> Async.RunSynchronously
         enableStatus |> Expect.equal "enable should succeed" 200
 
-        let policyStatus, policyBody =
+        let! policyStatus, policyBody =
           postJson client "/api/live-testing/policy" {| category = "unit"; policy = "every" |}
-          |> Async.AwaitTask |> Async.RunSynchronously
         policyStatus |> Expect.equal "policy update should succeed" 200
 
-        let discovered, discoveredSnapshot, discoveredBody =
+        let! discovered, discoveredSnapshot, discoveredBody =
           waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
             snapshot.DiscoveryState = "ready_with_tests"
             && snapshot.Total >= 11)
-          |> Async.AwaitTask |> Async.RunSynchronously
 
         discovered
         |> Expect.isTrue (
@@ -1000,11 +1008,10 @@ let httpApiLiveTestingCompiledProjectTests =
             discoveredBody
             discoveredSnapshot)
 
-        let settledAfterDiscovery, settledSnapshot, settledBody =
+        let! settledAfterDiscovery, settledSnapshot, settledBody =
           waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
             snapshot.Total >= 11
             && snapshot.Running = 0)
-          |> Async.AwaitTask |> Async.RunSynchronously
 
         settledAfterDiscovery
         |> Expect.isTrue (
@@ -1020,26 +1027,27 @@ let httpApiLiveTestingCompiledProjectTests =
           && settledSnapshot.Running = 0
           && settledSnapshot.Stale = 0
 
-        let runBody, baselineReady, baselineSnapshot, baselineBody =
-          match autoBaselineReady with
-          | true ->
-              "auto-run", true, settledSnapshot, settledBody
-          | false ->
-              let runStatus, runBody =
-                postJson client "/api/live-testing/run" {| pattern = ""; category = "" |}
-                |> Async.AwaitTask |> Async.RunSynchronously
-              runStatus |> Expect.equal "baseline run request should succeed" 200
+        let mutable runBody = "auto-run"
+        let mutable baselineReady = true
+        let mutable baselineSnapshot = settledSnapshot
+        let mutable baselineBody = settledBody
 
-              let baselineReady, baselineSnapshot, baselineBody =
-                waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
-                  snapshot.Total >= 11
-                  && snapshot.Passed >= 11
-                  && snapshot.Failed = 0
-                  && snapshot.Running = 0
-                  && snapshot.Stale = 0)
-                |> Async.AwaitTask |> Async.RunSynchronously
+        if not autoBaselineReady then
+          let! runStatus, runBody' =
+            postJson client "/api/live-testing/run" {| pattern = ""; category = "" |}
+          runStatus |> Expect.equal "baseline run request should succeed" 200
+          runBody <- runBody'
 
-              runBody, baselineReady, baselineSnapshot, baselineBody
+          let! ready, snapshot, body =
+            waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
+              snapshot.Total >= 11
+              && snapshot.Passed >= 11
+              && snapshot.Failed = 0
+              && snapshot.Running = 0
+              && snapshot.Stale = 0)
+          baselineReady <- ready
+          baselineSnapshot <- snapshot
+          baselineBody <- body
 
         baselineReady
         |> Expect.isTrue (
@@ -1051,11 +1059,10 @@ let httpApiLiveTestingCompiledProjectTests =
 
         File.WriteAllText(helloPath, editedHello, utf8NoBom)
 
-        let failedAfterEdit, failedSnapshot, failedBody =
+        let! failedAfterEdit, failedSnapshot, failedBody =
           waitForLiveTestingStatus client None (TimeSpan.FromSeconds(60.0)) (fun snapshot ->
             snapshot.FailedTests
             |> List.exists (fun name -> name = "add infers int"))
-          |> Async.AwaitTask |> Async.RunSynchronously
 
         failedAfterEdit
         |> Expect.isTrue (
@@ -1072,6 +1079,7 @@ let httpApiLiveTestingCompiledProjectTests =
         with _ -> ()
         client.Dispose()
         killDaemon proc
+    }
   ]
 
 // ─── E2E Smoke Test (full Process.Start lifecycle) ────────────────

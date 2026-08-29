@@ -52,6 +52,31 @@ let waitForAsync (timeoutMs: int) (condition: unit -> System.Threading.Tasks.Tas
     return result
   }
 
+/// Await a condition with a hard ceiling, without sleep-polling.
+/// Yields via Task.Delay so the thread pool is never hogged; returns true only
+/// when the condition was satisfied before the ceiling elapsed.
+let awaitCondition (timeoutMs: int) (condition: unit -> bool) =
+  task {
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    let mutable ok = false
+    while not ok && sw.ElapsedMilliseconds < int64 timeoutMs do
+      if condition () then ok <- true
+      else do! System.Threading.Tasks.Task.Delay 10
+    return ok
+  }
+
+/// Await a TaskCompletionSource with a hard ceiling. Completes the TCS with
+/// false when the timeout elapses, so a timed-out wait fails the test with a
+/// clear signal instead of hanging.
+let awaitTcs (timeoutMs: int) (tcs: System.Threading.Tasks.TaskCompletionSource<bool>) =
+  task {
+    let! winner =
+      System.Threading.Tasks.Task.WhenAny(tcs.Task, System.Threading.Tasks.Task.Delay(timeoutMs))
+    let completed = obj.ReferenceEquals(winner, tcs.Task)
+    if not completed then tcs.TrySetResult false |> ignore
+    return completed
+  }
+
 /// Single shared actor result for all read-only tests across the entire test suite.
 /// Created once on first access, reused everywhere.
 let globalActorResult = lazy(

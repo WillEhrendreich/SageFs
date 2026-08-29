@@ -160,7 +160,7 @@ let verdictStringTests = testList "toCoverageIntelJson verdict strings" [
 [<Tests>]
 let explainWithCoverageTests = testList "explain_test_failure coverageIntel present" [
 
-  testCase "response includes non-null coverageIntel when instrumentation maps exist" <| fun _ ->
+  testTask "response includes non-null coverageIntel when instrumentation maps exist" {
     let testId = mkTestId "myTest"
     let maps = Map.ofList [
       "sess1", [| mkInstrumentationMap [| mkSequencePoint "src.fs" 10 0 |] |]
@@ -168,9 +168,8 @@ let explainWithCoverageTests = testList "explain_test_failure coverageIntel pres
     let model = mkModelWithTest testId "my failing test" maps
     let ctx = mkCtxWithModel model
 
-    let json =
+    let! json =
       McpTools.explainTestFailure ctx "my failing test"
-      |> Async.AwaitTask |> Async.RunSynchronously
 
     let doc = JsonDocument.Parse(json)
     let narratives = doc.RootElement.GetProperty("Narratives")
@@ -179,8 +178,9 @@ let explainWithCoverageTests = testList "explain_test_failure coverageIntel pres
     let coverageIntel = narr.GetProperty("CoverageIntel")
     coverageIntel.ValueKind
     |> Expect.notEqual "coverageIntel should not be null" JsonValueKind.Null
+  }
 
-  testCase "coverageIntel includes verdict field when maps are present" <| fun _ ->
+  testTask "coverageIntel includes verdict field when maps are present" {
     let testId = mkTestId "verdictTest"
     let maps = Map.ofList [
       "sess1", [| mkInstrumentationMap [| mkSequencePoint "src.fs" 5 0 |] |]
@@ -188,9 +188,8 @@ let explainWithCoverageTests = testList "explain_test_failure coverageIntel pres
     let model = mkModelWithTest testId "verdict test" maps
     let ctx = mkCtxWithModel model
 
-    let json =
+    let! json =
       McpTools.explainTestFailure ctx "verdict test"
-      |> Async.AwaitTask |> Async.RunSynchronously
 
     let doc = JsonDocument.Parse(json)
     let narr = doc.RootElement.GetProperty("Narratives").[0]
@@ -200,6 +199,7 @@ let explainWithCoverageTests = testList "explain_test_failure coverageIntel pres
     |> Expect.isNotNull "verdict should be a string"
     // 0/1 coverage → DiagnosticBlindSpot (causal file is src.fs, 1 point, no bitmap hits)
     verdict |> Expect.equal "verdict should be DiagnosticBlindSpot" "DiagnosticBlindSpot"
+  }
 ]
 
 // ── Test 3: explain_test_failure has coverageIntel=null when no maps ───
@@ -207,14 +207,13 @@ let explainWithCoverageTests = testList "explain_test_failure coverageIntel pres
 [<Tests>]
 let explainWithoutCoverageTests = testList "explain_test_failure coverageIntel null" [
 
-  testCase "coverageIntel is null when InstrumentationMaps is empty" <| fun _ ->
+  testTask "coverageIntel is null when InstrumentationMaps is empty" {
     let testId = mkTestId "noMapsTest"
     let model = mkModelWithTest testId "no maps test" Map.empty
     let ctx = mkCtxWithModel model
 
-    let json =
+    let! json =
       McpTools.explainTestFailure ctx "no maps test"
-      |> Async.AwaitTask |> Async.RunSynchronously
 
     let doc = JsonDocument.Parse(json)
     let narratives = doc.RootElement.GetProperty("Narratives")
@@ -223,15 +222,15 @@ let explainWithoutCoverageTests = testList "explain_test_failure coverageIntel n
     let coverageIntel = narr.GetProperty("CoverageIntel")
     coverageIntel.ValueKind
     |> Expect.equal "coverageIntel should be null when no maps" JsonValueKind.Null
+  }
 
-  testCase "response is well-formed JSON with coverageIntel null field when no maps" <| fun _ ->
+  testTask "response is well-formed JSON with coverageIntel null field when no maps" {
     let testId = mkTestId "structTest"
     let model = mkModelWithTest testId "struct test" Map.empty
     let ctx = mkCtxWithModel model
 
-    let json =
+    let! json =
       McpTools.explainTestFailure ctx "struct test"
-      |> Async.AwaitTask |> Async.RunSynchronously
 
     let doc = JsonDocument.Parse(json)
     let root = doc.RootElement
@@ -243,4 +242,5 @@ let explainWithoutCoverageTests = testList "explain_test_failure coverageIntel n
     narr.TryGetProperty("DisplayName") |> fst |> Expect.isTrue "DisplayName field present"
     narr.TryGetProperty("Summary") |> fst |> Expect.isTrue "Summary field present"
     narr.TryGetProperty("CoverageIntel") |> fst |> Expect.isTrue "CoverageIntel field present"
+  }
 ]

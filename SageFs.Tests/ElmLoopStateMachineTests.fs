@@ -4,6 +4,7 @@ open Expecto
 open Expecto.Flip
 open System
 open System.Threading
+open System.Threading.Tasks
 open SageFs
 
 type TestModel = { Count: int; Log: string list }
@@ -13,11 +14,15 @@ type TestRegion = CountRegion of int | LogRegion of string list
 
 let initialModel = { Count = 0; Log = [] }
 
-let waitFor (condition: unit -> bool) (timeoutMs: int) =
-  let sw = Diagnostics.Stopwatch.StartNew()
-  while not (condition ()) && sw.ElapsedMilliseconds < int64 timeoutMs do
-    Thread.Sleep 10
-  condition ()
+let waitForAsync (condition: unit -> bool) (timeoutMs: int) =
+  task {
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let mutable ok = false
+    while not ok && sw.ElapsedMilliseconds < int64 timeoutMs do
+      if condition () then ok <- true
+      else do! Task.Delay 10
+    return ok
+  }
 
 let makeTestProgram (onModelChanged: TestModel -> TestRegion list -> unit) =
   { Update = fun msg model ->
@@ -43,59 +48,72 @@ let makeTestProgram (onModelChanged: TestModel -> TestRegion list -> unit) =
 let elmLoopStateMachineTests =
   testList "ElmLoop state machine" [
 
-    testCase "initial model is preserved" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "initial model is preserved" {
+      let cts = new CancellationTokenSource()
       let prog = makeTestProgram (fun _ _ -> ())
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.GetModel() |> Expect.equal "GetModel returns initial model" initialModel
       cts.Cancel()
+      cts.Dispose()
+    }
 
-    testCase "single dispatch updates model" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "single dispatch updates model" {
+      let cts = new CancellationTokenSource()
       let prog = makeTestProgram (fun _ _ -> ())
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch Increment
-      waitFor (fun () -> (rt.GetModel()).Count = 1) 5000 |> ignore
+      let! updated = waitForAsync (fun () -> (rt.GetModel()).Count = 1) 5000
+      updated |> Expect.isTrue "model should update after Increment"
       (rt.GetModel()).Count |> Expect.equal "Count should be 1 after Increment" 1
       cts.Cancel()
+      cts.Dispose()
+    }
 
-    testCase "multiple dispatches batch" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "multiple dispatches batch" {
+      let cts = new CancellationTokenSource()
       let prog = makeTestProgram (fun _ _ -> ())
       let rt = ElmLoop.start prog initialModel cts.Token
 
       for _ in 1..5 do rt.Dispatch Increment
-      waitFor (fun () -> (rt.GetModel()).Count = 5) 5000 |> ignore
+      let! updated = waitForAsync (fun () -> (rt.GetModel()).Count = 5) 5000
+      updated |> Expect.isTrue "model should reach 5"
       (rt.GetModel()).Count |> Expect.equal "Count should be 5 after 5 Increments" 5
       cts.Cancel()
+      cts.Dispose()
+    }
 
-    testCase "effects trigger messages" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "effects trigger messages" {
+      let cts = new CancellationTokenSource()
       let prog = makeTestProgram (fun _ _ -> ())
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch (TriggerEffect "hello")
-      waitFor (fun () -> (rt.GetModel()).Log |> List.contains "hello") 5000 |> ignore
+      let! logged = waitForAsync (fun () -> (rt.GetModel()).Log |> List.contains "hello") 5000
+      logged |> Expect.isTrue "effect should dispatch AddLog"
       (rt.GetModel()).Log
       |> List.contains "hello"
       |> Expect.isTrue "log should contain 'hello' from LogEffect"
       cts.Cancel()
+      cts.Dispose()
+    }
 
-    testCase "render produces regions from model" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "render produces regions from model" {
+      let cts = new CancellationTokenSource()
       let prog = makeTestProgram (fun _ _ -> ())
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch Increment
-      waitFor (fun () ->
+      let! rendered = waitForAsync (fun () ->
         rt.GetRegions() |> List.contains (CountRegion 1)) 5000
-      |> Expect.isTrue "regions should contain CountRegion 1"
+      rendered |> Expect.isTrue "regions should contain CountRegion 1"
       cts.Cancel()
+      cts.Dispose()
+    }
 
-    testCase "OnModelChanged callback fires" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "OnModelChanged callback fires" {
+      let cts = new CancellationTokenSource()
       let calls = Collections.Concurrent.ConcurrentBag<TestModel * TestRegion list>()
       let prog = makeTestProgram (fun m r -> calls.Add(m, r))
       let rt = ElmLoop.start prog initialModel cts.Token
@@ -103,52 +121,61 @@ let elmLoopStateMachineTests =
       // Initial OnModelChanged fires during start
       let initialCallCount = calls.Count
       rt.Dispatch Increment
-      waitFor (fun () -> calls.Count > initialCallCount) 5000 |> ignore
+      let! fired = waitForAsync (fun () -> calls.Count > initialCallCount) 5000
+      fired |> Expect.isTrue "callback should fire"
       let model, regions =
         calls |> Seq.find (fun (m, _) -> m.Count = 1)
       model.Count |> Expect.equal "callback received updated model" 1
       regions |> List.contains (CountRegion 1)
       |> Expect.isTrue "callback received updated regions"
       cts.Cancel()
+      cts.Dispose()
+    }
 
-    testCase "dispatch after cancellation does not crash" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "dispatch after cancellation does not crash" {
+      let cts = new CancellationTokenSource()
       let prog = makeTestProgram (fun _ _ -> ())
       let rt = ElmLoop.start prog initialModel cts.Token
 
       cts.Cancel()
       // Give drain thread time to exit
-      Thread.Sleep 50
+      do! Task.Delay 50
       // Dispatching after cancellation should not throw
       rt.Dispatch Increment
       rt.Dispatch Decrement
+      cts.Dispose()
+    }
 
-    testCase "loop settles after dispatch" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "loop settles after dispatch" {
+      let cts = new CancellationTokenSource()
       let prog = makeTestProgram (fun _ _ -> ())
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch Increment
-      let settled = waitFor (fun () -> (rt.GetModel()).Count = 1) 5000
+      let! settled = waitForAsync (fun () -> (rt.GetModel()).Count = 1) 5000
       settled |> Expect.isTrue "loop should settle within timeout"
       cts.Cancel()
+      cts.Dispose()
+    }
 
-    testCase "GetRegions returns latest after multiple dispatches" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "GetRegions returns latest after multiple dispatches" {
+      let cts = new CancellationTokenSource()
       let prog = makeTestProgram (fun _ _ -> ())
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch Increment
       rt.Dispatch Increment
       rt.Dispatch (AddLog "a")
-      waitFor (fun () ->
+      let! updated = waitForAsync (fun () ->
         let regions = rt.GetRegions()
         regions = [ CountRegion 2; LogRegion ["a"] ]) 5000
-      |> Expect.isTrue "regions reflect final state"
+      updated |> Expect.isTrue "regions reflect final state"
       cts.Cancel()
+      cts.Dispose()
+    }
 
-    testCase "effects run asynchronously" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "effects run asynchronously" {
+      let cts = new CancellationTokenSource()
       let prog =
         { Update = fun msg model ->
             match msg with
@@ -170,25 +197,32 @@ let elmLoopStateMachineTests =
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch (TriggerEffect "async")
-      waitFor (fun () -> (rt.GetModel()).Count = 1) 5000 |> ignore
+      let! updated = waitForAsync (fun () -> (rt.GetModel()).Count = 1) 5000
+      updated |> Expect.isTrue "DelayedMsg effect should have dispatched Increment"
       (rt.GetModel()).Count
       |> Expect.equal "DelayedMsg effect should have dispatched Increment" 1
       cts.Cancel()
+      cts.Dispose()
+    }
 
-    testCase "Reset returns to initial state" <| fun _ ->
-      use cts = new CancellationTokenSource()
+    testTask "Reset returns to initial state" {
+      let cts = new CancellationTokenSource()
       let prog = makeTestProgram (fun _ _ -> ())
       let rt = ElmLoop.start prog initialModel cts.Token
 
       rt.Dispatch Increment
       rt.Dispatch Increment
       rt.Dispatch (AddLog "before-reset")
-      waitFor (fun () -> (rt.GetModel()).Count = 2) 5000 |> ignore
+      let! counted = waitForAsync (fun () -> (rt.GetModel()).Count = 2) 5000
+      counted |> Expect.isTrue "model should reach 2"
 
       rt.Dispatch Reset
-      waitFor (fun () -> (rt.GetModel()).Count = 0) 5000 |> ignore
+      let! reset = waitForAsync (fun () -> (rt.GetModel()).Count = 0) 5000
+      reset |> Expect.isTrue "model should reset to 0"
       let m = rt.GetModel()
       m.Count |> Expect.equal "Count should be 0 after Reset" 0
       m.Log |> Expect.equal "Log should be empty after Reset" []
       cts.Cancel()
+      cts.Dispose()
+    }
   ]

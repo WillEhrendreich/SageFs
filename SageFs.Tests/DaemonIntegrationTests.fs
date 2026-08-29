@@ -18,12 +18,16 @@ let testProjectDir =
     Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Tests"))
 
 let SageFsExe =
+  let localExe =
+    Path.Combine(
+      __SOURCE_DIRECTORY__, "..", "SageFs", "bin", "Debug", "net11.0", "SageFs.exe")
   let toolDir =
     Path.Combine(
       Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
       ".dotnet", "tools")
   let exe = Path.Combine(toolDir, "SageFs.exe")
-  if File.Exists exe then exe
+  if File.Exists localExe then localExe
+  elif File.Exists exe then exe
   else "SageFs" // fall back to PATH
 
 /// Kill a process by PID, swallowing errors.
@@ -222,6 +226,9 @@ let daemonLifecycleTests =
       psi.UseShellExecute <- false
       psi.CreateNoWindow <- true
       psi.WorkingDirectory <- testProjectDir
+      // Isolate persisted state so the daemon never resumes real ~/.SageFs sessions.
+      psi.Environment.["SAGEFS_DATA_DIR"] <-
+        Path.Combine(Path.GetTempPath(), "sagefs-test", Guid.NewGuid().ToString("N"))
 
       let daemonProc = Process.Start(psi)
       try
@@ -307,15 +314,15 @@ let cleanupSession
 let sessionManagerLifecycleTests =
   ptestList "[Integration] SessionManager lifecycle" [
 
-    testCase "create session, eval code, stop session" <| fun _ ->
-      use cts = new CancellationTokenSource(120_000)
+    testTask "create session, eval code, stop session" {
+      let cts = new CancellationTokenSource(120_000)
       let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
-      let createResult =
+      let! createResult =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
             [], testProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
-        |> Async.RunSynchronously
+        |> Async.StartAsTask
 
       match createResult with
       | Error err -> failwithf "create failed: %s" (SageFsError.describe err)
@@ -326,19 +333,19 @@ let sessionManagerLifecycleTests =
         info.WorkerPid
         |> Expect.isSome "has worker PID"
 
-        let session =
+        let! (session: SageFs.SessionManager.ManagedSession option) =
           mgr.PostAndAsyncReply(fun reply ->
             SageFs.SessionManager.SessionCommand.GetSession(
               info.Id, reply))
-          |> Async.RunSynchronously
+          |> Async.StartAsTask
         session |> Expect.isSome "session exists"
 
         let proxy = session.Value.Proxy
 
         // Eval simple code
-        let evalResp =
+        let! (evalResp: WorkerResponse) =
           proxy (WorkerMessage.EvalCode("let x = 42;;", "e1"))
-          |> Async.RunSynchronously
+          |> Async.StartAsTask
         match evalResp with
         | WorkerResponse.EvalResult("e1", Ok output, _, _) ->
           output |> Expect.stringContains "has 42" "42"
@@ -348,9 +355,9 @@ let sessionManagerLifecycleTests =
           failwithf "unexpected eval response: %A" other
 
         // Get status — should show at least 1 eval
-        let statusResp =
+        let! (statusResp: WorkerResponse) =
           proxy (WorkerMessage.GetStatus "s1")
-          |> Async.RunSynchronously
+          |> Async.StartAsTask
         match statusResp with
         | WorkerResponse.StatusResult(_, snap) ->
           Expect.isTrue "at least 1 eval"
@@ -359,31 +366,33 @@ let sessionManagerLifecycleTests =
           failwithf "unexpected status response: %A" other
 
         // Stop session
-        let stopResult =
+        let! stopResult =
           mgr.PostAndAsyncReply(fun reply ->
             SageFs.SessionManager.SessionCommand.StopSession(
               info.Id, reply))
-          |> Async.RunSynchronously
+          |> Async.StartAsTask
         stopResult |> Expect.isOk "stop succeeded"
 
         // Verify session removed
-        let sessions =
+        let! (sessions: SageFs.WorkerProtocol.SessionInfo list) =
           mgr.PostAndAsyncReply(fun reply ->
             SageFs.SessionManager.SessionCommand.ListSessions reply)
-          |> Async.RunSynchronously
+          |> Async.StartAsTask
         sessions.Length |> Expect.equal "no sessions" 0
       finally
         cleanupSession mgr info.Id
+        cts.Dispose()
+    }
 
-    testCase "worker crash is detected and session cleaned up" <| fun _ ->
-      use cts = new CancellationTokenSource(120_000)
+    testTask "worker crash is detected and session cleaned up" {
+      let cts = new CancellationTokenSource(120_000)
       let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
-      let createResult =
+      let! createResult =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
             [], testProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
-        |> Async.RunSynchronously
+        |> Async.StartAsTask
 
       match createResult with
       | Error err -> failwithf "create failed: %s" (SageFsError.describe err)
@@ -399,37 +408,41 @@ let sessionManagerLifecycleTests =
           p.WaitForExit(5000) |> ignore
         with _ -> ()
 
-        // Give the WorkerExited message time to propagate
-        let mutable attempts = 0
+        // Give the WorkerExited message time to propagate (async poll)
         let mutable cleaned = false
-        while attempts < 20 && not cleaned do
-          Thread.Sleep(100)
-          let sessions =
+        let sw = System.Diagnostics.Stopwatch.StartNew()
+        while not cleaned && sw.ElapsedMilliseconds < 2000L do
+          let! (sessions: SageFs.WorkerProtocol.SessionInfo list) =
             mgr.PostAndAsyncReply(fun reply ->
               SageFs.SessionManager.SessionCommand.ListSessions reply)
-            |> Async.RunSynchronously
+            |> Async.StartAsTask
           cleaned <-
             sessions |> List.forall (fun s -> s.Id <> info.Id)
-          attempts <- attempts + 1
+          if not cleaned then do! System.Threading.Tasks.Task.Delay 100
 
         cleaned
         |> Expect.isTrue
           "session should be removed after worker crash"
       finally
         cleanupSession mgr info.Id
+        cts.Dispose()
+    }
 
-    testCase "multiple sessions are independent" <| fun _ ->
-      use cts = new CancellationTokenSource(120_000)
+    testTask "multiple sessions are independent" {
+      let cts = new CancellationTokenSource(120_000)
       let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
       let create () =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
             [], testProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
-        |> Async.RunSynchronously
+        |> Async.StartAsTask
 
       let result1 = create ()
       let result2 = create ()
+
+      let! result1 = result1
+      let! result2 = result2
 
       match result1, result2 with
       | Ok info1, Ok info2 ->
@@ -449,27 +462,27 @@ let sessionManagerLifecycleTests =
 
           // Get proxies
           let getProxy id =
-            let s =
-              mgr.PostAndAsyncReply(fun reply ->
-                SageFs.SessionManager.SessionCommand.GetSession(
-                  id, reply))
-              |> Async.RunSynchronously
-            s.Value.Proxy
+            mgr.PostAndAsyncReply(fun reply ->
+              SageFs.SessionManager.SessionCommand.GetSession(
+                id, reply))
+            |> Async.StartAsTask
 
-          let proxy1 = getProxy info1.Id
-          let proxy2 = getProxy info2.Id
+          let! (s1: SageFs.SessionManager.ManagedSession option) = getProxy info1.Id
+          let! (s2: SageFs.SessionManager.ManagedSession option) = getProxy info2.Id
+          let proxy1 = s1.Value.Proxy
+          let proxy2 = s2.Value.Proxy
 
           // Eval different code in each session
-          let resp1 =
+          let! (resp1: WorkerResponse) =
             proxy1 (
               WorkerMessage.EvalCode(
                 "let session1Val = 111;;", "r1"))
-            |> Async.RunSynchronously
-          let resp2 =
+            |> Async.StartAsTask
+          let! (resp2: WorkerResponse) =
             proxy2 (
               WorkerMessage.EvalCode(
                 "let session2Val = 222;;", "r2"))
-            |> Async.RunSynchronously
+            |> Async.StartAsTask
 
           match resp1 with
           | WorkerResponse.EvalResult(_, Ok output, _, _) ->
@@ -484,28 +497,30 @@ let sessionManagerLifecycleTests =
           | _ -> failwithf "unexpected: %A" resp2
 
           // List sessions — should have 2
-          let sessions =
+          let! (sessions: SageFs.WorkerProtocol.SessionInfo list) =
             mgr.PostAndAsyncReply(fun reply ->
               SageFs.SessionManager.SessionCommand.ListSessions
                 reply)
-            |> Async.RunSynchronously
+            |> Async.StartAsTask
           sessions.Length |> Expect.equal "2 sessions" 2
 
           // Stop both
-          mgr.PostAndAsyncReply(fun reply ->
-            SageFs.SessionManager.SessionCommand.StopSession(
-              info1.Id, reply))
-          |> Async.RunSynchronously |> ignore
-          mgr.PostAndAsyncReply(fun reply ->
-            SageFs.SessionManager.SessionCommand.StopSession(
-              info2.Id, reply))
-          |> Async.RunSynchronously |> ignore
+          let! (_: Result<unit, SageFsError>) =
+            mgr.PostAndAsyncReply(fun reply ->
+              SageFs.SessionManager.SessionCommand.StopSession(
+                info1.Id, reply))
+            |> Async.StartAsTask
+          let! (_: Result<unit, SageFsError>) =
+            mgr.PostAndAsyncReply(fun reply ->
+              SageFs.SessionManager.SessionCommand.StopSession(
+                info2.Id, reply))
+            |> Async.StartAsTask
 
-          let afterStop =
+          let! (afterStop: SageFs.WorkerProtocol.SessionInfo list) =
             mgr.PostAndAsyncReply(fun reply ->
               SageFs.SessionManager.SessionCommand.ListSessions
                 reply)
-            |> Async.RunSynchronously
+            |> Async.StartAsTask
           afterStop.Length |> Expect.equal "no sessions" 0
         finally
           cleanupSession mgr info1.Id
@@ -514,4 +529,6 @@ let sessionManagerLifecycleTests =
         failwithf "session 1 create failed: %s" (SageFsError.describe err)
       | _, Error err ->
         failwithf "session 2 create failed: %s" (SageFsError.describe err)
+      cts.Dispose()
+    }
   ]

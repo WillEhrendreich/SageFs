@@ -2233,9 +2233,9 @@ let elmIntegrationTests = testList "ElmLoop integration" [
     callbackCount
     |> Expect.equal "real session refresh should render exactly once" (initialCallbackCount + 1)
 
-  testCase "effects are dispatched asynchronously" <| fun _ ->
+  testTask "effects are dispatched asynchronously" {
     let mutable effectExecuted = false
-    let mutable resultReceived = false
+    let resultReceived = System.Threading.Tasks.TaskCompletionSource<bool>()
     let program : ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> = {
       Update = SageFsUpdate.update
       Render = SageFsRender.render
@@ -2251,17 +2251,17 @@ let elmIntegrationTests = testList "ElmLoop integration" [
           | _ -> ()
         }
       OnModelChanged = fun model _ ->
-        if model.RecentOutput.GetBuffer("s1").Count > 0 then resultReceived <- true
+        if model.RecentOutput.GetBuffer("s1").Count > 0 then
+          resultReceived.TrySetResult true |> ignore
       OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar '1'))
     dispatch (SageFsMsg.Editor EditorAction.Submit)
-    let deadline = DateTime.UtcNow.AddSeconds 5.0
-    while not resultReceived && DateTime.UtcNow < deadline do
-      System.Threading.Thread.Sleep 10
+    let! received = SageFs.Tests.TestInfrastructure.awaitTcs 5000 resultReceived
     effectExecuted |> Expect.isTrue "effect should have been executed"
-    resultReceived |> Expect.isTrue "result should have been received"
+    received |> Expect.isTrue "result should have been received"
+  }
 ]
 
 [<Tests>]

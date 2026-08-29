@@ -1,7 +1,7 @@
 module SageFs.Tests.LiveBindingsAdaptiveTests
 
 open System
-open System.Threading
+open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open SageFs.Features.LiveBindingsAdaptive
@@ -33,31 +33,39 @@ let liveBindingsAdaptiveTests = testList "LiveBindingsAdaptive" [
     | Some s -> s.Generation |> Expect.equal "generation" 1L
     | None -> failtest "expected snapshot"
 
-  testCase "same snapshot does not fire subscribers (adaptive dedup)" <| fun _ ->
+  testTask "same snapshot does not fire subscribers (adaptive dedup)" {
     let store = create ()
     let snap = mkSnap "sess1" 1L [ "x" ]
     update store "sess1" snap
     let mutable calls = 0
-    use _sub = subscribe store "sess1" (fun _ -> calls <- calls + 1)
-    // Give the initial callback a chance to fire (subscribers fire once with current value).
-    Thread.Sleep 200
-    let afterSubscribe = calls
-    // Update with the SAME snapshot value — adaptive equality means no re-fire.
-    update store "sess1" snap
-    Thread.Sleep 200
-    calls |> Expect.equal "no extra calls for identical snapshot" afterSubscribe
+    let sub = subscribe store "sess1" (fun _ -> calls <- calls + 1)
+    try
+      // Give the initial callback a chance to fire (subscribers fire once with current value).
+      do! Task.Delay 200
+      let afterSubscribe = calls
+      // Update with the SAME snapshot value — adaptive equality means no re-fire.
+      update store "sess1" snap
+      do! Task.Delay 200
+      calls |> Expect.equal "no extra calls for identical snapshot" afterSubscribe
+    finally
+      sub.Dispose()
+  }
 
-  testCase "changed snapshot fires subscriber once" <| fun _ ->
+  testTask "changed snapshot fires subscriber once" {
     let store = create ()
     let snap1 = mkSnap "sess1" 1L [ "x" ]
     update store "sess1" snap1
     let mutable calls = 0
-    use _sub = subscribe store "sess1" (fun _ -> calls <- calls + 1)
-    Thread.Sleep 200
-    let snap2 = mkSnap "sess1" 2L [ "x"; "y" ]
-    update store "sess1" snap2
-    Thread.Sleep 200
-    calls > 0 |> Expect.isTrue "subscriber fired on change"
+    let sub = subscribe store "sess1" (fun _ -> calls <- calls + 1)
+    try
+      do! Task.Delay 200
+      let snap2 = mkSnap "sess1" 2L [ "x"; "y" ]
+      update store "sess1" snap2
+      do! Task.Delay 200
+      calls > 0 |> Expect.isTrue "subscriber fired on change"
+    finally
+      sub.Dispose()
+  }
 
   testCase "per-session isolation" <| fun _ ->
     let store = create ()

@@ -1,5 +1,6 @@
 module SageFs.Tests.ElmLoopResilienceTests
 
+open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open SageFs
@@ -7,14 +8,24 @@ open SageFs.Utils
 open System.Collections.Concurrent
 open System.Collections.Generic
 
-let waitFor (condition: unit -> bool) (timeoutMs: int) =
-  let sw = System.Diagnostics.Stopwatch.StartNew()
-  while not (condition ()) && sw.ElapsedMilliseconds < int64 timeoutMs do
-    System.Threading.Thread.Sleep 10
-  condition ()
+/// Await a condition with a hard ceiling, without sleep-polling.
+/// The ElmLoop drain runs on a dedicated thread, so the async yield never
+/// starves the loop; returns true only when the condition was satisfied before
+/// the ceiling elapsed.
+let waitForAsync (condition: unit -> bool) (timeoutMs: int) =
+  task {
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    let mutable ok = false
+    while not ok && sw.ElapsedMilliseconds < int64 timeoutMs do
+      if condition () then ok <- true
+      else do! Task.Delay 10
+    return ok
+  }
 
-let wait () =
-  System.Threading.Thread.Sleep 50
+/// Fixed bounded settle window for negative assertions (nothing-more-happens
+/// checks). A short delay is the only way to assert the absence of an event.
+let settleAsync () =
+  Task.Delay 50
 
 type CoalescingMsg =
   | Gate
@@ -66,7 +77,7 @@ let elmLoopResilienceTests =
   // See ElmLoop.fs header for the full contract.
   testList "ElmLoop resilience" [
 
-    testCase "Update throws: model stays, no effect, loop recovers" <| fun _ ->
+    testTask "Update throws: model stays, no effect, loop recovers" {
       let effCount = ref 0
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun msg model ->
@@ -81,21 +92,24 @@ let elmLoopResilienceTests =
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.Dispatch 1  // model=1, effect fires
-      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
+      let! fired = waitForAsync (fun () -> effCount.Value >= 1) 2000
+      fired |> Expect.isTrue "effect should fire on d1"
       effCount.Value |> Expect.equal "effect fired on d1" 1
       rt.GetModel() |> Expect.equal "model is 1" 1
 
       rt.Dispatch 2  // Update throws, model stays 1, no effect
-      wait ()
+      do! settleAsync ()
       effCount.Value |> Expect.equal "no new effect on d2" 1
       rt.GetModel() |> Expect.equal "model still 1" 1
 
       rt.Dispatch 3  // recovers, model=2
-      waitFor (fun () -> effCount.Value >= 2) 2000 |> ignore
+      let! fired3 = waitForAsync (fun () -> effCount.Value >= 2) 2000
+      fired3 |> Expect.isTrue "effect should fire on d3 — loop survived throw (see ElmLoop.fs header)"
       effCount.Value |> Expect.equal "effect fires on d3 — loop survived throw (see ElmLoop.fs header)" 2
       rt.GetModel() |> Expect.equal "model is 2" 2
+    }
 
-    testCase "Render throws: previous regions preserved, effects fire" <| fun _ ->
+    testTask "Render throws: previous regions preserved, effects fire" {
       let effCount = ref 0
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun msg model -> model + 1, [1]
@@ -110,19 +124,23 @@ let elmLoopResilienceTests =
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.Dispatch 1  // model=1, regions=[10]
-      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
+      let! fired1 = waitForAsync (fun () -> effCount.Value >= 1) 2000
+      fired1 |> Expect.isTrue "effect should fire on d1"
       rt.GetRegions() |> Expect.equal "regions from d1" [10]
 
       rt.Dispatch 2  // model=2, Render throws, regions stay [10]
-      waitFor (fun () -> effCount.Value >= 2) 2000 |> ignore
+      let! fired2 = waitForAsync (fun () -> effCount.Value >= 2) 2000
+      fired2 |> Expect.isTrue "effect should still fire on d2"
       effCount.Value |> Expect.equal "effect still fires" 2
       rt.GetRegions() |> Expect.equal "regions preserved" [10]
 
       rt.Dispatch 3  // model=3, Render succeeds with [30]
-      waitFor (fun () -> effCount.Value >= 3) 2000 |> ignore
+      let! fired3 = waitForAsync (fun () -> effCount.Value >= 3) 2000
+      fired3 |> Expect.isTrue "effect should fire on d3"
       rt.GetRegions() |> Expect.equal "regions recover" [30]
+    }
 
-    testCase "OnModelChanged throws: effects still fire" <| fun _ ->
+    testTask "OnModelChanged throws: effects still fire" {
       let effCount = ref 0
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun msg model -> model + 1, [1]
@@ -136,19 +154,23 @@ let elmLoopResilienceTests =
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.Dispatch 1
-      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
+      let! fired1 = waitForAsync (fun () -> effCount.Value >= 1) 2000
+      fired1 |> Expect.isTrue "effect on d1"
       effCount.Value |> Expect.equal "effect on d1" 1
 
       rt.Dispatch 2  // OnModelChanged throws, but effect should still fire
-      waitFor (fun () -> effCount.Value >= 2) 2000 |> ignore
+      let! fired2 = waitForAsync (fun () -> effCount.Value >= 2) 2000
+      fired2 |> Expect.isTrue "effect on d2 despite throw — resilience contract (see ElmLoop.fs header)"
       effCount.Value |> Expect.equal "effect on d2 despite throw — resilience contract (see ElmLoop.fs header)" 2
       rt.GetModel() |> Expect.equal "model updated" 2
 
       rt.Dispatch 3  // recovers
-      waitFor (fun () -> effCount.Value >= 3) 2000 |> ignore
+      let! fired3 = waitForAsync (fun () -> effCount.Value >= 3) 2000
+      fired3 |> Expect.isTrue "effect on d3"
       effCount.Value |> Expect.equal "effect on d3" 3
+    }
 
-    testCase "Effect throws: loop still works for subsequent dispatches" <| fun _ ->
+    testTask "Effect throws: loop still works for subsequent dispatches" {
       let effCount = ref 0
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun msg model -> model + 1, [msg]
@@ -164,18 +186,21 @@ let elmLoopResilienceTests =
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.Dispatch 1  // effect=1, succeeds
-      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
+      let! fired1 = waitForAsync (fun () -> effCount.Value >= 1) 2000
+      fired1 |> Expect.isTrue "effect 1 should run"
       effCount.Value |> Expect.equal "effect 1 ran" 1
 
       rt.Dispatch 2  // effect=2, throws
-      wait ()
+      do! settleAsync ()
       effCount.Value |> Expect.equal "effect 2 failed" 1
 
       rt.Dispatch 3  // effect=3, succeeds
-      waitFor (fun () -> effCount.Value >= 2) 2000 |> ignore
+      let! fired3 = waitForAsync (fun () -> effCount.Value >= 2) 2000
+      fired3 |> Expect.isTrue "effect 3 should run — loop survived bad effect (see ElmLoop.fs header)"
       effCount.Value |> Expect.equal "effect 3 ran — loop survived bad effect (see ElmLoop.fs header)" 2
+    }
 
-    testCase "Initial Render throws: starts with empty regions" <| fun _ ->
+    testTask "Initial Render throws: starts with empty regions" {
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun msg model -> model + 1, []
         Render = fun model ->
@@ -191,10 +216,11 @@ let elmLoopResilienceTests =
       rt.GetModel() |> Expect.equal "model still 0" 0
 
       rt.Dispatch 1  // Render succeeds now
-      wait ()
+      do! settleAsync ()
       rt.GetRegions() |> Expect.equal "regions recover" [10]
+    }
 
-    testCase "Initial OnModelChanged throws: loop still works" <| fun _ ->
+    testTask "Initial OnModelChanged throws: loop still works" {
       let effCount = ref 0
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun msg model -> model + 1, [1]
@@ -211,11 +237,13 @@ let elmLoopResilienceTests =
       rt.GetRegions() |> Expect.equal "regions rendered despite throw" [0]
 
       rt.Dispatch 1
-      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
+      let! fired = waitForAsync (fun () -> effCount.Value >= 1) 2000
+      fired |> Expect.isTrue "effect fires"
       effCount.Value |> Expect.equal "effect fires" 1
       rt.GetModel() |> Expect.equal "model updated" 1
+    }
 
-    testCase "Multiple failures in sequence: loop survives all" <| fun _ ->
+    testTask "Multiple failures in sequence: loop survives all" {
       let effCount = ref 0
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun msg model ->
@@ -236,35 +264,40 @@ let elmLoopResilienceTests =
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
 
       rt.Dispatch 1  // all good, model=1
-      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
+      let! fired1 = waitForAsync (fun () -> effCount.Value >= 1) 2000
+      fired1 |> Expect.isTrue "d1 effect should fire"
       rt.GetModel() |> Expect.equal "d1 model" 1
       effCount.Value |> Expect.equal "d1 effects" 1
 
       rt.Dispatch 2  // model=2, Render throws, regions preserved
-      waitFor (fun () -> effCount.Value >= 2) 2000 |> ignore
+      let! fired2 = waitForAsync (fun () -> effCount.Value >= 2) 2000
+      fired2 |> Expect.isTrue "d2 effect should fire"
       rt.GetModel() |> Expect.equal "d2 model" 2
       rt.GetRegions() |> Expect.equal "d2 regions preserved" [1]
 
       rt.Dispatch 3  // Update throws, model stays 2
-      wait ()
+      do! settleAsync ()
       rt.GetModel() |> Expect.equal "d3 model unchanged" 2
 
       rt.Dispatch 4  // model=3, OnModelChanged doesn't throw (model=3, not 4)
-      waitFor (fun () -> effCount.Value >= 3) 2000 |> ignore
+      let! fired4 = waitForAsync (fun () -> effCount.Value >= 3) 2000
+      fired4 |> Expect.isTrue "d4 effect should fire"
       rt.GetModel() |> Expect.equal "d4 model" 3
 
       rt.Dispatch 5  // model=4, OnModelChanged throws; effect=5 throws
-      wait ()
+      do! settleAsync ()
       rt.GetModel() |> Expect.equal "d5 model" 4
 
       rt.Dispatch 6  // model=5, all good
-      waitFor (fun () -> effCount.Value >= 4) 2000 |> ignore
+      let! fired6 = waitForAsync (fun () -> effCount.Value >= 4) 2000
+      fired6 |> Expect.isTrue "d6 effect should fire"
       rt.GetModel() |> Expect.equal "d6 model" 5
       // effects: d1(1)+d2(2)+d4(4)+d5(5 fails)+d6(6) = 4 successes
       effCount.Value |> Expect.equal "total effects" 4
+    }
 
     // RED: currently only ex.Message is logged, not stack trace
-    testCase "Effect throws: stack trace is logged not just message" <| fun _ ->
+    testTask "Effect throws: stack trace is logged not just message" {
       let logged = ConcurrentBag<string>()
       let prevError = Log.logError
       Log.logError <- fun s -> logged.Add(s); prevError s
@@ -282,7 +315,8 @@ let elmLoopResilienceTests =
         }
         let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
         rt.Dispatch 1
-        waitFor (fun () -> logged |> Seq.exists (fun s -> s.Contains("boom in effect"))) 2000 |> ignore
+        let! loggedIt = waitForAsync (fun () -> logged |> Seq.exists (fun s -> s.Contains("boom in effect"))) 2000
+        loggedIt |> Expect.isTrue "error should be logged"
         let entry = logged |> Seq.find (fun s -> s.Contains("boom in effect"))
         // Before fix: only "boom in effect" with no stack frames
         // After fix: stack trace lines like "  at SageFs..." appear in the log entry
@@ -290,6 +324,7 @@ let elmLoopResilienceTests =
           "error log entry must contain stack frames (found no 'at ' — stack trace not logged)"
       finally
         Log.logError <- prevError
+    }
   ]
 
 // ---------------------------------------------------------------------------
@@ -300,7 +335,7 @@ let elmLoopResilienceTests =
 let elmLoopAlarmTests =
   testList "ElmLoop.OnSystemAlarm" [
 
-    testCase "Update throws: OnSystemAlarm is called with 'update' phase" <| fun _ ->
+    testTask "Update throws: OnSystemAlarm is called with 'update' phase" {
       let alarms = System.Collections.Generic.List<string * string>()
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun _msg _model -> failwith "update-alarm-test"; 0, []
@@ -311,13 +346,15 @@ let elmLoopAlarmTests =
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
       rt.Dispatch 1
-      waitFor (fun () -> alarms.Count > 0) 2000 |> ignore
+      let! fired = waitForAsync (fun () -> alarms.Count > 0) 2000
+      fired |> Expect.isTrue "alarm should fire"
       (alarms.Count, 0) |> Expect.isGreaterThan "alarm should fire"
       let (phase, msg) = alarms.[0]
       phase |> Expect.equal "phase should be 'update'" "update"
       msg |> Expect.stringContains "message should contain exception text" "update-alarm-test"
+    }
 
-    testCase "Render throws: OnSystemAlarm is called with 'render' phase" <| fun _ ->
+    testTask "Render throws: OnSystemAlarm is called with 'render' phase" {
       let alarms = System.Collections.Generic.List<string * string>()
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun msg model -> model + msg, []
@@ -328,12 +365,14 @@ let elmLoopAlarmTests =
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
       // Initial render fires immediately; wait for alarm
-      waitFor (fun () -> alarms.Count > 0) 2000 |> ignore
+      let! fired = waitForAsync (fun () -> alarms.Count > 0) 2000
+      fired |> Expect.isTrue "alarm should fire on initial render"
       (alarms.Count, 0) |> Expect.isGreaterThan "alarm should fire on initial render"
       let (phase, _) = alarms.[0]
       phase |> Expect.equal "phase should be 'initial_render' or 'render'" "initial_render"
+    }
 
-    testCase "OnModelChanged throws: OnSystemAlarm is called with 'callback' phase" <| fun _ ->
+    testTask "OnModelChanged throws: OnSystemAlarm is called with 'callback' phase" {
       let alarms = System.Collections.Generic.List<string * string>()
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun msg model -> model + msg, []
@@ -344,13 +383,15 @@ let elmLoopAlarmTests =
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
       // Initial OnModelChanged fires immediately
-      waitFor (fun () -> alarms.Count > 0) 2000 |> ignore
+      let! fired = waitForAsync (fun () -> alarms.Count > 0) 2000
+      fired |> Expect.isTrue "alarm should fire"
       (alarms.Count, 0) |> Expect.isGreaterThan "alarm should fire"
       let (phase, msg) = alarms.[0]
       phase |> Expect.equal "phase should be 'initial_callback' or 'callback'" "initial_callback"
       msg |> Expect.stringContains "message should contain exception text" "callback-alarm-test"
+    }
 
-    testCase "Effect throws: OnSystemAlarm is called with 'effect' phase" <| fun _ ->
+    testTask "Effect throws: OnSystemAlarm is called with 'effect' phase" {
       let alarms = System.Collections.Generic.List<string * string>()
       let effSignal = new System.Threading.ManualResetEventSlim(false)
       let prog : ElmProgram<int, int, int, int> = {
@@ -367,13 +408,15 @@ let elmLoopAlarmTests =
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
       rt.Dispatch 1
       effSignal.Wait(2000) |> ignore
-      waitFor (fun () -> alarms |> Seq.exists (fun (p, _) -> p = "effect")) 2000 |> ignore
+      let! fired = waitForAsync (fun () -> alarms |> Seq.exists (fun (p, _) -> p = "effect")) 2000
+      fired |> Expect.isTrue "effect alarm should fire"
       let effectAlarms = alarms |> Seq.filter (fun (p, _) -> p = "effect") |> Seq.toList
       (effectAlarms.Length, 0) |> Expect.isGreaterThan "effect alarm should fire"
       let (_, msg) = effectAlarms.[0]
       msg |> Expect.stringContains "message should contain exception text" "effect-alarm-test"
+    }
 
-    testCase "Loop resilience preserved: alarm fires AND loop continues after update throw" <| fun _ ->
+    testTask "Loop resilience preserved: alarm fires AND loop continues after update throw" {
       let alarms = System.Collections.Generic.List<string * string>()
       let effCount = ref 0
       let prog : ElmProgram<int, int, int, int> = {
@@ -388,13 +431,16 @@ let elmLoopAlarmTests =
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
       rt.Dispatch 1  // throws → alarm
-      waitFor (fun () -> alarms.Count > 0) 2000 |> ignore
+      let! fired = waitForAsync (fun () -> alarms.Count > 0) 2000
+      fired |> Expect.isTrue "alarm fired"
       (alarms.Count, 0) |> Expect.isGreaterThan "alarm fired"
       // Loop must still be alive — dispatch 2 should succeed
       rt.Dispatch 2
-      waitFor (fun () -> effCount.Value >= 1) 2000 |> ignore
+      let! ran = waitForAsync (fun () -> effCount.Value >= 1) 2000
+      ran |> Expect.isTrue "effect should run after alarm"
       rt.GetModel() |> Expect.equal "model updated after alarm" 1
       (effCount.Value, 0) |> Expect.isGreaterThan "effect ran after alarm"
+    }
   ]
 
 // ---------------------------------------------------------------------------
@@ -410,7 +456,7 @@ let elmLoopBackpressureTests =
   // Danger: Raising these caps without benchmarking first.
   testList "ElmLoop backpressure" [
 
-    testCase "queue depth high-watermark alarm fires when >256 msgs pile up" <| fun _ ->
+    testTask "queue depth high-watermark alarm fires when >256 msgs pile up" {
       // Strategy: block the drain thread inside Update while it holds the model lock,
       // enqueue 300 more messages (ConcurrentQueue.Enqueue needs no lock), then release.
       // After Update returns, the drain checks queue.Count inside the while-TryDequeue loop
@@ -433,24 +479,26 @@ let elmLoopBackpressureTests =
         OnModelChanged = fun _ _ -> ()
         OnSystemAlarm = fun phase msg -> alarms.Add(phase, msg)
       }
-      use cts = new System.Threading.CancellationTokenSource()
+      let cts = new System.Threading.CancellationTokenSource()
       let rt = ElmLoop.start prog 0 cts.Token
 
       rt.Dispatch 1                              // wake drain; model=0 hits gate
       drainStarted.Wait(2000) |> ignore          // drain is now inside Update holding lock
       for _ in 1..300 do rt.Dispatch 1          // 300 msgs pile into ConcurrentQueue
-      System.Threading.Thread.Sleep(50)          // let all enqueues settle
+      do! Task.Delay 50                          // let all enqueues settle
       releaseGate.Set()                          // unblock drain
 
-      waitFor (fun () -> processed.Count >= 301) 15000 |> ignore
+      let! drained = waitForAsync (fun () -> processed.Count >= 301) 15000
+      drained |> Expect.isTrue "drain should process all queued messages"
 
       alarms |> Seq.exists (fun (p, _) -> p = "queue_depth")
       |> Expect.isTrue
            "queue_depth alarm must fire when >256 msgs are pending (see ElmLoop.fs — high-watermark check inside while-TryDequeue loop)"
 
       cts.Cancel()
+    }
 
-    testCase "effect concurrency bounded: at most 64 effects run simultaneously" <| fun _ ->
+    testTask "effect concurrency bounded: at most 64 effects run simultaneously" {
       // 20 msgs × 5 effects = 100 potential concurrent in-flight effects.
       // Without a SemaphoreSlim cap, all 100 Async.Start immediately; Async.Sleep(50) keeps
       // them all in-flight simultaneously so maxConcurrent ≈ 100.
@@ -477,24 +525,26 @@ let elmLoopBackpressureTests =
         OnModelChanged = fun _ _ -> ()
         OnSystemAlarm = fun _ _ -> ()
       }
-      use cts = new System.Threading.CancellationTokenSource()
+      let cts = new System.Threading.CancellationTokenSource()
       let rt = ElmLoop.start prog 0 cts.Token
 
       for _ in 1..20 do rt.Dispatch 1           // 100 potential concurrent effects
-      waitFor (fun () -> !effectsCompleted >= 100) 15000 |> ignore
+      let! allDone = waitForAsync (fun () -> !effectsCompleted >= 100) 15000
+      allDone |> Expect.isTrue "all 100 effects should complete"
 
       (!maxConcurrent <= 64)
       |> Expect.isTrue
            "max concurrent effects must be ≤64 — unbounded Async.Start allows all 100 to run at once (see ElmLoop.fs SemaphoreSlim cap)"
 
       cts.Cancel()
+    }
   ]
 
 [<Tests>]
 let elmLoopCoalescingTests =
   testList "ElmLoop coalescing" [
 
-    testCase "latest wins coalescing replaces stale pending ticks before the drain resumes" <| fun _ ->
+    testTask "latest wins coalescing replaces stale pending ticks before the drain resumes" {
       let drainStarted = new System.Threading.SemaphoreSlim(0, 1)
       let releaseGate = new System.Threading.ManualResetEventSlim(false)
       let processed = ResizeArray<CoalescingMsg>()
@@ -513,7 +563,7 @@ let elmLoopCoalescingTests =
         OnModelChanged = fun _ _ -> ()
         OnSystemAlarm = fun _ _ -> ()
       }
-      use cts = new System.Threading.CancellationTokenSource()
+      let cts = new System.Threading.CancellationTokenSource()
       let rt = ElmLoop.startWithCoalescer CoalescingMsg.tryAbsorbPending prog 0 cts.Token
 
       rt.Dispatch Gate
@@ -524,8 +574,8 @@ let elmLoopCoalescingTests =
       rt.Dispatch (Tick 3)
       releaseGate.Set()
 
-      waitFor (fun () -> lock processedLock (fun () -> processed.Count >= 2)) 5000
-      |> Expect.isTrue "gate and the final coalesced tick should both be processed"
+      let! processed2 = waitForAsync (fun () -> lock processedLock (fun () -> processed.Count >= 2)) 5000
+      processed2 |> Expect.isTrue "gate and the final coalesced tick should both be processed"
 
       let seen =
         lock processedLock (fun () -> processed |> Seq.toList)
@@ -534,8 +584,9 @@ let elmLoopCoalescingTests =
            [ Gate; Tick 3 ]
 
       cts.Cancel()
+    }
 
-    testCase "merge coalescing preserves every payload item while collapsing multiple pending batches" <| fun _ ->
+    testTask "merge coalescing preserves every payload item while collapsing multiple pending batches" {
       let drainStarted = new System.Threading.SemaphoreSlim(0, 1)
       let releaseGate = new System.Threading.ManualResetEventSlim(false)
       let processed = ResizeArray<CoalescingMsg>()
@@ -554,7 +605,7 @@ let elmLoopCoalescingTests =
         OnModelChanged = fun _ _ -> ()
         OnSystemAlarm = fun _ _ -> ()
       }
-      use cts = new System.Threading.CancellationTokenSource()
+      let cts = new System.Threading.CancellationTokenSource()
       let rt = ElmLoop.startWithCoalescer CoalescingMsg.tryAbsorbPending prog 0 cts.Token
 
       rt.Dispatch Gate
@@ -565,8 +616,8 @@ let elmLoopCoalescingTests =
       rt.Dispatch (Batch [ 4 ])
       releaseGate.Set()
 
-      waitFor (fun () -> lock processedLock (fun () -> processed.Count >= 2)) 5000
-      |> Expect.isTrue "gate and the merged batch should both be processed"
+      let! processed2 = waitForAsync (fun () -> lock processedLock (fun () -> processed.Count >= 2)) 5000
+      processed2 |> Expect.isTrue "gate and the merged batch should both be processed"
 
       let seen =
         lock processedLock (fun () -> processed |> Seq.toList)
@@ -575,4 +626,5 @@ let elmLoopCoalescingTests =
            [ Gate; Batch [ 1; 2; 3; 4 ] ]
 
       cts.Cancel()
+    }
   ]

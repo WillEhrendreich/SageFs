@@ -374,11 +374,11 @@ let versionAwareResolutionTests =
 
 let hotReloadCompilationContextTests =
   testList "hot-reload CompilationContext integration" [
-    test "File mode wraps module declaration for FSI" {
+    testTask "File mode wraps module declaration for FSI" {
       let code = "module MyApp.Server\n\nopen System\n\nlet handler () = \"hello\"\n"
-      let fs =
-        SageFs.Middleware.CompilationContext.parseFileStructure "C:/project/Server.fs" code
-        |> Async.AwaitTask |> Async.RunSynchronously
+      let filePath = System.IO.Path.Combine("C", "project", "Server.fs")
+      let! fs =
+        SageFs.Middleware.CompilationContext.parseFileStructure filePath code
       let result, _ =
         SageFs.Middleware.CompilationContext.preprocessForFsi
           (Some fs) SageFs.Middleware.CompilationContext.EvalMode.File None Set.empty code
@@ -392,11 +392,11 @@ let hotReloadCompilationContextTests =
       |> Flip.Expect.isFalse "should not have standalone module declaration (would fail in FSI)"
     }
 
-    test "File mode preserves function definitions" {
+    testTask "File mode preserves function definitions" {
       let code = "module MyApp.Handlers\n\nlet index () = \"Welcome\"\nlet about () = \"About\"\n"
-      let fs =
-        SageFs.Middleware.CompilationContext.parseFileStructure "C:/project/Handlers.fs" code
-        |> Async.AwaitTask |> Async.RunSynchronously
+      let filePath = System.IO.Path.Combine("C", "project", "Handlers.fs")
+      let! fs =
+        SageFs.Middleware.CompilationContext.parseFileStructure filePath code
       let result, _ =
         SageFs.Middleware.CompilationContext.preprocessForFsi
           (Some fs) SageFs.Middleware.CompilationContext.EvalMode.File None Set.empty code
@@ -404,11 +404,11 @@ let hotReloadCompilationContextTests =
       result.Code |> Flip.Expect.stringContains "should contain about function" "about"
     }
 
-    test "File mode tracks evaluated modules" {
+    testTask "File mode tracks evaluated modules" {
       let code = "module MyApp.Domain\n\ntype User = { Name: string }\n"
-      let fs =
-        SageFs.Middleware.CompilationContext.parseFileStructure "C:/project/Domain.fs" code
-        |> Async.AwaitTask |> Async.RunSynchronously
+      let filePath = System.IO.Path.Combine("C", "project", "Domain.fs")
+      let! fs =
+        SageFs.Middleware.CompilationContext.parseFileStructure filePath code
       let _, updatedModules =
         SageFs.Middleware.CompilationContext.preprocessForFsi
           (Some fs) SageFs.Middleware.CompilationContext.EvalMode.File None Set.empty code
@@ -416,18 +416,18 @@ let hotReloadCompilationContextTests =
       |> Flip.Expect.isTrue "should track MyApp.Domain as evaluated module"
     }
 
-    test "Successive file reloads accumulate module context" {
+    testTask "Successive file reloads accumulate module context" {
       let code1 = "module MyApp.Types\n\ntype Color = Red | Green | Blue\n"
-      let fs1 =
-        SageFs.Middleware.CompilationContext.parseFileStructure "C:/project/Types.fs" code1
-        |> Async.AwaitTask |> Async.RunSynchronously
+      let typesPath = System.IO.Path.Combine("C", "project", "Types.fs")
+      let! fs1 =
+        SageFs.Middleware.CompilationContext.parseFileStructure typesPath code1
       let _, modules1 =
         SageFs.Middleware.CompilationContext.preprocessForFsi
           (Some fs1) SageFs.Middleware.CompilationContext.EvalMode.File None Set.empty code1
       let code2 = "module MyApp.Logic\n\nlet describe color = sprintf \"%A\" color\n"
-      let fs2 =
-        SageFs.Middleware.CompilationContext.parseFileStructure "C:/project/Logic.fs" code2
-        |> Async.AwaitTask |> Async.RunSynchronously
+      let logicPath = System.IO.Path.Combine("C", "project", "Logic.fs")
+      let! fs2 =
+        SageFs.Middleware.CompilationContext.parseFileStructure logicPath code2
       let _, modules2 =
         SageFs.Middleware.CompilationContext.preprocessForFsi
           (Some fs2) SageFs.Middleware.CompilationContext.EvalMode.File None modules1 code2
