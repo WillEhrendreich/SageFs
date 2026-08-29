@@ -403,30 +403,48 @@ let parseSessionLines (content: string) =
     | true -> v.Substring(prefix.Length).Trim()
     | false -> ""
   content.Split('\n')
-  |> Array.choose (fun (l: string) ->
+  |> Array.filter (fun (l: string) ->
+    l.Length > 0
+    && not (l.StartsWith("───", StringComparison.Ordinal))
+    && not (l.StartsWith("⏳", StringComparison.Ordinal))
+    && not (l.Contains("↑↓ nav"))
+    && not (l.Contains("Enter switch"))
+    && not (l.Contains("Ctrl+Tab cycle")))
+  |> Array.map (fun (l: string) ->
     let m = sessionRegex.Match(l)
-    if not m.Success then None
-    else
+    let emptySession =
+      { Id = l.Trim()
+        Status = "unknown"
+        StatusMessage = None
+        IsActive = false
+        IsSelected = false
+        ProjectsText = ""
+        EvalCount = 0
+        Uptime = ""
+        WorkingDir = ""
+        LastActivity = ""
+        StandbyLabel = ""
+        TestSummary = None
+        CoverageSummary = None
+        TestTreemapEntries = [||]
+        BindingEntries = [||]
+        AgentBadges = []
+        GuidanceCssClass = "" }
+    match m.Success with
+    | true ->
       let evalsMatch = Regex.Match(m.Groups.[6].Value, @"evals:(\d+)")
-      let session =
-        { Id = m.Groups.[2].Value
+      { emptySession
+          with
+          Id = m.Groups.[2].Value
           Status = m.Groups.[3].Value
-          StatusMessage = None
           IsActive = m.Groups.[4].Value.Contains("*")
           IsSelected = m.Groups.[1].Value = ">"
           ProjectsText = m.Groups.[5].Value.Trim()
           EvalCount = match evalsMatch.Success with | true -> int evalsMatch.Groups.[1].Value | false -> 0
           Uptime = extractTag "up:" m.Groups.[7].Value
           WorkingDir = extractTag "dir:" m.Groups.[8].Value
-          LastActivity = extractTag "last:" m.Groups.[9].Value
-          StandbyLabel = ""
-          TestSummary = None
-          CoverageSummary = None
-          TestTreemapEntries = [||]
-          BindingEntries = [||]
-          AgentBadges = []
-          GuidanceCssClass = "" }
-      Some session)
+          LastActivity = extractTag "last:" m.Groups.[9].Value }
+    | false -> emptySession)
   |> Array.toList
 
 let isCreatingSession (content: string) =
