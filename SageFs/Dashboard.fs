@@ -208,7 +208,11 @@ let renderShell (version: string) (initialSessionId: string) (initialContent: Xm
     Elem.head [] [
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
       connectionMonitorScript ()
-      Ds.cdnScript
+      // The Falco.Datastar 1.3.0 cdnScript property points to Datastar 1.0.0-RC.7
+      // which lacks the `class:` plugin. We use the `develop` branch build instead
+      // because it includes the `class:` plugin that the dashboard relies on
+      // (see DashboardFragments.fs Ds.class' usage).
+      Elem.script [ Attr.type' "module"; Attr.src "https://cdn.jsdelivr.net/gh/starfederation/datastar@develop/bundles/datastar.js" ] []
       Elem.link [ Attr.rel "preconnect"; Attr.href "https://fonts.googleapis.com" ]
       Elem.link [ Attr.rel "preconnect"; Attr.href "https://fonts.gstatic.com"; Attr.create "crossorigin" "" ]
       Elem.link [ Attr.rel "stylesheet"; Attr.href "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" ]
