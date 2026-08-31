@@ -17,7 +17,7 @@ open SageFs
 // ── Authoritative daemon event list ─────────────────────────────────────────
 
 /// All SSE events the daemon can emit on /events.
-/// Composed from SseWriter.allSseEventTypes (17 formatters)
+/// Composed from SseWriter.allSseEventTypes (19 formatters)
 /// + the session event type (SessionEvents.sessionEventType)
 /// + the state event type (DaemonStateChange.sseEventType).
 let allDaemonSseEvents : string list =
@@ -56,6 +56,7 @@ let vscodeHandledEvents : Set<string> =
     "domain_model"
     "diagnosis_ready"
     "live_bindings"
+    "coverage_view"
   ]
 
 // ── Neovim EVENT_MAP key set ─────────────────────────────────────────────────
@@ -108,6 +109,7 @@ let neovimHandledEvents : Set<string> =
     "domain_model"
     "diagnosis_ready"
     "live_bindings"
+    "coverage_view"
   ]
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -115,14 +117,14 @@ let neovimHandledEvents : Set<string> =
 [<Tests>]
 let sseParityTests = testList "SSE Parity" [
 
-  test "allDaemonSseEvents contains 20 entries (18 SseWriter + session + state)" {
+  test "allDaemonSseEvents contains 21 entries (19 SseWriter + session + state)" {
     allDaemonSseEvents
-    |> Expect.hasLength "should have 20 daemon SSE event types" 20
+    |> Expect.hasLength "should have 21 daemon SSE event types" 21
   }
 
-  test "SseWriter.allSseEventTypes contains exactly 18 formatter event types" {
+  test "SseWriter.allSseEventTypes contains exactly 19 formatter event types" {
     SseWriter.allSseEventTypes
-    |> Expect.hasLength "SseWriter exposes 18 event type names" 18
+    |> Expect.hasLength "SseWriter exposes 19 event type names" 19
   }
 
   test "no duplicate entries in allDaemonSseEvents" {
@@ -174,7 +176,7 @@ let sseParityTests = testList "SSE Parity" [
     // If this count changes, a developer added a new SSE event. Update both handler sets above.
     allDaemonSseEvents.Length
     |> Expect.equal
-         "if this fails, you added a daemon SSE event — update vscodeHandledEvents, neovimHandledEvents, and this test"
-         20
+         "if this fails, you added a daemon SSE event - update vscodeHandledEvents, neovimHandledEvents, and this test"
+         21
   }
 ]

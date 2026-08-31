@@ -123,6 +123,7 @@
         <Compile Include="LiveTestingCoverageTests.fs" />
          <Compile Include="LiveTestingElmTests.fs" />
          <Compile Include="CoverageViewTests.fs" />
+        <Compile Include="CoverageViewSseEventTests.fs" />
          <Compile Include="LiveTestRebuildCycleTests.fs" />
          <Compile Include="LiveTestingGraphTests.fs" />
          <Compile Include="DomainModelVizTests.fs" />

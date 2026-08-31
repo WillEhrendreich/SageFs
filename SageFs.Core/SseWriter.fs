@@ -126,6 +126,30 @@ let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (sessionId: string 
   let json = JsonSerializer.Serialize(annotations, opts) |> injectSessionId sessionId
   formatSseEvent "file_annotations" json
 
+/// Format a CoverageView as an SSE event string.
+/// WHY — this is the shared "per-function aggregate" event that all three
+/// editors subscribe to. Each editor renders it natively: VSCode shows it
+/// as one CodeLens, Neovim shows it as one virt_text line, VS shows it
+/// in the navigation bar. The editor never sees per-test inline text for
+/// a heavily-tested function — only the aggregate badge.
+/// Performance: a single JsonSerializer.Serialize call per view. The
+/// caller (SsePublisher) is expected to throttle / batch across files.
+let formatCoverageViewEvent
+  (opts: JsonSerializerOptions)
+  (sessionId: string option)
+  (view: Features.LiveTesting.CoverageView)
+  : string =
+  let payload =
+    {| Symbol = view.Symbol
+       FilePath = view.FilePath
+       DefinitionLine = view.DefinitionLine
+       TotalCount = view.TotalCount
+       InlineBadge = view.InlineBadge
+       HasOverflow = view.HasOverflow
+       Health = view.Health |}
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  formatSseEvent "coverage_view" json
+
 /// Format failure narratives as an SSE event string
 let formatFailureNarrativesEvent (opts: JsonSerializerOptions) (sessionId: string option) (narratives: Map<Features.LiveTesting.TestId, Features.LiveTesting.FailureNarrative>) : string =
   let payload =
@@ -421,4 +445,5 @@ let allSseEventTypes : string list = [
   "eval_timeline"
   "domain_model"
   "diagnosis_ready"
+  "coverage_view"
 ]

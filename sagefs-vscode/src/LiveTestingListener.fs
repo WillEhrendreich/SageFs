@@ -412,6 +412,7 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       | "diagnosis_ready" ->
         callbacks.OnDiagnosisReady data
       | "live_bindings" ->
+      | "coverage_view" -> () // Phase 9: per-function aggregate, handled by Extension.fs
         // Live bound-value watch window — intentionally a no-op for now;
         // the dashboard consumes this event. Handled explicitly for parity.
         ()
