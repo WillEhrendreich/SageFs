@@ -47,32 +47,38 @@ let coverageViewEmissionTests =
         FilePath = annotation.FilePath
         DefinitionLine = annotation.DefinitionLine
         TotalCount = 1
-        InlineBadge = [ CoverageBadge.Fail 1 ]
-        FailingTests = [| test |]
-        HasOverflow = false
-        Health = CoverageHealth.SomeFailing
+        Overflow = Overflow.Within
+        InlineBadgeText = "✗ 1"
+        Health = CoverageViewState.Failing
       }
       view.Symbol |> Expect.equal "symbol matches" "Module.add"
       view.FilePath |> Expect.equal "file path matches" "Prod.fs"
       view.DefinitionLine |> Expect.equal "line matches" 42
-      view.Health |> Expect.equal "health" CoverageHealth.SomeFailing
+      view.Health |> Expect.equal "health" CoverageViewState.Failing
 
     testCase "WHY - emission - a function with 100 covering tests produces ONE view, not 100" <| fun _ ->
       let tests =
         [for i in 1..100 -> mkTestCase (sprintf "Module.Tests.t%d" i) TestFramework.Expecto TestCategory.Unit]
         |> List.toArray
-      let coveringIds = tests |> Array.map (fun t -> t.Id) |> Set.ofArray
+      let coveringIds = tests |> Array.map (fun t -> t.Id)
+      let state =
+        { LiveTestState.empty with
+            DiscoveredTests = tests
+            LastResults =
+              tests
+              |> Array.map (fun t -> t.Id, mkResult t.Id (TestResult.Passed (ts 1.0)))
+              |> Map.ofArray }
       let view =
         CoverageView.project
           CoverageViewMode.defaults
           coveringIds
           TestDependencyGraph.empty
-          { LiveTestState.empty with DiscoveredTests = tests }
+          state
+          "Prod.fs"
+          42
           "Module.big"
-        |> Option.get
-      view.TotalCount |> Expect.equal "total is 100" 100
-      view.InlineBadge |> Expect.hasLength "one badge entry" 1
-      (match view.InlineBadge.[0] with
-       | CoverageBadge.Pass n -> n |> Expect.equal "Pass count is 100" 100
-       | _ -> failtest "expected Pass")
+      (view.TotalCount, 100)
+      |> Expect.equal "total is 100" (100, 100)
+      (view.InlineBadgeText, "✓ 100")
+      |> Expect.equal "one badge entry" ("✓ 100", "✓ 100")
   ]

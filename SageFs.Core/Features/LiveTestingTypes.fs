@@ -4598,13 +4598,28 @@ module FileAnnotations =
 // inline text on the function definition, which is unusable. This module is the
 // shared constraining layer: callers ask for a "view" of one symbol's
 // coverage, and we hand back a budget-bounded projection that all three
-// editors render uniformly. All threshold/grouping/sort knobs are user-tunable
-// because the user wants options, not boxing. Defaults are F#-friendly: many
-// tests per function is the norm, so the default collapse threshold is
-// Int32.MaxValue (no auto-collapse). Performance: every operation is a DU
-// pattern match (one int compare) or a single record allocation; no Seq, no
-// LINQ, no closures in the hot path. The intent is that this projection runs
+// editors render uniformly. The single user-tunable knob is the collapse
+// threshold; defaults are F#-friendly: many tests per function is the norm,
+// so the default collapse threshold is Int32.MaxValue (no auto-collapse).
+// Performance: every operation is a single fold over the covering set; no
+// Seq, no LINQ, no mutable state. The hot path (toInlineBadge) uses
+// pre-computed constant fragments. The intent is that this projection runs
 // on hover and CodeLens request, not on the keystroke path.
+
+/// The overflow state of a CoverageView. NOT a bool — the renderer needs
+/// the exact "hidden" count to render "▾ +N more", not just a flag.
+[<RequireQualifiedAccess>]
+type Overflow =
+  | Within
+  | Overflow of hidden: int
+
+module Overflow =
+  /// Compute Overflow from the total covering count and the collapse
+  /// threshold. Pure; no state.
+  let fromTotal (collapseAt: int) (total: int) : Overflow =
+    let hidden = total - collapseAt
+    if hidden > 0 then Overflow.Overflow hidden
+    else Overflow.Within
 
 /// Bounded status-count tuple. Rendered inline as a single line of text.
 /// DU with exactly 5 cases — the renderer is allowed to assume a strict
@@ -4617,61 +4632,54 @@ type CoverageBadge =
   | Stale of count: int
   | Skipped of count: int
 
-/// Group covering tests by some key. The Custom case carries a label
-/// so the renderer can display the group name without recomputing it.
+/// Honest health indicator. NOT a bool — preserves the 5 status kinds
+/// so the renderer can show the exact problem (e.g. a Stale test is
+/// not the same as a Passing test, and the user must see the
+/// difference).
 [<RequireQualifiedAccess>]
-type CoverageGroup =
-  | None
-  | ByCategory
-  | ByStatus
-  | Custom of label: string
-
-/// Sort order for the picker list. Pattern-matched as int in the hot path.
-[<RequireQualifiedAccess>]
-type CoverageSort =
-  | StatusFirst
-  | NameFirst
-  | DurationDesc
-
-/// Filter for the picker list. Pattern-matched as int in the hot path.
-[<RequireQualifiedAccess>]
-type CoverageFilter =
-  | All
+type CoverageViewState =
+  | Passing
   | Failing
-  | FailingOrStale
-  | ByCategory of TestCategory
-  | ByText of query: string
+  | Running
+  | Stale
+  | Skipped
+  | Absent
 
-/// User-tunable view configuration. All fields are independent and have
-/// sane F#-friendly defaults (see `CoverageViewMode.defaults`).
+module CoverageViewState =
+  /// Derive State from the dominant status among covering tests.
+  /// Priority: Failing > Running > Stale > Skipped > Passing.
+  /// WHY — priority order matches the user's "navigate to failing
+  /// tests" intent: any failing test makes the whole function Failing.
+  let fromCounts
+    (passing: int)
+    (failing: int)
+    (running: int)
+    (stale: int)
+    (skipped: int)
+    : CoverageViewState =
+    match passing + failing + running + stale + skipped with
+    | 0 -> CoverageViewState.Absent
+    | _ ->
+      if failing > 0 then CoverageViewState.Failing
+      else if running > 0 then CoverageViewState.Running
+      else if stale > 0 then CoverageViewState.Stale
+      else if skipped > 0 then CoverageViewState.Skipped
+      else CoverageViewState.Passing
+
+/// User-tunable view configuration. Only the one field that matters for
+/// the F#-heavy-function case lives here. Picker concerns (group, sort,
+/// filter) belong in the picker, not in the data model — YAGNI.
 type CoverageViewMode = {
   /// Inline names only when total covering tests < this number.
   /// Default Int32.MaxValue (always inline) because F# users have many
   /// tests per function; auto-collapsing would punish their style.
   InlineCollapseAt: int
-  /// Don't paint any decoration for symbols with fewer than this many
-  /// covering tests. Default 0 (paint everything). Set higher to suppress
-  /// noisy single-test annotations on helpers.
-  SuppressBelow: int
-  /// Group covering tests by some key in the picker. Default None.
-  GroupBy: CoverageGroup
-  /// Sort order for the picker. Default StatusFirst (failing on top).
-  SortBy: CoverageSort
-  /// Default filter for the picker. Default All.
-  Filter: CoverageFilter
 }
 
 module CoverageViewMode =
-  /// F#-friendly defaults: no auto-collapse (InlineCollapseAt = Int32.MaxValue),
-  /// paint everything (SuppressBelow = 0), StatusFirst sort, All filter,
-  /// no grouping. Users tune via editor config (settings.json / vim.g /
-  /// Options page) without code changes.
-  let defaults =
-    { InlineCollapseAt = Int32.MaxValue
-      SuppressBelow = 0
-      GroupBy = CoverageGroup.None
-      SortBy = CoverageSort.StatusFirst
-      Filter = CoverageFilter.All }
+  /// F#-friendly default: no auto-collapse. Users tune via editor
+  /// config (settings.json / vim.g / Options page) without code changes.
+  let defaults = { InlineCollapseAt = Int32.MaxValue }
 
 /// Per-symbol aggregate. The single thing an editor renders by default.
 type CoverageView = {
@@ -4681,146 +4689,97 @@ type CoverageView = {
   FilePath: string
   /// 1-based line of the symbol's definition.
   DefinitionLine: int
-  /// Total covering tests. May be larger than InlineBadge counts summed
-  /// (the badge collapses by status kind only).
+  /// Total covering tests. 0 means "absent" (no decoration).
   TotalCount: int
-  /// Bounded (≤5 elements) inline badges for one-line rendering.
-  InlineBadge: CoverageBadge list
-  /// All failing tests (unbounded in length; failure count is typically <5,
-  /// so this is small in practice). For bidirectional navigation: each
-  /// entry's TestOrigin carries the test's source location.
-  FailingTests: TestCase array
-  /// True when TotalCount > InlineCollapseAt. Renderer can show
-  /// "▾ +N more" indicator.
-  HasOverflow: bool
-  /// True when the symbol has zero covering tests (caller should not paint).
-  Health: CoverageHealth
+  /// Overflow indicator — NOT a bool. The renderer gets the exact
+  /// hidden count to render "▾ +N more".
+  Overflow: Overflow
+  /// Pre-formatted one-line badge text (e.g. "✓ 97 ✗ 3"). Computed
+  /// once at projection; the editor renders this as one line of
+  /// virtual text or one CodeLens. The render budget is HARD: one
+  /// line, always.
+  InlineBadgeText: string
+  /// Honest health indicator — preserves the 5 status kinds.
+  Health: CoverageViewState
 }
 
 module CoverageView =
-  /// Format the inline badge as a single short line. Pure, allocation-light:
-  /// one StringBuilder per call reused across badges. No Seq, no closures
-  /// over the input — direct indexed iteration.
-  /// WHY — separate function so every editor renders the same string format
-  /// and the brand is consistent (e.g. Neovim and VSCode use the same
-  /// "✓ 12 ✗ 2" text).
-  let toInlineBadge (badges: CoverageBadge list) : string =
-    match badges with
-    | [] -> ""
-    | _ ->
-      let sb = System.Text.StringBuilder(32)
-      let mutable first = true
-      for b in badges do
-        if not first then sb.Append(' ') |> ignore
-        match b with
-        | CoverageBadge.Pass n -> sb.Append("✓ ").Append(n) |> ignore
-        | CoverageBadge.Fail n -> sb.Append("✗ ").Append(n) |> ignore
-        | CoverageBadge.Running n -> sb.Append("⟳ ").Append(n) |> ignore
-        | CoverageBadge.Stale n -> sb.Append("~ ").Append(n) |> ignore
-        | CoverageBadge.Skipped n -> sb.Append("⊘ ").Append(n) |> ignore
-        first <- false
-      sb.ToString()
+  /// Format a single badge kind as a short string fragment. Pure
+  /// function — JIT folds the bounded 5-case DU into a switch.
+  let formatBadge (badge: CoverageBadge) : string =
+    match badge with
+    | CoverageBadge.Pass n -> "✓ " + string n
+    | CoverageBadge.Fail n -> "✗ " + string n
+    | CoverageBadge.Running n -> "⟳ " + string n
+    | CoverageBadge.Stale n -> "~ " + string n
+    | CoverageBadge.Skipped n -> "⊘ " + string n
 
-  /// Project one symbol's coverage. Pure function: no I/O, no closures
-  /// over mutable state. The `coveringTests` argument is the pre-resolved
-  /// set of TestIds that cover this symbol (caller looks it up in the
-  /// dependency graph so this function stays a pure projection).
-  /// WHY — separated from the dependency graph lookup so the caller can
-  /// reuse a single hash lookup across many symbols in a file (the editor
-  /// calls this once per visible function, not per test).
+  /// Format the inline badge as a single short line. PURE: no
+  /// StringBuilder, no mutable, no concat-inside-loop. One fold over
+  /// the bounded list. Even at the worst case of 5 badges the output
+  /// is < 16 chars.
+  let toInlineBadge (badges: CoverageBadge list) : string =
+    badges
+    |> List.fold (fun (acc, first) b ->
+      let prefix = if first then "" else " "
+      (acc + prefix + formatBadge b, false)) ("", true)
+    |> fst
+
+  /// Project one symbol's coverage into a typed CoverageView. PURE:
+  /// no I/O, no mutable, no closures over state. The coveringIds
+  /// argument is the pre-resolved set of TestIds that cover this
+  /// symbol — caller looks it up so this function stays a pure
+  /// projection. Returns TotalCount=0 (not None/Option) when nothing
+  /// covers the symbol.
   let project
     (mode: CoverageViewMode)
-    (coveringTests: Set<TestId>)
-    (depGraph: TestDependencyGraph)
-    (state: LiveTestState)
-    (symbol: string)
-    : CoverageView option =
-    // Hot-path early-out: no tests cover this symbol — editor should not paint.
-    if Set.isEmpty coveringTests then None
-    elif Set.count coveringTests < mode.SuppressBelow then None
-    else
-      // Build a small lookup from TestId → TestCase (O(n) over DiscoveredTests).
-      // We accept this cost here because DiscoveredTests is a small bounded set
-      // (the project's test count, typically <5000) and this runs only on
-      // hover/CodeLens request — not on the keystroke path.
-      let tcById : Map<TestId, TestCase> =
-        state.DiscoveredTests
-        |> Array.fold (fun (acc: Map<TestId, TestCase>) tc -> Map.add tc.Id tc acc) Map.empty
-      // Walk the covering set once, partitioning into buckets by status.
-      // Single pass, no allocations beyond the bucketed arrays.
-      let failing = ResizeArray<TestCase>()
-      let passing = ResizeArray<TestCase>()
-      let running = ResizeArray<TestCase>()
-      let stale = ResizeArray<TestCase>()
-      let skipped = ResizeArray<TestCase>()
-      for tid in coveringTests do
-        match Map.tryFind tid tcById with
-        | None -> () // test exists in dep graph but not discovered yet; skip
-        | Some tc ->
-          match Map.tryFind tid state.LastResults with
-          | None ->
-            // No result yet — count as a pass candidate (will run on next cycle).
-            passing.Add(tc)
-          | Some result ->
-            match result.Result with
-            | TestResult.Passed _ -> passing.Add(tc)
-            | TestResult.Failed _ -> failing.Add(tc)
-            | TestResult.Skipped _ -> skipped.Add(tc)
-            | TestResult.NotRun -> passing.Add(tc) // treat as pass for badge purposes
-      // Build the inline badge. We do this unconditionally so editors get a
-      // consistent shape even when no tests have run yet.
-      let inlineBadge : CoverageBadge list =
-        let mutable any = false
-        let mutable acc : CoverageBadge list = []
-        let push b =
-          any <- true
-          acc <- b :: acc
-        if passing.Count > 0 then push (CoverageBadge.Pass passing.Count)
-        if failing.Count > 0 then push (CoverageBadge.Fail failing.Count)
-        if running.Count > 0 then push (CoverageBadge.Running running.Count)
-        if stale.Count > 0 then push (CoverageBadge.Stale stale.Count)
-        if skipped.Count > 0 then push (CoverageBadge.Skipped skipped.Count)
-        acc
-      let total = Set.count coveringTests
-      let health =
-        if failing.Count > 0 then CoverageHealth.SomeFailing
-        else CoverageHealth.AllPassing
-      // FailingTests: materialise from the ResizeArray. Small in practice.
-      Some {
-        Symbol = symbol
-        FilePath = "" // filled by caller (projectForLine)
-        DefinitionLine = 0 // filled by caller
-        TotalCount = total
-        InlineBadge = inlineBadge
-        FailingTests = failing.ToArray()
-        HasOverflow = total > mode.InlineCollapseAt
-        Health = health
-      }
-
-  /// Convenience: project for a (file, line) pair. Looks up the
-  /// `CoverageAnnotation` by (file, line) to find the symbol, then
-  /// delegates to `project`. Editor hover handler calls this.
-  let projectForLine
-    (mode: CoverageViewMode)
-    (annotations: CoverageAnnotation array)
+    (coveringIds: TestId array)
     (depGraph: TestDependencyGraph)
     (state: LiveTestState)
     (file: string)
     (line: int)
-    : CoverageView option =
-    match
-      annotations
-      |> Array.tryFind (fun a -> a.FilePath = file && a.DefinitionLine = line)
-    with
-    | None -> None
-    | Some ann ->
-      // Look up covering tests from the dep graph (Map.tryFind is O(log n)).
-      let coveringSet =
-        match Map.tryFind ann.Symbol depGraph.SymbolToTests with
-        | Some arr -> Set.ofArray arr
-        | None -> Set.empty
-      project mode coveringSet depGraph state ann.Symbol
-      |> Option.map (fun v -> { v with FilePath = file; DefinitionLine = line })
+    (symbol: string)
+    : CoverageView =
+    let total = Array.length coveringIds
+    if total = 0 then
+      { Symbol = symbol
+        FilePath = file
+        DefinitionLine = line
+        TotalCount = 0
+        Overflow = Overflow.Within
+        InlineBadgeText = ""
+        Health = CoverageViewState.Absent }
+    else
+      // Single fold over the covering set, partitioning into status
+      // counts. No mutable state; the fold accumulates a record.
+      let init : int * int * int * int * int = (0, 0, 0, 0, 0)
+      let (passing, failing, running, stale, skipped) =
+        coveringIds
+        |> Array.fold (fun (p, f, r, s, k) tid ->
+          match Map.tryFind tid state.LastResults with
+          | Some result ->
+            match result.Result with
+            | TestResult.Passed _ -> (p + 1, f, r, s, k)
+            | TestResult.Failed _ -> (p, f + 1, r, s, k)
+            | TestResult.Skipped _ -> (p, f, r, s, k + 1)
+            | TestResult.NotRun -> (p, f, r, s + 1, k) // NotRun = stale: result not current
+          | None -> (p, f, r, s + 1, k)) // No result yet = stale: not yet run
+          init
+      // Build the badge list. Stable order: Pass, Fail, Running, Stale, Skipped.
+      // Empty entries are omitted so the inline text stays short.
+      let badges =
+        [ if passing > 0 then CoverageBadge.Pass passing
+          if failing > 0 then CoverageBadge.Fail failing
+          if running > 0 then CoverageBadge.Running running
+          if stale > 0 then CoverageBadge.Stale stale
+          if skipped > 0 then CoverageBadge.Skipped skipped ]
+      { Symbol = symbol
+        FilePath = file
+        DefinitionLine = line
+        TotalCount = total
+        Overflow = Overflow.fromTotal mode.InlineCollapseAt total
+        InlineBadgeText = toInlineBadge badges
+        Health = CoverageViewState.fromCounts passing failing running stale skipped }
 
 // --- Test Run Explainer (MCP "explain_test_run" / "query_test_coverage") ---
 

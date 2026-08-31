@@ -144,8 +144,8 @@ let formatCoverageViewEvent
        FilePath = view.FilePath
        DefinitionLine = view.DefinitionLine
        TotalCount = view.TotalCount
-       InlineBadge = view.InlineBadge
-       HasOverflow = view.HasOverflow
+       Overflow = view.Overflow
+       InlineBadgeText = view.InlineBadgeText
        Health = view.Health |}
   let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "coverage_view" json

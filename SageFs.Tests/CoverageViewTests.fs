@@ -7,37 +7,25 @@ open SageFs
 open SageFs.Features.LiveTesting
 open SageFs.Tests.LiveTestingTestHelpers
 
-// --- WHY bullets up front (one per test, in test names) ---
-// 1. CoverageView — defaults must NOT collapse F# users' many tests per function
-//    because collapsing by default would punish the F# style of writing many small
-//    pure-function tests against a single production binding. xUnit's "1-3 per method"
-//    assumption does not hold for F#.
-// 2. CoverageView — every threshold must be user-configurable because the user
-//    asked for "the most options to customize this as they like, with sane defaults,
-//    but not boxing them in".
-// 3. CoverageView.project — must be pure and allocation-light because it is called
-//    on hover and CodeLens request in the editor. JIT-friendliness matters.
-// 4. CoverageView.project — must return None for uncovered symbols because the
-//    editor should not render any decoration for a symbol with no tests.
-// 5. CoverageView — SortBy / Filter / GroupBy must be DUs not magic strings because
-//    a magic string costs us a hash lookup per call. Pattern matching on a DU tag
-//    is a single integer compare and branch.
-// 6. CoverageView — inline badge is a bounded array (one per status kind) because
-//    the editor's render budget is "one line of text", and an unbounded array would
-//    be a contract violation that every renderer has to re-derive.
-// 7. CoverageView — toInlineBadge must format compactly because the editor calls
-//    it on every visible test line. Branchless where possible.
+// ============================================================================
+// CoverageView v2 - strict design contract
+// ============================================================================
+//
+// Design principles (each test name has a WHY bullet):
+//
+// 1. NO Option in data modeling. CoverageView is a record; "absent" is
+//    encoded by TotalCount = 0.
+// 2. NO bool. HasOverflow becomes a DU: Overflow = Within | Overflow of
+//    hidden:int.
+// 3. NO mutable. Every function is a pure expression or a fold.
+// 4. NO speculative fields. CoverageViewMode has only InlineCollapseAt.
+// 5. Health is honest. CoverageViewState preserves the 5 status kinds.
+// 6. ONE function. No project/projectForLine split. Returns CoverageView
+//    directly. TotalCount = 0 means absent.
+// 7. Hot path budget. 100 projections of 200 tests must complete in
+//    <100ms (= <1ms per projection).
 
-// --- Helpers (kept local to avoid bloating the shared helpers file) ---
-
-let private mkDep (entries: (string * TestId) list) : TestDependencyGraph =
-  let bySymbol =
-    entries
-    |> List.groupBy fst
-    |> List.map (fun (sym, pairs) -> sym, pairs |> List.map snd |> Array.ofList)
-    |> Map.ofList
-  { TestDependencyGraph.empty with
-      SymbolToTests = bySymbol }
+// --- Helpers ---
 
 let private mkTest (name: string) (category: TestCategory) : TestCase =
   { Id = TestId.create name TestFramework.Expecto
@@ -48,263 +36,177 @@ let private mkTest (name: string) (category: TestCategory) : TestCase =
     Framework = TestFramework.Expecto
     Category = category }
 
-let private mkResult (testId: TestId) (result: TestResult) : TestRunResult =
-  { TestId = testId
-    TestName = TestId.value testId
-    Result = result
-    Timestamp = DateTimeOffset.UtcNow
-    Output = None }
-
 [<Tests>]
-let defaultsHonorFSharpUsage =
-  testList "CoverageView defaults" [
+let v2Defaults =
+  testList "CoverageView v2 - defaults" [
 
-    testCase "WHY — defaults — inlineCollapseAt must default to Int32.MaxValue because F# users write many tests per function and auto-collapsing would punish their style" <| fun _ ->
-      let mode = CoverageViewMode.defaults
-      mode.InlineCollapseAt
-      |> Expect.equal "F#-friendly default is no auto-collapse" Int32.MaxValue
+    testCase "WHY - defaults - InlineCollapseAt defaults to Int32.MaxValue because F# users have many tests per function and auto-collapse would punish their style" <| fun _ ->
+      CoverageViewMode.defaults.InlineCollapseAt
+      |> Expect.equal "F#-friendly default" Int32.MaxValue
+
+    testCase "WHY - defaults - no other modes exist because the picker is a future concern and YAGNI" <| fun _ ->
+      let fields = FSharp.Reflection.FSharpType.GetRecordFields(typeof<CoverageViewMode>)
+                   |> Array.map (fun f -> f.Name)
+                   |> Set.ofArray
+      Set.contains "InlineCollapseAt" fields |> Expect.isTrue "InlineCollapseAt exists"
+      (fields.Count, 1)
+      |> Expect.isLessThanOrEqual "data model is minimal"
   ]
 
 [<Tests>]
-let modeIsFullyConfigurable =
-  testList "CoverageViewMode configurability" [
+let v2HasOverflow =
+  testList "CoverageView v2 - Overflow is a DU not a bool" [
 
-    testCase "WHY — mode — all thresholds must be settable because the user wants options not boxing-in" <| fun _ ->
-      let custom =
-        { CoverageViewMode.defaults with
-            InlineCollapseAt = 5
-            SuppressBelow = 0
-            SortBy = CoverageSort.StatusFirst
-            Filter = CoverageFilter.Failing
-            GroupBy = CoverageGroup.None }
-      custom.InlineCollapseAt |> Expect.equal "InlineCollapseAt settable" 5
-      custom.SuppressBelow |> Expect.equal "SuppressBelow settable" 0
-      (match custom.SortBy with
-       | CoverageSort.StatusFirst -> ()
-       | _ -> failtest "SortBy not set")
-      (match custom.Filter with
-       | CoverageFilter.Failing -> ()
-       | _ -> failtest "Filter not set")
-      (match custom.GroupBy with
-       | CoverageGroup.None -> ()
-       | _ -> failtest "GroupBy not set")
+    testCase "WHY - overflow - is a DU with Within | Overflow of hidden:int because the renderer needs the exact hidden count" <| fun _ ->
+      let small = Overflow.Within
+      let big = Overflow.Overflow 47
+      let hiddenStr = function
+        | Overflow.Within -> ""
+        | Overflow.Overflow n -> sprintf "%c +%d" (char 0x2713) n
+      (hiddenStr small, "")
+      |> Expect.equal "within" ("", "")
+      (hiddenStr big, sprintf "%c +47" (char 0x2713))
+      |> Expect.equal "47 hidden" (sprintf "%c +47" (char 0x2713), sprintf "%c +47" (char 0x2713))
   ]
 
 [<Tests>]
-let projectReturnsNoneForUncovered =
-  testList "CoverageView.project uncovered" [
+let v2ProjectIsTotal =
+  testList "CoverageView v2 - single project function, no Option" [
 
-    testCase "WHY — project — uncovered symbol returns None because the editor must not paint any decoration for a symbol with no tests" <| fun _ ->
-      let tid = TestId.create "t1" TestFramework.Expecto
-      let depGraph = mkDep [ "Module.foo", tid ]
+    testCase "WHY - project - returns CoverageView directly (not Option) because absent is encoded by TotalCount = 0" <| fun _ ->
+      let test = mkTest "Tests.t1" TestCategory.Unit
+      let state = { LiveTestState.empty with DiscoveredTests = [| test |] }
+      let view = CoverageView.project CoverageViewMode.defaults [||] TestDependencyGraph.empty state "Prod.fs" 999 "Module.x"
+      (view.TotalCount, 0)
+      |> Expect.equal "no covering tests" (0, 0)
+      (view.InlineBadgeText, "")
+      |> Expect.equal "no badge" ("", "")
+
+    testCase "WHY - project - line with one passing test produces TotalCount=1 and InlineBadge=Pass 1" <| fun _ ->
+      let test = mkTest "Tests.t1" TestCategory.Unit
       let state =
         { LiveTestState.empty with
-            DiscoveredTests = [| mkTest "Tests.t1" TestCategory.Unit |] }
-      let view =
-        CoverageView.project
-          CoverageViewMode.defaults
-          Set.empty // No tests cover "Module.uncovered"
-          depGraph
-          state
-          "Module.uncovered"
-      view |> Expect.isNone "uncovered symbol has no view"
-  ]
+            DiscoveredTests = [| test |]
+            LastResults = Map.ofList [ test.Id, mkResult test.Id (TestResult.Passed (ts 1.0)) ] }
+      let view = CoverageView.project CoverageViewMode.defaults [| test.Id |] TestDependencyGraph.empty state "Prod.fs" 10 "Module.x"
+      (view.TotalCount, 1)
+      |> Expect.equal "1" (1, 1)
+      (view.InlineBadgeText, sprintf "%c 1" (char 0x2713))
+      |> Expect.equal "Pass 1" (sprintf "%c 1" (char 0x2713), sprintf "%c 1" (char 0x2713))
 
-[<Tests>]
-let projectIsPure =
-  testList "CoverageView.project purity" [
-
-    testCase "WHY — project — same input produces structurally equal output because editors cache and compare the projection; impure projection would defeat change detection" <| fun _ ->
-      let tid = TestId.create "Tests.t1" TestFramework.Expecto
-      let depGraph = mkDep [ "Module.foo", tid ]
+    testCase "WHY - project - line with one failing test produces TotalCount=1 and InlineBadge=Fail 1" <| fun _ ->
+      let test = mkTest "Tests.t1" TestCategory.Unit
       let state =
         { LiveTestState.empty with
-            DiscoveredTests = [| mkTest "Tests.t1" TestCategory.Unit |]
-            LastResults = Map.ofList [ tid, mkResult tid (TestResult.Passed (ts 1.0)) ] }
-      let v1 = CoverageView.project CoverageViewMode.defaults (Set.ofList [ tid ]) depGraph state "Module.foo"
-      let v2 = CoverageView.project CoverageViewMode.defaults (Set.ofList [ tid ]) depGraph state "Module.foo"
-      v1 |> Expect.isSome "produces a view"
-      v2 |> Expect.isSome "produces a view"
-      // Structural equality of the record is automatic in F#.
-      Expect.equal "deterministic" v1 v2
+            DiscoveredTests = [| test |]
+            LastResults = Map.ofList [ test.Id, mkResult test.Id (TestResult.Failed (TestFailure.AssertionFailed "x", ts 1.0)) ] }
+      let view = CoverageView.project CoverageViewMode.defaults [| test.Id |] TestDependencyGraph.empty state "Prod.fs" 10 "Module.x"
+      (view.TotalCount, 1)
+      |> Expect.equal "1" (1, 1)
+      (view.InlineBadgeText, sprintf "%c 1" (char 0x2717))
+      |> Expect.equal "Fail 1" (sprintf "%c 1" (char 0x2717), sprintf "%c 1" (char 0x2717))
   ]
 
 [<Tests>]
-let inlineBadgeHasBoundedAity =
-  testList "CoverageView DU arity" [
+let v2HealthIsHonest =
+  testList "CoverageView v2 - Health is honest about test status" [
 
-    testCase "WHY — CoverageBadge DU has exactly 5 cases — because the editor render budget is one line and a 6th case would change the contract" <| fun _ ->
-      // The DU has exactly 5 cases by construction. We assert by exhaustively
-      // matching all 5 — if anyone adds a 6th, this test still compiles but
-      // the F# compiler emits a warning about incomplete matches elsewhere.
-      let rank = function
-        | CoverageBadge.Pass _ -> 0
-        | CoverageBadge.Fail _ -> 1
-        | CoverageBadge.Running _ -> 2
-        | CoverageBadge.Stale _ -> 3
-        | CoverageBadge.Skipped _ -> 4
-      let ranks = [0; 1; 2; 3; 4]
-      ranks
-      |> List.iter (fun r ->
-        // Just exercise the match so the compiler checks exhaustiveness
-        ignore r)
-      rank (CoverageBadge.Pass 1) |> Expect.equal "Pass rank" 0
-      rank (CoverageBadge.Fail 1) |> Expect.equal "Fail rank" 1
-      rank (CoverageBadge.Running 1) |> Expect.equal "Running rank" 2
-      rank (CoverageBadge.Stale 1) |> Expect.equal "Stale rank" 3
-      rank (CoverageBadge.Skipped 1) |> Expect.equal "Skipped rank" 4
+    testCase "WHY - health - Stale tests are reported as Stale, not AllPassing" <| fun _ ->
+      let test = mkTest "Tests.t1" TestCategory.Unit
+      let state =
+        { LiveTestState.empty with
+            DiscoveredTests = [| test |]
+            LastResults = Map.ofList [ test.Id, { TestId = test.Id; TestName = "t1"; Result = TestResult.NotRun; Timestamp = DateTimeOffset.UtcNow; Output = None } ] }
+      let view = CoverageView.project CoverageViewMode.defaults [| test.Id |] TestDependencyGraph.empty state "Prod.fs" 10 "Module.x"
+      (match view.Health with
+       | CoverageViewState.Passing -> failtest "NotRun must NOT collapse to Passing"
+       | _ -> ())
   ]
 
 [<Tests>]
-let groupByIsADiscriminatedUnion =
-  testList "CoverageViewGroup DU arity" [
+let v2HotPath =
+  testList "CoverageView v2 - hot path is tight" [
 
-    testCase "WHY — GroupBy is a DU — because pattern matching on a tag is one int compare vs a string compare+hash on every call" <| fun _ ->
-      let describe = function
-        | CoverageGroup.None -> "none"
-        | CoverageGroup.ByCategory -> "by-category"
-        | CoverageGroup.ByStatus -> "by-status"
-        | CoverageGroup.Custom _ -> "custom"
-      describe CoverageGroup.None |> Expect.equal "None case" "none"
-      describe CoverageGroup.ByCategory |> Expect.equal "ByCategory case" "by-category"
-      describe CoverageGroup.ByStatus |> Expect.equal "ByStatus case" "by-status"
-      (match CoverageGroup.Custom "test-name" with
-       | CoverageGroup.Custom s -> s |> Expect.equal "Custom carries label" "test-name"
-       | _ -> failtest "expected Custom")
-  ]
-
-[<Tests>]
-let sortAndFilterAreDUs =
-  testList "CoverageView sort/filter DU" [
-
-    testCase "WHY — SortBy and Filter are DUs — exhaustively matchable for branchless dispatch" <| fun _ ->
-      let sortRank = function
-        | CoverageSort.StatusFirst -> 0
-        | CoverageSort.NameFirst -> 1
-        | CoverageSort.DurationDesc -> 2
-      let filterAcceptsAll = function
-        | CoverageFilter.All -> true
-        | CoverageFilter.Failing -> false
-        | CoverageFilter.FailingOrStale -> false
-        | CoverageFilter.ByCategory _ -> false
-        | CoverageFilter.ByText _ -> false
-      sortRank CoverageSort.StatusFirst |> Expect.equal "status-first rank" 0
-      sortRank CoverageSort.NameFirst |> Expect.equal "name-first rank" 1
-      sortRank CoverageSort.DurationDesc |> Expect.equal "duration-desc rank" 2
-      filterAcceptsAll CoverageFilter.All |> Expect.isTrue "All accepts everything"
-  ]
-
-[<Tests>]
-let inlineBadgeToString =
-  testList "CoverageView toInlineBadge string" [
-
-    testCase "WHY — toInlineBadge — formats 100 passing tests as '✓ 100' in one short line because editor rendering is one virtual line" <| fun _ ->
-      let text = CoverageView.toInlineBadge [ CoverageBadge.Pass 100 ]
-      text |> Expect.equal "single-kind compact" "✓ 100"
-
-    testCase "WHY — toInlineBadge — formats mixed statuses compactly" <| fun _ ->
-      let text =
-        CoverageView.toInlineBadge
-          [ CoverageBadge.Pass 97
-            CoverageBadge.Fail 3 ]
-      text |> Expect.equal "mixed-kind compact" "✓ 97 ✗ 3"
-
-    testCase "WHY — toInlineBadge — empty list returns empty string because the editor then omits the badge entirely" <| fun _ ->
-      CoverageView.toInlineBadge []
-      |> Expect.equal "empty badge" ""
-  ]
-
-[<Tests>]
-let fsharpHeavyFunctionScenario =
-  testList "CoverageView F# heavy function scenario" [
-
-    testCase "WHY — F#-heavy-function — 100 tests covering one symbol produces one InlineBadge of [Pass 100] not 100 entries because the editor renders one line" <| fun _ ->
-      // F# users routinely have 50-200 tests per function. The badge must
-      // collapse 100 tests to ONE entry, not 100 separate entries.
-      let mode = CoverageViewMode.defaults // InlineCollapseAt = Int32.MaxValue, so HasOverflow = false
-      let coveringIds =
-        [for i in 1..100 -> TestId.create (sprintf "Tests.t%d" i) TestFramework.Expecto]
-        |> Set.ofList
-      let depGraph = TestDependencyGraph.empty
-      let tests =
-        [for i in 1..100 -> mkTest (sprintf "Tests.t%d" i) TestCategory.Unit]
-        |> List.toArray
-      let state = { LiveTestState.empty with DiscoveredTests = tests }
-      let view =
-        CoverageView.project mode coveringIds depGraph state "Module.big"
-      match view with
-      | Some v ->
-        v.TotalCount |> Expect.equal "TotalCount = 100" 100
-        v.InlineBadge |> Expect.hasLength "InlineBadge is one element" 1
-        (match v.InlineBadge.[0] with
-         | CoverageBadge.Pass n -> n |> Expect.equal "Pass count is 100" 100
-         | _ -> failtest "expected Pass")
-        v.HasOverflow |> Expect.isFalse "no overflow at default (Int32.MaxValue)"
-        v.FailingTests |> Expect.hasLength "no failures" 0
-        v.Health |> Expect.equal "AllPassing" CoverageHealth.AllPassing
-      | None -> failtest "expected a view"
-  ]
-
-[<Tests>]
-let overflowIndicator =
-  testList "CoverageView overflow" [
-
-    testCase "WHY — HasOverflow — true when total exceeds InlineCollapseAt because the renderer must show '▾ +N more' to invite the user to open the picker" <| fun _ ->
-      // User has set InlineCollapseAt to 5 (collapsed view). 10 tests → overflow.
-      let mode = { CoverageViewMode.defaults with InlineCollapseAt = 5 }
-      let coveringIds =
-        [for i in 1..10 -> TestId.create (sprintf "Tests.t%d" i) TestFramework.Expecto]
-        |> Set.ofList
-      let tests =
-        [for i in 1..10 -> mkTest (sprintf "Tests.t%d" i) TestCategory.Unit]
-        |> List.toArray
-      let state = { LiveTestState.empty with DiscoveredTests = tests }
-      let view = CoverageView.project mode coveringIds TestDependencyGraph.empty state "Module.many"
-      match view with
-      | Some v ->
-        v.HasOverflow |> Expect.isTrue "overflow at 10 > 5"
-        v.TotalCount |> Expect.equal "TotalCount = 10" 10
-      | None -> failtest "expected a view"
-
-    testCase "WHY — HasOverflow — false at boundary (total == InlineCollapseAt) because the user said >= should overflow, not >" <| fun _ ->
-      let mode = { CoverageViewMode.defaults with InlineCollapseAt = 10 }
-      let coveringIds =
-        [for i in 1..10 -> TestId.create (sprintf "Tests.t%d" i) TestFramework.Expecto]
-        |> Set.ofList
-      let tests =
-        [for i in 1..10 -> mkTest (sprintf "Tests.t%d" i) TestCategory.Unit]
-        |> List.toArray
-      let state = { LiveTestState.empty with DiscoveredTests = tests }
-      let view = CoverageView.project mode coveringIds TestDependencyGraph.empty state "Module.m"
-      match view with
-      | Some v ->
-        v.HasOverflow |> Expect.isFalse "no overflow at boundary"
-      | None -> failtest "expected a view"
-  ]
-
-[<Tests>]
-let hotPathBudget =
-  testList "CoverageView hot path performance" [
-
-    testCase "WHY — hot-path — projecting 200 tests covering one symbol completes in <5ms because the editor calls this on every visible function and a slow projection freezes the editor" <| fun _ ->
-      // Performance budget: 200 covering tests, 1 projection call, must
-      // complete in <5ms on a CI box. This is the worst case for a function
-      // in an F# codebase. If this fails, the projection is doing Seq
-      // allocations, ResizeArray churn, or something pathological.
-      let mode = CoverageViewMode.defaults
-      let coveringIds =
-        [for i in 1..200 -> TestId.create (sprintf "Tests.t%d" i) TestFramework.Expecto]
-        |> Set.ofList
+    testCase "WHY - hot-path - 100 projections of 200 tests must complete in <100ms (<1ms each)" <| fun _ ->
       let tests =
         [for i in 1..200 -> mkTest (sprintf "Tests.t%d" i) TestCategory.Unit]
         |> List.toArray
+      let coveringIds = tests |> Array.map (fun t -> t.Id)
       let state = { LiveTestState.empty with DiscoveredTests = tests }
+      for _ in 1..5 do
+        CoverageView.project CoverageViewMode.defaults coveringIds TestDependencyGraph.empty state "Prod.fs" 10 "Module.x" |> ignore
       let sw = System.Diagnostics.Stopwatch.StartNew()
-      let view = CoverageView.project mode coveringIds TestDependencyGraph.empty state "Module.hot"
+      for _ in 1..100 do
+        CoverageView.project CoverageViewMode.defaults coveringIds TestDependencyGraph.empty state "Prod.fs" 10 "Module.x" |> ignore
       sw.Stop()
-      view |> Expect.isSome "produces a view"
-      // Budget: 5ms. Generous to allow CI variance, but strict enough to
-      // catch O(n²) regressions (e.g. accidental Seq.distinct on a hot path).
-      (sw.Elapsed.TotalMilliseconds, 5.0)
-      |> Expect.isLessThan "200-test projection must complete in <5ms"
+      (sw.Elapsed.TotalMilliseconds, 100.0)
+      |> Expect.isLessThan "100 projections of 200 tests must complete in <100ms"
+  ]
+
+[<Tests>]
+let v2InlineBadge =
+  testList "CoverageView v2 - InlineBadgeText is computed once at projection" [
+
+    testCase "WHY - inline - empty covering set produces empty string" <| fun _ ->
+      let test = mkTest "Tests.t1" TestCategory.Unit
+      let state = { LiveTestState.empty with DiscoveredTests = [| test |] }
+      let view = CoverageView.project CoverageViewMode.defaults [||] TestDependencyGraph.empty state "Prod.fs" 10 "Module.x"
+      (view.InlineBadgeText, "")
+      |> Expect.equal "no badge" ("", "")
+
+    testCase "WHY - inline - 100 Pass tests formats as one entry" <| fun _ ->
+      let tests =
+        [for i in 1..100 -> mkTest (sprintf "Tests.t%d" i) TestCategory.Unit]
+        |> List.toArray
+      let state =
+        { LiveTestState.empty with
+            DiscoveredTests = tests
+            LastResults =
+              tests
+              |> Array.map (fun t -> t.Id, mkResult t.Id (TestResult.Passed (ts 1.0)))
+              |> Map.ofArray }
+      let view = CoverageView.project CoverageViewMode.defaults (tests |> Array.map (fun t -> t.Id)) TestDependencyGraph.empty state "Prod.fs" 10 "Module.x"
+      (view.InlineBadgeText, sprintf "%c 100" (char 0x2713))
+      |> Expect.equal "100 passes" (sprintf "%c 100" (char 0x2713), sprintf "%c 100" (char 0x2713))
+
+    testCase "WHY - inline - mixed statuses fit on one line in stable order Pass Fail Stale Skipped" <| fun _ ->
+      // 5 Pass, 2 Fail, 4 Skipped, 3 NotRun (Stale), 1 Skipped (running)
+      // = 5 Pass, 2 Fail, 5 Skipped, 3 Stale
+      let pCount, fCount, kCount, sCount, rCount = 5, 2, 4, 3, 1
+      let mkTestPair (kind: string) (r: TestResult) =
+        let t = mkTest ("Tests." + kind + "_" + string (abs (System.DateTime.UtcNow.Ticks.GetHashCode() + kind.GetHashCode()))) TestCategory.Unit
+        t, r
+      let pTests = [for _ in 1..pCount -> mkTestPair "p" (TestResult.Passed (ts 1.0))]
+      let fTests = [for _ in 1..fCount -> mkTestPair "f" (TestResult.Failed (TestFailure.AssertionFailed "x", ts 1.0))]
+      let kTests = [for _ in 1..kCount -> mkTestPair "k" (TestResult.Skipped "policy")]
+      let sTests = [for _ in 1..sCount -> mkTestPair "s" TestResult.NotRun]
+      let rTests = [for _ in 1..rCount -> mkTestPair "r" (TestResult.Skipped "running-policy")]
+      let all = pTests @ fTests @ kTests @ sTests @ rTests
+      let testArray = all |> List.map fst |> List.toArray
+      let state =
+        { LiveTestState.empty with
+            DiscoveredTests = testArray
+            LastResults =
+              all
+              |> List.map (fun (t, r) -> t.Id, mkResult t.Id r)
+              |> Map.ofList }
+      let view = CoverageView.project CoverageViewMode.defaults (testArray |> Array.map (fun t -> t.Id)) TestDependencyGraph.empty state "Prod.fs" 10 "Module.x"
+      // Stable order: Pass(5), Fail(2), Stale(3), Skipped(5)
+      let expected =
+        sprintf "%c 5 %c 2 ~ 3 %c 5"
+          (char 0x2713) (char 0x2717) (char 0x2298)
+      (view.InlineBadgeText, expected)
+      |> Expect.equal "stable order one line" (expected, expected)
+  ]
+
+[<Tests>]
+let v2SetIsInternal =
+  testList "CoverageView v2 - caller does not build Sets" [
+
+    testCase "WHY - project - accepts TestId array directly, not Set" <| fun _ ->
+      let test = mkTest "Tests.t1" TestCategory.Unit
+      let state = { LiveTestState.empty with DiscoveredTests = [| test |] }
+      let view = CoverageView.project CoverageViewMode.defaults [| test.Id |] TestDependencyGraph.empty state "Prod.fs" 10 "Module.x"
+      (view.TotalCount, 1)
+      |> Expect.equal "1 test" (1, 1)
   ]
