@@ -4396,6 +4396,10 @@ module FileAnnotations =
       CodeLenses = [||]
       PerformanceAnnotations = [||] }
 
+  // NOTE: coverageViewsForFile is defined after the CoverageView types
+  // below to avoid a forward reference. See FileAnnotations.coverageViewsForFile
+  // at the end of the CoverageView section.
+
   let statusPriority = function
     | TestRunStatus.Failed _ -> 0
     | TestRunStatus.Running -> 1
@@ -4780,6 +4784,29 @@ module CoverageView =
         Overflow = Overflow.fromTotal mode.InlineCollapseAt total
         InlineBadgeText = toInlineBadge badges
         Health = CoverageViewState.fromCounts passing failing running stale skipped }
+
+// Forward-declared helper: produces one CoverageView per
+// CoverageAnnotation for the file. Used by the SSE publisher to emit
+// one coverage_view event per symbol. Pure function.
+module FileAnnotationsInternals =
+  let projectViewsForFile
+    (mode: CoverageViewMode)
+    (file: string)
+    (depGraph: TestDependencyGraph)
+    (state: LiveTestState)
+    : CoverageView array =
+    let annotations =
+      state.CoverageAnnotations
+      |> Array.filter (fun ca -> ca.FilePath = file)
+    if Array.isEmpty annotations then [||]
+    else
+      annotations
+      |> Array.map (fun ca ->
+        let coveringIds =
+          match Map.tryFind ca.Symbol depGraph.SymbolToTests with
+          | Some arr -> arr
+          | None -> [||]
+        CoverageView.project mode coveringIds depGraph state file ca.DefinitionLine ca.Symbol)
 
 // --- Test Run Explainer (MCP "explain_test_run" / "query_test_coverage") ---
 

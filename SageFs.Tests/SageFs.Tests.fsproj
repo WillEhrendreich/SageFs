@@ -125,6 +125,7 @@
          <Compile Include="CoverageViewTests.fs" />
         <Compile Include="CoverageViewSseEventTests.fs" />
         <Compile Include="CoverageViewEmissionTests.fs" />
+        <Compile Include="CoverageViewEmissionContractTests.fs" />
          <Compile Include="LiveTestRebuildCycleTests.fs" />
          <Compile Include="LiveTestingGraphTests.fs" />
          <Compile Include="DomainModelVizTests.fs" />
