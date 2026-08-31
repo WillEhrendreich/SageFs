@@ -1469,7 +1469,15 @@ let renderLiveTestingPanel (isActive: bool) (statusLabel: string) (testsPassed: 
     Elem.h2 [] [
       match isActive, testsPassed, testsFailed with
       | false, _, _ -> Text.raw "Live Testing: OFF"
-      | true, Some p, Some f -> Text.raw (sprintf "Live Testing: ON — %d✓ %d✗" p f)
+      | true, Some p, Some f ->
+        Elem.span [] [ Text.raw "Live Testing: ON — " ]
+        Elem.span [ Attr.style "color: var(--fg-green, #27ae60);" ] [
+          Text.raw (sprintf "%d✓" p)
+        ]
+        Elem.span [] [ Text.raw " " ]
+        Elem.span [ Attr.style "color: var(--fg-red, #e74c3c);" ] [
+          Text.raw (sprintf "%d✗" f)
+        ]
       | true, _, _ -> Text.raw "Live Testing: ON"
     ]
     Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [

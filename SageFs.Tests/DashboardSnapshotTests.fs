@@ -1,5 +1,6 @@
 module SageFs.Tests.DashboardSnapshotTests
 
+open System
 open Expecto
 open VerifyExpecto
 open VerifyTests
@@ -221,6 +222,31 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     let html = snap.LiveTestingPanel |> renderNode
     // The "off" hint must mention the cost: keystrokes drive test re-runs.
     Expect.stringContains html "keystroke" "OFF hint must mention that tests run on every keystroke"
+  }
+
+  // ─── TDD improvement: passed/failed counts must be color-coded ──────────────
+  // WHY — when the live testing header shows "5 passed / 2 failed", a user
+  // scanning the dashboard cannot tell the colors apart because the count
+  // is in a single inline string. A single failed test buried in green
+  // can be missed. Passed must be green (--fg-green), failed must be red
+  // (--fg-red) so the eyes latch onto the failing count.
+  testTask "ON state shows passed count in green and failed count in red" {
+    let ltSummary : SageFs.Features.LiveTestHealthSummary = {
+      TotalTests = 7; Passed = 5; Failed = 2; Running = 0
+    }
+    let healthSnap : SageFs.Features.HealthSnapshot = {
+      DaemonPid = 1; DaemonPort = 37749
+      Uptime = TimeSpan.FromSeconds 1.0; Version = "0.0.0"
+      SessionSummaries = []; LiveTestingSummary = Some ltSummary
+      MemoryMB = 0
+    }
+    let queries = { (mkQueries true "Tests: 5 passed / 2 failed") with
+                      GetDaemonHealth = fun () -> Some healthSnap }
+    let! snap, _, _ =
+      buildDashboardSnapshot queries (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default"
+    let html = snap.LiveTestingPanel |> renderNode
+    Expect.stringContains html "--fg-green" "passed count must use green color"
+    Expect.stringContains html "--fg-red" "failed count must use red color"
   }
 ]
 
