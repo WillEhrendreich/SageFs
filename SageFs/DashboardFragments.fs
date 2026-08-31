@@ -1490,7 +1490,7 @@ let renderLiveTestingPanel (isActive: bool) (statusLabel: string) (testsPassed: 
     match isActive with
     | false ->
       Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
-        Text.raw "Enable to start discovering and running tests automatically."
+        Text.raw "Enable to run tests on every keystroke and file save."
       ]
     | true ->
       match statusLabel.Length > 0 with

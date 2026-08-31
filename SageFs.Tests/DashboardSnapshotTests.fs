@@ -207,6 +207,21 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     Expect.stringContains html "Live Testing: ON" "dashboard should show live testing as active"
     Expect.stringContains html "🔨 Rebuilding 2 tests" "dashboard should tell users that tests are waiting on compilation"
   }
+
+  // ─── TDD improvement: OFF state must communicate the cost ───────────────────
+  // WHY — when live testing is off, the dashboard currently says only
+  // "Enable to start discovering and running tests automatically" which
+  // describes the benefit. A user who enables without knowing the cost
+  // (tests re-run on every keystroke and file save) will be surprised by
+  // unexpected CPU usage or flapping test state. The hint must mention
+  // "keystroke" so the cost is explicit.
+  testTask "OFF state hint warns that tests run on every keystroke" {
+    let! snap, _, _ =
+      buildDashboardSnapshot (mkQueries false "Test cycle idle") (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default"
+    let html = snap.LiveTestingPanel |> renderNode
+    // The "off" hint must mention the cost: keystrokes drive test re-runs.
+    Expect.stringContains html "keystroke" "OFF hint must mention that tests run on every keystroke"
+  }
 ]
 
 let keyboardHelpSnapshotTests = testList "keyboard help snapshots" [
