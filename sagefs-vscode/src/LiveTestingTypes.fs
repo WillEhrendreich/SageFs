@@ -365,3 +365,42 @@ let renderNarrativeText (n: VscFailureNarrative) : string =
   | "", t  -> sprintf " — %s (%s ago)" n.Summary t
   | s, ""  -> sprintf " — because %s changed" s
   | s, t   -> sprintf " — because %s changed (%s ago)" s t
+
+// --- CoverageView (Fable-side mirror of server-side type) ---
+// WHY — kept in the Fable-side LiveTestingTypes rather than in the
+// separate CoverageView.fs so the listener state record can carry
+// the map directly. The parser (parseCoverageView) lives in
+// CoverageView.fs and returns this same shape.
+
+/// Overflow indicator. DU not bool — the renderer needs the exact
+/// "hidden" count to render "▾ +N more".
+[<RequireQualifiedAccess>]
+type VscCoverageOverflow =
+  | VscOverflowWithin
+  | VscOverflowOf of hidden: int
+
+/// Honest health indicator. Preserves the 5 status kinds so the
+/// renderer can show the exact problem (a Stale test is not the same
+/// as a Passing test).
+[<RequireQualifiedAccess>]
+type VscCoverageHealth =
+  | VscCoveragePassing
+  | VscCoverageFailing
+  | VscCoverageRunning
+  | VscCoverageStale
+  | VscCoverageSkipped
+  | VscCoverageAbsent
+
+/// Per-function aggregate. Pre-rendered to one line of text so the
+/// editor never iterates per test.
+type VscCoverageView = {
+  Symbol: string
+  FilePath: string
+  DefinitionLine: int
+  TotalCount: int
+  Overflow: VscCoverageOverflow
+  /// Pre-formatted single-line badge text (e.g. "✓ 97 ✗ 3").
+  /// Editor renders this as one line of virtual text or one CodeLens.
+  InlineBadgeText: string
+  Health: VscCoverageHealth
+}

@@ -2340,6 +2340,12 @@ let activate (context: ExtensionContext) =
       OnWorkflowChanged = fun label ->
         currentWorkflowLabel <- label
         refreshStatus ()
+      OnCoverageView = fun view ->
+        // One coverage_view event per symbol. The CodeLens provider
+        // (registered separately) reads the listener's CoverageViews map
+        // and emits one CodeLens per view. We don't need to do anything
+        // here — the listener already updated its map.
+        ()
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."

@@ -236,6 +236,7 @@ type LiveTestingCallbacks = {
   OnDiagnosisReady: obj -> unit
   OnBindingValuesUpdate: int -> ClientBindingValue list -> unit
   OnWorkflowChanged: string -> unit
+  OnCoverageView: VscCoverageView -> unit
 }
 
 type LiveTestingListener = {
@@ -247,6 +248,10 @@ type LiveTestingListener = {
   CellGraph: unit -> VscCellGraph option
   BindingScope: unit -> VscBindingScopeSnapshot option
   Timeline: unit -> VscTimelineStats option
+  /// Coverage views per file. Map from file path to one
+  /// VscCoverageView per function definition. Updated on every
+  /// coverage_view SSE event; read by the CodeLens provider.
+  CoverageViews: unit -> Map<string, VscCoverageView array>
   /// Update the session filter — only events tagged with this session ID will be processed.
   /// Pass None to disable filtering (accept all sessions, e.g. before first warmup).
   SetSessionFilter: string option -> unit
@@ -261,6 +266,13 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
   let mutable cellGraph: VscCellGraph option = None
   let mutable bindingScope: VscBindingScopeSnapshot option = None
   let mutable timeline: VscTimelineStats option = None
+  // Coverage views: file path -> one VscCoverageView per function.
+  // Replaced wholesale on each coverage_view event (one per file per
+  // emit). Why wholesale: the server's CoverageView is per-symbol,
+  // not per-test, and replacing the file's array is O(n) — no merge
+  // or diff needed. This is the same shape as the Fable test
+  // "CoverageView store replaces a file's views in one Map.add" pins.
+  let mutable coverageViews: Map<string, VscCoverageView array> = Map.empty
   // Track last known (filePath, blockStartLine) from eval_result so bindings_snapshot
   // can fall back to it when the server doesn't yet emit blockStartLine in the snapshot.
   let mutable lastKnownBsl: (string * int) option = None
@@ -412,7 +424,23 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       | "diagnosis_ready" ->
         callbacks.OnDiagnosisReady data
       | "live_bindings" ->
-      | "coverage_view" -> () // Phase 9: per-function aggregate, handled by Extension.fs
+      | "coverage_view" ->
+        // The server emits one coverage_view event per CoverageAnnotation
+        // for a file. We append the parsed view to the file's array in
+        // coverageViews, then fire the callback. The caller (Extension.fs)
+        // reads the map and renders one CodeLens per view.
+        // WHY — append, not replace: events arrive one-symbol-at-a-time
+        // so the same file can have many events. Wholesale replacement
+        // would race with in-flight events. Append keeps the listener
+        // O(n) per event.
+        let view = SageFs.Vscode.CoverageView.parseCoverageView data
+        let existing =
+          match Map.tryFind view.FilePath coverageViews with
+          | Some arr -> arr
+          | None -> [||]
+        coverageViews <-
+          Map.add view.FilePath (Array.append existing [| view |])
+        callbacks.OnCoverageView view
         // Live bound-value watch window — intentionally a no-op for now;
         // the dashboard consumes this event. Handled explicitly for parity.
         ()
@@ -449,4 +477,5 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     BindingScope = fun () -> bindingScope
     Timeline = fun () -> timeline
     SetSessionFilter = fun sid -> sessionFilter <- sid
+    CoverageViews = fun () -> coverageViews
     Dispose = fun () -> disposable.dispose () |> ignore }
