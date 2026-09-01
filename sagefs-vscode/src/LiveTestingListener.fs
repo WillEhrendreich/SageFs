@@ -236,7 +236,7 @@ type LiveTestingCallbacks = {
   OnDiagnosisReady: obj -> unit
   OnBindingValuesUpdate: int -> ClientBindingValue list -> unit
   OnWorkflowChanged: string -> unit
-  OnCoverageView: VscCoverageView -> unit
+  OnCoverageView: SageFs.Vscode.CoverageViewPure.CoverageView -> unit
 }
 
 type LiveTestingListener = {
@@ -251,7 +251,7 @@ type LiveTestingListener = {
   /// Coverage views per file. Map from file path to one
   /// VscCoverageView per function definition. Updated on every
   /// coverage_view SSE event; read by the CodeLens provider.
-  CoverageViews: unit -> Map<string, VscCoverageView array>
+  CoverageViews: unit -> Map<string, SageFs.Vscode.CoverageViewPure.CoverageView array>
   /// Update the session filter — only events tagged with this session ID will be processed.
   /// Pass None to disable filtering (accept all sessions, e.g. before first warmup).
   SetSessionFilter: string option -> unit
@@ -272,7 +272,7 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
   // not per-test, and replacing the file's array is O(n) — no merge
   // or diff needed. This is the same shape as the Fable test
   // "CoverageView store replaces a file's views in one Map.add" pins.
-  let mutable coverageViews: Map<string, VscCoverageView array> = Map.empty
+  let mutable coverageViews: Map<string, SageFs.Vscode.CoverageViewPure.CoverageView array> = Map.empty
   // Track last known (filePath, blockStartLine) from eval_result so bindings_snapshot
   // can fall back to it when the server doesn't yet emit blockStartLine in the snapshot.
   let mutable lastKnownBsl: (string * int) option = None
@@ -424,6 +424,7 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       | "diagnosis_ready" ->
         callbacks.OnDiagnosisReady data
       | "live_bindings" ->
+        ()
       | "coverage_view" ->
         // The server emits one coverage_view event per CoverageAnnotation
         // for a file. We append the parsed view to the file's array in
@@ -439,7 +440,7 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
           | Some arr -> arr
           | None -> [||]
         coverageViews <-
-          Map.add view.FilePath (Array.append existing [| view |])
+          Map.add view.FilePath (Array.append existing [| view |]) coverageViews
         callbacks.OnCoverageView view
         // Live bound-value watch window — intentionally a no-op for now;
         // the dashboard consumes this event. Handled explicitly for parity.

@@ -1,68 +1,54 @@
 module SageFs.Vscode.CoverageView
 
 // WHY — Fable-specific parser that turns a coverage_view SSE payload
-// into a typed VscCoverageView. The pure rendering logic
+// into a typed CoverageViewPure.CoverageView. The pure rendering logic
 // (CoverageViewPure) is tested under plain `dotnet fsi` via
 // CoverageViewContractTests.fsx. This file is the thin Fable shim.
 
-open SageFs.Vscode.LiveTestingTypes
+open Fable.Core.JsInterop
+open Vscode
+open SageFs.Vscode.CoverageViewPure
+open SageFs.Vscode.SafeInterop
 
-let private fieldString (name: string) (o: obj) : string =
-  match Fable.Core.JsInterop.jsOptions o with
-  | None -> ""
-  | Some opts ->
-    match opts?``${name}``` with
-    | null -> ""
-    | s -> string s
-
-let private fieldInt (name: string) (o: obj) : int =
-  match Fable.Core.JsInterop.jsOptions o with
-  | None -> 0
-  | Some opts ->
-    match opts?``${name}``` with
-    | null -> 0
-    | n -> int n
-
-let private fieldArray (name: string) (o: obj) : obj array =
-  match Fable.Core.JsInterop.jsOptions o with
-  | None -> [||]
-  | Some opts ->
-    match opts?``${name}``` with
-    | null -> [||]
-    | arr -> arr :?> obj array
-
-/// Map the server-side health DU name to the Fable-side DU.
-let private parseHealth (s: string) : VscCoverageHealth =
+/// Map the server-side health DU name to the pure CoverageHealth DU.
+let private parseHealth (s: string) : CoverageHealth =
   match s with
-  | "Passing" -> VscCoveragePassing
-  | "Failing" -> VscCoverageFailing
-  | "Running" -> VscCoverageRunning
-  | "Stale" -> VscCoverageStale
-  | "Skipped" -> VscCoverageSkipped
-  | _ -> VscCoverageAbsent
+  | "Passing" -> CoverageHealth.Passing
+  | "Failing" -> CoverageHealth.Failing
+  | "Running" -> CoverageHealth.Running
+  | "Stale" -> CoverageHealth.Stale
+  | "Skipped" -> CoverageHealth.Skipped
+  | _ -> CoverageHealth.Absent
 
-/// Map the server-side overflow DU name + Fields to Fable DU.
-/// The server serializes `Overflow.Overflow 3` as
-/// `{"Case":"Overflow","Fields":[3]}`.
-let private parseOverflow (o: obj) : VscCoverageOverflow =
-  let case = fieldString "Case" o
-  let fields = fieldArray "Fields" o
-  match case, fields.Length with
-  | "Overflow", n when n >= 1 -> VscOverflowOf (fieldInt "0" fields.[0])
-  | _ -> VscOverflowWithin
+/// Map the server-side overflow DU name + Fields to pure Overflow DU.
+let private parseOverflow (caseName: string) (fields: obj array) : Overflow =
+  match caseName, fields.Length with
+  | "Overflow", n when n >= 1 ->
+    match fields.[0] with
+    | :? int as n -> Overflow.Overflow n
+    | _ -> Overflow.Overflow 0
+  | _ -> Overflow.Within
 
-/// Parse a coverage_view SSE payload into a typed VscCoverageView.
-let parseCoverageView (data: obj) : VscCoverageView =
-  let overflowObj =
-    fieldArray "Overflow" data |> Array.tryHead |> Option.defaultValue (box "")
-  let healthObj =
-    fieldArray "Health" data |> Array.tryHead |> Option.defaultValue (box "")
-  {
-    Symbol = fieldString "Symbol" data
-    FilePath = fieldString "FilePath" data
-    DefinitionLine = fieldInt "DefinitionLine" data
-    TotalCount = fieldInt "TotalCount" data
-    Overflow = parseOverflow overflowObj
-    InlineBadgeText = fieldString "InlineBadgeText" data
-    Health = parseHealth (fieldString "Case" healthObj)
-  }
+/// Parse a coverage_view SSE payload into a typed CoverageViewPure.CoverageView.
+let parseCoverageView (data: obj) : CoverageView =
+  let overflowArr = fieldArray "Overflow" data |> Option.defaultValue [||]
+  let overflowCase =
+    match overflowArr |> Array.tryHead with
+    | Some o -> fieldString "Case" o |> Option.defaultValue ""
+    | None -> ""
+  let overflowFields =
+    match overflowArr |> Array.tryHead with
+    | Some o -> fieldArray "Fields" o |> Option.defaultValue [||]
+    | None -> [||]
+  let healthArr = fieldArray "Health" data |> Option.defaultValue [||]
+  let healthStr =
+    match healthArr |> Array.tryHead with
+    | Some s -> string s
+    | None -> "Absent"
+  { Symbol = fieldString "Symbol" data |> Option.defaultValue ""
+    FilePath = fieldString "FilePath" data |> Option.defaultValue ""
+    DefinitionLine = fieldInt "DefinitionLine" data |> Option.defaultValue 0
+    TotalCount = fieldInt "TotalCount" data |> Option.defaultValue 0
+    Overflow = parseOverflow overflowCase overflowFields
+    InlineBadgeText = fieldString "InlineBadgeText" data |> Option.defaultValue ""
+    Health = parseHealth healthStr }

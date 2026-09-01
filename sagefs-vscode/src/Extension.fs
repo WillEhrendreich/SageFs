@@ -15,6 +15,9 @@ module SessionCtx = SageFs.Vscode.SessionContextTreeProvider
 module Sessions = SageFs.Vscode.SessionsTreeProvider
 module LiveTest = SageFs.Vscode.LiveTestingListener
 module TestCtrl = SageFs.Vscode.TestControllerAdapter
+module CovView = SageFs.Vscode.CoverageView
+module CovViewPure = SageFs.Vscode.CoverageViewPure
+module CovViewLens = SageFs.Vscode.CoverageViewCodeLensProvider
 module TypeExpl = SageFs.Vscode.TypeExplorerProvider
 module TestDeco = SageFs.Vscode.TestDecorations
 module TestLens = SageFs.Vscode.TestCodeLensProvider
@@ -2156,7 +2159,7 @@ let activate (context: ExtensionContext) =
   // via the OnCoverageView callback (calls refresh()). This is the
   // user-facing fix for the "20-100 tests above the function" problem:
   // instead of one CodeLens per test, one CodeLens per function.
-  let coverageViewLensProvider = CoverageViewCodeLensProvider.create ()
+  let coverageViewLensProvider = CovViewLens.create ()
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" coverageViewLensProvider)
 
   // Code completion
@@ -2355,10 +2358,10 @@ let activate (context: ExtensionContext) =
         // visible file. One refresh per event keeps the editor idle
         // when nothing changes.
         let existing =
-          match Map.tryFind view.FilePath CoverageViewCodeLensProvider.coverageViews with
+          match Map.tryFind view.FilePath CovViewLens.coverageViews with
           | Some arr -> arr
           | None -> [||]
-        CoverageViewCodeLensProvider.updateFile view.FilePath (Array.append existing [| view |])
+        CovViewLens.updateFile view.FilePath (Array.append existing [| view |])
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."

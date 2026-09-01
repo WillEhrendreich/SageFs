@@ -72,3 +72,34 @@ let toInlineBadge (badges: (string * int) list) : string =
       | _ -> ""
     (acc + prefix + fragment, false)) ("", true)
   |> fst
+
+/// Pure CodeLens shape — editor-agnostic, no Fable dependency.
+/// Rendered to VSCode CodeLens by CoverageViewCodeLensProvider.
+type PureCodeLens = {
+  Line: int
+  Title: string
+  Tooltip: string
+  CommandLabel: string
+}
+
+/// Pure projection: CoverageView → PureCodeLens. No Option, no bool,
+/// no mutable state — the same projection used by the contract tests.
+module PureProvider =
+  let tooltipSuffix (v: CoverageView) : string =
+    match v.Overflow with
+    | Overflow.Within -> ""
+    | Overflow.Overflow n -> sprintf "%d more" n
+
+  let project (v: CoverageView) : PureCodeLens =
+    { Line = v.DefinitionLine
+      Title = v.InlineBadgeText
+      Tooltip = sprintf "%d test(s), %s" v.TotalCount (tooltipSuffix v)
+      CommandLabel = "sagefs.showCoveringTests" }
+
+  let lensesForFile
+    (store: Map<string, CoverageView array>)
+    (file: string)
+    : PureCodeLens array =
+    match Map.tryFind file store with
+    | Some arr -> arr |> Array.map project
+    | None -> [||]

@@ -10,6 +10,8 @@
     <Compile Include="JsHelpers.fs" />
     <Compile Include="BufferBridge.fs" />
     <Compile Include="LiveTestingTypes.fs" />
+    <Compile Include="CoverageViewPure.fs" />
+    <Compile Include="CoverageView.fs" />
     <Compile Include="FeatureTypes.fs" />
     <Compile Include="FileAnnotationCoverage.fs" />
     <Compile Include="FileAnnotationsListener.fs" />
@@ -26,6 +28,7 @@
     <Compile Include="TestControllerAdapter.fs" />
     <Compile Include="TestDecorations.fs" />
     <Compile Include="TestCodeLensProvider.fs" />
+    <Compile Include="CoverageViewCodeLensProvider.fs" />
     <Compile Include="InlineDecorations.fs" />
     <Compile Include="Extension.fs" />
   </ItemGroup>

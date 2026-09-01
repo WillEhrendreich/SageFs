@@ -37,16 +37,16 @@ type VscTestResult = {
   Output: string option
 }
 
-/// Whether coverage is healthy — replaces bool
+/// Whether coverage is healthy — replaces bool (per-line granularity)
 [<RequireQualifiedAccess>]
-type VscCoverageHealth =
+type VscLineCoverageHealth =
   | AllPassing
   | SomeFailing
 
 /// Per-line coverage status
 [<RequireQualifiedAccess>]
 type VscLineCoverage =
-  | Covered of testCount: int * health: VscCoverageHealth
+  | Covered of testCount: int * health: VscLineCoverageHealth
   | NotCovered
   | Pending
 

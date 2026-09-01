@@ -174,12 +174,12 @@ let applyCoverageToEditor (state: VscLiveTestState) (editor: TextEditor) =
       | VscLineCoverage.Covered (testCount, health) ->
         let hoverText =
           match health with
-          | VscCoverageHealth.AllPassing -> sprintf "▸ Covered by %d test(s), all passing" testCount
-          | VscCoverageHealth.SomeFailing -> sprintf "▸ Covered by %d test(s), some failing" testCount
+          | VscLineCoverageHealth.AllPassing -> sprintf "▸ Covered by %d test(s), all passing" testCount
+          | VscLineCoverageHealth.SomeFailing -> sprintf "▸ Covered by %d test(s), some failing" testCount
         match health with
-        | VscCoverageHealth.AllPassing ->
+        | VscLineCoverageHealth.AllPassing ->
           covPassRanges.Add(decorationRange line hoverText)
-        | VscCoverageHealth.SomeFailing ->
+        | VscLineCoverageHealth.SomeFailing ->
           covFailRanges.Add(decorationRange line hoverText)
       | VscLineCoverage.NotCovered ->
         notCovRanges.Add(decorationRange line "○ Not covered by any test")
