@@ -96,6 +96,7 @@
         <Compile Include="CoverageViewMutationTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
         <Compile Include="RestartPolicyCorrespondenceTests.fs" />
+        <Compile Include="ResultExCorrespondenceTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
         <Compile Include="DevReloadTests.fs" />
