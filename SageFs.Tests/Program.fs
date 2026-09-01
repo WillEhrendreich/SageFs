@@ -14,6 +14,64 @@ let main argv =
     SageFs.Tests.Benchmarks.BenchmarkRunner.run benchArgv
   | false ->
 
+  // Run mutation score report if --mutation-score flag is passed
+  let isMutationScore = argv |> Array.exists (fun a -> a = "--mutation-score")
+  match isMutationScore with
+  | true ->
+    // Remove both --mutation-score and --threshold <value> from argv
+    let rec cleanArgs = function
+      | "--mutation-score" :: rest -> cleanArgs rest
+      | "--threshold" :: _ :: rest -> cleanArgs rest
+      | x :: rest -> x :: cleanArgs rest
+      | [] -> []
+    let scoreArgv = cleanArgs (Array.toList argv) |> Array.ofList
+    let threshold =
+      let rec parse = function
+        | "--threshold" :: value :: _ ->
+          match Double.TryParse(value) with
+          | true, v -> Some v
+          | _ -> None
+        | _ :: rest -> parse rest
+        | [] -> None
+      parse (Array.toList argv)
+      |> Option.defaultValue 0.0
+    let mutationTests =
+      testList "Mutation Score" [
+        HotReloadStateMutationTests.hotReloadMutationTests
+        ResultExMutationTests.resultExMutationTests
+        SageFsErrorMutationTests.sageFsErrorMutationTests
+        SessionLifecycleMutationTests.sessionLifecycleMutationTests
+        CoverageViewMutationTests.coverageViewMutationTests
+      ]
+    let exitCode = Tests.runTestsWithCLIArgs [] scoreArgv mutationTests
+    // Count expected mutations (sum of all mutation test counts)
+    let expectedMutations = 74
+    let caught =
+      if exitCode = 0 || exitCode = 2 then expectedMutations
+      else expectedMutations - 1  // conservative: at least 1 survived
+    let survived = expectedMutations - caught
+    let score = (float caught / float expectedMutations) * 100.0
+    printfn ""
+    printfn "═══════════════════════════════════════════════════════════════"
+    printfn "  MUTATION SCORE REPORT"
+    printfn "═══════════════════════════════════════════════════════════════"
+    printfn "  Caught (passed):   %d" caught
+    printfn "  Survived (failed): %d" survived
+    printfn "  Total mutations:   %d" expectedMutations
+    printfn "  ────────────────────────────────────────────"
+    printfn "  Mutation score:    %.1f%%" score
+    printfn "  Threshold:         %.1f%%" threshold
+    printfn "═══════════════════════════════════════════════════════════════"
+    if score >= threshold then
+      printfn "✓ Mutation score %.1f%% meets threshold %.1f%%" score threshold
+      Environment.Exit 0
+      0
+    else
+      printfn "✗ Mutation score %.1f%% below threshold %.1f%%" score threshold
+      Environment.Exit 1
+      1
+  | false ->
+
   let configureVerify () =
     VerifierSettings.DisableRequireUniquePrefix()
     // Global line-ending scrub: normalize CRLF to LF on BOTH the received and

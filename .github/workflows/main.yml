@@ -49,6 +49,19 @@ jobs:
         if [ $rc -eq 0 ] || [ $rc -eq 2 ]; then exit 0; else exit $rc; fi
       timeout-minutes: 10
 
+    - name: Mutation score report
+      shell: bash
+      run: |
+        # WHY — mutation testing proves the test suite catches injected faults.
+        # Score = caught/total. 100% means every planted fault was caught.
+        # No threshold gate yet (baseline phase) — just report for trend tracking.
+        set +e
+        dotnet run --no-build --project SageFs.Tests -- --mutation-score
+        rc=$?
+        # Always succeed — this is a reporting step, not a gate (yet).
+        exit 0
+      timeout-minutes: 5
+
   extensions:
     runs-on: ubuntu-latest
 
