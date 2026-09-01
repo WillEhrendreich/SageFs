@@ -554,6 +554,14 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
           | true ->
             do! SageFs.SseWriter.formatFileAnnotationsEvent ctx.SseJsonOpts (Some activeId) fa
                 |> writeSseFrame body
+            // Emit coverage_view events on replay so late-connecting
+            // editors get the same views as already-connected ones.
+            let views =
+              FileAnnotationsInternals.projectViewsForFile
+                CoverageViewMode.defaults file ltState.DepGraph ltState.TestState
+            for view in views do
+              do! SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) view
+                  |> writeSseFrame body
           | false -> ()
       | false -> ()
     with ex ->
@@ -801,6 +809,17 @@ let wireModelChangeHandlers
             | true ->
               ctx.TestEventBroadcast.Trigger(
                 SageFs.SseWriter.formatFileAnnotationsEvent ctx.SseJsonOpts (Some activeId) fa)
+              // Emit one coverage_view event per CoverageView so editors
+              // can render a single badge per function instead of one per test.
+              let views =
+                SageFs.Features.LiveTesting.FileAnnotationsInternals.projectViewsForFile
+                  SageFs.Features.LiveTesting.CoverageViewMode.defaults
+                  file
+                  model.LiveTesting.DepGraph
+                  model.LiveTesting.TestState
+              for view in views do
+                ctx.TestEventBroadcast.Trigger(
+                  SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) view)
             | false -> ()
         | false -> ()
       | false -> ())

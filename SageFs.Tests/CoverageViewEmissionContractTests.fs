@@ -121,3 +121,64 @@ let fileAnnotationsEmitsViews = testList "FileAnnotations emits CoverageView per
     (views.Length, 2)
     |> Expect.equal "two annotations = two views" (2, 2)
   ]
+
+[<Tests>]
+let roundTripEmission = testList "projectViewsForFile → formatCoverageViewEvent round-trip" [
+
+  testCase "WHY — round-trip — views from projectViewsForFile produce valid SSE events" <| fun _ ->
+    let annotation : CoverageAnnotation = {
+      Symbol = "Module.add"; FilePath = "Prod.fs"; DefinitionLine = 42
+      Status = CoverageStatus.Covered (1, CoverageHealth.AllPassing); BranchCoverage = BranchCoverage.Unknown }
+    let test = mkTestCase "Module.Tests.t1" TestFramework.Expecto TestCategory.Unit
+    let state =
+      { LiveTestState.empty with
+          CoverageAnnotations = [| annotation |]
+          DiscoveredTests = [| test |]
+          LastResults = Map.ofList [ test.Id, mkResult test.Id (TestResult.Passed (ts 1.0)) ] }
+    let depGraph =
+      { TestDependencyGraph.empty with
+          SymbolToTests = Map.ofList [ "Module.add", [| test.Id |] ] }
+    let views = FileAnnotationsInternals.projectViewsForFile CoverageViewMode.defaults "Prod.fs" depGraph state
+    let opts = formatOpts()
+    let sseFrames = views |> Array.map (SageFs.SseWriter.formatCoverageViewEvent opts None)
+    (sseFrames.Length, 1)
+    |> Expect.equal "one view → one SSE frame" (1, 1)
+    sseFrames.[0] |> Expect.stringContains "frame contains coverage_view event type" "coverage_view"
+    sseFrames.[0] |> Expect.stringContains "frame contains Symbol" "Module.add"
+    sseFrames.[0] |> Expect.stringContains "frame contains FilePath" "Prod.fs"
+
+  testCase "WHY — round-trip — views from different files produce separate SSE events" <| fun _ ->
+    let a1 : CoverageAnnotation = {
+      Symbol = "Module.add"; FilePath = "Prod.fs"; DefinitionLine = 42
+      Status = CoverageStatus.Covered (1, CoverageHealth.AllPassing); BranchCoverage = BranchCoverage.Unknown }
+    let a2 : CoverageAnnotation = {
+      Symbol = "Other.sub"; FilePath = "Other.fs"; DefinitionLine = 10
+      Status = CoverageStatus.Covered (1, CoverageHealth.AllPassing); BranchCoverage = BranchCoverage.Unknown }
+    let t1 = mkTestCase "Module.Tests.t1" TestFramework.Expecto TestCategory.Unit
+    let t2 = mkTestCase "Other.Tests.t2" TestFramework.Expecto TestCategory.Unit
+    let state =
+      { LiveTestState.empty with
+          CoverageAnnotations = [| a1; a2 |]
+          DiscoveredTests = [| t1; t2 |]
+          LastResults =
+            Map.ofList
+              [ t1.Id, mkResult t1.Id (TestResult.Passed (ts 1.0))
+                t2.Id, mkResult t2.Id (TestResult.Passed (ts 1.0)) ] }
+    let depGraph =
+      { TestDependencyGraph.empty with
+          SymbolToTests =
+            Map.ofList
+              [ "Module.add", [| t1.Id |]
+                "Other.sub", [| t2.Id |] ] }
+    let v1 = FileAnnotationsInternals.projectViewsForFile CoverageViewMode.defaults "Prod.fs" depGraph state
+    let v2 = FileAnnotationsInternals.projectViewsForFile CoverageViewMode.defaults "Other.fs" depGraph state
+    let opts = formatOpts()
+    let f1 = v1 |> Array.map (SageFs.SseWriter.formatCoverageViewEvent opts None) |> Array.head
+    let f2 = v2 |> Array.map (SageFs.SseWriter.formatCoverageViewEvent opts None) |> Array.head
+    f1 |> Expect.stringContains "Prod.fs view has Prod.fs" "Prod.fs"
+    f1 |> Expect.stringContains "Prod.fs view has Module.add" "Module.add"
+    f2 |> Expect.stringContains "Other.fs view has Other.fs" "Other.fs"
+    f2 |> Expect.stringContains "Other.fs view has Other.sub" "Other.sub"
+    (f1 = f2, false)
+    |> Expect.equal "different files produce different SSE frames" (false, false)
+  ]

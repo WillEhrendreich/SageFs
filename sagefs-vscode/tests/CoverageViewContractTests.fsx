@@ -16,46 +16,47 @@ let tests =
   testList "VS Code coverage_view contract - pure renderer" [
 
     testCase "WHY - render - formats the inline badge as one short line 'check 97 x 3' so the editor never paints 100 names" <| fun _ ->
-      joinBadges [ "Pass", 97; "Fail", 3 ]
+      toInlineBadge [ "Pass", 97; "Fail", 3 ]
       |> Expect.equal "compact one line" "✓ 97 ✗ 3"
 
     testCase "WHY - render - empty badge list produces empty text so the editor omits the badge entirely" <| fun _ ->
-      joinBadges []
+      toInlineBadge []
       |> Expect.equal "empty" ""
 
     testCase "WHY - render - single Pass badge formats as 'check 100' not 'check 100  '" <| fun _ ->
-      joinBadges [ "Pass", 100 ]
+      toInlineBadge [ "Pass", 100 ]
       |> Expect.equal "single kind" "✓ 100"
 
     testCase "WHY - render - mixed statuses with running produce three badges space-separated" <| fun _ ->
-      joinBadges [ "Pass", 5; "Fail", 2; "Running", 5 ]
+      toInlineBadge [ "Pass", 5; "Fail", 2; "Running", 5 ]
       |> Expect.equal "three kinds" "✓ 5 ✗ 2 ⟳ 5"
 
     testCase "WHY - render - all five status kinds fit on one line (bounded by DU arity)" <| fun _ ->
-      joinBadges [ "Pass", 10; "Fail", 2; "Running", 3; "Stale", 1; "Skipped", 4 ]
+      toInlineBadge [ "Pass", 10; "Fail", 2; "Running", 3; "Stale", 1; "Skipped", 4 ]
       |> Expect.equal "five kinds, one line" "✓ 10 ✗ 2 ⟳ 3 ~ 1 ⊘ 4"
 
     testCase "WHY - render - unknown case produces empty string (defensive default)" <| fun _ ->
-      formatBadge "Mystery" 5
+      // Inline badges with unknown kind get the prefix but empty count
+      toInlineBadge [ "Mystery", 5 ]
       |> Expect.equal "unknown case" ""
 
-    testCase "WHY - health - 'AllPassing' parses to AllPassing" <| fun _ ->
-      healthFromString "AllPassing"
-      |> Expect.equal "all passing" CoverageHealth.AllPassing
+    testCase "WHY - health - 'Passing' parses to Passing" <| fun _ ->
+      healthFromString "Passing"
+      |> Expect.equal "all passing" CoverageHealth.Passing
 
-    testCase "WHY - health - 'SomeFailing' parses to SomeFailing" <| fun _ ->
-      healthFromString "SomeFailing"
-      |> Expect.equal "some failing" CoverageHealth.SomeFailing
+    testCase "WHY - health - 'Failing' parses to Failing" <| fun _ ->
+      healthFromString "Failing"
+      |> Expect.equal "some failing" CoverageHealth.Failing
 
-    testCase "WHY - health - unknown string defaults to NoCoverage (defensive default)" <| fun _ ->
+    testCase "WHY - health - unknown string defaults to Absent (defensive default)" <| fun _ ->
       healthFromString "Wat"
-      |> Expect.equal "unknown -> no coverage" CoverageHealth.NoCoverage
+      |> Expect.equal "unknown -> absent" CoverageHealth.Absent
 
     testCase "WHY - perf - rendering 5 badges completes in <1ms because the editor calls this on every visible function and a slow renderer freezes the editor" <| fun _ ->
       let badges = [ "Pass", 10; "Fail", 2; "Running", 3; "Stale", 1; "Skipped", 4 ]
       let sw = System.Diagnostics.Stopwatch.StartNew()
       for _ in 1..10000 do
-        joinBadges badges |> ignore
+        toInlineBadge badges |> ignore
       sw.Stop()
       // 10000 calls must complete in <100ms = <10us per call. Generous
       // budget that catches O(n^2) regressions (e.g. accidental Seq

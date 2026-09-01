@@ -2151,6 +2151,13 @@ let activate (context: ExtensionContext) =
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" lensProvider)
   let testLensProvider = TestLens.create ()
   context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" testLensProvider)
+  // Coverage view CodeLens provider — one CodeLens per CoverageView.
+  // The provider's internal state is updated by the LiveTestingListener
+  // via the OnCoverageView callback (calls refresh()). This is the
+  // user-facing fix for the "20-100 tests above the function" problem:
+  // instead of one CodeLens per test, one CodeLens per function.
+  let coverageViewLensProvider = CoverageViewCodeLensProvider.create ()
+  context.subscriptions.Add (Languages.registerCodeLensProvider "fsharp" coverageViewLensProvider)
 
   // Code completion
   let getWorkDir () =
@@ -2341,11 +2348,17 @@ let activate (context: ExtensionContext) =
         currentWorkflowLabel <- label
         refreshStatus ()
       OnCoverageView = fun view ->
-        // One coverage_view event per symbol. The CodeLens provider
-        // (registered separately) reads the listener's CoverageViews map
-        // and emits one CodeLens per view. We don't need to do anything
-        // here — the listener already updated its map.
-        ()
+        // Push the view into the provider's store and refresh. The
+        // listener already maintains a per-file CoverageViews map
+        // (it appends on each event), but the provider keeps its own
+        // mirror so that its provideCodeLenses can be O(n) over the
+        // visible file. One refresh per event keeps the editor idle
+        // when nothing changes.
+        let existing =
+          match Map.tryFind view.FilePath CoverageViewCodeLensProvider.coverageViews with
+          | Some arr -> arr
+          | None -> [||]
+        CoverageViewCodeLensProvider.updateFile view.FilePath (Array.append existing [| view |])
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."

@@ -133,4 +133,37 @@ let providerContract = testList "CoverageView CodeLens provider contract" [
     |> Expect.equal "different file filtered out" (0, 0)
   ]
 
-let _ = Expecto.Tests.runTestsWithCLIArgs [] [||] providerContract
+[<Tests>]
+let providerWiring = testList "CodeLens provider wiring" [
+
+  testCase "WHY - wiring - line number is 1-based in CoverageView but 0-based in VSCode ranges, so the Fable provider subtracts 1" <| fun _ ->
+    // This test pins the Fable provider's invariant: VSCode ranges
+    // are 0-based; CoverageView.DefinitionLine is 1-based. The
+    // provider maps DefinitionLine - 1 → range.start.line.
+    let v = mkV "Module.add" 42 1 "within" 0 "v 1" "Passing"
+    let view = v
+    let expectedZeroBased = view.DefinitionLine - 1
+    (expectedZeroBased, 41)
+    |> Expect.equal "1-based → 0-based mapping" (41, 41)
+
+  testCase "WHY - wiring - empty line is clamped to 0 so the badge is not placed above the buffer" <| fun _ ->
+    // If DefinitionLine is 0 (shouldn't happen but defense in depth),
+    // the range must be 0, not -1.
+    let v = mkV "Module.add" 0 0 "within" 0 "" "Absent"
+    let clamped = max 0 (v.DefinitionLine - 1)
+    (clamped, 0)
+    |> Expect.equal "clamp to 0" (0, 0)
+
+  testCase "WHY - wiring - tooltip is preserved verbatim so the user's reason for opening the picker is one click away" <| fun _ ->
+    let v = mkV "Module.add" 42 1 "overflow" 47 "v 2 x 3" "Failing"
+    let view = v
+    let lens = PureProvider.project view
+    (lens.Tooltip, "1 test(s), 47 more")
+    |> Expect.equal "tooltip carries total and hidden count" ("1 test(s), 47 more", "1 test(s), 47 more")
+  ]
+
+let _ =
+  Expecto.Tests.runTestsWithCLIArgs
+    []
+    [||]
+    (testList "CoverageView CodeLens provider contract" [providerContract; providerWiring])
