@@ -73,6 +73,20 @@ let toInlineBadge (badges: (string * int) list) : string =
     (acc + prefix + fragment, false)) ("", true)
   |> fst
 
+/// Editor-side configuration for coverage view rendering.
+/// The daemon sends full CoverageView data; the editor decides
+/// how to render based on this config. No round-trip needed.
+type CoverageViewConfig = {
+  /// Inline names only when total covering tests < this number.
+  /// Default Int32.MaxValue: always inline (F# users have many tests
+  /// per function; auto-collapsing would punish their style).
+  InlineCollapseAt: int
+}
+
+module CoverageViewConfig =
+  /// F#-friendly default: no auto-collapse.
+  let defaults = { InlineCollapseAt = System.Int32.MaxValue }
+
 /// Pure CodeLens shape — editor-agnostic, no Fable dependency.
 /// Rendered to VSCode CodeLens by CoverageViewCodeLensProvider.
 type PureCodeLens = {
@@ -90,16 +104,26 @@ module PureProvider =
     | Overflow.Within -> ""
     | Overflow.Overflow n -> sprintf "%d more" n
 
-  let project (v: CoverageView) : PureCodeLens =
+  /// When TotalCount >= InlineCollapseAt, return a collapsed badge
+  /// ("▸ 42 tests") instead of the full inline text. This keeps the
+  /// editor readable when a function has 50+ covering tests.
+  let collapsedTitle (v: CoverageView) : string =
+    sprintf "▸ %d tests" v.TotalCount
+
+  let project (config: CoverageViewConfig) (v: CoverageView) : PureCodeLens =
+    let title =
+      if v.TotalCount >= config.InlineCollapseAt then collapsedTitle v
+      else v.InlineBadgeText
     { Line = v.DefinitionLine
-      Title = v.InlineBadgeText
+      Title = title
       Tooltip = sprintf "%d test(s), %s" v.TotalCount (tooltipSuffix v)
       CommandLabel = "sagefs.showCoveringTests" }
 
   let lensesForFile
+    (config: CoverageViewConfig)
     (store: Map<string, CoverageView array>)
     (file: string)
     : PureCodeLens array =
     match Map.tryFind file store with
-    | Some arr -> arr |> Array.map project
+    | Some arr -> arr |> Array.map (project config)
     | None -> [||]

@@ -14,9 +14,14 @@ open Fable.Core.JsInterop
 open Vscode
 open SageFs.Vscode.CoverageViewPure
 
+/// Mutable config: read from VSCode settings on each refresh.
+/// WHY mutable: the editor settings change at runtime; the provider
+/// re-reads on each provideCodeLenses call.
+let mutable config : CoverageViewConfig = CoverageViewConfig.defaults
+
 /// Coverage views per file. Updated by LiveTestingListener via the
 /// `coverage_view` SSE event handler. Keyed by file path.
-let mutable coverageViews : Map<string, CoverageViewPure.CoverageView array> = Map.empty
+let mutable coverageViews : Map<string, CoverageView array> = Map.empty
 
 /// Event emitter to signal CodeLens refresh.
 let changeEmitter = newEventEmitter<obj> ()
@@ -26,13 +31,19 @@ let refresh () = changeEmitter.fire (null)
 
 /// Replace the coverage views for a single file. Called by the listener
 /// when a `coverage_view` event arrives.
-let updateFile (filePath: string) (views: CoverageViewPure.CoverageView array) =
+let updateFile (filePath: string) (views: CoverageView array) =
   coverageViews <- Map.add filePath views coverageViews
+  refresh ()
+
+/// Update config from editor settings. Called by the extension when the
+/// user changes `sagefs.coverageView.inlineCollapseAt`.
+let updateConfig (newConfig: CoverageViewConfig) =
+  config <- newConfig
   refresh ()
 
 /// Build a single VSCode CodeLens from a PureCodeLens. Wraps the pure
 /// shape with the Fable `createObj` + `newCodeLens` API.
-let private buildCodeLens (lens: CoverageViewPure.PureCodeLens) : CodeLens =
+let private buildCodeLens (lens: PureCodeLens) : CodeLens =
   let line = max 0 (lens.Line - 1)
   let range = newRange line 0 line 0
   let cmd = createObj [
@@ -48,6 +59,6 @@ let create () =
     "onDidChangeCodeLenses" ==> changeEmitter.event
     "provideCodeLenses" ==> fun (doc: TextDocument) (_token: obj) ->
       let filePath = doc.fileName
-      CoverageViewPure.PureProvider.lensesForFile coverageViews filePath
+      PureProvider.lensesForFile config coverageViews filePath
       |> Array.map buildCodeLens
   ]
