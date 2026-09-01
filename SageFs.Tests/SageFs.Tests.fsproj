@@ -88,6 +88,8 @@
         <Compile Include="ReplayTests.fs" />
         <Compile Include="HotReloadTests.fs" />
         <Compile Include="HotReloadStateTests.fs" />
+        <Compile Include="MutationTestingFramework.fs" />
+        <Compile Include="HotReloadStateMutationTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
         <Compile Include="DevReloadTests.fs" />
