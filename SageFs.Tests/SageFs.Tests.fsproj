@@ -92,6 +92,7 @@
         <Compile Include="HotReloadStateMutationTests.fs" />
         <Compile Include="ResultExMutationTests.fs" />
         <Compile Include="SageFsErrorMutationTests.fs" />
+        <Compile Include="SessionLifecycleMutationTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
         <Compile Include="DevReloadTests.fs" />
