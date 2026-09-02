@@ -53,6 +53,27 @@ let errorMessagesTests =
         categorize "TypeLoadException: type conflict"
         |> Expect.equal "TypeLoad should win over TypeError" ErrorCategory.TypeLoad
       }
+      test "not-found on first line is NameError even when later lines mention type" {
+        // Regression: stack frames / dumps after the real error must not reclassify.
+        categorize "The namespace 'Bar' is not found\nat System.Runtime.TypeLoader.Load()"
+        |> Expect.equal "first-line not found should stay NameError" ErrorCategory.NameError
+      }
+      test "type mismatch in a later stack frame does not reclassify a name error" {
+        categorize "The value 'foo' is not defined\n   at FSI_0003.Program.foo() in type Foo"
+        |> Expect.equal "stack noise must not flip NameError to TypeError" ErrorCategory.NameError
+      }
+      test "type mismatch on first line is TypeError (not caught by earlier not-found)" {
+        categorize "The type 'int' does not match the type 'string'"
+        |> Expect.equal "type mismatch should be TypeError" ErrorCategory.TypeError
+      }
+      test "unexpected on first line is SyntaxError even when the dump mentions type" {
+        categorize "unexpected token ')'\nSystem.TypeInitializationException"
+        |> Expect.equal "unexpected should stay SyntaxError" ErrorCategory.SyntaxError
+      }
+      test "multi-line TypeLoad dump still classifies TypeLoad from first line" {
+        categorize "TypeLoadException: Could not load type 'X'\n at FSI_0001..."
+        |> Expect.equal "TypeLoad on first line wins" ErrorCategory.TypeLoad
+      }
     ]
     testList "getSuggestion" [
       test "TypeLoad suggests removing #r" {

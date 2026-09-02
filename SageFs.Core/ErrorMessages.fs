@@ -14,13 +14,24 @@ module ErrorMessages =
     | Unknown
 
   /// Classify an FSI error string into an ErrorCategory.
+  /// Only the FIRST line is classified: FSI puts the actual error message on
+  /// the first line, and anything after it can be a stack dump whose frames
+  /// mention "type"/"syntax"/"not found" and would skew the category.
+  /// Checks are ordered most-specific-first so "not found" (a file/name
+  /// resolution issue) never lands in TypeError via a later generic "type"
+  /// match, and stack-frame noise can't reclassify a real error.
   let categorize (errorText: string) =
+    let firstLine =
+      errorText.Split([| '\n'; '\r' |], System.StringSplitOptions.RemoveEmptyEntries)
+      |> Array.tryHead
+      |> Option.defaultValue errorText
     match () with
-    | _ when errorText.Contains("TypeLoadException") || errorText.Contains("type identity") -> ErrorCategory.TypeLoad
-    | _ when errorText.Contains("earlier error") -> ErrorCategory.EarlierError
-    | _ when errorText.Contains("not defined") || errorText.Contains("not found") -> ErrorCategory.NameError
-    | _ when errorText.Contains("syntax") || errorText.Contains("unexpected") -> ErrorCategory.SyntaxError
-    | _ when errorText.Contains("type") -> ErrorCategory.TypeError
+    | _ when firstLine.Contains("TypeLoadException") || firstLine.Contains("type identity") -> ErrorCategory.TypeLoad
+    | _ when firstLine.Contains("earlier error") -> ErrorCategory.EarlierError
+    | _ when firstLine.Contains("unexpected") || firstLine.Contains("syntax") -> ErrorCategory.SyntaxError
+    | _ when firstLine.Contains("not defined") || firstLine.Contains("not found") || firstLine.Contains("does not exist") -> ErrorCategory.NameError
+    | _ when firstLine.Contains("type mismatch") || firstLine.Contains("expected to have type") || firstLine.Contains("but given") -> ErrorCategory.TypeError
+    | _ when firstLine.Contains("type") -> ErrorCategory.TypeError
     | _ -> ErrorCategory.Unknown
 
   /// Generate helpful suggestion based on error category.
