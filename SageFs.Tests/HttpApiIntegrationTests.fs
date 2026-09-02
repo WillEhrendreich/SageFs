@@ -421,22 +421,23 @@ let integrationTests =
       doc.Dispose()
     }
 
-    testTask "POST /exec returns type error in result for invalid code" {
+    testTask "POST /exec reports eval failure truthfully (200, success=false)" {
       let client = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir
       let payload =
         {| code = """let x: int = "not an int";;"""
            working_directory = testProjectDir |}
       let! status, body = postJson client "/exec" payload
+      // HTTP stays 200 — the request was processed; success reflects the
+      // typed worker outcome so a compile failure is distinguishable from
+      // a successful eval without string sniffing.
       status |> Expect.equal "200 OK" 200
 
       let doc = JsonDocument.Parse(body: string)
       let root = doc.RootElement
 
-      // /exec returns HTTP 200 with success=true whenever the request was
-      // processed; eval failures surface in the `result` string.
       root.GetProperty("success").GetBoolean()
-      |> Expect.isTrue "request was processed"
+      |> Expect.isFalse "eval failed"
       root.GetProperty("result").GetString()
       |> Expect.stringContains "result reports the type error" "expected to have type"
       doc.Dispose()

@@ -1190,7 +1190,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
                   rctx.SseContext.TestEventBroadcast.Trigger(hbStr)
             with :? System.OperationCanceledException -> ()
           } :> System.Threading.Tasks.Task))
-      let! result = SageFs.McpTools.sendFSharpCode rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine None
+      let! result, hadError = SageFs.McpTools.evalFSharpCodeWithOutcome rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine None
       sw.Stop()
       heartbeatCts.Cancel()
       let! _ = heartbeatTask
@@ -1201,13 +1201,27 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
         let sseStr = SageFs.SseWriter.formatEvalResultEvent rctx.SseContext.SseJsonOpts sid fp bsl result true (sw.ElapsedMilliseconds |> float)
         rctx.SseContext.TestEventBroadcast.Trigger(sseStr)
       | _ -> ()
-      do! jsonResponse ctx 200 {| success = true; result = result |}
+      // Truthful contract: success reflects the typed worker outcome (an eval
+      // that failed to compile/run has success=false), never string sniffing.
+      // HTTP stays 200 — the request WAS processed and the result text is for
+      // the client to display; editors treat non-2xx as transport failure.
+      // The failure body also carries `error` so standard { success, error }
+      // client parsers surface the diagnostic instead of "Unknown error".
+      let body =
+        match hadError with
+        | false -> {| success = true; result = result |} :> obj
+        | true -> {| success = false; result = result; error = result |} :> obj
+      do! jsonResponse ctx 200 body
     } :> Task
   ) |> ignore
   app.MapPost("/reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let! result = SageFs.McpTools.resetSession rctx.McpContext "http" None None
-      do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
+      // resetSession prefixes failures with "Error: " — check the prefix, not
+      // a substring, so a success message containing the word Error is not
+      // misreported as a failure.
+      let failed = result.StartsWith("Error", StringComparison.Ordinal)
+      do! jsonResponse ctx (if failed then 500 else 200) {| success = not failed; message = result |}
     } :> Task
   ) |> ignore
   app.MapPost("/hard-reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -1220,7 +1234,8 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
           | false, _ -> false
         with :? System.Text.Json.JsonException -> false
       let! result = SageFs.McpTools.hardResetSession rctx.McpContext "http" rebuild None None
-      do! jsonResponse ctx 200 {| success = not (result.Contains("Error")); message = result |}
+      let failed = result.StartsWith("Error", StringComparison.Ordinal)
+      do! jsonResponse ctx (if failed then 500 else 200) {| success = not failed; message = result |}
     } :> Task
   ) |> ignore
   app.MapPost("/cancel", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

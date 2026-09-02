@@ -1156,7 +1156,7 @@ module McpTools =
       | other -> other
 
   /// Evaluate a single FSI statement, dispatch Elm events, return formatted output.
-  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) = task {
+  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) : Task<string * bool> = task {
     notifyElm ctx (SageFsEvent.EvalStarted (sid, statement))
     let workflow = getWorkflowForSession ctx sid
     let! routeResult =
@@ -1220,6 +1220,8 @@ module McpTools =
               | true -> ()
             with ex -> Log.warn "Failed to deserialize assembly load errors: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()
+          // Success — the typed Ok outcome, not string sniffing, decides truth.
+          (formatted, false)
         | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
           let errText = SageFsError.describe err
           // Track TypeLoadException so targeted_verify can flag the session as compromised.
@@ -1230,94 +1232,118 @@ module McpTools =
           | _ -> ()
           notifyElm ctx (
             SageFsEvent.EvalFailed (sid, errText))
-        | _ -> ()
-        formatted
+          (formatted, true)
+        | _ -> (formatted, false)
       | Error msg ->
         let err = routeErrorMessage msg
         notifyElm ctx (SageFsEvent.EvalFailed (sid, err))
-        sprintf "Error: %s" err
+        (sprintf "Error: %s" err, true)
   }
 
+  /// Evaluate F# code. Returns (formatted output, true when any statement
+  /// failed) — the error flag comes from the typed worker outcome, never
+  /// string sniffing. Most callers use `sendFSharpCode` (string-only view).
+  let evalFSharpCodeWithOutcome
+      (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat)
+      (sessionId: string option) (workingDirectory: string option)
+      (filePath: string option) (evalMode: string option) (blockStartLine: int option)
+      (intent: string option)
+      : Task<string * bool> =
+    task {
+      let! resolution = resolveSessionId ctx agentName sessionId workingDirectory
+      match resolution with
+      | Routable sid ->
+        return! task {
+          // Temporal dedup: skip re-evaluation if identical code was just evaluated
+          let now = DateTimeOffset.UtcNow
+          match Features.EvalDedup.DedupCache.tryGet evalDedupCache sid code now with
+          | Some cached ->
+            Log.debug "Eval dedup hit for session %s (code hash %08x)" sid (code.GetHashCode())
+            Instrumentation.fsiEvals.Add(1L)
+            return (cached, false)
+          | None ->
+
+          let state =
+            compilationStates.GetOrAdd(sid, fun _ -> Middleware.CompilationContext.CompilationState.empty)
+
+          let! fileStructure, updatedCache =
+            match filePath with
+            | Some fp -> task {
+              try
+                let! fs, cache =
+                  Middleware.CompilationContext.parseFileStructureCached fp code state.FileCache
+                return Some fs, cache
+              with
+              | :? System.OperationCanceledException as ex ->
+                return raise ex
+              | exn ->
+                Log.debug "CompilationContext parse failed for %s: %s" fp exn.Message
+                return None, state.FileCache
+              }
+            | None -> Task.FromResult(None, state.FileCache)
+
+          let parsedMode = Middleware.CompilationContext.EvalMode.parse evalMode
+          let preprocessed, updatedModules =
+            Middleware.CompilationContext.preprocessForFsi
+              fileStructure parsedMode blockStartLine state.EvaluatedModules code
+
+          // Note: concurrent MCP calls for the same session could race here.
+          // Blast radius is small — lost cache entry means one extra ~7ms parse,
+          // lost EvaluatedModules entry means unnecessary `open` or duplicate module error.
+          // Acceptable since evals are effectively serialized per session by the FSI lock.
+          compilationStates.[sid] <- { state with EvaluatedModules = updatedModules; FileCache = updatedCache }
+
+          let statements = McpAdapter.splitStatements preprocessed.Code
+          Instrumentation.fsiEvals.Add(1L)
+          Instrumentation.fsiStatements.Add(int64 statements.Length)
+          let span = Instrumentation.startSpan Instrumentation.mcpSource "fsi.eval"
+                       ["fsi.agent.name", box agentName; "fsi.statement.count", box statements.Length; "fsi.session.id", box sid]
+          // Record agent activity for multi-agent coordination
+          AgentActivityTracker.recordToolCall ctx.ActivityTracker agentName sid filePath intent DateTime.UtcNow
+
+          let mutable allOutputs = []
+          let mutable anyError = false
+          for statement in statements do
+            let! output, errored = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset statement
+            allOutputs <- output :: allOutputs
+            if errored then anyError <- true
+
+          let finalOutput =
+            match format with
+            | Json when statements.Length > 1 ->
+              let items = List.rev allOutputs |> List.map (fun s -> s) |> String.concat ","
+              sprintf "[%s]" items
+            | _ when statements.Length > 1 ->
+              String.concat "\n\n" (List.rev allOutputs)
+            | _ -> allOutputs |> List.tryHead |> Option.defaultValue ""
+
+          Features.EvalDedup.DedupCache.record evalDedupCache sid code finalOutput (DateTimeOffset.UtcNow)
+          Instrumentation.succeedSpan span
+          // Compute file-overlap advisory AFTER caching raw output
+          let enrichedOutput =
+            match filePath with
+            | Some fp ->
+              let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+              let advisories = SessionOperations.FileOverlapAdvisory.compute agentName [fp] presences
+              SessionOperations.CoordinationEnrichment.enrichEvalWithAdvisories advisories finalOutput
+            | None -> finalOutput
+          return (enrichedOutput, anyError)
+        }
+      | other ->
+        return (sprintf "Error: %s" (formatSessionResolution other), true)
+    }
+
+  /// String-only view of evalFSharpCodeWithOutcome — keeps existing callers.
   let sendFSharpCode
       (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat)
       (sessionId: string option) (workingDirectory: string option)
       (filePath: string option) (evalMode: string option) (blockStartLine: int option)
       (intent: string option)
       : Task<string> =
-    withSession ctx agentName sessionId workingDirectory (fun sid -> task {
-      // Temporal dedup: skip re-evaluation if identical code was just evaluated
-      let now = DateTimeOffset.UtcNow
-      match Features.EvalDedup.DedupCache.tryGet evalDedupCache sid code now with
-      | Some cached ->
-        Log.debug "Eval dedup hit for session %s (code hash %08x)" sid (code.GetHashCode())
-        Instrumentation.fsiEvals.Add(1L)
-        return cached
-      | None ->
-
-      let state =
-        compilationStates.GetOrAdd(sid, fun _ -> Middleware.CompilationContext.CompilationState.empty)
-
-      let! fileStructure, updatedCache =
-        match filePath with
-        | Some fp -> task {
-          try
-            let! fs, cache =
-              Middleware.CompilationContext.parseFileStructureCached fp code state.FileCache
-            return Some fs, cache
-          with
-          | :? System.OperationCanceledException as ex ->
-            return raise ex
-          | exn ->
-            Log.debug "CompilationContext parse failed for %s: %s" fp exn.Message
-            return None, state.FileCache
-          }
-        | None -> Task.FromResult(None, state.FileCache)
-
-      let parsedMode = Middleware.CompilationContext.EvalMode.parse evalMode
-      let preprocessed, updatedModules =
-        Middleware.CompilationContext.preprocessForFsi
-          fileStructure parsedMode blockStartLine state.EvaluatedModules code
-
-      // Note: concurrent MCP calls for the same session could race here.
-      // Blast radius is small — lost cache entry means one extra ~7ms parse,
-      // lost EvaluatedModules entry means unnecessary `open` or duplicate module error.
-      // Acceptable since evals are effectively serialized per session by the FSI lock.
-      compilationStates.[sid] <- { state with EvaluatedModules = updatedModules; FileCache = updatedCache }
-
-      let statements = McpAdapter.splitStatements preprocessed.Code
-      Instrumentation.fsiEvals.Add(1L)
-      Instrumentation.fsiStatements.Add(int64 statements.Length)
-      let span = Instrumentation.startSpan Instrumentation.mcpSource "fsi.eval"
-                   ["fsi.agent.name", box agentName; "fsi.statement.count", box statements.Length; "fsi.session.id", box sid]
-      // Record agent activity for multi-agent coordination
-      AgentActivityTracker.recordToolCall ctx.ActivityTracker agentName sid filePath intent DateTime.UtcNow
-
-      let mutable allOutputs = []
-      for statement in statements do
-        let! output = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset statement
-        allOutputs <- output :: allOutputs
-
-      let finalOutput =
-        match format with
-        | Json when statements.Length > 1 ->
-          let items = List.rev allOutputs |> List.map (fun s -> s) |> String.concat ","
-          sprintf "[%s]" items
-        | _ when statements.Length > 1 ->
-          String.concat "\n\n" (List.rev allOutputs)
-        | _ -> allOutputs |> List.tryHead |> Option.defaultValue ""
-
-      Features.EvalDedup.DedupCache.record evalDedupCache sid code finalOutput (DateTimeOffset.UtcNow)
-      Instrumentation.succeedSpan span
-      // Compute file-overlap advisory AFTER caching raw output
-      let enrichedOutput =
-        match filePath with
-        | Some fp ->
-          let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
-          let advisories = SessionOperations.FileOverlapAdvisory.compute agentName [fp] presences
-          SessionOperations.CoordinationEnrichment.enrichEvalWithAdvisories advisories finalOutput
-        | None -> finalOutput
-      return enrichedOutput
-    })
+    task {
+      let! output, _ = evalFSharpCodeWithOutcome ctx agentName code format sessionId workingDirectory filePath evalMode blockStartLine intent
+      return output
+    }
 
   let getRecentEvents (ctx: McpContext) (agent: string) (count: int) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun sid -> task {
