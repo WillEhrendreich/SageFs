@@ -155,3 +155,36 @@ let sessionHealthTests =
       DaemonHealth.formatUptime (TimeSpan.FromDays 1.5)
       |> Expect.equal "days" "1d 12h"
   ]
+
+[<Tests>]
+let structuredErrorTests =
+  testList "DaemonHealth structured error" [
+
+    testCase "no error for a ready session" <| fun _ ->
+      DaemonHealth.structuredErrorForFault "Ready" (Some "nope")
+      |> Expect.equal "ready session carries no error" None
+
+    testCase "faulted session with reason surfaces structured message" <| fun _ ->
+      match DaemonHealth.structuredErrorForFault "Faulted" (Some "worker crashed") with
+      | Some err ->
+        let props =
+          err.GetType().GetProperties()
+          |> Array.map (fun p -> p.Name, p.GetValue(err))
+          |> Map.ofArray
+        props.TryFind "message" |> Expect.isSome "message field present"
+        props.TryFind "suggestedAction" |> Expect.isSome "suggestedAction field present"
+        props.TryFind "message" |> Option.bind (fun v -> v :?> string |> Some) |> Expect.equal "message carries the reason" (Some "worker crashed")
+      | None -> failwith "expected a structured error for the faulted session"
+
+    testCase "faulted session without reason carries no error" <| fun _ ->
+      DaemonHealth.structuredErrorForFault "Faulted" None
+      |> Expect.equal "no reason means no error object" None
+
+    testCase "stopped session with reason surfaces structured message" <| fun _ ->
+      DaemonHealth.structuredErrorForFault "Stopped" (Some "session ended")
+      |> Expect.isSome "stopped session with reason should surface an error"
+
+    testCase "warming session with reason carries no error" <| fun _ ->
+      DaemonHealth.structuredErrorForFault "Warming Up" (Some "still warming")
+      |> Expect.equal "warming is not a fault" None
+  ]

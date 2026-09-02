@@ -1413,10 +1413,19 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
         | Some SageFs.Features.SessionHealthStatus.Evaluating -> true
         | _ -> false
       let diagnosticSummary = SageFs.Features.DaemonHealth.diagnosticSummary healthSnapshot
+      // Structured error for the Faulted/Stopped case: the VS Code client
+      // branches on `error` and shows { message, suggestedAction } with an
+      // action button — a null error leaves it rendering a bare icon with
+      // no message. Populate it from the faulted session's reason when one
+      // exists (sessionStates carry the faulted session's faultReason).
+      let sessionError =
+        sessionStates
+        |> Array.tryPick (fun s -> SageFs.Features.DaemonHealth.structuredErrorForFault s.status s.faultReason)
+        |> Option.defaultValue (null :> obj)
       do! jsonResponse ctx 200
             {| healthy = healthy
                status = sessionStatus
-               error = (null :> obj)
+               error = sessionError
                version = version
                apiVersion = SageFs.EndpointContracts.apiVersion
                features = [ "live-testing"; "coverage-intel"; "impact-forecast"; "action-prioritizer"; "mark-all-stale"; "time-travel" ]

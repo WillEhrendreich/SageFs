@@ -174,3 +174,23 @@ module DaemonHealth =
           (String.concat ", " projects)
           sessions.Length
           breakdown
+
+  /// The structured `error` object for /health responses: clients (e.g. the VS
+  /// Code extension) branch on `status.error` and render { message,
+  /// suggestedAction } with an action button when a session is Faulted or
+  /// Stopped. Returns None when there is no fault to surface (null on the wire).
+  let structuredErrorForFault (statusLabel: string) (faultReason: string option) : obj option =
+    let isFaultedOrStopped =
+      statusLabel = "Faulted" || statusLabel = "Stopped"
+
+    if not isFaultedOrStopped then
+      None
+    else
+      match faultReason with
+      | Some reason when reason <> "" ->
+        let structuredError : obj =
+          box
+            {| message = reason
+               suggestedAction = "Open the SageFs output panel for details, then restart the session (hard reset if it stays faulted)" |}
+        Some structuredError
+      | _ -> None
