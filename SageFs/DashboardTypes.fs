@@ -74,6 +74,7 @@ module Signals =
   let [<Literal>] FrictionDrawerOpen = "frictionDrawerOpen"
   let [<Literal>] FrictionEndpoint = "frictionEndpoint"
   let [<Literal>] FrictionToken = "frictionToken"
+  let [<Literal>] FrictionEdits = "frictionEdits"
   let [<Literal>] FrictionSending = "frictionSending"
 
 /// Precomputed syntax-color RGB → CSS class lookup (eliminates 12-branch if/elif chain)

@@ -1234,6 +1234,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             snap.LiveTestingPanel
             snap.BindingsPanel
             snap.SessionContextPanel
+            snap.FrictionPanel
           ]
           Elem.details
             [ Attr.class' "panel new-session-panel" ]
@@ -1475,6 +1476,112 @@ let renderHotReloadEmpty =
       Text.raw "No active session"
     ]
   ]
+
+/// Render the friction review panel (Phase 5 dashboard journey).
+///
+/// Privacy model: this panel shows ONLY the user's LOCAL friction telemetry
+/// (the SQLite store). It renders a sanitized preview of what a send would
+/// contain, editable reason fields bound to Datastar signals, an endpoint +
+/// optional token, and the local send history. The send handler is
+/// server-authoritative — the client never assembles the payload.
+let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReviewSnapshot) =
+  let escAttr (s: string) =
+    s.Replace("&", "&amp;").Replace("\"", "&quot;").Replace("<", "&lt;").Replace(">", "&gt;")
+  Elem.details [ Attr.id DomIds.FrictionPanel; Attr.class' "panel"; Attr.style "margin-top: 0.5rem;" ] [
+    Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
+      Elem.span [] [ Text.raw (sprintf "🧾 Friction (%d events, %d feedback)" snap.EventCount snap.FeedbackCount) ]
+    ]
+    match snap.IsEmpty with
+    | true ->
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem; margin-top: 0.4rem;" ] [
+        Text.raw "No local friction recorded yet. It appears here as SageFs tools are used."
+      ]
+    | false ->
+      Elem.div [ Attr.style "margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem;" ] [
+        Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
+          Text.raw "Report is sanitized locally before send. You can edit the reasons below."
+        ]
+        // Top tools with friction — a compact preview of the outbound summary
+        (match snap.Outgoing.ToolsWithFriction with
+         | [] -> Elem.div [] []
+         | tools ->
+           Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.72rem; color: var(--fg-dim);" ] [
+             for t in tools |> List.truncate 5 do
+               Elem.li [] [
+                 Text.raw (sprintf "%s — %d calls, %d blocked, %d abandoned, %d feedback"
+                   t.Tool t.Invocations t.Blocked t.Abandoned t.ExplicitFeedback)
+               ]
+           ])
+        // Editable feedback reasons — one textarea per (tool, kind). Each is
+        // a .friction-edit field carrying its data-tool/data-kind; the send
+        // button assembles them into the frictionEdits signal JSON.
+        (match snap.Outgoing.RecentFeedback with
+         | [] -> Elem.div [] []
+         | feedback ->
+           Elem.div [ Attr.style "display: flex; flex-direction: column; gap: 0.3rem;" ] [
+             for f in feedback do
+               Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; display: block;" ] [
+                 Text.raw (sprintf "%s (%s)" f.Tool f.Kind)
+               ]
+               Elem.textarea
+                 [ Attr.class' "eval-input friction-edit"
+                   Attr.create "data-tool" (escAttr f.Tool)
+                   Attr.create "data-kind" (escAttr f.Kind)
+                   Attr.style "min-height: 3rem; height: auto; font-size: 0.75rem;" ]
+                 [ Text.raw f.Reason ]
+           ])
+        // Endpoint + optional token, bound to signals.
+        Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; display: block;" ] [
+          Text.raw "Report endpoint (https, or http to localhost)"
+        ]
+        Elem.input
+          [ Attr.class' "eval-input"
+            Attr.style "min-height: auto; height: 2rem; font-size: 0.75rem;"
+            Ds.bind Signals.FrictionEndpoint
+            Attr.create "placeholder" "https://your-worker.example.workers.dev/" ]
+        Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; display: block; margin-top: 0.3rem;" ] [
+          Text.raw "Ingest token (optional)"
+        ]
+        Elem.input
+          [ Attr.class' "eval-input"
+            Attr.style "min-height: auto; height: 2rem; font-size: 0.75rem;"
+            Ds.bind Signals.FrictionToken
+            Attr.create "placeholder" "token if your receiver requires one" ]
+        // Send button + result status. The click handler assembles the
+        // per-reason edits into frictionEdits before POSTing.
+        Elem.div [ Attr.style "display: flex; gap: 0.4rem; align-items: center; margin-top: 0.4rem;" ] [
+          Elem.button
+            [ Attr.class' "eval-btn"
+              Attr.style "font-size: 0.75rem; height: 2rem; padding: 0 0.6rem;"
+              Ds.indicator Signals.FrictionSending
+              Ds.attr' ("disabled", "$frictionSending")
+              Ds.onEvent ("click", "var edits={};document.querySelectorAll('.friction-edit').forEach(function(ta){if(ta.dataset.tool&&ta.dataset.kind)edits[ta.dataset.tool+'|'+ta.dataset.kind]=ta.value});var h=document.getElementById('friction-edits-json');h.value=JSON.stringify(edits);h.dispatchEvent(new Event('input',{bubbles:true}));@post('/dashboard/friction/send')") ]
+            [ Elem.span [ Ds.show "$frictionSending" ] [ Text.raw "⏳ " ]
+              Text.raw "Send Report" ]
+        ]
+        Elem.input
+          [ Attr.id "friction-edits-json"
+            Attr.type' "hidden"
+            Ds.bind Signals.FrictionEdits ]
+        Elem.div [ Attr.id DomIds.FrictionSendStatus ] []
+        // Local send history.
+        (match snap.SentReports with
+         | [] -> Elem.div [] []
+         | history ->
+           Elem.details [ Attr.style "margin-top: 0.4rem;" ] [
+             Elem.summary [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; cursor: pointer;" ] [
+               Text.raw (sprintf "Sent reports (%d)" history.Length)
+             ]
+             Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.7rem; color: var(--fg-dim);" ] [
+               for s in history |> List.truncate 10 do
+                 Elem.li [] [
+                   Text.raw (sprintf "%s — %s (%d events)" s.ReportId (s.SentAtUtc.ToLocalTime().ToString("g")) s.TotalEvents)
+                 ]
+             ]
+           ])
+      ]
+  ]
+
 
 /// Render the live testing panel with ON/OFF toggle and test summary when active.
 let renderLiveTestingPanel (isActive: bool) (statusLabel: string) (testsPassed: int option) (testsFailed: int option) =

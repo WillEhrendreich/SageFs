@@ -219,7 +219,7 @@ let renderShell (version: string) (initialSessionId: string) (initialContent: Xm
       Elem.link [ Attr.rel "stylesheet"; Attr.href "/dashboard/dashboard.css" ]
     ]
     Elem.body [ Ds.safariStreamingFix ] [
-      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream?session=%s" (Uri.EscapeDataString initialSessionId))); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false") ] []
+      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream?session=%s" (Uri.EscapeDataString initialSessionId))); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false"); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, "false") ] []
       Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
       ]
@@ -414,6 +414,23 @@ let buildDashboardSnapshot
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
     let warmupProgress = q.GetWarmupProgress sessionId
     let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanels q sessionId stateStr warmupProgress
+    // Friction review panel — local store only. Built server-side so the
+    // client never assembles raw telemetry.
+    let! frictionStore = q.GetFrictionStore () |> Async.AwaitTask
+    let frictionPanel =
+      match frictionStore with
+      | None -> Elem.div [ Attr.id DomIds.FrictionPanel ] []
+      | Some store ->
+        let reportResult =
+          SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store None
+          |> Async.AwaitTask
+          |> Async.RunSynchronously
+        let historyResult = store.ListSentReports ()
+        match reportResult, historyResult with
+        | Ok report, Ok history ->
+          let view = SageFs.Features.FrictionReviewView.build report history
+          renderFrictionPanel view
+        | _ -> Elem.div [ Attr.id DomIds.FrictionPanel ] []
     let snap : DashboardSnapshot = {
       Version = infra.Version
       SessionState = stateStr
@@ -438,7 +455,7 @@ let buildDashboardSnapshot
       ThemePicker = renderThemePicker themeName
       ThemeVars = renderThemeVars themeName
       BindingsPanel = bindingsPanel
-      FrictionPanel = Elem.div [] []
+      FrictionPanel = frictionPanel
     }
     return snap, sessionId, themeName
   }
@@ -1037,19 +1054,25 @@ let isAllowedFrictionEndpoint (endpoint: string) : bool =
     | _ -> false
   | _ -> false
 
-/// POST /dashboard/friction/send — receive a sanitized report from the
-/// client, POST it to the user's configured Cloudflare Worker endpoint,
-/// and record the send in the local FrictionStore so the dashboard can
-/// show "you already sent 3 reports this week".
+/// POST /dashboard/friction/send — server-authoritative friction send.
+///
+/// Privacy + integrity model:
+/// - The client supplies ONLY the destination (frictionEndpoint + optional
+///   frictionToken) and optional per-feedback reason edits (frictionEdits).
+///   It NEVER supplies the report payload — the server builds the outgoing
+///   report from the LOCAL SQLite store and sanitizes it (FrictionSanitize)
+///   immediately before serialization. A buggy or malicious client cannot
+///   push raw local data out; the server is the only assembly point.
+/// - The destination is validated strictly (https, or http to loopback)
+///   before any network I/O.
+/// - The receipt is recorded only after remote acceptance AND local
+///   receipt-write success.
 let createFrictionSendHandler
   (q: DashboardQueries)
   : HttpHandler =
   fun ctx -> task {
     try
       use! doc = readSignalsJsonSized ctx
-      // The client signals the endpoint URL, ingest token, sanitized
-      // payload JSON, and a few metadata fields. Everything is per-client:
-      // the server has no opinion about where reports go.
       let endpoint =
         match doc.RootElement.TryGetProperty("frictionEndpoint") with
         | true, prop -> prop.GetString()
@@ -1058,88 +1081,82 @@ let createFrictionSendHandler
         match doc.RootElement.TryGetProperty("frictionToken") with
         | true, prop -> prop.GetString()
         | _ -> ""
-      let payloadJson =
-        match doc.RootElement.TryGetProperty("frictionPayload") with
+      let editsJson =
+        match doc.RootElement.TryGetProperty("frictionEdits") with
+        | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String -> prop.GetString()
         | true, prop -> prop.GetRawText()
         | _ -> ""
-      let sageFsVersion =
-        match doc.RootElement.TryGetProperty("frictionVersion") with
-        | true, prop -> prop.GetString()
-        | _ -> ""
-      let totalEvents =
-        match doc.RootElement.TryGetProperty("frictionTotalEvents") with
-        | true, prop -> prop.GetInt32()
-        | _ -> 0
-      let totalFeedback =
-        match doc.RootElement.TryGetProperty("frictionTotalFeedback") with
-        | true, prop -> prop.GetInt32()
-        | _ -> 0
       Response.sseStartResponse ctx |> ignore
-      match endpoint.Length, payloadJson.Length with
-      | 0, _ | _, 0 ->
-        do! ssePatchNode ctx (frictionSendResultDom false "missing endpoint or payload" "")
+      match endpoint.Length with
+      | 0 ->
+        do! ssePatchNode ctx (frictionSendResultDom false "missing endpoint" "")
       | _ ->
-        // P0 safety: the client supplies the destination, so validate it
-        // strictly before any network I/O (see isAllowedFrictionEndpoint).
+        // P0 safety: validate the destination strictly before any network I/O.
         match isAllowedFrictionEndpoint endpoint with
         | false ->
           do! ssePatchNode ctx (frictionSendResultDom false "endpoint must be an absolute https URL (http allowed only to loopback)" "")
         | true ->
-          let urlHash = frictionEndpointHash endpoint
-          let mutable attemptError : string option = None
-          let mutable reportId = ""
-          try
-            use http = new HttpClient()
-            http.Timeout <- System.TimeSpan.FromSeconds(15.0)
-            try
-              let req = new HttpRequestMessage(HttpMethod.Post, endpoint)
-              req.Content <- new StringContent(payloadJson, System.Text.Encoding.UTF8, "application/json")
-              if token.Length > 0 then
-                req.Headers.Add("X-SageFs-Token", token)
-              let! resp = http.SendAsync(req) |> Async.AwaitTask
-              let! body = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
-              if resp.IsSuccessStatusCode then
+          // Server-authoritative: build the report from the local store.
+          let! store = q.GetFrictionStore () |> Async.AwaitTask
+          match store with
+          | None ->
+            do! ssePatchNode ctx (frictionSendResultDom false "no local friction store is available to build the report" "")
+          | Some s ->
+            let! reportResult = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect s None |> Async.AwaitTask
+            match reportResult with
+            | Error err ->
+              do! ssePatchNode ctx (frictionSendResultDom false err "")
+            | Ok report ->
+              let outgoing = SageFs.Features.FrictionReviewView.buildOutgoingForSend report editsJson
+              let payloadJson = System.Text.Json.JsonSerializer.Serialize(outgoing)
+              let urlHash = frictionEndpointHash endpoint
+              let mutable attemptError : string option = None
+              let mutable reportId = ""
+              try
+                use http = new HttpClient()
+                http.Timeout <- System.TimeSpan.FromSeconds(15.0)
                 try
-                  use respDoc = System.Text.Json.JsonDocument.Parse(body)
-                  let root = respDoc.RootElement
-                  reportId <-
-                    match root.TryGetProperty("reportId") with
-                    | true, p -> p.GetString()
-                    | _ -> ""
-                with _ -> ()
-                let sentAt = System.DateTimeOffset.UtcNow
-                let sent =
-                  { ReportId = if reportId.Length > 0 then reportId else System.Guid.NewGuid().ToString("N").[..12]
-                    SentAtUtc = sentAt
-                    SageFsVersion = sageFsVersion
-                    TotalEvents = totalEvents
-                    TotalFeedbackItems = totalFeedback
-                    DestinationKind = "cloudflare-worker"
-                    DestinationUrlHash = urlHash }
-                let! store = q.GetFrictionStore () |> Async.AwaitTask
-                // P0 safety: the receipt is only "sent" after BOTH remote
-                // acceptance AND local receipt-write success. A receipt-write
-                // failure must NOT report success — the user would believe the
-                // report was durably recorded when it was not.
-                match store with
-                | Some s ->
-                  match s.RecordSentReport sent with
-                  | Ok () ->
-                    do! ssePatchNode ctx (frictionSendResultDom true "" reportId)
-                  | Error e ->
-                    Log.warn "[friction] failed to record sent report locally: %s" e
-                    attemptError <- Some (sprintf "worker accepted the report but recording the local receipt failed: %s" e)
-                | None ->
-                  attemptError <- Some "worker accepted the report but no local friction store is available to record the receipt"
-              else
-                attemptError <- Some (sprintf "worker returned %d: %s" (int resp.StatusCode) (if body.Length > 200 then body.[..200] + "..." else body))
-            finally
-              http.Dispose()
-          with ex ->
-            attemptError <- Some ex.Message
-          match attemptError with
-          | Some err -> do! ssePatchNode ctx (frictionSendResultDom false err "")
-          | None -> ()
+                  let req = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                  req.Content <- new StringContent(payloadJson, System.Text.Encoding.UTF8, "application/json")
+                  if token.Length > 0 then
+                    req.Headers.Add("X-SageFs-Token", token)
+                  let! resp = http.SendAsync(req) |> Async.AwaitTask
+                  let! body = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+                  if resp.IsSuccessStatusCode then
+                    try
+                      use respDoc = System.Text.Json.JsonDocument.Parse(body)
+                      let root = respDoc.RootElement
+                      reportId <-
+                        match root.TryGetProperty("reportId") with
+                        | true, p -> p.GetString()
+                        | _ -> ""
+                    with _ -> ()
+                    let sentAt = System.DateTimeOffset.UtcNow
+                    let sent =
+                      { ReportId = if reportId.Length > 0 then reportId else System.Guid.NewGuid().ToString("N").[..12]
+                        SentAtUtc = sentAt
+                        SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current ()
+                        TotalEvents = outgoing.TotalEvents
+                        TotalFeedbackItems = outgoing.TotalFeedbackItems
+                        DestinationKind = "cloudflare-worker"
+                        DestinationUrlHash = urlHash }
+                    // P0 safety: the receipt is only "sent" after BOTH remote
+                    // acceptance AND local receipt-write success.
+                    match s.RecordSentReport sent with
+                    | Ok () ->
+                      do! ssePatchNode ctx (frictionSendResultDom true "" reportId)
+                    | Error e ->
+                      Log.warn "[friction] failed to record sent report locally: %s" e
+                      attemptError <- Some (sprintf "worker accepted the report but recording the local receipt failed: %s" e)
+                  else
+                    attemptError <- Some (sprintf "worker returned %d: %s" (int resp.StatusCode) (if body.Length > 200 then body.[..200] + "..." else body))
+                finally
+                  http.Dispose()
+              with ex ->
+                attemptError <- Some ex.Message
+              match attemptError with
+              | Some err -> do! ssePatchNode ctx (frictionSendResultDom false err "")
+              | None -> ()
     with
     | :? RequestTooLargeException -> ()
     | ex -> Log.warn "[friction] send failed: %s" ex.Message
