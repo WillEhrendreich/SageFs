@@ -749,7 +749,7 @@ let createEvalFileHandler
         match isContained && File.Exists canonical with
         | false ->
           ctx.Response.StatusCode <- 403
-          do! ctx.Response.WriteAsJsonAsync({| error = "File not found or outside session working directory" |})
+          do! ctx.Response.WriteAsJsonAsync({| success = false; error = "File not found or outside session working directory" |})
         | true ->
           let! code = File.ReadAllTextAsync(canonical)
           let codeWithTerminator =
@@ -767,7 +767,11 @@ let createEvalFileHandler
     | :? RequestTooLargeException -> ()  // 413 already written
     | ex ->
       ctx.Response.StatusCode <- 500
-      do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+      let details = SageFs.SageFsError.toJson (SageFs.SageFsError.Unexpected ex)
+      do! ctx.Response.WriteAsJsonAsync(
+            {| success = false
+               error = SageFs.SageFsError.describe (SageFs.SageFsError.Unexpected ex)
+               errorDetails = details |})
   }
 let createCompletionsHandler
   (getCompletions: WorkerProtocol.SessionId -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>)
@@ -809,7 +813,11 @@ let createCompletionsHandler
     | :? RequestTooLargeException -> ()
     | ex ->
       ctx.Response.StatusCode <- 500
-      do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+      let details = SageFs.SageFsError.toJson (SageFs.SageFsError.Unexpected ex)
+      do! ctx.Response.WriteAsJsonAsync(
+            {| success = false
+               error = SageFs.SageFsError.describe (SageFs.SageFsError.Unexpected ex)
+               errorDetails = details |})
   }
 
 /// Create the reset POST handler.
