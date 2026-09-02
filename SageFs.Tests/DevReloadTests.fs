@@ -378,43 +378,31 @@ let middlewareTests = testList "DevReload.Middleware" [
 let killSwitchTests = testSequenced <| testList "DevReload.KillSwitch" [
 
   test "SAGEFS_DEVRELOAD=false disables injection" {
-    let original = Environment.GetEnvironmentVariable("SAGEFS_DEVRELOAD")
-    try
-      Environment.SetEnvironmentVariable("SAGEFS_DEVRELOAD", "false")
+    SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" (Some "false") (fun () ->
       let disabled =
         match Environment.GetEnvironmentVariable("SAGEFS_DEVRELOAD") with
         | "false" | "0" -> true
         | _ -> false
-      disabled |> Expect.isTrue "kill switch should be respected"
-    finally
-      Environment.SetEnvironmentVariable("SAGEFS_DEVRELOAD", original)
+      disabled |> Expect.isTrue "kill switch should be respected")
   }
 
   test "SAGEFS_DEVRELOAD=0 disables injection" {
-    let original = Environment.GetEnvironmentVariable("SAGEFS_DEVRELOAD")
-    try
-      Environment.SetEnvironmentVariable("SAGEFS_DEVRELOAD", "0")
+    SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" (Some "0") (fun () ->
       let disabled =
         match Environment.GetEnvironmentVariable("SAGEFS_DEVRELOAD") with
         | "false" | "0" -> true
         | _ -> false
-      disabled |> Expect.isTrue "kill switch with 0 should be respected"
-    finally
-      Environment.SetEnvironmentVariable("SAGEFS_DEVRELOAD", original)
+      disabled |> Expect.isTrue "kill switch with 0 should be respected")
   }
 
   test "SAGEFS_DEVRELOAD unset means enabled" {
-    let original = Environment.GetEnvironmentVariable("SAGEFS_DEVRELOAD")
-    try
-      Environment.SetEnvironmentVariable("SAGEFS_DEVRELOAD", null)
+    SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" None (fun () ->
       let disabled =
         match Environment.GetEnvironmentVariable("SAGEFS_DEVRELOAD") with
         | null | "" | "true" | "1" -> false
         | "false" | "0" -> true
         | _ -> false
-      disabled |> Expect.isFalse "unset should mean enabled"
-    finally
-      Environment.SetEnvironmentVariable("SAGEFS_DEVRELOAD", original)
+      disabled |> Expect.isFalse "unset should mean enabled")
   }
 ]
 

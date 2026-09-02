@@ -15,6 +15,21 @@ let quietLogger =
       member _.LogWarning msg = ()
   }
 
+/// Serialize process-global environment-variable mutations across test lists.
+/// Expecto runs test LISTS in parallel, so two lists mutating the same env
+/// var (SAGEFS_DEVRELOAD kill-switch tests + HotReloadTool env-reading tests)
+/// race: one test's SetEnvironmentVariable can be observed mid-flight by the
+/// other, producing intermittent failures that pass in isolation.
+let envLock = obj()
+
+let withEnvVar (name: string) (value: string option) (f: unit -> 'T) : 'T =
+  lock envLock (fun () ->
+    let original = System.Environment.GetEnvironmentVariable(name)
+    System.Environment.SetEnvironmentVariable(name, (match value with Some v -> v | None -> null))
+    try f ()
+    finally
+      System.Environment.SetEnvironmentVariable(name, original))
+
 /// Create a temporary file-based SQLite friction store for tests.
 /// Each call creates a new database file in the temp directory.
 /// The file is NOT automatically cleaned up — tests should delete it if needed,

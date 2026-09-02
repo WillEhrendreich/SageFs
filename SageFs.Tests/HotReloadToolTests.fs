@@ -67,29 +67,26 @@ let private mkTools
 let hotReloadToolTests =
   testList "HotReloadTool" [
 
-    // Ensure a clean env-var state for every test. Earlier tests can leave
-    // SAGEFS_DEVRELOAD set in the process, which would break this one.
-    let resetEnv () =
-      System.Environment.SetEnvironmentVariable("SAGEFS_DEVRELOAD", null)
+    // Env-var hygiene: SAGEFS_DEVRELOAD mutations are serialized across test
+    // lists via TestInfrastructure.withEnvVar (Expecto runs lists in
+    // parallel; the DevReload.KillSwitch list mutates the same var).
 
     testCase "enable_hot_reload returns PatchFailed gracefully when SageFs.Host is not loaded" <| fun _ ->
-      resetEnv ()
-      let port = 40000
-      let tools = mkTools (Some port)
-      let m = tools.GetType().GetMethod("enable_hot_reload")
-      let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
-      raw.Result
-      |> System.Text.Json.JsonDocument.Parse
-      |> fun doc -> doc.RootElement
-      |> fun n ->
-        let health = n.GetProperty("health").GetString()
-        Expect.stringContains "should mention PatchFailed" "PatchFailed" health
-        Expect.stringContains "should mention DevReloadInjector or host assembly" "DevReloadInjector" health
+      SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" None (fun () ->
+        let port = 40000
+        let tools = mkTools (Some port)
+        let m = tools.GetType().GetMethod("enable_hot_reload")
+        let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
+        raw.Result
+        |> System.Text.Json.JsonDocument.Parse
+        |> fun doc -> doc.RootElement
+        |> fun n ->
+          let health = n.GetProperty("health").GetString()
+          Expect.stringContains "should mention PatchFailed" "PatchFailed" health
+          Expect.stringContains "should mention DevReloadInjector or host assembly" "DevReloadInjector" health)
 
     testCase "enable_hot_reload respects SAGEFS_DEVRELOAD=0" <| fun _ ->
-      resetEnv ()
-      System.Environment.SetEnvironmentVariable("SAGEFS_DEVRELOAD", "0")
-      try
+      SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" (Some "0") (fun () ->
         let tools = mkTools (Some 40000)
         let m = tools.GetType().GetMethod("enable_hot_reload")
         let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
@@ -106,9 +103,7 @@ let hotReloadToolTests =
           |> Seq.map (fun x -> x.GetString ())
           |> Seq.toList
           |> String.concat " "
-        steps |> Expect.stringContains "should mention how to unset the env var" "unset"
-      finally
-        System.Environment.SetEnvironmentVariable("SAGEFS_DEVRELOAD", null)
+        steps |> Expect.stringContains "should mention how to unset the env var" "unset")
 
     testCase "enable_hot_reload returns PatchFailed when worker port is 0" <| fun _ ->
       let tools = mkTools None
