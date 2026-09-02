@@ -992,15 +992,26 @@ module SessionManager =
           onTestDiscovery id tests providers
           return! loop state
 
-        | SessionCommand.WorkerSpawnFailed(id, _workerPid, msg) ->
-          Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
+        | SessionCommand.WorkerSpawnFailed(id, workerPid, msg) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
-            let updated = faultedTombstone (Some msg) session
-            let newState = ManagerState.addSession id updated state
-            onSessionReady id  // notify clients of Faulted state change
-            onSessionFaulted id msg
-            return! loop newState
+            // Ignore stale spawn-failure events from a replaced worker: a hard
+            // reset kills the old process while its awaitWorkerPort task is
+            // still reading stdout; on EOF it posts WorkerSpawnFailed, which
+            // would tombstone the FRESH worker to Faulted. The pid on the
+            // message exists precisely so this race can be closed (the same
+            // discipline WorkerExited already applies).
+            match session.Info.WorkerPid with
+            | Some currentPid when workerPid > 0 && currentPid <> workerPid ->
+              Log.warn "[SessionManager] Ignoring stale WorkerSpawnFailed for session %s (event pid %d != current pid %d)" (SessionId.value id) workerPid currentPid
+              return! loop state
+            | _ ->
+              Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
+              let updated = faultedTombstone (Some msg) session
+              let newState = ManagerState.addSession id updated state
+              onSessionReady id  // notify clients of Faulted state change
+              onSessionFaulted id msg
+              return! loop newState
           | None ->
             return! loop state
 

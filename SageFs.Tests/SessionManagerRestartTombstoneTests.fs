@@ -242,7 +242,56 @@ let sessionManagerRestartTombstoneTests =
         harness.FaultedEvents[0] |> snd
         |> Expect.stringContains "fault message should include the spawn reason" "spawn boom"
 
-    testCase "late WorkerExited from old worker does not erase tombstone" <| fun _ ->
+    testCase "late WorkerSpawnFailed from old worker does not tombstone the replacement" <| fun _ ->
+      // The stale-pid race: a hard reset kills the old process while its
+      // awaitWorkerPort task is still reading stdout; on EOF it posts
+      // WorkerSpawnFailed with the OLD pid. The handler must compare the
+      // message pid against the session's current worker pid and ignore the
+      // stale failure — otherwise the fresh worker is tombstoned to Faulted.
+      let distinctProcesses =
+        Process.GetProcesses()
+        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
+      if distinctProcesses.Length = 0 then
+        skiptest "need a second live process to simulate distinct worker pids"
+      let oldPidProcess = distinctProcesses[0]
+
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun call ->
+            match call with
+            | 1 -> Ok(Process.GetCurrentProcess())   // original worker
+            | _ -> Ok(oldPidProcess))                // replacement worker
+
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        let originalPid =
+          info.WorkerPid
+          |> Option.defaultWith (fun () -> failtest "expected worker pid")
+
+        // Cold restart registers the replacement worker (new pid).
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
+        |> ignore
+
+        let afterRestart = getManagedSession harness info.Id
+        let replacementPid =
+          afterRestart.Info.WorkerPid
+          |> Option.defaultWith (fun () -> failtest "expected replacement worker pid")
+        replacementPid
+        |> Expect.notEqual "replacement should have a distinct pid from the original" originalPid
+
+        // Late spawn-failure from the OLD worker arrives after the restart.
+        harness.Mailbox.Post(SessionCommand.WorkerSpawnFailed(info.Id, originalPid, "old worker died on EOF"))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> ignore
+
+        let session = getManagedSession harness info.Id
+        session.Info.Status
+        |> Expect.equal "stale spawn failure must not tombstone the fresh worker" SessionStatus.Starting
+        session.Info.WorkerPid
+        |> Expect.equal "fresh worker pid survives the stale spawn failure" (Some replacementPid)
+        harness.FaultedEvents |> Seq.length
+        |> Expect.equal "stale spawn failure should not fire a fault callback" 0
       let runtime =
         mkRuntime
           (fun _ -> Error "build boom")
