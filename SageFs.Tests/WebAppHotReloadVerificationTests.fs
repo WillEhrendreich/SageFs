@@ -196,6 +196,21 @@ let private readSseUntil (reader: StreamReader) (timeoutMs: int) (predicate: str
     failwithf "SSE stream did not produce a matching event within %dms" timeoutMs
   found
 
+/// Write a fixture file with retry: a host process killed at the end of a
+/// previous test can briefly hold the file (FileSystemWatcher + FSI handle
+/// teardown), and two [Integration] tests share the fixture directory.
+let private writeFixtureFile (path: string) (content: string) =
+  let sw = Stopwatch.StartNew()
+  let mutable written = false
+  while not written && sw.ElapsedMilliseconds < 15000L do
+    try
+      File.WriteAllText(path, content)
+      written <- true
+    with :? IOException ->
+      Thread.Sleep 200
+  if not written then
+    failwithf "could not write fixture file %s within 15s (locked by a previous host?)" path
+
 /// The fixture's App.fs is the file we edit on disk. This test is the plan's
 /// required RED test: a real module-declared Falco/ASP.NET fixture whose route
 /// closes over a function. Start the app through a SageFs Live-workflow
@@ -256,7 +271,7 @@ let webAppHotReloadVerificationTests =
             "let greeting () = \"hello from sagefs\"",
             "let greeting () = \"hello from hot reload (value B)\"")
         Expect.stringContains "fixture should contain the editable greeting function" "let greeting () = \"hello from sagefs\"" original
-        File.WriteAllText(appSource, edited)
+        writeFixtureFile appSource edited
         try
           // 8. Observe Compiling -> Reload through the real worker SSE path.
           readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"reload\""))
@@ -269,7 +284,7 @@ let webAppHotReloadVerificationTests =
             "hello from hot reload (value B)" bodyB
         finally
           // Always restore the fixture so later runs start from value A.
-          File.WriteAllText(appSource, original)
+          writeFixtureFile appSource original
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
@@ -307,7 +322,7 @@ let webAppHotReloadVerificationTests =
           original.Replace(
             "let greeting () = \"hello from sagefs\"",
             "let greeting () : int = \"this will not compile\"")
-        File.WriteAllText(appSource, broken)
+        writeFixtureFile appSource broken
         try
           let failedEvt =
             try
@@ -334,7 +349,7 @@ let webAppHotReloadVerificationTests =
             original.Replace(
               "let greeting () = \"hello from sagefs\"",
               "let greeting () = \"hello from hot reload (value B)\"")
-          File.WriteAllText(appSource, repaired)
+          writeFixtureFile appSource repaired
           let written = File.ReadAllText(appSource)
           Expect.stringContains "repair write should have landed on disk" "hello from hot reload (value B)" written
           try
@@ -356,7 +371,7 @@ let webAppHotReloadVerificationTests =
             (sprintf "repair should hot-reload the new greeting from the running process.\nHost log:\n%s" (hostLog.ToString()))
             "hello from hot reload (value B)" bodyB
         finally
-          File.WriteAllText(appSource, original)
+          writeFixtureFile appSource original
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
