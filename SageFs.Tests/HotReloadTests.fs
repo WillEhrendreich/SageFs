@@ -318,9 +318,15 @@ let noInliningInjectionTests =
       let result = injectNoInlining "let h : int = 42"
       Flip.Expect.equal "typed val should be unchanged" "let h : int = 42" result
 
-    testCase "skips indented let (not top-level)" <| fun () ->
-      let result = injectNoInlining "  let nested () = 1"
-      Flip.Expect.equal "indented let should be unchanged" "  let nested () = 1" result
+    testCase "injects on indented module-member function" <| fun () ->
+      // Chesterton's fence: module-declared files are transformed by indenting
+      // the module body, so the detour target is indented. It must get
+      // NoInlining or the JIT inlines it into the route closure and Harmony
+      // has nothing to detour (P0 hot-reload gap).
+      let result = injectNoInlining "module Greeting =\n  let greeting () = \"hi\""
+      Flip.Expect.stringContains
+        "should inject NoInlining on indented module-member function"
+        "[<MethodImpl(MethodImplOptions.NoInlining)>]" result
 
     testCase "injects on static member" <| fun () ->
       let result = injectNoInlining "static member Hello () = \"hi\""

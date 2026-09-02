@@ -3,6 +3,13 @@
     <PropertyGroup>
         <OutputType>Library</OutputType>
         <IsPackable>false</IsPackable>
+        <!-- Core must compile for BOTH net11 (daemon/dashboard default) and
+             net10 (the FSI host process, which needs Harmony for hot reload —
+             Harmony 2.4.2 does not support CoreCLR 11). Directory.Build.props
+             sets net11 for the whole repo; multi-target here. Must clear the
+             singular TargetFramework first or it overrides TargetFrameworks. -->
+        <TargetFramework></TargetFramework>
+        <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
     </PropertyGroup>
 
     <ItemGroup>
@@ -210,6 +217,10 @@
         <PackageReference Include="FSharp.SystemTextJson" />
         <PackageReference Include="FsToolkit.ErrorHandling" />
         <PackageReference Include="Microsoft.Data.Sqlite" />
+        <!-- Explicit logging abstractions: net11 resolves this transitively via
+             FSharp.Compiler.Service, but the net10 target does not. Pinning it
+             explicitly (central version 9.0.1) keeps both TFMs consistent. -->
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <!-- Direct reference to the native SQLite library: pins the transitive
              SQLitePCLRaw.lib.e_sqlite3 to a version bundling SQLite >= 3.50.2,
              resolving CVE-2025-6965 (GHSA-2m69-gcr7-jv3q). The 2.1.x managed

@@ -52,9 +52,14 @@ let isTopLevelFunctionBindingTests = testList "isTopLevelFunctionBinding" [
     isTopLevelFunctionBinding "let x : int = 42"
     |> Expect.isFalse "typed value is not function"
   }
-  test "indented binding is not top-level" {
+  test "indented module-member function IS detourable" {
+    // Chesterton's fence: hot-reload transforms module-declared files by
+    // indenting the module body, so the detour target (e.g. `greeting` inside
+    // `module Greeting =`) is indented. Requiring column-0 meant module-nested
+    // functions never got NoInlining, the JIT inlined them, and Harmony had
+    // nothing to detour — the P0 hot-reload gap.
     isTopLevelFunctionBinding "  let f x = x"
-    |> Expect.isFalse "indented is not top-level"
+    |> Expect.isTrue "indented module-member function must be recognized"
   }
   test "let! is not a binding" {
     isTopLevelFunctionBinding "let! x = async { return 1 }"
@@ -274,18 +279,22 @@ let cleanStdoutNoAnsi =
 
 // --- isTopLevelFunctionBinding: hot-reload patch safety ---
 
-/// Hot reload only needs NoInlining on TOP-LEVEL functions.
-/// Nested bindings (inside match/if/function bodies) are never
-/// Harmony patch targets. Injecting attributes on them would
-/// change indentation semantics and potentially break compilation.
-let topLevelRejectsIndented =
+/// Hot reload needs NoInlining on module-member FUNCTIONS (which the
+/// hot-reload transform indents inside `module X =` wrappers) so Harmony can
+/// detour them. Indentation no longer disqualifies a function binding — but a
+/// function binding must still have parameters (not be a value). This property
+/// asserts indented FUNCTION bindings are accepted while indented VALUE
+/// bindings are still rejected.
+let topLevelAcceptsIndentedFunctions =
   testPropertyWithConfig cfg
-    "isTopLevelFunctionBinding: any leading whitespace means not top-level"
+    "isTopLevelFunctionBinding: indented function bindings are detourable"
     <| fun (NonNegativeInt indent) (name: NonEmptyString) ->
-      let spaces = String(' ', indent + 1)
+      let spaces = String(' ', indent)
       let safeName = Text.RegularExpressions.Regex.Replace(name.Get, @"[^a-zA-Z_]", "a")
-      let line = sprintf "%slet %s x = x" spaces safeName
-      isTopLevelFunctionBinding line = false
+      let fnLine = sprintf "%slet %s x = x" spaces safeName
+      let valueLine = sprintf "%slet %s = 42" spaces safeName
+      isTopLevelFunctionBinding fnLine = true
+      && isTopLevelFunctionBinding valueLine = false
 
 /// Users mark functions `private`/`inline`/`rec` for their own reasons.
 /// The hot-reload detector must classify function-vs-value regardless
@@ -2625,7 +2634,7 @@ let allPureModulesTests = testList "Pure modules comprehensive" [
       cleanStdoutNoAnsi
     ]
     testList "isTopLevelFunctionBinding" [
-      topLevelRejectsIndented
+      topLevelAcceptsIndentedFunctions
       modifiersDontAffectClassification
     ]
     testList "injectNoInlining" [

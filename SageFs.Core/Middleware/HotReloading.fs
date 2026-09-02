@@ -134,7 +134,15 @@ type Event =
 let getAllMethods (asm: Assembly) =
   let rec getMethods currentPath (t: Type) =
     try
-      let newPath =
+      // Chesterton's fence: never add an FSI_* type name to the path — not for
+      // the type's own methods AND not when descending into nested types. The
+      // old recursion added t.Name to the CHILD path unconditionally
+      // (`getMethods (t.Name :: currentPath)`), so a nested module under the
+      // FSI root class (FSI_0007+WebAppFixture+Greeting) registered as
+      // FSI_0007.WebAppFixture.Greeting.greeting — a name that never
+      // EndsWith-matches the #load'd top-level WebAppFixture.Greeting.greeting,
+      // so the route's captured method was never detoured.
+      let pathForChildren =
         match t.Name.Contains "FSI_" with
         | true -> currentPath
         | false -> t.Name :: currentPath
@@ -142,7 +150,7 @@ let getAllMethods (asm: Assembly) =
       let methods =
         t.GetMethods()
         |> Array.filter (fun m -> m.IsStatic && not <| m.IsGenericMethod)
-        |> Array.map (Method.make newPath)
+        |> Array.map (Method.make pathForChildren)
         |> Array.toList
 
       let nestedTypes =
@@ -150,7 +158,7 @@ let getAllMethods (asm: Assembly) =
           t.GetNestedTypes() |> Array.toList
         with _ -> []
 
-      let nestedMethods = nestedTypes |> List.collect (getMethods (t.Name :: currentPath))
+      let nestedMethods = nestedTypes |> List.collect (getMethods pathForChildren)
       methods @ nestedMethods
     with ex ->
       // Skip this specific type but continue with others
@@ -186,10 +194,35 @@ let getAllMethods (asm: Assembly) =
       Log.logWarn $"Failed to get types from assembly %s{asm.GetName().Name}: %s{ex.Message}"
       []
 
-  // Only process exported/public types
-  let publicTypes = types |> List.filter (fun t -> t.IsPublic || t.IsNestedPublic)
+  // Only process exported/public types. Nested types are handled by their
+  // parent's recursion (getMethods walks GetNestedTypes), so skip them in the
+  // top-level iteration — processing them twice produced duplicate/spurious
+  // FullNames (e.g. `Greeting.greeting` alongside `WebAppFixture.Greeting.greeting`
+  // for the same method) that confused the detour matcher.
+  let topLevelTypes =
+    types
+    |> List.filter (fun t -> not t.IsNested && (t.IsPublic || t.IsNestedPublic))
 
-  publicTypes |> List.collect (getMethods [])
+  /// Chesterton's fence: FSI represents a `namespace Foo.Bar` file's types as
+  /// top-level types whose FULL name is `FSI_0042.Foo.Bar.Greeting` but whose
+  /// t.Name is just `Greeting` and t.Namespace is `FSI_0042.Foo.Bar`. Building
+  /// the path from t.Name alone drops the `Foo.Bar` namespace, so a `#load`'d
+  /// module registers as `Greeting.greeting` while a hot-reload re-eval (which
+  /// wraps in `module Foo.Bar =`) produces `Foo.Bar.Greeting.greeting`. The
+  /// longer name never EndsWith-matches the shorter registered name, so no
+  /// detour ever fires and the running app keeps the old closure (P0 gap).
+  /// Seed the path with the namespace segments (minus any FSI_ prefix) so both
+  /// sides register the same qualified name.
+  let seedPath (t: Type) : string list =
+    match t.Namespace with
+    | null | "" -> []
+    | ns ->
+      ns.Split('.')
+      |> Array.filter (fun seg -> not (seg.Contains "FSI_"))
+      |> Array.toList
+
+  topLevelTypes
+  |> List.collect (fun t -> getMethods (seedPath t) t)
 
 let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
   // Setup assembly resolver once
@@ -380,8 +413,16 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
     logger.LogDebug (sprintf "Hot-reload detour skipped (type init failure): %s — %s" method.Name ex.InnerException.Message)
 
 let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assembly) (st: State) =
+  // Chesterton's fence: the `prev = asm` dedup only applies to NON-dynamic
+  // assemblies. In WebLive the FSI session runs with --multiemit- (single
+  // assembly mode): EVERY eval lands in the SAME persistent FSI-ASSEMBLY, so
+  // object identity is constant and the old check made the middleware
+  // early-return after the first eval — no hot-reload re-eval was ever
+  // processed, no detour ever fired (P0 hot-reload gap). Dynamic assemblies
+  // must always be processed; the method merge is idempotent (Map.add
+  // overwrites) and the detour matcher pairs old->new per eval.
   match st.LastAssembly with
-  | Some prev when prev = asm -> st, []
+  | Some prev when prev = asm && not asm.IsDynamic -> st, []
   | _ ->
     // Compute getAllMethods once — used for both method merge and hot-reload matching.
     // getAllMethods has internal try/catch for ReflectionTypeLoadException so this is safe.
@@ -410,27 +451,12 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
       match hotReloadEnabled with
       | false -> []
       | true ->
-        let scoreCandidate (newMethod: Method) (existingMethod: Method) =
-          let moduleCandidate =
-            st.LastOpenModules
-            |> Seq.map (fun o ->
-              match existingMethod.FullName.EndsWith(o + "." + newMethod.FullName,
-                StringComparison.Ordinal) with
-              | true -> 2
-              | false -> 0)
-            |> Seq.fold max 0
-          let noModuleCandidate =
-            match existingMethod.FullName.EndsWith(newMethod.FullName,
-              StringComparison.Ordinal) with
-            | true -> 1
-            | false -> 0
-          max moduleCandidate noModuleCandidate
-
         newMethods
-        |> Seq.choose (fun newMethod ->
+        |> Seq.collect (fun newMethod ->
           Map.tryFind newMethod.MethodInfo.Name st.Methods
-          |> Option.bind (
-            Seq.filter (fun existingMethod ->
+          |> Option.map (fun existing ->
+            existing
+            |> Seq.filter (fun existingMethod ->
               // Chesterton's fence: .ParameterType/.ReturnType can throw
               // TypeLoadException when FSI redefines a type across compilation
               // units. Even with the hotReloadEnabled gate, this can happen for
@@ -439,7 +465,30 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
                 let getParams m =
                   m.MethodInfo.GetParameters() |> Array.map _.ParameterType
 
-                getParams existingMethod = getParams newMethod
+                // Chesterton's fence: only detour USER module functions, not
+                // FSI bookkeeping. In single-assembly mode the accumulated
+                // assembly contains REPL temp accessors (get_it, set_it,
+                // get_asm, ...) and the framework's own methods; detouring
+                // those is collateral damage — patching FSI's `it` accessor
+                // corrupted the running session. A detourable method must have
+                // a dotted module path (WebAppFixture.Greeting.greeting) and a
+                // name that is not an FSI temp-value accessor.
+                let isDetourable (m: Method) =
+                  let name = m.MethodInfo.Name
+                  let full = m.FullName
+                  full.Contains(".")
+                  && not (name.StartsWith("get_", StringComparison.Ordinal) && full.StartsWith("get_", StringComparison.Ordinal))
+                  && not (name = "get_it" || name = "set_it" || name = "get_asm")
+
+                // Chesterton's fence: never detour a method onto itself. In
+                // WebLive's --multiemit- single-assembly mode the FSI assembly
+                // ACCUMULATES every eval's methods, and st.Methods (merged
+                // from prior evals) contains the very method being considered
+                // as "new" — pairing it with itself makes MonoMod throw
+                // "Cannot detour a method to itself!" and the eval crashes.
+                existingMethod.MethodInfo <> newMethod.MethodInfo
+                && isDetourable newMethod
+                && getParams existingMethod = getParams newMethod
                 && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
                 && existingMethod.FullName.EndsWith(newMethod.FullName, StringComparison.Ordinal)
               with
@@ -448,28 +497,17 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
                   sprintf "Hot-reload param comparison skipped (TypeLoadException): %s — %s"
                     newMethod.FullName ex.Message)
                 false)
-            // Chesterton's fence: exact qualified-name matching replaces FuzzySharp.
-            // Fuzzy string matching for method identity is a heuristic that can match
-            // the wrong method (e.g. `getUser` vs `getUsers` have high Fuzz.Ratio).
-            // Instead: prefer exact suffix match with last-opened module prepended,
-            // then fall back to exact suffix match on the raw FullName.
-            >> Seq.sortByDescending (scoreCandidate newMethod)
-            >> fun candidates ->
-              let arr = candidates |> Seq.truncate 2 |> Seq.toArray
-              match arr.Length with
-              | 0 -> None
-              | 1 -> Some arr[0]
-              | _ ->
-                let s0 = scoreCandidate newMethod arr[0]
-                let s1 = scoreCandidate newMethod arr[1]
-                match s0 = s1 with
-                | true ->
-                  logger.LogWarning(
-                    sprintf "Ambiguous hot-reload match for %s: %s and %s both score %d. Picking first — consider qualifying the module name."
-                      newMethod.FullName arr[0].FullName arr[1].FullName s0)
-                | false -> ()
-                Some arr[0])
-          |> Option.map (fun oldMethod -> oldMethod, newMethod))
+            // Chesterton's fence: detour EVERY distinct older method with a
+            // matching signature onto the newest, not just the best-scoring
+            // one. In single-assembly FSI mode each re-eval leaves the prior
+            // eval's method in the accumulated assembly AND in st.Methods, and
+            // the running app's route closure may have captured ANY of them
+            // (the #load's FSI_0005, a prior re-eval's FSI_0007, ...). Picking
+            // only the "best" left the actually-captured method undetoured and
+            // the app kept serving the old value. Detouring all of them is
+            // safe (Harmony just rewrites each entry point to the newest).
+            |> Seq.map (fun oldMethod -> oldMethod, newMethod))
+          |> Option.defaultValue Seq.empty)
         |> Seq.toList
 
     // Apply Harmony detours — already gated by replacementPairs being [] when disabled.
@@ -502,9 +540,18 @@ let getOpenModules (replCode: string) st =
 ///   let f (x: int) = .. → function (typed params)
 ///   let x = 42          → value (no params)
 ///   let h : Type = ...  → value (type annotation, no params)
+///
+/// Chesterton's fence: accepts INDENTED function bindings too (module-member
+/// functions like `  let greeting () = ...` inside `module Greeting =`).
+/// The hot-reload pipeline transforms module-declared files by indenting the
+/// module body, so the detour target `greeting` is indented. Requiring column-0
+/// meant module-nested functions never got NoInlining, the JIT inlined them
+/// into the route closure, and Harmony had nothing to detour — the running app
+/// kept serving the old value (P0 hot-reload gap). Local `let f x =` inside a
+/// function body is also a method and getting NoInlining is harmless.
 let isTopLevelFunctionBinding (line: string) =
   let trimmed = line.TrimStart()
-  match not (trimmed.StartsWith("let ", System.StringComparison.Ordinal)) || trimmed.StartsWith("let!", System.StringComparison.Ordinal) || line <> line.TrimStart() with
+  match not (trimmed.StartsWith("let ", System.StringComparison.Ordinal)) || trimmed.StartsWith("let!", System.StringComparison.Ordinal) with
   | true -> false
   | false ->
     let mutable s = trimmed.Substring(4).TrimStart()
@@ -534,11 +581,12 @@ let isStaticMemberFunction (line: string) =
 
 /// Strip `let` keyword + modifiers, returning the remaining text after the name.
 /// Used by multi-line binding detection to identify function signatures that span lines.
+/// Accepts indented bindings (module-member functions) — see
+/// isTopLevelFunctionBinding for why column-0 is not required.
 let private startsLetBinding (line: string) =
   let trimmed = line.TrimStart()
   match trimmed.StartsWith("let ", System.StringComparison.Ordinal)
-        && not (trimmed.StartsWith("let!", System.StringComparison.Ordinal))
-        && line = line.TrimStart() with
+        && not (trimmed.StartsWith("let!", System.StringComparison.Ordinal)) with
   | false -> None
   | true ->
     let mutable s = trimmed.Substring(4).TrimStart()
@@ -632,10 +680,31 @@ let injectNoInlining (code: string) =
   match injectionLines.IsEmpty with
   | true -> code
   | false ->
+    // Chesterton's fence: skip injecting when the binding ALREADY carries a
+    // [<MethodImpl(NoInlining)>] attribute on the line(s) directly above it.
+    // User source files (like the hot-reload verification fixture) may declare
+    // NoInlining themselves so the startup #load is not inlined into the route
+    // closure; injecting a SECOND attribute on the watcher's re-eval makes FSI
+    // fail with "MethodImplAttribute has AllowMultiple=false" — the save then
+    // errors instead of hot-reloading (P0 gap).
+    let hasExistingAttribute (idx: int) =
+      let mutable j = idx - 1
+      let mutable found = false
+      while j >= 0 && not found do
+        let t = lines.[j].Trim()
+        match t with
+        | "" -> j <- j - 1
+        | _ ->
+          if t.StartsWith("[<MethodImpl", StringComparison.Ordinal)
+             || t.StartsWith("[<System.Runtime.CompilerServices.MethodImpl", StringComparison.Ordinal) then
+            found <- true
+          else
+            j <- -1 // stop at the first non-blank, non-attribute line
+      found
     let sb = System.Text.StringBuilder()
     sb.Append("open System.Runtime.CompilerServices\n") |> ignore
     for i in 0 .. lines.Length - 1 do
-      match Set.contains i injectionLines with
+      match Set.contains i injectionLines && not (hasExistingAttribute i) with
       | true ->
         let line = lines.[i]
         let indent = line.Length - line.TrimStart().Length

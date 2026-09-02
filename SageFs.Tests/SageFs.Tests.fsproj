@@ -349,6 +349,14 @@
         <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
         <ProjectReference Include="..\SageFs\SageFs.fsproj" />
         <ProjectReference Include="..\SageFs.Host\SageFs.Host.fsproj" />
+        <!-- The web-app hot-reload fixture is a build-time dependency: the
+             host process #loads its source and needs the fixture's compiled
+             bin/ assemblies to resolve references. Reference with
+             ReferenceOutputAssembly=false so the fixture DLL is built (and its
+             bin/ populated) without polluting the test project's references. -->
+        <ProjectReference Include="fixtures\WebAppFixture\WebAppFixture.fsproj"
+                          PrivateAssets="all"
+                          ReferenceOutputAssembly="false" />
     </ItemGroup>
 
 </Project>

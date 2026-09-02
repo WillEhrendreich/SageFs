@@ -651,6 +651,30 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
     logger.LogInfo (sprintf "  FSI session created in %dms, loading startup files..." sw.ElapsedMilliseconds)
     onProgress(1, 4, "FSI session created")
 
+    // Chesterton's fence: evaluate the embedded base.fsx FIRST so the
+    // feature-gate flags (_SageFsHotReload, _SageFsCompExpr) are bound before
+    // any user code runs. The middleware gates read these via
+    // Session.TryFindBoundValue; if they are never bound, hot-reload detouring
+    // and computation-expression rewriting silently no-op (the P0 hot-reload
+    // gap: WebLive sessions never detoured because _SageFsHotReload was
+    // unbound). getBaseConfigString() was dead code — wire it here.
+    let baseConfig =
+      try
+        SageFs.Utils.Configuration.getBaseConfigString()
+        |> Async.AwaitTask
+        |> Async.RunSynchronously
+      with ex ->
+        logger.LogWarning (sprintf "  Failed to load embedded base.fsx: %s" ex.Message)
+        ""
+    match baseConfig.Trim() with
+    | "" -> ()
+    | _ ->
+      logger.LogInfo "  Loading embedded base.fsx (feature gates)"
+      try
+        fsiSession.EvalInteraction(baseConfig, ct)
+      with ex ->
+        logger.LogWarning (sprintf "  base.fsx eval failed (continuing): %s" ex.Message)
+
     for fileName in sln.StartupFiles do
       ct.ThrowIfCancellationRequested()
       logger.LogInfo $"Loading %s{fileName}"

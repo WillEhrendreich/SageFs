@@ -305,10 +305,42 @@ let transformWholeFile (fs: FileStructure) (code: string) : PreprocessResult =
         l.Trim().StartsWith("namespace "))
     match nsLineIdx with
     | Some idx ->
-      let body = lines.[idx + 1 ..] |> String.concat "\n"
-      { Code = body
+      // Chesterton's fence: a `namespace X` file must NOT be reduced to its
+      // bare body. The hot-reload pipeline re-evals the file on every save and
+      // relies on Harmony detour name-matching between the startup-captured
+      // methods and the re-eval'd ones. If the namespace is stripped, FSI puts
+      // the re-eval'd modules at the top level (module Greeting =) while the
+      // compiled app's methods live under the namespace
+      // (FSI_0043.WebAppFixture.Greeting). The FullName suffix no longer
+      // matches, no detour fires, and the running app keeps serving the old
+      // closure — the exact P0 hot-reload gap. Instead, convert the namespace
+      // to nested modules so re-eval'd module identity matches the compiled
+      // app: `namespace A.B.C` → `module A = module B = module C =`.
+      let nsName =
+        let t = lines.[idx].Trim()
+        t.Substring("namespace".Length).Trim()
+      let nsParts = nsName.Split('.') |> Array.filter (fun p -> p <> "")
+      let bodyLines = lines.[idx + 1 ..]
+      let indentedBody =
+        bodyLines
+        |> Array.map (fun l ->
+          match l.Trim() = "" with
+          | true -> ""
+          | false -> "  " + l)
+      let wrapped =
+        match nsParts with
+        | [||] ->
+          // Malformed namespace — pass through the body unmodified.
+          bodyLines |> String.concat "\n"
+        | _ ->
+          // Fold outside-in: each part becomes one `module X =` nesting level.
+          nsParts
+          |> Array.rev
+          |> Array.fold (fun inner part ->
+            sprintf "module %s =\n%s" part (indentCode inner)) (indentedBody |> String.concat "\n")
+      { Code = wrapped
         LineOffset = -1
-        ColumnOffset = 0
+        ColumnOffset = 2
         OriginalFilePath = Some fs.FilePath }
     | None ->
       { Code = code; LineOffset = 0; ColumnOffset = 0

@@ -20,14 +20,22 @@ let commonInitFunctions = [ HotReloading.hotReloadingInitFunction ]
 open System
 open System.IO
 
-/// Extract unique project directories from a Solution.
+/// Project directories for the file watcher. Derives from BOTH the Ionide
+/// ProjectOptions list AND the manual-parse FSharpProjectOptions fallback
+/// (FsProjects): when Ionide's WorkspaceLoader returns 0 projects (e.g. an
+/// MSBuild eval failure in-process), loadSolution falls back to a manual
+/// fsproj parse that fills only FsProjects. Without this, ProjectDirectories
+/// is empty, the file watcher is skipped, and hot reload silently never fires
+/// on file saves — the exact P0 hot-reload gap.
 let projectDirectories (sln: Solution) : string list =
-  sln.Projects
-  |> List.choose (fun p ->
-    let dir = Path.GetDirectoryName(p.ProjectFileName)
+  let dirOf (projectFile: string) =
+    let dir = Path.GetDirectoryName(projectFile)
     match String.IsNullOrEmpty(dir) with
     | true -> None
-    | false -> Some (Path.GetFullPath(dir)))
+    | false -> Some (Path.GetFullPath(dir))
+  sln.Projects
+  |> List.choose (fun p -> dirOf p.ProjectFileName)
+  |> List.append (sln.FsProjects |> List.choose (fun p -> dirOf p.ProjectFileName))
   |> List.distinct
 
 type ActorArgs = {
