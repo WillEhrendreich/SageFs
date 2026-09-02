@@ -476,6 +476,56 @@ let stream4Tests =
       |> Expect.isTrue
           "when live testing is already enabled, a session transitioning to running should register its watcher"
     }
+
+    // ── Test 8 ──────────────────────────────────────────────────────
+    // WHY: Disabling live testing must release the watcher claims that
+    // EnableLiveTesting registered, or every enable/disable cycle leaks
+    // a FileSystemWatcher per running session (OS handles + duplicate
+    // FileReloaded attribution after re-enable). This is the "dispose
+    // half" of the dispose/recreate lifecycle across disable/restart.
+    test "disable live testing disposes watcher claims for every running session" {
+      let snapA = mkSession "session-a" "/projects/alpha"
+      let snapB = mkSession "session-b" "/projects/beta"
+      // NOTE: do NOT use withLiveTesting here — it pre-enables, which would
+      // short-circuit the Enable below. Build the two-session model first.
+      let model =
+        SageFsModel.initial ()
+        |> withSession snapA
+        |> withSession snapB
+
+      // Enable registers one watcher per running session's working dir.
+      let enabled, enableEffects =
+        SageFsUpdate.update SageFsMsg.EnableLiveTesting model
+      let registerDirs =
+        enableEffects
+        |> List.choose (fun e ->
+          match e with
+          | SageFsEffect.TestCycle (TestCycleEffect.RegisterFileWatcher (_, dir)) -> Some dir
+          | _ -> None)
+        |> Set.ofList
+      registerDirs
+      |> Expect.equal
+          "enable should register watchers for both running sessions"
+          (Set.ofList [ "/projects/alpha"; "/projects/beta" ])
+
+      let _disabled, disableEffects =
+        SageFsUpdate.update SageFsMsg.DisableLiveTesting enabled
+
+      let disposeDirs =
+        disableEffects
+        |> List.choose (fun e ->
+          match e with
+          | SageFsEffect.TestCycle (TestCycleEffect.DisposeFileWatcher (_, dir)) -> Some dir
+          | _ -> None)
+        |> Set.ofList
+
+      // RED: today DisableLiveTesting emits no effects, so this set is
+      // empty and the watchers leak until the session stops.
+      disposeDirs
+      |> Expect.equal
+          "disable should dispose the watcher claim for every running session"
+          (Set.ofList [ "/projects/alpha"; "/projects/beta" ])
+    }
   ]
 
 // =====================================================================

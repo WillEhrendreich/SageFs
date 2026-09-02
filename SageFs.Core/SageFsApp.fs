@@ -1515,7 +1515,20 @@ module SageFsUpdate =
         let lt =
           refreshStatusesKeepingEntries model.LiveTesting (fun s ->
             { s with Activation = Features.LiveTesting.LiveTestingActivation.Inactive })
-        { model with LiveTesting = lt }, []
+        // Dispose the watcher claims that EnableLiveTesting registered for
+        // every running/stale session. Without this, each enable/disable
+        // cycle leaks a FileSystemWatcher per session (OS handles + stale
+        // FileReloaded attribution after re-enable).
+        let watcherEffects =
+          model.Sessions.Sessions
+          |> List.choose (fun session ->
+            match session.Status with
+            | SessionDisplayStatus.Running
+            | SessionDisplayStatus.Stale ->
+              Some (SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.DisposeFileWatcher
+                (SessionId.value session.Id, session.WorkingDirectory)))
+            | _ -> None)
+        { model with LiveTesting = lt }, watcherEffects
 
     | SageFsMsg.CycleRunPolicy ->
       let lt = model.LiveTesting
