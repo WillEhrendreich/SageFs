@@ -2,6 +2,7 @@ module SageFs.Server.DaemonMode
 
 open System
 open System.Threading
+open System.Threading.Tasks
 open SageFs
 open SageFs.WarmUp
 open SageFs.Utils
@@ -1107,6 +1108,11 @@ let startDashboardServer
       | h -> h
     app.Urls.Add(sprintf "http://%s:%d" bindHost dashboardPort)
     app.UseResponseCompression() |> ignore
+    // Browser-origin/CSRF gate: reject cross-site/non-loopback browser
+    // requests before any dashboard route runs (the dashboard exposes
+    // mutating endpoints — eval, session create/stop, shutdown).
+    app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
+      SageFs.Server.McpServer.originGuardMiddleware ctx next :> Task)) |> ignore
     app.UseRouting().UseFalco(endpoints) |> ignore
     log.LogInformation("Dashboard available at http://localhost:{Port}/dashboard", dashboardPort)
     do! app.RunAsync()

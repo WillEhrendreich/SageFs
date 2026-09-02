@@ -316,6 +316,31 @@ let errorHandlingMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: 
     | false -> do! jsonResponse ctx 500 {| success = false; error = ex.Message |}
 }
 
+/// Browser-origin/CSRF gate (see HttpOriginGuard). Rejects cross-site and
+/// non-loopback requests before any route runs; local tooling (curl, MCP,
+/// editors, CLI — no browser headers) passes untouched.
+let originGuardMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: Func<Task>) = task {
+  let host =
+    match ctx.Request.Host.HasValue with
+    | true -> Some (string ctx.Request.Host)
+    | false -> None
+  let secFetchSite =
+    match ctx.Request.Headers.TryGetValue("Sec-Fetch-Site") with
+    | true, v when not (System.String.IsNullOrWhiteSpace(string v)) -> Some (string v)
+    | _ -> None
+  let origin =
+    match ctx.Request.Headers.TryGetValue("Origin") with
+    | true, v when not (System.String.IsNullOrWhiteSpace(string v)) -> Some (string v)
+    | _ -> None
+  match SageFs.Server.HttpOriginGuard.decide host secFetchSite origin with
+  | SageFs.Server.HttpOriginGuard.Verdict.Allow ->
+    do! next.Invoke()
+  | SageFs.Server.HttpOriginGuard.Verdict.Reject reason ->
+    Log.warn "[origin-guard] rejected %s %s (%s)" ctx.Request.Method (string ctx.Request.Path) reason
+    ctx.Response.StatusCode <- 403
+    do! jsonResponse ctx 403 {| success = false; error = sprintf "Request rejected: %s" reason |}
+}
+
 /// Read and parse the request body as a JSON document.
 let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
   match ctx.Request.ContentLength with
@@ -2044,6 +2069,8 @@ let startMcpServer (cfg: McpServerConfig) =
       app.UseResponseCompression() |> ignore
       app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
         errorHandlingMiddleware ctx next :> Task)) |> ignore
+      app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
+        originGuardMiddleware ctx next :> Task)) |> ignore
       app.MapMcp() |> ignore
 
       // Phase 3: Route context + routes

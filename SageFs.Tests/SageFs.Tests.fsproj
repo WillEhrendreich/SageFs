@@ -52,6 +52,7 @@
         <Compile Include="WorkerMainTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
+        <Compile Include="HttpOriginGuardTests.fs" />
         <Compile Include="DaemonIntegrationTests.fs" />
         <Compile Include="SessionOperationsTests.fs" />
         <Compile Include="MultiAgentCoordinationTests.fs" />
