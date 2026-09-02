@@ -1606,11 +1606,19 @@ module McpTools =
           match List.isEmpty diags with
           | true -> "No errors found."
           | false ->
-            diags
-            |> List.map (fun d ->
-              sprintf "[%s] %s"
-                (Features.Diagnostics.DiagnosticSeverity.label d.Severity) d.Message)
-            |> String.concat "\n"
+            let lines =
+              diags
+              |> List.map (fun d ->
+                sprintf "[%s] (%d,%d) %s"
+                  (Features.Diagnostics.DiagnosticSeverity.label d.Severity)
+                  d.StartLine d.StartColumn
+                  d.Message)
+            let remediation =
+              diags
+              |> List.tryHead
+              |> Option.map (fun d -> SageFs.ErrorMessages.getSuggestion (SageFs.ErrorMessages.categorize d.Message))
+              |> Option.defaultValue ""
+            String.concat "\n" lines + "\n\n" + remediation
         | Ok other -> sprintf "Unexpected response: %A" other
         | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
     })
