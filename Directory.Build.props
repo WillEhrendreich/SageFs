@@ -1,13 +1,22 @@
 <Project>
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
+    <!-- Target net10.0 across the repo. DO NOT bump to net11.0 until Harmony
+         (and MonoMod) support CoreCLR 11: hot reload detours methods at
+         runtime, and Harmony 2.4.2 throws PlatformNotSupportedException
+         ("MonoMod may not support this runtime") on CoreCLR 11. SageFs ran
+         net11.0 + a net10-only host for a period and it cost a multi-target
+         matrix plus per-test skip guards for zero product benefit — every
+         Harmony-touching test had to skip on net11. Upgrade net10 -> net11
+         only AFTER verifying the full hot-reload journey (WebAppHotReload-
+         VerificationTests) passes on the new runtime with no skips. -->
+    <TargetFramework>net10.0</TargetFramework>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!-- F# nullness analysis: surfaces nullability warnings at compile time
          (requires the newer FCS/SDK — the whole point of keeping those current).
          NoWarn NU1608/NU1902 for the pre-1.0/known-audited transitive pins. -->
     <CheckNulls>true</CheckNulls>
     <NoWarn>$(NoWarn);NU1608;NU1902</NoWarn>
-    <Version>0.6.395</Version>
+    <Version>0.6.396</Version>
   </PropertyGroup>
 </Project>
 

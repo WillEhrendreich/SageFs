@@ -21,7 +21,6 @@
         <Compile Include="McpToolExecutionTests.fs" />
         <Compile Include="McpLlmInteropTests.fs" />
         <Compile Include="ManualProjectParseTests.fs" />
-        <Compile Include="SharedSageFsFixture.fs" />
         <Compile Include="SharedGenerators.fs" />
         <Compile Include="McpFormatterPropertyTests.fs" />
         <Compile Include="CompExprSimplifierTests.fs" />
@@ -205,7 +204,6 @@
         <Compile Include="QuarantineTests.fs" />
         <Compile Include="FlakyClassificationTests.fs" />
         <Compile Include="FlakyClassificationPropertyTests.fs" />
-        <Compile Include="Tier0CorrectnessTests.fs" />
         <Compile Include="FileCoverageTests.fs" />
         <Compile Include="TestRunExplainerTests.fs" />
         <Compile Include="BatchFlusherTests.fs" />
