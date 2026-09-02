@@ -107,6 +107,57 @@ let tests =
       |> LiveTestState.requiresPrimingEval
       |> Expect.isFalse "queued discovery should clear the priming requirement"
     }
+
+    test "zero-test discovery completion bumps the discovery generation" {
+      // Phase 3 RED: a completed zero-test discovery must be observable —
+      // the model must reach ReadyZeroTests AND carry a monotonic
+      // DiscoveryGeneration so clients can reject stale snapshots.
+      let initial = { LiveTestState.empty with Activation = LiveTestingActivation.Active }
+      let model =
+        { (SageFsModel.initial()) with
+            LiveTesting = { (SageFsModel.initial()).LiveTesting with TestState = initial } }
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("session-zero", [||])))
+          model
+
+      let state = model'.LiveTesting.TestState
+      state
+      |> LiveTestState.discoveryState
+      |> Expect.equal "zero-test discovery should surface ready_zero_tests" LiveTestDiscoveryState.ReadyZeroTests
+      state.DiscoveryGeneration
+      |> Expect.equal "zero-test discovery should bump the generation to 1" 1L
+    }
+
+    test "re-discovery replaces the session's prior tests and bumps generation again" {
+      // Phase 3 RED: discovery is REPLACEMENT state — a re-discovery that
+      // removed renamed/deleted tests must be observable via a new generation.
+      let tc1 = mkTestCase "Old.Tests.one" TestFramework.Expecto TestCategory.Unit
+      let tc2 = mkTestCase "New.Tests.two" TestFramework.Expecto TestCategory.Unit
+      let initial = { LiveTestState.empty with Activation = LiveTestingActivation.Active }
+      let baseModel =
+        { (SageFsModel.initial()) with
+            LiveTesting = { (SageFsModel.initial()).LiveTesting with TestState = initial } }
+
+      let afterFirst, _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("session-r", [| tc1 |])))
+          baseModel
+      afterFirst.LiveTesting.TestState.DiscoveryGeneration
+      |> Expect.equal "first discovery should bump generation to 1" 1L
+
+      // Re-discover with a renamed test — the old test must be swept.
+      let afterSecond, _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("session-r", [| tc2 |])))
+          afterFirst
+      let state = afterSecond.LiveTesting.TestState
+      state.DiscoveryGeneration
+      |> Expect.equal "re-discovery should bump generation to 2" 2L
+      state.DiscoveredTests
+      |> Array.map (fun t -> t.FullName)
+      |> Expect.equal "re-discovery must replace (sweep absent) rather than merge" [| "New.Tests.two" |]
+    }
   ]
 
 [<Tests>]

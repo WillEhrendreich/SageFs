@@ -1367,6 +1367,11 @@ type LiveTestState = {
   /// Timestamp of the most recent TestsDiscovered event merge. Used by run_tests to detect
   /// whether discovery completed after a hot-reload before proceeding with stale test list.
   LastDiscoveryTime: System.DateTimeOffset
+  /// Monotonic discovery generation: bumped on every meaningful TestsDiscovered
+  /// merge so downstream clients can treat discovery as REPLACEMENT state — a
+  /// snapshot tagged with an older generation is stale and must be rejected,
+  /// and a re-discovery that removed renamed/deleted tests is observable.
+  DiscoveryGeneration: int64
   /// Sessions currently running an explicit discovery request triggered by live-testing enablement.
   PendingDiscoverySessions: Set<string>
   LastDecision: LiveTestingDecision option
@@ -1467,6 +1472,7 @@ module LiveTestState =
     TestCoverageBitmaps = Map.empty
     Cached = CachedViews.empty
     LastDiscoveryTime = System.DateTimeOffset.MinValue
+    DiscoveryGeneration = 0L
     PendingDiscoverySessions = Set.empty
     LastDecision = None
   }

@@ -1219,11 +1219,20 @@ module SageFsUpdate =
         let locs =
           let emptyGraph : Features.CellDependencyGraph.CellGraph = { Cells = Map.empty; Edges = [] }
           Features.TestSourceResolver.resolveTestLocations emptyGraph (Array.toList tests)
+        // Zero-test discovery defect: completing discovery with zero tests must
+        // be observable. When discovery has NEVER completed (LastDiscoveryTime
+        // still MinValue), stamping it now is a meaningful change even if the
+        // test lists are both empty — it flips the derived discovery state from
+        // Discovering to ReadyZeroTests. Without this, a zero-test discovery
+        // against an empty state short-circuits and no client can ever learn
+        // that discovery finished.
+        let firstCompletion = state.LastDiscoveryTime = System.DateTimeOffset.MinValue
         let meaningfulChange =
           state.DiscoveredTests <> withSourceMap
           || state.TestSessionMap <> newSessionMap
           || state.PendingDiscoverySessions <> pendingDiscoverySessions
           || model.ResolvedSourceLocations <> locs
+          || (firstCompletion && state.Activation = Features.LiveTesting.LiveTestingActivation.Active)
         match meaningfulChange with
         | false -> model, []
         | true ->
@@ -1232,6 +1241,7 @@ module SageFsUpdate =
                 DiscoveredTests = withSourceMap
                 TestSessionMap = newSessionMap
                 LastDiscoveryTime = System.DateTimeOffset.UtcNow
+                DiscoveryGeneration = s.DiscoveryGeneration + 1L
                 PendingDiscoverySessions = pendingDiscoverySessions })
           let effects =
             match lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active

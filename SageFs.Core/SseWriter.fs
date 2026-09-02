@@ -109,6 +109,34 @@ let formatTestSummaryEvent
   let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "test_summary" json
 
+/// Format a TestSummary as an SSE event string, carrying the authoritative
+/// per-session discovery state + generation. Discovery is REPLACEMENT state:
+/// clients must reject summaries whose DiscoveryGeneration is older than the
+/// last one they applied, and ReadyZeroTests/ready_zero_tests is how a
+/// completed discovery with zero tests becomes observable (the zero-test
+/// suppression defect).
+let formatTestSummaryEventWithDiscovery
+  (opts: JsonSerializerOptions)
+  (sessionId: string option)
+  (summary: Features.LiveTesting.TestSummary)
+  (lastDecision: Features.LiveTesting.LiveTestingDecision option)
+  (discoveryState: Features.LiveTesting.LiveTestDiscoveryState)
+  (discoveryGeneration: int64)
+  : string =
+  let payload =
+    {| Total = summary.Total
+       Passed = summary.Passed
+       Failed = summary.Failed
+       Stale = summary.Stale
+       Running = summary.Running
+       Disabled = summary.Disabled
+       Enabled = summary.Enabled
+       DiscoveryState = Features.LiveTesting.LiveTestDiscoveryState.toWireValue discoveryState
+       DiscoveryGeneration = discoveryGeneration
+       LastDecision = lastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}
+  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
+  formatSseEvent "test_summary" json
+
 /// Format a TestResultsBatchPayload as an SSE event string
 let formatTestResultsBatchEvent (opts: JsonSerializerOptions) (sessionId: string option) (payload: Features.LiveTesting.TestResultsBatchPayload) : string =
   let wirePayload =

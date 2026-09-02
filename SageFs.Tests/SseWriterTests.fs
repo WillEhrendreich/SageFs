@@ -81,6 +81,36 @@ let sseTests = testList "SSE Writer" [
       result |> Expect.stringContains "should contain PascalCase Passed" "\"Passed\":8"
       result |> Expect.stringContains "should end with double newline" "\n\n"
   ]
+
+  testList "formatTestSummaryEventWithDiscovery" [
+    testCase "zero-test discovery completion is observable on the wire" <| fun () ->
+      // Phase 3 RED: a completed zero-test discovery must reach clients as
+      // ready_zero_tests with a discovery generation — not silence.
+      let opts = JsonSerializerOptions()
+      opts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+      let summary: SageFs.Features.LiveTesting.TestSummary = {
+        Total = 0; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true
+      }
+      let result =
+        formatTestSummaryEventWithDiscovery opts (Some "sess-1") summary None
+          SageFs.Features.LiveTesting.LiveTestDiscoveryState.ReadyZeroTests 7L
+      result |> Expect.stringContains "should be a test_summary event" "event: test_summary"
+      result |> Expect.stringContains "should carry session id" "\"SessionId\":\"sess-1\""
+      result |> Expect.stringContains "zero-test discovery must be observable" "ready_zero_tests"
+      result |> Expect.stringContains "should carry the discovery generation" "\"DiscoveryGeneration\":7"
+
+    testCase "ready_with_tests surfaces the discovered count on the wire" <| fun () ->
+      let opts = JsonSerializerOptions()
+      opts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+      let summary: SageFs.Features.LiveTesting.TestSummary = {
+        Total = 3; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true
+      }
+      let result =
+        formatTestSummaryEventWithDiscovery opts None summary None
+          (SageFs.Features.LiveTesting.LiveTestDiscoveryState.ReadyWithTests 3) 2L
+      result |> Expect.stringContains "non-zero discovery should surface ready_with_tests" "ready_with_tests"
+      result |> Expect.stringContains "should carry the discovery generation" "\"DiscoveryGeneration\":2"
+  ]
 ]
 
 /// Production-equivalent SSE serialization options (must match McpServer.fs sseJsonOpts)

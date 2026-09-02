@@ -522,11 +522,18 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
       let activeId = SseContext.activeSessionId ctx |> Option.defaultValue ""
       let sessionEntries =
         LiveTestState.statusEntriesForSession activeId lt
-      match sessionEntries.Length > 0 with
+      // Zero-test suppression defect: even with zero entries, an ACTIVE
+      // live-testing session that completed discovery must announce its
+      // authoritative discovery state to late clients. Discovery state is
+      // derived from Activation + DiscoveredTests + LastDiscoveryTime; emit
+      // whenever live testing is enabled OR entries exist (nothing to emit
+      // for a fully-disabled session).
+      let discoveryState = LiveTestState.discoveryState lt
+      match lt.Activation = LiveTestingActivation.Active || sessionEntries.Length > 0 with
       | true ->
         let s = TestSummary.fromStatuses
                   lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
-        do! SageFs.SseWriter.formatTestSummaryEvent ctx.SseJsonOpts (Some activeId) s lt.LastDecision
+        do! SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration
             |> writeSseFrame body
         let freshness =
           match lt.RunPhases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false) with
@@ -756,7 +763,13 @@ let wireModelChangeHandlers
         SseContext.activeSessionId ctx |> Option.defaultValue ""
       let sessionEntries =
         LiveTestState.statusEntriesForSession activeId lt
-      match sessionEntries.Length > 0 || TestRunPhase.isAnyRunning lt.RunPhases with
+      // Zero-test suppression defect: a completed zero-test discovery must be
+      // observable. Emit whenever live testing is active (which covers
+      // ReadyZeroTests) or a run is in flight or entries exist.
+      let discoveryState = LiveTestState.discoveryState lt
+      match lt.Activation = SageFs.Features.LiveTesting.LiveTestingActivation.Active
+            || sessionEntries.Length > 0
+            || TestRunPhase.isAnyRunning lt.RunPhases with
       | true ->
         let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
                   lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
@@ -768,7 +781,7 @@ let wireModelChangeHandlers
         | true ->
           modelChangeState.Value <- { modelChangeState.Value with LastTestSsePushTicks = now }
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatTestSummaryEvent ctx.SseJsonOpts (Some activeId) s lt.LastDecision)
+            SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration)
           let freshness =
             match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
             | true -> SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited
@@ -1740,16 +1753,32 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
   ) |> ignore
 
 let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
+  // Truthful command failure: enable/disable/policy used to report HTTP 200
+  // success even when the internal operation failed (e.g. Elm loop not
+  // started, unknown category/policy). Distinguish error strings from
+  // success messages so clients can surface real failures.
+  let isFailureMessage (message: string) =
+    message.StartsWith("Cannot ", System.StringComparison.Ordinal)
+    || message.StartsWith("Unknown ", System.StringComparison.Ordinal)
+  let respond (ctx: Microsoft.AspNetCore.Http.HttpContext) (result: string) (activation: string option) =
+    task {
+      match isFailureMessage result with
+      | true -> do! jsonResponse ctx 503 {| success = false; error = result |}
+      | false ->
+        match activation with
+        | Some a -> do! jsonResponse ctx 200 {| success = true; message = result; activation = a |}
+        | None -> do! jsonResponse ctx 200 {| success = true; message = result |}
+    }
   app.MapPost("/api/live-testing/enable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let! result = SageFs.McpTools.setLiveTesting rctx.McpContext true
-      do! jsonResponse ctx 200 {| success = true; message = result; activation = "active" |}
+      do! respond ctx result (Some "active")
     } :> Task
   ) |> ignore
   app.MapPost("/api/live-testing/disable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let! result = SageFs.McpTools.setLiveTesting rctx.McpContext false
-      do! jsonResponse ctx 200 {| success = true; message = result; activation = "inactive" |}
+      do! respond ctx result (Some "inactive")
     } :> Task
   ) |> ignore
   app.MapPost("/api/live-testing/policy", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -1758,7 +1787,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       let category = json.RootElement.GetProperty("category").GetString()
       let policy = json.RootElement.GetProperty("policy").GetString()
       let! result = SageFs.McpTools.setRunPolicy rctx.McpContext category policy
-      do! jsonResponse ctx 200 {| success = true; message = result |}
+      do! respond ctx result None
     } :> Task
   ) |> ignore
   app.MapPost("/api/live-testing/run", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
