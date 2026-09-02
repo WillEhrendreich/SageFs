@@ -16,6 +16,7 @@ export interface Env {
   FRICTION_BUCKET: R2Bucket;
   DISCORD_WEBHOOK_URL?: string;
   INGEST_TOKEN?: string;
+  OWNER_TOKEN?: string;
   MAX_PAYLOAD_BYTES?: string;
 }
 
@@ -285,10 +286,92 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+/// Constant-time-ish compare for bearer tokens. (Node/Worker crypto.subtle
+/// is async; this is a simple length-safe compare for a non-cryptographic
+/// gate — the token is a high-entropy secret, and timing here is not a
+/// practical leak surface for an R2 report store.)
+function tokensEqual(a: string | null, b: string | undefined): boolean {
+  if (!b || !a) return false;
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/// Owner-only gate: list stored report metadata (no contents). The ingest
+/// path is open to every SageFs user, but reading reports is restricted to
+/// the tool owner. `OWNER_TOKEN` must be configured or reads return 404
+/// (indistinguishable from "nothing here").
+async function handleOwnerList(req: Request, env: Env): Promise<Response> {
+  if (!env.OWNER_TOKEN) {
+    return jsonResponse(404, { error: "not found" });
+  }
+  const auth = req.headers.get("Authorization");
+  const token = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : null;
+  if (!tokensEqual(token, env.OWNER_TOKEN)) {
+    return jsonResponse(401, { error: "invalid or missing owner token" });
+  }
+  try {
+    const listed = await env.FRICTION_BUCKET.list();
+    const reports = (listed.objects ?? []).map((o) => ({
+      key: o.key,
+      size: o.size,
+      uploaded: o.uploaded,
+      sageFsVersion: o.customMetadata?.sageFsVersion ?? null,
+    }));
+    return jsonResponse(200, { count: reports.length, reports });
+  } catch (err) {
+    return jsonResponse(500, { error: `R2 list failed: ${(err as Error).message}` });
+  }
+}
+
+/// Owner-only gate: read a single stored report body by key.
+async function handleOwnerGet(req: Request, env: Env, key: string): Promise<Response> {
+  if (!env.OWNER_TOKEN) {
+    return jsonResponse(404, { error: "not found" });
+  }
+  const auth = req.headers.get("Authorization");
+  const token = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : null;
+  if (!tokensEqual(token, env.OWNER_TOKEN)) {
+    return jsonResponse(401, { error: "invalid or missing owner token" });
+  }
+  try {
+    const obj = await env.FRICTION_BUCKET.get(key);
+    if (!obj) {
+      return jsonResponse(404, { error: `no report at key ${key}` });
+    }
+    const text = await obj.text();
+    return new Response(text, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    return jsonResponse(500, { error: `R2 get failed: ${(err as Error).message}` });
+  }
+}
+
+/// Method router. POST / is the open ingest path (sanitized, size-capped).
+/// GET /api/reports (owner) lists stored report metadata; GET /api/reports/{key}
+/// (owner) returns one stored report. Everything read-side requires the owner
+/// token — SageFs users can always submit, but only the tool owner can read.
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    const url = new URL(req.url);
+
+    // Owner-only read endpoints.
+    if (req.method === "GET" && url.pathname === "/api/reports") {
+      return handleOwnerList(req, env);
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/api/reports/")) {
+      const key = decodeURIComponent(url.pathname.slice("/api/reports/".length));
+      return handleOwnerGet(req, env, key);
+    }
+
     if (req.method !== "POST") {
       return jsonResponse(405, { error: "POST only" });
+    }
+    if (url.pathname !== "/") {
+      return jsonResponse(404, { error: "not found" });
     }
 
     // Token check (if configured).

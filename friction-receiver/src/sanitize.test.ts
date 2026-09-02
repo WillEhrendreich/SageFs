@@ -43,6 +43,129 @@ function truthy(actual: unknown, name: string): void {
   }
 }
 
+// ── Owner-only read boundary ──────────────────────────────────────────────
+// The receiver is a privacy boundary: EVERYONE may POST friction reports to
+// the store, but only the tool owner (holder of OWNER_TOKEN) may read them
+// back. These tests pin the auth contract so a future refactor cannot open
+// reports to the public.
+
+function makeMinimalReport() {
+  return {
+    schemaVersion: 1,
+    sageFsVersion: "0.6.999",
+    submittedAtUtc: "2026-01-01T00:00:00.000Z",
+    totalEvents: 0,
+    totalFeedbackItems: 0,
+    toolsWithFriction: [],
+    topBlockers: [],
+    frequentTransitions: [],
+    recentFeedback: [],
+    recommendedWorkItems: [],
+  };
+}
+
+function mockBucket() {
+  const objects = new Map<string, { body: string; meta?: Record<string, string> }>();
+  return {
+    objects,
+    async put(key: string, body: string, opts?: { customMetadata?: Record<string, string> }) {
+      objects.set(key, { body, meta: opts?.customMetadata });
+    },
+    async list() {
+      return {
+        objects: [...objects.entries()].map(([key, v]) => ({
+          key,
+          size: v.body.length,
+          uploaded: new Date("2026-01-02T00:00:00Z"),
+          customMetadata: v.meta,
+        })),
+      };
+    },
+    async get(key: string) {
+      const v = objects.get(key);
+      if (!v) return null;
+      return {
+        async text() {
+          return v.body;
+        },
+      };
+    },
+  };
+}
+
+async function testOwnerReadBoundary(): Promise<void> {
+  const { default: worker } = await import("./index");
+
+  console.log("owner-only reads — ingest stays open, reads are gated");
+  {
+    // Ingest without any token succeeds (open submission).
+    const bucket = mockBucket();
+    const env = { OWNER_TOKEN: "owner-secret", FRICTION_BUCKET: bucket } as never;
+    const res = await worker.fetch(
+      new Request("http://receiver.test/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(makeMinimalReport()),
+      }),
+      env,
+    );
+    eq(res.status, 200, "open ingest: POST / succeeds without token");
+    eq(bucket.objects.size, 1, "open ingest: report stored");
+
+    // Owner list without a token → 401.
+    const noAuth = await worker.fetch(new Request("http://receiver.test/api/reports"), env);
+    eq(noAuth.status, 401, "owner list without token → 401");
+
+    // Owner list with wrong token → 401.
+    const badAuth = await worker.fetch(
+      new Request("http://receiver.test/api/reports", {
+        headers: { Authorization: "Bearer wrong-secret" },
+      }),
+      env,
+    );
+    eq(badAuth.status, 401, "owner list with wrong token → 401");
+
+    // Owner list with correct token → 200 + metadata.
+    const goodAuth = await worker.fetch(
+      new Request("http://receiver.test/api/reports", {
+        headers: { Authorization: "Bearer owner-secret" },
+      }),
+      env,
+    );
+    eq(goodAuth.status, 200, "owner list with correct token → 200");
+    const listed = (await goodAuth.json()) as { count: number; reports: { key: string }[] };
+    eq(listed.count, 1, "owner list returns the stored report count");
+
+    // Owner get of the stored key with correct token → 200 + body.
+    const key = listed.reports[0]!.key;
+    const got = await worker.fetch(
+      new Request(`http://receiver.test/api/reports/${encodeURIComponent(key)}`, {
+        headers: { Authorization: "Bearer owner-secret" },
+      }),
+      env,
+    );
+    eq(got.status, 200, "owner get with correct token → 200");
+    const body = (await got.json()) as { reportId?: string };
+    truthy(body.reportId !== undefined, "owner get returns the stored report body");
+
+    // Owner get without token → 401.
+    const gotNoAuth = await worker.fetch(new Request(`http://receiver.test/api/reports/${encodeURIComponent(key)}`), env);
+    eq(gotNoAuth.status, 401, "owner get without token → 401");
+
+    // POST-only enforcement on the ingest path: GET / → 405.
+    const getRoot = await worker.fetch(new Request("http://receiver.test/"), env);
+    eq(getRoot.status, 405, "GET / → 405 (POST only)");
+  }
+
+  console.log("owner-only reads — unconfigured OWNER_TOKEN hides everything");
+  {
+    const bucket = mockBucket();
+    const env = { FRICTION_BUCKET: bucket } as never;
+    const res = await worker.fetch(new Request("http://receiver.test/api/reports"), env);
+    eq(res.status, 404, "owner list without OWNER_TOKEN configured → 404 (indistinguishable)");
+  }
+}
+
 console.log("sanitizeText — paths");
 eq(redactPaths("see C:\\Users\\foo\\bar\\baz for details"), "see C:\\<path> for details", "Windows drive-letter path collapsed");
 eq(redactPaths("see \\\\server\\share\\file for details"), "see \\\\<path> for details", "UNC path collapsed");
@@ -146,3 +269,12 @@ if (failed > 0) {
   for (const f of failures) console.log(`  - ${f}`);
   process.exit(1);
 }
+
+testOwnerReadBoundary().then(() => {
+  console.log(`\n${passed} passed, ${failed} failed`);
+  if (failed > 0) {
+    console.log("\nFailures:");
+    for (const f of failures) console.log(`  - ${f}`);
+    process.exit(1);
+  }
+});
