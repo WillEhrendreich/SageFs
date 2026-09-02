@@ -6,6 +6,18 @@ open VerifyTests
 
 [<EntryPoint>]
 let main argv =
+  let isReleaseReadiness = argv |> Array.exists (fun arg -> arg = "--release-readiness")
+  match isReleaseReadiness with
+  | true ->
+    let errors =
+      System.IO.File.ReadAllText SageFs.Tests.DefinitionOfDoneTests.matrixPath
+      |> SageFs.Tests.DefinitionOfDoneTests.validateMatrix true (DateOnly.FromDateTime DateTime.UtcNow)
+    match errors with
+    | [] -> 0
+    | failures ->
+      failures |> List.iter (eprintfn "QUALITY GATE: %s")
+      1
+  | false ->
   // Run BenchmarkDotNet if --benchmark flag is passed
   let isBenchmark = argv |> Array.exists (fun a -> a = "--benchmark")
   match isBenchmark with

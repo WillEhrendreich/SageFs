@@ -64,6 +64,18 @@ jobs:
           8.0.x
         dotnet-quality: preview
 
+    - name: Enforce release Definition of Done
+      shell: pwsh
+      run: |
+        $matrix = Get-Content quality/definition-of-done.json -Raw | ConvertFrom-Json
+        $deferred = @($matrix.rows | Where-Object status -eq 'deferred')
+        if ($deferred.Count -gt 0) {
+          $deferred | ForEach-Object {
+            Write-Error "Release blocked by $($_.id) (issue #$($_.issue), expires $($_.expires))"
+          }
+          throw "Release Definition of Done has $($deferred.Count) deferred obligation(s)."
+        }
+
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:

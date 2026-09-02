@@ -109,6 +109,24 @@ let mergeInitialDiscoveryResults
 
   tests, providers
 
+let workerRuntimeCriticalAssemblyNames =
+  set [
+    "fsharp.core.dll"
+    "fsharp.systemtextjson.dll"
+    "mono.cecil.dll"
+    "mono.cecil.rocks.dll"
+    "mono.cecil.mdb.dll"
+    "mono.cecil.pdb.dll"
+  ]
+
+let isWorkerRuntimeCritical (assemblyName: string) =
+  workerRuntimeCriticalAssemblyNames
+  |> Set.contains (assemblyName.ToLowerInvariant())
+
+let shouldQuarantineAssembly (assemblyName: string) =
+  not (assemblyName.EndsWith(".resources.dll", StringComparison.OrdinalIgnoreCase))
+  && not (isWorkerRuntimeCritical assemblyName)
+
 /// Handle a single WorkerMessage by dispatching to the actor.
 let handleMessage
   (actor: AppActor)
@@ -284,18 +302,9 @@ let run (sessionId: string) (port: int) = async {
     // NEVER quarantine runtime-critical assemblies the worker itself needs to
     // function (FSharp.Core is the prime example — the FSI session loads it
     // from the worker's base dir and must get the worker's own version).
-    let criticalNames =
-      Set.ofList [
-        "FSharp.Core.dll"
-        // The worker's JSON/DU serialization uses FSharp.SystemTextJson —
-        // quarantining it breaks worker<->daemon message transport.
-        "FSharp.SystemTextJson.dll"
-      ]
     let quarantined =
       projectBinNames
-      |> Seq.filter (fun name ->
-        not (name.EndsWith(".resources.dll", System.StringComparison.OrdinalIgnoreCase))
-        && not (criticalNames.Contains name))
+      |> Seq.filter shouldQuarantineAssembly
       |> Seq.choose (fun name ->
         let own = System.IO.Path.Combine(baseDir, name)
         match System.IO.File.Exists own with
