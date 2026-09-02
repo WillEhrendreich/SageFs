@@ -318,6 +318,7 @@
         <Compile Include="HostAdaptationTests.fs" />
         <Compile Include="SupervisorPortHandshakeTests.fs" />
         <Compile Include="WebAppHotReloadVerificationTests.fs" />
+        <Compile Include="DaemonStateChangeContractTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

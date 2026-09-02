@@ -8,8 +8,12 @@ type DaemonStateChange =
   | StandbyProgress
   | SessionReady of sessionId: WorkerProtocol.SessionId
   | SessionSwitched of sessionId: WorkerProtocol.SessionId
-  | HotReloadChanged
-  | FileReloaded of path: string
+  /// Hot-reload state changed for the given session. Carries the session ID so
+  /// downstream code never has to guess the affected session from a global
+  /// "active" selection (the session-isolation blocker: an event for session B
+  /// must not push session A's state just because A is the active tab).
+  | HotReloadChanged of sessionId: WorkerProtocol.SessionId
+  | FileReloaded of sessionId: WorkerProtocol.SessionId * path: string
   | SessionFaulted of sessionId: WorkerProtocol.SessionId * error: string
   | ModelChanged of outputCount: int * diagCount: int
   | WarmupProgress of sessionId: WorkerProtocol.SessionId * step: int * total: int * message: string
@@ -24,8 +28,8 @@ module DaemonStateChange =
       sprintf """{"outputCount":%d,"diagCount":%d}""" outputCount diagCount
     | SessionReady sid -> sprintf """{"sessionReady":"%s"}""" (WorkerProtocol.SessionId.value sid)
     | SessionSwitched sid -> sprintf """{"sessionSwitched":"%s"}""" (WorkerProtocol.SessionId.value sid)
-    | HotReloadChanged -> """{"hotReloadChanged":true}"""
-    | FileReloaded path -> sprintf """{"fileReloaded":"%s"}""" (path.Replace("\\", "\\\\"))
+    | HotReloadChanged sid -> sprintf """{"hotReloadChanged":true,"sessionId":"%s"}""" (WorkerProtocol.SessionId.value sid)
+    | FileReloaded (sid, path) -> sprintf """{"fileReloaded":"%s","sessionId":"%s"}""" (path.Replace("\\", "\\\\")) (WorkerProtocol.SessionId.value sid)
     | SessionFaulted (sid, err) ->
       sprintf """{"sessionFaulted":"%s","error":"%s"}""" (WorkerProtocol.SessionId.value sid) (err.Replace("\"", "\\\""))
     | StandbyProgress -> """{"standbyProgress":true}"""

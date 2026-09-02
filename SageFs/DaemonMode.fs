@@ -558,7 +558,7 @@ let createHotReloadProxyEndpoints
         ctx.Response.StatusCode <- statusCode
         do! ctx.Response.WriteAsync(respBody)
         match triggerChange with
-        | true -> stateChangedEvent.Trigger HotReloadChanged
+        | true -> stateChangedEvent.Trigger (HotReloadChanged sid)
         | false -> ()
       with ex ->
         ctx.Response.StatusCode <- 502
@@ -834,14 +834,38 @@ let periodicManifestSave (log: ILogger) (readSnapshot: unit -> SessionManager.Qu
 /// when sessions are discovered and disposed when sessions are removed.
 type LiveTestWatcherManager
   ( dispatch: SageFsMsg -> unit,
-    onFileReloaded: string -> unit ) =
+    onFileReloaded: WorkerProtocol.SessionId -> string -> unit,
+    fallbackDir: string option ) =
+  // onFileReloaded: sessionId -> path -> unit. Carries the owning session so
+  // downstream FileReloaded events are session-attributed (the isolation
+  // blocker: two sessions can share one working dir; a path alone cannot
+  // disambiguate which session's live-test state changed).
+  //
+  // fallbackDir: the daemon-CWD fallback watcher. It claims no session — files
+  // under it fire FileContentChanged but never FileReloaded (a path with no
+  // owning session must not be attributed to a fabricated one).
 
   let liveTestWatcherDebounceMs = 75
 
   let watchers = System.Collections.Concurrent.ConcurrentDictionary<string, System.IO.FileSystemWatcher * System.Threading.Timer>()
+  // dir -> owning session IDs (only real sessions; the fallback dir is tracked
+  // separately via fallbackDir).
+  let dirSessions = System.Collections.Concurrent.ConcurrentDictionary<string, WorkerProtocol.SessionId list>()
   let pendingPaths = System.Collections.Concurrent.ConcurrentDictionary<string, bool>()
   let pendingLock = obj()
   let debounceMs = liveTestWatcherDebounceMs
+
+  /// Session ID(s) owning the directory that contains `path` (longest-prefix
+  /// dir wins — a file under a session's dir must not be attributed to the
+  /// daemon-CWD fallback).
+  let sessionsForPath (path: string) =
+    let normalizedPath = System.IO.Path.GetFullPath(path)
+    dirSessions
+    |> Seq.filter (fun kvp -> normalizedPath.StartsWith(System.IO.Path.GetFullPath(kvp.Key), System.StringComparison.OrdinalIgnoreCase))
+    |> Seq.sortByDescending (fun kvp -> kvp.Key.Length)
+    |> Seq.tryHead
+    |> Option.map (fun kvp -> kvp.Value)
+    |> Option.defaultValue []
 
   let debounceCallback _ =
     let paths =
@@ -856,7 +880,8 @@ type LiveTestWatcherManager
         | true ->
           let content = System.IO.File.ReadAllText(path)
           dispatch (SageFsMsg.FileContentChanged(path, content))
-          onFileReloaded path
+          for sessionId in sessionsForPath path do
+            onFileReloaded sessionId path
         | false -> ()
       with
       | :? System.IO.IOException -> ()
@@ -878,26 +903,21 @@ type LiveTestWatcherManager
         sharedDebounceTimer.Change(debounceMs, System.Threading.Timeout.Infinite) |> ignore)
     | false -> ()
 
-  /// Register a watcher for a session's working directory (idempotent).
-  member _.AddDirectory(dir: string) =
-    match System.IO.Directory.Exists(dir) with
-    | false -> ()
-    | true ->
-      watchers.GetOrAdd(dir, fun d ->
-        let watcher = new System.IO.FileSystemWatcher(d)
-        watcher.IncludeSubdirectories <- true
-        watcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite
-        watcher.Filters.Add("*.fs")
-        watcher.Filters.Add("*.fsx")
-        let handler = handleFileChanged [d]
-        watcher.Changed.Add(handler)
-        watcher.Created.Add(handler)
-        watcher.EnableRaisingEvents <- true
-        Log.info "[watcher] Registered file watcher for %s" d
-        watcher, sharedDebounceTimer) |> ignore
+  let startWatcher (dir: string) =
+    watchers.GetOrAdd(dir, fun d ->
+      let watcher = new System.IO.FileSystemWatcher(d)
+      watcher.IncludeSubdirectories <- true
+      watcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite
+      watcher.Filters.Add("*.fs")
+      watcher.Filters.Add("*.fsx")
+      let handler = handleFileChanged [d]
+      watcher.Changed.Add(handler)
+      watcher.Created.Add(handler)
+      watcher.EnableRaisingEvents <- true
+      Log.info "[watcher] Registered file watcher for %s" d
+      watcher, sharedDebounceTimer) |> ignore
 
-  /// Remove a watcher for a directory (idempotent).
-  member _.RemoveDirectory(dir: string) =
+  let stopWatcher (dir: string) =
     match watchers.TryRemove(dir) with
     | true, (watcher, _) ->
       watcher.EnableRaisingEvents <- false
@@ -905,16 +925,70 @@ type LiveTestWatcherManager
       Log.info "[watcher] Disposed file watcher for %s" dir
     | false, _ -> ()
 
-  /// Sync watchers to match the current set of session directories.
-  member this.SyncToSessions(sessionDirs: string list) =
-    let desired = sessionDirs |> Set.ofList
-    let current = watchers.Keys |> Set.ofSeq
-    // Add missing
-    for dir in desired - current do
-      this.AddDirectory(dir)
-    // Remove stale
-    for dir in current - desired do
-      this.RemoveDirectory(dir)
+  /// Whether `dir` must stay watched: it is the fallback dir, or a session
+  /// claims it. (The fallback watcher itself covers nested session dirs via
+  /// IncludeSubdirectories, so no nesting special-case is needed here.)
+  let isNeeded (dir: string) =
+    let isFallback =
+      match fallbackDir with
+      | Some f -> System.String.Equals(System.IO.Path.GetFullPath f, System.IO.Path.GetFullPath dir, System.StringComparison.OrdinalIgnoreCase)
+      | None -> false
+    let hasSession =
+      match dirSessions.TryGetValue(dir) with
+      | true, claims -> not claims.IsEmpty
+      | false, _ -> false
+    isFallback || hasSession
+
+  /// Register a watcher for a directory, attributed to a session (idempotent).
+  member _.AddDirectory(dir: string, sessionId: WorkerProtocol.SessionId) =
+    match System.IO.Directory.Exists(dir) with
+    | false -> ()
+    | true ->
+      dirSessions.AddOrUpdate(
+        dir,
+        [sessionId],
+        fun _ existing ->
+          if List.contains sessionId existing then existing
+          else sessionId :: existing)
+      |> ignore
+      startWatcher dir
+
+  /// Remove one session's claim on a directory. The watcher is disposed only
+  /// when nothing needs it anymore — a dir shared by two sessions keeps its
+  /// watcher when one session stops.
+  member _.RemoveDirectory(dir: string, sessionId: WorkerProtocol.SessionId) =
+    let remaining =
+      dirSessions.AddOrUpdate(
+        dir,
+        [],
+        fun _ existing -> existing |> List.filter (fun s -> s <> sessionId))
+    match remaining with
+    | [] ->
+      dirSessions.TryRemove(dir) |> ignore
+      if not (isNeeded dir) then stopWatcher dir
+    | _ -> ()
+
+  /// Sync watchers to match the current sessions. Each entry is
+  /// (sessionId, workingDir). One dir may host several sessions; the watcher
+  /// is created once and attributes reloads to every owning session.
+  member this.SyncToSessions(sessions: (WorkerProtocol.SessionId * string) list) =
+    let desiredDirs = sessions |> List.map snd |> Set.ofList
+    for (sessionId, dir) in sessions do
+      this.AddDirectory(dir, sessionId)
+    // Remove session claims for dirs that no session references anymore, then
+    // dispose watchers nothing needs (isNeeded covers the fallback).
+    let claimedDirs = dirSessions.Keys |> Seq.toList
+    for dir in claimedDirs do
+      if not (desiredDirs.Contains dir) then
+        // Drop all session claims for this dir; the fallback may still keep it.
+        dirSessions.TryRemove(dir) |> ignore
+        if not (isNeeded dir) then stopWatcher dir
+    // Watch the fallback dir (session-less) if it is not already covered by a
+    // session claim or nested session dir.
+    match fallbackDir with
+    | Some f when System.IO.Directory.Exists(f) ->
+      if not (dirSessions.ContainsKey f) then startWatcher f
+    | _ -> ()
 
   member _.WatchedDirectories = watchers.Keys |> Seq.toList
 
@@ -924,55 +998,8 @@ type LiveTestWatcherManager
         w.EnableRaisingEvents <- false
         w.Dispose()
       watchers.Clear()
+      dirSessions.Clear()
       sharedDebounceTimer.Dispose()
-
-let createLiveTestWatcher
-  (workingDir: string)
-  (dispatch: SageFsMsg -> unit)
-  (onFileReloaded: string -> unit) =
-  let liveTestWatcherDebounceMs = 75
-  let mutable pendingPaths : Set<string> = Set.empty
-  let watcherLock = obj()
-  let debounceCallback _ =
-    let paths =
-      lock watcherLock (fun () ->
-        let ps = pendingPaths
-        pendingPaths <- Set.empty
-        ps)
-    for path in paths do
-      try
-        let fi = System.IO.FileInfo(path)
-        match fi.Exists && fi.Length < 1_048_576L with
-        | true ->
-          let content = System.IO.File.ReadAllText(path)
-          dispatch (SageFsMsg.FileContentChanged(path, content))
-          onFileReloaded path
-        | false -> ()
-      with
-      | :? System.IO.IOException -> ()
-      | :? System.UnauthorizedAccessException -> ()
-  let debounceTimer = new System.Threading.Timer(
-    System.Threading.TimerCallback(debounceCallback), null,
-    System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite)
-  let handleFileChanged (e: System.IO.FileSystemEventArgs) =
-    let path = e.FullPath
-    match SageFs.FileWatcher.shouldTriggerRebuild
-        { Directories = [workingDir]; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = liveTestWatcherDebounceMs }
-        path with
-    | true ->
-      lock watcherLock (fun () ->
-        pendingPaths <- pendingPaths |> Set.add path
-        debounceTimer.Change(liveTestWatcherDebounceMs, System.Threading.Timeout.Infinite) |> ignore)
-    | false -> ()
-  let watcher = new System.IO.FileSystemWatcher(workingDir)
-  watcher.IncludeSubdirectories <- true
-  watcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite
-  watcher.Filters.Add("*.fs")
-  watcher.Filters.Add("*.fsx")
-  watcher.Changed.Add(handleFileChanged)
-  watcher.Created.Add(handleFileChanged)
-  watcher.EnableRaisingEvents <- true
-  watcher, debounceTimer
 
 /// Get previous sessions: active from CQRS snapshot + historical from binary manifest.
 let getPreviousSessions
@@ -1267,13 +1294,23 @@ let createElmRuntime
           | Some url when url.Length > 0 ->
             Some (HttpWorkerClient.streamingTestProxyWithCoverage url)
           | _ -> None
-        RegisterFileWatcher = fun _sessionId directory ->
+        RegisterFileWatcher = fun sessionIdStr directory ->
           match !watcherManagerRef with
-          | Some mgr -> mgr.AddDirectory(directory)
+          | Some mgr ->
+            // The effect carries a raw session-ID string (Elm model type);
+            // the watcher manager attributes by typed SessionId. Session IDs
+            // originate from validated snapshot state, so validate() is
+            // expected to succeed.
+            match WorkerProtocol.SessionId.validate sessionIdStr with
+            | Ok sid -> mgr.AddDirectory(directory, sid)
+            | Error _ -> Log.warn "[watcher] RegisterFileWatcher with invalid session id '%s'" sessionIdStr
           | None -> ()
-        DisposeFileWatcher = fun _sessionId directory ->
+        DisposeFileWatcher = fun sessionIdStr directory ->
           match !watcherManagerRef with
-          | Some mgr -> mgr.RemoveDirectory(directory)
+          | Some mgr ->
+            match WorkerProtocol.SessionId.validate sessionIdStr with
+            | Ok sid -> mgr.RemoveDirectory(directory, sid)
+            | Error _ -> Log.warn "[watcher] DisposeFileWatcher with invalid session id '%s'" sessionIdStr
           | None -> () }
   let runtime =
     ElmDaemon.startHeadless
@@ -1568,20 +1605,25 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     activityCleanupTimerRef <- t
     t
 
-  // Live testing file watcher manager — per-session directory watchers
+  // Live testing file watcher manager — per-session directory watchers.
+  // onFileReloaded receives only REAL session IDs: the daemon-CWD fallback
+  // watcher claims no session, so files it sees never fire FileReloaded (a
+  // path with no owning session must not be attributed to a fabricated one).
   let liveTestWatcherManager =
     new LiveTestWatcherManager(
       elmRuntime.Dispatch,
-      (fun path -> stateChangedEvent.Trigger (FileReloaded path)))
-  // Seed with daemon CWD as fallback (for scripts evaluated from daemon dir)
-  liveTestWatcherManager.AddDirectory(workingDir)
+      (fun sessionId path -> stateChangedEvent.Trigger (FileReloaded (sessionId, path))),
+      Some workingDir)
   watcherManagerRef := Some liveTestWatcherManager
-  // Also seed with any existing session directories
+  // Seed with any existing session directories (fallback dir handled by the
+  // manager's fallbackDir).
   let seedSessionDirs () =
     let snapshot = readSnapshot()
     let sessions = SessionManager.QuerySnapshot.allSessions snapshot
-    let dirs = sessions |> List.map (fun si -> si.WorkingDirectory) |> List.distinct
-    liveTestWatcherManager.SyncToSessions(workingDir :: dirs)
+    let sessionDirPairs =
+      sessions
+      |> List.map (fun si -> si.Id, si.WorkingDirectory)
+    liveTestWatcherManager.SyncToSessions(sessionDirPairs)
   seedSessionDirs ()
 
   // Periodic session-watcher sync — ensures new sessions get watchers

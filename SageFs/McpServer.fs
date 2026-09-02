@@ -576,29 +576,26 @@ let wireSessionEventSubscription
   (stateChanged: IEvent<DaemonStateChange>)
   (ctx: SseContext) =
   match ctx.GetElmModel, ctx.GetWarmupContext with
-  | Some getModel, Some getCtx ->
+  | Some _getModel, Some getCtx ->
     stateChanged.Subscribe(fun change ->
       match change with
-      | DaemonStateChange.HotReloadChanged ->
+      | DaemonStateChange.HotReloadChanged sid ->
         task {
           try
-            let activeId =
-              let model = getModel()
-              SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
-              |> Option.map SageFs.WorkerProtocol.SessionId.value
-              |> Option.defaultValue ""
-            match activeId.Length > 0 with
-            | true ->
-              match ctx.GetHotReloadState with
-              | Some getHr ->
-                let! hrOpt = getHr activeId
-                match hrOpt with
-                | Some watchedFiles ->
-                  let evt = SageFs.SessionEvents.HotReloadSnapshot(activeId, watchedFiles)
-                  ctx.SessionEventBroadcast.Trigger(SageFs.SessionEvents.formatSessionSseEvent evt)
-                | None -> ()
+            // Session-isolation: the event carries the affected session. Never
+            // fall back to a global "active session" here — an event for
+            // session B must not push session A's hot-reload state just
+            // because A is the active tab in some client.
+            let activeId = SageFs.WorkerProtocol.SessionId.value sid
+            match ctx.GetHotReloadState with
+            | Some getHr ->
+              let! hrOpt = getHr activeId
+              match hrOpt with
+              | Some watchedFiles ->
+                let evt = SageFs.SessionEvents.HotReloadSnapshot(activeId, watchedFiles)
+                ctx.SessionEventBroadcast.Trigger(SageFs.SessionEvents.formatSessionSseEvent evt)
               | None -> ()
-            | false -> ()
+            | None -> ()
           with
           | :? System.IO.IOException -> ()
           | ex -> Log.error "[SSE] HotReload push error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
@@ -652,7 +649,7 @@ let wireSessionEventSubscription
         let sidStr = SageFs.WorkerProtocol.SessionId.value sid
         let sseFrame = SageFs.SseWriter.formatWarmupProgressEvent ctx.SseJsonOpts (Some sidStr) step total msg
         ctx.SessionEventBroadcast.Trigger(sseFrame)
-      | DaemonStateChange.FileReloaded path ->
+      | DaemonStateChange.FileReloaded (_sid, path) ->
         ctx.ServerTracker.AccumulateEvent(PushEvent.FileReloaded path)
       | DaemonStateChange.SessionFaulted (_sid, error) ->
         ctx.ServerTracker.AccumulateEvent(PushEvent.SessionFaulted error)
