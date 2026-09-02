@@ -177,6 +177,13 @@ type VscTestSummary = {
   Running: int
   Stale: int
   Disabled: int
+  /// Server discovery state wire value: disabled | discovering |
+  /// ready_zero_tests | ready_with_tests. Makes a completed zero-test
+  /// discovery observable (previously Total=0 was ambiguous between
+  /// "discovering", "disabled", and "discovery completed with no tests").
+  DiscoveryState: string
+  /// Server discovery generation — clients can reject stale summaries.
+  DiscoveryGeneration: int64
   LastDecision: VscLiveTestingDecision option
 }
 
@@ -259,6 +266,12 @@ module VscLiveTestState =
   let update (event: VscLiveTestEvent) (state: VscLiveTestState) : VscLiveTestState * VscStateChange list =
     match event with
     | VscLiveTestEvent.TestsDiscovered tests ->
+      // NOTE: merge semantics retained. A batch may be PARTIAL (live result
+      // streaming), so wholesale replacement would sweep tests that simply
+      // have no results in this batch. Correct replacement-sweep requires
+      // threading the server's Completion signal through parseResultsBatch
+      // (only sweep when Completion = Complete) — tracked as the client-side
+      // rediscovery defect; the server already sweeps + tags generations.
       let newTests =
         tests |> Array.fold (fun m t -> Map.add t.Id t m) state.Tests
       { state with Tests = newTests }, [ VscStateChange.TestsAdded tests ]
@@ -329,7 +342,14 @@ module VscLiveTestState =
           | _ -> true)
         |> Map.count
     { Total = total; Passed = passed; Failed = failed
-      Running = state.RunningTests.Count; Stale = stale; Disabled = disabled; LastDecision = None }
+      Running = state.RunningTests.Count; Stale = stale; Disabled = disabled
+      DiscoveryState =
+        match state.Enabled, total with
+        | VscLiveTestingEnabled.LiveTestingOff, _ -> "disabled"
+        | _, 0 -> "discovering"
+        | _ -> "ready_with_tests"
+      DiscoveryGeneration = 0L
+      LastDecision = None }
 
   /// Get tests for a specific file
   let testsForFile (filePath: string) (state: VscLiveTestState) : VscTestInfo list =

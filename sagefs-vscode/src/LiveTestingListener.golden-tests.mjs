@@ -64,6 +64,8 @@ const context = {
   ofArray: (xs) => xs,
   empty: () => [],
   choose: (f, arr) => arr.map(f).filter((x) => x !== undefined),
+  toInt64: (x) => x,
+  fromInt32: (x) => x,
   VscSelectionPrecision: function(tag) { this.tag = tag; },
   VscFreshnessTrust: function(tag) { this.tag = tag; },
   VscRerunCause: function(tag) { this.tag = tag; },
@@ -78,13 +80,15 @@ const context = {
     this.DeferredTests = DeferredTests;
     this.Reason = Reason;
   },
-  VscTestSummary: function(Total, Passed, Failed, Running, Stale, Disabled, LastDecision) {
+  VscTestSummary: function(Total, Passed, Failed, Running, Stale, Disabled, DiscoveryState, DiscoveryGeneration, LastDecision) {
     this.Total = Total;
     this.Passed = Passed;
     this.Failed = Failed;
     this.Running = Running;
     this.Stale = Stale;
     this.Disabled = Disabled;
+    this.DiscoveryState = DiscoveryState;
+    this.DiscoveryGeneration = DiscoveryGeneration;
     this.LastDecision = LastDecision;
   },
   VscLiveTestEvent: function(tag, fields) {
@@ -145,6 +149,26 @@ run("parseSummary consumes suppressed-by-policy golden fixture", () => {
   assert(summary.LastDecision.Precision.tag === 4, `expected SuppressedByPolicy precision, got ${summary.LastDecision.Precision.tag}`);
   assert(summary.LastDecision.Trust.tag === 3, `expected Suppressed trust, got ${summary.LastDecision.Trust.tag}`);
   assert(summary.LastDecision.DeferredTests.length === 1, `expected 1 deferred test, got ${summary.LastDecision.DeferredTests.length}`);
+});
+
+run("parseSummary surfaces ready_zero_tests discovery state", () => {
+  // Zero-test observability: the server's test_summary carries the
+  // authoritative discovery state + generation; the client must surface it.
+  const summary = parseSummary({
+    Total: 0, Passed: 0, Failed: 0, Running: 0, Stale: 0, Disabled: 0,
+    DiscoveryState: "ready_zero_tests",
+    DiscoveryGeneration: 3,
+  });
+  assert(summary.DiscoveryState === "ready_zero_tests", `expected ready_zero_tests, got ${summary.DiscoveryState}`);
+  assert(summary.DiscoveryGeneration === 3n || summary.DiscoveryGeneration === 3, `expected generation 3, got ${summary.DiscoveryGeneration}`);
+  assert(summary.Total === 0, "zero tests stay observable as zero");
+});
+
+run("parseSummary defaults discovery state to discovering when absent", () => {
+  // Old servers (pre-discovery-state) must not crash: default to discovering.
+  const summary = parseSummary({ Total: 0, Passed: 0, Failed: 0, Running: 0, Stale: 0, Disabled: 0 });
+  assert(summary.DiscoveryState === "discovering", `expected discovering default, got ${summary.DiscoveryState}`);
+  assert(summary.DiscoveryGeneration === 0n || summary.DiscoveryGeneration === 0, "generation defaults to 0");
 });
 
 if (process.exitCode && process.exitCode !== 0) {

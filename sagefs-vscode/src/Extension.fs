@@ -585,7 +585,13 @@ let describeTestStatusBarTooltip (summary: VscTestSummary) =
     | _ -> None
   [ Some (
       match summary with
-      | s when s.Total = 0 -> "$(beaker) No tests"
+      | s when s.Total = 0 ->
+        // Zero-test observability: distinguish "discovery not finished" from
+        // "discovery completed with zero tests" from "live testing off".
+        match s.DiscoveryState with
+        | "ready_zero_tests" -> "$(beaker) No tests found (discovery complete)"
+        | "disabled" -> "$(beaker) Live testing off"
+        | _ -> "$(sync~spin) Discovering tests..."
       | s when s.Failed > 0 -> sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total
       | s when s.Running > 0 -> sprintf "$(sync~spin) Running %d/%d" s.Running s.Total
       | s when s.Stale > 0 -> sprintf "$(warning) %d/%d stale" s.Stale s.Total
@@ -602,7 +608,10 @@ let updateTestStatusBar (summary: VscTestSummary) =
     let text, bg =
       match summary with
       | s when s.Total = 0 ->
-        "$(beaker) No tests", None
+        match s.DiscoveryState with
+        | "ready_zero_tests" -> "$(beaker) No tests found", None
+        | "disabled" -> "$(beaker) Live testing off", None
+        | _ -> "$(sync~spin) Discovering tests...", None
       | s when s.Failed > 0 ->
         sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total,
         Some (newThemeColor "statusBarItem.errorBackground")

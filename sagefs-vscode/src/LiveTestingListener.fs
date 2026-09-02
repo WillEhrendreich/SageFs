@@ -108,6 +108,8 @@ let parseSummary (data: obj) : VscTestSummary =
     Running = fieldInt "Running" data |> Option.defaultValue 0
     Stale = fieldInt "Stale" data |> Option.defaultValue 0
     Disabled = fieldInt "Disabled" data |> Option.defaultValue 0
+    DiscoveryState = fieldString "DiscoveryState" data |> Option.defaultValue "discovering"
+    DiscoveryGeneration = fieldInt "DiscoveryGeneration" data |> Option.map int64 |> Option.defaultValue 0L
     LastDecision = fieldObj "LastDecision" data |> Option.bind parseLastDecision }
 
 /// Map a server TestStatusEntry to VscTestResult
@@ -289,13 +291,17 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
 
   /// Session-scoped events carry a SessionId field injected by the server.
   /// When a filter is set, skip events whose SessionId doesn't match.
+  /// Strict isolation: when a filter IS set, an UNTAGGED session-scoped event
+  /// is rejected too — accepting it would leak another session's state into
+  /// the filtered view (the "untagged events are accepted" defect). Only
+  /// before the first warmup (filter = None) are untagged events passed.
   let passesSessionFilter (data: obj) =
     match sessionFilter with
     | None -> true
     | Some expected ->
       match fieldString "SessionId" data with
       | Some sid -> sid = expected
-      | None -> true  // No SessionId in event — backward compat: always pass through
+      | None -> false
 
   // Events that are NOT session-scoped — always process regardless of sessionFilter.
   let isSessionAgnosticEvent (eventType: string) =
