@@ -83,7 +83,12 @@ type LiveTestingSubscriber(port: int) =
               currentEvent <- line.Substring(7).Trim()
             elif line.StartsWith("data: ") then
               let json = line.Substring(6)
-              let events = LiveTestingParser.parseSseEvent currentEvent json
+              // Parse batches against the newest discovery generation applied
+              // so a complete batch from a newer generation sweeps (and a
+              // same-generation affected-run batch never does).
+              let events =
+                LiveTestingParser.parseSseEventWithGeneration
+                  state.DiscoveryGeneration currentEvent json
               for evt in events do
                 let newState, changes = LiveTestState.update evt state
                 state <- newState

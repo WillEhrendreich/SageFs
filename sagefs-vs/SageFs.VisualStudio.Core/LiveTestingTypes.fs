@@ -81,6 +81,14 @@ type TestSummary = {
   Running: int
   Stale: int
   Disabled: int
+  /// Server discovery state wire value: disabled | discovering |
+  /// ready_zero_tests | ready_with_tests. The AUTHORITATIVE activation +
+  /// phase signal (the client's Enabled must derive from this, not from
+  /// local optimistic toggles). "disabled" ⇔ live testing off.
+  DiscoveryState: string
+  /// Server discovery generation — a summary carrying an OLDER generation
+  /// than the client's applied generation is stale and must be rejected.
+  DiscoveryGeneration: int64
   LastDecision: LiveTestingDecision option
 }
 
@@ -245,7 +253,10 @@ type TestSourceLocation = {
 /// SSE events from the SageFs server
 [<RequireQualifiedAccess>]
 type LiveTestEvent =
-  | TestsDiscovered of tests: TestInfo array
+  /// tests: discovered/streamed infos; isComplete: server marked the batch
+  /// Completion=Complete (entries are the authoritative full discovery set);
+  /// discoveryGeneration: the summary's generation at batch time (0 = none).
+  | TestsDiscovered of tests: TestInfo array * isComplete: bool * discoveryGeneration: int64
   | TestRunStarted of testIds: TestId array
   | TestResultBatch of results: TestResult array * freshness: ResultFreshness
   | LiveTestingEnabled
@@ -269,6 +280,9 @@ type FeatureEvent =
 [<RequireQualifiedAccess>]
 type LiveTestChange =
   | TestsDiscovered of TestInfo array
+  /// A complete rediscovery from a newer generation removed these tests —
+  /// the tool window must drop their rows and decorations.
+  | TestsRemoved of TestId array
   | TestsUpdated of TestResult array
   | EnabledChanged of LiveTestingEnabled
   | SummaryChanged of TestSummary
@@ -301,6 +315,10 @@ type LiveTestState = {
   Policies: Map<TestCategory, RunPolicy>
   SourceLocations: Map<string, TestSourceLocation>
   FailureNarratives: Map<string, FailureNarrative>
+  /// Newest discovery generation applied. A complete discovery carrying a
+  /// HIGHER generation replaces Tests/Results; older or equal generations
+  /// are ignored (the server already applied them).
+  DiscoveryGeneration: int64
 }
 
 [<RequireQualifiedAccess>]
@@ -315,16 +333,50 @@ module LiveTestState =
     Policies = Map.empty
     SourceLocations = Map.empty
     FailureNarratives = Map.empty
+    DiscoveryGeneration = 0L
   }
 
   /// Pure fold returning (state, changes) — imperative subscriber becomes thin adapter
   let update (event: LiveTestEvent) (state: LiveTestState) : LiveTestState * LiveTestChange list =
     match event with
-    | LiveTestEvent.TestsDiscovered tests ->
-      let newTests =
-        tests |> Array.fold (fun m t -> Map.add t.Id t m) state.Tests
-      { state with Tests = newTests },
-      [ LiveTestChange.TestsDiscovered tests ]
+    | LiveTestEvent.TestsDiscovered (tests, isComplete, discoveryGeneration) ->
+      // Rediscovery sweep: a COMPLETE batch from a NEWER generation is the
+      // authoritative discovery set — tests absent from it were renamed or
+      // deleted server-side and must be swept (their rows and decorations
+      // would otherwise linger). Partial batches (live result streaming)
+      // keep merge semantics.
+      let isAuthoritative =
+        isComplete && discoveryGeneration > state.DiscoveryGeneration
+      match isAuthoritative with
+      | false ->
+        let newTests =
+          tests |> Array.fold (fun m t -> Map.add t.Id t m) state.Tests
+        { state with Tests = newTests },
+        [ LiveTestChange.TestsDiscovered tests ]
+      | true ->
+        let newTests = tests |> Array.fold (fun m t -> Map.add t.Id t m) Map.empty
+        let removed =
+          state.Tests
+          |> Map.keys
+          |> Seq.filter (fun id -> not (Map.containsKey id newTests))
+          |> Seq.toArray
+        // Sweep results for removed tests too — stale results drive stale
+        // pass/fail decorations on rows that no longer exist.
+        let sweptResults =
+          if Array.isEmpty removed then state.Results
+          else
+            let removedSet = removed |> Set.ofArray
+            state.Results |> Map.filter (fun id _ -> not (Set.contains id removedSet))
+        let changes = [
+          yield LiveTestChange.TestsDiscovered tests
+          if not (Array.isEmpty removed) then
+            yield LiveTestChange.TestsRemoved removed
+        ]
+        { state with
+            Tests = newTests
+            Results = sweptResults
+            DiscoveryGeneration = discoveryGeneration },
+        changes
 
     | LiveTestEvent.TestRunStarted ids ->
       let running = ids |> Set.ofArray
@@ -356,8 +408,24 @@ module LiveTestState =
       [ LiveTestChange.EnabledChanged LiveTestingEnabled.Off ]
 
     | LiveTestEvent.SummaryUpdated summary ->
-      { state with LastSummary = Some summary },
-      [ LiveTestChange.SummaryChanged summary ]
+      // Authoritative activation: the server's DiscoveryState is the truth.
+      // "disabled" ⇔ live testing off; any other state (discovering,
+      // ready_zero_tests, ready_with_tests) ⇔ on. Deriving Enabled here
+      // fixes the optimistic-toggle drift (another client toggling the
+      // server, or a VS restart, now reconciles on the first summary).
+      let enabled =
+        match summary.DiscoveryState with
+        | "disabled" -> LiveTestingEnabled.Off
+        | _ -> LiveTestingEnabled.On
+      let changes = [
+        if enabled <> state.Enabled then
+          LiveTestChange.EnabledChanged enabled
+        LiveTestChange.SummaryChanged summary
+      ]
+      { state with
+          LastSummary = Some summary
+          Enabled = enabled },
+      changes
 
     | LiveTestEvent.RunPolicyChanged (cat, pol) ->
       { state with Policies = Map.add cat pol state.Policies },
@@ -392,7 +460,13 @@ module LiveTestState =
           |> Map.count
         else stale
       { Total = state.Tests.Count; Passed = passed; Failed = failed
-        Running = state.RunningTests.Count; Stale = stale; Disabled = disabled; LastDecision = None }
+        Running = state.RunningTests.Count; Stale = stale; Disabled = disabled
+        DiscoveryState =
+          (match state.Enabled with
+           | LiveTestingEnabled.Off -> "disabled"
+           | LiveTestingEnabled.On -> "ready_with_tests")
+        DiscoveryGeneration = state.DiscoveryGeneration
+        LastDecision = None }
 
   let testsForFile (filePath: string) (state: LiveTestState) =
     state.Tests

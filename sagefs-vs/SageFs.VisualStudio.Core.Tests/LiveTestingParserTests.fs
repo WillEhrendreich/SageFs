@@ -75,6 +75,24 @@ let ``parseSseEvent test_summary with empty JSON returns SummaryUpdated with all
 let ``parseSseEvent test_summary with invalid JSON returns empty list`` () =
   LiveTestingParser.parseSseEvent "test_summary" "not json" |> should be Empty
 
+[<Fact>]
+let ``parseSseEvent test_summary with discovery fields reads DiscoveryState and DiscoveryGeneration`` () =
+  let json = """{ "Total": 2, "DiscoveryState": "ready_with_tests", "DiscoveryGeneration": 4 }"""
+  match LiveTestingParser.parseSseEvent "test_summary" json with
+  | [ LiveTestEvent.SummaryUpdated s ] ->
+    s.DiscoveryState |> should equal "ready_with_tests"
+    s.DiscoveryGeneration |> should equal 4L
+  | other -> failwith (sprintf "expected [SummaryUpdated] but got %A" other)
+
+[<Fact>]
+let ``parseSseEvent test_summary missing discovery fields defaults to disabled and zero`` () =
+  let json = """{ "Total": 0 }"""
+  match LiveTestingParser.parseSseEvent "test_summary" json with
+  | [ LiveTestEvent.SummaryUpdated s ] ->
+    s.DiscoveryState |> should equal "disabled"
+    s.DiscoveryGeneration |> should equal 0L
+  | other -> failwith (sprintf "expected [SummaryUpdated] but got %A" other)
+
 // -- parseSseEvent: test_results_batch -------------------------------------
 
 let private passedBatchJson =
@@ -121,14 +139,14 @@ let ``parseSseEvent test_results_batch passed result has Passed outcome with dur
 [<Fact>]
 let ``parseSseEvent test_results_batch passed result has correct test ID`` () =
   match LiveTestingParser.parseSseEvent "test_results_batch" passedBatchJson with
-  | [ LiveTestEvent.TestsDiscovered infos; _ ] ->
+  | [ LiveTestEvent.TestsDiscovered (infos, _, _); _ ] ->
     TestId.value infos.[0].Id |> should equal "test-id-1"
   | other -> failwith (sprintf "unexpected result %A" other)
 
 [<Fact>]
 let ``parseSseEvent test_results_batch passed result has source file and line from Origin`` () =
   match LiveTestingParser.parseSseEvent "test_results_batch" fixtureBatchJson with
-  | [ LiveTestEvent.TestsDiscovered infos; _ ] ->
+  | [ LiveTestEvent.TestsDiscovered (infos, _, _); _ ] ->
     infos.[0].FilePath |> should equal (Some "src/Tests.fs")
     infos.[0].Line |> should equal (Some 10)
   | other -> failwith (sprintf "unexpected result %A" other)
@@ -170,6 +188,24 @@ let ``parseSseEvent test_results_batch with StaleCodeEdited freshness parses cor
   match LiveTestingParser.parseSseEvent "test_results_batch" staleCodeEditedBatchJson with
   | [ _; LiveTestEvent.TestResultBatch(_, freshness) ] ->
     freshness |> should equal ResultFreshness.StaleCodeEdited
+  | other -> failwith (sprintf "unexpected result %A" other)
+
+[<Fact>]
+let ``parseSseEventWithGeneration threads discovery generation into TestsDiscovered`` () =
+  match LiveTestingParser.parseSseEventWithGeneration 7L "test_results_batch" passedBatchJson with
+  | [ LiveTestEvent.TestsDiscovered (infos, isComplete, gen); _ ] ->
+    infos.Length |> should be (greaterThan 0)
+    gen |> should equal 7L
+    // the fixture is a real server payload with Completion=Complete —
+    // a complete batch is the authoritative discovery set
+    isComplete |> should equal true
+  | other -> failwith (sprintf "unexpected result %A" other)
+
+[<Fact>]
+let ``parseSseEvent test_results_batch defaults generation to zero`` () =
+  match LiveTestingParser.parseSseEvent "test_results_batch" passedBatchJson with
+  | [ LiveTestEvent.TestsDiscovered (_, _, gen); _ ] ->
+    gen |> should equal 0L
   | other -> failwith (sprintf "unexpected result %A" other)
 
 [<Fact>]

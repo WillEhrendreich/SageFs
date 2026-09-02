@@ -80,13 +80,13 @@ let ``update LiveTestingDisabled returns EnabledChanged Off change`` () =
 [<Fact>]
 let ``update TestsDiscovered adds test to Tests map`` () =
   let info = mkInfo "id-1" "my test" (Some "Test.fs") (Some 10)
-  let state, _ = LiveTestState.update (LiveTestEvent.TestsDiscovered [| info |]) LiveTestState.empty
+  let state, _ = LiveTestState.update (LiveTestEvent.TestsDiscovered ([| info |], false, 0L)) LiveTestState.empty
   state.Tests |> Map.containsKey (TestId.create "id-1") |> should equal true
 
 [<Fact>]
 let ``update TestsDiscovered returns TestsDiscovered change with correct count`` () =
   let info = mkInfo "id-1" "my test" (Some "Test.fs") (Some 10)
-  let _, changes = LiveTestState.update (LiveTestEvent.TestsDiscovered [| info |]) LiveTestState.empty
+  let _, changes = LiveTestState.update (LiveTestEvent.TestsDiscovered ([| info |], false, 0L)) LiveTestState.empty
   match changes with
   | [ LiveTestChange.TestsDiscovered arr ] -> arr.Length |> should equal 1
   | _ -> failwith "expected single TestsDiscovered change"
@@ -96,7 +96,7 @@ let ``update TestsDiscovered preserves existing tests`` () =
   let info1 = mkInfo "id-1" "test 1" (Some "Test.fs") (Some 1)
   let info2 = mkInfo "id-2" "test 2" (Some "Test.fs") (Some 2)
   let state0 = { LiveTestState.empty with Tests = Map.ofList [ (info1.Id, info1) ] }
-  let state1, _ = LiveTestState.update (LiveTestEvent.TestsDiscovered [| info2 |]) state0
+  let state1, _ = LiveTestState.update (LiveTestEvent.TestsDiscovered ([| info2 |], false, 0L)) state0
   state1.Tests.Count |> should equal 2
 
 // -- LiveTestState.update: TestResultBatch ---------------------------------
@@ -157,15 +157,101 @@ let ``update TestResultBatch removes completed IDs from RunningTests`` () =
 
 [<Fact>]
 let ``update SummaryUpdated sets LastSummary`` () =
-  let summary = { Total = 5; Passed = 3; Failed = 1; Running = 0; Stale = 1; Disabled = 0; LastDecision = None }
+  let summary = { Total = 5; Passed = 3; Failed = 1; Running = 0; Stale = 1; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = None }
   let state, _ = LiveTestState.update (LiveTestEvent.SummaryUpdated summary) LiveTestState.empty
   state.LastSummary |> should equal (Some summary)
 
 [<Fact>]
 let ``update SummaryUpdated returns SummaryChanged change`` () =
-  let summary = { Total = 5; Passed = 3; Failed = 1; Running = 0; Stale = 1; Disabled = 0; LastDecision = None }
+  let summary = { Total = 5; Passed = 3; Failed = 1; Running = 0; Stale = 1; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = None }
   let _, changes = LiveTestState.update (LiveTestEvent.SummaryUpdated summary) LiveTestState.empty
   changes |> should equal [ LiveTestChange.SummaryChanged summary ]
+
+// -- Authoritative activation from the server summary (Phase 7) ------------
+// The client's Enabled must derive from the server's DiscoveryState, not
+// optimistic local toggles — another client toggling the server (or a VS
+// restart) reconciles on the first summary.
+
+[<Fact>]
+let ``update SummaryUpdated with ready_with_tests turns Enabled On`` () =
+  let summary = { Total = 2; Passed = 0; Failed = 0; Running = 0; Stale = 0; Disabled = 0; DiscoveryState = "ready_with_tests"; DiscoveryGeneration = 3L; LastDecision = None }
+  let state, _ = LiveTestState.update (LiveTestEvent.SummaryUpdated summary) LiveTestState.empty
+  state.Enabled |> should equal LiveTestingEnabled.On
+
+[<Fact>]
+let ``update SummaryUpdated with ready_with_tests emits EnabledChanged On`` () =
+  let summary = { Total = 2; Passed = 0; Failed = 0; Running = 0; Stale = 0; Disabled = 0; DiscoveryState = "ready_with_tests"; DiscoveryGeneration = 3L; LastDecision = None }
+  let _, changes = LiveTestState.update (LiveTestEvent.SummaryUpdated summary) LiveTestState.empty
+  changes
+  |> List.exists (function LiveTestChange.EnabledChanged LiveTestingEnabled.On -> true | _ -> false)
+  |> should equal true
+
+[<Fact>]
+let ``update SummaryUpdated with disabled turns Enabled Off`` () =
+  let summary = { Total = 0; Passed = 0; Failed = 0; Running = 0; Stale = 0; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = None }
+  let on = { LiveTestState.empty with Enabled = LiveTestingEnabled.On }
+  let state, _ = LiveTestState.update (LiveTestEvent.SummaryUpdated summary) on
+  state.Enabled |> should equal LiveTestingEnabled.Off
+
+[<Fact>]
+let ``update SummaryUpdated with discovering turns Enabled On`` () =
+  // Zero-test discoverability: "discovering" is active even with 0 tests.
+  let summary = { Total = 0; Passed = 0; Failed = 0; Running = 0; Stale = 0; Disabled = 0; DiscoveryState = "discovering"; DiscoveryGeneration = 0L; LastDecision = None }
+  let state, _ = LiveTestState.update (LiveTestEvent.SummaryUpdated summary) LiveTestState.empty
+  state.Enabled |> should equal LiveTestingEnabled.On
+
+// -- Rediscovery sweep (Phase 7) -------------------------------------------
+// A COMPLETE discovery from a NEWER generation must REPLACE tests/results —
+// tests renamed/deleted server-side must not linger in the tool window.
+
+[<Fact>]
+let ``update complete TestsDiscovered from newer generation sweeps removed tests and their results`` () =
+  let infoA = mkInfo "id-A" "test A" (Some "Test.fs") (Some 1)
+  let infoB = mkInfo "id-B" "test B" (Some "Test.fs") (Some 2)
+  let resultB = mkResult "id-B" (TestOutcome.Failed ("broke", None)) (Some 1.0)
+  let prior =
+    { LiveTestState.empty with
+        Tests = Map.ofList [ (infoA.Id, infoA); (infoB.Id, infoB) ]
+        Results = Map.ofList [ (resultB.Id, resultB) ] }
+  let next, changes =
+    LiveTestState.update
+      (LiveTestEvent.TestsDiscovered ([| infoA |], true, 1L))
+      prior
+  next.Tests |> Map.containsKey infoA.Id |> should equal true
+  next.Tests |> Map.containsKey infoB.Id |> should equal false
+  next.Results |> Map.containsKey resultB.Id |> should equal false
+  next.DiscoveryGeneration |> should equal 1L
+  changes
+  |> List.exists (function
+    | LiveTestChange.TestsRemoved removed -> removed = [| infoB.Id |]
+    | _ -> false)
+  |> should equal true
+
+[<Fact>]
+let ``update partial TestsDiscovered keeps merge semantics and never sweeps`` () =
+  let infoA = mkInfo "id-A" "test A" (Some "Test.fs") (Some 1)
+  let infoB = mkInfo "id-B" "test B" (Some "Test.fs") (Some 2)
+  let prior = { LiveTestState.empty with Tests = Map.ofList [ (infoA.Id, infoA) ] }
+  let next, _ =
+    LiveTestState.update
+      (LiveTestEvent.TestsDiscovered ([| infoB |], false, 1L))
+      prior
+  next.Tests |> Map.containsKey infoA.Id |> should equal true
+  next.Tests |> Map.containsKey infoB.Id |> should equal true
+
+[<Fact>]
+let ``update same-generation complete TestsDiscovered does not sweep`` () =
+  let infoA = mkInfo "id-A" "test A" (Some "Test.fs") (Some 1)
+  let infoB = mkInfo "id-B" "test B" (Some "Test.fs") (Some 2)
+  let prior =
+    { LiveTestState.empty with
+        Tests = Map.ofList [ (infoA.Id, infoA); (infoB.Id, infoB) ]
+        DiscoveryGeneration = 1L }
+  let next, _ =
+    LiveTestState.update
+      (LiveTestEvent.TestsDiscovered ([| infoA |], true, 1L))
+      prior
+  next.Tests |> Map.containsKey infoB.Id |> should equal true
 
 // -- LiveTestState.update: RunPolicyChanged --------------------------------
 
@@ -194,7 +280,7 @@ let ``multiple events applied sequentially produce correct cumulative state`` ()
   let result = mkResult "id-1" (TestOutcome.Passed 20.0) (Some 20.0)
   let state0 = LiveTestState.empty
   let state1, _ = LiveTestState.update LiveTestEvent.LiveTestingEnabled state0
-  let state2, _ = LiveTestState.update (LiveTestEvent.TestsDiscovered [| info |]) state1
+  let state2, _ = LiveTestState.update (LiveTestEvent.TestsDiscovered ([| info |], false, 0L)) state1
   let state3, _ =
     LiveTestState.update
       (LiveTestEvent.TestResultBatch([| result |], ResultFreshness.Fresh))
@@ -241,37 +327,37 @@ let ``resultFor returns Some result when test ID exists`` () =
 
 [<Fact>]
 let ``formatToolWindowLine with all passed returns info severity`` () =
-  let s = { Total = 5; Passed = 5; Failed = 0; Running = 0; Stale = 0; Disabled = 0; LastDecision = None }
+  let s = { Total = 5; Passed = 5; Failed = 0; Running = 0; Stale = 0; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = None }
   let _, severity = TestSummary.formatToolWindowLine s
   severity |> should equal "info"
 
 [<Fact>]
 let ``formatToolWindowLine with failures returns error severity`` () =
-  let s = { Total = 5; Passed = 4; Failed = 1; Running = 0; Stale = 0; Disabled = 0; LastDecision = None }
+  let s = { Total = 5; Passed = 4; Failed = 1; Running = 0; Stale = 0; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = None }
   let _, severity = TestSummary.formatToolWindowLine s
   severity |> should equal "error"
 
 [<Fact>]
 let ``formatToolWindowLine with stale but no failures returns warning severity`` () =
-  let s = { Total = 5; Passed = 4; Failed = 0; Running = 0; Stale = 1; Disabled = 0; LastDecision = None }
+  let s = { Total = 5; Passed = 4; Failed = 0; Running = 0; Stale = 1; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = None }
   let _, severity = TestSummary.formatToolWindowLine s
   severity |> should equal "warning"
 
 [<Fact>]
 let ``formatToolWindowLine with all passed shows passed count in text`` () =
-  let s = { Total = 5; Passed = 5; Failed = 0; Running = 0; Stale = 0; Disabled = 0; LastDecision = None }
+  let s = { Total = 5; Passed = 5; Failed = 0; Running = 0; Stale = 0; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = None }
   let text, _ = TestSummary.formatToolWindowLine s
   text |> should haveSubstring "5 passed"
 
 [<Fact>]
 let ``formatToolWindowLine with no results shows just total`` () =
-  let s = { Total = 3; Passed = 0; Failed = 0; Running = 0; Stale = 0; Disabled = 0; LastDecision = None }
+  let s = { Total = 3; Passed = 0; Failed = 0; Running = 0; Stale = 0; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = None }
   let text, _ = TestSummary.formatToolWindowLine s
   text |> should equal "3 tests"
 
 [<Fact>]
 let ``formatToolWindowLine mixed summary shows both failed and stale in text`` () =
-  let s = { Total = 5; Passed = 2; Failed = 2; Running = 0; Stale = 1; Disabled = 0; LastDecision = None }
+  let s = { Total = 5; Passed = 2; Failed = 2; Running = 0; Stale = 1; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = None }
   let text, _ = TestSummary.formatToolWindowLine s
   text |> should haveSubstring "failed"
   text |> should haveSubstring "stale"
@@ -280,7 +366,7 @@ let ``formatToolWindowLine mixed summary shows both failed and stale in text`` (
 
 [<Fact>]
 let ``summary returns LastSummary when it is set`` () =
-  let expected = { Total = 10; Passed = 8; Failed = 2; Running = 0; Stale = 0; Disabled = 0; LastDecision = None }
+  let expected = { Total = 10; Passed = 8; Failed = 2; Running = 0; Stale = 0; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = None }
   let state = { LiveTestState.empty with LastSummary = Some expected }
   LiveTestState.summary state |> should equal expected
 
@@ -295,7 +381,7 @@ let ``formatToolWindowLine includes last decision explanation when available`` (
       SelectedTests = [| "Compiled.Tests.should_build_a" |]
       DeferredTests = [||]
       Reason = "fallback rebuild" }
-  let summary = { Total = 1; Passed = 0; Failed = 0; Running = 0; Stale = 1; Disabled = 0; LastDecision = Some decision }
+  let summary = { Total = 1; Passed = 0; Failed = 0; Running = 0; Stale = 1; Disabled = 0; DiscoveryState = "disabled"; DiscoveryGeneration = 0L; LastDecision = Some decision }
   let text, _ = TestSummary.formatToolWindowLine summary
   text |> should haveSubstring "conservative fallback rebuild"
 

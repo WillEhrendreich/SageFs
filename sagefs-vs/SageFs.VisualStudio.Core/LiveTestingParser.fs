@@ -196,6 +196,11 @@ module LiveTestingParser =
       Running = tryInt root "Running" 0
       Stale = tryInt root "Stale" 0
       Disabled = tryInt root "Disabled" 0
+      DiscoveryState = tryStr root "DiscoveryState" "disabled"
+      DiscoveryGeneration =
+        match getProp root "DiscoveryGeneration" with
+        | Some el when el.ValueKind = JsonValueKind.Number -> el.GetInt64()
+        | _ -> 0L
       LastDecision = getProp root "LastDecision" |> Option.bind parseLastDecision }
 
   let parseFreshness (root: JsonElement) : ResultFreshness =
@@ -212,14 +217,25 @@ module LiveTestingParser =
       | _ -> ResultFreshness.Fresh
     | _ -> ResultFreshness.Fresh
 
-  let parseResultsBatch (root: JsonElement) : LiveTestEvent list =
+  /// Completion DU (Complete | Partial | Superseded) from a batch payload.
+  /// Only Complete marks the Entries as the authoritative discovery set.
+  let parseIsComplete (root: JsonElement) : bool =
+    match getProp root "Completion" with
+    | Some el when el.ValueKind = JsonValueKind.Object ->
+      tryStr el "Case" "" = "Complete"
+    | _ -> false
+
+  /// discoveryGeneration is supplied by the caller (the subscriber's last
+  /// summary generation) — the batch itself carries only the RUN generation.
+  let parseResultsBatch (discoveryGeneration: int64) (root: JsonElement) : LiveTestEvent list =
     let freshness = parseFreshness root
+    let isComplete = parseIsComplete root
     match getProp root "Entries" with
     | Some entries when entries.ValueKind = JsonValueKind.Array ->
       let entryArray = [| for e in entries.EnumerateArray() -> e |]
       let testInfos = entryArray |> Array.map parseTestInfo
       let testResults = entryArray |> Array.map parseTestResult
-      [ LiveTestEvent.TestsDiscovered testInfos
+      [ LiveTestEvent.TestsDiscovered (testInfos, isComplete, discoveryGeneration)
         LiveTestEvent.TestResultBatch (testResults, freshness) ]
     | _ -> []
 
@@ -234,16 +250,22 @@ module LiveTestingParser =
           yield { TestName = testName; FilePath = filePath; StartLine = startLine; EndLine = endLine } |]
     | _ -> [||]
 
-  let parseSseEvent (eventType: string) (json: string) : LiveTestEvent list =
+  let parseSseEventWithGeneration (discoveryGeneration: int64) (eventType: string) (json: string) : LiveTestEvent list =
     try
       use doc = JsonDocument.Parse(json)
       let root = doc.RootElement
       match eventType with
       | "test_summary" -> [ LiveTestEvent.SummaryUpdated (parseSummary root) ]
-      | "test_results_batch" -> parseResultsBatch root
+      | "test_results_batch" -> parseResultsBatch discoveryGeneration root
       | "test_source_locations" -> [ LiveTestEvent.TestSourceLocationsReceived (parseTestSourceLocations root) ]
       | _ -> []
     with _ -> []
+
+  /// Backwards-compatible entry: batches parsed with generation 0 (merge-only
+  /// semantics, never sweep). The subscriber uses the generation-aware variant
+  /// once a summary with a generation has arrived.
+  let parseSseEvent (eventType: string) (json: string) : LiveTestEvent list =
+    parseSseEventWithGeneration 0L eventType json
 
   let tryFloat (el: JsonElement) (prop: string) =
     let mutable v = Unchecked.defaultof<JsonElement>
