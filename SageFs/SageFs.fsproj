@@ -20,9 +20,9 @@
         <RepositoryType>git</RepositoryType>
         <RepositoryUrl>https://github.com/WillEhrendreich/SageFs</RepositoryUrl>
 
-        <!-- The FSI host builds for net10.0 (Harmony needs it) while the daemon
-             stays net11.0. All host-copy/pack globs use this property so there
-             is exactly one place to change the host TFM. -->
+        <!-- The daemon and the FSI host both run net10.0 (repo default).
+             All host-copy/pack globs use HostTargetFramework so there is
+             exactly one place to change the host TFM if it ever diverges. -->
         <HostTargetFramework>net10.0</HostTargetFramework>
     </PropertyGroup>
 

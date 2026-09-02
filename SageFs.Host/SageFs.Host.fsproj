@@ -5,11 +5,9 @@
         <IsPackable>false</IsPackable>
         <AssemblyName>SageFs.Host</AssemblyName>
         <RootNamespace>SageFs.Host</RootNamespace>
-        <!-- The host process runs on net10.0 (NOT the repo-default net11.0):
-             hot reload uses Harmony method detouring, and Harmony 2.4.2 does
-             not support CoreCLR 11. The host is an isolated process with its
-             own closure + manifest, so only this worker runs on net10; the
-             daemon/dashboard stay on net11. -->
+        <!-- The host process runs on net10.0 (repo default, via Directory.Build.props).
+             Hot reload uses Harmony method detouring, and Harmony 2.4.2 does not
+             support CoreCLR 11 — see Directory.Build.props for the upgrade gate. -->
         <TargetFramework>net10.0</TargetFramework>
         <!-- *.runtimeconfig.dev.json is a Debug-only hot-reload artifact, not in
              the vetted manifest closure — disable its generation so the
