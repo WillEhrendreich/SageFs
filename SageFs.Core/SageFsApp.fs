@@ -1017,6 +1017,16 @@ module SageFsUpdate =
                   Features.LiveTesting.TestCycleEffect.RegisterFileWatcher (
                     sessionId,
                     session.WorkingDirectory)) ]
+          // Phase 3.6 dispose/recreate lifecycle: a hard reset emits
+          // SessionStatusChanged(Running -> Restarting); the worker is being
+          // torn down, so the watcher claim must be released or the fresh
+          // worker's registration doubles up on a stale FileSystemWatcher.
+          // Register-on-Running (above) recreates the claim after restart.
+          | LiveTestingActivation.Active, Some session when isWatcherEligible session.Status && not (isWatcherEligible status) ->
+              [ SageFsEffect.TestCycle (
+                  Features.LiveTesting.TestCycleEffect.DisposeFileWatcher (
+                    sessionId,
+                    session.WorkingDirectory)) ]
           | _ -> []
 
         { model with

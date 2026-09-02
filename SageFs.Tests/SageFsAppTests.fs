@@ -723,6 +723,94 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     | SessionDisplayStatus.Errored _ -> ()
     | other -> failtestf "expected Errored, got %A" other
 
+  testCase "SessionStatusChanged to Restarting disposes the watcher claim when live testing is active" <| fun _ ->
+    // Phase 3.6 (dispose/recreate across disable/restart): a hard reset emits
+    // SessionStatusChanged(Running -> Restarting). With live testing active
+    // the watcher manager holds a FileSystemWatcher claim for the session's
+    // working dir. If the claim survives the restart, the worker's fresh
+    // watch-all registration doubles up on the old watcher (stale handle,
+    // duplicate FileReloaded attribution). Entering Restarting must DISPOSE
+    // the claim; the existing register-on-Running transition recreates it.
+    let snap = {
+      Id = testSessionId "aa000001"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true
+      WorkingDirectory = "C:\\proj\\work" }
+    let baseModel = SageFsModel.initial()
+    let model = {
+      baseModel with
+        Sessions = {
+          baseModel.Sessions with
+            Sessions = [snap]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
+        LiveTesting = {
+          baseModel.LiveTesting with
+            TestState = { baseModel.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
+    let event = SageFsEvent.SessionStatusChanged ("aa000001", SessionDisplayStatus.Restarting)
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Event event) model
+    match effects with
+    | [ SageFsEffect.TestCycle (TestCycleEffect.DisposeFileWatcher (sid, dir)) ] ->
+      sid |> Expect.equal "dispose should target the restarting session" "aa000001"
+      dir |> Expect.equal "dispose should release the session's working dir" "C:\\proj\\work"
+    | other -> failtestf "expected a single DisposeFileWatcher on restart, got %A" other
+
+  testCase "SessionStatusChanged out of Restarting re-registers the watcher claim when live testing is active" <| fun _ ->
+    // The recreate half of dispose/recreate: a worker that finished restarting
+    // (Restarting -> Running) must claim the watcher again so file saves
+    // resume flowing to the fresh worker.
+    let snap = {
+      Id = testSessionId "aa000001"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Restarting
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true
+      WorkingDirectory = "C:\\proj\\work" }
+    let baseModel = SageFsModel.initial()
+    let model = {
+      baseModel with
+        Sessions = {
+          baseModel.Sessions with
+            Sessions = [snap]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
+        LiveTesting = {
+          baseModel.LiveTesting with
+            TestState = { baseModel.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
+    let event = SageFsEvent.SessionStatusChanged ("aa000001", SessionDisplayStatus.Running)
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Event event) model
+    match effects with
+    | [ SageFsEffect.TestCycle (TestCycleEffect.RegisterFileWatcher (sid, dir)) ] ->
+      sid |> Expect.equal "register should target the restarted session" "aa000001"
+      dir |> Expect.equal "register should claim the session's working dir" "C:\\proj\\work"
+    | other -> failtestf "expected a single RegisterFileWatcher out of restart, got %A" other
+
+  testCase "SessionStopped disposes the watcher claim when live testing is active" <| fun _ ->
+    let snap = {
+      Id = testSessionId "aa000001"; Name = None; Projects = []
+      Status = SessionDisplayStatus.Running
+      LastActivity = DateTime.UtcNow; EvalCount = 0
+      UpSince = DateTime.UtcNow; IsActive = true
+      WorkingDirectory = "C:\\proj\\work" }
+    let baseModel = SageFsModel.initial()
+    let model = {
+      baseModel with
+        Sessions = {
+          baseModel.Sessions with
+            Sessions = [snap]
+            ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
+        LiveTesting = {
+          baseModel.LiveTesting with
+            TestState = { baseModel.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
+    let event = SageFsEvent.SessionStopped "aa000001"
+    let _, effects =
+      SageFsUpdate.update (SageFsMsg.Event event) model
+    match effects with
+    | [ SageFsEffect.TestCycle (TestCycleEffect.DisposeFileWatcher (sid, dir)) ] ->
+      sid |> Expect.equal "dispose should target the stopped session" "aa000001"
+      dir |> Expect.equal "dispose should release the session's working dir" "C:\\proj\\work"
+    | other -> failtestf "expected a single DisposeFileWatcher on stop, got %A" other
+
   testCase "SessionStatusChanged for unknown session is no-op" <| fun _ ->
     let event = SageFsEvent.SessionStatusChanged ("x", SessionDisplayStatus.Errored "x")
     let newModel, effects =
