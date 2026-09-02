@@ -23,6 +23,7 @@ open SageFs.McpTools
 open SageFs.McpPushNotifications
 open SageFs.McpStateHandlers
 open SageFs.Utils
+open SageFs
 
 // ---------------------------------------------------------------------------
 // MCP Push Notifications — tracks active connections and broadcasts events
@@ -239,6 +240,20 @@ let rawJsonResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) (json: string) 
   do! ctx.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(json))
 }
 
+/// Standard error body: `error` stays a client-compatible string (VS Code's
+/// parseOutcome reads it via fieldString), `errorDetails` carries the full
+/// SageFsError algebra (case/message/suggestedAction) for agents and logs.
+let structuredErrorBody (err: SageFsError) =
+  let details = SageFsError.toJson err
+  box {| success = false
+         error = SageFsError.describe err
+         errorDetails = details |}
+
+/// Build the structured body for an unexpected exception, logging the full
+/// details server-side while the wire carries the algebra-safe description.
+let unexpectedErrorBody (ex: exn) =
+  structuredErrorBody (SageFsError.Unexpected ex)
+
 let private writeRequestTooLargeResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
   do! jsonResponse ctx 413 {| success = false; error = "Request body too large" |}
 }
@@ -292,9 +307,9 @@ let withErrorHandling (ctx: Microsoft.AspNetCore.Http.HttpContext) (handler: uni
   with
   | RequestTooLarge -> ()  // 413 already committed — do not write a second response
   | :? System.Text.Json.JsonException as je ->
-    do! jsonResponse ctx 400 {| success = false; error = je.Message |}
+    do! jsonResponse ctx 400 (structuredErrorBody (SageFsError.JsonParseError ("request body", je.Message)))
   | ex ->
-    do! jsonResponse ctx 500 {| success = false; error = ex.Message |}
+    do! jsonResponse ctx 500 (unexpectedErrorBody ex)
 }
 
 /// Global error-handling middleware — catches unhandled exceptions from all endpoints.
@@ -309,11 +324,11 @@ let errorHandlingMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: 
   | :? System.Text.Json.JsonException as je ->
     match ctx.Response.HasStarted with
     | true -> ()  // SSE or streaming response already committed
-    | false -> do! jsonResponse ctx 400 {| success = false; error = je.Message |}
+    | false -> do! jsonResponse ctx 400 (structuredErrorBody (SageFsError.JsonParseError ("request body", je.Message)))
   | ex ->
     match ctx.Response.HasStarted with
     | true -> ()  // SSE or streaming response already committed
-    | false -> do! jsonResponse ctx 500 {| success = false; error = ex.Message |}
+    | false -> do! jsonResponse ctx 500 (unexpectedErrorBody ex)
 }
 
 /// Browser-origin/CSRF gate (see HttpOriginGuard). Rejects cross-site and
@@ -1789,7 +1804,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         | None -> ()
         do! jsonResponse ctx 200 {| success = true; message = msg |}
       | Error err ->
-        do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
+        do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
     } :> Task
   ) |> ignore
   app.MapPost("/api/sessions/stop", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -1804,7 +1819,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         | None -> ()
         match result with
         | Ok msg -> do! jsonResponse ctx 200 {| success = true; message = msg |}
-        | Error err -> do! jsonResponse ctx 400 {| success = false; error = SageFs.SageFsError.describe err |}
+        | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
     } :> Task
   ) |> ignore
 
