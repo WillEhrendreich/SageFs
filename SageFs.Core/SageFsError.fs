@@ -15,6 +15,7 @@ type SageFsError =
   | NoActiveSessions
   | AmbiguousSessions of sessionDescriptions: string list
   | SessionCreationFailed of reason: string
+  | DuplicateSession of existingSessionId: string * workingDirectory: string
   | SessionStopFailed of sessionId: string * reason: string
   | SessionSwitchFailed of sessionId: string * reason: string
   // ── Worker communication ──
@@ -60,6 +61,8 @@ module SageFsError =
       sprintf "Multiple sessions active. Specify sessionId:\n%s" (descriptions |> String.concat "\n")
     | SageFsError.SessionCreationFailed reason ->
       sprintf "Failed to create session: %s. Check the project path exists and contains a valid .fsproj." reason
+    | SageFsError.DuplicateSession(existingId, dir) ->
+      sprintf "A session for this project already exists (session %s, working directory %s). Use switch_session to select it instead of creating a duplicate." existingId dir
     | SageFsError.SessionStopFailed(id, reason) ->
       sprintf "Failed to stop session '%s': %s" id reason
     | SageFsError.SessionSwitchFailed(id, reason) ->
@@ -123,6 +126,7 @@ module SageFsError =
     | SageFsError.WorkerHttpError _ -> LogLevel.Error
     | SageFsError.PipeClosed -> LogLevel.Error
     | SageFsError.SessionCreationFailed _ -> LogLevel.Error
+    | SageFsError.DuplicateSession _ -> LogLevel.Information
     | SageFsError.EvalFailed _ -> LogLevel.Error
     | SageFsError.ResetFailed _ -> LogLevel.Error
     | SageFsError.HardResetFailed _ -> LogLevel.Error
@@ -159,6 +163,7 @@ module SageFsError =
     // 409 Conflict
     | SageFsError.PortInUse _ -> 409
     | SageFsError.RestartLimitExceeded _ -> 409
+    | SageFsError.DuplicateSession _ -> 409
     // 504 Gateway Timeout
     | SageFsError.WorkerTimeout _ -> 504
     // 502 Bad Gateway
@@ -193,6 +198,7 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _ -> true
     | SageFsError.JsonParseError _ -> true
     | SageFsError.ToolNotAvailable _ -> true
+    | SageFsError.DuplicateSession _
     | SageFsError.SessionCreationFailed _
     | SageFsError.SessionStopFailed _
     | SageFsError.SessionSwitchFailed _
@@ -242,6 +248,7 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _
     | SageFsError.JsonParseError _
     | SageFsError.DaemonNotRunning
+    | SageFsError.DuplicateSession _
     | SageFsError.WorkerCommunicationFailed _
     | SageFsError.WorkerSpawnFailed _
     | SageFsError.WorkerTimeout _
@@ -265,6 +272,7 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _
     | SageFsError.JsonParseError _
     | SageFsError.DaemonNotRunning
+    | SageFsError.DuplicateSession _
     | SageFsError.SessionCreationFailed _
     | SageFsError.SessionStopFailed _
     | SageFsError.SessionSwitchFailed _
@@ -284,10 +292,11 @@ module SageFsError =
     | SageFsError.PortInUse _
     | SageFsError.Unexpected _ -> false
 
-  /// Infrastructure errors: 409 — system-level conflicts (port in use, restart limit).
+  /// Infrastructure errors: 409 — system-level conflicts (port in use, restart limit, duplicate session).
   let isInfraError = function
     | SageFsError.PortInUse _ -> true
     | SageFsError.RestartLimitExceeded _ -> true
+    | SageFsError.DuplicateSession _ -> true
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
     | SageFsError.NoActiveSessions
@@ -324,6 +333,7 @@ module SageFsError =
     | SageFsError.NoActiveSessions -> "Run create_session to start one"
     | SageFsError.AmbiguousSessions _ -> "Specify a sessionId explicitly"
     | SageFsError.SessionCreationFailed _ -> "Check the project path and run 'dotnet build'"
+    | SageFsError.DuplicateSession _ -> "Run switch_session to select the existing session"
     | SageFsError.SessionStopFailed _ -> "Try hard_reset_fsi_session"
     | SageFsError.SessionSwitchFailed _ -> "Run list_sessions to check available sessions"
     | SageFsError.WorkerCommunicationFailed _ -> "Run hard_reset_fsi_session"

@@ -107,6 +107,21 @@ module SessionManager =
       |> Map.toList
       |> List.map (fun (_, s) -> s.Info)
 
+    /// Find an existing session with the same working directory and project
+    /// set. Uniqueness is enforced HERE at the single owner (the mailbox) —
+    /// the CQRS advisory guard in Mcp.fs is check-then-act and cannot prevent
+    /// two concurrent create_session calls from both passing it.
+    let tryFindDuplicate (projects: string list) (workingDir: string) state =
+      state.Sessions
+      |> Map.toList
+      |> List.tryFind (fun (_, s) ->
+        let sameDir =
+          String.Equals(s.Info.WorkingDirectory, workingDir, StringComparison.OrdinalIgnoreCase)
+        let sameProjects =
+          List.sort s.Info.Projects = List.sort projects
+        sameDir && sameProjects)
+      |> Option.map fst
+
   /// Immutable snapshot of ManagerState for lock-free CQRS reads.
   /// Published after every command — reads go here, never to the mailbox.
   type QuerySnapshot = {
@@ -645,51 +660,61 @@ module SessionManager =
         let! cmd = inbox.Receive()
         match cmd with
         | SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, workflow, reply) ->
-          let sessionId = SessionId.newId()
-          let span = Instrumentation.startSpan Instrumentation.sessionSource "session.create"
-                       [("session.id", box sessionId); ("session.projects", box (String.concat "," projects)); ("session.working_dir", box workingDir)]
-          let onExited workerPid exitCode =
-            inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
-          match runtime.StartWorkerProcess sessionId projects workingDir autoOpenNamespaces workflow onExited with
-          | Ok proc ->
-            // Register session immediately with pending proxy — don't block
-            let info : SessionInfo = {
-              Id = sessionId
-              Name = None
-              Projects = projects
-              WorkingDirectory = workingDir
-              SolutionRoot = SessionInfo.findSolutionRoot workingDir
-              CreatedAt = DateTime.UtcNow
-              LastActivity = DateTime.UtcNow
-              Status = SessionStatus.Starting
-              FaultReason = None
-              WorkerPid = Some proc.Id
-              WorkerPort = None
-              Workflow = workflow
-            }
-            let managed = {
-              Info = info
-              Process = proc
-              Proxy = pendingProxy
-              WorkerBaseUrl = ""
-              Projects = projects
-              WorkingDir = workingDir
-              AutoOpenNamespaces = autoOpenNamespaces
-              Workflow = workflow
-              RestartState = RestartPolicy.emptyState
-            }
-            let newState = ManagerState.addSession sessionId managed state
-            reply.Reply(Ok info)
-            Instrumentation.sessionsCreated.Add(1L)
-            Instrumentation.activeSessions.Add(1L)
-            Instrumentation.succeedSpan span
-            // Port discovery runs off the agent loop
-            runtime.AwaitWorkerPort sessionId proc inbox ct
-            return! loop newState
-          | Error err ->
-            reply.Reply(Error err)
-            Instrumentation.failSpan span (sprintf "%A" err)
+          // Enforce one session per (projects, workingDir) AT THE OWNER — the
+          // mailbox is the only place that can make this atomic. Two
+          // concurrent create_session calls both passing the CQRS advisory
+          // guard would otherwise spawn duplicate workers, breaking the
+          // "Multiple sessions match workingDirectory" routing invariant.
+          match ManagerState.tryFindDuplicate projects workingDir state with
+          | Some existingId ->
+            reply.Reply(Error (SageFsError.DuplicateSession (SessionId.value existingId, workingDir)))
             return! loop state
+          | None ->
+            let sessionId = SessionId.newId()
+            let span = Instrumentation.startSpan Instrumentation.sessionSource "session.create"
+                         [("session.id", box sessionId); ("session.projects", box (String.concat "," projects)); ("session.working_dir", box workingDir)]
+            let onExited workerPid exitCode =
+              inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
+            match runtime.StartWorkerProcess sessionId projects workingDir autoOpenNamespaces workflow onExited with
+            | Ok proc ->
+              // Register session immediately with pending proxy — don't block
+              let info : SessionInfo = {
+                Id = sessionId
+                Name = None
+                Projects = projects
+                WorkingDirectory = workingDir
+                SolutionRoot = SessionInfo.findSolutionRoot workingDir
+                CreatedAt = DateTime.UtcNow
+                LastActivity = DateTime.UtcNow
+                Status = SessionStatus.Starting
+                FaultReason = None
+                WorkerPid = Some proc.Id
+                WorkerPort = None
+                Workflow = workflow
+              }
+              let managed = {
+                Info = info
+                Process = proc
+                Proxy = pendingProxy
+                WorkerBaseUrl = ""
+                Projects = projects
+                WorkingDir = workingDir
+                AutoOpenNamespaces = autoOpenNamespaces
+                Workflow = workflow
+                RestartState = RestartPolicy.emptyState
+              }
+              let newState = ManagerState.addSession sessionId managed state
+              reply.Reply(Ok info)
+              Instrumentation.sessionsCreated.Add(1L)
+              Instrumentation.activeSessions.Add(1L)
+              Instrumentation.succeedSpan span
+              // Port discovery runs off the agent loop
+              runtime.AwaitWorkerPort sessionId proc inbox ct
+              return! loop newState
+            | Error err ->
+              reply.Reply(Error err)
+              Instrumentation.failSpan span (sprintf "%A" err)
+              return! loop state
 
         | SessionCommand.StopSession(id, reply) ->
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.stop" [("session.id", box id)]

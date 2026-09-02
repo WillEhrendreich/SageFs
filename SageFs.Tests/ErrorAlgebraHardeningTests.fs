@@ -63,6 +63,11 @@ let private genError =
     genStr |> Gen.map SageFsError.SessionCreationFailed
     gen {
       let! s = genStr
+      let! d = genStr
+      return SageFsError.DuplicateSession(s, d)
+    }
+    gen {
+      let! s = genStr
       let! r = genStr
       return SageFsError.SessionStopFailed(s, r)
     }
