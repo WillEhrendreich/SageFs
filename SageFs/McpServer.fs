@@ -116,14 +116,18 @@ let recordToolFailure (ctx: McpContext) (tracker: McpServerTracker) (ex: exn) =
       ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused
       SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current () }
   // Write to the durable SQLite store if available.
+  // P0 automatic-capture defect: this previously built
+  //   task { ... } |> Async.AwaitTask |> ignore
+  // — an Async that was never started, so pre-wrapper MCP failures were never
+  // durably captured. The store append is synchronous, so call it directly.
   match ctx.FrictionStore with
   | Some store ->
-    task {
-      let! _ = SageFs.Features.McpFrictionRecorder.Recorder.appendEventDirect store event
-      return ()
-    }
-    |> Async.AwaitTask
-    |> ignore
+    try
+      SageFs.Features.McpFrictionRecorder.Recorder.appendEventDirect store event
+      |> Async.AwaitTask
+      |> Async.RunSynchronously
+      |> ignore
+    with _ -> () // never throw from the failure path
   | None -> ()
   // Note: we deliberately do NOT push this to the in-memory PushEvent tracker.
   // PushEvent is for SSE state broadcasts (file reloads, test results, etc.)

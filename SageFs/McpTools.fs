@@ -217,20 +217,14 @@ let withEchoNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string>)
       Log.info ">> %s" toolName
       Log.debug "%s" normalized
       SageFs.Instrumentation.succeedSpan span
-      task {
-        let! _ = recordToolResult ctx toolName result (int sw.Elapsed.TotalMilliseconds)
-        return ()
-      } |> ignore
+      let! _ = recordToolResult ctx toolName result (int sw.Elapsed.TotalMilliseconds)
       return result
     with ex ->
       sw.Stop()
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
       auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
       SageFs.Instrumentation.failSpan span ex.Message
-      task {
-        let! _ = recordToolResult ctx toolName (sprintf "Error: %s" ex.Message) (int sw.Elapsed.TotalMilliseconds)
-        return ()
-      } |> ignore
+      let! _ = recordToolResult ctx toolName (sprintf "Error: %s" ex.Message) (int sw.Elapsed.TotalMilliseconds)
       return raise ex
   }
 
