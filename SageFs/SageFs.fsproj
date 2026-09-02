@@ -32,6 +32,7 @@
 
     <ItemGroup>
         <EmbeddedResource Include="dashboard.css" />
+        <EmbeddedResource Include="datastar.js" />
         <EmbeddedResource Include="Resources\devreload.js" />
     </ItemGroup>
 

@@ -60,6 +60,20 @@ let dashboardCss =
   use reader = new StreamReader(stream)
   reader.ReadToEnd()
 
+/// Pinned Datastar client bundle — loaded from the embedded resource and
+/// served by the daemon at /dashboard/datastar.js. WHY pinned + self-hosted:
+/// the dashboard previously fetched starfederation/datastar@develop from a
+/// CDN at runtime — a moving, unversioned branch (supply-chain + XSS
+/// surface, and a version skew breaks every open dashboard tab). The bytes
+/// below are the exact @develop bundle the dashboard was built against,
+/// frozen in-repo (SHA-256 5D6B7794A50A83D82DA962AEC5E382F5AE83AC7AFBC751F
+/// 903F7A9C6BD433C65). Upgrading Datastar is a separate, testable change.
+let datastarBundle =
+  let asm = System.Reflection.Assembly.GetExecutingAssembly()
+  use stream = asm.GetManifestResourceStream("SageFs.datastar.js")
+  use reader = new StreamReader(stream)
+  reader.ReadToEnd()
+
 let private bindingSnapshotFromEntries
   (bindings: SageFs.Features.BindingExplorer.BindingInfo array)
   : SageFs.Features.BindingExplorer.BindingScopeSnapshot option =
@@ -208,11 +222,9 @@ let renderShell (version: string) (initialSessionId: string) (initialContent: Xm
     Elem.head [] [
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
       connectionMonitorScript ()
-      // The Falco.Datastar 1.3.0 cdnScript property points to Datastar 1.0.0-RC.7
-      // which lacks the `class:` plugin. We use the `develop` branch build instead
-      // because it includes the `class:` plugin that the dashboard relies on
-      // (see DashboardFragments.fs Ds.class' usage).
-      Elem.script [ Attr.type' "module"; Attr.src "https://cdn.jsdelivr.net/gh/starfederation/datastar@develop/bundles/datastar.js" ] []
+      // Self-hosted pinned Datastar bundle (see `datastarBundle`) — never
+      // fetch a moving CDN branch at runtime.
+      Elem.script [ Attr.type' "module"; Attr.src "/dashboard/datastar.js" ] []
       Elem.link [ Attr.rel "preconnect"; Attr.href "https://fonts.googleapis.com" ]
       Elem.link [ Attr.rel "preconnect"; Attr.href "https://fonts.gstatic.com"; Attr.create "crossorigin" "" ]
       Elem.link [ Attr.rel "stylesheet"; Attr.href "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" ]
@@ -1482,6 +1494,12 @@ let createEndpoints
       ctx.Response.ContentType <- "text/css; charset=utf-8"
       ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "no-cache, must-revalidate"
       do! ctx.Response.WriteAsync(dashboardCss)
+    })
+    // Pinned self-hosted Datastar bundle — see `datastarBundle`.
+    yield get "/dashboard/datastar.js" (fun ctx -> task {
+      ctx.Response.ContentType <- "application/javascript; charset=utf-8"
+      ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "no-cache, must-revalidate"
+      do! ctx.Response.WriteAsync(datastarBundle)
     })
     yield get "/dashboard" (fun ctx -> task {
       try
