@@ -266,6 +266,18 @@ async function notifyDiscord(env: Env, reportId: string, r: IncomingFrictionRepo
   }
 }
 
+/// Concatenate Uint8Array chunks into one buffer (used for capped body reads).
+function concatBytes(chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((acc, c) => acc + c.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -287,17 +299,41 @@ export default {
       }
     }
 
-    // Size cap.
+    // Size cap. Content-Length is advisory only — chunked bodies (or lying
+    // headers) bypass it. Read the body through a hard byte cap and reject
+    // when the stream exceeds it, so the application-level limit always holds.
     const maxBytes = parseInt(env.MAX_PAYLOAD_BYTES ?? "65536", 10);
     const contentLength = parseInt(req.headers.get("Content-Length") ?? "0", 10);
     if (contentLength > maxBytes) {
       return jsonResponse(413, { error: `payload too large: ${contentLength} > ${maxBytes}` });
     }
 
+    let rawText: string;
+    try {
+      if (!req.body) {
+        return jsonResponse(400, { error: "empty body" });
+      }
+      const reader = req.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        if (received > maxBytes) {
+          return jsonResponse(413, { error: `payload too large: > ${maxBytes} bytes` });
+        }
+        chunks.push(value);
+      }
+      rawText = new TextDecoder().decode(concatBytes(chunks));
+    } catch (err) {
+      return jsonResponse(400, { error: `failed to read body: ${(err as Error).message}` });
+    }
+
     // Parse + sanitize.
     let raw: unknown;
     try {
-      raw = await req.json();
+      raw = JSON.parse(rawText);
     } catch (err) {
       return jsonResponse(400, { error: "invalid JSON body" });
     }
