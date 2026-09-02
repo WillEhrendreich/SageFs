@@ -496,14 +496,24 @@ let createStreamHandler
     let mutable lastSessionId = currentSessionOpt |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
     let mutable lastWorkingDir = ""
     let mutable lastThemeName = defaultThemeName
+    // No-change suppression: the last #main HTML actually sent on this stream.
+    // pushState renders the full snapshot on every tick (state reads are cheap),
+    // but the SSE morph only fires when the rendered HTML differs — a poll tick
+    // with nothing changed sends zero payload bytes instead of a full fat morph.
+    let mutable lastPushedMain = ""
 
     let pushState () = task {
       match currentSessionOpt with
       | None ->
-        // No sessions — push session picker
+        // No sessions — push session picker (only when it actually changed)
         let! previous = q.GetPreviousSessions ()
-        do! ssePatchNode ctx (renderSessionPicker previous)
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
+        let pickerHtml = renderNode (renderSessionPicker previous)
+        match pickerHtml = lastPushedMain with
+        | true -> () // no-change tick — nothing to send
+        | false ->
+          lastPushedMain <- pickerHtml
+          do! ssePatchNode ctx (renderSessionPicker previous)
+          do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | Some sessionId ->
       let! snap, newSessionId, newThemeName =
         buildDashboardSnapshot q infra sessionId lastSessionId lastWorkingDir lastThemeName
@@ -531,7 +541,14 @@ let createStreamHandler
       match shouldPatchTheme with
       | true -> do! Response.ssePatchSignal ctx (SignalPath.sp Signals.Theme) newThemeName
       | false -> ()
-      do! ssePatchNode ctx (renderMainContent snap)
+      // Render once, morph only on change: identical snapshots (timer poll
+      // ticks with no state movement) send zero payload bytes.
+      let mainHtml = renderNode (renderMainContent snap)
+      match mainHtml = lastPushedMain with
+      | true -> () // no-change tick — nothing to send
+      | false ->
+        lastPushedMain <- mainHtml
+        do! ssePatchNode ctx (renderMainContent snap)
     }
 
     try
