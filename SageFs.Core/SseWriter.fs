@@ -165,10 +165,12 @@ let formatFileAnnotationsEvent (opts: JsonSerializerOptions) (sessionId: string 
 let formatCoverageViewEvent
   (opts: JsonSerializerOptions)
   (sessionId: string option)
+  (generation: int)
   (view: Features.LiveTesting.CoverageView)
   : string =
   let payload =
-    {| Symbol = view.Symbol
+    {| Generation = generation
+       Symbol = view.Symbol
        FilePath = view.FilePath
        DefinitionLine = view.DefinitionLine
        TotalCount = view.TotalCount

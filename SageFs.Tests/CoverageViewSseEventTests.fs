@@ -49,35 +49,40 @@ let private absentView =
 let sseCoverageViewEventTests = testList "SSE CoverageView event v2" [
 
   testCase "WHY - SSE - emits a 'coverage_view' event because all three editors subscribe to this event name to render the per-function aggregate" <| fun _ ->
-    let sse = formatCoverageViewEvent (makeOpts()) None sampleView
+    let sse = formatCoverageViewEvent (makeOpts()) None 7 sampleView
     sse |> Expect.stringStarts "must name the event" "event: coverage_view\n"
 
   testCase "WHY - SSE - payload's Overflow is serialized as a DU with the hidden count so the renderer can show 'v +N more' exactly" <| fun _ ->
-    let sse = formatCoverageViewEvent (makeOpts()) None sampleView
+    let sse = formatCoverageViewEvent (makeOpts()) None 7 sampleView
     sse |> Expect.stringContains "Overflow case present" "Overflow"
     sse |> Expect.stringContains "hidden count 3" "3"
 
   testCase "WHY - SSE - payload's Within overflow produces an empty indicator (no 'v +0 more')" <| fun _ ->
-    let sse = formatCoverageViewEvent (makeOpts()) None withinView
+    let sse = formatCoverageViewEvent (makeOpts()) None 7 withinView
     sse |> Expect.stringContains "Within case" "Within"
 
   testCase "WHY - SSE - payload includes Symbol so the editor can place the badge without a second lookup" <| fun _ ->
-    let sse = formatCoverageViewEvent (makeOpts()) None sampleView
+    let sse = formatCoverageViewEvent (makeOpts()) None 7 sampleView
     sse |> Expect.stringContains "symbol present" "Module.add"
 
   testCase "WHY - SSE - payload includes FilePath so the editor matches the view to the buffer" <| fun _ ->
-    let sse = formatCoverageViewEvent (makeOpts()) None sampleView
+    let sse = formatCoverageViewEvent (makeOpts()) None 7 sampleView
     sse |> Expect.stringContains "filePath present" "Prod.fs"
 
   testCase "WHY - SSE - payload includes DefinitionLine so the editor places the badge at the right position" <| fun _ ->
-    let sse = formatCoverageViewEvent (makeOpts()) None sampleView
+    let sse = formatCoverageViewEvent (makeOpts()) None 7 sampleView
     sse |> Expect.stringContains "DefinitionLine key present" "DefinitionLine"
 
   testCase "WHY - SSE - payload includes session id when provided so per-session rendering targets the right window" <| fun _ ->
-    let sse = formatCoverageViewEvent (makeOpts()) (Some "sess-1") sampleView
+    let sse = formatCoverageViewEvent (makeOpts()) (Some "sess-1") 7 sampleView
     sse |> Expect.stringContains "session id injected" "sess-1"
 
+  testCase "WHY - SSE - payload carries the run generation so editors can sweep stale coverage views from older generations" <| fun _ ->
+    let sse = formatCoverageViewEvent (makeOpts()) None 7 sampleView
+    sse |> Expect.stringContains "generation key present" "Generation"
+    sse |> Expect.stringContains "generation value 7" ":7"
+
   testCase "WHY - SSE - empty view (TotalCount=0) serializes without error so a temporarily-empty buffer is still valid JSON" <| fun _ ->
-    let sse = formatCoverageViewEvent (makeOpts()) None absentView
+    let sse = formatCoverageViewEvent (makeOpts()) None 7 absentView
     sse |> Expect.stringStarts "empty view still emits the event" "event: coverage_view\n"
   ]

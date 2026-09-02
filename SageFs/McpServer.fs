@@ -570,8 +570,9 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
             let views =
               FileAnnotationsInternals.projectViewsForFile
                 CoverageViewMode.defaults file ltState.DepGraph ltState.TestState
+            let gen = RunGeneration.value ltState.TestState.LastGeneration
             for view in views do
-              do! SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) view
+              do! SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) gen view
                   |> writeSseFrame body
           | false -> ()
       | false -> ()
@@ -831,9 +832,11 @@ let wireModelChangeHandlers
                   file
                   model.LiveTesting.DepGraph
                   model.LiveTesting.TestState
+              let gen =
+                RunGeneration.value model.LiveTesting.TestState.LastGeneration
               for view in views do
                 ctx.TestEventBroadcast.Trigger(
-                  SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) view)
+                  SageFs.SseWriter.formatCoverageViewEvent ctx.SseJsonOpts (Some activeId) gen view)
             | false -> ()
         | false -> ()
       | false -> ())

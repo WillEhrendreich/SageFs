@@ -2359,18 +2359,14 @@ let activate (context: ExtensionContext) =
       OnWorkflowChanged = fun label ->
         currentWorkflowLabel <- label
         refreshStatus ()
-      OnCoverageView = fun view ->
-        // Push the view into the provider's store and refresh. The
-        // listener already maintains a per-file CoverageViews map
-        // (it appends on each event), but the provider keeps its own
-        // mirror so that its provideCodeLenses can be O(n) over the
-        // visible file. One refresh per event keeps the editor idle
-        // when nothing changes.
-        let existing =
-          match Map.tryFind view.FilePath CovViewLens.coverageViews with
-          | Some arr -> arr
-          | None -> [||]
-        CovViewLens.updateFile view.FilePath (Array.append existing [| view |])
+      OnCoverageView = fun view generation ->
+        // Push the view (with its run generation) into the provider's
+        // gen-aware store and refresh. The provider replaces a file's
+        // views when a NEWER generation arrives (sweeping stale views for
+        // renamed/deleted symbols) and appends within the same generation
+        // (one event per symbol). One refresh per event keeps the editor
+        // idle when nothing changes.
+        CovViewLens.updateFile view.FilePath generation view
     }
     let reconnectHandler = Some (fun () ->
       c.log "SSE reconnected — refreshing status..."

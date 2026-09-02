@@ -37,24 +37,24 @@ let private formatOpts () =
 let sseCoverageViewEventShape = testList "SSE coverage_view event shape" [
 
   testCase "WHY — shape — Symbol field is carried so the editor can place the badge by symbol" <| fun _ ->
-    let sse = SageFs.SseWriter.formatCoverageViewEvent (formatOpts()) None (sampleView "Module.add" 42)
+    let sse = SageFs.SseWriter.formatCoverageViewEvent (formatOpts()) None 5 (sampleView "Module.add" 42)
     sse |> Expect.stringContains "Symbol present" "Module.add"
 
   testCase "WHY — shape — FilePath and DefinitionLine carried so the editor can match the view to the buffer line" <| fun _ ->
-    let sse = SageFs.SseWriter.formatCoverageViewEvent (formatOpts()) None (sampleView "Module.add" 42)
+    let sse = SageFs.SseWriter.formatCoverageViewEvent (formatOpts()) None 5 (sampleView "Module.add" 42)
     sse |> Expect.stringContains "FilePath present" "Prod.fs"
     sse |> Expect.stringContains "DefinitionLine present" "42"
 
   testCase "WHY — shape — TotalCount carried so the editor shows the absolute count in tooltips even when the badge is collapsed" <| fun _ ->
-    let sse = SageFs.SseWriter.formatCoverageViewEvent (formatOpts()) None (sampleView "Module.add" 42)
+    let sse = SageFs.SseWriter.formatCoverageViewEvent (formatOpts()) None 5 (sampleView "Module.add" 42)
     sse |> Expect.stringContains "TotalCount present" "TotalCount"
 
   testCase "WHY — shape — Overflow DU is serialized as a tagged union so the renderer gets the hidden count directly" <| fun _ ->
-    let sse = SageFs.SseWriter.formatCoverageViewEvent (formatOpts()) None (sampleView "Module.add" 42)
+    let sse = SageFs.SseWriter.formatCoverageViewEvent (formatOpts()) None 5 (sampleView "Module.add" 42)
     sse |> Expect.stringContains "Overflow case serialized" "Overflow"
 
   testCase "WHY — shape — Health DU is serialized as a tagged union so the renderer can show the dominant status" <| fun _ ->
-    let sse = SageFs.SseWriter.formatCoverageViewEvent (formatOpts()) None (sampleView "Module.add" 42)
+    let sse = SageFs.SseWriter.formatCoverageViewEvent (formatOpts()) None 5 (sampleView "Module.add" 42)
     sse |> Expect.stringContains "Health case serialized" "Health"
   ]
 
@@ -140,7 +140,7 @@ let roundTripEmission = testList "projectViewsForFile → formatCoverageViewEven
           SymbolToTests = Map.ofList [ "Module.add", [| test.Id |] ] }
     let views = FileAnnotationsInternals.projectViewsForFile CoverageViewMode.defaults "Prod.fs" depGraph state
     let opts = formatOpts()
-    let sseFrames = views |> Array.map (SageFs.SseWriter.formatCoverageViewEvent opts None)
+    let sseFrames = views |> Array.map (SageFs.SseWriter.formatCoverageViewEvent opts None 5)
     (sseFrames.Length, 1)
     |> Expect.equal "one view → one SSE frame" (1, 1)
     sseFrames.[0] |> Expect.stringContains "frame contains coverage_view event type" "coverage_view"
@@ -173,8 +173,8 @@ let roundTripEmission = testList "projectViewsForFile → formatCoverageViewEven
     let v1 = FileAnnotationsInternals.projectViewsForFile CoverageViewMode.defaults "Prod.fs" depGraph state
     let v2 = FileAnnotationsInternals.projectViewsForFile CoverageViewMode.defaults "Other.fs" depGraph state
     let opts = formatOpts()
-    let f1 = v1 |> Array.map (SageFs.SseWriter.formatCoverageViewEvent opts None) |> Array.head
-    let f2 = v2 |> Array.map (SageFs.SseWriter.formatCoverageViewEvent opts None) |> Array.head
+    let f1 = v1 |> Array.map (SageFs.SseWriter.formatCoverageViewEvent opts None 5) |> Array.head
+    let f2 = v2 |> Array.map (SageFs.SseWriter.formatCoverageViewEvent opts None 5) |> Array.head
     f1 |> Expect.stringContains "Prod.fs view has Prod.fs" "Prod.fs"
     f1 |> Expect.stringContains "Prod.fs view has Module.add" "Module.add"
     f2 |> Expect.stringContains "Other.fs view has Other.fs" "Other.fs"

@@ -20,8 +20,10 @@ open SageFs.Vscode.CoverageViewPure
 let mutable config : CoverageViewConfig = CoverageViewConfig.defaults
 
 /// Coverage views per file. Updated by LiveTestingListener via the
-/// `coverage_view` SSE event handler. Keyed by file path.
-let mutable coverageViews : Map<string, CoverageView array> = Map.empty
+/// `coverage_view` SSE event handler. Keyed by file path; each file's
+/// entry carries the run generation that produced its views so a newer
+/// generation's burst replaces (sweeps) stale views from older bursts.
+let mutable coverageViews : Map<string, int * CoverageView array> = Map.empty
 
 /// Event emitter to signal CodeLens refresh.
 let changeEmitter = newEventEmitter<obj> ()
@@ -29,10 +31,24 @@ let changeEmitter = newEventEmitter<obj> ()
 /// Notify VS Code to refresh CodeLens.
 let refresh () = changeEmitter.fire (null)
 
-/// Replace the coverage views for a single file. Called by the listener
-/// when a `coverage_view` event arrives.
-let updateFile (filePath: string) (views: CoverageView array) =
-  coverageViews <- Map.add filePath views coverageViews
+/// Merge a single view for a file under a run generation. A view from a
+/// NEWER generation replaces the file's whole array (the burst is the
+/// authoritative per-file set — symbols absent from it were renamed or
+/// deleted and their stale CodeLenses must disappear). Views from the
+/// SAME generation append (one event per symbol). Views from an OLDER
+/// generation are dropped (a straggler from a superseded burst).
+let updateFile (filePath: string) (generation: int) (view: CoverageView) =
+  let existingGen, existing =
+    match Map.tryFind filePath coverageViews with
+    | Some (g, arr) -> g, arr
+    | None -> 0, [||]
+  if generation < existingGen then
+    // Straggler from an older burst — already superseded.
+    ()
+  else if generation > existingGen then
+    coverageViews <- Map.add filePath (generation, [| view |]) coverageViews
+  else
+    coverageViews <- Map.add filePath (generation, Array.append existing [| view |]) coverageViews
   refresh ()
 
 /// Update config from editor settings. Called by the extension when the
@@ -59,6 +75,9 @@ let create () =
     "onDidChangeCodeLenses" ==> changeEmitter.event
     "provideCodeLenses" ==> fun (doc: TextDocument) (_token: obj) ->
       let filePath = doc.fileName
-      PureProvider.lensesForFile config coverageViews filePath
-      |> Array.map buildCodeLens
+      let views =
+        match Map.tryFind filePath coverageViews with
+        | Some (_, arr) -> arr
+        | None -> [||]
+      views |> Array.map (PureProvider.project config) |> Array.map buildCodeLens
   ]

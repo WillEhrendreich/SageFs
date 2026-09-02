@@ -52,3 +52,10 @@ let parseCoverageView (data: obj) : CoverageView =
     Overflow = parseOverflow overflowCase overflowFields
     InlineBadgeText = fieldString "InlineBadgeText" data |> Option.defaultValue ""
     Health = parseHealth healthStr }
+
+/// Parse the run generation from a coverage_view SSE payload (the batch
+/// generation that produced this view). Defaults to 0 when absent (older
+/// servers) — the sweep treats generation 0 as "always current" so views
+/// from a server without generations are never dropped.
+let parseGeneration (data: obj) : int =
+  fieldInt "Generation" data |> Option.defaultValue 0
