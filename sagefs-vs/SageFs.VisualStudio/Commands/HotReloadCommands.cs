@@ -64,9 +64,12 @@ internal class HotReloadToggleFileCommand : Command
       return;
     }
 
-    await client.ToggleHotReloadAsync(sessionId, filePath, ct);
+    var ok = await client.ToggleHotReloadAsync(sessionId, filePath, ct);
     if (output is not null)
-      await output.WriteLineAsync($"↻ Toggled hot reload for {Path.GetFileName(filePath)}");
+      await output.WriteLineAsync(
+        ok
+          ? $"↻ Toggled hot reload for {Path.GetFileName(filePath)}"
+          : $"✗ Failed to toggle hot reload for {Path.GetFileName(filePath)} — is the daemon running?");
   }
 }
 
@@ -100,9 +103,12 @@ internal class HotReloadWatchAllCommand : Command
       return;
     }
 
-    await client.WatchAllAsync(sessions[0].Id, ct);
+    var ok = await client.WatchAllAsync(sessions[0].Id, ct);
     if (output is not null)
-      await output.WriteLineAsync("● Watch All — all F# files now watched for hot reload");
+      await output.WriteLineAsync(
+        ok
+          ? "● Watch All — all F# files now watched for hot reload"
+          : "✗ Failed to watch all files — is the daemon running?");
   }
 }
 
@@ -136,9 +142,12 @@ internal class HotReloadUnwatchAllCommand : Command
       return;
     }
 
-    await client.UnwatchAllAsync(sessions[0].Id, ct);
+    var ok = await client.UnwatchAllAsync(sessions[0].Id, ct);
     if (output is not null)
-      await output.WriteLineAsync("○ Unwatch All — hot reload stopped for all files");
+      await output.WriteLineAsync(
+        ok
+          ? "○ Unwatch All — hot reload stopped for all files"
+          : "✗ Failed to unwatch all files — is the daemon running?");
   }
 }
 
@@ -172,9 +181,12 @@ internal class HotReloadRefreshCommand : Command
       return;
     }
 
-    await client.RefreshHotReloadAsync(sessions[0].Id, ct);
+    var ok = await client.RefreshHotReloadAsync(sessions[0].Id, ct);
     if (output is not null)
-      await output.WriteLineAsync("↻ Hot reload refreshed — re-evaluating watched files");
+      await output.WriteLineAsync(
+        ok
+          ? "↻ Hot reload refreshed — re-evaluating watched files"
+          : "✗ Failed to refresh hot reload — is the daemon running?");
   }
 }
 
@@ -230,12 +242,15 @@ internal class HotReloadToggleDirectoryCommand : Command
     }
 
     // Real toggle: unwatch when already watched, watch otherwise.
-    var nowWatching = await client.ToggleDirectoryWatchAsync(sessionId, directory, ct);
+    // bool? — true = watching, false = unwatched, null = failure.
+    var result = await client.ToggleDirectoryWatchAsync(sessionId, directory, ct);
     if (output is not null)
       await output.WriteLineAsync(
-        nowWatching
-          ? $"📂 Watching directory: {directory}"
-          : $"⏹ Stopped watching directory: {directory}");
+        result is null
+          ? $"✗ Failed to toggle hot reload for directory: {directory} — is the daemon running?"
+          : result.Value
+            ? $"📂 Watching directory: {directory}"
+            : $"⏹ Stopped watching directory: {directory}");
   }
 }
 

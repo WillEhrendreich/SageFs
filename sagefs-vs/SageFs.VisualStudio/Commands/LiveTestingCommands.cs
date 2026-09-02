@@ -71,9 +71,12 @@ internal class RunTestsCommand : Command
 
   public override async Task ExecuteCommandAsync(IClientContext context, CancellationToken ct)
   {
-    await client.RunTestsAsync("", ct);
+    var ok = await client.RunTestsAsync("", ct);
     if (output is not null)
-      await output.WriteLineAsync("▶ Running all tests...");
+      await output.WriteLineAsync(
+        ok
+          ? "▶ Running all tests..."
+          : "✗ Failed to start test run — is the daemon running?");
   }
 }
 

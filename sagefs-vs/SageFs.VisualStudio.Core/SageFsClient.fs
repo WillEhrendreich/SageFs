@@ -386,80 +386,83 @@ type SageFsClient(http: HttpClient) =
       return None
   }
 
-  /// Toggle hot reload for a file.
-  member this.ToggleHotReloadAsync(sessionId: string, path: string, ct: CancellationToken) = task {
+  /// Toggle hot reload for a file. Returns true only when the daemon
+  /// accepted the request (success is no longer assumed on any exception).
+  member this.ToggleHotReloadAsync(sessionId: string, path: string, ct: CancellationToken) : Task<bool> = task {
     try
       use content =
         new StringContent(
           sprintf """{"path":%s}""" (JsonSerializer.Serialize(path)),
           Encoding.UTF8, "application/json")
-      let! _ =
+      let! resp =
         http.PostAsync(
           sprintf "%s/api/sessions/%s/hotreload/toggle" this.BaseUrl sessionId,
           content, ct)
-      return ()
-    with _ -> return ()
+      return resp.IsSuccessStatusCode
+    with _ -> return false
   }
 
-  /// Watch all F# files for hot reload.
-  member this.WatchAllAsync(sessionId: string, ct: CancellationToken) = task {
+  /// Watch all F# files for hot reload. Returns success.
+  member this.WatchAllAsync(sessionId: string, ct: CancellationToken) : Task<bool> = task {
     try
-      let! _ =
+      let! resp =
         http.PostAsync(
           sprintf "%s/api/sessions/%s/hotreload/watch-all" this.BaseUrl sessionId,
           new StringContent("", Encoding.UTF8), ct)
-      return ()
-    with _ -> return ()
+      return resp.IsSuccessStatusCode
+    with _ -> return false
   }
 
-  /// Unwatch all F# files for hot reload.
-  member this.UnwatchAllAsync(sessionId: string, ct: CancellationToken) = task {
+  /// Unwatch all F# files for hot reload. Returns success.
+  member this.UnwatchAllAsync(sessionId: string, ct: CancellationToken) : Task<bool> = task {
     try
-      let! _ =
+      let! resp =
         http.PostAsync(
           sprintf "%s/api/sessions/%s/hotreload/unwatch-all" this.BaseUrl sessionId,
           new StringContent("", Encoding.UTF8), ct)
-      return ()
-    with _ -> return ()
+      return resp.IsSuccessStatusCode
+    with _ -> return false
   }
 
-  /// Refresh hot reload (re-evaluate watched files).
-  member this.RefreshHotReloadAsync(sessionId: string, ct: CancellationToken) = task {
+  /// Refresh hot reload (re-evaluate watched files). Returns success.
+  member this.RefreshHotReloadAsync(sessionId: string, ct: CancellationToken) : Task<bool> = task {
     try
-      let! _ =
+      let! resp =
         http.PostAsync(
           sprintf "%s/api/sessions/%s/hotreload/refresh" this.BaseUrl sessionId,
           new StringContent("", Encoding.UTF8), ct)
-      return ()
-    with _ -> return ()
+      return resp.IsSuccessStatusCode
+    with _ -> return false
   }
 
-  member this.WatchDirectoryAsync(sessionId: string, directory: string, ct: CancellationToken) = task {
+  member this.WatchDirectoryAsync(sessionId: string, directory: string, ct: CancellationToken) : Task<bool> = task {
     try
       let json = sprintf """{"directory":%s}""" (JsonSerializer.Serialize(directory))
-      let! _ =
+      let! resp =
         http.PostAsync(
           sprintf "%s/api/sessions/%s/hotreload/watch-directory" this.BaseUrl sessionId,
           new StringContent(json, Encoding.UTF8, "application/json"), ct)
-      return ()
-    with _ -> return ()
+      return resp.IsSuccessStatusCode
+    with _ -> return false
   }
 
-  member this.UnwatchDirectoryAsync(sessionId: string, directory: string, ct: CancellationToken) = task {
+  member this.UnwatchDirectoryAsync(sessionId: string, directory: string, ct: CancellationToken) : Task<bool> = task {
     try
       let json = sprintf """{"directory":%s}""" (JsonSerializer.Serialize(directory))
-      let! _ =
+      let! resp =
         http.PostAsync(
           sprintf "%s/api/sessions/%s/hotreload/unwatch-directory" this.BaseUrl sessionId,
           new StringContent(json, Encoding.UTF8, "application/json"), ct)
-      return ()
-    with _ -> return ()
+      return resp.IsSuccessStatusCode
+    with _ -> return false
   }
 
   /// Toggle directory watch state: when any watched path falls under the
   /// directory, unwatch it; otherwise watch it. Real toggling (the old
   /// directory toggle always watched — the defect), decided from live state.
-  member this.ToggleDirectoryWatchAsync(sessionId: string, directory: string, ct: CancellationToken) = task {
+  /// Returns Some true when now watching, Some false when now unwatched,
+  /// and None when the toggle could not be completed (daemon unreachable).
+  member this.ToggleDirectoryWatchAsync(sessionId: string, directory: string, ct: CancellationToken) : Task<bool option> = task {
     try
       let! state = this.GetHotReloadStateAsync(sessionId, ct)
       let normalizedDirectory = WatchPath.normalizeDirectory directory
@@ -471,11 +474,13 @@ type SageFsClient(http: HttpClient) =
         | None -> false
 
       match currentlyWatched with
-      | true -> do! this.UnwatchDirectoryAsync(sessionId, directory, ct)
-      | false -> do! this.WatchDirectoryAsync(sessionId, directory, ct)
-
-      return currentlyWatched |> not
-    with _ -> return true
+      | true ->
+        let! ok = this.UnwatchDirectoryAsync(sessionId, directory, ct)
+        return (if ok then Some false else None)
+      | false ->
+        let! ok = this.WatchDirectoryAsync(sessionId, directory, ct)
+        return (if ok then Some true else None)
+    with _ -> return None
   }
 
   /// Start the daemon process.
@@ -584,7 +589,9 @@ type SageFsClient(http: HttpClient) =
       return false
   }
 
-  /// Disable live testing.
+  /// Disable live testing. Returns the live-testing enabled state reported by
+  /// the daemon (false = disabled). When the daemon is unreachable the
+  /// fail-closed claim is "not enabled" (false), never a phantom success.
   member this.DisableLiveTestingAsync(ct: CancellationToken) = task {
     try
       let! resp =
@@ -595,19 +602,20 @@ type SageFsClient(http: HttpClient) =
       use doc = JsonDocument.Parse(body)
       return tryBool doc.RootElement "enabled" false
     with _ ->
-      return true
+      return false
   }
 
-  /// Run all tests (or filtered by pattern).
-  member this.RunTestsAsync(pattern: string, ct: CancellationToken) = task {
+  /// Run all tests (or filtered by pattern). Returns true when the daemon
+  /// accepted the run request.
+  member this.RunTestsAsync(pattern: string, ct: CancellationToken) : Task<bool> = task {
     try
       let json = sprintf """{"pattern":%s}""" (JsonSerializer.Serialize(pattern))
-      let! _ =
+      let! resp =
         http.PostAsync(
           sprintf "%s/api/live-testing/run" this.BaseUrl,
           new StringContent(json, Encoding.UTF8, "application/json"), ct)
-      return ()
-    with _ -> return ()
+      return resp.IsSuccessStatusCode
+    with _ -> return false
   }
 
   /// Get the apiVersion integer from the daemon's /version endpoint.

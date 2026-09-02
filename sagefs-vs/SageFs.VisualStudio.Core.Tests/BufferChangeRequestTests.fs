@@ -200,3 +200,53 @@ let ``WatchPath treats exact directory match as watched`` () =
 let ``WatchPath normalizes trailing separators and forward slashes`` () =
   WatchPath.pathUnderDirectory @"C:/Code/SageFs/" @"C:\Code\SageFs\src\App.fs"
   |> should equal true
+
+// ── Truthful failure semantics (plan Phase 7: stop swallowing HTTP failures) ──
+
+type private ThrowingHttpMessageHandler() =
+  inherit HttpMessageHandler()
+  override _.SendAsync(_, _) =
+    raise (System.Net.Http.HttpRequestException "Connection refused")
+
+[<Fact>]
+let ``WatchAllAsync reports failure when the daemon is unreachable`` () =
+  task {
+    use client = new SageFsClient(new ThrowingHttpMessageHandler())
+    let! ok = client.WatchAllAsync("abc12345", CancellationToken.None)
+    ok |> should equal false
+  }
+
+[<Fact>]
+let ``UnwatchAllAsync reports failure when the daemon is unreachable`` () =
+  task {
+    use client = new SageFsClient(new ThrowingHttpMessageHandler())
+    let! ok = client.UnwatchAllAsync("abc12345", CancellationToken.None)
+    ok |> should equal false
+  }
+
+[<Fact>]
+let ``ToggleHotReloadAsync reports failure when the daemon is unreachable`` () =
+  task {
+    use client = new SageFsClient(new ThrowingHttpMessageHandler())
+    let! ok = client.ToggleHotReloadAsync("abc12345", @"C:\Code\SageFs\Game.fs", CancellationToken.None)
+    ok |> should equal false
+  }
+
+[<Fact>]
+let ``DisableLiveTestingAsync fails closed when the daemon is unreachable`` () =
+  task {
+    // The old code returned true ("still enabled") on exception — a phantom
+    // success that told the user live testing was on when the daemon was
+    // down. Fail-closed: an unreachable daemon reports NOT enabled.
+    use client = new SageFsClient(new ThrowingHttpMessageHandler())
+    let! enabled = client.DisableLiveTestingAsync(CancellationToken.None)
+    enabled |> should equal false
+  }
+
+[<Fact>]
+let ``ToggleDirectoryWatchAsync reports failure as null when the daemon is unreachable`` () =
+  task {
+    use client = new SageFsClient(new ThrowingHttpMessageHandler())
+    let! result = client.ToggleDirectoryWatchAsync("abc12345", @"C:\Code\SageFs", CancellationToken.None)
+    result |> should equal None
+  }

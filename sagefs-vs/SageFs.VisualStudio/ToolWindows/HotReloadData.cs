@@ -104,7 +104,12 @@ internal class HotReloadData : NotifyPropertyChangedObject
     {
       var sessionId = await GetFirstSessionIdAsync(ct);
       if (sessionId == null) return;
-      await client.WatchAllAsync(sessionId, ct);
+      var ok = await client.WatchAllAsync(sessionId, ct);
+      if (!ok)
+      {
+        FilesText = "✗ Failed to watch all files — is the daemon running?";
+        return;
+      }
       await RefreshAsync(null, ct);
     }
     catch (Exception ex)
@@ -120,7 +125,12 @@ internal class HotReloadData : NotifyPropertyChangedObject
     {
       var sessionId = await GetFirstSessionIdAsync(ct);
       if (sessionId == null) return;
-      await client.UnwatchAllAsync(sessionId, ct);
+      var ok = await client.UnwatchAllAsync(sessionId, ct);
+      if (!ok)
+      {
+        FilesText = "✗ Failed to unwatch all files — is the daemon running?";
+        return;
+      }
       await RefreshAsync(null, ct);
     }
     catch (Exception ex)
@@ -137,7 +147,12 @@ internal class HotReloadData : NotifyPropertyChangedObject
       var sessionId = await GetFirstSessionIdAsync(ct);
       if (sessionId == null) return;
       SummaryText = "⟳ Refreshing...";
-      await client.RefreshHotReloadAsync(sessionId, ct);
+      var ok = await client.RefreshHotReloadAsync(sessionId, ct);
+      if (!ok)
+      {
+        SummaryText = "✗ Failed to refresh hot reload — is the daemon running?";
+        return;
+      }
       await RefreshAsync(null, ct);
     }
     catch (Exception ex)

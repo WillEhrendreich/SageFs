@@ -281,7 +281,9 @@ internal class LiveTestingData : NotifyPropertyChangedObject, IDisposable
     try
     {
       SummaryText = "⟳ Running all tests...";
-      await client.RunTestsAsync("", ct);
+      var ok = await client.RunTestsAsync("", ct);
+      if (!ok)
+        SummaryText = "✗ Failed to start test run — is the daemon running?";
     }
     catch (Exception ex)
     {

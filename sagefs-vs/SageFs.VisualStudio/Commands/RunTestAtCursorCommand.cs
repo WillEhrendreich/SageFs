@@ -91,7 +91,14 @@ internal class RunTestAtCursorCommand : Command
 
     try
     {
-      await client.RunTestsAsync(testInfo.FullName, ct);
+      var ok = await client.RunTestsAsync(testInfo.FullName, ct);
+      if (!ok)
+      {
+        if (output is not null)
+          await output.WriteLineAsync(
+            $"✗ Failed to start test run for [{testInfo.DisplayName}] — is the daemon running?");
+        return;
+      }
       // Result arrives via SSE → inline adornments and glyph margin update automatically.
       // The elapsed time to SSE result is visible in the test tooltip once it arrives.
     }
