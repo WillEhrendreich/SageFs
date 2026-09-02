@@ -216,6 +216,81 @@ let manifestVersionTests = testList "DaemonManifest format version" [
 ]
 
 [<Tests>]
+let manifestHostileHeaderTests = testList "DaemonManifest hostile header rejection" [
+
+  /// Rewrite a field then re-compute the whole-file CRC over the tampered
+  /// bytes — the CRC gate must NOT be the defense here; a consistent hostile
+  /// rewrite that inflates header counts/sizes must fail the bounds checks.
+  let tamperAndFixCrc (bytes: byte[]) (offset: int) (setField: byte[] -> unit) =
+    let patched = Array.copy bytes
+    setField patched
+    let forCrc = Array.copy patched
+    forCrc.[36] <- 0uy; forCrc.[37] <- 0uy; forCrc.[38] <- 0uy; forCrc.[39] <- 0uy
+    let crc = Crc32.computeAll forCrc
+    let cb = System.BitConverter.GetBytes(crc)
+    System.Array.Copy(cb, 0, patched, 36, 4)
+    patched
+
+  testCase "inflated section count is rejected even with recomputed CRC" <| fun _ ->
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 1L }
+    let bytes = ManifestWriter.write data
+    let patched = tamperAndFixCrc bytes 8 (fun p ->
+      let cb = System.BitConverter.GetBytes(0xFFFFFFu)
+      System.Array.Copy(cb, 0, p, 8, 4))
+    match ManifestReader.read patched with
+    | Error msg ->
+      (msg.Contains("count") || msg.Contains("capacity"))
+      |> Expect.isTrue "error should cite the inflated count"
+    | Ok _ -> failwith "Should reject an inflated section count even with a valid CRC"
+
+  testCase "declared total size mismatch is rejected even with recomputed CRC" <| fun _ ->
+    let data = { Entries = []; ActiveSessionId = None; CreatedAtMs = 1L }
+    let bytes = ManifestWriter.write data
+    let patched = tamperAndFixCrc bytes 24 (fun p ->
+      let cb = System.BitConverter.GetBytes(uint64 bytes.Length + 4096UL)
+      System.Array.Copy(cb, 0, p, 24, 8))
+    match ManifestReader.read patched with
+    | Error msg ->
+      (msg.Contains("total size") || msg.Contains("actual file size"))
+      |> Expect.isTrue "error should cite the declared total size"
+    | Ok _ -> failwith "Should reject a declared total size mismatch even with a valid CRC"
+
+  testCase "declared session count mismatch is rejected even with recomputed CRC" <| fun _ ->
+    let entry = {
+      SessionId = "sess-1"
+      Projects = [ "A.fsproj" ]
+      WorkingDir = "C:\\A"
+      CreatedAt = DateTimeOffset.UtcNow
+      StoppedAt = None
+    }
+    let data = { Entries = [ entry ]; ActiveSessionId = None; CreatedAtMs = 1L }
+    let bytes = ManifestWriter.write data
+    let patched = tamperAndFixCrc bytes 32 (fun p ->
+      let cb = System.BitConverter.GetBytes(99u)
+      System.Array.Copy(cb, 0, p, 32, 4))
+    match ManifestReader.read patched with
+    | Error msg ->
+      (msg.Contains("session count") || msg.Contains("parsed count"))
+      |> Expect.isTrue "error should cite the declared session count"
+    | Ok _ -> failwith "Should reject a declared session count mismatch even with a valid CRC"
+
+  testCase "valid manifest still loads after the hostile-header guards" <| fun _ ->
+    let entry = {
+      SessionId = "sess-ok"
+      Projects = [ "A.fsproj" ]
+      WorkingDir = "C:\\A"
+      CreatedAt = DateTimeOffset.UtcNow
+      StoppedAt = None
+    }
+    let data = { Entries = [ entry ]; ActiveSessionId = Some "sess-ok"; CreatedAtMs = 1L }
+    let bytes = ManifestWriter.write data
+    match ManifestReader.read bytes with
+    | Ok loaded ->
+      loaded.Entries |> Expect.hasLength "one entry loads" 1
+    | Error e -> failwithf "valid manifest rejected: %s" e
+]
+
+[<Tests>]
 let manifestMappingTests = testList "ManifestMapping" [
   testCase "replay state → manifest → replay state roundtrips" <| fun _ ->
     let now = DateTimeOffset.UtcNow

@@ -14,10 +14,11 @@ module TestCacheTypes =
     | Fail = 1uy
     | Skip = 2uy
     | Error = 3uy
+    | NotRun = 4uy
 
   module Outcome =
     let tryParse (b: byte) : Result<Outcome, string> =
-      match b <= 3uy with
+      match b <= 4uy with
       | true -> Ok (LanguagePrimitives.EnumOfValue<byte, Outcome> b)
       | false -> Error (sprintf "Unknown Outcome value: %d" b)
 
@@ -171,9 +172,19 @@ module TestCacheReader =
     try
       use ms = new MemoryStream(payload)
       use br = new BinaryReader(ms)
-      let count = br.ReadUInt32() |> int
+      let payloadLen = ms.Length
+      // Each IMAP entry needs a tid lp-string (>=4 bytes) plus a u32 word
+      // count — floor of 4 bytes per plausible entry is impossible; use a
+      // generous physical cap: every entry must contain >= 5 bytes (4 prefix
+      // + 1 word-count byte) so no more than payload/5 entries can exist.
+      let rawCount = br.ReadUInt32() |> int64
+      let maxPossible = max 0L (payloadLen - 4L) / 5L
+      match rawCount > maxPossible with
+      | true -> err (sprintf "IMAP parse error: count %d exceeds section payload capacity %d" rawCount maxPossible)
+      | false ->
+      let count = int rawCount
       readItems count [] (fun () ->
-        let tid = BinaryPrimitives.readLpString br
+        let tid = BinaryPrimitives.readLpStringBounded br (max 0L (ms.Length - ms.Position))
         let wc = br.ReadUInt32()
         let remaining = ms.Length - ms.Position
         match int64 wc * 8L > remaining with
@@ -191,15 +202,23 @@ module TestCacheReader =
     try
       use ms = new MemoryStream(payload)
       use br = new BinaryReader(ms)
-      let count = br.ReadUInt32() |> int
+      let payloadLen = ms.Length
+      // Each TRES entry needs a tid lp-string (>=4 bytes) + outcome byte +
+      // duration u32 + optional message — floor of 9 bytes per entry.
+      let rawCount = br.ReadUInt32() |> int64
+      let maxPossible = max 0L (payloadLen - 4L) / 9L
+      match rawCount > maxPossible with
+      | true -> err (sprintf "TRES parse error: count %d exceeds section payload capacity %d" rawCount maxPossible)
+      | false ->
+      let count = int rawCount
       readItems count [] (fun () ->
-        let tid = BinaryPrimitives.readLpString br
+        let tid = BinaryPrimitives.readLpStringBounded br (max 0L (ms.Length - ms.Position))
         let rawOutcome = br.ReadByte()
         match Outcome.tryParse rawOutcome with
         | Error msg -> Error (sprintf "TRES parse error: %s" msg)
         | Ok outcome ->
         let dur = br.ReadUInt32()
-        let msg = BinaryPrimitives.readLpStringOption br
+        let msg = BinaryPrimitives.readLpStringOptionBounded br (max 0L (ms.Length - ms.Position))
         Ok { TestId = tid; Outcome = outcome; DurationMs = dur; Message = msg })
     with ex -> err (sprintf "TRES parse error: %s" ex.Message)
 
@@ -221,10 +240,19 @@ module TestCacheReader =
         if minVersion > readerVersion then
           err (sprintf "File requires reader version %d but this reader is version %d" minVersion readerVersion)
         else
-        let sectionCount = BitConverter.ToUInt32(data, 8) |> int
+        let rawSectionCount = BitConverter.ToUInt32(data, 8)
         let createdAtMs = BitConverter.ToInt64(data, 16)
         let imapGen = BitConverter.ToUInt32(data, 40)
 
+        // Directory capacity: after the 64-byte header, each entry is 16 bytes
+        // (tag:u32 + offset:u64 + crc:u32). A consistent hostile rewrite that
+        // inflates section_count must fail cleanly here — never walk the loop
+        // past the directory into the payload and misparse it as entries.
+        let maxSections = uint32 ((data.Length - 64) / 16)
+        match rawSectionCount > maxSections with
+        | true -> err (sprintf "Header section count %d exceeds directory capacity %d" rawSectionCount maxSections)
+        | false ->
+        let sectionCount = int rawSectionCount
         let dirEntries = [
           for i in 0 .. sectionCount - 1 do
             let o = 64 + i * 16
@@ -238,6 +266,12 @@ module TestCacheReader =
         let sorted = dirEntries |> List.sortBy (fun e -> e.Offset)
         let totalSize = BitConverter.ToUInt64(data, 24)
         let fileLen = uint64 data.Length
+
+        // Declared total size is a section boundary for the LAST payload; it
+        // must match the actual file length or section slicing walks nowhere.
+        match totalSize <> fileLen with
+        | true -> err (sprintf "Declared total size %d does not match actual file size %d" totalSize fileLen)
+        | false ->
 
         // Bounds check: all offsets must be within the file
         let oob = sorted |> List.tryFind (fun e -> e.Offset >= fileLen)
@@ -317,7 +351,7 @@ module TestCacheMapping =
           | TestResult.Skipped reason ->
             Outcome.Skip, 0u, Some reason
           | TestResult.NotRun ->
-            Outcome.Skip, 0u, None
+            Outcome.NotRun, 0u, None
         { TestId = tid
           Outcome = outcome
           DurationMs = durationMs
@@ -359,7 +393,9 @@ module TestCacheMapping =
           | Outcome.Skip ->
             let reason = e.Message |> Option.defaultValue "Skipped"
             TestResult.Skipped reason
-          | _ -> TestResult.NotRun
+          | Outcome.NotRun -> TestResult.NotRun
+          | Outcome.Error -> TestResult.NotRun  // legacy code 3; never written by current writers
+          | _ -> TestResult.NotRun  // unknown enum value — treat as not run, never crash
         let runResult : TestRunResult = {
           TestId = tid
           TestName = e.TestId

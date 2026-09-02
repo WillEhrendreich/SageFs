@@ -19,7 +19,7 @@ let genSafeString =
 
 // STC generators
 let genOutcome =
-  Gen.elements [Outcome.Pass; Outcome.Fail; Outcome.Skip; Outcome.Error]
+  Gen.elements [Outcome.Pass; Outcome.Fail; Outcome.Skip; Outcome.Error; Outcome.NotRun]
 
 let genStcTestId =
   Gen.elements ["abc123def456"; ""; "deadbeef0000"; "test_id_here"; "a1b2c3d4e5f6"]
@@ -998,7 +998,7 @@ let daemonRoundtripPropertyTests = testList "Daemon Roundtrip Properties" [
 
 let robustnessTests = testList "Robustness rejects corrupted and adversarial input" [
   testCase "all Outcome values roundtrip through STC" <| fun _ ->
-    for o in [ Outcome.Pass; Outcome.Fail; Outcome.Skip; Outcome.Error ] do
+    for o in [ Outcome.Pass; Outcome.Fail; Outcome.Skip; Outcome.Error; Outcome.NotRun ] do
       let d: StcData = {
         CoverageEntries = []; ImapGeneration = 0u; CreatedAtMs = 0L
         ResultEntries = [{ TestId = "t1"; Outcome = o; DurationMs = 1u; Message = None }] }
@@ -1478,7 +1478,7 @@ let enumTryParseTests = testList "centralized enum tryParse" [
       | Result.Error e -> failwith (sprintf "Valid byte %d rejected: %s" b e)
   }
   test "Outcome.tryParse invalid byte" {
-    for b in [ 4uy; 128uy; 255uy ] do
+    for b in [ 5uy; 128uy; 255uy ] do
       match Outcome.tryParse b with
       | Result.Error _ -> ()
       | Result.Ok v -> failwith (sprintf "Invalid byte %d accepted as %A" b v)
@@ -1742,6 +1742,40 @@ let sessionIsolationTests = testList "Session Isolation" [
       b.ResultEntries.Length |> Expect.equal "B result count" cB
     | Error e, _ -> failwithf "STC A failed: %s" e
     | _, Error e -> failwithf "STC B failed: %s" e
+
+  testCase "inflated STC section count rejected even with recomputed CRC" <| fun _ ->
+    let bytes = TestCacheWriter.write StcData.empty
+    let patched = Array.copy bytes
+    let cb = BitConverter.GetBytes(0xFFFFFFu)
+    Array.Copy(cb, 0, patched, 8, 4)
+    // Recompute the whole-file CRC so the tamper is CONSISTENT — the bounds
+    // check must catch the inflated count, not the CRC.
+    let forCrc = Array.copy patched
+    forCrc.[36] <- 0uy; forCrc.[37] <- 0uy; forCrc.[38] <- 0uy; forCrc.[39] <- 0uy
+    let crc = Crc32.computeAll forCrc
+    let cb2 = BitConverter.GetBytes(crc)
+    Array.Copy(cb2, 0, patched, 36, 4)
+    match TestCacheReader.read patched with
+    | Error msg ->
+      (msg.Contains("count") || msg.Contains("capacity"))
+      |> Expect.isTrue "error should cite the inflated section count"
+    | Ok _ -> failwith "Should reject an inflated STC section count even with a valid CRC"
+
+  testCase "declared STC total size mismatch rejected even with recomputed CRC" <| fun _ ->
+    let bytes = TestCacheWriter.write StcData.empty
+    let patched = Array.copy bytes
+    let cb = BitConverter.GetBytes(uint64 bytes.Length + 2048UL)
+    Array.Copy(cb, 0, patched, 24, 8)
+    let forCrc = Array.copy patched
+    forCrc.[36] <- 0uy; forCrc.[37] <- 0uy; forCrc.[38] <- 0uy; forCrc.[39] <- 0uy
+    let crc = Crc32.computeAll forCrc
+    let cb2 = BitConverter.GetBytes(crc)
+    Array.Copy(cb2, 0, patched, 36, 4)
+    match TestCacheReader.read patched with
+    | Error msg ->
+      (msg.Contains("total size") || msg.Contains("actual file size"))
+      |> Expect.isTrue "error should cite the declared total size"
+    | Ok _ -> failwith "Should reject a declared total size mismatch even with a valid CRC"
 ]
 
 [<Tests>]

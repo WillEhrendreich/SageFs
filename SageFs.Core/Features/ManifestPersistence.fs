@@ -145,11 +145,11 @@ module ManifestReader =
       | _ ->
 
       let minReaderVersion = br.ReadUInt16()
-      let sectionCount = br.ReadUInt32() |> int
+      let rawSectionCount = br.ReadUInt32()
       let _flags = br.ReadUInt32()
       let createdAtMs = br.ReadInt64()
-      let _totalSize = br.ReadUInt64()
-      let _sessionCount = br.ReadUInt32()
+      let declaredTotalSize = br.ReadUInt64()
+      let declaredSessionCount = br.ReadUInt32()
       let storedCrc = br.ReadUInt32()
 
       // W15(R10): The stored CRC covers the ENTIRE file (header + payload) with bytes [36..39]
@@ -165,6 +165,24 @@ module ManifestReader =
           1L, System.Collections.Generic.KeyValuePair("format", box "sfm1"))
         err (sprintf "File integrity CRC mismatch (whole-file check): stored=%08x computed=%08x" storedCrc computedCrc)
       | true ->
+
+      // Header-declared sizes are cross-checked against the actual bytes: the
+      // CRC gate protects against corruption, not against a CONSISTENT hostile
+      // rewrite that recomputes the CRC over inflated header fields. A declared
+      // total size or session count that does not match the real payload is a
+      // clean parse error, never silently trusted.
+      let headerAndPayloadLen = uint64 data.Length
+      match declaredTotalSize <> 0UL && declaredTotalSize <> headerAndPayloadLen with
+      | true -> err (sprintf "Declared total size %d does not match actual file size %d" declaredTotalSize headerAndPayloadLen)
+      | false ->
+      // Directory capacity: after the 64-byte header, each entry is 16 bytes
+      // (u32 tag + u64 offset + u32 crc). Cap sectionCount by what physically
+      // fits so a hostile count fails cleanly instead of looping out of bounds.
+      let maxSections = uint32 ((data.Length - 64) / 16)
+      match rawSectionCount > maxSections with
+      | true -> err (sprintf "Header section count %d exceeds directory capacity %d" rawSectionCount maxSections)
+      | false ->
+      let sectionCount = int rawSectionCount
 
       let activeSessionId = BinaryPrimitives.readLpStringOption br
       ms.Position <- 64L
@@ -185,6 +203,15 @@ module ManifestReader =
       | None -> err "Missing SESS section"
       | Some (_, sessOffset, sessCrcStored) ->
 
+      // Validate every directory offset stays inside the file (hostile rewrite
+      // protection — CRC alone cannot catch a consistent rewrite).
+      let dirOob =
+        dirEntries
+        |> List.tryFind (fun (_, o, _) -> o >= uint64 data.Length)
+      match dirOob with
+      | Some (t, o, _) -> err (sprintf "Section 0x%08X offset %d exceeds file length %d" t o data.Length)
+      | None ->
+
       let payloadStart = int sessOffset
       let payloadEnd =
         dirEntries
@@ -203,13 +230,33 @@ module ManifestReader =
 
       use pms = new MemoryStream(payload)
       use pbr = new BinaryReader(pms)
-      let count = pbr.ReadUInt32() |> int
+      let payloadLen = pms.Length
+      // Each session entry needs at least: lp-string sid (4 prefix + >=0),
+      // u32 projCount, lp-string workDir, two int64 timestamps — floor of 4
+      // bytes per plausible entry is impossible; use a generous physical cap:
+      // every entry must contain >= 24 bytes of fixed fields (sid prefix 4 +
+      // projCount 4 + workDir prefix 4 + 16 timestamp bytes) so no more than
+      // payload/24 entries can exist. Anything more is a hostile header.
+      let rawCount = pbr.ReadUInt32() |> int64
+      let maxEntries = max 0L (payloadLen - 4L) / 24L
+      match rawCount > maxEntries with
+      | true -> err (sprintf "SESS count %d exceeds section payload capacity %d" rawCount maxEntries)
+      | false ->
+      let count = int rawCount
+      let budget () = max 0L (pms.Length - pms.Position)
       let entries =
         [ for _ in 0 .. count - 1 do
-            let sid = BinaryPrimitives.readLpString pbr
-            let projCount = pbr.ReadUInt32() |> int
-            let projects = [ for _ in 0 .. projCount - 1 do BinaryPrimitives.readLpString pbr ]
-            let workDir = BinaryPrimitives.readLpString pbr
+            let sid = BinaryPrimitives.readLpStringBounded pbr (budget ())
+            let projCount = pbr.ReadUInt32() |> int64
+            // Same physical-cap discipline per entry: each project needs an
+            // lp-string >= 4 bytes (prefix), and the fixed fields already
+            // consumed budget; bound by what remains. Throwing flows to the
+            // enclosing try/with which converts to a clean parse error.
+            let remaining = budget ()
+            if projCount > max 0L (remaining / 4L) then
+              invalidOp (sprintf "SESS project count %d exceeds remaining payload %d" projCount remaining)
+            let projects = [ for _ in 0 .. int projCount - 1 do BinaryPrimitives.readLpStringBounded pbr (budget ()) ]
+            let workDir = BinaryPrimitives.readLpStringBounded pbr (budget ())
             let createdMs = pbr.ReadInt64()
             let stoppedMs = pbr.ReadInt64()
             {
@@ -222,6 +269,14 @@ module ManifestReader =
                 | -1L -> None
                 | v -> Some (DateTimeOffset.FromUnixTimeMilliseconds(v))
             } ]
+
+      // declaredSessionCount is advisory in the header; when nonzero it must
+      // match what was actually parsed (a consistent rewrite that inflates it
+      // gets caught here, not silently trusted).
+      let parsedCount = entries |> List.length
+      match declaredSessionCount <> 0u && declaredSessionCount <> uint32 parsedCount with
+      | true -> err (sprintf "Declared session count %d does not match parsed count %d" declaredSessionCount parsedCount)
+      | false ->
 
       Ok {
         Entries = entries

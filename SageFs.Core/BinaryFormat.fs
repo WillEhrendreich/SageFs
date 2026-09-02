@@ -37,16 +37,21 @@ module BinaryPrimitives =
     bw.Write(uint32 bytes.Length)
     bw.Write(bytes)
 
-  /// Read length-prefixed UTF-8 string with bounds validation.
-  /// Guards against uint32→int32 overflow (lengths > 2GB) and truncated streams.
-  let readLpString (br: BinaryReader) : string =
+  /// Read length-prefixed UTF-8 string with bounds validation against the
+  /// remaining bytes in the stream, capped by an explicit caller-supplied
+  /// budget. Section parsers pass the section's remaining byte count so the
+  /// check is against the SECTION SLICE, never the whole stream — a reader that
+  /// operates on a window of a larger buffer must not be able to read past the
+  /// slice it was given.
+  let readLpStringBounded (br: BinaryReader) (maxRemaining: int64) : string =
     let lenRaw = br.ReadUInt32()
     match lenRaw > uint32 System.Int32.MaxValue with
     | true ->
       invalidOp (sprintf "lp-string length %u exceeds maximum safe string length (Int32.MaxValue)" lenRaw)
     | false ->
     let len = int lenRaw
-    let remaining = br.BaseStream.Length - br.BaseStream.Position
+    let streamRemaining = br.BaseStream.Length - br.BaseStream.Position
+    let remaining = min maxRemaining streamRemaining
     match int64 len > remaining with
     | true ->
       invalidOp (sprintf "lp-string length %d exceeds remaining %d bytes" len remaining)
@@ -54,14 +59,21 @@ module BinaryPrimitives =
       let bytes = br.ReadBytes(len)
       Encoding.UTF8.GetString(bytes)
 
+  /// Read length-prefixed UTF-8 string with bounds validation.
+  /// Guards against uint32→int32 overflow (lengths > 2GB) and truncated streams.
+  let readLpString (br: BinaryReader) : string =
+    readLpStringBounded br System.Int64.MaxValue
+
   /// Write optional lp-string: 0xFFFFFFFF = None, else lp-string.
   let writeLpStringOption (bw: BinaryWriter) (opt: string option) =
     match opt with
     | None -> bw.Write(0xFFFFFFFFu)
     | Some s -> writeLpString bw s
 
-  /// Read optional lp-string with bounds validation.
-  let readLpStringOption (br: BinaryReader) : string option =
+  /// Read optional lp-string with bounds validation against the remaining bytes
+  /// in the stream, capped by an explicit caller-supplied budget (see
+  /// readLpStringBounded — section parsers must bound by the section slice).
+  let readLpStringOptionBounded (br: BinaryReader) (maxRemaining: int64) : string option =
     let marker = br.ReadUInt32()
     match marker with
     | 0xFFFFFFFFu -> None
@@ -70,13 +82,18 @@ module BinaryPrimitives =
       | true ->
         invalidOp (sprintf "lp-string-option length %d overflows Int32 (corrupt data)" len)
       | false ->
-      let remaining = br.BaseStream.Length - br.BaseStream.Position
+      let streamRemaining = br.BaseStream.Length - br.BaseStream.Position
+      let remaining = min maxRemaining streamRemaining
       match int64 len > remaining with
       | true ->
         invalidOp (sprintf "lp-string-option length %d exceeds remaining %d bytes" (int len) remaining)
       | false ->
         let bytes = br.ReadBytes(int len)
         Some(Encoding.UTF8.GetString(bytes))
+
+  /// Read optional lp-string with bounds validation.
+  let readLpStringOption (br: BinaryReader) : string option =
+    readLpStringOptionBounded br System.Int64.MaxValue
 
   let writeU8 (bw: BinaryWriter) (v: byte) = bw.Write(v)
   let writeU16 (bw: BinaryWriter) (v: uint16) = bw.Write(v)

@@ -244,13 +244,15 @@ module SessionBinaryReader =
     try
       use ms = new MemoryStream(payload)
       use br = new BinaryReader(ms)
+      // All reads are bounded by the section payload size, never the enclosing stream.
+      let budget () = max 0L (ms.Length - ms.Position)
       let m = {
-        SageFsVersion = BinaryPrimitives.readLpString br
-        FSharpVersion = BinaryPrimitives.readLpString br
-        DotNetVersion = BinaryPrimitives.readLpString br
-        ProjectPath = BinaryPrimitives.readLpString br
-        WorkingDirectory = BinaryPrimitives.readLpString br
-        SessionId = BinaryPrimitives.readLpString br
+        SageFsVersion = BinaryPrimitives.readLpStringBounded br (budget ())
+        FSharpVersion = BinaryPrimitives.readLpStringBounded br (budget ())
+        DotNetVersion = BinaryPrimitives.readLpStringBounded br (budget ())
+        ProjectPath = BinaryPrimitives.readLpStringBounded br (budget ())
+        WorkingDirectory = BinaryPrimitives.readLpStringBounded br (budget ())
+        SessionId = BinaryPrimitives.readLpStringBounded br (budget ())
         EvalCount = br.ReadUInt32()
         FailedEvalCount = br.ReadUInt32()
       }
@@ -261,16 +263,43 @@ module SessionBinaryReader =
     try
       use ms = new MemoryStream(payload)
       use br = new BinaryReader(ms)
-      let count = br.ReadUInt32() |> int
+      // All bounds derive from the SECTION PAYLOAD (ms.Length), which is the
+      // declared section size (e.Size). Header count/stride fields must stay
+      // inside the payload — a consistent rewrite that inflates them must fail
+      // cleanly instead of walking out of the section or exhausting memory.
+      let payloadLen = ms.Length
+      if payloadLen < 8L then
+        err "INPT parse error: payload too short for header (count + stride)"
+      else
+      let count = br.ReadUInt32() |> int64
       let stride = br.ReadUInt16() |> int
       let tocStart = ms.Position
-      let entries = [
-        for i in 0 .. count - 1 do
-          ms.Position <- tocStart + int64 (i * stride)
-          yield (br.ReadUInt32(), br.ReadUInt32(), br.ReadInt64(), br.ReadUInt16(), br.ReadUInt16(), br.ReadUInt32()) ]
-      ms.Position <- tocStart + int64 (count * stride)
-      let poolSize = br.ReadUInt32() |> int
-      let pool = br.ReadBytes(poolSize)
+      let tocBytes = payloadLen - tocStart
+      match stride = 0 && count > 0L with
+      | true -> err "INPT parse error: zero toc_entry_stride with nonzero entry count"
+      | false ->
+      match count > 0L && int64 stride > tocBytes with
+      | true -> err (sprintf "INPT parse error: toc_entry_stride %d exceeds payload %d" stride tocBytes)
+      | false ->
+      // The whole TOC (count fixed-size entries at stride) plus the u32 pool
+      // size must fit inside the section payload. Checked in int64 to avoid
+      // any int overflow on hostile count/stride combinations.
+      match count > 0L && count * int64 stride + 4L > tocBytes with
+      | true -> err (sprintf "INPT parse error: count %d * stride %d exceeds section payload %d" count stride tocBytes)
+      | false ->
+      let entries =
+        match count with
+        | 0L -> []
+        | n -> List.init (int n) (fun i ->
+          let off = int64 i * int64 stride
+          ms.Position <- tocStart + off
+          (br.ReadUInt32(), br.ReadUInt32(), br.ReadInt64(), br.ReadUInt16(), br.ReadUInt16(), br.ReadUInt32()))
+      ms.Position <- tocStart + count * int64 stride
+      let poolSize = br.ReadUInt32() |> int64
+      match poolSize < 0L || poolSize > payloadLen - ms.Position with
+      | true -> err (sprintf "INPT parse error: string pool size %d exceeds remaining payload %d" poolSize (payloadLen - ms.Position))
+      | false ->
+      let pool = br.ReadBytes(int poolSize)
       let rec build (remaining: (uint32 * uint32 * int64 * uint16 * uint16 * uint32) list) acc =
         match remaining with
         | [] -> Ok (List.rev acc)
@@ -299,15 +328,27 @@ module SessionBinaryReader =
     try
       use ms = new MemoryStream(payload)
       use br = new BinaryReader(ms)
-      let count = br.ReadUInt32() |> int
-      readItems count [] (fun () ->
+      // Cap declared count by the section payload: a ref entry needs at least
+      // one kind byte plus a u32 length prefix, so no more than payload/5 entries
+      // can physically exist. Anything more is a consistent-but-hostile header.
+      let payloadLen = ms.Length
+      let rawCount = br.ReadUInt32() |> int64
+      let maxPossible = max 0L (payloadLen - 4L) / 5L
+      let count =
+        match rawCount > maxPossible with
+        | true -> err (sprintf "REFS parse error: count %d exceeds section payload capacity %d" rawCount maxPossible)
+        | false -> ok (int rawCount)
+      match count with
+      | Error e -> Error e
+      | Ok n ->
+      readItems n [] (fun () ->
         let rawKind = br.ReadByte()
         match RefKind.tryParse rawKind with
         | Error msg -> Error (sprintf "REFS parse error: %s" msg)
         | Ok validKind ->
           Ok {
             Kind = validKind
-            Path = BinaryPrimitives.readLpString br
+            Path = BinaryPrimitives.readLpStringBounded br (ms.Length - ms.Position)
           })
     with ex -> err (sprintf "REFS parse error: %s" ex.Message)
 
@@ -329,27 +370,46 @@ module SessionBinaryReader =
         if minVersion > readerVersion then
           err (sprintf "File requires reader version %d but this reader is version %d" minVersion readerVersion)
         else
-        let sectionCount = BitConverter.ToUInt32(data, 8) |> int
+        let sectionCount = BitConverter.ToUInt32(data, 8)
         let createdAtMs = BitConverter.ToInt64(data, 16)
         let fileLen = uint64 data.Length
-        let dirEntries = [
-          for i in 0 .. sectionCount - 1 do
-            let o = 64 + i * 20
-            yield {
-              Tag = BitConverter.ToUInt16(data, o)
-              Flags = BitConverter.ToUInt16(data, o + 2)
-              Offset = BitConverter.ToUInt64(data, o + 4)
-              Size = BitConverter.ToUInt32(data, o + 12)
-              Crc = BitConverter.ToUInt32(data, o + 16)
-            } ]
-        // Bounds check: all section offset+size must be within the file
+        // Section directory is 20 bytes per entry; cap section_count by the
+        // bytes that actually exist after the 64-byte header so a consistent
+        // rewrite with a huge count fails cleanly (no int overflow, no OOM).
+        let maxSections = uint32 ((data.Length - 64) / 20)
+        let dirEntries =
+          match sectionCount > maxSections with
+          | true -> err (sprintf "Header section count %d exceeds directory capacity %d" sectionCount maxSections)
+          | false ->
+          let count = int sectionCount
+          let entries = [
+            for i in 0 .. count - 1 do
+              let o = 64 + i * 20
+              yield {
+                Tag = BitConverter.ToUInt16(data, o)
+                Flags = BitConverter.ToUInt16(data, o + 2)
+                Offset = BitConverter.ToUInt64(data, o + 4)
+                Size = BitConverter.ToUInt32(data, o + 12)
+                Crc = BitConverter.ToUInt32(data, o + 16)
+              } ]
+          ok entries
+        match dirEntries with
+        | Error e -> err e
+        | Ok dirEntries ->
+        // Bounds check: all section offset+size must be within the file.
+        // Arithmetic on u64 is checked against fileLen; entry offset+size is
+        // re-checked with overflow-safe comparisons before slicing.
         let oob = dirEntries |> List.tryFind (fun e ->
-          e.Offset >= fileLen || uint64 e.Size > fileLen || e.Offset + uint64 e.Size > fileLen)
+          e.Offset >= fileLen
+          || uint64 e.Size > fileLen
+          || e.Size > 0u && e.Offset > fileLen - uint64 e.Size)
         match oob with
         | Some e -> err (sprintf "Section offset %d + size %d exceeds file length %d" e.Offset e.Size fileLen)
         | None ->
         let crcOk = dirEntries |> List.forall (fun e ->
-          let p = data.[int e.Offset .. int e.Offset + int e.Size - 1]
+          let eOff = int e.Offset
+          let eEnd = int e.Offset + int e.Size
+          let p = data.[eOff .. eEnd - 1]
           Crc32.computeAll p = e.Crc)
         if not crcOk then
           Instrumentation.persistenceCrcErrors.Add(
@@ -358,7 +418,10 @@ module SessionBinaryReader =
         else
           let getP tag =
             match findSection tag dirEntries with
-            | Some e -> ok data.[int e.Offset .. int e.Offset + int e.Size - 1]
+            | Some e ->
+              let eOff = int e.Offset
+              let eSize = int e.Size
+              ok data.[eOff .. eOff + eSize - 1]
             | None -> err (sprintf "Missing section 0x%04X" tag)
           match getP 0x4D45us, getP 0x494Eus, getP 0x5245us with
           | Result.Ok mp, Result.Ok ip, Result.Ok rp ->
