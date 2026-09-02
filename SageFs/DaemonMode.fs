@@ -851,9 +851,37 @@ type LiveTestWatcherManager
   // dir -> owning session IDs (only real sessions; the fallback dir is tracked
   // separately via fallbackDir).
   let dirSessions = System.Collections.Concurrent.ConcurrentDictionary<string, WorkerProtocol.SessionId list>()
+  // dir -> generation counter. Incremented every time a watcher for the dir is
+  // stopped (dispose/recreate lifecycle). Events queued before a stop carry the
+  // dir's epoch at queue time; a queued path whose epoch no longer matches is a
+  // stale event from a dead watcher generation and is dropped at fire time.
+  let dirEpochs = System.Collections.Concurrent.ConcurrentDictionary<string, int64>()
   let pendingPaths = System.Collections.Concurrent.ConcurrentDictionary<string, bool>()
+  // path -> epoch of the dir that queued it (the dir prefix that matched at
+  // queue time). Kept in lock-step with pendingPaths.
+  let pendingEpochs = System.Collections.Concurrent.ConcurrentDictionary<string, int64>()
   let pendingLock = obj()
   let debounceMs = liveTestWatcherDebounceMs
+
+  /// The watched directory that contains `path` (longest-prefix wins), if any.
+  /// Fallback dir participates only when no session dir claims the path.
+  let dirForPath (path: string) =
+    let normalizedPath = System.IO.Path.GetFullPath(path)
+    dirSessions
+    |> Seq.filter (fun kvp -> normalizedPath.StartsWith(System.IO.Path.GetFullPath(kvp.Key), System.StringComparison.OrdinalIgnoreCase))
+    |> Seq.sortByDescending (fun kvp -> kvp.Key.Length)
+    |> Seq.tryHead
+    |> Option.map (fun kvp -> kvp.Key)
+    |> Option.orElseWith (fun () ->
+      match fallbackDir with
+      | Some f when normalizedPath.StartsWith(System.IO.Path.GetFullPath(f), System.StringComparison.OrdinalIgnoreCase) -> Some f
+      | _ -> None)
+
+  /// Current epoch for a watched dir (0 if never stopped).
+  let epochOf (dir: string) =
+    match dirEpochs.TryGetValue(dir) with
+    | true, e -> e
+    | false, _ -> 0L
 
   /// Session ID(s) owning the directory that contains `path` (longest-prefix
   /// dir wins — a file under a session's dir must not be attributed to the
@@ -871,18 +899,29 @@ type LiveTestWatcherManager
     let paths =
       lock pendingLock (fun () ->
         let ps = pendingPaths.Keys |> Seq.toArray
+        let epochs = ps |> Array.map (fun p -> match pendingEpochs.TryGetValue(p) with | true, e -> Some e | false, _ -> None)
         pendingPaths.Clear()
-        ps)
-    for path in paths do
+        pendingEpochs.Clear()
+        Array.zip ps epochs)
+    for (path, queuedEpoch) in paths do
       try
-        let fi = System.IO.FileInfo(path)
-        match fi.Exists && fi.Length < 1_048_576L with
-        | true ->
-          let content = System.IO.File.ReadAllText(path)
-          dispatch (SageFsMsg.FileContentChanged(path, content))
-          for sessionId in sessionsForPath path do
-            onFileReloaded sessionId path
-        | false -> ()
+        // Stale-event guard: if the dir that queued this path was stopped and
+        // recreated (or dropped entirely) while the debounce was pending, the
+        // queued event belongs to a dead watcher generation. Drop it — a stale
+        // reload must never reach a fresh session claim.
+        let dir = dirForPath path
+        let isStale = SageFs.FileWatcher.LiveTestWatcherStaleGuard.isStaleEvent dir queuedEpoch epochOf
+        match isStale with
+        | true -> ()
+        | false ->
+          let fi = System.IO.FileInfo(path)
+          match fi.Exists && fi.Length < 1_048_576L with
+          | true ->
+            let content = System.IO.File.ReadAllText(path)
+            dispatch (SageFsMsg.FileContentChanged(path, content))
+            for sessionId in sessionsForPath path do
+              onFileReloaded sessionId path
+          | false -> ()
       with
       | :? System.IO.IOException -> ()
       | :? System.UnauthorizedAccessException -> ()
@@ -899,7 +938,14 @@ type LiveTestWatcherManager
         path with
     | true ->
       lock pendingLock (fun () ->
+        // Snapshot the dir's epoch now; the fire-time guard compares against
+        // it to drop events queued by a watcher generation that was stopped.
+        let queuedEpoch =
+          match dirForPath path with
+          | Some d -> epochOf d
+          | None -> 0L
         pendingPaths.TryAdd(path, true) |> ignore
+        pendingEpochs.[path] <- queuedEpoch
         sharedDebounceTimer.Change(debounceMs, System.Threading.Timeout.Infinite) |> ignore)
     | false -> ()
 
@@ -922,6 +968,9 @@ type LiveTestWatcherManager
     | true, (watcher, _) ->
       watcher.EnableRaisingEvents <- false
       watcher.Dispose()
+      // Bump the dir's epoch so any event queued by this watcher generation
+      // is recognized as stale and dropped at debounce-fire time.
+      dirEpochs.AddOrUpdate(dir, 1L, fun _ e -> e + 1L) |> ignore
       Log.info "[watcher] Disposed file watcher for %s" dir
     | false, _ -> ()
 
