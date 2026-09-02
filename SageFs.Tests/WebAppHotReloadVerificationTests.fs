@@ -273,4 +273,91 @@ let webAppHotReloadVerificationTests =
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
+    testCase "[Integration] compile-error save keeps last valid behavior and repair hot-reloads it" <| fun () ->
+      let fDir = fixtureDir ()
+      let appSource = Path.Combine(fDir, "Greeting.fs")
+      let original = File.ReadAllText(appSource)
+
+      let sessionId = sprintf "webapp-repair-%s" (Guid.NewGuid().ToString("N"))
+      let hostLog = StringBuilder()
+      let proc, baseUrl, proxy = spawnHost sessionId hostLog
+      try
+        waitReady proxy hostLog
+        let appFile = Path.Combine(fDir, "App.fs")
+        evalOk proxy (sprintf "#load @\"%s\"" appSource) |> ignore
+        evalOk proxy (sprintf "#load @\"%s\"" appFile) |> ignore
+        let port = freePort ()
+        evalOk proxy (sprintf "let appTask = WebAppFixture.App.run %d" port) |> ignore
+
+        let bodyA = httpGet port "/"
+        Expect.stringContains "first response should be the original greeting" "hello from sagefs" bodyA
+
+        watchAllFiles baseUrl
+        waitForWatched baseUrl 10000
+        use sseReader = openSseStream baseUrl
+
+        // 1. Save BROKEN F# — this must NOT take down the running process.
+        //    The watcher broadcasts CompilationFailed with a diagnostic; the
+        //    app keeps serving the last valid behavior (value A).
+        //    NOTE: the broken text must be a real compile error (type
+        //    mismatch). A syntactically incomplete expression (trailing binary
+        //    operator) sends FSI into continuation mode — it waits for more
+        //    input instead of erroring, and the watcher never broadcasts.
+        let broken =
+          original.Replace(
+            "let greeting () = \"hello from sagefs\"",
+            "let greeting () : int = \"this will not compile\"")
+        File.WriteAllText(appSource, broken)
+        try
+          let failedEvt =
+            try
+              readSseUntil sseReader 30000 (fun payload ->
+                payload.Contains("\"type\":\"failed\"") && payload.Contains("diagnostics"))
+            with ex ->
+              let dumpPath = Path.Combine(Path.GetTempPath(), sprintf "sagefs-repair-%s.log" sessionId)
+              File.WriteAllText(dumpPath, hostLog.ToString())
+              failwithf "%s\nHost log dumped to %s" ex.Message dumpPath
+          Expect.stringContains
+            "failed event should carry the error summary" "error" failedEvt
+
+          // App must still be alive and serving the last valid behavior.
+          let bodyAfterFail = httpGet port "/"
+          Expect.stringContains
+            "compile error must not take down the running app (last valid behavior retained)"
+            "hello from sagefs" bodyAfterFail
+
+          // 2. Repair the file — the fix must hot-reload into the running app.
+          //    Brief pause so the FileSystemWatcher has re-armed after the
+          //    failed eval's event burst before writing again.
+          Thread.Sleep 1000
+          let repaired =
+            original.Replace(
+              "let greeting () = \"hello from sagefs\"",
+              "let greeting () = \"hello from hot reload (value B)\"")
+          File.WriteAllText(appSource, repaired)
+          let written = File.ReadAllText(appSource)
+          Expect.stringContains "repair write should have landed on disk" "hello from hot reload (value B)" written
+          try
+            // The repair save must produce Reload. If it instead produces
+            // another `failed`, that's a real bug (a failed eval corrupting
+            // the watcher's cache so the fix can't reload) — report it.
+            let evt =
+              readSseUntil sseReader 30000 (fun payload ->
+                payload.Contains("\"type\":\"reload\"")
+                || payload.Contains("\"type\":\"failed\""))
+            Expect.stringContains
+              "repair save should produce reload, not another failure" "\"type\":\"reload\"" evt
+          with ex ->
+            let dumpPath = Path.Combine(Path.GetTempPath(), sprintf "sagefs-repair2-%s.log" sessionId)
+            File.WriteAllText(dumpPath, hostLog.ToString())
+            failwithf "%s\nHost log dumped to %s" ex.Message dumpPath
+          let bodyB = httpGet port "/"
+          Expect.stringContains
+            (sprintf "repair should hot-reload the new greeting from the running process.\nHost log:\n%s" (hostLog.ToString()))
+            "hello from hot reload (value B)" bodyB
+        finally
+          File.WriteAllText(appSource, original)
+      finally
+        try proc.Kill(entireProcessTree = true) with _ -> ()
+        try proc.Dispose() with _ -> ()
   ]
