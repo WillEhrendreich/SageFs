@@ -71,4 +71,37 @@ let tests =
     testCase "missing fsproj returns empty" (fun () ->
       let options = ManualProjectParse.parseFsproj quietLogger "Z:\\does-not-exist\\Missing.fsproj"
       Expect.isEmpty options "missing project should yield no options")
+
+    testCase "bin reference collection dedupes same-named DLLs across TFM dirs, keeping the newest" (fun () ->
+      // Regression: a project bin holding orphaned same-named DLLs in multiple
+      // TFM subdirs (e.g. a stale net10 SageFs.Core.dll left after the project
+      // moved to net11-only) made the REPL compile against ancient metadata —
+      // the old copy shadowed the fresh build. The collector must keep only
+      // the NEWEST copy of each assembly name.
+      let dir = Path.Combine(Path.GetTempPath(), "sagefs-manual-parse-" + Guid.NewGuid().ToString("N"))
+      Directory.CreateDirectory dir |> ignore
+      try
+        File.WriteAllText(Path.Combine(dir, "App.fs"), "module App\nlet x = 1\n")
+        File.WriteAllText(Path.Combine(dir, "App.fsproj"), simpleFsproj)
+        // Build the bin layout: cfg dir newest = Release; under it two TFM
+        // subdirs each holding a same-named SageFs.Core.dll, the net11 copy
+        // NEWER than the net10 orphan (the stale-shadow scenario).
+        let binDir = Path.Combine(dir, "bin", "Release")
+        let net10Dir = Path.Combine(binDir, "net10.0")
+        let net11Dir = Path.Combine(binDir, "net11.0")
+        Directory.CreateDirectory net10Dir |> ignore
+        Directory.CreateDirectory net11Dir |> ignore
+        let stale = Path.Combine(net10Dir, "SageFs.Core.dll")
+        let fresh = Path.Combine(net11Dir, "SageFs.Core.dll")
+        File.WriteAllBytes(stale, Array.init 256 byte)
+        File.WriteAllBytes(fresh, Array.init 256 (fun i -> 255uy - byte i))
+        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-2.0))
+        File.SetLastWriteTimeUtc(fresh, DateTime.UtcNow)
+
+        let refs = ManualProjectParse.collectBinReferences quietLogger [ Path.Combine(dir, "App.fsproj") ]
+        let coreRefs = refs |> List.filter (fun r -> Path.GetFileName r = "SageFs.Core.dll")
+        Expect.hasLength coreRefs 1 "exactly one SageFs.Core.dll reference after dedup"
+        Expect.equal coreRefs.Head fresh "the fresh (newest) copy must win over the stale orphan"
+      finally
+        Directory.Delete(dir, true))
   ]
