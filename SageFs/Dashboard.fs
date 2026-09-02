@@ -1023,6 +1023,20 @@ let private frictionEndpointHash (url: string) : string =
   let hash = sha.ComputeHash(bytes)
   System.Convert.ToHexString(hash).ToLowerInvariant()
 
+/// P0 safety: validate a friction-report destination before any network I/O.
+/// Absolute https only; http permitted solely to loopback (local receiver
+/// development). Rejects file://, non-loopback plaintext http (the ingest
+/// token would cross the wire unencrypted), and malformed URLs — so the
+/// client-supplied endpoint cannot be abused as an SSRF/proxy primitive.
+let isAllowedFrictionEndpoint (endpoint: string) : bool =
+  match System.Uri.TryCreate(endpoint, System.UriKind.Absolute) with
+  | true, uri ->
+    match uri.Scheme.ToLowerInvariant() with
+    | "https" -> true
+    | "http" -> uri.IsLoopback
+    | _ -> false
+  | _ -> false
+
 /// POST /dashboard/friction/send — receive a sanitized report from the
 /// client, POST it to the user's configured Cloudflare Worker endpoint,
 /// and record the send in the local FrictionStore so the dashboard can
@@ -1065,53 +1079,67 @@ let createFrictionSendHandler
       | 0, _ | _, 0 ->
         do! ssePatchNode ctx (frictionSendResultDom false "missing endpoint or payload" "")
       | _ ->
-        let urlHash = frictionEndpointHash endpoint
-        let mutable attemptError : string option = None
-        let mutable reportId = ""
-        try
-          use http = new HttpClient()
+        // P0 safety: the client supplies the destination, so validate it
+        // strictly before any network I/O (see isAllowedFrictionEndpoint).
+        match isAllowedFrictionEndpoint endpoint with
+        | false ->
+          do! ssePatchNode ctx (frictionSendResultDom false "endpoint must be an absolute https URL (http allowed only to loopback)" "")
+        | true ->
+          let urlHash = frictionEndpointHash endpoint
+          let mutable attemptError : string option = None
+          let mutable reportId = ""
           try
-            let req = new HttpRequestMessage(HttpMethod.Post, endpoint)
-            req.Content <- new StringContent(payloadJson, System.Text.Encoding.UTF8, "application/json")
-            if token.Length > 0 then
-              req.Headers.Add("X-SageFs-Token", token)
-            let! resp = http.SendAsync(req) |> Async.AwaitTask
-            let! body = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
-            if resp.IsSuccessStatusCode then
-              try
-                use respDoc = System.Text.Json.JsonDocument.Parse(body)
-                let root = respDoc.RootElement
-                reportId <-
-                  match root.TryGetProperty("reportId") with
-                  | true, p -> p.GetString()
-                  | _ -> ""
-              with _ -> ()
-              let sentAt = System.DateTimeOffset.UtcNow
-              let sent =
-                { ReportId = if reportId.Length > 0 then reportId else System.Guid.NewGuid().ToString("N").[..12]
-                  SentAtUtc = sentAt
-                  SageFsVersion = sageFsVersion
-                  TotalEvents = totalEvents
-                  TotalFeedbackItems = totalFeedback
-                  DestinationKind = "cloudflare-worker"
-                  DestinationUrlHash = urlHash }
-              let! store = q.GetFrictionStore () |> Async.AwaitTask
-              match store with
-              | Some s ->
-                match s.RecordSentReport sent with
-                | Ok () -> ()
-                | Error e -> Log.warn "[friction] failed to record sent report: %s" e
-              | None -> ()
-              do! ssePatchNode ctx (frictionSendResultDom true "" reportId)
-            else
-              attemptError <- Some (sprintf "worker returned %d: %s" (int resp.StatusCode) (if body.Length > 200 then body.[..200] + "..." else body))
-          finally
-            http.Dispose()
-        with ex ->
-          attemptError <- Some ex.Message
-        match attemptError with
-        | Some err -> do! ssePatchNode ctx (frictionSendResultDom false err "")
-        | None -> ()
+            use http = new HttpClient()
+            http.Timeout <- System.TimeSpan.FromSeconds(15.0)
+            try
+              let req = new HttpRequestMessage(HttpMethod.Post, endpoint)
+              req.Content <- new StringContent(payloadJson, System.Text.Encoding.UTF8, "application/json")
+              if token.Length > 0 then
+                req.Headers.Add("X-SageFs-Token", token)
+              let! resp = http.SendAsync(req) |> Async.AwaitTask
+              let! body = resp.Content.ReadAsStringAsync() |> Async.AwaitTask
+              if resp.IsSuccessStatusCode then
+                try
+                  use respDoc = System.Text.Json.JsonDocument.Parse(body)
+                  let root = respDoc.RootElement
+                  reportId <-
+                    match root.TryGetProperty("reportId") with
+                    | true, p -> p.GetString()
+                    | _ -> ""
+                with _ -> ()
+                let sentAt = System.DateTimeOffset.UtcNow
+                let sent =
+                  { ReportId = if reportId.Length > 0 then reportId else System.Guid.NewGuid().ToString("N").[..12]
+                    SentAtUtc = sentAt
+                    SageFsVersion = sageFsVersion
+                    TotalEvents = totalEvents
+                    TotalFeedbackItems = totalFeedback
+                    DestinationKind = "cloudflare-worker"
+                    DestinationUrlHash = urlHash }
+                let! store = q.GetFrictionStore () |> Async.AwaitTask
+                // P0 safety: the receipt is only "sent" after BOTH remote
+                // acceptance AND local receipt-write success. A receipt-write
+                // failure must NOT report success — the user would believe the
+                // report was durably recorded when it was not.
+                match store with
+                | Some s ->
+                  match s.RecordSentReport sent with
+                  | Ok () ->
+                    do! ssePatchNode ctx (frictionSendResultDom true "" reportId)
+                  | Error e ->
+                    Log.warn "[friction] failed to record sent report locally: %s" e
+                    attemptError <- Some (sprintf "worker accepted the report but recording the local receipt failed: %s" e)
+                | None ->
+                  attemptError <- Some "worker accepted the report but no local friction store is available to record the receipt"
+              else
+                attemptError <- Some (sprintf "worker returned %d: %s" (int resp.StatusCode) (if body.Length > 200 then body.[..200] + "..." else body))
+            finally
+              http.Dispose()
+          with ex ->
+            attemptError <- Some ex.Message
+          match attemptError with
+          | Some err -> do! ssePatchNode ctx (frictionSendResultDom false err "")
+          | None -> ()
     with
     | :? RequestTooLargeException -> ()
     | ex -> Log.warn "[friction] send failed: %s" ex.Message

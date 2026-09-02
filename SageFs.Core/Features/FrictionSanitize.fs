@@ -55,7 +55,11 @@ let sanitizeText (s: string) (maxLen: int) : string =
       |> redactEmails
       |> redactSessionIds
     if scrubbed.Length <= maxLen then scrubbed
-    else scrubbed.[..maxLen - 2] + "..."
+    // Truncate to exactly maxLen including the ellipsis: [..maxLen-4] yields
+    // maxLen-3 chars (index maxLen-4 inclusive) + "..." = maxLen. Previously
+    // [..maxLen-2] produced maxLen+2 — an off-by-two that let oversized text
+    // past the documented cap (caught by the F# sanitizer property tests).
+    else scrubbed.[..maxLen - 4] + "..."
 
 /// Unwrap a private-case smart wrapper to its underlying string.
 let private unwrap (tool: ToolName) : string = ToolName.value tool

@@ -320,6 +320,7 @@
         <Compile Include="WebAppHotReloadVerificationTests.fs" />
         <Compile Include="DaemonStateChangeContractTests.fs" />
         <Compile Include="FrictionCaptureDurabilityTests.fs" />
+        <Compile Include="FrictionSendSafetyTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
