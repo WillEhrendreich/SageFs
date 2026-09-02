@@ -3,7 +3,7 @@
 ## For New Users
 - **[First 5 Minutes](../Readme.md#-first-5-minutes)** — Install → Evaluate → See results
 - **[Workflow Modes Guide](workflow-modes.md)** — REPL vs Live mode, when to use which, and why live testing isn't a mode
-- **[Choosing Your Editor](../Readme.md#what-you-get-in-each-editor)** — VS Code, Neovim, Visual Studio, TUI, Raylib GUI, and MCP clients
+- **[Choosing a Client](../Readme.md#what-you-get-in-each-editor)** — VS Code, Neovim, Visual Studio, the web dashboard, and MCP clients
 - **[Understanding the Gutter](../Readme.md#-understanding-the-gutter-icons)** — What the colored markers mean
 - **[Language Migration Guides](../Readme.md#welcome-traveler----pick-your-home-language)** — Coming from Python, Jupyter, C#, Java, JS, or Rust
 
@@ -23,7 +23,7 @@
 - **[Troubleshooting](TROUBLESHOOTING.md)** — Common issues and fixes
 
 ## For Contributors
-- **[Architecture Decision Records](architecture-decisions.md)** — Why SSE-only CQRS, SageTUI migration, binary persistence, typed errors, dual renderer, MCP, no interfaces
+- **[Architecture Decision Records](architecture-decisions.md)** — Historical decisions, including superseded frontend decisions, plus persistence, typed errors, MCP, and module composition
 - **[Code Reference](internal/CODE_REFERENCE.md)** — Key design patterns with examples
 - **[Contributing Guide](../CONTRIBUTING.md)** — Development workflow, testing, PRs
 - **[Live Testing Guide](LIVE_TESTING_GUIDE.md)** — Implementation details of the test pipeline

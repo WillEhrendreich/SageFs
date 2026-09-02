@@ -441,8 +441,8 @@ let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list
     nodes |> Seq.toList
 
 /// Render output lines as an HTML fragment.
-let renderOutput (lines: OutputLine list) (placeholder: string) =
-  Elem.div [ Attr.id DomIds.OutputPanel ] [
+let renderOutputForSession (sessionId: string) (lines: OutputLine list) (placeholder: string) =
+  Elem.div [ Attr.id DomIds.OutputPanel; Attr.create "data-session-id" sessionId ] [
     match lines.IsEmpty with
     | true ->
       Elem.span [ Attr.class' "meta" ] [ Text.raw placeholder ]
@@ -466,6 +466,9 @@ let renderOutput (lines: OutputLine list) (placeholder: string) =
             Text.raw (System.Net.WebUtility.HtmlEncode line.Text)
         ])
   ]
+
+let renderOutput (lines: OutputLine list) (placeholder: string) =
+  renderOutputForSession "" lines placeholder
 
 /// Render diagnostics as an HTML fragment.
 let renderDiagnostics (diags: Diagnostic list) =
@@ -747,7 +750,7 @@ let renderStoppingCard (sessionId: WorkerProtocol.SessionId) =
       ] ]
 
 /// Render sessions as an HTML fragment with action buttons.
-let renderSessions (sessions: ParsedSession list) (creating: bool) =
+let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession list) (creating: bool) =
   Elem.div [ Attr.id DomIds.SessionsPanel ] [
     match creating with
     | true ->
@@ -762,9 +765,10 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
       yield! sessions |> List.mapi (fun i (s: ParsedSession) ->
         let statusClass = SessionDisplayStatus.cssClass s.Status
         let sid = WorkerProtocol.SessionId.value s.Id
+        let isViewing = sid = viewingSessionId
         let cls =
-          match s.IsActive with
-          | true -> "output-result"
+          match isViewing with
+          | true -> "output-result session-selected"
           | false -> ""
         let guidanceCls =
           match s.GuidanceCssClass.Length > 0 with
@@ -774,19 +778,20 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
           [ Attr.id (sprintf "session-card-%s" sid)
             Attr.class' (sprintf "session-row %s%s" cls guidanceCls)
             Attr.style "padding: 10px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
-            Ds.class' ("session-selected", sprintf "$%s === '%s'" Signals.ViewingSessionId sid)
-            Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId sid sid) ]
+            Attr.create "data-session-id" sid
+            Attr.create "aria-current" (match isViewing with | true -> "true" | false -> "false")
+            Ds.onEvent ("click", sprintf "window.location.assign('/dashboard?session=%s')" sid) ]
           [
             Elem.div [ Attr.class' "session-card-body" ] [
-              // Row 1: session ID + status + active indicator
+              // Row 1: session ID + status + selected indicator
               Elem.div [ Attr.class' "session-card-status-row" ] [
                 Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw sid ]
                 Elem.span
                   [ Attr.class' (sprintf "status badge %s" statusClass) ]
                   [ Text.raw (SessionDisplayStatus.label s.Status) ]
-                match s.IsActive with
+                match isViewing with
                 | true ->
-                  Elem.span [ Attr.style "color: var(--fg-green);" ] [ Text.raw "● active" ]
+                  Elem.span [ Attr.style "color: var(--fg-green);" ] [ Text.raw "● selected" ]
                 | false -> ()
                 // Per-session standby indicator
                 match s.StandbyLabel.Length > 0 with
@@ -913,11 +918,11 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
               (match s.WorkingDir.Length with
                | 0 -> renderAutoOpenToggleIcon true
                | _ -> renderAutoOpenToggleIcon (DirectoryConfig.autoOpenNamespacesForDirectory s.WorkingDir))
-              match s.IsActive with
+              match isViewing with
               | false ->
                 Elem.button
                   [ Attr.class' "session-btn"
-                    Ds.onEvent ("click", sprintf "$%s = '%s'; @post('/dashboard/session/switch/%s')" Signals.ViewingSessionId sid sid) ]
+                    Ds.onEvent ("click", sprintf "event.stopPropagation(); window.location.assign('/dashboard?session=%s')" sid) ]
                   [ Text.raw "⇄" ]
               | true -> ()
               Elem.button
@@ -979,6 +984,15 @@ let renderSessions (sessions: ParsedSession list) (creating: bool) =
         | false -> ()
       ]
   ]
+
+let renderSessions (sessions: ParsedSession list) (creating: bool) =
+  let viewingSessionId =
+    sessions
+    |> List.tryFind (fun session -> session.IsSelected)
+    |> Option.orElseWith (fun () -> sessions |> List.tryFind (fun session -> session.IsActive))
+    |> Option.map (fun session -> WorkerProtocol.SessionId.value session.Id)
+    |> Option.defaultValue ""
+  renderSessionsForSession viewingSessionId sessions creating
 
 
 
@@ -1070,7 +1084,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       ]
     | None ->
       Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] []
-  Elem.div [ Attr.id DomIds.Main; Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard) ] [
+  Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" snap.SessionId; Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard) ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
     // App header — tabline style like sagetech.dev
@@ -1145,7 +1159,6 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             Elem.div [ Attr.id DomIds.KeyboardHelpWrapper; Ds.show "$helpVisible" ] [
               renderKeyboardHelp ()
             ]
-            Elem.input [ Attr.type' "hidden"; Ds.bind Signals.SessionId ]
             Elem.div [ Attr.style "position: relative;" ] [
               Elem.textarea
                 [ Attr.class' "eval-input"

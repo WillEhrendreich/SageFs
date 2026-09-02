@@ -25,7 +25,9 @@
 
 ## Project Overview
 
-SageFs is an F# live development environment — a REPL-powered tool with editor integrations for VS Code, Visual Studio, Neovim, plus a built-in TUI and Raylib GUI. It uses an MCP server for editor communication and a daemon architecture for persistent F# Interactive sessions.
+SageFs is an F# live development environment with editor integrations for VS Code, Visual Studio, and Neovim, a web dashboard, and an MCP server for agent and programmatic access. Its daemon architecture hosts persistent, isolated F# Interactive sessions.
+
+The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated. Do not treat them as current product surfaces or add new product documentation for them. Preserve Raylib application and game demos because they demonstrate SageFs support for game projects and are independent of the deprecated GUI frontend.
 
 ## Language & Stack
 
@@ -71,9 +73,9 @@ SageFs is an F# live development environment — a REPL-powered tool with editor
 ## Project Structure
 
 ```
-SageFs.Core/       — Shared types, rendering abstraction, KeyMap, Theme
-SageFs/            — CLI tool, daemon, SageTUI client (SageTuiClient.fs) + legacy TUI (TuiClient.fs)
-SageFs.Gui/        — Raylib GUI client (Cell[,] grid renderer)
+SageFs.Core/       — Shared engine, session, testing, persistence, and protocol logic
+SageFs/            — CLI tool, daemon, MCP server, dashboard, and retained deprecated TUI source
+SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy source
 SageFs.Tests/      — Expecto test project
 sagefs-vscode/     — VS Code extension (Fable F#→JS)
 sagefs-vs/         — Visual Studio extension (C# + F#)
@@ -92,8 +94,8 @@ dotnet pack SageFs -o nupkg  # Package the CLI tool
 
 ## Architecture Principles
 
-- **TUI via SageTUI**: Terminal UI uses [SageTUI](https://github.com/WillEhrendreich/sagetui) Elm Architecture (`Program<Model,Msg>` with `init/update/view/subscribe`), SIMD cell diff, zero-GC rendering. Classic `CellGrid` imperative renderer available as `--legacy-tui` fallback.
-- **Raylib GUI**: GPU-rendered client uses `Cell[,]` grid abstraction with `RaylibEmitter`
+- **Current clients**: VS Code, Neovim, Visual Studio, the web dashboard, and MCP use session-scoped daemon contracts
+- **Web dashboard**: Falco.Datastar and SSE provide browser-based session control and observability
 - **Binary persistence**: Session/test state via CRC-validated binary manifest (.sagefm)
 - **CQRS**: Separate read/write models
 - **Vertical slices**: Features as single files for locality of behavior

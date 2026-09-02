@@ -3,6 +3,8 @@
 Key decisions that shape SageFs's architecture. Written for future contributors
 who need to understand **why**, not just what.
 
+> **Historical status:** ADR-2 and ADR-5, and frontend lists in other early ADRs, describe the former built-in SageTUI, legacy TUI, and `SageFs.Gui` Raylib product frontends. Those frontends are now deprecated and these decisions are superseded for current product direction by the web dashboard, editor integrations, and MCP. The original records remain unchanged as architectural history. Raylib application and game demos are not deprecated.
+
 ---
 
 ## ADR-1: SSE as the Only Read Channel (CQRS)

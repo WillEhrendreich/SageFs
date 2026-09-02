@@ -76,7 +76,6 @@
         <Compile Include="CellGridTests.fs" />
         <Compile Include="ScreenTests.fs" />
         <Compile Include="DashboardSnapshotTests.fs" />
-        <Compile Include="TuiClientTests.fs" />
         <Compile Include="MultiUiConsistencyTests.fs" />
         <Compile Include="TuiGuiSharedTests.fs" />
         <Compile Include="ThemePersistenceTests.fs" />
@@ -94,6 +93,7 @@
         <Compile Include="SageFsErrorMutationTests.fs" />
         <Compile Include="SessionLifecycleMutationTests.fs" />
         <Compile Include="CoverageViewMutationTests.fs" />
+        <Compile Include="CoverageViewProjectMutationTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
         <Compile Include="RestartPolicyCorrespondenceTests.fs" />
         <Compile Include="ResultExCorrespondenceTests.fs" />
@@ -109,7 +109,6 @@
         <Compile Include="DiffEmitTests.fs" />
         <Compile Include="SyntaxHighlightTests.fs" />
         <Compile Include="TestTreeSitterTests.fs" />
-        <Compile Include="VtInputParserTests.fs" />
         <Compile Include="PluginContractTests.fs" />
         <Compile Include="ProjectLoadingTests.fs" />
         <Compile Include="McpWireProtocolTests.fs" />
@@ -308,7 +307,6 @@
         <Compile Include="SseSerializationBenchmarks.fs" />
         <Compile Include="SsePropertyTests.fs" />
         <Compile Include="SseContractComplianceTests.fs" />
-        <Compile Include="SageTuiAllocationBenchmarks.fs" />
         <Compile Include="ManifestBackupRecoveryTests.fs" />
         <Compile Include="WorkerLivenessTests.fs" />
         <Compile Include="BranchCoverageRenderingTests.fs" />

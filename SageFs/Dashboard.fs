@@ -103,8 +103,8 @@ let connectionMonitorScript () =
       if(b&&m){new MutationObserver(function(){b.style.display='none';}).observe(m,{childList:true});}
       var f=window.fetch;window.fetch=function(u){var p=f.apply(this,arguments);
       if(typeof u==='string'&&u.indexOf('/dashboard/stream')!==-1){
-        p.then(function(r){if(b){if(r.ok){b.style.display='none';}else{b.textContent='\u274c Server error ('+r.status+')';b.style.display='';}}});
-        .catch(function(){if(b){b.textContent='\u274c Server disconnected \u2014 reconnecting...';b.style.display='';}});}
+        p.then(function(r){if(b){if(r.ok){b.style.display='none';}else{b.textContent='\u274c Server error ('+r.status+')';b.style.display='';}}})
+         .catch(function(){if(b){b.textContent='\u274c Server disconnected \u2014 reconnecting...';b.style.display='';}});}
       return p;};
     })();
   """ DomIds.ServerStatus) ]
@@ -219,7 +219,7 @@ let renderShell (version: string) (initialSessionId: string) (initialContent: Xm
       Elem.link [ Attr.rel "stylesheet"; Attr.href "/dashboard/dashboard.css" ]
     ]
     Elem.body [ Ds.safariStreamingFix ] [
-      Elem.div [ Ds.onInit (Ds.get "/dashboard/stream"); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.SessionId, initialSessionId); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false") ] []
+      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream?session=%s" (Uri.EscapeDataString initialSessionId))); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false") ] []
       Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
       ]
@@ -249,10 +249,8 @@ let private buildOutputPanels
         | "Ready" -> "Ready — type code in the evaluator below, or use the MCP tools"
         | state -> sprintf "%s" state
     let computeResult () =
-      // Per-session regions: use the caller's sessionId, NOT the Elm
-      // runtime's global active session. This is the structural fix
-      // for the bug where the TUI switching sessions would also
-      // change the dashboard's output panel.
+      // Per-session regions use the caller's immutable viewing session,
+      // never the Elm runtime's global active session.
       match q.GetElmRegionsForSession sessionId with
       | Some regions ->
         let outputRegion = regions |> List.tryFind (fun r -> r.Id = "output")
@@ -261,9 +259,9 @@ let private buildOutputPanels
           | Some r ->
             let lines = parseOutputLines r.Content
             match lines.IsEmpty with
-            | true -> renderOutput lines emptyPlaceholder
-            | false -> renderOutput lines "No output yet"
-          | None -> renderOutput [] emptyPlaceholder
+            | true -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) lines emptyPlaceholder
+            | false -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) lines "No output yet"
+          | None -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) [] emptyPlaceholder
         let sessRegion = regions |> List.tryFind (fun r -> r.Id = "sessions")
         match sessRegion with
         | Some r ->
@@ -287,18 +285,29 @@ let private buildOutputPanels
                   AgentBadges = q.GetSessionAgentBadges s.Id
                   GuidanceCssClass = q.GetSessionGuidanceCss s.Id })
           let creating = isCreatingSession r.Content
-          let sess = renderSessions visible creating
+          let sess = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) visible creating
           let sessionPicker =
             match visible.IsEmpty && not creating with
             | true -> renderSessionPicker previous
             | false -> renderSessionPickerEmpty
           (outNode, sess, sessionPicker)
         | None ->
-          (outNode, renderSessions [] false, renderSessionPickerEmpty)
+          (outNode, renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) [] false, renderSessionPickerEmpty)
       | None ->
-        (renderOutput [] emptyPlaceholder, renderSessions [] false, renderSessionPickerEmpty)
+        (renderOutputForSession (WorkerProtocol.SessionId.value sessionId) [] emptyPlaceholder, renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) [] false, renderSessionPickerEmpty)
     return computeResult ()
   }
+
+let resolveViewingSession
+  (requestedSession: string option)
+  (sessions: WorkerProtocol.SessionInfo list)
+  : WorkerProtocol.SessionId option =
+  let requested =
+    requestedSession
+    |> Option.bind (WorkerProtocol.SessionId.validate >> Result.toOption)
+    |> Option.filter (fun sessionId -> sessions |> List.exists (fun session -> session.Id = sessionId))
+  requested
+  |> Option.orElseWith (fun () -> sessions |> List.tryHead |> Option.map (fun session -> session.Id))
 
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
@@ -444,10 +453,15 @@ let createStreamHandler
     Response.sseStartResponse ctx |> ignore
 
     let clientId = Guid.NewGuid().ToString("N").[..7]
-    // Resolve initial session: first available session (observer behavior — don't create)
+    // Resolve one immutable viewing session for this browser connection.
+    // renderShell puts this same ID in the selected card, output projection,
+    // eval target, and stream URL. Daemon-global switches never replace it.
     let! sessions = q.GetAllSessions ()
-    let mutable currentSessionOpt =
-      sessions |> List.tryHead |> Option.map (fun s -> s.Id)
+    let requestedSession =
+      match ctx.Request.Query.TryGetValue("session") with
+      | true, values when values.Count > 0 -> Some values.[0]
+      | _ -> None
+    let currentSessionOpt = resolveViewingSession requestedSession sessions
     let currentSessionStr = currentSessionOpt |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
     infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionStr))
     let mutable lastSessionId = currentSessionOpt |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
@@ -460,7 +474,6 @@ let createStreamHandler
         // No sessions — push session picker
         let! previous = q.GetPreviousSessions ()
         do! ssePatchNode ctx (renderSessionPicker previous)
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) ""
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | Some sessionId ->
       let! snap, newSessionId, newThemeName =
@@ -479,11 +492,9 @@ let createStreamHandler
         Log.info "[pushState] cur=%s last=%s newTheme=%s lastTheme=%s sessionChanged=%b themeChanged=%b"
           (WorkerProtocol.SessionId.value sessionId) (WorkerProtocol.SessionId.value lastSessionId) newThemeName lastThemeName sessionChanged themeChanged
       | false -> ()
-      currentSessionOpt <- Some newSessionId
       lastSessionId <- newSessionId
       lastWorkingDir <- q.GetSessionWorkingDir newSessionId
       lastThemeName <- newThemeName
-      do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") (WorkerProtocol.SessionId.value newSessionId)
       // When the active session changes OR the resolved theme name differs
       // from the last theme the server pushed, patch the theme signal so
       // Datastar's data-bind-theme on the <select> stays in sync with the
@@ -542,32 +553,15 @@ let createStreamHandler
               match ctx.RequestAborted.IsCancellationRequested with
               | true -> ()
               | false -> return! loop ()
-            | Some (SessionSwitched sid) ->
-              // Session switch is user-interactive — update tracking and push immediately
-              currentSessionOpt <- Some sid
-              try
-                do! pushState () |> Async.AwaitTask
-              with
-              | :? System.IO.IOException -> ()
-              | :? ObjectDisposedException -> ()
-              | :? OperationCanceledException -> ()
-              | :? System.ArgumentOutOfRangeException -> ()
-              | :? System.InvalidOperationException -> ()
-              | ex -> Log.debug "[Dashboard SSE] pushState failed: %s" ex.Message
-              return! loop ()
             | Some _change ->
               // Other state changes — drain + coalesce + push
               while inbox.CurrentQueueLength > 0 do
-                let! c = inbox.Receive()
-                match c with
-                | SessionSwitched sid -> currentSessionOpt <- Some sid
-                | _ -> ()
+                let! _ = inbox.Receive()
+                ()
               do! Async.Sleep 100
               while inbox.CurrentQueueLength > 0 do
-                let! c = inbox.Receive()
-                match c with
-                | SessionSwitched sid -> currentSessionOpt <- Some sid
-                | _ -> ()
+                let! _ = inbox.Receive()
+                ()
               try
                 do! pushState () |> Async.AwaitTask
               with
@@ -583,9 +577,10 @@ let createStreamHandler
         use _sub = evt.Subscribe(fun change ->
           try pushAgent.Post(change)
           with :? ObjectDisposedException -> ())
-        // Adaptive live-bindings subscription: patch ONLY the bindings panel when
-        // the session's snapshot changes (debugger watch window). Fires only on
-        // real change (FSharp.Data.Adaptive dedup), so no redundant renders.
+        // Adaptive live-bindings subscription. Never write directly to the SSE
+        // response here: eval completion can fire this callback concurrently
+        // with the Elm ModelChanged event. All writes must go through pushAgent
+        // so a full #main morph is serialized and cannot be interleaved.
         let mutable liveBindingsSub : IDisposable option = None
         let subscribeLiveBindings (sessionId: WorkerProtocol.SessionId) =
           liveBindingsSub |> Option.iter (fun d -> d.Dispose())
@@ -593,30 +588,14 @@ let createStreamHandler
           liveBindingsSub <-
             infra.LiveBindingsAdaptive
             |> Option.bind (fun store ->
-                Some (SageFs.Features.LiveBindingsAdaptive.subscribe store sidStr (fun snap ->
-                  let panel =
-                    renderLiveBindingsPanel (Some snap)
-                  try
-                    ssePatchNode ctx panel |> Async.AwaitTask |> Async.RunSynchronously
-                  with
-                  | :? System.IO.IOException -> ()
-                  | :? ObjectDisposedException -> ()
-                  | :? OperationCanceledException -> ())))
+                Some (SageFs.Features.LiveBindingsAdaptive.subscribe store sidStr (fun _ ->
+                  try pushAgent.Post(ModelChanged (0, 0))
+                  with :? ObjectDisposedException -> ())))
         match currentSessionOpt with
         | Some sid -> subscribeLiveBindings sid
         | None -> ()
-        // Re-subscribe when the user switches sessions.
-        let sessionSwitchReg =
-          evt.Subscribe(fun change ->
-            match change with
-            | SessionSwitched sid ->
-              subscribeLiveBindings sid
-              try pushAgent.Post(change)
-              with :? ObjectDisposedException -> ()
-            | _ -> ())
         do! tcs.Task
         liveBindingsSub |> Option.iter (fun d -> d.Dispose())
-        sessionSwitchReg.Dispose()
       | None ->
         // Fallback: poll every second
         while not ctx.RequestAborted.IsCancellationRequested do
@@ -632,6 +611,8 @@ let createStreamHandler
 
 /// Create the eval POST handler.
 let createEvalHandler
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
   (evalCode: WorkerProtocol.SessionId -> string -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
@@ -642,7 +623,7 @@ let createEvalHandler
         | true, prop -> prop.GetString()
         | _ -> ""
       let sessionIdStr =
-        match doc.RootElement.TryGetProperty("sessionId") with
+        match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
         | true, prop -> prop.GetString()
         | _ -> ""
       match String.IsNullOrWhiteSpace code with
@@ -663,6 +644,12 @@ let createEvalHandler
           let! result = evalCode sessionId codeWithTerminator
           Response.sseStartResponse ctx |> ignore
           do! Response.ssePatchSignal ctx (SignalPath.sp "code") ""
+          // The action response owns this interaction. Render the freshly
+          // committed snapshot here so Datastar cannot drop an overlapping
+          // long-lived stream morph while this POST is still resolving.
+          let! snap, _, _ =
+            buildDashboardSnapshot q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName
+          do! ssePatchNode ctx (renderMainContent snap)
           let displayResult, cssClass =
             match result with
             | Ok msg -> msg, "output-line output-result"
@@ -699,7 +686,7 @@ let createEvalFileHandler
         | true, prop -> prop.GetString()
         | _ -> ""
       let sessionIdStr =
-        match doc.RootElement.TryGetProperty("sessionId") with
+        match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
         | true, prop -> prop.GetString()
         | _ -> ""
       match WorkerProtocol.SessionId.validate sessionIdStr with
@@ -775,7 +762,7 @@ let createCompletionsHandler
           | _ -> -1
         | _ -> -1
       let sessionIdStr =
-        match doc.RootElement.TryGetProperty(Signals.SessionId) with
+        match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
         | true, prop -> prop.GetString()
         | _ -> ""
       Response.sseStartResponse ctx |> ignore
@@ -805,9 +792,9 @@ let createResetHandler
       let! sessionIdResult = task {
         try
           use! doc = readSignalsJsonSized ctx
-          match doc.RootElement.TryGetProperty("sessionId") with
+          match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
           | true, prop -> return WorkerProtocol.SessionId.validate (prop.GetString())
-          | _ -> return Error "Missing sessionId"
+          | _ -> return Error "Missing viewingSessionId"
         with ex ->
           Log.warn "[Dashboard] Session ID extraction from JSON failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           return Error "Failed to parse request"
@@ -915,7 +902,6 @@ let createSessionActionHandler
       match nextId with
       | Some nextSession ->
         // Auto-switch: display + select the next session.
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) (WorkerProtocol.SessionId.value nextSession)
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value nextSession)
         // Sync the output, sessions panel, and statusline to the auto-selected next session.
         match q.GetElmRegionsForSession nextSession with
@@ -955,7 +941,6 @@ let createSessionActionHandler
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | None ->
         // Switch path (or failed teardown): eval form targets the requested session.
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.SessionId) (WorkerProtocol.SessionId.value sessionId)
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value sessionId)
         // Immediately sync the output, sessions panel, and statusline to the
         // newly-selected session so the display matches the sidebar highlight.
@@ -1187,8 +1172,8 @@ let createCreateSessionHandler
           | Ok newSessionId ->
             // Switch to the new session so the SSE stream picks it up
             let! _ = switchSession newSessionId
-            // Push the new session's ID so the eval form targets it
-            do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") (WorkerProtocol.SessionId.value newSessionId)
+            // Push the new viewing identity so every dashboard action targets it.
+            do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
             do! ssePatchNode ctx (
               Elem.div [ Attr.id DomIds.EvalResult ] [
                 Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
@@ -1221,7 +1206,7 @@ let createToggleWarmupAutoOpenHandler
     try
       use! doc = readSignalsJsonSized ctx
       let dir = getSignalString doc "newSessionDir" "new-session-dir"
-      let sessionId = getSignalString doc "sessionId" "session-id"
+      let sessionId = getSignalString doc Signals.ViewingSessionId "viewing-session-id"
       let configResultNode message cssClass =
         Elem.div [ Attr.id DomIds.EvalResult ] [
           Elem.pre [ Attr.class' (sprintf "output-line %s" cssClass); Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
@@ -1265,8 +1250,7 @@ let createToggleWarmupAutoOpenHandler
           match result with
           | Ok newSessionId ->
             let! _ = a.SwitchSession newSessionId in ()
-            do! Response.ssePatchSignal ctx (SignalPath.sp "sessionId") (WorkerProtocol.SessionId.value newSessionId)
-            do! Response.ssePatchSignal ctx (SignalPath.sp "viewingSessionId") (WorkerProtocol.SessionId.value newSessionId)
+            do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
             // 4) Concise confirmation — no warmup status spam.
             let message =
               match enable with
@@ -1461,21 +1445,25 @@ let createEndpoints
         // param so deep-links work, then fall back to the first available
         // session. There is intentionally NO global "active session" read
         // here — that concept does not exist at the dashboard layer.
-        let initialSessionId =
+        let requestedSession =
           match ctx.Request.Query.TryGetValue("session") with
           | true, v when v.Count > 0 && not (String.IsNullOrEmpty(v.[0])) ->
-            v.[0] |> WorkerProtocol.SessionId.validate |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-          | _ ->
-            sessions |> List.tryHead |> Option.map (fun s -> s.Id) |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
-        let! snap, resolvedId, _ = buildDashboardSnapshot q infra initialSessionId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName
-        let html = renderShell infra.Version (WorkerProtocol.SessionId.value resolvedId) (renderMainContent snap)
-        return! FalcoResponse.ofHtml html ctx
+            Some v.[0]
+          | _ -> None
+        match resolveViewingSession requestedSession sessions with
+        | Some initialSessionId ->
+          let! snap, resolvedId, _ = buildDashboardSnapshot q infra initialSessionId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName
+          let html = renderShell infra.Version (WorkerProtocol.SessionId.value resolvedId) (renderMainContent snap)
+          return! FalcoResponse.ofHtml html ctx
+        | None ->
+          let html = renderShell infra.Version "" (Elem.div [] [])
+          return! FalcoResponse.ofHtml html ctx
       with _ ->
         let html = renderShell infra.Version "" (Elem.div [] [])
         return! FalcoResponse.ofHtml html ctx
     })
     yield get "/dashboard/stream" (createStreamHandler q infra)
-    yield post "/dashboard/eval" (createEvalHandler a.EvalCode)
+    yield post "/dashboard/eval" (createEvalHandler q infra a.EvalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)
     yield post "/dashboard/completions" (createCompletionsHandler infra.GetCompletions)
     yield post "/dashboard/reset" (createResetHandler a.ResetSession)

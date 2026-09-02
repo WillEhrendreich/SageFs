@@ -2,8 +2,8 @@
 
 > *The best argument for a language is a tool so good that people ask "what's it written in?"*
 
-SageFs is a live F# development environment — a REPL, TUI, GUI, editor plugin ecosystem,
-and daemon architecture — built entirely in F#. This document explains why F# was the right
+SageFs is a live F# development environment with a REPL engine, web dashboard, editor integrations,
+MCP surface, and daemon architecture built primarily in F#. This document explains why F# was the right
 choice, using real code from the SageFs codebase as evidence.
 
 ---
@@ -57,7 +57,7 @@ let you.
 
 ## 3. Immutability by Default Eliminates Entire Bug Categories
 
-SageFs's Elm architecture processes messages through a pure update function:
+SageFs processes state transitions through pure update functions:
 
 ```fsharp
 let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
@@ -67,10 +67,7 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
   | ...
 ```
 
-The model is a record. Updates produce new records via `{ model with ... }`. There is no
-shared mutable state between the TUI renderer, the Raylib GUI, and the daemon. The same
-`Cell[,]` grid feeds both renderers — and because cells are structs with value semantics,
-there are no aliasing bugs.
+The model is a record. Updates produce new records via `{ model with ... }`, keeping daemon and session transitions explicit and testable instead of spreading shared mutable state across clients.
 
 **The CellGrid monoid** formalizes overlay composition with mathematical properties verified
 by FsCheck:
@@ -219,7 +216,7 @@ Because SageFs is written in F#, it can:
 - **Hot-reload F# source files** into a live FSI session (the language's REPL is first-class)
 - **Use FSharp.Compiler.Service** for real-time diagnostics, completions, and symbol analysis
 - **Generate Fable JavaScript** for the VS Code extension from the same F# source
-- **Share types** between the CLI, GUI, VS extension, and test project with zero serialization
+- **Share types** between the CLI, dashboard, editor integrations, and test project with minimal translation
 
 The tool and the language amplify each other. SageFs makes F# development better.
 F# makes SageFs possible.
@@ -233,7 +230,7 @@ F# makes SageFs possible.
 | Tests | 4,668+ |
 | Property tests | 50+ |
 | Lines of F# | ~40,000 |
-| Editor integrations | 4 (VS Code, Visual Studio, Neovim, TUI/GUI) |
+| Current client surfaces | VS Code, Visual Studio, Neovim, web dashboard, MCP |
 | Runtime overhead of UoM | 0 bytes |
 | Null reference exceptions | 0 (by design) |
 | Unhandled pattern matches | 0 (compiler-enforced) |

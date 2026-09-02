@@ -117,9 +117,9 @@ This is a **physical constraint of the CLR**, not a SageFs design choice. If Mic
 
 | Editor | Command |
 |:---|:---|
-| **TUI / GUI** | `Ctrl+W` toggles between modes |
 | **Neovim** | `:SageFsWorkflow live` or `:SageFsWorkflow repl` |
 | **VS Code** | Command Palette → `SageFs: Switch Workflow` |
+| **Web dashboard** | Use the session workflow controls |
 | **MCP tool** | `switch_workflow(target='live')` or `switch_workflow(target='repl')` |
 
 ### What happens when you switch
@@ -212,10 +212,7 @@ Save the file → Harmony patches the method → SSE pushes to the browser → y
 
 ### Scenario 3: "I started in REPL mode but now I want browser hot reload"
 
-Switch:
-- Press `Ctrl+W` (TUI/GUI)
-- Or `:SageFsWorkflow live` (Neovim)
-- Or Command Palette → `SageFs: Switch Workflow` (VS Code)
+Switch with `:SageFsWorkflow live` in Neovim, **SageFs: Switch Workflow** in VS Code, the dashboard workflow controls, or the corresponding MCP tool.
 
 Your REPL definitions are gone, but your `.fs` files reload automatically. The new Live session picks up right where your persisted code left off.
 
@@ -223,7 +220,7 @@ Your REPL definitions are gone, but your `.fs` files reload automatically. The n
 
 You're in **Live mode** and tried to redefine a type in the REPL. You have two options:
 
-1. **Switch to REPL mode** if you need to reshape the type (`Ctrl+W` or `:SageFsWorkflow repl`)
+1. **Switch to REPL mode** if you need to reshape the type (for example, `:SageFsWorkflow repl` in Neovim)
 2. **Edit the `.fs` file instead** — in Live mode, file-level type changes trigger a full reload that handles the redefinition correctly. It's REPL-level redefinition that's blocked.
 
 SageFs already adds a hint to the FS0037 error message when you're in Live mode:
@@ -241,5 +238,5 @@ SageFs already adds a hint to the FS0037 error message when you're in Live mode:
 | **Coverage & diagnostics** | ✅ Full | ✅ Full |
 | **Best for** | Prototyping, exploration, scripts | Web apps, UI iteration |
 | **FSI flag** | (default) | `--multiemit-` |
-| **Switch to** | `:SageFsWorkflow repl` / `Ctrl+W` | `:SageFsWorkflow live` / `Ctrl+W` |
+| **Switch to** | Editor, dashboard, or MCP workflow command | Editor, dashboard, or MCP workflow command |
 | **Switch cost** | New session, REPL state lost | New session, REPL state lost |

@@ -659,6 +659,15 @@ let jupyterKernelTests =
            | other -> failtest (sprintf "Expected Daemon but got %A" other)
       }
 
+      test "WHY — tui and gui commands are explicit deprecations because they must not silently enter daemon mode" {
+        Program.CliCommand.parse [| "tui" |]
+        |> Expect.equal "tui should be recognized as deprecated" (Program.DeprecatedClient "tui")
+        Program.CliCommand.parse [| "gui" |]
+        |> Expect.equal "gui should be recognized as deprecated" (Program.DeprecatedClient "gui")
+        Program.deprecatedClientMessage "tui"
+        |> Expect.stringContains "deprecation should direct users to the maintained UI" "/dashboard"
+      }
+
       test "daemon launch decision starts new daemon when only default port is occupied" {
         let defaultDaemon = {
           Pid = 42

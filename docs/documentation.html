@@ -311,7 +311,7 @@
     <h4>Architecture</h4>
     <a href="#daemon">Daemon &amp; Workers</a>
     <a href="#elm">Elm Architecture</a>
-    <a href="#rendering">Rendering Pipeline</a>
+    <a href="#dashboard">Dashboard</a>
     <a href="#live-testing">Live Testing</a>
     <a href="#hot-reload">Hot Reload</a>
   </div>
@@ -320,8 +320,7 @@
     <a href="#neovim">Neovim</a>
     <a href="#vscode">VS Code</a>
     <a href="#vs">Visual Studio</a>
-    <a href="#tui">Built-in TUI</a>
-    <a href="#gui">Raylib GUI</a>
+    <a href="#game-demos">Game Project Demos</a>
   </div>
 </aside>
 
@@ -351,7 +350,7 @@
 
 <h2 id="quickstart">Quick Start</h2>
 
-<p>Start the daemon — it runs bare and waits for your editor to connect:</p>
+<p>Start the daemon — it runs bare and waits for the dashboard, an editor, or an MCP client to connect:</p>
 
 <pre><code># Start the daemon (bare — no project flag needed)
 SageFs
@@ -368,7 +367,7 @@ SageFs
 
 <h2 id="modes">Startup Modes</h2>
 
-<p>SageFs operates in several modes depending on how you invoke it:</p>
+<p>SageFs operates as a daemon with browser, editor, CLI, and MCP clients:</p>
 
 <table>
   <thead><tr><th>Mode</th><th>What It Does</th></tr></thead>
@@ -378,16 +377,12 @@ SageFs
       <td><strong>Default (bare daemon).</strong> Starts the daemon with no project loaded. Clients (editors, AI agents) create sessions and the daemon auto-discovers projects from their working directory.</td>
     </tr>
     <tr>
-      <td><code>SageFs tui</code></td>
-      <td>Connect to an <em>already running</em> daemon with the terminal UI. Fails if no daemon is found.</td>
-    </tr>
-    <tr>
-      <td><code>SageFs gui</code></td>
-      <td>Connect to a running daemon with the <strong>Raylib GPU GUI</strong> — same features, rendered with GPU quads instead of ANSI.</td>
+      <td><code>http://localhost:37750/dashboard</code></td>
+      <td>Open the live dashboard for sessions, evaluation, output, tests, diagnostics, and daemon health.</td>
     </tr>
     <tr>
       <td><code>SageFs connect</code></td>
-      <td>Attach a plain REPL to a running daemon. No TUI chrome — just stdin/stdout eval.</td>
+      <td>Attach a plain stdin/stdout REPL to a running daemon.</td>
     </tr>
     <tr>
       <td><code>SageFs status</code></td>
@@ -409,8 +404,6 @@ SageFs
     <tr><td><code>daemon</code></td><td>Start as background daemon (default when no subcommand given)</td></tr>
     <tr><td><code>worker</code></td><td>Internal: launched by the daemon to run an isolated FSI worker process</td></tr>
     <tr><td><code>connect</code></td><td>Plain REPL connection to a running daemon</td></tr>
-    <tr><td><code>tui</code></td><td>Terminal UI client — full interactive TUI connected to the daemon</td></tr>
-    <tr><td><code>gui</code></td><td>Raylib GPU GUI client — same features, GPU-rendered window</td></tr>
     <tr><td><code>stop</code></td><td>Stop the running daemon</td></tr>
     <tr><td><code>status</code></td><td>Show daemon info and exit</td></tr>
   </tbody>
@@ -698,24 +691,22 @@ SageFs
   <li><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/AppState.fs"><code>AppState.fs</code></a> — the single immutable model record</li>
 </ul>
 
-<h2 id="rendering">Rendering Pipeline</h2>
+<h2 id="dashboard">Dashboard</h2>
 
 <p>
-  SageFs has two UI frontends — a <strong>terminal TUI</strong> and a <strong>Raylib GPU GUI</strong> —
-  that share the exact same rendering pipeline:
+  The built-in dashboard is the primary visual client. Start <code>SageFs</code>, then open
+  <code>http://localhost:37750/dashboard</code>. It connects to the daemon's live state and provides:
 </p>
 
-<pre><code>ElmModel → render → RenderRegion list → Screen.draw → Cell[,] → Backend.emit
-                                                                   ├── AnsiEmitter (TUI)
-                                                                   └── RaylibEmitter (GUI)</code></pre>
+<ul>
+  <li><strong>Session management</strong> — discover projects and create, switch, reset, stop, or resume sessions</li>
+  <li><strong>Interactive evaluation</strong> — send F# code and inspect structured output in the browser</li>
+  <li><strong>Live feedback</strong> — follow test status, diagnostics, completions, and daemon health over SSE</li>
+  <li><strong>Shared state</strong> — observe the same sessions used by VS Code, Neovim, Visual Studio, and MCP agents</li>
+</ul>
 
-<p>
-  The shared <code>Cell[,]</code> grid is a 2D array of characters with colors and attributes.
-  All layout, drawing, and pane composition happens at this abstract level
-  (<a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/TerminalUI.fs"><code>TerminalUI.fs</code></a>).
-  The TUI backend emits ANSI escape codes; the Raylib backend draws GPU quads.
-  Same logic, pixel-perfect parity.
-</p>
+<p>Source: <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/Dashboard.fs"><code>SageFs/Dashboard.fs</code></a>,
+  <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/DashboardFragments.fs"><code>SageFs/DashboardFragments.fs</code></a></p>
 
 <h2 id="live-testing">Live Testing</h2>
 
@@ -796,23 +787,18 @@ SageFs
   (<a href="https://github.com/WillEhrendreich/SageFs/tree/master/sagefs-vs/SageFs.VisualStudio.Core"><code>SageFs.VisualStudio.Core</code></a>).
 </p>
 
-<h2 id="tui">Built-in TUI</h2>
+<h2 id="game-demos">Raylib Game Project Demos</h2>
 
 <p>
-  The default SageFs experience. A full-screen terminal interface with multiple panes:
-  editor, output, sessions, tests, diagnostics, and a status bar showing frame time.
-  Built on the shared <code>Cell[,]</code> rendering pipeline. Source:
-  <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/TuiClient.fs"><code>SageFs/TuiClient.fs</code></a>.
+  The <a href="https://github.com/WillEhrendreich/SageFs/tree/master/samples/demos/SageFs.Samples.RaylibGame"><code>RaylibGame</code></a>
+  and <a href="https://github.com/WillEhrendreich/SageFs/tree/master/samples/demos/SageFs.Samples.RaylibHello"><code>RaylibHello</code></a>
+  samples demonstrate that SageFs can load and develop interactive F# game and graphics projects.
 </p>
 
-<h2 id="gui">Raylib GPU GUI</h2>
-
-<p>
-  Same features as the TUI but rendered in a GPU-accelerated window using
-  <a href="https://www.raylib.com/">Raylib</a>. Provides crisp font rendering and smooth
-  scrolling. Lives in <a href="https://github.com/WillEhrendreich/SageFs/tree/master/SageFs.Gui"><code>SageFs.Gui/</code></a>.
-  Launch with <code>SageFs gui</code> or <code>SageFs --both</code> to run TUI and GUI simultaneously.
-</p>
+<div class="callout orange">
+  <strong>Distinction:</strong> these are user-project demos and proof of game-project support.
+  They are not the deprecated <code>SageFs.Gui</code> Raylib frontend.
+</div>
 
 </main>
 </div>

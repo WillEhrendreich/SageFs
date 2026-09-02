@@ -1,16 +1,18 @@
 # Session Isolation Architecture
 
+> **Status note:** This document records the design that introduced per-client session routing. Current product clients are editor integrations, dashboard tabs, and MCP connections. The built-in TUI was part of the original implementation context but is now deprecated.
+
 ## Problem
 
-A single `activeSessionId: string ref` in `DaemonMode.fs` is shared across ALL clients — MCP, dashboard browsers, and TUI. When any client switches sessions, ALL clients are forced to switch:
+A single `activeSessionId: string ref` in `DaemonMode.fs` was shared across all clients. When one client switched sessions, other clients could be forced to switch:
 
 ```
-MCP (Harmony agent) calls switch_session("harmony-session")
+MCP client calls switch_session("agent-session")
   → sets activeSessionId.Value
   → dispatches SessionSwitched to Elm
   → Elm pushes new state via SSE
-  → ALL dashboard browsers switch to Harmony session
-  → User was looking at SageFs session in browser — forced away
+  → ALL dashboard browsers switch to the agent session
+  → A user viewing another session in the browser is forced away
 ```
 
 ### Secondary: Dashboard Connectivity
@@ -27,7 +29,7 @@ During startup, sessions resume sequentially but the dashboard only gets the ful
 
 **Each client connection maintains its own "active session" independently.** No client's session switch affects another client.
 
-### Three Independent Session Scopes
+### Independent Session Scopes
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -38,9 +40,9 @@ During startup, sessions resume sequentially but the dashboard only gets the ful
 │   default to?" — never for routing)                 │
 │                                                     │
 │  ┌─────────────┐  ┌──────────────┐  ┌───────────┐  │
-│  │ MCP Conn 1  │  │ Dashboard    │  │ TUI       │  │
+│  │ MCP Conn 1  │  │ Dashboard    │  │ Editor    │  │
 │  │ activeId: A │  │ Browser 1    │  │ activeId  │  │
-│  │             │  │ activeId: B  │  │ (Elm own) │  │
+│  │             │  │ activeId: B  │  │ C         │  │
 │  ├─────────────┤  ├──────────────┤  └───────────┘  │
 │  │ MCP Conn 2  │  │ Dashboard    │                  │
 │  │ activeId: B │  │ Browser 2    │                  │
@@ -126,9 +128,9 @@ let createEvalHandler evalCodeForSession : HttpHandler =
   }
 ```
 
-### TUI: Already Isolated
+### Editor Integrations
 
-The TUI client runs its own Elm loop with `Sessions.ActiveSessionId` in the model. It fetches session lists via HTTP and manages its own selection. No changes needed.
+Each supported editor integration keeps its selected session in client state and sends that session identity with commands. Switching a session in one editor must not change another editor, dashboard tab, or MCP connection.
 
 ## Dashboard Connectivity Banner
 

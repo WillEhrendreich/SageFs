@@ -829,7 +829,7 @@
   <div class="logo">SageFs</div>
   <a href="#get-started">Get Started</a>
   <a href="#journey">The Journey</a>
-  <a href="#editors">Your Editor</a>
+  <a href="#editors">Clients</a>
   <a href="#engine">The Engine</a>
   <a href="#protocol">One Daemon</a>
   <a href="#ai">AI Integration</a>
@@ -844,7 +844,7 @@
   <p>
     SageFs is a live development environment that eliminates the edit‑build‑run cycle.
     Tests run as you type — no save needed. Eval code on demand with <code>Alt+Enter</code>.
-    Results stream to every editor you use, from a single shared daemon.
+    Results stream to the dashboard, editor integrations, and MCP clients from a single shared daemon.
   </p>
   <div class="cmd"><span>$</span> sagefs</div>
 </div>
@@ -928,7 +928,7 @@
     <div class="flow-step" data-color="cyan">
       <span class="step-num">05 — Results everywhere</span>
       <h3>All editors update</h3>
-      <p>Via Server-Sent Events (SSE), every connected client — VS Code, Neovim, Visual Studio, the GPU GUI, AI agents — sees the results simultaneously. No polling. No refresh.</p>
+      <p>Via Server-Sent Events (SSE), every connected client — the dashboard, VS Code, Neovim, Visual Studio, and MCP agents — sees the results simultaneously. No polling. No refresh.</p>
       <span class="time">~500 ms total</span>
     </div>
   </div>
@@ -937,9 +937,9 @@
 <!-- ─── YOUR EDITOR ─── -->
 <section id="editors" class="reveal">
   <div class="section-label">Work where you want</div>
-  <div class="section-title">Five editors, one live session</div>
+  <div class="section-title">Dashboard and editors, one live session</div>
   <div class="section-desc">
-    Every editor connects to the same running daemon. Switch between them
+    The dashboard and every editor connect to the same running daemon. Switch between them
     freely — your session, your test results, your eval history all stay in sync.
   </div>
 
@@ -983,35 +983,35 @@
 
     <div class="editor-card" data-color="blue">
       <span class="card-icon">⌨️</span>
-      <h3>Terminal (TUI)</h3>
-      <span class="card-tech">F# · ANSI rendering · built-in</span>
+      <h3>Web Dashboard</h3>
+      <span class="card-tech">Browser · Datastar · live SSE</span>
       <p>
-        A terminal interface with panes for code input, eval output, session management,
-        and live test results. Completion menus, 256-color themes.
-        Works over SSH. Zero dependencies.
+        The built-in browser workspace for session creation, code evaluation, output,
+        diagnostics, live tests, and daemon health. Open it at
+        <code>http://localhost:37750/dashboard</code> after starting SageFs.
       </p>
       <ul class="card-features">
         <li>Alt+Enter eval</li>
-        <li>split panes</li>
-        <li>session picker</li>
-        <li>completions</li>
+        <li>session management</li>
+        <li>live test status</li>
+        <li>diagnostics</li>
       </ul>
     </div>
 
     <div class="editor-card" data-color="purple">
       <span class="card-icon">🖥️</span>
-      <h3>GPU Window (Raylib)</h3>
-      <span class="card-tech">F# · Raylib-cs · OpenGL</span>
+      <h3>MCP Clients</h3>
+      <span class="card-tech">Model Context Protocol · agent tools</span>
       <p>
-        A GPU-accelerated rendering of the same UI. Crisp text at any resolution,
-        smooth scrolling, and sub-millisecond frame times. Shares the same
-        layout engine as the terminal — gutter features are still catching up.
+        Give coding agents direct access to the live FSI session. They can evaluate and
+        type-check snippets, inspect session state, discover projects, and run targeted tests
+        against the same daemon used by the dashboard and editor integrations.
       </p>
       <ul class="card-features">
-        <li>GPU-rendered text</li>
-        <li>mouse support</li>
-        <li>any resolution</li>
-        <li>same keybindings</li>
+        <li>live compiler</li>
+        <li>structured results</li>
+        <li>test tools</li>
+        <li>session control</li>
       </ul>
     </div>
 
@@ -1042,13 +1042,13 @@
   <div class="section-title">One daemon. Every client. Always in sync.</div>
   <div class="section-desc">
     SageFs runs a single background daemon that owns all sessions, workers, and state.
-    Every editor — and every AI agent — connects via the same protocol.
+    The dashboard, every editor, and every AI agent connect through the same daemon contracts.
     Crash-proof supervision means it auto-restarts on failure.
   </div>
 
   <div class="protocol-diagram">
 
-    <div class="proto-row-label">Editors — where you write code</div>
+    <div class="proto-row-label">Clients — where people and agents work</div>
     <div class="proto-row">
       <div class="proto-card editor-cyan">
         <div class="proto-name">Neovim</div>
@@ -1059,16 +1059,12 @@
         <div class="proto-detail">Inline annotations, sidebar panels</div>
       </div>
       <div class="proto-card editor-blue">
-        <div class="proto-name">Terminal TUI</div>
-        <div class="proto-detail">Built-in editor, split panes</div>
+        <div class="proto-name">Dashboard</div>
+        <div class="proto-detail">Browser workspace, sessions, tests, diagnostics</div>
       </div>
       <div class="proto-card editor-orange">
         <div class="proto-name">Visual Studio</div>
         <div class="proto-detail">Tool windows, daemon auto-start</div>
-      </div>
-      <div class="proto-card editor-pink">
-        <div class="proto-name">Raylib GUI</div>
-        <div class="proto-detail">GPU-rendered, same layout engine</div>
       </div>
       <div class="proto-card ai-client">
         <div class="proto-name">AI Agents</div>
@@ -1154,8 +1150,8 @@
       <div class="engine-why">"What methods does this type have? What namespace is that in?"</div>
       <div class="engine-how">
         Type-aware completions powered by the F# Compiler Services, with fuzzy matching.
-        Available everywhere — the TUI and GPU GUI have a built-in completion popup,
-        editor plugins get them via SSE, and AI agents access them through the MCP
+        Available everywhere — the dashboard and editor plugins receive them from the daemon,
+        and AI agents access them through the MCP
         <code>get_completions</code> tool. Explore any loaded .NET API interactively.
         Diagnostics (type errors, warnings) stream inline as you type.
       </div>
@@ -1189,14 +1185,14 @@
 
     <div class="engine-card">
       <div class="engine-icon pink">🎨</div>
-      <h3>Rendering Pipeline</h3>
-      <div class="engine-why">"How does the same UI work in a terminal AND a GPU window?"</div>
+      <h3>Live Dashboard</h3>
+      <div class="engine-why">"How do I see every session, test, and diagnostic in one place?"</div>
       <div class="engine-how">
-        All UI renders to an abstract <code>Cell[,]</code> grid — a 2D array of characters with colors.
-        The TUI backend emits ANSI escape codes. The Raylib backend draws GPU quads.
-        Same layout engine, same input handling, pixel-perfect parity.
+        The daemon serves a browser dashboard and pushes state changes over SSE.
+        Create and switch sessions, evaluate F#, inspect output, and track live tests and
+        diagnostics without a separate desktop frontend.
       </div>
-      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/RenderPipeline.fs" target="_blank"><code>RenderPipeline.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/CellGrid.fs" target="_blank"><code>CellGrid.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Draw.fs" target="_blank"><code>Draw.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Screen.fs" target="_blank"><code>Screen.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/AnsiEmitter.fs" target="_blank"><code>AnsiEmitter.fs</code></a></div>
+      <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/Dashboard.fs" target="_blank"><code>Dashboard.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/DashboardFragments.fs" target="_blank"><code>DashboardFragments.fs</code></a> <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/DashboardTypes.fs" target="_blank"><code>DashboardTypes.fs</code></a></div>
     </div>
 
     <div class="engine-card">
@@ -1238,6 +1234,14 @@
       <div class="engine-files"><a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Instrumentation.fs" target="_blank"><code>Instrumentation.fs</code></a></div>
     </div>
 
+  </div>
+
+  <div class="section-desc" style="margin-top:32px;margin-bottom:0;">
+    <strong style="color:var(--text-bright);">Game-project proof:</strong>
+    <a href="https://github.com/WillEhrendreich/SageFs/tree/master/samples/demos/SageFs.Samples.RaylibGame" target="_blank">RaylibGame</a>
+    and <a href="https://github.com/WillEhrendreich/SageFs/tree/master/samples/demos/SageFs.Samples.RaylibHello" target="_blank">RaylibHello</a>
+    are application demos showing that SageFs supports live F# game projects. They are user projects,
+    not the deprecated <code>SageFs.Gui</code> frontend.
   </div>
 </section>
 
@@ -1301,8 +1305,8 @@
   <div class="section-label">The complete picture</div>
   <div class="section-title">Every module, every layer</div>
   <div class="section-desc">
-    SageFs.Core is the shared engine (94 modules). The CLI and GUI projects are thin shells
-    that consume Core's rendering pipeline. Here's the full compilation-order dependency map.
+    SageFs.Core is the shared engine (94 modules). The daemon serves the dashboard, editor
+    integrations, and MCP clients. Here's the full compilation-order dependency map.
   </div>
 
   <div class="arch-map">
@@ -1310,7 +1314,7 @@
     <div class="arch-layer">
       <div class="arch-layer-label">🏗️ Foundation — bootstrapping, configuration, utilities</div>
       <div class="arch-modules">
-        <a class="arch-mod" data-tip="CLI argument parsing — project paths, flags like --no-watch, --bare, --tui, --gui" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Args.fs">Args</a>
+        <a class="arch-mod" data-tip="CLI argument parsing — project paths, daemon settings, and flags like --no-watch and --bare" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Args.fs">Args</a>
         <a class="arch-mod" data-tip="Shared helper functions used across the entire codebase" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Utils.fs">Utils</a>
         <a class="arch-mod" data-tip="Reads .fsproj files to discover source files, references, and NuGet dependencies" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ProjectLoading.fs">ProjectLoading</a>
         <a class="arch-mod" data-tip="Copies assemblies to temp dirs so the originals aren't locked — enables hot reload without file locks" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ShadowCopy.fs">ShadowCopy</a>
@@ -1372,11 +1376,11 @@
       <div class="arch-modules">
         <a class="arch-mod" data-tip="Text editor state machine — cursor, selection, vi modes, undo/redo, completion popup, keybindings" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Editor.fs">Editor</a>
         <a class="arch-mod" data-tip="Defines render regions, editor actions, and the mapping from keystrokes to actions" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/RenderPipeline.fs">RenderPipeline</a>
-        <a class="arch-mod" data-tip="The abstract Cell[,] grid that both TUI and Raylib render from — characters + colors + attributes" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/CellGrid.fs">CellGrid</a>
+        <a class="arch-mod" data-tip="A legacy abstract Cell[,] grid of characters, colors, and attributes" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/CellGrid.fs">CellGrid</a>
         <a class="arch-mod" data-tip="Primitive drawing operations: text, boxes, borders, fills — writes to the CellGrid" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Draw.fs">Draw</a>
         <a class="arch-mod" data-tip="Composes all panes into the final frame — output, editor, sessions, tests, diagnostics, status bar" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Screen.fs">Screen</a>
-        <a class="arch-mod" data-tip="All UI types: Cell, Rect, Layout, PaneRenderer — the shared vocabulary for both TUI and Raylib" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/TerminalUI.fs">TerminalUI</a>
-        <a class="arch-mod" data-tip="Color schemes and styling — abstract color IDs mapped to 256-color ANSI or Raylib RGB" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Theme.fs">Theme</a>
+        <a class="arch-mod" data-tip="Legacy UI types: Cell, Rect, Layout, and PaneRenderer" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/TerminalUI.fs">TerminalUI</a>
+        <a class="arch-mod" data-tip="Color schemes and styling shared by rendering components" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Theme.fs">Theme</a>
         <a class="arch-mod" data-tip="Pre-built color themes — dark palettes, accent colors, syntax highlighting presets" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ThemePresets.fs">ThemePresets</a>
         <a class="arch-mod" data-tip="F# syntax highlighting — tokenizes code for colored display in the editor" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/SyntaxHighlight.fs">SyntaxHighlight</a>
         <a class="arch-mod" data-tip="Converts the Cell[,] grid into ANSI escape codes for terminal output" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/AnsiEmitter.fs">AnsiEmitter</a>
@@ -1403,7 +1407,7 @@
         <a class="arch-mod" data-tip="Bridges gaps between SageFs's FSI and standard F# Interactive — handles quirks and edge cases" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/FsiCompatibility.fs">FsiCompatibility</a>
         <a class="arch-mod" data-tip="Custom computation expressions for monadic workflows in the REPL" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/ComputationExpression.fs">ComputationExpression</a>
         <a class="arch-mod" data-tip="Processes #r, #load, #time and other FSI directives with SageFs-specific enhancements" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/Directives.fs">Directives</a>
-        <a class="arch-mod" data-tip="Runs FSI evaluations without blocking the UI thread — keeps the TUI responsive during long evals" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/NonBlockingRun.fs">NonBlockingRun</a>
+        <a class="arch-mod" data-tip="Runs FSI evaluations without blocking client updates during long evaluations" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Middleware/NonBlockingRun.fs">NonBlockingRun</a>
       </div>
     </div>
 
@@ -1415,7 +1419,7 @@
         <a class="arch-mod" data-tip="Creates and wires up all actor processes — sessions, workers, standby pool, watchdog, file watcher" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/ActorCreation.fs">ActorCreation</a>
         <a class="arch-mod" data-tip="Model Context Protocol server — exposes eval, check, completions, tests, and exploration to AI agents" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Mcp.fs">Mcp</a>
         <a class="arch-mod" data-tip="Runs the background daemon: HTTP server, SSE broadcasting, MCP endpoint, session orchestration" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/DaemonMode.fs">DaemonMode</a>
-        <a class="arch-mod" data-tip="Terminal UI client that connects to a running daemon and renders the interactive TUI" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/TuiClient.fs">TuiClient</a>
+        <a class="arch-mod" data-tip="Serves the live browser dashboard for sessions, evaluation, tests, and diagnostics" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/Dashboard.fs">Dashboard</a>
         <a class="arch-mod" data-tip="Entry point — parses args, detects existing daemon, launches in the right mode" href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs/Program.fs">Program</a>
       </div>
     </div>
@@ -1440,7 +1444,7 @@
     </a>
     <a class="stat" href="#editors" style="text-decoration:none;">
       <div class="stat-num">5</div>
-      <div class="stat-label">Editor integrations</div>
+      <div class="stat-label">Primary clients</div>
     </a>
     <a class="stat" href="https://github.com/WillEhrendreich/SageFs/commits/master" target="_blank">
       <div class="stat-num">19</div>

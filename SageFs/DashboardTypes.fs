@@ -56,7 +56,6 @@ module DomIds =
 /// Datastar signal names — shared between Ds.signal init and Ds.bind/Ds.show refs.
 [<RequireQualifiedAccess>]
 module Signals =
-  let [<Literal>] SessionId = "sessionId"
   let [<Literal>] ViewingSessionId = "viewingSessionId"
   let [<Literal>] Code = "code"
   let [<Literal>] HelpVisible = "helpVisible"
@@ -567,7 +566,7 @@ type SystemAlarmEntry = {
 ///
 /// IMPORTANT: there is intentionally NO `GetActiveSessionId` and NO
 /// global `GetElmRegions` on this type. "Active session" is a per-client
-/// concept (which session is THIS browser tab / MCP connection / TUI
+/// concept (which session is THIS browser tab or MCP connection
 /// currently viewing), and the output region is per-session in the
 /// underlying `SessionOutputStore`. Dashboard code MUST:
 ///   - read the viewing session from the per-connection `viewingSessionId`
@@ -575,10 +574,9 @@ type SystemAlarmEntry = {
 ///     JSON state streams), never from a daemon global
 ///   - call `GetElmRegionsForSession sessionId` with THAT session id,
 ///     never a global accessor
-/// The Elm runtime's `ActiveSessionId` is the TUI's own state and is
-/// not exposed to the dashboard layer. If you find yourself wanting to
-/// add "just a quick global" to this type, don't — route it through
-/// the per-client path or add a dedicated TUI-only query type.
+/// The Elm runtime's `ActiveSessionId` is not exposed to the dashboard
+/// layer. If you find yourself wanting to add "just a quick global" to
+/// this type, don't — route it through the per-client path.
 type DashboardQueries = {
   GetSessionState: WorkerProtocol.SessionId -> SessionState
   GetStatusMsg: WorkerProtocol.SessionId -> string option
@@ -588,8 +586,7 @@ type DashboardQueries = {
   /// Per-session render regions. The dashboard MUST call this with the
   /// per-client viewing session id. The output region's content is
   /// sourced from the requested session's `OutputRingBuffer`, not from
-  /// the Elm runtime's global active session — so the TUI switching
-  /// sessions doesn't change what a dashboard tab is displaying.
+  /// the Elm runtime's global active session.
   GetElmRegionsForSession: WorkerProtocol.SessionId -> RenderRegion list option
   GetPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>
   GetAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>

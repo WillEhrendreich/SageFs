@@ -51,9 +51,9 @@ let featureParityTests = testList "FeatureParity" [
       |> Expect.isTrue (sprintf "feature '%s' should have a description" f.name))
   }
 
-  test "Editor.all contains exactly 6 editors" {
+  test "WHY — Editor.all contains exactly 4 maintained clients because deprecated renderers must not shape current parity work" {
     Editor.all.Length
-    |> Expect.equal "should have 6 editors" 6
+    |> Expect.equal "should have 4 maintained clients" 4
   }
 
   test "Editor.label returns non-empty for all editors" {

@@ -161,6 +161,7 @@ type OutputRingBuffer(capacity: int) =
 type SessionOutputStore(bufferCapacity: int) =
   let buffers = System.Collections.Generic.Dictionary<string, OutputRingBuffer>()
   let staging = OutputRingBuffer(bufferCapacity)
+  let mutable version = 0L
 
   new() = SessionOutputStore(500)
 
@@ -187,6 +188,7 @@ type SessionOutputStore(bufferCapacity: int) =
     | false ->
       let buf = this.GetOrCreate(line.SessionId)
       buf.Add(line)
+    version <- version + 1L
 
   /// Add multiple lines, routing each to the correct session buffer.
   member this.AddRange(lines: OutputLine seq) =
@@ -207,15 +209,22 @@ type SessionOutputStore(bufferCapacity: int) =
   /// Clear a specific session's buffer.
   member _.Clear(sessionId: string) =
     match buffers.TryGetValue(sessionId) with
-    | true, buf -> buf.Clear()
+    | true, buf ->
+      buf.Clear()
+      version <- version + 1L
     | false, _ -> ()
 
   /// Clear all session buffers and staging.
   member _.ClearAll() =
     for kvp in buffers do kvp.Value.Clear()
     staging.Clear()
+    version <- version + 1L
 
   member _.SessionCount = buffers.Count
+
+  /// Monotonic version for the entire output store. Any session mutation
+  /// increments it so browser streams pinned to non-global sessions wake up.
+  member _.Version = version
 
   /// True if the active session's buffer is empty.
   member this.IsEmpty(active: ActiveSession) = this.GetActiveBuffer(active).IsEmpty

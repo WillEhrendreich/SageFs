@@ -58,19 +58,16 @@ Now `sagefs` on your PATH is your locally-built version.
 # Point SageFs at any F# project
 sagefs
 
-# Or use the TUI (SageTUI Elm Architecture), GUI, or dashboard
-sagefs tui                # New SageTUI-based terminal UI (default)
-sagefs tui --legacy-tui   # Classic imperative CellGrid renderer
-sagefs gui                # GPU-rendered Raylib window
-# Dashboard auto-opens at http://localhost:37750/dashboard
+# Use an editor integration, MCP client, or the dashboard
+# Dashboard: http://localhost:37750/dashboard
 ```
 
 ## Project Structure
 
 ```
-SageFs.Core/       — Shared types, rendering abstraction, KeyMap, Theme (start here!)
-SageFs/            — CLI tool, daemon, SageTUI client (SageTuiClient.fs) + legacy TUI (TuiClient.fs)
-SageFs.Gui/        — Raylib GPU-rendered GUI client
+SageFs.Core/       — Shared engine, session, testing, persistence, and protocol logic (start here!)
+SageFs/            — CLI tool, daemon, MCP server, dashboard, plus retained deprecated TUI source
+SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy source
 SageFs.Tests/      — Expecto test project (6200+ tests)
 sagefs-vscode/     — VS Code extension (F# via Fable → JavaScript)
 sagefs-vs/         — Visual Studio extension (C# shim + F# core)
@@ -79,10 +76,12 @@ docs/              — GitHub Pages documentation site
 
 The Neovim plugin lives in a separate repo: [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim).
 
+The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated. Do not extend them as current product surfaces. Raylib application and game demos remain valuable examples of SageFs game-project support and should be preserved.
+
 **Good starting points for reading code:**
-- `SageFs/SageTuiClient.fs` — the SageTUI Elm Architecture TUI client (Model/Msg/init/update/view/subscribe)
-- `SageFs.Core/RenderPipeline.fs` — PaneId, EditorAction, KeyCombo, UiAction, RenderRegion types
-- `SageFs.Core/TerminalUI.fs` — `Cell`, `CellGrid`, `Draw`, `Theme` types (used by Raylib GUI + legacy TUI)
+- `SageFs/DaemonMode.fs` — daemon composition and client routing
+- `SageFs/Dashboard.fs` — current browser dashboard
+- `SageFs/McpServer.fs` and `SageFs/McpTools.fs` — MCP transport and tools
 - `SageFs.Tests/` — the test project shows how every module is exercised
 
 ## Debugging SageFs
@@ -213,7 +212,7 @@ The full coding standards are in [AGENTS.md](AGENTS.md). Here are the essentials
 ### The Non-Negotiables
 
 - **2 spaces for indentation** — not 4, not tabs. The entire codebase uses 2 spaces.
-- **Conventional Commits** — `feat(core): add cell merging`, `fix(tui): handle resize crash`, `docs: update contributing guide`
+- **Conventional Commits** — `feat(core): add session routing`, `fix(dashboard): handle reconnect`, `docs: update contributing guide`
 - **No `Version` in PackageReference** — all NuGet versions live in `Directory.Packages.props`
 
 ### F# Style
@@ -278,7 +277,7 @@ list |> Expect.hasLength "should have 3 items" 3
 - Does it follow F# idioms? (pattern matching, immutability, composition)
 - Does it have tests?
 - Does it use 2-space indentation?
-- Does it affect multiple editor plugins? (VS Code, Neovim, Visual Studio, TUI, GUI)
+- Does it affect multiple current clients? (VS Code, Neovim, Visual Studio, web dashboard, MCP)
 - Are commit messages conventional?
 
 ## Good First Contributions
@@ -310,19 +309,19 @@ SageFs is **daemon-first** — one long-running server, many clients:
                 │  │  MCP     │  │  ← AI + editor communication
                 │  │ Server   │  │
                 │  └─────────┘  │
-                └──┬──┬──┬──┬───┘
-                   │  │  │  │
-     ┌──────┐  ┌──┴┐ ┌┴──┐ ┌┴──────┐  ┌────────┐
-     │VS Code│  │TUI│ │GUI│ │ Web   │  │AI Agent│
-     └──────┘  └───┘ └───┘ │ Dash  │  │ (MCP)  │
-     ┌──────┐  ┌───────┐   └───────┘  └────────┘
-     │Neovim│  │ REPL  │
-     └──────┘  └───────┘
+                 └──┬──┬──┬──┬───┘
+                    │  │  │  │
+     ┌───────┐ ┌────┴──┐ ┌┴──────┐  ┌──────────┐
+     │VS Code│ │Neovim │ │ Web   │  │MCP Client│
+     └───────┘ └───────┘ │ Dash  │  └──────────┘
+     ┌─────────────┐      └───────┘
+     │Visual Studio│
+     └─────────────┘
 ```
 
 Key architectural concepts:
-- **Dual-renderer** — TUI and Raylib GUI share the same `Cell[,]` grid abstraction
-- **Elm architecture** — unidirectional data flow: Model → View → Update
+- **Thin clients** — editors, dashboard tabs, and MCP clients use the same session-scoped daemon contracts
+- **Web dashboard** — browser operations and state updates use Falco.Datastar and SSE
 - **Worker isolation** — each FSI session runs in an isolated sub-process (Erlang-style)
 - **SSE for reads** — all state changes push to clients via Server-Sent Events
 - **POST for commands** — write operations are POST-only, return acknowledgment only

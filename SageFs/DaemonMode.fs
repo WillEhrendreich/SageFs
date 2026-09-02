@@ -1311,6 +1311,29 @@ let createElmRuntime
       ct
   runtime
 
+/// Dispatch an Elm output event and wait until the target session's output
+/// buffer has committed. The daemon state event is raised by OnModelChanged
+/// after the model update, so this avoids returning a dashboard action while
+/// its long-lived SSE stream still sees the previous output snapshot.
+let dispatchOutputAndWait
+  (elmRuntime: ElmRuntime<SageFsModel, SageFsMsg, RenderRegion>)
+  (stateChanged: IEvent<DaemonStateChange>)
+  (sessionId: string)
+  (message: SageFsMsg)
+  = task {
+    let beforeVersion = elmRuntime.GetModel().RecentOutput.GetBuffer(sessionId).Version
+    let committed = System.Threading.Tasks.TaskCompletionSource<bool>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+    use _subscription =
+      stateChanged.Subscribe(fun _ ->
+        let afterVersion = elmRuntime.GetModel().RecentOutput.GetBuffer(sessionId).Version
+        match afterVersion > beforeVersion with
+        | true -> committed.TrySetResult(true) |> ignore
+        | false -> ())
+    elmRuntime.Dispatch message
+    let! completed = System.Threading.Tasks.Task.WhenAny(committed.Task, System.Threading.Tasks.Task.Delay(2000))
+    return obj.ReferenceEquals(completed, committed.Task) && committed.Task.Result
+  }
+
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
 /// Every session is a worker sub-process managed by SessionManager.
@@ -1827,8 +1850,13 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
       match result with
       | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, metadata)) ->
-        elmRuntime.Dispatch (SageFsMsg.Event (
-          SageFsEvent.EvalCompleted (sidStr, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
+        let! _ =
+          dispatchOutputAndWait
+            elmRuntime
+            stateChangedEvent.Publish
+            sidStr
+            (SageFsMsg.Event (
+              SageFsEvent.EvalCompleted (sidStr, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
         // Live binding watch window: feed the reflection-walked snapshot into the
         // adaptive store. Subscribers fire only on real change; the existing
         // EvalCompleted → ModelChanged morph re-renders the dashboard panel.
@@ -1846,7 +1874,12 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         return Ok msg
       | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
         let msg = SageFsError.describe err
-        elmRuntime.Dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed (sidStr, msg)))
+        let! _ =
+          dispatchOutputAndWait
+            elmRuntime
+            stateChangedEvent.Publish
+            sidStr
+            (SageFsMsg.Event (SageFsEvent.EvalFailed (sidStr, msg)))
         return Error msg
       | Ok other -> return Error (sprintf "Unexpected: %A" other)
       | Error e -> return Error (SageFsError.describe e)

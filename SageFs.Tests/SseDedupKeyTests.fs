@@ -122,5 +122,19 @@ let tests = testList "SseDedupKey" [
       let after = SseDedupKey.fromModel withOutput
       (before <> after)
       |> Expect.isTrue "must still detect output changes"
+
+    testCase "WHY — output in any session changes the key because browser tabs may view a non-global session" <| fun () ->
+      let before = SseDedupKey.fromModel baseModel
+      let withNonActiveOutput =
+        { baseModel with
+            RecentOutput =
+              SessionOutputStore.ofLines
+                [{ Kind = OutputKind.Info
+                   Text = "session B output"
+                   Timestamp = DateTime.UtcNow
+                   SessionId = "0a2b3c4e" }] }
+      let after = SseDedupKey.fromModel withNonActiveOutput
+      (before <> after)
+      |> Expect.isTrue "non-active session output must wake pinned browser streams"
   ]
 ]

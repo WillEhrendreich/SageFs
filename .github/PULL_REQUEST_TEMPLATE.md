@@ -20,4 +20,4 @@
 - [ ] Tests added/updated and passing
 - [ ] 2-space indentation throughout
 - [ ] Conventional commit messages (`feat:`, `fix:`, `refactor:`, etc.)
-- [ ] Considered impact on editor plugins (VS Code, Neovim, Visual Studio, TUI, GUI)
+- [ ] Considered impact on current clients (VS Code, Neovim, Visual Studio, web dashboard, MCP)

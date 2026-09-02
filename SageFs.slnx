@@ -8,7 +8,6 @@
   <Project Path="SageFs/SageFs.fsproj" />
   <Project Path="SageFs.Host/SageFs.Host.fsproj" />
   <Project Path="SageFs.Tests/SageFs.Tests.fsproj" />
-  <Project Path="SageFs.Gui/SageFs.Gui.fsproj" />
   <Folder Name="/Samples/">
     <Project Path="samples/from-koans/SageFs.Samples.Koans/SageFs.Samples.Koans.fsproj" />
     <Project Path="samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj" />

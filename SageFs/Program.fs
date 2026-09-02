@@ -60,36 +60,8 @@ let explicitDaemonInvocationUsesAlternatePort (args: string array) =
   let defaultPort = SageFsConfig.McpPortFromEnv
   requestedPort <> defaultPort
 
-
-/// CLI command parsed from arguments — replaces if/elif chain with pattern matching.
-type CliCommand =
-  | ShowHelp
-  | ShowVersion
-  | Stop
-  | Status
-  | Check
-  | Tui of remainingArgs: string array
-  | Gui of remainingArgs: string array
-  | Daemon of args: string array
-  | Jupyter of connectionFile: string
-
-module CliCommand =
-  let parse (args: string array) =
-    let hasFlag flag = args |> Array.exists (fun a -> a = flag)
-    match () with
-    | _ when hasFlag "--help" || hasFlag "-h" -> ShowHelp
-    | _ when hasFlag "--version" || hasFlag "-v" -> ShowVersion
-    | _ when args.Length > 0 && args.[0] = "stop" -> Stop
-    | _ when args.Length > 0 && args.[0] = "status" -> Status
-    | _ when args.Length > 0 && args.[0] = "check" -> Check
-    | _ when args.Length > 0 && args.[0] = "tui" -> Tui args
-    | _ when args.Length > 0 && args.[0] = "gui" -> Gui args
-    | _ when hasFlag "--jupyter" ->
-      let idx = args |> Array.findIndex (fun a -> a = "--jupyter")
-      match idx + 1 < args.Length with
-      | true -> Jupyter args.[idx + 1]
-      | false -> ShowHelp
-    | _ -> Daemon args
+let deprecatedClientMessage name =
+  sprintf "The '%s' client is deprecated and no longer shipped. Use http://localhost:37750/dashboard." name
 
 let waitForDaemonReady
   (sleep: int -> unit)
@@ -106,31 +78,35 @@ let waitForDaemonReady
   | Some daemon -> Ok daemon
   | None -> Error (SageFsError.DaemonStartFailed "Daemon started but did not become ready in 15s")
 
-/// Start daemon in background, wait for it to be ready.
-let startDaemonInBackground (daemonArgs: string array) =
-  let exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName
-  let psi = System.Diagnostics.ProcessStartInfo()
-  psi.FileName <- exePath
-  psi.UseShellExecute <- false
-  psi.CreateNoWindow <- true
-  psi.ArgumentList.Add("-d")
-  for arg in daemonArgs do
-    psi.ArgumentList.Add(arg)
-  let proc = System.Diagnostics.Process.Start(psi)
-  match isNull proc with
-  | true ->
-    Error (SageFsError.DaemonStartFailed "Failed to start daemon")
-  | false ->
-    let mcpPort = parseMcpPort daemonArgs
-    match waitForDaemonReady System.Threading.Thread.Sleep DaemonState.readOnPort mcpPort with
-    | Ok daemon -> Ok daemon
-    | Error err ->
-      try
-        if not proc.HasExited then
-          proc.Kill()
-          proc.WaitForExit(3000) |> ignore
-      with _ -> ()
-      Error err
+
+/// CLI command parsed from arguments — replaces if/elif chain with pattern matching.
+type CliCommand =
+  | ShowHelp
+  | ShowVersion
+  | Stop
+  | Status
+  | Check
+  | DeprecatedClient of name: string
+  | Daemon of args: string array
+  | Jupyter of connectionFile: string
+
+module CliCommand =
+  let parse (args: string array) =
+    let hasFlag flag = args |> Array.exists (fun a -> a = flag)
+    match () with
+    | _ when hasFlag "--help" || hasFlag "-h" -> ShowHelp
+    | _ when hasFlag "--version" || hasFlag "-v" -> ShowVersion
+    | _ when args.Length > 0 && args.[0] = "stop" -> Stop
+    | _ when args.Length > 0 && args.[0] = "status" -> Status
+    | _ when args.Length > 0 && args.[0] = "check" -> Check
+    | _ when args.Length > 0 && args.[0] = "tui" -> DeprecatedClient "tui"
+    | _ when args.Length > 0 && args.[0] = "gui" -> DeprecatedClient "gui"
+    | _ when hasFlag "--jupyter" ->
+      let idx = args |> Array.findIndex (fun a -> a = "--jupyter")
+      match idx + 1 < args.Length with
+      | true -> Jupyter args.[idx + 1]
+      | false -> ShowHelp
+    | _ -> Daemon args
 
 /// Run daemon mode (default behavior).
 let runDaemon (args: string array) =
@@ -183,9 +159,6 @@ let main args =
     printfn "Usage: SageFs [options]                Start daemon (default mode)"
     printfn "       SageFs check                    Check environment before first run"
     printfn "       SageFs --supervised [options]   Start with watchdog auto-restart"
-    printfn "       SageFs tui                      Terminal UI client for running daemon"
-    printfn "       SageFs tui --legacy-tui         Terminal UI (imperative fallback)"
-    printfn "       SageFs gui                      GPU-rendered Raylib GUI client"
     printfn "       SageFs --jupyter <conn.json>    Run as Jupyter kernel"
     printfn "       SageFs stop                     Stop running daemon"
     printfn "       SageFs status                   Show daemon info"
@@ -212,8 +185,8 @@ let main args =
     printfn "    File watcher    Auto-reload .fs/.fsx changes via #load"
     printfn "    Hot reload      Runtime function redefinition"
     printfn ""
-    printfn "  All frontends (terminal, browser, MCP, Neovim) are clients of the daemon."
-    printfn "  If a daemon is already running, `sagefs` (no subcommand) launches the TUI."
+    printfn "  The dashboard, MCP agents, and editor integrations are clients of the daemon."
+    printfn "  If a daemon is already running, `sagefs` reports its dashboard URL."
     printfn ""
     printfn "Quick Start:"
     printfn "  1. sagefs                            Start the bare daemon"
@@ -226,8 +199,6 @@ let main args =
     printfn "  SageFs                              Start the bare daemon"
     printfn "  SageFs --mcp-port 47700             Start daemon on custom port"
     printfn "  SageFs --supervised                 Start with auto-restart"
-    printfn "  SageFs tui                          Terminal UI (starts daemon if needed)"
-    printfn "  SageFs gui                          Raylib GUI (starts daemon if needed)"
     printfn "  SageFs --jupyter conn.json          Run as Jupyter kernel"
     printfn "  SageFs status                       Show daemon status"
     printfn "  SageFs check                        Check environment before first run"
@@ -302,48 +273,9 @@ let main args =
     | 0 -> 0
     | _ -> 1
 
-  | Tui tuiArgs ->
-    let useLegacy = tuiArgs |> Array.exists (fun a -> a = "--legacy-tui")
-    let mcpPort = parseMcpPort tuiArgs
-    let runTui (info: DaemonInfo) =
-      match useLegacy with
-      | true ->
-        TuiClient.run info
-        |> _.GetAwaiter() |> _.GetResult()
-      | false ->
-        SageTuiClient.run info
-    match DaemonState.readOnPort mcpPort with
-    | Some info -> runTui info
-    | None ->
-      printfn "No SageFs daemon running. Starting one..."
-      let daemonArgs =
-        tuiArgs.[1..]
-        |> Array.filter (fun a -> a <> "tui" && a <> "--legacy-tui")
-      match startDaemonInBackground daemonArgs with
-      | Ok info ->
-        runTui info
-      | Error err ->
-        printfn "Failed to start daemon: %A" err
-        1
-
-  | Gui guiArgs ->
-    let mcpPort = parseMcpPort guiArgs
-    let daemonArgs =
-      guiArgs.[1..]
-      |> Array.filter (fun a -> a <> "gui")
-    let launchGui () =
-      SageFs.Gui.RaylibMode.run ()
-      0
-    match DaemonState.readOnPort mcpPort with
-    | Some _ -> launchGui ()
-    | None ->
-      printfn "No SageFs daemon running. Starting one..."
-      match startDaemonInBackground daemonArgs with
-      | Ok _ ->
-        launchGui ()
-      | Error err ->
-        printfn "Failed to start daemon: %A" err
-        1
+  | DeprecatedClient name ->
+    eprintfn "%s" (deprecatedClientMessage name)
+    2
 
   | Jupyter connectionFile ->
     match File.Exists connectionFile with
@@ -399,7 +331,8 @@ let main args =
     | true, _ ->
       runDaemon args
     | false, AttachToExistingDaemon info ->
-      printfn "SageFs daemon already running (PID %d, port %d). Launching TUI..." info.Pid info.Port
-      SageTuiClient.run info
+      printfn "SageFs daemon already running (PID %d, port %d)." info.Pid info.Port
+      printfn "Dashboard: http://localhost:%d/dashboard" info.DashboardPort
+      0
     | false, StartNewDaemon ->
       runDaemon args

@@ -24,7 +24,7 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 
 ## What is SageFs?
 
-SageFs is a live F# development engine. Start it once, connect any editor — VS Code, Neovim, Visual Studio, or the built-in TUI — and get sub-500ms feedback on every save: inline results, live test markers, hot reload, and AI agent access via MCP. It runs as a daemon with isolated session workers, so multiple editors and AI agents can share the same live state simultaneously.
+SageFs is a live F# development engine. Start it once, then connect through VS Code, Neovim, Visual Studio, the web dashboard, or an MCP client to get sub-500ms feedback on every save: inline results, live test markers, hot reload, and agent access. It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients can share live state simultaneously.
 
 **How is SageFs different from Ionide?** Ionide provides IntelliSense, diagnostics, and project support through the F# Compiler Service. SageFs adds live execution: eval any expression and see results inline, continuous test feedback on every save, and hot reload that patches your running app. Use both together — Ionide for editing, SageFs for running.
 
@@ -71,9 +71,9 @@ Save a `.fs` file. SageFs reloads it in ~100ms via [Harmony](https://github.com/
 
 SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an **affordance-driven state machine** and a deliberately small tool surface — AI agents only see tools valid for the current session state, and the core MCP path stays focused on session trust, F# evaluation, exact test execution, and failure explanation. No wasted tokens guessing. Copilot, Claude, and any MCP client can execute F# code, type-check, verify a changed behavior, and run tests against your real project.
 
-### 🖥️ One Daemon, Every Editor — Simultaneously
+### 🖥️ One Daemon, Every Client — Simultaneously
 
-Start SageFs once. Connect from VS Code, Neovim, Visual Studio, a terminal TUI, a GPU-rendered Raylib GUI, a web dashboard, or an AI agent. Open them all at the same time — they share the same live session. Switch editors without switching tools.
+Start SageFs once. Connect from VS Code, Neovim, Visual Studio, the web dashboard, or an MCP client. Open several at the same time: they can share a live session while retaining per-client session selection.
 
 ```mermaid
 flowchart TB
@@ -82,18 +82,14 @@ flowchart TB
     D --- VS[VS Code]
     D --- NV[Neovim]
     D --- VI[Visual Studio]
-    D --- TU[Terminal TUI]
-    D --- GU[Raylib GUI]
     D --- WB[Web Dashboard]
-    D --- AI[AI Agents]
+    D --- AI[MCP Clients]
     D --- JP[Jupyter Kernel]
 
     style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
     style VS fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
     style NV fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
     style VI fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
-    style TU fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
-    style GU fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
     style WB fill:#1a1b26,stroke:#7dcfff,color:#c0caf5
     style AI fill:#1a1b26,stroke:#e0af68,color:#c0caf5
     style JP fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
@@ -137,7 +133,9 @@ SageFs opens an interactive terminal. Then create a session for `YourProject.fsp
 
 **Visual Studio 2022** — Install [SageFs from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=WillEhrendreich.sagefs-visualstudio). Press `Alt+Enter`. The daemon starts automatically.
 
-**Terminal only** — `sagefs tui` for the built-in terminal UI (powered by [SageTUI](https://github.com/WillEhrendreich/sagetui) Elm Architecture), or `sagefs gui` for the Raylib GPU window. Use `sagefs tui --legacy-tui` for the classic imperative renderer.
+**Web dashboard** — Open `http://localhost:37750/dashboard` for session management, evaluation, output, test state, and diagnostics without an editor extension.
+
+> **Deprecated frontends:** The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are no longer current product interfaces. Their source remains in the repository for historical context. This does not affect Raylib application and game projects developed with SageFs; see the [Raylib demos](#-visual-demos).
 
 ### 5. Enable live testing
 
@@ -210,7 +208,7 @@ Use your editor's command to switch workflows:
 
 - **Neovim**: `:SageFsWorkflow live` or `:SageFsWorkflow repl`
 - **VS Code**: Command Palette → `SageFs: Switch Workflow`
-- **TUI/GUI**: `Ctrl+W` toggles between modes
+- **MCP**: use the session workflow tools exposed for the current state
 
 When you switch, SageFs creates a new session in the target mode and stops the old one. Any REPL-defined bindings are lost — persisted files are unaffected.
 
@@ -235,7 +233,8 @@ flowchart TB
 
     D --- VS[VS Code]
     D --- NV[Neovim]
-    D --- TU[Terminal TUI]
+    D --- WB[Web Dashboard]
+    D --- VI[Visual Studio]
     D --- AI[AI Agent - MCP]
 
     style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
@@ -245,7 +244,8 @@ flowchart TB
     style SVC fill:#1a1b26,stroke:#e0af68,color:#c0caf5
     style VS fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
     style NV fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
-    style TU fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
+    style WB fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
+    style VI fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
     style AI fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
 ```
 
@@ -253,7 +253,7 @@ flowchart TB
 
 **Sessions are isolated workers.** Each session is a separate OS process with its own FSI instance, its own loaded project, its own file watcher. They can't interfere with each other. Create as many as you need.
 
-**Clients are thin.** Your editor plugin, the TUI, the Jupyter bridge, or an AI agent — they all connect to the same daemon. They create sessions, send code, read results. Multiple clients can share the same session or each use their own.
+**Clients are thin.** Editor integrations, dashboard tabs, the Jupyter bridge, and MCP clients all connect to the same daemon. They create sessions, send code, and read results. Multiple clients can share the same session or each use their own.
 
 **The workflow:**
 
@@ -271,25 +271,25 @@ This means **the daemon doesn't need to know your project at startup**. It start
 
 Every frontend connects to the same daemon. Open several at once — they all see the same state.
 
-| Capability | VS Code | Neovim | Visual Studio | TUI | Raylib GUI | Web | AI (MCP) |
-|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| Eval code / file / block | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Inline results | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Live diagnostics (SSE) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Hot reload toggle | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| Session management | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Code completion | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| CodeLens | ✅ | ✅ | ✅ | — | — | — | — |
-| **Live test gutters** | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| **Coverage gutters** | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| **Failure narratives** | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ |
-| **Test source-jump** | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| Test panel | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
-| Test policy controls | ✅ | ✅ | ✅ | — | — | — | ✅ |
-| Type explorer | ✅ | ✅ | — | — | ¹ | — | ✅ |
-| Call graph | ✅ | ✅ | — | — | — | — | — |
-| History browser | ✅ | ✅ | — | ✅ | ✅ | — | — |
-| Test trace | ✅ | ✅ | — | — | — | — | ✅ |
+| Capability | VS Code | Neovim | Visual Studio | Web Dashboard | MCP |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| Eval code / file / block | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Inline results | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Live diagnostics (SSE) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Hot reload controls | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Session management | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Code completion | ✅ | ✅ | ✅ | — | ✅ |
+| CodeLens | ✅ | ✅ | ✅ | — | — |
+| **Live test gutters** | ✅ | ✅ | ✅ | — | — |
+| **Coverage gutters** | ✅ | ✅ | ✅ | — | — |
+| **Failure narratives** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Test source-jump** | ✅ | ✅ | ✅ | — | — |
+| Test panel | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Test policy controls | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Type explorer | ✅ | ✅ | — | — | ✅ |
+| Call graph | ✅ | ✅ | — | — | ✅ |
+| History browser | ✅ | ✅ | — | ✅ | ✅ |
+| Test trace | ✅ | ✅ | — | ✅ | ✅ |
 
 > ¹ Server-side data ready. Editor UI integration pending (VS SDK limitations or work-in-progress).
 
@@ -346,12 +346,9 @@ SageFs exposes a **small surgical MCP surface** — from `send_fsharp_code` to `
 }
 ```
 
-#### TUI / GUI / Web Dashboard / Jupyter
+#### Web Dashboard / Jupyter
 
 ```bash
-sagefs tui                # SageTUI Elm Architecture terminal UI
-sagefs tui --legacy-tui   # Classic imperative CellGrid renderer (fallback)
-sagefs gui                # GPU-rendered Raylib window
 sagefs --jupyter conn.json  # Run as a Jupyter kernel
 # Dashboard auto-starts at http://localhost:37750/dashboard
 ```
@@ -404,7 +401,7 @@ SageFs is building toward that same feedback loop with a REPL-centered architect
 |:---|:---|:---|
 | **Speed** | 5–30 sec (MSBuild rebuild) | **300–800ms typical** on the current FSI-driven hot path |
 | **Broken code** | ✗ Must compile first | **✓ Tree-sitter works on incomplete code** |
-| **Editors** | Visual Studio only | **VS Code · Neovim · TUI · GUI · Visual Studio · Web** |
+| **Editors** | Visual Studio only | **VS Code · Neovim · Visual Studio · Web dashboard · MCP clients** |
 | **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
 | **Price** | ~$250/month | **Free, MIT licensed** |
 
@@ -433,13 +430,13 @@ Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Arc
 
 **SSE Events** — All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 
-**Architecture** — Daemon-first design with isolated worker sub-processes and dual-renderer TUI/Raylib GUI. [Full details →](docs/architecture.md)
+**Architecture** — Daemon-first design with isolated worker sub-processes, a web dashboard, editor integrations, and an affordance-driven MCP surface. [Full details →](docs/architecture.md)
 
 ### Repository Map — where things live
 
 - `SageFs.Core/` — shared engine and runtime logic: session management, MCP/session operations, live testing, persistence, and shared rendering primitives
-- `SageFs/` — CLI entrypoint, daemon host, MCP server, dashboard, worker HTTP transport, SageTUI client, and the legacy terminal renderer
-- `SageFs.Gui/` — Raylib GUI frontend
+- `SageFs/` — CLI entrypoint, daemon host, MCP server, dashboard, and worker HTTP transport; deprecated terminal client source is retained for historical context
+- `SageFs.Gui/` — deprecated Raylib product frontend retained as legacy source; it is separate from supported Raylib application and game projects
 - `SageFs.Tests/` — main Expecto test suite
 - `sagefs-vscode/` — VS Code extension (F# via Fable → JavaScript)
 - `sagefs-vs/` — Visual Studio extension workspace
@@ -448,7 +445,7 @@ Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Arc
 - `tests/` — Playwright/browser scenarios for dashboard and editor-facing UX flows
 - `scripts/` — repo helper scripts and smoke/integration utilities
 
-`SageFs.slnx` covers the core tool, GUI, tests, and samples. The editor integrations live alongside it in `sagefs-vscode/` and `sagefs-vs/` because they use their own packaging toolchains and release flows.
+`SageFs.slnx` covers the core tool, retained legacy projects, tests, and samples. The editor integrations live alongside it in `sagefs-vscode/` and `sagefs-vs/` because they use their own packaging toolchains and release flows.
 
 The Neovim plugin is not in this repo — it lives in the separate [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) repository.
 
@@ -505,9 +502,6 @@ Design: length-prefixed strings, section headers with byte-count envelopes, vers
 ```
 Usage: sagefs [options]                Start daemon (bare by default)
        sagefs --supervised [options]   Start with watchdog auto-restart
-       sagefs tui                      Terminal UI (starts daemon if needed)
-       sagefs tui --legacy-tui         Terminal UI (imperative fallback)
-       sagefs gui                      GPU GUI via Raylib (starts daemon if needed)
        sagefs --jupyter <conn.json>    Run as Jupyter kernel
        sagefs check                    Check environment before first run
        sagefs stop                     Stop running daemon
@@ -541,12 +535,12 @@ Full options: `sagefs --help`
     InitScript = Some "setup.fsx" }
 ```
 
-Set `AutoOpenNamespaces = false` to skip warmup auto-opening of namespaces and modules. Because sessions inherit `.SageFs/config.fsx` from the working directory, this opt-out applies across VS Code, Neovim, Visual Studio, the dashboard, TUI, and GUI session creation flows.
+Set `AutoOpenNamespaces = false` to skip warmup auto-opening of namespaces and modules. Because sessions inherit `.SageFs/config.fsx` from the working directory, this opt-out applies across VS Code, Neovim, Visual Studio, dashboard, and MCP session creation flows.
 
 Built-in ways to create or edit that config:
 
 - **Dashboard** — enter a working directory, then click **Disable Warmup Auto-Open**
-- **TUI / GUI** — focus the sessions UI and press **Ctrl+Alt+A**
+- **MCP** — edit the per-directory config through the shared workspace
 - **VS Code** — run **SageFs: Configure Warmup Auto-Open**
 - **Visual Studio** — run **SageFs: Configure Warmup Auto-Open**
 - **Neovim** — run `:SageFsConfig`
@@ -580,7 +574,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 
 📖 **[Full Troubleshooting Guide →](docs/TROUBLESHOOTING.md)** — covers first-run issues, runtime problems, platform-specific fixes, and diagnostic tools.
 
-📊 **[Feature Matrix →](docs/FEATURE_MATRIX.md)** — compare features across VS Code, Neovim, Visual Studio, TUI, and Raylib GUI.
+📊 **[Feature Matrix →](docs/FEATURE_MATRIX.md)** — compare features across VS Code, Neovim, Visual Studio, the web dashboard, and MCP.
 
 ---
 
@@ -589,7 +583,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 SageFs isn't just for F# veterans. Find your background below and get started with a guide that maps concepts you already know to F#, with runnable examples.
 
 > **Quick orientation:** Every sample in [`/samples`](samples/) is a runnable `.fsx` script.
-> Open it in VS Code with the SageFs extension (or `sagefs tui`), hit **Alt+Enter** on any expression, and results appear inline. Instantly.
+> Open it in a supported editor with SageFs connected, hit **Alt+Enter** on any expression, and results appear inline. Instantly.
 
 | Background | One-liner | Guide |
 |:---|:---|:---|

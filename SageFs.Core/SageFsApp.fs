@@ -2575,7 +2575,7 @@ module SseDedupKey =
   /// instead of filtering+counting 3131 entries (was 50-100ms, now <0.01ms).
   let fromModel (model: SageFsModel) : string =
     let sb = System.Text.StringBuilder(128)
-    sb.Append(model.RecentOutput.ActiveVersion(model.Sessions.ActiveSessionId)).Append('|') |> ignore
+    sb.Append(model.RecentOutput.Version).Append('|') |> ignore
     let diagCount =
       model.Diagnostics |> Map.values |> Seq.sumBy List.length
     sb.Append(diagCount).Append('|') |> ignore

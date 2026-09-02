@@ -395,10 +395,83 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     Expect.stringContains html "v1.2.3" "main content has version"
   }
 
+  test "WHY — connection monitor script is valid JavaScript because a syntax error can disable dashboard stream diagnostics" {
+    let html = connectionMonitorScript () |> renderNode
+    Expect.isFalse (html.Contains(";\n        .catch")) "promise catch must remain chained to then"
+    Expect.stringContains html ".catch(function()" "monitor must handle stream failures"
+  }
+
+  test "WHY — selected-session projection — main, selected card, and output share one session identity because separate identities can display another session's output" {
+    let sessionA = WorkerProtocol.SessionId.validate "0a2b3c4d" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+    let sessionB = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+    let sessions = [
+      { Id = sessionA; Status = SessionDisplayStatus.Running; StatusMessage = None
+        IsActive = true; IsSelected = false; ProjectsText = "(A.fsproj)"; EvalCount = 1
+        Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"; StandbyLabel = ""
+        TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
+        BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
+      { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
+        IsActive = false; IsSelected = true; ProjectsText = "(B.fsproj)"; EvalCount = 1
+        Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"; StandbyLabel = ""
+        TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
+        BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
+    ]
+    let snap =
+      { mkSnap "0.0.0" with
+          SessionId = "0a2b3c4e"
+          OutputPanel = renderOutputForSession "0a2b3c4e" [ { Timestamp = None; Kind = ResultLine; Text = "SESSIONB" } ] "No output yet"
+          SessionsPanel = renderSessionsForSession "0a2b3c4e" sessions false }
+    let html = renderMainContent snap |> renderNode
+    Expect.stringContains html "data-viewing-session-id=\"0a2b3c4e\"" "main must declare the one viewing identity"
+    Expect.stringContains html "data-session-id=\"0a2b3c4e\"" "output must carry the same identity"
+    Expect.stringContains html "aria-current=\"true\"" "selected session card must be explicit in the same morph"
+    Expect.stringContains html "id=\"output-panel\"" "the selected session's output panel must be in the same morph"
+    Expect.isFalse (html.Contains "data-session-id=\"0a2b3c4d\" aria-current=\"true\"") "another session must not be selected"
+  }
+
+  test "WHY — stream reconnect identity — requested session wins over list order because reconnecting to the first session would desynchronize highlight and output" {
+    let sessionA = WorkerProtocol.SessionId.validate "0a2b3c4d" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+    let sessionB = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+    let info sessionId project : WorkerProtocol.SessionInfo =
+      { Id = sessionId
+        Name = None
+        Projects = [ project ]
+        WorkingDirectory = "/tmp"
+        SolutionRoot = None
+        CreatedAt = DateTime.UtcNow
+        LastActivity = DateTime.UtcNow
+        Status = WorkerProtocol.SessionStatus.Ready
+        FaultReason = None
+        WorkerPid = None
+        WorkerPort = None
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive }
+    let resolved = resolveViewingSession (Some "0a2b3c4e") [ info sessionA "A.fsproj"; info sessionB "B.fsproj" ]
+    Expect.equal resolved (Some sessionB) "stream must retain the browser-requested session"
+  }
+
   test "evaluate section has textarea with placeholder" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
     Expect.stringContains html "eval-input" "has eval-input class"
     Expect.stringContains html "F# code" "placeholder mentions F#"
+  }
+
+  test "WHY — evaluator has no session-bound hidden input because an empty input overwrites the selected-session signal" {
+    let mainHtml = renderMainContent (mkSnap "0.0.0") |> renderNode
+    let shellHtml = renderShell "0.0.0" "test-id" (Elem.div [] []) |> renderNode
+    Expect.stringContains shellHtml "viewing-session-id" "shell must own the selected-session signal"
+    Expect.isFalse (mainHtml.Contains "data-bind:viewing-session-id") "hidden input must not overwrite the selected-session signal"
+    Expect.isFalse (mainHtml.Contains "data-bind:session-id") "no second session identity may exist"
+  }
+
+  test "WHY — main snapshot embeds selected output because an action response must atomically deliver its committed evaluation" {
+    let snap =
+      { mkSnap "0.0.0" with
+          SessionId = "0a2b3c4e"
+          OutputPanel = renderOutputForSession "0a2b3c4e" [ { Timestamp = None; Kind = ResultLine; Text = "val dashboardProbe: int = 8967" } ] "No output" }
+    let html = renderMainContent snap |> renderNode
+    Expect.stringContains html "data-viewing-session-id=\"0a2b3c4e\"" "action morph must retain selected identity"
+    Expect.stringContains html "data-session-id=\"0a2b3c4e\"" "action morph output must use selected identity"
+    Expect.stringContains html "8967" "action morph must contain the committed result"
   }
 
   test "eval button is present" {
@@ -916,7 +989,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
     let html = renderShell "0.0.0" "" (Elem.div [] []) |> renderNode
     // Datastar renders signal names kebab-case: helpVisible → help-visible
     let expectedSignalAttrs =
-      [ "data-signals:help-visible"; "data-signals:sidebar-open"; "data-signals:session-id"
+      [ "data-signals:help-visible"; "data-signals:sidebar-open"; "data-signals:viewing-session-id"
         "data-signals:code"; "data-signals:new-session-dir"; "data-signals:manual-projects"
         "data-signals:theme"; "data-signals:cursor-pos"; "data-signals:test-filter" ]
     for attr in expectedSignalAttrs do
@@ -1070,6 +1143,7 @@ let bindingsPanelSseTests = testList "SSE bindings panel" [
     Expect.stringContains html "answer" "bindings panel should render the selected session binding"
   }
 ]
+
 
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [

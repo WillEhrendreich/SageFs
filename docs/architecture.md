@@ -1,15 +1,15 @@
 # 🏗️ Architecture
 
-SageFs is **daemon-first** — one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** (Erlang-style fault isolation) with its own FSI, project, and file watcher. The TUI uses SageTUI's Elm Architecture (`Program<Model,Msg>` with SIMD cell diff), while the Raylib GUI uses the `Cell[,]` grid abstraction — both share the same keybindings via `KeyMap` and connect to the daemon via SSE. See the [architecture diagram](../Readme.md#-one-daemon-every-editor--simultaneously) for how clients connect.
+SageFs is **daemon-first**: one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** with its own FSI, project, and file watcher. VS Code, Neovim, Visual Studio, the web dashboard, and MCP clients communicate with the daemon through session-scoped HTTP and SSE contracts. See the [architecture diagram](../Readme.md#-one-daemon-every-client--simultaneously) for how clients connect.
 
 5700+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
 
 ## Project Structure
 
 ```
-SageFs.Core/       — Shared types, rendering abstraction, KeyMap, Theme
-SageFs/            — CLI tool, daemon, SageTUI client + legacy TUI
-SageFs.Gui/        — Raylib GUI client (Cell[,] grid renderer)
+SageFs.Core/       — Shared engine, session, testing, persistence, and protocol logic
+SageFs/            — CLI tool, daemon, MCP server, dashboard, and retained legacy TUI source
+SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy source
 SageFs.Tests/      — Expecto test project
 sagefs-vscode/     — VS Code extension (Fable F#→JS)
 sagefs-vs/         — Visual Studio extension (C# + F#)
@@ -18,15 +18,18 @@ docs/              — GitHub Pages site
 
 The Neovim plugin lives in a separate repo: [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim).
 
-## Rendering Pipeline
+## Client Pipeline
 
-Both TUI and Raylib GUI consume the same pipeline:
+Current clients use the daemon as the source of truth:
 
 ```
-ElmModel → SageFsRender.render → RenderRegion list
-  → Screen.draw(grid, state, regions)  ← writes to Cell[,]
-    → Backend.emit(grid)               ← TUI: ANSI string, Raylib: draw calls
+Editor / Dashboard / MCP command
+  → session-scoped daemon endpoint
+    → isolated FSI worker
+      → structured result and SSE state updates
 ```
+
+The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated and are not current product interfaces. Their rendering code remains in the repository as legacy implementation history. Raylib application and game demos remain valuable, supported examples of using SageFs with game projects; they do not depend on the deprecated SageFs GUI frontend.
 
 ## Session Lifecycle
 

@@ -10,9 +10,9 @@
         <!-- NuGet config -->
         <PackageId>SageFs</PackageId>
         <Authors>Will Ehrendreich</Authors>
-        <Description>SageFs — a functional F# REPL, MCP server, and development environment with TUI and GUI modes.</Description>
+        <Description>SageFs — a functional F# REPL, MCP server, and live web development environment.</Description>
         <Copyright>Copyright © 2025-2026 Will Ehrendreich</Copyright>
-        <PackageTags>fsharp;functional;repl;interactive;shell;asp.net core;mcp;tui;gui;sagefs</PackageTags>
+        <PackageTags>fsharp;functional;repl;interactive;shell;asp.net core;mcp;dashboard;sagefs</PackageTags>
         <PackageProjectUrl>https://github.com/WillEhrendreich/SageFs</PackageProjectUrl>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <PackageReadmeFile>Readme.md</PackageReadmeFile>
@@ -37,10 +37,6 @@
         <Compile Include="Dashboard.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpServer.fs" />
-                                        <Compile Include="ConsoleInput.fs" />
-        <Compile Include="TerminalMode.fs" />
-        <Compile Include="TuiClient.fs" />
-        <Compile Include="SageTuiClient.fs" />
         <Compile Include="DaemonMode.fs" />
         <Compile Include="WatchdogRunner.fs" />
         <Compile Include="JupyterTransport.fs" />
@@ -55,7 +51,6 @@
 
     <ItemGroup>
         <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
-        <ProjectReference Include="..\SageFs.Gui\SageFs.Gui.fsproj" />
     </ItemGroup>
 
     <ItemGroup>
@@ -74,7 +69,6 @@
         <PackageReference Include="ModelContextProtocol" />
         <PackageReference Include="ModelContextProtocol.AspNetCore" />
         <PackageReference Include="NetMQ" />
-        <PackageReference Include="SageTUI" />
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
     </ItemGroup>
 

@@ -5,6 +5,8 @@ All notable changes to SageFs will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> **Historical frontend note:** Entries about SageTUI, the legacy TUI, and the `SageFs.Gui` Raylib frontend record features available at those release dates. Those built-in product frontends are now deprecated; current product interfaces are the web dashboard, editor integrations, and MCP. Raylib application and game demos remain supported examples and are not part of this deprecation.
+
 ## [Unreleased]
 
 > **What's New**: Dashboard redesign aligned with **sagetech.dev** aesthetic

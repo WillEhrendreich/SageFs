@@ -11,7 +11,7 @@ health check in your editor.
 | **VS Code** | `Ctrl+Shift+P` → "SageFs: Check Health" |
 | **Neovim** | `:checkhealth sagefs` |
 | **Visual Studio** | Check the SageFs output channel (View → Output → SageFs) |
-| **TUI / CLI** | `sagefs status` |
+| **CLI / dashboard** | `sagefs status` and `http://localhost:37750/dashboard` |
 
 ---
 
@@ -73,21 +73,9 @@ The active project is shown in the status bar.
 - **Long-running eval**: Some evaluations genuinely take time (large
   compilations, network calls). Check the daemon console for progress.
 
-### TUI rendering issues / display corruption
+### Deprecated frontend commands
 
-The TUI was rebuilt on the SageTUI Elm Architecture in v0.7.x. If you experience
-rendering problems:
-
-1. **Try the legacy renderer**: `sagefs tui --legacy-tui` — this uses the classic
-   imperative CellGrid renderer and may work better in terminals with limited
-   capabilities.
-2. **Check terminal compatibility**: SageTUI requires a terminal that supports:
-   - Alternate screen buffer (xterm)
-   - SGR mouse protocol (1006)
-   - 256-color or truecolor
-   - Most modern terminals work: Windows Terminal, iTerm2, Alacritty, Kitty, WezTerm
-3. **Resize issues**: If the layout breaks after resize, press the configured
-   Redraw key (default: `Ctrl+L`).
+The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated. Use a supported editor integration, the web dashboard, or MCP instead. Raylib application and game projects remain supported; this deprecation applies only to the SageFs product frontend.
 
 ### Stale REPL after code changes
 
@@ -95,7 +83,6 @@ Use hard reset to pick up source file changes:
 - **VS Code**: "SageFs: Hard Reset" from command palette
 - **Neovim**: `:SageFsHardReset`
 - **MCP**: `hard_reset_fsi_session` tool with `rebuild=true`
-- **TUI REPL**: `#hard-reset` command
 
 ### Hot reload not working
 
@@ -109,7 +96,7 @@ Use hard reset to pick up source file changes:
 - Verify live testing is enabled: check your editor's test status indicator
 - Check run policies: some test categories (integration, browser) default to
   `demand` (manual trigger only)
-- Run `:SageFsLiveTestStatus` (Neovim) or check the Tests pane (VS Code/TUI)
+- Run `:SageFsLiveTestStatus` (Neovim), check the Tests pane (VS Code), use the dashboard, or query live-test status through MCP
 
 ### SSE connections dropping
 
@@ -119,8 +106,7 @@ Use hard reset to pick up source file changes:
 
 ### Eval watchdog — detecting daemon crash during eval
 
-All editors (VS Code, Neovim, Visual Studio, TUI) now include an **eval
-watchdog**. If the daemon becomes unresponsive during an evaluation:
+Supported editor integrations include an **eval watchdog**. If the daemon becomes unresponsive during an evaluation:
 
 1. A timer starts when you send an eval command
 2. If no response arrives within the timeout, the editor shows a notification:

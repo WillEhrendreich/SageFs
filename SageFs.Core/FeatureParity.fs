@@ -35,7 +35,9 @@ module FeatureParity =
   }
 
   module Editor =
-    let all = [ VsCode; Neovim; VisualStudio; Tui; RaylibGui; McpAgent ]
+    /// Currently maintained product integrations. TUI and RaylibGui remain
+    /// in the DU only for historical data compatibility; both are deprecated.
+    let all = [ VsCode; Neovim; VisualStudio; McpAgent ]
 
     let label = function
       | VsCode -> "VS Code"
@@ -81,7 +83,7 @@ module FeatureParity =
     ]
 
   /// The canonical parity matrix. Update this when features are added to any editor.
-  let matrix : ParityEntry list = [
+  let historicalMatrix : ParityEntry list = [
     // === Execution ===
     { feature = Feature.evalCode; editor = VsCode; status = Supported }
     { feature = Feature.evalCode; editor = Neovim; status = Supported }
@@ -250,6 +252,11 @@ module FeatureParity =
     { feature = Feature.dashboard; editor = RaylibGui; status = NotApplicable }
     { feature = Feature.dashboard; editor = McpAgent; status = NotApplicable }
   ]
+
+  /// Current support matrix excludes deprecated clients.
+  let matrix =
+    historicalMatrix
+    |> List.filter (fun entry -> Editor.all |> List.contains entry.editor)
 
   /// Query: all entries for a specific editor.
   let forEditor (editor: Editor) =

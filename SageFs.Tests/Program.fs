@@ -42,10 +42,11 @@ let main argv =
         SageFsErrorMutationTests.sageFsErrorMutationTests
         SessionLifecycleMutationTests.sessionLifecycleMutationTests
         CoverageViewMutationTests.coverageViewMutationTests
+        CoverageViewProjectMutationTests.coverageViewProjectMutationTests
       ]
     let exitCode = Tests.runTestsWithCLIArgs [] scoreArgv mutationTests
     // Count expected mutations (sum of all mutation test counts)
-    let expectedMutations = 74
+    let expectedMutations = 89
     let caught =
       if exitCode = 0 || exitCode = 2 then expectedMutations
       else expectedMutations - 1  // conservative: at least 1 survived
