@@ -21,6 +21,8 @@ function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) 
     }, inactivityTimeout);
   };
 
+  let firstConnect = true;
+
   const reconnect = () => {
     if (inactivityTimer) clearTimeout(inactivityTimer);
     if (onDisconnect) { try { onDisconnect(); } catch (e) { log(`onDisconnect error: ${e.message || e}`); } }
@@ -29,7 +31,6 @@ function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) 
     const delaySec = ((retryDelay + jitter) / 1000).toFixed(1);
     log(`Reconnecting in ${delaySec}s...`);
     setTimeout(() => {
-      if (onReconnect) { try { onReconnect(); } catch (e) { log(`onReconnect error: ${e.message || e}`); } }
       startListening();
     }, retryDelay + jitter);
   };
@@ -37,8 +38,15 @@ function createSseSubscriber(url, onMessage, onReconnect, logger, onDisconnect) 
   const startListening = () => {
     log(`Connecting to ${url}`);
     req = http.get(url, { timeout: 0, headers: { 'Accept-Encoding': 'br, gzip, deflate' } }, (res) => {
+      // Reconnect truth: announce "connected" only once the replacement
+      // connection has SUCCEEDED (HTTP response received). Previously
+      // onReconnect fired before startListening, so the UI could show
+      // "connected" while the old stream was still dead. The initial
+      // connection never fires onReconnect (it fires only after a drop).
       retryDelay = 1000;
       log(`Connected (status ${res.statusCode})`);
+      if (!firstConnect && onReconnect) { try { onReconnect(); } catch (e) { log(`onReconnect error: ${e.message || e}`); } }
+      firstConnect = false;
       resetInactivity();
       // Decompress if server sent compressed response
       let stream = res;
