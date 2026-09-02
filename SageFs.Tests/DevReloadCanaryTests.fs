@@ -23,7 +23,15 @@ type PrefixRunAsyncTarget() =
   member _.RunAsync (url: string) = Threading.Tasks.Task.CompletedTask
 
 type PrefixHook() =
-  static member Prefix (__instance: obj) : bool = true
+  [<DefaultValue>]
+  [<ThreadStatic>]
+  static val mutable private ran: bool
+  static member Ran
+    with get () = PrefixHook.ran
+    and set v = PrefixHook.ran <- v
+  static member Prefix (__instance: obj) : bool =
+    PrefixHook.ran <- true
+    true
 
 type SnapshotOnlyTarget() =
   [<MethodImpl(MethodImplOptions.NoInlining)>]
@@ -84,11 +92,15 @@ let prefixPatchIntegrationTests = testList "Harmony prefix patch" [
       let harmony = Harmony("sagefs.test.devreload.canary.run")
       harmony.Patch(target, prefix = HarmonyMethod(prefix)) |> ignore
       let result = validateDetourCanary jitAddr preBytes
-      // Harmony prefix patches may or may not change JIT bytes —
-      // either DetourConfirmed or BytesUnchanged is acceptable
+      // The patch must actually fire: invoking the target after patching
+      // must run the prefix hook (BytesUnchanged alone is NOT proof — a
+      // silently-dead patch also reports unchanged bytes).
+      PrefixHook.Ran <- false
+      PrefixRunTarget().Run("http://localhost:0")
+      PrefixHook.Ran
+      |> Expect.isTrue "invoking the patched target must run the prefix hook"
       match result with
-      | DetourConfirmed -> ()
-      | BytesUnchanged -> ()
+      | DetourConfirmed | BytesUnchanged -> ()
       | CanaryError ex ->
         failwithf "canary should not error on prefix patch, got: %s" ex.Message
     | None ->
@@ -104,9 +116,12 @@ let prefixPatchIntegrationTests = testList "Harmony prefix patch" [
       let harmony = Harmony("sagefs.test.devreload.canary.runasync")
       harmony.Patch(target, prefix = HarmonyMethod(prefix)) |> ignore
       let result = validateDetourCanary jitAddr preBytes
+      PrefixHook.Ran <- false
+      PrefixRunAsyncTarget().RunAsync("http://localhost:0").Wait()
+      PrefixHook.Ran
+      |> Expect.isTrue "invoking the patched target must run the prefix hook"
       match result with
-      | DetourConfirmed -> ()
-      | BytesUnchanged -> ()
+      | DetourConfirmed | BytesUnchanged -> ()
       | CanaryError ex ->
         failwithf "canary should not error on prefix patch, got: %s" ex.Message
     | None ->

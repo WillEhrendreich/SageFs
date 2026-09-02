@@ -40,7 +40,7 @@ let healthSnapshotTests =
       let health = DaemonHealth.overallStatus snapshot
       health |> Expect.equal "should be degraded" OverallHealth.Degraded
 
-    testCase "unhealthy when no sessions exist" <| fun _ ->
+    testCase "healthy when no sessions exist (idle daemon)" <| fun _ ->
       let snapshot = {
         DaemonPid = 1234
         DaemonPort = 37749

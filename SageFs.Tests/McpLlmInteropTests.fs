@@ -465,7 +465,7 @@ module ShadowCopyTests =
       testCase "cleanupShadowDir is safe on nonexistent dir"
       <| fun _ ->
         SageFs.ShadowCopy.cleanupShadowDir "/nonexistent/path/sagefs-shadow"
-        Expect.isTrue true "Should not throw"
+        Expect.isFalse (Directory.Exists "/nonexistent/path/sagefs-shadow") "Should not create the directory"
     ]
 
 // ============================================================================
