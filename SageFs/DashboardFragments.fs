@@ -149,7 +149,7 @@ let renderAlarmBanner (alarms: SystemAlarmEntry list) =
             Text.raw (sprintf "[%s]" alarm.Phase)
           ]
           Elem.span [ Attr.class' "alarm-message" ] [
-            Text.raw (sprintf " %s" alarm.Message)
+            Text.raw (System.Net.WebUtility.HtmlEncode (sprintf " %s" alarm.Message))
           ]
           Elem.span [ Attr.class' "alarm-ts meta" ] [
             Text.raw (sprintf " @ %s" (alarm.Timestamp.ToLocalTime().ToString("HH:mm:ss")))
@@ -312,7 +312,7 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
                 ]
               | None -> ()
               Elem.span [ Attr.class' "narrative-summary"; Attr.style "margin-left: 0.5rem;" ] [
-                Text.raw entry.Summary
+                Text.raw (System.Net.WebUtility.HtmlEncode entry.Summary)
               ]
               match entry.CausalLabels with
               | [] -> ()
@@ -353,7 +353,7 @@ let private renderStage (stage: PipelineStageView) =
     | StageSuccess -> ("✓", "stage-success")
     | StageFailure _ -> ("✗", "stage-failure")
   Elem.span [ Attr.class' (sprintf "pipeline-stage %s" cssClass) ] [
-    Text.raw (sprintf "%s %s" stage.Name icon)
+    Text.raw (System.Net.WebUtility.HtmlEncode (sprintf "%s %s" stage.Name icon))
     Elem.span [ Attr.class' "stage-duration" ] [
       Text.raw (sprintf " [%.0fms]" stage.DurationMs)
     ]
@@ -490,7 +490,7 @@ let renderDiagnostics (diags: Diagnostic list) =
             ]
           | false -> ()
           Elem.span [] [
-            Text.raw (sprintf " %s" diag.Message)
+            Text.raw (System.Net.WebUtility.HtmlEncode (sprintf " %s" diag.Message))
           ]
         ])
   ]
@@ -715,7 +715,7 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
           [ Attr.style "display:flex;align-items:baseline;gap:0.4em;padding:2px 0;border-bottom:1px solid var(--border-normal,#333);" ]
           [ Elem.code
               [ Attr.style "color:var(--fg-cyan,#56b6c2);font-weight:bold;white-space:nowrap;font-size:0.7rem;" ]
-              [ Text.raw b.Name ]
+              [ Text.raw (System.Net.WebUtility.HtmlEncode b.Name) ]
             Elem.span
               [ Attr.style "color:var(--fg-dim,#666);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" ]
               [ Text.raw (sprintf ": %s" b.TypeSig) ]
@@ -1028,7 +1028,7 @@ let renderSessionFilmstrip (entries: FilmstripEntry list) =
             Elem.div [ Attr.class' (sprintf "filmstrip-frame %s" speedCls) ] [
               Elem.span [ Attr.class' "frame-index" ] [ Text.raw (sprintf "#%d" e.Index) ]
               Elem.span [ Attr.class' "frame-icon" ] [ Text.raw icon ]
-              Elem.span [ Attr.class' "frame-label" ] [ Text.raw e.Label ]
+              Elem.span [ Attr.class' "frame-label" ] [ Text.raw (System.Net.WebUtility.HtmlEncode e.Label) ]
               Elem.span [ Attr.class' "frame-duration" ] [ Text.raw (sprintf " %dms" e.DurationMs) ]
             ])
         ]
@@ -1064,7 +1064,7 @@ let renderCurrentDiagnostics (diags: Diagnostic list) =
               Elem.span [ Attr.class' "diag-icon" ] [ Text.raw icon ]
               if diag.Line > 0 || diag.Col > 0 then
                 Elem.span [ Attr.class' "diag-loc" ] [ Text.raw (sprintf " L%d:%d " diag.Line diag.Col) ]
-              Elem.span [ Attr.class' "diag-msg" ] [ Text.raw diag.Message ]
+              Elem.span [ Attr.class' "diag-msg" ] [ Text.raw (System.Net.WebUtility.HtmlEncode diag.Message) ]
             ])
         ]
       ]
@@ -1528,7 +1528,7 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
                    Attr.create "data-tool" (escAttr f.Tool)
                    Attr.create "data-kind" (escAttr f.Kind)
                    Attr.style "min-height: 3rem; height: auto; font-size: 0.75rem;" ]
-                 [ Text.raw f.Reason ]
+                  [ Text.raw (System.Net.WebUtility.HtmlEncode f.Reason) ]
            ])
         // Endpoint + optional token, bound to signals.
         Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; display: block;" ] [
@@ -1680,7 +1680,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
                 Elem.div [ Attr.class' "diag-error-block" ] [
                   Elem.div [ Attr.style "font-weight: bold; color: var(--fg-red);" ] [
                     let kind = OpenableKind.label f.Kind
-                    Text.raw (sprintf "✖ %s (%s)" f.Name kind)
+                    Text.raw (System.Net.WebUtility.HtmlEncode (sprintf "✖ %s (%s)" f.Name kind))
                     match f.RetryCount > 1 with
                     | true ->
                       Elem.span [ Attr.style "color: var(--fg-dim); font-weight: normal; margin-left: 0.5em;" ] [
@@ -1711,7 +1711,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
                             ]
                           | None -> ()
                           Elem.span [ Attr.style "margin-left: 0.4em;" ] [
-                            Text.raw d.Message
+                            Text.raw (System.Net.WebUtility.HtmlEncode d.Message)
                           ]
                         ]
                     ]
@@ -1819,7 +1819,7 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
             for KeyValue(_, b) in scope.ActiveBindings do
               Elem.div [ Attr.style "display: flex; align-items: baseline; gap: 0.5em; padding: 2px 0; border-bottom: 1px solid var(--border, #333);" ] [
                 Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [
-                  Text.raw b.Name
+                  Text.raw (System.Net.WebUtility.HtmlEncode b.Name)
                 ]
                 Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" ] [
                   Text.raw b.TypeSig
@@ -1851,7 +1851,7 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
               Elem.div [ Attr.style "font-size: 0.7rem; opacity: 0.6;" ] [
                 for b in scope.ShadowedBindings do
                   Elem.div [ Attr.style "padding: 1px 0;" ] [
-                    Elem.code [] [ Text.raw b.Name ]
+                    Elem.code [] [ Text.raw (System.Net.WebUtility.HtmlEncode b.Name) ]
                     Elem.span [ Attr.style "color: var(--fg-dim, #555); margin-left: 0.3em;" ] [
                       Text.raw (sprintf ": %s (cell %d)" b.TypeSig b.CellIndex)
                     ]
@@ -1876,12 +1876,15 @@ let renderLiveBindingsPanel (snapshot: SageFs.Features.LiveValueTree.LiveValueSn
     | _ -> []
   let rec renderNode (node: SageFs.Features.LiveValueTree.LiveValueNode) =
     let hasChildren = not (List.isEmpty node.Children)
+    // Text.create escapes — labels, type names, and previews are FSI-derived
+    // DATA, not trusted markup. A string preview containing <script> (e.g. a
+    // bound value holding HTML) must never inject into the dashboard DOM.
     let row =
       Elem.div [ Attr.class' "live-binding-node"; Attr.style (sprintf "padding-left: %dem;" (node.Depth)) ] [
-        Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [ Text.raw node.Label ]
-        Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; margin-left: 0.4em;" ] [ Text.raw node.TypeName ]
+        Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [ Text.raw (System.Net.WebUtility.HtmlEncode node.Label) ]
+        Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; margin-left: 0.4em;" ] [ Text.raw (System.Net.WebUtility.HtmlEncode node.TypeName) ]
         Elem.span [ Attr.class' "live-preview"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.7rem; margin-left: 0.4em; overflow-wrap: anywhere;" ] [
-          Text.raw (sprintf "= %s" node.Preview)
+          Text.raw (System.Net.WebUtility.HtmlEncode (sprintf "= %s" node.Preview))
         ]
         yield! kindBadge node
       ]
