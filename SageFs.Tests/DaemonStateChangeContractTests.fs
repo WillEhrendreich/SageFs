@@ -85,12 +85,12 @@ let liveTestWatcherStaleEventTests =
         match epochs.TryGetValue(d) with
         | true, e -> e
         | false, _ -> 0L
-      SageFs.FileWatcher.LiveTestWatcherStaleGuard.isStaleEvent (Some "/proj") (Some 0L) currentEpoch
+      LiveTestWatcherStaleGuard.isStaleEvent (Some "/proj") (Some 0L) currentEpoch
       |> Expect.isTrue "epoch advanced past queue time → stale"
 
     testCase "queued event whose dir no longer resolves is stale and dropped" <| fun _ ->
       let currentEpoch (_d: string) = 0L
-      SageFs.FileWatcher.LiveTestWatcherStaleGuard.isStaleEvent None (Some 0L) currentEpoch
+      LiveTestWatcherStaleGuard.isStaleEvent None (Some 0L) currentEpoch
       |> Expect.isTrue "no resolving dir → stale (fallback dropped too)"
 
     testCase "queued event from the current watcher generation is fresh" <| fun _ ->
@@ -100,12 +100,12 @@ let liveTestWatcherStaleEventTests =
         match epochs.TryGetValue(d) with
         | true, e -> e
         | false, _ -> 0L
-      SageFs.FileWatcher.LiveTestWatcherStaleGuard.isStaleEvent (Some "/proj") (Some 2L) currentEpoch
+      LiveTestWatcherStaleGuard.isStaleEvent (Some "/proj") (Some 2L) currentEpoch
       |> Expect.isFalse "epoch unchanged since queue → fresh"
 
     testCase "event queued before any stop and never recreated stays fresh" <| fun _ ->
       let currentEpoch (_d: string) = 0L
-      SageFs.FileWatcher.LiveTestWatcherStaleGuard.isStaleEvent (Some "/proj") (Some 0L) currentEpoch
+      LiveTestWatcherStaleGuard.isStaleEvent (Some "/proj") (Some 0L) currentEpoch
       |> Expect.isFalse "epoch 0 → 0 with a resolving dir → fresh"
   ]
 

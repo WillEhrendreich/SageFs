@@ -153,6 +153,7 @@
         <Compile Include="SessionEvents.fs" />
         <Compile Include="DevReload.fs" />
         <Compile Include="FileWatcher.fs" />
+        <Compile Include="LiveTestWatcherStaleGuard.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />

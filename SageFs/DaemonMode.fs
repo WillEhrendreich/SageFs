@@ -910,7 +910,7 @@ type LiveTestWatcherManager
         // queued event belongs to a dead watcher generation. Drop it — a stale
         // reload must never reach a fresh session claim.
         let dir = dirForPath path
-        let isStale = SageFs.FileWatcher.LiveTestWatcherStaleGuard.isStaleEvent dir queuedEpoch epochOf
+        let isStale = SageFs.LiveTestWatcherStaleGuard.isStaleEvent dir queuedEpoch epochOf
         match isStale with
         | true -> ()
         | false ->
