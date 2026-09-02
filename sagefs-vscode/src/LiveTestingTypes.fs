@@ -128,7 +128,11 @@ type VscResultFreshness =
 /// SSE events from the SageFs server
 [<RequireQualifiedAccess>]
 type VscLiveTestEvent =
-  | TestsDiscovered of tests: VscTestInfo array
+  /// tests: the discovered/streamed test infos; isComplete: true when the
+  /// server marked this batch Completion=Complete (the entries are the
+  /// authoritative full discovery set); discoveryGeneration: the server's
+  /// discovery generation (0 = none/unversioned).
+  | TestsDiscovered of tests: VscTestInfo array * isComplete: bool * discoveryGeneration: int64
   | TestRunStarted of testIds: VscTestId array
   | TestResultBatch of results: VscTestResult array * freshness: VscResultFreshness
   | LiveTestingEnabled
@@ -205,6 +209,9 @@ module VscLiveTestingDecision =
 [<RequireQualifiedAccess>]
 type VscStateChange =
   | TestsAdded of VscTestInfo array
+  /// A complete rediscovery from a newer generation removed these tests —
+  /// the adapter must drop their TestItems and decorations.
+  | TestsRemoved of VscTestId array
   | TestsStarted of VscTestId array
   | TestsCompleted of VscTestResult array
   | ResultsStale of VscResultFreshness
@@ -247,6 +254,10 @@ type VscLiveTestState = {
   LastTiming: (float * float * float) option
   Freshness: VscResultFreshness
   FailureNarratives: Map<string, VscFailureNarrative>
+  /// The newest discovery generation applied to this state. A complete
+  /// discovery carrying a HIGHER generation replaces Tests/Results; older
+  /// or equal generations are ignored (the server already applied them).
+  DiscoveryGeneration: int64
 }
 
 module VscLiveTestState =
@@ -260,21 +271,48 @@ module VscLiveTestState =
     LastTiming = None
     Freshness = VscResultFreshness.Fresh
     FailureNarratives = Map.empty
+    DiscoveryGeneration = 0L
   }
 
   /// Pure fold: event → state → (new state * changes for UI)
   let update (event: VscLiveTestEvent) (state: VscLiveTestState) : VscLiveTestState * VscStateChange list =
     match event with
-    | VscLiveTestEvent.TestsDiscovered tests ->
-      // NOTE: merge semantics retained. A batch may be PARTIAL (live result
-      // streaming), so wholesale replacement would sweep tests that simply
-      // have no results in this batch. Correct replacement-sweep requires
-      // threading the server's Completion signal through parseResultsBatch
-      // (only sweep when Completion = Complete) — tracked as the client-side
-      // rediscovery defect; the server already sweeps + tags generations.
-      let newTests =
-        tests |> Array.fold (fun m t -> Map.add t.Id t m) state.Tests
-      { state with Tests = newTests }, [ VscStateChange.TestsAdded tests ]
+    | VscLiveTestEvent.TestsDiscovered (tests, isComplete, discoveryGeneration) ->
+      // Rediscovery sweep: a COMPLETE batch from a NEWER generation is the
+      // authoritative discovery set — tests absent from it were renamed or
+      // deleted server-side and must be swept (their TestItems, results, and
+      // decorations would otherwise linger as stale). Partial batches (live
+      // result streaming) keep merge semantics — sweeping on a partial batch
+      // would drop tests that merely have no results in it.
+      let isAuthoritative =
+        isComplete && discoveryGeneration > state.DiscoveryGeneration
+      match isAuthoritative with
+      | false ->
+        let newTests =
+          tests |> Array.fold (fun m t -> Map.add t.Id t m) state.Tests
+        { state with Tests = newTests }, [ VscStateChange.TestsAdded tests ]
+      | true ->
+        let newTests = tests |> Array.fold (fun m t -> Map.add t.Id t m) Map.empty
+        let removed =
+          state.Tests
+          |> Map.keys
+          |> Seq.filter (fun id -> not (Map.containsKey id newTests))
+          |> Seq.toArray
+        // Sweep results for removed tests too — stale results drive stale
+        // pass/fail decorations on items that no longer exist.
+        let sweptResults =
+          if Array.isEmpty removed then state.Results
+          else
+            let removedSet = removed |> Set.ofArray
+            state.Results |> Map.filter (fun id _ -> not (Set.contains id removedSet))
+        let changes =
+          [ yield VscStateChange.TestsAdded tests
+            if not (Array.isEmpty removed) then
+              yield VscStateChange.TestsRemoved removed ]
+        { state with
+            Tests = newTests
+            Results = sweptResults
+            DiscoveryGeneration = discoveryGeneration }, changes
 
     | VscLiveTestEvent.TestRunStarted ids ->
       let running = ids |> Set.ofArray

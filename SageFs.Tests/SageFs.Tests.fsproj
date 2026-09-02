@@ -150,6 +150,10 @@
          <Compile Include="FsiRewriteTests.fs" />
          <Compile Include="LiveTestingTypesTests.fs" />
          <Compile Include="LiveTestingDiscoveryStateTests.fs" />
+         <!-- Client-side pure fold (shared with the Fable VS Code extension):
+              linked so the rediscovery-sweep contract is tested in Expecto. -->
+         <Compile Include="..\sagefs-vscode\src\LiveTestingTypes.fs" />
+         <Compile Include="VscLiveTestStateTests.fs" />
          <Compile Include="SessionPredicatesAndUiTests.fs" />
          <Compile Include="SessionManagerCqrsTests.fs" />
          <Compile Include="SessionManagerRestartTombstoneTests.fs" />

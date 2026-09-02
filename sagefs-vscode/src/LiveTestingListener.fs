@@ -175,16 +175,29 @@ let parseFreshness (data: obj) : VscResultFreshness =
   | Some "StaleWrongGeneration" -> VscResultFreshness.StaleWrongGeneration
   | _ -> VscResultFreshness.Fresh
 
-/// Parse test_results_batch → VscLiveTestEvent pair (discovery + results)
-let parseResultsBatch (data: obj) : VscLiveTestEvent list =
+/// Parse Completion DU from server JSON (Complete | Partial | Superseded).
+let parseCompletion (data: obj) : bool =
+  // true = Complete — the batch entries are the authoritative discovery set.
+  match fieldObj "Completion" data |> Option.bind parseDuCase with
+  | Some "Complete" -> true
+  | _ -> false
+
+/// Parse test_results_batch → VscLiveTestEvent pair (discovery + results).
+/// The discoveryGeneration is supplied by the caller from the latest
+/// test_summary (the batch itself does not carry it) — a batch arriving
+/// after a summary with a bumped generation is the authoritative fresh
+/// discovery set; an affected-run batch (generation unchanged) must not
+/// sweep.
+let parseResultsBatch (discoveryGeneration: int64) (data: obj) : VscLiveTestEvent list =
   fieldObj "Entries" data
   |> Option.bind tryOfObj
   |> Option.map (fun entries ->
     let freshness = parseFreshness data
+    let isComplete = parseCompletion data
     let entryArray = tryCastArray entries |> Option.defaultValue [||]
     let testInfos = entryArray |> Array.map parseTestInfo
     let testResults = entryArray |> Array.map parseTestResult
-    [ VscLiveTestEvent.TestsDiscovered testInfos
+    [ VscLiveTestEvent.TestsDiscovered (testInfos, isComplete, discoveryGeneration)
       VscLiveTestEvent.TestResultBatch (testResults, freshness) ])
   |> Option.defaultValue []
 
@@ -262,6 +275,7 @@ type LiveTestingListener = {
 
 let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> unit) option) (onDisconnect: (unit -> unit) option) (log: (string -> unit) option) : LiveTestingListener =
   let mutable state = VscLiveTestState.empty
+  let mutable discoveryGen = 0L
   let mutable bindings: obj array = [||]
   let mutable TestTrace: obj option = None
   let mutable evalDiff: VscEvalDiff option = None
@@ -317,9 +331,10 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
       match eventType with
       | "test_summary" ->
         let summary = parseSummary data
+        discoveryGen <- summary.DiscoveryGeneration
         callbacks.OnSummaryUpdate summary
       | "test_results_batch" ->
-        let events = parseResultsBatch data
+        let events = parseResultsBatch discoveryGen data
         let mutable allChanges = []
         for evt in events do
           let newState, changes = VscLiveTestState.update evt state
@@ -464,6 +479,7 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
     | Some reconnectFn, Some logger ->
       subscribeTypedSseWithReconnect url processEvent (fun () ->
         state <- VscLiveTestState.empty
+        discoveryGen <- 0L
         sessionFilter <- None  // Re-open filter; will be re-set by next warmup_context_snapshot
         reconnectFn ()
       ) disconnectFn logger

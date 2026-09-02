@@ -162,6 +162,16 @@ let create
       | VscStateChange.TestsAdded tests ->
         for t in tests do
           ensureTestItem t |> ignore
+      | VscStateChange.TestsRemoved ids ->
+        // Rediscovery sweep: drop the stale TestItems so the Test Explorer
+        // and gutter decorations stop showing renamed/deleted tests.
+        for id in ids do
+          let idStr = VscTestId.value id
+          match testItemMap.TryGetValue(idStr) with
+          | true, _ ->
+            controller.items.delete idStr
+            testItemMap.Remove(idStr) |> ignore
+          | false, _ -> ()
       | VscStateChange.TestsCompleted results ->
         applyResults results
       | VscStateChange.TestsStarted ids ->

@@ -38,6 +38,7 @@ ${extractFunction("parseStringArrayField")}
 ${extractFunction("parseLastDecision")}
 ${extractFunction("parseSummary")}
 ${extractFunction("parseFreshness")}
+${extractFunction("parseCompletion")}
 ${extractFunction("parseResultsBatch")}
 module.exports = { parseSummary, parseResultsBatch };
 `;
@@ -131,12 +132,15 @@ run("parseSummary consumes fallback decision golden fixture", () => {
 });
 
 run("parseResultsBatch consumes coverage decision golden fixture", () => {
-  const events = Array.from(parseResultsBatch(readFixture("results-batch-with-coverage-decision.json")));
+  const events = Array.from(parseResultsBatch(2n, readFixture("results-batch-with-coverage-decision.json")));
   assert(events.length === 2, `expected 2 events, got ${events.length}`);
   const discovered = events[0];
   const batch = events[1];
   assert(discovered.tag === 0, `expected TestsDiscovered tag 0, got ${discovered.tag}`);
+  assert(discovered.fields.length === 3, `expected (tests, isComplete, generation), got ${discovered.fields.length} fields`);
   assert(discovered.fields[0].length === 2, `expected 2 discovered tests, got ${discovered.fields[0].length}`);
+  assert(discovered.fields[1] === true, `expected Complete=true from fixture, got ${discovered.fields[1]}`);
+  assert(discovered.fields[2] === 2n, `expected generation threaded from summary, got ${discovered.fields[2]}`);
   assert(batch.tag === 2, `expected TestResultBatch tag 2, got ${batch.tag}`);
   assert(batch.fields[0].length === 2, `expected 2 results, got ${batch.fields[0].length}`);
   assert(batch.fields[1].tag === 0, `expected Fresh freshness tag 0, got ${batch.fields[1].tag}`);
