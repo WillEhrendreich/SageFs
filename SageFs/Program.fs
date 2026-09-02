@@ -147,6 +147,64 @@ let decideDaemonLaunch
   | Some info -> AttachToExistingDaemon info
   | None -> StartNewDaemon
 
+/// Result of the fallback force-kill performed when graceful shutdown fails.
+type StopKillResult =
+  /// Process was found and terminated.
+  | StopKilled
+  /// Process is gone (stale PID from a dead daemon's state file).
+  | StopProcessGone of message: string
+  /// Process exists but could not be killed for another reason.
+  | StopKillFailed of message: string
+
+/// The `sagefs stop` command with every daemon interaction injected so exit
+/// codes are testable without touching a real daemon:
+///   readOnPort     - locate the daemon state (stale-pid / no-daemon cases)
+///   requestShutdown - graceful HTTP shutdown request
+///   killProcess    - fallback force-kill of the recorded PID
+/// A stop that did nothing is NOT success: "No daemon running" and
+/// "Daemon was not running (stale PID N)" both exit NON-zero so automation can
+/// tell a successful stop from a no-op.
+let stopCommand
+  (readOnPort: int -> DaemonInfo option)
+  (requestShutdown: int -> bool)
+  (killProcess: int -> StopKillResult)
+  (mcpPort: int)
+  =
+  match readOnPort mcpPort with
+  | Some info ->
+    match requestShutdown mcpPort with
+    | true ->
+      printfn "Daemon shutting down (PID %d)" info.Pid
+      0
+    | false ->
+      match killProcess info.Pid with
+      | StopKilled ->
+        printfn "Daemon stopped (PID %d)" info.Pid
+        0
+      | StopProcessGone message ->
+        eprintfn "Stop daemon error for PID %d: %s" info.Pid message
+        printfn "Daemon was not running (stale PID %d)" info.Pid
+        1
+      | StopKillFailed message ->
+        eprintfn "Stop daemon error for PID %d: %s" info.Pid message
+        printfn "Daemon was not running (stale PID %d)" info.Pid
+        1
+  | None ->
+    printfn "No daemon running"
+    1
+
+let private stopKillProcess (pid: int) =
+  try
+    let proc = System.Diagnostics.Process.GetProcessById(pid)
+    if proc.HasExited then
+      StopProcessGone (sprintf "process %d has already exited" pid)
+    else
+      proc.Kill()
+      proc.WaitForExit(3000) |> ignore
+      StopKilled
+  with ex ->
+    StopProcessGone ex.Message
+
 [<EntryPoint>]
 let main args =
   // Wrap Console.Out to normalize \n to \r\n on Windows console.
@@ -213,26 +271,7 @@ let main args =
 
   | Stop ->
     let mcpPort = parseMcpPort args
-    match DaemonState.readOnPort mcpPort with
-    | Some info ->
-      match DaemonState.requestShutdown mcpPort with
-      | true ->
-        printfn "Daemon shutting down (PID %d)" info.Pid
-        0
-      | false ->
-        try
-          let proc = System.Diagnostics.Process.GetProcessById(info.Pid)
-          proc.Kill()
-          proc.WaitForExit(3000) |> ignore
-          printfn "Daemon stopped (PID %d)" info.Pid
-          0
-        with ex ->
-          eprintfn "Stop daemon error for PID %d: %s" info.Pid ex.Message
-          printfn "Daemon was not running (stale PID %d)" info.Pid
-          0
-    | None ->
-      printfn "No daemon running"
-      0
+    stopCommand DaemonState.readOnPort DaemonState.requestShutdown stopKillProcess mcpPort
 
   | Status ->
     let mcpPort = parseMcpPort args

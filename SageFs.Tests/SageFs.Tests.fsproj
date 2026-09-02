@@ -307,6 +307,7 @@
         <Compile Include="TestsPaneTests.fs" />
         <Compile Include="TimeoutsTests.fs" />
         <Compile Include="EnvCheckTests.fs" />
+        <Compile Include="CliStopExitCodeTests.fs" />
         <Compile Include="FsiOutputParserTests.fs" />
         <Compile Include="SseReplayTests.fs" />
         <Compile Include="SseSerializationBenchmarks.fs" />
