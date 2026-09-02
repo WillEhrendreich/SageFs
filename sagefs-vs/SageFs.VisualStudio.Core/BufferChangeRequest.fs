@@ -90,3 +90,21 @@ type BufferChangeRequestInterop =
     content: string) =
       let sessionList = sessions |> Seq.toList
       BufferChangeRequest.tryCreate sessionList filePath content
+
+  /// Resolve the session that owns the given document. Prefers the unique
+  /// owning session (document-owning selection, not sessions[0]); falls back
+  /// to the first session when no session owns the file (global commands and
+  /// files outside any session's working dir). Returns null when there are no
+  /// sessions at all.
+  static member ResolveSessionId(
+    sessions: System.Collections.Generic.IEnumerable<SessionInfo>,
+    filePath: string) =
+      let sessionList = sessions |> Seq.toList
+      match BufferChangeRequest.resolveSessionOwnership sessionList filePath with
+      | SessionOwnershipResolution.UniqueMatch sessionId -> sessionId
+      | SessionOwnershipResolution.AmbiguousMatch (sessionId :: _) -> sessionId
+      | SessionOwnershipResolution.AmbiguousMatch [] -> null
+      | SessionOwnershipResolution.NoMatch ->
+        match sessionList with
+        | first :: _ -> first.Id
+        | [] -> null

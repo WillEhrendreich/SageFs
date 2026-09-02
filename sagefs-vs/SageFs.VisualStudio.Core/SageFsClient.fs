@@ -169,6 +169,39 @@ type HealthError = {
   SuggestedAction: string
 }
 
+[<RequireQualifiedAccess>]
+module WatchPath =
+  /// Normalize a directory path for prefix comparison (case-insensitive on
+  /// Windows, trailing separators trimmed, forward slashes converted).
+  let normalizeDirectory (directory: string) =
+    match String.IsNullOrWhiteSpace directory with
+    | true -> ""
+    | false ->
+        directory.Replace('/', '\\')
+        |> fun p ->
+          match p.Length with
+          | n when n > 3 && p.EndsWith("\\") -> p.TrimEnd('\\')
+          | n when n = 3 && p.EndsWith("\\") -> p // drive root "C:\" keeps its slash
+          | _ -> p
+
+  /// Does the (normalized) directory prefix-contain the path?
+  let pathUnderDirectory (directory: string) (path: string) =
+    match String.IsNullOrWhiteSpace directory, String.IsNullOrWhiteSpace path with
+    | true, _
+    | _, true -> false
+    | _ ->
+        let normalizedPath = path.Replace('/', '\\')
+        let dir = normalizeDirectory directory
+        match dir with
+        | "" -> false
+        | d when d.EndsWith(":") -> // drive root "C:" — treat as "C:\"
+          normalizedPath.StartsWith(d + "\\", StringComparison.OrdinalIgnoreCase)
+        | d when d.EndsWith("\\") -> // drive root "C:\"
+          normalizedPath.StartsWith(d, StringComparison.OrdinalIgnoreCase)
+        | d ->
+          normalizedPath.StartsWith(d + "\\", StringComparison.OrdinalIgnoreCase)
+        || String.Equals(normalizedPath, dir, StringComparison.OrdinalIgnoreCase)
+
 /// HTTP client for communicating with the SageFs daemon.
 /// Registered as a singleton via DI in the extension entry point.
 type SageFsClient(http: HttpClient) =
@@ -421,6 +454,28 @@ type SageFsClient(http: HttpClient) =
           new StringContent(json, Encoding.UTF8, "application/json"), ct)
       return ()
     with _ -> return ()
+  }
+
+  /// Toggle directory watch state: when any watched path falls under the
+  /// directory, unwatch it; otherwise watch it. Real toggling (the old
+  /// directory toggle always watched — the defect), decided from live state.
+  member this.ToggleDirectoryWatchAsync(sessionId: string, directory: string, ct: CancellationToken) = task {
+    try
+      let! state = this.GetHotReloadStateAsync(sessionId, ct)
+      let normalizedDirectory = WatchPath.normalizeDirectory directory
+      let currentlyWatched =
+        match state with
+        | Some s ->
+          s.Files
+          |> List.exists (fun f -> f.Watched && WatchPath.pathUnderDirectory normalizedDirectory f.Path)
+        | None -> false
+
+      match currentlyWatched with
+      | true -> do! this.UnwatchDirectoryAsync(sessionId, directory, ct)
+      | false -> do! this.WatchDirectoryAsync(sessionId, directory, ct)
+
+      return currentlyWatched |> not
+    with _ -> return true
   }
 
   /// Start the daemon process.

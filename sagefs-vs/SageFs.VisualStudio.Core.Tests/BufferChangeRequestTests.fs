@@ -148,3 +148,55 @@ let ``PostBufferChangedAsync posts to session scoped buffer changed route`` () =
     handler.LastBody.Value |> should haveSubstring "\"filePath\":\"C:\\\\Code\\\\SageFs\\\\Features\\\\Game.fs\""
     handler.LastBody.Value |> should haveSubstring "\"content\":\"module Game\""
   }
+
+[<Fact>]
+let ``ResolveSessionId prefers document-owning session over first session`` () =
+  let sessions =
+    [ session "first" @"C:\Code\Other"
+      session "owner" @"C:\Code\SageFs" ]
+
+  BufferChangeRequestInterop.ResolveSessionId(sessions, @"C:\Code\SageFs\Features\Game.fs")
+  |> should equal "owner"
+
+[<Fact>]
+let ``ResolveSessionId falls back to first session when nothing owns the file`` () =
+  let sessions =
+    [ session "first" @"C:\Code\Other"
+      session "second" @"C:\Code\SageFs" ]
+
+  BufferChangeRequestInterop.ResolveSessionId(sessions, @"C:\Code\Unrelated\Notes.md")
+  |> should equal "first"
+
+[<Fact>]
+let ``ResolveSessionId returns null when no sessions exist`` () =
+  BufferChangeRequestInterop.ResolveSessionId([], @"C:\Code\SageFs\Game.fs")
+  |> should equal null
+
+[<Fact>]
+let ``ResolveSessionId breaks ambiguous ownership toward the owning session`` () =
+  let sessions =
+    [ session "root" @"C:\Code"
+      session "child" @"C:\Code\SageFs" ]
+
+  BufferChangeRequestInterop.ResolveSessionId(sessions, @"C:\Code\SageFs\Features\Game.fs")
+  |> should equal "root"
+
+[<Fact>]
+let ``WatchPath treats paths under directory as watched`` () =
+  WatchPath.pathUnderDirectory @"C:\Code\SageFs" @"C:\Code\SageFs\src\App.fs"
+  |> should equal true
+
+[<Fact>]
+let ``WatchPath treats sibling-prefix as not watched`` () =
+  WatchPath.pathUnderDirectory @"C:\Code\SageFs" @"C:\Code\SageFs-Other\src\App.fs"
+  |> should equal false
+
+[<Fact>]
+let ``WatchPath treats exact directory match as watched`` () =
+  WatchPath.pathUnderDirectory @"C:\Code\SageFs" @"C:\Code\SageFs"
+  |> should equal true
+
+[<Fact>]
+let ``WatchPath normalizes trailing separators and forward slashes`` () =
+  WatchPath.pathUnderDirectory @"C:/Code/SageFs/" @"C:\Code\SageFs\src\App.fs"
+  |> should equal true

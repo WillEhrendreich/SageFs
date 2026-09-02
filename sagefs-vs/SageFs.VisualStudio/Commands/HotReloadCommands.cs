@@ -54,7 +54,17 @@ internal class HotReloadToggleFileCommand : Command
       return;
     }
 
-    await client.ToggleHotReloadAsync(sessions[0].Id, filePath, ct);
+    // Document-owning session selection: use the session whose working dir
+    // contains the active file — not sessions[0] (the multi-session defect).
+    var sessionId = Core.BufferChangeRequestInterop.ResolveSessionId(sessions, filePath);
+    if (sessionId is null)
+    {
+      if (output is not null)
+        await output.WriteLineAsync("⚠ No session owns this file");
+      return;
+    }
+
+    await client.ToggleHotReloadAsync(sessionId, filePath, ct);
     if (output is not null)
       await output.WriteLineAsync($"↻ Toggled hot reload for {Path.GetFileName(filePath)}");
   }
@@ -211,10 +221,21 @@ internal class HotReloadToggleDirectoryCommand : Command
       return;
     }
 
-    // Toggle: watch the directory (the daemon will toggle based on current state)
-    await client.WatchDirectoryAsync(sessions[0].Id, directory, ct);
+    var sessionId = Core.BufferChangeRequestInterop.ResolveSessionId(sessions, filePath);
+    if (sessionId is null)
+    {
+      if (output is not null)
+        await output.WriteLineAsync("⚠ No session owns this directory");
+      return;
+    }
+
+    // Real toggle: unwatch when already watched, watch otherwise.
+    var nowWatching = await client.ToggleDirectoryWatchAsync(sessionId, directory, ct);
     if (output is not null)
-      await output.WriteLineAsync($"📂 Toggled hot reload for directory: {directory}");
+      await output.WriteLineAsync(
+        nowWatching
+          ? $"📂 Watching directory: {directory}"
+          : $"⏹ Stopped watching directory: {directory}");
   }
 }
 
