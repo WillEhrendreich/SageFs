@@ -69,15 +69,43 @@ let recordEval (code: string) (result: string) (durationMs: int64) (state: Featu
   // W1(R9): Cap EvalHistory at MaxEvalHistory to prevent unbounded O(n) growth.
   // Prepend is O(1); truncate drops the oldest entries at the tail.
   let cappedHistory = (entry :: state.EvalHistory) |> List.truncate MaxEvalHistory
-  // Build scope snapshot in chronological order (oldest-first for correct CellIndex ordering).
-  let allCellInputs =
-    cappedHistory
-    |> List.rev
-    |> List.map (fun e ->
-      let ci: BindingExplorer.CellInput =
-        { CellIndex = e.CellIndex; FsiOutput = e.Result; Source = e.Code }
-      ci)
-  let newScope = BindingExplorer.buildScopeSnapshot allCellInputs
+  // The binding scope is updated INCREMENTALLY: only the new cell can change
+  // the scope, so merge it into the cached snapshot instead of rebuilding the
+  // whole scope from up to 10,000 retained cells on every eval (roast §6 —
+  // that was O(n) per eval, O(n²) total). The merge cannot evict cells, so
+  // when the history cap actually truncated (an eviction), fall back to the
+  // full rebuild.
+  let didTruncate = cappedHistory.Length < (entry :: state.EvalHistory).Length
+  let newScope =
+    match didTruncate with
+    | true ->
+      let allCellInputs =
+        cappedHistory
+        |> List.rev
+        |> List.map (fun e ->
+          let ci: BindingExplorer.CellInput =
+            { CellIndex = e.CellIndex; FsiOutput = e.Result; Source = e.Code }
+          ci)
+      BindingExplorer.buildScopeSnapshot allCellInputs
+    | false ->
+      match state.CachedScope with
+      | None ->
+        // First eval — build from the single cell.
+        BindingExplorer.buildScopeSnapshot
+          [ { BindingExplorer.CellInput.CellIndex = idx
+              FsiOutput = result
+              Source = code } ]
+      | Some prior ->
+        let priorCellInputs =
+          state.EvalHistory
+          |> List.rev
+          |> List.map (fun e ->
+            let ci: BindingExplorer.CellInput =
+              { CellIndex = e.CellIndex; FsiOutput = e.Result; Source = e.Code }
+            ci)
+        let newCell: BindingExplorer.CellInput =
+          { CellIndex = idx; FsiOutput = result; Source = code }
+        BindingExplorer.appendCell newCell priorCellInputs prior
   let timelineEntry: EvalTimeline.TimelineEntry =
     { CellId = idx; StartMs = 0L; DurationMs = durationMs; Status = EvalTimeline.Success }
   let newTimeline = EvalTimeline.TimelineState.record timelineEntry state.CachedTimeline

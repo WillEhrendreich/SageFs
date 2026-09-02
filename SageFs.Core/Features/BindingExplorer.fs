@@ -95,6 +95,90 @@ let buildScopeSnapshot (cells: CellInput list) : BindingScopeSnapshot =
   let shadowed = withRefs |> List.filter (fun b -> not (b.ShadowedBy |> List.isEmpty))
   { Bindings = withRefs; ActiveBindings = active; ShadowedBindings = shadowed }
 
+/// Cells (excluding index `selfCellIndex`) whose source contains `name` as a
+/// whole word. Shared by buildScopeSnapshot and appendCell so the incremental
+/// merge uses identical word-boundary semantics.
+let private cellsReferencingName (name: string) (selfCellIndex: int) (cells: CellInput list) : int list =
+  let re = Regex(@"\b" + Regex.Escape(name) + @"\b")
+  cells
+  |> List.choose (fun cell ->
+    if cell.CellIndex <> selfCellIndex && re.IsMatch(cell.Source) then
+      Some cell.CellIndex
+    else None)
+
+/// Incrementally append ONE new cell to an existing scope snapshot.
+///
+/// Per-eval cost driver (roast §6/queue-7): recordEval used to rebuild the
+/// whole scope from up to 10,000 retained cells on EVERY eval — re-parsing
+/// every retained result and recomputing every cross-reference, O(n) per
+/// eval, O(n²) total. Only the newest cell can change the scope, in exactly
+/// these ways (mirroring buildScopeSnapshot's semantics precisely):
+///   - prior bindings same-named as a new binding gain the new cell index in
+///     ShadowedBy (the rebuild shadows EVERY prior same-named binding);
+///   - prior bindings whose name the new source references gain the new cell
+///     index in ReferencedIn;
+///   - a NEW binding's ReferencedIn includes every prior cell whose source
+///     mentions the name — the rebuild's reference scan is bidirectional, so
+///     an OLDER cell that defined or used the same name is recorded as a
+///     reference on the new binding (e.g. redefining `let x = ...` makes the
+///     new binding referenced-by the older defining cell);
+///   - the new binding is never referenced by cells after it (none exist).
+/// Every other binding is untouched. `priorCells` must be the cells that
+/// produced `prior`, in chronological order, and `cell` must be the newest.
+/// When the history is truncated the caller must fall back to a full
+/// buildScopeSnapshot (this merge cannot evict dropped cells).
+let appendCell (cell: CellInput) (priorCells: CellInput list) (prior: BindingScopeSnapshot) : BindingScopeSnapshot =
+  let newBindings =
+    cell.FsiOutput.Split('\n')
+    |> Array.choose parseBinding
+    |> Array.map (fun (name, typeSig, valueOpt) ->
+      { Name = name
+        TypeSig = typeSig
+        Value = valueOpt
+        CellIndex = cell.CellIndex
+        ShadowedBy = []
+        ReferencedIn = cellsReferencingName name cell.CellIndex priorCells })
+    |> Array.toList
+  let newNames = newBindings |> List.map (fun b -> b.Name) |> Set.ofList
+  let newShadowIdx = newBindings |> List.map (fun b -> b.CellIndex)
+  let mergedPrior =
+    prior.Bindings
+    |> List.map (fun b ->
+      let shadowed =
+        match newNames.Contains b.Name with
+        | true -> b.ShadowedBy @ newShadowIdx
+        | false -> b.ShadowedBy
+      // Does the new source reference this prior binding's name as a word?
+      let referenced =
+        match Regex(@"\b" + Regex.Escape(b.Name) + @"\b").IsMatch(cell.Source) with
+        | true ->
+          if b.ReferencedIn |> List.contains cell.CellIndex |> not then
+            b.ReferencedIn @ [ cell.CellIndex ]
+          else b.ReferencedIn
+        | false -> b.ReferencedIn
+      { b with ShadowedBy = shadowed; ReferencedIn = referenced })
+  let merged = mergedPrior @ newBindings
+  // Active = empty ShadowedBy; within one cell, the last same-named binding
+  // wins (mirrors the Map.ofList last-wins behavior of buildScopeSnapshot).
+  let lastOfNameInNewCell =
+    newBindings
+    |> List.groupBy (fun b -> b.Name)
+    |> Map.ofList
+    |> Map.map (fun _ group -> List.last group)
+  let activeMap =
+    merged
+    |> List.filter (fun b ->
+      match b.ShadowedBy |> List.isEmpty with
+      | true ->
+        match lastOfNameInNewCell |> Map.tryFind b.Name with
+        | Some last -> last.CellIndex = b.CellIndex
+        | None -> true
+      | false -> false)
+    |> List.map (fun b -> (b.Name, b))
+    |> Map.ofList
+  let shadowed = merged |> List.filter (fun b -> not (b.ShadowedBy |> List.isEmpty))
+  { Bindings = merged; ActiveBindings = activeMap; ShadowedBindings = shadowed }
+
 /// Compute a binding scope snapshot from raw FSI output text (no per-cell source attribution).
 /// Returns None when the output contains no parseable val bindings.
 /// Used by the dashboard so bindings are visible even when no MCP SSE client is connected.

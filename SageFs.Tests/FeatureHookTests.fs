@@ -80,6 +80,45 @@ let featureHookTests = testList "Feature Hook Computation" [
     }
   ]
 
+  testList "incremental CachedScope equivalence" [
+    // recordEval's fast path merges the new cell into CachedScope instead of
+    // rebuilding from all retained cells. The result must be identical to the
+    // full rebuild from the accumulated history (roast §6 regression guard).
+    test "redefinition + cross-cell refs: incremental scope equals full rebuild" {
+      let steps = [
+        "let x = 1", "val x: int = 1"
+        "let y = x + 1", "val y: int = 2"
+        "let x = 10", "val x: int = 10"
+        "let z = x + y", "val z: int = 12"
+      ]
+      let state =
+        steps
+        |> List.fold (fun st (code, result) -> recordEval code result 5L st) FeaturePushState.empty
+      let expected =
+        state.EvalHistory
+        |> List.rev
+        |> List.map (fun e ->
+          let cell : SageFs.Features.BindingExplorer.CellInput = {
+            CellIndex = e.CellIndex
+            FsiOutput = e.Result
+            Source = e.Code
+          }
+          cell)
+        |> SageFs.Features.BindingExplorer.buildScopeSnapshot
+      match state.CachedScope with
+      | None -> failwith "CachedScope should exist after evals"
+      | Some actual ->
+        actual.Bindings |> Expect.equal "bindings match full rebuild" expected.Bindings
+        actual.ActiveBindings |> Expect.equal "active map matches" expected.ActiveBindings
+        actual.ShadowedBindings |> Expect.equal "shadowed list matches" expected.ShadowedBindings
+    }
+
+    test "first eval populates CachedScope" {
+      let state = FeaturePushState.empty |> recordEval "let x = 1" "val x: int = 1" 50L
+      state.CachedScope |> Expect.isSome "first eval should populate scope"
+    }
+  ]
+
   testList "Dedup" [
     test "third identical EvalDiff call is deduped" {
       let state =

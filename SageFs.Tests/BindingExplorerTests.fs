@@ -284,6 +284,91 @@ let bindingExplorerTests = testList "BindingExplorer" [
           activeCount + shadowedCount = totalBindings
   ]
 
+  testList "appendCell equivalence" [
+    // The incremental merge MUST produce exactly the same snapshot as the
+    // full rebuild — this is the invariant that keeps recordEval's fast path
+    // semantically identical to the O(n) rebuild it replaced.
+    let snapEquals (a: BindingScopeSnapshot) (b: BindingScopeSnapshot) =
+      a.Bindings = b.Bindings
+      && a.ActiveBindings = b.ActiveBindings
+      && a.ShadowedBindings = b.ShadowedBindings
+
+    let poolName (raw: string) (pool: string[]) =
+      let h = raw |> Seq.fold (fun acc c -> acc + int c) 0
+      pool.[abs h % pool.Length]
+
+    testProperty "appendCell fold equals full rebuild for shadowing" <|
+      fun (rawNames: string list) ->
+        let pool = [| "x"; "y"; "z" |]
+        let cells =
+          rawNames
+          |> List.truncate 12
+          |> List.mapi (fun i raw ->
+            let name = poolName raw pool
+            { CellIndex = i
+              FsiOutput = sprintf "val %s : int = %d" name i
+              Source = sprintf "let %s = %d" name i })
+        match cells with
+        | [] -> true
+        | first :: rest ->
+          let rebuilt = buildScopeSnapshot cells
+          let incremental =
+            rest
+            |> List.fold (fun (priorCells, snap) cell ->
+              (priorCells @ [ cell ], appendCell cell priorCells snap))
+              ([ first ], buildScopeSnapshot [ first ])
+            |> snd
+          snapEquals rebuilt incremental
+
+    testProperty "appendCell fold equals full rebuild with cross-cell references" <|
+      fun (pairs: (string * bool) list) ->
+        let pool = [| "a"; "b"; "c" |]
+        let cells =
+          pairs
+          |> List.truncate 10
+          |> List.mapi (fun i (rawName, usesPrev) ->
+            let name = poolName rawName pool
+            let source =
+              match i, usesPrev with
+              | 0, _ -> sprintf "let %s = %d" name i
+              | _, true ->
+                let prev = pool.[(i - 1) % pool.Length]
+                sprintf "let %s = %s + %d" name prev i
+              | _, false -> sprintf "let %s = %d" name i
+            { CellIndex = i
+              FsiOutput = sprintf "val %s : int = %d" name i
+              Source = source })
+        match cells with
+        | [] -> true
+        | first :: rest ->
+          let rebuilt = buildScopeSnapshot cells
+          let incremental =
+            rest
+            |> List.fold (fun (priorCells, snap) cell ->
+              (priorCells @ [ cell ], appendCell cell priorCells snap))
+              ([ first ], buildScopeSnapshot [ first ])
+            |> snd
+          snapEquals rebuilt incremental
+
+    testProperty "appendCell fold equals full rebuild with same-name redefinition" <|
+      fun (count: uint8) ->
+        let n = max 2 (int count % 8 + 2)
+        let cells =
+          [ for i in 0 .. n - 1 ->
+              { CellIndex = i
+                FsiOutput = sprintf "val x : int = %d" i
+                Source = sprintf "let y = x + 1\nlet x = %d" i } ]
+        let rebuilt = buildScopeSnapshot cells
+        let incremental =
+          cells
+          |> List.tail
+          |> List.fold (fun (priorCells, snap) cell ->
+            (priorCells @ [ cell ], appendCell cell priorCells snap))
+            ([ cells.Head ], buildScopeSnapshot [ cells.Head ])
+          |> snd
+        snapEquals rebuilt incremental
+  ]
+
   testList "fromRawOutput" [
     testCase "empty string returns None" <| fun () ->
       fromRawOutput "" |> Expect.isNone "empty string"
