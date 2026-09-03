@@ -528,7 +528,7 @@ let renderSessionPicker (previous: PreviousSession list) =
             Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
               Elem.button
                 [ Attr.class' "eval-btn"
-                  Attr.style "flex: 1; height: 2rem; padding: 0 0.5rem; font-size: 0.8rem;"
+                  Attr.style "flex: 1; font-size: 0.8rem; display: inline-flex; align-items: center; justify-content: center; gap: 2px; height: 2rem;"
                   Ds.indicator Signals.DiscoverLoading
                   Ds.attr' ("disabled", "$discoverLoading")
                   Ds.onClick (Ds.post "/dashboard/discover-projects") ]
@@ -537,7 +537,7 @@ let renderSessionPicker (previous: PreviousSession list) =
                   Text.raw "Discover" ]
               Elem.button
                 [ Attr.class' "eval-btn"
-                  Attr.style "flex: 1; height: 2rem; padding: 0 0.5rem; font-size: 0.8rem;"
+                  Attr.style "flex: 1; font-size: 0.8rem; display: inline-flex; align-items: center; justify-content: center; gap: 2px; height: 2rem;"
                   Ds.indicator Signals.CreateLoading
                   Ds.attr' ("disabled", "$createLoading")
                   Ds.onClick (Ds.post "/dashboard/session/create") ]
@@ -932,7 +932,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 [ Text.raw "■" ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-warn"
-                  Attr.title "Dispose — stop and clear saved memory (must rebuild anew)"
+                  Attr.title "Dispose — stop the session (no separate saved-memory file remains; purge removes the manifest entry)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/dispose/%s" sid)) ]
                 [ Text.raw "⌫" ]
               Elem.button
@@ -1174,35 +1174,46 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                   Attr.style "display:none; position:absolute; bottom:100%; left:0; max-height:200px; overflow-y:auto; background:var(--bg-default); border:1px solid var(--bg-selection); border-radius:0; z-index:100; min-width:200px; font-size:0.85em; box-shadow:0 -2px 8px rgba(0,0,0,0.3);" ]
                 []
             ]
-            Elem.div [ Attr.style "display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;" ] [
-              Elem.button
-                [ Attr.class' "eval-btn"
-                  Ds.indicator Signals.EvalLoading
-                  Ds.attr' ("disabled", "$evalLoading")
-                  Ds.onClick (Ds.post "/dashboard/eval") ]
-                [ Elem.span [ Ds.show "$evalLoading" ] [ Text.raw "⏳ " ]
-                  Elem.span [ Ds.show "!$evalLoading" ] [ Text.raw "▶ " ]
-                  Text.raw "[EVAL]" ]
-              Elem.button
-                [ Attr.class' "eval-btn"
-                  Attr.style "background: var(--fg-green);"
-                  Ds.onClick (Ds.post "/dashboard/reset") ]
-                [ Text.raw "[RESET]" ]
-              Elem.button
-                [ Attr.class' "eval-btn"
-                  Attr.style "background: var(--fg-red);"
-                  Ds.onClick (Ds.post "/dashboard/hard-reset") ]
-                [ Text.raw "[HARD_RESET]" ]
-              Elem.label
-                [ Attr.class' "eval-btn"
-                  Attr.style "background: var(--fg-blue); cursor: pointer; display: inline-flex; align-items: center;" ]
-                [ Elem.input
-                    [ Attr.type' "file"
-                      Attr.accept ".fs,.fsx,.fsi"
-                      Attr.style "display: none;"
-                      Attr.create "onchange" "if(this.files[0]){var f=this.files[0];var r=new FileReader();r.onload=function(){var ta=document.getElementById('eval-textarea');ta.value=r.result;ta.dispatchEvent(new Event('input'))};r.readAsText(f);this.value=''}" ]
-                  Text.raw "📂 Load File" ]
-            ]
+            Elem.div
+              [ Attr.class' "eval-controls" ]
+              [
+                // Eval / reset / hard-reset share one in-flight signal so every
+                // action button is disabled while ANY of them is running — a
+                // click can never double-fire a destructive reset behind an eval.
+                Elem.button
+                  [ Attr.class' "eval-btn"
+                    Ds.indicator Signals.ActionLoading
+                    Ds.attr' ("disabled", "$actionLoading")
+                    Ds.onClick (Ds.post "/dashboard/eval") ]
+                  [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
+                    Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "▶ " ]
+                    Text.raw "[EVAL]" ]
+                Elem.button
+                  [ Attr.class' "eval-btn eval-btn-reset"
+                    Ds.indicator Signals.ActionLoading
+                    Ds.attr' ("disabled", "$actionLoading")
+                    Ds.onClick (Ds.post "/dashboard/reset") ]
+                  [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
+                    Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "↻ " ]
+                    Text.raw "[RESET]" ]
+                Elem.button
+                  [ Attr.class' "eval-btn eval-btn-reset eval-btn-hard"
+                    Ds.indicator Signals.ActionLoading
+                    Ds.attr' ("disabled", "$actionLoading")
+                    Ds.onClick (Ds.post "/dashboard/hard-reset") ]
+                  [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
+                    Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "✖ " ]
+                    Text.raw "[HARD_RESET]" ]
+                Elem.label
+                  [ Attr.class' "eval-btn"
+                    Attr.style "background: var(--fg-blue); cursor: pointer; display: inline-flex; align-items: center; gap: 2px; height: 2rem; padding: 0 0.75rem;" ]
+                  [ Elem.input
+                      [ Attr.type' "file"
+                        Attr.accept ".fs,.fsx,.fsi"
+                        Attr.style "display: none;"
+                        Attr.create "onchange" "if(this.files[0]){var f=this.files[0];var r=new FileReader();r.onload=function(){var ta=document.getElementById('eval-textarea');ta.value=r.result;ta.dispatchEvent(new Event('input'))};r.readAsText(f);this.value=''}" ]
+                    Text.raw "📂 Load File" ]
+              ]
             Elem.div [ Attr.id DomIds.EvalResult ] []
           ]
         ]
@@ -1273,7 +1284,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                     Attr.create "placeholder" "MyProject.fsproj" ]
                 Elem.button
                   [ Attr.class' "eval-btn"
-                    Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
+                    Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem; display: inline-flex; align-items: center; justify-content: center; gap: 2px; height: 2rem;"
                     Ds.indicator Signals.CreateLoading
                     Ds.attr' ("disabled", "$createLoading")
                     Ds.onClick (Ds.post "/dashboard/session/create") ]

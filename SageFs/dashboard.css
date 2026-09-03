@@ -400,6 +400,36 @@ h2 {
   }
 }
 
+/* Eval action row (EVAL / RESET / HARD_RESET / Load File).
+   One shared control idiom: every button is the same fixed height with
+   flex-centered glyphs and labels, and consistent gaps between them —
+   no per-button size drift (taste: uniform fixed-size square controls). */
+.eval-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 0.5rem;
+
+  & .eval-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    height: 2rem;
+    padding: 0 0.75rem;
+    flex-shrink: 0;
+  }
+
+  & .eval-btn-reset {
+    background: var(--fg-green);
+  }
+
+  & .eval-btn-hard {
+    background: var(--fg-red);
+  }
+}
+
 /* ── Editor ───────────────────────────────────────────────────── */
 
 #editor-area {
