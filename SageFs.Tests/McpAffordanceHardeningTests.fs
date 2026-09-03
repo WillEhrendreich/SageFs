@@ -199,10 +199,10 @@ let affordanceAlgebraTests =
 let toolRegistrationTests =
   testList "tool registration completeness" [
 
-    testCase "affordance module covers exactly 15 unique tool names" <| fun _ ->
+    testCase "affordance module covers exactly 33 unique tool names" <| fun _ ->
       allAffordanceTools
       |> List.length
-      |> Expect.equal "unique affordance tools" 15
+      |> Expect.equal "unique affordance tools" 33
 
     testCase "all affordance tool names are non-empty and non-whitespace"
     <| fun _ ->
@@ -221,7 +221,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 20 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 38 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -230,7 +230,7 @@ let toolRegistrationTests =
            reflection test skipped"
       | Some methods ->
         methods.Length
-          |> Expect.equal "MCP tool method count" 20
+          |> Expect.equal "MCP tool method count" 38
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -303,7 +303,7 @@ let stateTransitionSafetyTests =
               "checkToolAvailability threw for (%A, %s): %s"
               state tool ex.Message))
       tested
-          |> Expect.equal "should test all 75 state×tool combos" 75
+          |> Expect.equal "should test all 165 state×tool combos" 165
 
     testCase "all rejections return ToolNotAvailable specifically" <| fun _ ->
       allStates
@@ -382,12 +382,12 @@ let stateTransitionSafetyTests =
         | Ok _ ->
           failtestf "bogus tool must be rejected in %A" state)
 
-    testCase "90-combo safety: all MCP tools × all states never throw (reflection)"
+    testCase "190-combo safety: all MCP tools × all states never throw (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
         skiptest
-          "SageFsTools not found; 245-combo test skipped"
+          "SageFsTools not found; 190-combo test skipped"
       | Some methods ->
         let toolNames = methods |> Array.map (fun m -> m.Name)
         let mutable tested = 0
@@ -404,7 +404,7 @@ let stateTransitionSafetyTests =
                 state tool ex.Message))
         tested
         |> Expect.equal
-          "should test 5 states × 20 tools = 100" 100
+          "should test 5 states × 38 tools = 190" 190
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

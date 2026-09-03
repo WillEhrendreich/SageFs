@@ -42,10 +42,11 @@ let availableTools (state: SessionState) : string list =
   match state with
   | Uninitialized ->
     [ "get_fsi_status"; "get_friction_report"; "get_available_projects"
-      "list_sessions"; "create_session" ]
+      "list_sessions"; "create_session"; "decompose_pipeline" ]
   | WarmingUp ->
     [ "get_fsi_status"; "get_recent_fsi_events"; "get_friction_report"
-      "get_available_projects"; "list_sessions"; "create_session" ]
+      "get_available_projects"; "list_sessions"; "create_session"
+      "decompose_pipeline" ]
   | Ready ->
     [ "send_fsharp_code"
       "get_fsi_status"
@@ -61,7 +62,27 @@ let availableTools (state: SessionState) : string list =
       "get_available_projects"
       "reset_fsi_session"
       "hard_reset_fsi_session"
-      "cancel_eval" ]
+      "cancel_eval"
+      // Feature-analysis surface (P15–P19 + orphaned modules): all session
+      // read-only, available once a session is Ready.
+      "decompose_pipeline"
+      "diagnose"
+      "coverage_intel"
+      "impact_forecast"
+      "suggest_next_action"
+      "plan_ripple"
+      "preview_what_if"
+      "suggest_next_cell"
+      "get_session_filmstrip"
+      "export_notebook"
+      "export_session_transcript"
+      "get_message_journal"
+      "get_eval_timeline"
+      "manage_scratch_pad"
+      "get_eval_diff"
+      "get_cell_dependencies"
+      "discover_features"
+      "suggest_repair" ]
   | Evaluating ->
     [ "cancel_eval"
       "get_fsi_status"
@@ -69,7 +90,8 @@ let availableTools (state: SessionState) : string list =
       "get_friction_report"
       "get_available_projects"
       "list_sessions"
-      "check_fsharp_code" ]
+      "check_fsharp_code"
+      "decompose_pipeline" ]
   | Faulted ->
     [ "get_fsi_status"
       "get_recent_fsi_events"
@@ -78,7 +100,8 @@ let availableTools (state: SessionState) : string list =
       "list_sessions"
       "create_session"
       "reset_fsi_session"
-      "hard_reset_fsi_session" ]
+      "hard_reset_fsi_session"
+      "decompose_pipeline" ]
 
 /// Check if a tool is available in the current state.
 /// Returns Ok () if available, Error with SageFsError.ToolNotAvailable.
@@ -123,6 +146,9 @@ let private gatingDomain : Map<string, ToolGate> =
     "enable_hot_reload", ToolGate.AlwaysAvailable
     "disable_hot_reload", ToolGate.AlwaysAvailable
     "stop_session", ToolGate.AlwaysAvailable
+    // Stateless code analysis — no session required (decomposes the passed
+    // pipeline expression directly).
+    "decompose_pipeline", ToolGate.AlwaysAvailable
     // State-gated tools — availability derives from availableTools for the
     // session's current lifecycle state.
     "send_fsharp_code", ToolGate.StateGated
@@ -136,6 +162,25 @@ let private gatingDomain : Map<string, ToolGate> =
     "reset_fsi_session", ToolGate.StateGated
     "hard_reset_fsi_session", ToolGate.StateGated
     "cancel_eval", ToolGate.StateGated
+    // Feature-analysis surface (P15–P19 + orphaned modules): session
+    // read-only, gated on a Ready session like the other analysis tools.
+    "diagnose", ToolGate.StateGated
+    "coverage_intel", ToolGate.StateGated
+    "impact_forecast", ToolGate.StateGated
+    "suggest_next_action", ToolGate.StateGated
+    "plan_ripple", ToolGate.StateGated
+    "preview_what_if", ToolGate.StateGated
+    "suggest_next_cell", ToolGate.StateGated
+    "get_session_filmstrip", ToolGate.StateGated
+    "export_notebook", ToolGate.StateGated
+    "export_session_transcript", ToolGate.StateGated
+    "get_message_journal", ToolGate.StateGated
+    "get_eval_timeline", ToolGate.StateGated
+    "manage_scratch_pad", ToolGate.StateGated
+    "get_eval_diff", ToolGate.StateGated
+    "get_cell_dependencies", ToolGate.StateGated
+    "discover_features", ToolGate.StateGated
+    "suggest_repair", ToolGate.StateGated
   ]
 
 /// Look up a tool's gating classification. `None` means the tool is not

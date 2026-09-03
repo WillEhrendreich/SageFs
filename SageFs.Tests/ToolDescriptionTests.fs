@@ -48,6 +48,15 @@ let registeredToolMethods =
     m.GetCustomAttributes(true)
     |> Array.exists (fun attr -> attr.GetType().Name = "McpServerToolAttribute"))
 
+/// Public SageFsTools members that carry a [<Description>] (i.e. are written
+/// to look like MCP tools). Every one of them must also carry
+/// [<McpServerTool>] — otherwise it is a write-only member that no agent can
+/// ever call (roast-2 item 7: ~17 feature tools were unreachable because they
+/// had a Description but no registration attribute).
+let describedToolMethods =
+  typeof<SageFsTools>.GetMethods(BindingFlags.Instance ||| BindingFlags.Public)
+  |> Array.filter (fun m -> m.GetCustomAttribute<DescriptionAttribute>() |> Option.ofObj |> Option.isSome)
+
 /// WHY — MCP SDK reflection marks every parameter WITHOUT a default value as
 /// REQUIRED in the tool schema. A parameter whose handler tolerates absence but
 /// whose signature lacks a default makes the schema lie to agents: omitting it
@@ -63,7 +72,12 @@ let requiredParamsByTool =
     "switch_session", set ["session_id"]
     "targeted_verify", set ["behavior"]
     "report_friction", set ["tool_name"; "feedback_kind"; "short_reason"]
-    "explain_test_failure", set ["test_name"] ]
+    "explain_test_failure", set ["test_name"]
+    "decompose_pipeline", set ["code"]
+    "plan_ripple", set ["changed_cells"]
+    "preview_what_if", set ["binding_name"; "new_code"]
+    "manage_scratch_pad", set ["action"]
+    "suggest_repair", set ["test_name"] ]
   |> Map.ofList
 
 [<Tests>]
@@ -198,5 +212,45 @@ let descriptionPropertyTests =
 
     testCase "reduced MCP surface keeps the tool count surgical"
     <| fun _ ->
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 20
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 38
+
+    testCase "every tool-shaped member is registered — no write-only MCP surface"
+    <| fun _ ->
+      // A [<Description>] advertises a callable MCP tool to agents. If the
+      // member lacks [<McpServerTool>], `.WithTools<SageFsTools>()` never
+      // reflects it and the tool is unreachable dead surface (roast-2 item 7:
+      // ~17 feature tools carried only [<Description>] and were never
+      // callable). Registration must be structural: any future tool-shaped
+      // member without the attribute fails this test.
+      // The only tolerated exceptions are the legacy members deliberately
+      // retired from the MCP surface in 3e73861 ("reduce agent tool surface")
+      // — they keep their Description but must never grow back a registration.
+      let deliberatelyRetired =
+        set [
+          "load_fsharp_script"
+          "get_startup_info"
+          "get_completions"
+          "explore_namespace"
+          "explore_type"
+          "visualize_domain_model"
+          "switch_workflow"
+          "get_elm_state"
+          "explain_test_run"
+          "query_test_coverage"
+          "get_file_coverage"
+        ]
+      let registered =
+        registeredToolMethods
+        |> Array.map (fun m -> m.Name)
+        |> Set.ofArray
+      let unregistered =
+        describedToolMethods
+        |> Array.filter (fun m ->
+          Set.contains m.Name registered |> not
+          && Set.contains m.Name deliberatelyRetired |> not)
+        |> Array.map (fun m -> m.Name)
+      unregistered
+      |> Array.toList
+      |> Expect.equal
+        "every [<Description>]-attributed SageFsTools member must carry [<McpServerTool>] or be a known-retired legacy member" []
   ]

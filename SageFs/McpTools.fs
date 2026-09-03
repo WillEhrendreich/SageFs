@@ -1131,6 +1131,7 @@ WORKFLOW: When live testing reports a failure, call explain_test_failure with th
 
     // ── Feature Analysis Tools (P15–P19) ───────────────────────
 
+    [<McpServerTool>]
     [<Description("""Decompose an F# pipeline expression into individual stages and classify each stage's purity.
 
 INPUT: A pipeline expression using |> operators (e.g., 'xs |> List.filter isEven |> List.map string |> String.concat ","').
@@ -1145,6 +1146,7 @@ Use this to understand complex pipelines before modifying them, or to identify e
         logger.LogDebug("MCP-TOOL: decompose_pipeline called, code length={Len}", code.Length)
         decomposePipeline code |> withEcho ctx "decompose_pipeline"
 
+    [<McpServerTool>]
     [<Description("""Run a full diagnostic analysis of the current session.
 
 Composes 6 feature modules into one coherent report: test failure narratives, cell dependency graph,
@@ -1165,6 +1167,7 @@ This replaces calling explain_test_failure + plan_ripple + get_eval_timeline + s
         logger.LogDebug("MCP-TOOL: diagnose called")
         diagnose ctx |> withEcho ctx "diagnose"
 
+    [<McpServerTool>]
     [<Description("""Analyze test coverage quality — find blind spots, correlate failures, assess diagnostic power.
 
 Composes failure narratives + IL instrumentation bitmaps + test dependency graph into per-failure coverage intelligence.
@@ -1182,6 +1185,7 @@ Complements 'diagnose' (which tells you what failed) by telling you how well you
         logger.LogDebug("MCP-TOOL: coverage_intel called")
         coverageIntel ctx |> withEcho ctx "coverage_intel"
 
+    [<McpServerTool>]
     [<Description("""Forecast performance impact for evaluated cells — detect regressions, measure downstream blast radius.
 
 Analyzes eval timeline statistics (P50/P95), cell dependency graph, and duration trends to predict whether
@@ -1198,11 +1202,16 @@ OUTPUT: Per-cell analysis with:
 
 WORKFLOW: Call periodically or after slow evaluations to catch regressions before they compound.
 Pairs with 'suggest_next_action' which folds impact data into a prioritized action queue.""")>]
-    member _.impact_forecast([<Description("Optional cell ID to analyze. Omit to analyze all cells.")>] cellId: int) : Task<string> =
+    member _.impact_forecast(
+        [<Description("Optional cell ID to analyze. Omit to analyze all cells.")>]
+        [<Optional; DefaultParameterValue(0)>]
+        cellId: int
+    ) : Task<string> =
         logger.LogDebug("MCP-TOOL: impact_forecast called for cell {cellId}", cellId)
         let cellOpt = match cellId with | 0 -> None | n -> Some n
         impactForecast ctx cellOpt |> withEcho ctx "impact_forecast"
 
+    [<McpServerTool>]
     [<Description("""Get a prioritized action queue — the intelligent "what should I do next?" recommendation.
 
 Composes coverage intelligence + impact forecasts + stale cell detection into a ranked queue of actions,
@@ -1223,6 +1232,7 @@ Replaces manual triage of test results, coverage, and performance data.""")>]
         logger.LogDebug("MCP-TOOL: suggest_next_action called")
         suggestNextAction ctx |> withEcho ctx "suggest_next_action"
 
+    [<McpServerTool>]
     [<Description("""Plan a cascade re-evaluation (ripple) for changed cells.
 
 Given a set of cell IDs that have changed, computes the topologically-ordered list of downstream cells
@@ -1239,6 +1249,7 @@ WORKFLOW: After editing a binding, use this tool to see which cells would be aff
         logger.LogDebug("MCP-TOOL: plan_ripple called, cells={Cells}", changed_cells)
         planRipple ctx changed_cells |> withEcho ctx "plan_ripple"
 
+    [<McpServerTool>]
     [<Description("""Preview a "what if" scenario: what would change if a binding had a different value?
 
 Identifies the cell that produces the named binding, then plans a ripple of all downstream cells
@@ -1257,6 +1268,7 @@ WORKFLOW: Use this to explore hypothetical changes safely before committing to t
         logger.LogDebug("MCP-TOOL: preview_what_if called, binding={Name}", binding_name)
         previewWhatIf ctx binding_name new_code |> withEcho ctx "preview_what_if"
 
+    [<McpServerTool>]
     [<Description("""Get type-directed suggestions for what to evaluate next.
 
 Analyzes all bindings currently in scope and generates contextually-appropriate suggestions
@@ -1270,6 +1282,7 @@ WORKFLOW: When you're not sure what to try next in the REPL, call this for intel
         logger.LogDebug("MCP-TOOL: suggest_next_cell called")
         suggestNextCell ctx |> withEcho ctx "suggest_next_cell"
 
+    [<McpServerTool>]
     [<Description("""Get the session filmstrip — a visual history of all evaluations in the current session.
 
 Shows each evaluation as a "frame" with its index, code snippet, binding count, duration, and test summary.
@@ -1280,6 +1293,7 @@ OUTPUT: Overview statistics followed by individual frame cards.
 WORKFLOW: Use to review what happened in a session, find when a binding was introduced, or understand the session timeline.""")>]
     member _.get_session_filmstrip(
         [<Description("Optional filter string to search frames by label (case-insensitive substring match)")>]
+        [<Optional; DefaultParameterValue("")>]
         filter: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_session_filmstrip called, filter={Filter}", filter)
@@ -1288,6 +1302,7 @@ WORKFLOW: Use to review what happened in a session, find when a binding was intr
 
     // ── Phase 1b: Orphaned module MCP tools ──
 
+    [<McpServerTool>]
     [<Description("""Export the current session as a notebook-style .fsx file with cell metadata.
 
 Each cell preserves its code, output, index, and dependencies as structured comments.
@@ -1298,12 +1313,14 @@ OUTPUT: A complete .fsx file string with cell boundaries and metadata.
 WORKFLOW: Use this to save your interactive session as a portable, re-runnable notebook.""")>]
     member _.export_notebook(
         [<Description("Optional project name for the notebook header (defaults to 'SageFs Session')")>]
+        [<Optional; DefaultParameterValue("")>]
         project_name: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: export_notebook called, project={Name}", project_name)
         let nameOpt = match System.String.IsNullOrWhiteSpace project_name with | true -> None | false -> Some project_name
         exportNotebook ctx nameOpt |> withEcho ctx "export_notebook"
 
+    [<McpServerTool>]
     [<Description("""Export the current session as a clean, topologically-sorted .fsx transcript.
 
 Uses the cell dependency graph to order cells so that dependencies come before dependents.
@@ -1314,12 +1331,14 @@ OUTPUT: A clean .fsx file string ready to run with `dotnet fsi`.
 WORKFLOW: Use this to extract a clean, reproducible script from an exploratory session.""")>]
     member _.export_session_transcript(
         [<Description("Optional project name for the transcript header (defaults to 'SageFs Session')")>]
+        [<Optional; DefaultParameterValue("")>]
         project_name: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: export_session_transcript called, project={Name}", project_name)
         let nameOpt = match System.String.IsNullOrWhiteSpace project_name with | true -> None | false -> Some project_name
         exportSessionTranscript ctx nameOpt |> withEcho ctx "export_session_transcript"
 
+    [<McpServerTool>]
     [<Description("""Get the message journal — a structured audit log of eval events.
 
 Synthesizes journal entries from eval history, classifying successful evals as Info
@@ -1330,8 +1349,10 @@ OUTPUT: Journal summary statistics followed by timestamped, level-tagged entries
 WORKFLOW: Use this for observability — review what happened, filter to errors only, or trace eval activity.""")>]
     member _.get_message_journal(
         [<Description("Minimum severity level to include: 'debug', 'info', 'warn', or 'error' (defaults to all)")>]
+        [<Optional; DefaultParameterValue("")>]
         min_level: string,
         [<Description("Optional source filter — only show entries from matching sources (case-insensitive)")>]
+        [<Optional; DefaultParameterValue("")>]
         source: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_message_journal called, level={Level}, source={Source}", min_level, source)
@@ -1339,6 +1360,7 @@ WORKFLOW: Use this for observability — review what happened, filter to errors 
         let sourceOpt = match System.String.IsNullOrWhiteSpace source with | true -> None | false -> Some source
         getMessageJournal ctx levelOpt sourceOpt |> withEcho ctx "get_message_journal"
 
+    [<McpServerTool>]
     [<Description("""Get eval timeline with performance sparkline and percentile statistics.
 
 Shows a visual sparkline of recent eval durations, plus P50/P95/P99 and mean latency.
@@ -1349,12 +1371,14 @@ OUTPUT: Sparkline visualization, percentile statistics, and recent eval entries.
 WORKFLOW: Use this to monitor eval performance trends and identify slow cells.""")>]
     member _.get_eval_timeline(
         [<Description("Width of the sparkline in characters (defaults to 20)")>]
+        [<Optional; DefaultParameterValue(0)>]
         sparkline_width: int
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_eval_timeline called, width={Width}", sparkline_width)
         let widthOpt = match sparkline_width with | 0 -> None | w -> Some w
         getEvalTimeline ctx widthOpt |> withEcho ctx "get_eval_timeline"
 
+    [<McpServerTool>]
     [<Description("""Manage the session scratch pad — view, export, or promote ephemeral code snippets.
 
 Actions:
@@ -1374,6 +1398,7 @@ WORKFLOW: Use 'list' to review snippets, 'export' for a full dump, 'promote' to 
         logger.LogDebug("MCP-TOOL: manage_scratch_pad called, action={Action}", action)
         manageScratchPad ctx action None None |> withEcho ctx "manage_scratch_pad"
 
+    [<McpServerTool>]
     [<Description("""Get a diff between recent eval outputs — before vs after comparison.
 
 Compares the two most recent eval outputs (or outputs for a specific cell) and shows
@@ -1384,6 +1409,7 @@ OUTPUT: Diff summary with counts of changes and line-by-line breakdown.
 WORKFLOW: Use after re-evaluating a cell to see exactly what changed in the output.""")>]
     member _.get_eval_diff(
         [<Description("Optional cell index to diff (defaults to comparing the two most recent evals)")>]
+        [<Optional; DefaultParameterValue(0)>]
         cell_index: int
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: get_eval_diff called, cellIndex={Idx}", cell_index)
@@ -1415,6 +1441,7 @@ WORKFLOW: Use this to discover what tests exist, or to build a pattern for send_
         let fileOpt = match file_path with | "" | null -> None | s -> Some s
         listTests ctx patOpt fileOpt |> withEcho ctx "list_tests"
 
+    [<McpServerTool>]
     [<Description("""Get the cell dependency graph annotated with staleness information.
 
 Shows which cells are stale (their dependencies changed but they haven't re-evaluated), what each cell produces/consumes, and the full upstream/downstream wiring.
@@ -1426,6 +1453,7 @@ WORKFLOW: After editing code, use this to understand the ripple impact before de
         logger.LogDebug("MCP-TOOL: get_cell_dependencies called")
         getCellDependencies ctx |> withEcho ctx "get_cell_dependencies"
 
+    [<McpServerTool>]
     [<Description("""Discover and rank all SageFs features by relevance to your current session state.
 
 Acts as a built-in "tour guide" — analyzes your session context (failing tests, stale cells, eval count, discovered tests) and surfaces the most useful features first.
@@ -1438,12 +1466,14 @@ OUTPUT: JSON with ContextSummary, TotalKnownFeatures, Returned count, and Sugges
 WORKFLOW: Call this at the start of a session to see what to do next, or any time you feel lost.""")>]
     member _.discover_features(
         [<Description("Optional topic keyword to focus suggestions (e.g. 'testing', 'performance', 'export'). Empty for all features.")>]
+        [<Optional; DefaultParameterValue("")>]
         topic: string
     ) : Task<string> =
         logger.LogDebug("MCP-TOOL: discover_features called, topic={Topic}", topic)
         let topicOpt = match topic with | "" | null -> None | s -> Some s
         discoverFeatures ctx topicOpt |> withEcho ctx "discover_features"
 
+    [<McpServerTool>]
     [<Description("""Given a failing test, compose explain_test_failure → extract causal symbol → preview ripple into a single repair plan.
 
 V1 does NOT suggest a new value for the binding — it surfaces the causal symbol, its current code, and the ripple of cells that would re-evaluate on any change. The developer supplies the new value.
