@@ -5,9 +5,15 @@ open System.IO
 open System.Text
 open SageFs
 
-/// Domain types for .sagetc v1 binary format (test cache).
+/// Domain types for the .sagetc test-cache binary format.
 module TestCacheTypes =
 
+  /// A test outcome byte in the TRES section. Values 0-4 are the STC v1
+  /// codes. Values 5-7 are the STC v2 failure-kind refinement: v1 collapsed
+  /// every TestFailure kind into Fail (1); v2 gives AssertionFailed (5),
+  /// ExceptionThrown (6) and TimedOut (7) distinct bytes so write→read
+  /// round-trips preserve the failure kind across restarts. The reader treats
+  /// byte 1 (Fail) as AssertionFailed, which is exactly what v1 writers meant.
   [<RequireQualifiedAccess>]
   type Outcome =
     | Pass = 0uy
@@ -15,10 +21,13 @@ module TestCacheTypes =
     | Skip = 2uy
     | Error = 3uy
     | NotRun = 4uy
+    | AssertionFailed = 5uy
+    | ExceptionThrown = 6uy
+    | TimedOut = 7uy
 
   module Outcome =
     let tryParse (b: byte) : Result<Outcome, string> =
-      match b <= 4uy with
+      match b <= 7uy with
       | true -> Ok (LanguagePrimitives.EnumOfValue<byte, Outcome> b)
       | false -> Error (sprintf "Unknown Outcome value: %d" b)
 
@@ -113,8 +122,10 @@ module TestCacheWriter =
 
     // Header (64 bytes) — matches spec §3.2
     bw.Write([| 0x53uy; 0x54uy; 0x43uy; 0x31uy |]) // "STC1"
-    bw.Write(1us)                                     // format_version
-    bw.Write(1us)                                     // min_reader_version
+    bw.Write(2us)                                     // format_version
+    bw.Write(1us)                                     // min_reader_version — a v1 reader can
+                                                      //   still parse v2 files (bytes 5-7 merely
+                                                      //   refine what byte 1 already meant)
     bw.Write(sectionCount)                            // section_count (u32)
     bw.Write(0u)                                      // flags
     bw.Write(data.CreatedAtMs)                        // created_at_ms
@@ -323,6 +334,49 @@ module TestCacheMapping =
   open TestCacheTypes
   open SageFs.Features.LiveTesting
 
+  // ── TimedOut message format helpers ─────────────────────────────
+  // A TimedOut failure's TimeSpan lives on the wire only as a string (the
+  // TRES entry has a single lp-string-option message). The message is written
+  // in a parseable form so kind AND timeout duration round-trip losslessly.
+
+  let private timedOutPrefix = "Timed out after "
+
+  let private tryParseTimedOutMessage (msg: string) : TimeSpan option =
+    match msg.StartsWith(timedOutPrefix, StringComparison.Ordinal) with
+    | false -> None
+    | true ->
+      let rest = msg.Substring(timedOutPrefix.Length).Trim()
+      let trimmed =
+        match rest.EndsWith("s", StringComparison.Ordinal) with
+        | true -> rest.Substring(0, rest.Length - 1).Trim()
+        | false -> rest
+      match Double.TryParse(trimmed, Globalization.NumberStyles.Float, Globalization.CultureInfo.InvariantCulture) with
+      | true, seconds when seconds >= 0.0 -> Some (TimeSpan.FromSeconds seconds)
+      | _ -> None
+
+  let private formatTimeSpan (ts: TimeSpan) : string =
+    let seconds = Math.Round(ts.TotalSeconds, 3)
+    sprintf "%s%ss" timedOutPrefix (seconds.ToString(Globalization.CultureInfo.InvariantCulture))
+
+  /// A failure's kind alongside the message persisted for it. Rehydrating a
+  /// TimedOut needs the duration ("Timed out after X") as the elapsed span —
+  /// exact kind + duration both survive, which v1's single Fail byte erased.
+  let private failureInfo (failure: TestFailure) (duration: TimeSpan) : Outcome * string =
+    match failure with
+    | TestFailure.AssertionFailed m -> Outcome.AssertionFailed, m
+    | TestFailure.ExceptionThrown (m, _) -> Outcome.ExceptionThrown, m
+    | TestFailure.TimedOut after ->
+      // Persist the timeout span, rounded to whole seconds when it does not
+      // already land on a whole millisecond. Live-testing timeouts are built
+      // from whole seconds (Timeouts.perTestDefault), and duration_ms on the
+      // wire is whole milliseconds anyway, so this keeps the round-trip exact
+      // for every value a real executor can produce.
+      let ts =
+        match TimeSpan.FromMilliseconds(float (int64 after.TotalMilliseconds)) = after with
+        | true -> after
+        | false -> TimeSpan.FromSeconds after.TotalSeconds
+      Outcome.TimedOut, formatTimeSpan ts
+
   /// Convert LiveTestState coverage/results to binary-serializable StcData.
   let fromLiveTestState (state: LiveTestState) : StcData =
     let coverageEntries =
@@ -342,12 +396,8 @@ module TestCacheMapping =
           | TestResult.Passed duration ->
             Outcome.Pass, uint32 duration.TotalMilliseconds, None
           | TestResult.Failed (failure, duration) ->
-            let msg =
-              match failure with
-              | TestFailure.AssertionFailed m -> m
-              | TestFailure.ExceptionThrown (m, _) -> m
-              | TestFailure.TimedOut ts -> sprintf "Timed out after %A" ts
-            Outcome.Fail, uint32 duration.TotalMilliseconds, Some msg
+            let kind, msg = failureInfo failure duration
+            kind, uint32 duration.TotalMilliseconds, Some msg
           | TestResult.Skipped reason ->
             Outcome.Skip, 0u, Some reason
           | TestResult.NotRun ->
@@ -366,7 +416,7 @@ module TestCacheMapping =
       ResultEntries = resultEntries
       CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
 
-  /// Restore LiveTestState from deserialized StcData (lossy reverse mapping).
+  /// Restore LiveTestState from deserialized StcData.
   let toLiveTestState (data: StcData) : LiveTestState =
     let coverageBitmaps =
       data.CoverageEntries
@@ -387,9 +437,26 @@ module TestCacheMapping =
         let result =
           match e.Outcome with
           | Outcome.Pass -> TestResult.Passed duration
+          // STC v1 byte — Fail was the only failure code and every v1 writer
+          // produced AssertionFailed, so legacy files decode exactly as written.
           | Outcome.Fail ->
             let msg = e.Message |> Option.defaultValue "Unknown failure"
             TestResult.Failed (TestFailure.AssertionFailed msg, duration)
+          | Outcome.AssertionFailed ->
+            let msg = e.Message |> Option.defaultValue "Unknown failure"
+            TestResult.Failed (TestFailure.AssertionFailed msg, duration)
+          | Outcome.ExceptionThrown ->
+            let msg = e.Message |> Option.defaultValue "Unknown exception"
+            TestResult.Failed (TestFailure.ExceptionThrown (msg, ""), duration)
+          | Outcome.TimedOut ->
+            // v2 writers stored the original timeout span in the message
+            // ("Timed out after <N>s") so the kind round-trips losslessly even
+            // though the wire carries only one string.
+            let after =
+              e.Message
+              |> Option.bind tryParseTimedOutMessage
+              |> Option.defaultValue duration
+            TestResult.Failed (TestFailure.TimedOut after, duration)
           | Outcome.Skip ->
             let reason = e.Message |> Option.defaultValue "Skipped"
             TestResult.Skipped reason

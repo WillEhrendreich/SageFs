@@ -623,6 +623,7 @@ let private discoverWarmupReplayPlan
         fingerprint
         fileCount
         (Seq.toList loadedAssemblies)
+        (projectFilesForSolution originalSln)
         namePairs
         (Seq.toList discoveryWarnings)
   }

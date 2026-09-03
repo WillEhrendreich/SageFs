@@ -459,6 +459,22 @@ entry_count            u32             Number of result entries
 | 1 | Fail |
 | 2 | Skip |
 | 3 | Error |
+| 4 | NotRun |
+| 5 | AssertionFailed (v2) |
+| 6 | ExceptionThrown (v2) |
+| 7 | TimedOut (v2) |
+
+Values 0-4 are the STC v1 codes. Values 5-7 were added in format v2 so the
+test-cache codec is lossless across restarts: v1 collapsed every failure kind
+into `Fail` (1), and readers decoded byte 1 as an assertion failure. The v2
+writer emits byte 5/6/7 for `AssertionFailed`/`ExceptionThrown`/`TimedOut`
+respectively and sets `format_version = 2` while leaving
+`min_reader_version = 1` — a v1 reader can still parse a v2 file (it treats
+bytes 5-7 as assertion failures, which is strictly no worse than what its own
+writer stored). The v2 reader continues to decode legacy byte 1 as
+`AssertionFailed`, exactly matching what v1 writers produced. A `TimedOut`
+entry's timeout span is carried in the message string ("Timed out after
+`<N>s`") so the kind and duration both round-trip.
 
 ---
 

@@ -321,6 +321,73 @@ let stcMappingTests = testList "STC Mapping" [
           classify rr.Result |> Expect.equal "same outcome" (classify runResult.Result)
         | None -> failwith (sprintf "Missing result for %A" tid)))
 
+  testCase "failure kind survives save→load for AssertionFailed" <| fun _ ->
+    let tid = TestId.TestId "kind-a"
+    let rr : TestRunResult = {
+      TestId = tid; TestName = "kind-a"
+      Result = TestResult.Failed (TestFailure.AssertionFailed "expected 42 but got 41", TimeSpan.FromMilliseconds 12.0)
+      Timestamp = DateTimeOffset.UtcNow; Output = None }
+    let state = { LiveTestState.empty with LastResults = Map.ofList [ tid, rr ] }
+    let bytes = TestCacheWriter.write (TestCacheMapping.fromLiveTestState state)
+    match TestCacheReader.read bytes with
+    | Ok data ->
+      let restored = TestCacheMapping.toLiveTestState data
+      match restored.LastResults.[tid].Result with
+      | TestResult.Failed (TestFailure.AssertionFailed msg, _) ->
+        msg |> Expect.equal "assertion message preserved" "expected 42 but got 41"
+      | other -> failwithf "expected AssertionFailed, got: %A" other
+    | Error e -> failwithf "write→read failed: %s" e
+
+  testCase "failure kind survives save→load for ExceptionThrown" <| fun _ ->
+    let tid = TestId.TestId "kind-b"
+    let rr : TestRunResult = {
+      TestId = tid; TestName = "kind-b"
+      Result = TestResult.Failed (TestFailure.ExceptionThrown ("NullReferenceException: bang", "at Parser.run()"), TimeSpan.FromMilliseconds 7.0)
+      Timestamp = DateTimeOffset.UtcNow; Output = None }
+    let state = { LiveTestState.empty with LastResults = Map.ofList [ tid, rr ] }
+    let bytes = TestCacheWriter.write (TestCacheMapping.fromLiveTestState state)
+    match TestCacheReader.read bytes with
+    | Ok data ->
+      let restored = TestCacheMapping.toLiveTestState data
+      match restored.LastResults.[tid].Result with
+      | TestResult.Failed (TestFailure.ExceptionThrown (msg, _), _) ->
+        msg |> Expect.equal "exception message preserved" "NullReferenceException: bang"
+      | other -> failwithf "expected ExceptionThrown, got: %A" other
+    | Error e -> failwithf "write→read failed: %s" e
+
+  testCase "failure kind survives save→load for TimedOut" <| fun _ ->
+    let tid = TestId.TestId "kind-c"
+    let rr : TestRunResult = {
+      TestId = tid; TestName = "kind-c"
+      Result = TestResult.Failed (TestFailure.TimedOut (TimeSpan.FromSeconds 30.0), TimeSpan.FromSeconds 30.0)
+      Timestamp = DateTimeOffset.UtcNow; Output = None }
+    let state = { LiveTestState.empty with LastResults = Map.ofList [ tid, rr ] }
+    let bytes = TestCacheWriter.write (TestCacheMapping.fromLiveTestState state)
+    match TestCacheReader.read bytes with
+    | Ok data ->
+      let restored = TestCacheMapping.toLiveTestState data
+      match restored.LastResults.[tid].Result with
+      | TestResult.Failed (TestFailure.TimedOut after, duration) ->
+        after |> Expect.equal "timeout span preserved" (TimeSpan.FromSeconds 30.0)
+        duration |> Expect.equal "duration preserved" (TimeSpan.FromSeconds 30.0)
+      | other -> failwithf "expected TimedOut, got: %A" other
+    | Error e -> failwithf "write→read failed: %s" e
+
+  testCase "legacy Fail byte decodes as AssertionFailed (backward compat)" <| fun _ ->
+    // A v1 cache never wrote bytes 5-7; its only failure byte was 1 (Fail),
+    // which every v1 writer produced from an AssertionFailed failure. The
+    // reader must keep decoding byte 1 as AssertionFailed so old caches do
+    // not mislabel stored failures.
+    let data: StcData = {
+      CoverageEntries = []
+      ResultEntries = [{ TestId = "legacy"; Outcome = Outcome.Fail; DurationMs = 100u; Message = Some "assertion failed" }]
+      ImapGeneration = 1u; CreatedAtMs = 0L }
+    let restored = TestCacheMapping.toLiveTestState data
+    match restored.LastResults.[TestId.TestId "legacy"].Result with
+    | TestResult.Failed (TestFailure.AssertionFailed msg, _) ->
+      msg |> Expect.equal "v1 message preserved" "assertion failed"
+    | other -> failwithf "legacy Fail byte must decode as AssertionFailed, got: %A" other
+
   testPropertyWithConfig fsCheckConfig "generation roundtrips" <|
     Prop.forAll (Arb.fromGen genLiveTestState) (fun state ->
       let stcData = TestCacheMapping.fromLiveTestState state
@@ -640,7 +707,8 @@ let daemonRoundtripPropertyTests = testList "Daemon Roundtrip Properties" [
 
 let robustnessTests = testList "Robustness rejects corrupted and adversarial input" [
   testCase "all Outcome values roundtrip through STC" <| fun _ ->
-    for o in [ Outcome.Pass; Outcome.Fail; Outcome.Skip; Outcome.Error; Outcome.NotRun ] do
+    for o in [ Outcome.Pass; Outcome.Fail; Outcome.Skip; Outcome.Error; Outcome.NotRun
+               Outcome.AssertionFailed; Outcome.ExceptionThrown; Outcome.TimedOut ] do
       let d: StcData = {
         CoverageEntries = []; ImapGeneration = 0u; CreatedAtMs = 0L
         ResultEntries = [{ TestId = "t1"; Outcome = o; DurationMs = 1u; Message = None }] }
@@ -650,6 +718,31 @@ let robustnessTests = testList "Robustness rejects corrupted and adversarial inp
         rt.ResultEntries.[0].Outcome
         |> Expect.equal (sprintf "outcome %A roundtrip" o) o
       | Result.Error e -> failwith e
+
+  testCase "failure-kind outcomes use distinct wire bytes" <| fun _ ->
+    // STC v2 encoding: the three failure kinds must occupy three different
+    // outcome bytes in the TRES payload (5, 6, 7), distinct from every v1 code.
+    let data: StcData = {
+      CoverageEntries = []
+      ResultEntries = [
+        { TestId = "a"; Outcome = Outcome.AssertionFailed; DurationMs = 1u; Message = Some "m" }
+        { TestId = "b"; Outcome = Outcome.ExceptionThrown; DurationMs = 2u; Message = Some "m" }
+        { TestId = "c"; Outcome = Outcome.TimedOut; DurationMs = 3u; Message = Some "m" }
+        { TestId = "d"; Outcome = Outcome.Fail; DurationMs = 4u; Message = Some "m" }
+      ]
+      ImapGeneration = 1u; CreatedAtMs = 0L }
+    let bytes = TestCacheWriter.write data
+    let tresOffset = System.BitConverter.ToUInt64(bytes, 64 + 2 * 16 + 4) |> int
+    // Payload = u32 entry_count, then each entry is a 1-char lp-string tid
+    // (4-byte len + 1 char) + outcome byte + duration u32 + 1-char lp-string
+    // message (4-byte len + 1 char) = 15 bytes. Entry i's outcome byte sits at
+    // payload + 4 (count) + i*15 + 5 (tid lp-string).
+    let entryStride = 4 + 1 + 1 + 4 + 4 + 1
+    let rawOutcome i = bytes.[tresOffset + 4 + i * entryStride + 5]
+    rawOutcome 0 |> Expect.equal "AssertionFailed byte" 5uy
+    rawOutcome 1 |> Expect.equal "ExceptionThrown byte" 6uy
+    rawOutcome 2 |> Expect.equal "TimedOut byte" 7uy
+    rawOutcome 3 |> Expect.equal "legacy Fail byte unchanged" 1uy
 
   testCase "atomic overwrite: STC file replaced correctly" <| fun _ ->
     let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "stc_ow_%s" (Guid.NewGuid().ToString("N")))
@@ -897,13 +990,13 @@ let goldenFileTests = testList "golden files" [
 
 let enumTryParseTests = testList "centralized enum tryParse" [
   test "Outcome.tryParse valid range" {
-    for b in 0uy .. 3uy do
+    for b in 0uy .. 7uy do
       match Outcome.tryParse b with
       | Result.Ok _ -> ()
       | Result.Error e -> failwith (sprintf "Valid byte %d rejected: %s" b e)
   }
   test "Outcome.tryParse invalid byte" {
-    for b in [ 5uy; 128uy; 255uy ] do
+    for b in [ 8uy; 128uy; 255uy ] do
       match Outcome.tryParse b with
       | Result.Error _ -> ()
       | Result.Ok v -> failwith (sprintf "Invalid byte %d accepted as %A" b v)
