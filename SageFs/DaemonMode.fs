@@ -1340,7 +1340,7 @@ let createElmRuntime
             lastStateJson <- json
             let significantOutputChange = abs (outputCount - lastLoggedOutputCount) >= 50
             let diagChanged = diagCount <> lastLoggedDiagCount
-            match (not TerminalUIState.IsActive) && (significantOutputChange || diagChanged) with
+            match significantOutputChange || diagChanged with
             | true ->
               lastLoggedOutputCount <- outputCount
               lastLoggedDiagCount <- diagCount

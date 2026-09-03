@@ -8,6 +8,7 @@ open System.Net.Http
 open System.Net
 open System.Net.Sockets
 open System.Text.Json
+open SageFs
 open SageFs.Server
 
 [<RequireQualifiedAccess>]

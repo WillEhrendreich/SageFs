@@ -277,7 +277,6 @@ let startupInfoTests =
         CommandLineArgs = [| "--mcp-port"; "37749" |]
         LoadedProjects = ["Test.fsproj"]
         WorkingDirectory = "/code"
-        McpPort = 37749
         Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
         AutoOpenNamespaces = true
         AspireDetected = false
@@ -289,8 +288,6 @@ let startupInfoTests =
       let root = doc.RootElement
       root.GetProperty("workingDirectory").GetString()
       |> Expect.equal "working dir" "/code"
-      root.GetProperty("mcpPort").GetInt32()
-      |> Expect.equal "port" 37749
       root.GetProperty("hotReloadEnabled").GetBoolean()
       |> Expect.isTrue "hot reload on"
 
@@ -299,7 +296,6 @@ let startupInfoTests =
         CommandLineArgs = [||]
         LoadedProjects = ["A.fsproj"; "B.fsproj"]
         WorkingDirectory = "/"
-        McpPort = 9999
         Workflow = SessionWorkflow.Interactive
         AutoOpenNamespaces = true
         AspireDetected = true

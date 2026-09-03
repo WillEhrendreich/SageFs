@@ -462,7 +462,6 @@ Working Directory: %s{config.WorkingDirectory}
 Loaded Projects: %s{projectsStr}
 Assemblies Loaded: %d{assemblyCount}
 Hot Reload: %s{hotReloadStr}
-MCP Port: %d{config.McpPort}
 Aspire Detected: %s{aspireStr}
 Startup Profile: %s{profileStr}
 Started: %s{timestamp} UTC"""
@@ -472,7 +471,6 @@ Started: %s{timestamp} UTC"""
       commandLineArgs = config.CommandLineArgs
       loadedProjects = config.LoadedProjects |> List.toArray
       workingDirectory = config.WorkingDirectory
-      mcpPort = config.McpPort
       hotReloadEnabled = config.HotReloadEnabled
       aspireDetected = config.AspireDetected
       startupProfileLoaded = config.StartupProfileLoaded |> Option.toObj
@@ -540,10 +538,9 @@ Started: %s{timestamp} UTC"""
 
 📋 Startup Information:
 - Working Directory: %s
-- MCP Port: %d
 - Hot Reload: %s
 - Aspire: %s
-- File Watcher: %s""" config.WorkingDirectory config.McpPort hotReload aspire fileWatch
+- File Watcher: %s""" config.WorkingDirectory hotReload aspire fileWatch
 
     let statsSection =
       match evalStats with
@@ -590,8 +587,8 @@ Available: %s%s%s""" sessionId eventCount (SessionState.label state) projectsStr
           match WorkflowTypes.SessionWorkflow.replCapability config.Workflow with
           | WorkflowTypes.ReplCapability.Full -> "Full"
           | WorkflowTypes.ReplCapability.ExpressionOnly -> "ExpressionOnly"
-        sprintf ""","startup":{"workingDirectory":"%s","mcpPort":%d,"hotReloadEnabled":%b,"aspireDetected":%b,"workflow":"%s","workflowLabel":"%s","replCapability":"%s"}"""
-          (escapeJson config.WorkingDirectory) config.McpPort config.HotReloadEnabled config.AspireDetected
+        sprintf ""","startup":{"workingDirectory":"%s","hotReloadEnabled":%b,"aspireDetected":%b,"workflow":"%s","workflowLabel":"%s","replCapability":"%s"}"""
+          (escapeJson config.WorkingDirectory) config.HotReloadEnabled config.AspireDetected
           (escapeJson (sprintf "%A" config.Workflow)) workflowLabel replCap
     sprintf """{"sessionId":"%s","eventCount":%d,"state":"%s","projects":%s,"tools":[%s]%s%s}"""
       (escapeJson sessionId) eventCount (SessionState.label state) projectsJson toolsJson statsJson startupJson

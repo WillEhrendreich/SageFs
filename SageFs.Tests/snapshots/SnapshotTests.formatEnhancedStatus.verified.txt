@@ -3,7 +3,6 @@ Available: send_fsharp_code, get_fsi_status, get_recent_fsi_events, get_friction
 
 📋 Startup Information:
 - Working Directory: /code/test
-- MCP Port: 8080
 - Hot Reload: ✅
 - Aspire: ❌
 - File Watcher: ✅ (auto-reload .fs/.fsx via #load)

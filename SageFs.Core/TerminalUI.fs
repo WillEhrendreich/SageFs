@@ -281,11 +281,6 @@ module FrameDiff =
       | _ -> sb.Append(kv.Value) |> ignore
 
     sb.ToString()
-module TerminalUIState =
-  /// When true, eprintfn output should be suppressed (terminal UI owns the console)
-  let mutable IsActive = false
-  /// Lock for synchronized console writes
-  let consoleLock = obj ()
 
 
 /// Terminal-specific commands beyond EditorAction

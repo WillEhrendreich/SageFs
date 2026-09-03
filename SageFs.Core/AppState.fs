@@ -76,7 +76,6 @@ type StartupConfig = {
   CommandLineArgs: string[]
   LoadedProjects: string list
   WorkingDirectory: string
-  McpPort: int
   Workflow: WorkflowTypes.SessionWorkflow
   AutoOpenNamespaces: bool
   AspireDetected: bool
@@ -195,7 +194,6 @@ type Command =
   | GetStartupConfig of AsyncReplyChannel<StartupConfig option>
   | GetWarmupFailures of AsyncReplyChannel<WarmupFailure list>
   | EnableStdout
-  | UpdateMcpPort of int
   | ResetSession of AsyncReplyChannel<Result<unit, SageFsError>>
   | HardResetSession of rebuild: bool * AsyncReplyChannel<Result<string, SageFsError>>
 
@@ -224,7 +222,6 @@ type internal QueryCommand =
   | QueryGetDiagnostics of text: string * AsyncReplyChannel<Diagnostics.Diagnostic array>
   | QueryGetTypeCheckWithSymbols of text: string * filePath: string * AsyncReplyChannel<Diagnostics.TypeCheckWithSymbolsResult>
   | QueryGetBoundValue of name: string * AsyncReplyChannel<obj Option>
-  | QueryUpdateMcpPort of int
 
 /// Internal command for the eval actor — only mutation/eval operations
 type internal EvalCommand =
@@ -1024,15 +1021,6 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           | _ ->
             reply.Reply None
             return snapshot
-        | QueryUpdateMcpPort port ->
-          match snapshot.Phase with
-          | Active (st, activity) ->
-            let updatedConfig =
-              match st.StartupConfig with
-              | Some config -> Some { config with McpPort = port }
-              | None -> None
-            return { snapshot with Phase = Active ({ st with StartupConfig = updatedConfig }, activity) }
-          | _ -> return snapshot
       }
     let safeProcessQuery = ResilientActor.wrapLoop logger "query-actor" processQuery
     let rec loop (snapshot: QuerySnapshot) = async {
@@ -1256,10 +1244,12 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
               publishPhase (Initializing (Some (sprintf "[%d/%d] %s" s t msg))) evalStats
             // StartupConfig is NOT a closure capture: it is built in init()
-            // after warmup and mutated by QueryUpdateMcpPort. When Active,
-            // read the live config so a reset preserves McpPort and any
-            // profile-loaded flags; when Faulted (StartupConfig was None in
-            // the tombstone) fall back to the same defaults the old code used.
+            // after warmup. When Active, read the live config so a reset
+            // preserves the fields the live config genuinely carries — e.g.
+            // AutoOpenNamespaces, HotReloadEnabled (via Workflow), and the
+            // profile-loaded flag (StartupProfileLoaded); when Faulted
+            // (StartupConfig was None in the tombstone) fall back to the same
+            // defaults the old code used.
             let startupConfig =
               match phase with
               | Active (st, _) -> st.StartupConfig
@@ -1335,8 +1325,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             logger.LogInfo "🔨 Hard resetting FSI session..."
             let activeSt = SessionPhase.tryAppState phase
             // Context audit (same policy as EvalReset): StartupConfig lives on
-            // the live st when Active (mutated by QueryUpdateMcpPort) and is
-            // None-equivalent when Faulted; OriginalSolution/ShadowDir are the
+            // the live st when Active and is None-equivalent when Faulted —
+            // read it so a hard reset preserves LoadedProjects/Workflow/
+            // AutoOpenNamespaces etc.; OriginalSolution/ShadowDir are the
             // closure captures exactly when Faulted (they matched the tombstone).
             let startupConfig =
               match phase with
@@ -1556,8 +1547,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             let newSt =
               match activeSt with
               | Some st ->
-                // Live path: preserve Custom/HotReloadState/StartupConfig (incl.
-                // McpPort) and swap the session-bearing fields.
+                // Live path: preserve Custom/HotReloadState/StartupConfig and
+                // swap the session-bearing fields.
                 { st with
                     Session = newSession
                     OutStream = newRecorder
@@ -1678,7 +1669,6 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               CommandLineArgs = args
               LoadedProjects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
               WorkingDirectory = System.Environment.CurrentDirectory
-              McpPort = 0
               Workflow = WorkflowTypes.SessionWorkflow.fromHotReloadBool hotReload
               AutoOpenNamespaces = autoOpenNamespaces
               AspireDetected = useAsp
@@ -1746,8 +1736,6 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           queryActor.Post(QueryGetTypeCheckWithSymbols(text, filePath, reply))
         | GetBoundValue(name, reply) ->
           queryActor.Post(QueryGetBoundValue(name, reply))
-        | UpdateMcpPort port ->
-          queryActor.Post(QueryUpdateMcpPort port)
 
         // Cancel — cooperative via CTS + thread interrupt for blocked evals
         | CancelEval reply ->

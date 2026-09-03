@@ -34,7 +34,6 @@ module StartupConfigTests =
           CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Code\Test"
-          McpPort = 8080
           Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
@@ -43,7 +42,6 @@ module StartupConfigTests =
         
         Expect.equal config.CommandLineArgs.Length 2 "Should have command line args"
         Expect.equal config.LoadedProjects.Length 1 "Should have loaded projects"
-        Expect.equal config.McpPort 8080 "Should have MCP port"
         Expect.isTrue config.HotReloadEnabled "Should track hot reload"
         Expect.isFalse config.AspireDetected "Should track Aspire detection"
       
@@ -53,7 +51,6 @@ module StartupConfigTests =
           CommandLineArgs = [||]
           LoadedProjects = []
           WorkingDirectory = ""
-          McpPort = 0
           Workflow = SessionWorkflow.Interactive
           AutoOpenNamespaces = true
           AspireDetected = false
@@ -61,7 +58,6 @@ module StartupConfigTests =
         }
         
         Expect.equal emptyConfig.LoadedProjects.Length 0 "Should handle no projects"
-        Expect.equal emptyConfig.McpPort 0 "Should handle no MCP port"
     ]
 
 // ============================================================================
@@ -246,7 +242,6 @@ module McpAdapterEnhancementTests =
           CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
-          McpPort = 8080
           Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
@@ -256,7 +251,7 @@ module McpAdapterEnhancementTests =
         let output = SageFs.McpAdapter.formatStartupInfo config
         
         Expect.stringContains output "Test.fsproj" "Should include project"
-        Expect.stringContains output "8080" "Should include port"
+        Expect.stringContains output "--mcp-port" "Should include command line args"
         Expect.stringContains output "Hot Reload" "Should mention hot reload"
       
       testCase "formatStartupInfoJson should create valid JSON"
@@ -265,7 +260,6 @@ module McpAdapterEnhancementTests =
           CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
-          McpPort = 8080
           Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
@@ -277,7 +271,6 @@ module McpAdapterEnhancementTests =
         Expect.stringContains json "{" "Should be JSON object"
         Expect.stringContains json "\"commandLineArgs\"" "Should have field"
         Expect.stringContains json "\"loadedProjects\"" "Should have field"
-        Expect.stringContains json "\"mcpPort\"" "Should have field"
       
       testCase "formatEnhancedStatus should include startup section"
       <| fun _ ->
@@ -285,7 +278,6 @@ module McpAdapterEnhancementTests =
           CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
-          McpPort = 8080
           Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false

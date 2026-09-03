@@ -606,7 +606,7 @@ let jsonFormatVariantTests =
       <| fun _ ->
         let cfg : StartupConfig = {
           CommandLineArgs = [||]; LoadedProjects = ["Test.fsproj"]
-          WorkingDirectory = "C:\\test"; McpPort = 1234
+          WorkingDirectory = "C:\\test"
           Workflow = WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults; AutoOpenNamespaces = true; AspireDetected = false
           StartupProfileLoaded = None; StartupTimestamp = DateTime.UtcNow
         }
@@ -621,15 +621,13 @@ let jsonFormatVariantTests =
       <| fun _ ->
         let cfg : StartupConfig = {
           CommandLineArgs = [||]; LoadedProjects = []
-          WorkingDirectory = "C:\\work"; McpPort = 5000
+          WorkingDirectory = "C:\\work"
           Workflow = WorkflowTypes.SessionWorkflow.Interactive; AutoOpenNamespaces = true; AspireDetected = true
           StartupProfileLoaded = None; StartupTimestamp = DateTime.UtcNow
         }
         let result = McpAdapter.formatEnhancedStatusJson "x" 0 SessionState.Ready None (Some cfg)
         let doc = JsonDocument.Parse(result)
         let startup = doc.RootElement.GetProperty("startup")
-        startup.GetProperty("mcpPort").GetInt32()
-        |> Expect.equal "should be 5000" 5000
         startup.GetProperty("hotReloadEnabled").GetBoolean()
         |> Expect.isFalse "should be false"
 

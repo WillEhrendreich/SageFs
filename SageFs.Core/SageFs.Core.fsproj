@@ -13,10 +13,6 @@
     </ItemGroup>
 
     <ItemGroup>
-        <InternalsVisibleTo Include="SageFs.Tests" />
-    </ItemGroup>
-
-    <ItemGroup>
         <Compile Include="WorkflowTypes.fs" />
         <Compile Include="Args.fs" />
         <Compile Include="Measures.fs" />
