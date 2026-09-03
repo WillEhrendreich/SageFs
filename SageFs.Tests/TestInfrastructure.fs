@@ -110,7 +110,6 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
   { CreateSession = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(Ok "test-session")
     ListSessions = fun () -> System.Threading.Tasks.Task.FromResult("No sessions")
     StopSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "stopped")
-    DisposeSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "disposed")
     PurgeSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "purged")
     RestartSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "restarted")
     GetProxy = fun _ -> System.Threading.Tasks.Task.FromResult(Some proxy)

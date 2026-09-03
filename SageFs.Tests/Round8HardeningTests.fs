@@ -7,7 +7,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features
 open SageFs.Features.ManifestTypes
-open SageFs.Features.Replay
+open SageFs.Features.DaemonManifest
 
 // ---------------------------------------------------------------------------
 // W1-residual — TOCTOU: canonical is now used for File.Exists and ReadAllText
@@ -145,7 +145,7 @@ let w3TimelineStateTests =
 
 [<Tests>]
 let w4ManifestPruningTests =
-  testList "W4 — toReplayState prunes by StoppedAt, not CreatedAt" [
+  testList "W4 — toManifestState prunes by StoppedAt, not CreatedAt" [
 
     testCase "session created 10 days ago but stopped 1 day ago is KEPT" <| fun _ ->
       // This is the key regression: old code pruned by CreatedAt, so a session
@@ -161,7 +161,7 @@ let w4ManifestPruningTests =
         ActiveSessionId = None
         CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
       }
-      let state = ManifestMapping.toReplayState manifest
+      let state = ManifestMapping.toManifestState manifest
       state.Sessions |> Map.containsKey "old-created-recent-stopped"
       |> Expect.isTrue "session stopped only 1 day ago should be kept even if created 10 days ago"
 
@@ -177,7 +177,7 @@ let w4ManifestPruningTests =
         ActiveSessionId = None
         CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
       }
-      let state = ManifestMapping.toReplayState manifest
+      let state = ManifestMapping.toManifestState manifest
       state.Sessions |> Map.containsKey "old-stopped-8d"
       |> Expect.isFalse "session stopped 8 days ago should be pruned"
 
@@ -193,7 +193,7 @@ let w4ManifestPruningTests =
         ActiveSessionId = Some "alive-very-old"
         CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
       }
-      let state = ManifestMapping.toReplayState manifest
+      let state = ManifestMapping.toManifestState manifest
       state.Sessions |> Map.containsKey "alive-very-old"
       |> Expect.isTrue "alive session (no StoppedAt) is never pruned regardless of age"
 
@@ -219,7 +219,7 @@ let w4ManifestPruningTests =
         ActiveSessionId = Some "keep-alive"
         CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
       }
-      let state = ManifestMapping.toReplayState manifest
+      let state = ManifestMapping.toManifestState manifest
       state.Sessions |> Map.containsKey "keep-alive" |> Expect.isTrue "alive session kept"
       state.Sessions |> Map.containsKey "keep-recent-stop" |> Expect.isTrue "recently-stopped session kept"
       state.Sessions |> Map.containsKey "prune-old-stop" |> Expect.isFalse "old-stopped session pruned"

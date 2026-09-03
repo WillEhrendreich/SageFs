@@ -85,7 +85,6 @@
         <Compile Include="SessionCreationTests.fs" />
         <Compile Include="SessionCreationUxTests.fs" />
         <Compile Include="ExplorationTests.fs" />
-        <Compile Include="ReplayTests.fs" />
         <Compile Include="HotReloadTests.fs" />
         <Compile Include="HotReloadStateTests.fs" />
         <Compile Include="MutationTestingFramework.fs" />
@@ -180,7 +179,6 @@
         <Compile Include="DomainModelSseTests.fs" />
         <Compile Include="FeatureHookTests.fs" />
         <Compile Include="AlgebraicPropertyTests.fs" />
-        <Compile Include="EventFoldPropertyTests.fs" />
         <Compile Include="BinaryFormatTests.fs" />
         <Compile Include="ManifestPersistenceTests.fs" />
         <Compile Include="PersistenceComplianceTests.fs" />

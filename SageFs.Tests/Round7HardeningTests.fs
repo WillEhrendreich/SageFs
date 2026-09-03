@@ -7,7 +7,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features
 open SageFs.Features.ManifestTypes
-open SageFs.Features.Replay
+open SageFs.Features.DaemonManifest
 
 // ---------------------------------------------------------------------------
 // W2 — awaitWorkerPort disposes Process on startup timeout/failure
@@ -145,7 +145,7 @@ let w7FeatureHooksIncrementalCacheTests =
 let w10ManifestStaleEntriesTests =
   testList "W10 — Manifest stale alive entries fixed" [
 
-    testCase "toReplayState prunes stopped entries older than 7 days" <| fun _ ->
+    testCase "toManifestState prunes stopped entries older than 7 days" <| fun _ ->
       let old = DateTimeOffset.UtcNow.AddDays(-8.0)
       let manifest : DaemonManifestData = {
         Entries = [
@@ -163,13 +163,13 @@ let w10ManifestStaleEntriesTests =
         ActiveSessionId = Some "new-alive"
         CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
       }
-      let state = ManifestMapping.toReplayState manifest
+      let state = ManifestMapping.toManifestState manifest
       state.Sessions |> Map.containsKey "old-stopped"
       |> Expect.isFalse "old stopped session should be pruned"
       state.Sessions |> Map.containsKey "new-alive"
       |> Expect.isTrue "recent alive session should be preserved"
 
-    testCase "toReplayState keeps stopped entries newer than 7 days" <| fun _ ->
+    testCase "toManifestState keeps stopped entries newer than 7 days" <| fun _ ->
       let recent = DateTimeOffset.UtcNow.AddDays(-2.0)
       let manifest : DaemonManifestData = {
         Entries = [
@@ -182,11 +182,11 @@ let w10ManifestStaleEntriesTests =
         ActiveSessionId = None
         CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
       }
-      let state = ManifestMapping.toReplayState manifest
+      let state = ManifestMapping.toManifestState manifest
       state.Sessions |> Map.containsKey "recent-stopped"
       |> Expect.isTrue "recently stopped session should be kept"
 
-    testCase "toReplayState keeps alive sessions regardless of age" <| fun _ ->
+    testCase "toManifestState keeps alive sessions regardless of age" <| fun _ ->
       // An alive session that's old (crash scenario) should not be pruned
       let old = DateTimeOffset.UtcNow.AddDays(-10.0)
       let manifest : DaemonManifestData = {
@@ -200,7 +200,7 @@ let w10ManifestStaleEntriesTests =
         ActiveSessionId = None
         CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
       }
-      let state = ManifestMapping.toReplayState manifest
+      let state = ManifestMapping.toManifestState manifest
       state.Sessions |> Map.containsKey "old-alive"
       |> Expect.isTrue "old alive (crash) session should be preserved for user"
 
@@ -224,19 +224,19 @@ let w10ManifestStaleEntriesTests =
         let entry = result.Entries |> List.find (fun e -> e.SessionId = "s1")
         entry.StoppedAt |> Expect.isSome "StoppedAt preserved through round-trip"
 
-    testCase "fromReplayState roundtrip via toReplayState preserves stopped sessions" <| fun _ ->
+    testCase "manifest state roundtrip via toManifestState preserves stopped sessions" <| fun _ ->
       let stoppedAt = DateTimeOffset.UtcNow.AddMinutes(-10.0)
-      let replayState : DaemonReplayState = {
+      let manifestState : DaemonManifestState = {
         Sessions = Map.ofList [
           "s1", { SessionId = "s1"; Projects = ["a.fsproj"]; WorkingDir = "C:\\a"
                   CreatedAt = DateTimeOffset.UtcNow.AddHours(-1.0); StoppedAt = Some stoppedAt }
         ]
         ActiveSessionId = None
       }
-      let manifest = ManifestMapping.fromReplayState replayState
-      let restored = ManifestMapping.toReplayState manifest
+      let manifest = ManifestMapping.fromManifestState manifestState
+      let restored = ManifestMapping.toManifestState manifest
       restored.Sessions |> Map.containsKey "s1"
-      |> Expect.isTrue "session survives fromReplayState → toReplayState roundtrip"
+      |> Expect.isTrue "session survives fromManifestState → toManifestState roundtrip"
       let r = restored.Sessions.["s1"]
       r.StoppedAt |> Expect.isSome "StoppedAt survives roundtrip"
 

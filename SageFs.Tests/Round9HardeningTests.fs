@@ -6,7 +6,7 @@ open Expecto
 open Expecto.Flip
 open SageFs.Features
 open SageFs.Features.ManifestTypes
-open SageFs.Features.Replay
+open SageFs.Features.DaemonManifest
 
 // ---------------------------------------------------------------------------
 // W3 — sparkline maxDur uses visible window only (not all 1000 entries)

@@ -48,13 +48,6 @@ let complianceSuite = testList "[Compliance] Behavioral contracts" [
     AffordancesPropertyTests.allAffordancesPropertyTests
     CellGridMonoidTests.cellOverlayTests
     CellGridMonoidTests.cellGridOverlayTests
-    EventFoldPropertyTests.replayEquivalenceTests
-    EventFoldPropertyTests.lastActivityMonotonicTests
-    EventFoldPropertyTests.evalCountTests
-    EventFoldPropertyTests.resetCountTests
-    EventFoldPropertyTests.evalHistoryTests
-    EventFoldPropertyTests.emptyStreamTests
-    EventFoldPropertyTests.sessionEventRoundtripTests
     ResultExTests.resultExTests
   ]
 

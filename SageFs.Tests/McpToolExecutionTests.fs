@@ -25,7 +25,6 @@ let tests =
         CreateSession = fun _ _ _ -> Task.FromResult(Ok "test-session")
         ListSessions = fun () -> Task.FromResult("No sessions")
         StopSession = fun _ -> Task.FromResult(Ok "stopped")
-        DisposeSession = fun _ -> Task.FromResult(Ok "disposed")
         PurgeSession = fun _ -> Task.FromResult(Ok "purged")
         RestartSession = fun _ _ ->
           task {

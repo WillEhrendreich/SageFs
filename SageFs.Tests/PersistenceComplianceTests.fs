@@ -7,7 +7,7 @@ open SageFs.Features
 open SageFs.Features.LiveTesting
 
 /// Persistence compliance tests define behavioral contracts that BOTH
-/// the current binary format (.sagefm/.sagefs/.sagetc) and any future
+/// the current binary format (.sagefm/.sagetc) and any future
 /// storage implementation must satisfy (synthesis 4.2).
 ///
 /// Contract categories:
@@ -30,8 +30,8 @@ let private withTempDir (f: string -> unit) =
   finally
     try System.IO.Directory.Delete(dir, true) with _ -> ()
 
-let private sampleDaemonState () : Replay.DaemonReplayState =
-  let record : Replay.DaemonSessionRecord =
+let private sampleDaemonState () : DaemonManifest.DaemonManifestState =
+  let record : DaemonManifest.DaemonSessionRecord =
     { SessionId = "s1"
       Projects = [ "App.fsproj" ]
       WorkingDir = "C:\\Code"
@@ -39,24 +39,6 @@ let private sampleDaemonState () : Replay.DaemonReplayState =
       StoppedAt = None }
   { Sessions = Map.ofList [ "s1", record ]
     ActiveSessionId = Some "s1" }
-
-let private sampleSessionState () : Replay.SessionReplayState =
-  { Status = Replay.ReplayStatus.Ready
-    EvalCount = 1
-    FailedEvalCount = 0
-    ResetCount = 0
-    HardResetCount = 0
-    LastEvalResult = Some "val x: int = 42"
-    WarmupErrors = []
-    EvalHistory =
-      [ { Code = "let x = 42;;"
-          Result = "val x: int = 42"
-          TypeSignature = Some "int"
-          Duration = TimeSpan.FromMilliseconds(120.0)
-          Timestamp = DateTimeOffset(2025, 3, 1, 12, 0, 0, TimeSpan.Zero) } ]
-    LastDiagnostics = []
-    StartedAt = Some (DateTimeOffset(2025, 3, 1, 12, 0, 0, TimeSpan.Zero))
-    LastActivity = Some (DateTimeOffset(2025, 3, 1, 12, 0, 1, TimeSpan.Zero)) }
 
 // ── 1. Roundtrip contracts ──
 
@@ -76,7 +58,7 @@ let roundtripTests = testList "Roundtrip contracts" [
 
   testCase "manifest: empty state roundtrips"
   <| fun _ -> withTempDir (fun dir ->
-    let state = Replay.DaemonReplayState.empty
+    let state = DaemonManifest.DaemonManifestState.empty
     DaemonPersistence.saveManifest dir state |> ignore
     match DaemonPersistence.loadManifest dir with
     | Ok s ->
@@ -84,28 +66,16 @@ let roundtripTests = testList "Roundtrip contracts" [
       s.ActiveSessionId |> Expect.isNone "no active"
     | Error e -> failwithf "empty roundtrip failed: %A" e)
 
-  testCase "session: save → load preserves eval history"
-  <| fun _ -> withTempDir (fun dir ->
-    let state = sampleSessionState ()
-    DaemonPersistence.saveSession dir "s1" "App.fsproj" "C:\\Code" [ "FSharp.Core" ] state |> ignore
-    match DaemonPersistence.loadSession dir "s1" with
-    | Ok s ->
-      s.EvalHistory.Length |> Expect.equal "eval count" 1
-      s.EvalHistory.[0].Code |> Expect.equal "code" "let x = 42;;"
-      s.EvalHistory.[0].Result |> Expect.equal "result" "val x: int = 42"
-      s.EvalCount |> Expect.equal "eval counter" 1
-    | Error e -> failwithf "session roundtrip failed: %s" e)
-
   testCase "manifest: multiple sessions roundtrip"
   <| fun _ -> withTempDir (fun dir ->
-    let r1 : Replay.DaemonSessionRecord =
+    let r1 : DaemonManifest.DaemonSessionRecord =
       { SessionId = "s1"; Projects = [ "A.fsproj" ]; WorkingDir = "C:\\A"
         CreatedAt = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero); StoppedAt = None }
-    let r2 : Replay.DaemonSessionRecord =
+    let r2 : DaemonManifest.DaemonSessionRecord =
       { SessionId = "s2"; Projects = [ "B.fsproj"; "C.fsproj" ]; WorkingDir = "C:\\B"
         CreatedAt = DateTimeOffset(2025, 2, 1, 0, 0, 0, TimeSpan.Zero)
         StoppedAt = Some (DateTimeOffset.UtcNow.AddHours(-1.0)) }
-    let state : Replay.DaemonReplayState =
+    let state : DaemonManifest.DaemonManifestState =
       { Sessions = Map.ofList [ "s1", r1; "s2", r2 ]
         ActiveSessionId = Some "s1" }
     DaemonPersistence.saveManifest dir state |> ignore
@@ -120,38 +90,12 @@ let roundtripTests = testList "Roundtrip contracts" [
 
 let isolationTests = testList "Isolation contracts" [
 
-  testCase "saving session A doesn't affect session B"
-  <| fun _ -> withTempDir (fun dir ->
-    let stateA = sampleSessionState ()
-    let stateB =
-      { sampleSessionState () with
-          EvalHistory =
-            [ { Code = "let y = 99;;"
-                Result = "val y: int = 99"
-                TypeSignature = Some "int"
-                Duration = TimeSpan.FromMilliseconds(50.0)
-                Timestamp = DateTimeOffset(2025, 3, 2, 0, 0, 0, TimeSpan.Zero) } ] }
-    DaemonPersistence.saveSession dir "s1" "A.fsproj" "C:\\A" [] stateA |> ignore
-    DaemonPersistence.saveSession dir "s2" "B.fsproj" "C:\\B" [] stateB |> ignore
-    match DaemonPersistence.loadSession dir "s1" with
-    | Ok s ->
-      s.EvalHistory.[0].Code |> Expect.equal "A unchanged" "let x = 42;;"
-    | Error e -> failwithf "load A failed: %s" e
-    match DaemonPersistence.loadSession dir "s2" with
-    | Ok s ->
-      s.EvalHistory.[0].Code |> Expect.equal "B has its own code" "let y = 99;;"
-    | Error e -> failwithf "load B failed: %s" e)
-
   testCase "manifest and session files are independent"
   <| fun _ -> withTempDir (fun dir ->
     let manifest = sampleDaemonState ()
-    let session = sampleSessionState ()
     DaemonPersistence.saveManifest dir manifest |> ignore
-    DaemonPersistence.saveSession dir "s1" "A.fsproj" "C:\\A" [] session |> ignore
     DaemonPersistence.loadManifest dir |> Result.isOk
-    |> Expect.isTrue "manifest loads"
-    DaemonPersistence.loadSession dir "s1" |> Result.isOk
-    |> Expect.isTrue "session loads")
+    |> Expect.isTrue "manifest loads")
 ]
 
 // ── 3. Idempotency contracts ──
@@ -167,26 +111,6 @@ let idempotencyTests = testList "Idempotency contracts" [
     | Ok s ->
       s.Sessions.Count |> Expect.equal "still one session" 1
     | Error e -> failwithf "idempotent save failed: %A" e)
-
-  testCase "overwriting session preserves latest data"
-  <| fun _ -> withTempDir (fun dir ->
-    let v1 = sampleSessionState ()
-    DaemonPersistence.saveSession dir "s1" "A.fsproj" "C:\\A" [] v1 |> ignore
-    let v2 =
-      { v1 with
-          EvalCount = 2
-          EvalHistory =
-            v1.EvalHistory @
-            [ { Code = "let z = 100;;"
-                Result = "val z: int = 100"
-                TypeSignature = Some "int"
-                Duration = TimeSpan.FromMilliseconds(80.0)
-                Timestamp = DateTimeOffset(2025, 3, 1, 12, 1, 0, TimeSpan.Zero) } ] }
-    DaemonPersistence.saveSession dir "s1" "A.fsproj" "C:\\A" [] v2 |> ignore
-    match DaemonPersistence.loadSession dir "s1" with
-    | Ok s ->
-      s.EvalHistory.Length |> Expect.equal "has both evals" 2
-    | Error e -> failwithf "overwrite failed: %s" e)
 ]
 
 // ── 4. Missing data contracts ──
@@ -201,12 +125,6 @@ let missingDataTests = testList "Missing data contracts" [
       match e with
       | ManifestTypes.ManifestLoadError.NotFound -> ()
       | other -> failwithf "expected NotFound, got: %A" other)
-
-  testCase "loading nonexistent session returns Error"
-  <| fun _ -> withTempDir (fun dir ->
-    match DaemonPersistence.loadSession dir "nonexistent" with
-    | Ok _ -> failwith "should not find session"
-    | Error _ -> ())
 ]
 
 // ── 5. Corruption resilience contracts ──

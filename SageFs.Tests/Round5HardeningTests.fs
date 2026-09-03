@@ -49,67 +49,6 @@ let manifestOverflowTests =
   ]
 
 // ---------------------------------------------------------------------------
-// W8 — O(n²) EvalHistory in Replay.applyEvent
-// ---------------------------------------------------------------------------
-// Bug: `state.EvalHistory @ [record]` copies the entire list on every append.
-// Fix: prepend with `record :: state.EvalHistory`; reverse at display read sites.
-
-open SageFs.Features.Replay
-
-let private makeEvalEvent code : SageFsEvent =
-  EvalCompleted
-    {| Code = code
-       Result = "val it : int = 42"
-       TypeSignature = None
-       Duration = TimeSpan.FromMilliseconds(10.0) |}
-
-[<Tests>]
-let evalHistoryOrderTests =
-  testList "Replay.SessionReplayState EvalHistory" [
-
-    testCase "single eval appears in EvalHistory" <| fun _ ->
-      let ts = DateTimeOffset.UtcNow
-      let state = SessionReplayState.replayStream [ ts, makeEvalEvent "1 + 1" ]
-      state.EvalHistory |> Expect.hasLength "should have one entry" 1
-
-    testCase "multiple evals all appear in EvalHistory" <| fun _ ->
-      let ts = DateTimeOffset.UtcNow
-      let events = [
-        ts.AddSeconds(-2.0), makeEvalEvent "eval1"
-        ts.AddSeconds(-1.0), makeEvalEvent "eval2"
-        ts,                  makeEvalEvent "eval3"
-      ]
-      let state = SessionReplayState.replayStream events
-      state.EvalHistory |> Expect.hasLength "should have 3 entries" 3
-
-    testCase "EvalHistory contains all eval codes" <| fun _ ->
-      let ts = DateTimeOffset.UtcNow
-      let events = [
-        ts.AddSeconds(-2.0), makeEvalEvent "first"
-        ts.AddSeconds(-1.0), makeEvalEvent "second"
-        ts,                  makeEvalEvent "third"
-      ]
-      let state = SessionReplayState.replayStream events
-      state.EvalHistory |> List.exists (fun r -> r.Code = "first")
-      |> Expect.isTrue "history should include the first eval"
-      state.EvalHistory |> List.exists (fun r -> r.Code = "third")
-      |> Expect.isTrue "history should include the third eval"
-
-    testCase "exportAsFsx presents evals in chronological order (oldest first)" <| fun _ ->
-      let ts = DateTimeOffset.UtcNow
-      let events = [
-        ts.AddSeconds(-2.0), makeEvalEvent "// eval-first"
-        ts.AddSeconds(-1.0), makeEvalEvent "// eval-second"
-        ts,                  makeEvalEvent "// eval-third"
-      ]
-      let state = SessionReplayState.replayStream events
-      let exported = SessionReplayState.exportAsFsx state
-      let firstPos = exported.IndexOf("// eval-first", StringComparison.Ordinal)
-      let thirdPos = exported.IndexOf("// eval-third", StringComparison.Ordinal)
-      (firstPos, thirdPos) |> Expect.isLessThan "first eval should appear before third in export"
-  ]
-
-// ---------------------------------------------------------------------------
 // W1 — Path traversal: containment check (pure predicate tests)
 // ---------------------------------------------------------------------------
 // Bug: createEvalFileHandler reads any file path with no containment check.

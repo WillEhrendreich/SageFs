@@ -215,7 +215,6 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     CreateSession = fun _ _ _ -> Task.FromResult(Ok "stub")
     ListSessions = fun () -> Task.FromResult("[]")
     StopSession = fun _ -> Task.FromResult(Ok "stub")
-    DisposeSession = fun _ -> Task.FromResult(Ok "stub")
     PurgeSession = fun _ -> Task.FromResult(Ok "stub")
     RestartSession = fun _ _ -> Task.FromResult(Ok "stub")
     GetProxy = fun _ -> Task.FromResult(Some (mkStatusProxy status))

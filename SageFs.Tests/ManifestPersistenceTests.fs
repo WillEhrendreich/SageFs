@@ -292,17 +292,17 @@ let manifestHostileHeaderTests = testList "DaemonManifest hostile header rejecti
 
 [<Tests>]
 let manifestMappingTests = testList "ManifestMapping" [
-  testCase "replay state → manifest → replay state roundtrips" <| fun _ ->
+  testCase "manifest state → manifest → manifest state roundtrips" <| fun _ ->
     let now = DateTimeOffset.UtcNow
-    let state : Replay.DaemonReplayState = {
+    let state : Features.DaemonManifest.DaemonManifestState = {
       Sessions = Map.ofList [
         "s1", { SessionId = "s1"; Projects = ["A.fsproj"]; WorkingDir = "C:\\A"; CreatedAt = now; StoppedAt = None }
         "s2", { SessionId = "s2"; Projects = ["B.fsproj"]; WorkingDir = "C:\\B"; CreatedAt = now.AddMinutes(-5.0); StoppedAt = Some now }
       ]
       ActiveSessionId = Some "s1"
     }
-    let manifest = ManifestMapping.fromReplayState state
-    let roundtripped = ManifestMapping.toReplayState manifest
+    let manifest = ManifestMapping.fromManifestState state
+    let roundtripped = ManifestMapping.toManifestState manifest
 
     roundtripped.Sessions.Count |> Expect.equal "2 sessions" 2
     roundtripped.ActiveSessionId |> Expect.equal "active" (Some "s1")

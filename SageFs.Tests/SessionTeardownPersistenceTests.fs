@@ -5,16 +5,15 @@ open System.IO
 open Expecto
 open Expecto.Flip
 open SageFs.Features
-open SageFs.Features.Replay
+open SageFs.Features.DaemonManifest
 
-/// Tests for the three-tier session teardown persistence:
-///   Stop   — unload (manifest entry stamped stopped, kept for resume picker)
-///   Dispose— stop + delete the per-session .sagefs replay binary
-///   Purge  — dispose + remove the .sagefm manifest entry entirely
+/// Tests for the two-tier session teardown persistence:
+///   Stop — unload (manifest entry stamped stopped, kept for resume picker)
+///   Purge — stop + remove the .sagefm manifest entry entirely
 ///
-/// These are contract tests over DaemonPersistence.deleteSessionFile /
-/// removeManifestEntry + SessionFile.delete — the daemon-mode wiring is
-/// exercised end-to-end by the dashboard tests.
+/// The per-session .sagefs replay binary no longer exists (event-sourcing
+/// story), so teardown is manifest-only. The daemon-mode wiring is exercised
+/// end-to-end by the dashboard tests.
 
 let private withTempDir (f: string -> unit) =
   let dir =
@@ -25,7 +24,7 @@ let private withTempDir (f: string -> unit) =
   finally
     try Directory.Delete(dir, true) with _ -> ()
 
-let private sampleManifest (ids: string list) : DaemonReplayState =
+let private sampleManifest (ids: string list) : DaemonManifestState =
   let sessions =
     ids
     |> List.map (fun id ->
@@ -38,37 +37,6 @@ let private sampleManifest (ids: string list) : DaemonReplayState =
     |> Map.ofList
   { Sessions = sessions
     ActiveSessionId = ids |> List.tryHead }
-
-[<Tests>]
-let sessionFileDeleteTests = testList "SessionFile.delete" [
-
-  testCase "delete removes the .sagefs replay file" <| fun _ ->
-    withTempDir (fun dir ->
-      let sid = "sess_abc123"
-      let state : SessionReplayState =
-        { Status = ReplayStatus.Ready
-          EvalCount = 1
-          FailedEvalCount = 0
-          ResetCount = 0
-          HardResetCount = 0
-          LastEvalResult = Some "val x: int = 42"
-          WarmupErrors = []
-          EvalHistory = []
-          LastDiagnostics = []
-          StartedAt = Some DateTimeOffset.UtcNow
-          LastActivity = Some DateTimeOffset.UtcNow }
-      let sfsData = SessionMapping.fromReplayState sid "App.fsproj" "C:\\Code" [] state
-      SessionFile.save dir sid sfsData |> Result.isOk |> Expect.isTrue "save should succeed"
-      File.Exists(Path.Combine(dir, "sessions", sid + ".sagefs")) |> Expect.isTrue "file should exist"
-      SessionFile.delete dir sid |> Result.isOk |> Expect.isTrue "delete should succeed"
-      File.Exists(Path.Combine(dir, "sessions", sid + ".sagefs")) |> Expect.isFalse "file should be gone"
-    )
-
-  testCase "delete is idempotent for a missing file" <| fun _ ->
-    withTempDir (fun dir ->
-      SessionFile.delete dir "sess_missing" |> Result.isOk |> Expect.isTrue "missing file delete should be Ok"
-    )
-]
 
 [<Tests>]
 let removeManifestEntryTests = testList "DaemonPersistence.removeManifestEntry" [

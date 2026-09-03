@@ -4,7 +4,7 @@ open System
 open Expecto
 open Expecto.Flip
 open SageFs.Features
-open SageFs.Features.Replay
+open SageFs.Features.DaemonManifest
 open SageFs.Features.EvalTimeline
 open SageFs.Features.BindingExplorer
 
