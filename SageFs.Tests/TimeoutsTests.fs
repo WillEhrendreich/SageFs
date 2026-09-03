@@ -44,6 +44,17 @@ let timeoutsTests = testList "Timeouts" [
       | Error e -> failtestf "unexpected error: %s" e
   ]
 
+  testList "workerHttpRequest" [
+    testCase "is bounded (never infinite) and matches the build cap" <| fun _ ->
+      Timeouts.workerHttpRequest
+      |> Expect.equal "worker HTTP requests must not hang forever" (TimeSpan.FromMinutes(10.0))
+
+    testCase "is a positive bounded span usable as an HttpClient timeout" <| fun _ ->
+      let t = Timeouts.workerHttpRequest
+      (t > TimeSpan.Zero && t <= TimeSpan.FromMinutes(10.0))
+      |> Expect.isTrue "must be a positive span within the 10-minute cap"
+  ]
+
   testSequenced <| testList "Thread-safe mutable timeouts" [
     testCase "setPerTestTimeout rejects invalid value" <| fun _ ->
       let before = Timeouts.perTestDefault ()

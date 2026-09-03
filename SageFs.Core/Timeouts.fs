@@ -50,6 +50,12 @@ module Timeouts =
 
   // -- HTTP / Worker Communication --
   let workerHttpRead = envOrDefault "SAGEFS_WORKER_HTTP_READ_SECONDS" 30.0
+  /// Bounded request timeout for worker HTTP calls (eval/check/typecheck/
+  /// reset/etc). An eval that hangs in the worker must not hang the caller
+  /// forever; 10 minutes matches the ValidTimeout max and the build cap, so
+  /// legitimately long evals still complete while a wedged worker eventually
+  /// surfaces as a timeout error instead of an infinite hang.
+  let workerHttpRequest = envOrDefaultMinutes "SAGEFS_WORKER_HTTP_REQUEST_MINUTES" 10.0
   let healthCheck = TimeSpan.FromSeconds(2.0)
   let shutdownHttpClient = TimeSpan.FromSeconds(5.0)
   let sseKeepAlive = TimeSpan.FromHours(24.0)

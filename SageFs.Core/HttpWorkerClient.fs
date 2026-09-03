@@ -50,7 +50,7 @@ module HttpWorkerClient =
   /// Create a SessionProxy backed by HTTP to the given base URL.
   let httpProxy (baseUrl: string) : SessionProxy =
     let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
-    let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = System.Threading.Timeout.InfiniteTimeSpan)
+    let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
     fun msg ->
       async {
         let method, path, body = toRoute msg
@@ -95,7 +95,7 @@ module HttpWorkerClient =
       -> (Features.LiveTesting.TestRunResult -> unit)
       -> Async<unit> =
     let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
-    let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = System.Threading.Timeout.InfiniteTimeSpan)
+    let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
     fun tests maxParallelism onResult ->
       async {
         let body = Serialization.serialize {| tests = tests; maxParallelism = maxParallelism |}
@@ -149,7 +149,7 @@ module HttpWorkerClient =
       -> (bool array -> unit)
       -> Async<unit> =
     let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
-    let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = System.Threading.Timeout.InfiniteTimeSpan)
+    let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
     fun tests maxParallelism onResult onCoverage ->
       async {
         let body = Serialization.serialize {| tests = tests; maxParallelism = maxParallelism |}
