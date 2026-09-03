@@ -1,0 +1,90 @@
+name: Dashboard E2E
+
+# Real-browser dashboard journeys against a real daemon at the tested SHA.
+# This is the same-SHA evidence layer for the quality/definition-of-done.json
+# dashboard rows (HR-DASH-E2E / LT-DASH-E2E / FR-DASH-E2E): the daemon is the
+# freshly built tool, the browser is a real headless Chromium via Playwright,
+# and the specs drive the served dashboard over HTTP.
+#
+# The daemon is started with SAGEFS_DATA_DIR pointed at a temp dir so the run
+# never touches (or is polluted by) the runner's real ~/.SageFs state, and on a
+# non-default MCP port so no stale daemon can collide.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/e2e-dashboard.yml'
+      - 'playwright.config.ts'
+      - 'tests/**'
+      - 'scripts/e2e-dashboard.ps1'
+      - 'samples/demos/SageFs.Samples.WebappDatastar/**'
+      - 'SageFs/**'
+      - 'SageFs.Core/**'
+      - 'SageFs.Host/**'
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/e2e-dashboard.yml'
+      - 'playwright.config.ts'
+      - 'tests/**'
+      - 'scripts/e2e-dashboard.ps1'
+      - 'samples/demos/SageFs.Samples.WebappDatastar/**'
+      - 'SageFs/**'
+      - 'SageFs.Core/**'
+      - 'SageFs.Host/**'
+
+jobs:
+  dashboard:
+    name: Playwright dashboard journeys
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout forked MCP SDK
+        uses: actions/checkout@v5
+        with:
+          repository: WillEhrendreich/ModelContextProtocolSdk
+          path: mcp-sdk
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '11.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Build forked MCP SDK packages
+        run: |
+          dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+          dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+          dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+
+      - name: Build and pack SageFs tool
+        run: |
+          dotnet build --nologo -c Release
+          dotnet pack SageFs -o nupkg --nologo -c Release
+
+      - name: Install SageFs global tool
+        run: dotnet tool install --global SageFs --add-source nupkg --no-cache
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Run dashboard E2E
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force e2e-diagnostics | Out-Null
+          pwsh -NoProfile -File scripts/e2e-dashboard.ps1 -Port 37951 -SessionWarmupSeconds 120 2>&1 |
+            Tee-Object -FilePath e2e-diagnostics\e2e.log
+          exit $LASTEXITCODE
+        timeout-minutes: 15
+
+      - name: Upload E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-diagnostics
+          path: e2e-diagnostics\
+          if-no-files-found: ignore
+          retention-days: 7

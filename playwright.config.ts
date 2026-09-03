@@ -19,5 +19,10 @@ export default defineConfig({
     viewport: { width: 1440, height: 1000 },
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'dashboard', testMatch: /tests\/dashboard\/.*\.spec\.ts/ }],
+  projects: [
+    {
+      name: 'dashboard',
+      testMatch: /tests\/(dashboard|code-evaluation|session-management|connection-status|keyboard-shortcuts)\/.*\.spec\.ts/,
+    },
+  ],
 });
