@@ -837,115 +837,138 @@ module SessionManager =
         | SessionCommand.WorkerReady(id, workerPid, baseUrl, proxy) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
-            match hasValidReadyTransport baseUrl proxy with
-            | false ->
-              let msg = describeInvalidReadyTransport "Worker" baseUrl proxy
-              do! runtime.StopWorker session
-              let faulted = faultedTombstone (Some msg) session
-              let newState =
-                { ManagerState.addSession id faulted state with
-                    WarmupProgress = Map.remove id state.WarmupProgress }
-              onSessionReady id
-              onSessionFaulted id msg
-              return newState
+            // Stale-ready guard (mirrors WorkerExited/WorkerSpawnFailed): during a
+            // spawn-first restart the OLD session is parked in PendingSwap with
+            // its pid still registered. A late WorkerReady from the retired
+            // worker (carrying the OLD pid) must never commit — it would point
+            // the registry back at the dying process and clear the pending swap,
+            // after which the NEW worker's ready would be ignored as "stale" and
+            // the session would be left serving a dead worker.
+            let isStaleReady =
+              match ManagerState.tryGetPendingSwap id state with
+              | Some oldSession ->
+                workerPid > 0 && oldSession.Info.WorkerPid = Some workerPid
+              | None ->
+                // No swap pending: a ready whose pid differs from an already-
+                // registered live pid is a straggler from a replaced worker
+                // (e.g. a double-spawned older process reporting late).
+                match session.Info.WorkerPid with
+                | Some currentPid -> workerPid > 0 && currentPid <> workerPid
+                | None -> false
+            match isStaleReady with
             | true ->
-              let workerPort =
-                let mutable u : System.Uri = null
-                match System.Uri.TryCreate(baseUrl, System.UriKind.Absolute, &u) with
-                | true when u.Port > 0 -> Some u.Port
-                | _ -> None
-              // Commit point for a spawn-first restart: when the old worker is
-              // parked in PendingSwap, point the registry at the NEW pid FIRST
-              // (so the old worker's eventual exit event is stale/inert — P2),
-              // then install the new transport, then retire the old worker and
-              // clear the pending entry. If no swap is pending this is a plain
-              // create/rebuild-recovery WorkerReady and pid/transport install
-              // is the same as before.
-              let updated =
-                { session with
-                    Proxy = proxy
-                    WorkerBaseUrl = baseUrl
-                    Info =
-                      { session.Info with
-                          WorkerPort = workerPort
-                          WorkerPid = Some workerPid } }
-              let stateAfterInstall =
-                { ManagerState.addSession id updated state with
-                    WarmupProgress = Map.remove id state.WarmupProgress }
-              let newState =
-                match ManagerState.tryGetPendingSwap id state with
-                | Some oldSession ->
-                  // Retire the old worker off the critical path; its exit event
-                  // now carries a pid that no longer matches Info.WorkerPid, so
-                  // WorkerExited will ignore it (stale-pid guard).
-                  Async.Start(runtime.StopWorker oldSession, ct)
-                  ManagerState.clearPendingSwap id stateAfterInstall
-                | None ->
-                  stateAfterInstall
-              onSessionReady id
-              // Poll worker until it reports Ready, then update snapshot.
-              // Uses while loop with CT check to stop cleanly on daemon shutdown
-              // or when the session terminates before becoming Ready.
-              // Watchdog: faults the session if it hasn't become Ready within the timeout.
-              Async.Start(async {
-                let mutable done' = false
-                let started = DateTime.UtcNow
-                let timeout = Timeouts.warmupReadyPollMax
-                while not done' && not ct.IsCancellationRequested do
-                  do! Async.Sleep 1000
-                  let elapsed = DateTime.UtcNow - started
-                  match elapsed > timeout with
-                  | true ->
-                    let reason = sprintf "Session warmup timed out after %.0fs — worker did not reach Ready state. Use hard_reset_fsi_session with rebuild=true to retry." elapsed.TotalSeconds
-                    Log.warn "[SessionManager] %s (session %s)" reason (SessionId.value id)
-                    inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Faulted))
-                    onSessionFaulted id reason
-                    done' <- true
-                  | false ->
-                    try
-                      let rid = Guid.NewGuid().ToString("N").[..7]
-                      let! resp = proxy (WorkerMessage.GetStatus rid)
-                      match resp with
-                      | WorkerResponse.StatusResult(_, snapshot) ->
-                        match snapshot.Status with
-                        | SessionStatus.Ready ->
-                          inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Ready))
-                          done' <- true
-                        | SessionStatus.Faulted
-                        | SessionStatus.Stopped -> done' <- true
+              Log.warn "[SessionManager] Ignoring stale WorkerReady for session %s (event pid %d != current pid)" (SessionId.value id) workerPid
+              return state
+            | false ->
+              match hasValidReadyTransport baseUrl proxy with
+              | false ->
+                let msg = describeInvalidReadyTransport "Worker" baseUrl proxy
+                do! runtime.StopWorker session
+                let faulted = faultedTombstone (Some msg) session
+                let newState =
+                  { ManagerState.addSession id faulted state with
+                      WarmupProgress = Map.remove id state.WarmupProgress }
+                onSessionReady id
+                onSessionFaulted id msg
+                return newState
+              | true ->
+                let workerPort =
+                  let mutable u : System.Uri = null
+                  match System.Uri.TryCreate(baseUrl, System.UriKind.Absolute, &u) with
+                  | true when u.Port > 0 -> Some u.Port
+                  | _ -> None
+                // Commit point for a spawn-first restart: when the old worker is
+                // parked in PendingSwap, point the registry at the NEW pid FIRST
+                // (so the old worker's eventual exit event is stale/inert — P2),
+                // then install the new transport, then retire the old worker and
+                // clear the pending entry. If no swap is pending this is a plain
+                // create/rebuild-recovery WorkerReady and pid/transport install
+                // is the same as before.
+                let updated =
+                  { session with
+                      Proxy = proxy
+                      WorkerBaseUrl = baseUrl
+                      Info =
+                        { session.Info with
+                            WorkerPort = workerPort
+                            WorkerPid = Some workerPid } }
+                let stateAfterInstall =
+                  { ManagerState.addSession id updated state with
+                      WarmupProgress = Map.remove id state.WarmupProgress }
+                let newState =
+                  match ManagerState.tryGetPendingSwap id state with
+                  | Some oldSession ->
+                    // Retire the old worker off the critical path; its exit event
+                    // now carries a pid that no longer matches Info.WorkerPid, so
+                    // WorkerExited will ignore it (stale-pid guard).
+                    Async.Start(runtime.StopWorker oldSession, ct)
+                    ManagerState.clearPendingSwap id stateAfterInstall
+                  | None ->
+                    stateAfterInstall
+                onSessionReady id
+                // Poll worker until it reports Ready, then update snapshot.
+                // Uses while loop with CT check to stop cleanly on daemon shutdown
+                // or when the session terminates before becoming Ready.
+                // Watchdog: faults the session if it hasn't become Ready within the timeout.
+                Async.Start(async {
+                  let mutable done' = false
+                  let started = DateTime.UtcNow
+                  let timeout = Timeouts.warmupReadyPollMax
+                  while not done' && not ct.IsCancellationRequested do
+                    do! Async.Sleep 1000
+                    let elapsed = DateTime.UtcNow - started
+                    match elapsed > timeout with
+                    | true ->
+                      let reason = sprintf "Session warmup timed out after %.0fs — worker did not reach Ready state. Use hard_reset_fsi_session with rebuild=true to retry." elapsed.TotalSeconds
+                      Log.warn "[SessionManager] %s (session %s)" reason (SessionId.value id)
+                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Faulted))
+                      onSessionFaulted id reason
+                      done' <- true
+                    | false ->
+                      try
+                        let rid = Guid.NewGuid().ToString("N").[..7]
+                        let! resp = proxy (WorkerMessage.GetStatus rid)
+                        match resp with
+                        | WorkerResponse.StatusResult(_, snapshot) ->
+                          match snapshot.Status with
+                          | SessionStatus.Ready ->
+                            inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Ready))
+                            done' <- true
+                          | SessionStatus.Faulted
+                          | SessionStatus.Stopped -> done' <- true
+                          | _ -> ()
                         | _ -> ()
-                      | _ -> ()
-                    with ex ->
-                        Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)\n%s" (SessionId.value id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-                        done' <- true  // Transport error — WorkerExited event handles cleanup
-              }, ct)
-              // Request initial test discovery from the worker
-              Async.Start(async {
-                try
-                  let rid = System.Guid.NewGuid().ToString("N")
-                  let! resp = proxy (WorkerMessage.GetTestDiscovery rid)
-                  match resp with
-                  | WorkerResponse.InitialTestDiscovery(tests, providers) ->
-                    inbox.Post(SessionCommand.WorkerTestDiscovery(id, tests, providers))
-                  | _ -> ()
-                with ex ->
-                  Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "test_discovery" :> obj))
-                  Log.error "[SessionManager] Test discovery failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-              }, ct)
-              // Fetch instrumentation maps from the worker
-              Async.Start(async {
-                try
-                  let rid = System.Guid.NewGuid().ToString("N")
-                  let! resp = proxy (WorkerMessage.GetInstrumentationMaps rid)
-                  match resp with
-                  | WorkerResponse.InstrumentationMapsResult(_, maps) when not (Array.isEmpty maps) ->
-                    onInstrumentationMaps id maps
-                  | _ -> ()
-                with ex ->
-                  Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "instrumentation_maps" :> obj))
-                  Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-              }, ct)
-              return newState
+                      with ex ->
+                          Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)\n%s" (SessionId.value id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                          done' <- true  // Transport error — WorkerExited event handles cleanup
+                }, ct)
+                // Request initial test discovery from the worker
+                Async.Start(async {
+                  try
+                    let rid = System.Guid.NewGuid().ToString("N")
+                    let! resp = proxy (WorkerMessage.GetTestDiscovery rid)
+                    match resp with
+                    | WorkerResponse.InitialTestDiscovery(tests, providers) ->
+                      inbox.Post(SessionCommand.WorkerTestDiscovery(id, tests, providers))
+                    | _ -> ()
+                  with ex ->
+                    Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "test_discovery" :> obj))
+                    Log.error "[SessionManager] Test discovery failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                }, ct)
+                // Fetch instrumentation maps from the worker
+                Async.Start(async {
+                  try
+                    let rid = System.Guid.NewGuid().ToString("N")
+                    let! resp = proxy (WorkerMessage.GetInstrumentationMaps rid)
+                    match resp with
+                    | WorkerResponse.InstrumentationMapsResult(_, maps) when not (Array.isEmpty maps) ->
+                      onInstrumentationMaps id maps
+                    | _ -> ()
+                  with ex ->
+                    Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "instrumentation_maps" :> obj))
+                    Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                }, ct)
+                return newState
           | None ->
             // Session was stopped before port discovery completed — ignore
             return state

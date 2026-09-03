@@ -363,4 +363,77 @@ let sessionManagerSpawnFirstRestartTests =
 
         runtime.Verbs |> Seq.toList
         |> Expect.equal "ready must retire the old worker (one stop after the two starts)" [ Verb.Start; Verb.Start; Verb.Stop ]
+
+    testCase "T8 — the retired worker's stale WorkerReady during a swap must not commit the old pid" <| fun _ ->
+      let distinctProcesses =
+        Process.GetProcesses()
+        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
+      if distinctProcesses.Length = 0 then
+        skiptest "need a second live process to simulate distinct worker pids"
+      let otherProcess = distinctProcesses[0]
+
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun call ->
+            match call with
+            | 1 -> Ok(Process.GetCurrentProcess())
+            | _ -> Ok(otherProcess))
+
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        makeSessionReady harness info
+        let oldPid =
+          getManagedSession harness info.Id
+          |> getWorkerPid
+
+        // Accept the spawn-first restart: the old session is parked in
+        // PendingSwap (still registered with the OLD pid), the new worker is
+        // warming.
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        | Ok _ -> ()
+        | Error err -> failtestf "restart failed: %s" (SageFsError.describe err)
+
+        // The OLD worker's late ready arrives mid-swap carrying the OLD pid.
+        // It must be treated as stale: committing it would point the registry
+        // back at the dying worker and clear the pending swap, so the new
+        // worker's eventual ready would then be ignored as "stale" and the
+        // session would be left serving a dead process.
+        harness.Mailbox.Post(
+          SessionCommand.WorkerReady(
+            info.Id,
+            oldPid,
+            "http://localhost:4123",
+            readyProxy))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> ignore
+
+        let sessionAfterStale = getManagedSession harness info.Id
+        sessionAfterStale.Info.WorkerPid
+        |> Expect.equal "stale ready must not overwrite the registered old pid mid-swap" (Some oldPid)
+        sessionAfterStale.Info.Status
+        |> Expect.equal "stale ready must not flip the session out of Restarting" SessionStatus.Restarting
+
+        // The NEW worker's ready still commits the swap normally.
+        harness.Mailbox.Post(
+          SessionCommand.WorkerReady(
+            info.Id,
+            otherProcess.Id,
+            "http://localhost:4124",
+            readyProxy))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> ignore
+
+        let session = getManagedSession harness info.Id
+        session.Info.WorkerPid
+        |> Expect.equal "the new worker's ready must still commit the swap" (Some otherProcess.Id)
+
+        // Mirror the worker ready-poll: once the swap commits, the poll probes
+        // the new worker and flips the registry to Ready.
+        harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionStatus.Ready))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> ignore
+        let sessionReady = getManagedSession harness info.Id
+        sessionReady.Info.Status
+        |> Expect.equal "session must return to Ready after the swap commits" SessionStatus.Ready
   ]
