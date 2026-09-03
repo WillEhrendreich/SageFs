@@ -323,6 +323,13 @@ let resolveViewingSession
 /// Independent of any HTTP/SSE context — called from both the initial GET render
 /// and each SSE push. Returns the snapshot, the resolved session ID, and the
 /// resolved theme name so the caller can update its tracking state.
+///
+/// `cachedWorkerData` lets an SSE stream reuse recent worker-fetched values
+/// (eval stats / hot-reload state / warmup context) across high-frequency
+/// ticks: the three fetches are the expensive per-push cost (worker HTTP
+/// round-trips), and the render-diff guard means reusing a cache can never
+/// SEND stale HTML — it only makes unchanged ticks cheaper. When None, all
+/// three are fetched fresh (the initial GET render and cold pushes).
 let buildDashboardSnapshot
   (q: DashboardQueries)
   (infra: DashboardInfra)
@@ -330,7 +337,8 @@ let buildDashboardSnapshot
   (lastSessionId: WorkerProtocol.SessionId)
   (lastWorkingDir: string)
   (lastThemeName: string)
-  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string> =
+  (cachedWorkerData: DashboardWorkerCache option)
+  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let sessionId = currentSessionId
     let sid = WorkerProtocol.SessionId.value sessionId
@@ -338,9 +346,18 @@ let buildDashboardSnapshot
     let state = q.GetSessionState sessionId
     let stateStr = SessionState.label state
     let workingDir = q.GetSessionWorkingDir sessionId
-    let statsTask = q.GetEvalStats sessionId
-    let hrTask = q.GetHotReloadState sessionId
-    let wCtxTask = q.GetWarmupContext sessionId
+    let statsTask =
+      match cachedWorkerData with
+      | Some cache when cache.SessionId = sessionId -> System.Threading.Tasks.Task.FromResult cache.EvalStats
+      | _ -> q.GetEvalStats sessionId
+    let hrTask =
+      match cachedWorkerData with
+      | Some cache when cache.SessionId = sessionId -> System.Threading.Tasks.Task.FromResult cache.HotReloadState
+      | _ -> q.GetHotReloadState sessionId
+    let wCtxTask =
+      match cachedWorkerData with
+      | Some cache when cache.SessionId = sessionId -> System.Threading.Tasks.Task.FromResult cache.WarmupContext
+      | _ -> q.GetWarmupContext sessionId
     let! stats = statsTask
     let! hrState = hrTask
     let! wCtx = wCtxTask
@@ -425,22 +442,34 @@ let buildDashboardSnapshot
     let warmupProgress = q.GetWarmupProgress sessionId
     let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanels q sessionId stateStr warmupProgress
     // Friction review panel — local store only. Built server-side so the
-    // client never assembles raw telemetry.
-    let! frictionStore = q.GetFrictionStore () |> Async.AwaitTask
-    let frictionPanel =
-      match frictionStore with
-      | None -> Elem.div [ Attr.id DomIds.FrictionPanel ] []
-      | Some store ->
-        let reportResult =
-          SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store None
-          |> Async.AwaitTask
-          |> Async.RunSynchronously
-        let historyResult = store.ListSentReports ()
-        match reportResult, historyResult with
-        | Ok report, Ok history ->
-          let view = SageFs.Features.FrictionReviewView.build report history
-          renderFrictionPanel view
-        | _ -> Elem.div [ Attr.id DomIds.FrictionPanel ] []
+    // client never assembles raw telemetry. The read is synchronous SQLite;
+    // an SSE stream reuses its last-built panel within the worker-data TTL
+    // (the view only changes via friction-tool events that arrive through
+    // their own push path, and the render-diff guard prevents stale sends).
+    let frictionPanelTask =
+      match cachedWorkerData with
+      | Some cache ->
+        match cache.FrictionPanel with
+        | Some panel -> System.Threading.Tasks.Task.FromResult panel
+        | None -> System.Threading.Tasks.Task.FromResult (Elem.div [ Attr.id DomIds.FrictionPanel ] [])
+      | None ->
+        task {
+          let! frictionStore = q.GetFrictionStore () |> Async.AwaitTask
+          match frictionStore with
+          | None -> return Elem.div [ Attr.id DomIds.FrictionPanel ] []
+          | Some store ->
+            let reportResult =
+              SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store None
+              |> Async.AwaitTask
+              |> Async.RunSynchronously
+            let historyResult = store.ListSentReports ()
+            match reportResult, historyResult with
+            | Ok report, Ok history ->
+              let view = SageFs.Features.FrictionReviewView.build report history
+              return renderFrictionPanel view
+            | _ -> return Elem.div [ Attr.id DomIds.FrictionPanel ] []
+        }
+    let! frictionPanel = frictionPanelTask
     let snap : DashboardSnapshot = {
       Version = infra.Version
       SessionState = stateStr
@@ -467,7 +496,7 @@ let buildDashboardSnapshot
       BindingsPanel = bindingsPanel
       FrictionPanel = frictionPanel
     }
-    return snap, sessionId, themeName
+    return snap, sessionId, themeName, {| EvalStats = stats; HotReloadState = hrState; WarmupContext = wCtx; FrictionPanel = frictionPanel |}
   }
 
 /// Create the SSE stream handler that pushes Elm state to the browser.
@@ -499,6 +528,25 @@ let createStreamHandler
     // but the SSE morph only fires when the rendered HTML differs — a poll tick
     // with nothing changed sends zero payload bytes instead of a full fat morph.
     let mutable lastPushedMain = ""
+    // Worker-data cache: the three worker HTTP fetches (eval stats, hot-reload
+    // state, warmup context) are the dominant per-push cost. In poll mode
+    // (StateChanged = None) pushState fires every second; reusing the last
+    // fetch for up to `workerDataTtlMs` keeps unchanged ticks cheap. The
+    // render-diff guard below means a reused cache can never SEND stale HTML —
+    // a tick whose rendered output differs still morphs. Real worker changes
+    // also arrive as state events in the wired (event) mode; there the push is
+    // event-driven and the TTL is short enough that the change is reflected on
+    // the next push after the event.
+    let workerDataTtlMs = 2000
+    let mutable lastWorkerFetch = DateTime.MinValue
+    let mutable workerCache : DashboardWorkerCache option = None
+    let tryGetFreshWorkerCache (sessionId: WorkerProtocol.SessionId) =
+      match workerCache with
+      | Some cache when cache.SessionId = sessionId ->
+        match (DateTime.UtcNow - lastWorkerFetch).TotalMilliseconds < float workerDataTtlMs with
+        | true -> Some cache
+        | false -> None
+      | _ -> None
 
     let pushState () = task {
       match currentSessionOpt with
@@ -513,8 +561,22 @@ let createStreamHandler
           do! ssePatchNode ctx (renderSessionPicker previous)
           do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | Some sessionId ->
-      let! snap, newSessionId, newThemeName =
-        buildDashboardSnapshot q infra sessionId lastSessionId lastWorkingDir lastThemeName
+      let cached = tryGetFreshWorkerCache sessionId
+      let! snap, newSessionId, newThemeName, rawWorkerData =
+        buildDashboardSnapshot q infra sessionId lastSessionId lastWorkingDir lastThemeName cached
+      match cached with
+      | None ->
+        // This push performed the expensive fetches — record them so the next
+        // ticks within the TTL window reuse them.
+        workerCache <- Some {
+          SessionId = sessionId
+          EvalStats = rawWorkerData.EvalStats
+          HotReloadState = rawWorkerData.HotReloadState
+          WarmupContext = rawWorkerData.WarmupContext
+          FrictionPanel = Some rawWorkerData.FrictionPanel
+        }
+        lastWorkerFetch <- DateTime.UtcNow
+      | Some _ -> ()
       let sessionChanged = newSessionId <> lastSessionId
       // Patch the theme signal on session switch (always), or when the
       // resolved theme name changed. This keeps the picker in sync with
@@ -597,15 +659,37 @@ let createStreamHandler
               match ctx.RequestAborted.IsCancellationRequested with
               | true -> ()
               | false -> return! loop ()
-            | Some _change ->
+            | Some change ->
               // Other state changes — drain + coalesce + push
+              // Worker-affecting events invalidate the worker-data TTL cache so
+              // the push re-fetches eval stats / hot-reload / warmup context:
+              // reusing a cache across a real change would render identical
+              // HTML and wrongly suppress the morph.
+              let invalidatesWorkerData (c: DaemonStateChange) =
+                match c with
+                | DaemonStateChange.ModelChanged _
+                | DaemonStateChange.HotReloadChanged _
+                | DaemonStateChange.FileReloaded _
+                | DaemonStateChange.WarmupProgress _
+                | DaemonStateChange.SessionReady _
+                | DaemonStateChange.SessionSwitched _
+                | DaemonStateChange.SessionFaulted _ -> true
+                | DaemonStateChange.StandbyProgress
+                | DaemonStateChange.SystemAlarm _ -> false
+              let mutable workerInvalidated = invalidatesWorkerData change
               while inbox.CurrentQueueLength > 0 do
-                let! _ = inbox.Receive()
+                let! drained = inbox.Receive()
+                if invalidatesWorkerData drained then
+                  workerInvalidated <- true
                 ()
               do! Async.Sleep 100
               while inbox.CurrentQueueLength > 0 do
-                let! _ = inbox.Receive()
+                let! drained = inbox.Receive()
+                if invalidatesWorkerData drained then
+                  workerInvalidated <- true
                 ()
+              if workerInvalidated then
+                lastWorkerFetch <- DateTime.MinValue
               try
                 do! pushState () |> Async.AwaitTask
               with
@@ -691,8 +775,8 @@ let createEvalHandler
           // The action response owns this interaction. Render the freshly
           // committed snapshot here so Datastar cannot drop an overlapping
           // long-lived stream morph while this POST is still resolving.
-          let! snap, _, _ =
-            buildDashboardSnapshot q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName
+          let! snap, _, _, _ =
+            buildDashboardSnapshot q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None
           do! ssePatchNode ctx (renderMainContent snap)
           let displayResult, cssClass =
             match result with
@@ -1530,7 +1614,7 @@ let createEndpoints
           | _ -> None
         match resolveViewingSession requestedSession sessions with
         | Some initialSessionId ->
-          let! snap, resolvedId, _ = buildDashboardSnapshot q infra initialSessionId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName
+          let! snap, resolvedId, _, _ = buildDashboardSnapshot q infra initialSessionId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
           let html = renderShell infra.Version (WorkerProtocol.SessionId.value resolvedId) (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
         | None ->

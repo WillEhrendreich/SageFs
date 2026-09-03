@@ -198,8 +198,8 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     }
 
   testTask "buildDashboardSnapshot carries rebuilding status into the live testing panel" {
-    let! snap, _, _ =
-      buildDashboardSnapshot (mkQueries true "🔨 Rebuilding 2 tests") (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default"
+    let! snap, _, _, _ =
+      buildDashboardSnapshot (mkQueries true "🔨 Rebuilding 2 tests") (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default" None
     let html = snap.LiveTestingPanel |> renderNode
     Expect.stringContains html "Live Testing: ON" "dashboard should show live testing as active"
     Expect.stringContains html "🔨 Rebuilding 2 tests" "dashboard should tell users that tests are waiting on compilation"
@@ -213,8 +213,8 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
   // unexpected CPU usage or flapping test state. The hint must mention
   // "keystroke" so the cost is explicit.
   testTask "OFF state hint warns that tests run on every keystroke" {
-    let! snap, _, _ =
-      buildDashboardSnapshot (mkQueries false "Test cycle idle") (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default"
+    let! snap, _, _, _ =
+      buildDashboardSnapshot (mkQueries false "Test cycle idle") (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default" None
     let html = snap.LiveTestingPanel |> renderNode
     // The "off" hint must mention the cost: keystrokes drive test re-runs.
     Expect.stringContains html "keystroke" "OFF hint must mention that tests run on every keystroke"
@@ -238,11 +238,49 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     }
     let queries = { (mkQueries true "Tests: 5 passed / 2 failed") with
                       GetDaemonHealth = fun () -> Some healthSnap }
-    let! snap, _, _ =
-      buildDashboardSnapshot queries (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default"
+    let! snap, _, _, _ =
+      buildDashboardSnapshot queries (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default" None
     let html = snap.LiveTestingPanel |> renderNode
     Expect.stringContains html "--fg-green" "passed count must use green color"
     Expect.stringContains html "--fg-red" "failed count must use red color"
+  }
+
+  // ─── Item 4: the worker-data cache must skip the three expensive fetches ──
+  testTask "cached worker data skips eval-stats/hot-reload/warmup fetches" {
+    let sid = WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+    let mutable evalFetches = 0
+    let mutable hrFetches = 0
+    let mutable wCtxFetches = 0
+    let queries =
+      { mkQueries true "Test cycle idle" with
+          GetEvalStats = fun _ ->
+            evalFetches <- evalFetches + 1
+            System.Threading.Tasks.Task.FromResult SageFs.Affordances.EvalStats.empty
+          GetHotReloadState = fun _ ->
+            hrFetches <- hrFetches + 1
+            System.Threading.Tasks.Task.FromResult None
+          GetWarmupContext = fun _ ->
+            wCtxFetches <- wCtxFetches + 1
+            System.Threading.Tasks.Task.FromResult None }
+    let cache : DashboardWorkerCache = {
+      SessionId = sid
+      EvalStats = SageFs.Affordances.EvalStats.empty
+      HotReloadState = None
+      WarmupContext = None
+      FrictionPanel = None
+    }
+    // Uncached: all three fetches run.
+    let! _, _, _, _ =
+      buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" None
+    Expect.equal evalFetches 1 "uncached push fetches eval stats"
+    Expect.equal hrFetches 1 "uncached push fetches hot-reload state"
+    Expect.equal wCtxFetches 1 "uncached push fetches warmup context"
+    // Cached (same session): all three fetches are skipped.
+    let! _, _, _, _ =
+      buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" (Some cache)
+    Expect.equal evalFetches 1 "cached push must not re-fetch eval stats"
+    Expect.equal hrFetches 1 "cached push must not re-fetch hot-reload state"
+    Expect.equal wCtxFetches 1 "cached push must not re-fetch warmup context"
   }
 ]
 

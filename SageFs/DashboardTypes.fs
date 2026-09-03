@@ -626,6 +626,24 @@ type DashboardQueries = {
   GetSessionWorkflow: WorkerProtocol.SessionId -> WorkflowTypes.SessionWorkflow
 }
 
+/// Recently-fetched worker-derived dashboard data, reused across SSE pushes so
+/// high-frequency ticks do not pay three worker HTTP round-trips each. The
+/// render-diff guard means reusing this can never SEND stale HTML — it only
+/// makes unchanged ticks cheaper; a real change still renders and sends.
+type DashboardWorkerCache = {
+  SessionId: WorkerProtocol.SessionId
+  EvalStats: SageFs.Affordances.EvalStats
+  HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int |} option
+  WarmupContext: WarmupContext option
+  /// Server-built friction review panel — reusing it avoids the synchronous
+  /// SQLite read (GetFrictionStore + reportDirect + ListSentReports) on every
+  /// push. The view changes only when friction tools record events, which do
+  /// not flow through the SSE state-change stream; the render-diff guard keeps
+  /// a reused panel from ever being SENT stale — it only skips re-reading the
+  /// DB when nothing else on the page changed either.
+  FrictionPanel: Falco.Markup.XmlNode option
+}
+
 /// Commands that mutate session state.
 type DashboardActions = {
   EvalCode: WorkerProtocol.SessionId -> string -> Threading.Tasks.Task<Result<string, string>>
