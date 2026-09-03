@@ -321,6 +321,20 @@ let architectureTests =
         |> Expect.isFalse
           "Mcp.fs (McpAdapter/McpTools) belongs in the daemon project, not Core"
 
+      testCase "SageFs.Core must not contain the daemon MCP/Jupyter push modules"
+      <| fun _ ->
+        let coreTypeNames =
+          coreAssembly.GetTypes()
+          |> Array.map (fun t -> t.FullName)
+        coreTypeNames
+        |> Array.exists (fun n ->
+          n = "SageFs.McpPushNotifications"
+          || n = "SageFs.McpStateHandlers"
+          || n = "SageFs.SessionEvents"
+          || n = "SageFs.JupyterKernel")
+        |> Expect.isFalse
+          "MCP push/state handlers, SessionEvents, and JupyterKernel belong in the daemon project, not Core"
+
       testCase "SageFs.Core must not reference ModelContextProtocol"
       <| fun _ ->
         coreAssembly

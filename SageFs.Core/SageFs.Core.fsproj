@@ -140,11 +140,8 @@
         <Compile Include="Screen.fs" />
         <Compile Include="DirectoryConfig.fs" />
         <Compile Include="ConnectionTracker.fs" />
-        <Compile Include="McpPushNotifications.fs" />
-        <Compile Include="McpStateHandlers.fs" />
         <Compile Include="StartupProfile.fs" />
         <Compile Include="HotReloadState.fs" />
-        <Compile Include="SessionEvents.fs" />
         <Compile Include="HttpOriginGuard.fs" />
         <Compile Include="DevReload.fs" />
         <Compile Include="FileWatcher.fs" />
@@ -158,7 +155,6 @@
         <Compile Include="Middleware\HotReloading.fs" />
         <Compile Include="Middleware\Tracing.fs" />
         <Compile Include="ActorCreation.fs" />
-        <Compile Include="JupyterKernel.fs" />
     </ItemGroup>
 
     <ItemGroup>

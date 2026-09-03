@@ -41,6 +41,10 @@
         <Compile Include="DashboardTypes.fs" />
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="Dashboard.fs" />
+        <Compile Include="McpPushNotifications.fs" />
+        <Compile Include="McpStateHandlers.fs" />
+        <Compile Include="SessionEvents.fs" />
+        <Compile Include="JupyterKernel.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpServer.fs" />
