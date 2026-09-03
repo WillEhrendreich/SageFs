@@ -281,4 +281,71 @@ let architectureTests =
           (sprintf "should have ≤30 type-bag modules (found %d)" typeBagModules.Length)
 
     ]
+
+    testList "Closure seams (daemon vs host)" [
+
+      let hostAssembly =
+        tryLoadAssembly "SageFs.Host"
+
+      testCase "SageFs.Host must not reference the SageFs daemon assembly"
+      <| fun _ ->
+        match hostAssembly with
+        | Some host ->
+          host
+          |> doesNotReference
+            "FSI host closure must be Core-only — the daemon (SageFs) must never load into the worker"
+            "SageFs"
+        | None ->
+          failwith "SageFs.Host assembly not loadable — closure seam unverifiable"
+
+      testCase "SageFs.Host must not reference ModelContextProtocol"
+      <| fun _ ->
+        match hostAssembly with
+        | Some host ->
+          host
+          |> doesNotReferenceAny
+            "MCP surface must stay out of the worker process closure"
+            [ "ModelContextProtocol"; "StreamJsonRpc" ]
+        | None ->
+          failwith "SageFs.Host assembly not loadable — closure seam unverifiable"
+
+      testCase "SageFs.Core must not contain the MCP hub modules"
+      <| fun _ ->
+        let coreTypeNames =
+          coreAssembly.GetTypes()
+          |> Array.map (fun t -> t.FullName)
+        coreTypeNames
+        |> Array.exists (fun n ->
+          n = "SageFs.McpAdapter"
+          || n = "SageFs.McpTools")
+        |> Expect.isFalse
+          "Mcp.fs (McpAdapter/McpTools) belongs in the daemon project, not Core"
+
+      testCase "SageFs.Core must not reference ModelContextProtocol"
+      <| fun _ ->
+        coreAssembly
+        |> doesNotReferenceAny
+          "MCP SDK belongs to the daemon adapter layer, not the domain core"
+          [ "ModelContextProtocol"; "StreamJsonRpc" ]
+
+      testCase "SageFs.Core still hosts the worker-domain modules"
+      <| fun _ ->
+        let coreTypeNames =
+          coreAssembly.GetTypes()
+          |> Array.map (fun t -> t.FullName)
+        let found (simpleName: string) =
+          coreTypeNames
+          |> Array.exists (fun n ->
+            n = simpleName
+            || n.EndsWith("+" + simpleName, StringComparison.Ordinal)
+            || n.EndsWith("." + simpleName, StringComparison.Ordinal))
+        for expected in
+          [ "SessionId"          // WorkerProtocol
+            "SessionPhase"       // AppState
+            "SessionManager"     // supervisor module
+            "SessionOperations" ] do
+          found expected
+          |> Expect.isTrue
+            (sprintf "Core must still define %s (seam test must not pass vacuously)" expected)
+    ]
   ]
