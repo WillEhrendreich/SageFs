@@ -119,6 +119,32 @@ let tests = testSequenced <| testList "Session Creation" [
           result |> Expect.hasLength "should find one solution" 1
           result.[0]
           |> Expect.stringContains "should use config solution" "MyApp.sln")
+
+    testCase "drops manual projects outside the working directory" <| fun _ ->
+      withTempDir
+        (fun dir -> addFakeProject dir "Inside.fsproj")
+        (fun dir ->
+          // A rooted project path elsewhere on disk must be rejected — a
+          // dashboard peer cannot point the daemon at arbitrary projects.
+          let outside =
+            Path.Combine(Path.GetTempPath(), sprintf "sagefs-outside-%s.fsproj" (Guid.NewGuid().ToString("N").[..7]))
+          try
+            writeText outside "<Project />"
+            let result = resolveSessionProjects dir outside
+            result
+            |> Expect.isEmpty "rooted manual project outside the working dir must be dropped"
+          finally
+            if File.Exists outside then File.Delete outside)
+
+    testCase "keeps rooted manual projects inside the working directory" <| fun _ ->
+      withTempDir
+        (fun dir -> addFakeProject dir "Inside.fsproj")
+        (fun dir ->
+          let rootedInside = Path.Combine(dir, "Inside.fsproj")
+          let result = resolveSessionProjects dir rootedInside
+          result |> Expect.hasLength "rooted manual project inside the working dir must be kept" 1
+          result.[0]
+          |> Expect.stringContains "should be the inside project" "Inside.fsproj")
   ]
 
   testList "DirectoryConfig.evaluate" [

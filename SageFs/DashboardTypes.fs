@@ -856,6 +856,9 @@ let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary
 // ---------------------------------------------------------------------------
 
 /// Resolve session projects from manual input or auto-detection.
+/// Manual project paths are CONTAINED to the chosen working directory: a
+/// dashboard peer must not be able to point the daemon at an arbitrary
+/// project elsewhere on disk (mirrors the eval-file containment discipline).
 let resolveSessionProjects (dir: string) (manualProjects: string) =
   let autoDetectProjects dir =
     let discovered = discoverProjects dir
@@ -865,6 +868,20 @@ let resolveSessionProjects (dir: string) (manualProjects: string) =
       match discovered.Projects.IsEmpty with
       | false -> discovered.Projects |> List.map (fun p -> Path.Combine(dir, p))
       | true -> []
+  let resolveRealPath (p: string) : string =
+    let full = Path.GetFullPath p
+    let fsi : System.IO.FileSystemInfo =
+      match Directory.Exists(full) with
+      | true -> DirectoryInfo(full) :> System.IO.FileSystemInfo
+      | false -> FileInfo(full) :> System.IO.FileSystemInfo
+    match fsi.ResolveLinkTarget(returnFinalTarget = true) with
+    | null -> full
+    | resolved -> resolved.FullName
+  let canonicalDir = resolveRealPath dir
+  let isContainedInDir (p: string) =
+    let canonical = resolveRealPath p
+    canonical.StartsWith(canonicalDir + string Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+    || canonical.Equals(canonicalDir, StringComparison.OrdinalIgnoreCase)
   match String.IsNullOrWhiteSpace manualProjects with
   | false ->
     manualProjects.Split(',')
@@ -874,6 +891,7 @@ let resolveSessionProjects (dir: string) (manualProjects: string) =
       match Path.IsPathRooted p with
       | true -> p
       | false -> Path.Combine(dir, p))
+    |> Array.filter isContainedInDir
     |> Array.toList
   | true ->
     match DirectoryConfig.load dir with
