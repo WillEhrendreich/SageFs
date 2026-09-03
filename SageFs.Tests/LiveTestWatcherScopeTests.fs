@@ -32,7 +32,6 @@ let private mkSession (idStr: string) (workingDir: string) : SessionSnapshot =
     LastActivity = DateTime.UtcNow
     EvalCount = 0
     UpSince = DateTime.UtcNow
-    IsActive = true
     WorkingDirectory = workingDir }
 
 /// Inject a session into the initial model by dispatching SessionCreated.
@@ -407,8 +406,7 @@ let stream4Tests =
 
       let snapNew =
         { snapOld with
-            WorkingDirectory = "/projects/alpha-v2"
-            IsActive = true }
+            WorkingDirectory = "/projects/alpha-v2" }
 
       let _modelAfterCreate, createEffects =
         SageFsUpdate.update

@@ -56,7 +56,6 @@ let private genSessionSnapshot =
       LastActivity = DateTime.UtcNow
       EvalCount = 0
       UpSince = DateTime.UtcNow
-      IsActive = false
       WorkingDirectory = "C:\\test"
     }
   }
@@ -132,7 +131,6 @@ let sageFsUpdatePropertyTests =
         LastActivity = DateTime.UtcNow
         EvalCount = 5
         UpSince = DateTime.UtcNow
-        IsActive = false
         WorkingDirectory = "C:\\code"
       }
       let event = SageFsEvent.SessionsRefreshed [ snap ]

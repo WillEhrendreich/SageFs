@@ -951,7 +951,6 @@ module SageFsUpdate =
 
       | SageFsEvent.SessionCreated snap ->
         let isFirst = model.Sessions.ActiveSessionId = ActiveSession.AwaitingSession
-        let snap = match isFirst with | true -> { snap with IsActive = true } | false -> snap
         let existing = model.Sessions.Sessions |> List.exists (fun s -> s.Id = snap.Id)
         let sessions =
           match existing with
@@ -977,13 +976,7 @@ module SageFsUpdate =
 
       | SageFsEvent.SessionsRefreshed snaps ->
         let activeId = model.Sessions.ActiveSessionId
-        let merged =
-          snaps |> List.map (fun snap ->
-            let isActive =
-              match activeId with
-              | ActiveSession.Viewing id -> id = snap.Id
-              | _ -> false
-            { snap with IsActive = isActive })
+        let merged = snaps
         let activeId' =
           match activeId with
           | ActiveSession.AwaitingSession when not (List.isEmpty merged) ->
@@ -1050,11 +1043,7 @@ module SageFsUpdate =
             SessionContext = None
             Sessions = {
               liveTestingSwapped.Sessions with
-                ActiveSessionId = ActiveSession.Viewing toId
-                Sessions =
-                  liveTestingSwapped.Sessions.Sessions
-                  |> List.map (fun s ->
-                    { s with IsActive = s.Id = toId }) } }, []
+                ActiveSessionId = ActiveSession.Viewing toId } }, []
 
       | SageFsEvent.SessionStopped sessionId ->
         let stoppedSession =
@@ -1074,9 +1063,6 @@ module SageFsUpdate =
             |> Option.map (fun s -> ActiveSession.Viewing s.Id)
             |> Option.defaultValue ActiveSession.AwaitingSession
           | false -> model.Sessions.ActiveSessionId
-        let remaining =
-          remaining
-          |> List.map (fun s -> { s with IsActive = ActiveSession.isViewing s.Id newActive })
         let clearedMap =
           model.LiveTesting.TestState.TestSessionMap
           |> Map.filter (fun _ sid -> sid <> sessionId)
@@ -1848,6 +1834,7 @@ module SageFsRender =
       Flags = RegionFlags.Clickable ||| RegionFlags.LiveUpdate
       Content =
         let now = DateTime.UtcNow
+        let activeId = model.Sessions.ActiveSessionId
         model.Sessions.Sessions
         |> List.mapi (fun i s ->
           let statusLabel =
@@ -1858,7 +1845,7 @@ module SageFsRender =
             | SessionDisplayStatus.Suspended -> "suspended"
             | SessionDisplayStatus.Stale -> "stale"
             | SessionDisplayStatus.Restarting -> "restarting"
-          let active = match s.IsActive with | true -> " *" | false -> ""
+          let active = match activeId with | ActiveSession.Viewing id when id = s.Id -> " *" | _ -> ""
           let selected = match model.Editor.SelectedSessionIndex = Some i with | true -> ">" | false -> " "
           let projects =
             match s.Projects.IsEmpty with
@@ -2048,7 +2035,6 @@ module SageFsEffectHandler =
       LastActivity = info.LastActivity
       EvalCount = 0
       UpSince = info.CreatedAt
-      IsActive = false
       WorkingDirectory = info.WorkingDirectory }
 
   /// The main effect handler — plug into ElmProgram.ExecuteEffect

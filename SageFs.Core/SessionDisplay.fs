@@ -22,7 +22,6 @@ type SessionSnapshot = {
   LastActivity: DateTime
   EvalCount: int
   UpSince: DateTime
-  IsActive: bool
   WorkingDirectory: string
 }
 
@@ -50,14 +49,6 @@ module ActiveSession =
     | ActiveSession.Viewing id -> id = sid
     | ActiveSession.AwaitingSession -> false
 
-/// Augment SessionSnapshot with a rich DU accessor.
-/// Prefer `snap.Activation` over raw `snap.IsActive` for pattern matching.
-type SessionSnapshot with
-  member this.Activation =
-    match this.IsActive with
-    | true -> ActiveSession.Viewing this.Id
-    | false -> ActiveSession.AwaitingSession
-
 /// The full session registry view — what every UI renders
 type SessionRegistryView = {
   Sessions: SessionSnapshot list
@@ -70,6 +61,10 @@ type SessionRegistryView = {
 /// Pure functions to build display state from domain state
 module SessionDisplay =
   let staleDuration = Timeouts.staleSessionThreshold
+
+  /// A session is active iff the registry's ActiveSessionId views it.
+  let isActive (active: ActiveSession) (snap: SessionSnapshot) =
+    ActiveSession.isViewing snap.Id active
 
   /// Map internal SessionStatus to display status
   let displayStatus (now: DateTime) (info: SessionInfo) : SessionDisplayStatus =
@@ -90,7 +85,7 @@ module SessionDisplay =
       SessionDisplayStatus.Errored "Session stopped"
 
   /// Build a snapshot from internal session info
-  let snapshot (now: DateTime) (active: ActiveSession) (info: SessionInfo) : SessionSnapshot =
+  let snapshot (now: DateTime) (info: SessionInfo) : SessionSnapshot =
     { Id = info.Id
       Name = info.Name
       Projects = info.Projects
@@ -98,7 +93,6 @@ module SessionDisplay =
       LastActivity = info.LastActivity
       EvalCount = 0
       UpSince = info.CreatedAt
-      IsActive = ActiveSession.isViewing info.Id active
       WorkingDirectory = info.WorkingDirectory }
 
   /// Build the full registry view
@@ -110,7 +104,7 @@ module SessionDisplay =
     (standby: StandbyInfo)
     : SessionRegistryView =
     let snapshots =
-      sessions |> List.map (snapshot now active)
+      sessions |> List.map (snapshot now)
     { Sessions = snapshots
       ActiveSessionId = active
       TotalEvals = snapshots |> List.sumBy (fun s -> s.EvalCount)
@@ -118,16 +112,16 @@ module SessionDisplay =
       Standby = standby }
 
   /// Build affordances for a session card
-  let sessionAffordances (keyMap: KeyMap) (snap: SessionSnapshot) : Affordance list =
+  let sessionAffordances (keyMap: KeyMap) (active: ActiveSession) (snap: SessionSnapshot) : Affordance list =
     [ yield
         { Action = EditorAction.SwitchSession (SessionId.value snap.Id)
           Label = "Switch"
           KeyHint = KeyMap.hintFor keyMap (EditorAction.SwitchSession (SessionId.value snap.Id))
           Enabled =
-            match snap.Activation with
-            | ActiveSession.Viewing _ -> false
-            | ActiveSession.AwaitingSession -> true }
-      match snap.Status = SessionDisplayStatus.Stale || not snap.IsActive with
+            match active with
+            | ActiveSession.Viewing id when id = snap.Id -> false
+            | _ -> true }
+      match snap.Status = SessionDisplayStatus.Stale || not (isActive active snap) with
       | true ->
         yield
           { Action = EditorAction.StopSession (SessionId.value snap.Id)

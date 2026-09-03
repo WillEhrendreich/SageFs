@@ -51,7 +51,7 @@ let SageFsEventTests = testList "SageFsEvent" [
       Id = s1; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 0
-      UpSince = now; IsActive = true; WorkingDirectory = "" }
+      UpSince = now; WorkingDirectory = "" }
     let evt = SageFsEvent.SessionCreated snap
     match evt with
     | SageFsEvent.SessionCreated s -> s.Id |> Expect.equal "id" s1
@@ -102,7 +102,7 @@ let SageFsViewTests = testList "SageFsView" [
         Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
         Status = SessionDisplayStatus.Running
         LastActivity = now; EvalCount = 0
-        UpSince = now; IsActive = true; WorkingDirectory = "" }
+        UpSince = now; WorkingDirectory = "" }
       RecentOutput = []
       Diagnostics = []
       WatchStatus = None
@@ -121,7 +121,7 @@ let SageFsViewTests = testList "SageFsView" [
       CompletionMenu = None
       ActiveSession = {
         Id = testSessionId "aa000001"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
-        LastActivity = now; EvalCount = 1; UpSince = now; IsActive = true; WorkingDirectory = "" }
+        LastActivity = now; EvalCount = 1; UpSince = now; WorkingDirectory = "" }
       RecentOutput = lines
       Diagnostics = []
       WatchStatus = None
@@ -135,7 +135,7 @@ let SageFsViewTests = testList "SageFsView" [
       CompletionMenu = None
       ActiveSession = {
         Id = testSessionId "aa000001"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
-        LastActivity = now; EvalCount = 0; UpSince = now; IsActive = true; WorkingDirectory = "" }
+        LastActivity = now; EvalCount = 0; UpSince = now; WorkingDirectory = "" }
       RecentOutput = []
       Diagnostics = []
       WatchStatus = Some ws

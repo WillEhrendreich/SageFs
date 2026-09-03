@@ -10,7 +10,6 @@ let mkSnap id = {
   SessionSnapshot.Id = id
   Name = None
   Status = SessionDisplayStatus.Starting
-  IsActive = false
   Projects = ["test.fsproj"]
   EvalCount = 0
   UpSince = DateTime.UtcNow

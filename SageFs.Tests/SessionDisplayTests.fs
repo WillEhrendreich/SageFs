@@ -87,25 +87,28 @@ let displayStatusTests = testList "SessionDisplay.displayStatus" [
 
 [<Tests>]
 let snapshotTests = testList "SessionDisplay.snapshot" [
-  testCase "active session marked as active" <| fun _ ->
+  testCase "active session derived active via isActive helper" <| fun _ ->
     let s1 = testSessionId "aa000001"
     let info = mkInfo s1 SessionStatus.Ready now
-    let snap = SessionDisplay.snapshot now (ActiveSession.Viewing s1) info
-    snap.IsActive |> Expect.isTrue "should be active"
+    let snap = SessionDisplay.snapshot now info
+    SessionDisplay.isActive (ActiveSession.Viewing s1) snap
+    |> Expect.isTrue "should be active"
 
-  testCase "inactive session marked as not active" <| fun _ ->
+  testCase "inactive session is not active" <| fun _ ->
     let info = mkInfo (testSessionId "aa000001") SessionStatus.Ready now
-    let snap = SessionDisplay.snapshot now (ActiveSession.Viewing (testSessionId "aa000002")) info
-    snap.IsActive |> Expect.isFalse "should not be active"
+    let snap = SessionDisplay.snapshot now info
+    SessionDisplay.isActive (ActiveSession.Viewing (testSessionId "aa000002")) snap
+    |> Expect.isFalse "should not be active"
 
   testCase "awaiting session means no session is active" <| fun _ ->
     let info = mkInfo (testSessionId "aa000001") SessionStatus.Ready now
-    let snap = SessionDisplay.snapshot now ActiveSession.AwaitingSession info
-    snap.IsActive |> Expect.isFalse "should not be active when awaiting"
+    let snap = SessionDisplay.snapshot now info
+    SessionDisplay.isActive ActiveSession.AwaitingSession snap
+    |> Expect.isFalse "should not be active when awaiting"
 
   testCase "snapshot preserves projects" <| fun _ ->
     let info = mkInfo (testSessionId "aa000001") SessionStatus.Ready now
-    let snap = SessionDisplay.snapshot now ActiveSession.AwaitingSession info
+    let snap = SessionDisplay.snapshot now info
     snap.Projects |> Expect.equal "should match" ["Test.fsproj"]
 ]
 
@@ -130,12 +133,13 @@ let registryViewTests = testList "SessionDisplay.registryView" [
 [<Tests>]
 let affordanceTests = testList "SessionDisplay.sessionAffordances" [
   testCase "inactive session has Switch enabled" <| fun _ ->
+    let sid = testSessionId "aa000001"
     let snap = {
-      Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
+      Id = sid; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 5
-      UpSince = now.AddHours(-1.0); IsActive = false; WorkingDirectory = "" }
-    let affordances = SessionDisplay.sessionAffordances Map.empty snap
+      UpSince = now.AddHours(-1.0); WorkingDirectory = "" }
+    let affordances = SessionDisplay.sessionAffordances Map.empty (ActiveSession.Viewing (testSessionId "aa000002")) snap
     affordances
     |> List.exists (fun a -> a.Label = "Switch" && a.Enabled)
     |> Expect.isTrue "should have enabled Switch"
@@ -145,8 +149,8 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 5
-      UpSince = now.AddHours(-1.0); IsActive = true; WorkingDirectory = "" }
-    let affordances = SessionDisplay.sessionAffordances Map.empty snap
+      UpSince = now.AddHours(-1.0); WorkingDirectory = "" }
+    let affordances = SessionDisplay.sessionAffordances Map.empty (ActiveSession.Viewing (testSessionId "aa000001")) snap
     affordances
     |> List.exists (fun a -> a.Label = "Switch" && not a.Enabled)
     |> Expect.isTrue "Switch should be disabled for active"
@@ -156,8 +160,8 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Errored "crash"
       LastActivity = now; EvalCount = 0
-      UpSince = now.AddHours(-1.0); IsActive = false; WorkingDirectory = "" }
-    let affordances = SessionDisplay.sessionAffordances Map.empty snap
+      UpSince = now.AddHours(-1.0); WorkingDirectory = "" }
+    let affordances = SessionDisplay.sessionAffordances Map.empty (ActiveSession.Viewing (testSessionId "aa000001")) snap
     affordances
     |> List.exists (fun a -> a.Label = "Restart")
     |> Expect.isTrue "should have Restart"
@@ -167,8 +171,8 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 5
-      UpSince = now.AddHours(-1.0); IsActive = true; WorkingDirectory = "" }
-    let affordances = SessionDisplay.sessionAffordances Map.empty snap
+      UpSince = now.AddHours(-1.0); WorkingDirectory = "" }
+    let affordances = SessionDisplay.sessionAffordances Map.empty (ActiveSession.Viewing (testSessionId "aa000001")) snap
     affordances
     |> List.exists (fun a -> a.Label = "Restart")
     |> Expect.isFalse "should not have Restart"
@@ -178,8 +182,8 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 0
-      UpSince = now; IsActive = true; WorkingDirectory = "" }
-    let affordances = SessionDisplay.sessionAffordances Map.empty snap
+      UpSince = now; WorkingDirectory = "" }
+    let affordances = SessionDisplay.sessionAffordances Map.empty (ActiveSession.Viewing (testSessionId "aa000001")) snap
     affordances
     |> List.exists (fun a -> a.Label = "Stop")
     |> Expect.isFalse "no Stop for active running session"
@@ -189,8 +193,8 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
       Id = testSessionId "aa000001"; Name = None; Projects = []
       Status = SessionDisplayStatus.Stale
       LastActivity = now; EvalCount = 0
-      UpSince = now; IsActive = true; WorkingDirectory = "" }
-    let affordances = SessionDisplay.sessionAffordances Map.empty snap
+      UpSince = now; WorkingDirectory = "" }
+    let affordances = SessionDisplay.sessionAffordances Map.empty (ActiveSession.Viewing (testSessionId "aa000001")) snap
     affordances
     |> List.exists (fun a -> a.Label = "Stop")
     |> Expect.isTrue "Stop should show for stale session"
@@ -200,8 +204,8 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
       Id = testSessionId "aa000001"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = now; EvalCount = 0
-      UpSince = now; IsActive = false; WorkingDirectory = "" }
-    let affordances = SessionDisplay.sessionAffordances Map.empty snap
+      UpSince = now; WorkingDirectory = "" }
+    let affordances = SessionDisplay.sessionAffordances Map.empty (ActiveSession.Viewing (testSessionId "aa000002")) snap
     affordances
     |> List.exists (fun a -> a.Label = "Stop")
     |> Expect.isTrue "Stop should show for inactive session"

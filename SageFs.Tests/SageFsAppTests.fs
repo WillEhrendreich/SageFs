@@ -209,7 +209,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     let event = SageFsEvent.SessionCreated snap
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
@@ -222,7 +222,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true
+      UpSince = DateTime.UtcNow
       WorkingDirectory = @"C:\Code\Repos\TestProject" }
     let model = {
       baseModel with
@@ -244,7 +244,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["A.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -261,7 +261,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["A.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -281,12 +281,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["A.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let snapB = {
       Id = testSessionId "aa000002"; Name = None; Projects = ["B.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -300,11 +300,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let snap1 = {
       Id = testSessionId "aa000001"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     let snap2 = {
       Id = testSessionId "aa000002"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "" }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -318,7 +318,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "should be s2" (ActiveSession.Viewing (testSessionId "aa000002"))
     newModel.Sessions.Sessions
     |> List.find (fun s -> s.Id = testSessionId "aa000002")
-    |> fun s -> s.IsActive
+    |> fun s -> ActiveSession.isViewing s.Id newModel.Sessions.ActiveSessionId
     |> Expect.isTrue "s2 should be active"
 
   testCase "SessionsRefreshed replaces all sessions in one update" <| fun _ ->
@@ -326,12 +326,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["A.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let snap2 = {
       Id = testSessionId "aa000002"; Name = None; Projects = ["B.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -344,7 +344,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.hasLength "should have 2 sessions" 2
     newModel.Sessions.Sessions
     |> List.find (fun s -> s.Id = testSessionId "aa000001")
-    |> fun s -> s.IsActive
+    |> fun s -> ActiveSession.isViewing s.Id newModel.Sessions.ActiveSessionId
     |> Expect.isTrue "s1 should be active (matches ActiveSessionId)"
 
   testCase "SessionsRefreshed preserves active session" <| fun _ ->
@@ -352,12 +352,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["A.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let snap2 = {
       Id = testSessionId "aa000002"; Name = None; Projects = ["B.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -370,7 +370,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "active should still be s2" (ActiveSession.Viewing (testSessionId "aa000002"))
     newModel.Sessions.Sessions
     |> List.find (fun s -> s.Id = testSessionId "aa000002")
-    |> fun s -> s.IsActive
+    |> fun s -> ActiveSession.isViewing s.Id newModel.Sessions.ActiveSessionId
     |> Expect.isTrue "s2 should be marked active"
 
   testCase "SessionsRefreshed sets first session active when awaiting" <| fun _ ->
@@ -378,7 +378,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["A.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let event = SageFsEvent.SessionsRefreshed [snap]
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
@@ -389,7 +389,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let snap = {
       Id = testSessionId "aa000001"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -512,7 +512,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let snap = {
       Id = testSessionId "aa000001"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -536,7 +536,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["A.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -552,7 +552,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = id; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Editor = { EditorState.initial with SelectedSessionIndex = Some 2 }
@@ -579,7 +579,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = id; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Editor = { EditorState.initial with SelectedSessionIndex = Some 0 }
@@ -639,12 +639,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let snap2 = {
       Id = testSessionId "aa000002"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -659,7 +659,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.hasLength "should have 1 session" 1
     newModel.Sessions.ActiveSessionId
     |> Expect.equal "should fall back to s2" (ActiveSession.Viewing (testSessionId "aa000002"))
-    newModel.Sessions.Sessions.[0].IsActive
+    ActiveSession.isViewing newModel.Sessions.Sessions.[0].Id newModel.Sessions.ActiveSessionId
     |> Expect.isTrue "s2 should be active"
     newModel.Diagnostics |> Map.containsKey "aa000001"
     |> Expect.isFalse "s1 diagnostics removed"
@@ -669,12 +669,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let snap2 = {
       Id = testSessionId "aa000002"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -691,7 +691,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -709,7 +709,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -735,7 +735,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true
+      UpSince = DateTime.UtcNow
       WorkingDirectory = "C:\\proj\\work" }
     let baseModel = SageFsModel.initial()
     let model = {
@@ -764,7 +764,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = []
       Status = SessionDisplayStatus.Restarting
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true
+      UpSince = DateTime.UtcNow
       WorkingDirectory = "C:\\proj\\work" }
     let baseModel = SageFsModel.initial()
     let model = {
@@ -790,7 +790,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true
+      UpSince = DateTime.UtcNow
       WorkingDirectory = "C:\\proj\\work" }
     let baseModel = SageFsModel.initial()
     let model = {
@@ -910,7 +910,6 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       LastActivity = DateTime.UtcNow
       EvalCount = 0
       UpSince = DateTime.UtcNow
-      IsActive = true
       WorkingDirectory = "." }
     let discovered = [|
       mkLiveTestCase "test.replay.active" "SageFs.Tests.Replay.active" "replay-active"
@@ -979,7 +978,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         failtestf "expected RequestRebuild after stale run completion, got %A" other
 
   testCase "background session completion replays only that session's queued compiled rebuild intent" <| fun _ ->
-    let mkSnap id active = {
+    let mkSnap id = {
       Id = testSessionId id
       Name = None
       Projects = []
@@ -987,7 +986,6 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       LastActivity = DateTime.UtcNow
       EvalCount = 0
       UpSince = DateTime.UtcNow
-      IsActive = active
       WorkingDirectory = "." }
     let primarySid = "aa000001"
     let backgroundSid = "aa000002"
@@ -1017,7 +1015,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       (SageFsModel.initial()) with
         Sessions = {
           (SageFsModel.initial()).Sessions with
-            Sessions = [ mkSnap primarySid true; mkSnap backgroundSid false ]
+            Sessions = [ mkSnap primarySid; mkSnap backgroundSid ]
             ActiveSessionId = ActiveSession.Viewing (testSessionId primarySid) }
         LiveTesting = primaryState
         PerSessionLiveTesting = Map.ofList [ backgroundSid, backgroundState ] }
@@ -1522,7 +1520,6 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       LastActivity = DateTime.UtcNow.AddMinutes(-5.0)
       EvalCount = 1
       UpSince = DateTime.UtcNow.AddMinutes(-10.0)
-      IsActive = false
       WorkingDirectory = @"C:\Code\Repos\SageFs" }
     let snap2 = {
       snap1 with
@@ -1659,12 +1656,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["A.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) (SageFsModel.initial())
     newModel.Sessions.ActiveSessionId
     |> Expect.equal "should auto-select" (ActiveSession.Viewing (testSessionId "aa000001"))
-    newModel.Sessions.Sessions.[0].IsActive
+    ActiveSession.isViewing newModel.Sessions.Sessions.[0].Id newModel.Sessions.ActiveSessionId
     |> Expect.isTrue "should be marked active"
     newModel.CreatingSession
     |> Expect.isFalse "should clear CreatingSession"
@@ -1674,7 +1671,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000001"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
@@ -1685,7 +1682,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Id = testSessionId "aa000002"; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = false; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap2)) model
     newModel.Sessions.ActiveSessionId
@@ -1694,31 +1691,31 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.hasLength "should have 2 sessions" 2
 
   testCase "SessionSwitched marks only target active" <| fun _ ->
-    let mkSnap id active = {
+    let mkSnap id = {
       Id = id; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
           (SageFsModel.initial()).Sessions with
-            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false; mkSnap (testSessionId "aa000003") false]
+            Sessions = [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002"); mkSnap (testSessionId "aa000003")]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000003"))) model
     newModel.Sessions.ActiveSessionId
     |> Expect.equal "should be s3" (ActiveSession.Viewing (testSessionId "aa000003"))
     newModel.Sessions.Sessions
-    |> List.filter (fun s -> s.IsActive)
+    |> List.filter (fun s -> ActiveSession.isViewing s.Id newModel.Sessions.ActiveSessionId)
     |> Expect.hasLength "only s3 active" 1
 
   testCase "SessionSwitched promotes target live-testing state to primary" <| fun _ ->
-    let mkSnap id active = {
+    let mkSnap id = {
       Id = id; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let primaryState =
       { LiveTestCycleState.empty with
           LastTrigger = RunTrigger.FileSave }
@@ -1729,7 +1726,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       (SageFsModel.initial()) with
         Sessions = {
           (SageFsModel.initial()).Sessions with
-            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            Sessions = [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
         LiveTesting = primaryState
         PerSessionLiveTesting = Map.ofList [ "aa000002", backgroundState ] }
@@ -1742,11 +1739,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.isFalse "promoted target session should no longer also live in the background map"
 
   testCase "SessionSwitched parks previous primary live-testing state under the previous session id" <| fun _ ->
-    let mkSnap id active = {
+    let mkSnap id = {
       Id = id; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let primaryState =
       { LiveTestCycleState.empty with
           LastTrigger = RunTrigger.FileSave }
@@ -1757,7 +1754,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       (SageFsModel.initial()) with
         Sessions = {
           (SageFsModel.initial()).Sessions with
-            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            Sessions = [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
         LiveTesting = primaryState
         PerSessionLiveTesting = Map.ofList [ "aa000002", backgroundState ] }
@@ -1769,11 +1766,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "previous active session state should be preserved under its session id" RunTrigger.FileSave
 
   testCase "SessionSwitched round-trips live-testing state between sessions" <| fun _ ->
-    let mkSnap id active = {
+    let mkSnap id = {
       Id = id; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let stateA =
       { LiveTestCycleState.empty with
           LastTrigger = RunTrigger.FileSave }
@@ -1784,7 +1781,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       (SageFsModel.initial()) with
         Sessions = {
           (SageFsModel.initial()).Sessions with
-            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            Sessions = [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
         LiveTesting = stateA
         PerSessionLiveTesting = Map.ofList [ "aa000002", stateB ] }
@@ -1800,11 +1797,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "session aa000002 should be demoted back to the background map with its state intact" RunTrigger.Keystroke
 
   testCase "SessionSwitched preserves the promoted session's rebuilding banner so users know tests are waiting on compilation" <| fun _ ->
-    let mkSnap id active = {
+    let mkSnap id = {
       Id = id; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let mkTestCase name =
       { Id = TestId.create name TestFramework.Expecto
         FullName = name
@@ -1837,7 +1834,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       (SageFsModel.initial()) with
         Sessions = {
           (SageFsModel.initial()).Sessions with
-            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            Sessions = [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
         LiveTesting = primaryState
         PerSessionLiveTesting = Map.ofList [ "aa000002", backgroundState ] }
@@ -1849,11 +1846,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       "🔨 Rebuilding 2 tests"
 
   testCase "SessionSwitched preserves both sessions' pending rebuild identities when parking and promoting live-testing state" <| fun _ ->
-    let mkSnap id active = {
+    let mkSnap id = {
       Id = id; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let mkTestCase name =
       { Id = TestId.create name TestFramework.Expecto
         FullName = name
@@ -1896,7 +1893,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       (SageFsModel.initial()) with
         Sessions = {
           (SageFsModel.initial()).Sessions with
-            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            Sessions = [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
         LiveTesting = stateA
         PerSessionLiveTesting = Map.ofList [ "aa000002", stateB ] }
@@ -1966,16 +1963,16 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       "why: deferred by policy (1)"
 
   testCase "SessionSwitched does not emit live-testing effects" <| fun _ ->
-    let mkSnap id active = {
+    let mkSnap id = {
       Id = id; Name = None; Projects = []
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = active; WorkingDirectory = "." }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
           (SageFsModel.initial()).Sessions with
-            Sessions = [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+            Sessions = [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
         LiveTesting =
           { LiveTestCycleState.empty with LastTrigger = RunTrigger.FileSave }
@@ -2023,7 +2020,6 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         LastActivity = DateTime.UtcNow
         EvalCount = 0
         UpSince = DateTime.UtcNow
-        IsActive = true
         WorkingDirectory = "." }
     let initial = SageFsModel.initial()
     let model =
@@ -2143,12 +2139,13 @@ let sageFsRenderTests = testList "SageFsRender" [
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
-      UpSince = DateTime.UtcNow; IsActive = true; WorkingDirectory = "" }
+      UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     let model = {
       (SageFsModel.initial()) with
         Sessions = {
           (SageFsModel.initial()).Sessions with
-            Sessions = [snap] }
+            Sessions = [snap]
+            ActiveSessionId = ActiveSession.Viewing snap.Id }
     }
     let regions = SageFsRender.render model
     let sessionsRegion = regions |> List.find (fun r -> r.Id = "sessions")
@@ -2186,10 +2183,11 @@ let sageFsRenderTests = testList "SageFsRender" [
             { (SageFsModel.initial()).Sessions with
                 Sessions = [
                   { Id = testSessionId "aa000001"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
-                    LastActivity = now; EvalCount = 0; UpSince = now; IsActive = true; WorkingDirectory = "" }
+                    LastActivity = now; EvalCount = 0; UpSince = now; WorkingDirectory = "" }
                   { Id = testSessionId "aa000002"; Name = None; Projects = []; Status = SessionDisplayStatus.Starting
-                    LastActivity = now; EvalCount = 0; UpSince = now; IsActive = false; WorkingDirectory = "" }
-                ] } }
+                    LastActivity = now; EvalCount = 0; UpSince = now; WorkingDirectory = "" }
+                ]
+                ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
     let sessions =
       SageFsRender.render model
       |> List.find (fun r -> r.Id = "sessions")
@@ -2225,7 +2223,7 @@ let sageFsRenderTests = testList "SageFsRender" [
             { SessionSnapshot.Id = testSessionId (sprintf "%08x" i)
               Name = None; Projects = []; Status = statuses.[i % statuses.Length]
               LastActivity = now; EvalCount = i; UpSince = now
-              IsActive = (i = 0); WorkingDirectory = "" } ]
+              WorkingDirectory = "" } ]
       let model =
         { (SageFsModel.initial()) with
             Sessions = { (SageFsModel.initial()).Sessions with Sessions = sessions } }
@@ -2273,7 +2271,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
 
     let snap : SessionSnapshot = {
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
-      Status = SessionDisplayStatus.Running; IsActive = true
+      Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     dispatch (SageFsMsg.Event (SageFsEvent.SessionCreated snap))
@@ -2312,7 +2310,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
 
     let snap : SessionSnapshot = {
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
-      Status = SessionDisplayStatus.Running; IsActive = true
+      Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     dispatch (SageFsMsg.Event (SageFsEvent.SessionsRefreshed [snap]))
@@ -2354,10 +2352,10 @@ let elmIntegrationTests = testList "ElmLoop integration" [
 
 [<Tests>]
 let sessionNavAppTests = testList "SageFsUpdate session navigation" [
-  let mkSnap id isActive = {
+  let mkSnap id = {
     Id = id; Name = None; Projects = []; Status = SessionDisplayStatus.Running
     LastActivity = System.DateTime.UtcNow; EvalCount = 0
-    UpSince = System.DateTime.UtcNow; IsActive = isActive; WorkingDirectory = "" }
+    UpSince = System.DateTime.UtcNow; WorkingDirectory = "" }
 
   let withSessions (snaps: SessionSnapshot list) (model: SageFsModel) : SageFsModel =
     { model with
@@ -2367,7 +2365,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
   testCase "SessionNavDown clamps to session count" <| fun _ ->
     let model =
       (SageFsModel.initial())
-      |> withSessions [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+      |> withSessions [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
     let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 1 } }
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionNavDown) model'
@@ -2377,7 +2375,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
   testCase "SessionSelect emits RequestSessionSwitch with correct id" <| fun _ ->
     let model =
       (SageFsModel.initial())
-      |> withSessions [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+      |> withSessions [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
     let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 1 } }
     let _, effects =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionSelect) model'
@@ -2389,7 +2387,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
   testCase "SessionDelete emits RequestSessionStop with correct id" <| fun _ ->
     let model =
       (SageFsModel.initial())
-      |> withSessions [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+      |> withSessions [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
     let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 0 } }
     let _, effects =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionDelete) model'
@@ -2399,7 +2397,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
     | _ -> failtest (sprintf "expected RequestSessionStop, got %A" effects)
 
   testCase "SessionSelect with no selection does nothing" <| fun _ ->
-    let model = (SageFsModel.initial()) |> withSessions [mkSnap (testSessionId "aa000001") true]
+    let model = (SageFsModel.initial()) |> withSessions [mkSnap (testSessionId "aa000001")]
     let _, effects =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionSelect) model
     effects |> Expect.isEmpty "no effects when no selection"
@@ -2407,7 +2405,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
   testCase "SessionSelect with out-of-range index does nothing" <| fun _ ->
     let model =
       (SageFsModel.initial())
-      |> withSessions [mkSnap (testSessionId "aa000001") true]
+      |> withSessions [mkSnap (testSessionId "aa000001")]
     let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 5 } }
     let _, effects =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionSelect) model'
@@ -2459,7 +2457,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
   testCase "SessionCycleNext moves to next session and switches" <| fun _ ->
     let model =
       (SageFsModel.initial())
-      |> withSessions [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false; mkSnap (testSessionId "aa000003") false]
+      |> withSessions [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002"); mkSnap (testSessionId "aa000003")]
     let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 0 } }
     let newModel, effects =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) model'
@@ -2473,7 +2471,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
   testCase "SessionCycleNext wraps around" <| fun _ ->
     let model =
       (SageFsModel.initial())
-      |> withSessions [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+      |> withSessions [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
     let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 1 } }
     let newModel, effects =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) model'
@@ -2487,7 +2485,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
   testCase "SessionCyclePrev moves to previous session and switches" <| fun _ ->
     let model =
       (SageFsModel.initial())
-      |> withSessions [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false; mkSnap (testSessionId "aa000003") false]
+      |> withSessions [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002"); mkSnap (testSessionId "aa000003")]
     let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 2 } }
     let newModel, effects =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCyclePrev) model'
@@ -2501,7 +2499,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
   testCase "SessionCyclePrev wraps around" <| fun _ ->
     let model =
       (SageFsModel.initial())
-      |> withSessions [mkSnap (testSessionId "aa000001") true; mkSnap (testSessionId "aa000002") false]
+      |> withSessions [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002")]
     let model' = { model with Editor = { model.Editor with SelectedSessionIndex = Some 0 } }
     let newModel, effects =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCyclePrev) model'
@@ -2515,7 +2513,7 @@ let sessionNavAppTests = testList "SageFsUpdate session navigation" [
   testCase "SessionCycleNext with single session does nothing" <| fun _ ->
     let model =
       (SageFsModel.initial())
-      |> withSessions [mkSnap (testSessionId "aa000001") true]
+      |> withSessions [mkSnap (testSessionId "aa000001")]
     let _, effects =
       SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) model
     effects |> Expect.isEmpty "no effects with single session"
@@ -2531,7 +2529,7 @@ let renderConsistencyTests = testList "Render consistency" [
   let mkModel () =
     let snap : SessionSnapshot = {
       Id = testSessionId "aa100001"; Name = None; Status = SessionDisplayStatus.Running
-      IsActive = true; Projects = ["Test.fsproj"]; EvalCount = 5
+      Projects = ["Test.fsproj"]; EvalCount = 5
       UpSince = DateTime.UtcNow.AddHours(-1.0)
       LastActivity = DateTime.UtcNow; WorkingDirectory = "C:\\Code" }
     { (SageFsModel.initial()) with
