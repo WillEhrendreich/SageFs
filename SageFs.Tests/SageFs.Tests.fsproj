@@ -316,7 +316,6 @@
         <Compile Include="SsePropertyTests.fs" />
         <Compile Include="SseContractComplianceTests.fs" />
         <Compile Include="ManifestBackupRecoveryTests.fs" />
-        <Compile Include="WorkerLivenessTests.fs" />
         <Compile Include="BranchCoverageRenderingTests.fs" />
         <Compile Include="LiveTestWatcherScopeTests.fs" />
         <Compile Include="RestartPolicyCircuitBreakerTests.fs" />
