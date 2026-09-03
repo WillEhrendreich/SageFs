@@ -320,19 +320,22 @@ let cleanStdout (raw: string) =
     | false -> ()
   sb.ToString()
 
-let tryGetEvalAvailabilityError sessionState (st: AppState) =
-  match sessionState with
-  | SessionState.Faulted ->
+/// The eval gate: can code be evaluated right now? Phase-based — no null
+/// checks, because a live Session/OutStream exist iff phase is Active.
+/// Initializing covers two windows: initial warm-up (eval never arrives —
+/// init() runs before the loop processes messages) and the in-flight reset
+/// window (EvalRun IS queued behind EvalReset). Gating the latter is a
+/// deliberate fail-closed improvement over the old parallel SessionState
+/// loop variable, which reported WarmingUp (gate passed) while the reset was
+/// mid-flight — a queued eval could have run against a session being torn
+/// down. Faulted carries no AppState at all, so recovery is via reset.
+let tryGetEvalAvailabilityError (phase: SessionPhase) =
+  match phase with
+  | Faulted ->
     Some "Session is faulted. Run hard_reset_fsi_session to recover."
-  | _ ->
-    match isNull (box st.Session) with
-    | true ->
-      Some "FSI session is unavailable. Run hard_reset_fsi_session to recover."
-    | false ->
-      match isNull (box st.OutStream) with
-      | true ->
-        Some "Output recorder is unavailable. Run hard_reset_fsi_session to recover."
-      | false -> None
+  | Initializing _ ->
+    Some "Session is resetting. Wait for reset to complete before evaluating."
+  | Active (_, _) -> None
 
 let evalFn (token: CancellationToken) =
   fun ({ Code = code }, st) ->
@@ -1071,24 +1074,22 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
     // Monotonic generation for live binding snapshots — lets consumers ignore
     // stale/out-of-order snapshots.
     let liveValueGeneration = ref 0L
-    let rec loop st middleware sessionState evalStats =
+    let rec loop (phase: SessionPhase) middleware evalStats =
       async {
         let! cmd = mailbox.Receive()
 
         match cmd with
         | EvalEnableStdout ->
-          match sessionState with
-          | SessionState.Faulted ->
+          match phase with
+          | Faulted ->
             logger.LogWarning "EnableStdout requested on faulted session; ignoring"
-          | _ ->
-            match isNull (box st.OutStream) with
-            | true ->
-              logger.LogWarning "EnableStdout requested but OutStream unavailable"
-            | false ->
-              st.OutStream.Enable()
-          return! loop st middleware sessionState evalStats
+          | Initializing _ ->
+            logger.LogWarning "EnableStdout requested during warmup; ignoring"
+          | Active (st, _) ->
+            st.OutStream.Enable()
+          return! loop phase middleware evalStats
         | EvalRun(request, cts, reply) ->
-          match tryGetEvalAvailabilityError sessionState st with
+          match tryGetEvalAvailabilityError phase with
           | Some message ->
             currentEvalCts.Value <- None
             let errResponse = {
@@ -1099,34 +1100,38 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             }
             emit (Events.EvalFailed {| Code = request.Code; Error = message; Diagnostics = [] |})
             reply.Reply errResponse
-            return! loop st middleware sessionState evalStats
+            return! loop phase middleware evalStats
           | None ->
-            let sessionState' = SessionState.Evaluating
-            publishSnapshot st Evaluating evalStats
-            let sw = System.Diagnostics.Stopwatch.StartNew()
-            emit (Events.EvalRequested {| Code = request.Code; Source = Events.System |})
-            let pipeline = pipelineBuildFn (wrapErrorMiddleware :: middleware) (evalFn cts.Token)
-            // Run eval on a dedicated thread so the actor stays responsive
-            // to CancelEval, HardReset, etc. while the eval is in progress.
-            let evalThread = Thread(fun () ->
-              try
-                let res, newSt = pipeline (request, st)
-                mailbox.Post(EvalFinished(Ok(res, newSt), sw, request.Code, reply))
-              with ex ->
-                mailbox.Post(EvalFinished(Error ex, sw, request.Code, reply))
-            )
-            evalThread.IsBackground <- true
-            evalThread.Name <- sprintf "sagefs-eval-%d" (evalStats.EvalCount + 1)
-            currentEvalThread.Value <- Some evalThread
-            evalThread.Start()
-            return! loop st middleware sessionState' evalStats
+            match phase with
+            | Active (st, _) ->
+              publishSnapshot st Evaluating evalStats
+              let sw = System.Diagnostics.Stopwatch.StartNew()
+              emit (Events.EvalRequested {| Code = request.Code; Source = Events.System |})
+              let pipeline = pipelineBuildFn (wrapErrorMiddleware :: middleware) (evalFn cts.Token)
+              // Run eval on a dedicated thread so the actor stays responsive
+              // to CancelEval, HardReset, etc. while the eval is in progress.
+              let evalThread = Thread(fun () ->
+                try
+                  let res, newSt = pipeline (request, st)
+                  mailbox.Post(EvalFinished(Ok(res, newSt), sw, request.Code, reply))
+                with ex ->
+                  mailbox.Post(EvalFinished(Error ex, sw, request.Code, reply))
+              )
+              evalThread.IsBackground <- true
+              evalThread.Name <- sprintf "sagefs-eval-%d" (evalStats.EvalCount + 1)
+              currentEvalThread.Value <- Some evalThread
+              evalThread.Start()
+              return! loop (Active (st, Evaluating)) middleware evalStats
+            | Initializing _ | Faulted ->
+              // Unreachable: tryGetEvalAvailabilityError gates these phases with
+              // Some above. Kept exhaustive so the phase match is total.
+              return! loop phase middleware evalStats
         | EvalFinished(result, sw, code, reply) ->
           sw.Stop()
           currentEvalCts.Value <- None
           currentEvalThread.Value <- None
           match result with
           | Ok(res, newSt) ->
-            let sessionState'' = SessionState.Ready
             let evalStats' = Affordances.EvalStats.record sw.Elapsed evalStats
             publishSnapshot newSt Idle evalStats'
             // Live binding watch window: capture the REAL bound values from the
@@ -1183,7 +1188,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               | _ -> ()
             | None -> ()
             reply.Reply resWithLiveValues
-            return! loop newSt middleware sessionState'' evalStats'
+            return! loop (Active (newSt, Idle)) middleware evalStats'
           | Error ex ->
             let errResponse = {
               EvaluationResult = Error ex
@@ -1191,23 +1196,36 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               EvaluatedCode = code
               Metadata = Map.empty
             }
-            let sessionState'' = SessionState.Ready
-            publishSnapshot st Idle evalStats
-            emit (Events.EvalFailed {|
-              Code = code
-              Error = ex.Message
-              Diagnostics = []
-            |})
-            reply.Reply errResponse
-            return! loop st middleware sessionState'' evalStats
+            match phase with
+            | Active (st, _) ->
+              publishSnapshot st Idle evalStats
+              emit (Events.EvalFailed {|
+                Code = code
+                Error = ex.Message
+                Diagnostics = []
+              |})
+              reply.Reply errResponse
+              return! loop (Active (st, Idle)) middleware evalStats
+            | Initializing _ | Faulted ->
+              // Straggler: the eval thread was still running when a reset tore
+              // the session down (or the reset failed). Publishing the eval's
+              // stale AppState would resurrect a snapshot of a disposed/null
+              // session — reply with the error and stay in the current phase.
+              logger.LogWarning (sprintf "EvalFinished(Error) arrived outside Active phase (session state: %s); not republishing state: %s" (SessionPhase.toSessionState phase |> SessionState.label) ex.Message)
+              reply.Reply errResponse
+              return! loop phase middleware evalStats
         | EvalAddMiddleware(additionalMiddleware, r) ->
           r.Reply(())
-          return! loop st (additionalMiddleware @ middleware) sessionState evalStats
+          return! loop phase (additionalMiddleware @ middleware) evalStats
         | EvalReset reply ->
           try
-            let sessionState' = SessionState.WarmingUp
             publishPhase (Initializing None) evalStats
             logger.LogInfo "🔄 Resetting FSI session..."
+            // The reset needs a live session's context only if one exists.
+            // A Faulted phase carries no AppState: the closure captures
+            // (sln/originalSln/shadowDir/initCustomData) are exactly what the
+            // old faulted tombstone held, so recovery needs no state at all.
+            let activeSt = SessionPhase.tryAppState phase
             // Wait briefly for any in-flight eval thread to finish
             match currentEvalThread.Value with
             | Some thread ->
@@ -1216,51 +1234,117 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               | true -> ()
               currentEvalThread.Value <- None
             | None -> ()
-            match isNull (box st.Session) with
-            | false -> (st.Session :> System.IDisposable).Dispose()
-            | true -> ()
+            match phase with
+            | Active (st, _) when not (isNull (box st.Session)) ->
+              (st.Session :> System.IDisposable).Dispose()
+            | _ -> ()
             let softResetCts = new CancellationTokenSource(Timeouts.softResetCancellation)
             let onProgress (s,t,msg) =
               emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
               publishPhase (Initializing (Some (sprintf "[%d/%d] %s" s t msg))) evalStats
+            // StartupConfig is NOT a closure capture: it is built in init()
+            // after warmup and mutated by QueryUpdateMcpPort. When Active,
+            // read the live config so a reset preserves McpPort and any
+            // profile-loaded flags; when Faulted (StartupConfig was None in
+            // the tombstone) fall back to the same defaults the old code used.
+            let startupConfig =
+              match phase with
+              | Active (st, _) -> st.StartupConfig
+              | Initializing _ | Faulted -> None
             let autoOpenNamespaces =
-              st.StartupConfig
+              startupConfig
               |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
               |> Option.defaultValue true
             let hotReload =
-              st.StartupConfig
+              startupConfig
               |> Option.map (fun cfg -> cfg.HotReloadEnabled)
               |> Option.defaultValue false
+            // Immutable reset context: on the live path these come off the
+            // current st (they may have evolved through prior hard resets);
+            // on the Faulted path the closure captures ARE today's tombstone
+            // values (Solution = sln, OriginalSolution = originalSln,
+            // ShadowDir = shadowDir).
+            let resetSolution, resetOriginalSolution =
+              match activeSt with
+              | Some st -> st.Solution, st.OriginalSolution
+              | None -> sln, originalSln
             let! newSession, newRecorder, _, warmupFailures, warmupCtx =
               createFsiSession
                 logger
                 outStream
                 useAsp
-                st.OriginalSolution
-                st.Solution
+                resetOriginalSolution
+                resetSolution
                 autoOpenNamespaces
                 hotReload
                 softResetCts.Token
                 onProgress
             softResetCts.Dispose()
-            let newSt = { st with Session = newSession; OutStream = newRecorder; Diagnostics = Features.DiagnosticsStore.empty; WarmupFailures = warmupFailures; WarmupContext = warmupCtx }
+            let baseSt =
+              match activeSt with
+              | Some st -> st
+              | None ->
+                // Recovery from Faulted: start fresh — same field values the
+                // deleted faulted tombstone held (Custom = initCustomData,
+                // Diagnostics empty, WarmupFailures [], WarmupContext empty,
+                // HotReloadState empty, StartupConfig None, plus the closure
+                // solution/shadow context).
+                { Solution = sln
+                  OriginalSolution = originalSln
+                  ShadowDir = shadowDir
+                  Logger = logger
+                  Session = newSession
+                  OutStream = newRecorder
+                  Custom = initCustomData
+                  Diagnostics = Features.DiagnosticsStore.empty
+                  WarmupFailures = warmupFailures
+                  WarmupContext = warmupCtx
+                  HotReloadState = HotReloadState.empty
+                  StartupConfig = None }
+            let newSt =
+              match activeSt with
+              | Some st ->
+                { st with Session = newSession; OutStream = newRecorder; Diagnostics = Features.DiagnosticsStore.empty; WarmupFailures = warmupFailures; WarmupContext = warmupCtx }
+              | None -> baseSt
             logger.LogInfo "✅ FSI session reset complete"
-            let sessionState'' = SessionState.Ready
             publishSnapshot newSt Idle evalStats
             emit Events.SessionReset
             reply.Reply(Ok ())
-            return! loop newSt middleware sessionState'' evalStats
+            return! loop (Active (newSt, Idle)) middleware evalStats
           with ex ->
             logger.LogError $"❌ FSI session reset failed: {ex.Message}"
-            let sessionState' = SessionState.Faulted
             publishPhase Faulted evalStats
             reply.Reply(Error (SageFsError.ResetFailed ex.Message))
-            return! loop st middleware sessionState' evalStats
+            return! loop Faulted middleware evalStats
         | EvalHardReset (rebuild, reply) ->
           try
-            let sessionState' = SessionState.WarmingUp
             publishPhase (Initializing None) evalStats
             logger.LogInfo "🔨 Hard resetting FSI session..."
+            let activeSt = SessionPhase.tryAppState phase
+            // Context audit (same policy as EvalReset): StartupConfig lives on
+            // the live st when Active (mutated by QueryUpdateMcpPort) and is
+            // None-equivalent when Faulted; OriginalSolution/ShadowDir are the
+            // closure captures exactly when Faulted (they matched the tombstone).
+            let startupConfig =
+              match phase with
+              | Active (st, _) -> st.StartupConfig
+              | Initializing _ | Faulted -> None
+            let autoOpenNamespaces =
+              startupConfig
+              |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
+              |> Option.defaultValue true
+            let hotReload =
+              startupConfig
+              |> Option.map (fun cfg -> cfg.HotReloadEnabled)
+              |> Option.defaultValue false
+            let resetOriginalSolution =
+              match activeSt with
+              | Some st -> st.OriginalSolution
+              | None -> originalSln
+            let shadowDirToClean =
+              match activeSt with
+              | Some st -> st.ShadowDir
+              | None -> shadowDir
             // Wait briefly for any in-flight eval thread to finish
             match currentEvalThread.Value with
             | Some thread ->
@@ -1271,8 +1355,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               currentEvalThread.Value <- None
             | None -> ()
 
-            match isNull (box st.Session) with
-            | false ->
+            match phase with
+            | Active (st, _) when not (isNull (box st.Session)) ->
               let disposeTask = System.Threading.Tasks.Task.Run(fun () ->
                 (st.Session :> System.IDisposable).Dispose())
               let timeoutTask = System.Threading.Tasks.Task.Delay(Timeouts.sessionDispose)
@@ -1280,13 +1364,13 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               match System.Object.ReferenceEquals(completed, disposeTask) with
               | false -> logger.LogWarning $"⚠️ Session dispose timed out after {Timeouts.sessionDispose.TotalSeconds}s, continuing..."
               | true -> ()
-            | true -> ()
+            | _ -> ()
             // Required before dotnet build can overwrite assemblies on Windows
             GC.Collect()
             GC.WaitForPendingFinalizers()
             GC.Collect()
 
-            match st.ShadowDir with
+            match shadowDirToClean with
             | Some dir -> ShadowCopy.cleanupShadowDir dir
             | None -> ()
 
@@ -1295,7 +1379,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               // Build only the primary project — dotnet build resolves dependencies transitively.
               // Building each project separately is redundant and slow for multi-project solutions.
               let primaryProject =
-                st.OriginalSolution.Projects
+                resetOriginalSolution.Projects
                 |> List.tryHead
                 |> Option.map (fun p -> p.ProjectFileName)
               match primaryProject with
@@ -1375,19 +1459,17 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                     | true ->
                       let msg = sprintf "Build failed on retry (exit code %d): %s" retryCode retryErr
                       logger.LogError (sprintf "  ❌ %s" msg)
-                      let failedState = SessionState.Faulted
                       publishPhase Faulted evalStats
                       reply.Reply(Error (SageFsError.HardResetFailed msg))
-                      return! loop st middleware failedState evalStats
+                      return! loop Faulted middleware evalStats
                     | false ->
                       logger.LogInfo "  ✅ Build succeeded on retry"
                   | false ->
                     let msg = sprintf "Build failed (exit code %d): %s" exitCode stderr
                     logger.LogError (sprintf "  ❌ %s" msg)
-                    let failedState = SessionState.Faulted
                     publishPhase Faulted evalStats
                     reply.Reply(Error (SageFsError.HardResetFailed msg))
-                    return! loop st middleware failedState evalStats
+                    return! loop Faulted middleware evalStats
                 | false ->
                   logger.LogInfo "  ✅ Build succeeded"
               | None ->
@@ -1396,7 +1478,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
 
             let newShadowDir = ShadowCopy.createShadowDir ()
             logger.LogInfo "  Creating shadow copies..."
-            let newSln = ShadowCopy.shadowCopySolution newShadowDir st.OriginalSolution
+            let newSln = ShadowCopy.shadowCopySolution newShadowDir resetOriginalSolution
             logger.LogInfo "  Instrumenting assemblies for IL coverage..."
             let instrSw = System.Diagnostics.Stopwatch.StartNew()
             let targetPaths = newSln.Projects |> List.map (fun po -> po.TargetPath)
@@ -1418,21 +1500,13 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                 let onProgress (s,t,msg) =
                   emit (Events.SageFsEvent.SessionWarmUpProgress {| Step = s; Total = t; Message = msg |})
                   publishPhase (Initializing (Some (sprintf "[%d/%d] %s" s t msg))) evalStats
-                let autoOpenNamespaces =
-                  st.StartupConfig
-                  |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
-                  |> Option.defaultValue true
-                let hotReload =
-                  st.StartupConfig
-                  |> Option.map (fun cfg -> cfg.HotReloadEnabled)
-                  |> Option.defaultValue false
                 try
                   Async.RunSynchronously(
                     createFsiSession
                       logger
                       outStream
                       useAsp
-                      st.OriginalSolution
+                      resetOriginalSolution
                       newSln
                       autoOpenNamespaces
                       hotReload
@@ -1461,33 +1535,49 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               ShadowCopy.cleanupShadowDir newShadowDir
               let msg = sprintf "Session warmup failed: %s" ex.Message
               logger.LogError (sprintf "  ❌ %s" msg)
-              let failedState = SessionState.Faulted
               publishPhase Faulted evalStats
               reply.Reply(Error (SageFsError.HardResetFailed msg))
-              return! loop st middleware failedState evalStats
+              return! loop Faulted middleware evalStats
             | Ok (newSession, newRecorder, _, warmupFailures, warmupCtx) ->
             warmupCts.Dispose()
             let newSt =
-              { st with
+              match activeSt with
+              | Some st ->
+                // Live path: preserve Custom/HotReloadState/StartupConfig (incl.
+                // McpPort) and swap the session-bearing fields.
+                { st with
+                    Session = newSession
+                    OutStream = newRecorder
+                    Solution = newSln
+                    ShadowDir = Some newShadowDir
+                    Diagnostics = Features.DiagnosticsStore.empty
+                    WarmupFailures = warmupFailures
+                    WarmupContext = warmupCtx }
+              | None ->
+                // Recovery from Faulted/Initializing: fresh state carrying the
+                // closure context — mirrors the deleted faulted tombstone fields.
+                { Solution = newSln
+                  OriginalSolution = originalSln
+                  ShadowDir = Some newShadowDir
+                  Logger = logger
                   Session = newSession
                   OutStream = newRecorder
-                  Solution = newSln
-                  ShadowDir = Some newShadowDir
+                  Custom = initCustomData
                   Diagnostics = Features.DiagnosticsStore.empty
                   WarmupFailures = warmupFailures
-                  WarmupContext = warmupCtx }
+                  WarmupContext = warmupCtx
+                  HotReloadState = HotReloadState.empty
+                  StartupConfig = None }
             logger.LogInfo "✅ Hard reset complete"
-            let sessionState'' = SessionState.Ready
             publishSnapshot newSt Idle evalStats
             emit (Events.SessionHardReset {| Rebuild = rebuild |})
             reply.Reply(Ok "Hard reset complete. Fresh session with re-copied assemblies.")
-            return! loop newSt middleware sessionState'' evalStats
+            return! loop (Active (newSt, Idle)) middleware evalStats
           with ex ->
             logger.LogError (sprintf "❌ Hard reset failed: %s" ex.Message)
-            let sessionState' = SessionState.Faulted
             publishPhase Faulted evalStats
             reply.Reply(Error (SageFsError.HardResetFailed ex.Message))
-            return! loop st middleware sessionState' evalStats
+            return! loop Faulted middleware evalStats
       }
 
     and init () =
@@ -1558,7 +1648,6 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             StartupProfile.loadedPath outcome
           
           emit Events.SessionReady
-          let sessionState = SessionState.Ready
 
           let st = {
             Solution = sln
@@ -1587,7 +1676,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
 
           let evalStats = Affordances.EvalStats.empty
           publishSnapshot st Idle evalStats
-          return! loop st [] sessionState evalStats
+          return! loop (Active (st, Idle)) [] evalStats
         with ex ->
           let msg =
             match ex with
@@ -1599,25 +1688,13 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           | true -> ()
           logger.LogError (sprintf "  Stack: %s" ex.StackTrace)
           // Publish Faulted so MCP clients know the session is dead, not warming up.
-          // AppState is None because the Session/OutStream are unusable.
+          // Faulted carries NO AppState: Session/OutStream are unrepresentable,
+          // and the eval loop stays alive in the Faulted phase to accept
+          // hard_reset_fsi_session commands (the reset handlers rebuild state
+          // from the actor closure captures). This replaces the old tombstone
+          // that held Unchecked.defaultof Session/OutStream.
           publishPhase Faulted Affordances.EvalStats.empty
-          // Actor stays alive to accept hard_reset_fsi_session commands.
-          // faultedSt keeps the loop alive but is NOT exposed via QuerySnapshot.
-          let faultedSt = {
-            Solution = sln
-            OriginalSolution = originalSln
-            ShadowDir = shadowDir
-            Session = Unchecked.defaultof<_>
-            Logger = logger
-            OutStream = Unchecked.defaultof<_>
-            Custom = initCustomData
-            Diagnostics = Features.DiagnosticsStore.empty
-            WarmupFailures = []
-            WarmupContext = WarmupContext.empty
-            StartupConfig = None
-            HotReloadState = HotReloadState.empty
-          }
-          return! loop faultedSt [] SessionState.Faulted Affordances.EvalStats.empty
+          return! loop Faulted [] Affordances.EvalStats.empty
       }
 
     init ()
