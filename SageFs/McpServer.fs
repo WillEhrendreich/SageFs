@@ -211,11 +211,62 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
         result.Content.Add(TextContentBlock(Text = message))
         result
 
+      /// Structural affordance gate: every `tools/call` reaches the tool body
+      /// ONLY through this check. `Affordances.toolGate` classifies each tool;
+      /// state-gated tools are checked against the state of the session the call
+      /// targets (resolved exactly as the tool body would resolve it — the "mcp"
+      /// agent key plus the same working_directory argument), always-available
+      /// tools pass in every state, and undeclared tools fail closed.
+      /// A rejected call returns a structured IsError result (never throws,
+      /// never executes the tool body).
+      let enforceToolGate (toolName: string) =
+        task {
+          // MCP tool handlers all route as agent "mcp" and take no session_id
+          // parameter; working_directory is the only routing argument.
+          let workingDirectoryArg =
+            match ctx.Params.Arguments with
+            | null -> None
+            | args ->
+              match args.TryGetValue("working_directory") with
+              | true, v when v.ValueKind = System.Text.Json.JsonValueKind.String ->
+                let s = v.GetString()
+                match String.IsNullOrWhiteSpace s with
+                | true -> None
+                | false -> Some s
+              | _ -> None
+          return!
+            SageFs.McpTools.enforceToolCallGate
+              mcpCtx "mcp" None workingDirectoryArg toolName
+        }
+
+      let buildGateErrorResult (gateError: string) =
+        let result = CallToolResult()
+        result.IsError <- Nullable true
+        result.Content.Add(TextContentBlock(Text = gateError))
+        result
+
+      let requestName =
+        match box ctx.Params with
+        | null -> ""
+        | _ -> ctx.Params.Name
+
       ValueTask<CallToolResult>(
         task {
           try
-            let! result = next.Invoke(ctx, ct).AsTask()
-            return appendEvents result
+            // Affordance gate: reject tools that are not available in the
+            // current session state BEFORE the tool body runs.
+            match String.IsNullOrWhiteSpace requestName with
+            | false ->
+              let! gateResult = enforceToolGate requestName
+              match gateResult with
+              | Error gateError ->
+                return buildGateErrorResult gateError
+              | Ok _ ->
+                let! result = next.Invoke(ctx, ct).AsTask()
+                return appendEvents result
+            | true ->
+              let! result = next.Invoke(ctx, ct).AsTask()
+              return appendEvents result
           with ex ->
             return buildErrorResult ex
         })))

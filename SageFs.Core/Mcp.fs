@@ -1097,6 +1097,59 @@ module McpTools =
         |> Result.mapError SageFsError.describeForAgent
     }
 
+  /// ── Affordance call gate ─────────────────────────────────────────────────
+  ///
+  /// Structural enforcement point for the affordance model. The MCP server's
+  /// CallToolFilter runs this BEFORE any `[<McpServerTool>]` body executes, so a
+  /// tool that is not available in the CURRENT session state is rejected with a
+  /// structured error instead of executing.
+  ///
+  /// Classification comes only from `Affordances.toolGate`:
+  ///   - AlwaysAvailable — no session-state dependence; callable in every state
+  ///     and before any session exists (monitoring, session listing, telemetry).
+  ///   - StateGated      — availability is derived from `availableTools` for the
+  ///     state of the session the call would actually act on. `sessionId` /
+  ///     `workingDirectory` mirror the routing inputs the tool body will use, so
+  ///     the gate evaluates the SAME session the tool would target.
+  ///   - undeclared      — fails closed (ToolNotAvailable).
+  let enforceToolCallGate
+    (ctx: McpContext)
+    (agent: string)
+    (sessionId: string option)
+    (workingDirectory: string option)
+    (toolName: string)
+    : Task<Result<unit, string>> =
+    task {
+      match Affordances.toolGate toolName with
+      | Some Affordances.ToolGate.AlwaysAvailable ->
+        return Ok ()
+      | Some Affordances.ToolGate.StateGated ->
+        let! resolution = resolveSessionId ctx agent sessionId workingDirectory
+        match resolution with
+        | Routable sid ->
+          // Worker-authoritative state for the routable session.
+          return! requireTool ctx sid toolName
+        | WarmingUp (_, status) | Unroutable (_, status) ->
+          let state = WorkerProtocol.SessionStatus.toSessionState status
+          return
+            Affordances.checkToolCallAllowed state toolName
+            |> Result.mapError SageFsError.describeForAgent
+        | FaultedSession _ ->
+          return
+            Affordances.checkToolCallAllowed SessionState.Faulted toolName
+            |> Result.mapError SageFsError.describeForAgent
+        | Gone _ ->
+          // No session reachable — the pre-session policy applies: session
+          // creation/status tools pass, code-execution tools fail closed.
+          return
+            Affordances.checkToolCallAllowed SessionState.Uninitialized toolName
+            |> Result.mapError SageFsError.describeForAgent
+      | None ->
+        return
+          Affordances.checkToolCallAllowed SessionState.Uninitialized toolName
+          |> Result.mapError SageFsError.describeForAgent
+    }
+
   /// Look up the workflow for a session from the Elm model.
   /// Falls back to Interactive (identity for enhancement) when the model is unavailable.
   let getWorkflowForSession (ctx: McpContext) (sid: string) : WorkflowTypes.SessionWorkflow =
