@@ -65,6 +65,9 @@ module Signals =
   let [<Literal>] EvalLoading = "evalLoading"
   let [<Literal>] DiscoverLoading = "discoverLoading"
   let [<Literal>] CreateLoading = "createLoading"
+  /// Single in-flight signal shared by the eval-actions row (EVAL / RESET /
+  /// HARD_RESET) so every control is disabled while ANY action is running.
+  let [<Literal>] ActionLoading = "actionLoading"
   let [<Literal>] ConfigLoading = "configLoading"
   let [<Literal>] TempLoading = "tempLoading"
   let [<Literal>] Theme = "theme"
@@ -635,9 +638,7 @@ type DashboardActions = {
   Dispatch: SageFsMsg -> unit
   SwitchSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   StopSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
-  /// Dispose — stop + clear the session's saved replay memory (.sagefs).
-  DisposeSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
-  /// Purge — dispose + remove the session's .sagefm manifest entry (gone from resume picker).
+  /// Purge — stop the session + remove its .sagefm manifest entry (gone from resume picker).
   PurgeSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   CreateSession: string list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>
   ShutdownCallback: (unit -> unit) option

@@ -3,7 +3,7 @@ namespace SageFs.Features
 open SageFs.Features.LiveTesting
 
 /// Daemon-level coordination between domain types and binary file I/O.
-/// Pure functions that bridge LiveTestState/SessionReplayState ↔ .sagetc/.sagefs files.
+/// Bridges LiveTestState ↔ .sagetc cache and the daemon manifest ↔ daemon.sagefm.
 module DaemonPersistence =
 
   /// Compute a stable hash key from project paths for cache lookup.
@@ -33,34 +33,17 @@ module DaemonPersistence =
     TestCacheFile.load sageFsDir hash
     |> Result.map TestCacheMapping.toLiveTestState
 
-  /// Save session replay state to .sagefs binary.
-  let saveSession
-    (sageFsDir: string) (sessionId: string) (projectPath: string)
-    (workingDir: string) (refs: string list) (state: Replay.SessionReplayState)
-    : Result<string, string> =
-    let sfsData = SessionMapping.fromReplayState sessionId projectPath workingDir refs state
-    SessionFile.save sageFsDir sessionId sfsData
-
-  /// Load session replay state from .sagefs binary.
-  let loadSession (sageFsDir: string) (sessionId: string) : Result<Replay.SessionReplayState, string> =
-    SessionFile.load sageFsDir sessionId
-    |> Result.map SessionMapping.toReplayState
-
-  /// Delete the per-session .sagefs replay file (dispose/clear-memory).
-  let deleteSessionFile (sageFsDir: string) (sessionId: string) : Result<unit, string> =
-    SessionFile.delete sageFsDir sessionId
-
   /// Save daemon session manifest to .sagefm binary.
-  let saveManifest (sageFsDir: string) (state: Replay.DaemonReplayState) : Result<string, string> =
-    let data = ManifestMapping.fromReplayState state
+  let saveManifest (sageFsDir: string) (state: DaemonManifest.DaemonManifestState) : Result<string, string> =
+    let data = ManifestMapping.fromManifestState state
     ManifestFile.save sageFsDir data
 
   /// Load daemon session manifest from .sagefm binary.
   /// W26(R12): Returns ManifestLoadError DU instead of stringly-typed error string.
   /// Strips ManifestSource — backup fallback is logged inside ManifestFile.load.
-  let loadManifest (sageFsDir: string) : Result<Replay.DaemonReplayState, ManifestTypes.ManifestLoadError> =
+  let loadManifest (sageFsDir: string) : Result<DaemonManifest.DaemonManifestState, ManifestTypes.ManifestLoadError> =
     ManifestFile.load sageFsDir
-    |> Result.map (fun (data, _source) -> ManifestMapping.toReplayState data)
+    |> Result.map (fun (data, _source) -> ManifestMapping.toManifestState data)
 
   /// W35(R14): Rename a corrupt manifest file to unblock future saves.
   /// CorruptData is permanent — the file will never become readable again.

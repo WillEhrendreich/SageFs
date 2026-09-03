@@ -187,7 +187,7 @@ let createDaemonInfrastructure () : DaemonInfra =
 let private pruneManifest (dir: string) (log: ILogger) : Result<bool, string> =
   match Features.DaemonPersistence.loadManifest dir with
   | Ok state ->
-    let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions state
+    let aliveSessions = Features.DaemonManifest.DaemonManifestState.aliveSessions state
     match aliveSessions.IsEmpty with
     | true ->
       log.LogInformation("No alive sessions to prune")
@@ -239,10 +239,12 @@ let handlePrune (dir: string) (log: ILogger) (checkDaemonRunning: unit -> System
 }
 
 /// Build SessionManagementOps record from mailbox + snapshot reader.
+/// Session lifecycle events are recorded directly in the daemon.sagefm binary
+/// manifest (the sole source of truth for session resume) — there is no
+/// separate event-append step or per-session event stream.
 let createSessionOps
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
-  (appendEvents: Features.Events.SageFsEvent list -> unit)
   : SessionManagementOps =
   {
     CreateSession = fun projects workingDir workflow ->
@@ -252,14 +254,9 @@ let createSessionOps
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, workflow, reply))
           |> Async.StartAsTask
-        match result with
-        | Ok info ->
-          appendEvents [
-            Features.Events.SageFsEvent.DaemonSessionCreated
-              {| SessionId = WorkerProtocol.SessionId.value info.Id; Projects = projects; WorkingDir = workingDir; CreatedAt = DateTimeOffset.UtcNow |}
-          ]
-          return Ok (WorkerProtocol.SessionId.value info.Id)
-        | Error e -> return Error e
+        return
+          result
+          |> Result.map (fun info -> WorkerProtocol.SessionId.value info.Id)
       }
     ListSessions = fun () ->
       task {
@@ -272,40 +269,10 @@ let createSessionOps
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.StopSession(toSessionId sessionId, reply))
           |> Async.StartAsTask
-        match result with
-        | Ok () ->
-          appendEvents [
-            Features.Events.SageFsEvent.DaemonSessionStopped
-              {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
-          ]
-        | Error _ -> ()
         return
           result
           |> Result.map (fun () ->
             sprintf "Session '%s' stopped." sessionId)
-      }
-    DisposeSession = fun sessionId ->
-      task {
-        let! result =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.StopSession(toSessionId sessionId, reply))
-          |> Async.StartAsTask
-        match result with
-        | Ok () ->
-          appendEvents [
-            Features.Events.SageFsEvent.DaemonSessionStopped
-              {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
-          ]
-          // Clear the session's saved replay memory — must be rebuilt anew on resume.
-          match Features.DaemonPersistence.deleteSessionFile DaemonState.SageFsDir sessionId with
-          | Ok () -> ()
-          | Error err ->
-            Log.warn "[DaemonMode] Dispose session %s: %s" sessionId err
-        | Error _ -> ()
-        return
-          result
-          |> Result.map (fun () ->
-            sprintf "Session '%s' disposed — saved memory cleared." sessionId)
       }
     PurgeSession = fun sessionId ->
       task {
@@ -315,15 +282,8 @@ let createSessionOps
           |> Async.StartAsTask
         match result with
         | Ok () ->
-          appendEvents [
-            Features.Events.SageFsEvent.DaemonSessionStopped
-              {| SessionId = sessionId; StoppedAt = DateTimeOffset.UtcNow |}
-          ]
-          // Clear saved replay memory AND remove the manifest entry entirely.
-          match Features.DaemonPersistence.deleteSessionFile DaemonState.SageFsDir sessionId with
-          | Ok () -> ()
-          | Error err ->
-            Log.warn "[DaemonMode] Purge session %s (delete .sagefs): %s" sessionId err
+          // Remove the manifest entry entirely — the session is gone from the
+          // resume picker too (purge = the corrupted-state escape hatch).
           match Features.DaemonPersistence.removeManifestEntry DaemonState.SageFsDir sessionId with
           | Ok () -> ()
           | Error err ->
@@ -332,7 +292,7 @@ let createSessionOps
         return
           result
           |> Result.map (fun () ->
-            sprintf "Session '%s' purged — binaries and saved state removed." sessionId)
+            sprintf "Session '%s' purged — manifest entry removed." sessionId)
       }
     RestartSession = fun sessionId rebuild ->
       task {
@@ -401,17 +361,17 @@ let fetchWorkerEndpoint
   | None -> return None
 }
 
-/// Build DaemonReplayState from active sessions (used in periodic save + shutdown).
+/// Build DaemonManifestState from active sessions (used in periodic save + shutdown).
 /// `activeSessionId` must come from the live Elm model (not the snapshot) since the
 /// snapshot has no concept of "which session is currently active".
-let buildReplayState (snapshot: SessionManager.QuerySnapshot) (activeSessionId: string option) =
+let buildManifestState (snapshot: SessionManager.QuerySnapshot) (activeSessionId: string option) =
   let activeSessions = SessionManager.QuerySnapshot.allSessions snapshot
-  let toRecord (s: WorkerProtocol.SessionInfo) : Features.Replay.DaemonSessionRecord =
+  let toRecord (s: WorkerProtocol.SessionInfo) : Features.DaemonManifest.DaemonSessionRecord =
     { SessionId = WorkerProtocol.SessionId.value s.Id; Projects = s.Projects; WorkingDir = s.WorkingDirectory
       CreatedAt = DateTimeOffset(s.CreatedAt, TimeSpan.Zero); StoppedAt = None }
-  { Features.Replay.DaemonReplayState.Sessions =
+  { Features.DaemonManifest.DaemonManifestState.Sessions =
       activeSessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id, toRecord s) |> Map.ofList
-    Features.Replay.DaemonReplayState.ActiveSessionId = activeSessionId }
+    Features.DaemonManifest.DaemonManifestState.ActiveSessionId = activeSessionId }
 
 /// W10(R10): Shared manifest merge logic used by both periodic save and graceful shutdown.
 /// Loads the existing manifest from disk (if any), preserves previously-stopped sessions
@@ -429,14 +389,14 @@ let mergeManifestWithExisting
   (snapshot: SessionManager.QuerySnapshot)
   (activeSessionId: string option)
   (stampActive: DateTimeOffset option)
-  : Result<Features.Replay.DaemonReplayState, Features.ManifestTypes.ManifestLoadError> =
+  : Result<Features.DaemonManifest.DaemonManifestState, Features.ManifestTypes.ManifestLoadError> =
   let activeSessions = SessionManager.QuerySnapshot.allSessions snapshot
   let activeSessionIds = activeSessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Set.ofList
   let existingManifestResult =
     match Features.DaemonPersistence.loadManifest dir with
     | Ok m -> Ok m
     | Error Features.ManifestTypes.ManifestLoadError.NotFound ->
-      Ok (buildReplayState snapshot activeSessionId)
+      Ok (buildManifestState snapshot activeSessionId)
     | Error (Features.ManifestTypes.ManifestLoadError.IoError err) ->
       // W23(R12): IO errors must NOT fall back to active-only state — that erases history.
       // Return Error so callers skip the write entirely.
@@ -452,7 +412,7 @@ let mergeManifestWithExisting
   | Ok existingManifest ->
     let mergedSessions =
       existingManifest.Sessions
-      |> Map.map (fun sid (r: Features.Replay.DaemonSessionRecord) ->
+      |> Map.map (fun sid (r: Features.DaemonManifest.DaemonSessionRecord) ->
         match activeSessionIds.Contains(sid), stampActive with
         | true, Some ts -> { r with StoppedAt = Some ts }   // active now → stamp if shutting down
         | true, None    -> { r with StoppedAt = None }      // active → enforce StoppedAt=None (W20/R11)
@@ -466,9 +426,9 @@ let mergeManifestWithExisting
           | None ->
             // Phantom: alive in manifest but absent from running snapshot.
             { r with StoppedAt = Some (stampActive |> Option.defaultWith (fun () -> DateTimeOffset.UtcNow)) })
-    let replayStateBase = buildReplayState snapshot activeSessionId
+    let manifestStateBase = buildManifestState snapshot activeSessionId
     let newSessions =
-      replayStateBase.Sessions
+      manifestStateBase.Sessions
       |> Map.filter (fun sid _ -> not (mergedSessions.ContainsKey(sid)))
       |> Map.map (fun _ r ->
         match stampActive with
@@ -1159,7 +1119,7 @@ let resumePreviousSessions
       | false -> binarySpan.SetTag("source", "none") |> ignore
       | true -> ()
       Instrumentation.succeedSpan binarySpan
-      Features.Replay.DaemonReplayState.empty
+      Features.DaemonManifest.DaemonManifestState.empty
     | Error (Features.ManifestTypes.ManifestLoadError.IoError err) ->
       // W32(R13): File EXISTS but can't be read (lock/permissions) → Warning + failSpan.
       // Old code used LogInformation+succeedSpan for ALL error cases — wrong severity.
@@ -1168,7 +1128,7 @@ let resumePreviousSessions
       | false -> binarySpan.SetTag("source", "error_io") |> ignore
       | true -> ()
       Instrumentation.failSpan binarySpan err
-      Features.Replay.DaemonReplayState.empty
+      Features.DaemonManifest.DaemonManifestState.empty
     | Error (Features.ManifestTypes.ManifestLoadError.CorruptData err) ->
       // W32(R13): File is permanently corrupt → Error + failSpan.
       // W35(R14): Rename the corrupt file so periodic saves are unblocked for this run.
@@ -1184,9 +1144,9 @@ let resumePreviousSessions
       | false -> binarySpan.SetTag("source", "error_corrupt") |> ignore
       | true -> ()
       Instrumentation.failSpan binarySpan err
-      Features.Replay.DaemonReplayState.empty
+      Features.DaemonManifest.DaemonManifestState.empty
 
-  let aliveSessions = Features.Replay.DaemonReplayState.aliveSessions daemonState
+  let aliveSessions = Features.DaemonManifest.DaemonManifestState.aliveSessions daemonState
 
   match aliveSessions.IsEmpty with
   | false ->
@@ -1481,7 +1441,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       (fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress)
       (fun sid error -> stateChangedEvent.Trigger (SessionFaulted (sid, error)))
 
-  let sessionOps = createSessionOps sessionManager readSnapshot (fun _ -> ())  // Event tracking removed — no callback needed
+  let sessionOps = createSessionOps sessionManager readSnapshot
   // String-to-SessionId adapters for proxyToSession (which takes string callbacks)
   let getProxyStr s = sessionOps.GetProxy (toSessionId s)
   let notifyWorkerDiedStr s = sessionOps.NotifyWorkerDied (toSessionId s)
@@ -2011,12 +1971,6 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
       return result |> Result.mapError SageFsError.describe
     }
-    DisposeSession = fun sid -> task {
-      let sidStr = WorkerProtocol.SessionId.value sid
-      let! result = sessionOps.DisposeSession sidStr
-      elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
-      return result |> Result.mapError SageFsError.describe
-    }
     PurgeSession = fun sid -> task {
       let sidStr = WorkerProtocol.SessionId.value sid
       let! result = sessionOps.PurgeSession sidStr
@@ -2150,14 +2104,12 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   log.LogInformation("Health: http://localhost:{Port}/health", mcpPort)
 
   // Cleanup orphaned .tmp files from interrupted writes
+  // (.sagefs per-session replay files no longer exist — only the .sagetc test cache)
   let stcOrphans = Features.TestCacheFile.cleanupOrphanedTmpFiles DaemonState.SageFsDir
-  let sfsOrphans = Features.SessionFile.cleanupOrphanedTmpFiles DaemonState.SageFsDir
-  match stcOrphans + sfsOrphans > 0 with
+  match stcOrphans > 0 with
   | true ->
     Instrumentation.persistenceOrphanedTmpCleanup.Add(int64 stcOrphans, System.Collections.Generic.KeyValuePair("format", box "stc1"))
-    Instrumentation.persistenceOrphanedTmpCleanup.Add(int64 sfsOrphans, System.Collections.Generic.KeyValuePair("format", box "sfs3"))
-    log.LogInformation("Cleaned up {Count} orphaned .tmp files ({Stc} .sagetc, {Sfs} .sagefs)",
-      stcOrphans + sfsOrphans, stcOrphans, sfsOrphans)
+    log.LogInformation("Cleaned up {Count} orphaned .tmp files ({Stc} .sagetc)", stcOrphans, stcOrphans)
   | false -> ()
 
   // Test cache pre-loading happens per-session after resume, not eagerly

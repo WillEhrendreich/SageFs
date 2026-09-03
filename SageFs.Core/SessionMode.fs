@@ -9,10 +9,7 @@ type SessionManagementOps = {
   CreateSession: string list -> string -> WorkflowTypes.SessionWorkflow -> Task<Result<string, SageFsError>>
   ListSessions: unit -> Task<string>
   StopSession: string -> Task<Result<string, SageFsError>>
-  /// Dispose — stop the session AND clear its saved memory (delete the per-session .sagefs replay binary).
-  /// The same solution/project/folder must be rebuilt anew if loaded again.
-  DisposeSession: string -> Task<Result<string, SageFsError>>
-  /// Purge — dispose the session AND remove its entry from the .sagefm manifest (gone from the resume picker too).
+  /// Purge — stop the session AND remove its entry from the .sagefm manifest (gone from the resume picker too).
   /// For corrupted state, this is the equivalent of deleting obj/bin folders.
   PurgeSession: string -> Task<Result<string, SageFsError>>
   /// Stop worker, optionally rebuild, respawn with same session ID.
@@ -40,7 +37,6 @@ module SessionManagementOps =
     CreateSession = fun _ _ _ -> Task.FromResult(Result.Error (SageFsError.SessionCreationFailed "Not available"))
     ListSessions = fun () -> Task.FromResult("No sessions")
     StopSession = fun _ -> Task.FromResult(Result.Error (SageFsError.SessionCreationFailed "Not available"))
-    DisposeSession = fun _ -> Task.FromResult(Result.Error (SageFsError.SessionCreationFailed "Not available"))
     PurgeSession = fun _ -> Task.FromResult(Result.Error (SageFsError.SessionCreationFailed "Not available"))
     RestartSession = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
     GetProxy = fun _ -> Task.FromResult(None)

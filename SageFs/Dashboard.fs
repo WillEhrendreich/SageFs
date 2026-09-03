@@ -1708,7 +1708,10 @@ let createEndpoints
     })
     yield mapPost "/dashboard/session/dispose/{id}"
       (fun (r: RequestData) -> r.GetString("id", ""))
-      (fun sid -> createSessionActionHandler q a.DisposeSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      // Dispose == stop: the per-session .sagefs replay binary is gone, so
+      // there is no separate "clear saved memory" step anymore (see the
+      // event-sourcing story — the .sagefm manifest is the only durable state).
+      (fun sid -> createSessionActionHandler q a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
     yield mapPost "/dashboard/session/purge/{id}"
       (fun (r: RequestData) -> r.GetString("id", ""))
       (fun sid -> createSessionActionHandler q a.PurgeSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))

@@ -352,12 +352,12 @@ module ManifestFile =
         | _ -> Error NotFound
 
 
-/// Mapping between DaemonReplayState and DaemonManifestData.
+/// Mapping between DaemonManifestState and DaemonManifestData.
 module ManifestMapping =
   open ManifestTypes
-  open Replay
+  open DaemonManifest
 
-  let fromReplayState (state: DaemonReplayState) : DaemonManifestData =
+  let fromManifestState (state: DaemonManifestState) : DaemonManifestData =
     let entries =
       state.Sessions
       |> Map.toList
@@ -375,7 +375,7 @@ module ManifestMapping =
       CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
     }
 
-  let toReplayState (manifest: DaemonManifestData) : DaemonReplayState =
+  let toManifestState (manifest: DaemonManifestData) : DaemonManifestState =
     let cutoff = DateTimeOffset.UtcNow.AddDays(-7.0)
     let sessions =
       manifest.Entries

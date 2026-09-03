@@ -52,8 +52,7 @@
         <Compile Include="Features\Diagnostics.fs" />
         <Compile Include="Features\DiagnosticsStore.fs" />
         <Compile Include="Features\Events.fs" />
-        <Compile Include="Features\Replay.fs" />
-        <Compile Include="Features\SessionPersistence.fs" />
+        <Compile Include="Features\DaemonManifest.fs" />
         <Compile Include="Features\ManifestPersistence.fs" />
         <Compile Include="Features\DaemonPersistence.fs" />
         <Compile Include="Features\EvalDedup.fs" />
