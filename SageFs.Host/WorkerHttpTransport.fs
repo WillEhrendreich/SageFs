@@ -52,6 +52,86 @@ module WorkerHttpTransport =
     do! ctx.Response.WriteAsync(Serialization.serialize resp)
   }
 
+  /// True for paths that execute F# or mutate worker state — the endpoints a
+  /// cross-site browser page must never reach.
+  let private isMutatingOrRpcPath (path: string) =
+    path.StartsWith("/eval", StringComparison.Ordinal)
+    || path.StartsWith("/check", StringComparison.Ordinal)
+    || path.StartsWith("/typecheck-symbols", StringComparison.Ordinal)
+    || path.StartsWith("/shutdown", StringComparison.Ordinal)
+    || path.StartsWith("/reset", StringComparison.Ordinal)
+    || path.StartsWith("/cancel", StringComparison.Ordinal)
+    || path.StartsWith("/load-script", StringComparison.Ordinal)
+    || path.StartsWith("/hotreload/", StringComparison.Ordinal)
+
+  /// Origin/CSRF gate for the worker HTTP surface — the F#-executing server.
+  ///
+  /// The daemon proxies to the worker with NO browser headers (loopback Host,
+  /// no Origin/Sec-Fetch-Site), so those requests pass. A browser page is the
+  /// only realistic attacker: cross-site fetches carry Sec-Fetch-Site:
+  /// cross-site and a foreign Origin. Fail closed on those for every endpoint
+  /// except the DevReload SSE stream, which the user's local dev app (a
+  /// loopback origin) legitimately reads cross-origin — that one reflects the
+  /// specific loopback origin instead of `*`.
+  let workerOriginGuard (ctx: HttpContext) (next: Func<Task>) = task {
+    let hostHeader =
+      match ctx.Request.Host.HasValue with
+      | true -> Some ctx.Request.Host.Host
+      | false -> None
+    let secFetchSite =
+      match ctx.Request.Headers.TryGetValue("Sec-Fetch-Site") with
+      | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(string v)) -> Some (string v)
+      | _ -> None
+    let origin =
+      match ctx.Request.Headers.TryGetValue("Origin") with
+      | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(string v)) -> Some (string v)
+      | _ -> None
+    // Non-loopback Host = DNS rebinding / proxy — reject everything.
+    match hostHeader with
+    | Some h when not (SageFs.Server.HttpOriginGuard.isLoopbackHost h) ->
+      ctx.Response.StatusCode <- 403
+      do! ctx.Response.WriteAsync("Forbidden: non-loopback Host")
+    | _ ->
+      let path = ctx.Request.Path.Value |> Option.ofObj |> Option.defaultValue ""
+      let isSse = path.StartsWith("/__sagefs__/reload", StringComparison.Ordinal)
+      match secFetchSite, origin with
+      // Browser signals absent: daemon proxy, curl, editors — allow.
+      | None, None -> do! next.Invoke()
+      // The SSE stream is the one surface a browser legitimately reads
+      // cross-origin (user's dev app on a loopback origin). Reject remote
+      // origins; echo the specific loopback origin, never *.
+      | _, _ when isSse ->
+        match origin with
+        | Some o when SageFs.Server.HttpOriginGuard.isLoopbackOrigin o ->
+          ctx.Response.Headers["Access-Control-Allow-Origin"] <- o
+          do! next.Invoke()
+        | Some o ->
+          ctx.Response.StatusCode <- 403
+          do! ctx.Response.WriteAsync(sprintf "Forbidden: non-loopback Origin %s" o)
+        | None -> do! next.Invoke()
+      // Mutating/RPC endpoints: any cross-site signal or foreign origin is
+      // rejected before it can execute F# or mutate watch state.
+      | _ when isMutatingOrRpcPath path ->
+        match secFetchSite with
+        | Some site when site <> "same-origin" && site <> "same-site" && site <> "none" ->
+          ctx.Response.StatusCode <- 403
+          do! ctx.Response.WriteAsync(sprintf "Forbidden: cross-site Sec-Fetch-Site %s" site)
+        | _ ->
+          match origin with
+          | Some o when not (SageFs.Server.HttpOriginGuard.isLoopbackOrigin o) ->
+            ctx.Response.StatusCode <- 403
+            do! ctx.Response.WriteAsync(sprintf "Forbidden: non-loopback Origin %s" o)
+          | _ -> do! next.Invoke()
+      // Read-only GETs (/status, /hotreload, /test-discovery, ...) with
+      // browser signals: allow same-origin/loopback-origin, reject foreign.
+      | _ ->
+        match origin with
+        | Some o when not (SageFs.Server.HttpOriginGuard.isLoopbackOrigin o) ->
+          ctx.Response.StatusCode <- 403
+          do! ctx.Response.WriteAsync(sprintf "Forbidden: non-loopback Origin %s" o)
+        | _ -> do! next.Invoke()
+  }
+
   /// Start a Kestrel HTTP server dispatching to the given handler.
   /// Pass port=0 for OS-assigned dynamic port.
   let startServer
@@ -94,6 +174,10 @@ module WorkerHttpTransport =
       SageFs.Utils.Log.logError <- fun msg -> workerLogger.LogError(msg)
 
       app.UseResponseCompression() |> ignore
+
+      // Origin/CSRF gate for the worker HTTP surface — see workerOriginGuard.
+      app.Use(Func<HttpContext, Func<Task>, Task>(fun ctx next ->
+        workerOriginGuard ctx next :> Task)) |> ignore
 
       let inline respond' ctx msg = respond handler ctx msg
 
@@ -402,7 +486,8 @@ module WorkerHttpTransport =
         ctx.Response.Headers["Cache-Control"] <- "no-cache"
         ctx.Response.Headers["Connection"] <- "keep-alive"
         ctx.Response.Headers["X-Accel-Buffering"] <- "no"
-        ctx.Response.Headers["Access-Control-Allow-Origin"] <- "*"
+        // CORS is set by the origin-gate middleware above (reflects the specific
+        // loopback origin — never a wildcard). Nothing to do here.
         do! ctx.Response.Body.FlushAsync()
 
         let id = Guid.NewGuid().ToString("N")
