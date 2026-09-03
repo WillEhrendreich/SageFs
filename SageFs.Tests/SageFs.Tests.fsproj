@@ -35,6 +35,7 @@
         <Compile Include="ActorCreationTests.fs" />
         <Compile Include="ActorEventEmissionTests.fs" />
         <Compile Include="EvalCancellationTests.fs" />
+        <Compile Include="EvalActorResilienceTests.fs" />
         <Compile Include="FaultedEvalTests.fs" />
         <Compile Include="ActorSplitTests.fs" />
         <Compile Include="AffordanceTests.fs" />

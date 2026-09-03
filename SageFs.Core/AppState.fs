@@ -235,6 +235,13 @@ type internal EvalCommand =
   | EvalReset of AsyncReplyChannel<Result<unit, SageFsError>>
   | EvalHardReset of rebuild: bool * AsyncReplyChannel<Result<string, SageFsError>>
 
+/// Test-only fault-injection seam for the eval-actor resilience tests
+/// (SageFs.Tests/EvalActorResilienceTests.fs). When set, the eval actor's
+/// message-processing function runs it before handling each message; a
+/// throw here escapes the handler exactly like an unexpected bug would.
+/// Default (None) is a no-op, so production behavior is unchanged.
+let mutable internal evalActorFaultInjector : (unit -> unit) option = None
+
 let wrapErrorMiddleware next (request, st) =
   try
     next (request, st)
@@ -1074,9 +1081,14 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
     // Monotonic generation for live binding snapshots — lets consumers ignore
     // stale/out-of-order snapshots.
     let liveValueGeneration = ref 0L
-    let rec loop (phase: SessionPhase) middleware evalStats =
+    let processEvalCommand (phase: SessionPhase, middleware: Middleware list, evalStats: Affordances.EvalStats) (cmd: EvalCommand) : Async<SessionPhase * Middleware list * Affordances.EvalStats> =
       async {
-        let! cmd = mailbox.Receive()
+        // Test-only fault-injection seam (None in production): a throw here
+        // escapes the handler like an unexpected bug — the wrapped loop below
+        // logs it, keeps the previous state, and the session stays alive.
+        match evalActorFaultInjector with
+        | Some fault -> fault ()
+        | None -> ()
 
         match cmd with
         | EvalEnableStdout ->
@@ -1087,7 +1099,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             logger.LogWarning "EnableStdout requested during warmup; ignoring"
           | Active (st, _) ->
             st.OutStream.Enable()
-          return! loop phase middleware evalStats
+          return (phase, middleware, evalStats)
         | EvalRun(request, cts, reply) ->
           match tryGetEvalAvailabilityError phase with
           | Some message ->
@@ -1100,7 +1112,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             }
             emit (Events.EvalFailed {| Code = request.Code; Error = message; Diagnostics = [] |})
             reply.Reply errResponse
-            return! loop phase middleware evalStats
+            return (phase, middleware, evalStats)
           | None ->
             match phase with
             | Active (st, _) ->
@@ -1121,11 +1133,11 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               evalThread.Name <- sprintf "sagefs-eval-%d" (evalStats.EvalCount + 1)
               currentEvalThread.Value <- Some evalThread
               evalThread.Start()
-              return! loop (Active (st, Evaluating)) middleware evalStats
+              return (Active (st, Evaluating), middleware, evalStats)
             | Initializing _ | Faulted ->
               // Unreachable: tryGetEvalAvailabilityError gates these phases with
               // Some above. Kept exhaustive so the phase match is total.
-              return! loop phase middleware evalStats
+              return (phase, middleware, evalStats)
         | EvalFinished(result, sw, code, reply) ->
           sw.Stop()
           currentEvalCts.Value <- None
@@ -1188,7 +1200,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               | _ -> ()
             | None -> ()
             reply.Reply resWithLiveValues
-            return! loop (Active (newSt, Idle)) middleware evalStats'
+            return (Active (newSt, Idle), middleware, evalStats')
           | Error ex ->
             let errResponse = {
               EvaluationResult = Error ex
@@ -1205,7 +1217,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                 Diagnostics = []
               |})
               reply.Reply errResponse
-              return! loop (Active (st, Idle)) middleware evalStats
+              return (Active (st, Idle), middleware, evalStats)
             | Initializing _ | Faulted ->
               // Straggler: the eval thread was still running when a reset tore
               // the session down (or the reset failed). Publishing the eval's
@@ -1213,10 +1225,10 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               // session — reply with the error and stay in the current phase.
               logger.LogWarning (sprintf "EvalFinished(Error) arrived outside Active phase (session state: %s); not republishing state: %s" (SessionPhase.toSessionState phase |> SessionState.label) ex.Message)
               reply.Reply errResponse
-              return! loop phase middleware evalStats
+              return (phase, middleware, evalStats)
         | EvalAddMiddleware(additionalMiddleware, r) ->
           r.Reply(())
-          return! loop phase (additionalMiddleware @ middleware) evalStats
+          return (phase, additionalMiddleware @ middleware, evalStats)
         | EvalReset reply ->
           try
             publishPhase (Initializing None) evalStats
@@ -1310,12 +1322,12 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             publishSnapshot newSt Idle evalStats
             emit Events.SessionReset
             reply.Reply(Ok ())
-            return! loop (Active (newSt, Idle)) middleware evalStats
+            return (Active (newSt, Idle), middleware, evalStats)
           with ex ->
             logger.LogError $"❌ FSI session reset failed: {ex.Message}"
             publishPhase Faulted evalStats
             reply.Reply(Error (SageFsError.ResetFailed ex.Message))
-            return! loop Faulted middleware evalStats
+            return (Faulted, middleware, evalStats)
         | EvalHardReset (rebuild, reply) ->
           try
             publishPhase (Initializing None) evalStats
@@ -1458,18 +1470,18 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                     match retryCode <> 0 with
                     | true ->
                       let msg = sprintf "Build failed on retry (exit code %d): %s" retryCode retryErr
-                      logger.LogError (sprintf "  ❌ %s" msg)
-                      publishPhase Faulted evalStats
-                      reply.Reply(Error (SageFsError.HardResetFailed msg))
-                      return! loop Faulted middleware evalStats
+                      // Mid-function exit to the handler's existing `with ex ->
+                      // Hard reset failed` recovery below (identical Faulted
+                      // publish + error reply + Faulted-phase continuation).
+                      raise (System.Exception msg)
                     | false ->
                       logger.LogInfo "  ✅ Build succeeded on retry"
                   | false ->
                     let msg = sprintf "Build failed (exit code %d): %s" exitCode stderr
-                    logger.LogError (sprintf "  ❌ %s" msg)
-                    publishPhase Faulted evalStats
-                    reply.Reply(Error (SageFsError.HardResetFailed msg))
-                    return! loop Faulted middleware evalStats
+                    // Mid-function exit to the handler's existing `with ex ->
+                    // Hard reset failed` recovery below (identical Faulted
+                    // publish + error reply + Faulted-phase continuation).
+                    raise (System.Exception msg)
                 | false ->
                   logger.LogInfo "  ✅ Build succeeded"
               | None ->
@@ -1537,7 +1549,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               logger.LogError (sprintf "  ❌ %s" msg)
               publishPhase Faulted evalStats
               reply.Reply(Error (SageFsError.HardResetFailed msg))
-              return! loop Faulted middleware evalStats
+              return (Faulted, middleware, evalStats)
             | Ok (newSession, newRecorder, _, warmupFailures, warmupCtx) ->
             warmupCts.Dispose()
             let newSt =
@@ -1572,15 +1584,15 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             publishSnapshot newSt Idle evalStats
             emit (Events.SessionHardReset {| Rebuild = rebuild |})
             reply.Reply(Ok "Hard reset complete. Fresh session with re-copied assemblies.")
-            return! loop (Active (newSt, Idle)) middleware evalStats
+            return (Active (newSt, Idle), middleware, evalStats)
           with ex ->
             logger.LogError (sprintf "❌ Hard reset failed: %s" ex.Message)
             publishPhase Faulted evalStats
             reply.Reply(Error (SageFsError.HardResetFailed ex.Message))
-            return! loop Faulted middleware evalStats
+            return (Faulted, middleware, evalStats)
       }
 
-    and init () =
+    let init () =
       async {
         try
           logger.LogInfo "Welcome to SageFs!"
@@ -1676,7 +1688,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
 
           let evalStats = Affordances.EvalStats.empty
           publishSnapshot st Idle evalStats
-          return! loop (Active (st, Idle)) [] evalStats
+          return (Active (st, Idle), [], evalStats)
         with ex ->
           let msg =
             match ex with
@@ -1694,10 +1706,19 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           // from the actor closure captures). This replaces the old tombstone
           // that held Unchecked.defaultof Session/OutStream.
           publishPhase Faulted Affordances.EvalStats.empty
-          return! loop Faulted [] Affordances.EvalStats.empty
+          return (Faulted, [], Affordances.EvalStats.empty)
       }
 
-    init ()
+    let safeProcessEval = ResilientActor.wrapLoop logger "eval-actor" processEvalCommand
+    let rec loop state = async {
+      let! cmd = mailbox.Receive()
+      let! state' = safeProcessEval state cmd
+      return! loop state'
+    }
+    async {
+      let! initialState = init ()
+      return! loop initialState
+    }
   )
 
   // Router actor: dispatches instantly, never blocks.
