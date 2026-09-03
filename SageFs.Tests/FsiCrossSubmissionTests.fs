@@ -108,7 +108,7 @@ let allTests =
     // in a subsequent eval — the core behavior --multiemit- enables.
     // Assertions check for error ABSENCE only (not output format).
     testList "[Integration] type sharing" [
-      ptestCase "record type from eval 1 can be instantiated in eval 2" <| fun _ ->
+      testCase "record type from eval 1 can be instantiated in eval 2" <| fun _ ->
         let uid = nextUid ()
         let typeName = sprintf "Rec_%s" uid
         let r1, r2 = evalPair

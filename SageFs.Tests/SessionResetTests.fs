@@ -29,7 +29,7 @@ let sessionManagerBuildPathTests =
 
 [<Tests>]
 let sessionResetTests =
-  testSequenced <| ptestList "[Integration] Session reset" [
+  testSequenced <| testList "[Integration] Session reset" [
 
     testCase "eval → reset → value is gone"
     <| fun _ ->
@@ -98,9 +98,9 @@ let sessionResetTests =
 
 [<Tests>]
 let resetPushbackTests =
-  ptestList "[Integration] Reset pushback warnings" [
+  testList "[Integration] Reset pushback warnings" [
 
-    ptestCase "hard reset on healthy session includes warning"
+    testCase "hard reset on healthy session includes warning"
     <| fun _ ->
       task {
         let ctx = sharedCtx ()
@@ -131,7 +131,7 @@ let resetPushbackTests =
       |> Async.AwaitTask
       |> Async.RunSynchronously
 
-    ptestCase "soft reset on healthy session includes warning"
+    testCase "soft reset on healthy session includes warning"
     <| fun _ ->
       task {
         let ctx = sharedCtx ()

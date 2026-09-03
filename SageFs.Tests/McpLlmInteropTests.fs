@@ -25,7 +25,7 @@ open SageFs.Tests.TestInfrastructure
 module StartupConfigTests =
   
   let tests =
-    ptestList "[Integration] StartupConfig type and storage" [
+    testList "[Integration] StartupConfig type and storage" [
       
       testCase "StartupConfig should have all required fields"
       <| fun _ ->
@@ -71,7 +71,7 @@ module StartupConfigTests =
 module GetStartupInfoTests =
   
   let tests =
-    ptestList "[Integration] get_startup_info tool" [
+    testList "[Integration] get_startup_info tool" [
       
       testCase "get_startup_info should return structured startup information"
       <| fun _ ->
@@ -135,7 +135,7 @@ module GetStartupInfoTests =
 module EnhancedStatusTests =
   
   let tests =
-    ptestList "[Integration] Enhanced get_fsi_status with startup context" [
+    testList "[Integration] Enhanced get_fsi_status with startup context" [
       
       testCase "get_fsi_status should include startup information section"
       <| fun _ ->
@@ -159,7 +159,7 @@ module EnhancedStatusTests =
 module ProjectDiscoveryTests =
 
   let tests =
-    ptestList "[Integration] Project discovery for LLMs" [
+    testList "[Integration] Project discovery for LLMs" [
 
       testCase "loadSolution runs without error and returns a solution"
       <| fun _ ->

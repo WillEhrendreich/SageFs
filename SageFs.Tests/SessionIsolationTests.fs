@@ -72,7 +72,7 @@ module McpSessionIsolation =
         return Error (ex.Message)
     }
 
-  let tests = testSequenced <| ptestList "[Integration] MCP session isolation" [
+  let tests = testSequenced <| testList "[Integration] MCP session isolation" [
 
     testTask "switchSession updates only the given context's SessionMap for that agent" {
       let ctx1, _ = ctxWithTracking "aaaaaa01"

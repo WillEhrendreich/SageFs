@@ -350,7 +350,7 @@ do AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
 
 [<Tests>]
 let integrationTests =
-  testSequenced <| ptestList "[Integration] HTTP API" [
+  testSequenced <| testList "[Integration] HTTP API" [
 
     // ── Core endpoints ──────────────────────────────────────────
 
@@ -1089,7 +1089,7 @@ let httpApiLiveTestingCompiledProjectTests =
 [<Tests>]
 let daemonStartupSmokeTest =
   testList "[Integration] Daemon startup smoke" [
-    ptestCase "Daemon starts on fresh port and /health responds" <| fun _ ->
+    testCase "Daemon starts on fresh port and /health responds" <| fun _ ->
       let port = reserveLoopbackPort (Some (38100 + (Random().Next(100))))
       let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
       try

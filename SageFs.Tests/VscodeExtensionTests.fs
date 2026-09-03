@@ -250,6 +250,8 @@ module VscodeHelpers =
 /// Run a test against VSCode with extensions disabled (pure UI tests).
 let vscodeUiTest name (body: IPage -> Task<unit>) =
   if not VscodeFixture.isAvailable then
+    // Kept pending: pure UI tests need VS Code (Code.exe); this placeholder only
+    // registers when the fixture is absent on the machine, so it stays pending.
     ptestCase (sprintf "[Integration] VSCode UI: %s" name) ignore
   else
     testCase (sprintf "[Integration] VSCode UI: %s" name) (fun () ->
@@ -264,6 +266,8 @@ let vscodeUiTest name (body: IPage -> Task<unit>) =
 /// Run a test against VSCode with extensions enabled (extension tests).
 let vscodeExtTest name (body: IPage -> Task<unit>) =
   if not VscodeFixture.isAvailable then
+    // Kept pending: extension tests need VS Code + the SageFs extension installed
+    // (Code.exe); placeholder only registers when the fixture is absent, so it stays pending.
     ptestCase (sprintf "[Integration] VSCode extension: %s" name) ignore
   else
     testCase (sprintf "[Integration] VSCode extension: %s" name) (fun () ->

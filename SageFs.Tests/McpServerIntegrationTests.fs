@@ -16,7 +16,7 @@ open SageFs.WorkerProtocol
 
 [<Tests>]
 let tests =
-  testSequenced <| ptestList "[Integration] MCP Server Integration tests" [
+  testSequenced <| testList "[Integration] MCP Server Integration tests" [
 
     testCase "sendFSharpCode tool executes code"
     <| fun _ ->

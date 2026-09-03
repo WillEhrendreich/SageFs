@@ -1102,6 +1102,9 @@ let demoRecordingTests =
           cleanup ()
           reraise ())
     | false ->
+      // Kept pending: VS Code demo recording is machine-dependent — needs VS Code + the
+      // recorder driving it. These placeholder cases only exist so the suite is visible;
+      // real recording runs in the `true` branch above.
       ptestCase "Demo recording: hero (VS Code not found)" ignore
       ptestCase "Demo recording: extension (VS Code not found)" ignore
       ptestCase "Demo recording: hot-reload hero (VS Code not found)" ignore

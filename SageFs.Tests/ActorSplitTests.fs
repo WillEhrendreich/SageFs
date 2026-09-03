@@ -13,7 +13,7 @@ let createActorResult () =
 
 [<Tests>]
 let actorSplitTests =
-  ptestList "[Integration] Actor split" [
+  testList "[Integration] Actor split" [
 
     testCase "GetSessionPhase responds during long eval"
     <| fun _ ->

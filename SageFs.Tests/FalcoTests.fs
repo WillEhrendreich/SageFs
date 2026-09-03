@@ -104,7 +104,7 @@ let testHttpGetWithRetry (url: string) (maxRetries: int) (delayMs: int) =
 
 [<Tests>]
 let tests =
-  testSequenced <| ptestList "[Integration] Falco web application tests" [
+  testSequenced <| testList "[Integration] Falco web application tests" [
 
     testCase "create and start basic Falco web app"
     <| fun _ ->

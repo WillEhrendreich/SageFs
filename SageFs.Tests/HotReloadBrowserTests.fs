@@ -142,6 +142,7 @@ function setStatus(text, bg, fg) {
 
 [<Tests>]
 let tests =
+  // Kept pending: browser video demo needs Playwright browsers + a display; cannot run headless.
   testSequenced
   <| ptestList "[Integration] Hot reload browser tests" [
 
