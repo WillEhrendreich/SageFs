@@ -16,7 +16,7 @@
          NoWarn NU1608/NU1902 for the pre-1.0/known-audited transitive pins. -->
     <CheckNulls>true</CheckNulls>
     <NoWarn>$(NoWarn);NU1608;NU1902</NoWarn>
-    <Version>0.6.409</Version>
+    <Version>0.6.410</Version>
   </PropertyGroup>
 </Project>
 

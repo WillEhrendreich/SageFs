@@ -41,6 +41,7 @@
         <Compile Include="DashboardTypes.fs" />
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="Dashboard.fs" />
+        <Compile Include="Mcp.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpServer.fs" />
         <Compile Include="DaemonMode.fs" />
