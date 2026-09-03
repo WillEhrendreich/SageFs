@@ -35,7 +35,7 @@ let private hostExePath () =
   let root = here.Parent.Parent.Parent.Parent.FullName // repo root
   let cfg =
     if AppContext.BaseDirectory.Contains("Release") then "Release" else "Debug"
-  let hostDir = Path.Combine(root, "SageFs", "bin", cfg, "net11.0", "host")
+  let hostDir = Path.Combine(root, "SageFs", "bin", cfg, "net10.0", "host")
   // Windows: SageFs.Host.exe; Linux/macOS: extensionless SageFs.Host.
   let exe = Path.Combine(hostDir, "SageFs.Host.exe")
   let noExt = Path.Combine(hostDir, "SageFs.Host")

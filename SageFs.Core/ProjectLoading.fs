@@ -93,10 +93,11 @@ module ManualProjectParse =
             && not (name.StartsWith("lib", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
           // Same-named DLLs can appear in MULTIPLE TFM subdirs (a project's bin
           // may hold orphans from old target layouts, e.g. a net10 copy of
-          // SageFs.Core.dll left behind after the project moved to net11-only).
-          // Passing both to FSI lets the stale one shadow the fresh build, so
-          // the REPL compiles against ancient metadata. Dedupe by file name,
-          // keeping the NEWEST copy — an orphan can never shadow a fresh build.
+          // SageFs.Core.dll left behind after the project targeted a different
+          // TFM (net11-only during the preview era, or a net9 orphan)). Passing
+          // both to FSI lets the stale one shadow the fresh build, so the REPL
+          // compiles against ancient metadata. Dedupe by file name, keeping the
+          // NEWEST copy — an orphan can never shadow a fresh build.
           |> Seq.groupBy (fun dll -> Path.GetFileName dll)
           |> Seq.map (fun (_, group) ->
             group |> Seq.maxBy (fun dll -> File.GetLastWriteTimeUtc dll))

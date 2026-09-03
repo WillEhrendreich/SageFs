@@ -5,7 +5,7 @@
 #r "nuget: Expecto"
 // WHY — the module under test lives in SageFs.Core; the workflow builds it
 // (Debug) before invoking this script so the relative reference resolves.
-#r "../../../SageFs.Core/bin/Debug/net11.0/SageFs.Core.dll"
+#r "../../../SageFs.Core/bin/Debug/net10.0/SageFs.Core.dll"
 
 open System
 open Expecto

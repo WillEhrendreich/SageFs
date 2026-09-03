@@ -43,7 +43,7 @@ let smokeSampleProjectDir = Path.GetDirectoryName(smokeSampleProject)
 
 let sageFsExe =
   let localExe =
-    Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net11.0", "SageFs.exe")
+    Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
   let toolDir =
     Path.Combine(
       Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),

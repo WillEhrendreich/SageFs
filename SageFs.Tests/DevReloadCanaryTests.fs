@@ -81,10 +81,6 @@ let canaryUnitTests = testList "canary unit" [
 let prefixPatchIntegrationTests = testList "Harmony prefix patch" [
 
   testCase "canary validates prefix patch on Run-style instance method" <| fun () ->
-    // Harmony 2.4.2 does not support CoreCLR 11 (net11 preview) — skip there
-    // so the canary suite stays green on the newest SDK; it runs on net10.
-    if Environment.Version.Major >= 11 then
-      skiptest "Harmony does not support CoreCLR 11 yet"
     let target = typeof<PrefixRunTarget>.GetMethod("Run")
     let prefix = typeof<PrefixHook>.GetMethod("Prefix", BindingFlags.Public ||| BindingFlags.Static)
     match snapshotMethodState target with
@@ -107,8 +103,6 @@ let prefixPatchIntegrationTests = testList "Harmony prefix patch" [
       skiptest "could not snapshot method state on this platform"
 
   testCase "canary validates prefix patch on RunAsync-style instance method" <| fun () ->
-    if Environment.Version.Major >= 11 then
-      skiptest "Harmony does not support CoreCLR 11 yet"
     let target = typeof<PrefixRunAsyncTarget>.GetMethod("RunAsync")
     let prefix = typeof<PrefixHook>.GetMethod("Prefix", BindingFlags.Public ||| BindingFlags.Static)
     match snapshotMethodState target with
@@ -128,8 +122,6 @@ let prefixPatchIntegrationTests = testList "Harmony prefix patch" [
       skiptest "could not snapshot method state on this platform"
 
   testCase "snapshot before and after prefix patch captures different state" <| fun () ->
-    if Environment.Version.Major >= 11 then
-      skiptest "Harmony does not support CoreCLR 11 yet"
     // This test verifies the full snapshot-patch-validate flow used by
     // DevReloadInjector.patchMethod after the canary integration.
     let target = typeof<PrefixRunTarget>.GetMethod("Run")

@@ -20,7 +20,7 @@ let testProjectDir =
 let SageFsExe =
   let localExe =
     Path.Combine(
-      __SOURCE_DIRECTORY__, "..", "SageFs", "bin", "Debug", "net11.0", "SageFs.exe")
+      __SOURCE_DIRECTORY__, "..", "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
   let toolDir =
     Path.Combine(
       Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),

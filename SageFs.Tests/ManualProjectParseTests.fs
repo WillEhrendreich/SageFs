@@ -74,8 +74,8 @@ let tests =
 
     testCase "bin reference collection dedupes same-named DLLs across TFM dirs, keeping the newest" (fun () ->
       // Regression: a project bin holding orphaned same-named DLLs in multiple
-      // TFM subdirs (e.g. a stale net10 SageFs.Core.dll left after the project
-      // moved to net11-only) made the REPL compile against ancient metadata —
+      // TFM subdirs (e.g. a stale net9 SageFs.Core.dll left after the project
+      // retargeted to net10) made the REPL compile against ancient metadata —
       // the old copy shadowed the fresh build. The collector must keep only
       // the NEWEST copy of each assembly name.
       let dir = Path.Combine(Path.GetTempPath(), "sagefs-manual-parse-" + Guid.NewGuid().ToString("N"))
@@ -84,15 +84,17 @@ let tests =
         File.WriteAllText(Path.Combine(dir, "App.fs"), "module App\nlet x = 1\n")
         File.WriteAllText(Path.Combine(dir, "App.fsproj"), simpleFsproj)
         // Build the bin layout: cfg dir newest = Release; under it two TFM
-        // subdirs each holding a same-named SageFs.Core.dll, the net11 copy
-        // NEWER than the net10 orphan (the stale-shadow scenario).
+        // subdirs each holding a same-named SageFs.Core.dll — the current
+        // net10.0 copy in the fresh build dir, and a stale net9.0 orphan from
+        // when the project previously targeted net9. The net10.0 copy is the
+        // NEWER one (the stale-shadow scenario).
         let binDir = Path.Combine(dir, "bin", "Release")
+        let net9Dir = Path.Combine(binDir, "net9.0")
         let net10Dir = Path.Combine(binDir, "net10.0")
-        let net11Dir = Path.Combine(binDir, "net11.0")
+        Directory.CreateDirectory net9Dir |> ignore
         Directory.CreateDirectory net10Dir |> ignore
-        Directory.CreateDirectory net11Dir |> ignore
-        let stale = Path.Combine(net10Dir, "SageFs.Core.dll")
-        let fresh = Path.Combine(net11Dir, "SageFs.Core.dll")
+        let stale = Path.Combine(net9Dir, "SageFs.Core.dll")
+        let fresh = Path.Combine(net10Dir, "SageFs.Core.dll")
         File.WriteAllBytes(stale, Array.init 256 byte)
         File.WriteAllBytes(fresh, Array.init 256 (fun i -> 255uy - byte i))
         File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddHours(-2.0))
