@@ -51,7 +51,7 @@ let renderCompletionDropdown (items: Features.AutoCompletion.CompletionItem list
           [ Attr.class' "comp-item"
             Attr.style (sprintf "padding:2px 6px;cursor:pointer;%s" (match i with | 0 -> "background:var(--bg-selection)" | _ -> ""))
             Ds.onEvent ("click", sprintf "window._insertComp('%s',%d)" (escJs item.ReplacementText) cursorPos) ]
-          [ Text.raw item.DisplayText
+          [ Text.raw (System.Net.WebUtility.HtmlEncode item.DisplayText)
             Elem.span [ Attr.style "opacity:0.5;font-size:0.8em;margin-left:4px;" ] [
               Text.raw (sprintf "(%s)" (Features.AutoCompletion.CompletionKind.label item.Kind))
             ]
@@ -718,13 +718,13 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
               [ Text.raw (System.Net.WebUtility.HtmlEncode b.Name) ]
             Elem.span
               [ Attr.style "color:var(--fg-dim,#666);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" ]
-              [ Text.raw (sprintf ": %s" b.TypeSig) ]
+              [ Text.raw (sprintf ": %s" (System.Net.WebUtility.HtmlEncode b.TypeSig)) ]
             match b.Value with
             | Some v ->
               Elem.span
                 [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;"
-                  Attr.title v ]
-                [ Text.raw (sprintf "= %s" v) ]
+                  Attr.title (System.Net.WebUtility.HtmlEncode v) ]
+                [ Text.raw (sprintf "= %s" (System.Net.WebUtility.HtmlEncode v)) ]
             | None -> ()
             match b.ReferencedIn.Length with
             | 0 -> ()
@@ -1831,7 +1831,7 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
                 | None -> ()
                 | Some v ->
                   Elem.span [ Attr.class' "value-display"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 20em;" ] [
-                    Text.raw (sprintf "= %s" v)
+                    Text.raw (sprintf "= %s" (System.Net.WebUtility.HtmlEncode v))
                   ]
               ]
           ]
@@ -1847,7 +1847,7 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
                   Elem.div [ Attr.style "padding: 1px 0;" ] [
                     Elem.code [] [ Text.raw (System.Net.WebUtility.HtmlEncode b.Name) ]
                     Elem.span [ Attr.style "color: var(--fg-dim, #555); margin-left: 0.3em;" ] [
-                      Text.raw (sprintf ": %s (cell %d)" b.TypeSig b.CellIndex)
+                      Text.raw (sprintf ": %s (cell %d)" (System.Net.WebUtility.HtmlEncode b.TypeSig) b.CellIndex)
                     ]
                   ]
               ]

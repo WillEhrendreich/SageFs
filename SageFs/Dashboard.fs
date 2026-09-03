@@ -705,7 +705,7 @@ let createEvalHandler
           let resultHtml =
             Elem.div [ Attr.id DomIds.EvalResult ] [
               Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-                Text.raw displayResult
+                Text.raw (System.Net.WebUtility.HtmlEncode displayResult)
               ]
             ]
           do! ssePatchNode ctx resultHtml
@@ -857,7 +857,7 @@ let createResetHandler
         let resultHtml =
           Elem.div [ Attr.id DomIds.EvalResult ] [
             Elem.pre [ Attr.class' "output-line output-error"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              Text.raw (sprintf "Reset: %s" errMsg)
+              Text.raw (sprintf "Reset: %s" (System.Net.WebUtility.HtmlEncode errMsg))
             ]
           ]
         do! ssePatchNode ctx resultHtml
@@ -871,7 +871,7 @@ let createResetHandler
         let resultHtml =
           Elem.div [ Attr.id DomIds.EvalResult ] [
             Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              Text.raw (sprintf "Reset: %s" msg)
+              Text.raw (sprintf "Reset: %s" (System.Net.WebUtility.HtmlEncode msg))
             ]
           ]
         do! ssePatchNode ctx resultHtml
@@ -879,7 +879,7 @@ let createResetHandler
         let clearedOutput =
           Elem.div [ Attr.id DomIds.OutputPanel ] [
             Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [
-              Text.raw (sprintf "Reset: %s" msg)
+              Text.raw (sprintf "Reset: %s" (System.Net.WebUtility.HtmlEncode msg))
             ]
           ]
         do! ssePatchNode ctx clearedOutput
@@ -1029,7 +1029,7 @@ let createSessionActionHandler
       let resultHtml =
         Elem.div [ Attr.id DomIds.EvalResult ] [
           Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            Text.raw msg
+            Text.raw (System.Net.WebUtility.HtmlEncode msg)
           ]
         ]
       do! ssePatchNode ctx resultHtml
