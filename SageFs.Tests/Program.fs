@@ -57,30 +57,42 @@ let main argv =
         CoverageViewProjectMutationTests.coverageViewProjectMutationTests
       ]
     let exitCode = Tests.runTestsWithCLIArgs [] scoreArgv mutationTests
-    // Count expected mutations (sum of all mutation test counts)
-    let expectedMutations = 89
-    let caught =
-      if exitCode = 0 || exitCode = 2 then expectedMutations
-      else expectedMutations - 1  // conservative: at least 1 survived
-    let survived = expectedMutations - caught
-    let score = (float caught / float expectedMutations) * 100.0
+    // Honest mutation accounting: every mutation test PASSES when the mutant is
+    // killed (real != mutant) and FAILS when the mutant survived (real ==
+    // mutant). Expecto's exit code is therefore the measured survivor gate —
+    // 0 means every mutant in the suite was killed. The total is counted
+    // structurally from the test tree, and the killed count is derived from
+    // the run outcome, so the reported score is measured, never hardcoded.
+    let rec countCases (t: Expecto.Test) =
+      match t with
+      | Expecto.TestCase _ -> 1
+      | Expecto.TestList (tests, _) -> tests |> List.sumBy countCases
+      | Expecto.TestLabel (_, inner, _) -> countCases inner
+      | Expecto.Sequenced (_, inner) -> countCases inner
+    let totalMutations = countCases mutationTests
+    // Exit code 0 = every mutation test passed = every mutant was killed.
+    // Exit code 1 = at least one mutation test failed = at least one survivor.
+    let killed =
+      match exitCode with
+      | 0 -> totalMutations
+      | _ -> 0
+    let score = (float killed / float totalMutations) * 100.0
     printfn ""
     printfn "═══════════════════════════════════════════════════════════════"
     printfn "  MUTATION SCORE REPORT"
     printfn "═══════════════════════════════════════════════════════════════"
-    printfn "  Caught (passed):   %d" caught
-    printfn "  Survived (failed): %d" survived
-    printfn "  Total mutations:   %d" expectedMutations
+    printfn "  Killed (passed):  %d" killed
+    printfn "  Total mutations:  %d" totalMutations
     printfn "  ────────────────────────────────────────────"
     printfn "  Mutation score:    %.1f%%" score
     printfn "  Threshold:         %.1f%%" threshold
     printfn "═══════════════════════════════════════════════════════════════"
-    if score >= threshold then
-      printfn "✓ Mutation score %.1f%% meets threshold %.1f%%" score threshold
+    if exitCode = 0 && score >= threshold then
+      printfn "✓ All %d mutants killed — mutation score %.1f%% meets threshold %.1f%%" totalMutations score threshold
       Environment.Exit 0
       0
     else
-      printfn "✗ Mutation score %.1f%% below threshold %.1f%%" score threshold
+      printfn "✗ At least one mutant survived — mutation score %.1f%% below threshold %.1f%%" score threshold
       Environment.Exit 1
       1
   | false ->
