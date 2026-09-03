@@ -1274,6 +1274,110 @@ module LiveTestStateIsolation =
     }
   ]
 
+/// SessionMap (agent→session) eviction contract. The map previously had no
+/// TryRemove anywhere: setActiveSessionId was the only write, empty-string
+/// writes left keys present, stop_session never pruned, and stale agents kept
+/// claiming "OccupiedBy: X" on live sessions. These tests pin the eviction.
+module SessionMapEviction =
+
+  let mkCtx (live: WorkerProtocol.SessionInfo list) : McpContext =
+    let result = globalActorResult.Value
+    { FrictionStore = None
+      DiagnosticsChanged = result.DiagnosticsChanged
+      StateChanged = None
+      SessionOps = {
+        CreateSession = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(Ok "new-session")
+        ListSessions = fun () -> System.Threading.Tasks.Task.FromResult("No sessions")
+        StopSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "stopped")
+        PurgeSession = fun _ -> System.Threading.Tasks.Task.FromResult(Ok "purged")
+        RestartSession = fun _ _ -> System.Threading.Tasks.Task.FromResult(Ok "restarted")
+        GetProxy = fun _ -> System.Threading.Tasks.Task.FromResult(None)
+        GetSessionInfo = fun _ -> System.Threading.Tasks.Task.FromResult(None)
+        GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult(live)
+        UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+        NotifyWorkerDied = fun _ -> () }
+      SessionMap = ConcurrentDictionary<string, string>()
+      McpPort = 0
+      Dispatch = None
+      GetElmModel = None
+      GetElmRegions = None
+      GetWarmupContext = None
+      GetFeatureState = None
+      ActivityTracker = SageFs.AgentActivityTracker.create()
+      LiveSnapshotSink = None } : McpContext
+
+  let mkInfo id workDir : WorkerProtocol.SessionInfo =
+    { Id = id; Name = None; Projects = []
+      WorkingDirectory = workDir; SolutionRoot = None
+      Status = WorkerProtocol.SessionStatus.Ready
+      FaultReason = None; WorkerPid = None; WorkerPort = None
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      CreatedAt = System.DateTime.UtcNow
+      LastActivity = System.DateTime.UtcNow }
+
+  let tests = testList "SessionMap eviction" [
+    test "setActiveSessionId with empty id removes the agent entry" {
+      let ctx = mkCtx []
+      setActiveSessionId ctx "mcp" "5a6e0001"
+      setActiveSessionId ctx "mcp" ""
+      activeSessionId ctx "mcp" |> Expect.equal "empty set should clear the mapping" ""
+      ctx.SessionMap.ContainsKey "mcp"
+      |> Expect.isFalse "empty set must not leave an empty-string key present"
+    }
+
+    test "setActiveSessionId with a new session overwrites the old mapping" {
+      let ctx = mkCtx []
+      setActiveSessionId ctx "mcp" "5a6e0001"
+      setActiveSessionId ctx "mcp" "4a120002"
+      activeSessionId ctx "mcp" |> Expect.equal "new session should overwrite" "4a120002"
+      ctx.SessionMap.Count |> Expect.equal "exactly one entry remains" 1
+    }
+
+    testTask "stopSession removes every agent routed to the stopped session" {
+      let live = [ mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs" ]
+      let ctx = mkCtx live
+      setActiveSessionId ctx "claude" "5a6e0001"
+      setActiveSessionId ctx "copilot" "5a6e0001"
+      setActiveSessionId ctx "cursor" "4a120002"   // another (already-stopped) session
+      let! _ = stopSession ctx "5a6e0001"
+      ctx.SessionMap.TryGetValue "claude" |> fst
+      |> Expect.equal "claude mapping removed" false
+      ctx.SessionMap.TryGetValue "copilot" |> fst
+      |> Expect.equal "copilot mapping removed" false
+      ctx.SessionMap.TryGetValue "cursor" |> fst
+      |> Expect.equal "unrelated agent mapping untouched" true
+      ctx.SessionMap.TryGetValue "cursor" |> snd
+      |> Expect.equal "unrelated agent still on its session" "4a120002"
+    }
+
+    testTask "listSessions prunes entries pointing at sessions absent from the registry" {
+      let live = [ mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs" ]
+      let ctx = mkCtx live
+      // agent1 points at a session the registry no longer has (stopped by any
+      // path — HTTP route, dashboard, worker death); agent2 points at the live one.
+      ctx.SessionMap.["agent1"] <- "dead0000"
+      ctx.SessionMap.["agent2"] <- "5a6e0001"
+      let! _ = listSessions ctx
+      ctx.SessionMap.ContainsKey "agent1"
+      |> Expect.isFalse "dead-target entry pruned by listSessions"
+      ctx.SessionMap.TryGetValue "agent2" |> fst
+      |> Expect.equal "live-target entry kept" true
+      ctx.SessionMap.TryGetValue "agent2" |> snd
+      |> Expect.equal "live-target value intact" "5a6e0001"
+    }
+
+    testTask "listSessions keeps routing-only agents with no recorded presence" {
+      let live = [ mkInfo (testSessionId "5a6e0001") @"C:\Code\Repos\SageFs" ]
+      let ctx = mkCtx live
+      // "http" / "cli-integrated" are set by McpServer HTTP routes and never
+      // fire a presence-recording MCP tool call — they must survive pruning.
+      ctx.SessionMap.["http"] <- "5a6e0001"
+      let! _ = listSessions ctx
+      ctx.SessionMap.ContainsKey "http"
+      |> Expect.isTrue "routing-only agent with no presence must be kept"
+    }
+  ]
+
 [<Tests>]
 let sessionIsolationTests = testList "Session Isolation" [
   McpSessionIsolation.tests
@@ -1281,4 +1385,5 @@ let sessionIsolationTests = testList "Session Isolation" [
   WorkingDirRoutingPriority.tests
   ResetIsolation.tests
   LiveTestStateIsolation.tests
+  SessionMapEviction.tests
 ]

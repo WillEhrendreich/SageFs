@@ -688,8 +688,61 @@ module McpTools =
     | _ -> ""
 
   /// Set the active session ID for a specific agent/client.
+  /// An empty session id CLEARS the agent's mapping instead of storing an
+  /// empty-string entry — the old unconditional write left the key present,
+  /// so dead-session references accumulated in the map forever.
   let setActiveSessionId (ctx: McpContext) (agent: string) (sid: string) =
-    ctx.SessionMap.[agent] <- sid
+    match sid with
+    | "" -> ctx.SessionMap.TryRemove(agent) |> ignore
+    | _ -> ctx.SessionMap.[agent] <- sid
+
+  /// Remove every agent→session entry that points at the given session id.
+  /// Called when a session is stopped or purged so references to a dead
+  /// session do not linger in SessionMap (previously there was no TryRemove
+  /// anywhere — setActiveSessionId was the only write).
+  let evictSessionEntries (ctx: McpContext) (sessionId: string) =
+    ctx.SessionMap
+    |> Seq.iter (fun kv ->
+      if kv.Value = sessionId then
+        ctx.SessionMap.TryRemove(kv.Key) |> ignore)
+
+  /// Staleness horizon for SessionMap occupancy claims. Matches the
+  /// AgentActivityTracker cleanup window (DaemonMode's periodic sweep evicts
+  /// agents idle longer than this): an agent that has not recorded a tool
+  /// call in this long is treated as gone.
+  let private staleAgentTimeout = TimeSpan.FromMinutes 5.0
+
+  /// Opportunistic SessionMap eviction, run at the reads that surface
+  /// occupancy (list_sessions / get_fsi_status) so the map converges no
+  /// matter which path stopped the session (MCP tool, HTTP route, dashboard,
+  /// worker death):
+  ///  - dead-target entries: mapping points at a session not in the live
+  ///    registry (stopped/purged) → removed.
+  ///  - stale agents: the agent's tracked presence (AgentActivityTracker)
+  ///    is older than staleAgentTimeout → removed, so a dead/disconnected
+  ///    agent stops claiming "OccupiedBy: X" on sessions it no longer uses.
+  /// Agents with no recorded presence are kept — they may be legitimate
+  /// routing-only clients (e.g. the "http"/"cli-integrated" aliases) that
+  /// never fire a presence-recording tool call. `exemptAgent` (the caller,
+  /// provably alive mid-call) is never pruned.
+  let pruneSessionMap
+    (ctx: McpContext)
+    (liveSessionIds: Set<string> option)
+    (exemptAgent: string option)
+    (now: DateTime) =
+    ctx.SessionMap
+    |> Seq.iter (fun kv ->
+      let targetDead =
+        match liveSessionIds with
+        | Some live -> not (live.Contains kv.Value)
+        | None -> false
+      let agentStale =
+        exemptAgent <> Some kv.Key
+        && (match AgentActivityTracker.getPresence ctx.ActivityTracker kv.Key with
+            | Some presence -> SessionOperations.AgentPresence.isStale now staleAgentTimeout presence
+            | None -> false)
+      if targetDead || agentStale then
+        ctx.SessionMap.TryRemove(kv.Key) |> ignore)
 
   /// Per-session compilation context state (evaluated modules, file cache).
   let compilationStates =
@@ -1461,7 +1514,12 @@ module McpTools =
             | None ->
               let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
               McpAdapter.formatEnhancedStatus sid eventCount state None None
-          // Enrich with multi-agent coordination data
+          // Enrich with multi-agent coordination data.
+          // Prune first so the caller does not see (and is not misled by)
+          // agents whose tracked presence has gone stale while this live
+          // session stays routable. The caller itself is exempt — its
+          // presence is refreshed by the recordToolCall below.
+          pruneSessionMap ctx None (Some agent) DateTime.UtcNow
           let occupants = SessionOperations.SessionOccupancy.forSession ctx.SessionMap sid
           let guidance = SessionOperations.SessionGuidance.compute occupants snapshot.Status
           let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
@@ -2018,6 +2076,11 @@ module McpTools =
   let listSessions (ctx: McpContext) : Task<string> =
     task {
       let! sessions = ctx.SessionOps.GetAllSessions()
+      // Prune SessionMap against the live registry before reporting occupancy:
+      // a stopped/purged session (by ANY path) must not keep its agents listed
+      // as occupants, and stale agents must not claim live sessions forever.
+      let liveIds = sessions |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id) |> Set.ofList
+      pruneSessionMap ctx (Some liveIds) None DateTime.UtcNow
       let occupancyMap =
         sessions
         |> List.map (fun s ->
@@ -2032,7 +2095,11 @@ module McpTools =
       let! result = ctx.SessionOps.StopSession sessionId
       ctx.Dispatch |> Option.iter (fun d -> d (SageFsMsg.Editor EditorAction.ListSessions))
       match result with
-      | Result.Ok msg -> return msg
+      | Result.Ok msg ->
+        // The session is gone from the registry — release every agent that
+        // was routed to it so it no longer claims occupancy.
+        evictSessionEntries ctx sessionId
+        return msg
       | Result.Error err -> return SageFsError.describeForAgent err
     }
 
