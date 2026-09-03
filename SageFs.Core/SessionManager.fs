@@ -515,7 +515,7 @@ module SessionManager =
   let internal createWith
     (runtime: SessionManagerRuntime)
     (ct: CancellationToken)
-    (onStandbyProgressChanged: unit -> unit)
+    (onSessionProgressChanged: unit -> unit)
     (onTestDiscovery: SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit)
     (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit)
     (onSessionReady: SessionId -> unit)
@@ -1215,7 +1215,7 @@ module SessionManager =
         | SessionCommand.WorkerWarmupProgress(id, progress) ->
           let newState =
             { state with WarmupProgress = Map.add id progress state.WarmupProgress }
-          onStandbyProgressChanged ()
+          onSessionProgressChanged ()
           onWarmupProgress id progress
           return newState
 
@@ -1230,7 +1230,7 @@ module SessionManager =
             let updated =
               { session with Info = { session.Info with Status = newStatus; FaultReason = faultReason } }
             let newState = ManagerState.addSession id updated state
-            onStandbyProgressChanged ()
+            onSessionProgressChanged ()
             return newState
           | None ->
             return state
@@ -1293,7 +1293,7 @@ module SessionManager =
 
   let create
     (ct: CancellationToken)
-    (onStandbyProgressChanged: unit -> unit)
+    (onSessionProgressChanged: unit -> unit)
     (onTestDiscovery: SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit)
     (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit)
     (onSessionReady: SessionId -> unit)
@@ -1302,7 +1302,7 @@ module SessionManager =
     createWith
       defaultRuntime
       ct
-      onStandbyProgressChanged
+      onSessionProgressChanged
       onTestDiscovery
       onInstrumentationMaps
       onSessionReady

@@ -5,7 +5,7 @@ open SageFs
 /// Typed state-change events for SSE subscribers.
 /// Replaces stringly-typed JSON routing — compiler catches missing handlers.
 type DaemonStateChange =
-  | StandbyProgress
+  | SessionProgress
   | SessionReady of sessionId: WorkerProtocol.SessionId
   | SessionSwitched of sessionId: WorkerProtocol.SessionId
   /// Hot-reload state changed for the given session. Carries the session ID so
@@ -32,7 +32,7 @@ module DaemonStateChange =
     | FileReloaded (sid, path) -> sprintf """{"fileReloaded":"%s","sessionId":"%s"}""" (path.Replace("\\", "\\\\")) (WorkerProtocol.SessionId.value sid)
     | SessionFaulted (sid, err) ->
       sprintf """{"sessionFaulted":"%s","error":"%s"}""" (WorkerProtocol.SessionId.value sid) (err.Replace("\"", "\\\""))
-    | StandbyProgress -> """{"standbyProgress":true}"""
+    | SessionProgress -> """{"sessionProgress":true}"""
     | WarmupProgress (sid, step, total, _msg) ->
       sprintf """{"warmupProgress":true,"sessionId":"%s","step":%d,"total":%d}""" (WorkerProtocol.SessionId.value sid) step total
     | SystemAlarm (phase, msg) ->

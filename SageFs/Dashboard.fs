@@ -674,7 +674,7 @@ let createStreamHandler
                 | DaemonStateChange.SessionReady _
                 | DaemonStateChange.SessionSwitched _
                 | DaemonStateChange.SessionFaulted _ -> true
-                | DaemonStateChange.StandbyProgress
+                | DaemonStateChange.SessionProgress
                 | DaemonStateChange.SystemAlarm _ -> false
               let mutable workerInvalidated = invalidatesWorkerData change
               while inbox.CurrentQueueLength > 0 do

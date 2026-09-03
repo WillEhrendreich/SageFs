@@ -1432,7 +1432,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
   let sessionManager, readSnapshot =
     SessionManager.create cts.Token
-      (fun () -> stateChangedEvent.Trigger StandbyProgress)
+      (fun () -> stateChangedEvent.Trigger SessionProgress)
       (fun sid tests providers -> onTestDiscoveryCallback sid tests providers)
       (fun sid maps -> onInstrumentationMapsCallback sid maps)
       (fun sid -> stateChangedEvent.Trigger (SessionReady sid))
