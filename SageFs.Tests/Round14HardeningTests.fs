@@ -7,7 +7,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features
 open SageFs.Features.ManifestTypes
-open SageFs.Features.Replay
+open SageFs.Features.DaemonManifest
 open Microsoft.Extensions.Logging.Abstractions
 
 let private nullLog = NullLogger.Instance
@@ -52,7 +52,7 @@ let w35CorruptRenameTests =
         match DaemonPersistence.loadManifest dir with
         | Result.Error ManifestLoadError.NotFound -> ()
         | other -> failtest (sprintf "Expected NotFound after rename, got %A" other)
-        match DaemonPersistence.saveManifest dir DaemonReplayState.empty with
+        match DaemonPersistence.saveManifest dir DaemonManifestState.empty with
         | Ok _ -> ()
         | Error err -> failtest (sprintf "saveManifest should succeed after rename, got Error: %s" err)
       finally
@@ -229,7 +229,7 @@ let w38w39MergeTests =
           StoppedAt = None  // alive in manifest but will be absent from snapshot
         }
         let manifestState = {
-          DaemonReplayState.Sessions = Map.ofList [("phantom-001", phantomSession)]
+          DaemonManifestState.Sessions = Map.ofList [("phantom-001", phantomSession)]
           ActiveSessionId = None
         }
         DaemonPersistence.saveManifest dir manifestState |> ignore
@@ -266,7 +266,7 @@ let w38w39MergeTests =
           StoppedAt = Some originalStop  // already explicitly stopped
         }
         let manifestState = {
-          DaemonReplayState.Sessions = Map.ofList [("stopped-001", stoppedSession)]
+          DaemonManifestState.Sessions = Map.ofList [("stopped-001", stoppedSession)]
           ActiveSessionId = None
         }
         DaemonPersistence.saveManifest dir manifestState |> ignore
@@ -293,7 +293,7 @@ let w38w39MergeTests =
           StoppedAt = None
         }
         let manifestState = {
-          DaemonReplayState.Sessions = Map.ofList [("phantom-002", phantomSession)]
+          DaemonManifestState.Sessions = Map.ofList [("phantom-002", phantomSession)]
           ActiveSessionId = None
         }
         DaemonPersistence.saveManifest dir manifestState |> ignore
@@ -357,7 +357,7 @@ let w41NotFoundLogLevelTests =
   testList "W41(R14) — NotFound propagation is invariant violation, should LogError" [
 
     testCase "W41 contract: NotFound arm in callers is unreachable — LogError severity correct" <| fun _ ->
-      // mergeManifestWithExisting converts NotFound → Ok(buildReplayState).
+      // mergeManifestWithExisting converts NotFound → Ok(buildManifestState).
       // The callers have a NotFound arm that "should not be reached."
       // If that arm fires, it means the function's contract was broken.
       // A contract violation must be LogError, not LogWarning.

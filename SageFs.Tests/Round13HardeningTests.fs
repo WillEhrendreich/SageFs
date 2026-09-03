@@ -6,7 +6,7 @@ open Expecto.Flip
 open SageFs
 open SageFs.Features
 open SageFs.Features.ManifestTypes
-open SageFs.Features.Replay
+open SageFs.Features.DaemonManifest
 open Microsoft.Extensions.Logging.Abstractions
 
 let private nullLog = NullLogger.Instance
@@ -158,14 +158,14 @@ let w32StartupLogLevelTests =
       isSpanError (ManifestLoadError.CorruptData "crc") |> Expect.isTrue "CorruptData → failSpan (corrupt)"
 
     testCase "NotFound at startup produces a valid empty state (correct first-run path)" <| fun _ ->
-      // Regression check: NotFound must still produce DaemonReplayState.empty (not an error)
+      // Regression check: NotFound must still produce DaemonManifestState.empty (not an error)
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r13-%s" (Guid.NewGuid().ToString("N")))
       // No directory → NotFound
       let result = DaemonPersistence.loadManifest dir
       match result with
       | Result.Error ManifestLoadError.NotFound ->
         // Correct: startup correctly treats this as a first run
-        DaemonReplayState.empty.Sessions.Count |> Expect.equal "empty state has 0 sessions" 0
+        DaemonManifestState.empty.Sessions.Count |> Expect.equal "empty state has 0 sessions" 0
       | other -> failtest (sprintf "Expected NotFound for missing dir, got %A" other)
   ]
 
@@ -224,7 +224,7 @@ let w33TestCycleTimerTimeoutTests =
 // ---------------------------------------------------------------------------
 // W34 — mergeManifestWithExisting returns typed ManifestLoadError (not string)
 // ---------------------------------------------------------------------------
-// W34(R13): mergeManifestWithExisting returned Result<DaemonReplayState, string>,
+// W34(R13): mergeManifestWithExisting returned Result<DaemonManifestState, string>,
 // discarding the typed ManifestLoadError from W26. Callers couldn't distinguish
 // transient IoError (retriable) from permanent CorruptData. Fix: return typed error.
 
@@ -261,7 +261,7 @@ let w34TypedErrorTests =
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r13-%s" (Guid.NewGuid().ToString("N")))
       IO.Directory.CreateDirectory(dir) |> ignore
       try
-        DaemonPersistence.saveManifest dir DaemonReplayState.empty |> ignore
+        DaemonPersistence.saveManifest dir DaemonManifestState.empty |> ignore
         match DaemonPersistence.loadManifest dir with
         | Ok loaded -> loaded.Sessions.Count |> Expect.equal "round-trip session count" 0
         | Result.Error err -> failtest (sprintf "Expected Ok after valid save, got %A" err)

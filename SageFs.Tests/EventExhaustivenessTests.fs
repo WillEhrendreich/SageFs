@@ -27,9 +27,6 @@ let allEventCases : SageFsEvent list = [
   ScriptLoadFailed {| FilePath = "bad.fsx"; Error = "not found" |}
   McpInputReceived {| Source = EventSource.Console; Content = "hello" |}
   McpOutputSent {| Source = EventSource.System; Content = "world" |}
-  DaemonSessionCreated {| SessionId = "s1"; Projects = ["p.fsproj"]; WorkingDir = "/tmp"; CreatedAt = DateTimeOffset.UtcNow |}
-  DaemonSessionStopped {| SessionId = "s1"; StoppedAt = DateTimeOffset.UtcNow |}
-  DaemonSessionSwitched {| FromId = None; ToId = "s2"; SwitchedAt = DateTimeOffset.UtcNow |}
 ]
 
 /// Verify the list covers every DU case by checking the count matches
@@ -60,17 +57,4 @@ let eventExhaustivenessTests = testList "Event exhaustiveness" [
     names |> List.distinct |> List.length
     |> Expect.equal "no duplicates" names.Length
   }
-
-  testList "Replay.applyEvent handles every case without exception" [
-    for evt in allEventCases do
-      let caseName =
-        let c, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(evt, typeof<SageFsEvent>)
-        c.Name
-      test (sprintf "Replay handles %s" caseName) {
-        let state = Replay.SessionReplayState.empty
-        let ts = DateTimeOffset.UtcNow
-        let result = Replay.SessionReplayState.applyEvent ts state evt
-        result |> ignore
-      }
-  ]
 ]

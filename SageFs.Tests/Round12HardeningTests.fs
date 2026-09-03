@@ -5,12 +5,12 @@ open Expecto
 open Expecto.Flip
 open SageFs.Features
 open SageFs.Features.ManifestTypes
-open SageFs.Features.Replay
+open SageFs.Features.DaemonManifest
 
 // ---------------------------------------------------------------------------
 // W26 — ManifestLoadError DU replaces stringly-typed sentinel
 // ---------------------------------------------------------------------------
-// W26(R12): loadManifest now returns Result<DaemonReplayState, ManifestLoadError>
+// W26(R12): loadManifest now returns Result<DaemonManifestState, ManifestLoadError>
 // with a structured DU instead of string comparisons. The compiler enforces
 // exhaustiveness; no sentinel-stability test needed.
 
@@ -53,7 +53,7 @@ let w26ManifestLoadErrorDuTests =
       IO.Directory.CreateDirectory(dir) |> ignore
       try
         // Save a valid manifest, then load it — should return Ok, not any error variant
-        let state = DaemonReplayState.empty
+        let state = DaemonManifestState.empty
         match DaemonPersistence.saveManifest dir state with
         | Result.Error err -> failtest (sprintf "Save failed: %s" err)
         | Ok _ ->
@@ -67,7 +67,7 @@ let w26ManifestLoadErrorDuTests =
 // ---------------------------------------------------------------------------
 // W23 — mergeManifestWithExisting returns Result; callers skip save on Error
 // ---------------------------------------------------------------------------
-// W23(R12): The function now returns Result<DaemonReplayState, string>.
+// W23(R12): The function now returns Result<DaemonManifestState, string>.
 // Error means "cannot read manifest; callers must NOT write to preserve history."
 // The old code logged "history preserved" but still wrote active-only state.
 
@@ -76,7 +76,7 @@ let w23MergeResultTests =
   testList "W23(R12) — mergeManifestWithExisting returns Result; Error skips write" [
 
     testCase "loadManifest returns Error NotFound for first run — callers get Ok (fresh state)" <| fun _ ->
-      // mergeManifestWithExisting converts NotFound → Ok (buildReplayState) — safe first-run
+      // mergeManifestWithExisting converts NotFound → Ok (buildManifestState) — safe first-run
       // We test the upstream: NotFound is not an IoError, so callers proceed with fresh state.
       let notFound = ManifestLoadError.NotFound
       let isIoError =
@@ -95,7 +95,7 @@ let w23MergeResultTests =
 
     testCase "corrupt manifest on disk causes loadManifest Error — no Ok result that would erase history" <| fun _ ->
       // Simulate the scenario: daemon has a manifest on disk that's corrupt (partial write).
-      // Before W23: mergeManifest would return active-only DaemonReplayState and callers would write.
+      // Before W23: mergeManifest would return active-only DaemonManifestState and callers would write.
       // After W23: callers receive Error and skip the write — history is preserved (nothing written).
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r12-%s" (Guid.NewGuid().ToString("N")))
       IO.Directory.CreateDirectory(dir) |> ignore
@@ -159,7 +159,7 @@ let w24MrseDisposeTests =
 // ---------------------------------------------------------------------------
 // W25 — Consistent snapshot: passed as value not thunk
 // ---------------------------------------------------------------------------
-// W25(R12): buildReplayState and mergeManifestWithExisting now take QuerySnapshot as a value.
+// W25(R12): buildManifestState and mergeManifestWithExisting now take QuerySnapshot as a value.
 // The observable property: the same snapshot value always produces the same replay state.
 // Testing via DaemonPersistence (accessible from test project) for round-trip consistency.
 
@@ -167,13 +167,13 @@ let w24MrseDisposeTests =
 let w25SnapshotConsistencyTests =
   testList "W25(R12) — Snapshot value consistency: deterministic for same input" [
 
-    testCase "empty DaemonReplayState round-trips through save/load consistently" <| fun _ ->
+    testCase "empty DaemonManifestState round-trips through save/load consistently" <| fun _ ->
       // Verify that a snapshot-derived state is stable: save X, load X, matches X.
       // This is the key property that passing snapshot-as-value must preserve.
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r12-%s" (Guid.NewGuid().ToString("N")))
       IO.Directory.CreateDirectory(dir) |> ignore
       try
-        let state = DaemonReplayState.empty
+        let state = DaemonManifestState.empty
         DaemonPersistence.saveManifest dir state |> ignore
         match DaemonPersistence.loadManifest dir with
         | Ok loaded ->
@@ -188,7 +188,7 @@ let w25SnapshotConsistencyTests =
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r12-%s" (Guid.NewGuid().ToString("N")))
       IO.Directory.CreateDirectory(dir) |> ignore
       try
-        let state = DaemonReplayState.empty
+        let state = DaemonManifestState.empty
         DaemonPersistence.saveManifest dir state |> ignore
         let r1 = DaemonPersistence.loadManifest dir
         let r2 = DaemonPersistence.loadManifest dir
@@ -202,9 +202,9 @@ let w25SnapshotConsistencyTests =
 
     testCase "single snapshot read is the consistent-view pattern" <| fun _ ->
       // Document the W25 invariant: a value read once produces a deterministic result.
-      // Here we verify via the type: DaemonReplayState is an immutable F# record.
-      let s1 = DaemonReplayState.empty
-      let s2 = DaemonReplayState.empty
+      // Here we verify via the type: DaemonManifestState is an immutable F# record.
+      let s1 = DaemonManifestState.empty
+      let s2 = DaemonManifestState.empty
       s1.Sessions.Count |> Expect.equal "same initial state" s2.Sessions.Count
       s1.ActiveSessionId |> Expect.equal "same initial active id" s2.ActiveSessionId
   ]
