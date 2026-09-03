@@ -1,9 +1,5 @@
-Due to the severe change in pricing of copilot, and my limited time, I'm unable to guarantee any work or anything on this project. 
-
-This was an experiment in testing the limits of agentic development, and as such I have some pretty extreme cognitive/comprehension debt in the project to catch up on. 
-
-Feel free to submit issues, or pull requests, if you like, but for some reason I rarely get actual notifications, so it may be a while before i even see it. not sure what that's about, but it's the truth. 
-
+This is an experiment in testing the limits of agentic development, and so many of it's features are still in progress and not as well understood as I'd like.
+Feel free to submit issues, or pull requests, if you like. 
 If you really need to get ahold of me, the most reliable way is on discord, so you can hit me up there, if you like, my name is the same on there, too.
 
 <div align="center">
