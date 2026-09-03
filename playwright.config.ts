@@ -22,7 +22,7 @@ export default defineConfig({
   projects: [
     {
       name: 'dashboard',
-      testMatch: /tests\/(dashboard|code-evaluation|session-management|connection-status|keyboard-shortcuts)\/.*\.spec\.ts/,
+      testMatch: /tests\/(dashboard|code-evaluation|session-management|connection-status|keyboard-shortcuts|hot-reload)\/.*\.spec\.ts/,
     },
   ],
 });
