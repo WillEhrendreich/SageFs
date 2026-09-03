@@ -51,6 +51,14 @@ module SessionManager =
         SessionId *
         rebuild: bool *
         AsyncReplyChannel<Result<string, SageFsError>>
+    /// Internal: a cold rebuild started off the mailbox loop has finished.
+    /// The carrying reply channel is replied to here so the original caller
+    /// still receives the FINAL restart result (Ok respawn / Error) without
+    /// ever blocking the loop on `dotnet build`.
+    | RebuildCompleted of
+        SessionId *
+        buildResult: Result<string, string> *
+        AsyncReplyChannel<Result<string, SageFsError>>
     | GetSession of
         SessionId *
         AsyncReplyChannel<ManagedSession option>
@@ -81,6 +89,13 @@ module SessionManager =
     /// Per-session warmup progress from worker stdout (e.g., "2/4 Scanned 12 files").
     /// Cleared when WorkerReady is received or session is removed.
     WarmupProgress: Map<SessionId, string>
+    /// Sessions with a cold `dotnet build` currently running OFF the mailbox
+    /// loop (started by RestartSession rebuild=true). The owner records the
+    /// original reply channel so the mailbox stays free while the build runs
+    /// and the caller is answered when RebuildCompleted arrives. Rejects a
+    /// second hard reset and suppresses crash-recovery respawns for the same
+    /// session while present.
+    RebuildsInFlight: Map<SessionId, AsyncReplyChannel<Result<string, SageFsError>>>
   }
 
   module ManagerState =
@@ -89,6 +104,7 @@ module SessionManager =
       RestartPolicy = RestartPolicy.defaultPolicy
       Pool = PoolState.empty
       WarmupProgress = Map.empty
+      RebuildsInFlight = Map.empty
     }
 
     let addSession id session state =
@@ -97,7 +113,8 @@ module SessionManager =
     let removeSession id state =
       { state with
           Sessions = Map.remove id state.Sessions
-          WarmupProgress = Map.remove id state.WarmupProgress }
+          WarmupProgress = Map.remove id state.WarmupProgress
+          RebuildsInFlight = Map.remove id state.RebuildsInFlight }
 
     let tryGetSession id state =
       Map.tryFind id state.Sessions
@@ -106,6 +123,15 @@ module SessionManager =
       state.Sessions
       |> Map.toList
       |> List.map (fun (_, s) -> s.Info)
+
+    let tryGetRebuildChannel id state =
+      Map.tryFind id state.RebuildsInFlight
+
+    let setRebuildInFlight id reply state =
+      { state with RebuildsInFlight = Map.add id reply state.RebuildsInFlight }
+
+    let clearRebuildInFlight id state =
+      { state with RebuildsInFlight = Map.remove id state.RebuildsInFlight }
 
     /// Find an existing session with the same working directory and project
     /// set. Uniqueness is enforced HERE at the single owner (the mailbox) —
@@ -652,12 +678,74 @@ module SessionManager =
     (onWarmupProgress: SessionId -> string -> unit)
     (onSessionFaulted: SessionId -> string -> unit) =
     let snapshotRef = ref QuerySnapshot.empty
+    /// Spawn a cold replacement worker for a session whose old worker was
+    /// already stopped. Used by the plain rebuild=false restart (inline) and by
+    /// the RebuildCompleted handler (off-mailbox build). Returns the next state
+    /// plus the spawn outcome; the caller replies to its own channel (Ok with
+    /// the "Hard reset complete" message, or the raw spawn SageFsError).
+    let spawnColdReplacement
+      (id: SessionId)
+      (session: ManagedSession)
+      (inbox: MailboxProcessor<SessionCommand>)
+      (span: System.Diagnostics.Activity)
+      (state: ManagerState)
+      : ManagerState * Result<unit, SageFsError> =
+      let onExited workerPid exitCode =
+        inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
+      match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
+      | Ok proc ->
+        let info : SessionInfo = {
+          Id = id
+          Name = session.Info.Name
+          Projects = session.Projects
+          WorkingDirectory = session.WorkingDir
+          SolutionRoot = session.Info.SolutionRoot
+          CreatedAt = session.Info.CreatedAt
+          LastActivity = DateTime.UtcNow
+          Status = SessionStatus.Starting
+          FaultReason = None
+          WorkerPid = Some proc.Id
+          WorkerPort = None
+          Workflow = session.Workflow
+        }
+        let restarted = {
+          Info = info
+          Process = proc
+          Proxy = pendingProxy
+          WorkerBaseUrl = ""
+          Projects = session.Projects
+          WorkingDir = session.WorkingDir
+          AutoOpenNamespaces = session.AutoOpenNamespaces
+          Workflow = session.Workflow
+          RestartState = session.RestartState
+        }
+        let newState = ManagerState.addSession id restarted state
+        Instrumentation.sessionsRestarted.Add(1L)
+        Instrumentation.coldRestarts.Add(1L)
+        Instrumentation.succeedSpan span
+        runtime.AwaitWorkerPort id proc inbox ct
+        (newState, Ok ())
+      | Error err ->
+        let reason = SageFsError.describe err
+        let tombstone = faultedTombstone (Some reason) session
+        let newState = ManagerState.addSession id tombstone state
+        onSessionReady id
+        onSessionFaulted id reason
+        Instrumentation.failSpan span (sprintf "%A" err)
+        (newState, Error err)
     let mailbox = MailboxProcessor<SessionCommand>.Start((fun inbox ->
       let publishSnapshot (state: ManagerState) =
         System.Threading.Interlocked.Exchange(snapshotRef, QuerySnapshot.fromManagerState state) |> ignore
+      /// Single dispatch step of the mailbox loop, wrapped in the supervise step.
+      /// Keeps the giant existing match; callers must end with `return state` for
+      /// the untouched case and `return nextState` after a transition.
       let rec loop (state: ManagerState) = async {
         publishSnapshot state
         let! cmd = inbox.Receive()
+        let! state' = superviseStep state cmd
+        return! loop state'
+      }
+      and step (state: ManagerState) (cmd: SessionCommand) : Async<ManagerState> = async {
         match cmd with
         | SessionCommand.CreateSession(projects, workingDir, autoOpenNamespaces, workflow, reply) ->
           // Enforce one session per (projects, workingDir) AT THE OWNER — the
@@ -668,7 +756,7 @@ module SessionManager =
           match ManagerState.tryFindDuplicate projects workingDir state with
           | Some existingId ->
             reply.Reply(Error (SageFsError.DuplicateSession (SessionId.value existingId, workingDir)))
-            return! loop state
+            return state
           | None ->
             let sessionId = SessionId.newId()
             let span = Instrumentation.startSpan Instrumentation.sessionSource "session.create"
@@ -710,32 +798,49 @@ module SessionManager =
               Instrumentation.succeedSpan span
               // Port discovery runs off the agent loop
               runtime.AwaitWorkerPort sessionId proc inbox ct
-              return! loop newState
+              return newState
             | Error err ->
               reply.Reply(Error err)
               Instrumentation.failSpan span (sprintf "%A" err)
-              return! loop state
+              return state
 
         | SessionCommand.StopSession(id, reply) ->
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.stop" [("session.id", box id)]
           match ManagerState.tryGetSession id state with
           | Some session ->
-            do! runtime.StopWorker session
-            let newState = ManagerState.removeSession id state
-            reply.Reply(Ok ())
-            Instrumentation.sessionsStopped.Add(1L)
-            Instrumentation.activeSessions.Add(-1L)
-            Instrumentation.succeedSpan span
-            return! loop newState
+            try
+              do! runtime.StopWorker session
+              let newState = ManagerState.removeSession id state
+              reply.Reply(Ok ())
+              Instrumentation.sessionsStopped.Add(1L)
+              Instrumentation.activeSessions.Add(-1L)
+              Instrumentation.succeedSpan span
+              return newState
+            with ex ->
+              // Fail-closed: an unexpected stop-worker exception must not kill
+              // the mailbox. Reply the error to the caller and keep the session
+              // registered so the operator can retry / hard-reset it.
+              Log.warn "[SessionManager] StopWorker threw for session %s: %s\n%s" (SessionId.value id) ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+              reply.Reply(Error (SageFsError.SessionStopFailed (SessionId.value id, ex.Message)))
+              Instrumentation.failSpan span ex.Message
+              return state
           | None ->
             reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
             Instrumentation.failSpan span (sprintf "Session %s not found" (SessionId.value id))
-            return! loop state
+            return state
 
         | SessionCommand.RestartSession(id, rebuild, reply) ->
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.restart"
                        [("session.id", box id); ("rebuild", box rebuild)]
           match ManagerState.tryGetSession id state with
+          | Some session when ManagerState.tryGetRebuildChannel id state |> Option.isSome ->
+            // Reject another hard reset while a cold rebuild of this session is
+            // still in flight (started by a previous RestartSession). The
+            // RebuildCompleted handler is the single respawn point, so an
+            // accepted second reset would otherwise double-spawn the worker.
+            reply.Reply(Error (SageFsError.HardResetFailed "Hard reset already in progress for this session"))
+            Instrumentation.failSpan span "Hard reset already in progress for this session"
+            return state
           | Some session ->
             let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow
             let standby = PoolState.getStandby key state.Pool
@@ -792,9 +897,10 @@ module SessionManager =
               Instrumentation.succeedSpan span
               // Start warming a new standby for next time
               inbox.Post(SessionCommand.WarmStandby key)
-              return! loop newState
+              return newState
             | RestartDecision.ColdRestart ->
-              // Slow path: traditional stop → build → spawn
+              // Slow path: stop the worker first (bounded), then either rebuild
+              // OFF the mailbox loop (rebuild=true) or respawn inline (rebuild=false).
               match isNull span with
               | false -> span.SetTag("restart.decision", "cold_restart") |> ignore
               | true -> ()
@@ -823,80 +929,86 @@ module SessionManager =
                 { afterMark with
                     Pool = poolAfterKill
                     WarmupProgress = Map.remove id afterMark.WarmupProgress }
-              let! buildResult =
-                match rebuild with
-                | true -> runtime.RunBuildAsync session.Projects session.WorkingDir
-                | false -> async { return Ok "No rebuild requested" }
-              match buildResult with
-              | Error msg ->
-                let tombstone = faultedTombstone (Some msg) session
-                let newState = ManagerState.addSession id tombstone stateAfterStop
-                reply.Reply(Error (SageFsError.HardResetFailed msg))
-                onSessionReady id
-                onSessionFaulted id msg
-                Instrumentation.failSpan span msg
-                return! loop newState
-              | Ok _buildMsg ->
-                let onExited workerPid exitCode =
-                  inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-                match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
-                | Ok proc ->
-                  let info : SessionInfo = {
-                    Id = id
-                    Name = session.Info.Name
-                    Projects = session.Projects
-                    WorkingDirectory = session.WorkingDir
-                    SolutionRoot = session.Info.SolutionRoot
-                    CreatedAt = session.Info.CreatedAt
-                    LastActivity = DateTime.UtcNow
-                    Status = SessionStatus.Starting
-                    FaultReason = None
-                    WorkerPid = Some proc.Id
-                    WorkerPort = None
-                    Workflow = session.Workflow
-                  }
-                  let restarted = {
-                    Info = info
-                    Process = proc
-                    Proxy = pendingProxy
-                    WorkerBaseUrl = ""
-                    Projects = session.Projects
-                    WorkingDir = session.WorkingDir
-                    AutoOpenNamespaces = session.AutoOpenNamespaces
-                    Workflow = session.Workflow
-                    RestartState = session.RestartState
-                  }
-                  let newState = ManagerState.addSession id restarted stateAfterStop
-                  reply.Reply(Ok "Hard reset complete — worker respawning with fresh assemblies.")
-                  Instrumentation.sessionsRestarted.Add(1L)
-                  Instrumentation.coldRestarts.Add(1L)
-                  Instrumentation.succeedSpan span
-                  runtime.AwaitWorkerPort id proc inbox ct
-                  return! loop newState
+              match rebuild with
+              | false ->
+                // rebuild=false: plain restart stays inline and immediate (the
+                // old behavior) — nothing expensive runs on the loop.
+                let newState, spawnResult = spawnColdReplacement id session inbox span stateAfterStop
+                match spawnResult with
+                | Ok () ->
+                  reply.Reply(Ok "Hard reset complete — worker respawning.")
+                  return newState
                 | Error err ->
-                  let reason = SageFsError.describe err
-                  let tombstone = faultedTombstone (Some reason) session
-                  let newState = ManagerState.addSession id tombstone stateAfterStop
                   reply.Reply(Error err)
-                  onSessionReady id
-                  onSessionFaulted id reason
-                  Instrumentation.failSpan span (sprintf "%A" err)
-                  return! loop newState
+                  return newState
+              | true ->
+                // rebuild=true: run `dotnet build` OFF the mailbox loop so other
+                // session operations (list/create/stop) stay responsive for the
+                // whole build. The caller's reply channel is parked in state and
+                // NOT answered yet — the FINAL Ok/Error is delivered when
+                // RebuildCompleted is processed (the mailbox is the single
+                // respawn point), so the caller's PostAndAsyncReply resolves
+                // only once the restart has actually completed.
+                let stateInFlight = ManagerState.setRebuildInFlight id reply stateAfterStop
+                Instrumentation.succeedSpan span
+                Async.Start(async {
+                  let! buildResult = runtime.RunBuildAsync session.Projects session.WorkingDir
+                  inbox.Post(SessionCommand.RebuildCompleted(id, buildResult, reply))
+                }, ct)
+                return stateInFlight
           | None ->
             reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
             Instrumentation.failSpan span (sprintf "Session %s not found" (SessionId.value id))
-            return! loop state
+            return state
+
+        | SessionCommand.RebuildCompleted(id, buildResult, reply) ->
+          // Single respawn point for an off-mailbox cold rebuild. The session is
+          // still registered as Restarting (registry-preservation invariant) with
+          // the rebuild flag cleared and the original caller's channel parked.
+          let rebuildSpan =
+            Instrumentation.startSpan Instrumentation.sessionSource "session.rebuild_completed"
+              [("session.id", box id)]
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let stateCleared = ManagerState.clearRebuildInFlight id state
+            match buildResult with
+            | Error msg ->
+              // Build failed → faulted tombstone (same fail-closed contract as
+              // the old inline path).
+              let tombstone = faultedTombstone (Some msg) session
+              let newState = ManagerState.addSession id tombstone stateCleared
+              reply.Reply(Error (SageFsError.HardResetFailed msg))
+              onSessionReady id
+              onSessionFaulted id msg
+              Instrumentation.failSpan rebuildSpan msg
+              return newState
+            | Ok _buildMsg ->
+              let newState, spawnResult = spawnColdReplacement id session inbox rebuildSpan stateCleared
+              match spawnResult with
+              | Ok () ->
+                reply.Reply(Ok "Hard reset complete — worker respawning with fresh assemblies.")
+                return newState
+              | Error err ->
+                reply.Reply(Error err)
+                return newState
+          | None ->
+            // Session was stopped while the build ran (StopSession/StopAll
+            // removed it and cleared the in-flight flag). Answer the carried
+            // channel so the caller never hangs, then leave state untouched.
+            reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
+            Instrumentation.failSpan rebuildSpan (sprintf "Session %s no longer registered" (SessionId.value id))
+            return state
 
         | SessionCommand.GetSession(id, reply) ->
           reply.Reply(ManagerState.tryGetSession id state)
-          return! loop state
+          return state
 
         | SessionCommand.ListSessions reply ->
           // Return CQRS snapshot directly — no live HTTP calls inside the mailbox.
           // Status is kept current by the poll-until-Ready loop on WorkerReady.
           // Danger: Adding reads inside the mailbox loop causes p99 > 200ms during slow writes.
           reply.Reply(ManagerState.allInfos state)
-          return! loop state
+          return state
 
         | SessionCommand.TouchSession id ->
           match ManagerState.tryGetSession id state with
@@ -907,9 +1019,9 @@ module SessionManager =
                     { session.Info with
                         LastActivity = DateTime.UtcNow } }
             let newState = ManagerState.addSession id updated state
-            return! loop newState
+            return newState
           | None ->
-            return! loop state
+            return state
 
         | SessionCommand.WorkerReady(id, _workerPid, baseUrl, proxy) ->
           match ManagerState.tryGetSession id state with
@@ -924,7 +1036,7 @@ module SessionManager =
                     WarmupProgress = Map.remove id state.WarmupProgress }
               onSessionReady id
               onSessionFaulted id msg
-              return! loop newState
+              return newState
             | true ->
               let workerPort =
                 let mutable u : System.Uri = null
@@ -1008,14 +1120,14 @@ module SessionManager =
                   Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "instrumentation_maps" :> obj))
                   Log.error "[SessionManager] Instrumentation maps fetch failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
               }, ct)
-              return! loop newState
+              return newState
           | None ->
             // Session was stopped before port discovery completed — ignore
-            return! loop state
+            return state
 
         | SessionCommand.WorkerTestDiscovery(id, tests, providers) ->
           onTestDiscovery id tests providers
-          return! loop state
+          return state
 
         | SessionCommand.WorkerSpawnFailed(id, workerPid, msg) ->
           match ManagerState.tryGetSession id state with
@@ -1029,16 +1141,16 @@ module SessionManager =
             match session.Info.WorkerPid with
             | Some currentPid when workerPid > 0 && currentPid <> workerPid ->
               Log.warn "[SessionManager] Ignoring stale WorkerSpawnFailed for session %s (event pid %d != current pid %d)" (SessionId.value id) workerPid currentPid
-              return! loop state
+              return state
             | _ ->
               Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
               let updated = faultedTombstone (Some msg) session
               let newState = ManagerState.addSession id updated state
               onSessionReady id  // notify clients of Faulted state change
               onSessionFaulted id msg
-              return! loop newState
+              return newState
           | None ->
-            return! loop state
+            return state
 
         | SessionCommand.WorkerExited(id, workerPid, exitCode) ->
           let span = Instrumentation.startSpan Instrumentation.sessionSource "worker.exited"
@@ -1054,13 +1166,13 @@ module SessionManager =
               | false -> span.SetTag("stale_event", true) |> ignore
               | true -> ()
               Instrumentation.succeedSpan span
-              return! loop state
+              return state
             | Some currentPid when currentPid <> workerPid && workerPid > 0 ->
               match isNull span with
               | false -> span.SetTag("stale_event", true) |> ignore
               | true -> ()
               Instrumentation.succeedSpan span
-              return! loop state
+              return state
             | _ ->
             let outcome =
               SessionLifecycle.onWorkerExited
@@ -1077,7 +1189,7 @@ module SessionManager =
               Instrumentation.activeSessions.Add(-1L)
               Instrumentation.succeedSpan span
               let newState = ManagerState.removeSession id state
-              return! loop newState
+              return newState
             | SessionLifecycle.ExitOutcome.Abandoned _ ->
               match isNull span with
               | false -> span.SetTag("outcome", "abandoned") |> ignore
@@ -1089,7 +1201,7 @@ module SessionManager =
               let newState = ManagerState.addSession id tombstone state
               onSessionReady id
               onSessionFaulted id reason
-              return! loop newState
+              return newState
             | SessionLifecycle.ExitOutcome.RestartAfter(delay, newRestartState) ->
               match isNull span with
               | false ->
@@ -1108,16 +1220,30 @@ module SessionManager =
                 do! Async.Sleep(int delay.TotalMilliseconds)
                 inbox.Post(SessionCommand.ScheduleRestart id)
               }, ct)
-              return! loop newState
+              return newState
           | None ->
             Instrumentation.succeedSpan span
-            return! loop state
+            return state
 
         | SessionCommand.ScheduleRestart id ->
           let recoverySpan =
             Instrumentation.startSpan Instrumentation.sessionSource "session.crash_recovery"
               [("session.id", box id)]
           match ManagerState.tryGetSession id state with
+          // Crash-recovery must NOT respawn while a cold rebuild of the same
+          // session is in flight — the RebuildCompleted handler is the single
+          // respawn point, and a worker spawned here would be orphaned/raced by
+          // the rebuild's own replacement.
+          | Some session when session.Info.Status = SessionStatus.Restarting
+                              && (ManagerState.tryGetRebuildChannel id state |> Option.isSome) ->
+            // Rebuild in flight: do nothing. The off-mailbox build completion
+            // owns the respawn. The timer that fired us will not re-fire (the
+            // WorkerExited that scheduled it belonged to the pre-rebuild worker).
+            match isNull recoverySpan with
+            | false -> recoverySpan.SetTag("recovery.outcome", "deferred_to_rebuild") |> ignore
+            | true -> ()
+            Instrumentation.succeedSpan recoverySpan
+            return state
           | Some session when session.Info.Status = SessionStatus.Restarting ->
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
@@ -1141,7 +1267,7 @@ module SessionManager =
               | false -> recoverySpan.SetTag("recovery.outcome", "restarted") |> ignore
               | true -> ()
               Instrumentation.succeedSpan recoverySpan
-              return! loop newState
+              return newState
             | Error err ->
               // Spawn failed — treat as another crash
               let outcome =
@@ -1161,14 +1287,14 @@ module SessionManager =
                 let newState = ManagerState.addSession id tombstone state
                 onSessionReady id
                 onSessionFaulted id reason
-                return! loop newState
+                return newState
               | SessionLifecycle.ExitOutcome.Graceful ->
                 match isNull recoverySpan with
                 | false -> recoverySpan.SetTag("recovery.outcome", "graceful") |> ignore
                 | true -> ()
                 Instrumentation.succeedSpan recoverySpan
                 let newState = ManagerState.removeSession id state
-                return! loop newState
+                return newState
               | SessionLifecycle.ExitOutcome.RestartAfter(delay, newRestartState) ->
                 match isNull recoverySpan with
                 | false ->
@@ -1186,10 +1312,10 @@ module SessionManager =
                   do! Async.Sleep(int delay.TotalMilliseconds)
                   inbox.Post(SessionCommand.ScheduleRestart id)
                 }, ct)
-                return! loop newState
+                return newState
           | _ ->
             Instrumentation.succeedSpan recoverySpan
-            return! loop state
+            return state
 
         | SessionCommand.StopAll reply ->
           // Graceful shutdown of all sessions and standbys — run in parallel
@@ -1200,7 +1326,7 @@ module SessionManager =
             [ for KeyValue(_, standby) in state.Pool.Standbys -> runtime.StopStandbyWorker standby ]
           do! sessionTasks @ standbyTasks |> Async.Parallel |> Async.Ignore
           reply.Reply(())
-          return! loop ManagerState.empty
+          return ManagerState.empty
 
         // --- Standby pool commands ---
 
@@ -1228,12 +1354,12 @@ module SessionManager =
               let newPool = PoolState.setStandby key standby state.Pool
               onStandbyProgressChanged ()
               runtime.AwaitStandbyPort key proc inbox ct
-              return! loop { state with Pool = newPool }
+              return { state with Pool = newPool }
             | Error _ ->
               // Spawn failed — just skip, cold restart still works
-              return! loop state
+              return state
           | false ->
-            return! loop state
+            return state
 
         | SessionCommand.StandbyReady(key, _workerPid, baseUrl, proxy) ->
           match PoolState.getStandby key state.Pool with
@@ -1243,7 +1369,7 @@ module SessionManager =
               do! runtime.StopStandbyWorker standby
               let newPool = PoolState.removeStandby key state.Pool
               onStandbyProgressChanged ()
-              return! loop { state with Pool = newPool }
+              return { state with Pool = newPool }
             | true ->
               let ready =
                 { standby with
@@ -1256,10 +1382,10 @@ module SessionManager =
               Instrumentation.standbyWarmupMs.Record(warmupMs)
               Instrumentation.standbyPoolSize.Add(1L)
               onStandbyProgressChanged ()
-              return! loop { state with Pool = newPool }
+              return { state with Pool = newPool }
           | _ ->
             // Stale or unexpected — ignore
-            return! loop state
+            return state
 
         | SessionCommand.StandbySpawnFailed(key, _workerPid, _msg) ->
           // Remove the failed standby
@@ -1267,9 +1393,9 @@ module SessionManager =
           | Some _ ->
             let newPool = PoolState.removeStandby key state.Pool
             onStandbyProgressChanged ()
-            return! loop { state with Pool = newPool }
+            return { state with Pool = newPool }
           | None ->
-            return! loop state
+            return state
 
         | SessionCommand.StandbyExited(key, _workerPid) ->
           // Standby worker exited — remove it
@@ -1277,9 +1403,9 @@ module SessionManager =
           | Some _ ->
             let newPool = PoolState.removeStandby key state.Pool
             onStandbyProgressChanged ()
-            return! loop { state with Pool = newPool }
+            return { state with Pool = newPool }
           | None ->
-            return! loop state
+            return state
 
         | SessionCommand.StandbyProgress(key, progress) ->
           match PoolState.getStandby key state.Pool with
@@ -1287,16 +1413,16 @@ module SessionManager =
             let updated = { standby with WarmupProgress = Some progress }
             let newPool = PoolState.setStandby key updated state.Pool
             onStandbyProgressChanged ()
-            return! loop { state with Pool = newPool }
+            return { state with Pool = newPool }
           | _ ->
-            return! loop state
+            return state
 
         | SessionCommand.WorkerWarmupProgress(id, progress) ->
           let newState =
             { state with WarmupProgress = Map.add id progress state.WarmupProgress }
           onStandbyProgressChanged ()
           onWarmupProgress id progress
-          return! loop newState
+          return newState
 
         | SessionCommand.UpdateSessionStatus(id, newStatus) ->
           match ManagerState.tryGetSession id state with
@@ -1310,9 +1436,9 @@ module SessionManager =
               { session with Info = { session.Info with Status = newStatus; FaultReason = faultReason } }
             let newState = ManagerState.addSession id updated state
             onStandbyProgressChanged ()
-            return! loop newState
+            return newState
           | None ->
-            return! loop state
+            return state
 
         | SessionCommand.InvalidateStandbys workingDir ->
           // Kill and remove standbys matching this working dir
@@ -1328,14 +1454,63 @@ module SessionManager =
             |> Map.fold (fun pool k _ -> PoolState.removeStandby k pool) state.Pool
           match toKill.IsEmpty with
           | true ->
-            return! loop state
+            return state
           | false ->
             onStandbyProgressChanged ()
-            return! loop { state with Pool = newPool }
+            return { state with Pool = newPool }
 
         | SessionCommand.GetStandbyInfo reply ->
           reply.Reply (computeStandbyInfo state.Pool)
-          return! loop state
+          return state
+      }
+      /// Supervision wrapper: an UNEXPECTED exception escaping a handler must
+      /// not kill the mailbox (that would orphan every session — no snapshot
+      /// updates, no stops, no restarts). Handlers that legitimately report
+      /// failure do so through reply.Reply(Error ...) (the fail-closed path);
+      /// this wrapper is only the backstop for bugs/transient faults. The loop
+      /// continues with the last known good state so the CQRS snapshot stays
+      /// consistent and nothing is silently orphaned.
+      and superviseStep (state: ManagerState) (cmd: SessionCommand) : Async<ManagerState> = async {
+        try
+          return! step state cmd
+        with
+        | :? OperationCanceledException -> return! raise (OperationCanceledException())
+        | ex ->
+          Log.error "[SessionManager] Unhandled exception processing command %A, continuing with previous state: %s\n%s"
+            (cmd.GetType().Name) ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+          Instrumentation.actorErrors.Add(
+            1L,
+            System.Collections.Generic.KeyValuePair("actor.name", "session-manager" :> obj))
+          // Fail-closed: if the crashing handler owned a reply channel, answer
+          // it with a SageFsError so the caller never hangs forever waiting on
+          // a mailbox that has moved on. Each reply is guarded: a handler that
+          // already replied before throwing must not let the guard reply throw
+          // (that would kill the mailbox, defeating the supervision).
+          let tryReply (ch: AsyncReplyChannel<_>) (value: _) =
+            try ch.Reply(value) with _ -> ()
+          match cmd with
+          | SessionCommand.StopSession(id, reply) ->
+            tryReply reply (Error (SageFsError.SessionStopFailed (SessionId.value id, ex.Message)))
+          | SessionCommand.RestartSession(id, _, reply) ->
+            tryReply reply (Error (SageFsError.HardResetFailed (sprintf "Hard reset failed: %s" ex.Message)))
+          | SessionCommand.CreateSession(_, _, _, _, reply) ->
+            tryReply reply (Error (SageFsError.SessionCreationFailed ex.Message))
+          | SessionCommand.RebuildCompleted(id, _, reply) ->
+            // The parked channel and the carried channel are the same object in
+            // the normal flow; answer whichever is still unresolved, exactly once.
+            match ManagerState.tryGetRebuildChannel id state with
+            | Some parked -> tryReply parked (Error (SageFsError.HardResetFailed (sprintf "Hard reset failed: %s" ex.Message)))
+            | None -> tryReply reply (Error (SageFsError.HardResetFailed (sprintf "Hard reset failed: %s" ex.Message)))
+          | SessionCommand.GetSession(id, reply) ->
+            tryReply reply (ManagerState.tryGetSession id state)
+          | SessionCommand.ListSessions reply ->
+            tryReply reply (ManagerState.allInfos state)
+          | SessionCommand.StopAll reply ->
+            tryReply reply ()
+          | SessionCommand.GetStandbyInfo reply ->
+            tryReply reply (computeStandbyInfo state.Pool)
+          | _ -> ()
+          return state
       }
       async {
         try
