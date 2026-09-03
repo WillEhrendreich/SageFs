@@ -1627,7 +1627,14 @@ module McpTools =
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         notifyElm ctx (
           SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-        return "Session reset successfully. All previous definitions have been cleared."
+        // Pushback: resetting a healthy (Ready) session destroys live REPL
+        // definitions — say so explicitly. Faulted/Starting sessions have
+        // nothing to lose, so no warning.
+        let warning =
+          match previousStatus with
+          | WorkerProtocol.SessionStatus.Ready -> "⚠️ NOTE: resetting clears all REPL definitions and evaluation history. "
+          | _ -> ""
+        return sprintf "%sSession reset successfully. All previous definitions have been cleared." warning
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
         do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
         notifyElm ctx (
@@ -1746,7 +1753,13 @@ module McpTools =
           do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
           notifyElm ctx (
             SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-          return msg
+          // Pushback: hard-resetting a healthy (Ready) session replaces its
+          // worker and rebuilds state — say so explicitly.
+          let warning =
+            match previousStatus with
+            | WorkerProtocol.SessionStatus.Ready -> "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. "
+            | _ -> ""
+          return sprintf "%s%s" warning msg
         | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Error err)) ->
           do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
           notifyElm ctx (
