@@ -71,21 +71,12 @@ module SessionManager =
     | WorkerSpawnFailed of SessionId * workerPid: int * string
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
-    // Standby pool commands
-    | WarmStandby of StandbyKey
-    | StandbyReady of StandbyKey * workerPid: int * baseUrl: string * SessionProxy
-    | StandbySpawnFailed of StandbyKey * workerPid: int * string
-    | StandbyExited of StandbyKey * workerPid: int
-    | StandbyProgress of StandbyKey * progress: string
     | WorkerWarmupProgress of SessionId * progress: string
     | UpdateSessionStatus of SessionId * WorkerProtocol.SessionStatus
-    | InvalidateStandbys of workingDir: string
-    | GetStandbyInfo of AsyncReplyChannel<StandbyInfo>
 
   type ManagerState = {
     Sessions: Map<SessionId, ManagedSession>
     RestartPolicy: RestartPolicy.Policy
-    Pool: PoolState
     /// Per-session warmup progress from worker stdout (e.g., "2/4 Scanned 12 files").
     /// Cleared when WorkerReady is received or session is removed.
     WarmupProgress: Map<SessionId, string>
@@ -96,15 +87,21 @@ module SessionManager =
     /// second hard reset and suppresses crash-recovery respawns for the same
     /// session while present.
     RebuildsInFlight: Map<SessionId, AsyncReplyChannel<Result<string, SageFsError>>>
+    /// Spawn-first restart in progress (rebuild=false): the NEW worker has been
+    /// spawned and is warming up; the OLD worker is still serving and is parked
+    /// here so it can be retired when the new worker reports Ready. The old
+    /// worker's exit event must be inert against the registered session (its
+    /// pid no longer matches once WorkerReady commits the swap).
+    PendingSwap: Map<SessionId, ManagedSession>
   }
 
   module ManagerState =
     let empty = {
       Sessions = Map.empty
       RestartPolicy = RestartPolicy.defaultPolicy
-      Pool = PoolState.empty
       WarmupProgress = Map.empty
       RebuildsInFlight = Map.empty
+      PendingSwap = Map.empty
     }
 
     let addSession id session state =
@@ -114,7 +111,8 @@ module SessionManager =
       { state with
           Sessions = Map.remove id state.Sessions
           WarmupProgress = Map.remove id state.WarmupProgress
-          RebuildsInFlight = Map.remove id state.RebuildsInFlight }
+          RebuildsInFlight = Map.remove id state.RebuildsInFlight
+          PendingSwap = Map.remove id state.PendingSwap }
 
     let tryGetSession id state =
       Map.tryFind id state.Sessions
@@ -132,6 +130,15 @@ module SessionManager =
 
     let clearRebuildInFlight id state =
       { state with RebuildsInFlight = Map.remove id state.RebuildsInFlight }
+
+    let setPendingSwap id oldSession state =
+      { state with PendingSwap = Map.add id oldSession state.PendingSwap }
+
+    let clearPendingSwap id state =
+      { state with PendingSwap = Map.remove id state.PendingSwap }
+
+    let tryGetPendingSwap id state =
+      Map.tryFind id state.PendingSwap
 
     /// Find an existing session with the same working directory and project
     /// set. Uniqueness is enforced HERE at the single owner (the mailbox) —
@@ -152,60 +159,14 @@ module SessionManager =
   /// Published after every command — reads go here, never to the mailbox.
   type QuerySnapshot = {
     Sessions: Map<SessionId, SessionInfo>
-    StandbyInfo: StandbyInfo
-    /// Per-session standby state, keyed by session ID.
-    /// Each session is matched to its standby (if any) via StandbyKey.
-    PerSessionStandby: Map<SessionId, StandbyInfo>
     /// Per-session warmup progress (e.g., "2/4 Scanned 12 files").
     WarmupProgress: Map<SessionId, string>
     /// Per-session worker HTTP base URLs (for hot-reload proxy, etc.).
     WorkerBaseUrls: Map<SessionId, string>
   }
 
-  /// Compute standby info from pool state (pure function).
-  let computeStandbyInfo (pool: PoolState) : StandbyInfo =
-    match pool.Enabled with
-    | false -> StandbyInfo.NoPool
-    | true ->
-    match pool.Standbys.IsEmpty with
-    | true -> StandbyInfo.NoPool
-    | false ->
-      let states = pool.Standbys |> Map.toList |> List.map (fun (_, s) -> s.State)
-      match states |> List.exists (fun s -> s = StandbyState.Invalidated) with
-      | true -> StandbyInfo.Invalidated
-      | false ->
-      match states |> List.forall (fun s -> s = StandbyState.Ready) with
-      | true -> StandbyInfo.Ready
-      | false ->
-        let progress =
-          pool.Standbys
-          |> Map.toList
-          |> List.tryPick (fun (_, s) ->
-            match s.State = StandbyState.Warming with
-            | true -> s.WarmupProgress
-            | false -> None)
-          |> Option.defaultValue ""
-        StandbyInfo.Warming progress
-
-  /// Compute per-session standby info by matching each session to its StandbyKey.
-  let computePerSessionStandby (pool: PoolState) (sessions: Map<SessionId, ManagedSession>) : Map<SessionId, StandbyInfo> =
-    match pool.Enabled with
-    | false -> Map.empty
-    | true ->
-      sessions
-      |> Map.map (fun _id session ->
-        let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow
-        match Map.tryFind key pool.Standbys with
-        | Some s ->
-          match s.State with
-          | StandbyState.Invalidated -> StandbyInfo.Invalidated
-          | StandbyState.Ready -> StandbyInfo.Ready
-          | StandbyState.Warming ->
-            StandbyInfo.Warming (s.WarmupProgress |> Option.defaultValue "")
-        | None -> StandbyInfo.NoPool)
-
   module QuerySnapshot =
-    let fromState (state: ManagerState) (standby: StandbyInfo) : QuerySnapshot =
+    let fromState (state: ManagerState) : QuerySnapshot =
       let sessions =
         state.Sessions
         |> Map.map (fun _id ms -> ms.Info)
@@ -215,12 +176,10 @@ module SessionManager =
           match ms.WorkerBaseUrl.Length > 0 with
           | true -> Map.add id ms.WorkerBaseUrl acc
           | false -> acc) Map.empty
-      let perSession = computePerSessionStandby state.Pool state.Sessions
-      { Sessions = sessions; StandbyInfo = standby; PerSessionStandby = perSession; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls }
+      { Sessions = sessions; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls }
 
-    /// Project a snapshot directly from ManagerState (computes standby info).
     let fromManagerState (state: ManagerState) : QuerySnapshot =
-      fromState state (computeStandbyInfo state.Pool)
+      fromState state
 
     let tryGetSession (id: SessionId) (snap: QuerySnapshot) : SessionInfo option =
       snap.Sessions |> Map.tryFind id
@@ -228,14 +187,12 @@ module SessionManager =
     let allSessions (snap: QuerySnapshot) : SessionInfo list =
       snap.Sessions |> Map.toList |> List.map snd
 
-    let empty = { Sessions = Map.empty; StandbyInfo = StandbyInfo.NoPool; PerSessionStandby = Map.empty; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty }
+    let empty = { Sessions = Map.empty; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty }
 
   type SessionManagerRuntime = {
     StartWorkerProcess: SessionId -> string list -> string -> bool -> WorkflowTypes.SessionWorkflow -> (int -> int -> unit) -> Result<Process, SageFsError>
     AwaitWorkerPort: SessionId -> Process -> MailboxProcessor<SessionCommand> -> CancellationToken -> unit
-    AwaitStandbyPort: StandbyKey -> Process -> MailboxProcessor<SessionCommand> -> CancellationToken -> unit
     StopWorker: ManagedSession -> Async<unit>
-    StopStandbyWorker: StandbySession -> Async<unit>
     RunBuildAsync: string list -> string -> Async<Result<string, string>>
   }
 
@@ -535,117 +492,6 @@ module SessionManager =
             return Ok "Build succeeded"
     }
 
-  /// Await standby worker port discovery — posts StandbyReady or StandbySpawnFailed.
-  /// Also captures WARMUP_PROGRESS lines and posts StandbyProgress updates.
-  /// Times out after SageFsConfig.WorkerStartupTimeoutMs if no port is reported.
-  let awaitStandbyPort
-    (key: StandbyKey)
-    (proc: Process)
-    (inbox: MailboxProcessor<SessionCommand>)
-    (ct: CancellationToken)
-    =
-    Async.Start(async {
-      use cts =
-        CancellationTokenSource.CreateLinkedTokenSource(ct)
-      cts.CancelAfter(SageFsConfig.WorkerStartupTimeoutMs)
-      let linkedCt = cts.Token
-      try
-        let mutable found = None
-        while Option.isNone found do
-          let! line = proc.StandardOutput.ReadLineAsync(linkedCt).AsTask() |> Async.AwaitTask
-          match isNull line with
-          | true ->
-            let workerPid = proc.Id
-            try proc.EnableRaisingEvents <- false with _ -> ()
-            try proc.Dispose() with _ -> ()
-            inbox.Post(
-              SessionCommand.StandbySpawnFailed(
-                key,
-                workerPid,
-                "Standby worker exited before reporting port"))
-            found <- Some ""
-          | false ->
-            match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
-            | true ->
-              let payload = line.Substring("WARMUP_PROGRESS=".Length)
-              inbox.Post(SessionCommand.StandbyProgress(key, payload))
-            | false ->
-              match line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) with
-              | true ->
-                found <- Some (line.Substring("WORKER_PORT=".Length))
-              | false -> ()
-        match found with
-        | Some baseUrl when baseUrl.Length > 0 ->
-          let proxy = HttpWorkerClient.httpProxy baseUrl
-          inbox.Post(SessionCommand.StandbyReady(key, proc.Id, baseUrl, proxy))
-        | _ -> ()
-      with
-      | :? OperationCanceledException when not ct.IsCancellationRequested ->
-        // Linked CTS fired: per-standby startup timeout, NOT daemon shutdown.
-        try proc.Kill(entireProcessTree = true) with ex2 ->
-          Log.warn "[SessionManager] Kill standby on startup timeout: %s" ex2.Message
-        try proc.EnableRaisingEvents <- false with _ -> ()
-        try proc.Dispose() with _ -> ()
-        inbox.Post(
-          SessionCommand.StandbySpawnFailed(
-            key,
-            proc.Id,
-            sprintf
-              "Standby startup timed out after %dms waiting for WORKER_PORT= \
-               (set SAGEFS_WORKER_STARTUP_TIMEOUT_MS to adjust)"
-              SageFsConfig.WorkerStartupTimeoutMs))
-      | ex ->
-        try proc.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Kill standby on spawn failure: %s" ex2.Message
-        try proc.EnableRaisingEvents <- false with _ -> ()
-        try proc.Dispose() with _ -> ()
-        inbox.Post(
-          SessionCommand.StandbySpawnFailed(
-            key, proc.Id,
-            sprintf "Standby failed: %s" ex.Message))
-    }, ct)
-
-  /// Stop a standby worker process (fire-and-forget). Shutdown is bounded like
-  /// stopWorker so a hung standby cannot stall StopAll; kills use the whole tree.
-  let stopStandbyWorker (standby: StandbySession) = async {
-    let proc = standby.Process
-    let hasExited = try proc.HasExited with _ -> true
-    match hasExited with
-    | true ->
-      try proc.EnableRaisingEvents <- false with _ -> ()
-      try proc.Dispose() with _ -> ()
-    | false ->
-      try
-        match standby.Proxy with
-        | Some proxy ->
-          let shutdownTask =
-            proxy WorkerMessage.Shutdown
-            |> Async.StartAsTask
-          let! completed =
-            System.Threading.Tasks.Task.WhenAny(
-              [| shutdownTask :> System.Threading.Tasks.Task
-                 System.Threading.Tasks.Task.Delay(Timeouts.workerShutdownDelay) |])
-            |> Async.AwaitTask
-          if obj.ReferenceEquals(completed, shutdownTask) then
-            let! _ = shutdownTask |> Async.AwaitTask
-            ()
-          let exited = proc.WaitForExit(3000)
-          match exited with
-          | false ->
-            try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill standby after timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-          | true -> ()
-        | None ->
-          try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill standby (no proxy): %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-      with ex ->
-        Log.warn "[SessionManager] Standby shutdown failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        let procAlive = try proc.HasExited with _ -> true |> not
-        match procAlive with
-        | true ->
-          try proc.Kill(entireProcessTree = true) with ex2 -> Log.warn "[SessionManager] Force kill standby: %s\n%s" ex2.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        | false -> ()
-      try proc.EnableRaisingEvents <- false with _ -> ()
-      try proc.Dispose() with _ -> ()
-  }
-
   let private faultedTombstone (reason: string option) (session: ManagedSession) =
     { session with
         Proxy = pendingProxy
@@ -660,9 +506,7 @@ module SessionManager =
   let internal defaultRuntime = {
     StartWorkerProcess = startWorkerProcess
     AwaitWorkerPort = awaitWorkerPort
-    AwaitStandbyPort = awaitStandbyPort
     StopWorker = stopWorker
-    StopStandbyWorker = stopStandbyWorker
     RunBuildAsync = runBuildAsync
   }
 
@@ -842,76 +686,64 @@ module SessionManager =
             Instrumentation.failSpan span "Hard reset already in progress for this session"
             return state
           | Some session ->
-            let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow
-            let standby = PoolState.getStandby key state.Pool
-            let restartStandby =
-              standby
-              |> Option.filter (fun candidate ->
-                candidate.State = StandbyState.Ready
-                && not (String.IsNullOrWhiteSpace candidate.BaseUrl)
-                && (candidate.Proxy |> Option.exists hasValidReadyProxy))
-            match StandbyPool.decideRestart rebuild restartStandby with
-            | RestartDecision.SwapStandby readyStandby ->
-              // Fast path: swap the warm standby in
+            match rebuild with
+            | false ->
+              // Spawn-first restart: start the replacement worker BEFORE
+              // stopping the old one, so the old worker keeps serving while
+              // the new one warms up and a spawn failure leaves the session
+              // untouched (still Ready, old worker serving). The old worker is
+              // parked in PendingSwap and retired when the new worker reports
+              // Ready (see the WorkerReady commit point).
               match isNull span with
-              | false -> span.SetTag("restart.decision", "standby_swap") |> ignore
+              | false -> span.SetTag("restart.decision", "spawn_first") |> ignore
               | true -> ()
-              do! runtime.StopWorker session
-              let stateAfterStop = ManagerState.removeSession id state
-              let info : SessionInfo = {
-                Id = id
-                Name = session.Info.Name
-                Projects = session.Projects
-                WorkingDirectory = session.WorkingDir
-                SolutionRoot = session.Info.SolutionRoot
-                CreatedAt = session.Info.CreatedAt
-                LastActivity = DateTime.UtcNow
-                Status = SessionStatus.Ready
-                FaultReason = None
-                WorkerPid = Some readyStandby.Process.Id
-                WorkerPort = session.Info.WorkerPort
-                Workflow = session.Workflow
-              }
-              let swapped = {
-                Info = info
-                Process = readyStandby.Process
-                Proxy = readyStandby.Proxy |> Option.defaultValue pendingProxy
-                WorkerBaseUrl = readyStandby.BaseUrl
-                Projects = session.Projects
-                WorkingDir = session.WorkingDir
-                AutoOpenNamespaces = session.AutoOpenNamespaces
-                Workflow = session.Workflow
-                RestartState = session.RestartState
-              }
-              let poolAfterSwap = PoolState.removeStandby key stateAfterStop.Pool
-              let newState =
-                { ManagerState.addSession id swapped stateAfterStop with
-                    Pool = poolAfterSwap }
-              onStandbyProgressChanged ()
-              reply.Reply(Ok "Hard reset complete — swapped warm standby (instant).")
-              Instrumentation.sessionsRestarted.Add(1L)
-              Instrumentation.standbySwaps.Add(1L)
-              let ageMs = (DateTime.UtcNow - readyStandby.CreatedAt).TotalMilliseconds
-              Instrumentation.standbyAgeAtSwapMs.Record(ageMs)
-              Instrumentation.standbyPoolSize.Add(-1L)
-              Instrumentation.succeedSpan span
-              // Start warming a new standby for next time
-              inbox.Post(SessionCommand.WarmStandby key)
-              return newState
-            | RestartDecision.ColdRestart ->
-              // Slow path: stop the worker first (bounded), then either rebuild
-              // OFF the mailbox loop (rebuild=true) or respawn inline (rebuild=false).
+              let onExited workerPid exitCode =
+                inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
+              match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
+              | Error err ->
+                // P3 — spawn failure is free: the old worker keeps serving and
+                // the session stays exactly as it was.
+                reply.Reply(Error err)
+                Instrumentation.failSpan span (SageFsError.describe err)
+                return state
+              | Ok proc ->
+                // Registry continuity (P7): the session stays registered for the
+                // whole restart, marked Restarting with a pending proxy. The old
+                // worker's pid stays on Info.WorkerPid until the swap commits, so
+                // its real exit during warmup is ignored by the stale-pid guard
+                // (P2). The old ManagedSession is parked so WorkerReady can stop
+                // it once the new worker is up.
+                let restarting =
+                  { session with
+                      Proxy = pendingProxy
+                      WorkerBaseUrl = ""
+                      Info =
+                        { session.Info with
+                            Status = SessionStatus.Restarting
+                            WorkerPort = None
+                            LastActivity = DateTime.UtcNow } }
+                let newState =
+                  ManagerState.setPendingSwap id session
+                    { ManagerState.addSession id restarting state with
+                        WarmupProgress = Map.remove id state.WarmupProgress }
+                runtime.AwaitWorkerPort id proc inbox ct
+                reply.Reply(Ok "Hard reset accepted — replacement worker spawning.")
+                Instrumentation.sessionsRestarted.Add(1L)
+                Instrumentation.succeedSpan span
+                return newState
+            | true ->
+              // rebuild=true: stop the old worker first (bounded), then run
+              // `dotnet build` OFF the mailbox loop so other session operations
+              // (list/create/stop) stay responsive for the whole build. The
+              // caller's reply channel is parked in state and NOT answered yet —
+              // the FINAL Ok/Error is delivered when RebuildCompleted is
+              // processed (the mailbox is the single respawn point), so the
+              // caller's PostAndAsyncReply resolves only once the restart has
+              // actually completed.
               match isNull span with
               | false -> span.SetTag("restart.decision", "cold_restart") |> ignore
               | true -> ()
               do! runtime.StopWorker session
-              // Also kill any stale standby for this config
-              let poolAfterKill =
-                match standby with
-                | Some s ->
-                  Async.Start(runtime.StopStandbyWorker s, ct)
-                  PoolState.removeStandby key state.Pool
-                | None -> state.Pool
               // INVARIANT (registry preservation): a session undergoing a hard reset
               // stays registered for the whole restart, marked `Restarting`, so no
               // reader can observe a missing session mid-restart — that previously
@@ -927,35 +759,14 @@ module SessionManager =
                       WorkerBaseUrl = "" }
                 let afterMark = ManagerState.addSession id restarting state
                 { afterMark with
-                    Pool = poolAfterKill
                     WarmupProgress = Map.remove id afterMark.WarmupProgress }
-              match rebuild with
-              | false ->
-                // rebuild=false: plain restart stays inline and immediate (the
-                // old behavior) — nothing expensive runs on the loop.
-                let newState, spawnResult = spawnColdReplacement id session inbox span stateAfterStop
-                match spawnResult with
-                | Ok () ->
-                  reply.Reply(Ok "Hard reset complete — worker respawning.")
-                  return newState
-                | Error err ->
-                  reply.Reply(Error err)
-                  return newState
-              | true ->
-                // rebuild=true: run `dotnet build` OFF the mailbox loop so other
-                // session operations (list/create/stop) stay responsive for the
-                // whole build. The caller's reply channel is parked in state and
-                // NOT answered yet — the FINAL Ok/Error is delivered when
-                // RebuildCompleted is processed (the mailbox is the single
-                // respawn point), so the caller's PostAndAsyncReply resolves
-                // only once the restart has actually completed.
-                let stateInFlight = ManagerState.setRebuildInFlight id reply stateAfterStop
-                Instrumentation.succeedSpan span
-                Async.Start(async {
-                  let! buildResult = runtime.RunBuildAsync session.Projects session.WorkingDir
-                  inbox.Post(SessionCommand.RebuildCompleted(id, buildResult, reply))
-                }, ct)
-                return stateInFlight
+              let stateInFlight = ManagerState.setRebuildInFlight id reply stateAfterStop
+              Instrumentation.succeedSpan span
+              Async.Start(async {
+                let! buildResult = runtime.RunBuildAsync session.Projects session.WorkingDir
+                inbox.Post(SessionCommand.RebuildCompleted(id, buildResult, reply))
+              }, ct)
+              return stateInFlight
           | None ->
             reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
             Instrumentation.failSpan span (sprintf "Session %s not found" (SessionId.value id))
@@ -1023,7 +834,7 @@ module SessionManager =
           | None ->
             return state
 
-        | SessionCommand.WorkerReady(id, _workerPid, baseUrl, proxy) ->
+        | SessionCommand.WorkerReady(id, workerPid, baseUrl, proxy) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
             match hasValidReadyTransport baseUrl proxy with
@@ -1043,20 +854,34 @@ module SessionManager =
                 match System.Uri.TryCreate(baseUrl, System.UriKind.Absolute, &u) with
                 | true when u.Port > 0 -> Some u.Port
                 | _ -> None
+              // Commit point for a spawn-first restart: when the old worker is
+              // parked in PendingSwap, point the registry at the NEW pid FIRST
+              // (so the old worker's eventual exit event is stale/inert — P2),
+              // then install the new transport, then retire the old worker and
+              // clear the pending entry. If no swap is pending this is a plain
+              // create/rebuild-recovery WorkerReady and pid/transport install
+              // is the same as before.
               let updated =
                 { session with
                     Proxy = proxy
                     WorkerBaseUrl = baseUrl
-                    Info = { session.Info with WorkerPort = workerPort } }
-              let newState =
+                    Info =
+                      { session.Info with
+                          WorkerPort = workerPort
+                          WorkerPid = Some workerPid } }
+              let stateAfterInstall =
                 { ManagerState.addSession id updated state with
                     WarmupProgress = Map.remove id state.WarmupProgress }
-              // Trigger standby warmup for this session's config
-              let key = StandbyKey.fromSession session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow
-              match state.Pool.Enabled && (PoolState.getStandby key state.Pool |> Option.isNone) with
-              | true -> inbox.Post(SessionCommand.WarmStandby key)
-              | false -> ()
-              onStandbyProgressChanged ()
+              let newState =
+                match ManagerState.tryGetPendingSwap id state with
+                | Some oldSession ->
+                  // Retire the old worker off the critical path; its exit event
+                  // now carries a pid that no longer matches Info.WorkerPid, so
+                  // WorkerExited will ignore it (stale-pid guard).
+                  Async.Start(runtime.StopWorker oldSession, ct)
+                  ManagerState.clearPendingSwap id stateAfterInstall
+                | None ->
+                  stateAfterInstall
               onSessionReady id
               // Poll worker until it reports Ready, then update snapshot.
               // Uses while loop with CT check to stop cleanly on daemon shutdown
@@ -1132,23 +957,48 @@ module SessionManager =
         | SessionCommand.WorkerSpawnFailed(id, workerPid, msg) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
-            // Ignore stale spawn-failure events from a replaced worker: a hard
-            // reset kills the old process while its awaitWorkerPort task is
-            // still reading stdout; on EOF it posts WorkerSpawnFailed, which
-            // would tombstone the FRESH worker to Faulted. The pid on the
-            // message exists precisely so this race can be closed (the same
-            // discipline WorkerExited already applies).
-            match session.Info.WorkerPid with
-            | Some currentPid when workerPid > 0 && currentPid <> workerPid ->
-              Log.warn "[SessionManager] Ignoring stale WorkerSpawnFailed for session %s (event pid %d != current pid %d)" (SessionId.value id) workerPid currentPid
-              return state
-            | _ ->
-              Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
-              let updated = faultedTombstone (Some msg) session
-              let newState = ManagerState.addSession id updated state
-              onSessionReady id  // notify clients of Faulted state change
-              onSessionFaulted id msg
-              return newState
+            match ManagerState.tryGetPendingSwap id state with
+            | Some oldSession ->
+              // Spawn-first restart in progress: the failure is for the NEW
+              // (pending) worker — its pid differs from the registered session's
+              // pid (which still points at the OLD, still-serving worker). This
+              // is NOT stale: the pending worker genuinely failed to come up.
+              // Fail-closed per P3/P4: revert the swap — restore the old session
+              // (still Ready, old worker serving) and clear the pending entry.
+              match session.Info.WorkerPid with
+              | Some oldPid when oldPid <> workerPid && workerPid > 0 ->
+                Log.warn "[SessionManager] Replacement worker spawn failed for session %s; reverting to the still-serving old worker: %s" (SessionId.value id) msg
+                let newState =
+                  ManagerState.clearPendingSwap id
+                    { ManagerState.addSession id oldSession state with
+                        WarmupProgress = Map.remove id state.WarmupProgress }
+                onSessionReady id
+                return newState
+              | _ ->
+                Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
+                let updated = faultedTombstone (Some msg) session
+                let newState = ManagerState.addSession id updated state
+                onSessionReady id  // notify clients of Faulted state change
+                onSessionFaulted id msg
+                return newState
+            | None ->
+              // Ignore stale spawn-failure events from a replaced worker: a hard
+              // reset kills the old process while its awaitWorkerPort task is
+              // still reading stdout; on EOF it posts WorkerSpawnFailed, which
+              // would tombstone the FRESH worker to Faulted. The pid on the
+              // message exists precisely so this race can be closed (the same
+              // discipline WorkerExited already applies).
+              match session.Info.WorkerPid with
+              | Some currentPid when workerPid > 0 && currentPid <> workerPid ->
+                Log.warn "[SessionManager] Ignoring stale WorkerSpawnFailed for session %s (event pid %d != current pid %d)" (SessionId.value id) workerPid currentPid
+                return state
+              | _ ->
+                Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
+                let updated = faultedTombstone (Some msg) session
+                let newState = ManagerState.addSession id updated state
+                onSessionReady id  // notify clients of Faulted state change
+                onSessionFaulted id msg
+                return newState
           | None ->
             return state
 
@@ -1157,6 +1007,19 @@ module SessionManager =
                        [("session.id", box id); ("worker.pid", box workerPid); ("exit_code", box exitCode)]
           match ManagerState.tryGetSession id state with
           | Some session ->
+            // During a spawn-first restart (pending swap), the OLD worker's exit
+            // is expected — it is being retired once the new worker reports
+            // Ready (or the swap reverts). Treat its exit as inert so it can
+            // never be mistaken for a real crash of the registered session.
+            match ManagerState.tryGetPendingSwap id state with
+            | Some oldSession when workerPid > 0 && oldSession.Info.WorkerPid = Some workerPid ->
+              Log.warn "[SessionManager] Ignoring retired worker exit for session %s during spawn-first restart (pid %d)" (SessionId.value id) workerPid
+              match isNull span with
+              | false -> span.SetTag("stale_event", true) |> ignore
+              | true -> ()
+              Instrumentation.succeedSpan span
+              return state
+            | _ ->
             // Ignore stale exit events from old workers (e.g., after RestartSession)
             // Also ignore synthetic NotifyWorkerDied events (workerPid = -1) which
             // should not be treated as real process exits.
@@ -1318,104 +1181,13 @@ module SessionManager =
             return state
 
         | SessionCommand.StopAll reply ->
-          // Graceful shutdown of all sessions and standbys — run in parallel
-          // to avoid N×5s sequential timeout during shutdown
+          // Graceful shutdown of all sessions — run in parallel to avoid N×5s
+          // sequential timeout during shutdown.
           let sessionTasks =
             [ for KeyValue(_, session) in state.Sessions -> runtime.StopWorker session ]
-          let standbyTasks =
-            [ for KeyValue(_, standby) in state.Pool.Standbys -> runtime.StopStandbyWorker standby ]
-          do! sessionTasks @ standbyTasks |> Async.Parallel |> Async.Ignore
+          do! sessionTasks |> Async.Parallel |> Async.Ignore
           reply.Reply(())
           return ManagerState.empty
-
-        // --- Standby pool commands ---
-
-        | SessionCommand.WarmStandby key ->
-          // Only warm if enabled and no standby exists for this config
-          match state.Pool.Enabled
-                && (PoolState.getStandby key state.Pool |> Option.isNone) with
-          | true ->
-            // Generate a temporary session ID for the standby worker
-            let standbyId = SessionId.newId()
-            let onExited workerPid _exitCode =
-              inbox.Post(SessionCommand.StandbyExited(key, workerPid))
-            match runtime.StartWorkerProcess standbyId key.Projects key.WorkingDir key.AutoOpenNamespaces key.Workflow onExited with
-            | Ok proc ->
-              let standby = {
-                Process = proc
-                Proxy = None
-                BaseUrl = ""
-                State = StandbyState.Warming
-                WarmupProgress = None
-                Projects = key.Projects
-                WorkingDir = key.WorkingDir
-                CreatedAt = DateTime.UtcNow
-              }
-              let newPool = PoolState.setStandby key standby state.Pool
-              onStandbyProgressChanged ()
-              runtime.AwaitStandbyPort key proc inbox ct
-              return { state with Pool = newPool }
-            | Error _ ->
-              // Spawn failed — just skip, cold restart still works
-              return state
-          | false ->
-            return state
-
-        | SessionCommand.StandbyReady(key, _workerPid, baseUrl, proxy) ->
-          match PoolState.getStandby key state.Pool with
-          | Some standby when standby.State = StandbyState.Warming ->
-            match hasValidReadyTransport baseUrl proxy with
-            | false ->
-              do! runtime.StopStandbyWorker standby
-              let newPool = PoolState.removeStandby key state.Pool
-              onStandbyProgressChanged ()
-              return { state with Pool = newPool }
-            | true ->
-              let ready =
-                { standby with
-                    Proxy = Some proxy
-                    BaseUrl = baseUrl
-                    State = StandbyState.Ready
-                    WarmupProgress = None }
-              let newPool = PoolState.setStandby key ready state.Pool
-              let warmupMs = (DateTime.UtcNow - standby.CreatedAt).TotalMilliseconds
-              Instrumentation.standbyWarmupMs.Record(warmupMs)
-              Instrumentation.standbyPoolSize.Add(1L)
-              onStandbyProgressChanged ()
-              return { state with Pool = newPool }
-          | _ ->
-            // Stale or unexpected — ignore
-            return state
-
-        | SessionCommand.StandbySpawnFailed(key, _workerPid, _msg) ->
-          // Remove the failed standby
-          match PoolState.getStandby key state.Pool with
-          | Some _ ->
-            let newPool = PoolState.removeStandby key state.Pool
-            onStandbyProgressChanged ()
-            return { state with Pool = newPool }
-          | None ->
-            return state
-
-        | SessionCommand.StandbyExited(key, _workerPid) ->
-          // Standby worker exited — remove it
-          match PoolState.getStandby key state.Pool with
-          | Some _ ->
-            let newPool = PoolState.removeStandby key state.Pool
-            onStandbyProgressChanged ()
-            return { state with Pool = newPool }
-          | None ->
-            return state
-
-        | SessionCommand.StandbyProgress(key, progress) ->
-          match PoolState.getStandby key state.Pool with
-          | Some standby when standby.State = StandbyState.Warming ->
-            let updated = { standby with WarmupProgress = Some progress }
-            let newPool = PoolState.setStandby key updated state.Pool
-            onStandbyProgressChanged ()
-            return { state with Pool = newPool }
-          | _ ->
-            return state
 
         | SessionCommand.WorkerWarmupProgress(id, progress) ->
           let newState =
@@ -1439,29 +1211,6 @@ module SessionManager =
             return newState
           | None ->
             return state
-
-        | SessionCommand.InvalidateStandbys workingDir ->
-          // Kill and remove standbys matching this working dir
-          let toKill =
-            state.Pool.Standbys
-            |> Map.filter (fun k _ -> System.String.Equals(k.WorkingDir, workingDir, System.StringComparison.OrdinalIgnoreCase))
-          for KeyValue(_, standby) in toKill do
-            Instrumentation.standbyInvalidations.Add(1L)
-            Instrumentation.standbyPoolSize.Add(-1L)
-            Async.Start(runtime.StopStandbyWorker standby, ct)
-          let newPool =
-            toKill
-            |> Map.fold (fun pool k _ -> PoolState.removeStandby k pool) state.Pool
-          match toKill.IsEmpty with
-          | true ->
-            return state
-          | false ->
-            onStandbyProgressChanged ()
-            return { state with Pool = newPool }
-
-        | SessionCommand.GetStandbyInfo reply ->
-          reply.Reply (computeStandbyInfo state.Pool)
-          return state
       }
       /// Supervision wrapper: an UNEXPECTED exception escaping a handler must
       /// not kill the mailbox (that would orphan every session — no snapshot
@@ -1507,8 +1256,6 @@ module SessionManager =
             tryReply reply (ManagerState.allInfos state)
           | SessionCommand.StopAll reply ->
             tryReply reply ()
-          | SessionCommand.GetStandbyInfo reply ->
-            tryReply reply (computeStandbyInfo state.Pool)
           | _ -> ()
           return state
       }

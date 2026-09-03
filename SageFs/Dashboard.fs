@@ -283,13 +283,11 @@ let private buildOutputPanels
             corrected
             |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
             |> List.map (fun s ->
-              let info = q.GetSessionStandbyInfo s.Id
               let testSummary = q.GetSessionTestSummary s.Id
               let coverageSummary = q.GetSessionCoverageSummary s.Id
               let treemapEntries = q.GetSessionTestTreemap s.Id
               let bindingEntries = q.GetSessionBindings s.Id
               { s with
-                  StandbyLabel = StandbyInfo.label info
                   TestSummary = testSummary
                   CoverageSummary = coverageSummary
                   TestTreemapEntries = treemapEntries
@@ -971,9 +969,6 @@ let createSessionActionHandler
             let visible =
               corrected
               |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
-              |> List.map (fun s ->
-                let info = q.GetSessionStandbyInfo s.Id
-                { s with StandbyLabel = StandbyInfo.label info })
             do! ssePatchNode ctx (renderSessions visible false)
           | None -> ()
         | None -> ()
@@ -1011,9 +1006,6 @@ let createSessionActionHandler
             let visible =
               corrected
               |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
-              |> List.map (fun s ->
-                let info = q.GetSessionStandbyInfo s.Id
-                { s with StandbyLabel = StandbyInfo.label info })
             do! ssePatchNode ctx (renderSessions visible false)
           | None -> ()
         | None -> ()
@@ -1393,7 +1385,6 @@ let createApiStateHandler
                       icon = SageFs.Features.LiveTesting.GutterIcon.toLabel a.Icon
                       tooltip = a.Tooltip |}) |})
         | None -> []
-      let! standby = q.GetStandbyInfo ()
       let liveTestingStatus = q.GetLiveTestingStatus ()
       let! hrState = q.GetHotReloadState activeSid
       let watchedCount = hrState |> Option.map (fun hr -> hr.watchedCount) |> Option.defaultValue 0
@@ -1409,7 +1400,6 @@ let createApiStateHandler
              evalCount = stats.EvalCount
              avgMs = if stats.EvalCount > 0 then stats.TotalDuration.TotalMilliseconds / float stats.EvalCount else 0.0
              activeWorkingDir = activeDir
-             standbyLabel = StandbyInfo.label standby
              liveTestingStatus = liveTestingStatus
              watchedCount = watchedCount
              regions = regions

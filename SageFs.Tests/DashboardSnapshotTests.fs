@@ -83,7 +83,6 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         Uptime = "3m"
         WorkingDir = @"C:\Code\MyProj"
         LastActivity = "eval"
-        StandbyLabel = ""
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
@@ -97,7 +96,6 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         Uptime = ""
         WorkingDir = ""
         LastActivity = ""
-        StandbyLabel = ""
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
@@ -161,8 +159,6 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetElmRegionsForSession = fun _ -> None
       GetPreviousSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
-      GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult StandbyInfo.NoPool
-      GetSessionStandbyInfo = fun _ -> StandbyInfo.NoPool
       GetHotReloadState = fun _ -> System.Threading.Tasks.Task.FromResult None
       GetWarmupContext = fun _ -> System.Threading.Tasks.Task.FromResult None
       GetWarmupProgress = fun _ -> ""
@@ -270,7 +266,6 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         Uptime = "15m"
         WorkingDir = @"C:\Code\MyProj"
         LastActivity = "eval"
-        StandbyLabel = ""
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
@@ -407,12 +402,12 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     let sessions = [
       { Id = sessionA; Status = SessionDisplayStatus.Running; StatusMessage = None
         IsActive = true; IsSelected = false; ProjectsText = "(A.fsproj)"; EvalCount = 1
-        Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"; StandbyLabel = ""
+        Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
       { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
         IsActive = false; IsSelected = true; ProjectsText = "(B.fsproj)"; EvalCount = 1
-        Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"; StandbyLabel = ""
+        Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
     ]
@@ -535,100 +530,6 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     // This test verifies the shell wires up the SSE stream that triggers the initial state push.
     let html = renderShell "0.0.0" "" (Elem.div [] []) |> renderNode
     Expect.stringContains html "/dashboard/stream" "shell connects to SSE stream endpoint for initial push"
-  }
-]
-
-let standbyBadgeSseTests = testList "SSE standby badge" [
-
-  test "ready standby shows green badge" {
-    let getState _ = SessionState.Ready
-    let getMsg _ = None
-    let getStandby _ = StandbyInfo.Ready
-    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
-    let html = renderRegionForSse getState getMsg getStandby r |> Option.map renderNode |> Option.defaultValue ""
-    Expect.isTrue (html.Contains "standby") "should contain standby"
-    Expect.isTrue (html.Contains "var(--fg-green)") "ready standby should use green"
-  }
-
-  test "warming standby shows yellow badge" {
-    let getState _ = SessionState.Ready
-    let getMsg _ = None
-    let getStandby _ = StandbyInfo.Warming ""
-    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
-    let html = renderRegionForSse getState getMsg getStandby r |> Option.map renderNode |> Option.defaultValue ""
-    Expect.isTrue (html.Contains "standby") "should contain standby"
-    Expect.isTrue (html.Contains "var(--fg-yellow)") "warming standby should use yellow"
-  }
-
-  test "invalidated standby shows red badge" {
-    let getState _ = SessionState.Ready
-    let getMsg _ = None
-    let getStandby _ = StandbyInfo.Invalidated
-    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
-    let html = renderRegionForSse getState getMsg getStandby r |> Option.map renderNode |> Option.defaultValue ""
-    Expect.isTrue (html.Contains "standby") "should contain standby"
-    Expect.isTrue (html.Contains "var(--fg-red)") "invalidated standby should use red"
-  }
-
-  test "no pool shows no badge" {
-    let getState _ = SessionState.Ready
-    let getMsg _ = None
-    let getStandby _ = StandbyInfo.NoPool
-    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
-    let html = renderRegionForSse getState getMsg getStandby r |> Option.map renderNode |> Option.defaultValue ""
-    Expect.isFalse (html.Contains "standby") "NoPool should not show standby badge"
-  }
-
-  test "StandbyInfo.label maps correctly" {
-    Expect.equal (StandbyInfo.label StandbyInfo.NoPool) "" "NoPool -> empty"
-    Expect.equal (StandbyInfo.label (StandbyInfo.Warming "")) "⏳ standby" "Warming empty"
-    Expect.equal (StandbyInfo.label (StandbyInfo.Warming "2/4 Scanned 12 files")) "⏳ 2/4 Scanned 12 files" "Warming with progress"
-    Expect.equal (StandbyInfo.label StandbyInfo.Ready) "✓ standby" "Ready"
-    Expect.equal (StandbyInfo.label StandbyInfo.Invalidated) "⚠ standby" "Invalidated"
-  }
-
-  test "output region unaffected by standby" {
-    let getState _ = SessionState.Ready
-    let getMsg _ = None
-    let getStandby _ = StandbyInfo.Ready
-    let r = mkRegion "output" "[12:00:00] [info] hello world"
-    let html = renderRegionForSse getState getMsg getStandby r |> Option.map renderNode |> Option.defaultValue ""
-    Expect.isFalse (html.Contains "standby") "output region should not contain standby"
-  }
-
-  test "unknown region returns None" {
-    let getState _ = SessionState.Ready
-    let getMsg _ = None
-    let getStandby _ = StandbyInfo.Ready
-    let r = mkRegion "unknown" "whatever"
-    Expect.isNone (renderRegionForSse getState getMsg getStandby r) "unknown region -> None"
-  }
-]
-
-let warmupProgressSseTests = testList "Standby warmup progress SSE" [
-  test "warming badge with progress shows phase text" {
-    let getState _ = SessionState.Ready
-    let getMsg _ = None
-    let getStandby _ = StandbyInfo.Warming "2/4 Scanned 12 files"
-    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
-    let result = renderRegionForSse getState getMsg getStandby r
-    match result with
-    | Some node ->
-      let html = renderNode node
-      Expect.stringContains html "⏳ 2/4 Scanned 12 files" "should show progress"
-    | None -> failtest "should render sessions region"
-  }
-  test "warming badge with empty progress shows default" {
-    let getState _ = SessionState.Ready
-    let getMsg _ = None
-    let getStandby _ = StandbyInfo.Warming ""
-    let r = mkRegion "sessions" "  0a2b3c4d [ready] * (SageFs.Tests.fsproj) evals:42 up:1m dir:C:\\Code\\Repos\\SageFs last:now"
-    let result = renderRegionForSse getState getMsg getStandby r
-    match result with
-    | Some node ->
-      let html = renderNode node
-      Expect.stringContains html "⏳ standby" "should show default label"
-    | None -> failtest "should render"
   }
 ]
 
@@ -1153,9 +1054,7 @@ let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   edgeCaseSnapshotTests
   parserTests
   shellStructureTests
-  standbyBadgeSseTests
   bindingsPanelSseTests
-  warmupProgressSseTests
   zeroJsBadgeTests
   railwayVisualizationTests
   testFilterTests

@@ -54,13 +54,6 @@ let genExitCode =
     1, Gen.constant 137
   ]
 
-let genStandbyState =
-  Gen.elements [
-    StandbyState.Warming
-    StandbyState.Ready
-    StandbyState.Invalidated
-  ]
-
 // ── SessionLifecycle property tests ──
 
 let lifecyclePropertyTests = testList "SessionLifecycle properties" [
@@ -122,127 +115,6 @@ let lifecyclePropertyTests = testList "SessionLifecycle properties" [
       | other -> failtestf "fresh state should restart, got %A" other
 ]
 
-// ── StandbyPool decision property tests ──
-
-let standbyDecisionTests = testList "StandbyPool.decideRestart properties" [
-
-  testPropertyWithConfig propConfig "rebuild=true always yields ColdRestart" <|
-    fun () ->
-      let standby = pick (Gen.optionOf (Gen.constant {
-          StandbySession.Process = null
-          Proxy = Some (fun _ -> async { return WorkerResponse.WorkerReady })
-          BaseUrl = "http://localhost:1234"
-          State = StandbyState.Ready
-          WarmupProgress = None
-          Projects = ["test.fsproj"]
-          WorkingDir = "C:\\test"
-          CreatedAt = DateTime.UtcNow
-        }))
-      match StandbyPool.decideRestart true standby with
-      | RestartDecision.ColdRestart -> ()
-      | RestartDecision.SwapStandby _ -> failtest "rebuild=true must cold restart"
-
-  testPropertyWithConfig propConfig "None standby always yields ColdRestart" <|
-    fun () ->
-      let rebuild = pick (ArbMap.defaults |> ArbMap.generate<bool>)
-      match StandbyPool.decideRestart rebuild None with
-      | RestartDecision.ColdRestart -> ()
-      | RestartDecision.SwapStandby _ -> failtest "None standby must cold restart"
-
-  test "Ready standby with proxy and rebuild=false yields SwapStandby" {
-    let standby = Some {
-      StandbySession.Process = null
-      Proxy = Some (fun _ -> async { return WorkerResponse.WorkerReady })
-      BaseUrl = "http://localhost:1234"
-      State = StandbyState.Ready
-      WarmupProgress = None
-      Projects = ["test.fsproj"]
-      WorkingDir = "C:\\test"
-      CreatedAt = DateTime.UtcNow
-    }
-    match StandbyPool.decideRestart false standby with
-    | RestartDecision.SwapStandby _ -> ()
-    | RestartDecision.ColdRestart -> failtest "ready standby should swap"
-  }
-
-  test "Warming standby yields ColdRestart" {
-    let standby = Some {
-      StandbySession.Process = null
-      Proxy = None
-      BaseUrl = ""
-      State = StandbyState.Warming
-      WarmupProgress = Some "Loading..."
-      Projects = ["test.fsproj"]
-      WorkingDir = "C:\\test"
-      CreatedAt = DateTime.UtcNow
-    }
-    match StandbyPool.decideRestart false standby with
-    | RestartDecision.ColdRestart -> ()
-    | RestartDecision.SwapStandby _ -> failtest "warming standby should cold restart"
-  }
-
-  test "Ready standby without proxy yields ColdRestart" {
-    let standby = Some {
-      StandbySession.Process = null
-      Proxy = None
-      BaseUrl = "http://localhost:1234"
-      State = StandbyState.Ready
-      WarmupProgress = None
-      Projects = ["test.fsproj"]
-      WorkingDir = "C:\\test"
-      CreatedAt = DateTime.UtcNow
-    }
-    match StandbyPool.decideRestart false standby with
-    | RestartDecision.ColdRestart -> ()
-    | RestartDecision.SwapStandby _ -> failtest "no proxy should cold restart"
-  }
-]
-
-// ── shouldWarmStandby property tests ──
-
-let warmupDecisionTests = testList "StandbyPool.shouldWarmStandby properties" [
-
-  testPropertyWithConfig propConfig "disabled pool never warms" <|
-    fun () ->
-      let status = pick genSessionStatus
-      StandbyPool.shouldWarmStandby status None false
-      |> Expect.isFalse "disabled pool should not warm"
-
-  testPropertyWithConfig propConfig "existing standby prevents warming" <|
-    fun () ->
-      let standby = Some {
-        StandbySession.Process = null
-        Proxy = None; BaseUrl = ""; State = StandbyState.Warming
-        WarmupProgress = None; Projects = []; WorkingDir = ""; CreatedAt = DateTime.UtcNow
-      }
-      let status = pick genSessionStatus
-      StandbyPool.shouldWarmStandby status standby true
-      |> Expect.isFalse "existing standby should prevent warming"
-
-  testPropertyWithConfig propConfig "healthy status + no standby + enabled => warm" <|
-    fun () ->
-      let healthyStatuses = [
-        SessionStatus.Ready
-        SessionStatus.Evaluating
-        SessionStatus.Building "test"
-      ]
-      for status in healthyStatuses do
-        StandbyPool.shouldWarmStandby status None true
-        |> Expect.isTrue (sprintf "healthy status %A should warm" status)
-
-  testPropertyWithConfig propConfig "unhealthy status never warms" <|
-    fun () ->
-      let unhealthyStatuses = [
-        SessionStatus.Starting
-        SessionStatus.Faulted
-        SessionStatus.Restarting
-        SessionStatus.Stopped
-      ]
-      for status in unhealthyStatuses do
-        StandbyPool.shouldWarmStandby status None true
-        |> Expect.isFalse (sprintf "unhealthy status %A should not warm" status)
-]
-
 // ── QuerySnapshot pure projection tests ──
 
 let querySnapshotTests = testList "QuerySnapshot projection properties" [
@@ -252,7 +124,6 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
     snap.Sessions |> Map.isEmpty |> Expect.isTrue "no sessions"
     snap.WarmupProgress |> Map.isEmpty |> Expect.isTrue "no warmup"
     snap.WorkerBaseUrls |> Map.isEmpty |> Expect.isTrue "no urls"
-    snap.StandbyInfo |> Expect.equal "no pool" StandbyInfo.NoPool
   }
 
   testPropertyWithConfig propConfig "snapshot session count equals state session count" <|
@@ -363,131 +234,9 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
   }
 ]
 
-// ── computeStandbyInfo property tests ──
-
-let standbyInfoTests = testList "computeStandbyInfo properties" [
-
-  test "empty pool yields NoPool" {
-    computeStandbyInfo PoolState.empty
-    |> Expect.equal "empty = NoPool" StandbyInfo.NoPool
-  }
-
-  test "disabled pool yields NoPool even with standbys" {
-    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
-    let standby = {
-      StandbySession.Process = null; Proxy = None; BaseUrl = ""
-      State = StandbyState.Ready; WarmupProgress = None
-      Projects = ["p.fsproj"]; WorkingDir = "C:\\test"; CreatedAt = DateTime.UtcNow
-    }
-    let pool = { PoolState.Standbys = Map.ofList [key, standby]; Enabled = false }
-    computeStandbyInfo pool
-    |> Expect.equal "disabled = NoPool" StandbyInfo.NoPool
-  }
-
-  test "all ready yields Ready" {
-    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
-    let standby = {
-      StandbySession.Process = null; Proxy = None; BaseUrl = ""
-      State = StandbyState.Ready; WarmupProgress = None
-      Projects = ["p.fsproj"]; WorkingDir = "C:\\test"; CreatedAt = DateTime.UtcNow
-    }
-    let pool = { PoolState.Standbys = Map.ofList [key, standby]; Enabled = true }
-    computeStandbyInfo pool
-    |> Expect.equal "all ready = Ready" StandbyInfo.Ready
-  }
-
-  test "any invalidated yields Invalidated" {
-    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
-    let standby = {
-      StandbySession.Process = null; Proxy = None; BaseUrl = ""
-      State = StandbyState.Invalidated; WarmupProgress = None
-      Projects = ["p.fsproj"]; WorkingDir = "C:\\test"; CreatedAt = DateTime.UtcNow
-    }
-    let pool = { PoolState.Standbys = Map.ofList [key, standby]; Enabled = true }
-    computeStandbyInfo pool
-    |> Expect.equal "invalidated" StandbyInfo.Invalidated
-  }
-
-  test "warming with progress shows progress" {
-    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
-    let standby = {
-      StandbySession.Process = null; Proxy = None; BaseUrl = ""
-      State = StandbyState.Warming; WarmupProgress = Some "2/4 files"
-      Projects = ["p.fsproj"]; WorkingDir = "C:\\test"; CreatedAt = DateTime.UtcNow
-    }
-    let pool = { PoolState.Standbys = Map.ofList [key, standby]; Enabled = true }
-    match computeStandbyInfo pool with
-    | StandbyInfo.Warming msg ->
-      msg |> Expect.equal "progress message" "2/4 files"
-    | other -> failtestf "expected Warming, got %A" other
-  }
-]
-
-// ── PoolState algebraic tests ──
-
-let poolStateTests = testList "PoolState algebra" [
-
-  testPropertyWithConfig propConfig "setStandby then getStandby roundtrips" <|
-    fun () ->
-      let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
-      let standby = {
-        StandbySession.Process = null; Proxy = None; BaseUrl = ""
-        State = StandbyState.Ready; WarmupProgress = None
-        Projects = ["p.fsproj"]; WorkingDir = "C:\\test"; CreatedAt = DateTime.UtcNow
-      }
-      let pool = PoolState.setStandby key standby PoolState.empty
-      PoolState.getStandby key pool
-      |> Option.isSome
-      |> Expect.isTrue "roundtrip"
-
-  testPropertyWithConfig propConfig "removeStandby makes getStandby return None" <|
-    fun () ->
-      let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
-      let standby = {
-        StandbySession.Process = null; Proxy = None; BaseUrl = ""
-        State = StandbyState.Ready; WarmupProgress = None
-        Projects = ["p.fsproj"]; WorkingDir = "C:\\test"; CreatedAt = DateTime.UtcNow
-      }
-      let pool =
-        PoolState.empty
-        |> PoolState.setStandby key standby
-        |> PoolState.removeStandby key
-      PoolState.getStandby key pool
-      |> Option.isNone
-      |> Expect.isTrue "removed"
-
-  test "removeStandby on empty pool is no-op" {
-    let key = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
-    let pool = PoolState.removeStandby key PoolState.empty
-    pool.Standbys |> Map.isEmpty |> Expect.isTrue "still empty"
-  }
-]
-
-// ── StandbyKey ordering tests ──
-
-let standbyKeyTests = testList "StandbyKey" [
-
-  test "fromSession sorts projects for deterministic keys" {
-    let key1 = StandbyKey.fromSession ["b.fsproj"; "a.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
-    let key2 = StandbyKey.fromSession ["a.fsproj"; "b.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
-    key1 |> Expect.equal "sorted projects" key2
-  }
-
-  test "different autoOpen yields different keys" {
-    let key1 = StandbyKey.fromSession ["p.fsproj"] "C:\\test" true WorkflowTypes.SessionWorkflow.Interactive
-    let key2 = StandbyKey.fromSession ["p.fsproj"] "C:\\test" false WorkflowTypes.SessionWorkflow.Interactive
-    (key1 = key2) |> Expect.isFalse "autoOpen matters"
-  }
-]
-
 [<Tests>]
 let tests = testList "Lifecycle properties" [
   lifecyclePropertyTests
-  standbyDecisionTests
-  warmupDecisionTests
   querySnapshotTests
-  standbyInfoTests
-  poolStateTests
-  standbyKeyTests
 ]
 

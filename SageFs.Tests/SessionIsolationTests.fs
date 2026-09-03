@@ -47,7 +47,6 @@ module McpSessionIsolation =
                      LastActivity = System.DateTime.UtcNow })
           GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
           UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
-          GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
           NotifyWorkerDied = fun _ -> ()
         }
         SessionMap = sessionMap
@@ -147,7 +146,6 @@ module McpSessionIsolation =
             GetSessionInfo = fun _ -> System.Threading.Tasks.Task.FromResult(None)
             GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
             UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
-            GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
             NotifyWorkerDied = fun _ -> () }
           SessionMap = sessionMap
           McpPort = 0
@@ -351,7 +349,6 @@ module WorkingDirRoutingPriority =
           GetSessionInfo = fun sid -> Task.FromResult(sessions |> List.tryFind (fun s -> s.Id = sid))
           GetAllSessions = fun () -> Task.FromResult(sessions)
           UpdateSessionStatus = fun _ _ -> Task.FromResult(())
-          GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
           NotifyWorkerDied = fun _ -> () }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
@@ -517,7 +514,6 @@ module ResetIsolation =
                  CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow })
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
       UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
-      GetStandbyInfo = fun () -> System.Threading.Tasks.Task.FromResult(SageFs.StandbyInfo.NoPool)
       NotifyWorkerDied = fun _ -> ()
     }
     let ctx =
@@ -605,7 +601,6 @@ module ResetIsolation =
       UpdateSessionStatus = fun _ status ->
         registryStatus := status
         Task.FromResult(())
-      GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
       NotifyWorkerDied = fun _ -> () }
 
     let ctx =
@@ -686,7 +681,6 @@ module ResetIsolation =
       UpdateSessionStatus = fun _ status ->
         registryStatus := status
         Task.FromResult(())
-      GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
       NotifyWorkerDied = fun sessionId ->
         workerDied.Add(WorkerProtocol.SessionId.value sessionId)
         registryStatus := WorkerProtocol.SessionStatus.Faulted }
@@ -758,7 +752,6 @@ module ResetIsolation =
         UpdateSessionStatus = fun _ status ->
           statuses.Add(status)
           Task.FromResult(())
-        GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
         NotifyWorkerDied = fun _ -> ()
       }
 
@@ -963,7 +956,6 @@ module ResetIsolation =
         UpdateSessionStatus = fun _ status ->
           statuses.Add(status)
           Task.FromResult(())
-        GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
         NotifyWorkerDied = fun sessionId ->
           workerDied.Add(WorkerProtocol.SessionId.value sessionId) }
 
@@ -1036,7 +1028,6 @@ module ResetIsolation =
           if status = WorkerProtocol.SessionStatus.Faulted then
             faultedSignal.TrySetResult(()) |> ignore
           Task.FromResult(())
-        GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
         NotifyWorkerDied = fun _ -> ()
       }
 
@@ -1118,7 +1109,6 @@ module ResetIsolation =
           if status = WorkerProtocol.SessionStatus.Faulted then
             faultedSignal.TrySetResult(()) |> ignore
           Task.FromResult(())
-        GetStandbyInfo = fun () -> Task.FromResult(SageFs.StandbyInfo.NoPool)
         NotifyWorkerDied = fun _ -> ()
       }
 

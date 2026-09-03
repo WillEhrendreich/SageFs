@@ -120,12 +120,12 @@ let registryViewTests = testList "SessionDisplay.registryView" [
       mkInfo s1 SessionStatus.Ready now
       mkInfo (testSessionId "aa000002") SessionStatus.Evaluating now
     ]
-    let view = SessionDisplay.registryView now (ActiveSession.Viewing s1) infos None StandbyInfo.NoPool
+    let view = SessionDisplay.registryView now (ActiveSession.Viewing s1) infos None
     view.Sessions.Length |> Expect.equal "should have 2 sessions" 2
     view.ActiveSessionId |> Expect.equal "active is Viewing s1" (ActiveSession.Viewing s1)
 
   testCase "empty session list with awaiting" <| fun _ ->
-    let view = SessionDisplay.registryView now ActiveSession.AwaitingSession [] None StandbyInfo.NoPool
+    let view = SessionDisplay.registryView now ActiveSession.AwaitingSession [] None
     view.Sessions |> Expect.equal "should be empty" []
     view.ActiveSessionId |> Expect.equal "should be awaiting" ActiveSession.AwaitingSession
 ]

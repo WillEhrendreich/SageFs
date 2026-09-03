@@ -225,7 +225,6 @@ module SageFsModel =
       ActiveSessionId = ActiveSession.AwaitingSession
       TotalEvals = 0
       WatchStatus = None
-      Standby = StandbyInfo.NoPool
     }
     RecentOutput = SessionOutputStore.empty
     Diagnostics = Map.empty

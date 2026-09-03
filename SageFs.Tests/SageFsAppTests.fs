@@ -2534,7 +2534,7 @@ let renderConsistencyTests = testList "Render consistency" [
       LastActivity = DateTime.UtcNow; WorkingDirectory = "C:\\Code" }
     { (SageFsModel.initial()) with
         Sessions = { Sessions = [snap]; ActiveSessionId = ActiveSession.Viewing (testSessionId "aa100001")
-                     TotalEvals = 5; WatchStatus = None; Standby = StandbyInfo.NoPool }
+                     TotalEvals = 5; WatchStatus = None }
         RecentOutput = SessionOutputStore.ofLines [
           { Kind = OutputKind.Result; Text = "val x = 42"
             Timestamp = DateTime.UtcNow; SessionId = "aa100001" }

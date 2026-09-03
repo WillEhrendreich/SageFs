@@ -66,60 +66,6 @@ let manifestPayloadBoundaryTests =
   ]
 
 // ---------------------------------------------------------------------------
-// W6 — StandbySession carries BaseUrl so hot-swap populates WorkerBaseUrl
-// ---------------------------------------------------------------------------
-// Bug: After standby hot-swap, WorkerBaseUrl was always set to "".
-//      All URL-dependent features (dashboard stats, warmup context fetch) silently failed.
-// Fix: Added BaseUrl field to StandbySession; threaded through StandbyReady message.
-
-open SageFs.WorkerProtocol
-
-[<Tests>]
-let standbyBaseUrlTests =
-  testList "StandbySession.BaseUrl threads through hot-swap" [
-
-    testCase "StandbySession has BaseUrl field" <| fun _ ->
-      let s = {
-        StandbySession.Process = new System.Diagnostics.Process()
-        Proxy = None
-        BaseUrl = "http://127.0.0.1:9999"
-        State = StandbyState.Ready
-        WarmupProgress = None
-        Projects = ["test.fsproj"]
-        WorkingDir = @"C:\test"
-        CreatedAt = DateTime.UtcNow
-      }
-      s.BaseUrl |> Expect.equal "BaseUrl should be stored" "http://127.0.0.1:9999"
-
-    testCase "StandbySession BaseUrl defaults to empty on Warming state" <| fun _ ->
-      let s = {
-        StandbySession.Process = new System.Diagnostics.Process()
-        Proxy = None
-        BaseUrl = ""
-        State = StandbyState.Warming
-        WarmupProgress = None
-        Projects = ["test.fsproj"]
-        WorkingDir = @"C:\test"
-        CreatedAt = DateTime.UtcNow
-      }
-      s.BaseUrl |> Expect.equal "BaseUrl should be empty while warming" ""
-
-    testCase "BaseUrl can be updated via record with-expression" <| fun _ ->
-      let warming = {
-        StandbySession.Process = new System.Diagnostics.Process()
-        Proxy = None
-        BaseUrl = ""
-        State = StandbyState.Warming
-        WarmupProgress = None
-        Projects = ["test.fsproj"]
-        WorkingDir = @"C:\test"
-        CreatedAt = DateTime.UtcNow
-      }
-      let ready = { warming with BaseUrl = "http://127.0.0.1:8888"; State = StandbyState.Ready }
-      ready.BaseUrl |> Expect.equal "BaseUrl should reflect the ready URL" "http://127.0.0.1:8888"
-  ]
-
-// ---------------------------------------------------------------------------
 // W8 — StopSession only appends DaemonSessionStopped when session actually stopped
 // ---------------------------------------------------------------------------
 // Bug: appendEventsAsync called before checking Result of StopSession.

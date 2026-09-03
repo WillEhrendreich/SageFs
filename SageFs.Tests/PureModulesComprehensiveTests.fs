@@ -15,7 +15,6 @@ open SageFs.Features.Events
 open SageFs.Features.Diagnostics
 open SageFs
 open SageFs.SessionManager
-open SageFs.StandbyPool
 open SageFs.Features.LiveTesting
 open SageFs.Watchdog
 open SageFs.RestartPolicy
@@ -1827,91 +1826,6 @@ let paneIdTests = testList "PaneId" [
 ]
 
 // ═══════════════════════════════════════════════════════════
-// SessionManager — computeStandbyInfo state machine
-// ═══════════════════════════════════════════════════════════
-
-let private mkStandbyKey wd name =
-  { StandbyKey.Projects = [name]; WorkingDir = wd; AutoOpenNamespaces = true; Workflow = WorkflowTypes.SessionWorkflow.Interactive }
-
-let private mkStandbySession state progress =
-  { StandbySession.Process = Unchecked.defaultof<_>
-    Proxy = None
-    BaseUrl = ""
-    State = state
-    WarmupProgress = progress
-    Projects = ["test"]
-    WorkingDir = "C:\\test"
-    CreatedAt = DateTime.UtcNow }
-
-let computeStandbyInfoTests = testList "computeStandbyInfo" [
-  test "disabled pool returns NoPool" {
-    let pool = { PoolState.Standbys = Map.empty; Enabled = false }
-    computeStandbyInfo pool |> Expect.equal "nopool" StandbyInfo.NoPool
-  }
-  test "enabled empty standbys returns NoPool" {
-    let pool = { PoolState.Standbys = Map.empty; Enabled = true }
-    computeStandbyInfo pool |> Expect.equal "nopool" StandbyInfo.NoPool
-  }
-  test "all Ready returns Ready" {
-    let pool =
-      { PoolState.Standbys =
-          Map.ofList [
-            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Ready None
-            mkStandbyKey "C:\\b" "p2", mkStandbySession StandbyState.Ready None ]
-        Enabled = true }
-    computeStandbyInfo pool |> Expect.equal "ready" StandbyInfo.Ready
-  }
-  test "any Invalidated returns Invalidated" {
-    let pool =
-      { PoolState.Standbys =
-          Map.ofList [
-            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Ready None
-            mkStandbyKey "C:\\b" "p2", mkStandbySession StandbyState.Invalidated None ]
-        Enabled = true }
-    computeStandbyInfo pool |> Expect.equal "invalidated" StandbyInfo.Invalidated
-  }
-  test "Warming with progress returns Warming msg" {
-    let pool =
-      { PoolState.Standbys =
-          Map.ofList [
-            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Warming (Some "loading refs") ]
-        Enabled = true }
-    match computeStandbyInfo pool with
-    | StandbyInfo.Warming msg -> msg |> Expect.stringContains "has loading" "loading"
-    | other -> failwithf "Expected Warming, got %A" other
-  }
-  test "Warming without progress returns Warming" {
-    let pool =
-      { PoolState.Standbys =
-          Map.ofList [
-            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Warming None ]
-        Enabled = true }
-    match computeStandbyInfo pool with
-    | StandbyInfo.Warming _ -> ()
-    | other -> failwithf "Expected Warming, got %A" other
-  }
-  test "Invalidated takes priority over Warming" {
-    let pool =
-      { PoolState.Standbys =
-          Map.ofList [
-            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Warming (Some "x")
-            mkStandbyKey "C:\\b" "p2", mkStandbySession StandbyState.Invalidated None ]
-        Enabled = true }
-    computeStandbyInfo pool |> Expect.equal "invalidated wins" StandbyInfo.Invalidated
-  }
-  test "Invalidated takes priority over Ready" {
-    let pool =
-      { PoolState.Standbys =
-          Map.ofList [
-            mkStandbyKey "C:\\a" "p1", mkStandbySession StandbyState.Ready None
-            mkStandbyKey "C:\\b" "p2", mkStandbySession StandbyState.Invalidated None
-            mkStandbyKey "C:\\c" "p3", mkStandbySession StandbyState.Ready None ]
-        Enabled = true }
-    computeStandbyInfo pool |> Expect.equal "invalidated wins" StandbyInfo.Invalidated
-  }
-]
-
-// ═══════════════════════════════════════════════════════════
 // ManagerState — empty state safety
 // ═══════════════════════════════════════════════════════════
 
@@ -1926,34 +1840,6 @@ let managerStateTests = testList "ManagerState" [
   test "removeSession on empty is safe" {
     let result = ManagerState.empty |> ManagerState.removeSession (SageFs.WorkerProtocol.SessionId.newId())
     result.Sessions |> Expect.isEmpty "still empty"
-  }
-  test "empty pool is enabled by default" {
-    ManagerState.empty.Pool.Enabled |> Expect.isTrue "enabled"
-  }
-  test "empty pool has no standbys" {
-    ManagerState.empty.Pool.Standbys |> Expect.isEmpty "no standbys"
-  }
-]
-
-// ═══════════════════════════════════════════════════════════
-// StandbyInfo.label — display string for each state
-// ═══════════════════════════════════════════════════════════
-
-let standbyInfoLabelTests = testList "StandbyInfo.label" [
-  test "NoPool is empty" {
-    StandbyInfo.label StandbyInfo.NoPool |> Expect.equal "empty" ""
-  }
-  test "Ready shows checkmark" {
-    StandbyInfo.label StandbyInfo.Ready |> Expect.stringContains "has check" "✓"
-  }
-  test "Invalidated shows warning" {
-    StandbyInfo.label StandbyInfo.Invalidated |> Expect.stringContains "has warning" "⚠"
-  }
-  test "Warming with message shows phase" {
-    StandbyInfo.label (StandbyInfo.Warming "loading") |> Expect.stringContains "has phase" "loading"
-  }
-  test "Warming with empty message shows standby" {
-    StandbyInfo.label (StandbyInfo.Warming "") |> Expect.stringContains "has standby" "standby"
   }
 ]
 
@@ -2532,10 +2418,8 @@ let allPureModulesTests = testList "Pure modules comprehensive" [
     layoutComputeTests
     paneIdTests
   ]
-  testList "SessionManager, StandbyPool, GutterRender, McpAdapter" [
-    computeStandbyInfoTests
+  testList "SessionManager, GutterRender, McpAdapter" [
     managerStateTests
-    standbyInfoLabelTests
     gutterRenderTests
     mcpAdapterPureTests
     watchdogDecideTests

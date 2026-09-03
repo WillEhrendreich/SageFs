@@ -30,7 +30,6 @@
         <Compile Include="HotReloadToolTests.fs" />
         <Compile Include="SessionResetTests.fs" />
         <Compile Include="ShadowCopyTests.fs" />
-        <Compile Include="StandbyPoolTests.fs" />
         <Compile Include="DiagnosticsToolTests.fs" />
         <Compile Include="DiagnosticsStoreTests.fs" />
         <Compile Include="ActorCreationTests.fs" />
@@ -102,6 +101,7 @@
         <Compile Include="HotReloadEndpointTests.fs" />
         <Compile Include="DevReloadTests.fs" />
         <Compile Include="WorkerHttpTransportTests.fs" />
+        <Compile Include="WorkerHttpGuardTests.fs" />
         <Compile Include="SessionIsolationTests.fs" />
         <Compile Include="ShutdownLifecycleTests.fs" />
         <Compile Include="CompletionsContractTests.fs" />
@@ -157,6 +157,7 @@
          <Compile Include="SessionPredicatesAndUiTests.fs" />
          <Compile Include="SessionManagerCqrsTests.fs" />
          <Compile Include="SessionManagerRestartTombstoneTests.fs" />
+         <Compile Include="SessionManagerSpawnFirstRestartTests.fs" />
          <Compile Include="SessionManagerMailboxSupervisionTests.fs" />
          <Compile Include="AutoCompletionAndEventsTests.fs" />
          <Compile Include="DrawAndRectPrimitivesTests.fs" />

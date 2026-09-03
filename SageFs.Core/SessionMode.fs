@@ -24,8 +24,6 @@ type SessionManagementOps = {
   /// Update the daemon-side snapshot status for an existing session.
   /// Used when the worker changes phase without a full process restart.
   UpdateSessionStatus: SessionId -> SessionStatus -> Task<unit>
-  /// Get summary of standby pool state for UI display.
-  GetStandbyInfo: unit -> Task<StandbyInfo>
   /// Notify that a worker died unexpectedly (pipe broken mid-request).
   /// Closes the race window between pipe failure and proc.Exited event firing.
   NotifyWorkerDied: SessionId -> unit
@@ -43,6 +41,5 @@ module SessionManagementOps =
     GetSessionInfo = fun _ -> Task.FromResult(None)
     GetAllSessions = fun () -> Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
-    GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
     NotifyWorkerDied = fun _ -> ()
   }

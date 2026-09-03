@@ -31,7 +31,6 @@ type StateEvent = {
   EvalCount: int
   AvgMs: float
   ActiveWorkingDir: string
-  StandbyLabel: string
   LiveTestingStatus: string
   WatchedCount: int
   Regions: DaemonRegionData list
@@ -113,10 +112,6 @@ module DaemonClient =
         match root.TryGetProperty("activeWorkingDir") with
         | true, el -> el.GetString()
         | _ -> ""
-      let standbyLabel =
-        match root.TryGetProperty("standbyLabel") with
-        | true, el -> el.GetString()
-        | _ -> ""
       let liveTestingStatus =
         match root.TryGetProperty("liveTestingStatus") with
         | true, el -> el.GetString()
@@ -156,7 +151,6 @@ module DaemonClient =
         EvalCount = evalCount
         AvgMs = avgMs
         ActiveWorkingDir = activeWorkingDir
-        StandbyLabel = standbyLabel
         LiveTestingStatus = liveTestingStatus
         WatchedCount = watchedCount
         Regions = regions

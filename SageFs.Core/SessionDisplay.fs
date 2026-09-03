@@ -55,7 +55,6 @@ type SessionRegistryView = {
   ActiveSessionId: ActiveSession
   TotalEvals: int
   WatchStatus: WatchStatus option
-  Standby: StandbyInfo
 }
 
 /// Pure functions to build display state from domain state
@@ -101,15 +100,13 @@ module SessionDisplay =
     (active: ActiveSession)
     (sessions: SessionInfo list)
     (watchStatus: WatchStatus option)
-    (standby: StandbyInfo)
     : SessionRegistryView =
     let snapshots =
       sessions |> List.map (snapshot now)
     { Sessions = snapshots
       ActiveSessionId = active
       TotalEvals = snapshots |> List.sumBy (fun s -> s.EvalCount)
-      WatchStatus = watchStatus
-      Standby = standby }
+      WatchStatus = watchStatus }
 
   /// Build affordances for a session card
   let sessionAffordances (keyMap: KeyMap) (active: ActiveSession) (snap: SessionSnapshot) : Affordance list =

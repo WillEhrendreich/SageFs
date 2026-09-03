@@ -12,7 +12,6 @@ type private Harness = {
   Mailbox: MailboxProcessor<SessionCommand>
   ReadSnapshot: unit -> QuerySnapshot
   FaultedEvents: ResizeArray<SessionId * string>
-  GetStandbyProgressNotifications: unit -> int
   Cancellation: CancellationTokenSource
 }
 
@@ -26,6 +25,27 @@ let private pendingProxyLooksPending (proxy: SessionProxy) =
   match proxy (WorkerMessage.GetStatus "pending") |> Async.RunSynchronously with
   | WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed _) -> true
   | _ -> false
+
+/// A proxy that reports a Ready status snapshot — simulates a live worker.
+let private readyProxy =
+  fun (msg: WorkerMessage) ->
+    async {
+      match msg with
+      | WorkerMessage.GetStatus rid ->
+        let snap : WorkerStatusSnapshot = {
+          Status = SessionStatus.Ready
+          StatusMessage = None
+          EvalCount = 0
+          AvgDurationMs = 0L
+          MinDurationMs = 0L
+          MaxDurationMs = 0L
+        }
+        return WorkerResponse.StatusResult(rid, snap)
+      | WorkerMessage.GetTestDiscovery rid ->
+        return WorkerResponse.InitialTestDiscovery([||], [])
+      | _ ->
+        return WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed "unexpected message")
+    }
 
 let private mkRuntime
   (runBuild: int -> Result<string, string>)
@@ -41,9 +61,7 @@ let private mkRuntime
             startCalls <- startCalls + 1
             startWorker startCalls
         AwaitWorkerPort = fun _ _ _ _ -> ()
-        AwaitStandbyPort = fun _ _ _ _ -> ()
         StopWorker = fun _ -> async { return () }
-        StopStandbyWorker = fun _ -> async { return () }
         RunBuildAsync =
           fun _ _ -> async {
             buildCalls <- buildCalls + 1
@@ -57,12 +75,11 @@ let private mkRuntime
 let private withHarness runtime run =
   use cancellation = new CancellationTokenSource()
   let faultedEvents = ResizeArray<SessionId * string>()
-  let standbyProgressNotifications = ref 0
   let mailbox, readSnapshot =
     createWith
       runtime
       cancellation.Token
-      (fun () -> standbyProgressNotifications.Value <- standbyProgressNotifications.Value + 1)
+      ignore
       (fun _ _ _ -> ())
       (fun _ _ -> ())
       ignore
@@ -73,7 +90,6 @@ let private withHarness runtime run =
     Mailbox = mailbox
     ReadSnapshot = readSnapshot
     FaultedEvents = faultedEvents
-    GetStandbyProgressNotifications = fun () -> standbyProgressNotifications.Value
     Cancellation = cancellation
   }
 
@@ -143,7 +159,7 @@ let sessionManagerRestartTombstoneTests =
         harness.FaultedEvents[0] |> snd
         |> Expect.stringContains "fault message should describe the invalid transport" "valid proxy"
 
-    testCase "standby ready without a proxy is discarded and restart falls back to a cold respawn" <| fun _ ->
+    testCase "restart with a ready worker uses spawn-first (session transitions through Restarting)" <| fun _ ->
       let runtime =
         mkRuntime
           (fun _ -> Ok "build ok")
@@ -151,36 +167,31 @@ let sessionManagerRestartTombstoneTests =
 
       withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
-        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true WorkflowTypes.SessionWorkflow.Interactive
-
-        harness.Mailbox.Post(SessionCommand.WarmStandby key)
-
-        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetStandbyInfo reply)
-        |> Expect.equal "warming a standby should expose pool progress before ready" (StandbyInfo.Warming "")
-
-        harness.Mailbox.Post(
-          SessionCommand.StandbyReady(
-            key,
-            Process.GetCurrentProcess().Id,
-            "http://localhost:4123",
-            Unchecked.defaultof<SessionProxy>))
-
-        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetStandbyInfo reply)
-        |> Expect.equal
-          "invalid standby ready transport should discard the standby instead of marking it ready"
-          StandbyInfo.NoPool
+        // Drive the session to Ready with a valid transport (spawn-first
+        // requires a live worker: the new worker is spawned before the old
+        // one is stopped).
+        let session = getManagedSession harness info.Id
+        let pid = getWorkerPid session
+        harness.Mailbox.Post(SessionCommand.WorkerReady(info.Id, pid, "http://localhost:4123", readyProxy))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> ignore
 
         match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
         | Ok message ->
           message
           |> Expect.stringContains
-            "restart should fall back to a cold respawn when the standby transport is invalid"
-            "worker respawning"
+            "non-rebuild restart should acknowledge the spawn-first respawn"
+            "replacement worker spawning"
         | Error err ->
-          failtestf "expected cold restart fallback, got %s" (SageFsError.describe err)
+          failtestf "expected spawn-first restart, got %s" (SageFsError.describe err)
 
+        // Spawn-first parks the old worker and marks the session Restarting
+        // until the replacement reports Ready.
+        let restarting = getManagedSession harness info.Id
+        restarting.Info.Status
+        |> Expect.equal "session should transition through Restarting under spawn-first" SessionStatus.Restarting
         runtime.GetStartCalls()
-        |> Expect.equal "cold restart fallback should spawn a replacement worker instead of swapping the bad standby" 3
+        |> Expect.equal "spawn-first restart spawns one replacement worker" 2
 
     testCase "cold restart build failure keeps a faulted tombstone session" <| fun _ ->
       let runtime =
@@ -485,48 +496,4 @@ let sessionManagerRestartTombstoneTests =
         |> Expect.equal "abandoned crash recovery should fire one fault callback" 1
         harness.FaultedEvents[0] |> snd
         |> Expect.stringContains "fault message should describe the scheduled restart failure" "scheduled restart boom"
-  ]
-
-[<Tests>]
-let sessionManagerStandbyNotificationTests =
-  testList "SessionManager standby notifications" [
-    testCase "warming a standby publishes a standby progress notification" <| fun _ ->
-      let runtime =
-        mkRuntime
-          (fun _ -> Ok "build ok")
-          (fun _ -> Ok(Process.GetCurrentProcess()))
-
-      withHarness runtime.Runtime <| fun harness ->
-        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true WorkflowTypes.SessionWorkflow.Interactive
-
-        harness.Mailbox.Post(SessionCommand.WarmStandby key)
-
-        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetStandbyInfo reply)
-        |> Expect.equal "warming standby should be visible immediately" (StandbyInfo.Warming "")
-
-        harness.GetStandbyProgressNotifications()
-        |> Expect.equal "entering the standby pool should notify observers" 1
-
-    testCase "removing a standby publishes a standby progress notification" <| fun _ ->
-      let runtime =
-        mkRuntime
-          (fun _ -> Ok "build ok")
-          (fun _ -> Ok(Process.GetCurrentProcess()))
-
-      withHarness runtime.Runtime <| fun harness ->
-        let key = StandbyKey.fromSession ["Test.fsproj"] @"C:\Test" true WorkflowTypes.SessionWorkflow.Interactive
-
-        harness.Mailbox.Post(SessionCommand.WarmStandby key)
-        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetStandbyInfo reply)
-        |> ignore
-
-        let notificationsAfterWarm = harness.GetStandbyProgressNotifications()
-
-        harness.Mailbox.Post(SessionCommand.StandbyExited(key, Process.GetCurrentProcess().Id))
-
-        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetStandbyInfo reply)
-        |> Expect.equal "exited standby should be removed from the pool" StandbyInfo.NoPool
-
-        harness.GetStandbyProgressNotifications()
-        |> Expect.equal "leaving the standby pool should notify observers" (notificationsAfterWarm + 1)
   ]

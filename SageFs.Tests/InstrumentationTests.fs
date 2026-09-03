@@ -30,7 +30,6 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     Instrumentation.sessionsCreated |> Expect.isNotNull "sessionsCreated"
     Instrumentation.sessionsStopped |> Expect.isNotNull "sessionsStopped"
     Instrumentation.sessionsRestarted |> Expect.isNotNull "sessionsRestarted"
-    Instrumentation.standbySwaps |> Expect.isNotNull "standbySwaps"
     Instrumentation.coldRestarts |> Expect.isNotNull "coldRestarts"
     Instrumentation.activeSessions |> Expect.isNotNull "activeSessions"
   }
@@ -385,20 +384,6 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
 
     captured |> Expect.isSome "should have captured activity"
     captured.Value.Kind |> Expect.equal "should be Server kind" ActivityKind.Server
-  }
-
-  // === Tier 2: Standby pool metrics ===
-  test "standbyPoolSize counter exists" {
-    Instrumentation.standbyPoolSize |> Expect.isNotNull "standbyPoolSize"
-  }
-  test "standbyWarmupMs histogram exists" {
-    Instrumentation.standbyWarmupMs |> Expect.isNotNull "standbyWarmupMs"
-  }
-  test "standbyInvalidations counter exists" {
-    Instrumentation.standbyInvalidations |> Expect.isNotNull "standbyInvalidations"
-  }
-  test "standbyAgeAtSwapMs histogram exists" {
-    Instrumentation.standbyAgeAtSwapMs |> Expect.isNotNull "standbyAgeAtSwapMs"
   }
 
   // === Tier 2: File watcher counter ===

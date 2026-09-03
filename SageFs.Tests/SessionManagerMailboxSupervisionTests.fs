@@ -40,9 +40,7 @@ let private mkRuntime
             startCalls <- startCalls + 1
             startWorker startCalls
         AwaitWorkerPort = fun _ _ _ _ -> ()
-        AwaitStandbyPort = fun _ _ _ _ -> ()
         StopWorker = fun _ -> stopWorker ()
-        StopStandbyWorker = fun _ -> async { return () }
         RunBuildAsync = fun _ _ -> runBuild ()
       }
     GetStartCalls = fun () -> startCalls
@@ -63,7 +61,7 @@ let private withHarness runtime run =
     createWith
       runtime
       cancellation.Token
-      (fun () -> ())
+      ignore
       (fun _ _ _ -> ())
       (fun _ _ -> ())
       ignore

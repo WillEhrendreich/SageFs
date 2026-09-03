@@ -42,7 +42,6 @@ let private mkTools
       })
     GetAllSessions = fun () -> Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
-    GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
     NotifyWorkerDied = fun _ -> ()
   }
   let ctx : McpContext = {

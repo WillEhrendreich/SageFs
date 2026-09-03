@@ -31,10 +31,8 @@ module Instrumentation =
     sessionMeter.CreateCounter<int64>("sagefs.sessions.stopped_total", description = "Total sessions stopped")
   let sessionsRestarted =
     sessionMeter.CreateCounter<int64>("sagefs.sessions.restarted_total", description = "Total session restarts")
-  let standbySwaps =
-    sessionMeter.CreateCounter<int64>("sagefs.sessions.standby_swaps_total", description = "Restarts using standby pool")
   let coldRestarts =
-    sessionMeter.CreateCounter<int64>("sagefs.sessions.cold_restarts_total", description = "Restarts without standby")
+    sessionMeter.CreateCounter<int64>("sagefs.sessions.cold_restarts_total", description = "Restarts using stop-then-spawn (rebuild=true or spawn-first failure fallback)")
   let activeSessions =
     sessionMeter.CreateUpDownCounter<int64>("sagefs.sessions.active", description = "Currently active sessions")
 
@@ -59,16 +57,6 @@ module Instrumentation =
     mcpMeter.CreateCounter<int64>("sagefs.fsi.statements_total", description = "Total FSI statements evaluated")
   let sseConnectionsActive =
     mcpMeter.CreateUpDownCounter<int64>("sagefs.sse.connections_active", description = "Currently active SSE connections")
-
-  // Standby pool metrics
-  let standbyPoolSize =
-    sessionMeter.CreateUpDownCounter<int64>("sagefs.standby.pool_size", description = "Current standby pool size")
-  let standbyWarmupMs =
-    sessionMeter.CreateHistogram<float>("sagefs.standby.warmup_ms", "ms", "Standby warmup duration")
-  let standbyInvalidations =
-    sessionMeter.CreateCounter<int64>("sagefs.standby.invalidations_total", description = "Total standby invalidations")
-  let standbyAgeAtSwapMs =
-    sessionMeter.CreateHistogram<float>("sagefs.standby.age_at_swap_ms", "ms", "Standby age at time of swap")
 
   // File watcher counter
   let fileWatcherChanges =

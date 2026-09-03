@@ -49,7 +49,6 @@ let tests =
                    LastActivity = DateTime.UtcNow })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ _ -> Task.FromResult(())
-        GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
         NotifyWorkerDied = fun _ -> ()
       }
 

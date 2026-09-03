@@ -221,7 +221,6 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     GetSessionInfo = fun _ -> Task.FromResult(Some info)
     GetAllSessions = fun () -> Task.FromResult([ info ])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
-    GetStandbyInfo = fun () -> Task.FromResult(StandbyInfo.NoPool)
     NotifyWorkerDied = fun _ -> ()
   }
   let ctx : McpContext = {

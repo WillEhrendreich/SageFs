@@ -793,19 +793,6 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 | true ->
                   Elem.span [ Attr.style "color: var(--fg-green);" ] [ Text.raw "● selected" ]
                 | false -> ()
-                // Per-session standby indicator
-                match s.StandbyLabel.Length > 0 with
-                | true ->
-                  let color =
-                    match s.StandbyLabel with
-                    | l when l.Contains "✓" -> "var(--fg-green)"
-                    | l when l.Contains "⏳" -> "var(--fg-yellow)"
-                    | l when l.Contains "⚠" -> "var(--fg-red)"
-                    | _ -> "var(--fg-dim)"
-                  Elem.span
-                    [ Attr.class' "badge"; Attr.style (sprintf "color: %s;" color) ]
-                    [ Text.raw s.StandbyLabel ]
-                | false -> ()
                 // Agent presence badges (multi-agent coordination)
                 yield! s.AgentBadges |> List.map (fun badge ->
                   Elem.span
@@ -1320,7 +1307,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     ]
   ]
 
-let renderRegionForSse (getSessionState: WorkerProtocol.SessionId -> SessionState) (getStatusMsg: WorkerProtocol.SessionId -> string option) (getSessionStandbyInfo: WorkerProtocol.SessionId -> StandbyInfo) (region: RenderRegion) =
+let renderRegionForSse (getSessionState: WorkerProtocol.SessionId -> SessionState) (getStatusMsg: WorkerProtocol.SessionId -> string option) (region: RenderRegion) =
   match region.Id with
   | "output" -> Some (renderOutput (parseOutputLines region.Content) "No output yet")
   | "sessions" ->
@@ -1329,9 +1316,6 @@ let renderRegionForSse (getSessionState: WorkerProtocol.SessionId -> SessionStat
     let visible =
       corrected
       |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
-      |> List.map (fun s ->
-        let info = getSessionStandbyInfo s.Id
-        { s with StandbyLabel = StandbyInfo.label info })
     Some (renderSessions visible (isCreatingSession region.Content))
   | _ -> None
 
@@ -1341,10 +1325,9 @@ let pushRegions
   (getPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>)
   (getSessionState: WorkerProtocol.SessionId -> SessionState)
   (getStatusMsg: WorkerProtocol.SessionId -> string option)
-  (getSessionStandbyInfo: WorkerProtocol.SessionId -> StandbyInfo)
   = task {
     for region in regions do
-      match renderRegionForSse getSessionState getStatusMsg getSessionStandbyInfo region with
+      match renderRegionForSse getSessionState getStatusMsg region with
       | Some html -> do! ssePatchNode ctx html
       | None -> ()
       // When sessions region is pushed, also push picker visibility

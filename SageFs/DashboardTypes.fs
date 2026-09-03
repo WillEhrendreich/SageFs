@@ -431,7 +431,6 @@ type ParsedSession = {
   Uptime: string
   WorkingDir: string
   LastActivity: string
-  StandbyLabel: string
   TestSummary: Features.LiveTesting.TestSummary option
   CoverageSummary: Features.LiveTesting.CoverageSummary option
   TestTreemapEntries: Features.LiveTesting.TestTreemapEntry array
@@ -476,7 +475,6 @@ let parseSessionLines (content: string) =
             Uptime = extractTag "up:" m.Groups.[7].Value
             WorkingDir = extractTag "dir:" m.Groups.[8].Value
             LastActivity = extractTag "last:" m.Groups.[9].Value
-            StandbyLabel = ""
             TestSummary = None
             CoverageSummary = None
             TestTreemapEntries = [||]
@@ -594,8 +592,6 @@ type DashboardQueries = {
   GetElmRegionsForSession: WorkerProtocol.SessionId -> RenderRegion list option
   GetPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>
   GetAllSessions: unit -> Threading.Tasks.Task<WorkerProtocol.SessionInfo list>
-  GetStandbyInfo: unit -> Threading.Tasks.Task<StandbyInfo>
-  GetSessionStandbyInfo: WorkerProtocol.SessionId -> StandbyInfo
   GetHotReloadState: WorkerProtocol.SessionId -> Threading.Tasks.Task<{| files: {| path: string; watched: bool |} list; watchedCount: int |} option>
   GetWarmupContext: WorkerProtocol.SessionId -> Threading.Tasks.Task<WarmupContext option>
   GetWarmupProgress: WorkerProtocol.SessionId -> string

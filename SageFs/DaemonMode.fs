@@ -316,8 +316,6 @@ let createSessionOps
         sessionManager.Post(
           SessionManager.SessionCommand.UpdateSessionStatus(sessionId, status))
       }
-    GetStandbyInfo = fun () ->
-      task { return (readSnapshot()).StandbyInfo }
     NotifyWorkerDied = fun sessionId ->
       // Post WorkerExited with pid=-1 to accelerate Faulted transition.
       // The real proc.Exited event will also fire; the stale-event guard
@@ -1681,9 +1679,6 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     GetPreviousSessions = fun () ->
       getPreviousSessions readSnapshot
     GetAllSessions = fun () -> task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
-    GetStandbyInfo = sessionOps.GetStandbyInfo
-    GetSessionStandbyInfo = fun sessionId ->
-      (readSnapshot()).PerSessionStandby |> Map.tryFind sessionId |> Option.defaultValue StandbyInfo.NoPool
     GetHotReloadState = fun sessionId ->
       fetchWorkerEndpoint sessionId "/hotreload" dashboardFetchTimeoutSec (fun resp ->
         use doc = Text.Json.JsonDocument.Parse(resp)
