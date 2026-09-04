@@ -633,4 +633,82 @@ let tests =
     do! disableBtn.ClickAsync()
     do! PlaywrightExpect.waitForText 30_000 panel "Live Testing: OFF"
   })
+
+  // --- FR-DASH: real friction capture through the local store (seeded via
+  // the product's own recorder API against the daemon's friction.db, which
+  // the browser runner exposes as SAGEFS_FRICTION_DB). These journeys run
+  // AFTER the honest empty-state journey above, so the panel starts empty
+  // and this journey observes the real empty -> recorded transition. ---
+
+  playwrightTest "friction feedback recorded locally reflects in the panel with the send form" (fun page -> task {
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    let panel = page.Locator("#friction-panel")
+    do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
+    // Record ONE explicit feedback through the product's recorder API into
+    // the daemon's local SQLite store (the same store the MCP report_friction
+    // tool appends to — server-authoritative, client never assembles data).
+    let dbPath = Environment.GetEnvironmentVariable("SAGEFS_FRICTION_DB")
+    Expect.isFalse (System.String.IsNullOrWhiteSpace dbPath) "runner should set SAGEFS_FRICTION_DB"
+    let store = SageFs.Features.FrictionSqlite.Store.create (sprintf "Data Source=%s" dbPath)
+    match store.Initialize() with
+    | Ok () ->
+      let tool = SageFs.Features.FrictionTelemetryTypes.ToolName.create "eval" |> function Ok t -> t | Error _ -> failwith "tool"
+      let sess = SageFs.Features.FrictionTelemetryTypes.SessionRef.create "fr-dash-journey" |> function Ok s -> s | Error _ -> failwith "session"
+      let feedback : SageFs.Features.FrictionTelemetryTypes.ExplicitFeedback = {
+        OccurredAtUtc = System.DateTimeOffset.UtcNow
+        Session = sess
+        Tool = tool
+        Kind = SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ToolIntentWasUnclear
+        ShortReason = "the eval tool result was confusing"
+        AlternativeUsed = SageFs.Features.FrictionTelemetryTypes.AlternativePath.NoAlternativeRecorded
+        SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current () }
+      match store.AppendFeedback feedback with
+      | Ok () -> ()
+      | Error e -> failwithf "append feedback failed: %s" e
+    | Error e -> failwithf "friction store init failed: %s" e
+
+    // A fresh page load rebuilds the panel from the store (cold GET render).
+    let! _ = page.ReloadAsync()
+    do! PlaywrightExpect.waitForText 15_000 (page.Locator("#friction-panel summary")) "1 feedback"
+    // The reload reset the <details> to closed — open it for role queries.
+    let! isOpen =
+      page.EvaluateAsync<bool>(
+        "() => { var el = document.querySelector('#friction-panel'); return el ? el.open : false; }")
+    if not isOpen then
+      do! panel.Locator("summary").ClickAsync()
+    do! PlaywrightExpect.waitForText 10_000 panel "Report is sanitized locally before send"
+    let! sendButtons =
+      panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Send Report")).CountAsync()
+    Expect.equal sendButtons 1 "send form appears once local friction exists"
+    // The recorded reason is editable in the panel (server renders local data).
+    do! PlaywrightExpect.waitForText 10_000 panel "the eval tool result was confusing"
+  })
+
+  playwrightTest "friction send validates the destination and surfaces the result inline" (fun page -> task {
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    let panel = page.Locator("#friction-panel")
+    do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
+    // Open the <details> so the send form is in the accessibility tree.
+    let! isOpen =
+      page.EvaluateAsync<bool>(
+        "() => { var el = document.querySelector('#friction-panel'); return el ? el.open : false; }")
+    if not isOpen then
+      do! panel.Locator("summary").ClickAsync()
+    // The previous journey left one feedback record; the send form is present.
+    let sendBtn =
+      panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Send Report"))
+    let! sendCount = sendBtn.CountAsync()
+    Expect.equal sendCount 1 "send form present from the recorded feedback"
+
+    // 1. No endpoint -> inline validation error (server-authoritative).
+    do! sendBtn.ClickAsync()
+    do! PlaywrightExpect.waitForText 15_000 (page.Locator("#friction-send-status")) "missing endpoint"
+
+    // 2. Non-loopback plaintext http -> rejected before any network I/O.
+    let endpoint = panel.Locator("input").First
+    do! endpoint.FillAsync("http://example.com/ingest")
+    do! sendBtn.ClickAsync()
+    let status = page.Locator("#friction-send-status")
+    do! PlaywrightExpect.waitForText 15_000 status "endpoint must be an absolute https URL"
+  })
   ]
