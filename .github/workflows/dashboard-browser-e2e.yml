@@ -1,34 +1,30 @@
 name: Dashboard Browser E2E (F#)
 
-# Real-browser dashboard journeys against a real daemon at the tested SHA,
-# driven by the type-safe F# Playwright.NET suite inside SageFs.Tests
-# ([Integration] Dashboard browser tests) — no separate TS harness.
-#
-# The daemon is the freshly built Release tool, started with SAGEFS_DATA_DIR
-# pointed at a temp dir (never touches runner state) on non-default ports.
-# Chromium is installed for the .NET Playwright driver via its bundled node.
+# Real-browser dashboard journeys, run as Expecto tests through the suite's
+# own --integration-browser entry point (SageFs.Tests/DashboardBrowserRunner.fs
+# boots an isolated daemon + session in-process and runs
+# DashboardBrowserTests). No separate harness or runner script: this job only
+# builds, installs the .NET Playwright Chromium, and invokes the test binary.
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - '.github/workflows/dashboard-browser-e2e.yml'
-      - 'scripts/e2e-browser-fsharp.ps1'
       - 'samples/demos/SageFs.Samples.WebappDatastar/**'
       - 'SageFs/**'
       - 'SageFs.Core/**'
       - 'SageFs.Host/**'
-      - 'SageFs.Tests/DashboardBrowserTests.fs'
+      - 'SageFs.Tests/DashboardBrowser*.fs'
   push:
     branches: [master]
     paths:
       - '.github/workflows/dashboard-browser-e2e.yml'
-      - 'scripts/e2e-browser-fsharp.ps1'
       - 'samples/demos/SageFs.Samples.WebappDatastar/**'
       - 'SageFs/**'
       - 'SageFs.Core/**'
       - 'SageFs.Host/**'
-      - 'SageFs.Tests/DashboardBrowserTests.fs'
+      - 'SageFs.Tests/DashboardBrowser*.fs'
 
 jobs:
   dashboard-browser:
@@ -72,19 +68,9 @@ jobs:
           & "$driver\node\win32_x64\node.exe" "$driver\package\cli.js" install chromium
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Run F# dashboard browser journeys
+      - name: Run F# dashboard browser journeys (Expecto --integration-browser)
         shell: pwsh
         run: |
-          pwsh -NoProfile -File scripts/e2e-browser-fsharp.ps1 -McpPort 37951 -SessionWarmupSeconds 120 -Configuration Release 2>&1 |
-            Tee-Object -FilePath e2e-browser-diagnostics\runner.log
+          dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --integration-browser --summary
           exit $LASTEXITCODE
         timeout-minutes: 20
-
-      - name: Upload diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dashboard-browser-diagnostics
-          path: e2e-browser-diagnostics\
-          if-no-files-found: ignore
-          retention-days: 7

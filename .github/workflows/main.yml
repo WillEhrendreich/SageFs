@@ -65,8 +65,9 @@ jobs:
     # real SageFs.Host spawns, and Harmony detours NEVER ran in CI (the default
     # run excludes [Integration] and no job passed --all). This job runs the
     # curated self-contained subset (--integration-host) — real processes, no
-    # external daemon or browser. Browser/daemon journeys run in the
-    # dashboard-browser-e2e and smoke workflows.
+    # external daemon or browser. Browser journeys run via the suite's own
+    # --integration-browser entry point in the dashboard-browser-e2e workflow;
+    # the daemon smoke journey runs in the smoke workflow.
     runs-on: windows-latest
     timeout-minutes: 25
 

@@ -101,10 +101,10 @@ let main argv =
   // SageFs.Host spawns, Harmony patches — that need NO external daemon or
   // browser. CI invokes this with --integration-host after a build; it is the
   // curated subset of --all that can run on a bare runner. Suites that need a
-  // running daemon (DashboardBrowserTests, HttpApiIntegrationTests,
-  // VscodeExtensionTests, McpServerIntegrationTests, McpLlmInteropTests) or a
-  // display (HotReloadBrowserTests, DemoRecording) are deliberately excluded —
-  // they run under the e2e-dashboard / smoke workflows instead.
+  // running daemon or a display are deliberately excluded — the dashboard
+  // browser journeys run under --integration-browser (DashboardBrowserRunner
+  // owns the daemon lifecycle), and the remaining daemon/display suites run
+  // under the smoke workflow.
   let isIntegrationHost = argv |> Array.exists (fun a -> a = "--integration-host")
   match isIntegrationHost with
   | true ->
@@ -120,6 +120,19 @@ let main argv =
         SageFs.Tests.DaemonStateChangeContractTests.daemonStateChangeContractTests
       ]
     let result = Tests.runTestsWithCLIArgs [] hostArgv hostIntegrationTests
+    Environment.Exit result
+    result
+  | false ->
+
+  // Run the [Integration] Dashboard browser journeys (Playwright.NET) with the
+  // daemon lifecycle owned in-process: boot an isolated daemon on reserved
+  // ports, create a Ready session on the WebappDatastar sample, run the
+  // journeys, tear down. CI invokes this with --integration-browser after a
+  // Release build (plus `playwright install chromium` for the .NET driver).
+  let isIntegrationBrowser = argv |> Array.exists (fun a -> a = "--integration-browser")
+  match isIntegrationBrowser with
+  | true ->
+    let result = SageFs.Tests.DashboardBrowserRunner.runBrowserJourneys argv
     Environment.Exit result
     result
   | false ->

@@ -327,6 +327,7 @@
         <Compile Include="DaemonStateChangeContractTests.fs" />
         <Compile Include="FrictionCaptureDurabilityTests.fs" />
         <Compile Include="FrictionSendSafetyTests.fs" />
+        <Compile Include="DashboardBrowserRunner.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
