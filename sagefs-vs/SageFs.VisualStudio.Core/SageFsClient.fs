@@ -363,11 +363,13 @@ type SageFsClient(http: HttpClient) =
   }
 
   /// Get hot reload state for a session.
+  /// NOTE: hot-reload endpoints are served on the DASHBOARD port (mcp + 1),
+  /// not the MCP port — the MCP server returns 404 for these routes.
   member this.GetHotReloadStateAsync(sessionId: string, ct: CancellationToken) = task {
     try
       let! body =
         http.GetStringAsync(
-          sprintf "%s/api/sessions/%s/hotreload" this.BaseUrl sessionId, ct)
+          sprintf "%s/api/sessions/%s/hotreload" this.DashUrl sessionId, ct)
       use doc = JsonDocument.Parse(body)
       let root = doc.RootElement
       let files =
@@ -396,7 +398,7 @@ type SageFsClient(http: HttpClient) =
           Encoding.UTF8, "application/json")
       let! resp =
         http.PostAsync(
-          sprintf "%s/api/sessions/%s/hotreload/toggle" this.BaseUrl sessionId,
+          sprintf "%s/api/sessions/%s/hotreload/toggle" this.DashUrl sessionId,
           content, ct)
       return resp.IsSuccessStatusCode
     with _ -> return false
@@ -407,7 +409,7 @@ type SageFsClient(http: HttpClient) =
     try
       let! resp =
         http.PostAsync(
-          sprintf "%s/api/sessions/%s/hotreload/watch-all" this.BaseUrl sessionId,
+          sprintf "%s/api/sessions/%s/hotreload/watch-all" this.DashUrl sessionId,
           new StringContent("", Encoding.UTF8), ct)
       return resp.IsSuccessStatusCode
     with _ -> return false
@@ -418,7 +420,7 @@ type SageFsClient(http: HttpClient) =
     try
       let! resp =
         http.PostAsync(
-          sprintf "%s/api/sessions/%s/hotreload/unwatch-all" this.BaseUrl sessionId,
+          sprintf "%s/api/sessions/%s/hotreload/unwatch-all" this.DashUrl sessionId,
           new StringContent("", Encoding.UTF8), ct)
       return resp.IsSuccessStatusCode
     with _ -> return false
@@ -429,7 +431,7 @@ type SageFsClient(http: HttpClient) =
     try
       let! resp =
         http.PostAsync(
-          sprintf "%s/api/sessions/%s/hotreload/refresh" this.BaseUrl sessionId,
+          sprintf "%s/api/sessions/%s/hotreload/refresh" this.DashUrl sessionId,
           new StringContent("", Encoding.UTF8), ct)
       return resp.IsSuccessStatusCode
     with _ -> return false
@@ -440,7 +442,7 @@ type SageFsClient(http: HttpClient) =
       let json = sprintf """{"directory":%s}""" (JsonSerializer.Serialize(directory))
       let! resp =
         http.PostAsync(
-          sprintf "%s/api/sessions/%s/hotreload/watch-directory" this.BaseUrl sessionId,
+          sprintf "%s/api/sessions/%s/hotreload/watch-directory" this.DashUrl sessionId,
           new StringContent(json, Encoding.UTF8, "application/json"), ct)
       return resp.IsSuccessStatusCode
     with _ -> return false
@@ -451,7 +453,7 @@ type SageFsClient(http: HttpClient) =
       let json = sprintf """{"directory":%s}""" (JsonSerializer.Serialize(directory))
       let! resp =
         http.PostAsync(
-          sprintf "%s/api/sessions/%s/hotreload/unwatch-directory" this.BaseUrl sessionId,
+          sprintf "%s/api/sessions/%s/hotreload/unwatch-directory" this.DashUrl sessionId,
           new StringContent(json, Encoding.UTF8, "application/json"), ct)
       return resp.IsSuccessStatusCode
     with _ -> return false
@@ -575,7 +577,9 @@ type SageFsClient(http: HttpClient) =
 
   // ── Live Testing API ──────────────────────────────────────
 
-  /// Enable live testing.
+  /// Enable live testing. The daemon responds
+  /// {"success":true,"activation":"active",...} (or HTTP 503 with
+  /// success:false); the reported activation is authoritative.
   member this.EnableLiveTestingAsync(ct: CancellationToken) = task {
     try
       let! resp =
@@ -584,13 +588,13 @@ type SageFsClient(http: HttpClient) =
           new StringContent("{}", Encoding.UTF8, "application/json"), ct)
       let! body = resp.Content.ReadAsStringAsync(ct)
       use doc = JsonDocument.Parse(body)
-      return tryBool doc.RootElement "enabled" false
+      return tryStr doc.RootElement "activation" "" = "active"
     with _ ->
       return false
   }
 
-  /// Disable live testing. Returns the live-testing enabled state reported by
-  /// the daemon (false = disabled). When the daemon is unreachable the
+  /// Disable live testing. Returns the live-testing activation reported by the
+  /// daemon ("inactive" = disabled). When the daemon is unreachable the
   /// fail-closed claim is "not enabled" (false), never a phantom success.
   member this.DisableLiveTestingAsync(ct: CancellationToken) = task {
     try
@@ -600,7 +604,8 @@ type SageFsClient(http: HttpClient) =
           new StringContent("{}", Encoding.UTF8, "application/json"), ct)
       let! body = resp.Content.ReadAsStringAsync(ct)
       use doc = JsonDocument.Parse(body)
-      return tryBool doc.RootElement "enabled" false
+      // "inactive" activation => live testing off => not enabled.
+      return tryStr doc.RootElement "activation" "" <> "inactive"
     with _ ->
       return false
   }

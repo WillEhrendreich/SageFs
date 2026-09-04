@@ -238,8 +238,20 @@ jobs:
     - name: Run VS extension Editor tests
       run: dotnet test sagefs-vs/SageFs.VisualStudio.Editor.Tests/SageFs.VisualStudio.Editor.Tests.csproj --nologo --logger "console;verbosity=minimal"
 
+    # The Core tests include the HR-VS-E2E / LT-VS-E2E real-daemon journeys
+    # (RealDaemonJourneys.fs): they boot the repo's SageFs tool against the
+    # FromCSharp sample, so both must be built before the test run. The sample
+    # is built Debug (the daemon's edit-triggered live-testing rebuild uses the
+    # Debug config) and the tool Release (the journey locates either).
+    - name: Build SageFs tool for VS daemon journeys
+      run: dotnet build SageFs/SageFs.fsproj -c Release --nologo
+
+    - name: Build FromCSharp sample for VS daemon journeys
+      run: dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Debug --nologo
+
     - name: Run VS extension Core tests
       run: dotnet test sagefs-vs/SageFs.VisualStudio.Core.Tests/SageFs.VisualStudio.Core.Tests.fsproj --nologo --logger "console;verbosity=minimal"
+      timeout-minutes: 20
 
     - name: Get Visual Studio extension version
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'

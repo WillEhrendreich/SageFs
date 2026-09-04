@@ -32,5 +32,6 @@
     <Compile Include="TypeExplorerGuardTests.fs" />
     <Compile Include="DaemonManagerTests.fs" />
     <Compile Include="SageFsClientVersionTests.fs" />
+    <Compile Include="RealDaemonJourneys.fs" />
   </ItemGroup>
 </Project>

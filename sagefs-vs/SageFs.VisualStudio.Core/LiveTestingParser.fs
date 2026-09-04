@@ -201,7 +201,10 @@ module LiveTestingParser =
         match getProp root "DiscoveryGeneration" with
         | Some el when el.ValueKind = JsonValueKind.Number -> el.GetInt64()
         | _ -> 0L
-      LastDecision = getProp root "LastDecision" |> Option.bind parseLastDecision }
+      LastDecision =
+        getProp root "LastDecision"
+        |> Option.filter (fun el -> el.ValueKind = JsonValueKind.Object)
+        |> Option.bind parseLastDecision }
 
   let parseFreshness (root: JsonElement) : ResultFreshness =
     match getProp root "Freshness" with
