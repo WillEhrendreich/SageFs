@@ -524,3 +524,232 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
   with ex ->
     eprintfn "HR runner: %s" (ex.ToString())
     exitWith 1
+
+// ============================================================================
+// LT-DASH: live-testing browser journeys (real enable -> discover -> edit ->
+// failing test -> fix -> green, all through the live dashboard).
+//
+// Boots an isolated daemon, creates a session on the FromCSharp sample (the
+// same small sample the daemon-level live-testing integration tests use — it
+// carries 11 Expecto tests in Hello.fs, resolved via the repo's central
+// package management, so it must be used IN PLACE, not temp-copied). The
+// journeys drive the DASHBOARD page's #live-testing-panel: Enable -> the
+// panel shows 11✓ after discovery+baseline -> Hello.fs is edited on disk ->
+// the panel shows 10✓ 1✗ -> the edit is reverted -> the panel returns to
+// 11✓. The journey restores Hello.fs in a finally, so the checkout is never
+// left mutated.
+//
+// CI invokes this via `SageFs.Tests.dll --integration-lt` after a Release
+// build (same shape as --integration-hr / --integration-browser).
+// ============================================================================
+
+/// Run the LT-DASH browser journeys end to end, owning the daemon lifecycle.
+let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
+  let repoRoot =
+    Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+
+  let exe =
+    let debugExe = Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
+    let releaseExe = Path.Combine(repoRoot, "SageFs", "bin", "Release", "net10.0", "SageFs.exe")
+    if File.Exists debugExe then debugExe
+    elif File.Exists releaseExe then releaseExe
+    else "SageFs"
+
+  let pickFreePort () =
+    use l = new TcpListener(IPAddress.Loopback, 0)
+    l.Start()
+    (l.LocalEndpoint :?> IPEndPoint).Port
+
+  let rec findPortPair attempts =
+    let mcp = pickFreePort ()
+    let dash = mcp + 1
+    try
+      use probe = new TcpListener(IPAddress.Loopback, dash)
+      probe.Start()
+      mcp
+    with
+    | :? SocketException when attempts > 0 -> findPortPair (attempts - 1)
+    | :? SocketException -> failwith "LT runner: could not find a free port pair"
+
+  let mcpPort = findPortPair 5
+  let dashboardPort = mcpPort + 1
+  let dataDir =
+    Path.Combine(Path.GetTempPath(), "sagefs-lt", Guid.NewGuid().ToString("N"))
+  Directory.CreateDirectory(dataDir) |> ignore
+
+  // The FromCSharp sample IN PLACE (central package management; a temp copy
+  // outside the repo cannot resolve Expecto's version). Live-testing rebuilds
+  // it on edit via dotnet build, which works here because the repo's
+  // Directory.Packages.props + nuget.config are in scope.
+  let sampleProject =
+    Path.Combine(
+      repoRoot, "samples", "from-csharp", "SageFs.Samples.FromCSharp",
+      "SageFs.Samples.FromCSharp.fsproj")
+  let sampleDir = Path.GetDirectoryName(sampleProject)
+  let helloPath = Path.Combine(sampleDir, "Hello.fs")
+
+  let psi = Diagnostics.ProcessStartInfo()
+  psi.FileName <- exe
+  psi.UseShellExecute <- false
+  psi.CreateNoWindow <- true
+  psi.WorkingDirectory <- repoRoot
+  psi.ArgumentList.Add("--mcp-port")
+  psi.ArgumentList.Add(string mcpPort)
+  psi.ArgumentList.Add("--no-resume")
+  psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+  psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
+  let daemonOutLog = Path.Combine(dataDir, "daemon.stdout.log")
+  let daemonErrLog = Path.Combine(dataDir, "daemon.stderr.log")
+  psi.RedirectStandardOutput <- true
+  psi.RedirectStandardError <- true
+
+  let daemon = Diagnostics.Process.Start(psi)
+  let drain (stream: System.IO.StreamReader) (path: string) =
+    let writer = new System.IO.StreamWriter(path, append = true)
+    let rec loop () =
+      async {
+        let! line = stream.ReadLineAsync() |> Async.AwaitTask
+        if not (isNull line) then
+          do! writer.WriteLineAsync(line) |> Async.AwaitTask
+          return! loop ()
+      }
+    async {
+      try
+        do! loop ()
+      with _ -> ()
+      writer.Dispose()
+    }
+    |> Async.Start
+  drain daemon.StandardOutput daemonOutLog
+  drain daemon.StandardError daemonErrLog
+
+  use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
+  client.Timeout <- TimeSpan.FromSeconds(5.0)
+
+  let dumpDaemonLogs () =
+    for path in [ daemonOutLog; daemonErrLog ] do
+      try
+        if File.Exists path then
+          let text = File.ReadAllText(path)
+          if not (String.IsNullOrWhiteSpace text) then
+            eprintfn "--- %s (tail) ---" (Path.GetFileName path)
+            let lines = text.Split('\n')
+            let tail = lines |> Array.skip (max 0 (lines.Length - 40))
+            tail |> Array.iter (eprintfn "%s")
+      with _ -> ()
+
+  let stopDaemon () =
+    try
+      if not daemon.HasExited then daemon.Kill(entireProcessTree = true)
+    with _ -> ()
+    try daemon.WaitForExit(5000) |> ignore with _ -> ()
+    daemon.Dispose()
+
+  let syncGetString (path: string) =
+    client.GetStringAsync(path).GetAwaiter().GetResult()
+
+  let syncPost (path: string) (json: string) =
+    use content = new StringContent(json, Text.Encoding.UTF8, "application/json")
+    let resp = client.PostAsync(path, content).GetAwaiter().GetResult()
+    let status = int resp.StatusCode
+    resp.Dispose()
+    status
+
+  let exitWith (code: int) =
+    stopDaemon ()
+    code
+
+  // Always restore Hello.fs if a journey left it mutated (belt and braces on
+  // top of the journey's own finally).
+  let restoreHello () =
+    try
+      let git = Diagnostics.ProcessStartInfo("git")
+      git.WorkingDirectory <- repoRoot
+      git.ArgumentList.Add("checkout")
+      git.ArgumentList.Add("--")
+      git.ArgumentList.Add(Path.GetRelativePath(repoRoot, helloPath))
+      git.UseShellExecute <- false
+      git.CreateNoWindow <- true
+      git.RedirectStandardOutput <- true
+      git.RedirectStandardError <- true
+      use p = Diagnostics.Process.Start(git)
+      p.WaitForExit(15000) |> ignore
+    with _ -> ()
+
+  try
+    let mutable healthy = false
+    let healthDeadline = DateTime.UtcNow.AddSeconds(60.0)
+    while not healthy && DateTime.UtcNow < healthDeadline do
+      try
+        use _resp = client.GetAsync("/health").GetAwaiter().GetResult()
+        healthy <- true
+      with _ ->
+        Threading.Thread.Sleep(250)
+
+    if not healthy then
+      eprintfn "LT runner: daemon did not become healthy on port %d" mcpPort
+      dumpDaemonLogs ()
+      exitWith 1
+    else
+      // Session on the FromCSharp sample; wait for Ready.
+      let payload =
+        System.Text.Json.JsonSerializer.Serialize(
+          {| projects = [| sampleProject |]
+             workingDirectory = sampleDir |})
+      let createStatus = syncPost "/api/sessions/create" payload
+      if createStatus <> 200 then
+        eprintfn "LT runner: session create failed (HTTP %d)" createStatus
+        dumpDaemonLogs ()
+        exitWith 1
+      else
+        let mutable ready = false
+        let mutable faulted = false
+        let warmupDeadline = DateTime.UtcNow.AddSeconds(300.0)
+        while not ready && not faulted && DateTime.UtcNow < warmupDeadline do
+          try
+            let body = syncGetString "/api/sessions"
+            use doc = System.Text.Json.JsonDocument.Parse(body)
+            let sessionStates =
+              doc.RootElement.GetProperty("sessions").EnumerateArray()
+              |> Seq.map (fun s -> s.GetProperty("status").GetString())
+              |> Seq.toList
+            if sessionStates |> List.contains "Faulted" then
+              faulted <- true
+            ready <- sessionStates |> List.contains "Ready"
+          with _ ->
+            Threading.Thread.Sleep(1000)
+
+        if faulted then
+          eprintfn "LT runner: session Faulted during warmup"
+          try
+            let body = syncGetString "/api/sessions"
+            eprintfn "--- /api/sessions ---"
+            eprintfn "%s" body
+          with _ -> ()
+          dumpDaemonLogs ()
+          exitWith 1
+        elif not ready then
+          eprintfn "LT runner: session never reached Ready within 300s"
+          try
+            let body = syncGetString "/api/sessions"
+            eprintfn "--- /api/sessions ---"
+            eprintfn "%s" body
+          with _ -> ()
+          dumpDaemonLogs ()
+          exitWith 1
+        else
+          try
+            Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
+            Environment.SetEnvironmentVariable("SAGEFS_LT_FIXTURE_DIR", sampleDir)
+            let ltArgv =
+              cliArgs
+              |> Array.filter (fun a -> a <> "--integration-lt")
+            let result =
+              Tests.runTestsWithCLIArgs [] ltArgv LiveTestingBrowserTests.tests
+            exitWith result
+          finally
+            restoreHello ()
+  with ex ->
+    eprintfn "LT runner: %s" (ex.ToString())
+    try restoreHello () with _ -> ()
+    exitWith 1

@@ -12,21 +12,25 @@ on:
     paths:
       - '.github/workflows/dashboard-browser-e2e.yml'
       - 'samples/demos/SageFs.Samples.WebappDatastar/**'
+      - 'samples/from-csharp/SageFs.Samples.FromCSharp/**'
       - 'SageFs/**'
       - 'SageFs.Core/**'
       - 'SageFs.Host/**'
       - 'SageFs.Tests/DashboardBrowser*.fs'
       - 'SageFs.Tests/HotReloadBrowserTests.fs'
+      - 'SageFs.Tests/LiveTestingBrowserTests.fs'
   push:
     branches: [master]
     paths:
       - '.github/workflows/dashboard-browser-e2e.yml'
       - 'samples/demos/SageFs.Samples.WebappDatastar/**'
+      - 'samples/from-csharp/SageFs.Samples.FromCSharp/**'
       - 'SageFs/**'
       - 'SageFs.Core/**'
       - 'SageFs.Host/**'
       - 'SageFs.Tests/DashboardBrowser*.fs'
       - 'SageFs.Tests/HotReloadBrowserTests.fs'
+      - 'SageFs.Tests/LiveTestingBrowserTests.fs'
 
 jobs:
   dashboard-browser:
@@ -126,5 +130,60 @@ jobs:
         shell: pwsh
         run: |
           dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --integration-hr --summary
+          exit $LASTEXITCODE
+        timeout-minutes: 20
+
+  # LT-DASH: live-testing through the live dashboard. Same shape as the other
+  # jobs, but runs the --integration-lt entry point: the runner boots a daemon
+  # + a session on the FromCSharp sample (11 Expecto tests in Hello.fs), and
+  # the journeys enable live testing in the panel, watch discovery/baseline
+  # (11✓), edit Hello.fs on disk, watch the failure surface (1✗), revert and
+  # watch recovery — restoring Hello.fs in a finally (plus git checkout on
+  # exit) so the checkout is never left mutated.
+  live-testing-browser:
+    name: F# live-testing browser journeys
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout forked MCP SDK
+        uses: actions/checkout@v5
+        with:
+          repository: WillEhrendreich/ModelContextProtocolSdk
+          path: mcp-sdk
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build forked MCP SDK packages
+        run: |
+          dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+          dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+          dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+
+      - name: Build Release (tool + sample + tests)
+        run: |
+          dotnet build SageFs/SageFs.fsproj -c Release --nologo
+          dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Release --nologo
+          dotnet build SageFs.Tests/SageFs.Tests.fsproj -c Release --nologo
+
+      - name: Install Chromium for the .NET Playwright driver
+        shell: pwsh
+        run: |
+          $driver = "SageFs.Tests\bin\Release\net10.0\.playwright"
+          if (-not (Test-Path "$driver\node\win32_x64\node.exe")) {
+            Write-Host "Playwright driver missing from test output" -ForegroundColor Red
+            exit 1
+          }
+          & "$driver\node\win32_x64\node.exe" "$driver\package\cli.js" install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run F# live-testing browser journeys (Expecto --integration-lt)
+        shell: pwsh
+        run: |
+          dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --integration-lt --summary
           exit $LASTEXITCODE
         timeout-minutes: 20

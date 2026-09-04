@@ -99,6 +99,7 @@
         <Compile Include="ResultExCorrespondenceTests.fs" />
         <Compile Include="SageFsErrorCorrespondenceTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
+        <Compile Include="LiveTestingBrowserTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
         <Compile Include="DevReloadTests.fs" />
         <Compile Include="WorkerHttpTransportTests.fs" />

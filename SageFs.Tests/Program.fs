@@ -150,6 +150,19 @@ let main argv =
     result
   | false ->
 
+  // Run the [Integration] live-testing dashboard browser journeys
+  // (Playwright.NET) against a session on the FromCSharp sample: enable live
+  // testing through the panel -> 11 tests discovered/passing -> edit Hello.fs
+  // on disk -> the panel shows the failing test -> revert -> all green again.
+  // CI invokes this with --integration-lt after a Release build.
+  let isIntegrationLt = argv |> Array.exists (fun a -> a = "--integration-lt")
+  match isIntegrationLt with
+  | true ->
+    let result = SageFs.Tests.DashboardBrowserRunner.runLiveTestingBrowserJourneys argv
+    Environment.Exit result
+    result
+  | false ->
+
   let configureVerify () =
     VerifierSettings.DisableRequireUniquePrefix()
     // Global line-ending scrub: normalize CRLF to LF on BOTH the received and
