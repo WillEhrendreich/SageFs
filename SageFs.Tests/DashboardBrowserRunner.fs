@@ -66,17 +66,50 @@ let runBrowserJourneys (cliArgs: string array) : int =
   psi.ArgumentList.Add("--no-resume")
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
   psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
-  // Deliberately do NOT redirect stdout/stderr: an undrained redirected pipe
-  // deadlocks the daemon once its log buffer fills (warmup logs block on
-  // write), freezing the session before Ready. Inheriting the runner's
-  // console keeps the daemon unblocked; CI surfaces daemon logs via the
-  // runner's own error output on failure.
-  psi.RedirectStandardOutput <- false
-  psi.RedirectStandardError <- false
+  // Redirect daemon logs to FILES (never pipes): an undrained pipe deadlocks
+  // the daemon once its log buffer fills, freezing warmup before Ready. Files
+  // cannot deadlock and are dumped to stderr on failure for CI diagnosis.
+  let daemonOutLog = Path.Combine(dataDir, "daemon.stdout.log")
+  let daemonErrLog = Path.Combine(dataDir, "daemon.stderr.log")
+  psi.RedirectStandardOutput <- true
+  psi.RedirectStandardError <- true
 
   let daemon = Diagnostics.Process.Start(psi)
+  // Drain the daemon's stdout/stderr asynchronously into the log files so the
+  // pipes never fill regardless of log volume.
+  let drain (stream: System.IO.StreamReader) (path: string) =
+    let writer = new System.IO.StreamWriter(path, append = true)
+    let rec loop () =
+      async {
+        let! line = stream.ReadLineAsync() |> Async.AwaitTask
+        if not (isNull line) then
+          do! writer.WriteLineAsync(line) |> Async.AwaitTask
+          return! loop ()
+      }
+    async {
+      try
+        do! loop ()
+      with _ -> ()
+      writer.Dispose()
+    }
+    |> Async.Start
+  drain daemon.StandardOutput daemonOutLog
+  drain daemon.StandardError daemonErrLog
+
   use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
   client.Timeout <- TimeSpan.FromSeconds(5.0)
+
+  let dumpDaemonLogs () =
+    for path in [ daemonOutLog; daemonErrLog ] do
+      try
+        if File.Exists path then
+          let text = File.ReadAllText(path)
+          if not (String.IsNullOrWhiteSpace text) then
+            eprintfn "--- %s (tail) ---" (Path.GetFileName path)
+            let lines = text.Split('\n')
+            let tail = lines |> Array.skip (max 0 (lines.Length - 40))
+            tail |> Array.iter (eprintfn "%s")
+      with _ -> ()
 
   let stopDaemon () =
     try
@@ -112,6 +145,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
 
     if not healthy then
       eprintfn "Browser runner: daemon did not become healthy on port %d" mcpPort
+      dumpDaemonLogs ()
       exitWith 1
     else
       // Create a session on the WebappDatastar sample; wait for Ready.
@@ -132,7 +166,9 @@ let runBrowserJourneys (cliArgs: string array) : int =
         exitWith 1
       else
         let mutable ready = false
-        let warmupDeadline = DateTime.UtcNow.AddSeconds(120.0)
+        // Cold CI runners can take several minutes for the first FSI project
+        // load; budget generously (the job's overall timeout is 20 min).
+        let warmupDeadline = DateTime.UtcNow.AddSeconds(300.0)
         while not ready && DateTime.UtcNow < warmupDeadline do
           try
             let body = syncGetString "/api/sessions"
@@ -145,7 +181,15 @@ let runBrowserJourneys (cliArgs: string array) : int =
             Threading.Thread.Sleep(1000)
 
         if not ready then
-          eprintfn "Browser runner: session never reached Ready within 120s"
+          eprintfn "Browser runner: session never reached Ready within 300s"
+          // Surface the actual session states and the daemon log tail so a CI
+          // failure is self-explanatory instead of a bare timeout.
+          try
+            let body = syncGetString "/api/sessions"
+            eprintfn "--- /api/sessions ---"
+            eprintfn "%s" body
+          with _ -> ()
+          dumpDaemonLogs ()
           exitWith 1
         else
           Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
