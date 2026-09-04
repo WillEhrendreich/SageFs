@@ -66,6 +66,13 @@ let runBrowserJourneys (cliArgs: string array) : int =
   psi.ArgumentList.Add("--no-resume")
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
   psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
+  // Deliberately do NOT redirect stdout/stderr: an undrained redirected pipe
+  // deadlocks the daemon once its log buffer fills (warmup logs block on
+  // write), freezing the session before Ready. Inheriting the runner's
+  // console keeps the daemon unblocked; CI surfaces daemon logs via the
+  // runner's own error output on failure.
+  psi.RedirectStandardOutput <- false
+  psi.RedirectStandardError <- false
 
   let daemon = Diagnostics.Process.Start(psi)
   use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
