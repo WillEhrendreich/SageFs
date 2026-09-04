@@ -376,3 +376,70 @@ let extensionTests = testList "VSCode extension behavior" [
     Expect.isTrue "should find .fsproj files in workspace" hasResults
   })
 ]
+
+// ---------------------------------------------------------------------------
+// DoD real-client journeys (HR-VSC-E2E, LT-VSC-E2E)
+//
+// These drive REAL VS Code + the SageFs extension against a REAL daemon. They
+// assume the same environment the extension-activation tests above assume: a
+// SageFs daemon is running on 37749 with a Ready session whose project has
+// Expecto tests (e.g. samples/from-csharp/SageFs.Samples.FromCSharp — 11
+// tests — with the daemon's session created on that directory), and VS Code
+// is open on that workspace. FR-VSC-E2E has no extension command: friction
+// is recorded agent/MCP-side (the daemon's report_friction tool), so the
+// honest VS Code journey for friction is not expressible through the
+// extension UI — recorded in the DoD evidence as an extension-surface gap.
+// ---------------------------------------------------------------------------
+
+/// Wait for the status bar to contain `text` (poll textContent).
+let vscodeWaitForStatusText (timeoutMs: int) (page: IPage) (text: string) = task {
+  let sw = Diagnostics.Stopwatch.StartNew()
+  let mutable found = false
+  while not found && sw.ElapsedMilliseconds < int64 timeoutMs do
+    let! status = VscodeHelpers.getStatusBarText page
+    if status.Contains(text) then found <- true
+    else do! Task.Delay(500)
+  Expect.isTrue "status bar should contain text" found
+}
+
+/// Wait for a CSS selector's text content to contain `text`.
+let vscodeWaitForSelectorText (timeoutMs: int) (page: IPage) (selector: string) (text: string) = task {
+  let sw = Diagnostics.Stopwatch.StartNew()
+  let mutable found = false
+  while not found && sw.ElapsedMilliseconds < int64 timeoutMs do
+    let! content = VscodeHelpers.selectorText page selector
+    if content <> null && content.Contains(text) then found <- true
+    else do! Task.Delay(500)
+  Expect.isTrue "selector should contain text" found
+}
+
+[<Tests>]
+let dodJourneys =
+  testList "VSCode DoD real-client journeys" [
+
+    vscodeExtTest "HR-VSC-E2E: watch all arms the hot-reload tree with watched files" (fun page -> task {
+      // Reveal the SageFs view container + the hot-reload tree view.
+      do! VscodeHelpers.executeCommand page "workbench.view.extension.sagefs"
+      do! Task.Delay(2000)
+      let treeSel = ".view-id-sagefs-hotReload"
+      do! VscodeHelpers.executeCommand page "sagefs.hotReloadWatchAll"
+      // The tree rows render directory descriptions as "N/M watched".
+      do! vscodeWaitForSelectorText 30_000 page (treeSel + " .monaco-list-row") "watched"
+      let! rows = VscodeHelpers.selectorText page (treeSel + " .monaco-list-row")
+      let hasWatched = rows.Contains("watched") && not (rows.Contains("0/0 watched"))
+      do! VscodeHelpers.executeCommand page "sagefs.hotReloadRefresh"
+      do! vscodeWaitForSelectorText 30_000 page (treeSel + " .monaco-list-row") "watched"
+      Expect.isTrue "tree should show watched files after refresh" hasWatched
+    })
+
+    vscodeExtTest "LT-VSC-E2E: enabling live testing surfaces discovered and passing tests in the status bar" (fun page -> task {
+      // Enable live testing via the extension command.
+      do! VscodeHelpers.executeCommand page "sagefs.enableLiveTesting"
+      // The test status bar item renders "N/N passed" once discovery + the
+      // baseline run settle (the FromCSharp sample carries 11 passing tests).
+      do! vscodeWaitForStatusText 90_000 page "11/11 passed"
+      // Disable again and confirm the status bar returns to the off state.
+      do! VscodeHelpers.executeCommand page "sagefs.disableLiveTesting"
+      do! vscodeWaitForStatusText 30_000 page "Live testing off"
+    })
+  ]
