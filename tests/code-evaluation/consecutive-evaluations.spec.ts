@@ -1,11 +1,15 @@
 // seed: seed.spec.ts
 
 import { test, expect } from '@playwright/test';
+import { openEvalArea } from '../helpers/dashboard';
 
 test.describe('Code Evaluation', () => {
   test('consecutive evaluations', async ({ page }) => {
     // 1. Navigate to the dashboard
     await page.goto('/dashboard');
+
+    // 1b. Evaluate is a collapsed accordion — open it.
+    await openEvalArea(page);
 
     // 2. Type 'let x = 5;;' and click '▶ Eval'
     await page.getByRole('textbox', { name: 'Enter F# code... (Ctrl+Enter' }).fill('let x = 5;;');

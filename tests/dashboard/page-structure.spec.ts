@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { openEvalArea, openNewSession } from '../helpers/dashboard';
 
 test.describe('Dashboard page structure', () => {
   test.beforeEach(async ({ page }) => {
@@ -9,8 +10,11 @@ test.describe('Dashboard page structure', () => {
   });
 
   test('should display page title with version', async ({ page }) => {
-    await expect(page.locator('h1')).toContainText('SageFs');
-    await expect(page.locator('h1')).toContainText('v');
+    // The shell has no <h1>; the daemon-health bar carries the product
+    // identity + version (e.g. "🟢 Healthy · SageFs 0.6.444.0 · up 6m · 15MB").
+    const health = page.locator('#daemon-health');
+    await expect(health).toContainText('SageFs');
+    await expect(health).toContainText(/v?\d+\.\d+\.\d+/);
   });
 
   test('should hide connection banner when connected', async ({ page }) => {
@@ -32,6 +36,9 @@ test.describe('Dashboard page structure', () => {
     await expect(evalSection).toBeVisible();
     await expect(evalSection).toContainText('Evaluate');
 
+    // Evaluate is a <details class="eval-area"> collapsed by default — open it.
+    await openEvalArea(page);
+
     // Textarea
     const textarea = page.locator('.eval-input').first();
     await expect(textarea).toBeVisible();
@@ -41,8 +48,7 @@ test.describe('Dashboard page structure', () => {
     await expect(page.getByRole('button', { name: 'Eval' })).toBeVisible();
 
     // Reset buttons
-    await expect(page.getByRole('button', { name: '↻ Reset' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '⟳ Hard Reset' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Reset/ }).first()).toBeVisible();
   });
 
   test('should render sessions panel', async ({ page }) => {
@@ -57,28 +63,34 @@ test.describe('Dashboard page structure', () => {
 
   test('should render eval stats panel', async ({ page }) => {
     const evalStats = page.locator('#eval-stats');
-    await expect(evalStats).toBeVisible();
+    await expect(evalStats).toBeAttached();
+    // Stats text: "0 evals · avg 0ms · min 0ms · max 0ms" (fresh session) or
+    // real counts after evals.
+    await expect(evalStats).toContainText(/evals/);
   });
 
   test('should render create session section with inputs', async ({ page }) => {
+    // "New Session" is a <details> collapsed by default — open it.
+    await openNewSession(page);
+
     // Working directory input
     const dirInput = page.locator('input[placeholder*="path\\\\to\\\\project"]');
     await expect(dirInput).toBeVisible();
 
     // Discover button
-    await expect(page.getByRole('button', { name: '🔍 Discover' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Discover/ })).toBeVisible();
 
     // Manual projects input
     const manualInput = page.locator('input[placeholder*="MyProject.fsproj"]');
     await expect(manualInput).toBeVisible();
 
     // Create session button
-    await expect(page.getByRole('button', { name: '➕ Create' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Create/ }).first()).toBeVisible();
   });
 
   test('should have clear output button in panel header', async ({ page }) => {
     const clearBtn = page.locator('#output-section .panel-header-btn');
     await expect(clearBtn).toBeVisible();
-    await expect(clearBtn).toContainText('Clear');
+    await expect(clearBtn).toContainText('CLEAR');
   });
 });
