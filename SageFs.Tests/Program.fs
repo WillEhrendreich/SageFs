@@ -137,6 +137,19 @@ let main argv =
     result
   | false ->
 
+  // Run the [Integration] hot-reload dashboard browser journeys (Playwright.NET)
+  // against a WebLive session on the WebAppFixture: real file save -> the SAME
+  // running app serves the new value, observed from the dashboard page. CI
+  // invokes this with --integration-hr after a Release build (same shape as
+  // --integration-host / --integration-browser).
+  let isIntegrationHr = argv |> Array.exists (fun a -> a = "--integration-hr")
+  match isIntegrationHr with
+  | true ->
+    let result = SageFs.Tests.DashboardBrowserRunner.runHotReloadBrowserJourneys argv
+    Environment.Exit result
+    result
+  | false ->
+
   let configureVerify () =
     VerifierSettings.DisableRequireUniquePrefix()
     // Global line-ending scrub: normalize CRLF to LF on BOTH the received and
