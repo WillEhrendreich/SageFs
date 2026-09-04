@@ -1683,7 +1683,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
                     | false -> ()
                   ]
                   Elem.div [ Attr.style "color: var(--fg-red); margin-top: 0.2em;" ] [
-                    Text.raw f.ErrorMessage
+                    Text.raw (System.Net.WebUtility.HtmlEncode f.ErrorMessage)
                   ]
                   match List.isEmpty f.Diagnostics with
                   | false ->
@@ -1816,7 +1816,7 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
                   Text.raw (System.Net.WebUtility.HtmlEncode b.Name)
                 ]
                 Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" ] [
-                  Text.raw b.TypeSig
+                  Text.raw (System.Net.WebUtility.HtmlEncode b.TypeSig)
                 ]
                 Elem.span [ Attr.style "color: var(--fg-dim, #555); font-size: 0.65rem; white-space: nowrap;" ] [
                   Text.raw (sprintf "cell %d" b.CellIndex)

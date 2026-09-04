@@ -284,6 +284,68 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
   }
 ]
 
+// Hostile-string escaping: FSI output is agent-controlled text. Every FSI-
+// derived render sink must escape HTML so a hostile eval result can never
+// inject markup or script into the dashboard. (Roast-2 item 1.)
+let hostileEscapingTests = testList "FSI-derived hostile-string escaping" [
+  let hostile = "x\"><script>alert(1)</script>"
+
+  testTask "renderBindingsPanel escapes hostile binding name, type sig, and value" {
+    let b : SageFs.Features.BindingExplorer.BindingInfo = {
+      Name = hostile
+      TypeSig = hostile
+      Value = Some hostile
+      CellIndex = 1
+      ShadowedBy = []
+      ReferencedIn = []
+    }
+    let snapshot : SageFs.Features.BindingExplorer.BindingScopeSnapshot = {
+      Bindings = [ b ]
+      ActiveBindings = Map.ofList [ hostile, b ]
+      ShadowedBindings = []
+    }
+    let html = renderBindingsPanel (Some snapshot) |> renderNode
+    Expect.isFalse (html.Contains("<script>alert(1)</script>")) "active-binding fields must not contain raw script"
+    Expect.isFalse (html.Contains("<script>alert(1)</script>")) "hostile payload must be escaped everywhere"
+    Expect.isTrue (html.Contains("&lt;script&gt;")) "encoded payload must appear in the HTML"
+  }
+
+  testTask "renderSessionContextPanel escapes hostile failed-open error message" {
+    let ctx : SageFs.SessionContext = {
+      SessionId = "session-1"
+      ProjectNames = [ "P.fsproj" ]
+      WorkingDir = @"C:\Code\Proj"
+      Status = "Ready"
+      Warmup = {
+        SourceFilesScanned = 1
+        AssembliesLoaded = []
+        NamespacesOpened = []
+        FailedOpens = [
+          { Name = hostile
+            Kind = SageFs.WarmUp.OpenableKind.Namespace
+            ErrorMessage = hostile
+            Diagnostics = []
+            RetryCount = 1
+            DurationMs = 1.0 }
+        ]
+        PhaseTiming = {
+          ScanSourceFilesMs = 0L
+          ScanAssembliesMs = 0L
+          OpenNamespacesMs = 0L
+          TotalMs = 0L
+        }
+        StartedAt = DateTimeOffset.MinValue
+      }
+      FileStatuses = []
+      Workflow = SageFs.WorkflowTypes.SessionWorkflow.Interactive
+      AutoOpenNamespaces = false
+    }
+    let html = renderSessionContextPanel ctx |> renderNode
+    Expect.isFalse (html.Contains("<script>alert(1)</script>")) "failed-open message must not contain raw script"
+    Expect.isTrue (html.Contains("&lt;script&gt;")) "encoded payload must appear in the HTML"
+  }
+]
+
 let keyboardHelpSnapshotTests = testList "keyboard help snapshots" [
   testTask "renderKeyboardHelp" {
     let html = renderKeyboardHelp () |> renderNode
@@ -1087,6 +1149,7 @@ let bindingsPanelSseTests = testList "SSE bindings panel" [
 [<Tests>]
 let allDashboardSnapshotTests = testList "Dashboard Snapshots" [
   dashboardRenderSnapshotTests
+  hostileEscapingTests
   liveTestingVisibilityTests
   keyboardHelpSnapshotTests
   edgeCaseSnapshotTests
