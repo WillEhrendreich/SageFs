@@ -5,8 +5,8 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Keyboard Shortcuts', () => {
   test('display keyboard shortcuts help', async ({ page }) => {
-    // 1. Navigate to http://localhost:37750/dashboard
-    await page.goto('http://localhost:37750/dashboard');
+    // 1. Navigate to the dashboard
+    await page.goto('/dashboard');
 
     // 2. Click the '⌨ Help' button
     await page.getByRole('button', { name: '⌨ Help' }).click();

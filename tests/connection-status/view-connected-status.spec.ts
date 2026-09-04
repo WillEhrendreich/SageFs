@@ -5,8 +5,8 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Connection Status', () => {
   test('view connected status', async ({ page }) => {
-    // 1. Navigate to http://localhost:37750/dashboard
-    await page.goto('http://localhost:37750/dashboard');
+    // 1. Navigate to the dashboard
+    await page.goto('/dashboard');
 
     // 2. Wait for the SSE stream to connect (server pushes serverConnected signal)
     // The server-status banner should become hidden when connected

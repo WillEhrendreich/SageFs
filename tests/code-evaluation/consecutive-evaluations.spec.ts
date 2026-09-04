@@ -4,8 +4,8 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Code Evaluation', () => {
   test('consecutive evaluations', async ({ page }) => {
-    // 1. Navigate to http://localhost:37750/dashboard
-    await page.goto('http://localhost:37750/dashboard');
+    // 1. Navigate to the dashboard
+    await page.goto('/dashboard');
 
     // 2. Type 'let x = 5;;' and click '▶ Eval'
     await page.getByRole('textbox', { name: 'Enter F# code... (Ctrl+Enter' }).fill('let x = 5;;');

@@ -5,8 +5,8 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Code Evaluation', () => {
   test('evaluate multiline code', async ({ page }) => {
-    // 1. Navigate to http://localhost:37750/dashboard
-    await page.goto('http://localhost:37750/dashboard');
+    // 1. Navigate to the dashboard
+    await page.goto('/dashboard');
 
     // 2. Type multi-line F# code into the textarea: 'let add x y =\n  x + y\nadd 5 3;;'
     const codeTextbox = page.getByRole('textbox', { name: 'Enter F# code... (Ctrl+Enter' });
