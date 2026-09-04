@@ -499,6 +499,123 @@ let buildDashboardSnapshot
     return snap, sessionId, themeName, {| EvalStats = stats; HotReloadState = hrState; WarmupContext = wCtx; FrictionPanel = frictionPanel |}
   }
 
+/// Build the full-shell dashboard snapshot for the "no session in play" state:
+/// the complete dashboard chrome (header, daemon health, sidebar Sessions panel,
+/// New Session panel, statusline) renders ALWAYS — only the main-area content
+/// differs. With no session to view, the main area shows the session picker
+/// (with Resume Previous) instead of a session's output.
+///
+/// This is the same full shell `buildDashboardSnapshot` produces for a session;
+/// session-dependent panels use their empty variants. It must NEVER render a
+/// bare picker fragment — an empty #main outside this shell is what caused the
+/// 0.6.460 blank screen (PatchElementsNoTargetsFound), and a bare-picker page
+/// is what hid the Sessions sidebar in 0.6.470.
+let buildNoSessionSnapshot
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  : System.Threading.Tasks.Task<DashboardSnapshot> =
+  task {
+    let! previous = q.GetPreviousSessions ()
+    // The sidebar MUST list the live sessions (so a session created while
+    // viewing the picker is clickable without a page reload), mirroring the
+    // enrichment buildOutputPanels applies to the session view's sidebar.
+    let! liveSessions = q.GetAllSessions ()
+    // Show every non-stopped session in the sidebar — mirror the session view,
+    // which filters Stopped out of the visible list.
+    let visibleSessions =
+      liveSessions
+      |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> s.Status <> WorkerProtocol.SessionStatus.Stopped)
+    let liveRows =
+      visibleSessions
+      |> List.map (fun (s: WorkerProtocol.SessionInfo) ->
+        let sid = s.Id
+        let parsedStatus = WorkerProtocol.SessionStatus.toSessionState s.Status |> SessionDisplayStatus.ofSessionState
+        let uptime =
+          let span = DateTime.UtcNow - s.CreatedAt
+          match span.TotalMinutes < 1.0 with
+          | true -> "just now"
+          | false -> sprintf "%.0fm" span.TotalMinutes
+        { Id = sid
+          Status = parsedStatus
+          StatusMessage = s.FaultReason
+          IsActive = (s.Status = WorkerProtocol.SessionStatus.Ready || s.Status = WorkerProtocol.SessionStatus.Evaluating)
+          IsSelected = false
+          ProjectsText = String.concat ", " (s.Projects |> List.map Path.GetFileName)
+          EvalCount = 0
+          Uptime = uptime
+          WorkingDir = s.WorkingDirectory
+          LastActivity = ""
+          TestSummary = q.GetSessionTestSummary sid
+          CoverageSummary = q.GetSessionCoverageSummary sid
+          TestTreemapEntries = q.GetSessionTestTreemap sid
+          BindingEntries = q.GetSessionBindings sid
+          AgentBadges = q.GetSessionAgentBadges sid
+          GuidanceCssClass = q.GetSessionGuidanceCss sid })
+    let daemonHealth = q.GetDaemonHealth()
+    let daemonHealthPanel =
+      match daemonHealth with
+      | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
+      | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
+    let failureNarrativesPanel =
+      let pairs = q.GetFailureNarratives()
+      renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
+    let diagnosticsPanel = renderCurrentDiagnostics (q.GetCurrentDiagnostics())
+    let filmstripPanel = renderSessionFilmstrip (q.GetFilmstripEntries())
+    let connectionLabel =
+      match infra.ConnectionTracker with
+      | Some tracker ->
+        let counts = tracker.GetAllCounts()
+        let parts =
+          [ match counts.Browsers > 0 with | true -> sprintf "🌐 %d" counts.Browsers | false -> ()
+            match counts.McpAgents > 0 with | true -> sprintf "🤖 %d" counts.McpAgents | false -> ()
+            match counts.Terminals > 0 with | true -> sprintf "💻 %d" counts.Terminals | false -> () ]
+        match parts.IsEmpty with
+        | true -> Some (sprintf "%d connected" tracker.TotalCount)
+        | false -> Some (String.Join(" ", parts))
+      | None -> None
+    let liveTestingActive = q.GetLiveTestingActive ()
+    let liveTestingStatus = q.GetLiveTestingStatus ()
+    let (ltPassed, ltFailed) =
+      match daemonHealth with
+      | Some dh ->
+        match dh.LiveTestingSummary with
+        | Some lt -> (Some lt.Passed, Some lt.Failed)
+        | None -> (None, None)
+      | None -> (None, None)
+    let liveTestingPanel = renderLiveTestingPanel liveTestingActive liveTestingStatus ltPassed ltFailed
+    let snap : DashboardSnapshot = {
+      Version = infra.Version
+      SessionState = "No session"
+      SessionId = ""
+      WorkingDir = ""
+      WarmupProgress = ""
+      WorkflowLabel = "Interactive"
+      EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
+      AlarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
+      DaemonHealth = daemonHealthPanel
+      FailureNarrativesPanel = failureNarrativesPanel
+      DiagnosticsPanel = diagnosticsPanel
+      FilmstripPanel = filmstripPanel
+      ThemeName = defaultThemeName
+      ConnectionLabel = connectionLabel
+      HotReloadPanel = renderHotReloadEmpty
+      LiveTestingPanel = liveTestingPanel
+      SessionContextPanel = renderSessionContextEmpty
+      OutputPanel = renderOutputForSession "" [] "No session in play — create or resume one to start."
+      SessionsPanel = renderSessionsForSession "" liveRows false
+      // The picker always shows in the no-session state (it is the "no session
+      // in play" landing — Quick Start / Open Directory / Resume Previous),
+      // while the sidebar lists the live sessions so any of them is one click
+      // away. It stays visible even when sessions exist but none is selected.
+      SessionPicker = renderSessionPicker previous
+      ThemePicker = renderThemePicker defaultThemeName
+      ThemeVars = renderThemeVars defaultThemeName
+      BindingsPanel = renderBindingsPanel None
+      FrictionPanel = Elem.div [ Attr.id DomIds.FrictionPanel ] []
+    }
+    return snap
+  }
+
 /// Create the SSE stream handler that pushes Elm state to the browser.
 let createStreamHandler
   (q: DashboardQueries)
@@ -551,14 +668,17 @@ let createStreamHandler
     let pushState () = task {
       match currentSessionOpt with
       | None ->
-        // No sessions — push session picker (only when it actually changed)
-        let! previous = q.GetPreviousSessions ()
-        let pickerHtml = renderNode (renderSessionPicker previous)
-        match pickerHtml = lastPushedMain with
+        // No session in play — push the FULL shell with the picker in the
+        // main area (only when it actually changed). This mirrors the initial
+        // GET render: the sidebar Sessions panel and chrome stay visible, and
+        // the no-change guard compares like-for-like full-shell HTML.
+        let! snap = buildNoSessionSnapshot q infra
+        let mainHtml = renderNode (renderMainContent snap)
+        match mainHtml = lastPushedMain with
         | true -> () // no-change tick — nothing to send
         | false ->
-          lastPushedMain <- pickerHtml
-          do! ssePatchNode ctx (renderSessionPicker previous)
+          lastPushedMain <- mainHtml
+          do! ssePatchNode ctx (renderMainContent snap)
           do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | Some sessionId ->
       let cached = tryGetFreshWorkerCache sessionId
@@ -1618,19 +1738,18 @@ let createEndpoints
           let html = renderShell infra.Version (WorkerProtocol.SessionId.value resolvedId) (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
         | None ->
-          // No session to view: the shell must render the session picker as
-          // its INITIAL #main content. The stream's no-session push morphs
-          // #session-picker — if the shell were empty, that patch would have
-          // no DOM target and Datastar fails the whole page with
-          // PatchElementsNoTargetsFound (the blank-screen defect).
-          let! previous = q.GetPreviousSessions ()
-          let html = renderShell infra.Version "" (renderSessionPicker previous)
+          // No session in play: render the FULL dashboard shell with the
+          // session picker in the main area (never a bare picker page — the
+          // sidebar Sessions panel and chrome must stay visible so the user
+          // can resume/create a session). The stream's no-session push morphs
+          // the same state, so the initial HTML must contain #session-picker
+          // or Datastar fails the page with PatchElementsNoTargetsFound.
+          let! snap = buildNoSessionSnapshot q infra
+          let html = renderShell infra.Version "" (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
       with _ ->
-        // Even on an error, serve a functional picker (never an empty shell —
-        // an empty #main blanks the page when the stream pushes the picker).
-        let! previous = q.GetPreviousSessions ()
-        let html = renderShell infra.Version "" (renderSessionPicker previous)
+        let! snap = buildNoSessionSnapshot q infra
+        let html = renderShell infra.Version "" (renderMainContent snap)
         return! FalcoResponse.ofHtml html ctx
     })
     yield get "/dashboard/stream" (createStreamHandler q infra)
