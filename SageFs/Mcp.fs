@@ -2152,7 +2152,7 @@ module McpTools =
       | None -> return sprintf "Error: session '%s' not found" sid
       | Some sessionInfo ->
       let current = sessionInfo.Workflow
-      let cost = WorkflowTypes.TransitionCost.compute 0 0 false
+      let cost = WorkflowTypes.TransitionCost.compute 0 0
       let opts = JsonSerializerOptions(WriteIndented = true)
       let prevLabel = WorkflowTypes.SessionWorkflow.label current
       let targetLabel = WorkflowTypes.SessionWorkflow.label target
@@ -2670,12 +2670,15 @@ module McpTools =
     }
 
   /// Build a CellGraph from the current FeaturePushState.
+  /// Uses the incrementally-maintained graph when populated (roast item 8).
   let private buildCellGraphFromState (state: Features.FeatureHooks.FeaturePushState) : Features.CellDependencyGraph.CellGraph =
-    let cells =
-      state.EvalHistory
-      |> List.map (fun e ->
-        Features.CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
-    Features.CellDependencyGraph.buildGraph cells
+    state.CachedCellGraph
+    |> Option.defaultWith (fun () ->
+      let cells =
+        state.EvalHistory
+        |> List.map (fun e ->
+          Features.CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
+      Features.CellDependencyGraph.buildGraph cells)
 
   /// Convert BindingScopeSnapshot active bindings to Ghostwriter ScopeBinding list.
   let private toScopeBindings (snapshot: Features.BindingExplorer.BindingScopeSnapshot) : Features.ScopeBinding list =

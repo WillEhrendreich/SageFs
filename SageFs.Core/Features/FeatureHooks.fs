@@ -23,6 +23,9 @@ type FeaturePushState = {
   KnownBindings: Map<string, int>
   /// Cached binding scope snapshot, updated incrementally in recordEval.
   CachedScope: BindingExplorer.BindingScopeSnapshot option
+  /// Cached cell-dependency graph, updated incrementally in recordEval
+  /// (roast item 8 — the push previously rebuilt the whole ≤10k-cell graph).
+  CachedCellGraph: CellDependencyGraph.CellGraph option
   /// Cached timeline state, updated incrementally in recordEval.
   CachedTimeline: EvalTimeline.TimelineState
 }
@@ -38,6 +41,7 @@ module FeaturePushState =
     NextCellIndex = 0
     KnownBindings = Map.empty
     CachedScope = None
+    CachedCellGraph = None
     CachedTimeline = EvalTimeline.TimelineState.empty
   }
 
@@ -106,6 +110,25 @@ let recordEval (code: string) (result: string) (durationMs: int64) (state: Featu
         let newCell: BindingExplorer.CellInput =
           { CellIndex = idx; FsiOutput = result; Source = code }
         BindingExplorer.appendCell newCell priorCellInputs prior
+  // The cell-dependency graph is maintained the same way: append the new
+  // cell incrementally; on history-cap eviction fall back to a full rebuild
+  // (an evicted cell's frozen Consumes could reference a name whose producer
+  // was evicted, and only a rebuild re-resolves the survivors).
+  let newCellGraph =
+    match didTruncate with
+    | true ->
+      cappedHistory
+      |> List.rev
+      |> List.map (fun e -> CellDependencyGraph.analyzeCell newBindings e.CellIndex e.Code e.Result)
+      |> CellDependencyGraph.buildGraph
+    | false ->
+      match state.CachedCellGraph with
+      | None ->
+        // First eval — build from the single cell.
+        CellDependencyGraph.buildGraph
+          [ CellDependencyGraph.analyzeCell newBindings idx code result ]
+      | Some prior ->
+        CellDependencyGraph.appendCell newBindings prior idx code result
   let timelineEntry: EvalTimeline.TimelineEntry =
     { CellId = idx; StartMs = 0L; DurationMs = durationMs; Status = EvalTimeline.Success }
   let newTimeline = EvalTimeline.TimelineState.record timelineEntry state.CachedTimeline
@@ -114,6 +137,7 @@ let recordEval (code: string) (result: string) (durationMs: int64) (state: Featu
       NextCellIndex = idx + 1
       KnownBindings = newBindings
       CachedScope = Some newScope
+      CachedCellGraph = Some newCellGraph
       CachedTimeline = newTimeline }
 
 let computeEvalDiffPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (currentOutputText: string) (state: FeaturePushState) =
@@ -127,12 +151,15 @@ let computeEvalDiffPush (opts: System.Text.Json.JsonSerializerOptions) (sessionI
     { updatedState with LastEvalDiffSse = Some sseStr }, Some sseStr
 
 let computeCellDepsPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (state: FeaturePushState) =
-  let knownBindings = state.KnownBindings
-  let cells =
-    state.EvalHistory
-    |> List.map (fun (e: EvalHistoryEntry) ->
-      CellDependencyGraph.analyzeCell knownBindings e.CellIndex e.Code e.Result)
-  let graph = CellDependencyGraph.buildGraph cells
+  // Use the incrementally-maintained graph; fall back to a full rebuild only
+  // if no eval has populated the cache yet (roast item 8).
+  let graph =
+    state.CachedCellGraph
+    |> Option.defaultWith (fun () ->
+      state.EvalHistory
+      |> List.map (fun (e: EvalHistoryEntry) ->
+        CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
+      |> CellDependencyGraph.buildGraph)
   let sseStr = SageFs.SseWriter.formatCellDependenciesEvent opts sessionId graph
   if Some sseStr = state.LastCellDepsSse then
     { state with LastCellDepsSse = Some sseStr }, None

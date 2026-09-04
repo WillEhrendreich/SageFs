@@ -952,7 +952,10 @@ let wireModelChangeHandlers
         let state, scopeSse =
           SageFs.Features.FeatureHooks.computeBindingScopePush ctx.SseJsonOpts sid state
         // W12(R10): Volatile.Write ensures the MCP-thread write is visible to dashboard HTTP threads.
-        System.Threading.Volatile.Write(&sharedBindingScope.contents, Some (SageFs.Features.FeatureHooks.buildScopeFromState state))
+        let scopeSnapshot =
+          state.CachedScope
+          |> Option.defaultWith (fun () -> SageFs.Features.FeatureHooks.buildScopeFromState state)
+        System.Threading.Volatile.Write(&sharedBindingScope.contents, Some scopeSnapshot)
         let state, timelineSse =
           SageFs.Features.FeatureHooks.computeEvalTimelinePush ctx.SseJsonOpts sid state
         featurePushState.Value <- state
