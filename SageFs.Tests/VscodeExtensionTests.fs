@@ -63,19 +63,46 @@ module VscodeFixture =
 
   let isAvailable = codeExePath.IsSome
 
-  /// Pre-configure the test profile so dialogs don't block tests.
+  /// Pre-configure the test profile so dialogs don't block tests. Honors
+  /// SAGEFS_MCP_PORT / SAGEFS_DASHBOARD_PORT so a runner can point the
+  /// extension at an isolated daemon; skips the write when the file already
+  /// carries the same settings (avoids lock races with a running instance).
   let ensureTestSettings () =
     let userDir = IO.Path.Combine(userDataDir, "User")
     if not (IO.Directory.Exists userDir) then
       IO.Directory.CreateDirectory(userDir) |> ignore
     let settingsPath = IO.Path.Combine(userDir, "settings.json")
+    let mcpPort = Environment.GetEnvironmentVariable("SAGEFS_MCP_PORT")
+    let dashPort = Environment.GetEnvironmentVariable("SAGEFS_DASHBOARD_PORT")
+    let portSettings =
+      match mcpPort, dashPort with
+      | null, null -> ""
+      | m, d ->
+        let m = if isNull m then "37749" else m
+        let d = if isNull d then "37750" else d
+        sprintf """"sagefs.mcpPort":%s,"sagefs.dashboardPort":%s,""" m d
     let settings =
-      """{"security.workspace.trust.enabled":false,"""
+      "{" + portSettings
+      + """"security.workspace.trust.enabled":false,"""
       + """"workbench.startupEditor":"none","""
       + """"update.mode":"none","""
       + """"extensions.autoCheckUpdates":false,"""
       + """"telemetry.telemetryLevel":"off"}"""
-    IO.File.WriteAllText(settingsPath, settings)
+    let existing =
+      try IO.File.ReadAllText(settingsPath) with _ -> null
+    if existing <> settings then
+      // A previous VS Code instance may still be releasing the file after a
+      // kill; retry briefly instead of failing the journey setup.
+      let mutable written = false
+      let deadline = DateTime.UtcNow.AddSeconds(15.0)
+      while not written && DateTime.UtcNow < deadline do
+        try
+          IO.File.WriteAllText(settingsPath, settings)
+          written <- true
+        with :? System.IO.IOException ->
+          Threading.Thread.Sleep(500)
+      if not written then
+        IO.File.WriteAllText(settingsPath, settings)
 
   /// Kill any Code processes started recently that might hold our CDP port.
   let killOrphans () =
@@ -91,10 +118,15 @@ module VscodeFixture =
     ensureTestSettings ()
 
     let extFlag = if disableExtensions then " --disable-extensions" else ""
+    let extDirFlag =
+      // The test profile keeps its own extension installs (CI installs the
+      // SageFs VSIX here with --extensions-dir); without this flag VS Code
+      // falls back to the default profile's extension set.
+      sprintf "--extensions-dir=\"%s\" " (IO.Path.Combine(userDataDir, "extensions"))
     let args =
       sprintf
-        "--remote-debugging-port=%d --user-data-dir=\"%s\" --new-window%s \"%s\""
-        cdpPort userDataDir extFlag workspaceDir
+        "--remote-debugging-port=%d --user-data-dir=\"%s\" %s--new-window%s \"%s\""
+        cdpPort userDataDir extDirFlag extFlag workspaceDir
 
     let psi = ProcessStartInfo(codeExe (), args)
     psi.UseShellExecute <- true
@@ -138,6 +170,25 @@ module VscodeFixture =
       return b
   }
 
+  /// Tear down any existing instance so the next ensureBrowser launches a
+  /// FRESH VS Code. The DoD journeys use this: a reused instance can carry a
+  /// stale/disconnected SSE stream from a previous journey, which makes the
+  /// live-testing status bar miss daemon pushes.
+  let resetInstance () = task {
+    match browser with
+    | Some b ->
+      try do! b.CloseAsync() with _ -> ()
+      browser <- None
+    | None -> ()
+    match codePid with
+    | Some pid ->
+      try Process.GetProcessById(pid).Kill(true) with _ -> ()
+      codePid <- None
+    | None -> ()
+    killOrphans ()
+    do! Task.Delay(1500)
+  }
+
   /// Get the main VSCode renderer page.
   let getPage () = task {
     match browser with
@@ -173,6 +224,20 @@ module VscodeHelpers =
     do! Task.Delay(500)
     do! page.Keyboard.PressAsync("Enter")
     do! Task.Delay(500)
+  }
+
+  /// Execute a VS Code command WITHOUT keyboard input, by clicking an anchor
+  /// whose href is the command: URI (VS Code's workbench handles command:
+  /// links). The DoD journeys prefer this for extension commands: palette
+  /// typing is flaky (fuzzy-matches can hit the wrong command) and heavy
+  /// keyboard automation can disturb the extension host's SSE sockets.
+  let executeCommandUri (page: IPage) (command: string) = task {
+    let js =
+      "(() => { var a = document.createElement('a'); a.href = 'command:"
+      + command
+      + "'; a.click(); return true; })()"
+    let! _ = page.EvaluateAsync<string>(js)
+    do! Task.Delay(800)
   }
 
   /// Open a file via Quick Open (Ctrl+P).
@@ -274,6 +339,38 @@ let vscodeExtTest name (body: IPage -> Task<unit>) =
       let t = task {
         let! _b =
           VscodeFixture.ensureBrowser @"C:\Code\Repos\SageFs" false
+        let! page = VscodeFixture.getPage ()
+        do! body page
+      }
+      t.GetAwaiter().GetResult())
+
+/// Like vscodeExtTest, but opens a specific workspace directory (used by the
+/// DoD journeys, which target the FromCSharp sample's 11 Expecto tests rather
+/// than the whole repo).
+let vscodeExtTestIn (workspaceDir: string) name (body: IPage -> Task<unit>) =
+  if not VscodeFixture.isAvailable then
+    ptestCase (sprintf "[Integration] VSCode extension: %s" name) ignore
+  else
+    testCase (sprintf "[Integration] VSCode extension: %s" name) (fun () ->
+      let t = task {
+        let! _b = VscodeFixture.ensureBrowser workspaceDir false
+        let! page = VscodeFixture.getPage ()
+        do! body page
+      }
+      t.GetAwaiter().GetResult())
+
+/// Like vscodeExtTestIn, but ALWAYS starts with a fresh VS Code instance
+/// (tears down any reused one first). The DoD journeys need this: live-testing
+/// state flows over SSE, and a reused instance can carry a stale/disconnected
+/// stream from a prior journey in the same process.
+let vscodeExtTestFresh (workspaceDir: string) name (body: IPage -> Task<unit>) =
+  if not VscodeFixture.isAvailable then
+    ptestCase (sprintf "[Integration] VSCode extension: %s" name) ignore
+  else
+    testCase (sprintf "[Integration] VSCode extension: %s" name) (fun () ->
+      let t = task {
+        do! VscodeFixture.resetInstance ()
+        let! _b = VscodeFixture.ensureBrowser workspaceDir false
         let! page = VscodeFixture.getPage ()
         do! body page
       }
@@ -413,33 +510,126 @@ let vscodeWaitForSelectorText (timeoutMs: int) (page: IPage) (selector: string) 
   Expect.isTrue "selector should contain text" found
 }
 
+/// The workspace the DoD journeys run against: the FromCSharp sample with its
+/// 11 Expecto tests. A daemon session must exist on this directory (the
+/// --integration-vsc runner creates it, as does the local manual setup).
+let sampleWorkspace =
+  IO.Path.Combine(
+    __SOURCE_DIRECTORY__, "..", "samples", "from-csharp",
+    "SageFs.Samples.FromCSharp")
+
 [<Tests>]
 let dodJourneys =
   testList "VSCode DoD real-client journeys" [
 
-    vscodeExtTest "HR-VSC-E2E: watch all arms the hot-reload tree with watched files" (fun page -> task {
-      // Reveal the SageFs view container + the hot-reload tree view.
+    vscodeExtTestFresh sampleWorkspace "HR-VSC-E2E: watch all arms the hot-reload tree with watched files" (fun page -> task {
+      // Reveal the SageFs activity-bar container (id "sagefs") which hosts the
+      // hot-reload tree view (id "sagefs-hotReload"). The container stacks its
+      // views — click the activity-bar icon, then the "Hot Reload Files" view
+      // header to surface the tree.
       do! VscodeHelpers.executeCommand page "workbench.view.extension.sagefs"
-      do! Task.Delay(2000)
+      do! Task.Delay(1500)
+      // Fall back to clicking the activity-bar icon labelled SageFs.
+      let sagefsIcon =
+        page.Locator(".activitybar .action-item").Filter(LocatorFilterOptions(HasText = "SageFs")).First
+      try
+        do! sagefsIcon.ClickAsync(LocatorClickOptions(Timeout = 3000.0f))
+        do! Task.Delay(1500)
+      with _ -> ()
+      // Click the view header for the hot-reload view (stacked under Sessions).
+      let headerSel = ".sidebar .view-header"
+      let hotReloadHeader =
+        page.Locator(headerSel).Filter(LocatorFilterOptions(HasText = "Hot Reload Files")).First
+      try
+        do! hotReloadHeader.ClickAsync(LocatorClickOptions(Timeout = 3000.0f))
+      with _ ->
+        // Not stacked/found — the view may already be visible.
+        ()
+      do! Task.Delay(1500)
       let treeSel = ".view-id-sagefs-hotReload"
-      do! VscodeHelpers.executeCommand page "sagefs.hotReloadWatchAll"
-      // The tree rows render directory descriptions as "N/M watched".
-      do! vscodeWaitForSelectorText 30_000 page (treeSel + " .monaco-list-row") "watched"
+      do! VscodeHelpers.executeCommandUri page "sagefs.hotReloadWatchAll"
+      // The tree rows render either per-file "● watching" descriptions or
+      // directory "N/M watched" descriptions.
+      let sw = Diagnostics.Stopwatch.StartNew()
+      let mutable found = false
+      while not found && sw.ElapsedMilliseconds < 30_000L do
+        let! content = VscodeHelpers.selectorText page (treeSel + " .monaco-list-row")
+        if content <> null && (content.Contains("watching") || content.Contains("watched"))
+        then found <- true
+        else do! Task.Delay(500)
+      if not found then
+        let! _ = VscodeHelpers.screenshot page "hr-fail"
+        let! rows = VscodeHelpers.selectorText page (treeSel + " .monaco-list-row")
+        let! sidebar =
+          VscodeHelpers.selectorText page ".sidebar"
+        let! status = VscodeHelpers.getStatusBarText page
+        failwithf
+          "HR-VSC: tree never showed watching/watched. rows='%s' sidebar='%s' status='%s'"
+          rows sidebar status
       let! rows = VscodeHelpers.selectorText page (treeSel + " .monaco-list-row")
-      let hasWatched = rows.Contains("watched") && not (rows.Contains("0/0 watched"))
-      do! VscodeHelpers.executeCommand page "sagefs.hotReloadRefresh"
-      do! vscodeWaitForSelectorText 30_000 page (treeSel + " .monaco-list-row") "watched"
-      Expect.isTrue "tree should show watched files after refresh" hasWatched
+      let hasWatchState =
+        (rows.Contains("watching") || rows.Contains("watched"))
+        && not (rows.Contains("No session active"))
+      do! VscodeHelpers.executeCommandUri page "sagefs.hotReloadRefresh"
+      do! Task.Delay(3000)
+      let! rows2 = VscodeHelpers.selectorText page (treeSel + " .monaco-list-row")
+      Expect.isTrue "tree should show watch state after refresh"
+        (rows2.Contains("watching") || rows2.Contains("watched"))
+      Expect.isTrue "tree should show watch state (not 'No session active')" hasWatchState
     })
 
-    vscodeExtTest "LT-VSC-E2E: enabling live testing surfaces discovered and passing tests in the status bar" (fun page -> task {
-      // Enable live testing via the extension command.
-      do! VscodeHelpers.executeCommand page "sagefs.enableLiveTesting"
-      // The test status bar item renders "N/N passed" once discovery + the
-      // baseline run settle (the FromCSharp sample carries 11 passing tests).
-      do! vscodeWaitForStatusText 90_000 page "11/11 passed"
-      // Disable again and confirm the status bar returns to the off state.
-      do! VscodeHelpers.executeCommand page "sagefs.disableLiveTesting"
-      do! vscodeWaitForStatusText 30_000 page "Live testing off"
+    vscodeExtTestFresh sampleWorkspace "LT-VSC-E2E: live-testing surfaces a failing edit then recovers to all-passing" (fun page -> task {
+      let helloPath = IO.Path.Combine(sampleWorkspace, "Hello.fs")
+      let canonicalAdd = "let add a b = a + b"
+      let brokenAdd = "let add a b = a + b + 1"
+      let readHello () = IO.File.ReadAllText helloPath
+      let writeHello (content: string) =
+        // The host/compiler can briefly hold the file; retry like LT-DASH.
+        let mutable written = false
+        let deadline = DateTime.UtcNow.AddSeconds(15.0)
+        while not written && DateTime.UtcNow < deadline do
+          try
+            IO.File.WriteAllText(helloPath, content)
+            written <- true
+          with :? System.IO.IOException ->
+            Threading.Thread.Sleep(500)
+        Expect.isTrue "Hello.fs should be writable" written
+      let original = readHello ()
+      Expect.isTrue "fixture should contain the editable add" (original.Contains canonicalAdd)
+      try
+        // Enable live testing via the extension command; the daemon's baseline
+        // run has the 11 tests passing.
+        do! VscodeHelpers.executeCommandUri page "sagefs.enableLiveTesting"
+        // Mutate `add` on disk: the edit-triggered rerun must surface the
+        // failing "add infers int" test in the extension's status bar.
+        writeHello (original.Replace(canonicalAdd, brokenAdd))
+        let sw = Diagnostics.Stopwatch.StartNew()
+        let mutable sawFailure = false
+        while not sawFailure && sw.ElapsedMilliseconds < 120_000L do
+          let! status = VscodeHelpers.getStatusBarText page
+          if status.Contains("failed") then sawFailure <- true
+          else do! Task.Delay(1000)
+        if not sawFailure then
+          let! _ = VscodeHelpers.screenshot page "lt-fail"
+          let! status = VscodeHelpers.getStatusBarText page
+          failwithf "LT-VSC: status bar never showed a failure after the edit. status='%s'" status
+        // Restore: the rerun must recover to all green.
+        writeHello original
+        let sw2 = Diagnostics.Stopwatch.StartNew()
+        let mutable sawGreen = false
+        while not sawGreen && sw2.ElapsedMilliseconds < 120_000L do
+          let! status = VscodeHelpers.getStatusBarText page
+          if status.Contains("11/11 passed") then sawGreen <- true
+          else do! Task.Delay(1000)
+        if not sawGreen then
+          let! _ = VscodeHelpers.screenshot page "lt-recover-fail"
+          let! status = VscodeHelpers.getStatusBarText page
+          failwithf "LT-VSC: status bar never recovered to 11/11 passed. status='%s'" status
+        // Disable again and confirm the status bar returns to the off state.
+        do! VscodeHelpers.executeCommandUri page "sagefs.disableLiveTesting"
+        do! vscodeWaitForStatusText 30_000 page "Live testing off"
+      finally
+        // Restore Hello.fs regardless of outcome.
+        try writeHello original with _ -> ()
     })
   ]

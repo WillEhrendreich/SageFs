@@ -755,3 +755,201 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
     eprintfn "LT runner: %s" (ex.ToString())
     try restoreHello () with _ -> ()
     exitWith 1
+
+/// Run the [Integration] VS Code DoD journeys (HR-VSC-E2E, LT-VSC-E2E) end to
+/// end, owning the daemon lifecycle in-process. Same shape as the LT runner:
+/// boots an isolated daemon on reserved loopback ports, creates a Ready
+/// session on the FromCSharp sample (11 Expecto tests), points the VS Code
+/// test profile at the daemon via SAGEFS_MCP_PORT / SAGEFS_DASHBOARD_PORT
+/// (the fixture writes those into the profile settings.json under
+/// sagefs.mcpPort / sagefs.dashboardPort), then runs VscodeExtensionTests's
+/// dodJourneys — which launch REAL VS Code with the SageFs extension and
+/// assert real client state.
+///
+/// Prerequisites (checked by the fixture, not the runner): Code.exe on PATH
+/// or VSCODE_PATH, and the SageFs extension installed in the VS Code test
+/// profile (C:\temp\sagefs-vscode-test\extensions). CI installs the VSIX
+/// built by the extensions job before invoking --integration-vsc.
+let runVscodeDoDJourneys (cliArgs: string array) : int =
+  let repoRoot =
+    Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+
+  let exe =
+    let debugExe = Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
+    let releaseExe = Path.Combine(repoRoot, "SageFs", "bin", "Release", "net10.0", "SageFs.exe")
+    if File.Exists debugExe then debugExe
+    elif File.Exists releaseExe then releaseExe
+    else "SageFs"
+
+  let pickFreePort () =
+    use l = new TcpListener(IPAddress.Loopback, 0)
+    l.Start()
+    (l.LocalEndpoint :?> IPEndPoint).Port
+
+  let rec findPortPair attempts =
+    let mcp = pickFreePort ()
+    let dash = mcp + 1
+    try
+      use probe = new TcpListener(IPAddress.Loopback, dash)
+      probe.Start()
+      mcp
+    with
+    | :? SocketException when attempts > 0 -> findPortPair (attempts - 1)
+    | :? SocketException -> failwith "VSC runner: could not find a free port pair"
+
+  let mcpPort = findPortPair 5
+  let dashboardPort = mcpPort + 1
+  let dataDir =
+    Path.Combine(Path.GetTempPath(), "sagefs-vsc", Guid.NewGuid().ToString("N"))
+  Directory.CreateDirectory(dataDir) |> ignore
+
+  // The FromCSharp sample IN PLACE (central package management — a temp copy
+  // outside the repo cannot resolve Expecto's version), same as the LT runner.
+  let sampleProject =
+    Path.Combine(
+      repoRoot, "samples", "from-csharp", "SageFs.Samples.FromCSharp",
+      "SageFs.Samples.FromCSharp.fsproj")
+  let sampleDir = Path.GetDirectoryName(sampleProject)
+
+  let psi = Diagnostics.ProcessStartInfo()
+  psi.FileName <- exe
+  psi.UseShellExecute <- false
+  psi.CreateNoWindow <- true
+  psi.WorkingDirectory <- repoRoot
+  psi.ArgumentList.Add("--mcp-port")
+  psi.ArgumentList.Add(string mcpPort)
+  psi.ArgumentList.Add("--no-resume")
+  psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+  psi.Environment["SAGEFS_HOT_RELOAD"] <- "true"
+  let daemonOutLog = Path.Combine(dataDir, "daemon.stdout.log")
+  let daemonErrLog = Path.Combine(dataDir, "daemon.stderr.log")
+  psi.RedirectStandardOutput <- true
+  psi.RedirectStandardError <- true
+
+  let daemon = Diagnostics.Process.Start(psi)
+  let drain (stream: System.IO.StreamReader) (path: string) =
+    let writer = new System.IO.StreamWriter(path, append = true)
+    let rec loop () =
+      async {
+        let! line = stream.ReadLineAsync() |> Async.AwaitTask
+        if not (isNull line) then
+          do! writer.WriteLineAsync(line) |> Async.AwaitTask
+          return! loop ()
+      }
+    async {
+      try
+        do! loop ()
+      with _ -> ()
+      writer.Dispose()
+    }
+    |> Async.Start
+  drain daemon.StandardOutput daemonOutLog
+  drain daemon.StandardError daemonErrLog
+
+  use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort))
+  client.Timeout <- TimeSpan.FromSeconds(5.0)
+
+  let dumpDaemonLogs () =
+    for path in [ daemonOutLog; daemonErrLog ] do
+      try
+        if File.Exists path then
+          let text = File.ReadAllText(path)
+          if not (String.IsNullOrWhiteSpace text) then
+            eprintfn "--- %s (tail) ---" (Path.GetFileName path)
+            let lines = text.Split('\n')
+            let tail = lines |> Array.skip (max 0 (lines.Length - 40))
+            tail |> Array.iter (eprintfn "%s")
+      with _ -> ()
+
+  let stopDaemon () =
+    try
+      if not daemon.HasExited then daemon.Kill(entireProcessTree = true)
+    with _ -> ()
+    try daemon.WaitForExit(5000) |> ignore with _ -> ()
+    daemon.Dispose()
+
+  let syncGetString (path: string) =
+    client.GetStringAsync(path).GetAwaiter().GetResult()
+
+  let syncPost (path: string) (json: string) =
+    use content = new StringContent(json, Text.Encoding.UTF8, "application/json")
+    let resp = client.PostAsync(path, content).GetAwaiter().GetResult()
+    let status = int resp.StatusCode
+    resp.Dispose()
+    status
+
+  let exitWith (code: int) =
+    stopDaemon ()
+    code
+
+  try
+    let mutable healthy = false
+    let healthDeadline = DateTime.UtcNow.AddSeconds(60.0)
+    while not healthy && DateTime.UtcNow < healthDeadline do
+      try
+        use _resp = client.GetAsync("/health").GetAwaiter().GetResult()
+        healthy <- true
+      with _ ->
+        Threading.Thread.Sleep(250)
+
+    if not healthy then
+      eprintfn "VSC runner: daemon did not become healthy on port %d" mcpPort
+      dumpDaemonLogs ()
+      exitWith 1
+    else
+      // Session on the FromCSharp sample; wait for Ready.
+      let payload =
+        System.Text.Json.JsonSerializer.Serialize(
+          {| projects = [| sampleProject |]
+             workingDirectory = sampleDir |})
+      let createStatus = syncPost "/api/sessions/create" payload
+      if createStatus <> 200 then
+        eprintfn "VSC runner: session create failed (HTTP %d)" createStatus
+        dumpDaemonLogs ()
+        exitWith 1
+      else
+        let mutable ready = false
+        let mutable faulted = false
+        let warmupDeadline = DateTime.UtcNow.AddSeconds(300.0)
+        while not ready && not faulted && DateTime.UtcNow < warmupDeadline do
+          try
+            let body = syncGetString "/api/sessions"
+            use doc = System.Text.Json.JsonDocument.Parse(body)
+            let sessionStates =
+              doc.RootElement.GetProperty("sessions").EnumerateArray()
+              |> Seq.map (fun s -> s.GetProperty("status").GetString())
+              |> Seq.toList
+            if sessionStates |> List.contains "Faulted" then
+              faulted <- true
+            ready <- sessionStates |> List.contains "Ready"
+          with _ ->
+            Threading.Thread.Sleep(1000)
+
+        if faulted then
+          eprintfn "VSC runner: session Faulted during warmup"
+          dumpDaemonLogs ()
+          exitWith 1
+        elif not ready then
+          eprintfn "VSC runner: session never reached Ready within 300s"
+          dumpDaemonLogs ()
+          exitWith 1
+        else
+          try
+            Environment.SetEnvironmentVariable("SAGEFS_MCP_PORT", string mcpPort)
+            Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
+            let vscArgv =
+              cliArgs
+              |> Array.filter (fun a -> a <> "--integration-vsc")
+            let result =
+              Tests.runTestsWithCLIArgs [] vscArgv SageFs.Tests.VscodeExtensionTests.dodJourneys
+            exitWith result
+          finally
+            // Leave no VS Code test instance behind.
+            for p in Diagnostics.Process.GetProcessesByName("Code") do
+              try
+                if (DateTime.Now - p.StartTime).TotalMinutes < 30.0 then
+                  p.Kill(true)
+              with _ -> ()
+  with ex ->
+    eprintfn "VSC runner: %s" (ex.ToString())
+    exitWith 1

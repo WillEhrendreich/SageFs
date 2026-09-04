@@ -163,6 +163,19 @@ let main argv =
     result
   | false ->
 
+  // Run the [Integration] VS Code DoD journeys (HR-VSC-E2E, LT-VSC-E2E):
+  // REAL VS Code + the SageFs extension against a real daemon with a session
+  // on the FromCSharp sample, asserting real client state (hot-reload tree,
+  // live-testing status bar). CI invokes this with --integration-vsc after a
+  // Release build + installing the extension VSIX into the test profile.
+  let isIntegrationVsc = argv |> Array.exists (fun a -> a = "--integration-vsc")
+  match isIntegrationVsc with
+  | true ->
+    let result = SageFs.Tests.DashboardBrowserRunner.runVscodeDoDJourneys argv
+    Environment.Exit result
+    result
+  | false ->
+
   let configureVerify () =
     VerifierSettings.DisableRequireUniquePrefix()
     // Global line-ending scrub: normalize CRLF to LF on BOTH the received and
