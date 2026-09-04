@@ -332,6 +332,37 @@ jobs:
     - name: Pack SageFs
       run: dotnet pack SageFs -c Release -o release
 
+    - name: Verify tool package installability
+      shell: pwsh
+      run: |
+        # WHY — issue #131: releases 0.6.299..0.6.352 were packed targeting
+        # net11.0 (tools/net11.0/any/), so net10-SDK users got "Settings file
+        # 'DotnetToolSettings.xml' was not found in the package" on install.
+        # Because — fail the release job HERE if the packed tool's TFM is not
+        # the repo's net10 target or the tool settings file is missing, so an
+        # uninstallable tool package can never reach the release artifact.
+        $nupkg = Get-ChildItem release -Filter "SageFs.*.nupkg" | Select-Object -First 1
+        if (-not $nupkg) { throw "No SageFs nupkg found in release/ — pack failed?" }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($nupkg.FullName)
+        try {
+          $toolDirs = $zip.Entries | ForEach-Object { $_.FullName } |
+            Where-Object { $_ -like 'tools/*/any/DotnetToolSettings.xml' } |
+            ForEach-Object { ($_ -split '/')[1] } | Sort-Object -Unique
+          if ($toolDirs.Count -eq 0) {
+            throw "DotnetToolSettings.xml not found in $($nupkg.Name) — net10 SDK installs will fail (issue #131)."
+          }
+          foreach ($tfm in $toolDirs) {
+            Write-Host "Tool package targets $tfm"
+            if ($tfm -ne 'net10.0') {
+              throw "Tool package targets $tfm, but net10-SDK users cannot install it (issue #131). The repo must pack net10.0."
+            }
+          }
+          Write-Host "OK $($nupkg.Name) is installable on net10 SDKs."
+        } finally {
+          $zip.Dispose()
+        }
+
     - name: Download VS Code extension artifact
       uses: actions/download-artifact@v4
       with:
