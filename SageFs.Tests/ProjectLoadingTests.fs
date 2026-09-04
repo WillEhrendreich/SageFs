@@ -140,4 +140,62 @@ let tests =
         |> Expect.isTrue "should include SAGEFS_BARE_SESSION=1"
       }
     ]
+
+    testList "resolveSiblingConfigOutput" [
+      // Ionide evaluates projects with MSBuild's default Configuration (Debug),
+      // so a Release-only build leaves TargetPath pointing at a missing
+      // bin/Debug DLL and warmup faults with "Missing DLL". The resolver must
+      // fall back to the sibling config output that actually exists.
+      test "falls back Debug -> Release when only Release exists" {
+        let root = Path.Combine(Path.GetTempPath(), "sagefs-projload-" + Guid.NewGuid().ToString("N"))
+        let releaseDll = Path.Combine(root, "bin", "Release", "net10.0", "App.dll")
+        Directory.CreateDirectory(Path.GetDirectoryName releaseDll) |> ignore
+        File.WriteAllText(releaseDll, "x")
+        try
+          let debugPath = Path.Combine(root, "bin", "Debug", "net10.0", "App.dll")
+          let result = resolveSiblingConfigOutput debugPath
+          result |> Expect.equal "should resolve to the Release DLL" (Some releaseDll)
+        finally
+          Directory.Delete(root, true)
+      }
+
+      test "falls back Release -> Debug when only Debug exists" {
+        let root = Path.Combine(Path.GetTempPath(), "sagefs-projload-" + Guid.NewGuid().ToString("N"))
+        let debugDll = Path.Combine(root, "bin", "Debug", "net10.0", "App.dll")
+        Directory.CreateDirectory(Path.GetDirectoryName debugDll) |> ignore
+        File.WriteAllText(debugDll, "x")
+        try
+          let releasePath = Path.Combine(root, "bin", "Release", "net10.0", "App.dll")
+          let result = resolveSiblingConfigOutput releasePath
+          result |> Expect.equal "should resolve to the Debug DLL" (Some debugDll)
+        finally
+          Directory.Delete(root, true)
+      }
+
+      test "returns None when neither config output exists" {
+        let root = Path.Combine(Path.GetTempPath(), "sagefs-projload-" + Guid.NewGuid().ToString("N"))
+        try
+          let debugPath = Path.Combine(root, "bin", "Debug", "net10.0", "App.dll")
+          resolveSiblingConfigOutput debugPath |> Expect.isNone "no sibling should exist"
+        finally
+          if Directory.Exists root then Directory.Delete(root, true)
+      }
+
+      test "returns the existing path unchanged when it exists" {
+        let root = Path.Combine(Path.GetTempPath(), "sagefs-projload-" + Guid.NewGuid().ToString("N"))
+        let debugDll = Path.Combine(root, "bin", "Debug", "net10.0", "App.dll")
+        Directory.CreateDirectory(Path.GetDirectoryName debugDll) |> ignore
+        File.WriteAllText(debugDll, "x")
+        try
+          let result = resolveSiblingConfigOutput debugDll
+          result |> Expect.equal "existing Debug DLL should be returned as-is" (Some debugDll)
+        finally
+          Directory.Delete(root, true)
+      }
+
+      test "handles non-bin layouts without throwing" {
+        resolveSiblingConfigOutput "C:\\some\\random\\file.dll"
+        |> Expect.isNone "non-bin layout should yield None"
+      }
+    ]
   ]

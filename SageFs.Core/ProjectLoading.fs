@@ -185,6 +185,33 @@ let emptySolution = {
   OtherArgs = []
 }
 
+/// If `dllPath` (a bin/<Config>/<TFM>/<name>.dll output) does not exist, probe
+/// the sibling configuration directory (Debug ↔ Release) at the same TFM and
+/// return an existing output path. Ionide evaluates projects with MSBuild's
+/// default Configuration (Debug), so a Release-only build leaves TargetPath
+/// pointing at a nonexistent bin/Debug file — without this, warmup faults with
+/// "Missing DLL" even though the project is built.
+let resolveSiblingConfigOutput (dllPath: string) : string option =
+  try
+    // An existing output needs no resolution.
+    if File.Exists dllPath then Some dllPath
+    else
+      // Layout: <binRoot>/<Config>/<TFM>/<name>.dll
+      let tfmDir = Path.GetDirectoryName dllPath   // .../bin/Debug/net10.0
+      let configDir = Path.GetDirectoryName tfmDir // .../bin/Debug
+      let binRoot = Path.GetDirectoryName configDir // .../bin
+      let config = Path.GetFileName configDir
+      let tfm = Path.GetFileName tfmDir
+      let altConfig =
+        match config with
+        | c when String.Equals(c, "Debug", StringComparison.OrdinalIgnoreCase) -> "Release"
+        | c when String.Equals(c, "Release", StringComparison.OrdinalIgnoreCase) -> "Debug"
+        | _ -> config
+      let fileName = Path.GetFileName dllPath
+      let candidate = Path.Combine(binRoot, altConfig, tfm, fileName)
+      if File.Exists candidate then Some candidate else None
+  with _ -> None
+
 let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
   let directory = config.WorkingDir
 
@@ -291,10 +318,27 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
         OtherArgs = [ "--langversion:preview" ]
       }
     | _ ->
-      let fcsProjectOptions = List.ofSeq <| FCS.mapManyOptions loadedProjects
+      // Ionide's loader evaluates projects with MSBuild defaults (Debug
+      // output), so TargetPath points at bin/Debug even when the user only
+      // built Release (or vice versa). Rewrite each project's TargetPath to
+      // whichever config output actually exists so a Release-only build loads
+      // instead of faulting with "Missing DLL". When neither exists the
+      // original path is kept so the missing-DLL error stays accurate.
+      let loadedProjects' =
+        loadedProjects
+        |> Seq.map (fun po ->
+          match File.Exists po.TargetPath with
+          | true -> po
+          | false ->
+            let alt = resolveSiblingConfigOutput po.TargetPath
+            match alt with
+            | Some existing when File.Exists existing -> { po with TargetPath = existing }
+            | _ -> po)
+        |> Seq.toList
+      let fcsProjectOptions = List.ofSeq <| FCS.mapManyOptions loadedProjects'
       {
         FsProjects = fcsProjectOptions
-        Projects = loadedProjects
+        Projects = loadedProjects'
         StartupFiles = []
         References = []
         LibPaths = []
