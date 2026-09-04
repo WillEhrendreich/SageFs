@@ -79,7 +79,8 @@ let renderThemePicker (selectedTheme: string) =
       Ds.bind Signals.Theme
       // Send the freshly-selected value (not the signal, which is updated
       // async by data-bind) by reading the select element at event time.
-      Ds.onEvent ("change", "var t=this.value; @post('/dashboard/set-theme', {theme: t})") ]
+      // (event.target, not `this` — Datastar leaves `this` unbound.)
+      Ds.onEvent ("change", "var t=event.target.value; @post('/dashboard/set-theme', {theme: t})") ]
     (ThemePresets.all |> List.map (fun (name, _) ->
       Elem.option
         ([ Attr.value name ] @ (match name = selectedTheme with | true -> [ Attr.create "selected" "selected" ] | false -> []))
@@ -1152,8 +1153,12 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                   Attr.id DomIds.EvalTextarea
                   Ds.bind Signals.Code
                   Attr.create "placeholder" "Enter F# code... (Alt+Enter to eval, ;; auto-appended)"
-                  Ds.onEvent ("keydown", "if(event.altKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') } if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') } if(event.key === 'Tab') { event.preventDefault(); var s=this.selectionStart; var e=this.selectionEnd; this.value=this.value.substring(0,s)+'  '+this.value.substring(e); this.selectionStart=this.selectionEnd=s+2; this.dispatchEvent(new Event('input')) } if(event.key === 'Escape') { document.getElementById('completion-dropdown').style.display='none' }")
-                  Ds.onEvent ("input.debounce_300ms", sprintf "var c=this.value[this.selectionStart-1]; $%s = this.selectionStart; if(c==='.'||(c>='a'&&c<='z')||(c>='A'&&c<='Z')){@post('/dashboard/completions')}" Signals.CursorPos)
+                  // NOTE: Datastar evaluates data-on expressions with `this`
+                  // unbound — the element must be reached via event.target,
+                  // never `this`. (A `this.` reference throws "Cannot read
+                  // properties of undefined (reading 'substring')" at runtime.)
+                  Ds.onEvent ("keydown", "var t=event.target; if(event.altKey && event.key === 'Enter') { event.preventDefault(); @post('/dashboard/eval') } if(event.ctrlKey && event.key === 'l') { event.preventDefault(); @post('/dashboard/clear-output') } if(event.key === 'Tab') { event.preventDefault(); var s=t.selectionStart; var e=t.selectionEnd; t.value=t.value.substring(0,s)+'  '+t.value.substring(e); t.selectionStart=t.selectionEnd=s+2; t.dispatchEvent(new Event('input')) } if(event.key === 'Escape') { document.getElementById('completion-dropdown').style.display='none' }")
+                  Ds.onEvent ("input.debounce_300ms", sprintf "var t=event.target; var c=t.value[t.selectionStart-1]; $%s = t.selectionStart; if(c==='.'||(c>='a'&&c<='z')||(c>='A'&&c<='Z')){@post('/dashboard/completions')}" Signals.CursorPos)
                   Attr.create "spellcheck" "false" ]
                 []
               Elem.div
