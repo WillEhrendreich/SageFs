@@ -17,18 +17,25 @@ open SageFs.Tests.DashboardBrowserTests
 ///   SAGEFS_DASHBOARD_PORT — dashboard URL for the page
 ///   SAGEFS_HR_APP_URL     — base URL of the running fixture app (value A)
 ///   SAGEFS_HR_FIXTURE_DIR — the temp fixture dir (Greeting.fs lives here)
+///
+/// The env is read LAZILY (per access, not at module load): the module is
+/// always linked into the test assembly, so a static throw would break
+/// Expecto's discovery of every other suite on machines where the env is
+/// unset. Only a journey that actually runs touches these.
 module HrEnv =
   let appUrl =
-    match Environment.GetEnvironmentVariable("SAGEFS_HR_APP_URL") with
-    | null | "" -> failwith "SAGEFS_HR_APP_URL not set (run under --integration-hr)"
-    | u -> u.TrimEnd('/')
+    lazy
+      (match Environment.GetEnvironmentVariable("SAGEFS_HR_APP_URL") with
+       | null | "" -> failwith "SAGEFS_HR_APP_URL not set (run under --integration-hr)"
+       | u -> u.TrimEnd('/'))
 
   let fixtureDir =
-    match Environment.GetEnvironmentVariable("SAGEFS_HR_FIXTURE_DIR") with
-    | null | "" -> failwith "SAGEFS_HR_FIXTURE_DIR not set (run under --integration-hr)"
-    | d -> d
+    lazy
+      (match Environment.GetEnvironmentVariable("SAGEFS_HR_FIXTURE_DIR") with
+       | null | "" -> failwith "SAGEFS_HR_FIXTURE_DIR not set (run under --integration-hr)"
+       | d -> d)
 
-  let greetingFile = Path.Combine(fixtureDir, "Greeting.fs")
+  let greetingFile = lazy Path.Combine(fixtureDir.Value, "Greeting.fs")
 
 /// HTTP GET the running app's / route.
 let private httpGet (url: string) =
@@ -59,7 +66,7 @@ let private writeGreeting (content: string) =
   let mutable written = false
   while not written && sw.ElapsedMilliseconds < 15000L do
     try
-      File.WriteAllText(HrEnv.greetingFile, content)
+      File.WriteAllText(HrEnv.greetingFile.Value, content)
       written <- true
     with :? IOException ->
       Threading.Thread.Sleep(200)
@@ -107,7 +114,7 @@ let tests =
     hrPlaywrightTest "saving a watched file hot-reloads the running app (value A -> value B)" (fun page -> task {
       do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
       // Establish value A from the running app.
-      let! bodyA = waitForAppBody HrEnv.appUrl "hello from sagefs" 15_000
+      let! bodyA = waitForAppBody HrEnv.appUrl.Value "hello from sagefs" 15_000
       Expect.isTrue (bodyA.Contains("hello from sagefs")) "app should serve value A before the edit"
 
       // Arm the watch set via the dashboard panel (Watch All), same as the UI.
@@ -122,7 +129,7 @@ let tests =
       do! page.WaitForTimeoutAsync(1500.0f)
 
       // Read the ORIGINAL fixture content, edit value A -> value B on disk.
-      let original = File.ReadAllText(HrEnv.greetingFile)
+      let original = File.ReadAllText(HrEnv.greetingFile.Value)
       Expect.stringContains original valueAGreeting "fixture should contain the editable greeting"
       let edited = original.Replace(valueAGreeting, valueBGreeting)
       writeGreeting edited
@@ -135,7 +142,7 @@ let tests =
         let mutable served = false
         while not served && sw.ElapsedMilliseconds < 60_000L do
           try
-            let body = httpGet HrEnv.appUrl
+            let body = httpGet HrEnv.appUrl.Value
             if body.Contains("hello from hot reload (value B)") then
               served <- true
             else
@@ -160,14 +167,14 @@ let tests =
       do! PlaywrightExpect.waitForText 30_000 panel "Hot Reload: ON"
       do! page.WaitForTimeoutAsync(1500.0f)
 
-      let original = File.ReadAllText(HrEnv.greetingFile)
+      let original = File.ReadAllText(HrEnv.greetingFile.Value)
       Expect.stringContains original valueAGreeting "fixture should start from value A"
 
       // 1. Save BROKEN F# — the app must keep serving value A.
       let broken = original.Replace(valueAGreeting, "let greeting () : int = \"this will not compile\"")
       writeGreeting broken
       try
-        let! bodyAfterFail = waitForAppBody HrEnv.appUrl "hello from sagefs" 15_000
+        let! bodyAfterFail = waitForAppBody HrEnv.appUrl.Value "hello from sagefs" 15_000
         Expect.stringContains bodyAfterFail "hello from sagefs"
           "compile error must not take down the running app (last valid behavior retained)"
 
@@ -175,7 +182,7 @@ let tests =
         Threading.Thread.Sleep(1000)
         let repaired = original.Replace(valueAGreeting, valueBGreeting)
         writeGreeting repaired
-        let! bodyB = waitForAppBody HrEnv.appUrl "hello from hot reload (value B)" 45_000
+        let! bodyB = waitForAppBody HrEnv.appUrl.Value "hello from hot reload (value B)" 45_000
         Expect.stringContains bodyB "hello from hot reload (value B)"
           "repair should hot-reload the new greeting from the running process"
       finally
