@@ -26,9 +26,7 @@ jobs:
     - name: Install Dotnet
       uses: actions/setup-dotnet@v5
       with:
-        dotnet-version: |
-          11.0.x
-        dotnet-quality: preview
+        dotnet-version: '10.0.x'
 
     - name: Build forked MCP SDK packages
       run: |
@@ -68,7 +66,7 @@ jobs:
     # run excludes [Integration] and no job passed --all). This job runs the
     # curated self-contained subset (--integration-host) — real processes, no
     # external daemon or browser. Browser/daemon journeys run in the
-    # e2e-dashboard and smoke workflows.
+    # dashboard-browser-e2e and smoke workflows.
     runs-on: windows-latest
     timeout-minutes: 25
 
@@ -84,9 +82,7 @@ jobs:
     - name: Install Dotnet
       uses: actions/setup-dotnet@v5
       with:
-        dotnet-version: |
-          11.0.x
-        dotnet-quality: preview
+        dotnet-version: '10.0.x'
 
     - name: Build forked MCP SDK packages
       run: |
@@ -122,9 +118,7 @@ jobs:
     - name: Install Dotnet
       uses: actions/setup-dotnet@v5
       with:
-        dotnet-version: |
-          11.0.x
-        dotnet-quality: preview
+        dotnet-version: '10.0.x'
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -189,9 +183,7 @@ jobs:
     - name: Install Dotnet
       uses: actions/setup-dotnet@v5
       with:
-        dotnet-version: |
-          11.0.x
-        dotnet-quality: preview
+        dotnet-version: '10.0.x'
 
     - name: Build forked MCP SDK packages
       run: |
@@ -230,9 +222,8 @@ jobs:
       uses: actions/setup-dotnet@v5
       with:
         dotnet-version: |
-          11.0.x
+          10.0.x
           8.0.x
-        dotnet-quality: preview
 
     - name: Build forked MCP SDK packages
       run: |
@@ -294,9 +285,7 @@ jobs:
     - name: Install Dotnet
       uses: actions/setup-dotnet@v5
       with:
-        dotnet-version: |
-          11.0.x
-        dotnet-quality: preview
+        dotnet-version: '10.0.x'
 
     - name: Build forked MCP SDK packages
       run: |

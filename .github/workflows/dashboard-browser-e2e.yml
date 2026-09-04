@@ -1,0 +1,90 @@
+name: Dashboard Browser E2E (F#)
+
+# Real-browser dashboard journeys against a real daemon at the tested SHA,
+# driven by the type-safe F# Playwright.NET suite inside SageFs.Tests
+# ([Integration] Dashboard browser tests) — no separate TS harness.
+#
+# The daemon is the freshly built Release tool, started with SAGEFS_DATA_DIR
+# pointed at a temp dir (never touches runner state) on non-default ports.
+# Chromium is installed for the .NET Playwright driver via its bundled node.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/dashboard-browser-e2e.yml'
+      - 'scripts/e2e-browser-fsharp.ps1'
+      - 'samples/demos/SageFs.Samples.WebappDatastar/**'
+      - 'SageFs/**'
+      - 'SageFs.Core/**'
+      - 'SageFs.Host/**'
+      - 'SageFs.Tests/DashboardBrowserTests.fs'
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/dashboard-browser-e2e.yml'
+      - 'scripts/e2e-browser-fsharp.ps1'
+      - 'samples/demos/SageFs.Samples.WebappDatastar/**'
+      - 'SageFs/**'
+      - 'SageFs.Core/**'
+      - 'SageFs.Host/**'
+      - 'SageFs.Tests/DashboardBrowserTests.fs'
+
+jobs:
+  dashboard-browser:
+    name: F# dashboard browser journeys
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout forked MCP SDK
+        uses: actions/checkout@v5
+        with:
+          repository: WillEhrendreich/ModelContextProtocolSdk
+          path: mcp-sdk
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build forked MCP SDK packages
+        run: |
+          dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+          dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+          dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+
+      - name: Build Release (tool + sample + tests)
+        run: |
+          dotnet build SageFs/SageFs.fsproj -c Release --nologo
+          dotnet build samples/demos/SageFs.Samples.WebappDatastar/SageFs.Samples.WebappDatastar.fsproj -c Release --nologo
+          dotnet build SageFs.Tests/SageFs.Tests.fsproj -c Release --nologo
+
+      - name: Install Chromium for the .NET Playwright driver
+        shell: pwsh
+        run: |
+          $driver = "SageFs.Tests\bin\Release\net10.0\.playwright"
+          if (-not (Test-Path "$driver\node\win32_x64\node.exe")) {
+            Write-Host "Playwright driver missing from test output" -ForegroundColor Red
+            exit 1
+          }
+          & "$driver\node\win32_x64\node.exe" "$driver\package\cli.js" install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run F# dashboard browser journeys
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/e2e-browser-fsharp.ps1 -McpPort 37951 -SessionWarmupSeconds 120 -Configuration Release 2>&1 |
+            Tee-Object -FilePath e2e-browser-diagnostics\runner.log
+          exit $LASTEXITCODE
+        timeout-minutes: 20
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-browser-diagnostics
+          path: e2e-browser-diagnostics\
+          if-no-files-found: ignore
+          retention-days: 7
