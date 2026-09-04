@@ -66,10 +66,18 @@ jobs:
           dotnet pack SageFs -o nupkg --nologo -c Release
 
       - name: Install SageFs global tool
-        run: dotnet tool install --global SageFs --add-source nupkg --no-cache
+        shell: pwsh
+        run: |
+          dotnet tool update --global SageFs --add-source nupkg --no-cache 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            dotnet tool install --global SageFs --add-source nupkg --no-cache
+          }
+          dotnet tool list --global
 
-      - name: Install Playwright Chromium
-        run: npx playwright install chromium
+      - name: Install Playwright test runner + Chromium
+        run: |
+          npm ci
+          npx playwright install chromium
 
       - name: Run dashboard E2E
         shell: pwsh
