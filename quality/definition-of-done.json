@@ -10,7 +10,7 @@
     { "id": "LT-VSC-E2E", "capability": "live-testing", "layer": "real-client-e2e", "client": "vscode", "status": "deferred", "issue": 128, "expires": "2026-10-01", "evidence": "VS Code extension-host E2E" },
     { "id": "LT-VS-E2E", "capability": "live-testing", "layer": "real-client-e2e", "client": "visualstudio", "status": "deferred", "issue": 128, "expires": "2026-10-01", "evidence": "Visual Studio experimental instance" },
     { "id": "LT-NVIM-E2E", "capability": "live-testing", "layer": "real-client-e2e", "client": "neovim", "status": "deferred", "issue": 128, "expires": "2026-10-01", "evidence": "sagefs.nvim real-daemon E2E" },
-    { "id": "FR-DASH-E2E", "capability": "friction", "layer": "real-client-e2e", "client": "dashboard", "status": "deferred", "issue": 129, "expires": "2026-10-01", "evidence": "Dashboard friction Playwright journey" },
+    { "id": "FR-DASH-E2E", "capability": "friction", "layer": "real-client-e2e", "client": "dashboard", "status": "verified", "evidence": "DashboardBrowserTests.fs FR journeys — CI dashboard-browser-e2e 'F# dashboard browser journeys' green at c26220c" },
     { "id": "FR-VSC-E2E", "capability": "friction", "layer": "real-client-e2e", "client": "vscode", "status": "deferred", "issue": 129, "expires": "2026-10-01", "evidence": "VS Code extension-host E2E" },
     { "id": "FR-VS-E2E", "capability": "friction", "layer": "real-client-e2e", "client": "visualstudio", "status": "deferred", "issue": 129, "expires": "2026-10-01", "evidence": "Visual Studio experimental instance" },
     { "id": "FR-NVIM-E2E", "capability": "friction", "layer": "real-client-e2e", "client": "neovim", "status": "deferred", "issue": 129, "expires": "2026-10-01", "evidence": "sagefs.nvim real-daemon E2E" }
