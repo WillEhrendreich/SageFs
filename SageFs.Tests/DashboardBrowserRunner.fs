@@ -267,8 +267,10 @@ File.WriteAllText(
   sprintf "http://127.0.0.1:%d" port)
 """
 
-/// Copy the WebAppFixture into a fresh temp dir and drop in the init profile.
-/// Returns the fixture dir.
+/// Copy the WebAppFixture into a fresh temp dir, drop in the init profile,
+/// and pre-build the copy so the daemon's warmup loads an already-built
+/// project (a cold ionide/FSI build of a temp copy on a clean CI runner can
+/// fault warmup before Ready). Returns the fixture dir.
 let prepareHotReloadFixture (repoRoot: string) : string =
   let fixtureSrc =
     Path.Combine(repoRoot, "SageFs.Tests", "fixtures", "WebAppFixture")
@@ -278,6 +280,47 @@ let prepareHotReloadFixture (repoRoot: string) : string =
   for file in [ "Greeting.fs"; "App.fs"; "Program.fs"; "WebAppFixture.fsproj" ] do
     File.Copy(Path.Combine(fixtureSrc, file), Path.Combine(dest, file))
   File.WriteAllText(Path.Combine(dest, ".SageFs", "init.fsx"), hotReloadInitProfile)
+  // Pre-build the temp copy (Debug is fine — the daemon's config fallback
+  // resolves Debug<->Release at the same TFM). Fail loudly with the build log
+  // if the fixture itself cannot build on this machine.
+  let psi = Diagnostics.ProcessStartInfo()
+  psi.FileName <- "dotnet"
+  psi.UseShellExecute <- false
+  psi.CreateNoWindow <- true
+  psi.WorkingDirectory <- dest
+  psi.ArgumentList.Add("build")
+  psi.ArgumentList.Add("WebAppFixture.fsproj")
+  psi.ArgumentList.Add("-v")
+  psi.ArgumentList.Add("q")
+  psi.RedirectStandardOutput <- true
+  psi.RedirectStandardError <- true
+  use build = Diagnostics.Process.Start(psi)
+  // Drain to files (never undrained pipes): files can't deadlock the child.
+  let buildOut = Path.Combine(dest, "build.stdout.log")
+  let buildErr = Path.Combine(dest, "build.stderr.log")
+  let outWriter = new System.IO.StreamWriter(buildOut)
+  let errWriter = new System.IO.StreamWriter(buildErr)
+  let drain (stream: System.IO.StreamReader) (writer: System.IO.StreamWriter) =
+    async {
+      try
+        let mutable line = stream.ReadLine()
+        while not (isNull line) do
+          writer.WriteLine(line)
+          line <- stream.ReadLine()
+      with _ -> ()
+      writer.Dispose()
+    }
+  let outDrain = drain build.StandardOutput outWriter |> Async.StartAsTask
+  let errDrain = drain build.StandardError errWriter |> Async.StartAsTask
+  if not (build.WaitForExit(180000)) then
+    failwith "HR runner: pre-build of the WebAppFixture copy timed out after 180s"
+  try outDrain.Wait(5000) |> ignore with _ -> ()
+  try errDrain.Wait(5000) |> ignore with _ -> ()
+  if build.ExitCode <> 0 then
+    let out = if File.Exists buildOut then File.ReadAllText(buildOut) else ""
+    let err = if File.Exists buildErr then File.ReadAllText(buildErr) else ""
+    failwithf "HR runner: pre-build of the WebAppFixture copy failed (exit %d).\n%s\n%s"
+      build.ExitCode out err
   dest
 
 /// Run the HR-DASH browser journeys end to end, owning the daemon lifecycle.
@@ -417,19 +460,32 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
         exitWith 1
       else
         let mutable ready = false
+        let mutable faulted = false
         let warmupDeadline = DateTime.UtcNow.AddSeconds(300.0)
-        while not ready && DateTime.UtcNow < warmupDeadline do
+        while not ready && not faulted && DateTime.UtcNow < warmupDeadline do
           try
             let body = syncGetString "/api/sessions"
             use doc = System.Text.Json.JsonDocument.Parse(body)
-            ready <-
+            let sessionStates =
               doc.RootElement.GetProperty("sessions").EnumerateArray()
-              |> Seq.exists (fun s ->
-                s.GetProperty("status").GetString() = "Ready")
+              |> Seq.map (fun s -> s.GetProperty("status").GetString())
+              |> Seq.toList
+            if sessionStates |> List.contains "Faulted" then
+              faulted <- true
+            ready <- sessionStates |> List.contains "Ready"
           with _ ->
             Threading.Thread.Sleep(1000)
 
-        if not ready then
+        if faulted then
+          eprintfn "HR runner: session Faulted during warmup"
+          try
+            let body = syncGetString "/api/sessions"
+            eprintfn "--- /api/sessions ---"
+            eprintfn "%s" body
+          with _ -> ()
+          dumpDaemonLogs ()
+          exitWith 1
+        elif not ready then
           eprintfn "HR runner: session never reached Ready within 300s"
           try
             let body = syncGetString "/api/sessions"
