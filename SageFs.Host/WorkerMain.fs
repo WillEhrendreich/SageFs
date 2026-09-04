@@ -142,7 +142,10 @@ let handleMessage
     match msg with
     | WorkerMessage.EvalCode(code, replyId) ->
       let request = { Code = code; Args = Map.empty }
-      use cts = new CancellationTokenSource()
+      // Bound the eval the same way the daemon's HTTP client does — a wedged
+      // actor must not hang the eval forever even if the client disconnects
+      // without cancelling. (Roast-2 item 11 worker side.)
+      use cts = new CancellationTokenSource(Timeouts.workerHttpRequest)
       let! response =
         actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Repl
