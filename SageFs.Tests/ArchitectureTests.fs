@@ -335,6 +335,47 @@ let architectureTests =
         |> Expect.isFalse
           "MCP push/state handlers, SessionEvents, and JupyterKernel belong in the daemon project, not Core"
 
+      testCase "SageFs.Core must not contain the daemon Elm kernel"
+      <| fun _ ->
+        let coreTypeNames =
+          coreAssembly.GetTypes()
+          |> Array.map (fun t -> t.FullName)
+        coreTypeNames
+        |> Array.exists (fun n ->
+          n = "SageFs.SageFsApp"
+          || n = "SageFs.SageFsModel"
+          || n = "SageFs.SageFsUpdate"
+          || n = "SageFs.SageFsRender"
+          || n = "SageFs.SageFsEffectHandler"
+          || n = "SageFs.ElmDaemon"
+          || n = "SageFs.ElmLoop")
+        |> Expect.isFalse
+          "The daemon's Elm kernel (SageFsApp/ElmDaemon/ElmLoop) belongs in the daemon project, not Core"
+
+      testCase "SageFs.Core must not contain the daemon render stack"
+      <| fun _ ->
+        let coreTypeNames =
+          coreAssembly.GetTypes()
+          |> Array.map (fun t -> t.FullName)
+        coreTypeNames
+        |> Array.exists (fun n ->
+          n = "SageFs.CellGrid"
+          || n = "SageFs.RenderRegion"
+          || n = "SageFs.ThemeConfig"
+          || n = "SageFs.SyntaxHighlight"
+          || n = "SageFs.TerminalUI"
+          || n = "SageFs.SessionDisplay"
+          || n = "SageFs.Draw"
+          || n = "SageFs.Screen"
+          || n = "SageFs.AnsiEmitter"
+          || n = "SageFs.EditorState"
+          || n = "SageFs.TestsPane"
+          || n = "SageFs.DirectoryConfig"
+          || n = "SageFs.ConnectionTracker"
+          || n = "SageFs.DaemonClient")
+        |> Expect.isFalse
+          "The daemon UI render stack belongs in the daemon project — the FSI host closure must be session-engine only"
+
       testCase "SageFs.Core must not reference ModelContextProtocol"
       <| fun _ ->
         coreAssembly

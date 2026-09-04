@@ -38,6 +38,30 @@
 
     <ItemGroup>
         <Compile Include="DaemonState.fs" />
+        <!-- The daemon's Elm kernel + render stack (moved out of SageFs.Core so the
+             FSI host closure ships the session engine only). Order is dependency-driven:
+             leaves first, SageFsApp/ElmDaemon last. -->
+        <Compile Include="RenderPipeline.fs" />
+        <Compile Include="PipelineFlame.fs" />
+        <Compile Include="CellGrid.fs" />
+        <Compile Include="Theme.fs" />
+        <Compile Include="ThemePresets.fs" />
+        <Compile Include="SyntaxHighlight.fs" />
+        <Compile Include="Draw.fs" />
+        <Compile Include="AnsiEmitter.fs" />
+        <Compile Include="DaemonClient.fs" />
+        <Compile Include="Editor.fs" />
+        <Compile Include="ElmLoop.fs" />
+        <Compile Include="SessionDisplay.fs" />
+        <Compile Include="SageFsEvent.fs" />
+        <Compile Include="TestsPane.fs" />
+        <Compile Include="SageFsApp.fs" />
+        <Compile Include="ElmDaemon.fs" />
+        <Compile Include="TerminalUI.fs" />
+        <Compile Include="JumpToTest.fs" />
+        <Compile Include="Screen.fs" />
+        <Compile Include="DirectoryConfig.fs" />
+        <Compile Include="ConnectionTracker.fs" />
         <Compile Include="DashboardTypes.fs" />
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="Dashboard.fs" />
