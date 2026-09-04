@@ -157,7 +157,6 @@ let private transitionCostScenarios =
         DefinitionsLost = 12
         CellsLost = 3
         EstimatedRestart = System.TimeSpan.FromSeconds 8.0
-        StandbyReady = false
       }
 
       // THEN the cost accurately describes what switching will cost
@@ -165,22 +164,6 @@ let private transitionCostScenarios =
       |> Expect.equal "should report 12 definitions" 12
       cost.CellsLost
       |> Expect.equal "should report 3 cells" 3
-      cost.StandbyReady
-      |> Expect.isFalse "no standby means slower restart"
-
-    testCase "standby-ready cost shows fast restart" <| fun _ ->
-      // GIVEN a session where the standby pool has a worker ready
-      let cost = {
-        TransitionCost.zero with
-          StandbyReady = true
-          EstimatedRestart = System.TimeSpan.FromMilliseconds 200.0
-      }
-
-      // THEN the user sees that switching will be near-instant
-      cost.StandbyReady
-      |> Expect.isTrue "standby ready means fast switch"
-      (cost.EstimatedRestart, System.TimeSpan.FromSeconds 1.0)
-      |> Expect.isLessThan "restart should be sub-second with standby"
   ]
 
 // ── Scenario: Project detection suggestions ─────────────────

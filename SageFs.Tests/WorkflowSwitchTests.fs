@@ -37,8 +37,7 @@ let private genTransitionCost =
   gen {
     let! defs = Gen.choose (0, 100)
     let! cells = Gen.choose (0, 50)
-    let! standby = Gen.elements [true; false]
-    return TransitionCost.compute defs cells standby
+    return TransitionCost.compute defs cells
   }
 
 type SwitchGenerators =
@@ -66,11 +65,11 @@ let transitionCostPropertyTests =
 
       testPropertyWithConfig switchConfig
         "same inputs always produce same cost" <|
-        fun (evalCount: int) (cellCount: int) (standby: bool) ->
+        fun (evalCount: int) (cellCount: int) ->
           let evalCount = abs evalCount % 1000
           let cellCount = abs cellCount % 500
-          let cost1 = TransitionCost.compute evalCount cellCount standby
-          let cost2 = TransitionCost.compute evalCount cellCount standby
+          let cost1 = TransitionCost.compute evalCount cellCount
+          let cost2 = TransitionCost.compute evalCount cellCount
           cost1 = cost2
     ]
 
@@ -126,29 +125,20 @@ let transitionCostPropertyTests =
           "losing 3 cells should not be zero cost"
     ]
 
-    testList "standby affects estimated restart time" [
+    testList "estimated restart time" [
 
       testCase
-        "standby ready gives near-instant estimate" <| fun _ ->
-        // GIVEN a standby worker is ready
-        let cost = TransitionCost.compute 5 3 true
+        "switches always estimate the cold-start restart" <| fun _ ->
+        // GIVEN a switch — every switch spawns a fresh session,
+        // there is no standby pool to give a near-instant switch
+        let cost = TransitionCost.compute 5 3
 
         // WHEN checking estimated restart
-        // THEN it's much faster than cold start
-        (cost.EstimatedRestart, System.TimeSpan.FromSeconds 1.0)
-        |> Expect.isLessThan
-          "standby restart should be under 1 second"
-
-      testCase
-        "no standby gives cold start estimate" <| fun _ ->
-        // GIVEN no standby worker available
-        let cost = TransitionCost.compute 5 3 false
-
-        // WHEN checking estimated restart
-        // THEN it reflects full cold start
-        (cost.EstimatedRestart, System.TimeSpan.FromSeconds 5.0)
-        |> Expect.isGreaterThan
-          "cold restart should be over 5 seconds"
+        // THEN it reflects the full cold start
+        cost.EstimatedRestart
+        |> Expect.equal
+          "restart should be the fixed cold-start estimate"
+          (System.TimeSpan.FromSeconds 15.0)
     ]
   ]
 
@@ -185,7 +175,7 @@ let workflowSwitchOutcomeTests =
         // GIVEN a session in Interactive mode with some state
         let current = SessionWorkflow.Interactive
         let target = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
-        let cost = TransitionCost.compute 5 3 false
+        let cost = TransitionCost.compute 5 3
 
         // WHEN previewing the switch
         let outcome = WorkflowSwitchOutcome.preview current target cost
@@ -223,7 +213,7 @@ let workflowSwitchOutcomeTests =
         // GIVEN switching from Interactive to WebLive
         let previous = SessionWorkflow.Interactive
         let target = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
-        let cost = TransitionCost.compute 2 1 true
+        let cost = TransitionCost.compute 2 1
         let newSid = "abc-new-session"
 
         // WHEN executing the switch

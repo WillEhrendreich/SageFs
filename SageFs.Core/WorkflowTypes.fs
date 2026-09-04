@@ -110,8 +110,6 @@ type TransitionCost = {
   CellsLost: int
   /// Estimated time for the new session to warm up.
   EstimatedRestart: System.TimeSpan
-  /// Whether a standby worker is ready (near-instant switch).
-  StandbyReady: bool
 }
 
 module TransitionCost =
@@ -119,7 +117,6 @@ module TransitionCost =
     DefinitionsLost = 0
     CellsLost = 0
     EstimatedRestart = System.TimeSpan.Zero
-    StandbyReady = false
   }
 
   /// Zero-cost switches skip confirmation.
@@ -128,14 +125,12 @@ module TransitionCost =
     cost.DefinitionsLost = 0 && cost.CellsLost = 0
 
   /// Compute transition cost from observable session state.
-  let compute (evalCount: int) (cellCount: int) (standbyReady: bool) = {
+  /// Every switch spawns a fresh session, so restart always reflects
+  /// the cold-start estimate — there is no standby pool anymore.
+  let compute (evalCount: int) (cellCount: int) = {
     DefinitionsLost = evalCount
     CellsLost = cellCount
-    EstimatedRestart =
-      match standbyReady with
-      | true -> System.TimeSpan.FromMilliseconds 200.0
-      | false -> System.TimeSpan.FromSeconds 15.0
-    StandbyReady = standbyReady
+    EstimatedRestart = System.TimeSpan.FromSeconds 15.0
   }
 
 // ─── Workflow switch outcome ────────────────────────────────

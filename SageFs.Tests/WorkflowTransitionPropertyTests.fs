@@ -44,12 +44,10 @@ let private genRawTransitionCost =
     let! defs = Gen.choose (0, 100)
     let! cells = Gen.choose (0, 50)
     let! restartMs = Gen.choose (0, 30000)
-    let! standby = Gen.elements [ true; false ]
     return {
       DefinitionsLost = defs
       CellsLost = cells
       EstimatedRestart = TimeSpan.FromMilliseconds(float restartMs)
-      StandbyReady = standby
     }
   }
 
@@ -81,13 +79,13 @@ let workflowTransitionPropertyTests =
 
       testPropertyWithConfig chaosConfig
         "previewing same switch twice yields identical costs" <|
-        fun (rawEval: int) (rawCell: int) (standby: bool) ->
+        fun (rawEval: int) (rawCell: int) ->
           // WHY: Users who click "preview" repeatedly must see
           // consistent information — flickering costs erode trust.
           let evalCount = normalize 500 rawEval
           let cellCount = normalize 200 rawCell
-          let cost1 = TransitionCost.compute evalCount cellCount standby
-          let cost2 = TransitionCost.compute evalCount cellCount standby
+          let cost1 = TransitionCost.compute evalCount cellCount
+          let cost2 = TransitionCost.compute evalCount cellCount
           cost1 = cost2
     ]
 
@@ -123,12 +121,12 @@ let workflowTransitionPropertyTests =
 
       testPropertyWithConfig chaosConfig
         "definitions lost equals eval count input" <|
-        fun (rawEval: int) (rawCell: int) (standby: bool) ->
+        fun (rawEval: int) (rawCell: int) ->
           // WHY: Cost must honestly reflect what users will lose —
           // underreporting causes surprise data loss.
           let evalCount = normalize 1000 rawEval
           let cellCount = normalize 500 rawCell
-          let cost = TransitionCost.compute evalCount cellCount standby
+          let cost = TransitionCost.compute evalCount cellCount
           cost.DefinitionsLost = evalCount
           && cost.CellsLost = cellCount
     ]
@@ -147,20 +145,19 @@ let workflowTransitionPropertyTests =
           TransitionCost.isZeroCost cost = expected
     ]
 
-    // ── (e) Standby readiness reduces restart time ───────────
+    // ── (e) Restart estimate is the fixed cold-start cost ─────
 
-    testList "standby readiness reduces restart time" [
+    testList "restart always reflects cold start" [
 
       testPropertyWithConfig chaosConfig
-        "standby restart is always faster than cold start" <|
+        "restart estimate equals the fixed 15s cold-start cost" <|
         fun (rawEval: int) (rawCell: int) ->
-          // WHY: Standby workers exist to make switches fast —
-          // the cost must reflect this or users won't trust previews.
+          // WHY: The standby pool was dissolved — every switch spawns a
+          // fresh session, so the estimate is always the cold-start 15s.
           let evalCount = normalize 500 rawEval
           let cellCount = normalize 200 rawCell
-          let standby = TransitionCost.compute evalCount cellCount true
-          let cold = TransitionCost.compute evalCount cellCount false
-          standby.EstimatedRestart < cold.EstimatedRestart
+          let cost = TransitionCost.compute evalCount cellCount
+          cost.EstimatedRestart = TimeSpan.FromSeconds 15.0
     ]
 
     // ── (f) alreadyInWorkflow always returns AlreadyActive ─────
@@ -229,12 +226,12 @@ let workflowTransitionPropertyTests =
 
       testPropertyWithConfig chaosConfig
         "all TransitionCost fields are non-negative" <|
-        fun (rawEval: int) (rawCell: int) (standby: bool) ->
+        fun (rawEval: int) (rawCell: int) ->
           // WHY: Negative "definitions lost" would confuse users and
           // break UI rendering (progress bars, cost displays).
           let evalCount = normalize 10000 rawEval
           let cellCount = normalize 5000 rawCell
-          let cost = TransitionCost.compute evalCount cellCount standby
+          let cost = TransitionCost.compute evalCount cellCount
           cost.DefinitionsLost >= 0
           && cost.CellsLost >= 0
           && cost.EstimatedRestart >= TimeSpan.Zero
