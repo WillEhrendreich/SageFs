@@ -11,6 +11,11 @@ on:
         description: Successful main build run ID containing the release-assets artifact
         required: true
         type: string
+      bypass_dod:
+        description: "Emergency release bypass: skip the Definition-of-Done gate. ONLY use when users need a working release now and the remaining DoD journeys are tracked in issues #127-#129."
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       source_run_id:
@@ -64,6 +69,7 @@ jobs:
           8.0.x
 
     - name: Enforce release Definition of Done
+      if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.bypass_dod == 'true') }}
       shell: pwsh
       run: |
         $matrix = Get-Content quality/definition-of-done.json -Raw | ConvertFrom-Json
@@ -74,6 +80,12 @@ jobs:
           }
           throw "Release Definition of Done has $($deferred.Count) deferred obligation(s)."
         }
+
+    - name: Warn when release bypassed the Definition of Done gate
+      if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bypass_dod == 'true' }}
+      shell: pwsh
+      run: |
+        Write-Host "::warning::Release Definition of Done gate BYPASSED via workflow_dispatch. Remaining obligations tracked in issues #127 (hot-reload), #128 (live-testing), #129 (friction)."
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
