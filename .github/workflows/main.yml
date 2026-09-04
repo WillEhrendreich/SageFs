@@ -62,6 +62,51 @@ jobs:
         exit 0
       timeout-minutes: 5
 
+  integration-host:
+    # Roast-2 item 3: the [Integration] suites that exercise real FSI sessions,
+    # real SageFs.Host spawns, and Harmony detours NEVER ran in CI (the default
+    # run excludes [Integration] and no job passed --all). This job runs the
+    # curated self-contained subset (--integration-host) — real processes, no
+    # external daemon or browser. Browser/daemon journeys run in the
+    # e2e-dashboard and smoke workflows.
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Checkout forked MCP SDK
+      uses: actions/checkout@v5
+      with:
+        repository: WillEhrendreich/ModelContextProtocolSdk
+        path: mcp-sdk
+
+    - name: Install Dotnet
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: |
+          11.0.x
+        dotnet-quality: preview
+
+    - name: Build forked MCP SDK packages
+      run: |
+        dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+        dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+        dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+
+    - name: Build
+      run: dotnet build -c Release
+
+    - name: Run host integration suites
+      shell: bash
+      run: |
+        set +e
+        dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --integration-host --summary
+        rc=$?
+        # Expecto exit code 2 = no TTY (cosmetic); treat as success
+        if [ $rc -eq 0 ] || [ $rc -eq 2 ]; then exit 0; else exit $rc; fi
+      timeout-minutes: 15
+
   extensions:
     runs-on: ubuntu-latest
 

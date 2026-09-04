@@ -97,6 +97,33 @@ let main argv =
       1
   | false ->
 
+  // Run the self-contained [Integration] suites — real FSI sessions, real
+  // SageFs.Host spawns, Harmony patches — that need NO external daemon or
+  // browser. CI invokes this with --integration-host after a build; it is the
+  // curated subset of --all that can run on a bare runner. Suites that need a
+  // running daemon (DashboardBrowserTests, HttpApiIntegrationTests,
+  // VscodeExtensionTests, McpServerIntegrationTests, McpLlmInteropTests) or a
+  // display (HotReloadBrowserTests, DemoRecording) are deliberately excluded —
+  // they run under the e2e-dashboard / smoke workflows instead.
+  let isIntegrationHost = argv |> Array.exists (fun a -> a = "--integration-host")
+  match isIntegrationHost with
+  | true ->
+    let hostArgv = argv |> Array.filter (fun a -> a <> "--integration-host")
+    let hostIntegrationTests =
+      testList "Integration (host)" [
+        SageFs.Tests.WebAppHotReloadVerificationTests.webAppHotReloadVerificationTests
+        SageFs.Tests.EvalCancellationTests.evalCancellationTests
+        SageFs.Tests.EvalActorResilienceTests.evalActorResilienceTests
+        SageFs.Tests.HarmonyCanaryTests.allTests
+        SageFs.Tests.MethodPatcherTests.tests
+        SageFs.Tests.FsiCrossSubmissionTests.allTests
+        SageFs.Tests.DaemonStateChangeContractTests.daemonStateChangeContractTests
+      ]
+    let result = Tests.runTestsWithCLIArgs [] hostArgv hostIntegrationTests
+    Environment.Exit result
+    result
+  | false ->
+
   let configureVerify () =
     VerifierSettings.DisableRequireUniquePrefix()
     // Global line-ending scrub: normalize CRLF to LF on BOTH the received and
