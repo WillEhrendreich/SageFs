@@ -16,6 +16,7 @@ on:
       - 'SageFs.Core/**'
       - 'SageFs.Host/**'
       - 'SageFs.Tests/DashboardBrowser*.fs'
+      - 'SageFs.Tests/HotReloadBrowserTests.fs'
   push:
     branches: [master]
     paths:
@@ -25,6 +26,7 @@ on:
       - 'SageFs.Core/**'
       - 'SageFs.Host/**'
       - 'SageFs.Tests/DashboardBrowser*.fs'
+      - 'SageFs.Tests/HotReloadBrowserTests.fs'
 
 jobs:
   dashboard-browser:
@@ -72,5 +74,57 @@ jobs:
         shell: pwsh
         run: |
           dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --integration-browser --summary
+          exit $LASTEXITCODE
+        timeout-minutes: 20
+
+  # HR-DASH: real save -> changed running app through the live dashboard.
+  # Same shape as the dashboard-browser job, but runs the --integration-hr
+  # entry point: the runner boots a daemon + a WebLive session on a temp copy
+  # of the WebAppFixture whose app the journeys edit and re-query.
+  hot-reload-browser:
+    name: F# hot-reload browser journeys
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout forked MCP SDK
+        uses: actions/checkout@v5
+        with:
+          repository: WillEhrendreich/ModelContextProtocolSdk
+          path: mcp-sdk
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build forked MCP SDK packages
+        run: |
+          dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+          dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+          dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+
+      - name: Build Release (tool + fixture + tests)
+        run: |
+          dotnet build SageFs/SageFs.fsproj -c Release --nologo
+          dotnet build SageFs.Tests/fixtures/WebAppFixture/WebAppFixture.fsproj -c Release --nologo
+          dotnet build SageFs.Tests/SageFs.Tests.fsproj -c Release --nologo
+
+      - name: Install Chromium for the .NET Playwright driver
+        shell: pwsh
+        run: |
+          $driver = "SageFs.Tests\bin\Release\net10.0\.playwright"
+          if (-not (Test-Path "$driver\node\win32_x64\node.exe")) {
+            Write-Host "Playwright driver missing from test output" -ForegroundColor Red
+            exit 1
+          }
+          & "$driver\node\win32_x64\node.exe" "$driver\package\cli.js" install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run F# hot-reload browser journeys (Expecto --integration-hr)
+        shell: pwsh
+        run: |
+          dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --integration-hr --summary
           exit $LASTEXITCODE
         timeout-minutes: 20
