@@ -1618,10 +1618,19 @@ let createEndpoints
           let html = renderShell infra.Version (WorkerProtocol.SessionId.value resolvedId) (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
         | None ->
-          let html = renderShell infra.Version "" (Elem.div [] [])
+          // No session to view: the shell must render the session picker as
+          // its INITIAL #main content. The stream's no-session push morphs
+          // #session-picker — if the shell were empty, that patch would have
+          // no DOM target and Datastar fails the whole page with
+          // PatchElementsNoTargetsFound (the blank-screen defect).
+          let! previous = q.GetPreviousSessions ()
+          let html = renderShell infra.Version "" (renderSessionPicker previous)
           return! FalcoResponse.ofHtml html ctx
       with _ ->
-        let html = renderShell infra.Version "" (Elem.div [] [])
+        // Even on an error, serve a functional picker (never an empty shell —
+        // an empty #main blanks the page when the stream pushes the picker).
+        let! previous = q.GetPreviousSessions ()
+        let html = renderShell infra.Version "" (renderSessionPicker previous)
         return! FalcoResponse.ofHtml html ctx
     })
     yield get "/dashboard/stream" (createStreamHandler q infra)
