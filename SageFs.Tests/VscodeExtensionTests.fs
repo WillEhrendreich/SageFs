@@ -648,6 +648,24 @@ let dodJourneys =
           let! status = VscodeHelpers.getStatusBarText page
           if status.Contains("11/11 passed") then baselineGreen <- true
           else do! Task.Delay(1000)
+        if not baselineGreen then
+          // Diagnose: is the daemon-side live-testing actually enabled+green?
+          let daemonDiag =
+            task {
+              let mcpPort = Environment.GetEnvironmentVariable("SAGEFS_MCP_PORT")
+              match String.IsNullOrEmpty mcpPort with
+              | true -> return "no SAGEFS_MCP_PORT"
+              | false ->
+                try
+                  use c = new Net.Http.HttpClient()
+                  c.Timeout <- TimeSpan.FromSeconds(3.0)
+                  let! s = c.GetStringAsync(sprintf "http://localhost:%s/api/live-testing/status" mcpPort)
+                  return s
+                with ex -> return sprintf "daemon diag failed: %s" ex.Message
+            }
+          let! daemonLt = daemonDiag
+          let! status = VscodeHelpers.getStatusBarText page
+          failwithf "LT-VSC: baseline never reached 11/11 passed. status='%s' daemonLT='%s'" status daemonLt
         Expect.isTrue "baseline should reach 11/11 passed before breaking the file" baselineGreen
         writeHello (original.Replace(canonicalAdd, brokenAdd))
         let sw = Diagnostics.Stopwatch.StartNew()
@@ -659,9 +677,10 @@ let dodJourneys =
         if not sawFailure then
           let! _ = VscodeHelpers.screenshot page "lt-fail"
           let! status = VscodeHelpers.getStatusBarText page
-          // Diagnose: read the runner daemon's own view of live-testing state
-          // (distinguishes "extension never sent the enable" from "daemon ran
-          // but the extension didn't render the result").
+          // Diagnose: read the runner daemon's OWN live-testing state (not
+          // /api/sessions — that lacks LT state). Enabled+Passed=11 proves
+          // the enable reached the daemon and the bug is extension-side SSE
+          // delivery; Enabled=false proves the enable never arrived.
           let daemonDiag =
             task {
               let mcpPort = Environment.GetEnvironmentVariable("SAGEFS_MCP_PORT")
@@ -671,7 +690,7 @@ let dodJourneys =
                 try
                   use c = new Net.Http.HttpClient()
                   c.Timeout <- TimeSpan.FromSeconds(3.0)
-                  let! s = c.GetStringAsync(sprintf "http://localhost:%s/api/sessions" mcpPort)
+                  let! s = c.GetStringAsync(sprintf "http://localhost:%s/api/live-testing/status" mcpPort)
                   return s
                 with ex -> return sprintf "daemon diag failed: %s" ex.Message
             }
