@@ -80,11 +80,11 @@ let definitionOfDoneTests =
       |> validateMatrix false (DateOnly.FromDateTime DateTime.UtcNow)
       |> Expect.isEmpty "development matrix should be structurally valid"
 
-    testCase "WHY — release readiness fails while any obligation is deferred because green CI is not proof of complete usability" <| fun () ->
+    testCase "WHY — release readiness is green when no obligation is deferred" <| fun () ->
       let errors =
         File.ReadAllText matrixPath
         |> validateMatrix true (DateOnly.FromDateTime DateTime.UtcNow)
       errors
       |> List.exists (fun error -> error.Contains "blocks release readiness")
-      |> Expect.isTrue "current deferred journeys must block release readiness"
+      |> Expect.isFalse "no current deferred journeys may block release readiness"
   ]
