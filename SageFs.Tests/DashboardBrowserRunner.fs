@@ -897,11 +897,17 @@ let runVscodeDoDJourneys (cliArgs: string array) : int =
       dumpDaemonLogs ()
       exitWith 1
     else
-      // Session on the FromCSharp sample; wait for Ready.
+      // WebLive session on the FromCSharp sample — same contract as the
+      // dashboard browser runners: the DoD journeys exercise hot-reload watch
+      // arming and edit-triggered live-testing reruns, which need a WebLive
+      // (save-driven) session, not the default Interactive REPL. An
+      // Interactive session is exactly what made the status bar read
+      // "[REPL]" and the journeys time out.
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
           {| projects = [| sampleProject |]
-             workingDirectory = sampleDir |})
+             workingDirectory = sampleDir
+             workflow = "WebLive" |})
       let createStatus = syncPost "/api/sessions/create" payload
       if createStatus <> 200 then
         eprintfn "VSC runner: session create failed (HTTP %d)" createStatus

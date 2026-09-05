@@ -216,27 +216,28 @@ module VscodeFixture =
 
 /// Helpers for interacting with VSCode through Playwright.
 module VscodeHelpers =
-  /// Execute a VS Code command via the Command Palette.
   let executeCommand (page: IPage) (command: string) = task {
+    // Palette execution is the ONLY reliable command path under CDP: a
+    // synthesized `command:` anchor click (executeCommandUri) does not route
+    // to the extension host. Each step WAITS for the UI state it needs — a
+    // fixed sleep can race (palette not open yet → keystrokes land in the
+    // editor → command silently never runs).
     do! page.Keyboard.PressAsync("Control+Shift+p")
-    do! Task.Delay(500)
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let mutable paletteOpen = false
+    while not paletteOpen && sw.ElapsedMilliseconds < 5_000L do
+      let! visible =
+        page.Locator(".quick-input-widget").IsVisibleAsync()
+      if visible then paletteOpen <- true
+      else do! Task.Delay(150)
     do! page.Keyboard.TypeAsync(command)
-    do! Task.Delay(500)
+    // Let the fuzzy matcher settle before Enter. NOTE: do NOT run any
+    // page.EvaluateAsync between typing and Enter — an eval steals focus from
+    // the quick-input, so the Enter that follows lands on the editor and the
+    // command silently never runs (observed: handlerEvidence='' with the
+    // command surfaced in the palette).
+    do! Task.Delay(800)
     do! page.Keyboard.PressAsync("Enter")
-    do! Task.Delay(500)
-  }
-
-  /// Execute a VS Code command WITHOUT keyboard input, by clicking an anchor
-  /// whose href is the command: URI (VS Code's workbench handles command:
-  /// links). The DoD journeys prefer this for extension commands: palette
-  /// typing is flaky (fuzzy-matches can hit the wrong command) and heavy
-  /// keyboard automation can disturb the extension host's SSE sockets.
-  let executeCommandUri (page: IPage) (command: string) = task {
-    let js =
-      "(() => { var a = document.createElement('a'); a.href = 'command:"
-      + command
-      + "'; a.click(); return true; })()"
-    let! _ = page.EvaluateAsync<string>(js)
     do! Task.Delay(800)
   }
 
@@ -488,6 +489,25 @@ let extensionTests = testList "VSCode extension behavior" [
 // extension UI — recorded in the DoD evidence as an extension-surface gap.
 // ---------------------------------------------------------------------------
 
+/// Wait for the SageFs extension to finish activating AND connecting to the
+/// daemon: the SageFs status-bar item must appear and stop showing the
+/// "connecting" state. Driving commands before this races the extension host
+/// (views/commands/SSE subscription not ready) — the journeys then silently
+/// no-op even though the palette lookup succeeds.
+let waitForExtensionReady (timeoutMs: int) (page: IPage) = task {
+  let sw = Diagnostics.Stopwatch.StartNew()
+  let mutable ready = false
+  while not ready && sw.ElapsedMilliseconds < int64 timeoutMs do
+    let! status = VscodeHelpers.getStatusBarText page
+    let hasSageFsItem = status.Contains("SageFs") || status.Contains("sagefs")
+    let settled =
+      not (status.Contains("Connecting"))
+      && not (status.Contains("Starting daemon"))
+    if hasSageFsItem && settled then ready <- true
+    else do! Task.Delay(500)
+  Expect.isTrue "SageFs extension should activate and connect within the timeout" ready
+}
+
 /// Wait for the status bar to contain `text` (poll textContent).
 let vscodeWaitForStatusText (timeoutMs: int) (page: IPage) (text: string) = task {
   let sw = Diagnostics.Stopwatch.StartNew()
@@ -523,6 +543,10 @@ let dodJourneys =
   testList "VSCode DoD real-client journeys" [
 
     vscodeExtTestFresh sampleWorkspace "HR-VSC-E2E: watch all arms the hot-reload tree with watched files" (fun page -> task {
+      // Extension host + daemon discovery + SSE subscribe take seconds after
+      // VS Code launches — wait for the status item before driving commands.
+      do! waitForExtensionReady 60_000 page
+      do! Task.Delay(1000)
       // Reveal the SageFs activity-bar container (id "sagefs") which hosts the
       // hot-reload tree view (id "sagefs-hotReload"). The container stacks its
       // views — click the activity-bar icon, then the "Hot Reload Files" view
@@ -547,7 +571,7 @@ let dodJourneys =
         ()
       do! Task.Delay(1500)
       let treeSel = ".view-id-sagefs-hotReload"
-      do! VscodeHelpers.executeCommandUri page "sagefs.hotReloadWatchAll"
+      do! VscodeHelpers.executeCommand page "sagefs.hotReloadWatchAll"
       // The tree rows render either per-file "● watching" descriptions or
       // directory "N/M watched" descriptions.
       let sw = Diagnostics.Stopwatch.StartNew()
@@ -570,7 +594,7 @@ let dodJourneys =
       let hasWatchState =
         (rows.Contains("watching") || rows.Contains("watched"))
         && not (rows.Contains("No session active"))
-      do! VscodeHelpers.executeCommandUri page "sagefs.hotReloadRefresh"
+      do! VscodeHelpers.executeCommand page "sagefs.hotReloadRefresh"
       do! Task.Delay(3000)
       let! rows2 = VscodeHelpers.selectorText page (treeSel + " .monaco-list-row")
       Expect.isTrue "tree should show watch state after refresh"
@@ -579,6 +603,7 @@ let dodJourneys =
     })
 
     vscodeExtTestFresh sampleWorkspace "LT-VSC-E2E: live-testing surfaces a failing edit then recovers to all-passing" (fun page -> task {
+      do! waitForExtensionReady 60_000 page
       let helloPath = IO.Path.Combine(sampleWorkspace, "Hello.fs")
       let canonicalAdd = "let add a b = a + b"
       let brokenAdd = "let add a b = a + b + 1"
@@ -599,9 +624,31 @@ let dodJourneys =
       try
         // Enable live testing via the extension command; the daemon's baseline
         // run has the 11 tests passing.
-        do! VscodeHelpers.executeCommandUri page "sagefs.enableLiveTesting"
+        do! VscodeHelpers.executeCommand page "sagefs.enableLiveTesting"
+        // The extension flashes "$(check) Live testing enabled" on success and
+        // may show a "daemon not running" modal on failure — watch both for a
+        // few seconds so a silent no-op is distinguishable from a slow run.
+        let mutable handlerEvidence = ""
+        let sw0 = Diagnostics.Stopwatch.StartNew()
+        while handlerEvidence = "" && sw0.ElapsedMilliseconds < 12_000L do
+          let! status = VscodeHelpers.getStatusBarText page
+          let modalVisible =
+            (page.Locator(".modal").CountAsync().GetAwaiter().GetResult()) > 0
+          if status.Contains("Live testing enabled") then handlerEvidence <- "flash"
+          elif modalVisible then handlerEvidence <- "modal"
+          else do! Task.Delay(500)
         // Mutate `add` on disk: the edit-triggered rerun must surface the
-        // failing "add infers int" test in the extension's status bar.
+        // failing "add infers int" test in the extension's status bar. Wait
+        // for the green baseline FIRST — breaking the file while the baseline
+        // is still compiling races the rerun (the edit can be folded into the
+        // baseline run and the failure never lands as its own state).
+        let swBase = Diagnostics.Stopwatch.StartNew()
+        let mutable baselineGreen = false
+        while not baselineGreen && swBase.ElapsedMilliseconds < 60_000L do
+          let! status = VscodeHelpers.getStatusBarText page
+          if status.Contains("11/11 passed") then baselineGreen <- true
+          else do! Task.Delay(1000)
+        Expect.isTrue "baseline should reach 11/11 passed before breaking the file" baselineGreen
         writeHello (original.Replace(canonicalAdd, brokenAdd))
         let sw = Diagnostics.Stopwatch.StartNew()
         let mutable sawFailure = false
@@ -612,7 +659,24 @@ let dodJourneys =
         if not sawFailure then
           let! _ = VscodeHelpers.screenshot page "lt-fail"
           let! status = VscodeHelpers.getStatusBarText page
-          failwithf "LT-VSC: status bar never showed a failure after the edit. status='%s'" status
+          // Diagnose: read the runner daemon's own view of live-testing state
+          // (distinguishes "extension never sent the enable" from "daemon ran
+          // but the extension didn't render the result").
+          let daemonDiag =
+            task {
+              let mcpPort = Environment.GetEnvironmentVariable("SAGEFS_MCP_PORT")
+              match String.IsNullOrEmpty mcpPort with
+              | true -> return "no SAGEFS_MCP_PORT"
+              | false ->
+                try
+                  use c = new Net.Http.HttpClient()
+                  c.Timeout <- TimeSpan.FromSeconds(3.0)
+                  let! s = c.GetStringAsync(sprintf "http://localhost:%s/api/sessions" mcpPort)
+                  return s
+                with ex -> return sprintf "daemon diag failed: %s" ex.Message
+            }
+          let! daemonState = daemonDiag
+          failwithf "LT-VSC: status bar never showed a failure after the edit. handlerEvidence='%s' status='%s' daemon='%s'" handlerEvidence status daemonState
         // Restore: the rerun must recover to all green.
         writeHello original
         let sw2 = Diagnostics.Stopwatch.StartNew()
@@ -626,7 +690,7 @@ let dodJourneys =
           let! status = VscodeHelpers.getStatusBarText page
           failwithf "LT-VSC: status bar never recovered to 11/11 passed. status='%s'" status
         // Disable again and confirm the status bar returns to the off state.
-        do! VscodeHelpers.executeCommandUri page "sagefs.disableLiveTesting"
+        do! VscodeHelpers.executeCommand page "sagefs.disableLiveTesting"
         do! vscodeWaitForStatusText 30_000 page "Live testing off"
       finally
         // Restore Hello.fs regardless of outcome.
