@@ -592,37 +592,40 @@ let dodJourneys =
       if iconResult <> "ok" || containerOpen <> "yes" then
         do! VscodeHelpers.executeCommand page "workbench.view.extension.sagefs"
         do! Task.Delay(1500)
-      // Activate the hot-reload view via its generated FOCUS command
-      // (sagefs-hotReload.focus → "SageFs: Focus on Hot Reload Files View").
-      // Clicking the stacked view's title header does NOT switch the active
-      // view in this VS Code (all pane-headers share one visible split-view;
-      // only the active view's content is rendered), but the focus command
-      // makes the hot-reload view active so its tree renders.
+      // Activate the hot-reload view via its generated FOCUS command run by
+      // PALETTE TITLE ("SageFs: Focus on Hot Reload Files View"). Direct
+      // header clicks do NOT expand the collapsed pane in this VS Code (the
+      // pane-header is role=button aria-expanded=false but synthetic
+      // mouse/keyboard activation is ignored), while the palette command
+      // flips aria-expanded to true and renders the pane-body tree.
       let navSw = Diagnostics.Stopwatch.StartNew()
       let mutable viewActive = false
-      while not viewActive && navSw.ElapsedMilliseconds < 45_000L do
-        do! VscodeHelpers.executeCommand page "sagefs-hotReload.focus"
+      while not viewActive && navSw.ElapsedMilliseconds < 60_000L do
+        do! VscodeHelpers.executeCommand page "SageFs: Focus on Hot Reload Files View"
         do! Task.Delay(1500)
-        // Active view check: the hot-reload view content is rendered — look
-        // for its tree rows or at least the hot-reload pane header carrying
-        // .focused after the focus command.
+        // Active view check: the hot-reload pane-header reports
+        // aria-expanded=true after the focus command expands it.
         let! active =
           page.EvaluateAsync<string>(
             "(() => { var hs = document.querySelectorAll('.sidebar .pane-header');" +
             " for (var i = 0; i < hs.length; i++) {" +
             "   if (hs[i].textContent.indexOf('Hot Reload Files') >= 0) {" +
-            "     return hs[i].className.indexOf('focused') >= 0 ? 'yes' : 'no'; } }" +
+            "     return hs[i].getAttribute('aria-expanded') === 'true' ? 'yes' : 'no'; } }" +
             " return 'no-title'; })()")
         if active = "yes" then viewActive <- true
       do! Task.Delay(1000)
-      // Query the tree rows from the ACTIVE split-view's content (the pane
-      // that shows when the hot-reload view is focused).
+      // Query the tree rows from the hot-reload pane's BODY (the element
+      // after its pane-header, class "pane-body").
       let rowsJs =
-        "(() => { var active = document.querySelector('.sidebar .split-view-view.visible');" +
-        " if (!active) return '';" +
-        " var rows = active.querySelectorAll('.monaco-list-row');" +
-        " var out = []; rows.forEach(function(r){ out.push(r.textContent); });" +
-        " return out.join(' | '); })()"
+        "(() => { var hs = document.querySelectorAll('.sidebar .pane-header');" +
+        " for (var i = 0; i < hs.length; i++) {" +
+        "   if (hs[i].textContent.indexOf('Hot Reload Files') >= 0) {" +
+        "     var body = hs[i].nextElementSibling;" +
+        "     if (!body) return '';" +
+        "     var rows = body.querySelectorAll('.monaco-list-row');" +
+        "     var out = []; rows.forEach(function(r){ out.push(r.textContent); });" +
+        "     return out.join(' | '); } }" +
+        " return ''; })()"
       do! VscodeHelpers.executeCommand page "sagefs.hotReloadWatchAll"
       // The tree rows render either per-file "● watching" descriptions or
       // directory "N/M watched" descriptions.
