@@ -585,12 +585,15 @@ let describeTestStatusBarTooltip (summary: VscTestSummary) =
     | _ -> None
   [ Some (
       match summary with
+      // Disabled is authoritative regardless of Total: after a disable the
+      // daemon keeps the discovered tests (Total=11, Passed=11) so the state
+      // must read "off", not a stale pass count.
+      | s when s.DiscoveryState = "disabled" -> "$(beaker) Live testing off"
       | s when s.Total = 0 ->
         // Zero-test observability: distinguish "discovery not finished" from
-        // "discovery completed with zero tests" from "live testing off".
+        // "discovery completed with zero tests".
         match s.DiscoveryState with
         | "ready_zero_tests" -> "$(beaker) No tests found (discovery complete)"
-        | "disabled" -> "$(beaker) Live testing off"
         | _ -> "$(sync~spin) Discovering tests..."
       | s when s.Failed > 0 -> sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total
       | s when s.Running > 0 -> sprintf "$(sync~spin) Running %d/%d" s.Running s.Total
@@ -607,10 +610,14 @@ let updateTestStatusBar (summary: VscTestSummary) =
   | Some sb ->
     let text, bg =
       match summary with
+      // Disabled is authoritative regardless of Total: after a disable the
+      // daemon keeps the discovered tests (Total=11, Passed=11) so the status
+      // must read "off", not a stale pass count.
+      | s when s.DiscoveryState = "disabled" ->
+        "$(beaker) Live testing off", None
       | s when s.Total = 0 ->
         match s.DiscoveryState with
         | "ready_zero_tests" -> "$(beaker) No tests found", None
-        | "disabled" -> "$(beaker) Live testing off", None
         | _ -> "$(sync~spin) Discovering tests...", None
       | s when s.Failed > 0 ->
         sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total,

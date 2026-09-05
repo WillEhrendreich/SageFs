@@ -170,6 +170,21 @@ module VscodeFixture =
       return b
   }
 
+  /// Clear VS Code's persisted per-workspace UI state so a fresh launch
+  /// starts from a DEFAULT layout. The sidebar's per-container view
+  /// visibility is persisted in workspaceStorage — if an earlier run opened
+  /// the SageFs container before all four TreeViews registered (only Sessions
+  /// existed), that "Sessions-only" layout is restored on every later launch
+  /// and the hot-reload view never appears.
+  let clearWorkbenchLayoutState () =
+    try
+      let ws = IO.Path.Combine(userDataDir, "User", "workspaceStorage")
+      if IO.Directory.Exists ws then
+        for dir in IO.Directory.GetDirectories(ws) do
+          try IO.File.Delete(IO.Path.Combine(dir, "state.vscdb")) with _ -> ()
+          try IO.File.Delete(IO.Path.Combine(dir, "state.vscdb.backup")) with _ -> ()
+    with _ -> ()
+
   /// Tear down any existing instance so the next ensureBrowser launches a
   /// FRESH VS Code. The DoD journeys use this: a reused instance can carry a
   /// stale/disconnected SSE stream from a previous journey, which makes the
@@ -186,6 +201,7 @@ module VscodeFixture =
       codePid <- None
     | None -> ()
     killOrphans ()
+    clearWorkbenchLayoutState ()
     do! Task.Delay(1500)
   }
 
@@ -546,57 +562,105 @@ let dodJourneys =
       // Extension host + daemon discovery + SSE subscribe take seconds after
       // VS Code launches — wait for the status item before driving commands.
       do! waitForExtensionReady 60_000 page
-      do! Task.Delay(1000)
+      // The four TreeViews register AFTER the status item appears (measured
+      // ~8-10s post-launch); opening the container before that renders only
+      // the Sessions view and VS Code caches the partial view list. Settle
+      // before navigating.
+      do! Task.Delay(8000)
       // Reveal the SageFs activity-bar container (id "sagefs") which hosts the
-      // hot-reload tree view (id "sagefs-hotReload"). The container stacks its
-      // views — click the activity-bar icon, then the "Hot Reload Files" view
-      // header to surface the tree.
-      do! VscodeHelpers.executeCommand page "workbench.view.extension.sagefs"
-      do! Task.Delay(1500)
-      // Fall back to clicking the activity-bar icon labelled SageFs.
-      let sagefsIcon =
-        page.Locator(".activitybar .action-item").Filter(LocatorFilterOptions(HasText = "SageFs")).First
-      try
-        do! sagefsIcon.ClickAsync(LocatorClickOptions(Timeout = 3000.0f))
+      // hot-reload tree view (id "sagefs-hotReload"). Click the activity-bar
+      // icon via JS (the icon's label is an aria-label, so Playwright's
+      // HasText filter cannot match it) — the palette view command
+      // (`workbench.view.extension.sagefs`) fuzzy-matches many "SageFs"
+      // commands and can land elsewhere.
+      let iconClicked =
+        page.EvaluateAsync<string>(
+          "(() => { var items = document.querySelectorAll('.activitybar .action-item');" +
+          " for (var i = 0; i < items.length; i++) {" +
+          "   var t = items[i].getAttribute('aria-label') || items[i].title || '';" +
+          "   if (t.indexOf('SageFs') >= 0) { items[i].click(); return 'ok'; } }" +
+          " return 'missing'; })()")
+      do! Task.Delay(2000)
+      let! iconResult = iconClicked
+      // Verify the SageFs container opened — check for the container's own
+      // composite title (".sidebar .composite.title") rather than any "SageFs"
+      // text (the Explorer's workspace folder is named SageFs.Samples.*).
+      let! containerOpen =
+        page.EvaluateAsync<string>(
+          "(() => { var t = document.querySelector('.sidebar .composite.title');" +
+          " return t && t.textContent.indexOf('SageFs') >= 0 ? 'yes' : 'no'; })()")
+      if iconResult <> "ok" || containerOpen <> "yes" then
+        do! VscodeHelpers.executeCommand page "workbench.view.extension.sagefs"
         do! Task.Delay(1500)
-      with _ -> ()
-      // Click the view header for the hot-reload view (stacked under Sessions).
-      let headerSel = ".sidebar .view-header"
-      let hotReloadHeader =
-        page.Locator(headerSel).Filter(LocatorFilterOptions(HasText = "Hot Reload Files")).First
-      try
-        do! hotReloadHeader.ClickAsync(LocatorClickOptions(Timeout = 3000.0f))
-      with _ ->
-        // Not stacked/found — the view may already be visible.
-        ()
-      do! Task.Delay(1500)
-      let treeSel = ".view-id-sagefs-hotReload"
+      // Activate the hot-reload view via its generated FOCUS command
+      // (sagefs-hotReload.focus → "SageFs: Focus on Hot Reload Files View").
+      // Clicking the stacked view's title header does NOT switch the active
+      // view in this VS Code (all pane-headers share one visible split-view;
+      // only the active view's content is rendered), but the focus command
+      // makes the hot-reload view active so its tree renders.
+      let navSw = Diagnostics.Stopwatch.StartNew()
+      let mutable viewActive = false
+      while not viewActive && navSw.ElapsedMilliseconds < 45_000L do
+        do! VscodeHelpers.executeCommand page "sagefs-hotReload.focus"
+        do! Task.Delay(1500)
+        // Active view check: the hot-reload view content is rendered — look
+        // for its tree rows or at least the hot-reload pane header carrying
+        // .focused after the focus command.
+        let! active =
+          page.EvaluateAsync<string>(
+            "(() => { var hs = document.querySelectorAll('.sidebar .pane-header');" +
+            " for (var i = 0; i < hs.length; i++) {" +
+            "   if (hs[i].textContent.indexOf('Hot Reload Files') >= 0) {" +
+            "     return hs[i].className.indexOf('focused') >= 0 ? 'yes' : 'no'; } }" +
+            " return 'no-title'; })()")
+        if active = "yes" then viewActive <- true
+      do! Task.Delay(1000)
+      // Query the tree rows from the ACTIVE split-view's content (the pane
+      // that shows when the hot-reload view is focused).
+      let rowsJs =
+        "(() => { var active = document.querySelector('.sidebar .split-view-view.visible');" +
+        " if (!active) return '';" +
+        " var rows = active.querySelectorAll('.monaco-list-row');" +
+        " var out = []; rows.forEach(function(r){ out.push(r.textContent); });" +
+        " return out.join(' | '); })()"
       do! VscodeHelpers.executeCommand page "sagefs.hotReloadWatchAll"
       // The tree rows render either per-file "● watching" descriptions or
       // directory "N/M watched" descriptions.
       let sw = Diagnostics.Stopwatch.StartNew()
       let mutable found = false
       while not found && sw.ElapsedMilliseconds < 30_000L do
-        let! content = VscodeHelpers.selectorText page (treeSel + " .monaco-list-row")
+        let! content = page.EvaluateAsync<string>(rowsJs)
         if content <> null && (content.Contains("watching") || content.Contains("watched"))
         then found <- true
         else do! Task.Delay(500)
       if not found then
         let! _ = VscodeHelpers.screenshot page "hr-fail"
-        let! rows = VscodeHelpers.selectorText page (treeSel + " .monaco-list-row")
+        let! rows = page.EvaluateAsync<string>(rowsJs)
         let! sidebar =
           VscodeHelpers.selectorText page ".sidebar"
         let! status = VscodeHelpers.getStatusBarText page
+        // Diagnose the container structure: all .title texts + which sagefs
+        // views exist in the DOM (Sessions-only vs all four registered).
+        let! titles =
+          page.EvaluateAsync<string>(
+            "(() => { var hs = document.querySelectorAll('.sidebar .title');" +
+            " var r = []; hs.forEach(function(h){ r.push(h.textContent.trim().slice(0,30)); });" +
+            " return JSON.stringify(r); })()")
+        let! viewIds =
+          page.EvaluateAsync<string>(
+            "(() => { var vs = document.querySelectorAll('[class*=view-id-sagefs]');" +
+            " var r = []; vs.forEach(function(v){ r.push(v.className); });" +
+            " return JSON.stringify(r); })()")
         failwithf
-          "HR-VSC: tree never showed watching/watched. rows='%s' sidebar='%s' status='%s'"
-          rows sidebar status
-      let! rows = VscodeHelpers.selectorText page (treeSel + " .monaco-list-row")
+          "HR-VSC: tree never showed watching/watched. rows='%s' titles='%s' viewIds='%s' sidebar='%s' status='%s'"
+          rows titles viewIds sidebar status
+      let! rows = page.EvaluateAsync<string>(rowsJs)
       let hasWatchState =
         (rows.Contains("watching") || rows.Contains("watched"))
         && not (rows.Contains("No session active"))
       do! VscodeHelpers.executeCommand page "sagefs.hotReloadRefresh"
       do! Task.Delay(3000)
-      let! rows2 = VscodeHelpers.selectorText page (treeSel + " .monaco-list-row")
+      let! rows2 = page.EvaluateAsync<string>(rowsJs)
       Expect.isTrue "tree should show watch state after refresh"
         (rows2.Contains("watching") || rows2.Contains("watched"))
       Expect.isTrue "tree should show watch state (not 'No session active')" hasWatchState
