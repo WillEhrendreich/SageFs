@@ -883,6 +883,16 @@ let runVscodeDoDJourneys (cliArgs: string array) : int =
     code
 
   try
+    // Fail fast: the DoD VS Code journeys must not run as a silent no-op. When
+    // Code.exe is missing the dodJourneys tests register as pending (ptestCase)
+    // and the summary exits 0 — a CI job invoking --integration-vsc would go
+    // green without exercising anything. Require the fixture up front so a
+    // misconfigured runner fails loudly instead. (exitWith terminates the
+    // process, so execution below only continues when the fixture is present.)
+    if not SageFs.Tests.VscodeExtensionTests.VscodeFixture.isAvailable then
+      eprintfn "VSC runner: Code.exe not found — the DoD VS Code journeys cannot run. Set VSCODE_PATH or install VS Code on the runner (windows-latest ships it)."
+      stopDaemon ()
+      Environment.Exit 1
     let mutable healthy = false
     let healthDeadline = DateTime.UtcNow.AddSeconds(60.0)
     while not healthy && DateTime.UtcNow < healthDeadline do
@@ -895,67 +905,66 @@ let runVscodeDoDJourneys (cliArgs: string array) : int =
     if not healthy then
       eprintfn "VSC runner: daemon did not become healthy on port %d" mcpPort
       dumpDaemonLogs ()
+      Environment.Exit 1
+    // WebLive session on the FromCSharp sample — same contract as the
+    // dashboard browser runners: the DoD journeys exercise hot-reload watch
+    // arming and edit-triggered live-testing reruns, which need a WebLive
+    // (save-driven) session, not the default Interactive REPL. An
+    // Interactive session is exactly what made the status bar read
+    // "[REPL]" and the journeys time out.
+    let payload =
+      System.Text.Json.JsonSerializer.Serialize(
+        {| projects = [| sampleProject |]
+           workingDirectory = sampleDir
+           workflow = "WebLive" |})
+    let createStatus = syncPost "/api/sessions/create" payload
+    if createStatus <> 200 then
+      eprintfn "VSC runner: session create failed (HTTP %d)" createStatus
+      dumpDaemonLogs ()
       exitWith 1
     else
-      // WebLive session on the FromCSharp sample — same contract as the
-      // dashboard browser runners: the DoD journeys exercise hot-reload watch
-      // arming and edit-triggered live-testing reruns, which need a WebLive
-      // (save-driven) session, not the default Interactive REPL. An
-      // Interactive session is exactly what made the status bar read
-      // "[REPL]" and the journeys time out.
-      let payload =
-        System.Text.Json.JsonSerializer.Serialize(
-          {| projects = [| sampleProject |]
-             workingDirectory = sampleDir
-             workflow = "WebLive" |})
-      let createStatus = syncPost "/api/sessions/create" payload
-      if createStatus <> 200 then
-        eprintfn "VSC runner: session create failed (HTTP %d)" createStatus
+      let mutable ready = false
+      let mutable faulted = false
+      let warmupDeadline = DateTime.UtcNow.AddSeconds(300.0)
+      while not ready && not faulted && DateTime.UtcNow < warmupDeadline do
+        try
+          let body = syncGetString "/api/sessions"
+          use doc = System.Text.Json.JsonDocument.Parse(body)
+          let sessionStates =
+            doc.RootElement.GetProperty("sessions").EnumerateArray()
+            |> Seq.map (fun s -> s.GetProperty("status").GetString())
+            |> Seq.toList
+          if sessionStates |> List.contains "Faulted" then
+            faulted <- true
+          ready <- sessionStates |> List.contains "Ready"
+        with _ ->
+          Threading.Thread.Sleep(1000)
+
+      if faulted then
+        eprintfn "VSC runner: session Faulted during warmup"
+        dumpDaemonLogs ()
+        exitWith 1
+      elif not ready then
+        eprintfn "VSC runner: session never reached Ready within 300s"
         dumpDaemonLogs ()
         exitWith 1
       else
-        let mutable ready = false
-        let mutable faulted = false
-        let warmupDeadline = DateTime.UtcNow.AddSeconds(300.0)
-        while not ready && not faulted && DateTime.UtcNow < warmupDeadline do
-          try
-            let body = syncGetString "/api/sessions"
-            use doc = System.Text.Json.JsonDocument.Parse(body)
-            let sessionStates =
-              doc.RootElement.GetProperty("sessions").EnumerateArray()
-              |> Seq.map (fun s -> s.GetProperty("status").GetString())
-              |> Seq.toList
-            if sessionStates |> List.contains "Faulted" then
-              faulted <- true
-            ready <- sessionStates |> List.contains "Ready"
-          with _ ->
-            Threading.Thread.Sleep(1000)
-
-        if faulted then
-          eprintfn "VSC runner: session Faulted during warmup"
-          dumpDaemonLogs ()
-          exitWith 1
-        elif not ready then
-          eprintfn "VSC runner: session never reached Ready within 300s"
-          dumpDaemonLogs ()
-          exitWith 1
-        else
-          try
-            Environment.SetEnvironmentVariable("SAGEFS_MCP_PORT", string mcpPort)
-            Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
-            let vscArgv =
-              cliArgs
-              |> Array.filter (fun a -> a <> "--integration-vsc")
-            let result =
-              Tests.runTestsWithCLIArgs [] vscArgv SageFs.Tests.VscodeExtensionTests.dodJourneys
-            exitWith result
-          finally
-            // Leave no VS Code test instance behind.
-            for p in Diagnostics.Process.GetProcessesByName("Code") do
-              try
-                if (DateTime.Now - p.StartTime).TotalMinutes < 30.0 then
-                  p.Kill(true)
-              with _ -> ()
+        try
+          Environment.SetEnvironmentVariable("SAGEFS_MCP_PORT", string mcpPort)
+          Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
+          let vscArgv =
+            cliArgs
+            |> Array.filter (fun a -> a <> "--integration-vsc")
+          let result =
+            Tests.runTestsWithCLIArgs [] vscArgv SageFs.Tests.VscodeExtensionTests.dodJourneys
+          exitWith result
+        finally
+          // Leave no VS Code test instance behind.
+          for p in Diagnostics.Process.GetProcessesByName("Code") do
+            try
+              if (DateTime.Now - p.StartTime).TotalMinutes < 30.0 then
+                p.Kill(true)
+            with _ -> ()
   with ex ->
     eprintfn "VSC runner: %s" (ex.ToString())
     exitWith 1

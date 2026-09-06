@@ -329,6 +329,12 @@ module VscodeHelpers =
 // Test wrappers
 // ---------------------------------------------------------------------------
 
+/// The repo root the smoke/ext tests open as their workspace. Derived from the
+/// test source location (never a hardcoded path — the extension fixture must
+/// run from any checkout location).
+let repoRoot =
+  IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "..")
+
 /// Run a test against VSCode with extensions disabled (pure UI tests).
 let vscodeUiTest name (body: IPage -> Task<unit>) =
   if not VscodeFixture.isAvailable then
@@ -339,7 +345,7 @@ let vscodeUiTest name (body: IPage -> Task<unit>) =
     testCase (sprintf "[Integration] VSCode UI: %s" name) (fun () ->
       let t = task {
         let! _b =
-          VscodeFixture.ensureBrowser @"C:\Code\Repos\SageFs" true
+          VscodeFixture.ensureBrowser repoRoot true
         let! page = VscodeFixture.getPage ()
         do! body page
       }
@@ -355,7 +361,7 @@ let vscodeExtTest name (body: IPage -> Task<unit>) =
     testCase (sprintf "[Integration] VSCode extension: %s" name) (fun () ->
       let t = task {
         let! _b =
-          VscodeFixture.ensureBrowser @"C:\Code\Repos\SageFs" false
+          VscodeFixture.ensureBrowser repoRoot false
         let! page = VscodeFixture.getPage ()
         do! body page
       }

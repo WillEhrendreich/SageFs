@@ -527,7 +527,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       GetStreamingTestProxy = fun _ ->
         proxyCalls <- proxyCalls + 1
         match proxyCalls >= 3 with
-        | true -> Some (fun _ _ _ _ -> async { return () })
+        | true -> Some (fun _ _ _ _ -> async { return HttpWorkerClient.StreamOutcome.Completed })
         | false -> None
       CreateSession = fun _ _ _ ->
         async { return Result.Error SageFsError.NoActiveSessions }
@@ -621,7 +621,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       GetStreamingTestProxy = fun _ ->
         proxyCalls <- proxyCalls + 1
         match proxyCalls >= 12 with
-        | true -> Some (fun _ _ _ _ -> async { return () })
+        | true -> Some (fun _ _ _ _ -> async { return HttpWorkerClient.StreamOutcome.Completed })
         | false -> None
       CreateSession = fun _ _ _ ->
         async { return Result.Error SageFsError.NoActiveSessions }
@@ -715,7 +715,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       GetStreamingTestProxy = fun _ ->
         proxyCalls <- proxyCalls + 1
         match proxyCalls >= 5 with
-        | true -> Some (fun _ _ _ _ -> async { return () })
+        | true -> Some (fun _ _ _ _ -> async { return HttpWorkerClient.StreamOutcome.Completed })
         | false -> None
       CreateSession = fun _ _ _ ->
         async { return Result.Error SageFsError.NoActiveSessions }
@@ -803,7 +803,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       GetStreamingTestProxy = fun _ ->
         proxyCalls <- proxyCalls + 1
         match proxyCalls >= 22 with
-        | true -> Some (fun _ _ _ _ -> async { return () })
+        | true -> Some (fun _ _ _ _ -> async { return HttpWorkerClient.StreamOutcome.Completed })
         | false -> None
       CreateSession = fun _ _ _ ->
         async { return Result.Error SageFsError.NoActiveSessions }
@@ -898,7 +898,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
         let ready =
           lock gate (fun () -> rebuildGeneration > 0 && readyGeneration >= rebuildGeneration)
         match ready with
-        | true -> Some (fun _ _ _ _ -> async { return () })
+        | true -> Some (fun _ _ _ _ -> async { return HttpWorkerClient.StreamOutcome.Completed })
         | false -> None
       CreateSession = fun _ _ _ ->
         async { return Result.Error SageFsError.NoActiveSessions }
@@ -1016,7 +1016,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       GetProxy = fun _ -> None
       GetStreamingTestProxy = fun _ ->
         match lock gate (fun () -> ready) with
-        | true -> Some (fun _ _ _ _ -> async { return () })
+        | true -> Some (fun _ _ _ _ -> async { return HttpWorkerClient.StreamOutcome.Completed })
         | false -> None
       CreateSession = fun _ _ _ ->
         async { return Result.Error SageFsError.NoActiveSessions }
@@ -1114,7 +1114,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       GetProxy = fun _ -> None
       GetStreamingTestProxy = fun _ ->
         match lock gate (fun () -> ready) with
-        | true -> Some (fun _ _ _ _ -> async { return () })
+        | true -> Some (fun _ _ _ _ -> async { return HttpWorkerClient.StreamOutcome.Completed })
         | false -> None
       CreateSession = fun _ _ _ ->
         async { return Result.Error SageFsError.NoActiveSessions }

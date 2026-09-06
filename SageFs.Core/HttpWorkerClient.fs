@@ -87,13 +87,46 @@ module HttpWorkerClient =
     | Some url when url.Length > 0 -> Some (cachedProxy url)
     | _ -> None
 
+  /// Result of a streaming test-proxy read loop.
+  [<RequireQualifiedAccess>]
+  type StreamOutcome =
+    /// The worker closed the stream cleanly (EOF or an explicit `event: done`).
+    | Completed
+    /// The worker went silent for longer than the read timeout without
+    /// finishing — the loop exits with an explicit timeout instead of silently
+    /// reporting success (roast queue item 1).
+    | TimedOut of after: TimeSpan
+
+  /// Read one SSE line with a per-read deadline, using ONE linked cancellation
+  /// token instead of allocating a `Task.Delay` + `Task.WhenAny` per line (the
+  /// old implementation leaked an un-cancelled timer and in-flight read on every
+  /// stalled line). Returns Choice1Of2 line, or Choice2Of2 when the deadline
+  /// (or the outer cancellation) fired before a line was produced.
+  let readLineWithDeadline
+    (readTimeout: TimeSpan)
+    (reader: IO.StreamReader)
+    (outer: System.Threading.CancellationTokenSource)
+    : Async<Choice<string, unit>> =
+    async {
+      use linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(outer.Token)
+      linked.CancelAfter(readTimeout)
+      try
+        let! line = reader.ReadLineAsync(linked.Token).AsTask() |> Async.AwaitTask
+        return Choice1Of2 line
+      with
+      | :? OperationCanceledException -> return Choice2Of2 ()
+    }
+
   /// Create a streaming test proxy that reads SSE events from the worker.
   /// Each test result is dispatched individually via the onResult callback.
-  let streamingTestProxy (baseUrl: string)
+  /// Returns the read-loop outcome so the caller can distinguish a completed run
+  /// from a stalled one (and synthesize truthful missing results, not silence or
+  /// fabricated failures).
+  let streamingTestProxy (readTimeout: TimeSpan) (baseUrl: string)
     : Features.LiveTesting.TestCase array
       -> int
       -> (Features.LiveTesting.TestRunResult -> unit)
-      -> Async<unit> =
+      -> Async<StreamOutcome> =
     let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
     let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
     fun tests maxParallelism onResult ->
@@ -105,49 +138,52 @@ module HttpWorkerClient =
         resp.EnsureSuccessStatusCode() |> ignore
         use! stream = resp.Content.ReadAsStreamAsync() |> Async.AwaitTask
         use reader = new IO.StreamReader(stream)
+        use cts = new System.Threading.CancellationTokenSource()
         let mutable keepReading = true
         let mutable isCoverageEvent = false
-        let readTimeout = Timeouts.workerHttpRead
+        let sw = Diagnostics.Stopwatch.StartNew()
+        let mutable outcome = StreamOutcome.Completed
         while keepReading do
-          let readTask = reader.ReadLineAsync()
-          let timeoutTask = Threading.Tasks.Task.Delay(readTimeout)
-          let! _ = Threading.Tasks.Task.WhenAny(readTask :> Threading.Tasks.Task, timeoutTask) |> Async.AwaitTask
-          match readTask.IsCompleted with
-          | false -> keepReading <- false // read timed out — worker stalled
-          | true ->
-            let line = readTask.Result
-            match isNull line with
+          match! readLineWithDeadline readTimeout reader cts with
+          | Choice2Of2 () when not cts.IsCancellationRequested ->
+            // Stalled worker: no line within the read timeout. Surface a real
+            // timeout instead of silently returning success — the caller marks
+            // the never-reported tests as TimedOut.
+            outcome <- StreamOutcome.TimedOut sw.Elapsed
+            keepReading <- false
+          | Choice2Of2 () -> keepReading <- false // outer cancellation — exit quietly
+          | Choice1Of2 null -> keepReading <- false // stream closed cleanly (EOF)
+          | Choice1Of2 line ->
+            match line.StartsWith("event: done") with
             | true -> keepReading <- false
             | false ->
-              match line.StartsWith("event: done") with
-              | true -> keepReading <- false
+              match line.StartsWith("event: coverage") with
+              | true -> isCoverageEvent <- true
               | false ->
-                match line.StartsWith("event: coverage") with
-                | true -> isCoverageEvent <- true
-                | false ->
-                  match line.StartsWith("data: ") with
+                match line.StartsWith("data: ") with
+                | true ->
+                  let json = line.Substring(6)
+                  match isCoverageEvent with
                   | true ->
-                    let json = line.Substring(6)
-                    match isCoverageEvent with
+                    isCoverageEvent <- false
+                    // Coverage data is ignored here — collected via separate proxy
+                  | false ->
+                    match json <> "{}" with
                     | true ->
-                      isCoverageEvent <- false
-                      // Coverage data is ignored here — collected via separate proxy
-                    | false ->
-                      match json <> "{}" with
-                      | true ->
-                        let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
-                        onResult result
-                      | false -> ()
-                  | false -> ()
+                      let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
+                      onResult result
+                    | false -> ()
+                | false -> ()
+        return outcome
       }
 
   /// Streaming test proxy that also collects IL coverage hits.
-  let streamingTestProxyWithCoverage (baseUrl: string)
+  let streamingTestProxyWithCoverage (readTimeout: TimeSpan) (baseUrl: string)
     : Features.LiveTesting.TestCase array
       -> int
       -> (Features.LiveTesting.TestRunResult -> unit)
       -> (bool array -> unit)
-      -> Async<unit> =
+      -> Async<StreamOutcome> =
     let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
     let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
     fun tests maxParallelism onResult onCoverage ->
@@ -159,45 +195,45 @@ module HttpWorkerClient =
         resp.EnsureSuccessStatusCode() |> ignore
         use! stream = resp.Content.ReadAsStreamAsync() |> Async.AwaitTask
         use reader = new IO.StreamReader(stream)
+        use cts = new System.Threading.CancellationTokenSource()
         let mutable keepReading = true
         let mutable isCoverageEvent = false
-        let readTimeout = Timeouts.workerHttpRead
+        let sw = Diagnostics.Stopwatch.StartNew()
+        let mutable outcome = StreamOutcome.Completed
         while keepReading do
-          let readTask = reader.ReadLineAsync()
-          let timeoutTask = Threading.Tasks.Task.Delay(readTimeout)
-          let! _ = Threading.Tasks.Task.WhenAny(readTask :> Threading.Tasks.Task, timeoutTask) |> Async.AwaitTask
-          match readTask.IsCompleted with
-          | false -> keepReading <- false // read timed out — worker stalled
-          | true ->
-            let line = readTask.Result
-            match isNull line with
+          match! readLineWithDeadline readTimeout reader cts with
+          | Choice2Of2 () when not cts.IsCancellationRequested ->
+            outcome <- StreamOutcome.TimedOut sw.Elapsed
+            keepReading <- false
+          | Choice2Of2 () -> keepReading <- false // outer cancellation — exit quietly
+          | Choice1Of2 null -> keepReading <- false // stream closed cleanly (EOF)
+          | Choice1Of2 line ->
+            match line.StartsWith("event: done") with
             | true -> keepReading <- false
             | false ->
-              match line.StartsWith("event: done") with
-              | true -> keepReading <- false
+              match line.StartsWith("event: coverage") with
+              | true -> isCoverageEvent <- true
               | false ->
-                match line.StartsWith("event: coverage") with
-                | true -> isCoverageEvent <- true
-                | false ->
-                  match line.StartsWith("data: ") with
+                match line.StartsWith("data: ") with
+                | true ->
+                  let json = line.Substring(6)
+                  match isCoverageEvent with
                   | true ->
-                    let json = line.Substring(6)
-                    match isCoverageEvent with
+                    isCoverageEvent <- false
+                    try
+                      let doc = System.Text.Json.JsonDocument.Parse(json)
+                      let hitsArr = doc.RootElement.GetProperty("hits")
+                      let hits = [| for i in 0 .. hitsArr.GetArrayLength() - 1 -> hitsArr.[i].GetBoolean() |]
+                      onCoverage hits
+                    with ex ->
+                      Utils.Log.warn "[HttpWorkerClient] Coverage data parse failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                      ()
+                  | false ->
+                    match json <> "{}" with
                     | true ->
-                      isCoverageEvent <- false
-                      try
-                        let doc = System.Text.Json.JsonDocument.Parse(json)
-                        let hitsArr = doc.RootElement.GetProperty("hits")
-                        let hits = [| for i in 0 .. hitsArr.GetArrayLength() - 1 -> hitsArr.[i].GetBoolean() |]
-                        onCoverage hits
-                      with ex ->
-                        Utils.Log.warn "[HttpWorkerClient] Coverage data parse failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-                        ()
-                    | false ->
-                      match json <> "{}" with
-                      | true ->
-                        let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
-                        onResult result
-                      | false -> ()
-                  | false -> ()
+                      let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
+                      onResult result
+                    | false -> ()
+                | false -> ()
+        return outcome
       }

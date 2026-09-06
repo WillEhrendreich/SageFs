@@ -61,6 +61,13 @@ module LiveValueTree =
   let [<Literal>] MaxDepth = 6
   let [<Literal>] MaxChildren = 50
   let [<Literal>] MaxStringLen = 500
+  /// Top-level bindings walked per snapshot — caps the per-eval reflection
+  /// cost even when a session binds thousands of values (roast queue 3).
+  let [<Literal>] MaxBindings = 200
+  /// Total node budget for one snapshot build. Depth × children bounds alone
+  /// allow an exponential 50^depth expansion on hostile object graphs; this
+  /// ref-based budget cuts the walk at a hard node count regardless of shape.
+  let [<Literal>] MaxNodes = 10_000
 
   // ── Preview builders ──────────────────────────────────────────────
 
@@ -99,6 +106,7 @@ module LiveValueTree =
 
   let rec private buildNode
     (visited: System.Collections.Generic.HashSet<obj>)
+    (budget: int ref)
     (label: string)
     (depth: int)
     (value: obj)
@@ -112,7 +120,14 @@ module LiveValueTree =
     elif depth >= MaxDepth then
       { Label = label; TypeName = t.Name; Preview = scalarPreview value; Kind = NodeKind.Truncated
         Children = []; BestEffort = false; Depth = depth }
+    elif budget.Value <= 0 then
+      // Total node budget exhausted — stop the walk for this snapshot. The
+      // depth/children limits alone allow a 50^depth blow-up on hostile object
+      // graphs; the budget forces a hard stop regardless of graph shape.
+      { Label = label; TypeName = t.Name; Preview = "… (node budget)"; Kind = NodeKind.Truncated
+        Children = []; BestEffort = false; Depth = depth }
     else
+      budget.Value <- budget.Value - 1
       try
         let typeName = t.Name
         let leaf preview kind = {
@@ -144,7 +159,7 @@ module LiveValueTree =
                     if endIdx > 1 then rawName.Substring(1, endIdx - 1) else rawName
                   else rawName
                 let v = fi.GetValue value
-                let child = buildNode visited name (depth + 1) v
+                let child = buildNode visited budget name (depth + 1) v
                 { child with BestEffort = true })
               |> Array.toList
             with _ -> []
@@ -158,7 +173,7 @@ module LiveValueTree =
                          |> truncateList |> fun s -> "map [" + s + "]"
           let children =
             entries |> List.truncate MaxChildren
-            |> List.mapi (fun i e -> buildNode visited (keyLabel e.Key) (depth + 1) e.Value)
+            |> List.mapi (fun i e -> buildNode visited budget (keyLabel e.Key) (depth + 1) e.Value)
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
             Children = children; BestEffort = false; Depth = depth }
         | _ when t.IsGenericType && t.GetGenericTypeDefinition() = typedefof<Map<string, obj>> ->
@@ -180,7 +195,7 @@ module LiveValueTree =
             |> List.mapi (fun i kv ->
               let k = kv.GetType().GetProperty("Key").GetValue kv
               let v = kv.GetType().GetProperty("Value").GetValue kv
-              buildNode visited (keyLabel k) (depth + 1) v)
+              buildNode visited budget (keyLabel k) (depth + 1) v)
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
             Children = children; BestEffort = false; Depth = depth }
         | :? System.Collections.IEnumerable as e ->
@@ -189,7 +204,7 @@ module LiveValueTree =
           let preview = shown |> List.map scalarPreview |> truncateList |> fun s -> "[" + s + "]"
           let children =
             shown
-            |> List.mapi (fun i item -> buildNode visited (sprintf "[%d]" i) (depth + 1) item)
+            |> List.mapi (fun i item -> buildNode visited budget (sprintf "[%d]" i) (depth + 1) item)
           let kind = if t.IsArray then NodeKind.Array else NodeKind.List
           { Label = label; TypeName = typeName; Preview = preview; Kind = kind
             Children = children; BestEffort = false; Depth = depth }
@@ -204,7 +219,7 @@ module LiveValueTree =
             |> fun s -> "{ " + s + " }"
           let children =
             fields
-            |> Array.mapi (fun i f -> buildNode visited fieldInfos.[i].Name (depth + 1) f)
+            |> Array.mapi (fun i f -> buildNode visited budget fieldInfos.[i].Name (depth + 1) f)
             |> Array.truncate MaxChildren
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Record
@@ -221,7 +236,7 @@ module LiveValueTree =
               case.Name + " " + args
           let children =
             case.GetFields()
-            |> Array.mapi (fun i fi -> buildNode visited fi.Name (depth + 1) caseFields.[i])
+            |> Array.mapi (fun i fi -> buildNode visited budget fi.Name (depth + 1) caseFields.[i])
             |> Array.truncate MaxChildren
             |> Array.toList
           let kind = if case.Name = "Some" || case.Name = "None" then NodeKind.Option else NodeKind.Union
@@ -232,7 +247,7 @@ module LiveValueTree =
           let preview = fields |> Array.map scalarPreview |> Array.toList |> truncateList |> fun s -> "(" + s + ")"
           let children =
             fields
-            |> Array.mapi (fun i f -> buildNode visited (sprintf "item%d" (i + 1)) (depth + 1) f)
+            |> Array.mapi (fun i f -> buildNode visited budget (sprintf "item%d" (i + 1)) (depth + 1) f)
             |> Array.truncate MaxChildren
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Tuple
@@ -254,7 +269,7 @@ module LiveValueTree =
           let children =
             props
             |> Array.mapi (fun i p ->
-              try buildNode visited p.Name (depth + 1) (p.GetValue value)
+              try buildNode visited budget p.Name (depth + 1) (p.GetValue value)
               with _ -> { Label = p.Name; TypeName = "error"; Preview = "<error>"; Kind = NodeKind.Leaf
                           Children = []; BestEffort = false; Depth = depth + 1 })
             |> Array.toList
@@ -267,7 +282,7 @@ module LiveValueTree =
   /// Build the root node for a binding's value.
   let buildValueNode (label: string) (value: obj) : LiveValueNode =
     let visited = System.Collections.Generic.HashSet<obj>(HashIdentity.Reference)
-    buildNode visited label 0 value
+    buildNode visited (ref MaxNodes) label 0 value
 
   /// Detect whether any node hit a truncation/cycle limit.
   let rec private hasTruncation (node: LiveValueNode) =
@@ -283,10 +298,13 @@ module LiveValueTree =
     (generation: int64)
     (boundValues: (string * string * obj) list)
     : LiveValueSnapshot =
+    let capped = boundValues |> List.truncate MaxBindings
     let bindings =
-      boundValues
+      capped
       |> List.map (fun (name, typeSig, value) ->
         { Name = name; TypeSignature = typeSig; Root = buildValueNode name value })
-    let truncated = bindings |> List.exists (fun b -> hasTruncation b.Root)
+    let truncated =
+      (boundValues.Length > MaxBindings)
+      || bindings |> List.exists (fun b -> hasTruncation b.Root)
     { SessionId = sessionId; Generation = generation; Bindings = bindings
       Truncated = truncated; CapturedAt = DateTimeOffset.UtcNow }

@@ -28,6 +28,11 @@ type FeaturePushState = {
   CachedCellGraph: CellDependencyGraph.CellGraph option
   /// Cached timeline state, updated incrementally in recordEval.
   CachedTimeline: EvalTimeline.TimelineState
+  /// Incremental equivalent of the old per-eval `EvalHistory |> List.rev |>
+  /// List.map (to CellInput)` — kept newest-first and appended with a single
+  /// cons per eval so the reference scan in `appendCell` never re-maps (and
+  /// allocates) a fresh ≤10k-element list on every eval (roast queue item 4).
+  PriorCellInputs: BindingExplorer.CellInput list
 }
 
 module FeaturePushState =
@@ -43,6 +48,7 @@ module FeaturePushState =
     CachedScope = None
     CachedCellGraph = None
     CachedTimeline = EvalTimeline.TimelineState.empty
+    PriorCellInputs = []
   }
 
 let [<Literal>] MaxEvalHistory = 10_000
@@ -73,6 +79,14 @@ let recordEval (code: string) (result: string) (durationMs: int64) (state: Featu
   // W1(R9): Cap EvalHistory at MaxEvalHistory to prevent unbounded O(n) growth.
   // Prepend is O(1); truncate drops the oldest entries at the tail.
   let cappedHistory = (entry :: state.EvalHistory) |> List.truncate MaxEvalHistory
+  // Incremental cell-input list: single cons per eval (newest-first). This
+  // replaces the per-eval `List.rev + List.map` of the whole ≤10k history that
+  // appendCell's reference scan used to receive (roast queue item 4) — the
+  // allocation and re-walk were O(n) on every eval, O(n²) across a session.
+  let priorCellInputs = state.PriorCellInputs
+  let newCellInput : BindingExplorer.CellInput =
+    { CellIndex = idx; FsiOutput = result; Source = code }
+  let priorCellInputs' = newCellInput :: priorCellInputs |> List.truncate MaxEvalHistory
   // The binding scope is updated INCREMENTALLY: only the new cell can change
   // the scope, so merge it into the cached snapshot instead of rebuilding the
   // whole scope from up to 10,000 retained cells on every eval (roast §6 —
@@ -100,16 +114,7 @@ let recordEval (code: string) (result: string) (durationMs: int64) (state: Featu
               FsiOutput = result
               Source = code } ]
       | Some prior ->
-        let priorCellInputs =
-          state.EvalHistory
-          |> List.rev
-          |> List.map (fun e ->
-            let ci: BindingExplorer.CellInput =
-              { CellIndex = e.CellIndex; FsiOutput = e.Result; Source = e.Code }
-            ci)
-        let newCell: BindingExplorer.CellInput =
-          { CellIndex = idx; FsiOutput = result; Source = code }
-        BindingExplorer.appendCell newCell priorCellInputs prior
+        BindingExplorer.appendCell newCellInput priorCellInputs prior
   // The cell-dependency graph is maintained the same way: append the new
   // cell incrementally; on history-cap eviction fall back to a full rebuild
   // (an evicted cell's frozen Consumes could reference a name whose producer
@@ -138,7 +143,8 @@ let recordEval (code: string) (result: string) (durationMs: int64) (state: Featu
       KnownBindings = newBindings
       CachedScope = Some newScope
       CachedCellGraph = Some newCellGraph
-      CachedTimeline = newTimeline }
+      CachedTimeline = newTimeline
+      PriorCellInputs = priorCellInputs' }
 
 let computeEvalDiffPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (currentOutputText: string) (state: FeaturePushState) =
   let diff = EvalDiff.diffLines (Some state.LastOutputText) (Some currentOutputText)

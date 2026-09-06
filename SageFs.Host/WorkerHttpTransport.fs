@@ -53,15 +53,20 @@ module WorkerHttpTransport =
   }
 
   /// True for paths that execute F# or mutate worker state — the endpoints a
-  /// cross-site browser page must never reach.
+  /// cross-site browser page must never reach. (`/diag/threadpool` and
+  /// `/status` are read-only and intentionally absent.)
   let private isMutatingOrRpcPath (path: string) =
     path.StartsWith("/eval", StringComparison.Ordinal)
     || path.StartsWith("/check", StringComparison.Ordinal)
     || path.StartsWith("/typecheck-symbols", StringComparison.Ordinal)
+    || path.StartsWith("/completions", StringComparison.Ordinal)
     || path.StartsWith("/shutdown", StringComparison.Ordinal)
     || path.StartsWith("/reset", StringComparison.Ordinal)
+    || path.StartsWith("/hard-reset", StringComparison.Ordinal)
     || path.StartsWith("/cancel", StringComparison.Ordinal)
     || path.StartsWith("/load-script", StringComparison.Ordinal)
+    || path.StartsWith("/run-tests", StringComparison.Ordinal)
+    || path.StartsWith("/run-tests-stream", StringComparison.Ordinal)
     || path.StartsWith("/hotreload/", StringComparison.Ordinal)
 
   /// Origin/CSRF gate for the worker HTTP surface — the F#-executing server.

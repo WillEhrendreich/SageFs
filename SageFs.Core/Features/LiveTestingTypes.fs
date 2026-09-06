@@ -298,6 +298,23 @@ type TestRunResult = {
   Output: string option
 }
 
+module TestRunResult =
+  /// Build result entries for tests that never reported during a run that has
+  /// ended (a stalled stream, or a transport failure). `receivedIds` are the
+  /// tests that already streamed a result — they are EXCLUDED so nothing is
+  /// double-reported (a Passed test must never be re-reported as a failure)
+  /// or fabricated over a real outcome. `mk` builds the synthesized entry.
+  let synthesizeMissing
+    (tests: TestCase array)
+    (receivedIds: Set<TestId>)
+    (mk: TestCase -> TestRunResult)
+    : TestRunResult array =
+    tests
+    |> Array.choose (fun tc ->
+      match receivedIds.Contains tc.Id with
+      | true -> None
+      | false -> Some (mk tc))
+
 // --- Run History ---
 
 [<RequireQualifiedAccess>]

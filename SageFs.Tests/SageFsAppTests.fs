@@ -402,6 +402,27 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     newModel.Sessions.Sessions
     |> Expect.isEmpty "session should be removed"
 
+  testCase "SessionStopped releases the session's output buffer" <| fun _ ->
+    // Roast queue item 2 — the per-session output ring must not survive the
+    // session. Only the stopped session's buffer is dropped; other sessions'
+    // buffers are untouched.
+    let model = {
+      (SageFsModel.initial()) with
+        RecentOutput = SessionOutputStore.ofLines [
+          { Kind = OutputKind.Result; Text = "s1 line"
+            Timestamp = DateTime.UtcNow; SessionId = "aa000001" }
+          { Kind = OutputKind.Result; Text = "s2 line"
+            Timestamp = DateTime.UtcNow; SessionId = "aa000002" }
+        ] }
+    let newModel, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (SageFsEvent.SessionStopped "aa000001")) model
+    outputFor "aa000001" newModel |> Expect.isEmpty "stopped session output released"
+    outputFor "aa000002" newModel
+    |> Seq.map (fun l -> l.Text)
+    |> Seq.toList
+    |> Expect.equal "peer session buffer untouched" [ "s2 line" ]
+
   testCase "DiagnosticsUpdated replaces diagnostics" <| fun _ ->
     let diag = {
       Message = "type error"

@@ -123,10 +123,13 @@ let private cellsReferencingName (name: string) (selfCellIndex: int) (cells: Cel
 ///     reference on the new binding (e.g. redefining `let x = ...` makes the
 ///     new binding referenced-by the older defining cell);
 ///   - the new binding is never referenced by cells after it (none exist).
-/// Every other binding is untouched. `priorCells` must be the cells that
-/// produced `prior`, in chronological order, and `cell` must be the newest.
-/// When the history is truncated the caller must fall back to a full
-/// buildScopeSnapshot (this merge cannot evict dropped cells).
+/// Every other binding is untouched. `priorCells` are the cells that produced
+/// `prior`; ORDER IS IRRELEVANT — this merge only ever scans them for word
+/// matches, never indexes positionally. ReferencedIn/ShadowedBy lists are
+/// sorted by cell index so the incremental result is byte-identical to a full
+/// rebuild (which scans chronologically) regardless of the storage order
+/// recordEval keeps (roast queue item 4: recordEval stores them newest-first
+/// for an O(1) cons and passes them here as-is).
 let appendCell (cell: CellInput) (priorCells: CellInput list) (prior: BindingScopeSnapshot) : BindingScopeSnapshot =
   let newBindings =
     cell.FsiOutput.Split('\n')
@@ -137,7 +140,7 @@ let appendCell (cell: CellInput) (priorCells: CellInput list) (prior: BindingSco
         Value = valueOpt
         CellIndex = cell.CellIndex
         ShadowedBy = []
-        ReferencedIn = cellsReferencingName name cell.CellIndex priorCells })
+        ReferencedIn = cellsReferencingName name cell.CellIndex priorCells |> List.sort })
     |> Array.toList
   let newNames = newBindings |> List.map (fun b -> b.Name) |> Set.ofList
   let newShadowIdx = newBindings |> List.map (fun b -> b.CellIndex)
@@ -146,14 +149,14 @@ let appendCell (cell: CellInput) (priorCells: CellInput list) (prior: BindingSco
     |> List.map (fun b ->
       let shadowed =
         match newNames.Contains b.Name with
-        | true -> b.ShadowedBy @ newShadowIdx
+        | true -> (b.ShadowedBy @ newShadowIdx) |> List.sort
         | false -> b.ShadowedBy
       // Does the new source reference this prior binding's name as a word?
       let referenced =
         match Regex(@"\b" + Regex.Escape(b.Name) + @"\b").IsMatch(cell.Source) with
         | true ->
           if b.ReferencedIn |> List.contains cell.CellIndex |> not then
-            b.ReferencedIn @ [ cell.CellIndex ]
+            (b.ReferencedIn @ [ cell.CellIndex ]) |> List.sort
           else b.ReferencedIn
         | false -> b.ReferencedIn
       { b with ShadowedBy = shadowed; ReferencedIn = referenced })

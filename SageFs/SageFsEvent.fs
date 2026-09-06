@@ -214,6 +214,15 @@ type SessionOutputStore(bufferCapacity: int) =
       version <- version + 1L
     | false, _ -> ()
 
+  /// Drop a session's ring buffer entirely (session stopped/purged) so the
+  /// store does not retain memory per dead session (roast queue item 2).
+  member _.Remove(sessionId: string) =
+    match buffers.ContainsKey sessionId with
+    | true ->
+      buffers.Remove(sessionId) |> ignore
+      version <- version + 1L
+    | false -> ()
+
   /// Clear all session buffers and staging.
   member _.ClearAll() =
     for kvp in buffers do kvp.Value.Clear()

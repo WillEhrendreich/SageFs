@@ -15,6 +15,11 @@ type Shape =
 type ThrowingProp() =
   member _.Boom : int = failwith "getter boom"
 
+/// A wide object whose children are themselves wide objects — exponential
+/// expansion without a node budget.
+type Wide() =
+  member _.Children : obj[] = Array.init MaxChildren (fun _ -> box (Wide()))
+
 let private rootOf (v: obj) = buildValueNode "v" v
 
 [<Tests>]
@@ -153,4 +158,21 @@ let liveValueSnapshotTests = testList "LiveValueSnapshot" [
   testCase "empty bindings produce empty snapshot" <| fun _ ->
     let snap = buildSnapshot "s1" 1L []
     snap.Bindings |> Expect.isEmpty "no bindings"
+
+  testCase "snapshot caps binding count and marks Truncated" <| fun _ ->
+    let many =
+      [ for i in 1 .. (MaxBindings + 50) -> sprintf "v%d" i, "int", box i ]
+    let snap = buildSnapshot "sess1" 1L many
+    snap.Bindings.Length |> Expect.equal "capped at MaxBindings" MaxBindings
+    snap.Truncated |> Expect.isTrue "binding cap sets Truncated"
+
+  testCase "node budget bounds expansion of hostile graphs" <| fun _ ->
+    // A wide object whose children are themselves wide objects. Without a node
+    // budget the expansion is exponential (50^depth); the budget must cap the
+    // total node count regardless of graph shape.
+    let rec countNodes (n: LiveValueNode) = 1 + (n.Children |> List.sumBy countNodes)
+    let node = buildValueNode "w" (box (Wide()))
+    let total = countNodes node
+    (total, MaxNodes + MaxChildren) |> Expect.isLessThan "bounded by MaxNodes"
+    node.Kind |> Expect.equal "kind" NodeKind.Class
 ]

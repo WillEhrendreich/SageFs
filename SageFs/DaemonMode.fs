@@ -238,6 +238,24 @@ let handlePrune (dir: string) (log: ILogger) (checkDaemonRunning: unit -> System
   | false -> return Result.Ok false
 }
 
+/// Remove adaptive-store snapshots for sessions that no longer exist and
+/// reset the shared feature push state when the last session is gone.
+/// Returns the ids that were swept (roast queue item 2 — session state must
+/// die with the session instead of accumulating for the daemon's lifetime).
+let sweepStaleSessionState
+  (liveIds: Set<string>)
+  (adaptive: SageFs.Features.LiveBindingsAdaptive.State)
+  (featureState: SageFs.Features.FeatureHooks.FeaturePushState ref)
+  : string list =
+  let stale =
+    adaptive.SessionSnapshots.Keys
+    |> Seq.filter (fun k -> not (liveIds.Contains k))
+    |> Seq.toList
+  stale |> List.iter (fun k -> SageFs.Features.LiveBindingsAdaptive.remove adaptive k)
+  if liveIds.IsEmpty then
+    System.Threading.Volatile.Write(&featureState.contents, SageFs.Features.FeatureHooks.FeaturePushState.empty)
+  stale
+
 /// Build SessionManagementOps record from mailbox + snapshot reader.
 /// Session lifecycle events are recorded directly in the daemon.sagefm binary
 /// manifest (the sole source of truth for session resume) — there is no
@@ -1305,7 +1323,7 @@ let createElmRuntime
           let snapshot = readSnapshot()
           match Map.tryFind sid snapshot.WorkerBaseUrls with
           | Some url when url.Length > 0 ->
-            Some (HttpWorkerClient.streamingTestProxyWithCoverage url)
+            Some (HttpWorkerClient.streamingTestProxyWithCoverage Timeouts.workerHttpRead url)
           | _ -> None
         RegisterFileWatcher = fun sessionIdStr directory ->
           match !watcherManagerRef with
@@ -1559,10 +1577,30 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // feedback can land near the intended debounce threshold instead of being
   // quantized up to an outer 200ms polling loop.
   // Elmish-style batching means rapid ticks coalesce: N ticks → N updates → 1 render
-  let testCycleTimer = new System.Threading.Timer(
-    System.Threading.TimerCallback(fun _ ->
-      elmRuntime.Dispatch(SageFsMsg.TestCycleTick DateTimeOffset.UtcNow)),
-    null, liveTestTickMs, liveTestTickMs)
+  // Idle-down: when NO session is actively live-testing the timer switches to a
+  // 1s heartbeat instead of a constant 40Hz scan (roast queue item 6). The
+  // one-shot reschedule pattern (same as cacheSaveTimer) prevents reentrancy.
+  let mutable testCycleTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  let testCycleCallback _ =
+    try
+      let model = elmRuntime.GetModel()
+      let hasLiveTestingActivity =
+        (not (Map.isEmpty model.LiveTesting.TestState.TestSessionMap))
+        || (not (Map.isEmpty model.LiveTesting.TestState.RunPhases))
+      if hasLiveTestingActivity then
+        elmRuntime.Dispatch(SageFsMsg.TestCycleTick DateTimeOffset.UtcNow)
+      let periodMs = if hasLiveTestingActivity then liveTestTickMs else 1000
+      if not (isNull testCycleTimerRef) then
+        try testCycleTimerRef.Change(periodMs, System.Threading.Timeout.Infinite) |> ignore
+        with :? System.ObjectDisposedException -> ()
+    with ex ->
+      log.LogWarning("TestCycleTimer callback threw unexpectedly: {Error}", ex.Message)
+  let testCycleTimer =
+    let t = new System.Threading.Timer(
+      System.Threading.TimerCallback(testCycleCallback),
+      null, liveTestTickMs, System.Threading.Timeout.Infinite)
+    testCycleTimerRef <- t
+    t
 
   // Periodic test cache save — crash recovery for test results.
   // Fires every 60s, only writes when RunGeneration has advanced since last save.
@@ -1642,7 +1680,17 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // Periodic session-watcher sync — ensures new sessions get watchers
   let mutable watcherSyncTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
   let watcherSyncCallback _ =
-    try seedSessionDirs ()
+    try
+      seedSessionDirs ()
+      // Sweep stale adaptive-store + feature-push state for sessions that no
+      // longer exist (roast queue item 2). Idempotent — cheap at idle.
+      let liveIds =
+        SessionManager.QuerySnapshot.allSessions (readSnapshot())
+        |> List.map (fun si -> WorkerProtocol.SessionId.value si.Id)
+        |> Set.ofList
+      match sweepStaleSessionState liveIds liveBindingsAdaptive sharedFeatureState with
+      | [] -> ()
+      | stale -> log.LogInformation("Swept {Count} stale session state entries", stale.Length)
     finally
       match isNull watcherSyncTimerRef with
       | true -> ()
@@ -2006,6 +2054,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
     TriggerStateChange = fun () -> stateChangedEvent.Trigger (ModelChanged (0, 0))
     ActivityTracker = Some activityTracker
     LiveBindingsAdaptive = Some liveBindingsAdaptive
+    ConnectionChannels = System.Collections.Concurrent.ConcurrentDictionary<string, MailboxProcessor<DashboardStreamCommand>>()
     GetCompletions = fun (sessionId: WorkerProtocol.SessionId) (code: string) (cursorPos: int) -> task {
       try
         let! proxy = sessionOps.GetProxy sessionId

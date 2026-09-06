@@ -30,13 +30,8 @@ let main argv =
   let isMutationScore = argv |> Array.exists (fun a -> a = "--mutation-score")
   match isMutationScore with
   | true ->
-    // Remove both --mutation-score and --threshold <value> from argv
-    let rec cleanArgs = function
-      | "--mutation-score" :: rest -> cleanArgs rest
-      | "--threshold" :: _ :: rest -> cleanArgs rest
-      | x :: rest -> x :: cleanArgs rest
-      | [] -> []
-    let scoreArgv = cleanArgs (Array.toList argv) |> Array.ofList
+    // Remove the --mutation-score / --threshold args from the argv used for
+    // per-mutant filters.
     let threshold =
       let rec parse = function
         | "--threshold" :: value :: _ ->
@@ -56,26 +51,37 @@ let main argv =
         CoverageViewMutationTests.coverageViewMutationTests
         CoverageViewProjectMutationTests.coverageViewProjectMutationTests
       ]
-    let exitCode = Tests.runTestsWithCLIArgs [] scoreArgv mutationTests
-    // Honest mutation accounting: every mutation test PASSES when the mutant is
-    // killed (real != mutant) and FAILS when the mutant survived (real ==
-    // mutant). Expecto's exit code is therefore the measured survivor gate —
-    // 0 means every mutant in the suite was killed. The total is counted
-    // structurally from the test tree, and the killed count is derived from
-    // the run outcome, so the reported score is measured, never hardcoded.
-    let rec countCases (t: Expecto.Test) =
+    // Honest mutation accounting: each mutant is one test case that PASSES only
+    // when the mutant is killed (real <> mutant). Deriving the score from the
+    // run's aggregate exit code makes it binary theater — one survivor zeroes
+    // the score and the threshold is inert. Instead, run each mutant case
+    // individually and tally killed/survived per mutant, so the reported score
+    // and threshold are measured, never guessed.
+    let rec flattenTests (t: Expecto.Test) : (string * Expecto.Test) list =
       match t with
-      | Expecto.TestCase _ -> 1
-      | Expecto.TestList (tests, _) -> tests |> List.sumBy countCases
-      | Expecto.TestLabel (_, inner, _) -> countCases inner
-      | Expecto.Sequenced (_, inner) -> countCases inner
-    let totalMutations = countCases mutationTests
-    // Exit code 0 = every mutation test passed = every mutant was killed.
-    // Exit code 1 = at least one mutation test failed = at least one survivor.
-    let killed =
-      match exitCode with
-      | 0 -> totalMutations
-      | _ -> 0
+      | Expecto.TestLabel (name, inner, _) ->
+        match inner with
+        | Expecto.TestCase _ -> [ name, t ]
+        | _ -> flattenTests inner
+      | Expecto.TestCase _ -> [ "", t ]
+      | Expecto.TestList (tests, _) -> tests |> List.collect flattenTests
+      | Expecto.Sequenced (_, inner) -> flattenTests inner
+    let mutants = flattenTests mutationTests
+    let totalMutations = mutants.Length
+    let outcomes =
+      mutants
+      |> List.map (fun (caseName, caseTest) ->
+          // Run the single mutant in isolation; Expecto's ``filter-test-case``
+          // is a substring match and the case names are unique.
+          let exitCode = Tests.runTestsWithCLIArgs [] [| "--filter-test-case"; caseName |] caseTest
+          // A mutant is killed only when ITS case passes (exit 0). Any other
+          // exit code (including 2 = no test matched, the case never ran) is a
+          // survivor — fail-closed: an unverified mutant cannot inflate the
+          // score.
+          caseName, (exitCode = 0))
+    let killed = outcomes |> List.filter snd |> List.length
+    let survivors =
+      outcomes |> List.filter (fun (_, isKilled) -> not isKilled) |> List.map fst
     let score = (float killed / float totalMutations) * 100.0
     printfn ""
     printfn "═══════════════════════════════════════════════════════════════"
@@ -87,12 +93,15 @@ let main argv =
     printfn "  Mutation score:    %.1f%%" score
     printfn "  Threshold:         %.1f%%" threshold
     printfn "═══════════════════════════════════════════════════════════════"
-    if exitCode = 0 && score >= threshold then
+    if survivors.Length > 0 then
+      printfn "✗ Surviving mutants:"
+      survivors |> List.iter (printfn "    - %s")
+    if survivors.Length = 0 && score >= threshold then
       printfn "✓ All %d mutants killed — mutation score %.1f%% meets threshold %.1f%%" totalMutations score threshold
       Environment.Exit 0
       0
     else
-      printfn "✗ At least one mutant survived — mutation score %.1f%% below threshold %.1f%%" score threshold
+      printfn "✗ %d mutants survived — mutation score %.1f%% below threshold %.1f%%" survivors.Length score threshold
       Environment.Exit 1
       1
   | false ->

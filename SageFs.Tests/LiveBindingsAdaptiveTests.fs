@@ -85,4 +85,33 @@ let liveBindingsAdaptiveTests = testList "LiveBindingsAdaptive" [
     update store "sess1" (mkSnap "sess1" 1L [ "x" ])
     remove store "sess1"
     tryGet store "sess1" |> Expect.isNone "removed"
+
+  testList "sweepStaleSessionState (roast queue item 2)" [
+    // Session lifecycle cleanup: adaptive snapshots for sessions that no
+    // longer exist must be released, and the shared feature push state reset
+    // when the last session is gone — otherwise memory grows for daemon life.
+    testCase "removes dead sessions, keeps live ones, leaves feature state intact" <| fun _ ->
+      let store = create ()
+      update store "s1" (mkSnap "s1" 1L [ "x" ])
+      update store "s2" (mkSnap "s2" 1L [ "y" ])
+      let feature = ref SageFs.Features.FeatureHooks.FeaturePushState.empty
+      let swept = SageFs.Server.DaemonMode.sweepStaleSessionState (Set.ofList [ "s1" ]) store feature
+      swept |> Expect.equal "only s2 swept" [ "s2" ]
+      tryGet store "s1" |> Expect.isSome "s1 still live"
+      tryGet store "s2" |> Expect.isNone "s2 removed"
+      // Sessions remain — the shared feature state is NOT reset yet.
+      feature.Value |> Expect.equal "feature state intact" SageFs.Features.FeatureHooks.FeaturePushState.empty
+
+    testCase "when the last session is gone, the shared feature state is reset" <| fun _ ->
+      let store = create ()
+      update store "s1" (mkSnap "s1" 1L [ "x" ])
+      let feature =
+        ref (SageFs.Features.FeatureHooks.FeaturePushState.empty
+             |> SageFs.Features.FeatureHooks.recordEval "let x = 1" "val x: int = 1" 5L)
+      feature.Value.EvalHistory.Length |> Expect.equal "history populated before reset" 1
+      let swept = SageFs.Server.DaemonMode.sweepStaleSessionState Set.empty store feature
+      swept |> Expect.equal "s1 swept" [ "s1" ]
+      tryGet store "s1" |> Expect.isNone "s1 removed"
+      feature.Value.EvalHistory |> Expect.isEmpty "shared feature state reset"
+  ]
 ]

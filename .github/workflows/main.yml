@@ -278,8 +278,54 @@ jobs:
         if-no-files-found: error
         retention-days: 1
 
+  vscode-journeys:
+    # Roast-3 items 8–9/12: the HR-VSC-E2E / LT-VSC-E2E DoD journeys were
+    # NEVER invoked by any workflow — no job passed --integration-vsc, and the
+    # missing-Code.exe path registered pending tests (exit 0, a silent no-op).
+    # windows-latest ships VS Code, so this job runs the real journeys against
+    # the FromCSharp sample; the runner now fails fast if Code.exe is absent.
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Checkout forked MCP SDK
+      uses: actions/checkout@v5
+      with:
+        repository: WillEhrendreich/ModelContextProtocolSdk
+        path: mcp-sdk
+
+    - name: Install Dotnet
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Build forked MCP SDK packages
+      run: |
+        dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+        dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+        dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
+
+    - name: Build SageFs tool (Release) for the journeys
+      run: dotnet build SageFs/SageFs.fsproj -c Release --nologo
+
+    - name: Build FromCSharp sample (Debug) for the journeys
+      run: dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Debug --nologo
+
+    - name: Run VS Code DoD journeys
+      shell: bash
+      run: |
+        set +e
+        dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --integration-vsc 2>&1
+        rc=$?
+        # Exit 2 = no TTY (cosmetic, Expecto); the runner itself exits non-zero
+        # on failure (and on a missing Code.exe) so 0/2 both mean green.
+        if [ $rc -eq 0 ] || [ $rc -eq 2 ]; then exit 0; else exit $rc; fi
+      timeout-minutes: 15
+
   release-artifacts:
-    needs: [build, extensions, vs-extension, benchmarks]
+    needs: [build, extensions, vs-extension, vscode-journeys, benchmarks]
     runs-on: windows-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:

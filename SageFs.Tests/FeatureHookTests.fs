@@ -265,4 +265,34 @@ let featureHookTests = testList "Feature Hook Computation" [
           let expected = fullRebuildGraph state
           actual.Cells = expected.Cells && actual.Edges = expected.Edges
   ]
+
+  testList "PriorCellInputs incremental list" [
+    // recordEval must NOT re-map the entire EvalHistory into CellInput records
+    // on every eval (that allocates a fresh ≤10k-element list per eval — the
+    // O(n²) driver per roast queue item 4). The stored list is the incremental
+    // equivalent; this test pins it to exactly what the old re-map produced
+    // (EvalHistory is stored newest-first, and PriorCellInputs keeps the same
+    // order — appendCell only scans it, never indexes positionally).
+    test "PriorCellInputs mirrors EvalHistory as newest-first CellInputs" {
+      let steps = [
+        "let a = 1", "val a: int = 1"
+        "let b = 2", "val b: int = 2"
+        "let c = 3", "val c: int = 3"
+      ]
+      let state =
+        steps
+        |> List.fold (fun st (code, result) -> recordEval code result 5L st) FeaturePushState.empty
+      let expected =
+        state.EvalHistory
+        |> List.map (fun e ->
+          let cell : SageFs.Features.BindingExplorer.CellInput = {
+            CellIndex = e.CellIndex
+            FsiOutput = e.Result
+            Source = e.Code
+          }
+          cell)
+      state.PriorCellInputs
+      |> Expect.equal "prior cells are the newest-first re-map, without re-mapping" expected
+    }
+  ]
 ]

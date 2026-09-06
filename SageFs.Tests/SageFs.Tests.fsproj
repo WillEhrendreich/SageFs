@@ -189,6 +189,7 @@
         <Compile Include="ParentMonitorTests.fs" />
         <Compile Include="LiveValueTreeTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
+        <Compile Include="StreamingProxyTests.fs" />
         <Compile Include="McpStateHandlerTests.fs" />
         <Compile Include="CompilationContextTests.fs" />
         <Compile Include="CompilationContextPropertyTests.fs" />

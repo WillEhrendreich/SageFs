@@ -1045,6 +1045,7 @@ module SageFsUpdate =
                 ActiveSessionId = ActiveSession.Viewing toId } }, []
 
       | SageFsEvent.SessionStopped sessionId ->
+        model.RecentOutput.Remove(sessionId)
         let stoppedSession =
           model.Sessions.Sessions |> List.tryFind (fun s -> SessionId.value s.Id = sessionId)
         let remaining =
@@ -1928,7 +1929,7 @@ type EffectDeps = {
   GetProxy: SessionId -> SessionProxy option
   /// Get a streaming test execution proxy for a session.
   /// The proxy streams test results and IL coverage hits.
-  GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> (bool array -> unit) -> Async<unit>) option
+  GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> (bool array -> unit) -> Async<HttpWorkerClient.StreamOutcome>) option
   /// Create a new session
   CreateSession: string list -> string -> WorkflowTypes.SessionWorkflow -> Async<Result<SessionInfo, SageFsError>>
   /// Ensure the working directory has warmup auto-open disabled.
@@ -2473,6 +2474,7 @@ module SageFsEffectHandler =
                 Features.LiveTesting.LiveTestingInstrumentation.activitySource.StartActivity(
                   "SageFs.LiveTesting.TestExecution")
               let sw = System.Diagnostics.Stopwatch.StartNew()
+              let receivedIds = System.Collections.Generic.HashSet<Features.LiveTesting.TestId>()
               try
                 let targetSid = targetSession |> Option.bind (fun s -> match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
                 match deps.ResolveSession targetSid with
@@ -2496,6 +2498,7 @@ module SageFsEffectHandler =
                         dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch))
                       )
                     let onResult (result: Features.LiveTesting.TestRunResult) =
+                      receivedIds.Add(result.TestId) |> ignore
                       resultFlusher.Add(result)
                     let onCoverage (hits: bool array) =
                       let mergedMap = Features.LiveTesting.InstrumentationMap.merge instrumentationMaps
@@ -2513,8 +2516,36 @@ module SageFsEffectHandler =
                         | false -> ()
                       | false -> ()
                     let parallelism = max 4 (Environment.ProcessorCount / 2)
-                    do! streamProxy tests parallelism onResult onCoverage
+                    let! outcome = streamProxy tests parallelism onResult onCoverage
                     // BatchFlusher's Dispose (via 'use') flushes remaining results
+                    match outcome with
+                    | HttpWorkerClient.StreamOutcome.Completed -> ()
+                    | HttpWorkerClient.StreamOutcome.TimedOut after ->
+                      // The worker went silent: never report this as a clean run.
+                      // Synthesize TimedOut entries ONLY for the tests that never
+                      // streamed a result (roast queue item 1 — no eternal
+                      // spinners, no fabricated failures for tests that passed).
+                      let missing =
+                        Features.LiveTesting.TestRunResult.synthesizeMissing
+                          tests
+                          (receivedIds |> Set.ofSeq)
+                          (fun tc ->
+                            { TestId = tc.Id
+                              TestName = tc.FullName
+                              Result =
+                                Features.LiveTesting.TestResult.Failed(
+                                  Features.LiveTesting.TestFailure.TimedOut after,
+                                  after)
+                              Timestamp = System.DateTimeOffset.UtcNow
+                              Output = None }
+                            : Features.LiveTesting.TestRunResult)
+                      match missing.Length with
+                      | 0 -> ()
+                      | _ ->
+                        dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch missing))
+                        Utils.Log.warn
+                          "[LiveTesting] Stream stalled after %A — %d of %d tests never reported"
+                          after missing.Length tests.Length
                   | None ->
                     let notRunResults =
                       tests |> Array.map (fun tc ->
@@ -2561,20 +2592,34 @@ module SageFsEffectHandler =
               with ex ->
                 sw.Stop()
                 Instrumentation.failSpan testCycleSpan ex.Message
+                // Transport failure: mark ONLY the tests that never reported —
+                // tests that already streamed Passed/Failed results must not be
+                // re-reported as failures (double-reporting bug fixed here).
                 let errResults =
-                  tests |> Array.map (fun tc ->
-                    ({ TestId = tc.Id
-                       TestName = tc.FullName
-                       Result =
-                         Features.LiveTesting.TestResult.Failed(
-                           Features.LiveTesting.TestFailure.ExceptionThrown(
-                             ex.Message,
-                             ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
-                           System.TimeSpan.Zero)
-                       Timestamp = System.DateTimeOffset.UtcNow
-                       Output = None }
-                     : Features.LiveTesting.TestRunResult))
-                dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch errResults))
+                  Features.LiveTesting.TestRunResult.synthesizeMissing
+                    tests
+                    (receivedIds |> Set.ofSeq)
+                    (fun tc ->
+                      ({ TestId = tc.Id
+                         TestName = tc.FullName
+                         Result =
+                           Features.LiveTesting.TestResult.Failed(
+                             Features.LiveTesting.TestFailure.ExceptionThrown(
+                               ex.Message,
+                               ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
+                             System.TimeSpan.Zero)
+                         Timestamp = System.DateTimeOffset.UtcNow
+                         Output = None }
+                       : Features.LiveTesting.TestRunResult))
+                match errResults.Length with
+                | 0 ->
+                  Utils.Log.warn
+                    "[LiveTesting] Transport failure after all tests reported: %s" ex.Message
+                | _ ->
+                  dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch errResults))
+                  Utils.Log.warn
+                    "[LiveTesting] Transport failure — %d of %d tests never reported: %s"
+                    errResults.Length tests.Length ex.Message
                 dispatch (SageFsMsg.Event (SageFsEvent.TestRunCompleted targetSession))
                 Instrumentation.testExecutionActiveCount.Add(-1L)
             }, ct)
