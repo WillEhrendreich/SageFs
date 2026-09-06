@@ -443,6 +443,10 @@ h2 {
 /* ── Session Picker ───────────────────────────────────────────── */
 
 #session-picker {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+
   &:empty {
     display: none;
   }
@@ -460,6 +464,10 @@ h2 {
   flex: 1;
   padding: 2rem;
   gap: 1.5rem;
+  /* safe center: center when content fits, top-align when it overflows
+     so the top isn't clipped by the scroll container */
+  justify-content: safe center;
+  min-height: min-content;
 
   & h2 {
     color: var(--fg-blue);
@@ -519,6 +527,8 @@ h2 {
 .picker-previous {
   width: 100%;
   max-width: 600px;
+  max-height: 50vh;
+  overflow-y: auto;
 }
 
 .picker-session-row {
@@ -559,6 +569,12 @@ h2 {
 .status-faulted {
   background: var(--fg-red);
   color: white;
+}
+
+.status-disconnected {
+  background: var(--fg-red);
+  color: white;
+  animation: pulse 1.5s infinite;
 }
 
 /* ── Session Controls ─────────────────────────────────────────── */
@@ -1255,4 +1271,34 @@ h2 {
 .guidance-unhealthy {
   border-left: 3px solid var(--fg-red, #e82424);
   background: rgba(232, 36, 36, 0.04);
+}
+
+/* ── Daemon Disconnected State ─────────────────────────────────── */
+/* When body[data-connected="false"], the daemon is not running.
+   The connection banner becomes prominent; the statusline and cmdline
+   reflect the disconnected state via DashboardConnectionState. */
+
+/* Connection banner: prominent when disconnected */
+.conn-banner {
+  position: fixed;
+  top: var(--tabline-h, 36px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 8px 16px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: bold;
+  font-family: inherit;
+}
+
+/* When disconnected, dim the main content to indicate stale state */
+body[data-connected="false"] #main {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Statusline reflects disconnected state via DashboardConnectionState */
+body[data-connected="false"] .statusline-info {
+  color: var(--fg-red);
 }

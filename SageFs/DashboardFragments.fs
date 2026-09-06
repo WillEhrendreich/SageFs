@@ -1084,7 +1084,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       // Status tabs — center
       Elem.div [ Attr.class' "tabline-menu"; Attr.style "display:flex;align-items:center;height:100%;flex:1;min-width:0;" ] [
         Elem.div [ Attr.id DomIds.SessionStatus; Attr.class' "tabline-status"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);font-size:12px;" ] [
-          Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ Text.raw snap.SessionState ]
+          Elem.span [ Attr.class' (sprintf "status %s" (DashboardConnectionState.statusBadgeCssClass snap.ConnectionState)); Attr.style "border-radius:0;" ] [
+            Text.raw (DashboardConnectionState.statusBadgeLabel snap.SessionState snap.ConnectionState) ]
         ]
         Elem.div [ Attr.class' "tabline-info"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:12px;white-space:nowrap;" ] [
           Text.raw (sprintf "Session: %s" snap.SessionId)
@@ -1294,7 +1295,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         Elem.div [ Attr.id "statusline-file"; Attr.class' "statusline-file" ] [ Text.raw (sprintf "%s" snap.WorkingDir) ]
       ]
       Elem.div [ Attr.class' "statusline-info" ] [
-        Text.raw (sprintf "\"%s\" — SageFs v%s —ready" snap.WorkingDir snap.Version)
+        Text.raw (DashboardConnectionState.statuslineLabel snap.WorkingDir snap.Version snap.ConnectionState)
       ]
       Elem.div [ Attr.class' "statusline-right" ] [
         Elem.div [ Attr.class' "statusline-stat" ] [
@@ -1308,7 +1309,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     // Bottom command line — evaluate input as cmdline
     Elem.div [ Attr.class' "cmdline" ] [
       Elem.span [ Attr.class' "cmdline-prompt" ] [ Text.raw ">" ]
-      Elem.span [ Attr.class' "cmdline-text" ] [ Text.raw "SageFs --ready" ]
+      Elem.span [ Attr.class' "cmdline-text" ] [ Text.raw (DashboardConnectionState.cmdlineLabel snap.ConnectionState) ]
     ]
   ]
 
@@ -2020,7 +2021,10 @@ let pushDiscoverResults (ctx: HttpContext) (dir: string) = task {
 let evalResultError (msg: string) =
   Elem.div [ Attr.id DomIds.EvalResult ] [
     Elem.pre [ Attr.class' "output-line output-error"; Attr.style "margin-top: 0.5rem;" ] [
-      Text.raw msg
+      // msg is user/agent-derived (directory names, eval output); encode like
+      // every other output sink so it can never reach the DOM as raw markup
+      // (roast queue item 2 — the last unescaped fragment).
+      Text.raw (System.Net.WebUtility.HtmlEncode msg)
     ]
   ]
 

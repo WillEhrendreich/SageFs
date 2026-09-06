@@ -57,6 +57,11 @@ module DomIds =
 [<RequireQualifiedAccess>]
 module Signals =
   let [<Literal>] ViewingSessionId = "viewingSessionId"
+  /// Per-page connection id — generated at initial render and echoed by every
+  /// @post so the server can retarget THIS tab's SSE stream when the viewing
+  /// session signal changes (the dashboard is signal-driven; there is no
+  /// session query parameter anymore).
+  let [<Literal>] ClientId = "clientId"
   let [<Literal>] Code = "code"
   let [<Literal>] HelpVisible = "helpVisible"
   let [<Literal>] SidebarOpen = "sidebarOpen"
@@ -79,6 +84,11 @@ module Signals =
   let [<Literal>] FrictionToken = "frictionToken"
   let [<Literal>] FrictionEdits = "frictionEdits"
   let [<Literal>] FrictionSending = "frictionSending"
+  /// Dashboard connection state — true when SSE stream is alive, false when
+  /// disconnected. Set by connectionMonitorScript on fetch failure. The
+  /// browser-side type system: when connected=false, NO UI element may show
+  /// "Ready" or "No session" — only the disconnected overlay is legal.
+  let [<Literal>] Connected = "connected"
 
 /// Precomputed syntax-color RGB → CSS class lookup (eliminates 12-branch if/elif chain)
 let syntaxColorLookup =
@@ -420,6 +430,44 @@ module SessionDisplayStatus =
     | SessionDisplayStatus.Lost -> "status-faulted"
     | SessionDisplayStatus.Stopped -> "status-faulted"
 
+/// Type-safe daemon connection state for the dashboard.
+/// Illegal states unrepresentable: the browser CANNOT show "Ready" or "No session"
+/// when the daemon is disconnected — the DU cases enforce this at the type level.
+[<RequireQualifiedAccess>]
+type DashboardConnectionState =
+  /// SSE stream is alive and the daemon is reachable.
+  | Connected
+  /// SSE stream failed or was never established — the daemon may not be running.
+  | Disconnected
+
+module DashboardConnectionState =
+  /// Convert to the Datastar signal string value.
+  let signalValue = function
+    | DashboardConnectionState.Connected -> "true"
+    | DashboardConnectionState.Disconnected -> "false"
+
+  /// The CSS class for the status badge based on connection state.
+  let statusBadgeCssClass = function
+    | DashboardConnectionState.Connected -> "status-ready"
+    | DashboardConnectionState.Disconnected -> "status-disconnected"
+
+  /// The text shown in the status badge.
+  let statusBadgeLabel (sessionState: string) = function
+    | DashboardConnectionState.Connected -> sessionState
+    | DashboardConnectionState.Disconnected -> "Disconnected"
+
+  /// The text shown in the statusline info area.
+  let statuslineLabel (workingDir: string) (version: string) = function
+    | DashboardConnectionState.Connected ->
+      sprintf "\"%s\" — SageFs v%s — ready" workingDir version
+    | DashboardConnectionState.Disconnected ->
+      sprintf "\"%s\" — SageFs v%s — daemon not running" workingDir version
+
+  /// The text shown in the command line area.
+  let cmdlineLabel = function
+    | DashboardConnectionState.Connected -> "SageFs -- ready"
+    | DashboardConnectionState.Disconnected -> "SageFs -- daemon not running"
+
 type ParsedSession = {
   Id: WorkerProtocol.SessionId
   Status: SessionDisplayStatus
@@ -572,8 +620,10 @@ type SystemAlarmEntry = {
 /// currently viewing), and the output region is per-session in the
 /// underlying `SessionOutputStore`. Dashboard code MUST:
 ///   - read the viewing session from the per-connection `viewingSessionId`
-///     Datastar signal (or from the `?sessionId=` query param for HTTP
-///     JSON state streams), never from a daemon global
+///     Datastar signal — never from a daemon global. The HTML dashboard never
+///     reads a session from its URL: the browser's viewing-session signal is the
+///     source of truth, synced with the backend via per-connection stream
+///     retargets. (The legacy TUI JSON stream still uses `?sessionId=`.)
 ///   - call `GetElmRegionsForSession sessionId` with THAT session id,
 ///     never a global accessor
 /// The Elm runtime's `ActiveSessionId` is not exposed to the dashboard
@@ -658,6 +708,15 @@ type DashboardActions = {
   ShutdownCallback: (unit -> unit) option
 }
 
+/// Per-connection SSE stream command — daemon state pushes plus viewing-session
+/// retargets issued by dashboard POST handlers. The stream channel is keyed by
+/// the page's client id so a signal-driven session selection re-targets the
+/// right tab's stream (and never a daemon-global session).
+[<RequireQualifiedAccess>]
+type DashboardStreamCommand =
+  | StateChange of DaemonStateChange
+  | RetargetView of WorkerProtocol.SessionId option
+
 /// Infrastructure dependencies — event sources, tracking, themes.
 type DashboardInfra = {
   Version: string
@@ -677,12 +736,20 @@ type DashboardInfra = {
   /// Adaptive live-bindings store — the dashboard stream subscribes to a
   /// session's cell and patches only the bindings panel on change.
   LiveBindingsAdaptive: Features.LiveBindingsAdaptive.State option
+  /// Live SSE stream channels keyed by page client id — dashboard POST
+  /// handlers retarget the owning stream when the viewing-session signal
+  /// changes (signal-driven session selection; no URL query parameter).
+  ConnectionChannels: Collections.Concurrent.ConcurrentDictionary<string, MailboxProcessor<DashboardStreamCommand>>
 }
 
 /// Complete snapshot of all dashboard state needed for a single full-page render.
 /// Constructed once per push, then passed to renderMainContent for atomic morph.
 type DashboardSnapshot = {
   Version: string
+  /// Type-safe daemon connection state — renderer derives badge class, statusline,
+  /// and cmdline text from this DU case. When Disconnected, the UI MUST NOT show
+  /// "Ready" or "No session" — enforced by DashboardConnectionState module functions.
+  ConnectionState: DashboardConnectionState
   SessionState: string
   SessionId: string
   WorkingDir: string

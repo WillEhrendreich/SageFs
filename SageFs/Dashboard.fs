@@ -117,8 +117,25 @@ let connectionMonitorScript () =
       if(b&&m){new MutationObserver(function(){b.style.display='none';}).observe(m,{childList:true});}
       var f=window.fetch;window.fetch=function(u){var p=f.apply(this,arguments);
       if(typeof u==='string'&&u.indexOf('/dashboard/stream')!==-1){
-        p.then(function(r){if(b){if(r.ok){b.style.display='none';}else{b.textContent='\u274c Server error ('+r.status+')';b.style.display='';}}})
-         .catch(function(){if(b){b.textContent='\u274c Server disconnected \u2014 reconnecting...';b.style.display='';}});}
+        p.then(function(r){
+          if(b){
+            if(r.ok){
+              b.style.display='none';
+              document.body.setAttribute('data-connected','true');
+            }else{
+              b.textContent='\u274c Server error ('+r.status+')';
+              b.style.display='';
+              document.body.setAttribute('data-connected','false');
+            }
+          }
+        })
+         .catch(function(){
+           if(b){
+             b.textContent='\u274c Daemon not running \u2014 start SageFs to continue';
+             b.style.display='';
+             document.body.setAttribute('data-connected','false');
+           }
+         });}
       return p;};
     })();
   """ DomIds.ServerStatus) ]
@@ -217,7 +234,12 @@ let keyboardHandlerScript () =
 /// Render the dashboard HTML shell with pre-rendered initial content.
 /// Providing initialContent eliminates the loading-screen flash — the browser
 /// receives a complete first paint without needing an SSE round-trip first.
-let renderShell (version: string) (initialSessionId: string) (initialContent: XmlNode) =
+/// `clientId` identifies THIS page's SSE stream so the backend can retarget
+/// it when the viewing-session signal changes; `initialSessionId` is the
+/// server-side default for the signal (first available session, or empty for
+/// the picker). There is NO session query parameter anywhere — the dashboard
+/// is driven entirely by the `viewingSessionId` signal synced with the backend.
+let renderShell (version: string) (clientId: string) (initialSessionId: string) (initialContent: XmlNode) =
   Elem.html [] [
     Elem.head [] [
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
@@ -230,8 +252,8 @@ let renderShell (version: string) (initialSessionId: string) (initialContent: Xm
       Elem.link [ Attr.rel "stylesheet"; Attr.href "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" ]
       Elem.link [ Attr.rel "stylesheet"; Attr.href "/dashboard/dashboard.css" ]
     ]
-    Elem.body [ Ds.safariStreamingFix ] [
-      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream?session=%s" (Uri.EscapeDataString initialSessionId))); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false"); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, "false") ] []
+    Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true" ] [
+      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.Connected, "true"); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false"); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, "false") ] []
       Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
       ]
@@ -317,7 +339,56 @@ let resolveViewingSession
     |> Option.bind (WorkerProtocol.SessionId.validate >> Result.toOption)
     |> Option.filter (fun sessionId -> sessions |> List.exists (fun session -> session.Id = sessionId))
   requested
-  |> Option.orElseWith (fun () -> sessions |> List.tryHead |> Option.map (fun session -> session.Id))
+
+/// Read the page client id from a signals JSON body; empty when absent.
+let private clientIdFromSignals (doc: System.Text.Json.JsonDocument) =
+  match doc.RootElement.TryGetProperty(Signals.ClientId) with
+  | true, p -> p.GetString()
+  | _ -> ""
+
+/// Retarget a specific browser's SSE stream to a viewing session — the
+/// signal-driven counterpart of session selection (there is no URL query
+/// parameter). The stream re-renders the appropriate output pane and confirms
+/// the signal; if the stream has not connected yet the POST's own patch still
+/// applies and the stream picks the target up on connect via its default.
+let private retargetStream
+  (infra: DashboardInfra)
+  (clientId: string)
+  (sessionId: WorkerProtocol.SessionId option)
+  : unit =
+  match clientId with
+  | "" -> ()
+  | id ->
+    match infra.ConnectionChannels.TryGetValue id with
+    | true, ch ->
+      try ch.Post(DashboardStreamCommand.RetargetView sessionId)
+      with :? ObjectDisposedException -> ()
+    | _ -> ()
+
+/// Adaptive live-bindings subscription for one browser connection. The
+/// callback never writes to the SSE response directly — it posts a
+/// ModelChanged state-change through the connection's channel so a full
+/// #main morph is serialized and cannot interleave with other writes.
+/// Module-scope (not nested in the stream handler) so the mailbox loop and
+/// the initial/RetargetView paths share the same logic without forward-
+/// reference ordering problems.
+let private subscribeLiveBindings
+  (infra: DashboardInfra)
+  (clientId: string)
+  (liveBindingsSub: (IDisposable option) ref)
+  (sessionId: WorkerProtocol.SessionId)
+  : unit =
+  liveBindingsSub.Value |> Option.iter (fun d -> d.Dispose())
+  let sidStr = WorkerProtocol.SessionId.value sessionId
+  liveBindingsSub.Value <-
+    infra.LiveBindingsAdaptive
+    |> Option.bind (fun store ->
+        Some (SageFs.Features.LiveBindingsAdaptive.subscribe store sidStr (fun _ ->
+          match infra.ConnectionChannels.TryGetValue clientId with
+          | true, ch ->
+            try ch.Post(DashboardStreamCommand.StateChange (ModelChanged (0, 0)))
+            with :? ObjectDisposedException -> ()
+          | _ -> ())))
 
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
@@ -472,6 +543,7 @@ let buildDashboardSnapshot
     let! frictionPanel = frictionPanelTask
     let snap : DashboardSnapshot = {
       Version = infra.Version
+      ConnectionState = DashboardConnectionState.Connected
       SessionState = stateStr
       SessionId = sid
       WorkingDir = workingDir
@@ -585,6 +657,7 @@ let buildNoSessionSnapshot
     let liveTestingPanel = renderLiveTestingPanel liveTestingActive liveTestingStatus ltPassed ltFailed
     let snap : DashboardSnapshot = {
       Version = infra.Version
+      ConnectionState = DashboardConnectionState.Connected
       SessionState = "No session"
       SessionId = ""
       WorkingDir = ""
@@ -620,21 +693,21 @@ let buildNoSessionSnapshot
 let createStreamHandler
   (q: DashboardQueries)
   (infra: DashboardInfra)
+  (clientId: string)
   : HttpHandler =
   fun ctx -> task {
     SageFs.Instrumentation.sseConnectionsActive.Add(1L)
     Response.sseStartResponse ctx |> ignore
 
-    let clientId = Guid.NewGuid().ToString("N").[..7]
-    // Resolve one immutable viewing session for this browser connection.
-    // renderShell puts this same ID in the selected card, output projection,
-    // eval target, and stream URL. Daemon-global switches never replace it.
+    // The viewing session for this connection is driven by the browser's
+    // `viewingSessionId` signal, NOT a URL query parameter. It starts at the
+    // same server-side default as the initial render (first available session,
+    // or the picker when none exist) and is re-targeted whenever the signal
+    // changes via dashboard POST handlers (RetargetView on this channel).
     let! sessions = q.GetAllSessions ()
-    let requestedSession =
-      match ctx.Request.Query.TryGetValue("session") with
-      | true, values when values.Count > 0 -> Some values.[0]
-      | _ -> None
-    let currentSessionOpt = resolveViewingSession requestedSession sessions
+    let defaultViewingSession =
+      sessions |> List.tryHead |> Option.map (fun s -> s.Id)
+    let mutable currentSessionOpt = defaultViewingSession
     let currentSessionStr = currentSessionOpt |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
     infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionStr))
     let mutable lastSessionId = currentSessionOpt |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
@@ -721,6 +794,12 @@ let createStreamHandler
       match shouldPatchTheme with
       | true -> do! Response.ssePatchSignal ctx (SignalPath.sp Signals.Theme) newThemeName
       | false -> ()
+      // Keep the browser's viewing-session signal synced with the backend:
+      // if the server resolved this connection to a different session than the
+      // one that was requested (e.g. the requested session vanished), echo the
+      // canonical id back so the picker/sidebar highlight never disagrees.
+      if sessionChanged then
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
       // Render once, morph only on change: identical snapshots (timer poll
       // ticks with no state movement) send zero payload bytes.
       let mainHtml = renderNode (renderMainContent snap)
@@ -750,7 +829,12 @@ let createStreamHandler
         // Coalesces rapid state changes: drain queued, throttle 100ms, drain again, push once.
         // Heartbeat: when idle >15s, sends `: keepalive\n\n` SSE comment to prevent
         // proxy/browser timeouts. Integrated into the actor loop to avoid concurrent writes.
-        let pushAgent = MailboxProcessor<DaemonStateChange>.Start((fun inbox ->
+        // Adaptive live-bindings subscription. Never write directly to the SSE
+        // response here: eval completion can fire this callback concurrently
+        // with the Elm ModelChanged event. All writes must go through pushAgent
+        // so a full #main morph is serialized and cannot be interleaved.
+        let liveBindingsSub : (IDisposable option) ref = ref None
+        let pushAgent = MailboxProcessor<DashboardStreamCommand>.Start((fun inbox ->
           let rec loop () = async {
             let! msg = inbox.TryReceive(15_000)
             match msg with
@@ -779,7 +863,31 @@ let createStreamHandler
               match ctx.RequestAborted.IsCancellationRequested with
               | true -> ()
               | false -> return! loop ()
-            | Some change ->
+            | Some (DashboardStreamCommand.RetargetView sidOpt) ->
+              // Signal-driven session retarget: a dashboard POST changed the
+              // browser's viewing-session signal, so this connection must now
+              // push the newly-selected session (or the picker when None).
+              currentSessionOpt <- sidOpt
+              // Session changed — every cached artifact is now stale.
+              workerCache <- None
+              lastWorkerFetch <- DateTime.MinValue
+              lastSessionId <- currentSessionOpt |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
+              lastWorkingDir <- ""
+              // Re-subscribe the adaptive live-bindings watch to the new session.
+              liveBindingsSub.Value |> Option.iter (fun d -> d.Dispose())
+              liveBindingsSub.Value <- None
+              currentSessionOpt |> Option.iter (subscribeLiveBindings infra clientId liveBindingsSub)
+              try
+                do! pushState () |> Async.AwaitTask
+              with
+              | :? System.IO.IOException -> ()
+              | :? ObjectDisposedException -> ()
+              | :? OperationCanceledException -> ()
+              | :? System.ArgumentOutOfRangeException -> ()
+              | :? System.InvalidOperationException -> ()
+              | ex -> Log.debug "[Dashboard SSE] pushState after retarget failed: %s" ex.Message
+              return! loop ()
+            | Some (DashboardStreamCommand.StateChange change) ->
               // Other state changes — drain + coalesce + push
               // Worker-affecting events invalidate the worker-data TTL cache so
               // the push re-fetches eval stats / hot-reload / warmup context:
@@ -799,14 +907,20 @@ let createStreamHandler
               let mutable workerInvalidated = invalidatesWorkerData change
               while inbox.CurrentQueueLength > 0 do
                 let! drained = inbox.Receive()
-                if invalidatesWorkerData drained then
-                  workerInvalidated <- true
+                match drained with
+                | DashboardStreamCommand.StateChange c ->
+                  if invalidatesWorkerData c then
+                    workerInvalidated <- true
+                | DashboardStreamCommand.RetargetView _ -> ()
                 ()
               do! Async.Sleep 100
               while inbox.CurrentQueueLength > 0 do
                 let! drained = inbox.Receive()
-                if invalidatesWorkerData drained then
-                  workerInvalidated <- true
+                match drained with
+                | DashboardStreamCommand.StateChange c ->
+                  if invalidatesWorkerData c then
+                    workerInvalidated <- true
+                | DashboardStreamCommand.RetargetView _ -> ()
                 ()
               if workerInvalidated then
                 lastWorkerFetch <- DateTime.MinValue
@@ -822,28 +936,19 @@ let createStreamHandler
               return! loop ()
           }
           loop ()), ctx.RequestAborted)
+        infra.ConnectionChannels.[clientId] <- pushAgent
         use _sub = evt.Subscribe(fun change ->
-          try pushAgent.Post(change)
+          try pushAgent.Post(DashboardStreamCommand.StateChange change)
           with :? ObjectDisposedException -> ())
         // Adaptive live-bindings subscription. Never write directly to the SSE
         // response here: eval completion can fire this callback concurrently
         // with the Elm ModelChanged event. All writes must go through pushAgent
-        // so a full #main morph is serialized and cannot be interleaved.
-        let mutable liveBindingsSub : IDisposable option = None
-        let subscribeLiveBindings (sessionId: WorkerProtocol.SessionId) =
-          liveBindingsSub |> Option.iter (fun d -> d.Dispose())
-          let sidStr = WorkerProtocol.SessionId.value sessionId
-          liveBindingsSub <-
-            infra.LiveBindingsAdaptive
-            |> Option.bind (fun store ->
-                Some (SageFs.Features.LiveBindingsAdaptive.subscribe store sidStr (fun _ ->
-                  try pushAgent.Post(ModelChanged (0, 0))
-                  with :? ObjectDisposedException -> ())))
-        match currentSessionOpt with
-        | Some sid -> subscribeLiveBindings sid
-        | None -> ()
+        // so a full #main morph is serialized and cannot be interleaved. The ref
+        // itself is declared before the mailbox (so the loop's RetargetView arm
+        // may re-subscribe); here we perform the initial subscription.
+        currentSessionOpt |> Option.iter (subscribeLiveBindings infra clientId liveBindingsSub)
         do! tcs.Task
-        liveBindingsSub |> Option.iter (fun d -> d.Dispose())
+        liveBindingsSub.Value |> Option.iter (fun d -> d.Dispose())
       | None ->
         // Fallback: poll every second
         while not ctx.RequestAborted.IsCancellationRequested do
@@ -855,6 +960,7 @@ let createStreamHandler
     finally
       SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
       infra.ConnectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
+      infra.ConnectionChannels.TryRemove(clientId) |> ignore
   }
 
 /// Create the eval POST handler.
@@ -1101,18 +1207,21 @@ let createResetHandler
 ///     (or shows the session picker if none remain)
 let createSessionActionHandler
   (q: DashboardQueries)
+  (infra: DashboardInfra)
   (action: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>)
   (teardown: bool)
   : WorkerProtocol.SessionId -> HttpHandler =
   fun sessionId ctx -> task {
     try
       let sid = WorkerProtocol.SessionId.value sessionId
-      // Read the signals so we know which session is currently being viewed.
-      let viewingId =
+      // Read the signals so we know which session is currently being viewed
+      // and which page (client id) owns this browser tab's SSE stream.
+      let viewingId, channelClientId =
         try
           use doc = readSignalsJsonSized ctx |> Async.AwaitTask |> Async.RunSynchronously
-          getSignalString doc Signals.ViewingSessionId "viewing-session-id"
-        with _ -> ""
+          getSignalString doc Signals.ViewingSessionId "viewing-session-id",
+          clientIdFromSignals doc
+        with _ -> "", ""
       Response.sseStartResponse ctx |> ignore
       let isViewingStopped = viewingId = sid
       // Immediate feedback: swap the card for the "Stopping…" message.
@@ -1158,6 +1267,7 @@ let createSessionActionHandler
       match nextId with
       | Some nextSession ->
         // Auto-switch: display + select the next session.
+        retargetStream infra channelClientId (Some nextSession)
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value nextSession)
         // Sync the output, sessions panel, and statusline to the auto-selected next session.
         match q.GetElmRegionsForSession nextSession with
@@ -1189,11 +1299,13 @@ let createSessionActionHandler
           ])
       | None when teardown && Result.isOk result ->
         // No sessions remain — show the session picker (with Resume Previous).
+        retargetStream infra channelClientId None
         let! previous = q.GetPreviousSessions ()
         do! ssePatchNode ctx (renderSessionPicker previous)
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | None ->
         // Switch path (or failed teardown): eval form targets the requested session.
+        retargetStream infra channelClientId (Some sessionId)
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value sessionId)
         // Immediately sync the output, sessions panel, and statusline to the
         // newly-selected session so the display matches the sidebar highlight.
@@ -1224,7 +1336,7 @@ let createSessionActionHandler
         do! ssePatchNode ctx (
           Elem.div [ Attr.id "statusline-left" ] [
             Elem.div [ Attr.id "statusline-branch" ] [ Text.raw stateLabel ]
-            Elem.div [ Attr.id "statusline-file" ] [ Text.raw switchedDir ]
+            Elem.div [ Attr.id "statusline-file" ] [ Text.raw (System.Net.WebUtility.HtmlEncode switchedDir) ]
           ])
       let msg, cssClass =
         match result with
@@ -1413,7 +1525,7 @@ let createDiscoverHandler : HttpHandler =
         do! ssePatchNode ctx (
           Elem.div [ Attr.id DomIds.DiscoveredProjects ] [
             Elem.span [ Attr.class' "output-line output-error" ] [
-              Text.raw (sprintf "Directory not found: %s" dir)
+              Text.raw (sprintf "Directory not found: %s" (System.Net.WebUtility.HtmlEncode dir))
             ]])
       | false, true ->
         do! pushDiscoverResults ctx dir
@@ -1425,6 +1537,7 @@ let createDiscoverHandler : HttpHandler =
 
 /// Create the create-session POST handler.
 let createCreateSessionHandler
+  (infra: DashboardInfra)
   (createSession: string list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>)
   (switchSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
@@ -1433,12 +1546,13 @@ let createCreateSessionHandler
       use! doc = readSignalsJsonSized ctx
       let dir = getSignalString doc "newSessionDir" "new-session-dir"
       let manualProjects = getSignalString doc "manualProjects" "manual-projects"
+      let channelClientId = clientIdFromSignals doc
       Response.sseStartResponse ctx |> ignore
       match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
       | true, _ ->
         do! ssePatchNode ctx (evalResultError "Working directory is required")
       | false, false ->
-        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
+        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" (System.Net.WebUtility.HtmlEncode dir)))
       | false, true ->
         let projects = resolveSessionProjects dir manualProjects
         match projects.IsEmpty with
@@ -1448,9 +1562,12 @@ let createCreateSessionHandler
           let! result = createSession projects dir
           match result with
           | Ok newSessionId ->
-            // Switch to the new session so the SSE stream picks it up
+            // Switch to the new session so the SSE stream picks it up.
             let! _ = switchSession newSessionId
-            // Push the new viewing identity so every dashboard action targets it.
+            // Push the new viewing identity so every dashboard action targets it,
+            // and retarget this page's SSE stream to the new session (signal-driven
+            // session selection — no URL query parameter).
+            retargetStream infra channelClientId (Some newSessionId)
             do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
             do! ssePatchNode ctx (
               Elem.div [ Attr.id DomIds.EvalResult ] [
@@ -1496,7 +1613,7 @@ let createToggleWarmupAutoOpenHandler
       | true, _ ->
         do! ssePatchNode ctx (evalResultError "Working directory is required")
       | false, false ->
-        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
+        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" (System.Net.WebUtility.HtmlEncode dir)))
       | false, true ->
         // 1) Write the config so FUTURE sessions pick up the setting.
         let configWrite : Result<unit, string> =
@@ -1566,6 +1683,9 @@ let createApiStateHandler
     infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Terminal, connSessionId))
 
     let pushJson () = task {
+      // Legacy TUI JSON stream (deprecated client). Unlike the dashboard, this
+      // endpoint keys off a `?sessionId=` query param — the dashboard itself is
+      // signal-driven and carries no session in its URL.
       // Use THIS connection's session (set via ?sessionId= query param),
       // not a daemon global. Each TUI/dashboard SSE connection has its own
       // sessionId, so the push reflects what THAT client is viewing.
@@ -1723,19 +1843,17 @@ let createEndpoints
     yield get "/dashboard" (fun ctx -> task {
       try
         let! sessions = q.GetAllSessions ()
-        // Initial session for a fresh page load: prefer a ?session= query
-        // param so deep-links work, then fall back to the first available
-        // session. There is intentionally NO global "active session" read
-        // here — that concept does not exist at the dashboard layer.
-        let requestedSession =
-          match ctx.Request.Query.TryGetValue("session") with
-          | true, v when v.Count > 0 && not (String.IsNullOrEmpty(v.[0])) ->
-            Some v.[0]
-          | _ -> None
-        match resolveViewingSession requestedSession sessions with
-        | Some initialSessionId ->
-          let! snap, resolvedId, _, _ = buildDashboardSnapshot q infra initialSessionId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
-          let html = renderShell infra.Version (WorkerProtocol.SessionId.value resolvedId) (renderMainContent snap)
+        // The viewing session is chosen by the browser's `viewingSessionId`
+        // signal, which starts at a server-side default: the first available
+        // session when any exist ("if there is any session, one of those"),
+        // otherwise empty so the picker shows. There is NO session query
+        // parameter — deep links land on the picker and the signal drives
+        // everything thereafter, synced with the backend.
+        let clientId = Guid.NewGuid().ToString("N").[..7]
+        match sessions |> List.tryHead with
+        | Some first ->
+          let! snap, resolvedId, _, _ = buildDashboardSnapshot q infra first.Id (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
+          let html = renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
         | None ->
           // No session in play: render the FULL dashboard shell with the
@@ -1745,14 +1863,20 @@ let createEndpoints
           // the same state, so the initial HTML must contain #session-picker
           // or Datastar fails the page with PatchElementsNoTargetsFound.
           let! snap = buildNoSessionSnapshot q infra
-          let html = renderShell infra.Version "" (renderMainContent snap)
+          let html = renderShell infra.Version clientId "" (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
       with _ ->
+        let clientId = Guid.NewGuid().ToString("N").[..7]
         let! snap = buildNoSessionSnapshot q infra
-        let html = renderShell infra.Version "" (renderMainContent snap)
+        let html = renderShell infra.Version clientId "" (renderMainContent snap)
         return! FalcoResponse.ofHtml html ctx
     })
-    yield get "/dashboard/stream" (createStreamHandler q infra)
+    // Stream endpoint for a specific page — the client id is a PATH segment
+    // (no session query parameter): this both keys the per-connection channel
+    // registry for signal-driven retargets and keeps the URL free of ?session=.
+    yield mapGet "/dashboard/stream/{clientId}"
+      (fun (r: RequestData) -> r.GetString("clientId", ""))
+      (fun clientId -> createStreamHandler q infra clientId)
     yield post "/dashboard/eval" (createEvalHandler q infra a.EvalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)
     yield post "/dashboard/completions" (createCompletionsHandler infra.GetCompletions)
@@ -1843,17 +1967,26 @@ let createEndpoints
       (fun (r: RequestData) -> r.GetString("id", ""))
       (fun sessionId -> fun ctx -> task {
         let! previous = q.GetPreviousSessions ()
+        let channelClientId =
+          try
+            use doc = readSignalsJsonSized ctx |> Async.AwaitTask |> Async.RunSynchronously
+            clientIdFromSignals doc
+          with _ -> ""
         match previous |> List.tryFind (fun s -> s.Id = sessionId) with
         | Some prev ->
           Response.sseStartResponse ctx |> ignore
           let! result = a.CreateSession prev.Projects prev.WorkingDir
           match result with
-          | Ok sessionId ->
+          | Ok newSessionId ->
             a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+            // Show and select the resumed session — patch the signal AND retarget
+            // this page's SSE stream to it (signal-driven; no URL query param).
+            retargetStream infra channelClientId (Some newSessionId)
+            do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
             do! ssePatchNode ctx (
               Elem.div [ Attr.id DomIds.EvalResult ] [
                 Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-                  Text.raw (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value sessionId))
+                  Text.raw (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value newSessionId))
                 ]
               ])
           | Error err ->
@@ -1865,15 +1998,15 @@ let createEndpoints
     // TUI client API
     yield get "/api/state" (createApiStateHandler q infra)
     yield post "/api/dispatch" (createApiDispatchHandler a.Dispatch)
-    yield post "/dashboard/session/create" (createCreateSessionHandler a.CreateSession a.SwitchSession)
+    yield post "/dashboard/session/create" (createCreateSessionHandler infra a.CreateSession a.SwitchSession)
     yield post "/dashboard/config/disable-auto-open" (createToggleWarmupAutoOpenHandler a false)
     yield post "/dashboard/config/enable-auto-open" (createToggleWarmupAutoOpenHandler a true)
     yield mapPost "/dashboard/session/switch/{id}"
       (fun (r: RequestData) -> r.GetString("id", ""))
-      (fun sid -> createSessionActionHandler q a.SwitchSession false (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (fun sid -> createSessionActionHandler q infra a.SwitchSession false (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
     yield mapPost "/dashboard/session/stop/{id}"
       (fun (r: RequestData) -> r.GetString("id", ""))
-      (fun sid -> createSessionActionHandler q a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (fun sid -> createSessionActionHandler q infra a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
     yield post "/dashboard/session/stop-others" (fun ctx -> task {
       let! sessions = q.GetAllSessions ()
       // "Others" = everyone except the session THIS client is viewing.
@@ -1913,10 +2046,10 @@ let createEndpoints
       // Dispose == stop: the per-session .sagefs replay binary is gone, so
       // there is no separate "clear saved memory" step anymore (see the
       // event-sourcing story — the .sagefm manifest is the only durable state).
-      (fun sid -> createSessionActionHandler q a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (fun sid -> createSessionActionHandler q infra a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
     yield mapPost "/dashboard/session/purge/{id}"
       (fun (r: RequestData) -> r.GetString("id", ""))
-      (fun sid -> createSessionActionHandler q a.PurgeSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+      (fun sid -> createSessionActionHandler q infra a.PurgeSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
     // Daemon info endpoint for client discovery (replaces daemon.json)
     yield get "/api/daemon-info" (fun ctx -> task {
       let startedAt =
