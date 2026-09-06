@@ -5,11 +5,28 @@
       if(b&&m){new MutationObserver(function(){b.style.display='none';}).observe(m,{childList:true});}
       var f=window.fetch;window.fetch=function(u){var p=f.apply(this,arguments);
       if(typeof u==='string'&&u.indexOf('/dashboard/stream')!==-1){
-        p.then(function(r){if(b){if(r.ok){b.style.display='none';}else{b.textContent='\u274c Server error ('+r.status+')';b.style.display='';}}})
-         .catch(function(){if(b){b.textContent='\u274c Server disconnected \u2014 reconnecting...';b.style.display='';}});}
+        p.then(function(r){
+          if(b){
+            if(r.ok){
+              b.style.display='none';
+              document.body.setAttribute('data-connected','true');
+            }else{
+              b.textContent='\u274c Server error ('+r.status+')';
+              b.style.display='';
+              document.body.setAttribute('data-connected','false');
+            }
+          }
+        })
+         .catch(function(){
+           if(b){
+             b.textContent='\u274c Daemon not running \u2014 start SageFs to continue';
+             b.style.display='';
+             document.body.setAttribute('data-connected','false');
+           }
+         });}
       return p;};
     })();
-  </script><script type="module" src="/dashboard/datastar.js"></script><link rel="preconnect" href="https://fonts.googleapis.com" /><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" /><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" /><link rel="stylesheet" href="/dashboard/dashboard.css" /></head><body data-on:pageshow.window="evt?.persisted && window.location.reload()"><div data-init="@get('/dashboard/stream/test-id')" data-signals:help-visible="'false'" data-signals:sidebar-open="'true'" data-signals:viewing-session-id="''" data-signals:client-id="'test-id'" data-signals:code="''" data-signals:new-session-dir="''" data-signals:manual-projects="''" data-signals:theme="''" data-signals:cursor-pos="'0'" data-signals:test-filter="'all'" data-signals:expanded-dashboard="'false'" data-signals:friction-endpoint="''" data-signals:friction-token="''" data-signals:friction-edits="'{}'" data-signals:friction-sending="'false'"></div><div id="server-status" class="conn-banner conn-disconnected" style="display:none">⏳ Connecting to server...</div><div id="main"><div></div></div><script>
+  </script><script type="module" src="/dashboard/datastar.js"></script><link rel="preconnect" href="https://fonts.googleapis.com" /><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" /><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" /><link rel="stylesheet" href="/dashboard/dashboard.css" /></head><body data-on:pageshow.window="evt?.persisted && window.location.reload()" data-connected="true"><div data-init="@get('/dashboard/stream/test-id')" data-signals:help-visible="'false'" data-signals:sidebar-open="'true'" data-signals:connected="'true'" data-signals:viewing-session-id="''" data-signals:client-id="'test-id'" data-signals:code="''" data-signals:new-session-dir="''" data-signals:manual-projects="''" data-signals:theme="''" data-signals:cursor-pos="'0'" data-signals:test-filter="'all'" data-signals:expanded-dashboard="'false'" data-signals:friction-endpoint="''" data-signals:friction-token="''" data-signals:friction-edits="'{}'" data-signals:friction-sending="'false'"></div><div id="server-status" class="conn-banner conn-disconnected" style="display:none">⏳ Connecting to server...</div><div id="main"><div></div></div><script>
     window._insertComp = function(text, reqPos) {
       var ta = document.getElementById('eval-textarea');
       if (!ta) return;
@@ -33,52 +50,40 @@
     }, true);
   </script><script>
     (function() {
-      var sizes = [10, 12, 14, 16, 18, 20, 24];
-      var idx = 2;
-      document.addEventListener('keydown', function(e) {
-        if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); idx = Math.min(sizes.length - 1, idx + 1); document.documentElement.style.setProperty('--font-size', sizes[idx] + 'px'); }
-        if (e.ctrlKey && e.key === '-') { e.preventDefault(); idx = Math.max(0, idx - 1); document.documentElement.style.setProperty('--font-size', sizes[idx] + 'px'); }
-        if (e.ctrlKey && e.key === 'Tab') {
-          e.preventDefault();
-          var body = {action: e.shiftKey ? 'sessionCyclePrev' : 'sessionCycleNext'};
-          fetch('/api/dispatch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
-          return;
-        }
-        var tag = (e.target.tagName || '').toLowerCase();
-        if (tag !== 'input' && tag !== 'textarea') {
-          var action = null;
-          var value = null;
-          if (e.key === 'j' || e.key === 'ArrowDown') { action = 'sessionNavDown'; }
-          if (e.key === 'k' || e.key === 'ArrowUp') { action = 'sessionNavUp'; }
-          if (e.key === 'Enter') { action = 'sessionSelect'; }
-          if (e.key === 'x' || e.key === 'Delete') { action = 'sessionDelete'; }
-          if (e.key === 'X') { action = 'sessionStopOthers'; }
-          if (e.key === 'n') { e.preventDefault(); fetch('/dashboard/session/create', {method:'POST'}); return; }
-          if (e.key >= '1' && e.key <= '9') { action = 'sessionSetIndex'; value = String(parseInt(e.key) - 1); }
-          if (action) {
-            e.preventDefault();
-            var body = value ? {action: action, value: value} : {action: action};
-            fetch('/api/dispatch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
-          }
+      function d(a,v){var b=v?{action:a,value:v}:{action:a};fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});}
+      var sizes=[10,12,14,16,18,20,24],idx=2;
+      document.addEventListener('keydown',function(e){
+        if(e.ctrlKey&&(e.key==='='||e.key==='+')){e.preventDefault();idx=Math.min(sizes.length-1,idx+1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
+        if(e.ctrlKey&&e.key==='-'){e.preventDefault();idx=Math.max(0,idx-1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
+        if(e.ctrlKey&&e.key==='Tab'){e.preventDefault();d(e.shiftKey?'sessionCyclePrev':'sessionCycleNext');return;}
+        var tag=(e.target.tagName||'').toLowerCase();
+        if(tag!=='input'&&tag!=='textarea'){
+          var a=null,v=null;
+          if(e.key==='j'||e.key==='ArrowDown'){a='sessionNavDown';}
+          if(e.key==='k'||e.key==='ArrowUp'){a='sessionNavUp';}
+          if(e.key==='Enter'){a='sessionSelect';}
+          if(e.key==='x'||e.key==='Delete'){a='sessionDelete';}
+          if(e.key==='X'){a='sessionStopOthers';}
+          if(e.key==='n'){e.preventDefault();fetch('/dashboard/session/create',{method:'POST'});return;}
+          if(e.key>='1'&&e.key<='9'){a='sessionSetIndex';v=String(parseInt(e.key)-1);}
+          if(a){e.preventDefault();d(a,v);}
         }
       });
-      var h = document.getElementById('sidebar-resize');
-      var s = document.getElementById('sidebar');
-      if (h && s) {
-        // Persist via CSS var on <html> — Datastar morphs #main (incl. sidebar) on every change, wiping inline styles.
-        var K = 'sagefs.sidebarWidth';
-        function setW(w) { document.documentElement.style.setProperty('--sidebar-width', w + 'px'); }
-        try { var v = localStorage.getItem(K); if (v) { var n = parseInt(v, 10); if (n >= 200 && n <= 600) setW(n); } } catch (e) {}
-        var d = false, raf = null, pending = 0;
-        h.addEventListener('mousedown', function(e) { d = true; e.preventDefault(); });
-        document.addEventListener('mousemove', function(e) {
-          if (!d) return;
-          pending = Math.max(200, Math.min(600, window.innerWidth - e.clientX));
-          if (!raf) raf = requestAnimationFrame(function() { setW(pending); raf = null; });
+      var h=document.getElementById('sidebar-resize'),s=document.getElementById('sidebar');
+      if(h&&s){
+        var K='sagefs.sidebarWidth';
+        function setW(w){document.documentElement.style.setProperty('--sidebar-width',w+'px');}
+        try{var v=localStorage.getItem(K);if(v){var n=parseInt(v,10);if(n>=200&&n<=600)setW(n);}}catch(e){}
+        var dragging=false,raf=null,pending=0;
+        h.addEventListener('mousedown',function(e){dragging=true;e.preventDefault();});
+        document.addEventListener('mousemove',function(e){
+          if(!dragging)return;
+          pending=Math.max(200,Math.min(600,window.innerWidth-e.clientX));
+          if(!raf)raf=requestAnimationFrame(function(){setW(pending);raf=null;});
         });
-        document.addEventListener('mouseup', function() {
-          if (d) { d = false;
-            try { localStorage.setItem(K, document.documentElement.style.getPropertyValue('--sidebar-width').replace('px','').trim()); } catch (e) {}
+        document.addEventListener('mouseup',function(){
+          if(dragging){dragging=false;
+            try{localStorage.setItem(K,document.documentElement.style.getPropertyValue('--sidebar-width').replace('px','').trim());}catch(e){}
           }
         });
       }

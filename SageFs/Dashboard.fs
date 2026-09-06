@@ -179,52 +179,40 @@ let detailsToggleScript () =
 let keyboardHandlerScript () =
   Elem.script [] [ Text.raw (sprintf """
     (function() {
-      var sizes = [10, 12, 14, 16, 18, 20, 24];
-      var idx = 2;
-      document.addEventListener('keydown', function(e) {
-        if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); idx = Math.min(sizes.length - 1, idx + 1); document.documentElement.style.setProperty('--font-size', sizes[idx] + 'px'); }
-        if (e.ctrlKey && e.key === '-') { e.preventDefault(); idx = Math.max(0, idx - 1); document.documentElement.style.setProperty('--font-size', sizes[idx] + 'px'); }
-        if (e.ctrlKey && e.key === 'Tab') {
-          e.preventDefault();
-          var body = {action: e.shiftKey ? 'sessionCyclePrev' : 'sessionCycleNext'};
-          fetch('/api/dispatch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
-          return;
-        }
-        var tag = (e.target.tagName || '').toLowerCase();
-        if (tag !== 'input' && tag !== 'textarea') {
-          var action = null;
-          var value = null;
-          if (e.key === 'j' || e.key === 'ArrowDown') { action = 'sessionNavDown'; }
-          if (e.key === 'k' || e.key === 'ArrowUp') { action = 'sessionNavUp'; }
-          if (e.key === 'Enter') { action = 'sessionSelect'; }
-          if (e.key === 'x' || e.key === 'Delete') { action = 'sessionDelete'; }
-          if (e.key === 'X') { action = 'sessionStopOthers'; }
-          if (e.key === 'n') { e.preventDefault(); fetch('/dashboard/session/create', {method:'POST'}); return; }
-          if (e.key >= '1' && e.key <= '9') { action = 'sessionSetIndex'; value = String(parseInt(e.key) - 1); }
-          if (action) {
-            e.preventDefault();
-            var body = value ? {action: action, value: value} : {action: action};
-            fetch('/api/dispatch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
-          }
+      function d(a,v){var b=v?{action:a,value:v}:{action:a};fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});}
+      var sizes=[10,12,14,16,18,20,24],idx=2;
+      document.addEventListener('keydown',function(e){
+        if(e.ctrlKey&&(e.key==='='||e.key==='+')){e.preventDefault();idx=Math.min(sizes.length-1,idx+1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
+        if(e.ctrlKey&&e.key==='-'){e.preventDefault();idx=Math.max(0,idx-1);document.documentElement.style.setProperty('--font-size',sizes[idx]+'px');}
+        if(e.ctrlKey&&e.key==='Tab'){e.preventDefault();d(e.shiftKey?'sessionCyclePrev':'sessionCycleNext');return;}
+        var tag=(e.target.tagName||'').toLowerCase();
+        if(tag!=='input'&&tag!=='textarea'){
+          var a=null,v=null;
+          if(e.key==='j'||e.key==='ArrowDown'){a='sessionNavDown';}
+          if(e.key==='k'||e.key==='ArrowUp'){a='sessionNavUp';}
+          if(e.key==='Enter'){a='sessionSelect';}
+          if(e.key==='x'||e.key==='Delete'){a='sessionDelete';}
+          if(e.key==='X'){a='sessionStopOthers';}
+          if(e.key==='n'){e.preventDefault();fetch('/dashboard/session/create',{method:'POST'});return;}
+          if(e.key>='1'&&e.key<='9'){a='sessionSetIndex';v=String(parseInt(e.key)-1);}
+          if(a){e.preventDefault();d(a,v);}
         }
       });
-      var h = document.getElementById('%s');
-      var s = document.getElementById('%s');
-      if (h && s) {
-        // Persist via CSS var on <html> — Datastar morphs #main (incl. sidebar) on every change, wiping inline styles.
-        var K = 'sagefs.sidebarWidth';
-        function setW(w) { document.documentElement.style.setProperty('--sidebar-width', w + 'px'); }
-        try { var v = localStorage.getItem(K); if (v) { var n = parseInt(v, 10); if (n >= 200 && n <= 600) setW(n); } } catch (e) {}
-        var d = false, raf = null, pending = 0;
-        h.addEventListener('mousedown', function(e) { d = true; e.preventDefault(); });
-        document.addEventListener('mousemove', function(e) {
-          if (!d) return;
-          pending = Math.max(200, Math.min(600, window.innerWidth - e.clientX));
-          if (!raf) raf = requestAnimationFrame(function() { setW(pending); raf = null; });
+      var h=document.getElementById('%s'),s=document.getElementById('%s');
+      if(h&&s){
+        var K='sagefs.sidebarWidth';
+        function setW(w){document.documentElement.style.setProperty('--sidebar-width',w+'px');}
+        try{var v=localStorage.getItem(K);if(v){var n=parseInt(v,10);if(n>=200&&n<=600)setW(n);}}catch(e){}
+        var dragging=false,raf=null,pending=0;
+        h.addEventListener('mousedown',function(e){dragging=true;e.preventDefault();});
+        document.addEventListener('mousemove',function(e){
+          if(!dragging)return;
+          pending=Math.max(200,Math.min(600,window.innerWidth-e.clientX));
+          if(!raf)raf=requestAnimationFrame(function(){setW(pending);raf=null;});
         });
-        document.addEventListener('mouseup', function() {
-          if (d) { d = false;
-            try { localStorage.setItem(K, document.documentElement.style.getPropertyValue('--sidebar-width').replace('px','').trim()); } catch (e) {}
+        document.addEventListener('mouseup',function(){
+          if(dragging){dragging=false;
+            try{localStorage.setItem(K,document.documentElement.style.getPropertyValue('--sidebar-width').replace('px','').trim());}catch(e){}
           }
         });
       }
