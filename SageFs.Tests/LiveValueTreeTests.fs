@@ -173,6 +173,9 @@ let liveValueSnapshotTests = testList "LiveValueSnapshot" [
     let rec countNodes (n: LiveValueNode) = 1 + (n.Children |> List.sumBy countNodes)
     let node = buildValueNode "w" (box (Wide()))
     let total = countNodes node
-    (total, MaxNodes + MaxChildren) |> Expect.isLessThan "bounded by MaxNodes"
+    // Budget limits non-truncated nodes to MaxNodes, but truncated leaf
+    // children of those nodes also count in countNodes.  The correct upper
+    // bound is MaxNodes × (MaxChildren + 1), far below the unbounded 50^depth.
+    (total, MaxNodes * (MaxChildren + 1)) |> Expect.isLessThan "bounded by node budget"
     node.Kind |> Expect.equal "kind" NodeKind.Class
 ]
