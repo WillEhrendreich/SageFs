@@ -95,7 +95,7 @@ let filmstripSnapshotTests =
     test "DashboardSnapshot has FilmstripPanel field" {
       let snap : DashboardSnapshot = {
         Version = "0.6.50"; SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
-        WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None
+        WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
         EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
         DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []
         DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []
@@ -113,7 +113,7 @@ let filmstripSnapshotTests =
     test "renderMainContent includes filmstrip-panel id" {
       let snap : DashboardSnapshot = {
         Version = "0.6.50"; SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
-        WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None
+        WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
         EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
         DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []
         DiagnosticsPanel = Elem.div [] []

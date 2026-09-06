@@ -479,7 +479,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     DashboardSnapshot.Version = version
     SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
     WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
-    ThemeName = "default"; ConnectionLabel = None
+    ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
     HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
     OutputPanel = Elem.div [] []
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -1013,7 +1013,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       DashboardSnapshot.Version = "0.0.0"
       SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
       WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
-      ThemeName = "default"; ConnectionLabel = None
+      ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -1052,7 +1052,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       DashboardSnapshot.Version = "0.0.0"
       SessionState = "ready"; SessionId = "t"; WorkingDir = "C:\\"
       WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = { Count = 0; AvgMs = 0.0; MinMs = 0.0; MaxMs = 0.0; Sparkline = ""; P50Ms = None; P95Ms = None }
-      ThemeName = "default"; ConnectionLabel = None
+      ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
@@ -1069,7 +1069,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
     { DashboardSnapshot.Version = version
       SessionState = state; SessionId = sessionId; WorkingDir = workingDir
       WarmupProgress = ""; WorkflowLabel = "REPL"; EvalStats = { Count = 7; AvgMs = 42.0; MinMs = 1.0; MaxMs = 100.0; Sparkline = ""; P50Ms = None; P95Ms = None }
-      ThemeName = "monokai"; ConnectionLabel = Some "🌐 2 🤖 1"
+      ThemeName = "monokai"; ConnectionLabel = Some "🌐 2 🤖 1"; ConnectionState = DashboardConnectionState.Connected
       HotReloadPanel = Elem.div [] []; SessionContextPanel = Elem.div [] []
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
