@@ -48,6 +48,3 @@ viz-output/code-city-tests/obj/
 test-output.txt
 .SageFs/
 .commandcode/
-.playwright-mcp/
-.slopwatch/
-$null
