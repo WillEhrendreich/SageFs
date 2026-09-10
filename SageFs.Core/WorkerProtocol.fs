@@ -4,6 +4,7 @@ open System
 open System.IO
 open System.Text.Json
 open System.Text.Json.Serialization
+open SageFs.ProjectLoading
 
 /// Cross-boundary protocol types shared between daemon and worker processes.
 /// This module defines the wire contract — changes here affect all editor integrations.
@@ -212,6 +213,19 @@ module WorkerProtocol =
   type SessionProxy = WorkerMessage -> Async<WorkerResponse>
 
   /// Metadata for a managed session — displayed in dashboard, stored in persistence.
+  /// Tracks a running web application started via the "Run App" button.
+  /// Used by the dashboard to show the app URL and enable stopping.
+  type RunningAppInfo = {
+    /// The detected URL of the running app (e.g., "http://localhost:5000")
+    Url: string
+    /// The port the app is listening on
+    Port: int
+    /// When the app was started
+    StartedAt: DateTime
+    /// The entry point expression that was evaluated to start the app
+    EntryPointExpression: string
+  }
+
   type SessionInfo = {
     Id: SessionId
     Name: string option
@@ -227,6 +241,12 @@ module WorkerProtocol =
     /// None until the worker reports WORKER_PORT= on stdout.
     WorkerPort: int option
     Workflow: WorkflowTypes.SessionWorkflow
+    /// The project currently in focus for "Run App" operations.
+    ActiveProject: string option
+    /// Classification of all projects loaded in this session.
+    ProjectRoles: ClassifiedProject list
+    /// State tracking for a running web application.
+    RunningApp: RunningAppInfo option
   }
 
   /// Utilities for deriving display-friendly paths from session metadata.

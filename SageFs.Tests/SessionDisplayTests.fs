@@ -21,7 +21,10 @@ let mkInfo (id: SessionId) status lastActive : SessionInfo =
     FaultReason = None
     WorkerPid = Some 1234
     WorkerPort = None
-    Workflow = WorkflowTypes.SessionWorkflow.Interactive }
+    Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    ActiveProject = None
+    ProjectRoles = []
+    RunningApp = None }
 
 [<Tests>]
 let displayStatusTests = testList "SessionDisplay.displayStatus" [

@@ -1,4 +1,4 @@
-module SageFs.Tests.WorkerProtocolTests // trigger discovery
+﻿module SageFs.Tests.WorkerProtocolTests // trigger discovery
 
 open System
 open System.IO
@@ -281,6 +281,12 @@ let workerProtocolTests =
           WorkerPid = Some 1234
           WorkerPort = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
+          ActiveProject = None
+
+          ProjectRoles = []
+
+          RunningApp = None
+
         }
         SessionInfo.displayName info
         |> Expect.equal "should use solution root dir name" "SageFs"
@@ -300,6 +306,12 @@ let workerProtocolTests =
           WorkerPid = None
           WorkerPort = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
+          ActiveProject = None
+
+          ProjectRoles = []
+
+          RunningApp = None
+
         }
         SessionInfo.displayName info
         |> Expect.equal "should use working dir name" "MyApp"
@@ -354,6 +366,12 @@ let workerProtocolTests =
           WorkerPid = Some 5678
           WorkerPort = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
+          ActiveProject = None
+
+          ProjectRoles = []
+
+          RunningApp = None
+
         }
         let _, result = roundTrip<SessionInfo> info
         result |> Expect.equal "should round-trip" info

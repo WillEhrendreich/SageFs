@@ -85,7 +85,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         LastActivity = "eval"
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
+        TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
+        ActiveProject = None; ProjectRoles = []; RunningApp = None }
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         Status = SessionDisplayStatus.Stopped
         StatusMessage = None
@@ -98,7 +99,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         LastActivity = ""
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
+        TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
+        ActiveProject = None; ProjectRoles = []; RunningApp = None }
     ]
     let html = renderSessions sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions" html
@@ -180,6 +182,9 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetSessionAgentBadges = fun _ -> []
       GetSessionGuidanceCss = fun _ -> ""
       GetSessionWorkflow = fun _ -> WorkflowTypes.SessionWorkflow.Interactive
+      GetSessionActiveProject = fun _ -> None
+      GetSessionProjectRoles = fun _ -> []
+      GetSessionRunningApp = fun _ -> None
     }
 
   let mkInfra () : DashboardInfra =
@@ -369,7 +374,8 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         LastActivity = "eval"
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
+        TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
+        ActiveProject = None; ProjectRoles = []; RunningApp = None }
     ]
     let html = renderSessions sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html
@@ -484,7 +490,10 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     OutputPanel = Elem.div [] []
     SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
     ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-    BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] [] }
+    BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
+    ActiveProject = None
+    ProjectRoles = []
+    RunningApp = None }
 
   test "renderMainContent shows version" {
     let html = renderMainContent (mkSnap "1.2.3") |> renderNode
@@ -505,12 +514,14 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         IsActive = true; IsSelected = false; ProjectsText = "(A.fsproj)"; EvalCount = 1
         Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
-        BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
+        BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
+        ActiveProject = None; ProjectRoles = []; RunningApp = None }
       { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
         IsActive = false; IsSelected = true; ProjectsText = "(B.fsproj)"; EvalCount = 1
         Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
-        BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = "" }
+        BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
+        ActiveProject = None; ProjectRoles = []; RunningApp = None }
     ]
     let snap =
       { mkSnap "0.0.0" with
@@ -540,7 +551,10 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         FaultReason = None
         WorkerPid = None
         WorkerPort = None
-        Workflow = WorkflowTypes.SessionWorkflow.Interactive }
+        Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        ActiveProject = None
+        ProjectRoles = []
+        RunningApp = None }
     let resolved = resolveViewingSession (Some "0a2b3c4e") [ info sessionA "A.fsproj"; info sessionB "B.fsproj" ]
     Expect.equal resolved (Some sessionB) "stream must retain the browser-requested session"
   }
@@ -1018,7 +1032,10 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] [] }
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None }
     let html = renderMainContent snap |> renderNode
     let mustHaveIds =
       [ DomIds.Main; DomIds.SessionStatus; DomIds.EvalStats
@@ -1057,7 +1074,10 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] [] }
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None }
     let html = renderMainContent snap |> renderNode
     Expect.isTrue (html.StartsWith("<div id=\"main\""))"must start with div#main"
   }
@@ -1074,7 +1094,10 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
       OutputPanel = Elem.div [] []
       SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
       ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] [] }
+      BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None }
   test "Version appears in rendered output" {
     let html = mkSnap "1.2.3" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
     Expect.stringContains html "1.2.3" "version should appear"

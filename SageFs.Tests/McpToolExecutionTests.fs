@@ -46,10 +46,16 @@ let tests =
                    WorkerPort = None
                    Workflow = WorkflowTypes.SessionWorkflow.Interactive
                    CreatedAt = DateTime.UtcNow
-                   LastActivity = DateTime.UtcNow })
+                   LastActivity = DateTime.UtcNow
+                   ActiveProject = None
+                   ProjectRoles = []
+                   RunningApp = None })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ _ -> Task.FromResult(())
         NotifyWorkerDied = fun _ -> ()
+        UpdateRunningApp = fun _ _ -> Task.FromResult(())
+        UpdateActiveProject = fun _ _ -> Task.FromResult(())
+        SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
       }
 
       let ctx : McpContext =

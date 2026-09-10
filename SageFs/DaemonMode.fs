@@ -340,6 +340,25 @@ let createSessionOps
       // in WorkerExited handler (checks currentPid <> workerPid) prevents double-restart.
       sessionManager.Post(
         SessionManager.SessionCommand.WorkerExited(sessionId, -1, -1))
+    UpdateRunningApp = fun sessionId runningApp ->
+      task {
+        sessionManager.Post(
+          SessionManager.SessionCommand.UpdateRunningApp(sessionId, runningApp))
+      }
+    UpdateActiveProject = fun sessionId activeProject ->
+      task {
+        sessionManager.Post(
+          SessionManager.SessionCommand.UpdateActiveProject(sessionId, activeProject))
+      }
+    SwitchWorkflow = fun sessionIdStr workflow ->
+      task {
+        let sessionId = toSessionId sessionIdStr
+        let! result =
+          sessionManager.PostAndAsyncReply(fun reply ->
+            SessionManager.SessionCommand.SwitchWorkflow(sessionId, workflow, reply))
+          |> Async.StartAsTask
+        return result
+      }
   }
 
 /// Look up worker HTTP base URL for a session from CQRS snapshot.
@@ -1356,6 +1375,8 @@ let createElmRuntime
           match json <> lastStateJson with
           | true ->
             lastStateJson <- json
+            // DIAGNOSTIC: log every state change propagation
+            Log.info "[elm-OnModelChanged] output=%d diags=%d json.Length=%d" outputCount diagCount json.Length
             let significantOutputChange = abs (outputCount - lastLoggedOutputCount) >= 50
             let diagChanged = diagCount <> lastLoggedDiagCount
             match significantOutputChange || diagChanged with
@@ -1942,6 +1963,18 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       match SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) with
       | Some info -> info.Workflow
       | None -> WorkflowTypes.SessionWorkflow.Interactive
+    GetSessionActiveProject = fun sessionId ->
+      match SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) with
+      | Some info -> info.ActiveProject
+      | None -> None
+    GetSessionProjectRoles = fun sessionId ->
+      match SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) with
+      | Some info -> info.ProjectRoles |> List.map (fun cp -> cp.Role)
+      | None -> []
+    GetSessionRunningApp = fun sessionId ->
+      match SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) with
+      | Some info -> info.RunningApp
+      | None -> None
   }
 
   let dashboardActions : DashboardActions = {
@@ -1964,9 +1997,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         | Some json ->
           try
             let snap =
-              System.Text.Json.JsonSerializer.Deserialize<SageFs.Features.LiveValueTree.LiveValueSnapshot>(
-                json,
-                System.Text.Json.JsonSerializerOptions(PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase))
+              WorkerProtocol.Serialization.deserialize<SageFs.Features.LiveValueTree.LiveValueSnapshot> json
             SageFs.Features.LiveBindingsAdaptive.update liveBindingsAdaptive sidStr { snap with SessionId = sidStr }
           with ex ->
             Log.warn "[DaemonMode] Failed to parse live value snapshot for %s: %s" sidStr ex.Message
@@ -2028,6 +2059,49 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         |> Result.mapError SageFsError.describe
     }
     ShutdownCallback = Some (fun () -> cts.Cancel())
+    RunApp = fun sid project -> task {
+      let sidStr = WorkerProtocol.SessionId.value sid
+      // 1. Switch session to WebLive workflow with default browser refresh config
+      let! workflowResult = sessionOps.SwitchWorkflow sidStr (WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults)
+      match workflowResult with
+      | Error e -> return Error (SageFsError.describe e)
+      | Ok _ ->
+        // 2. Evaluate the entry point — scan for a main/WebApplication builder in the project
+        let evalCode = sprintf """open SageFs.EntryPointDiscovery;; discoverEntryPoint "%s";;""" project
+        let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.EvalCode(evalCode, "run-app"))
+        match result with
+        | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, _, _)) ->
+          // 3. Update session state with running app info
+          let runningApp : WorkerProtocol.RunningAppInfo = {
+            Url = "http://localhost:5000"
+            Port = 5000
+            StartedAt = System.DateTime.UtcNow
+            EntryPointExpression = msg
+          }
+          do! sessionOps.UpdateRunningApp sid (Some runningApp)
+          do! sessionOps.UpdateActiveProject sid (Some project)
+          return Ok (sprintf "App started: %s" msg)
+        | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) -> return Error (SageFsError.describe err)
+        | Ok other -> return Error (sprintf "Unexpected: %A" other)
+        | Error e -> return Error (SageFsError.describe e)
+    }
+    StopApp = fun sid -> task {
+      let sidStr = WorkerProtocol.SessionId.value sid
+      let! sessionInfo = sessionOps.GetSessionInfo sid
+      match sessionInfo with
+      | None -> return Error "Session not found"
+      | Some info ->
+        match info.RunningApp with
+        | None -> return Error "No app is running"
+        | Some app ->
+          // Stop the Kestrel server and clear running app state
+          let evalCode = sprintf "System.Environment.Exit(0)"
+          let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.EvalCode(evalCode, "stop-app"))
+          do! sessionOps.UpdateRunningApp sid None
+          match result with
+          | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, _, _)) -> return Ok "App stopped"
+          | _ -> return Ok "App stopped"
+    }
   }
 
   let dashboardInfra : DashboardInfra = {

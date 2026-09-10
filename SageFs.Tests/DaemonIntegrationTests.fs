@@ -1,4 +1,4 @@
-module SageFs.Tests.DaemonIntegrationTests
+﻿module SageFs.Tests.DaemonIntegrationTests
 
 open System
 open System.Diagnostics
@@ -64,6 +64,12 @@ let managerStateTests =
         WorkerPid = Some 1234
         WorkerPort = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        ActiveProject = None
+
+        ProjectRoles = []
+
+        RunningApp = None
+
       }
       let session : SageFs.SessionManager.ManagedSession = {
         Info = info
@@ -75,6 +81,12 @@ let managerStateTests =
         AutoOpenNamespaces = true
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = SageFs.RestartPolicy.emptyState
+        ActiveProject = None
+
+        ProjectRoles = []
+
+        RunningApp = None
+
       }
       let state =
         SageFs.SessionManager.ManagerState.empty
@@ -97,6 +109,12 @@ let managerStateTests =
         WorkerPid = None
         WorkerPort = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        ActiveProject = None
+
+        ProjectRoles = []
+
+        RunningApp = None
+
       }
       let session : SageFs.SessionManager.ManagedSession = {
         Info = info
@@ -108,6 +126,12 @@ let managerStateTests =
         AutoOpenNamespaces = true
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = SageFs.RestartPolicy.emptyState
+        ActiveProject = None
+
+        ProjectRoles = []
+
+        RunningApp = None
+
       }
       let state =
         SageFs.SessionManager.ManagerState.empty
@@ -131,6 +155,12 @@ let managerStateTests =
           WorkerPid = None
           WorkerPort = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
+          ActiveProject = None
+
+          ProjectRoles = []
+
+          RunningApp = None
+
         }
         { Info = info
           Process = new Process()
@@ -140,7 +170,10 @@ let managerStateTests =
           WorkingDir = @"C:\test"
           AutoOpenNamespaces = true
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
-          RestartState = SageFs.RestartPolicy.emptyState }
+          RestartState = SageFs.RestartPolicy.emptyState
+          ActiveProject = None
+          ProjectRoles = []
+          RunningApp = None }
 
       let sidA = testSessionId "aa000011"
       let sidB = testSessionId "bb000011"

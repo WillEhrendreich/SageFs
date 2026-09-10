@@ -39,10 +39,16 @@ let private mkTools
         WorkerPid = Some 42
         WorkerPort = workerPort
         Workflow = SessionWorkflow.Interactive
+        ActiveProject = None
+        ProjectRoles = []
+        RunningApp = None
       })
     GetAllSessions = fun () -> Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
     NotifyWorkerDied = fun _ -> ()
+    UpdateRunningApp = fun _ _ -> Task.FromResult(())
+    UpdateActiveProject = fun _ _ -> Task.FromResult(())
+    SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
   }
   let ctx : McpContext = {
     FrictionStore = None

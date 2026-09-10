@@ -27,6 +27,12 @@ type SessionManagementOps = {
   /// Notify that a worker died unexpectedly (pipe broken mid-request).
   /// Closes the race window between pipe failure and proc.Exited event firing.
   NotifyWorkerDied: SessionId -> unit
+  /// Update the running app state for a session.
+  UpdateRunningApp: SessionId -> RunningAppInfo option -> Task<unit>
+  /// Update the active project for a session.
+  UpdateActiveProject: SessionId -> string option -> Task<unit>
+  /// Switch the workflow for a session.
+  SwitchWorkflow: string -> WorkflowTypes.SessionWorkflow -> Task<Result<string, SageFsError>>
 }
 
 module SessionManagementOps =
@@ -42,4 +48,7 @@ module SessionManagementOps =
     GetAllSessions = fun () -> Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
     NotifyWorkerDied = fun _ -> ()
+    UpdateRunningApp = fun _ _ -> Task.FromResult(())
+    UpdateActiveProject = fun _ _ -> Task.FromResult(())
+    SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
   }

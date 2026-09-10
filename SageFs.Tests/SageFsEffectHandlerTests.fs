@@ -1,4 +1,4 @@
-module SageFs.Tests.SageFsEffectHandlerTests
+﻿module SageFs.Tests.SageFsEffectHandlerTests
 
 open System
 open System.Threading.Tasks
@@ -58,6 +58,9 @@ module TestDeps =
       WorkerPid = Some 999
       WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None
     }
     let proxy (msg: WorkerMessage) =
       async {
@@ -134,6 +137,9 @@ module TestDeps =
             WorkerPid = None
             WorkerPort = None
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
+            ActiveProject = None
+            ProjectRoles = []
+            RunningApp = None
           }
           return Result.Ok info
         }
@@ -519,6 +525,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       WorkerPid = Some 999
       WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -613,6 +622,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       WorkerPid = Some 999
       WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -707,6 +719,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       WorkerPid = Some 999
       WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -795,6 +810,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       WorkerPid = Some 999
       WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -889,6 +907,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       WorkerPid = Some 999
       WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -1009,6 +1030,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       WorkerPid = Some 999
       WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -1107,6 +1131,9 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       WorkerPid = Some 999
       WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -1311,6 +1338,9 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       WorkerPort = None
       FaultReason = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None
     }
     let warmup : WarmupContext = {
       AssembliesLoaded =
@@ -1381,7 +1411,8 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   Status = SessionStatus.Ready; WorkerPid = Some 1
                   WorkerPort = None
                   FaultReason = None
-                  Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
+                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
+                  ActiveProject = None; ProjectRoles = []; RunningApp = None }]
       }
       SleepMs = fun _ -> async { return () }
       GetWarmupContext = None
@@ -1423,7 +1454,8 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   Status = SessionStatus.Starting; WorkerPid = None
                   WorkerPort = None
                   FaultReason = None
-                  Workflow = WorkflowTypes.SessionWorkflow.Interactive }]
+                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
+                  ActiveProject = None; ProjectRoles = []; RunningApp = None }]
       }
       SleepMs = fun _ -> async { return () }
       GetWarmupContext =

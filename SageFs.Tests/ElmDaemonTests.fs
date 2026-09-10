@@ -1,4 +1,4 @@
-module SageFs.Tests.ElmDaemonTests
+﻿module SageFs.Tests.ElmDaemonTests
 
 open System
 open System.Threading
@@ -29,6 +29,12 @@ module ElmDaemonTestHelpers =
       WorkerPid = Some 999
       WorkerPort = None
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None
+
+      ProjectRoles = []
+
+      RunningApp = None
+
     }
     let proxy (msg: WorkerMessage) =
       async { return handler msg }

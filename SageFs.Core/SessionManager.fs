@@ -6,6 +6,7 @@ open System.IO
 open System.Threading
 open SageFs.WorkerProtocol
 open SageFs.Utils
+open SageFs.ProjectLoading
 
 /// ROLE: Erlang-style supervisor for FSI worker sub-processes via MailboxProcessor.
 ///   SessionCommand DU serializes all mutations through a single agent loop.
@@ -34,6 +35,13 @@ module SessionManager =
     Workflow: WorkflowTypes.SessionWorkflow
     /// Per-session restart tracking.
     RestartState: RestartPolicy.State
+    /// The project currently in focus for "Run App" operations.
+    /// When null, the dashboard auto-selects based on ActiveProject dropdown logic.
+    ActiveProject: string option
+    /// Classification of all projects loaded in this session.
+    ProjectRoles: ClassifiedProject list
+    /// State tracking for a running web application.
+    RunningApp: RunningAppInfo option
   }
 
   [<RequireQualifiedAccess>]
@@ -73,6 +81,9 @@ module SessionManager =
     | StopAll of AsyncReplyChannel<unit>
     | WorkerWarmupProgress of SessionId * progress: string
     | UpdateSessionStatus of SessionId * WorkerProtocol.SessionStatus
+    | UpdateRunningApp of SessionId * WorkerProtocol.RunningAppInfo option
+    | UpdateActiveProject of SessionId * string option
+    | SwitchWorkflow of SessionId * WorkflowTypes.SessionWorkflow * AsyncReplyChannel<Result<string, SageFsError>>
 
   type ManagerState = {
     Sessions: Map<SessionId, ManagedSession>
@@ -551,6 +562,9 @@ module SessionManager =
           WorkerPid = Some proc.Id
           WorkerPort = None
           Workflow = session.Workflow
+          ActiveProject = session.ActiveProject
+          ProjectRoles = session.ProjectRoles
+          RunningApp = None
         }
         let restarted = {
           Info = info
@@ -562,6 +576,9 @@ module SessionManager =
           AutoOpenNamespaces = session.AutoOpenNamespaces
           Workflow = session.Workflow
           RestartState = session.RestartState
+          ActiveProject = session.ActiveProject
+          ProjectRoles = session.ProjectRoles
+          RunningApp = None
         }
         let newState = ManagerState.addSession id restarted state
         Instrumentation.sessionsRestarted.Add(1L)
@@ -623,6 +640,9 @@ module SessionManager =
                 WorkerPid = Some proc.Id
                 WorkerPort = None
                 Workflow = workflow
+                ActiveProject = None
+                ProjectRoles = []
+                RunningApp = None
               }
               let managed = {
                 Info = info
@@ -634,6 +654,9 @@ module SessionManager =
                 AutoOpenNamespaces = autoOpenNamespaces
                 Workflow = workflow
                 RestartState = RestartPolicy.emptyState
+                ActiveProject = None
+                ProjectRoles = []
+                RunningApp = None
               }
               let newState = ManagerState.addSession sessionId managed state
               reply.Reply(Ok info)
@@ -1233,6 +1256,44 @@ module SessionManager =
             onSessionProgressChanged ()
             return newState
           | None ->
+            return state
+        | SessionCommand.UpdateRunningApp(id, runningApp) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let updated =
+              { session with
+                  Info = { session.Info with RunningApp = runningApp }
+                  RunningApp = runningApp }
+            let newState = ManagerState.addSession id updated state
+            onSessionProgressChanged ()
+            return newState
+          | None ->
+            return state
+        | SessionCommand.UpdateActiveProject(id, activeProject) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let updated =
+              { session with
+                  Info = { session.Info with ActiveProject = activeProject }
+                  ActiveProject = activeProject }
+            let newState = ManagerState.addSession id updated state
+            onSessionProgressChanged ()
+            return newState
+          | None ->
+            return state
+        | SessionCommand.SwitchWorkflow(id, workflow, reply) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let updated =
+              { session with
+                  Info = { session.Info with Workflow = workflow }
+                  Workflow = workflow }
+            let newState = ManagerState.addSession id updated state
+            reply.Reply(Ok (sprintf "Workflow switched to %A" workflow))
+            onSessionProgressChanged ()
+            return newState
+          | None ->
+            reply.Reply(Error (SageFsError.SessionNotFound (WorkerProtocol.SessionId.value id)))
             return state
       }
       /// Supervision wrapper: an UNEXPECTED exception escaping a handler must

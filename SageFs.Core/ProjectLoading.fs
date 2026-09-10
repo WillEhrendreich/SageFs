@@ -14,6 +14,22 @@ type FileName = string
 type DllName = string
 type DirName = string
 
+/// Project role classification for session management.
+/// Determines which projects are suitable for hot-reloading vs. testing.
+type ProjectRole =
+  | Executable    // Has OutputType = Exe and is meant to be run as a web app
+  | Library       // Shared libraries, static assemblies
+  | Test          // Test projects (contained in test packages or marked with IsTestProject)
+
+/// Extended project representation with role and entry-point metadata.
+/// Used by SessionManager to select active project and discover entry points.
+and ClassifiedProject = {
+  Path: string
+  Role: ProjectRole
+  EntryPointFile: string option
+  PackageRefs: string list
+}
+
 /// Minimal manual .fsproj parse used as a fallback when Ionide's workspace
 /// loader silently returns zero projects (MSBuild evaluation can fail
 /// in-process without throwing). Produces FSharpProjectOptions directly so
@@ -359,6 +375,24 @@ let isTestProject (proj: ProjectOptions) : bool =
 /// Filter a solution's projects to only test projects.
 let discoverTestProjects (projects: ProjectOptions list) : ProjectOptions list =
   projects |> List.filter isTestProject
+
+/// Classify a single project by its role (Executable, Library, or Test).
+/// Uses MSBuild OutputType property and test package reference heuristics.
+let classifyProject (proj: ProjectOptions) : ClassifiedProject =
+  let role =
+    match proj.AllProperties.TryFind "OutputType" with
+    | Some vals when vals |> Set.exists (fun v -> String.Equals(v, "Exe", StringComparison.OrdinalIgnoreCase)) -> ProjectRole.Executable
+    | _ ->
+      if isTestProject proj then ProjectRole.Test
+      else ProjectRole.Library
+  { Path = proj.ProjectFileName
+    Role = role
+    EntryPointFile = None
+    PackageRefs = proj.PackageReferences |> List.map (fun pr -> Path.GetFileNameWithoutExtension(pr.FullPath)) }
+
+/// Classify all projects in a solution, returning a map of path to classification.
+let classifyProjects (projects: ProjectOptions list) : ClassifiedProject list =
+  projects |> List.map classifyProject
 
 let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
   let projectDlls = sln.Projects |> Seq.map _.TargetPath

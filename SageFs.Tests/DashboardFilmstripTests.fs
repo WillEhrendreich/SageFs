@@ -1,4 +1,4 @@
-module SageFs.Tests.DashboardFilmstripTests
+﻿module SageFs.Tests.DashboardFilmstripTests
 
 open System
 open Expecto
@@ -105,6 +105,12 @@ let filmstripSnapshotTests =
         ThemeVars = Elem.div [] []; BindingsPanel = Elem.div [] []
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
         FrictionPanel = Elem.div [] []
+        ActiveProject = None
+
+        ProjectRoles = []
+
+        RunningApp = None
+
       }
       let html = snap.FilmstripPanel |> render
       Expect.isTrue (html.Length > 0) "FilmstripPanel should render non-empty HTML"
@@ -124,6 +130,12 @@ let filmstripSnapshotTests =
         ThemeVars = Elem.div [] []; BindingsPanel = Elem.div [] []
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
         FrictionPanel = Elem.div [] []
+        ActiveProject = None
+
+        ProjectRoles = []
+
+        RunningApp = None
+
       }
       let html = renderMainContent snap |> render
       Expect.stringContains html DomIds.FilmstripPanel "main content should include filmstrip panel"

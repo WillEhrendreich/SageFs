@@ -42,7 +42,10 @@ let mkHangingSession (proc: Process) =
         WorkerPort = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         CreatedAt = DateTime.UtcNow
-        LastActivity = DateTime.UtcNow }
+        LastActivity = DateTime.UtcNow
+        ActiveProject = None
+        ProjectRoles = []
+        RunningApp = None }
     Process = proc
     // A proxy that never responds — simulates a hung worker whose HTTP server
     // is wedged (the real proxy has no request timeout).
@@ -54,7 +57,10 @@ let mkHangingSession (proc: Process) =
     WorkingDir = ""
     AutoOpenNamespaces = false
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
-    RestartState = RestartPolicy.emptyState }
+    RestartState = RestartPolicy.emptyState
+    ActiveProject = None
+    ProjectRoles = []
+    RunningApp = None }
 
 [<Tests>]
 let shutdownLifecycleTests =

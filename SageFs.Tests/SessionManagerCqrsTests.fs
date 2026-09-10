@@ -1,4 +1,4 @@
-module SageFs.Tests.SessionManagerCqrsTests
+﻿module SageFs.Tests.SessionManagerCqrsTests
 
 open System
 open System.Threading
@@ -31,6 +31,12 @@ let mkSessionInfo (id: SessionId) status =
     WorkerPid = None
     WorkerPort = None
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    ActiveProject = None
+
+    ProjectRoles = []
+
+    RunningApp = None
+
   }
 
 let mkManagedSession (id: SessionId) status =
@@ -48,6 +54,12 @@ let mkManagedSession (id: SessionId) status =
     AutoOpenNamespaces = true
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     RestartState = RestartPolicy.emptyState
+    ActiveProject = None
+
+    ProjectRoles = []
+
+    RunningApp = None
+
   }
 
 // ── Simulated actor for pattern testing ──────────────────────

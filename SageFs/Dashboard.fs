@@ -241,7 +241,7 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       Elem.link [ Attr.rel "stylesheet"; Attr.href "/dashboard/dashboard.css" ]
     ]
     Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true" ] [
-      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.Connected, "true"); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false"); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, "false") ] []
+      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.Connected, "true"); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false"); Ds.signal (Signals.BindingsPanelOpen, "true"); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, "false") ] []
       Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
       ]
@@ -276,6 +276,9 @@ let private buildOutputPanels
       match q.GetElmRegionsForSession sessionId with
       | Some regions ->
         let outputRegion = regions |> List.tryFind (fun r -> r.Id = "output")
+        // DIAGNOSTIC: log output region content length
+        outputRegion |> Option.iter (fun r ->
+          Log.info "[buildOutputPanels] outputRegion.Content.Length=%d sessionId=%s" r.Content.Length (WorkerProtocol.SessionId.value sessionId))
         let outNode =
           match outputRegion with
           | Some r ->
@@ -303,7 +306,10 @@ let private buildOutputPanels
                   TestTreemapEntries = treemapEntries
                   BindingEntries = bindingEntries
                   AgentBadges = q.GetSessionAgentBadges s.Id
-                  GuidanceCssClass = q.GetSessionGuidanceCss s.Id })
+                  GuidanceCssClass = q.GetSessionGuidanceCss s.Id
+                  ActiveProject = q.GetSessionActiveProject s.Id
+                  ProjectRoles = q.GetSessionProjectRoles s.Id
+                  RunningApp = q.GetSessionRunningApp s.Id })
           let creating = isCreatingSession r.Content
           let sess = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) visible creating
           let sessionPicker =
@@ -530,32 +536,35 @@ let buildDashboardSnapshot
         }
     let! frictionPanel = frictionPanelTask
     let snap : DashboardSnapshot = {
-      Version = infra.Version
-      ConnectionState = DashboardConnectionState.Connected
-      SessionState = stateStr
-      SessionId = sid
-      WorkingDir = workingDir
-      WarmupProgress = warmupProgress
-      WorkflowLabel = q.GetSessionWorkflow sessionId |> WorkflowTypes.SessionWorkflow.label
-      EvalStats = evalStatsView
-      AlarmPanel = alarmPanel
-      DaemonHealth = daemonHealthPanel
-      FailureNarrativesPanel = failureNarrativesPanel
-      DiagnosticsPanel = diagnosticsPanel
-      FilmstripPanel = filmstripPanel
-      ThemeName = themeName
-      ConnectionLabel = connectionLabel
-      HotReloadPanel = hrPanel
-      LiveTestingPanel = liveTestingPanel
-      SessionContextPanel = scPanel
-      OutputPanel = outputPanel
-      SessionsPanel = sessionsPanel
-      SessionPicker = sessionPicker
-      ThemePicker = renderThemePicker themeName
-      ThemeVars = renderThemeVars themeName
-      BindingsPanel = bindingsPanel
-      FrictionPanel = frictionPanel
-    }
+              Version = infra.Version
+              ConnectionState = DashboardConnectionState.Connected
+              SessionState = stateStr
+              SessionId = sid
+              WorkingDir = workingDir
+              WarmupProgress = warmupProgress
+              WorkflowLabel = q.GetSessionWorkflow sessionId |> WorkflowTypes.SessionWorkflow.label
+              EvalStats = evalStatsView
+              AlarmPanel = alarmPanel
+              DaemonHealth = daemonHealthPanel
+              FailureNarrativesPanel = failureNarrativesPanel
+              DiagnosticsPanel = diagnosticsPanel
+              FilmstripPanel = filmstripPanel
+              ThemeName = themeName
+              ConnectionLabel = connectionLabel
+              HotReloadPanel = hrPanel
+              LiveTestingPanel = liveTestingPanel
+              SessionContextPanel = scPanel
+              OutputPanel = outputPanel
+              SessionsPanel = sessionsPanel
+              SessionPicker = sessionPicker
+              ThemePicker = renderThemePicker themeName
+              ThemeVars = renderThemeVars themeName
+              BindingsPanel = bindingsPanel
+              FrictionPanel = frictionPanel
+              ActiveProject = q.GetSessionActiveProject sessionId
+              ProjectRoles = q.GetSessionProjectRoles sessionId
+              RunningApp = q.GetSessionRunningApp sessionId
+            }
     return snap, sessionId, themeName, {| EvalStats = stats; HotReloadState = hrState; WarmupContext = wCtx; FrictionPanel = frictionPanel |}
   }
 
@@ -610,7 +619,10 @@ let buildNoSessionSnapshot
           TestTreemapEntries = q.GetSessionTestTreemap sid
           BindingEntries = q.GetSessionBindings sid
           AgentBadges = q.GetSessionAgentBadges sid
-          GuidanceCssClass = q.GetSessionGuidanceCss sid })
+          GuidanceCssClass = q.GetSessionGuidanceCss sid
+          ActiveProject = q.GetSessionActiveProject sid
+          ProjectRoles = q.GetSessionProjectRoles sid
+          RunningApp = q.GetSessionRunningApp sid })
     let daemonHealth = q.GetDaemonHealth()
     let daemonHealthPanel =
       match daemonHealth with
@@ -673,6 +685,9 @@ let buildNoSessionSnapshot
       ThemeVars = renderThemeVars defaultThemeName
       BindingsPanel = renderBindingsPanel None
       FrictionPanel = Elem.div [ Attr.id DomIds.FrictionPanel ] []
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None
     }
     return snap
   }
@@ -794,6 +809,8 @@ let createStreamHandler
       match mainHtml = lastPushedMain with
       | true -> () // no-change tick — nothing to send
       | false ->
+        // DIAGNOSTIC: log when SSE stream sends a changed snapshot
+        Log.info "[pushState] sending changed mainHtml.Length=%d sessionId=%s" mainHtml.Length (WorkerProtocol.SessionId.value sessionId)
         lastPushedMain <- mainHtml
         do! ssePatchNode ctx (renderMainContent snap)
     }
@@ -991,6 +1008,9 @@ let createEvalHandler
           // long-lived stream morph while this POST is still resolving.
           let! snap, _, _, _ =
             buildDashboardSnapshot q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None
+          // DIAGNOSTIC: log output panel HTML to verify content is present
+          let mainHtml = renderNode (renderMainContent snap)
+          Log.info "[eval-POST] mainHtml.Length=%d sessionId=%s" mainHtml.Length (WorkerProtocol.SessionId.value sessionId)
           do! ssePatchNode ctx (renderMainContent snap)
           let displayResult, cssClass =
             match result with
@@ -2038,6 +2058,17 @@ let createEndpoints
     yield mapPost "/dashboard/session/purge/{id}"
       (fun (r: RequestData) -> r.GetString("id", ""))
       (fun sid -> createSessionActionHandler q infra a.PurgeSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+    // Run App / Stop App endpoints for the "Run App" feature
+    yield mapPost "/dashboard/run-app/{id}"
+      (fun (r: RequestData) -> r.GetString("id", ""))
+      (fun sid ->
+        let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+        createSessionActionHandler q infra (fun s -> a.RunApp s (q.GetSessionActiveProject s |> Option.defaultValue "")) false sessionId)
+    yield mapPost "/dashboard/stop-app/{id}"
+      (fun (r: RequestData) -> r.GetString("id", ""))
+      (fun sid ->
+        let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+        createSessionActionHandler q infra a.StopApp false sessionId)
     // Daemon info endpoint for client discovery (replaces daemon.json)
     yield get "/api/daemon-info" (fun ctx -> task {
       let startedAt =

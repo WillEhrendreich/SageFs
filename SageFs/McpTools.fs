@@ -1496,3 +1496,48 @@ WORKFLOW: When run_tests shows a failure, call suggest_repair with the test name
         logger.LogDebug("MCP-TOOL: suggest_repair called, test={Test}", test_name)
         suggestRepair ctx test_name |> withEcho ctx "suggest_repair"
 
+    [<McpServerTool>]
+    [<Description("""Start a web application in the current session.
+
+Discovers executable projects (OutputType=Exe), selects an entry point, and evaluates it to start the app. Switches the session to WebLive workflow if not already.
+
+Parameters:
+- project: project name or path (optional — uses active project if not specified)
+
+OUTPUT: JSON with Status (Started|Failed), Url, Port, Project, EntryPoint, and Workflow (WebLive).
+
+WORKFLOW: Use this to run a web app for live development. The dashboard "▶ Run App" button does the same thing. Use "stop_app" to shut it down.
+
+NOTE: Switching to WebLive restricts the REPL to expression-only mode (no type redefinition). This is required for hot-reload to work.""")>]
+    member _.run_webapp(
+        [<Description("Project name or path (optional — auto-discovers executable projects)")>]
+        [<Optional; DefaultParameterValue("")>]
+        project: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: run_webapp called, project={Project}", project)
+        runWebApp ctx project |> withEcho ctx "run_webapp"
+
+    [<McpServerTool>]
+    [<Description("""Stop the running web application started via run_webapp.
+
+Clears the running app state and attempts to shut down the server process.
+
+OUTPUT: JSON with Status (Stopped|NoAppRunning), Project, and Url.
+
+WORKFLOW: Use this after run_webapp to clean up. The dashboard "■ Stop App" button does the same thing.""")>]
+    member _.stop_app() : Task<string> =
+        logger.LogDebug("MCP-TOOL: stop_app called")
+        stopApp ctx |> withEcho ctx "stop_app"
+
+    [<McpServerTool>]
+    [<Description("""List executable projects in the current session that can be run via run_webapp.
+
+Shows project classification (Executable/Library/Test), entry point availability, and package references.
+
+OUTPUT: JSON with TotalProjects, ExecutableCount, and Projects array (Path, Role, EntryPointFile, PackageRefs).
+
+WORKFLOW: Call this before run_webapp to see which projects are available to run, or to inspect what was detected.""")>]
+    member _.list_runnable_projects() : Task<string> =
+        logger.LogDebug("MCP-TOOL: list_runnable_projects called")
+        listRunnableProjects ctx |> withEcho ctx "list_runnable_projects"
+

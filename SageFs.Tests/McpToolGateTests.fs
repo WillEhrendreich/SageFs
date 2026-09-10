@@ -210,6 +210,9 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     CreatedAt = DateTime.UtcNow
     LastActivity = DateTime.UtcNow
+    ActiveProject = None
+    ProjectRoles = []
+    RunningApp = None
   }
   let ops : SessionManagementOps = {
     CreateSession = fun _ _ _ -> Task.FromResult(Ok "stub")
@@ -222,6 +225,9 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     GetAllSessions = fun () -> Task.FromResult([ info ])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
     NotifyWorkerDied = fun _ -> ()
+    UpdateRunningApp = fun _ _ -> Task.FromResult(())
+    UpdateActiveProject = fun _ _ -> Task.FromResult(())
+    SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
   }
   let ctx : McpContext = {
     FrictionStore = None

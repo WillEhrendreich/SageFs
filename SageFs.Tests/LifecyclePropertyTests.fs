@@ -1,4 +1,4 @@
-module SageFs.Tests.LifecyclePropertyTests
+﻿module SageFs.Tests.LifecyclePropertyTests
 
 open System
 open Expecto
@@ -142,12 +142,24 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
             WorkerPort = None
             FaultReason = None
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
+            ActiveProject = None
+
+            ProjectRoles = []
+
+            RunningApp = None
+
           }
           Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
           Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
           AutoOpenNamespaces = false
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           RestartState = RestartPolicy.emptyState
+          ActiveProject = None
+
+          ProjectRoles = []
+
+          RunningApp = None
+
         }
         state <- ManagerState.addSession id managed state
       let snap = QuerySnapshot.fromManagerState state
@@ -167,12 +179,24 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
           WorkerPort = None
           FaultReason = None
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
+          ActiveProject = None
+
+          ProjectRoles = []
+
+          RunningApp = None
+
         }
         Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
         Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
         AutoOpenNamespaces = false
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = RestartPolicy.emptyState
+        ActiveProject = None
+
+        ProjectRoles = []
+
+        RunningApp = None
+
       }
       let state = ManagerState.addSession id managed ManagerState.empty
       let snap = QuerySnapshot.fromManagerState state
@@ -192,12 +216,24 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
         WorkerPort = None
         FaultReason = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        ActiveProject = None
+
+        ProjectRoles = []
+
+        RunningApp = None
+
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = url
       Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
       AutoOpenNamespaces = false
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       RestartState = RestartPolicy.emptyState
+      ActiveProject = None
+
+      ProjectRoles = []
+
+      RunningApp = None
+
     }
     let state =
       ManagerState.empty
@@ -220,12 +256,24 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
         WorkerPort = None
         FaultReason = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
+        ActiveProject = None
+
+        ProjectRoles = []
+
+        RunningApp = None
+
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
       Projects = ["p.fsproj"]; WorkingDir = "C:\\test"
       AutoOpenNamespaces = false
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       RestartState = RestartPolicy.emptyState
+      ActiveProject = None
+
+      ProjectRoles = []
+
+      RunningApp = None
+
     }
     let afterAdd = ManagerState.addSession id managed ManagerState.empty
     let afterRemove = ManagerState.removeSession id afterAdd

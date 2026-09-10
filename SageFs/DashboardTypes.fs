@@ -8,6 +8,7 @@ open System.Text.RegularExpressions
 open SageFs
 open SageFs.Utils
 open SageFs.Affordances
+open SageFs.ProjectLoading
 open SageFs.Features.LiveTesting
 open Falco.Markup
 open Falco.Datastar
@@ -79,6 +80,7 @@ module Signals =
   let [<Literal>] CursorPos = "cursorPos"
   let [<Literal>] TestFilter = "testFilter"
   let [<Literal>] ExpandedDashboard = "expandedDashboard"
+  let [<Literal>] BindingsPanelOpen = "bindingsPanelOpen"
   let [<Literal>] FrictionDrawerOpen = "frictionDrawerOpen"
   let [<Literal>] FrictionEndpoint = "frictionEndpoint"
   let [<Literal>] FrictionToken = "frictionToken"
@@ -485,6 +487,9 @@ type ParsedSession = {
   BindingEntries: Features.BindingExplorer.BindingInfo array
   AgentBadges: AgentBadge list
   GuidanceCssClass: string
+  ActiveProject: string option
+  ProjectRoles: SageFs.ProjectLoading.ProjectRole list
+  RunningApp: WorkerProtocol.RunningAppInfo option
 }
 
 let parseSessionLines (content: string) =
@@ -528,7 +533,10 @@ let parseSessionLines (content: string) =
             TestTreemapEntries = [||]
             BindingEntries = [||]
             AgentBadges = []
-            GuidanceCssClass = "" })
+            GuidanceCssClass = ""
+            ActiveProject = None
+            ProjectRoles = []
+            RunningApp = None })
   |> Array.toList
 
 let isCreatingSession (content: string) =
@@ -674,6 +682,12 @@ type DashboardQueries = {
   GetSessionGuidanceCss: WorkerProtocol.SessionId -> string
   /// Get the workflow for a session — returns Interactive as default.
   GetSessionWorkflow: WorkerProtocol.SessionId -> WorkflowTypes.SessionWorkflow
+  /// Get the active project name for a session (for Run App feature).
+  GetSessionActiveProject: WorkerProtocol.SessionId -> string option
+  /// Get the classified projects for a session (for Run App feature).
+  GetSessionProjectRoles: WorkerProtocol.SessionId -> ProjectRole list
+  /// Get the running app info for a session (for Run App feature).
+  GetSessionRunningApp: WorkerProtocol.SessionId -> WorkerProtocol.RunningAppInfo option
 }
 
 /// Recently-fetched worker-derived dashboard data, reused across SSE pushes so
@@ -706,6 +720,10 @@ type DashboardActions = {
   PurgeSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   CreateSession: string list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>
   ShutdownCallback: (unit -> unit) option
+  /// Start a web application in the active project.
+  RunApp: WorkerProtocol.SessionId -> string -> Threading.Tasks.Task<Result<string, string>>
+  /// Stop the running web application.
+  StopApp: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
 }
 
 /// Per-connection SSE stream command — daemon state pushes plus viewing-session
@@ -773,7 +791,14 @@ type DashboardSnapshot = {
   ThemeVars: XmlNode
   BindingsPanel: XmlNode
   FrictionPanel: XmlNode
+  /// Active project selection for "Run App" feature.
+  ActiveProject: string option
+  /// Classification of all projects in the session.
+  ProjectRoles: SageFs.ProjectLoading.ProjectRole list
+  /// State tracking for a running web application.
+  RunningApp: WorkerProtocol.RunningAppInfo option
 }
+
 
 type DaemonInfoContract = {
   Pid: int

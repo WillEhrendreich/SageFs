@@ -226,7 +226,10 @@ module SessionStateOverride =
       TestTreemapEntries = [||]
       BindingEntries = [||]
       AgentBadges = []
-      GuidanceCssClass = "" }
+      GuidanceCssClass = ""
+      ActiveProject = None
+      ProjectRoles = []
+      RunningApp = None }
 [<Tests>]
 let stateOverrideTests =
   let open' getState = SageFs.Server.DashboardTypes.overrideSessionStatuses getState (fun _ -> None)
@@ -510,7 +513,10 @@ let perSessionTestSummaryTests =
           TestTreemapEntries = [||]
           BindingEntries = [||]
           AgentBadges = []
-          GuidanceCssClass = "" }
+          GuidanceCssClass = ""
+          ActiveProject = None
+          ProjectRoles = []
+          RunningApp = None }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -534,7 +540,10 @@ let perSessionTestSummaryTests =
           TestTreemapEntries = [||]
           BindingEntries = [||]
           AgentBadges = []
-          GuidanceCssClass = "" }
+          GuidanceCssClass = ""
+          ActiveProject = None
+          ProjectRoles = []
+          RunningApp = None }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -566,7 +575,10 @@ let perSessionCoverageTests =
           TestTreemapEntries = [||]
           BindingEntries = [||]
           AgentBadges = []
-          GuidanceCssClass = "" }
+          GuidanceCssClass = ""
+          ActiveProject = None
+          ProjectRoles = []
+          RunningApp = None }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -590,7 +602,10 @@ let perSessionCoverageTests =
           TestTreemapEntries = [||]
           BindingEntries = [||]
           AgentBadges = []
-          GuidanceCssClass = "" }
+          GuidanceCssClass = ""
+          ActiveProject = None
+          ProjectRoles = []
+          RunningApp = None }
       let html =
         renderSessions [session] false
         |> renderNode

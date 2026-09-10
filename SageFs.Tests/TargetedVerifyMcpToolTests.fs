@@ -24,7 +24,10 @@ let private mkSessionInfo status =
     FaultReason = None
     WorkerPid = None
     WorkerPort = None
-    Workflow = WorkflowTypes.SessionWorkflow.Interactive }
+    Workflow = WorkflowTypes.SessionWorkflow.Interactive
+    ActiveProject = None
+    ProjectRoles = []
+    RunningApp = None }
 
 let private mkSessionContext sid files =
   { SessionId = sid

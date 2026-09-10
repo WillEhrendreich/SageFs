@@ -59,8 +59,8 @@ module SyntaxHighlight =
 
         let lang = new Language(path, "tree_sitter_fsharp")
 
-        // Load highlights.scm from embedded resource
-        let asm = Assembly.GetExecutingAssembly()
+        // Load highlights.scm from embedded resource — it lives in SageFs.Core.dll, not the executing assembly
+        let asm = typeof<SageFs.Features.LiveValueTree.LiveValueNode>.Assembly
         let queryText =
           use stream = asm.GetManifestResourceStream("highlights.scm")
           match isNull stream with

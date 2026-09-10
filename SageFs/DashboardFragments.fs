@@ -913,6 +913,23 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Ds.onEvent ("click", sprintf "event.stopPropagation(); window.location.assign('/dashboard?session=%s')" sid) ]
                   [ Text.raw "⇄" ]
               | true -> ()
+              // Run App / Stop App toggle — only for sessions that own an executable project
+              match s.ProjectRoles |> List.exists (fun r -> r = SageFs.ProjectLoading.ProjectRole.Executable) with
+              | false -> ()
+              | true ->
+                match s.RunningApp with
+                | Some app ->
+                  Elem.button
+                    [ Attr.class' "session-btn session-btn-success"
+                      Attr.title (sprintf "Stop App — running at %s" app.Url)
+                      Ds.onClick (Ds.post (sprintf "/dashboard/stop-app/%s" sid)) ]
+                    [ Text.raw "■ Stop App" ]
+                | None ->
+                  Elem.button
+                    [ Attr.class' "session-btn session-btn-primary"
+                      Attr.title "Run App — start the web application (switches the session to WebLive mode: expression-only REPL)"
+                      Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
+                    [ Text.raw "▶ Run App" ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.title "Stop — unload the session (saved memory kept)"
@@ -1891,7 +1908,11 @@ let renderLiveBindingsPanel (snapshot: SageFs.Features.LiveValueTree.LiveValueSn
     match hasChildren with
     | false -> row
     | true ->
-      Elem.details [ Attr.style "font-size: 0.75rem;" ] [
+      // Per-node signal for open/closed state — survives Datastar morphs
+      let nodeSignal = sprintf "open_%s_%d" (node.Label.Replace(" ", "_").Replace(".", "_").Replace("(", "").Replace(")", "")) node.Depth
+      Elem.details [ Attr.style "font-size: 0.75rem;"
+                     Ds.attr' ("open", sprintf "$%s" nodeSignal)
+                     Ds.onEvent ("toggle", sprintf "$%s = event.target.open" nodeSignal) ] [
         Elem.summary [ Attr.style "cursor: pointer; user-select: none; list-style: none;" ] [ row ]
         Elem.div [ Attr.style "margin-top: 2px;" ] [
           yield! node.Children |> List.map renderNode
@@ -1904,7 +1925,7 @@ let renderLiveBindingsPanel (snapshot: SageFs.Features.LiveValueTree.LiveValueSn
     |> Option.map (fun s -> s.CapturedAt.ToLocalTime().ToString("HH:mm:ss"))
     |> Option.defaultValue ""
   Elem.div [ Attr.id DomIds.BindingsPanel; Attr.class' "panel" ] [
-    Elem.details [] [
+    Elem.details [ Ds.attr' ("open", sprintf "$%s" Signals.BindingsPanelOpen); Ds.onEvent ("toggle", sprintf "$%s = event.target.open" Signals.BindingsPanelOpen) ] [
       Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;" ] [
         Text.raw (sprintf "🔴 Live Bindings (%d)" count)
         match snapshot with

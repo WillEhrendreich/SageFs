@@ -1,4 +1,4 @@
-module SageFs.Tests.SessionOperationsTests
+﻿module SageFs.Tests.SessionOperationsTests
 
 open System
 open Expecto
@@ -21,6 +21,12 @@ let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo =
   WorkerPid = Some 100
   WorkerPort = None
   Workflow = WorkflowTypes.SessionWorkflow.Interactive
+  ActiveProject = None
+
+  ProjectRoles = []
+
+  RunningApp = None
+
 }
 
 let resolveSessionTests = testList "resolveSession" [
@@ -159,6 +165,12 @@ let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) pid : Se
   WorkerPid = pid
   WorkerPort = None
   Workflow = WorkflowTypes.SessionWorkflow.Interactive
+  ActiveProject = None
+
+  ProjectRoles = []
+
+  RunningApp = None
+
 }
 
 let formatSessionInfoTests = testList "formatSessionInfo" [
