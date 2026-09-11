@@ -1,6 +1,5 @@
 module SageFs.Features.CellDependencyGraph
 
-open System.Text.RegularExpressions
 open System.Collections.Generic
 
 type CellId = int
@@ -20,19 +19,25 @@ type CellGraph = {
 /// Returns true if `name` appears as a whole identifier in `source`
 /// (not as a substring of a longer word/qualified name).
 let private containsIdentifier (name: string) (source: string) =
-  Regex.IsMatch(source, @"(?<![.\w])" + Regex.Escape(name) + @"(?![.\w])")
+  IdentifierScan.occursAsFreeIdentifier name source
+
+/// Names bound by the `val` lines of FSI output, in output order. The name
+/// runs from after `val ` to the first ':' or space.
+let producedNames (fsiOutput: string) : string list =
+  fsiOutput.Split('\n')
+  |> Array.choose (fun line ->
+    let trimmed = line.Trim()
+    match trimmed.StartsWith("val ") with
+    | true ->
+      let nameEnd = trimmed.IndexOfAny([| ':'; ' ' |], 4)
+      match nameEnd > 4 with
+      | true -> Some (trimmed.Substring(4, nameEnd - 4))
+      | false -> None
+    | false -> None)
+  |> Array.toList
 
 let analyzeCell (knownBindings: Map<string, CellId>) (cellId: CellId) (source: string) (fsiOutput: string) : CellInfo =
-  let produces =
-    fsiOutput.Split('\n')
-    |> Array.choose (fun line ->
-      let trimmed = line.Trim()
-      if trimmed.StartsWith("val ") then
-        let nameEnd = trimmed.IndexOfAny([| ':'; ' ' |], 4)
-        if nameEnd > 4 then Some (trimmed.Substring(4, nameEnd - 4))
-        else None
-      else None)
-    |> Array.toList
+  let produces = producedNames fsiOutput
   let consumes =
     knownBindings
     |> Map.toList

@@ -188,6 +188,7 @@
         <Compile Include="CellDependencyGraphTests.fs" />
         <Compile Include="TestSourceResolverTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />
+        <Compile Include="IdentifierScanTests.fs" />
         <Compile Include="EvalTimelineTests.fs" />
         <Compile Include="NotebookExportTests.fs" />
         <Compile Include="SseFeatureFormatTests.fs" />

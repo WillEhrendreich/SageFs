@@ -1,7 +1,5 @@
 module SageFs.Features.BindingExplorer
 
-open System.Text.RegularExpressions
-
 type BindingInfo = {
   Name: string
   TypeSig: string
@@ -48,6 +46,10 @@ type CellInput = {
   Source: string
 }
 
+/// Every `val` line of FSI output parsed as (name, type, value), in order.
+let parseBindings (fsiOutput: string) : (string * string * string option) list =
+  fsiOutput.Split('\n') |> Array.choose parseBinding |> Array.toList
+
 let buildScopeSnapshot (cells: CellInput list) : BindingScopeSnapshot =
   let allBindings =
     cells
@@ -76,14 +78,12 @@ let buildScopeSnapshot (cells: CellInput list) : BindingScopeSnapshot =
   let withRefs =
     withShadows
     |> List.map (fun binding ->
-      // W13(R10): Pre-compile regex ONCE per binding, outside the cells inner loop.
-      // Regex.IsMatch(string, string) uses a 15-slot static LRU cache; with >15 bindings
-      // the cache thrashes causing recompilation per match. Compile once here instead.
-      let re = Regex(@"\b" + Regex.Escape(binding.Name) + @"\b")
+      // `\bNAME\b` semantics without building a Regex per binding
+      // (IdentifierScan.occursWordBounded is proven equal to that regex).
       let refs =
         cells
         |> List.choose (fun cell ->
-          if cell.CellIndex <> binding.CellIndex && re.IsMatch(cell.Source) then
+          if cell.CellIndex <> binding.CellIndex && IdentifierScan.occursWordBounded binding.Name cell.Source then
             Some cell.CellIndex
           else None)
       { binding with ReferencedIn = refs })
@@ -99,10 +99,9 @@ let buildScopeSnapshot (cells: CellInput list) : BindingScopeSnapshot =
 /// whole word. Shared by buildScopeSnapshot and appendCell so the incremental
 /// merge uses identical word-boundary semantics.
 let private cellsReferencingName (name: string) (selfCellIndex: int) (cells: CellInput list) : int list =
-  let re = Regex(@"\b" + Regex.Escape(name) + @"\b")
   cells
   |> List.choose (fun cell ->
-    if cell.CellIndex <> selfCellIndex && re.IsMatch(cell.Source) then
+    if cell.CellIndex <> selfCellIndex && IdentifierScan.occursWordBounded name cell.Source then
       Some cell.CellIndex
     else None)
 
@@ -153,7 +152,7 @@ let appendCell (cell: CellInput) (priorCells: CellInput list) (prior: BindingSco
         | false -> b.ShadowedBy
       // Does the new source reference this prior binding's name as a word?
       let referenced =
-        match Regex(@"\b" + Regex.Escape(b.Name) + @"\b").IsMatch(cell.Source) with
+        match IdentifierScan.occursWordBounded b.Name cell.Source with
         | true ->
           if b.ReferencedIn |> List.contains cell.CellIndex |> not then
             (b.ReferencedIn @ [ cell.CellIndex ]) |> List.sort
