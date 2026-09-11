@@ -7,6 +7,33 @@ open Expecto
 open Expecto.Flip
 open Microsoft.Playwright
 
+/// Deadline-based wait on an ACTUAL condition — never a fixed sleep. Probes
+/// every 100ms until `probe` is true or `timeoutMs` elapses; returns whether
+/// the condition was met (callers assert or diagnose on false).
+let waitUntil (timeoutMs: int) (probe: unit -> Task<bool>) = task {
+  let sw = Stopwatch.StartNew()
+  let mutable met = false
+  while not met && sw.ElapsedMilliseconds < int64 timeoutMs do
+    let! ok = probe ()
+    match ok with
+    | true -> met <- true
+    | false -> do! Task.Delay 100
+  return met
+}
+
+/// Retry a write the OS may briefly refuse (a just-killed VS Code releasing
+/// its profile, the compiler holding a source file) until it succeeds or the
+/// deadline passes. Synchronous on purpose — it also runs from `finally`
+/// blocks, where awaits are not allowed — but condition-driven, not a sleep.
+let writeWithRetry (path: string) (content: string) (timeout: TimeSpan) =
+  Threading.SpinWait.SpinUntil(
+    (fun () ->
+      try
+        IO.File.WriteAllText(path, content)
+        true
+      with :? IO.IOException -> false),
+    timeout)
+
 /// Manages a VSCode instance with Chrome DevTools Protocol for Playwright.
 /// Launches a separate instance with its own user-data-dir to avoid
 /// interfering with the developer's main VSCode window.
@@ -16,7 +43,11 @@ module VscodeFixture =
   let mutable codePid: int option = None
 
   let cdpPort = 9222
-  let userDataDir = @"C:\temp\sagefs-vscode-test"
+  /// Stable per-machine profile under the OS temp dir (never a hardcoded
+  /// C:\temp path). Deliberately NOT a fresh temp subdirectory per run: the
+  /// profile's settings and its --extensions-dir installs (CI installs the
+  /// SageFs VSIX there) must persist across launches.
+  let userDataDir = IO.Path.Combine(IO.Path.GetTempPath(), "sagefs-vscode-test")
 
   let codeExePath =
     // 1. Env var override (VSCODE_PATH=C:\wherever\Code.exe)
@@ -92,26 +123,25 @@ module VscodeFixture =
       try IO.File.ReadAllText(settingsPath) with _ -> null
     if existing <> settings then
       // A previous VS Code instance may still be releasing the file after a
-      // kill; retry briefly instead of failing the journey setup.
-      let mutable written = false
-      let deadline = DateTime.UtcNow.AddSeconds(15.0)
-      while not written && DateTime.UtcNow < deadline do
-        try
-          IO.File.WriteAllText(settingsPath, settings)
-          written <- true
-        with :? System.IO.IOException ->
-          Threading.Thread.Sleep(500)
-      if not written then
-        IO.File.WriteAllText(settingsPath, settings)
+      // kill; retry until writable instead of failing the journey setup.
+      match writeWithRetry settingsPath settings (TimeSpan.FromSeconds 15.0) with
+      | true -> ()
+      | false -> IO.File.WriteAllText(settingsPath, settings)
 
-  /// Kill any Code processes started recently that might hold our CDP port.
-  let killOrphans () =
-    for p in Process.GetProcessesByName("Code") do
-      try
-        if (DateTime.Now - p.StartTime).TotalMinutes < 30.0 then
-          p.Kill(true)
-      with _ -> ()
-    Threading.Thread.Sleep(500)
+  /// Kill any Code processes started recently that might hold our CDP port,
+  /// then wait for them to actually exit (the CDP port and profile files are
+  /// released on exit) — a deadline on the real condition, not a fixed sleep.
+  let killOrphans () = task {
+    let recent =
+      Process.GetProcessesByName("Code")
+      |> Array.filter (fun p ->
+        try (DateTime.Now - p.StartTime).TotalMinutes < 30.0 with _ -> false)
+    for p in recent do
+      try p.Kill(true) with _ -> ()
+    use cts = new Threading.CancellationTokenSource(TimeSpan.FromSeconds 10.0)
+    for p in recent do
+      try do! p.WaitForExitAsync(cts.Token) with _ -> ()
+  }
 
   /// Launch VSCode via ShellExecute to detach from parent job object.
   let launchVscode (workspaceDir: string) (disableExtensions: bool) =
@@ -134,20 +164,20 @@ module VscodeFixture =
     codePid <- Some proc.Id
     proc.Id
 
+  /// Whether the CDP endpoint currently answers /json/version.
+  let cdpResponds () = task {
+    use client = new Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds 1.0)
+    try
+      let! resp =
+        client.GetStringAsync(
+          sprintf "http://127.0.0.1:%d/json/version" cdpPort)
+      return resp.Contains("webSocketDebuggerUrl")
+    with _ -> return false
+  }
+
   /// Poll CDP /json/version until the endpoint responds.
   let waitForCdp (timeoutMs: int) = task {
-    let sw = Stopwatch.StartNew()
-    use client = new Net.Http.HttpClient()
-    let mutable ready = false
-    while not ready && sw.ElapsedMilliseconds < int64 timeoutMs do
-      try
-        let! resp =
-          client.GetStringAsync(
-            sprintf "http://127.0.0.1:%d/json/version" cdpPort)
-        if resp.Contains("webSocketDebuggerUrl") then
-          ready <- true
-      with _ ->
-        do! Task.Delay(500)
+    let! ready = waitUntil timeoutMs cdpResponds
     if not ready then
       failwithf "CDP port %d not available after %dms" cdpPort timeoutMs
   }
@@ -158,7 +188,7 @@ module VscodeFixture =
     match browser with
     | Some b -> return b
     | None ->
-      killOrphans ()
+      do! killOrphans ()
       let _pid = launchVscode workspaceDir disableExtensions
       do! waitForCdp 15000
       let! playwright = Playwright.CreateAsync()
@@ -200,9 +230,15 @@ module VscodeFixture =
       try Process.GetProcessById(pid).Kill(true) with _ -> ()
       codePid <- None
     | None -> ()
-    killOrphans ()
+    do! killOrphans ()
     clearWorkbenchLayoutState ()
-    do! Task.Delay(1500)
+    // The next launch reuses the CDP port: wait until the old instance has
+    // actually released it.
+    let! _released =
+      waitUntil 10_000 (fun () -> task {
+        let! up = cdpResponds ()
+        return not up })
+    ()
   }
 
   /// Get the main VSCode renderer page.
@@ -232,6 +268,26 @@ module VscodeFixture =
 
 /// Helpers for interacting with VSCode through Playwright.
 module VscodeHelpers =
+  /// The fuzzy matcher's readiness between typing and Enter is the ONE
+  /// quick-input state that cannot be polled: any page evaluation there steals
+  /// focus from the quick-input, so the Enter that follows lands on the editor
+  /// and the command silently never runs (observed: handlerEvidence='' with the
+  /// command surfaced in the palette). Every other wait is a condition poll.
+  let private matcherSettleMs = 800
+
+  let paletteVisible (page: IPage) () =
+    page.Locator(".quick-input-widget").IsVisibleAsync()
+
+  /// Wait (deadline) for the quick-input widget to be visible.
+  let waitForPalette (timeoutMs: int) (page: IPage) =
+    waitUntil timeoutMs (paletteVisible page)
+
+  /// Wait (deadline) for the quick-input widget to close.
+  let waitForPaletteClosed (timeoutMs: int) (page: IPage) =
+    waitUntil timeoutMs (fun () -> task {
+      let! visible = paletteVisible page ()
+      return not visible })
+
   let executeCommand (page: IPage) (command: string) = task {
     // Palette execution is the ONLY reliable command path under CDP: a
     // synthesized `command:` anchor click (executeCommandUri) does not route
@@ -239,38 +295,31 @@ module VscodeHelpers =
     // fixed sleep can race (palette not open yet → keystrokes land in the
     // editor → command silently never runs).
     do! page.Keyboard.PressAsync("Control+Shift+p")
-    let sw = Diagnostics.Stopwatch.StartNew()
-    let mutable paletteOpen = false
-    while not paletteOpen && sw.ElapsedMilliseconds < 5_000L do
-      let! visible =
-        page.Locator(".quick-input-widget").IsVisibleAsync()
-      if visible then paletteOpen <- true
-      else do! Task.Delay(150)
+    let! _opened = waitForPalette 5_000 page
     do! page.Keyboard.TypeAsync(command)
-    // Let the fuzzy matcher settle before Enter. NOTE: do NOT run any
-    // page.EvaluateAsync between typing and Enter — an eval steals focus from
-    // the quick-input, so the Enter that follows lands on the editor and the
-    // command silently never runs (observed: handlerEvidence='' with the
-    // command surfaced in the palette).
-    do! Task.Delay(800)
+    do! Task.Delay(matcherSettleMs)
     do! page.Keyboard.PressAsync("Enter")
-    do! Task.Delay(800)
+    // The palette closes once the command is dispatched.
+    let! _closed = waitForPaletteClosed 5_000 page
+    ()
   }
 
   /// Open a file via Quick Open (Ctrl+P).
   let openFile (page: IPage) (filename: string) = task {
     do! page.Keyboard.PressAsync("Control+p")
-    do! Task.Delay(500)
+    let! _opened = waitForPalette 5_000 page
     do! page.Keyboard.TypeAsync(filename)
-    do! Task.Delay(500)
+    do! Task.Delay(matcherSettleMs)
     do! page.Keyboard.PressAsync("Enter")
-    do! Task.Delay(1000)
+    let! _closed = waitForPaletteClosed 5_000 page
+    ()
   }
 
   /// Press Escape to dismiss any overlay.
   let dismiss (page: IPage) = task {
     do! page.Keyboard.PressAsync("Escape")
-    do! Task.Delay(300)
+    let! _closed = waitForPaletteClosed 2_000 page
+    ()
   }
 
   /// Get text content of a CSS selector, empty string if not found.
@@ -320,7 +369,7 @@ module VscodeHelpers =
 
   /// Take a named screenshot for debugging failed tests.
   let screenshot (page: IPage) (name: string) = task {
-    let path = sprintf @"C:\temp\sagefs-vscode-test-%s.png" name
+    let path = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-vscode-test-%s.png" name)
     let! _ = page.ScreenshotAsync(PageScreenshotOptions(Path = path))
     return path
   }
@@ -335,69 +384,49 @@ module VscodeHelpers =
 let repoRoot =
   IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "..")
 
+// The wrappers ALWAYS register real tests. There is no pending (ptestCase)
+// fallback when VS Code is absent: a pending placeholder turned a missing
+// fixture into a silent green no-op. These are [Integration] tests (excluded
+// from the default run), and the --integration-vsc runner fails fast with an
+// actionable message when Code.exe is missing (VscodeFixture.isAvailable).
+
 /// Run a test against VSCode with extensions disabled (pure UI tests).
 let vscodeUiTest name (body: IPage -> Task<unit>) =
-  if not VscodeFixture.isAvailable then
-    // Kept pending: pure UI tests need VS Code (Code.exe); this placeholder only
-    // registers when the fixture is absent on the machine, so it stays pending.
-    ptestCase (sprintf "[Integration] VSCode UI: %s" name) ignore
-  else
-    testCase (sprintf "[Integration] VSCode UI: %s" name) (fun () ->
-      let t = task {
-        let! _b =
-          VscodeFixture.ensureBrowser repoRoot true
-        let! page = VscodeFixture.getPage ()
-        do! body page
-      }
-      t.GetAwaiter().GetResult())
+  testTask (sprintf "[Integration] VSCode UI: %s" name) {
+    let! _b = VscodeFixture.ensureBrowser repoRoot true
+    let! page = VscodeFixture.getPage ()
+    do! body page
+  }
 
 /// Run a test against VSCode with extensions enabled (extension tests).
 let vscodeExtTest name (body: IPage -> Task<unit>) =
-  if not VscodeFixture.isAvailable then
-    // Kept pending: extension tests need VS Code + the SageFs extension installed
-    // (Code.exe); placeholder only registers when the fixture is absent, so it stays pending.
-    ptestCase (sprintf "[Integration] VSCode extension: %s" name) ignore
-  else
-    testCase (sprintf "[Integration] VSCode extension: %s" name) (fun () ->
-      let t = task {
-        let! _b =
-          VscodeFixture.ensureBrowser repoRoot false
-        let! page = VscodeFixture.getPage ()
-        do! body page
-      }
-      t.GetAwaiter().GetResult())
+  testTask (sprintf "[Integration] VSCode extension: %s" name) {
+    let! _b = VscodeFixture.ensureBrowser repoRoot false
+    let! page = VscodeFixture.getPage ()
+    do! body page
+  }
 
 /// Like vscodeExtTest, but opens a specific workspace directory (used by the
 /// DoD journeys, which target the FromCSharp sample's 11 Expecto tests rather
 /// than the whole repo).
 let vscodeExtTestIn (workspaceDir: string) name (body: IPage -> Task<unit>) =
-  if not VscodeFixture.isAvailable then
-    ptestCase (sprintf "[Integration] VSCode extension: %s" name) ignore
-  else
-    testCase (sprintf "[Integration] VSCode extension: %s" name) (fun () ->
-      let t = task {
-        let! _b = VscodeFixture.ensureBrowser workspaceDir false
-        let! page = VscodeFixture.getPage ()
-        do! body page
-      }
-      t.GetAwaiter().GetResult())
+  testTask (sprintf "[Integration] VSCode extension: %s" name) {
+    let! _b = VscodeFixture.ensureBrowser workspaceDir false
+    let! page = VscodeFixture.getPage ()
+    do! body page
+  }
 
 /// Like vscodeExtTestIn, but ALWAYS starts with a fresh VS Code instance
 /// (tears down any reused one first). The DoD journeys need this: live-testing
 /// state flows over SSE, and a reused instance can carry a stale/disconnected
 /// stream from a prior journey in the same process.
 let vscodeExtTestFresh (workspaceDir: string) name (body: IPage -> Task<unit>) =
-  if not VscodeFixture.isAvailable then
-    ptestCase (sprintf "[Integration] VSCode extension: %s" name) ignore
-  else
-    testCase (sprintf "[Integration] VSCode extension: %s" name) (fun () ->
-      let t = task {
-        do! VscodeFixture.resetInstance ()
-        let! _b = VscodeFixture.ensureBrowser workspaceDir false
-        let! page = VscodeFixture.getPage ()
-        do! body page
-      }
-      t.GetAwaiter().GetResult())
+  testTask (sprintf "[Integration] VSCode extension: %s" name) {
+    do! VscodeFixture.resetInstance ()
+    let! _b = VscodeFixture.ensureBrowser workspaceDir false
+    let! page = VscodeFixture.getPage ()
+    do! body page
+  }
 
 // ---------------------------------------------------------------------------
 // Smoke tests — extensions disabled, verifies fixture works
@@ -417,9 +446,7 @@ let smokeTests = testList "VSCode fixture smoke" [
 
   vscodeUiTest "can open command palette" (fun page -> task {
     do! page.Keyboard.PressAsync("Control+Shift+p")
-    do! Task.Delay(1000)
-    let! inputVisible =
-      page.Locator(".quick-input-widget").IsVisibleAsync()
+    let! inputVisible = VscodeHelpers.waitForPalette 5_000 page
     Expect.isTrue "command palette should be visible" inputVisible
     do! VscodeHelpers.dismiss page
   })
@@ -465,14 +492,14 @@ let extensionTests = testList "VSCode extension behavior" [
   vscodeExtTest "output channel exists" (fun page -> task {
     // Open Output panel and switch to SageFs channel
     do! VscodeHelpers.executeCommand page "Output: Focus on Output View"
-    do! Task.Delay(2000)
-    // The output panel area should contain "SageFs" somewhere
+    // The output panel area should contain "SageFs" somewhere once rendered.
     let js =
       "(() => { var el = document.querySelector('.panel'); " +
       "return el ? el.textContent : ''; })()"
-    let! panelText = page.EvaluateAsync<string>(js)
-    let hasSageFsChannel =
-      panelText.Contains("SageFs") || panelText.Contains("sagefs")
+    let! hasSageFsChannel =
+      waitUntil 10_000 (fun () -> task {
+        let! panelText = page.EvaluateAsync<string>(js)
+        return panelText.Contains("SageFs") || panelText.Contains("sagefs") })
     if not hasSageFsChannel then
       let! _ = VscodeHelpers.screenshot page "output-channel-fail"
       ()
@@ -480,18 +507,15 @@ let extensionTests = testList "VSCode extension behavior" [
   })
 
   vscodeExtTest "workspace loads with fsproj files" (fun page -> task {
-    // Wait a moment for file indexing
-    do! Task.Delay(3000)
     do! page.Keyboard.PressAsync("Control+p")
-    do! Task.Delay(1000)
-    do! page.Keyboard.TypeAsync(".fsproj")
-    do! Task.Delay(1500)
-    let! quickPickVisible =
-      page.Locator(".quick-input-widget").IsVisibleAsync()
+    let! quickPickVisible = VscodeHelpers.waitForPalette 5_000 page
     Expect.isTrue "quick pick should be visible" quickPickVisible
-    let! resultsText =
-      VscodeHelpers.selectorText page ".quick-input-list"
-    let hasResults = resultsText.Length > 0
+    do! page.Keyboard.TypeAsync(".fsproj")
+    // File indexing is asynchronous: poll Quick Open until it lists a project.
+    let! hasResults =
+      waitUntil 15_000 (fun () -> task {
+        let! resultsText = VscodeHelpers.selectorText page ".quick-input-list"
+        return resultsText.Contains("fsproj") })
     do! VscodeHelpers.dismiss page
     Expect.isTrue "should find .fsproj files in workspace" hasResults
   })
@@ -570,8 +594,10 @@ let dodJourneys =
       do! waitForExtensionReady 60_000 page
       // The four TreeViews register AFTER the status item appears (measured
       // ~8-10s post-launch); opening the container before that renders only
-      // the Sessions view and VS Code caches the partial view list. Settle
-      // before navigating.
+      // the Sessions view and VS Code caches the partial view list. Their
+      // registration is not observable without opening the container (which
+      // is exactly what must not happen early), so this is the one bounded
+      // settle the journey keeps; every later step polls a real condition.
       do! Task.Delay(8000)
       // Reveal the SageFs activity-bar container (id "sagefs") which hosts the
       // hot-reload tree view (id "sagefs-hotReload"). Click the activity-bar
@@ -586,31 +612,30 @@ let dodJourneys =
           "   var t = items[i].getAttribute('aria-label') || items[i].title || '';" +
           "   if (t.indexOf('SageFs') >= 0) { items[i].click(); return 'ok'; } }" +
           " return 'missing'; })()")
-      do! Task.Delay(2000)
       let! iconResult = iconClicked
       // Verify the SageFs container opened — check for the container's own
       // composite title (".sidebar .composite.title") rather than any "SageFs"
       // text (the Explorer's workspace folder is named SageFs.Samples.*).
-      let! containerOpen =
-        page.EvaluateAsync<string>(
-          "(() => { var t = document.querySelector('.sidebar .composite.title');" +
-          " return t && t.textContent.indexOf('SageFs') >= 0 ? 'yes' : 'no'; })()")
-      if iconResult <> "ok" || containerOpen <> "yes" then
+      let containerIsOpen () = task {
+        let! r =
+          page.EvaluateAsync<string>(
+            "(() => { var t = document.querySelector('.sidebar .composite.title');" +
+            " return t && t.textContent.indexOf('SageFs') >= 0 ? 'yes' : 'no'; })()")
+        return r = "yes" }
+      let! containerOpen = waitUntil 5_000 containerIsOpen
+      if iconResult <> "ok" || not containerOpen then
         do! VscodeHelpers.executeCommand page "workbench.view.extension.sagefs"
-        do! Task.Delay(1500)
+        let! _opened = waitUntil 5_000 containerIsOpen
+        ()
       // Activate the hot-reload view via its generated FOCUS command run by
       // PALETTE TITLE ("SageFs: Focus on Hot Reload Files View"). Direct
       // header clicks do NOT expand the collapsed pane in this VS Code (the
       // pane-header is role=button aria-expanded=false but synthetic
       // mouse/keyboard activation is ignored), while the palette command
       // flips aria-expanded to true and renders the pane-body tree.
-      let navSw = Diagnostics.Stopwatch.StartNew()
-      let mutable viewActive = false
-      while not viewActive && navSw.ElapsedMilliseconds < 60_000L do
-        do! VscodeHelpers.executeCommand page "SageFs: Focus on Hot Reload Files View"
-        do! Task.Delay(1500)
-        // Active view check: the hot-reload pane-header reports
-        // aria-expanded=true after the focus command expands it.
+      // Active view check: the hot-reload pane-header reports
+      // aria-expanded=true after the focus command expands it.
+      let hotReloadViewActive () = task {
         let! active =
           page.EvaluateAsync<string>(
             "(() => { var hs = document.querySelectorAll('.sidebar .pane-header');" +
@@ -618,8 +643,13 @@ let dodJourneys =
             "   if (hs[i].textContent.indexOf('Hot Reload Files') >= 0) {" +
             "     return hs[i].getAttribute('aria-expanded') === 'true' ? 'yes' : 'no'; } }" +
             " return 'no-title'; })()")
-        if active = "yes" then viewActive <- true
-      do! Task.Delay(1000)
+        return active = "yes" }
+      let navSw = Diagnostics.Stopwatch.StartNew()
+      let mutable viewActive = false
+      while not viewActive && navSw.ElapsedMilliseconds < 60_000L do
+        do! VscodeHelpers.executeCommand page "SageFs: Focus on Hot Reload Files View"
+        let! active = waitUntil 3_000 hotReloadViewActive
+        viewActive <- active
       // Query the tree rows from the hot-reload pane's BODY (the element
       // after its pane-header, class "pane-body").
       let rowsJs =
@@ -668,10 +698,11 @@ let dodJourneys =
         (rows.Contains("watching") || rows.Contains("watched"))
         && not (rows.Contains("No session active"))
       do! VscodeHelpers.executeCommand page "sagefs.hotReloadRefresh"
-      do! Task.Delay(3000)
-      let! rows2 = page.EvaluateAsync<string>(rowsJs)
-      Expect.isTrue "tree should show watch state after refresh"
-        (rows2.Contains("watching") || rows2.Contains("watched"))
+      let! watchStateAfterRefresh =
+        waitUntil 10_000 (fun () -> task {
+          let! rows2 = page.EvaluateAsync<string>(rowsJs)
+          return rows2.Contains("watching") || rows2.Contains("watched") })
+      Expect.isTrue "tree should show watch state after refresh" watchStateAfterRefresh
       Expect.isTrue "tree should show watch state (not 'No session active')" hasWatchState
     })
 
@@ -682,16 +713,9 @@ let dodJourneys =
       let brokenAdd = "let add a b = a + b + 1"
       let readHello () = IO.File.ReadAllText helloPath
       let writeHello (content: string) =
-        // The host/compiler can briefly hold the file; retry like LT-DASH.
-        let mutable written = false
-        let deadline = DateTime.UtcNow.AddSeconds(15.0)
-        while not written && DateTime.UtcNow < deadline do
-          try
-            IO.File.WriteAllText(helloPath, content)
-            written <- true
-          with :? System.IO.IOException ->
-            Threading.Thread.Sleep(500)
-        Expect.isTrue "Hello.fs should be writable" written
+        // The host/compiler can briefly hold the file; retry until writable.
+        writeWithRetry helloPath content (TimeSpan.FromSeconds 15.0)
+        |> Expect.isTrue "Hello.fs should be writable"
       let original = readHello ()
       Expect.isTrue "fixture should contain the editable add" (original.Contains canonicalAdd)
       try
@@ -705,8 +729,8 @@ let dodJourneys =
         let sw0 = Diagnostics.Stopwatch.StartNew()
         while handlerEvidence = "" && sw0.ElapsedMilliseconds < 12_000L do
           let! status = VscodeHelpers.getStatusBarText page
-          let modalVisible =
-            (page.Locator(".modal").CountAsync().GetAwaiter().GetResult()) > 0
+          let! modalCount = page.Locator(".modal").CountAsync()
+          let modalVisible = modalCount > 0
           if status.Contains("Live testing enabled") then handlerEvidence <- "flash"
           elif modalVisible then handlerEvidence <- "modal"
           else do! Task.Delay(500)
