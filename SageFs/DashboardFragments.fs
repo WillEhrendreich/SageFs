@@ -1663,9 +1663,11 @@ module private LiveTestActivityView =
     | Activity.Rebuilding (_, tally)
     | Activity.BlockedByCompileErrors (_, _, tally)
     | Activity.BlockedByFailedRebuild (_, tally) ->
+      // One span for the counts: the header spreads its children apart, so
+      // separate spans would scatter the passed and failed counts.
       match counts tally with
       | [] -> [ Text.raw "Live Testing: ON" ]
-      | shown -> Text.raw "Live Testing: ON — " :: shown
+      | shown -> [ Text.raw "Live Testing: ON"; Elem.span [] shown ]
     | Activity.Discovering
     | Activity.DiscoveryFailed _
     | Activity.NoTestsFound _ -> [ Text.raw "Live Testing: ON" ]
