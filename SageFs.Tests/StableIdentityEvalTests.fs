@@ -61,4 +61,16 @@ let stableIdentityEvalTests =
       |> Array.distinct
       |> Expect.equal "errors sit on the fixture's line" [| errorLine |]
     }
+
+    testTask "WHY — stable-identity reload — a patch that uses a private compiled member cannot compile because only the compiled assembly sees it" {
+      let source = File.ReadAllText fixturePath
+      let! patched = patchWith (source.Replace("  secret () + 1\n", "  secret () + 2\n"))
+      patched.EvaluationResult |> Result.isError |> Expect.isTrue "the patch cannot reach the private member"
+      let reported =
+        patched.Diagnostics
+        |> Array.filter (fun d -> d.Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error)
+        |> Array.map (fun d -> sprintf "%s %s" d.Subcategory d.Message)
+      printfn "private-member patch diagnostics: %A" reported
+      reported |> Array.exists (fun m -> m.Contains "secret") |> Expect.isTrue "the error names the private member"
+    }
   ]

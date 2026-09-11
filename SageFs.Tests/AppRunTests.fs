@@ -289,3 +289,24 @@ let reuseAddressTests =
       plan.EnvironmentVariables |> List.contains (urlsVar, "http://localhost:5043") |> Expect.isTrue "the project's address"
       plan.UrlPolicy |> Expect.equal "project-configured" UrlPolicy.ProjectConfigured
   ]
+
+[<Tests>]
+let acrossWorkerRestartTests =
+  let at = System.DateTime(2026, 9, 11, 0, 0, 0, System.DateTimeKind.Utc)
+  let web = "/src/Web/Web.fsproj"
+  let rebuilding =
+    AppRunState.Starting (web, StartPhase.RebuildingForChanges (SageFs.Features.ReloadPlanning.ReloadChange.TypeChanged "Priority", []), at)
+  let running =
+    AppRunState.Running
+      { RunId = "r1"; Project = web; EntryPoint = "Web.Program.main"; Endpoint = AppEndpoint.Http ("http://127.0.0.1:5123", []); StartedAt = at }
+  testList "AppRun acrossWorkerRestart" [
+    testCase "WHY — AppRun.acrossWorkerRestart — an app being rebuilt stays Starting because the card must not flash Not running mid-rebuild" <| fun _ ->
+      acrossWorkerRestart rebuilding |> Expect.equal "still rebuilding" rebuilding
+
+    testCase "WHY — AppRun.acrossWorkerRestart — a running app is not running once its worker is replaced because the process that hosted it is gone" <| fun _ ->
+      acrossWorkerRestart running |> Expect.equal "not running" AppRunState.NotRunning
+
+    testCase "WHY — AppRun.acrossWorkerRestart — how the last run ended is kept because the card still explains it" <| fun _ ->
+      let crashed = AppRunState.Crashed (web, "boom", at)
+      acrossWorkerRestart crashed |> Expect.equal "still crashed" crashed
+  ]

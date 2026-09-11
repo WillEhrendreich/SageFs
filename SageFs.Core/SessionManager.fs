@@ -612,7 +612,7 @@ module SessionManager =
           Workflow = session.Workflow
           ActiveProject = session.ActiveProject
           ProjectRoles = session.ProjectRoles
-          App = AppRun.AppRunState.NotRunning
+          App = AppRun.acrossWorkerRestart session.Info.App
         }
         let restarted = {
           Info = info
@@ -978,6 +978,12 @@ module SessionManager =
                 // clear the pending entry. If no swap is pending this is a plain
                 // create/rebuild-recovery WorkerReady and pid/transport install
                 // is the same as before.
+                // Committing a spawn-first swap retires the old worker, and any
+                // app it hosted with it.
+                let app =
+                  match ManagerState.tryGetPendingSwap id state with
+                  | Some _ -> AppRun.acrossWorkerRestart session.Info.App
+                  | None -> session.Info.App
                 let updated =
                   { session with
                       Proxy = proxy
@@ -985,7 +991,8 @@ module SessionManager =
                       Info =
                         { session.Info with
                             WorkerPort = workerPort
-                            WorkerPid = Some workerPid } }
+                            WorkerPid = Some workerPid
+                            App = app } }
                 let stateAfterInstall =
                   { ManagerState.addSession id updated state with
                       WarmupProgress = Map.remove id state.WarmupProgress }

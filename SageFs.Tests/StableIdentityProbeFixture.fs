@@ -8,3 +8,8 @@ let mutable items: Item list = [ { Id = 1 } ]
 
 let count (xs: Item list) =
   xs.Length
+
+let private secret () = 41
+
+let answer () =
+  secret () + 1

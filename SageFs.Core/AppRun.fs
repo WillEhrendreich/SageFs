@@ -252,6 +252,18 @@ type AppRunState =
   /// The run was stopped because a save changed something that only takes effect at startup.
   | RestartRequired of project: string * first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list * at: DateTime
 
+/// What the app state becomes when the session's worker is replaced.
+/// An app being started survives (the card keeps saying what is happening), and
+/// how the last run ended is kept; a running app died with the old worker.
+let acrossWorkerRestart (state: AppRunState) : AppRunState =
+  match state with
+  | AppRunState.Starting _
+  | AppRunState.Exited _
+  | AppRunState.Crashed _
+  | AppRunState.RestartRequired _ -> state
+  | AppRunState.Running _
+  | AppRunState.NotRunning -> AppRunState.NotRunning
+
 /// A worker's report that a run ended applies only while that run is current:
 /// a stale report must not clobber a newer run or a stop the user already made.
 let applyEnd (current: AppRunState) (runId: string) (final: AppRunState) : AppRunState =
