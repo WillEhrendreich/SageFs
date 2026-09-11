@@ -34,6 +34,19 @@ let private patchWith (edited: string) =
     | other -> return failtestf "expected one function to patch, got %A" other
   }
 
+/// Emit one named function of `edited` without consulting the planner, to pin what FSI itself does.
+let private patchFunction (edited: string) (name: string) =
+  task {
+    let assembly = typeof<StableIdentityProbe.Fixture.Item>.Assembly.Location
+    let! referenced = eval (sprintf "#r @\"%s\"" assembly)
+    match referenced.EvaluationResult with
+    | Error ex -> failtestf "could not reference the test assembly: %s" ex.Message
+    | Ok _ -> ()
+    let editedDecls = decls edited
+    let f = editedDecls.Decls |> List.find (fun d -> d.Name = name)
+    return! eval (emitStableIdentity fixturePath editedDecls [ f ]).Code
+  }
+
 [<Tests>]
 let stableIdentityEvalTests =
   testSequenced <| testList "Stable-identity reload in FSI" [
@@ -62,9 +75,9 @@ let stableIdentityEvalTests =
       |> Expect.equal "errors sit on the fixture's line" [| errorLine |]
     }
 
-    testTask "WHY — stable-identity reload — a patch that uses a private compiled member cannot compile because only the compiled assembly sees it" {
+    testTask "WHY — stable-identity reload — a patch that uses a private compiled member cannot compile in FSI, which is why the planner restarts instead" {
       let source = File.ReadAllText fixturePath
-      let! patched = patchWith (source.Replace("  secret () + 1\n", "  secret () + 2\n"))
+      let! patched = patchFunction (source.Replace("  secret () + 1\n", "  secret () + 2\n")) "answer"
       patched.EvaluationResult |> Result.isError |> Expect.isTrue "the patch cannot reach the private member"
       let reported =
         patched.Diagnostics

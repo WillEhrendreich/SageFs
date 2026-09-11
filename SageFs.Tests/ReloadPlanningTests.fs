@@ -180,3 +180,28 @@ let confirmPatchTests =
       confirmPatch before [ render ] [ "Demo.Web.Program.prerender" ]
       |> Expect.equal "restart for render" (PatchOutcome.RestartNeeded (ReloadChange.SignatureChanged "render", []))
   ]
+
+[<Tests>]
+let accessTests =
+  let source =
+    "module Demo.Access\n\ntype internal Hidden = { V: int }\n\nlet private secret () = 41\n\nlet answer () =\n  secret () + 1\n\nlet shout (s: string) = s.ToUpper()\n"
+  let accessOf (name: string) = (declsOf source).Decls |> List.find (fun d -> d.Name = name) |> _.Access
+  testList "ReloadPlanning access" [
+    testCase "WHY — ReloadPlanning.extractDecls — records each declaration's access because a patch compiled outside the assembly cannot see private or internal members" <| fun _ ->
+      [ accessOf "Hidden"; accessOf "secret"; accessOf "answer" ]
+      |> Expect.equal "internal, private, public" [ DeclAccess.Internal; DeclAccess.Private; DeclAccess.Public ]
+
+    testCase "WHY — ReloadPlanning.planReload — a changed function that uses a private member restarts because the patch would not compile" <| fun _ ->
+      planReload (declsOf source) (declsOf (replace "secret () + 1" "secret () + 2" source))
+      |> restartChanges
+      |> Expect.equal "answer uses secret" [ ReloadChange.UsesNonPublicMember ("answer", "secret") ]
+
+    testCase "WHY — ReloadPlanning.planReload — a changed function that uses only public members is patched because FSI can compile it" <| fun _ ->
+      planReload (declsOf source) (declsOf (replace "s.ToUpper()" "s.ToLower()" source))
+      |> patchedNames
+      |> Expect.equal "shout" [ "shout" ]
+
+    testCase "WHY — ReloadChange.describe — names the function and the member it cannot reach because the card must say why the app restarted" <| fun _ ->
+      ReloadChange.describe (ReloadChange.UsesNonPublicMember ("answer", "secret"))
+      |> Expect.equal "wording" "answer uses secret, which is not public, so it cannot be patched in place"
+  ]

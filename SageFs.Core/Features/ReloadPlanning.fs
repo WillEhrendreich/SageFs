@@ -16,10 +16,18 @@ type DeclKind =
   | NestedModuleDecl
   | StartupCode
 
+/// A patch is compiled outside the app's assembly, so it cannot see private or internal members.
+[<RequireQualifiedAccess>]
+type DeclAccess =
+  | Public
+  | Internal
+  | Private
+
 /// One top-level declaration of a file, with its exact source text.
 type SourceDecl = {
   Name: string
   Kind: DeclKind
+  Access: DeclAccess
   /// For functions, the text before `=`: the part callers were compiled against.
   Header: string
   Text: string
@@ -42,6 +50,7 @@ type ReloadChange =
   | ModuleChanged of name: string
   | StartupCodeChanged
   | DeclarationRemoved of name: string
+  | UsesNonPublicMember of fn: string * memberName: string
 
 [<RequireQualifiedAccess>]
 type ReloadPlan =
@@ -59,6 +68,8 @@ module ReloadChange =
     | ReloadChange.ModuleChanged name -> sprintf "module %s changed" name
     | ReloadChange.StartupCodeChanged -> "startup code changed"
     | ReloadChange.DeclarationRemoved name -> sprintf "%s was removed" name
+    | ReloadChange.UsesNonPublicMember (fn, memberName) ->
+      sprintf "%s uses %s, which is not public, so it cannot be patched in place" fn memberName
 
   let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
     first :: rest |> List.map describe |> String.concat "; "
@@ -110,6 +121,21 @@ let private isEntryPoint (attributes: SynAttributes) =
     | Some id -> id.idText = "EntryPoint" || id.idText = "EntryPointAttribute"
     | None -> false)
 
+let rec private patAccess (pat: SynPat) : SynAccess option =
+  match pat with
+  | SynPat.LongIdent(accessibility = access) -> access
+  | SynPat.Named(accessibility = access) -> access
+  | SynPat.Typed(pat = inner)
+  | SynPat.Paren(pat = inner)
+  | SynPat.Attrib(pat = inner) -> patAccess inner
+  | _ -> None
+
+let private accessOf (access: SynAccess option) : DeclAccess =
+  match access with
+  | Some a when a.IsPrivate -> DeclAccess.Private
+  | Some a when a.IsInternal -> DeclAccess.Internal
+  | _ -> DeclAccess.Public
+
 let private bindingDecl (lines: string array) (binding: SynBinding) : SourceDecl =
   let (SynBinding(attributes = attributes; headPat = pat; trivia = trivia)) = binding
   let keyword = trivia.LeadingKeyword.Range
@@ -129,14 +155,16 @@ let private bindingDecl (lines: string array) (binding: SynBinding) : SourceDecl
     | false, false -> DeclKind.ValueDecl
   { Name = patName lines pat
     Kind = kind
+    Access = accessOf (patAccess pat)
     Header = header.Trim()
     Text = slice lines (start.Line, start.Column) (whole.EndLine, whole.EndColumn)
     StartLine = start.Line
     EndLine = whole.EndLine }
 
-let private simpleDecl (lines: string array) (name: string) (kind: DeclKind) (r: range) : SourceDecl =
+let private simpleDecl (lines: string array) (name: string) (kind: DeclKind) (access: DeclAccess) (r: range) : SourceDecl =
   { Name = name
     Kind = kind
+    Access = access
     Header = ""
     Text = rangeText lines r
     StartLine = r.StartLine
@@ -161,18 +189,18 @@ let private declsOf (lines: string array) (decls: SynModuleDecl list) : string l
       | SynModuleDecl.Types(typeDefns = defns) ->
         let types =
           defns
-          |> List.map (fun (SynTypeDefn(typeInfo = SynComponentInfo(longId = ids)) as defn) ->
-            simpleDecl lines (identText ids) DeclKind.TypeDecl defn.Range)
+          |> List.map (fun (SynTypeDefn(typeInfo = SynComponentInfo(longId = ids; accessibility = access)) as defn) ->
+            simpleDecl lines (identText ids) DeclKind.TypeDecl (accessOf access) defn.Range)
         opens, found @ types, startups
       | SynModuleDecl.Exception(range = r) ->
-        opens, found @ [ simpleDecl lines (exceptionName (rangeText lines r)) DeclKind.TypeDecl r ], startups
-      | SynModuleDecl.NestedModule(moduleInfo = SynComponentInfo(longId = ids); range = r) ->
-        opens, found @ [ simpleDecl lines (identText ids) DeclKind.NestedModuleDecl r ], startups
+        opens, found @ [ simpleDecl lines (exceptionName (rangeText lines r)) DeclKind.TypeDecl DeclAccess.Public r ], startups
+      | SynModuleDecl.NestedModule(moduleInfo = SynComponentInfo(longId = ids; accessibility = access); range = r) ->
+        opens, found @ [ simpleDecl lines (identText ids) DeclKind.NestedModuleDecl (accessOf access) r ], startups
       | SynModuleDecl.ModuleAbbrev(ident = ident; range = r) ->
-        opens, found @ [ simpleDecl lines ident.idText DeclKind.NestedModuleDecl r ], startups
+        opens, found @ [ simpleDecl lines ident.idText DeclKind.NestedModuleDecl DeclAccess.Public r ], startups
       | SynModuleDecl.Expr(range = r) ->
         let name = sprintf "startup#%d" (startups + 1)
-        opens, found @ [ simpleDecl lines name DeclKind.StartupCode r ], startups + 1
+        opens, found @ [ simpleDecl lines name DeclKind.StartupCode DeclAccess.Public r ], startups + 1
       | SynModuleDecl.HashDirective _
       | SynModuleDecl.Attributes _
       | SynModuleDecl.NamespaceFragment _ -> opens, found, startups) ([], [], 0)
@@ -246,6 +274,13 @@ let private outcomeOf (baseline: Map<DeclKind * string * int, SourceDecl>) (key,
     | false -> DeclOutcome.Restart (ReloadChange.SignatureChanged current.Name)
   | Some _, _ -> DeclOutcome.Restart (changeFor current)
 
+let private isIdentifier (name: string) =
+  System.Text.RegularExpressions.Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_']*$")
+
+/// A whole-identifier use of `name`, not part of a longer or qualified name.
+let private mentions (text: string) (name: string) =
+  System.Text.RegularExpressions.Regex.IsMatch(text, sprintf @"(?<![\w.'])%s(?![\w'])" (System.Text.RegularExpressions.Regex.Escape name))
+
 /// Types, values and startup code are compared with the source the running app
 /// was built from; a function may be patched only if its header is unchanged.
 let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
@@ -258,8 +293,23 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
     baselineKeyed
     |> List.filter (fun (key, _) -> not (Map.containsKey key now))
     |> List.map (snd >> removalFor)
+  // A patch cannot see the file's non-public members (it is compiled in FSI,
+  // outside the app's assembly) unless the same patch re-emits them.
+  let patchedNames =
+    outcomes |> List.choose (function DeclOutcome.Patch d -> Some d.Name | _ -> None) |> Set.ofList
+  let hidden =
+    current.Decls
+    |> List.filter (fun d -> d.Access <> DeclAccess.Public && not (patchedNames.Contains d.Name) && isIdentifier d.Name)
+  let unreachable =
+    outcomes
+    |> List.choose (function
+      | DeclOutcome.Patch f ->
+        hidden
+        |> List.tryFind (fun h -> h.Name <> f.Name && mentions f.Text h.Name)
+        |> Option.map (fun h -> ReloadChange.UsesNonPublicMember (f.Name, h.Name))
+      | _ -> None)
   let restarts =
-    (outcomes |> List.choose (function DeclOutcome.Restart c -> Some c | _ -> None)) @ removed
+    (outcomes |> List.choose (function DeclOutcome.Restart c -> Some c | _ -> None)) @ removed @ unreachable
     |> List.distinct
   match restarts with
   | first :: rest -> ReloadPlan.RestartRequired (first, rest)
