@@ -110,6 +110,13 @@ module CliCommand =
 
 /// Run daemon mode (default behavior).
 let runDaemon (args: string array) =
+  // Fail fast on a non-loopback SAGEFS_BIND_HOST before anything binds. The
+  // supervised watchdog's child daemon runs this check again.
+  match SageFsConfig.BindHost with
+  | Error message ->
+    eprintfn "%s" message
+    2
+  | Ok bindHost ->
   let mcpPort = parseMcpPort args
   let flags = Args.DaemonFlags.parse (Array.toList args)
   let isSupervised = args |> Array.exists (fun a -> a = "--supervised")
@@ -131,7 +138,7 @@ let runDaemon (args: string array) =
     |> _.GetAwaiter() |> _.GetResult()
     0
   | false ->
-    DaemonMode.run mcpPort flags
+    DaemonMode.run bindHost mcpPort flags
     |> _.GetAwaiter() |> _.GetResult()
     0
 
@@ -260,7 +267,8 @@ let main args =
     printfn ""
     printfn "Environment Variables:"
     printfn "  SageFs_MCP_PORT           Override MCP server port (same as --mcp-port)"
-    printfn "  SAGEFS_BIND_HOST          Bind address (default: localhost, use 0.0.0.0 for Docker)"
+    printfn "  SAGEFS_BIND_HOST          Loopback bind address: localhost (default), 127.0.0.1 or ::1."
+    printfn "                            Non-loopback addresses are refused — SageFs has no authentication."
     printfn ""
     printfn "Daemon:"
     printfn "  SageFs runs as a daemon by default. The daemon provides:"

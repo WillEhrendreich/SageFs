@@ -1128,6 +1128,8 @@ let disposeTimerAndWait (timer: System.Threading.Timer) (timeout: TimeSpan) : Ta
 
 let startDashboardServer
   (log: ILogger)
+  (bindHost: SageFs.SageFsConfig.LoopbackHost)
+  (ownOrigins: SageFs.Server.HttpOriginGuard.OwnOrigins)
   (dashboardPort: int)
   (endpoints: HttpEndpoint list)
   (stopping: System.Threading.CancellationToken) = task {
@@ -1149,17 +1151,12 @@ let startDashboardServer
       opts.Level <- System.IO.Compression.CompressionLevel.Fastest
     ) |> ignore
     let app = builder.Build()
-    let bindHost =
-      match System.Environment.GetEnvironmentVariable("SAGEFS_BIND_HOST") with
-      | null | "" -> "localhost"
-      | h -> h
-    app.Urls.Add(sprintf "http://%s:%d" bindHost dashboardPort)
+    app.Urls.Add(SageFs.SageFsConfig.LoopbackHost.listenUrl bindHost dashboardPort)
     app.UseResponseCompression() |> ignore
-    // Browser-origin/CSRF gate: reject cross-site/non-loopback browser
-    // requests before any dashboard route runs (the dashboard exposes
-    // mutating endpoints — eval, session create/stop, shutdown).
-    app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
-      SageFs.Server.McpServer.originGuardMiddleware ctx next :> Task)) |> ignore
+    // Origin/CSRF gate (see HttpOriginGuard): only this daemon's own pages and
+    // local tooling reach the dashboard's mutating endpoints (eval, session
+    // create/stop, shutdown).
+    SageFs.Server.McpServer.useOriginGuard ownOrigins app
     app.UseRouting().UseFalco(endpoints) |> ignore
     log.LogInformation("Dashboard available at http://localhost:{Port}/dashboard", dashboardPort)
     do! McpServer.runUntilCancelled app stopping
@@ -1516,7 +1513,7 @@ let dispatchOutputAndWait
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
 /// Every session is a worker sub-process managed by SessionManager.
-let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
+let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let startupSw = System.Diagnostics.Stopwatch.StartNew()
   let daemonStartTime = System.DateTimeOffset.UtcNow
   let startupSpan =
@@ -1664,12 +1661,18 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // Create the multi-agent coordination tracker (in-memory, daemon-lifetime)
   let activityTracker = AgentActivityTracker.create ()
 
+  // Both listeners share one origin set: the dashboard page (mcpPort + 1, see
+  // dashboardPort below) calls MCP-port endpoints as a same-site own origin.
+  let daemonOrigins = SageFs.Server.HttpOriginGuard.OwnOrigins.ofPorts [ mcpPort; mcpPort + 1 ]
+
   let mcpTask =
     McpServer.startMcpServer {
       DiagnosticsChanged = diagnosticsChanged.Publish
       StateChanged = Some stateChangedEvent.Publish
       FrictionStore = frictionStore
       Port = mcpPort
+      BindHost = bindHost
+      OwnOrigins = daemonOrigins
       SessionOps = sessionOps
       ElmRuntime = Some elmRuntime
       GetWarmupContext = Some (fun (sidStr: string) ->
@@ -2258,7 +2261,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let hotReloadProxyEndpoints = createHotReloadProxyEndpoints getWorkerBaseUrl httpClient stateChangedEvent
 
   let dashboardTask =
-    startDashboardServer log dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints) cts.Token
+    startDashboardServer log bindHost daemonOrigins dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints) cts.Token
 
   // Workers handle their own warmup, middleware, and file watching.
   // The daemon just needs to wait for the MCP and dashboard servers.

@@ -280,6 +280,16 @@ let private sampleMessages : WorkerMessage list = [
   WorkerMessage.Shutdown
 ]
 
+/// The worker's own origin in the pure-decision tests (its listener port).
+let private workerOwn = SageFs.Server.HttpOriginGuard.OwnOrigins.ofPorts [ 5000 ]
+
+/// A bodyless request with the given method and browser headers.
+let private guardRequest
+    (httpMethod: string) (host: string option) (fetchSite: string option) (origin: string option)
+    : SageFs.Server.HttpOriginGuard.Request =
+  { Method = httpMethod; Host = host; SecFetchSite = fetchSite; Origin = origin
+    ContentType = None; Body = SageFs.Server.HttpOriginGuard.Body.Empty }
+
 [<Tests>]
 let workerRouteTableTests =
   testList "WorkerHttpGuard.routeTable" [
@@ -336,27 +346,32 @@ let workerRouteTableTests =
       declared |> Set.contains ("POST", "/run-tests-stream")
       |> Expect.isTrue "the streaming test route the client posts to must be declared"
 
-    testCase "decide rejects every POST route cross-site, even from a loopback origin" <| fun _ ->
+    testCase "decide rejects every POST route cross-site or same-site from another loopback port" <| fun _ ->
       for r in WorkerHttpTransport.routes do
         match WorkerHttpTransport.WorkerRoute.httpMethod r with
         | "POST" ->
           let path = WorkerHttpTransport.WorkerRoute.path r
-          match WorkerHttpTransport.decide "POST" path None (Some "cross-site") (Some "http://localhost:5173") with
-          | WorkerHttpTransport.GuardVerdict.Reject _ -> ()
-          | other -> failtestf "cross-site POST %s must be rejected, got %A" path other
+          for site in [ "cross-site"; "same-site" ] do
+            match WorkerHttpTransport.decide workerOwn path (guardRequest "POST" None (Some site) (Some "http://localhost:5173")) with
+            | WorkerHttpTransport.GuardVerdict.Reject _ -> ()
+            | other -> failtestf "%s POST %s from :5173 must be rejected, got %A" site path other
         | _ -> ()
 
     testCase "decide allows the daemon proxy (no browser headers) on every route" <| fun _ ->
       for r in WorkerHttpTransport.routes do
-        WorkerHttpTransport.decide (WorkerHttpTransport.WorkerRoute.httpMethod r) (WorkerHttpTransport.WorkerRoute.path r) (Some "127.0.0.1:5000") None None
+        WorkerHttpTransport.decide workerOwn (WorkerHttpTransport.WorkerRoute.path r)
+          (guardRequest (WorkerHttpTransport.WorkerRoute.httpMethod r) (Some "127.0.0.1:5000") None None)
         |> Expect.equal "no-header loopback requests pass" WorkerHttpTransport.GuardVerdict.Allow
 
     testCase "decide reflects a loopback origin on the DevReload stream and rejects remote ones" <| fun _ ->
-      WorkerHttpTransport.decide "GET" "/__sagefs__/reload" None (Some "cross-site") (Some "http://localhost:5173")
+      WorkerHttpTransport.decide workerOwn "/__sagefs__/reload" (guardRequest "GET" None (Some "cross-site") (Some "http://localhost:5173"))
       |> Expect.equal "loopback dev app may read the stream" (WorkerHttpTransport.GuardVerdict.AllowCrossOrigin "http://localhost:5173")
-      match WorkerHttpTransport.decide "GET" "/__sagefs__/reload" None (Some "cross-site") (Some "http://evil.example.com") with
+      match WorkerHttpTransport.decide workerOwn "/__sagefs__/reload" (guardRequest "GET" None (Some "cross-site") (Some "http://evil.example.com")) with
       | WorkerHttpTransport.GuardVerdict.Reject _ -> ()
       | other -> failtestf "remote origin on the stream must be rejected, got %A" other
+      match WorkerHttpTransport.decide workerOwn "/__sagefs__/reload" (guardRequest "GET" None (Some "cross-site") (Some "http://localhost.evil.com")) with
+      | WorkerHttpTransport.GuardVerdict.Reject _ -> ()
+      | other -> failtestf "a localhost-prefixed DNS name on the stream must be rejected, got %A" other
   ]
 
 // ─── Mutating-route classification ─────────────────────────────────

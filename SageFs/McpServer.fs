@@ -382,9 +382,6 @@ let errorHandlingMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: 
     | false -> do! jsonResponse ctx 500 (unexpectedErrorBody ex)
 }
 
-/// Browser-origin/CSRF gate (see HttpOriginGuard). Rejects cross-site and
-/// non-loopback requests before any route runs; local tooling (curl, MCP,
-/// editors, CLI — no browser headers) passes untouched.
 /// Runs a daemon web host until the daemon's stop token is cancelled.
 let runUntilCancelled (app: WebApplication) (stopping: System.Threading.CancellationToken) : Task =
   task {
@@ -394,27 +391,55 @@ let runUntilCancelled (app: WebApplication) (stopping: System.Threading.Cancella
     do! app.RunAsync()
   }
 
-let originGuardMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: Func<Task>) = task {
-  let host =
-    match ctx.Request.Host.HasValue with
-    | true -> Some (string ctx.Request.Host)
-    | false -> None
-  let secFetchSite =
-    match ctx.Request.Headers.TryGetValue("Sec-Fetch-Site") with
+/// The parts of a request the origin gate decides on (see HttpOriginGuard).
+let guardRequestOf (ctx: Microsoft.AspNetCore.Http.HttpContext) : SageFs.Server.HttpOriginGuard.Request =
+  let header (name: string) =
+    match ctx.Request.Headers.TryGetValue(name) with
     | true, v when not (System.String.IsNullOrWhiteSpace(string v)) -> Some (string v)
     | _ -> None
-  let origin =
-    match ctx.Request.Headers.TryGetValue("Origin") with
-    | true, v when not (System.String.IsNullOrWhiteSpace(string v)) -> Some (string v)
-    | _ -> None
-  match SageFs.Server.HttpOriginGuard.decide host secFetchSite origin with
+  { Method = ctx.Request.Method
+    Host =
+      match ctx.Request.Host.HasValue with
+      | true -> Some (string ctx.Request.Host)
+      | false -> None
+    SecFetchSite = header "Sec-Fetch-Site"
+    Origin = header "Origin"
+    ContentType = header "Content-Type"
+    Body =
+      match ctx.Request.ContentLength with
+      | length when length.HasValue ->
+        match length.Value > 0L with
+        | true -> SageFs.Server.HttpOriginGuard.Body.Present
+        | false -> SageFs.Server.HttpOriginGuard.Body.Empty
+      | _ ->
+        // No Content-Length: a chunked body is still a body.
+        match ctx.Request.Headers.TransferEncoding.Count with
+        | 0 -> SageFs.Server.HttpOriginGuard.Body.Empty
+        | _ -> SageFs.Server.HttpOriginGuard.Body.Present }
+
+/// Browser-origin/CSRF gate (see HttpOriginGuard for the threat model).
+/// Before any route runs it rejects requests from pages that are not this
+/// daemon's own (`own` — every loopback origin of the MCP and dashboard
+/// listeners) and unsafe requests whose body is not labelled JSON. Local
+/// tooling (curl, MCP, editors, CLI — no browser headers) passes.
+let originGuardMiddleware
+  (own: SageFs.Server.HttpOriginGuard.OwnOrigins)
+  (ctx: Microsoft.AspNetCore.Http.HttpContext)
+  (next: Func<Task>) = task {
+  match SageFs.Server.HttpOriginGuard.decide own (guardRequestOf ctx) with
   | SageFs.Server.HttpOriginGuard.Verdict.Allow ->
     do! next.Invoke()
-  | SageFs.Server.HttpOriginGuard.Verdict.Reject reason ->
+  | SageFs.Server.HttpOriginGuard.Verdict.Reject rejection ->
+    let reason = SageFs.Server.HttpOriginGuard.Rejection.describe rejection
     Log.warn "[origin-guard] rejected %s %s (%s)" ctx.Request.Method (string ctx.Request.Path) reason
-    ctx.Response.StatusCode <- 403
-    do! jsonResponse ctx 403 {| success = false; error = sprintf "Request rejected: %s" reason |}
+    let status = SageFs.Server.HttpOriginGuard.Rejection.statusCode rejection
+    do! jsonResponse ctx status {| success = false; error = sprintf "Request rejected: %s" reason |}
 }
+
+/// Install the origin gate on a daemon web host (MCP and dashboard share it).
+let useOriginGuard (own: SageFs.Server.HttpOriginGuard.OwnOrigins) (app: WebApplication) : unit =
+  app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
+    originGuardMiddleware own ctx next :> Task)) |> ignore
 
 /// Read and parse the request body as a JSON document.
 let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
@@ -530,6 +555,10 @@ type McpServerConfig = {
   StateChanged: IEvent<DaemonStateChange> option
   FrictionStore: SageFs.Features.FrictionSqlite.FrictionStore option
   Port: int
+  /// Loopback interface to listen on (SageFsConfig.BindHost, validated at startup).
+  BindHost: SageFs.SageFsConfig.LoopbackHost
+  /// The daemon's own origins (MCP + dashboard listeners) for the origin gate.
+  OwnOrigins: SageFs.Server.HttpOriginGuard.OwnOrigins
   SessionOps: SageFs.SessionManagementOps
   ElmRuntime: SageFs.ElmRuntime<SageFs.SageFsModel, SageFs.SageFsMsg, SageFs.RenderRegion> option
   GetWarmupContext: (string -> Task<SageFs.WarmupContext option>) option
@@ -2138,11 +2167,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       let otelConfigured = DaemonInfo.otelConfigured
 
       let builder = WebApplication.CreateBuilder([||])
-      let bindHost =
-        match System.Environment.GetEnvironmentVariable("SAGEFS_BIND_HOST") with
-        | null | "" -> "localhost"
-        | h -> h
-      builder.WebHost.UseUrls(sprintf "http://%s:%d" bindHost cfg.Port) |> ignore
+      builder.WebHost.UseUrls(SageFs.SageFsConfig.LoopbackHost.listenUrl cfg.BindHost cfg.Port) |> ignore
 
       // Phase 1: Infrastructure
       configureOtel builder cfg.Port version otelConfigured
@@ -2168,8 +2193,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       app.UseResponseCompression() |> ignore
       app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
         errorHandlingMiddleware ctx next :> Task)) |> ignore
-      app.Use(Func<Microsoft.AspNetCore.Http.HttpContext, Func<Task>, Task>(fun ctx next ->
-        originGuardMiddleware ctx next :> Task)) |> ignore
+      useOriginGuard cfg.OwnOrigins app
       app.MapMcp() |> ignore
 
       // Phase 3: Route context + routes

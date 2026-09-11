@@ -190,68 +190,84 @@ module WorkerHttpTransport =
     | Allow
     /// Allow, and reflect this (loopback) origin in Access-Control-Allow-Origin.
     | AllowCrossOrigin of origin: string
-    | Reject of reason: string
+    | Reject of SageFs.Server.HttpOriginGuard.Rejection
 
   /// The origin/CSRF decision for one worker request — pure, so every route
   /// and header combination is testable without a server.
   ///
-  /// The daemon proxies to the worker with NO browser headers (loopback Host,
-  /// no Origin/Sec-Fetch-Site), so those requests pass. A browser page is the
-  /// only realistic attacker: cross-site fetches carry Sec-Fetch-Site:
-  /// cross-site and an Origin. Mutating requests get the daemon's own gate
-  /// (HttpOriginGuard.decide); the DevReload stream reflects a loopback origin
-  /// (never `*`); read-only GETs reject foreign origins.
+  /// Same threat model as the daemon (see HttpOriginGuard). The daemon proxies
+  /// to the worker with NO browser headers and JSON bodies, so it passes.
+  /// Mutating requests get exactly the daemon's gate (HttpOriginGuard.decide
+  /// against `own`, the worker's own listener origins): a page on another
+  /// localhost port — same-site, loopback Origin — cannot eval. The DevReload
+  /// stream is the one surface the user's dev app reads cross-origin, so it
+  /// reflects a loopback origin (never `*`); read-only GETs reject non-loopback
+  /// origins (the browser's same-origin policy already hides their responses).
   let decide
-    (httpMethod: string)
+    (own: SageFs.Server.HttpOriginGuard.OwnOrigins)
     (path: string)
-    (hostHeader: string option)
-    (secFetchSite: string option)
-    (origin: string option)
+    (request: SageFs.Server.HttpOriginGuard.Request)
     : GuardVerdict =
-    match hostHeader with
+    match request.Host with
     // Non-loopback Host = DNS rebinding / proxy — reject everything.
     | Some h when not (SageFs.Server.HttpOriginGuard.isLoopbackHost h) ->
-      GuardVerdict.Reject (sprintf "non-loopback Host %s" h)
+      GuardVerdict.Reject (SageFs.Server.HttpOriginGuard.Rejection.ForeignHost h)
     | _ ->
-      match secFetchSite, origin with
-      // Browser signals absent: daemon proxy, curl, editors — allow.
-      | None, None -> GuardVerdict.Allow
-      | _ ->
-        match classify httpMethod path with
-        | RouteAccess.Mutating ->
-          match SageFs.Server.HttpOriginGuard.decide hostHeader secFetchSite origin with
-          | SageFs.Server.HttpOriginGuard.Verdict.Allow -> GuardVerdict.Allow
-          | SageFs.Server.HttpOriginGuard.Verdict.Reject reason -> GuardVerdict.Reject reason
-        | RouteAccess.CrossOriginStream ->
-          match origin with
-          | Some o when SageFs.Server.HttpOriginGuard.isLoopbackOrigin o -> GuardVerdict.AllowCrossOrigin o
-          | Some o -> GuardVerdict.Reject (sprintf "non-loopback Origin %s" o)
-          | None -> GuardVerdict.Allow
-        | RouteAccess.ReadOnly ->
-          match origin with
-          | Some o when not (SageFs.Server.HttpOriginGuard.isLoopbackOrigin o) ->
-            GuardVerdict.Reject (sprintf "non-loopback Origin %s" o)
-          | _ -> GuardVerdict.Allow
+      match classify request.Method path with
+      | RouteAccess.Mutating ->
+        match SageFs.Server.HttpOriginGuard.decide own request with
+        | SageFs.Server.HttpOriginGuard.Verdict.Allow -> GuardVerdict.Allow
+        | SageFs.Server.HttpOriginGuard.Verdict.Reject rejection -> GuardVerdict.Reject rejection
+      | RouteAccess.CrossOriginStream ->
+        match request.Origin with
+        | Some o when SageFs.Server.HttpOriginGuard.isLoopbackOrigin o -> GuardVerdict.AllowCrossOrigin o
+        | Some o -> GuardVerdict.Reject (SageFs.Server.HttpOriginGuard.Rejection.ForeignOrigin o)
+        | None -> GuardVerdict.Allow
+      | RouteAccess.ReadOnly ->
+        match request.Origin with
+        | Some o when not (SageFs.Server.HttpOriginGuard.isLoopbackOrigin o) ->
+          GuardVerdict.Reject (SageFs.Server.HttpOriginGuard.Rejection.ForeignOrigin o)
+        | _ -> GuardVerdict.Allow
 
-  /// Origin/CSRF gate middleware for the worker HTTP surface — applies `decide`.
-  let workerOriginGuard (ctx: HttpContext) (next: Func<Task>) = task {
+  /// The parts of a request the origin gate decides on.
+  let guardRequestOf (ctx: HttpContext) : SageFs.Server.HttpOriginGuard.Request =
     let header (name: string) =
       match ctx.Request.Headers.TryGetValue(name) with
       | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(string v)) -> Some (string v)
       | _ -> None
-    let hostHeader =
-      match ctx.Request.Host.HasValue with
-      | true -> Some ctx.Request.Host.Host
-      | false -> None
+    { Method = ctx.Request.Method
+      Host =
+        match ctx.Request.Host.HasValue with
+        | true -> Some (string ctx.Request.Host)
+        | false -> None
+      SecFetchSite = header "Sec-Fetch-Site"
+      Origin = header "Origin"
+      ContentType = header "Content-Type"
+      Body =
+        match ctx.Request.ContentLength with
+        | length when length.HasValue ->
+          match length.Value > 0L with
+          | true -> SageFs.Server.HttpOriginGuard.Body.Present
+          | false -> SageFs.Server.HttpOriginGuard.Body.Empty
+        | _ ->
+          // No Content-Length: a chunked body is still a body.
+          match ctx.Request.Headers.TransferEncoding.Count with
+          | 0 -> SageFs.Server.HttpOriginGuard.Body.Empty
+          | _ -> SageFs.Server.HttpOriginGuard.Body.Present }
+
+  /// Origin/CSRF gate middleware for the worker HTTP surface — applies `decide`
+  /// with the listener's own origins.
+  let workerOriginGuard (ctx: HttpContext) (next: Func<Task>) = task {
+    let own = SageFs.Server.HttpOriginGuard.OwnOrigins.ofPorts [ ctx.Connection.LocalPort ]
     let path = ctx.Request.Path.Value |> Option.ofObj |> Option.defaultValue ""
-    match decide ctx.Request.Method path hostHeader (header "Sec-Fetch-Site") (header "Origin") with
+    match decide own path (guardRequestOf ctx) with
     | GuardVerdict.Allow -> do! next.Invoke()
     | GuardVerdict.AllowCrossOrigin o ->
       ctx.Response.Headers["Access-Control-Allow-Origin"] <- o
       do! next.Invoke()
-    | GuardVerdict.Reject reason ->
-      ctx.Response.StatusCode <- 403
-      do! ctx.Response.WriteAsync(sprintf "Forbidden: %s" reason)
+    | GuardVerdict.Reject rejection ->
+      ctx.Response.StatusCode <- SageFs.Server.HttpOriginGuard.Rejection.statusCode rejection
+      do! ctx.Response.WriteAsync(sprintf "Forbidden: %s" (SageFs.Server.HttpOriginGuard.Rejection.describe rejection))
   }
 
   /// Start a Kestrel HTTP server dispatching to the given handler.
