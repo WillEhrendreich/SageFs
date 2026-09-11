@@ -306,10 +306,11 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
     GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
     NotifyWorkerDied = fun _ -> ()
-    SetAppState = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
-    EndAppRun = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(())
+    ClaimRun = SageFs.SessionManagementOps.stub.ClaimRun
+    ClaimStop = SageFs.SessionManagementOps.stub.ClaimStop
+    AdvanceRun = SageFs.SessionManagementOps.stub.AdvanceRun
+    EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
     AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
-    UpdateActiveProject = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
     SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available")) }
 
 /// Create a McpContext backed by the global shared actor

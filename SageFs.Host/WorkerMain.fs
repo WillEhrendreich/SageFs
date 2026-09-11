@@ -132,7 +132,7 @@ let shouldQuarantineAssembly (assemblyName: string) =
 /// How the worker runs its session's executable project (see AppRunner).
 type AppRunHandlers = {
   Run: string -> AppRun.PreviousAddress -> Async<Result<AppRun.AppRunState, SageFsError>>
-  Stop: unit -> Async<Result<AppRun.AppRunState, SageFsError>>
+  Stop: AppRun.StopScope -> Async<Result<AppRun.AppRunState, SageFsError>>
   AwaitChange: string -> Async<AppRun.AppRunState>
 }
 
@@ -147,7 +147,7 @@ type private ReloadRoute =
 /// For hosts that do not run apps (test harnesses).
 let noAppRuns : AppRunHandlers = {
   Run = fun project _ -> async { return Error (SageFsError.AppRunFailed (project, "This host does not run apps.")) }
-  Stop = fun () -> async { return Ok AppRun.AppRunState.NotRunning }
+  Stop = fun _ -> async { return Ok AppRun.AppRunState.NotRunning }
   AwaitChange = fun _ -> async { return AppRun.AppRunState.NotRunning }
 }
 
@@ -277,8 +277,8 @@ let handleMessage
       let! result = appRuns.Run project previous
       return WorkerResponse.AppRunResult(replyId, result)
 
-    | WorkerMessage.StopApp replyId ->
-      let! result = appRuns.Stop ()
+    | WorkerMessage.StopApp(scope, replyId) ->
+      let! result = appRuns.Stop scope
       return WorkerResponse.AppRunResult(replyId, result)
 
     | WorkerMessage.AwaitAppChange(runId, replyId) ->
@@ -758,12 +758,12 @@ let run (sessionId: string) (port: int) = async {
         | AppRun.AppRunState.Running _ -> watchForHotReload project
         | _ -> ()
         return Ok state }
-    Stop = fun () -> async {
+    Stop = fun scope -> async {
       let project =
         match AppRunner.state appRunner with
         | AppRun.AppRunState.Running app -> app.Project
         | _ -> ""
-      let! stopped = AppRunner.stop appRunner |> Async.AwaitTask
+      let! stopped = AppRunner.stop appRunner scope |> Async.AwaitTask
       return stopped |> Result.mapError (fun reason -> SageFsError.AppRunFailed (project, reason)) }
     AwaitChange = fun runId -> async {
       use cts = new CancellationTokenSource(TimeSpan.FromMinutes 5.0)

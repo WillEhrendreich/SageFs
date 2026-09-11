@@ -27,14 +27,19 @@ type SessionManagementOps = {
   /// Notify that a worker died unexpectedly (pipe broken mid-request).
   /// Closes the race window between pipe failure and proc.Exited event firing.
   NotifyWorkerDied: SessionId -> unit
-  /// Record what the session's app is doing ("Run App").
-  SetAppState: SessionId -> AppRun.AppRunState -> Task<unit>
-  /// Record that a run ended — applied only while that run is still current.
-  EndAppRun: SessionId -> string -> AppRun.AppRunState -> Task<unit>
+  /// Ask the session's owner to run `project` ("Run App"). The owner decides:
+  /// it refuses while an app is running or starting, and an accepted run gets
+  /// the generation every later step of it must carry.
+  ClaimRun: SessionId -> string -> Task<Result<AppRun.RunClaim, SageFsError>>
+  /// Ask the owner to stop the app. The stop takes a new generation, so no
+  /// step of an earlier run can be applied after it.
+  ClaimStop: SessionId -> Task<Result<AppRun.StopClaim, SageFsError>>
+  /// Record one step of a run, applied only while its generation owns the app.
+  AdvanceRun: SessionId -> AppRun.RunGeneration -> AppRun.AppRunState -> Task<AppRun.StepOutcome>
+  /// Record that run `runId` ended — applied only while that run is still current.
+  EndAppRun: SessionId -> AppRun.RunGeneration -> string -> AppRun.AppRunState -> Task<AppRun.RunEnd>
   /// Wait until the session's worker is Ready (e.g. after a workflow restart).
   AwaitReady: SessionId -> System.TimeSpan -> Task<Result<unit, SageFsError>>
-  /// Update the active project for a session.
-  UpdateActiveProject: SessionId -> string option -> Task<unit>
   /// Switch the workflow for a session.
   SwitchWorkflow: string -> WorkflowTypes.SessionWorkflow -> Task<Result<string, SageFsError>>
 }
@@ -52,9 +57,10 @@ module SessionManagementOps =
     GetAllSessions = fun () -> Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
     NotifyWorkerDied = fun _ -> ()
-    SetAppState = fun _ _ -> Task.FromResult(())
-    EndAppRun = fun _ _ _ -> Task.FromResult(())
+    ClaimRun = fun sid _ -> Task.FromResult(Result.Error (SageFsError.SessionNotFound (SessionId.value sid)))
+    ClaimStop = fun sid -> Task.FromResult(Result.Error (SageFsError.SessionNotFound (SessionId.value sid)))
+    AdvanceRun = fun _ _ _ -> Task.FromResult(AppRun.StepOutcome.Stale AppRun.AppRunState.NotRunning)
+    EndAppRun = fun _ _ _ _ -> Task.FromResult(AppRun.RunEnd.NotCurrent)
     AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
-    UpdateActiveProject = fun _ _ -> Task.FromResult(())
     SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
   }

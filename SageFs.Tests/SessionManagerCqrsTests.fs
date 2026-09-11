@@ -54,7 +54,7 @@ let mkManagedSession (id: SessionId) status =
     AutoOpenNamespaces = true
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     RestartState = RestartPolicy.emptyState
-    ActiveProject = None
+    AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
 
     ProjectRoles = []
 

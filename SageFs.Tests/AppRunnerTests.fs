@@ -152,7 +152,7 @@ let appRunnerTests =
       let project = tempProject ()
       let! state = AppRunner.start runner project (serving "bye") (plan project)
       let url = primaryUrl state
-      let! stopped = AppRunner.stop runner
+      let! stopped = AppRunner.stop runner StopScope.CurrentApp
       stopped |> Expect.equal "back to not running" (Ok AppRunState.NotRunning)
       let! reachable = task {
         try
@@ -162,9 +162,20 @@ let appRunnerTests =
       reachable |> Expect.isFalse "the port no longer serves"
     }
 
+    testTask "WHY — AppRunner.stop — a stop for a run that is already over leaves the live app running because it must not end a run someone started since" {
+      use runner = AppRunner.create timeouts noEnv
+      let project = tempProject ()
+      let! state = AppRunner.start runner project (serving "still here") (plan project)
+      let url = primaryUrl state
+      let! stopped = AppRunner.stop runner (StopScope.OnlyRun "an-earlier-run")
+      stopped |> Expect.equal "the live app is untouched" (Ok state)
+      let! body = getBody url
+      body |> Expect.equal "it still serves" "still here"
+    }
+
     testTask "WHY — AppRunner.stop — with nothing running is a no-op because stop must be idempotent" {
       use runner = AppRunner.create timeouts noEnv
-      let! stopped = AppRunner.stop runner
+      let! stopped = AppRunner.stop runner StopScope.CurrentApp
       stopped |> Expect.equal "still not running" (Ok AppRunState.NotRunning)
     }
 
@@ -173,7 +184,7 @@ let appRunnerTests =
       use runner = AppRunner.create timeouts noEnv
       let project = tempProject ()
       let! _ = AppRunner.start runner project { Name = "Worker.main"; Invoke = fun _ -> release.Task.Wait(); 0 } (plan project)
-      let! stopped = AppRunner.stop runner
+      let! stopped = AppRunner.stop runner StopScope.CurrentApp
       release.SetResult()
       match stopped with
       | Error msg -> msg |> Expect.stringContains "tells the user what to do" "→"

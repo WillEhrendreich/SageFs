@@ -528,7 +528,7 @@ let workerProtocolTests =
         result |> Expect.equal "round-trip" msg
 
       testCase "WHY — WorkerMessage.StopApp — round-trips because stop must reach the worker that owns the app" <| fun _ ->
-        let msg = WorkerMessage.StopApp "r2"
+        let msg = WorkerMessage.StopApp(SageFs.AppRun.StopScope.OnlyRun "run1", "r2")
         let _, result = roundTrip<WorkerMessage> msg
         result |> Expect.equal "round-trip" msg
 
@@ -564,7 +564,7 @@ let workerProtocolTests =
         body.Value |> Expect.stringContains "body carries the replyId" "r1"
 
       testCase "WHY — HttpWorkerClient.toRoute — StopApp posts to /stop-app because stop must not be a cacheable GET" <| fun _ ->
-        let method, path, _ = HttpWorkerClient.toRoute (WorkerMessage.StopApp "r2")
+        let method, path, _ = HttpWorkerClient.toRoute (WorkerMessage.StopApp(SageFs.AppRun.StopScope.OnlyRun "run1", "r2"))
         method |> Expect.equal "method" "POST"
         path |> Expect.equal "path" "/stop-app"
 

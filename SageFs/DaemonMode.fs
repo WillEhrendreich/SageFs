@@ -338,14 +338,18 @@ let createSessionOps
       // in WorkerExited handler (checks currentPid <> workerPid) prevents double-restart.
       sessionManager.Post(
         SessionManager.SessionCommand.WorkerExited(sessionId, -1, -1))
-    SetAppState = fun sessionId app ->
-      task {
-        sessionManager.Post(SessionManager.SessionCommand.SetAppState(sessionId, app))
-      }
-    EndAppRun = fun sessionId runId final ->
-      task {
-        sessionManager.Post(SessionManager.SessionCommand.EndAppRun(sessionId, runId, final))
-      }
+    ClaimRun = fun sessionId project ->
+      sessionManager.PostAndAsyncReply(fun reply -> SessionManager.SessionCommand.ClaimRun(sessionId, project, reply))
+      |> Async.StartAsTask
+    ClaimStop = fun sessionId ->
+      sessionManager.PostAndAsyncReply(fun reply -> SessionManager.SessionCommand.ClaimStop(sessionId, reply))
+      |> Async.StartAsTask
+    AdvanceRun = fun sessionId generation next ->
+      sessionManager.PostAndAsyncReply(fun reply -> SessionManager.SessionCommand.AdvanceRun(sessionId, generation, next, reply))
+      |> Async.StartAsTask
+    EndAppRun = fun sessionId generation runId final ->
+      sessionManager.PostAndAsyncReply(fun reply -> SessionManager.SessionCommand.EndAppRun(sessionId, generation, runId, final, reply))
+      |> Async.StartAsTask
     AwaitReady = fun sessionId timeout ->
       task {
         try
@@ -356,11 +360,6 @@ let createSessionOps
             |> Async.StartAsTask
         with :? TimeoutException ->
           return Error (SageFsError.WorkerTimeout (WorkerProtocol.SessionId.value sessionId, "restart", timeout.TotalSeconds))
-      }
-    UpdateActiveProject = fun sessionId activeProject ->
-      task {
-        sessionManager.Post(
-          SessionManager.SessionCommand.UpdateActiveProject(sessionId, activeProject))
       }
     SwitchWorkflow = fun sessionIdStr workflow ->
       task {

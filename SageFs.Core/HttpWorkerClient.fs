@@ -47,9 +47,9 @@ module HttpWorkerClient =
     | WorkerMessage.RunApp(project, previous, rid) ->
       "POST", "/run-app",
       Some (Serialization.serialize {| project = project; previous = previous; replyId = rid |})
-    | WorkerMessage.StopApp rid ->
+    | WorkerMessage.StopApp(scope, rid) ->
       "POST", "/stop-app",
-      Some (Serialization.serialize {| replyId = rid |})
+      Some (Serialization.serialize {| scope = scope; replyId = rid |})
     | WorkerMessage.AwaitAppChange(runId, rid) ->
       "POST", "/await-app-change",
       Some (Serialization.serialize {| runId = runId; replyId = rid |})

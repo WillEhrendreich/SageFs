@@ -154,7 +154,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
           AutoOpenNamespaces = false
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           RestartState = RestartPolicy.emptyState
-          ActiveProject = None
+          AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
 
           ProjectRoles = []
 
@@ -190,7 +190,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
         AutoOpenNamespaces = false
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = RestartPolicy.emptyState
-        ActiveProject = None
+        AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
 
         ProjectRoles = []
 
@@ -226,7 +226,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
       AutoOpenNamespaces = false
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       RestartState = RestartPolicy.emptyState
-      ActiveProject = None
+      AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
 
       ProjectRoles = []
 
@@ -265,7 +265,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
       AutoOpenNamespaces = false
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       RestartState = RestartPolicy.emptyState
-      ActiveProject = None
+      AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
 
       ProjectRoles = []
 

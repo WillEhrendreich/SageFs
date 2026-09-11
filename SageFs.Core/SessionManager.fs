@@ -35,9 +35,9 @@ module SessionManager =
     Workflow: WorkflowTypes.SessionWorkflow
     /// Per-session restart tracking.
     RestartState: RestartPolicy.State
-    /// The project currently in focus for "Run App" operations.
-    /// When null, the dashboard auto-selects based on ActiveProject dropdown logic.
-    ActiveProject: string option
+    /// The generation of the Run or Stop that last claimed the session's app
+    /// (its state is Info.App). This mailbox is the app's single owner.
+    AppGeneration: AppRun.RunGeneration
     /// Classification of all projects loaded in this session.
     ProjectRoles: ClassifiedProject list
   }
@@ -98,11 +98,15 @@ module SessionManager =
     | WorkerReportedReady of SessionId * workerPid: int * ClassifiedProject list
     /// A worker's ready poll saw it fault during warmup, with the worker's own reason.
     | WorkerReportedFaulted of SessionId * workerPid: int * reason: string
-    | SetAppState of SessionId * AppRun.AppRunState
-    | EndAppRun of SessionId * runId: string * AppRun.AppRunState
+    /// Run App: the owner decides whether the run may begin and how it starts.
+    | ClaimRun of SessionId * project: string * AsyncReplyChannel<Result<AppRun.RunClaim, SageFsError>>
+    /// Stop App: takes a new generation so no earlier run's step can land after it.
+    | ClaimStop of SessionId * AsyncReplyChannel<Result<AppRun.StopClaim, SageFsError>>
+    /// One step of a run, applied only while its generation owns the app.
+    | AdvanceRun of SessionId * AppRun.RunGeneration * AppRun.AppRunState * AsyncReplyChannel<AppRun.StepOutcome>
+    | EndAppRun of SessionId * AppRun.RunGeneration * runId: string * AppRun.AppRunState * AsyncReplyChannel<AppRun.RunEnd>
     /// Answered when the session is Ready (or has failed) — parked until then.
     | AwaitReady of SessionId * AsyncReplyChannel<Result<unit, SageFsError>>
-    | UpdateActiveProject of SessionId * string option
     | SwitchWorkflow of SessionId * WorkflowTypes.SessionWorkflow * AsyncReplyChannel<Result<string, SageFsError>>
 
   type ManagerState = {
@@ -566,6 +570,12 @@ module SessionManager =
             return Ok "Build succeeded"
     }
 
+  let private appSlotOf (session: ManagedSession) : AppRun.AppSlot =
+    { Generation = session.AppGeneration; State = session.Info.App }
+
+  let private withAppSlot (slot: AppRun.AppSlot) (session: ManagedSession) : ManagedSession =
+    { session with AppGeneration = slot.Generation; Info = { session.Info with App = slot.State } }
+
   let private faultedTombstone (reason: string option) (session: ManagedSession) =
     { session with
         Proxy = pendingProxy
@@ -625,7 +635,7 @@ module SessionManager =
           WorkerPid = Some proc.Id
           WorkerPort = None
           Workflow = session.Workflow
-          ActiveProject = session.ActiveProject
+          ActiveProject = session.Info.ActiveProject
           ProjectRoles = session.ProjectRoles
           App = AppRun.acrossWorkerRestart session.Info.App
         }
@@ -639,7 +649,7 @@ module SessionManager =
           AutoOpenNamespaces = session.AutoOpenNamespaces
           Workflow = session.Workflow
           RestartState = session.RestartState
-          ActiveProject = session.ActiveProject
+          AppGeneration = session.AppGeneration
           ProjectRoles = session.ProjectRoles
         }
         let newState = ManagerState.addSession id restarted state
@@ -784,7 +794,7 @@ module SessionManager =
                 AutoOpenNamespaces = autoOpenNamespaces
                 Workflow = workflow
                 RestartState = RestartPolicy.emptyState
-                ActiveProject = None
+                AppGeneration = AppRun.AppSlot.initial.Generation
                 ProjectRoles = []
               }
               let newState = ManagerState.addSession sessionId managed state
@@ -1408,40 +1418,63 @@ module SessionManager =
           | None ->
             Log.warn "[SessionManager] Ignoring Ready from worker pid %d for session %s: it is no longer the session's worker" workerPid (SessionId.value id)
             return state
-        | SessionCommand.SetAppState(id, app) ->
+        // The app's single owner: every Run, Stop and run step is decided here,
+        // against the state and generation this mailbox holds (AppRun.AppSlot).
+        | SessionCommand.ClaimRun(id, project, reply) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
-            let newState = ManagerState.addSession id { session with Info = { session.Info with App = app } } state
+            let phase = AppRunOrchestration.startPhaseFor session.Info.Status session.Workflow
+            let claim, slot = AppRun.AppSlot.claimRun project phase DateTime.UtcNow (appSlotOf session)
+            reply.Reply(Ok claim)
             onSessionProgressChanged ()
-            return newState
+            return ManagerState.addSession id (withAppSlot slot session) state
           | None ->
+            reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
             return state
-        | SessionCommand.EndAppRun(id, runId, final) ->
+        | SessionCommand.ClaimStop(id, reply) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
-            let app = AppRun.applyEnd session.Info.App runId final
-            let newState = ManagerState.addSession id { session with Info = { session.Info with App = app } } state
+            let claim, slot = AppRun.AppSlot.claimStop (appSlotOf session)
+            reply.Reply(Ok claim)
             onSessionProgressChanged ()
-            return newState
+            return ManagerState.addSession id (withAppSlot slot session) state
           | None ->
+            reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
+            return state
+        | SessionCommand.AdvanceRun(id, generation, next, reply) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let outcome, slot = AppRun.AppSlot.advance generation next (appSlotOf session)
+            reply.Reply outcome
+            match outcome with
+            | AppRun.StepOutcome.Applied ->
+              // The project that last ran is the one Run picks next time.
+              let activeProject =
+                match next with
+                | AppRun.AppRunState.Running app -> Some app.Project
+                | _ -> session.Info.ActiveProject
+              let updated = withAppSlot slot session
+              onSessionProgressChanged ()
+              return ManagerState.addSession id { updated with Info = { updated.Info with ActiveProject = activeProject } } state
+            | AppRun.StepOutcome.Stale _ -> return state
+          | None ->
+            reply.Reply(AppRun.StepOutcome.Stale AppRun.AppRunState.NotRunning)
+            return state
+        | SessionCommand.EndAppRun(id, generation, runId, final, reply) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let ended, slot = AppRun.AppSlot.endRun generation runId final (appSlotOf session)
+            reply.Reply ended
+            onSessionProgressChanged ()
+            return ManagerState.addSession id (withAppSlot slot session) state
+          | None ->
+            reply.Reply AppRun.RunEnd.NotCurrent
             return state
         | SessionCommand.AwaitReady(id, reply) ->
           // Parked here and settled after every step (settleReadyWaiters), so
           // any path that makes the session Ready or fails it answers the caller.
           let waiting = state.ReadyWaiters |> Map.tryFind id |> Option.defaultValue []
           return { state with ReadyWaiters = Map.add id (reply :: waiting) state.ReadyWaiters }
-        | SessionCommand.UpdateActiveProject(id, activeProject) ->
-          match ManagerState.tryGetSession id state with
-          | Some session ->
-            let updated =
-              { session with
-                  Info = { session.Info with ActiveProject = activeProject }
-                  ActiveProject = activeProject }
-            let newState = ManagerState.addSession id updated state
-            onSessionProgressChanged ()
-            return newState
-          | None ->
-            return state
         | SessionCommand.SwitchWorkflow(id, workflow, reply) ->
           match ManagerState.tryGetSession id state with
           | Some session when session.Workflow = workflow ->
@@ -1510,6 +1543,18 @@ module SessionManager =
             tryReply reply ()
           | SessionCommand.AwaitReady(_, reply) ->
             tryReply reply (Error (SageFsError.Unexpected ex))
+          | SessionCommand.ClaimRun(_, _, reply) ->
+            tryReply reply (Error (SageFsError.Unexpected ex))
+          | SessionCommand.ClaimStop(_, reply) ->
+            tryReply reply (Error (SageFsError.Unexpected ex))
+          | SessionCommand.AdvanceRun(id, _, _, reply) ->
+            let current =
+              ManagerState.tryGetSession id state
+              |> Option.map (fun s -> s.Info.App)
+              |> Option.defaultValue AppRun.AppRunState.NotRunning
+            tryReply reply (AppRun.StepOutcome.Stale current)
+          | SessionCommand.EndAppRun(_, _, _, _, reply) ->
+            tryReply reply AppRun.RunEnd.NotCurrent
           | _ -> ()
           return state
       }

@@ -171,7 +171,7 @@ let private stateOf = function
 
 type internal Msg =
   | Start of project: string * EntryPoint * LaunchPlan * AsyncReplyChannel<AppRunState>
-  | Stop of AsyncReplyChannel<Result<AppRunState, string>>
+  | Stop of StopScope * AsyncReplyChannel<Result<AppRunState, string>>
   | Finished of runId: string * AppRunState
   | Await of runId: string * TaskCompletionSource<AppRunState>
   | RequireRestart of first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list * AsyncReplyChannel<AppRunState>
@@ -324,18 +324,26 @@ type Runner(timeouts: StartTimeouts, setEnv: SetEnv) =
             reply.Reply(stateOf next)
             settle waiters (stateOf next)
             return! loop next []
-        | Stop reply ->
-          match owned with
-          | Idle _ ->
+        | Stop (scope, reply) ->
+          match scope, owned with
+          | StopScope.OnlyRun runId, Live (app, _, _) when app.RunId <> runId ->
+            // That run is already over and another is live: leave it alone.
+            reply.Reply(Ok (stateOf owned))
+            return! loop owned waiters
+          | StopScope.OnlyRun _, Idle last ->
+            // That run already ended; how it ended stays on record.
+            reply.Reply(Ok last)
+            return! loop owned waiters
+          | StopScope.CurrentApp, Idle _ ->
             let next = Idle AppRunState.NotRunning
             publish next
             reply.Reply(Ok AppRunState.NotRunning)
             settle waiters AppRunState.NotRunning
             return! loop next []
-          | Live (app, ThreadOnly, _) ->
+          | _, Live (app, ThreadOnly, _) ->
             reply.Reply(Error (sprintf "%s has no host to stop, so it cannot be stopped in place. → Hard-reset the session to stop it." app.EntryPoint))
             return! loop owned waiters
-          | Live (_, HostHandle host, restoreEnv) ->
+          | _, Live (_, HostHandle host, restoreEnv) ->
             let next = Idle AppRunState.NotRunning
             publish next
             do! stopHost host
@@ -409,8 +417,8 @@ let create (timeouts: StartTimeouts) (setEnv: SetEnv) = new Runner(timeouts, set
 let start (runner: Runner) (project: string) (entry: EntryPoint) (plan: LaunchPlan) : Task<AppRunState> =
   runner.Agent.PostAndAsyncReply(fun reply -> Start(project, entry, plan, reply)) |> Async.StartAsTask
 
-let stop (runner: Runner) : Task<Result<AppRunState, string>> =
-  runner.Agent.PostAndAsyncReply(fun reply -> Stop reply) |> Async.StartAsTask
+let stop (runner: Runner) (scope: StopScope) : Task<Result<AppRunState, string>> =
+  runner.Agent.PostAndAsyncReply(fun reply -> Stop (scope, reply)) |> Async.StartAsTask
 
 let state (runner: Runner) = runner.State
 

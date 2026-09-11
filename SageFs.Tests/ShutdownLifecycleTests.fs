@@ -58,7 +58,7 @@ let mkHangingSession (proc: Process) =
     AutoOpenNamespaces = false
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     RestartState = RestartPolicy.emptyState
-    ActiveProject = None
+    AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
     ProjectRoles = [] }
 
 [<Tests>]

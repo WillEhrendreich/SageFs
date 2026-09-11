@@ -274,6 +274,131 @@ let applyEnd (current: AppRunState) (runId: string) (final: AppRunState) : AppRu
   | AppRunState.Running app when app.RunId = runId -> final
   | _ -> current
 
+/// Which run a stop is for.
+[<RequireQualifiedAccess>]
+type StopScope =
+  /// Whatever the worker is running or starting: the user pressed Stop.
+  | CurrentApp
+  /// Only this run: stopping an app no Run owns any more must not end a newer one.
+  | OnlyRun of runId: string
+
+/// Where a running app listened, so its relaunch can come back there.
+let addressOf (app: RunningApp) : PreviousAddress =
+  match app.Endpoint with
+  | AppEndpoint.Http (url, _) -> PreviousAddress.ReuseAddress url
+  | AppEndpoint.NoServer -> PreviousAddress.NoPreviousAddress
+
+/// The owner's count of accepted Run and Stop presses for one session. Every
+/// step of a run carries the generation its Run was given; once a later Run or
+/// Stop takes a newer one, the older run's steps are stale and are dropped.
+[<Struct>]
+type RunGeneration = RunGeneration of int64
+
+module RunGeneration =
+  let initial = RunGeneration 0L
+  let next (RunGeneration n) = RunGeneration (n + 1L)
+
+/// The owner's answer to Run.
+[<RequireQualifiedAccess>]
+type RunClaim =
+  /// Accepted: the app is Starting under this generation; `previous` is where it last listened.
+  | Begun of generation: RunGeneration * phase: StartPhase * previous: PreviousAddress
+  | AlreadyRunning of RunningApp
+  | AlreadyStarting of project: string * phase: StartPhase
+
+/// The owner's answer to Stop. Either way the stop takes a new generation, so
+/// nothing an earlier Run still has in flight can be applied afterwards.
+[<RequireQualifiedAccess>]
+type StopClaim =
+  /// A start in progress was cancelled: the app is Not running from now on.
+  | CancelledStart of generation: RunGeneration * phase: StartPhase
+  /// The worker must be asked to stop its app; its answer is recorded under this generation.
+  | StopWorkerApp of generation: RunGeneration
+
+/// Whether one step of a run was recorded.
+[<RequireQualifiedAccess>]
+type StepOutcome =
+  | Applied
+  /// A later Run or Stop owns the app now; this step changed nothing.
+  | Stale of current: AppRunState
+
+/// What the owner did with a worker's report that a run ended.
+[<RequireQualifiedAccess>]
+type RunEnd =
+  | Recorded
+  /// The run ended for changes and its generation still owns the app: the
+  /// owner now says it is rebuilding, and the watcher rebuilds and relaunches.
+  | RebuildForChanges of project: string * previous: PreviousAddress
+  /// Not the current run (stopped, replaced, or its worker is gone): nothing changed.
+  | NotCurrent
+
+/// A session's app as its single owner holds it: the state the user sees and
+/// the generation of the Run or Stop that last claimed it.
+type AppSlot = {
+  Generation: RunGeneration
+  State: AppRunState
+}
+
+module AppSlot =
+  let initial = { Generation = RunGeneration.initial; State = AppRunState.NotRunning }
+
+  /// Run is accepted only when nothing is running or starting; the accepted
+  /// run takes the next generation and the app is Starting from that moment.
+  let claimRun (project: string) (phase: StartPhase) (at: DateTime) (slot: AppSlot) : RunClaim * AppSlot =
+    match slot.State with
+    | AppRunState.Running app -> RunClaim.AlreadyRunning app, slot
+    | AppRunState.Starting (starting, startingPhase, _) -> RunClaim.AlreadyStarting (starting, startingPhase), slot
+    | AppRunState.NotRunning
+    | AppRunState.Exited _
+    | AppRunState.Crashed _
+    | AppRunState.RestartRequired _
+    | AppRunState.BuildFailed _ ->
+      // After a failed rebuild, come back where the app listened so open tabs keep working.
+      let previous =
+        match slot.State with
+        | AppRunState.BuildFailed (_, _, _, address) -> address
+        | _ -> PreviousAddress.NoPreviousAddress
+      let generation = RunGeneration.next slot.Generation
+      RunClaim.Begun (generation, phase, previous),
+      { Generation = generation; State = AppRunState.Starting (project, phase, at) }
+
+  /// Stop always takes the next generation. A start in progress is cancelled on
+  /// the spot; anything else waits for the worker's answer.
+  let claimStop (slot: AppSlot) : StopClaim * AppSlot =
+    let generation = RunGeneration.next slot.Generation
+    match slot.State with
+    | AppRunState.Starting (_, phase, _) ->
+      StopClaim.CancelledStart (generation, phase), { Generation = generation; State = AppRunState.NotRunning }
+    | AppRunState.NotRunning
+    | AppRunState.Running _
+    | AppRunState.Exited _
+    | AppRunState.Crashed _
+    | AppRunState.RestartRequired _
+    | AppRunState.BuildFailed _ -> StopClaim.StopWorkerApp generation, { slot with Generation = generation }
+
+  /// A step is recorded only while its generation still owns the app.
+  let advance (generation: RunGeneration) (next: AppRunState) (slot: AppSlot) : StepOutcome * AppSlot =
+    match generation = slot.Generation with
+    | true -> StepOutcome.Applied, { slot with State = next }
+    | false -> StepOutcome.Stale slot.State, slot
+
+  /// A worker's report that run `runId` ended applies only while that run is
+  /// the current one. A run ended for changes whose generation still owns the
+  /// app moves straight to rebuilding, so no Run or Stop can slip in between.
+  let endRun (generation: RunGeneration) (runId: string) (final: AppRunState) (slot: AppSlot) : RunEnd * AppSlot =
+    match slot.State with
+    | AppRunState.Running app when app.RunId = runId ->
+      match final with
+      | AppRunState.RestartRequired (project, first, rest, at) when generation = slot.Generation ->
+        RunEnd.RebuildForChanges (project, addressOf app),
+        { slot with State = AppRunState.Starting (project, StartPhase.RebuildingForChanges (first, rest), at) }
+      | _ -> RunEnd.Recorded, { slot with State = final }
+    | _ -> RunEnd.NotCurrent, slot
+
+  /// What the slot becomes when the session's worker is replaced.
+  let acrossWorkerRestart (slot: AppSlot) : AppSlot =
+    { slot with State = acrossWorkerRestart slot.State }
+
 /// One wording for the app's state, wherever the user reads it.
 let describeState (state: AppRunState) : string =
   match state with

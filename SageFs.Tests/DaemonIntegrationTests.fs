@@ -77,7 +77,7 @@ let managerStateTests =
         AutoOpenNamespaces = true
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = SageFs.RestartPolicy.emptyState
-        ActiveProject = None
+        AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
 
         ProjectRoles = []
 
@@ -121,7 +121,7 @@ let managerStateTests =
         AutoOpenNamespaces = true
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = SageFs.RestartPolicy.emptyState
-        ActiveProject = None
+        AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
 
         ProjectRoles = []
 
@@ -165,7 +165,7 @@ let managerStateTests =
           AutoOpenNamespaces = true
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           RestartState = SageFs.RestartPolicy.emptyState
-          ActiveProject = None
+          AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
           ProjectRoles = [] }
 
       let sidA = testSessionId "aa000011"

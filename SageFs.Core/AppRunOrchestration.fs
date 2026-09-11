@@ -2,6 +2,12 @@
 /// and MCP: resolve the target, restart into WebLive when needed (hot reload
 /// installs only at worker start), ask the worker to start the entry point,
 /// and record what the user should see at every step.
+///
+/// The session's owner (the SessionManager mailbox) decides every Run and Stop
+/// and hands each accepted Run a generation. Every step recorded here carries
+/// that generation, so once a later Stop or Run claims the app, nothing this
+/// run still has in flight can be applied — a Stop cannot be lost to a
+/// rebuild that finishes after it, and two Runs cannot both start the app.
 module SageFs.AppRunOrchestration
 
 open System
@@ -10,6 +16,14 @@ open SageFs.AppRun
 open SageFs.WorkerProtocol
 
 let private newReplyId () = Guid.NewGuid().ToString("N").Substring(0, 8)
+
+/// What must happen before the entry point can start, given where the session is.
+let startPhaseFor (status: SessionStatus) (workflow: WorkflowTypes.SessionWorkflow) : StartPhase =
+  match status, workflow with
+  // No worker (its last build failed, or it was stopped): Run rebuilds it first.
+  | (SessionStatus.Faulted | SessionStatus.Stopped), _ -> StartPhase.RebuildingSession
+  | _, WorkflowTypes.SessionWorkflow.WebLive _ -> StartPhase.LaunchingEntryPoint
+  | _, WorkflowTypes.SessionWorkflow.Interactive -> StartPhase.RestartingIntoWebLive
 
 let private askWorker (ops: SessionManagementOps) (sessionId: SessionId) (msg: WorkerMessage) : Task<Result<AppRunState, SageFsError>> =
   task {
@@ -32,48 +46,65 @@ let private failedState (project: string) (previous: PreviousAddress) (err: Sage
   | other -> AppRunState.Crashed (project, SageFsError.describe other, at)
 
 /// Starts the entry point on a Ready worker, records what happened, and
-/// watches a running app until its run ends.
+/// watches a running app until its run ends. A run a later Stop or Run has
+/// superseded answers with the app state the owner holds now.
 let rec private launch
   (ops: SessionManagementOps)
   (clock: unit -> DateTime)
   (readyTimeout: TimeSpan)
   (sessionId: SessionId)
+  (generation: RunGeneration)
   (project: string)
   (previous: PreviousAddress)
   : Task<Result<AppRunState, SageFsError>> =
   task {
-    do! ops.SetAppState sessionId (AppRunState.Starting (project, StartPhase.LaunchingEntryPoint, clock ()))
-    match! askWorker ops sessionId (WorkerMessage.RunApp (project, previous, newReplyId ())) with
-    | Error e ->
-      do! ops.SetAppState sessionId (failedState project previous e (clock ()))
-      return Error e
-    | Ok state ->
-      do! ops.SetAppState sessionId state
-      do! ops.UpdateActiveProject sessionId (Some project)
-      match state with
-      | AppRunState.Running app -> watchRun ops clock readyTimeout sessionId app
-      | _ -> ()
-      return Ok state
+    match! ops.AdvanceRun sessionId generation (AppRunState.Starting (project, StartPhase.LaunchingEntryPoint, clock ())) with
+    | StepOutcome.Stale current -> return Ok current
+    | StepOutcome.Applied ->
+      match! askWorker ops sessionId (WorkerMessage.RunApp (project, previous, newReplyId ())) with
+      | Error e ->
+        match! ops.AdvanceRun sessionId generation (failedState project previous e (clock ())) with
+        | StepOutcome.Applied -> return Error e
+        | StepOutcome.Stale current -> return Ok current
+      | Ok state ->
+        match! ops.AdvanceRun sessionId generation state with
+        | StepOutcome.Applied ->
+          match state with
+          | AppRunState.Running app -> watchRun ops clock readyTimeout sessionId generation app
+          | _ -> ()
+          return Ok state
+        | StepOutcome.Stale current ->
+          // Stop was pressed while the worker started this app: nobody owns it,
+          // so end it — only it, never a run someone started since.
+          match state with
+          | AppRunState.Running app ->
+            let! _ = askWorker ops sessionId (WorkerMessage.StopApp (StopScope.OnlyRun app.RunId, newReplyId ()))
+            ()
+          | _ -> ()
+          return Ok current
   }
 
 /// Long-polls the worker until the run ends, then records its end. A run ended
-/// for changes is rebuilt and relaunched where it listened. A worker that goes
-/// away needs no report: its restart resets the app.
+/// for changes is rebuilt and relaunched where it listened, if its Run still
+/// owns the app. A worker that goes away needs no report: its restart resets the app.
 and private watchRun
   (ops: SessionManagementOps)
   (clock: unit -> DateTime)
   (readyTimeout: TimeSpan)
   (sessionId: SessionId)
+  (generation: RunGeneration)
   (app: RunningApp)
   : unit =
   let rec poll () : Task<unit> =
     task {
       match! askWorker ops sessionId (WorkerMessage.AwaitAppChange (app.RunId, newReplyId ())) with
       | Ok (AppRunState.Running current) when current.RunId = app.RunId -> return! poll ()
-      | Ok (AppRunState.RestartRequired (project, first, rest, _) as final) ->
-        do! ops.EndAppRun sessionId app.RunId final
-        do! restartForChanges ops clock readyTimeout sessionId project app first rest
-      | Ok final -> do! ops.EndAppRun sessionId app.RunId final
+      | Ok final ->
+        match! ops.EndAppRun sessionId generation app.RunId final with
+        | RunEnd.RebuildForChanges (project, previous) ->
+          do! restartForChanges ops clock readyTimeout sessionId generation project previous
+        | RunEnd.Recorded
+        | RunEnd.NotCurrent -> ()
       | Error _ -> ()
     }
   Task.Run(fun () -> poll () :> Task) |> ignore
@@ -83,26 +114,22 @@ and private restartForChanges
   (clock: unit -> DateTime)
   (readyTimeout: TimeSpan)
   (sessionId: SessionId)
+  (generation: RunGeneration)
   (project: string)
-  (app: RunningApp)
-  (first: SageFs.Features.ReloadPlanning.ReloadChange)
-  (rest: SageFs.Features.ReloadPlanning.ReloadChange list)
+  (previous: PreviousAddress)
   : Task<unit> =
   task {
-    do! ops.SetAppState sessionId (AppRunState.Starting (project, StartPhase.RebuildingForChanges (first, rest), clock ()))
-    let previous =
-      match app.Endpoint with
-      | AppEndpoint.Http (url, _) -> PreviousAddress.ReuseAddress url
-      | AppEndpoint.NoServer -> PreviousAddress.NoPreviousAddress
     let! restarted = ops.RestartSession sessionId true
     let! ready =
       match restarted with
       | Error e -> Task.FromResult(Error e)
       | Ok _ -> ops.AwaitReady sessionId readyTimeout
     match ready with
-    | Error e -> do! ops.SetAppState sessionId (failedState project previous e (clock ()))
+    | Error e ->
+      let! _ = ops.AdvanceRun sessionId generation (failedState project previous e (clock ()))
+      ()
     | Ok () ->
-      let! _ = launch ops clock readyTimeout sessionId project previous
+      let! _ = launch ops clock readyTimeout sessionId generation project previous
       ()
   }
 
@@ -144,51 +171,59 @@ let runApp
       | Error e -> return Error (SageFsError.AppRunFailed (requested, RunTargetError.describe e))
       | Ok target ->
         let project = target.Path
-        // After a failed rebuild, come back where the app listened so open tabs keep working.
-        let previous =
-          match info.App with
-          | AppRunState.BuildFailed (_, _, _, address) -> address
-          | _ -> PreviousAddress.NoPreviousAddress
-        match info.App with
-        | AppRunState.Running app when app.Project = project -> return Ok info.App
-        | AppRunState.Running app ->
+        match! ops.ClaimRun sessionId project with
+        | Error e -> return Error e
+        | Ok (RunClaim.AlreadyRunning app) when app.Project = project -> return Ok (AppRunState.Running app)
+        | Ok (RunClaim.AlreadyRunning app) ->
           return Error (SageFsError.AppRunFailed (project, sprintf "%s is already running. → Stop it first." (projectName app.Project)))
-        | AppRunState.Starting (starting, _, _) ->
+        | Ok (RunClaim.AlreadyStarting (starting, _)) ->
           return Error (SageFsError.AppRunFailed (project, sprintf "%s is already starting. → Wait for it, then retry." (projectName starting)))
-        | AppRunState.NotRunning | AppRunState.Exited _ | AppRunState.Crashed _ | AppRunState.RestartRequired _ | AppRunState.BuildFailed _ ->
-          let fail (err: SageFsError) =
-            task {
-              do! ops.SetAppState sessionId (failedState project previous err (clock ()))
-              return Error err
-            }
+        | Ok (RunClaim.Begun (generation, phase, previous)) ->
           let! ready =
-            match info.Status, info.Workflow with
-            // No worker (its last build failed, or it was stopped): Run rebuilds it first.
-            | (SessionStatus.Faulted | SessionStatus.Stopped), _ ->
+            match phase with
+            | StartPhase.RebuildingSession ->
               task {
-                do! ops.SetAppState sessionId (AppRunState.Starting (project, StartPhase.RebuildingSession, clock ()))
                 match! ops.RestartSession sessionId true with
                 | Error e -> return Error e
                 | Ok _ -> return! ops.AwaitReady sessionId readyTimeout
               }
-            | _, WorkflowTypes.SessionWorkflow.WebLive _ -> Task.FromResult(Ok ())
-            | _, WorkflowTypes.SessionWorkflow.Interactive ->
+            | StartPhase.RestartingIntoWebLive ->
               task {
-                do! ops.SetAppState sessionId (AppRunState.Starting (project, StartPhase.RestartingIntoWebLive, clock ()))
                 match! ops.SwitchWorkflow sid (WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults) with
                 | Error e -> return Error e
                 | Ok _ -> return! ops.AwaitReady sessionId readyTimeout
               }
+            | StartPhase.LaunchingEntryPoint
+            | StartPhase.RebuildingForChanges _ -> Task.FromResult(Ok ())
           match ready with
-          | Error e -> return! fail e
-          | Ok () -> return! launch ops clock readyTimeout sessionId project previous
+          | Error e ->
+            match! ops.AdvanceRun sessionId generation (failedState project previous e (clock ())) with
+            | StepOutcome.Applied -> return Error e
+            | StepOutcome.Stale current -> return Ok current
+          | Ok () -> return! launch ops clock readyTimeout sessionId generation project previous
   }
 
+/// Stop claims the app first, so no step of an earlier run lands after it,
+/// then asks the worker. A start still being prepared is cancelled on the spot.
 let stopApp (ops: SessionManagementOps) (sessionId: SessionId) : Task<Result<AppRunState, SageFsError>> =
   task {
-    match! askWorker ops sessionId (WorkerMessage.StopApp (newReplyId ())) with
-    | Ok state ->
-      do! ops.SetAppState sessionId state
-      return Ok state
+    match! ops.ClaimStop sessionId with
     | Error e -> return Error e
+    | Ok (StopClaim.CancelledStart (_, phase)) ->
+      match phase with
+      // The worker may be starting the app right now: tell it to stop too.
+      | StartPhase.LaunchingEntryPoint ->
+        let! _ = askWorker ops sessionId (WorkerMessage.StopApp (StopScope.CurrentApp, newReplyId ()))
+        ()
+      | StartPhase.RestartingIntoWebLive
+      | StartPhase.RebuildingSession
+      | StartPhase.RebuildingForChanges _ -> ()
+      return Ok AppRunState.NotRunning
+    | Ok (StopClaim.StopWorkerApp generation) ->
+      match! askWorker ops sessionId (WorkerMessage.StopApp (StopScope.CurrentApp, newReplyId ())) with
+      | Error e -> return Error e
+      | Ok state ->
+        match! ops.AdvanceRun sessionId generation state with
+        | StepOutcome.Applied -> return Ok state
+        | StepOutcome.Stale current -> return Ok current
   }

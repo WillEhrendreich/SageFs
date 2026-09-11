@@ -547,8 +547,9 @@ module WorkerHttpTransport =
       map Routes.stopApp (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
+        let scope = SageFs.WorkerProtocol.Serialization.deserialize<AppRun.StopScope> ((jsonProp doc "scope").GetRawText())
         let rid = (jsonProp doc "replyId").GetString()
-        return! respond' ctx (WorkerMessage.StopApp rid)
+        return! respond' ctx (WorkerMessage.StopApp(scope, rid))
       })) |> ignore
 
       map Routes.awaitAppChange (Func<HttpContext, Task>(fun ctx -> task {

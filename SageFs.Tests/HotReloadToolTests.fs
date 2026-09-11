@@ -46,10 +46,11 @@ let private mkTools
     GetAllSessions = fun () -> Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
     NotifyWorkerDied = fun _ -> ()
-    SetAppState = fun _ _ -> Task.FromResult(())
-    EndAppRun = fun _ _ _ -> Task.FromResult(())
+    ClaimRun = SageFs.SessionManagementOps.stub.ClaimRun
+    ClaimStop = SageFs.SessionManagementOps.stub.ClaimStop
+    AdvanceRun = SageFs.SessionManagementOps.stub.AdvanceRun
+    EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
     AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
-    UpdateActiveProject = fun _ _ -> Task.FromResult(())
     SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
   }
   let ctx : McpContext = {

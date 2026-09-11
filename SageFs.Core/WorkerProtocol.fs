@@ -129,7 +129,7 @@ module WorkerProtocol =
     | GetTestDiscovery of replyId: string
     | GetInstrumentationMaps of replyId: string
     | RunApp of project: string * previous: AppRun.PreviousAddress * replyId: string
-    | StopApp of replyId: string
+    | StopApp of scope: AppRun.StopScope * replyId: string
     /// Long poll: answered when the app is no longer Running with this run id.
     | AwaitAppChange of runId: string * replyId: string
     | Shutdown
