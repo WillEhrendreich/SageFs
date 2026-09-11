@@ -282,12 +282,39 @@ type TestFailure =
   | ExceptionThrown of message: string * stackTrace: string
   | TimedOut of after: TimeSpan
 
+/// Why a requested test ended a run without a result of its own. This is not
+/// a failure — nothing is known about the test's code, only that the run ended
+/// before the test reported — so it must never be shown as one.
+[<RequireQualifiedAccess>]
+type NoResultReason =
+  /// The worker closed the stream (EOF or `event: done`) without reporting it.
+  | StreamEnded
+  /// The worker went silent for longer than the run's inactivity window.
+  | StreamStalled of after: TimeSpan
+  /// The connection to the worker failed mid-run.
+  | TransportFailed of message: string
+  /// The run was cancelled — superseded by a newer run, or the daemon stopped.
+  | RunCancelled
+
+module NoResultReason =
+  /// Plain-language cause, for run summaries and per-test detail.
+  let describe (reason: NoResultReason) : string =
+    match reason with
+    | NoResultReason.StreamEnded -> "the worker ended the run before reporting it"
+    | NoResultReason.StreamStalled after ->
+      sprintf "the worker went silent for %.0fs" after.TotalSeconds
+    | NoResultReason.TransportFailed message ->
+      sprintf "the connection to the worker failed: %s" message
+    | NoResultReason.RunCancelled -> "the run was cancelled before it reported"
+
 [<RequireQualifiedAccess>]
 type TestResult =
   | Passed of duration: TimeSpan
   | Failed of failure: TestFailure * duration: TimeSpan
   | Skipped of reason: string
   | NotRun
+  /// The test was requested in a run that ended before it reported.
+  | NoResult of reason: NoResultReason
 
 type TestRunResult = {
   TestId: TestId
@@ -314,6 +341,22 @@ module TestRunResult =
       match receivedIds.Contains tc.Id with
       | true -> None
       | false -> Some (mk tc))
+
+  /// Mark every requested test that never reported with a truthful
+  /// `NoResult reason` — so whichever way a run ends, every requested test is
+  /// left terminal, and a reported outcome is never replaced or fabricated over.
+  let neverReported
+    (reason: NoResultReason)
+    (at: DateTimeOffset)
+    (tests: TestCase array)
+    (receivedIds: Set<TestId>)
+    : TestRunResult array =
+    synthesizeMissing tests receivedIds (fun tc ->
+      { TestId = tc.Id
+        TestName = tc.FullName
+        Result = TestResult.NoResult reason
+        Timestamp = at
+        Output = None })
 
 // --- Run History ---
 
@@ -1076,19 +1119,24 @@ module FlakyDetection =
     match result with
     | TestResult.Passed _ -> TestOutcome.Pass
     | TestResult.Failed _ -> TestOutcome.Fail
-    | TestResult.Skipped _ | TestResult.NotRun -> TestOutcome.Pass
+    | TestResult.Skipped _ | TestResult.NotRun | TestResult.NoResult _ -> TestOutcome.Pass
 
   let recordResult
     (testId: TestId)
     (result: TestResult)
     (history: Map<TestId, ResultWindow>)
     : Map<TestId, ResultWindow> =
-    let window =
-      history
-      |> Map.tryFind testId
-      |> Option.defaultWith (fun () -> ResultWindow.create FlakyDefaults.windowSize)
-    let updated = ResultWindow.add (outcomeOf result) window
-    Map.add testId updated history
+    match result with
+    // A test that never reported says nothing about its stability — recording
+    // it as a pass or a fail would fabricate evidence either way.
+    | TestResult.NoResult _ -> history
+    | TestResult.Passed _ | TestResult.Failed _ | TestResult.Skipped _ | TestResult.NotRun ->
+      let window =
+        history
+        |> Map.tryFind testId
+        |> Option.defaultWith (fun () -> ResultWindow.create FlakyDefaults.windowSize)
+      let updated = ResultWindow.add (outcomeOf result) window
+      Map.add testId updated history
 
   let assessTest
     (testId: TestId)
@@ -2251,6 +2299,9 @@ module LiveTesting =
           | TestResult.Failed (f, d) -> Some (TestRunStatus.Failed (f, d))
           | TestResult.Skipped reason -> Some (TestRunStatus.Skipped reason)
           | TestResult.NotRun -> None
+          // The test's run ended before it reported: there is no current
+          // result, so it is neither running nor waiting to run — it is stale.
+          | TestResult.NoResult _ -> Some TestRunStatus.Stale
         | None -> None
       match Set.contains testId state.AffectedTests with
       | true ->
@@ -3045,6 +3096,7 @@ module TestPrioritization =
     | TestResult.Failed (_, d) -> d.TotalMilliseconds
     | TestResult.Skipped _ -> 0.0
     | TestResult.NotRun -> 0.0
+    | TestResult.NoResult _ -> 0.0
 
   /// Compute the prioritization tier for a test, accounting for flaky demotion.
   /// Environmentally flaky failures are demoted from tier 0 to tier 2 (same as passed)
@@ -3062,6 +3114,8 @@ module TestPrioritization =
     | TestResult.Passed _ -> 2
     | TestResult.Skipped _ -> 3
     | TestResult.NotRun -> 4
+    // Never reported last time: as unknown as a new test, so run it early.
+    | TestResult.NoResult _ -> 1
 
   /// Build the lexicographic sort key: (tier, -coverageWeight, durationMs).
   /// Negated coverage weight ensures higher coverage sorts first within the same tier.
@@ -4818,6 +4872,7 @@ module CoverageView =
             | TestResult.Failed _ -> (p, f + 1, r, s, k)
             | TestResult.Skipped _ -> (p, f, r, s, k + 1)
             | TestResult.NotRun -> (p, f, r, s + 1, k) // NotRun = stale: result not current
+            | TestResult.NoResult _ -> (p, f, r, s + 1, k) // never reported = no current result
           | None -> (p, f, r, s + 1, k)) // No result yet = stale: not yet run
           init
       // Build the badge list. Stable order: Pass, Fail, Running, Stale, Skipped.
@@ -4892,7 +4947,7 @@ module TestRunExplainer =
     match r with
     | TestResult.Passed d -> Some d.TotalMilliseconds
     | TestResult.Failed (_, d) -> Some d.TotalMilliseconds
-    | TestResult.Skipped _ | TestResult.NotRun -> None
+    | TestResult.Skipped _ | TestResult.NotRun | TestResult.NoResult _ -> None
 
   let explainTest
     (graph: TestDependencyGraph)

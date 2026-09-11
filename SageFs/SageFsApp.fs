@@ -100,6 +100,10 @@ module TestOutputFormatter =
       { Kind = OutputKind.System
         Text = sprintf "  ⊘ %s (not run)" r.TestName
         Timestamp = now; SessionId = "" }
+    | TestResult.NoResult reason ->
+      { Kind = OutputKind.System
+        Text = sprintf "  ⬜ %s — never reported: %s" r.TestName (NoResultReason.describe reason)
+        Timestamp = now; SessionId = "" }
 
   let private resultLines (r: TestRunResult) : OutputLine list =
     let now = DateTime.UtcNow
@@ -126,9 +130,26 @@ module TestOutputFormatter =
         | TestResult.Passed d -> d.TotalMilliseconds
         | TestResult.Failed (_, d) -> d.TotalMilliseconds
         | _ -> 0.0)
-    let kind = match failed > 0 with | true -> OutputKind.Error | false -> OutputKind.Info
+    let neverReported =
+      results
+      |> Array.choose (fun r ->
+        match r.Result with
+        | TestResult.NoResult reason -> Some reason
+        | TestResult.Passed _ | TestResult.Failed _ | TestResult.Skipped _ | TestResult.NotRun -> None)
+    let incomplete =
+      match neverReported with
+      | [||] -> ""
+      | reasons ->
+        sprintf ", %d of %d never reported — %s"
+          reasons.Length
+          results.Length
+          (reasons |> Array.distinct |> Array.map NoResultReason.describe |> String.concat "; ")
+    let kind =
+      match failed, neverReported.Length with
+      | 0, 0 -> OutputKind.Info
+      | _ -> OutputKind.Error
     { Kind = kind
-      Text = sprintf "🧪 Test run complete: %d passed, %d failed, %d skipped (%s)" passed failed skipped (formatDuration (TimeSpan.FromMilliseconds totalDuration))
+      Text = sprintf "🧪 Test run complete: %d passed, %d failed, %d skipped%s (%s)" passed failed skipped incomplete (formatDuration (TimeSpan.FromMilliseconds totalDuration))
       Timestamp = DateTime.UtcNow; SessionId = "" }
 
 module PendingTestResultBuffer =
@@ -1983,6 +2004,16 @@ type EffectDeps = {
 
 /// Routes SageFsEffect to real infrastructure via injected deps.
 /// Converts WorkerResponses back into SageFsMsg for the Elm loop.
+/// Who reports a live-test run's completion once its stream has ended.
+[<RequireQualifiedAccess>]
+type RunHandoff =
+  /// The run ended on its own — cleanly, with gaps, stalled, or failed — and
+  /// reports its own completion.
+  | ReportsCompletion
+  /// The run was cancelled: the run that replaced it owns the session's run
+  /// phase and reports completion, so this one must not end that phase early.
+  | LeavesCompletionToSuccessor
+
 module SageFsEffectHandler =
 
   let newReplyId () =
@@ -2524,6 +2555,7 @@ module SageFsEffectHandler =
                   "SageFs.LiveTesting.TestExecution")
               let sw = System.Diagnostics.Stopwatch.StartNew()
               let receivedIds = System.Collections.Generic.HashSet<Features.LiveTesting.TestId>()
+              let mutable handoff = RunHandoff.ReportsCompletion
               try
                 let targetSid = targetSession |> Option.bind (fun s -> match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
                 match deps.ResolveSession targetSid with
@@ -2566,35 +2598,28 @@ module SageFsEffectHandler =
                       | false -> ()
                     let parallelism = max 4 (Environment.ProcessorCount / 2)
                     let! outcome = streamProxy tests parallelism onResult onCoverage
-                    // BatchFlusher's Dispose (via 'use') flushes remaining results
+                    // Whichever way the stream ended — a clean end with gaps, a
+                    // stall, a cancellation — every requested test that never
+                    // reported gets a truthful NoResult saying why, so none is
+                    // left spinning and none gets a fabricated failure. Tests that
+                    // did report are excluded: their outcome is never replaced.
+                    // BatchFlusher's Dispose (via 'use') flushes the reported ones.
+                    let reason = HttpWorkerClient.noResultReason outcome
+                    let missing =
+                      Features.LiveTesting.TestRunResult.neverReported
+                        reason System.DateTimeOffset.UtcNow tests (receivedIds |> Set.ofSeq)
+                    match missing.Length with
+                    | 0 -> ()
+                    | _ ->
+                      dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch missing))
+                      Utils.Log.warn
+                        "[LiveTesting] %d of %d tests never reported: %s"
+                        missing.Length tests.Length (Features.LiveTesting.NoResultReason.describe reason)
                     match outcome with
-                    | HttpWorkerClient.StreamOutcome.Completed -> ()
-                    | HttpWorkerClient.StreamOutcome.TimedOut after ->
-                      // The worker went silent: never report this as a clean run.
-                      // Synthesize TimedOut entries ONLY for the tests that never
-                      // streamed a result (roast queue item 1 — no eternal
-                      // spinners, no fabricated failures for tests that passed).
-                      let missing =
-                        Features.LiveTesting.TestRunResult.synthesizeMissing
-                          tests
-                          (receivedIds |> Set.ofSeq)
-                          (fun tc ->
-                            { TestId = tc.Id
-                              TestName = tc.FullName
-                              Result =
-                                Features.LiveTesting.TestResult.Failed(
-                                  Features.LiveTesting.TestFailure.TimedOut after,
-                                  after)
-                              Timestamp = System.DateTimeOffset.UtcNow
-                              Output = None }
-                            : Features.LiveTesting.TestRunResult)
-                      match missing.Length with
-                      | 0 -> ()
-                      | _ ->
-                        dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch missing))
-                        Utils.Log.warn
-                          "[LiveTesting] Stream stalled after %A — %d of %d tests never reported"
-                          after missing.Length tests.Length
+                    | HttpWorkerClient.StreamOutcome.Cancelled ->
+                      handoff <- RunHandoff.LeavesCompletionToSuccessor
+                    | HttpWorkerClient.StreamOutcome.Completed
+                    | HttpWorkerClient.StreamOutcome.TimedOut _ -> ()
                   | None ->
                     let notRunResults =
                       tests |> Array.map (fun tc ->
@@ -2615,51 +2640,49 @@ module SageFsEffectHandler =
                         Output = None }
                       : Features.LiveTesting.TestRunResult)
                   dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch notRunResults))
-                sw.Stop()
-                Instrumentation.testExecutionMs.Record(sw.Elapsed.TotalMilliseconds)
-                let endToEndMs = tsElapsed.TotalMilliseconds + fcsElapsed.TotalMilliseconds + sw.Elapsed.TotalMilliseconds
-                Instrumentation.testCycleEndToEnd.Record(endToEndMs)
-                Features.LiveTesting.LiveTestingInstrumentation.executionHistogram.Record(sw.Elapsed.TotalMilliseconds)
-                match activity <> null with
-                | true ->
-                  activity.SetTag("test_count", tests.Length) |> ignore
-                  activity.SetTag("trigger", sprintf "%A" trigger) |> ignore
-                  activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
-                | false -> ()
-                dispatch (SageFsMsg.Event (SageFsEvent.TestRunCompleted targetSession))
-                let timing : Features.LiveTesting.TestCycleTiming = {
-                  Depth = Features.LiveTesting.TestCycleDepth.ThroughExecution(
-                            tsElapsed, fcsElapsed, sw.Elapsed)
-                  TotalTests = tests.Length
-                  AffectedTests = tests.Length
-                  Trigger = trigger
-                  Timestamp = System.DateTimeOffset.UtcNow
-                }
-                dispatch (SageFsMsg.Event (SageFsEvent.TestCycleTimingRecorded timing))
-                Instrumentation.succeedSpan testCycleSpan
-                Instrumentation.testExecutionActiveCount.Add(-1L)
+                match handoff with
+                | RunHandoff.LeavesCompletionToSuccessor ->
+                  // Superseded: the replacing run owns this session's run phase,
+                  // so reporting completion here would end its phase early.
+                  sw.Stop()
+                  Instrumentation.succeedSpan testCycleSpan
+                  Instrumentation.testExecutionActiveCount.Add(-1L)
+                | RunHandoff.ReportsCompletion ->
+                  sw.Stop()
+                  Instrumentation.testExecutionMs.Record(sw.Elapsed.TotalMilliseconds)
+                  let endToEndMs = tsElapsed.TotalMilliseconds + fcsElapsed.TotalMilliseconds + sw.Elapsed.TotalMilliseconds
+                  Instrumentation.testCycleEndToEnd.Record(endToEndMs)
+                  Features.LiveTesting.LiveTestingInstrumentation.executionHistogram.Record(sw.Elapsed.TotalMilliseconds)
+                  match activity <> null with
+                  | true ->
+                    activity.SetTag("test_count", tests.Length) |> ignore
+                    activity.SetTag("trigger", sprintf "%A" trigger) |> ignore
+                    activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
+                  | false -> ()
+                  dispatch (SageFsMsg.Event (SageFsEvent.TestRunCompleted targetSession))
+                  let timing : Features.LiveTesting.TestCycleTiming = {
+                    Depth = Features.LiveTesting.TestCycleDepth.ThroughExecution(
+                              tsElapsed, fcsElapsed, sw.Elapsed)
+                    TotalTests = tests.Length
+                    AffectedTests = tests.Length
+                    Trigger = trigger
+                    Timestamp = System.DateTimeOffset.UtcNow
+                  }
+                  dispatch (SageFsMsg.Event (SageFsEvent.TestCycleTimingRecorded timing))
+                  Instrumentation.succeedSpan testCycleSpan
+                  Instrumentation.testExecutionActiveCount.Add(-1L)
               with ex ->
                 sw.Stop()
                 Instrumentation.failSpan testCycleSpan ex.Message
-                // Transport failure: mark ONLY the tests that never reported —
-                // tests that already streamed Passed/Failed results must not be
-                // re-reported as failures (double-reporting bug fixed here).
+                // Transport failure: mark ONLY the tests that never reported, and
+                // as never-reported — the connection failed, not the tests.
+                // Tests that already streamed a result keep it (no double report).
                 let errResults =
-                  Features.LiveTesting.TestRunResult.synthesizeMissing
+                  Features.LiveTesting.TestRunResult.neverReported
+                    (Features.LiveTesting.NoResultReason.TransportFailed ex.Message)
+                    System.DateTimeOffset.UtcNow
                     tests
                     (receivedIds |> Set.ofSeq)
-                    (fun tc ->
-                      ({ TestId = tc.Id
-                         TestName = tc.FullName
-                         Result =
-                           Features.LiveTesting.TestResult.Failed(
-                             Features.LiveTesting.TestFailure.ExceptionThrown(
-                               ex.Message,
-                               ex.StackTrace |> Option.ofObj |> Option.defaultValue ""),
-                             System.TimeSpan.Zero)
-                         Timestamp = System.DateTimeOffset.UtcNow
-                         Output = None }
-                       : Features.LiveTesting.TestRunResult))
                 match errResults.Length with
                 | 0 ->
                   Utils.Log.warn

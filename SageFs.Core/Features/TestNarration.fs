@@ -106,6 +106,8 @@ module TestNarration =
       sprintf "⏭️ %s skipped: %s" short reason
     | TestResult.NotRun ->
       sprintf "⬜ %s has not yet run" short
+    | TestResult.NoResult reason ->
+      sprintf "⬜ %s never reported a result: %s" short (NoResultReason.describe reason)
 
   /// Narrate with density control: Minimal is brief, Normal/Full add detail.
   let narrateAtDensity

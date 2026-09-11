@@ -318,8 +318,23 @@ let stcMappingTests = testList "STC Mapping" [
             | TestResult.Failed _ -> "fail"
             | TestResult.Skipped _ -> "skip"
             | TestResult.NotRun -> "skip"
+            | TestResult.NoResult _ -> "skip"
           classify rr.Result |> Expect.equal "same outcome" (classify runResult.Result)
         | None -> failwith (sprintf "Missing result for %A" tid)))
+
+  testCase "a never-reported result is restored as not run, not as a verdict" <| fun _ ->
+    let tid = TestId.TestId "never-reported"
+    let rr : TestRunResult = {
+      TestId = tid; TestName = "never-reported"
+      Result = TestResult.NoResult (NoResultReason.StreamStalled (TimeSpan.FromSeconds 30.0))
+      Timestamp = DateTimeOffset.UtcNow; Output = None }
+    let state = { LiveTestState.empty with LastResults = Map.ofList [ tid, rr ] }
+    let restored =
+      state |> TestCacheMapping.fromLiveTestState |> TestCacheMapping.toLiveTestState
+    restored.LastResults
+    |> Map.tryFind tid
+    |> Option.map (fun r -> r.Result)
+    |> Expect.equal "no current result survives a reload as 'not run yet'" (Some TestResult.NotRun)
 
   testCase "failure kind survives save→load for AssertionFailed" <| fun _ ->
     let tid = TestId.TestId "kind-a"

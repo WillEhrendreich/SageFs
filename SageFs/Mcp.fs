@@ -2619,6 +2619,8 @@ module McpTools =
               | Some (Features.LiveTesting.TestResult.Failed (_, d)) -> sprintf "Failed (%.0fms)" d.TotalMilliseconds
               | Some (Features.LiveTesting.TestResult.Skipped r) -> sprintf "Skipped: %s" r
               | Some Features.LiveTesting.TestResult.NotRun -> "Not run"
+              | Some (Features.LiveTesting.TestResult.NoResult reason) ->
+                sprintf "Never reported: %s" (Features.LiveTesting.NoResultReason.describe reason)
               | None -> "No result"
             {| TestId = Features.LiveTesting.TestId.value ct.TestId
                DisplayName = ct.DisplayName

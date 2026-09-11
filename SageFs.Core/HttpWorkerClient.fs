@@ -105,66 +105,90 @@ module HttpWorkerClient =
     /// finishing — the loop exits with an explicit timeout instead of silently
     /// reporting success (roast queue item 1).
     | TimedOut of after: TimeSpan
+    /// The caller cancelled the run (a newer run superseded it, or the daemon
+    /// is stopping) — the in-flight read was abandoned, not waited out.
+    | Cancelled
 
-  /// Read one SSE line with a per-read deadline, using ONE linked cancellation
-  /// token instead of allocating a `Task.Delay` + `Task.WhenAny` per line (the
-  /// old implementation leaked an un-cancelled timer and in-flight read on every
-  /// stalled line). Returns Choice1Of2 line, or Choice2Of2 when the deadline
-  /// (or the outer cancellation) fired before a line was produced.
-  let readLineWithDeadline
+  /// Where a run's inactivity window stands.
+  [<RequireQualifiedAccess>]
+  type WindowState =
+    /// The worker has spoken within the window.
+    | Open
+    /// The worker stayed silent for the whole window.
+    | Expired
+    /// The caller cancelled the run.
+    | CallerCancelled
+
+  /// ONE deadline per streaming run: a single cancellation source linked to the
+  /// caller's token, re-armed on every line the worker sends. The deadline is
+  /// therefore an inactivity window — a slow but steady run is never cut off —
+  /// and cancelling the run cancels the in-flight read with it. Nothing is
+  /// allocated per line.
+  type InactivityWindow(span: TimeSpan, caller: System.Threading.CancellationToken) =
+    let cts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(caller)
+    do cts.CancelAfter span
+    member _.Token = cts.Token
+    /// The worker just proved it is alive: restart the window.
+    member _.Touch() =
+      match cts.IsCancellationRequested with
+      | true -> ()
+      | false -> cts.CancelAfter span
+    member _.State =
+      match caller.IsCancellationRequested, cts.IsCancellationRequested with
+      | true, _ -> WindowState.CallerCancelled
+      | false, true -> WindowState.Expired
+      | false, false -> WindowState.Open
+    interface IDisposable with
+      member _.Dispose() = cts.Dispose()
+
+  /// Why the tests a stream never reported have no result, given how it ended.
+  let noResultReason (outcome: StreamOutcome) : Features.LiveTesting.NoResultReason =
+    match outcome with
+    | StreamOutcome.Completed -> Features.LiveTesting.NoResultReason.StreamEnded
+    | StreamOutcome.TimedOut after -> Features.LiveTesting.NoResultReason.StreamStalled after
+    | StreamOutcome.Cancelled -> Features.LiveTesting.NoResultReason.RunCancelled
+
+  /// One SSE payload the worker streamed during a test run.
+  [<RequireQualifiedAccess>]
+  type private SseData =
+    | TestResult of json: string
+    | Coverage of json: string
+
+  /// Run one streaming test request against the worker. The run has ONE
+  /// inactivity window linked to the caller's token: every line re-arms it,
+  /// silence past `readTimeout` ends the run as TimedOut, and cancelling the
+  /// caller abandons the in-flight read immediately and ends it as Cancelled.
+  /// Written as a task so cancellation arrives as a catchable exception and is
+  /// reported as an outcome, never as a silently-cancelled async.
+  let private streamRun
     (readTimeout: TimeSpan)
-    (reader: IO.StreamReader)
-    (outer: System.Threading.CancellationTokenSource)
-    : Async<Choice<string, unit>> =
-    async {
-      use linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(outer.Token)
-      linked.CancelAfter(readTimeout)
+    (client: HttpClient)
+    (tests: Features.LiveTesting.TestCase array)
+    (maxParallelism: int)
+    (onData: SseData -> unit)
+    (caller: System.Threading.CancellationToken)
+    : System.Threading.Tasks.Task<StreamOutcome> =
+    task {
+      let sw = Diagnostics.Stopwatch.StartNew()
       try
-        let! line = reader.ReadLineAsync(linked.Token).AsTask() |> Async.AwaitTask
-        return Choice1Of2 line
-      with
-      | :? OperationCanceledException -> return Choice2Of2 ()
-    }
-
-  /// Create a streaming test proxy that reads SSE events from the worker.
-  /// Each test result is dispatched individually via the onResult callback.
-  /// Returns the read-loop outcome so the caller can distinguish a completed run
-  /// from a stalled one (and synthesize truthful missing results, not silence or
-  /// fabricated failures).
-  let streamingTestProxy (readTimeout: TimeSpan) (baseUrl: string)
-    : Features.LiveTesting.TestCase array
-      -> int
-      -> (Features.LiveTesting.TestRunResult -> unit)
-      -> Async<StreamOutcome> =
-    let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
-    let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
-    fun tests maxParallelism onResult ->
-      async {
         let body = Serialization.serialize {| tests = tests; maxParallelism = maxParallelism |}
-        let content = new StringContent(body, Encoding.UTF8, "application/json")
-        let msg = new HttpRequestMessage(HttpMethod.Post, "/run-tests-stream", Content = content)
-        let! resp = client.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead) |> Async.AwaitTask
+        use content = new StringContent(body, Encoding.UTF8, "application/json")
+        use msg = new HttpRequestMessage(HttpMethod.Post, "/run-tests-stream", Content = content)
+        use! resp = client.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead, caller)
         resp.EnsureSuccessStatusCode() |> ignore
-        use! stream = resp.Content.ReadAsStreamAsync() |> Async.AwaitTask
+        use! stream = resp.Content.ReadAsStreamAsync(caller)
         use reader = new IO.StreamReader(stream)
-        use cts = new System.Threading.CancellationTokenSource()
-        let mutable keepReading = true
+        use window = new InactivityWindow(readTimeout, caller)
+        let mutable ended = ValueNone
         let mutable isCoverageEvent = false
-        let sw = Diagnostics.Stopwatch.StartNew()
-        let mutable outcome = StreamOutcome.Completed
-        while keepReading do
-          match! readLineWithDeadline readTimeout reader cts with
-          | Choice2Of2 () when not cts.IsCancellationRequested ->
-            // Stalled worker: no line within the read timeout. Surface a real
-            // timeout instead of silently returning success — the caller marks
-            // the never-reported tests as TimedOut.
-            outcome <- StreamOutcome.TimedOut sw.Elapsed
-            keepReading <- false
-          | Choice2Of2 () -> keepReading <- false // outer cancellation — exit quietly
-          | Choice1Of2 null -> keepReading <- false // stream closed cleanly (EOF)
-          | Choice1Of2 line ->
+        while ended.IsNone do
+          let! line = reader.ReadLineAsync(window.Token)
+          match line with
+          | null -> ended <- ValueSome StreamOutcome.Completed // EOF: the worker closed the stream
+          | line ->
+            window.Touch()
             match line.StartsWith("event: done") with
-            | true -> keepReading <- false
+            | true -> ended <- ValueSome StreamOutcome.Completed
             | false ->
               match line.StartsWith("event: coverage") with
               | true -> isCoverageEvent <- true
@@ -175,16 +199,56 @@ module HttpWorkerClient =
                   match isCoverageEvent with
                   | true ->
                     isCoverageEvent <- false
-                    // Coverage data is ignored here — collected via separate proxy
-                  | false ->
-                    match json <> "{}" with
-                    | true ->
-                      let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
-                      onResult result
-                    | false -> ()
+                    onData (SseData.Coverage json)
+                  | false -> onData (SseData.TestResult json)
                 | false -> ()
-        return outcome
-      }
+        match ended with
+        | ValueSome outcome -> return outcome
+        | ValueNone -> return StreamOutcome.Completed
+      with
+      | :? OperationCanceledException ->
+        match caller.IsCancellationRequested with
+        | true -> return StreamOutcome.Cancelled
+        | false -> return StreamOutcome.TimedOut sw.Elapsed
+    }
+
+  /// Run a stream under the caller's Async cancellation token, so cancelling the
+  /// run (a newer run superseding it, the daemon stopping) reaches the read.
+  let private underCallerToken
+    (run: System.Threading.CancellationToken -> System.Threading.Tasks.Task<StreamOutcome>)
+    : Async<StreamOutcome> =
+    async {
+      let! caller = Async.CancellationToken
+      return! run caller |> Async.AwaitTask
+    }
+
+  let private newStreamingClient (baseUrl: string) =
+    let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
+    new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
+
+  /// Deliver one streamed test result; the worker's `{}` keep-alive is skipped.
+  let private deliverResult (onResult: Features.LiveTesting.TestRunResult -> unit) (json: string) =
+    match json with
+    | "{}" -> ()
+    | _ -> onResult (Serialization.deserialize<Features.LiveTesting.TestRunResult> json)
+
+  /// Create a streaming test proxy that reads SSE events from the worker.
+  /// Each test result is dispatched individually via the onResult callback.
+  /// Returns how the stream ended so the caller can give every test that never
+  /// reported a truthful NoResult — not silence, and not a fabricated failure.
+  let streamingTestProxy (readTimeout: TimeSpan) (baseUrl: string)
+    : Features.LiveTesting.TestCase array
+      -> int
+      -> (Features.LiveTesting.TestRunResult -> unit)
+      -> Async<StreamOutcome> =
+    let client = newStreamingClient baseUrl
+    fun tests maxParallelism onResult ->
+      underCallerToken (
+        streamRun readTimeout client tests maxParallelism (fun data ->
+          match data with
+          | SseData.TestResult json -> deliverResult onResult json
+          // Coverage is collected by streamingTestProxyWithCoverage.
+          | SseData.Coverage _ -> ()))
 
   /// Streaming test proxy that also collects IL coverage hits.
   let streamingTestProxyWithCoverage (readTimeout: TimeSpan) (baseUrl: string)
@@ -193,56 +257,17 @@ module HttpWorkerClient =
       -> (Features.LiveTesting.TestRunResult -> unit)
       -> (bool array -> unit)
       -> Async<StreamOutcome> =
-    let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
-    let client = new HttpClient(handler, BaseAddress = Uri(baseUrl), Timeout = Timeouts.workerHttpRequest)
+    let client = newStreamingClient baseUrl
     fun tests maxParallelism onResult onCoverage ->
-      async {
-        let body = Serialization.serialize {| tests = tests; maxParallelism = maxParallelism |}
-        let content = new StringContent(body, Encoding.UTF8, "application/json")
-        let msg = new HttpRequestMessage(HttpMethod.Post, "/run-tests-stream", Content = content)
-        let! resp = client.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead) |> Async.AwaitTask
-        resp.EnsureSuccessStatusCode() |> ignore
-        use! stream = resp.Content.ReadAsStreamAsync() |> Async.AwaitTask
-        use reader = new IO.StreamReader(stream)
-        use cts = new System.Threading.CancellationTokenSource()
-        let mutable keepReading = true
-        let mutable isCoverageEvent = false
-        let sw = Diagnostics.Stopwatch.StartNew()
-        let mutable outcome = StreamOutcome.Completed
-        while keepReading do
-          match! readLineWithDeadline readTimeout reader cts with
-          | Choice2Of2 () when not cts.IsCancellationRequested ->
-            outcome <- StreamOutcome.TimedOut sw.Elapsed
-            keepReading <- false
-          | Choice2Of2 () -> keepReading <- false // outer cancellation — exit quietly
-          | Choice1Of2 null -> keepReading <- false // stream closed cleanly (EOF)
-          | Choice1Of2 line ->
-            match line.StartsWith("event: done") with
-            | true -> keepReading <- false
-            | false ->
-              match line.StartsWith("event: coverage") with
-              | true -> isCoverageEvent <- true
-              | false ->
-                match line.StartsWith("data: ") with
-                | true ->
-                  let json = line.Substring(6)
-                  match isCoverageEvent with
-                  | true ->
-                    isCoverageEvent <- false
-                    try
-                      let doc = System.Text.Json.JsonDocument.Parse(json)
-                      let hitsArr = doc.RootElement.GetProperty("hits")
-                      let hits = [| for i in 0 .. hitsArr.GetArrayLength() - 1 -> hitsArr.[i].GetBoolean() |]
-                      onCoverage hits
-                    with ex ->
-                      Utils.Log.warn "[HttpWorkerClient] Coverage data parse failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-                      ()
-                  | false ->
-                    match json <> "{}" with
-                    | true ->
-                      let result = Serialization.deserialize<Features.LiveTesting.TestRunResult> json
-                      onResult result
-                    | false -> ()
-                | false -> ()
-        return outcome
-      }
+      underCallerToken (
+        streamRun readTimeout client tests maxParallelism (fun data ->
+          match data with
+          | SseData.TestResult json -> deliverResult onResult json
+          | SseData.Coverage json ->
+            try
+              use doc = System.Text.Json.JsonDocument.Parse(json)
+              let hitsArr = doc.RootElement.GetProperty("hits")
+              let hits = [| for i in 0 .. hitsArr.GetArrayLength() - 1 -> hitsArr.[i].GetBoolean() |]
+              onCoverage hits
+            with ex ->
+              Utils.Log.warn "[HttpWorkerClient] Coverage data parse failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")))

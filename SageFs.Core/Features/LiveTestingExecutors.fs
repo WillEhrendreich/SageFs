@@ -813,6 +813,7 @@ module TestOrchestrator =
           "timed_out"
         | TestResult.Skipped _ -> "skipped"
         | TestResult.NotRun -> "not_run"
+        | TestResult.NoResult _ -> "no_result"
       match isNull activity with
       | false ->
         activity.SetTag("test.result", resultKind) |> ignore

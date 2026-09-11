@@ -1486,3 +1486,229 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       "Should not call GetWarmupContext when no Ready session" ctxCalled
   }
 ]
+
+/// Drives `RunAffectedTests` against a stub streaming proxy so each way a run
+/// can end (clean end with gaps, stall, transport failure, cancellation) is
+/// observed through the real effect handler.
+module RunEndHarness =
+  open SageFs.Features.LiveTesting
+
+  let mkTest (id: string) : TestCase = {
+    Id = TestId.TestId id
+    FullName = sprintf "Sample.Tests.%s" id
+    DisplayName = id
+    Origin = TestOrigin.ReflectionOnly
+    Labels = []
+    Framework = TestFramework.Expecto
+    Category = TestCategory.Unit
+  }
+
+  let requested = [| mkTest "t-a"; mkTest "t-b"; mkTest "t-c" |]
+
+  let reported (tc: TestCase) (result: TestResult) : TestRunResult = {
+    TestId = tc.Id
+    TestName = tc.FullName
+    Result = result
+    Timestamp = DateTimeOffset.UtcNow
+    Output = None
+  }
+
+  let passedA = reported requested.[0] (TestResult.Passed (TimeSpan.FromMilliseconds 5.0))
+  let failedB =
+    reported requested.[1] (TestResult.Failed (TestFailure.AssertionFailed "expected 1, got 2", TimeSpan.FromMilliseconds 7.0))
+
+  type Completion =
+    | ReportedCompletion
+    | NoCompletionReported
+
+  type RunEnd = {
+    Results: TestRunResult array
+    Completion: Completion
+  }
+
+  type CompletionExpectation =
+    | CompletesItself
+    | LeavesCompletionToSupersedingRun
+
+  let run
+    (expectation: CompletionExpectation)
+    (stub: (TestRunResult -> unit) -> Async<HttpWorkerClient.StreamOutcome>)
+    =
+    task {
+      let sid = testSessionId "a1b2c3d4"
+      let deps : EffectDeps = {
+        ResolveSession = fun _ ->
+          Result.Ok (SessionOperations.SessionResolution.DefaultSingle sid)
+        GetProxy = fun _ -> None
+        GetStreamingTestProxy = fun _ -> Some (fun _ _ onResult _ -> stub onResult)
+        CreateSession = fun _ _ _ ->
+          async { return Result.Error SageFsError.NoActiveSessions }
+        ConfigureWarmupAutoOpen = TestDeps.ensureAutoOpenNoop
+        StopSession = fun _ ->
+          async { return Result.Error SageFsError.NoActiveSessions }
+        RestartSession = fun _ _ ->
+          async { return Result.Error SageFsError.NoActiveSessions }
+        ListSessions = fun () -> async { return [] }
+        SleepMs = fun _ -> async { return () }
+        GetWarmupContext = None
+        RegisterFileWatcher = fun _ _ -> ()
+        DisposeFileWatcher = fun _ _ -> ()
+        TestCycleCancellation = TestCycleCancellation.create ()
+      }
+      let messages = System.Collections.Concurrent.ConcurrentQueue<SageFsMsg>()
+      let results () =
+        messages
+        |> Seq.collect (fun m ->
+          match m with
+          | SageFsMsg.Event (SageFsEvent.TestResultsBatch batch) -> Seq.ofArray batch
+          | _ -> Seq.empty)
+        |> Seq.toArray
+      let completion () =
+        let completed =
+          messages
+          |> Seq.exists (fun m ->
+            match m with
+            | SageFsMsg.Event (SageFsEvent.TestRunCompleted _) -> true
+            | _ -> false)
+        match completed with
+        | true -> ReportedCompletion
+        | false -> NoCompletionReported
+      let everyTestHasAResult () =
+        let ids = results () |> Array.map (fun r -> r.TestId) |> Set.ofArray
+        requested |> Array.forall (fun tc -> ids.Contains tc.Id)
+      do! SageFsEffectHandler.execute deps messages.Enqueue
+            (SageFsEffect.TestCycle (
+              TestCycleEffect.RunAffectedTests
+                { TestRunRequest.empty with
+                    Tests = requested
+                    Trigger = RunTrigger.FileSave
+                    SessionId = Some (SessionId.value sid) }))
+      let! _settled =
+        TestDeps.awaitCondition 5000 (fun () ->
+          match expectation with
+          | CompletesItself -> everyTestHasAResult () && completion () = ReportedCompletion
+          | LeavesCompletionToSupersedingRun -> everyTestHasAResult ())
+      return { Results = results (); Completion = completion () }
+    }
+
+  /// The run's end must leave every requested test with exactly one result:
+  /// the one it reported, or a never-reported marker that says why.
+  let expectEveryTestTerminal
+    (received: TestRunResult list)
+    (reason: NoResultReason)
+    (runEnd: RunEnd)
+    =
+    runEnd.Results
+    |> Array.map (fun r -> r.TestId)
+    |> Array.sort
+    |> Expect.equal
+        "every requested test has exactly one result — none missing, none double-reported"
+        (requested |> Array.map (fun t -> t.Id) |> Array.sort)
+    for r in received do
+      runEnd.Results
+      |> Array.find (fun f -> f.TestId = r.TestId)
+      |> fun f -> f.Result
+      |> Expect.equal (sprintf "%s keeps the outcome it reported" r.TestName) r.Result
+    let receivedIds = received |> List.map (fun r -> r.TestId) |> Set.ofList
+    for f in runEnd.Results |> Array.filter (fun f -> not (receivedIds.Contains f.TestId)) do
+      f.Result
+      |> Expect.equal (sprintf "%s is marked never-reported, not failed" f.TestName) (TestResult.NoResult reason)
+
+[<Tests>]
+let runEndTests = testList "SageFsEffectHandler — every requested test ends terminal" [
+  testTask "a stream that ends cleanly with tests unreported marks them never-reported instead of leaving them running" {
+    let! runEnd =
+      RunEndHarness.run RunEndHarness.CompletesItself (fun onResult ->
+        async {
+          onResult RunEndHarness.passedA
+          return HttpWorkerClient.StreamOutcome.Completed
+        })
+    runEnd |> RunEndHarness.expectEveryTestTerminal [ RunEndHarness.passedA ] Features.LiveTesting.NoResultReason.StreamEnded
+    runEnd.Completion |> Expect.equal "the run reports completion" RunEndHarness.ReportedCompletion
+  }
+
+  testTask "a stalled stream keeps the results that arrived and marks the rest never-reported, not failed" {
+    let after = TimeSpan.FromSeconds 30.0
+    let! runEnd =
+      RunEndHarness.run RunEndHarness.CompletesItself (fun onResult ->
+        async {
+          onResult RunEndHarness.passedA
+          onResult RunEndHarness.failedB
+          return HttpWorkerClient.StreamOutcome.TimedOut after
+        })
+    runEnd
+    |> RunEndHarness.expectEveryTestTerminal
+        [ RunEndHarness.passedA; RunEndHarness.failedB ]
+        (Features.LiveTesting.NoResultReason.StreamStalled after)
+    runEnd.Completion |> Expect.equal "the run reports completion" RunEndHarness.ReportedCompletion
+  }
+
+  testTask "a transport failure keeps streamed results and marks the rest never-reported" {
+    let! runEnd =
+      RunEndHarness.run RunEndHarness.CompletesItself (fun onResult ->
+        async {
+          onResult RunEndHarness.failedB
+          return failwith "connection reset by worker"
+        })
+    runEnd
+    |> RunEndHarness.expectEveryTestTerminal
+        [ RunEndHarness.failedB ]
+        (Features.LiveTesting.NoResultReason.TransportFailed "connection reset by worker")
+    runEnd.Completion |> Expect.equal "the run reports completion" RunEndHarness.ReportedCompletion
+  }
+
+  testTask "a cancelled run marks its unreported tests never-reported and leaves completion to the run that replaced it" {
+    let! runEnd =
+      RunEndHarness.run RunEndHarness.LeavesCompletionToSupersedingRun (fun onResult ->
+        async {
+          onResult RunEndHarness.passedA
+          return HttpWorkerClient.StreamOutcome.Cancelled
+        })
+    runEnd
+    |> RunEndHarness.expectEveryTestTerminal
+        [ RunEndHarness.passedA ]
+        Features.LiveTesting.NoResultReason.RunCancelled
+    runEnd.Completion
+    |> Expect.equal
+        "a superseded run must not end the phase of the run that replaced it"
+        RunEndHarness.NoCompletionReported
+  }
+
+  testTask "a run where every test reported synthesizes nothing" {
+    let passedC =
+      RunEndHarness.reported RunEndHarness.requested.[2] (Features.LiveTesting.TestResult.Passed TimeSpan.Zero)
+    let! (runEnd: RunEndHarness.RunEnd) =
+      RunEndHarness.run RunEndHarness.CompletesItself (fun onResult ->
+        async {
+          onResult RunEndHarness.passedA
+          onResult RunEndHarness.failedB
+          onResult passedC
+          return HttpWorkerClient.StreamOutcome.Completed
+        })
+    runEnd.Results
+    |> Array.map (fun r -> r.TestId)
+    |> Array.sort
+    |> Expect.equal
+        "only the reported results, each once"
+        (RunEndHarness.requested |> Array.map (fun t -> t.Id) |> Array.sort)
+    runEnd.Results
+    |> Array.filter (fun r ->
+      match r.Result with
+      | Features.LiveTesting.TestResult.NoResult _ -> true
+      | _ -> false)
+    |> Expect.isEmpty "nothing is marked never-reported"
+  }
+
+  testCase "the run summary says how many requested tests never reported, and why" <| fun _ ->
+    let missing =
+      Features.LiveTesting.TestRunResult.neverReported
+        (Features.LiveTesting.NoResultReason.StreamStalled (TimeSpan.FromSeconds 30.0))
+        DateTimeOffset.UtcNow
+        RunEndHarness.requested
+        (Set.ofList [ RunEndHarness.passedA.TestId ])
+    let line =
+      TestOutputFormatter.summaryLine (Array.append [| RunEndHarness.passedA |] missing)
+    line.Text |> Expect.stringContains "counts the unreported tests against the run" "2 of 3 never reported"
+    line.Text |> Expect.stringContains "says why" "the worker went silent for 30s"
+    line.Kind |> Expect.equal "an incomplete run is not reported as a clean one" OutputKind.Error
+]

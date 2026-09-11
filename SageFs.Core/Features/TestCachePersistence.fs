@@ -402,6 +402,11 @@ module TestCacheMapping =
             Outcome.Skip, 0u, Some reason
           | TestResult.NotRun ->
             Outcome.NotRun, 0u, None
+          // A test that never reported has no result worth restoring: after a
+          // reload it is simply not run yet, which is the truth. Persisting it
+          // as NotRun keeps the on-disk format unchanged.
+          | TestResult.NoResult _ ->
+            Outcome.NotRun, 0u, None
         { TestId = tid
           Outcome = outcome
           DurationMs = durationMs
