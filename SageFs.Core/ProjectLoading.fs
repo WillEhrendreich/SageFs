@@ -200,31 +200,37 @@ let emptySolution = {
   OtherArgs = []
 }
 
-/// If `dllPath` (a bin/<Config>/<TFM>/<name>.dll output) does not exist, probe
-/// the sibling configuration directory (Debug ↔ Release) at the same TFM and
-/// return an existing output path. Ionide evaluates projects with MSBuild's
-/// default Configuration (Debug), so a Release-only build leaves TargetPath
-/// pointing at a nonexistent bin/Debug file — without this, warmup faults with
-/// "Missing DLL" even though the project is built.
+/// If a build output does not exist, probe the same path under the sibling
+/// configuration (Debug ↔ Release) and return it when it exists. Ionide
+/// evaluates projects with MSBuild's default Configuration (Debug), so after a
+/// Release-only build every Debug path it reports is missing — the project's
+/// own bin/<Config>/<TFM>/x.dll AND the referenced projects' reference
+/// assemblies at obj/<Config>/<TFM>/ref/x.dll. The nearest Debug/Release
+/// directory in the path is the configuration, whatever the layout.
 let resolveSiblingConfigOutput (dllPath: string) : string option =
   try
-    // An existing output needs no resolution.
-    if File.Exists dllPath then Some dllPath
-    else
-      // Layout: <binRoot>/<Config>/<TFM>/<name>.dll
-      let tfmDir = Path.GetDirectoryName dllPath   // .../bin/Debug/net10.0
-      let configDir = Path.GetDirectoryName tfmDir // .../bin/Debug
-      let binRoot = Path.GetDirectoryName configDir // .../bin
-      let config = Path.GetFileName configDir
-      let tfm = Path.GetFileName tfmDir
-      let altConfig =
-        match config with
-        | c when String.Equals(c, "Debug", StringComparison.OrdinalIgnoreCase) -> "Release"
-        | c when String.Equals(c, "Release", StringComparison.OrdinalIgnoreCase) -> "Debug"
-        | _ -> config
-      let fileName = Path.GetFileName dllPath
-      let candidate = Path.Combine(binRoot, altConfig, tfm, fileName)
-      if File.Exists candidate then Some candidate else None
+    match File.Exists dllPath with
+    | true -> Some dllPath
+    | false ->
+      let separators = [| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |]
+      let segments = dllPath.Split separators
+      let isConfig (segment: string) =
+        String.Equals(segment, "Debug", StringComparison.OrdinalIgnoreCase)
+        || String.Equals(segment, "Release", StringComparison.OrdinalIgnoreCase)
+      match segments |> Array.tryFindIndexBack isConfig with
+      | None -> None
+      | Some index ->
+        let sibling =
+          match String.Equals(segments.[index], "Debug", StringComparison.OrdinalIgnoreCase) with
+          | true -> "Release"
+          | false -> "Debug"
+        let candidate =
+          segments
+          |> Array.mapi (fun i segment -> match i = index with | true -> sibling | false -> segment)
+          |> String.concat (string Path.DirectorySeparatorChar)
+        match File.Exists candidate with
+        | true -> Some candidate
+        | false -> None
   with _ -> None
 
 let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
@@ -407,13 +413,31 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
     |> Seq.distinct
     |> List.ofSeq
 
-  match List.exists (File.Exists >> not) allDlls with
-  | true ->
-    let missing = allDlls |> List.filter (File.Exists >> not)
+  // The -r: references each project passes its compiler (framework assemblies
+  // and referenced projects' reference assemblies), resolved to outputs that
+  // exist — after a Release-only build they point into obj/Debug and would
+  // otherwise kill FSI at startup with a bare StopProcessingExn.
+  let compilerRefs =
+    sln.Projects
+    |> Seq.collect _.OtherOptions
+    |> Seq.filter (fun s ->
+      s.StartsWith("-r:", System.StringComparison.Ordinal)
+      && s.EndsWith(".dll", System.StringComparison.Ordinal))
+    |> Seq.map (fun s ->
+      let path = s.Substring 3
+      resolveSiblingConfigOutput path |> Option.defaultValue path)
+    |> Seq.distinct
+    |> List.ofSeq
+
+  match (allDlls @ compilerRefs) |> List.filter (File.Exists >> not) |> List.distinct with
+  | [] -> ()
+  | missing ->
     for dll in missing do
       logger.LogError (sprintf "Missing DLL: %s" dll)
-    failwithf "Not all DLLs are found (%d missing). Please build your project before running REPL" missing.Length
-  | false -> ()
+    failwithf
+      "Not all DLLs are found (%d missing: %s). Build the project (dotnet build) before starting a session — both the Debug and Release outputs were checked."
+      missing.Length
+      (missing |> List.map Path.GetFileName |> String.concat ", ")
   // Flags from project OtherOptions that FSI should inherit for source-level
   // compatibility (e.g. --checknulls+ from <Nullable>enable</Nullable>).
   // We explicitly exclude --warnaserror (too strict for REPL) and --optimize
@@ -437,13 +461,7 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
     yield! sln.LibPaths |> Seq.map (sprintf "--lib:%s")
     yield! sln.OtherArgs
     yield! fsiSafeFlags
-    // Always include framework DLL references from project OtherOptions
-    // (e.g. ASP.NET Core, MVC) — harmless if unused, essential if needed
-    yield!
-      sln.Projects
-      |> Seq.collect _.OtherOptions
-      |> Seq.filter (fun s ->
-        s.StartsWith("-r", System.StringComparison.Ordinal)
-        && s.EndsWith(".dll", System.StringComparison.Ordinal)
-        )
+    // Always include the projects' compiler references (framework assemblies
+    // such as ASP.NET Core, and referenced projects) — resolved above.
+    yield! compilerRefs |> Seq.map (sprintf "-r:%s")
   |]

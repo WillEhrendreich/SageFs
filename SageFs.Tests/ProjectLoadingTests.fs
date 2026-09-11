@@ -199,3 +199,62 @@ let tests =
       }
     ]
   ]
+
+/// A Release-only build: Ionide reports Debug paths, only Release outputs exist.
+let private releaseOnlyLayout () =
+  let root = Directory.CreateTempSubdirectory("sagefs-releaseonly-").FullName
+  let write (parts: string list) =
+    let path = Path.Combine(root :: parts |> Array.ofList)
+    Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
+    File.WriteAllText(path, "x")
+    path
+  let appDll = write [ "App"; "bin"; "Release"; "net10.0"; "App.dll" ]
+  let coreRefRelease = write [ "Core"; "obj"; "Release"; "net10.0"; "ref"; "Core.dll" ]
+  let coreRefDebug = Path.Combine(root, "Core", "obj", "Debug", "net10.0", "ref", "Core.dll")
+  root, appDll, coreRefRelease, coreRefDebug
+
+let private solutionWith (targetPath: string) (otherOptions: string list) : Solution =
+  { FsProjects = []
+    Projects = [ { SageFs.Tests.ShadowCopyTests.mkProjectOptions targetPath with OtherOptions = otherOptions } ]
+    StartupFiles = []
+    References = []
+    LibPaths = []
+    OtherArgs = [] }
+
+[<Tests>]
+let releaseOnlyReferenceTests =
+  testList "Release-only project references" [
+    test "WHY — resolveSiblingConfigOutput — a referenced project's obj/Debug/<tfm>/ref assembly falls back to obj/Release, because CI builds Release only and FSI died with StopProcessingExn on the missing Debug reference" {
+      let root, _, coreRefRelease, coreRefDebug = releaseOnlyLayout ()
+      try
+        resolveSiblingConfigOutput coreRefDebug
+        |> Expect.equal "the Release reference assembly is found" (Some coreRefRelease)
+      finally
+        Directory.Delete(root, true)
+    }
+
+    test "WHY — solutionToFsiArgs — forwarded compiler references are resolved to outputs that exist, because a missing -r: kills FSI before any diagnostics" {
+      let root, appDll, coreRefRelease, coreRefDebug = releaseOnlyLayout ()
+      try
+        let args = solutionToFsiArgs SageFs.Tests.TestInfrastructure.quietLogger false false (solutionWith appDll [ "-r:" + coreRefDebug ])
+        args |> Array.contains ("-r:" + coreRefRelease) |> Expect.isTrue "the Release reference is passed to FSI"
+        args |> Array.contains ("-r:" + coreRefDebug) |> Expect.isFalse "the missing Debug reference is never passed"
+      finally
+        Directory.Delete(root, true)
+    }
+
+    test "WHY — solutionToFsiArgs — a reference missing in both configurations fails naming the file, because 'StopProcessingExn' tells the user nothing" {
+      let root, appDll, _, _ = releaseOnlyLayout ()
+      try
+        let gone = Path.Combine(root, "Gone", "obj", "Debug", "net10.0", "ref", "Gone.dll")
+        let error =
+          try
+            solutionToFsiArgs SageFs.Tests.TestInfrastructure.quietLogger false false (solutionWith appDll [ "-r:" + gone ]) |> ignore
+            None
+          with ex -> Some ex.Message
+        error |> Expect.isSome "a missing reference is reported before FSI starts"
+        error.Value |> Expect.stringContains "the message names the missing assembly" "Gone.dll"
+      finally
+        Directory.Delete(root, true)
+    }
+  ]
