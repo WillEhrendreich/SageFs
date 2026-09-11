@@ -939,9 +939,17 @@ type LiveTestWatcherManager
 
   let handleFileChanged (directories: string list) (e: System.IO.FileSystemEventArgs) =
     let path = e.FullPath
-    match SageFs.FileWatcher.shouldTriggerRebuild
+    // A file inside another checkout nested under the watched directory (a git
+    // worktree such as .claude/worktrees/*, a vendored repo) belongs to that
+    // project — feeding it to this session's live testing type-checked foreign
+    // copies of the session's own files.
+    let inNestedCheckout =
+      directories |> List.exists (fun root -> SageFs.FileWatcher.isInNestedCheckout root path SageFs.FileWatcher.hasCheckoutMarker)
+    let watchedSource =
+      SageFs.FileWatcher.shouldTriggerRebuild
         { Directories = directories; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = debounceMs }
-        path with
+        path
+    match watchedSource && not inNestedCheckout with
     | true ->
       lock pendingLock (fun () ->
         // Snapshot the dir's epoch now; the fire-time guard compares against

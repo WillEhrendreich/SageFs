@@ -271,3 +271,54 @@ let fileWatcherTests =
         |> Flip.Expect.isTrue "overflow recovery path should pass shouldTriggerRebuild"
     ]
   ]
+
+// ── Nested checkouts ────────────────────────────────────────────────────
+
+[<Tests>]
+let nestedCheckoutTests =
+  let root = Path.Combine(Path.GetTempPath(), "sagefs-root")
+  let under (parts: string list) = Path.Combine(root :: parts |> Array.ofList)
+  testList "isInNestedCheckout" [
+    test "WHY — isInNestedCheckout — a file in a git worktree under the session's directory is another project, because agent worktrees fed their copies into the session's live testing" {
+      let worktree = under [ ".claude"; "worktrees"; "agent-x" ]
+      let marked (d: string) = String.Equals(d, worktree, StringComparison.OrdinalIgnoreCase)
+      isInNestedCheckout root (under [ ".claude"; "worktrees"; "agent-x"; "SageFs"; "Dashboard.fs" ]) marked
+      |> Flip.Expect.isTrue "a worktree's file is excluded"
+    }
+    test "WHY — isInNestedCheckout — an ordinary source file under the root belongs to the session" {
+      isInNestedCheckout root (under [ "SageFs"; "Dashboard.fs" ]) (fun _ -> false)
+      |> Flip.Expect.isFalse "a plain file is kept"
+    }
+    test "WHY — isInNestedCheckout — the root's own .git does not count, because a session's repository root is where its files live" {
+      let marked (d: string) = String.Equals(d.TrimEnd(Path.DirectorySeparatorChar), root, StringComparison.OrdinalIgnoreCase)
+      isInNestedCheckout root (under [ "src"; "App.fs" ]) marked
+      |> Flip.Expect.isFalse "the root marker is ignored"
+    }
+    testProperty "WHY — isInNestedCheckout — a file is excluded exactly when a marker lies strictly between the root and the file" <|
+      fun (depth: byte) (markAt: byte) ->
+        let depth = int depth % 6 + 1
+        let dirs = [ for i in 1 .. depth -> sprintf "d%d" i ]
+        let file = under (dirs @ [ "F.fs" ])
+        let markIndex = int markAt % (depth + 2)   // 0 = none; 1..depth = that dir; depth+1 = root
+        let markedDir =
+          match markIndex with
+          | 0 -> None
+          | i when i <= depth -> Some (under (dirs |> List.truncate i))
+          | _ -> Some root
+        let marked (d: string) =
+          markedDir |> Option.exists (fun m -> String.Equals(d.TrimEnd(Path.DirectorySeparatorChar), m, StringComparison.OrdinalIgnoreCase))
+        let expected = markIndex >= 1 && markIndex <= depth
+        isInNestedCheckout root file marked = expected
+    test "WHY — hasCheckoutMarker — a git worktree's .git FILE marks a checkout, not only a .git directory" {
+      let dir = Directory.CreateTempSubdirectory("sagefs-worktree-").FullName
+      try
+        File.WriteAllText(Path.Combine(dir, ".git"), "gitdir: /elsewhere/.git/worktrees/x")
+        hasCheckoutMarker dir |> Flip.Expect.isTrue "a .git file is a checkout marker"
+        let inner = Path.Combine(dir, "src")
+        Directory.CreateDirectory inner |> ignore
+        isInNestedCheckout (Path.GetDirectoryName dir) (Path.Combine(inner, "App.fs")) hasCheckoutMarker
+        |> Flip.Expect.isTrue "files in the worktree are excluded from the parent's watch"
+      finally
+        Directory.Delete(dir, true)
+    }
+  ]

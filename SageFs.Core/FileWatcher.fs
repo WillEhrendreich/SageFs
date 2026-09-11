@@ -43,6 +43,29 @@ let shouldExcludeFile (patterns: string list) (filePath: string) : bool =
         .Replace("*", "[^/]*")
     System.Text.RegularExpressions.Regex.IsMatch(normalizedPath, regex, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
 
+/// Pure: whether `path` sits inside a different checkout nested under the
+/// watched `root` — some directory strictly between the root and the file holds
+/// a checkout marker. A nested repository, a git worktree (agent worktrees under
+/// .claude/worktrees, a vendored repo) is another project: its files must never
+/// be attributed to the root's session. The root's own marker does not count —
+/// a session's repository root is where its files live.
+let isInNestedCheckout (root: string) (path: string) (hasCheckoutMarker: string -> bool) : bool =
+  let rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+  let rec walk (dir: string) =
+    match dir with
+    | null | "" -> false
+    | d when String.Equals(d.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), rootFull, StringComparison.OrdinalIgnoreCase) -> false
+    | d when not (d.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) -> false
+    | d when hasCheckoutMarker d -> true
+    | d -> walk (Path.GetDirectoryName d)
+  walk (Path.GetDirectoryName(Path.GetFullPath path))
+
+/// A checkout marker on disk: `.git` is a directory in a repository and a
+/// file in a git worktree.
+let hasCheckoutMarker (dir: string) : bool =
+  let marker = Path.Combine(dir, ".git")
+  Directory.Exists marker || File.Exists marker
+
 /// Create a default watch config for the given directories.
 let defaultWatchConfig dirs : WatchConfig = {
   Directories = dirs
@@ -161,7 +184,7 @@ let start
 
           let handler (kind: FileChangeKind) (e: FileSystemEventArgs) =
             Log.info "FileWatcher raw event: %s %s" (string kind) e.FullPath
-            match shouldTriggerRebuild config e.FullPath with
+            match shouldTriggerRebuild config e.FullPath && not (isInNestedCheckout dir e.FullPath hasCheckoutMarker) with
             | true ->
               let change = {
                 FilePath = e.FullPath
