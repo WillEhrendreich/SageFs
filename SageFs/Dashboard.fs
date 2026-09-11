@@ -334,6 +334,35 @@ let resolveViewingSession
     |> Option.filter (fun sessionId -> sessions |> List.exists (fun session -> session.Id = sessionId))
   requested
 
+/// What a dashboard stream should view on its next push. A session can die
+/// outside this page's own teardown path — an MCP stop, a worker crash,
+/// another client — so every push reconciles against the sessions that exist.
+[<RequireQualifiedAccess>]
+type ViewingDecision =
+  /// The viewed session is still live.
+  | Keep of WorkerProtocol.SessionId
+  /// The viewed session is gone; view the first live session instead.
+  | SwitchTo of WorkerProtocol.SessionId
+  /// Nothing is selected, or nothing is left to view.
+  | ShowPicker
+
+/// Pure viewing reconciliation: keep a live viewed session, move off a dead
+/// one to the first live session (the same default the initial GET uses), and
+/// otherwise show the picker. With nothing selected the picker stays — the
+/// landing page waits for the user's click.
+let reconcileViewing
+  (current: WorkerProtocol.SessionId option)
+  (sessions: WorkerProtocol.SessionInfo list)
+  : ViewingDecision =
+  let live = sessions |> List.filter (fun s -> s.Status <> WorkerProtocol.SessionStatus.Stopped)
+  match current with
+  | None -> ViewingDecision.ShowPicker
+  | Some sid when live |> List.exists (fun s -> s.Id = sid) -> ViewingDecision.Keep sid
+  | Some _ ->
+    match live with
+    | first :: _ -> ViewingDecision.SwitchTo first.Id
+    | [] -> ViewingDecision.ShowPicker
+
 /// Read the page client id from a signals JSON body; empty when absent.
 let private clientIdFromSignals (doc: System.Text.Json.JsonDocument) =
   match doc.RootElement.TryGetProperty(Signals.ClientId) with
@@ -724,7 +753,37 @@ let createStreamHandler
         | false -> None
       | _ -> None
 
+    // Adaptive live-bindings subscription for the viewed session. Never write
+    // directly to the SSE response from its callback: eval completion can fire
+    // it concurrently with the Elm ModelChanged event, so all writes go
+    // through pushAgent and a full #main morph is never interleaved.
+    let liveBindingsSub : (IDisposable option) ref = ref None
+
+    /// Point this connection at another session (or the picker when None):
+    /// every cached artifact is stale and the live-bindings watch follows.
+    let retargetTo (sidOpt: WorkerProtocol.SessionId option) =
+      currentSessionOpt <- sidOpt
+      workerCache <- None
+      lastWorkerFetch <- DateTime.MinValue
+      lastSessionId <- currentSessionOpt |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
+      lastWorkingDir <- ""
+      liveBindingsSub.Value |> Option.iter (fun d -> d.Dispose())
+      liveBindingsSub.Value <- None
+      currentSessionOpt |> Option.iter (subscribeLiveBindings infra clientId liveBindingsSub)
+
     let pushState () = task {
+      // A viewed session that died outside this page's teardown path must not
+      // keep rendering as a dead "Uninitialized" header: reconcile first.
+      let! liveSessions = q.GetAllSessions ()
+      match reconcileViewing currentSessionOpt liveSessions with
+      | ViewingDecision.Keep _ -> ()
+      | ViewingDecision.SwitchTo sid ->
+        retargetTo (Some sid)
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value sid)
+      | ViewingDecision.ShowPicker ->
+        match currentSessionOpt with
+        | Some _ -> retargetTo None
+        | None -> ()
       match currentSessionOpt with
       | None ->
         // No session in play — push the FULL shell with the picker in the
@@ -817,11 +876,6 @@ let createStreamHandler
         // Coalesces rapid state changes: drain queued, throttle 100ms, drain again, push once.
         // Heartbeat: when idle >15s, sends `: keepalive\n\n` SSE comment to prevent
         // proxy/browser timeouts. Integrated into the actor loop to avoid concurrent writes.
-        // Adaptive live-bindings subscription. Never write directly to the SSE
-        // response here: eval completion can fire this callback concurrently
-        // with the Elm ModelChanged event. All writes must go through pushAgent
-        // so a full #main morph is serialized and cannot be interleaved.
-        let liveBindingsSub : (IDisposable option) ref = ref None
         let pushAgent = MailboxProcessor<DashboardStreamCommand>.Start((fun inbox ->
           let rec loop () = async {
             let! msg = inbox.TryReceive(15_000)
@@ -855,16 +909,7 @@ let createStreamHandler
               // Signal-driven session retarget: a dashboard POST changed the
               // browser's viewing-session signal, so this connection must now
               // push the newly-selected session (or the picker when None).
-              currentSessionOpt <- sidOpt
-              // Session changed — every cached artifact is now stale.
-              workerCache <- None
-              lastWorkerFetch <- DateTime.MinValue
-              lastSessionId <- currentSessionOpt |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
-              lastWorkingDir <- ""
-              // Re-subscribe the adaptive live-bindings watch to the new session.
-              liveBindingsSub.Value |> Option.iter (fun d -> d.Dispose())
-              liveBindingsSub.Value <- None
-              currentSessionOpt |> Option.iter (subscribeLiveBindings infra clientId liveBindingsSub)
+              retargetTo sidOpt
               try
                 do! pushState () |> Async.AwaitTask
               with
@@ -928,15 +973,12 @@ let createStreamHandler
         use _sub = evt.Subscribe(fun change ->
           try pushAgent.Post(DashboardStreamCommand.StateChange change)
           with :? ObjectDisposedException -> ())
-        // Adaptive live-bindings subscription. Never write directly to the SSE
-        // response here: eval completion can fire this callback concurrently
-        // with the Elm ModelChanged event. All writes must go through pushAgent
-        // so a full #main morph is serialized and cannot be interleaved. The ref
-        // itself is declared before the mailbox (so the loop's RetargetView arm
-        // may re-subscribe); here we perform the initial subscription.
-        currentSessionOpt |> Option.iter (subscribeLiveBindings infra clientId liveBindingsSub)
+        // Initial live-bindings subscription — unless the first push already
+        // retargeted (and so subscribed) while reconciling a dead session.
+        match liveBindingsSub.Value with
+        | None -> currentSessionOpt |> Option.iter (subscribeLiveBindings infra clientId liveBindingsSub)
+        | Some _ -> ()
         do! tcs.Task
-        liveBindingsSub.Value |> Option.iter (fun d -> d.Dispose())
       | None ->
         // Fallback: poll every second
         while not ctx.RequestAborted.IsCancellationRequested do
@@ -946,6 +988,8 @@ let createStreamHandler
           with
           | :? OperationCanceledException -> ()
     finally
+      // Whichever mode the stream ran in, its live-bindings watch ends with it.
+      liveBindingsSub.Value |> Option.iter (fun d -> d.Dispose())
       SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
       infra.ConnectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
       infra.ConnectionChannels.TryRemove(clientId) |> ignore
