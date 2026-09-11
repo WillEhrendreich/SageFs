@@ -1294,6 +1294,21 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
       sw.Stop()
       heartbeatCts.Cancel()
       let! _ = heartbeatTask
+      // /exec's implicit workingDirectory resolution (inside
+      // evalFSharpCodeWithOutcome) sets ONLY the "cli-integrated" agent's
+      // active-session mapping. /reset, /hard-reset, and /cancel all read
+      // the SEPARATE "http" agent's mapping with no sessionId/workingDirectory
+      // of their own — /api/sessions/create and /api/sessions/switch already
+      // keep both identities in sync at the moment a session becomes active,
+      // but /exec's own resolution was never given the same treatment, so a
+      // stale "http" entry from an earlier session (since stopped) could
+      // shadow the session /exec just established, and every following bare
+      // /reset or /hard-reset call resolved to a session that no longer
+      // exists ("Session is no longer running").
+      match SageFs.McpTools.activeSessionId rctx.McpContext "cli-integrated" with
+      | resolvedSid when not (System.String.IsNullOrEmpty resolvedSid) ->
+        SageFs.McpTools.setActiveSessionId rctx.McpContext "http" resolvedSid
+      | _ -> ()
       rctx.FeaturePushState.Value <- SageFs.Features.FeatureHooks.recordEval code result sw.ElapsedMilliseconds rctx.FeaturePushState.Value
       // Emit eval_result SSE for inline decorations in editor plugins
       match evalFp, evalBsl with
