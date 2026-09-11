@@ -50,3 +50,4 @@ test-output.txt
 .commandcode/
 .playwright-mcp/
 .slopwatch/
+.claude/
