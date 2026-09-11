@@ -1733,13 +1733,19 @@ let activate (context: ExtensionContext) =
     staleDebounceTimer |> Option.iter jsClearTimeout
     staleDebounceTimer <- Some (jsSetTimeout (fun () ->
       let changedDoc: TextDocument = evt?document
+      let contentChanges: int = evt?contentChanges?length
       let activeFilePath =
         match Window.getActiveTextEditor () with
         | Some ed when ed.document.fileName.EndsWith(".fs") || ed.document.fileName.EndsWith(".fsx") ->
-          if not (Map.isEmpty InlineDeco.blockDecorations) then
-            InlineDeco.markDecorationsStale ed
-          // Clear binding-value ghost text: source lines may have shifted
-          InlineDeco.clearBindingValueDecorations ()
+          // Only a real edit of this file makes its results stale (issue #132: every
+          // eval's own output-channel log used to mark them stale a second later).
+          match BufferBridge.resultStalenessFor changedDoc.uri.scheme changedDoc.fileName contentChanges (Some ed.document.fileName) with
+          | BufferBridge.ResultStaleness.MarkStale ->
+            if not (Map.isEmpty InlineDeco.blockDecorations) then
+              InlineDeco.markDecorationsStale ed
+            // Clear binding-value ghost text: source lines may have shifted
+            InlineDeco.clearBindingValueDecorations ()
+          | BufferBridge.ResultStaleness.KeepResults -> ()
           Some ed.document.fileName
         | _ ->
           None

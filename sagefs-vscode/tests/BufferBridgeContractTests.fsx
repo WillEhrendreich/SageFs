@@ -151,6 +151,23 @@ let tests =
     testCase "route path is session-scoped" <| fun _ ->
       bufferChangedPath "deadbeef"
       |> Expect.equal "client should post to the session-scoped buffer route" "/api/sessions/deadbeef/buffer-changed"
+
+    // Issue #132: results went stale about a second after every eval with no edit.
+    testCase "WHY — resultStalenessFor — a write to the SageFs output channel keeps results because it is not an edit to the code" <| fun _ ->
+      resultStalenessFor "output" "extension-output-sagefs.sagefs-#1-SageFs" 1 (Some @"C:\repo\App.fs")
+      |> Expect.equal "output channel appends keep results" ResultStaleness.KeepResults
+
+    testCase "WHY — resultStalenessFor — an edit to the F# file on screen marks its results stale because they may no longer match the code" <| fun _ ->
+      resultStalenessFor "file" @"C:\repo\App.fs" 1 (Some @"C:\repo\App.fs")
+      |> Expect.equal "a real edit marks stale" ResultStaleness.MarkStale
+
+    testCase "WHY — resultStalenessFor — a change event without content changes keeps results because saving or a dirty-flag flip changes no code" <| fun _ ->
+      resultStalenessFor "file" @"C:\repo\App.fs" 0 (Some @"C:\repo\App.fs")
+      |> Expect.equal "no content change keeps results" ResultStaleness.KeepResults
+
+    testCase "WHY — resultStalenessFor — an edit to another F# file keeps the results on screen because they belong to a different file" <| fun _ ->
+      resultStalenessFor "file" @"C:\repo\Other.fs" 1 (Some @"C:\repo\App.fs")
+      |> Expect.equal "another file keeps results" ResultStaleness.KeepResults
   ]
 
 Expecto.Tests.runTestsWithCLIArgs [] [||] tests

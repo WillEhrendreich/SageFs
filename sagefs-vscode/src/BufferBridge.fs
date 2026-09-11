@@ -114,3 +114,23 @@ let tryBuildBufferChangedRequest
         None
     | _ ->
       None
+
+/// Whether a document change makes the inline eval results on screen stale.
+[<RequireQualifiedAccess>]
+type ResultStaleness =
+  | MarkStale
+  | KeepResults
+
+let private isFSharpSource (filePath: string) =
+  filePath.EndsWith(".fs", StringComparison.OrdinalIgnoreCase)
+  || filePath.EndsWith(".fsx", StringComparison.OrdinalIgnoreCase)
+  || filePath.EndsWith(".fsi", StringComparison.OrdinalIgnoreCase)
+
+/// Inline results go stale only when the F# file they belong to is really edited.
+/// VS Code also reports writes to output channels (the extension logs every eval)
+/// and dirty-flag flips as document changes; those must not touch the results.
+let resultStalenessFor (uriScheme: string) (changedFile: string) (contentChanges: int) (activeFile: string option) : ResultStaleness =
+  let editorDocument = uriScheme = "file" || uriScheme = "untitled"
+  match editorDocument && contentChanges > 0 && isFSharpSource changedFile, activeFile with
+  | true, Some active when samePath active changedFile -> ResultStaleness.MarkStale
+  | _ -> ResultStaleness.KeepResults
