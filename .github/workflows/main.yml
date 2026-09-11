@@ -293,8 +293,11 @@ jobs:
     # Roast-3 items 8–9/12: the HR-VSC-E2E / LT-VSC-E2E DoD journeys were
     # NEVER invoked by any workflow — no job passed --integration-vsc, and the
     # missing-Code.exe path registered pending tests (exit 0, a silent no-op).
-    # windows-latest ships VS Code, so this job runs the real journeys against
-    # the FromCSharp sample; the runner now fails fast if Code.exe is absent.
+    # The windows-latest image does NOT ship VS Code, so this job installs a
+    # portable VS Code and the SageFs VSIX (from the extensions job) into the
+    # journeys' profile, then runs the real journeys against the FromCSharp
+    # sample; the runner fails fast if Code.exe is still absent.
+    needs: extensions
     runs-on: windows-latest
     timeout-minutes: 25
 
@@ -323,6 +326,35 @@ jobs:
 
     - name: Build FromCSharp sample (Debug) for the journeys
       run: dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Debug --nologo
+
+    - name: Install VS Code (portable) for the journeys
+      shell: pwsh
+      run: |
+        $zip = Join-Path $env:RUNNER_TEMP 'vscode.zip'
+        $dir = Join-Path $env:RUNNER_TEMP 'vscode'
+        Invoke-WebRequest -Uri 'https://update.code.visualstudio.com/latest/win32-x64-archive/stable' -OutFile $zip
+        Expand-Archive -Path $zip -DestinationPath $dir -Force
+        $code = Join-Path $dir 'Code.exe'
+        if (-not (Test-Path $code)) { throw "Code.exe not found after extracting VS Code to $dir" }
+        "VSCODE_PATH=$code" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+    - name: Download the SageFs VS Code extension
+      uses: actions/download-artifact@v4
+      with:
+        name: release-vscode-vsix
+        path: vsix
+
+    - name: Install the extension into the journeys' VS Code profile
+      shell: pwsh
+      run: |
+        # The fixture launches VS Code with --extensions-dir under
+        # [IO.Path]::GetTempPath()/sagefs-vscode-test/extensions.
+        $extDir = Join-Path ([System.IO.Path]::GetTempPath()) 'sagefs-vscode-test\extensions'
+        $vsix = (Get-ChildItem vsix -Filter *.vsix | Select-Object -First 1).FullName
+        if (-not $vsix) { throw 'No SageFs .vsix in the downloaded artifact' }
+        $cli = Join-Path $env:RUNNER_TEMP 'vscode\bin\code.cmd'
+        & $cli --install-extension $vsix --extensions-dir $extDir --force
+        if ($LASTEXITCODE -ne 0) { throw "code --install-extension failed with exit $LASTEXITCODE" }
 
     - name: Run VS Code DoD journeys
       shell: bash
