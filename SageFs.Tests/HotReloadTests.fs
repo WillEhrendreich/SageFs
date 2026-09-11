@@ -766,3 +766,21 @@ let allHotReloadTests =
     endswithPrefilterTests
     handleNewAsmFromReplGatingTests
   ]
+
+[<Tests>]
+let noInliningScopeTests =
+  let attrCount (code: string) =
+    code.Split('\n') |> Array.filter (fun l -> l.TrimStart().StartsWith("[<MethodImpl", StringComparison.Ordinal)) |> Array.length
+  testList "HotReloading injectNoInlining scope" [
+    testCase "WHY — HotReloading.injectNoInlining — a local function inside a value body gets no attribute because an attribute inside an expression is a parse error" <| fun _ ->
+      let code = "let total =\n  let helper x = x + 1\n  helper 2"
+      injectNoInlining code |> Flip.Expect.equal "value with a local helper is left untouched" code
+
+    testCase "WHY — HotReloading.injectNoInlining — only the module-level function of a body with a local helper is attributed because only it can be detoured" <| fun _ ->
+      let result = injectNoInlining "let outer () =\n  let helper x = x + 1\n  helper 2"
+      attrCount result |> Flip.Expect.equal "one attribute, for outer" 1
+      result.Split('\n')
+      |> Array.pairwise
+      |> Array.exists (fun (a, b) -> a.TrimStart().StartsWith("[<MethodImpl", StringComparison.Ordinal) && b.StartsWith("let outer", StringComparison.Ordinal))
+      |> Flip.Expect.isTrue "the attribute sits directly above outer"
+  ]

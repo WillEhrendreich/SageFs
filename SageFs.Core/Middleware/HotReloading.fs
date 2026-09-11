@@ -678,13 +678,16 @@ let needsNoInlining (kind: BindingKind) =
 let injectNoInlining (code: string) =
   let lines = code.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
   let injectionLines =
-    lines
-    |> Array.mapi (fun idx _ -> idx, classifyBinding lines idx)
-    |> Array.choose (fun (idx, kind) ->
-      match needsNoInlining kind with
-      | true -> Some idx
-      | false -> None)
-    |> Set.ofArray
+    match CompilationContext.noInliningTargets code with
+    | CompilationContext.SyntaxTargets targets -> targets
+    | CompilationContext.UnparsedFragment ->
+      lines
+      |> Array.mapi (fun idx _ -> idx, classifyBinding lines idx)
+      |> Array.choose (fun (idx, kind) ->
+        match needsNoInlining kind with
+        | true -> Some idx
+        | false -> None)
+      |> Set.ofArray
   match injectionLines.IsEmpty with
   | true -> code
   | false ->

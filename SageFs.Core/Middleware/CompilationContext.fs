@@ -191,6 +191,67 @@ let parseFileStructureCached
 }
 
 // ─────────────────────────────────────────────────────────────────
+// NoInlining targets (hot reload)
+// ─────────────────────────────────────────────────────────────────
+
+/// Where a hot-reload eval may carry [<MethodImpl(NoInlining)>]: only on
+/// module-level function bindings and static member methods. An attribute on a
+/// local function inside an expression is a parse error, so the targets come
+/// from the syntax tree, not from line text.
+type NoInliningTargets =
+  | SyntaxTargets of zeroBasedLines: Set<int>
+  | UnparsedFragment
+
+let private isFunctionHead (pat: SynPat) =
+  match pat with
+  | SynPat.LongIdent(argPats = SynArgPats.Pats (_ :: _)) -> true
+  | SynPat.LongIdent(argPats = SynArgPats.NamePatPairs(pats = _ :: _)) -> true
+  | _ -> false
+
+let private keywordLine (binding: SynBinding) =
+  let (SynBinding(trivia = trivia)) = binding
+  trivia.LeadingKeyword.Range.StartLine - 1
+
+let rec private noInliningLines (decls: SynModuleDecl list) : int list =
+  decls
+  |> List.collect (fun decl ->
+    match decl with
+    | SynModuleDecl.Let(bindings = bindings) ->
+      bindings
+      |> List.filter (fun (SynBinding(headPat = pat; trivia = trivia)) ->
+        isFunctionHead pat && not trivia.LeadingKeyword.IsAnd)
+      |> List.map keywordLine
+    | SynModuleDecl.NestedModule(decls = inner) -> noInliningLines inner
+    | SynModuleDecl.Types(typeDefns = defns) ->
+      defns
+      |> List.collect (fun (SynTypeDefn(typeRepr = repr; members = members)) ->
+        let reprMembers =
+          match repr with
+          | SynTypeDefnRepr.ObjectModel(members = ms) -> ms
+          | _ -> []
+        reprMembers @ members
+        |> List.choose (fun m ->
+          match m with
+          | SynMemberDefn.Member(memberDefn = SynBinding(headPat = pat; trivia = trivia) as b)
+              when trivia.LeadingKeyword.IsStaticMember && isFunctionHead pat -> Some (keywordLine b)
+          | _ -> None))
+    | _ -> [])
+
+let noInliningTargets (code: string) : NoInliningTargets =
+  try
+    let input, diagnostics = Fantomas.FCS.Parse.parseFile false (Fantomas.FCS.Text.SourceText.ofString code) []
+    let hasErrors =
+      diagnostics |> List.exists (fun d -> d.Severity.IsError)
+    match hasErrors, input with
+    | false, ParsedInput.ImplFile(ParsedImplFileInput(contents = contents)) ->
+      contents
+      |> List.collect (fun (SynModuleOrNamespace(decls = decls)) -> noInliningLines decls)
+      |> Set.ofList
+      |> SyntaxTargets
+    | _ -> UnparsedFragment
+  with _ -> UnparsedFragment
+
+// ─────────────────────────────────────────────────────────────────
 // Block location resolution
 // ─────────────────────────────────────────────────────────────────
 
