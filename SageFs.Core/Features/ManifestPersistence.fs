@@ -297,24 +297,31 @@ module ManifestFile =
 
   /// Save manifest to .sagefm with atomic write.
   /// Creates a .bak backup of the current manifest before overwriting.
+  /// The temp file is unique per write, so no two writes can share (and
+  /// clobber) one staging file; it is removed if the write does not complete.
   let save (sageFsDir: string) (data: DaemonManifestData) : Result<string, string> =
+    let path = manifestPath sageFsDir
+    let tmpPath = sprintf "%s.%s.tmp" path (Guid.NewGuid().ToString("N"))
     try
-      Directory.CreateDirectory(sageFsDir) |> ignore
-      let path = manifestPath sageFsDir
-      let tmpPath = path + ".tmp"
-      let bakPath = path + ".bak"
-      let bytes = ManifestWriter.write data
-      File.WriteAllBytes(tmpPath, bytes)
-      // Best-effort backup — don't fail the save if .bak creation fails
-      match File.Exists(path) with
-      | true ->
-        try File.Copy(path, bakPath, overwrite = true)
-        with _ -> ()
+      try
+        Directory.CreateDirectory(sageFsDir) |> ignore
+        let bakPath = path + ".bak"
+        let bytes = ManifestWriter.write data
+        File.WriteAllBytes(tmpPath, bytes)
+        // Best-effort backup — don't fail the save if .bak creation fails
+        match File.Exists(path) with
+        | true ->
+          try File.Copy(path, bakPath, overwrite = true)
+          with _ -> ()
+        | false -> ()
+        File.Move(tmpPath, path, overwrite = true)
+        Ok path
+      with ex ->
+        Error (sprintf "Failed to save manifest: %s" ex.Message)
+    finally
+      match File.Exists(tmpPath) with
+      | true -> try File.Delete(tmpPath) with _ -> ()
       | false -> ()
-      File.Move(tmpPath, path, overwrite = true)
-      Ok path
-    with ex ->
-      Error (sprintf "Failed to save manifest: %s" ex.Message)
 
   /// Load manifest from .sagefm, falling back to .sagefm.bak if primary is corrupt/missing.
   /// Returns the loaded data paired with the source (Primary or Backup).

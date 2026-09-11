@@ -64,25 +64,3 @@ module DaemonPersistence =
       with ex ->
         SageFs.Utils.Log.warn "[DaemonPersistence] Failed to rename corrupt manifest: %s" ex.Message
         false
-
-  /// Remove a session's entry from the .sagefm manifest (purge).
-  /// The entry is deleted entirely (not just stamped stopped) — the session
-  /// is gone from the resume picker too. Missing entry is Ok (idempotent).
-  let removeManifestEntry (sageFsDir: string) (sessionId: string) : Result<unit, string> =
-    match loadManifest sageFsDir with
-    | Error ManifestTypes.ManifestLoadError.NotFound -> Ok ()
-    | Error (ManifestTypes.ManifestLoadError.IoError err) -> Error err
-    | Error (ManifestTypes.ManifestLoadError.CorruptData err) -> Error err
-    | Ok state ->
-      match state.Sessions |> Map.containsKey sessionId with
-      | false -> Ok ()
-      | true ->
-        let updated =
-          { state with
-              Sessions = state.Sessions |> Map.remove sessionId
-              ActiveSessionId =
-                match state.ActiveSessionId = Some sessionId with
-                | true -> state.Sessions |> Map.remove sessionId |> Map.keys |> Seq.tryHead
-                | false -> state.ActiveSessionId }
-        saveManifest sageFsDir updated
-        |> Result.map ignore
