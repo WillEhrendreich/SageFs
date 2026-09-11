@@ -499,6 +499,34 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     Expect.stringContains html "SageFs" "shell has SageFs title"
   }
 
+  // A localhost tool must not reach out to third parties: no script, style,
+  // font or preconnect from an external origin (fonts used to come from
+  // fonts.googleapis.com).
+  test "shell loads nothing from an external origin" {
+    let html = renderShell "1.2.3" "test-id" "" (Elem.div [] []) |> renderNode
+    let externalLoads =
+      System.Text.RegularExpressions.Regex.Matches(
+        html, @"(?:src|href)\s*=\s*""https?://|url\(\s*['""]?https?://|@import")
+    Expect.equal externalLoads.Count 0 "shell must not load anything from an external origin"
+  }
+
+  test "every @font-face the shell declares is an embedded woff2 served by the daemon" {
+    let html = renderShell "1.2.3" "test-id" "" (Elem.div [] []) |> renderNode
+    let declared =
+      System.Text.RegularExpressions.Regex.Matches(html, @"url\('/dashboard/fonts/([^']+)'\)")
+      |> Seq.map (fun m -> m.Groups.[1].Value)
+      |> List.ofSeq
+    Expect.equal declared.Length 4 "the four weights the CSS uses (400/500/600/700) are declared"
+    for file in declared do
+      match Map.tryFind file dashboardFonts with
+      | Some bytes ->
+        Expect.equal (System.Text.Encoding.ASCII.GetString(bytes, 0, 4)) "wOF2" (sprintf "%s is a woff2 font" file)
+      | None -> failtestf "%s is declared by the shell but not embedded" file
+    Expect.stringContains html "font-display:swap" "faces use font-display: swap so text never blocks on the font"
+    Expect.stringContains html "ui-monospace,monospace" "a full system monospace fallback stack follows the face"
+    Expect.isTrue (dashboardFonts.ContainsKey "JetBrainsMono-OFL.txt") "the SIL OFL license text ships with the font"
+  }
+
   // Full-page morph: dynamic elements live in renderMainContent, not renderShell.
   // These tests verify the morphed content includes key interactive elements.
   let mkSnap version = {

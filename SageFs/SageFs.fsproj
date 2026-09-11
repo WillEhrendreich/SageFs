@@ -34,6 +34,11 @@
         <EmbeddedResource Include="dashboard.css" />
         <EmbeddedResource Include="datastar.js" />
         <EmbeddedResource Include="Resources\devreload.js" />
+        <!-- JetBrains Mono (SIL OFL 1.1, license text shipped alongside) for the
+             dashboard — self-hosted and served by the daemon; see
+             Dashboard.dashboardFonts. -->
+        <EmbeddedResource Include="Resources\fonts\JetBrainsMono-*.woff2;Resources\fonts\JetBrainsMono-OFL.txt"
+                          LogicalName="SageFs.fonts.%(Filename)%(Extension)" />
     </ItemGroup>
 
     <ItemGroup>

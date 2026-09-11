@@ -74,6 +74,42 @@ let datastarBundle =
   use reader = new StreamReader(stream)
   reader.ReadToEnd()
 
+/// JetBrains Mono (SIL OFL 1.1 — the license text ships alongside and is
+/// served at /dashboard/fonts/JetBrainsMono-OFL.txt), self-hosted from
+/// embedded resources and served by the daemon at /dashboard/fonts/<file>.
+/// WHY: the shell loaded the face from fonts.googleapis.com — the last external
+/// request a localhost tool made (offline it degraded silently, and every
+/// dashboard open leaked a request to a third party). Only the weights the
+/// dashboard CSS uses (400/500/600/700) ship, taken from the official
+/// JetBrains/JetBrainsMono v2.304 release.
+let dashboardFonts : Map<string, byte array> =
+  let asm = System.Reflection.Assembly.GetExecutingAssembly()
+  [ "JetBrainsMono-Regular.woff2"
+    "JetBrainsMono-Medium.woff2"
+    "JetBrainsMono-SemiBold.woff2"
+    "JetBrainsMono-Bold.woff2"
+    "JetBrainsMono-OFL.txt" ]
+  |> List.map (fun file ->
+    match asm.GetManifestResourceStream("SageFs.fonts." + file) with
+    | null -> failwithf "Embedded dashboard font resource missing: %s" file
+    | stream ->
+      use stream = stream
+      use bytes = new MemoryStream()
+      stream.CopyTo bytes
+      file, bytes.ToArray())
+  |> Map.ofList
+
+/// @font-face for every embedded weight — font-display: swap, so text renders
+/// immediately in a fallback face and never blocks on the font — plus the full
+/// system monospace fallback stack.
+let fontFaceCss =
+  let faces =
+    [ 400, "Regular"; 500, "Medium"; 600, "SemiBold"; 700, "Bold" ]
+    |> List.map (fun (weight, style) ->
+      sprintf "@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:%d;font-display:swap;src:url('/dashboard/fonts/JetBrainsMono-%s.woff2') format('woff2')}" weight style)
+    |> String.concat ""
+  faces + "body{font-family:'JetBrains Mono','Fira Code','Cascadia Code','Cascadia Mono','SF Mono',Menlo,Monaco,Consolas,'Liberation Mono','DejaVu Sans Mono',ui-monospace,monospace}"
+
 let private bindingSnapshotFromEntries
   (bindings: SageFs.Features.BindingExplorer.BindingInfo array)
   : SageFs.Features.BindingExplorer.BindingScopeSnapshot option =
@@ -235,10 +271,11 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       // Self-hosted pinned Datastar bundle (see `datastarBundle`) — never
       // fetch a moving CDN branch at runtime.
       Elem.script [ Attr.type' "module"; Attr.src "/dashboard/datastar.js" ] []
-      Elem.link [ Attr.rel "preconnect"; Attr.href "https://fonts.googleapis.com" ]
-      Elem.link [ Attr.rel "preconnect"; Attr.href "https://fonts.gstatic.com"; Attr.create "crossorigin" "" ]
-      Elem.link [ Attr.rel "stylesheet"; Attr.href "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" ]
       Elem.link [ Attr.rel "stylesheet"; Attr.href "/dashboard/dashboard.css" ]
+      // Self-hosted JetBrains Mono (see `dashboardFonts`) — after the
+      // stylesheet so its full fallback stack wins; the dashboard makes no
+      // external network requests.
+      Elem.style [] [ Text.raw fontFaceCss ]
     ]
     Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true" ] [
       Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.Connected, "true"); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false"); Ds.signal (Signals.BindingsPanelOpen, "true"); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, "false") ] []
@@ -1893,6 +1930,20 @@ let createEndpoints
       ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "no-cache, must-revalidate"
       do! ctx.Response.WriteAsync(datastarBundle)
     })
+    // Self-hosted JetBrains Mono + its OFL license — see `dashboardFonts`.
+    // The bytes are frozen in the assembly, so they are cacheable forever.
+    yield!
+      dashboardFonts
+      |> Map.toList
+      |> List.map (fun (file, bytes) ->
+        get ("/dashboard/fonts/" + file) (fun ctx -> task {
+          ctx.Response.ContentType <-
+            match file.EndsWith(".woff2", StringComparison.Ordinal) with
+            | true -> "font/woff2"
+            | false -> "text/plain; charset=utf-8"
+          ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "public, max-age=31536000, immutable"
+          do! ctx.Response.Body.WriteAsync(bytes, 0, bytes.Length)
+        }))
     yield get "/dashboard" (fun ctx -> task {
       try
         let! sessions = q.GetAllSessions ()
