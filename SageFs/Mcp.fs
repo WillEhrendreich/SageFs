@@ -3828,7 +3828,6 @@ module McpTools =
           |> List.map (fun cp ->
             {| Path = cp.Path
                Role = string cp.Role
-               EntryPointFile = cp.EntryPointFile |> Option.defaultValue ""
                PackageRefs = cp.PackageRefs |})
         let jsonData =
           {| TotalProjects = projects.Length

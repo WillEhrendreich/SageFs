@@ -21,12 +21,11 @@ type ProjectRole =
   | Library       // Shared libraries, static assemblies
   | Test          // Test projects (contained in test packages or marked with IsTestProject)
 
-/// Extended project representation with role and entry-point metadata.
-/// Used by SessionManager to select active project and discover entry points.
+/// A loaded project with its role. The entry point of an executable is not
+/// stored here: the compiled assembly's Assembly.EntryPoint is authoritative.
 and ClassifiedProject = {
   Path: string
   Role: ProjectRole
-  EntryPointFile: string option
   PackageRefs: string list
 }
 
@@ -387,7 +386,6 @@ let classifyProject (proj: ProjectOptions) : ClassifiedProject =
       else ProjectRole.Library
   { Path = proj.ProjectFileName
     Role = role
-    EntryPointFile = None
     PackageRefs = proj.PackageReferences |> List.map (fun pr -> Path.GetFileNameWithoutExtension(pr.FullPath)) }
 
 /// Classify all projects in a solution, returning a map of path to classification.

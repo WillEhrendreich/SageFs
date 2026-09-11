@@ -1532,9 +1532,9 @@ WORKFLOW: Use this after run_webapp to clean up. The dashboard "■ Stop App" bu
     [<McpServerTool>]
     [<Description("""List executable projects in the current session that can be run via run_webapp.
 
-Shows project classification (Executable/Library/Test), entry point availability, and package references.
+Shows project classification (Executable/Library/Test) and package references.
 
-OUTPUT: JSON with TotalProjects, ExecutableCount, and Projects array (Path, Role, EntryPointFile, PackageRefs).
+OUTPUT: JSON with TotalProjects, ExecutableCount, and Projects array (Path, Role, PackageRefs).
 
 WORKFLOW: Call this before run_webapp to see which projects are available to run, or to inspect what was detected.""")>]
     member _.list_runnable_projects() : Task<string> =
