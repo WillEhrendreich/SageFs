@@ -147,109 +147,6 @@ jobs:
       run: |
         npx ovsx publish "release/sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix" --pat $env:OVSX_PAT --skip-duplicate
 
-    - name: Patch Visual Studio VSIX manifest
-      id: vsix_patch
-      shell: pwsh
-      run: |
-        $vsixPath = "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix"
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $archive = [System.IO.Compression.ZipFile]::Open($vsixPath, [System.IO.Compression.ZipArchiveMode]::Update)
-        $entry = $archive.GetEntry("extension.vsixmanifest")
-        if (-not $entry) { $archive.Dispose(); throw "extension.vsixmanifest not found in VSIX" }
-        $stream = $entry.Open()
-        $reader = [System.IO.StreamReader]::new($stream)
-        $content = $reader.ReadToEnd()
-        $reader.Close(); $stream.Close()
-        $xml = [xml]$content
-        $ns = "http://schemas.microsoft.com/developer/vsx-schema/2011"
-        $nsMgr = [System.Xml.XmlNamespaceManager]::new($xml.NameTable)
-        $nsMgr.AddNamespace("v", $ns)
-        # Publisher is on the <Identity> child element, not the root <PackageManifest>
-        $identity = $xml.SelectSingleNode("//v:Identity", $nsMgr)
-        $manifestPublisher = $identity.GetAttribute("Publisher")
-        $manifestId = $identity.GetAttribute("Id")
-        Write-Host "Manifest publisher: '$manifestPublisher', id: '$manifestId'"
-        "publisher=$manifestPublisher" >> $env:GITHUB_OUTPUT
-        "extension_id=$manifestId" >> $env:GITHUB_OUTPUT
-        $metadata = $xml.SelectSingleNode("//v:Metadata", $nsMgr)
-        if ($metadata -and -not $xml.SelectSingleNode("//v:Categories", $nsMgr)) {
-          $cat = $xml.CreateElement("Categories", $ns)
-          $cat.InnerText = "Coding"
-          $metadata.AppendChild($cat) | Out-Null
-          Write-Host "Injected <Categories>Coding</Categories> into manifest"
-        } else {
-          Write-Host "Categories already present or Metadata not found — skipping"
-        }
-        $entry.Delete()
-        $newEntry = $archive.CreateEntry("extension.vsixmanifest")
-        $writeStream = $newEntry.Open()
-        $xmlSettings = [System.Xml.XmlWriterSettings]::new()
-        $xmlSettings.Encoding = [System.Text.UTF8Encoding]::new($false)
-        $xmlSettings.Indent = $true
-        $writer = [System.Xml.XmlWriter]::Create($writeStream, $xmlSettings)
-        $xml.Save($writer)
-        $writer.Close(); $writeStream.Close(); $archive.Dispose()
-        Write-Host "VSIX patched successfully: $vsixPath"
-
-    - name: Publish Visual Studio extension to Marketplace
-      continue-on-error: true
-      env:
-        VSCE_PAT: ${{ secrets.VSCE_PAT }}
-      shell: pwsh
-      run: |
-        $vsixPath = "release/sagefs-visualstudio-${{ steps.manifest.outputs.version }}.vsix"
-        $publisher = "${{ steps.vsix_patch.outputs.publisher }}"
-        $extId = "${{ steps.vsix_patch.outputs.extension_id }}"
-        Write-Host "Publisher: '$publisher', ExtensionId: '$extId', VSIX: '$vsixPath'"
-        # VsixPublisher.exe is the correct tool for VS Marketplace — the Gallery REST API
-        # returns VsIdeExtensionNotSupported for VS IDE extensions.
-        $vsixPublisher = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\*\VSSDK\VisualStudioIntegration\Tools\Bin\VsixPublisher.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $vsixPublisher) {
-          Write-Host "::warning::VsixPublisher.exe not found on this runner — skipping VS Marketplace publish"
-          exit 1
-        }
-        Write-Host "Using VsixPublisher.exe at: $($vsixPublisher.FullName)"
-        # VsixPublisher publish manifest schema (from http://json.schemastore.org/vsix-publish):
-        # - publisher: required at ROOT level (not inside identity)
-        # - identity.internalName: required (the only required field inside identity)
-        # - priceCategory: lowercase "free"
-        $overviewPath = [System.IO.Path]::Combine($env:RUNNER_TEMP, "sagefs-overview.md")
-        $overviewLines = @(
-          "# SageFs for Visual Studio",
-          "",
-          "F# live development environment with an integrated REPL, live testing, session management, and real-time code intelligence - directly inside Visual Studio 2022.",
-          "",
-          "## Features",
-          "- Interactive F# REPL sessions without leaving VS",
-          "- Live test feedback as you type",
-          "- Session history and replay",
-          "- Code coverage gutter indicators",
-          "- Works alongside your existing F# projects"
-        )
-        Set-Content -Path $overviewPath -Value ($overviewLines -join "`n") -Encoding UTF8
-        $publishManifest = [ordered]@{
-          '$schema'     = 'http://json.schemastore.org/vsix-publish'
-          categories    = @("coding")   # lowercase enum value per schemastore.org/vsix-publish
-          identity      = @{ internalName = $extId }
-          overview      = $overviewPath
-          publisher     = $publisher
-          priceCategory = "free"
-          private       = $false
-          qna           = $true
-          repo          = "https://github.com/WillEhrendreich/SageFs"
-        } | ConvertTo-Json -Depth 5
-        $manifestPath = [System.IO.Path]::Combine($env:RUNNER_TEMP, "publish-manifest.json")
-        Set-Content -Path $manifestPath -Value $publishManifest -Encoding UTF8
-        Write-Host "Publish manifest: $publishManifest"
-        & $vsixPublisher.FullName publish -payload $vsixPath -publishManifest $manifestPath -personalAccessToken $env:VSCE_PAT 2>&1
-        $exitCode = $LASTEXITCODE
-        Remove-Item $manifestPath -ErrorAction SilentlyContinue
-        if ($exitCode -ne 0) {
-          Write-Host "::warning::VsixPublisher.exe failed (exit $exitCode) — NuGet and GitHub Release will still proceed."
-          exit 1
-        }
-        Write-Host "SUCCESS"
-
     - name: Push to NuGet
       run: dotnet nuget push "release/SageFs.${{ steps.manifest.outputs.version }}.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
@@ -325,7 +222,6 @@ jobs:
         [void]$sb.AppendLine("### Downloads")
         [void]$sb.AppendLine("- **NuGet**: ``dotnet tool install --global SageFs``")
         [void]$sb.AppendLine("- **VS Code Extension**: ``code --install-extension sagefs-vscode-${{ steps.manifest.outputs.version }}.vsix``")
-        [void]$sb.AppendLine("- **Visual Studio Extension**: double-click the VSIX to install in Visual Studio 2022+")
         [void]$sb.AppendLine("- **Neovim**: see [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim)")
 
         $notesPath = Join-Path $env:RUNNER_TEMP "RELEASE_NOTES.md"

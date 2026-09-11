@@ -25,9 +25,11 @@
 
 ## Project Overview
 
-SageFs is an F# live development environment with editor integrations for VS Code, Visual Studio, and Neovim, a web dashboard, and an MCP server for agent and programmatic access. Its daemon architecture hosts persistent, isolated F# Interactive sessions.
+SageFs is an F# live development environment with editor integrations for VS Code and Neovim, a web dashboard, and an MCP server for agent and programmatic access. Its daemon architecture hosts persistent, isolated F# Interactive sessions.
 
 The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated. Do not treat them as current product surfaces or add new product documentation for them. Preserve Raylib application and game demos because they demonstrate SageFs support for game projects and are independent of the deprecated GUI frontend.
+
+The Visual Studio extension (`sagefs-vs/`) is deprecated and no longer built, tested, or published — do not treat it as a current product surface, do not add new product documentation for it, and do not route new engineering effort into it.
 
 ## Language & Stack
 
@@ -78,7 +80,7 @@ SageFs/            — CLI tool, daemon, MCP server, dashboard, and retained dep
 SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy source
 SageFs.Tests/      — Expecto test project
 sagefs-vscode/     — VS Code extension (Fable F#→JS)
-sagefs-vs/         — Visual Studio extension (C# + F#)
+sagefs-vs/         — Deprecated Visual Studio extension (C# + F#), retained as legacy source
 docs/              — GitHub Pages site
 ```
 
@@ -94,7 +96,7 @@ dotnet pack SageFs -o nupkg  # Package the CLI tool
 
 ## Architecture Principles
 
-- **Current clients**: VS Code, Neovim, Visual Studio, the web dashboard, and MCP use session-scoped daemon contracts
+- **Current clients**: VS Code, Neovim, the web dashboard, and MCP use session-scoped daemon contracts
 - **Web dashboard**: Falco.Datastar and SSE provide browser-based session control and observability
 - **Binary persistence**: Session/test state via CRC-validated binary manifest (.sagefm)
 - **CQRS**: Separate read/write models

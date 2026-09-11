@@ -20,7 +20,7 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 
 ## What is SageFs?
 
-SageFs is a live F# development engine. Start it once, then connect through VS Code, Neovim, Visual Studio, the web dashboard, or an MCP client to get sub-500ms feedback on every save: inline results, live test markers, hot reload, and agent access. It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients can share live state simultaneously.
+SageFs is a live F# development engine. Start it once, then connect through VS Code, Neovim, the web dashboard, or an MCP client to get sub-500ms feedback on every save: inline results, live test markers, hot reload, and agent access. It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients can share live state simultaneously.
 
 **How is SageFs different from Ionide?** Ionide provides IntelliSense, diagnostics, and project support through the F# Compiler Service. SageFs adds live execution: eval any expression and see results inline, continuous test feedback on every save, and hot reload that patches your running app. Use both together — Ionide for editing, SageFs for running.
 
@@ -69,7 +69,7 @@ SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) serv
 
 ### 🖥️ One Daemon, Every Client — Simultaneously
 
-Start SageFs once. Connect from VS Code, Neovim, Visual Studio, the web dashboard, or an MCP client. Open several at the same time: they can share a live session while retaining per-client session selection.
+Start SageFs once. Connect from VS Code, Neovim, the web dashboard, or an MCP client. Open several at the same time: they can share a live session while retaining per-client session selection.
 
 ```mermaid
 flowchart TB
@@ -77,7 +77,6 @@ flowchart TB
 
     D --- VS[VS Code]
     D --- NV[Neovim]
-    D --- VI[Visual Studio]
     D --- WB[Web Dashboard]
     D --- AI[MCP Clients]
     D --- JP[Jupyter Kernel]
@@ -85,7 +84,6 @@ flowchart TB
     style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
     style VS fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
     style NV fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
-    style VI fill:#1a1b26,stroke:#9ece6a,color:#c0caf5
     style WB fill:#1a1b26,stroke:#7dcfff,color:#c0caf5
     style AI fill:#1a1b26,stroke:#e0af68,color:#c0caf5
     style JP fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
@@ -127,11 +125,9 @@ SageFs opens an interactive terminal. Then create a session for `YourProject.fsp
 
 **Neovim** — Add `"WillEhrendreich/sagefs.nvim"` to your plugin manager. Press `Alt+Enter` to evaluate. See [Neovim setup](https://github.com/WillEhrendreich/sagefs.nvim).
 
-**Visual Studio 2022** — Install [SageFs from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=WillEhrendreich.sagefs-visualstudio). Press `Alt+Enter`. The daemon starts automatically.
-
 **Web dashboard** — Open `http://localhost:37750/dashboard` for session management, evaluation, output, test state, and diagnostics without an editor extension.
 
-> **Deprecated frontends:** The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are no longer current product interfaces. Their source remains in the repository for historical context. This does not affect Raylib application and game projects developed with SageFs; see the [Raylib demos](#-visual-demos).
+> **Deprecated frontends:** The built-in SageTUI client, legacy TUI, `SageFs.Gui` Raylib frontend, and the Visual Studio extension are no longer current product interfaces. Their source remains in the repository for historical context. This does not affect Raylib application and game projects developed with SageFs; see the [Raylib demos](#-visual-demos).
 
 ### 5. Enable live testing
 
@@ -230,7 +226,6 @@ flowchart TB
     D --- VS[VS Code]
     D --- NV[Neovim]
     D --- WB[Web Dashboard]
-    D --- VI[Visual Studio]
     D --- AI[AI Agent - MCP]
 
     style D fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px,color:#c0caf5
@@ -241,7 +236,6 @@ flowchart TB
     style VS fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
     style NV fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
     style WB fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
-    style VI fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
     style AI fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
 ```
 
@@ -267,25 +261,25 @@ This means **the daemon doesn't need to know your project at startup**. It start
 
 Every frontend connects to the same daemon. Open several at once — they all see the same state.
 
-| Capability | VS Code | Neovim | Visual Studio | Web Dashboard | MCP |
-|:---|:---:|:---:|:---:|:---:|:---:|
-| Eval code / file / block | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Inline results | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Live diagnostics (SSE) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Hot reload controls | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Session management | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Code completion | ✅ | ✅ | ✅ | — | ✅ |
-| CodeLens | ✅ | ✅ | ✅ | — | — |
-| **Live test gutters** | ✅ | ✅ | ✅ | — | — |
-| **Coverage gutters** | ✅ | ✅ | ✅ | — | — |
-| **Failure narratives** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Test source-jump** | ✅ | ✅ | ✅ | — | — |
-| Test panel | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Test policy controls | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Type explorer | ✅ | ✅ | — | — | ✅ |
-| Call graph | ✅ | ✅ | — | — | ✅ |
-| History browser | ✅ | ✅ | — | ✅ | ✅ |
-| Test trace | ✅ | ✅ | — | ✅ | ✅ |
+| Capability | VS Code | Neovim | Web Dashboard | MCP |
+|:---|:---:|:---:|:---:|:---:|
+| Eval code / file / block | ✅ | ✅ | ✅ | ✅ |
+| Inline results | ✅ | ✅ | ✅ | ✅ |
+| Live diagnostics (SSE) | ✅ | ✅ | ✅ | ✅ |
+| Hot reload controls | ✅ | ✅ | ✅ | ✅ |
+| Session management | ✅ | ✅ | ✅ | ✅ |
+| Code completion | ✅ | ✅ | — | ✅ |
+| CodeLens | ✅ | ✅ | — | — |
+| **Live test gutters** | ✅ | ✅ | — | — |
+| **Coverage gutters** | ✅ | ✅ | — | — |
+| **Failure narratives** | ✅ | ✅ | ✅ | ✅ |
+| **Test source-jump** | ✅ | ✅ | — | — |
+| Test panel | ✅ | ✅ | ✅ | ✅ |
+| Test policy controls | ✅ | ✅ | ✅ | ✅ |
+| Type explorer | ✅ | ✅ | — | ✅ |
+| Call graph | ✅ | ✅ | — | ✅ |
+| History browser | ✅ | ✅ | ✅ | ✅ |
+| Test trace | ✅ | ✅ | ✅ | ✅ |
 
 > ¹ Server-side data ready. Editor UI integration pending (VS SDK limitations or work-in-progress).
 
@@ -308,12 +302,6 @@ Current wiring includes Alt+Enter eval, CodeLens, live test decorations, native 
 ```
 
 Features: Cell eval, inline results, gutter signs, SSE live updates, live test panel, coverage panel with per-file breakdown, type explorer, call graph, history browser, session export to `.fsx`, code completion, branch coverage gutters, filterable test panel, display density presets, combined statusline component, Telescope source-jump (`<CR>`), failure narrative floating window (`<C-d>`), and SSE-driven test state caching.
-
-#### Visual Studio
-
-Install from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=WillEhrendreich.sagefs-visualstudio), or grab the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases). Uses the [VisualStudio.Extensibility](https://learn.microsoft.com/en-us/visualstudio/extensibility/visualstudio.extensibility/) SDK with F# core logic. Eval, CodeLens, session management, diagnostics, coverage gutter glyphs (CoverageGlyphTagger), test source-jump via TestStateTracker, and inline failure narrative context.
-
-The VS extension includes kill switches for individual features. See the [VS Extension README](sagefs-vs/README.md#kill-switches) for details.
 
 #### AI Agent (MCP)
 
@@ -355,19 +343,19 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel
 
 ## ⌨️ Keybindings Across Editors
 
-| Action | VS Code | Visual Studio | Neovim |
-|--------|---------|---------------|--------|
-| Evaluate selection/cell | `Alt+Enter` | `Alt+Enter` | `<M-CR>` |
-| Evaluate entire file | `Alt+Shift+Enter` | `Shift+Alt+Enter` | `<leader>rf` |
-| Clear inline results | Command Palette | — | `<leader>rc` |
-| Run all tests | Command Palette | Command Palette | `<leader>rT` |
-| Toggle test panel | Command Palette | View → SageFs Tests | `:SageFsTestPanel` |
-| Jump to test source | Click test in explorer | — | `<CR>` in telescope |
-| Show failure narrative | Hover on red marker | Hover on red marker | `<C-d>` in test panel |
-| Mark all stale | Command Palette | Command Palette | `<leader>rS` |
-| Session picker | Command Palette | Command Palette | `<leader>rs` |
+| Action | VS Code | Neovim |
+|--------|---------|--------|
+| Evaluate selection/cell | `Alt+Enter` | `<M-CR>` |
+| Evaluate entire file | `Alt+Shift+Enter` | `<leader>rf` |
+| Clear inline results | Command Palette | `<leader>rc` |
+| Run all tests | Command Palette | `<leader>rT` |
+| Toggle test panel | Command Palette | `:SageFsTestPanel` |
+| Jump to test source | Click test in explorer | `<CR>` in telescope |
+| Show failure narrative | Hover on red marker | `<C-d>` in test panel |
+| Mark all stale | Command Palette | `<leader>rS` |
+| Session picker | Command Palette | `<leader>rs` |
 
-> **Full keybinding references**: [VS Code](sagefs-vscode/README.md) · [Visual Studio](sagefs-vs/README.md) · [Neovim](https://github.com/WillEhrendreich/sagefs.nvim#keymaps)
+> **Full keybinding references**: [VS Code](sagefs-vscode/README.md) · [Neovim](https://github.com/WillEhrendreich/sagefs.nvim#keymaps)
 
 ---
 
@@ -397,7 +385,7 @@ SageFs is building toward that same feedback loop with a REPL-centered architect
 |:---|:---|:---|
 | **Speed** | 5–30 sec (MSBuild rebuild) | **300–800ms typical** on the current FSI-driven hot path |
 | **Broken code** | ✗ Must compile first | **✓ Tree-sitter works on incomplete code** |
-| **Editors** | Visual Studio only | **VS Code · Neovim · Visual Studio · Web dashboard · MCP clients** |
+| **Editors** | Visual Studio only | **VS Code · Neovim · Web dashboard · MCP clients** |
 | **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
 | **Price** | ~$250/month | **Free, MIT licensed** |
 
@@ -435,13 +423,13 @@ Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Arc
 - `SageFs.Gui/` — deprecated Raylib product frontend retained as legacy source; it is separate from supported Raylib application and game projects
 - `SageFs.Tests/` — main Expecto test suite
 - `sagefs-vscode/` — VS Code extension (F# via Fable → JavaScript)
-- `sagefs-vs/` — Visual Studio extension workspace
+- `sagefs-vs/` — deprecated Visual Studio extension, retained as legacy source
 - `docs/` — user docs, architecture notes, troubleshooting, and feature references
 - `samples/` — runnable sample apps and language-onramp projects
 - `tests/` — Playwright/browser scenarios for dashboard and editor-facing UX flows
 - `scripts/` — repo helper scripts and smoke/integration utilities
 
-`SageFs.slnx` covers the core tool, retained legacy projects, tests, and samples. The editor integrations live alongside it in `sagefs-vscode/` and `sagefs-vs/` because they use their own packaging toolchains and release flows.
+`SageFs.slnx` covers the core tool, retained legacy projects, tests, and samples. The VS Code integration lives alongside it in `sagefs-vscode/` because it uses its own packaging toolchain and release flow.
 
 The Neovim plugin is not in this repo — it lives in the separate [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) repository.
 
@@ -450,7 +438,6 @@ If you're tracing the live testing / "test as you type" stack, start here:
 - Engine, discovery, dependency graph, and coverage: `SageFs.Core/Features/LiveTestingExecutors.fs`, `LiveTestingTypes.fs`, `CoverageInstrumenter.fs`, `TestDiscovery.fs`, `TestTreeSitter.fs`
 - Daemon routes, watchers, and SSE emission: `SageFs/DaemonMode.fs`, `SageFs/McpServer.fs`, `SageFs/McpTools.fs`
 - VS Code client wiring: `sagefs-vscode/src/Extension.fs`, `LiveTestingListener.fs`, `TestControllerAdapter.fs`, `FileAnnotationsListener.fs`
-- Visual Studio client wiring: `sagefs-vs/SageFs.VisualStudio.Core/LiveTestingSubscriber.fs`, `SageFs.VisualStudio.Editor/TestStateTracker.cs`, `FileAnnotationTracker.cs`, `CoverageGlyphTagger.cs`
 - Neovim client wiring: the separate `sagefs.nvim` repo
 
 <details>
@@ -531,14 +518,13 @@ Full options: `sagefs --help`
     InitScript = Some "setup.fsx" }
 ```
 
-Set `AutoOpenNamespaces = false` to skip warmup auto-opening of namespaces and modules. Because sessions inherit `.SageFs/config.fsx` from the working directory, this opt-out applies across VS Code, Neovim, Visual Studio, dashboard, and MCP session creation flows.
+Set `AutoOpenNamespaces = false` to skip warmup auto-opening of namespaces and modules. Because sessions inherit `.SageFs/config.fsx` from the working directory, this opt-out applies across VS Code, Neovim, dashboard, and MCP session creation flows.
 
 Built-in ways to create or edit that config:
 
 - **Dashboard** — enter a working directory, then click **Disable Warmup Auto-Open**
 - **MCP** — edit the per-directory config through the shared workspace
 - **VS Code** — run **SageFs: Configure Warmup Auto-Open**
-- **Visual Studio** — run **SageFs: Configure Warmup Auto-Open**
 - **Neovim** — run `:SageFsConfig`
 
 If `.SageFs/config.fsx` does not exist, these affordances create it with:
@@ -570,7 +556,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 
 📖 **[Full Troubleshooting Guide →](docs/TROUBLESHOOTING.md)** — covers first-run issues, runtime problems, platform-specific fixes, and diagnostic tools.
 
-📊 **[Feature Matrix →](docs/FEATURE_MATRIX.md)** — compare features across VS Code, Neovim, Visual Studio, the web dashboard, and MCP.
+📊 **[Feature Matrix →](docs/FEATURE_MATRIX.md)** — compare features across VS Code, Neovim, the web dashboard, and MCP.
 
 ---
 

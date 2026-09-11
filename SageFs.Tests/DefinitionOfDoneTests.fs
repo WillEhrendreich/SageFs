@@ -9,7 +9,7 @@ open Expecto.Flip
 let matrixPath =
   Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", "quality", "definition-of-done.json"))
 
-let requiredClients = set [ "dashboard"; "vscode"; "visualstudio"; "neovim" ]
+let requiredClients = set [ "dashboard"; "vscode"; "neovim" ]
 let requiredCapabilities = set [ "hot-reload"; "live-testing"; "friction" ]
 let allowedStatuses = set [ "verified"; "deferred"; "not-applicable" ]
 
