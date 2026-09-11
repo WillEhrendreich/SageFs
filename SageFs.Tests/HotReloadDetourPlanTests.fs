@@ -85,3 +85,16 @@ let detourPlanTests =
           |> List.filter (fun k -> k.FullName = d.FullName)
           |> List.forall (fun old -> isPair old d s.Plan)))
   ]
+
+/// A compiled method in the two-segment namespace SageFs.Tests.
+let hotReloadNameProbe () = 42
+
+[<Tests>]
+let methodNameTests =
+  testList "HotReloading getAllMethods names" [
+    testCase "WHY — HotReloading.getAllMethods — a compiled method in a multi-segment namespace is named in reading order because detours pair it with its FSI copy by name suffix" <| fun _ ->
+      getAllMethods (System.Reflection.Assembly.GetExecutingAssembly())
+      |> List.filter (fun m -> m.MethodInfo.Name = "hotReloadNameProbe")
+      |> List.map _.FullName
+      |> Expect.equal "namespace segments in reading order" [ "SageFs.Tests.HotReloadDetourPlanTests.hotReloadNameProbe" ]
+  ]

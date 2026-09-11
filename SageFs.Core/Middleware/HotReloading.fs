@@ -213,12 +213,14 @@ let getAllMethods (asm: Assembly) =
   /// detour ever fires and the running app keeps the old closure (P0 gap).
   /// Seed the path with the namespace segments (minus any FSI_ prefix) so both
   /// sides register the same qualified name.
+  /// The path is innermost-first (Method.make reverses it), so the segments are too.
   let seedPath (t: Type) : string list =
     match t.Namespace with
     | null | "" -> []
     | ns ->
       ns.Split('.')
       |> Array.filter (fun seg -> not (seg.Contains "FSI_"))
+      |> Array.rev
       |> Array.toList
 
   topLevelTypes
