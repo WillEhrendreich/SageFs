@@ -617,10 +617,7 @@ let buildDashboardSnapshot
           match frictionStore with
           | None -> return Elem.div [ Attr.id DomIds.FrictionPanel ] []
           | Some store ->
-            let reportResult =
-              SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store None
-              |> Async.AwaitTask
-              |> Async.RunSynchronously
+            let! reportResult = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store None
             let historyResult = store.ListSentReports ()
             match reportResult, historyResult with
             | Ok report, Ok history ->
