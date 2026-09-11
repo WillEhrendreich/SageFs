@@ -496,6 +496,22 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
         IO.File.Delete tempFile
   }
 
+  testTask "WHY — RequestFcsTypeCheck — a worker that cannot be reached cancels the check instead of raising a system alarm, because a restarting worker is not a daemon fault" {
+    let log = TestDeps.createLog ()
+    let deps = TestDeps.singleSession log (fun _ ->
+      raise (System.Net.Http.HttpRequestException "An error occurred while sending the request."))
+    let effect = makeRequestFcsTypeCheckEffect None "/src/Math.fs" "module Math\nlet x = 1" "buffer-v1" TimeSpan.Zero
+    let mutable dispatched : SageFsMsg list = []
+    do! SageFsEffectHandler.execute deps
+          (fun msg -> dispatched <- msg :: dispatched)
+          (SageFsEffect.TestCycle effect)
+    dispatched
+    |> List.exists (function
+      | SageFsMsg.FcsTypeCheckCompleted (_, _, Features.LiveTesting.FcsTypeCheckResult.Cancelled "/src/Math.fs") -> true
+      | _ -> false)
+    |> Expect.isTrue "the check is reported as cancelled"
+  }
+
   testTask "RequestRebuild waits for restarted session proxy before reporting success" {
     let sid = testSessionId "a1b2c3d4"
     let mutable dispatched : SageFsMsg list = []

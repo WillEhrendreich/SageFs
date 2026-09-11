@@ -2299,11 +2299,22 @@ module SageFsEffectHandler =
                   |> Option.defaultWith (fun () ->
                     Features.LiveTesting.AnalysisIdentity.ofContent code)
                 let replyId = newReplyId ()
-                let! resp = proxy (WorkerMessage.TypeCheckWithSymbols(code, req.FilePath, replyId))
+                // The call runs inside the async so even a synchronous transport
+                // throw is caught here.
+                let! outcome =
+                  async { return! proxy (WorkerMessage.TypeCheckWithSymbols(code, req.FilePath, replyId)) }
+                  |> Async.Catch
                 fcsStopwatch.Stop()
                 Instrumentation.fcsTypecheckMs.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
                 Features.LiveTesting.LiveTestingInstrumentation.fcsHistogram.Record(fcsStopwatch.Elapsed.TotalMilliseconds)
                 let result =
+                  match outcome with
+                  | Choice2Of2 ex ->
+                    // A worker mid-restart cannot answer: that is a cancelled
+                    // check, not a daemon fault for the Elm loop to alarm on.
+                    Utils.Log.warn "[SageFsApp] Type-check could not reach the worker for %s: %s" req.FilePath ex.Message
+                    Features.LiveTesting.FcsTypeCheckResult.Cancelled req.FilePath
+                  | Choice1Of2 resp ->
                   match resp with
                   | WorkerResponse.TypeCheckWithSymbolsResult(_rid, hasErrors, diags, symRefs) ->
                     match hasErrors with
