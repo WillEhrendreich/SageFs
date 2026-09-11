@@ -17,11 +17,45 @@ open SageFs.Server.DashboardTypes
 let ssePatchNode (ctx: HttpContext) (node: XmlNode) =
   Falco.Datastar.Response.sseStringElements ctx (renderNode node)
 
+/// Escape the five HTML-significant characters — & < > " ' — and nothing else.
+///
+/// That set is exactly what can open a tag, close a quoted attribute, or start
+/// an entity, so the result is inert in text content and in quoted attribute
+/// values. Everything else (·, é, emoji) passes through unchanged. (Falco's
+/// `Text.enc`/WebUtility.HtmlEncode also entity-encodes every char >= U+00A0,
+/// which rewrites benign user-visible text into `&#183;`/`&#128994;` for no
+/// security gain.)
+let htmlEscape (s: string) : string =
+  match String.IsNullOrEmpty s || s.IndexOfAny([| '&'; '<'; '>'; '"'; '\'' |]) < 0 with
+  | true -> (match isNull s with | true -> "" | false -> s)
+  | false ->
+    let sb = Text.StringBuilder(s.Length + 16)
+    for c in s do
+      match c with
+      | '&' -> sb.Append("&amp;") |> ignore
+      | '<' -> sb.Append("&lt;") |> ignore
+      | '>' -> sb.Append("&gt;") |> ignore
+      | '"' -> sb.Append("&quot;") |> ignore
+      | '\'' -> sb.Append("&#39;") |> ignore
+      | c -> sb.Append(c) |> ignore
+    sb.ToString()
+
+/// Text node for any runtime string (session ids, dirs, project names,
+/// messages, eval output). The ONE place a computed string reaches
+/// `Text.raw` — every other `Text.raw` in the dashboard takes a string
+/// literal, which DashboardEscapingTests enforces structurally.
+let textEnc (s: string) : XmlNode = Text.raw (htmlEscape s)
+
+/// Encode a runtime string for use as an attribute VALUE. Falco.Markup emits
+/// attribute values verbatim inside double quotes, so a `"` in a working
+/// directory, title, or path would otherwise break out of the attribute.
+let attrEnc (s: string) : string = htmlEscape s
+
 let renderKeyboardHelp () =
   let shortcut key desc =
     Elem.tr [] [
-      Elem.td [ Attr.style "padding: 2px 8px; font-family: monospace; color: var(--fg-blue);" ] [ Text.raw key ]
-      Elem.td [ Attr.style "padding: 2px 8px;" ] [ Text.raw desc ]
+      Elem.td [ Attr.style "padding: 2px 8px; font-family: monospace; color: var(--fg-blue);" ] [ textEnc key ]
+      Elem.td [ Attr.style "padding: 2px 8px;" ] [ textEnc desc ]
     ]
   Elem.div [ Attr.id DomIds.KeyboardHelp; Attr.style "margin-top: 0.5rem;" ] [
     Elem.table [ Attr.style "font-size: 0.85rem; border-collapse: collapse;" ] [
@@ -51,9 +85,9 @@ let renderCompletionDropdown (items: Features.AutoCompletion.CompletionItem list
           [ Attr.class' "comp-item"
             Attr.style (sprintf "padding:2px 6px;cursor:pointer;%s" (match i with | 0 -> "background:var(--bg-selection)" | _ -> ""))
             Ds.onEvent ("click", sprintf "window._insertComp('%s',%d)" (escJs item.ReplacementText) cursorPos) ]
-          [ Text.raw (System.Net.WebUtility.HtmlEncode item.DisplayText)
+          [ textEnc item.DisplayText
             Elem.span [ Attr.style "opacity:0.5;font-size:0.8em;margin-left:4px;" ] [
-              Text.raw (sprintf "(%s)" (Features.AutoCompletion.CompletionKind.label item.Kind))
+              textEnc (sprintf "(%s)" (Features.AutoCompletion.CompletionKind.label item.Kind))
             ]
           ]))
 
@@ -84,7 +118,7 @@ let renderThemePicker (selectedTheme: string) =
     (ThemePresets.all |> List.map (fun (name, _) ->
       Elem.option
         ([ Attr.value name ] @ (match name = selectedTheme with | true -> [ Attr.create "selected" "selected" ] | false -> []))
-        [ Text.raw name ]))
+        [ textEnc name ]))
 
 
 let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: string) (warmupProgress: string) (workflowLabel: string) =
@@ -93,7 +127,8 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
     | true ->
       [ Elem.br []
         Elem.span [ Attr.class' "meta warmup-progress" ] [
-          Text.raw (sprintf "⏳ %s" warmupProgress)
+          Text.raw "⏳ "
+          textEnc warmupProgress
         ] ]
     | false -> []
   let workflowBadgeClass =
@@ -102,33 +137,22 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
     | _ -> "badge badge-workflow"
   let workflowNode =
     [ Elem.span [ Attr.class' workflowBadgeClass ] [
-        Text.raw workflowLabel
+        textEnc workflowLabel
       ] ]
-  match sessionState with
-  | "Ready" ->
-    Elem.div [ Attr.id DomIds.SessionStatus; Attr.create "data-working-dir" workingDir ] [
-      yield Elem.span [ Attr.class' "status status-ready" ] [ Text.raw sessionState ]
-      yield! workflowNode
-      yield Elem.br []
-      yield Elem.span [ Attr.class' "meta" ] [
-        Text.raw (sprintf "Session: %s | CWD: %s" sessionId workingDir)
-      ]
-      yield! warmupNode
+  let statusClass =
+    match sessionState with
+    | "Ready" -> "status-ready"
+    | "WarmingUp" -> "status-warming"
+    | _ -> "status-faulted"
+  Elem.div [ Attr.id DomIds.SessionStatus; Attr.create "data-working-dir" (attrEnc workingDir) ] [
+    yield Elem.span [ Attr.class' (sprintf "status %s" statusClass) ] [ textEnc sessionState ]
+    yield! workflowNode
+    yield Elem.br []
+    yield Elem.span [ Attr.class' "meta" ] [
+      textEnc (sprintf "Session: %s | CWD: %s" sessionId workingDir)
     ]
-  | _ ->
-    let statusClass =
-      match sessionState with
-      | "WarmingUp" -> "status-warming"
-      | _ -> "status-faulted"
-    Elem.div [ Attr.id DomIds.SessionStatus; Attr.create "data-working-dir" workingDir ] [
-      yield Elem.span [ Attr.class' (sprintf "status %s" statusClass) ] [ Text.raw sessionState ]
-      yield! workflowNode
-      yield Elem.br []
-      yield Elem.span [ Attr.class' "meta" ] [
-        Text.raw (sprintf "Session: %s | CWD: %s" sessionId workingDir)
-      ]
-      yield! warmupNode
-    ]
+    yield! warmupNode
+  ]
 
 /// Render system alarm banner — visible when ElmLoop throws at any catch site.
 /// Empty list renders a hidden placeholder so Datastar can morph it away.
@@ -147,13 +171,13 @@ let renderAlarmBanner (alarms: SystemAlarmEntry list) =
       alarms |> List.map (fun alarm ->
         Elem.div [ Attr.class' "alarm-entry" ] [
           Elem.span [ Attr.class' "alarm-phase meta" ] [
-            Text.raw (sprintf "[%s]" alarm.Phase)
+            textEnc (sprintf "[%s]" alarm.Phase)
           ]
           Elem.span [ Attr.class' "alarm-message" ] [
-            Text.raw (System.Net.WebUtility.HtmlEncode (sprintf " %s" alarm.Message))
+            textEnc (sprintf " %s" alarm.Message)
           ]
           Elem.span [ Attr.class' "alarm-ts meta" ] [
-            Text.raw (sprintf " @ %s" (alarm.Timestamp.ToLocalTime().ToString("HH:mm:ss")))
+            textEnc (sprintf " @ %s" (alarm.Timestamp.ToLocalTime().ToString("HH:mm:ss")))
           ]
         ])
     Elem.div [ Attr.id DomIds.AlarmBanner; Attr.class' "alarm-banner" ] [
@@ -161,12 +185,12 @@ let renderAlarmBanner (alarms: SystemAlarmEntry list) =
         Elem.summary [ Attr.style disclosureSummaryStyle ] [
           Elem.span [ Attr.class' "alarm-icon" ] [ Text.raw "🚨" ]
           Elem.span [ Attr.class' "alarm-title" ] [
-            Text.raw (sprintf " System Alarm (%d)" alarmCount)
+            textEnc (sprintf " System Alarm (%d)" alarmCount)
           ]
         ]
         Elem.div [ Attr.style "margin-top: 0.5rem;" ] [
           Elem.div [ Attr.class' "alarm-banner-header" ] [
-            Elem.span [ Attr.class' "meta" ] [ Text.raw alarmCountLabel ]
+            Elem.span [ Attr.class' "meta" ] [ textEnc alarmCountLabel ]
             Elem.button
               [ Attr.class' "alarm-dismiss"
                 Attr.title "Dismiss all alarms"
@@ -200,7 +224,7 @@ let renderAutoOpenToggleIcon (enabled: bool) =
       Attr.title tooltip
       Attr.style (sprintf "color: %s;" color)
       Ds.onClick (Ds.post endpoint) ]
-    [ Text.raw glyph ]
+    [ textEnc glyph ]
 
 /// Context-aware warmup auto-open toggle (full-width variant).
 /// Kept for potential use in panels where a labeled button fits better than
@@ -260,14 +284,14 @@ let renderDaemonHealth (view: DaemonHealthView) =
         match view.SessionSummaries with
         | [] -> sprintf "%s Ready · No active sessions" emoji
         | _ -> sprintf "%s %s" emoji label
-      Text.raw (sprintf "%s · SageFs %s · up %s · %dMB"
+      textEnc (sprintf "%s · SageFs %s · up %s · %dMB"
         statusText view.Version view.UptimeLabel view.MemoryMB)
     ]
     match sessionSummaryText view.SessionSummaries with
     | None -> ()
     | Some txt ->
       Elem.span [ Attr.class' "session-health-list"; Attr.style "margin-left: 0.5rem;" ] [
-        Text.raw txt
+        textEnc txt
       ]
     // Test counts removed from health row — they live in the Live Testing panel.
     // When live testing is inactive, no stale counts bleed into the health bar.
@@ -283,43 +307,44 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
       let badgeText =
         match view.SuppressedCount with
         | 0 when view.Entries.Length < total ->
-          sprintf "🔴 %d failure%s · showing top %d" total (if total = 1 then "" else "s") view.Entries.Length
+          sprintf "%d failure%s · showing top %d" total (if total = 1 then "" else "s") view.Entries.Length
         | 0 ->
-          sprintf "🔴 %d failure%s" total (if total = 1 then "" else "s")
+          sprintf "%d failure%s" total (if total = 1 then "" else "s")
         | suppressed when view.Entries.IsEmpty ->
-          sprintf "🔴 %d failure%s · %d have no baseline yet" total (if total = 1 then "" else "s") suppressed
+          sprintf "%d failure%s · %d have no baseline yet" total (if total = 1 then "" else "s") suppressed
         | suppressed ->
-          sprintf "🔴 %d failure%s · %d with context · %d no baseline" total (if total = 1 then "" else "s") view.Entries.Length suppressed
+          sprintf "%d failure%s · %d with context · %d no baseline" total (if total = 1 then "" else "s") view.Entries.Length suppressed
       Elem.details [] [
         Elem.summary [ Attr.style disclosureSummaryStyle ] [
           Elem.span [ Attr.class' "failure-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
-            Text.raw badgeText
+            Text.raw "🔴 "
+            textEnc badgeText
           ]
         ]
         Elem.div [ Attr.style "margin-top: 0.25rem;" ] [
           for entry in view.Entries do
+            let shortName =
+              let parts = entry.TestName.Split('.')
+              if parts.Length > 1 then parts.[parts.Length - 1] else entry.TestName
             Elem.div [ Attr.class' "narrative-entry"; Attr.style "margin-top: 0.25rem;" ] [
               Elem.span [ Attr.class' "narrative-test-name"; Attr.style "font-weight: bold;" ] [
-                Text.raw (
-                  let shortName =
-                    let parts = entry.TestName.Split('.')
-                    if parts.Length > 1 then parts.[parts.Length - 1] else entry.TestName
-                  sprintf "🔴 %s" shortName)
+                Text.raw "🔴 "
+                textEnc shortName
               ]
               match entry.TimeSinceLabel with
               | Some label ->
                 Elem.span [ Attr.class' "meta narrative-timing"; Attr.style "margin-left: 0.5rem;" ] [
-                  Text.raw (sprintf "was passing %s" label)
+                  textEnc (sprintf "was passing %s" label)
                 ]
               | None -> ()
               Elem.span [ Attr.class' "narrative-summary"; Attr.style "margin-left: 0.5rem;" ] [
-                Text.raw (System.Net.WebUtility.HtmlEncode entry.Summary)
+                textEnc entry.Summary
               ]
               match entry.CausalLabels with
               | [] -> ()
               | labels ->
                 Elem.span [ Attr.class' "meta narrative-causal"; Attr.style "margin-left: 0.5rem;" ] [
-                  Text.raw (sprintf "→ %s" (labels |> String.concat ", "))
+                  textEnc (sprintf "→ %s" (labels |> String.concat ", "))
                 ]
               if entry.HasPropertyViolation then
                 Elem.span [ Attr.class' "meta narrative-property"; Attr.style "margin-left: 0.5rem;" ] [
@@ -333,15 +358,15 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
 /// Render eval stats as an HTML fragment — includes sparkline and P50/P95 latency.
 let renderEvalStats (stats: EvalStatsView) =
   Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "meta" ] [
-    Text.raw (sprintf "%d evals · avg %.0fms · min %.0fms · max %.0fms" stats.Count stats.AvgMs stats.MinMs stats.MaxMs)
+    textEnc (sprintf "%d evals · avg %.0fms · min %.0fms · max %.0fms" stats.Count stats.AvgMs stats.MinMs stats.MaxMs)
     match stats.Sparkline with
     | "" -> ()
     | sparkline ->
       Elem.span [ Attr.class' "eval-sparkline"; Attr.title "Recent eval latency (oldest → newest)" ] [
-        Text.raw (sprintf " %s" sparkline)
+        textEnc (sprintf " %s" sparkline)
       ]
       Elem.span [ Attr.class' "eval-percentiles meta" ] [
-        Text.raw (sprintf " · P50 %s · P95 %s"
+        textEnc (sprintf " · P50 %s · P95 %s"
           (stats.P50Ms |> Option.map (sprintf "%.0fms") |> Option.defaultValue "—")
           (stats.P95Ms |> Option.map (sprintf "%.0fms") |> Option.defaultValue "—"))
       ]
@@ -354,9 +379,9 @@ let private renderStage (stage: PipelineStageView) =
     | StageSuccess -> ("✓", "stage-success")
     | StageFailure _ -> ("✗", "stage-failure")
   Elem.span [ Attr.class' (sprintf "pipeline-stage %s" cssClass) ] [
-    Text.raw (System.Net.WebUtility.HtmlEncode (sprintf "%s %s" stage.Name icon))
+    textEnc (sprintf "%s %s" stage.Name icon)
     Elem.span [ Attr.class' "stage-duration" ] [
-      Text.raw (sprintf " [%.0fms]" stage.DurationMs)
+      textEnc (sprintf " [%.0fms]" stage.DurationMs)
     ]
   ]
 
@@ -379,7 +404,7 @@ let renderRailway (railway: PipelineRailwayView) =
           | false -> [ renderArrow (); renderStage stage ])
         |> List.concat
       yield Elem.span [ Attr.class' "pipeline-total" ] [
-        Text.raw (sprintf " [%.0fms total]" railway.TotalMs)
+        textEnc (sprintf " [%.0fms total]" railway.TotalMs)
       ]
   ]
 
@@ -405,7 +430,7 @@ let captureToCssClass (capture: string) =
 /// Render a single line of code with syntax highlighting as HTML spans.
 let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list =
   match spans.Length = 0 || line.Length = 0 with
-  | true -> [ Text.raw (System.Net.WebUtility.HtmlEncode line) ]
+  | true -> [ textEnc line ]
   | false ->
     let nodes = ResizeArray<XmlNode>()
     let mutable pos = 0
@@ -416,7 +441,7 @@ let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list
       match span.Start > pos && pos < line.Length with
       | true ->
         let gapEnd = min span.Start line.Length
-        nodes.Add(Text.raw (System.Net.WebUtility.HtmlEncode(line.Substring(pos, gapEnd - pos))))
+        nodes.Add(textEnc (line.Substring(pos, gapEnd - pos)))
         pos <- gapEnd
       | false -> ()
       match span.Start >= 0 && span.Start < line.Length with
@@ -430,23 +455,23 @@ let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list
           | false, _ -> ""
         match cssClass <> "" with
         | true ->
-          nodes.Add(Elem.span [ Attr.class' cssClass ] [ Text.raw (System.Net.WebUtility.HtmlEncode text) ])
+          nodes.Add(Elem.span [ Attr.class' cssClass ] [ textEnc text ])
         | false ->
-          nodes.Add(Text.raw (System.Net.WebUtility.HtmlEncode text))
+          nodes.Add(textEnc text)
         pos <- end'
       | false -> ()
     match pos < line.Length with
     | true ->
-      nodes.Add(Text.raw (System.Net.WebUtility.HtmlEncode(line.Substring(pos))))
+      nodes.Add(textEnc (line.Substring(pos)))
     | false -> ()
     nodes |> Seq.toList
 
 /// Render output lines as an HTML fragment.
 let renderOutputForSession (sessionId: string) (lines: OutputLine list) (placeholder: string) =
-  Elem.div [ Attr.id DomIds.OutputPanel; Attr.create "data-session-id" sessionId ] [
+  Elem.div [ Attr.id DomIds.OutputPanel; Attr.create "data-session-id" (attrEnc sessionId) ] [
     match lines.IsEmpty with
     | true ->
-      Elem.span [ Attr.class' "meta" ] [ Text.raw placeholder ]
+      Elem.span [ Attr.class' "meta" ] [ textEnc placeholder ]
     | false ->
       yield! lines |> List.map (fun line ->
         let css = OutputLineKind.toCssClass line.Kind
@@ -454,7 +479,7 @@ let renderOutputForSession (sessionId: string) (lines: OutputLine list) (placeho
           match line.Timestamp with
           | Some t ->
             Elem.span [ Attr.class' "meta"; Attr.style "margin-right: 0.5rem;" ] [
-              Text.raw t
+              textEnc t
             ]
           | None -> ()
           match (line.Kind = ResultLine || line.Kind = InfoLine) && SyntaxHighlight.isAvailable () with
@@ -462,9 +487,9 @@ let renderOutputForSession (sessionId: string) (lines: OutputLine list) (placeho
             let allSpans = SyntaxHighlight.tokenize Theme.defaults line.Text
             match allSpans.Length > 0 with
             | true -> yield! renderHighlightedLine allSpans.[0] line.Text
-            | false -> Text.raw (System.Net.WebUtility.HtmlEncode line.Text)
+            | false -> textEnc line.Text
           | false ->
-            Text.raw (System.Net.WebUtility.HtmlEncode line.Text)
+            textEnc line.Text
         ])
   ]
 
@@ -482,16 +507,16 @@ let renderDiagnostics (diags: Diagnostic list) =
         let cls = DiagSeverity.toCssClass diag.Severity
         Elem.div [ Attr.class' (sprintf "diag %s" cls) ] [
           Elem.span [ Attr.style "margin-right: 0.25rem;" ] [
-            Text.raw (DiagSeverity.toIcon diag.Severity)
+            textEnc (DiagSeverity.toIcon diag.Severity)
           ]
           match diag.Line > 0 || diag.Col > 0 with
           | true ->
             Elem.span [ Attr.class' "diag-location" ] [
-              Text.raw (sprintf "L%d:%d" diag.Line diag.Col)
+              textEnc (sprintf "L%d:%d" diag.Line diag.Col)
             ]
           | false -> ()
           Elem.span [] [
-            Text.raw (System.Net.WebUtility.HtmlEncode (sprintf " %s" diag.Message))
+            textEnc (sprintf " %s" diag.Message)
           ]
         ])
   ]
@@ -573,15 +598,15 @@ let renderSessionPicker (previous: PreviousSession list) =
                 Ds.onClick (Ds.post (sprintf "/dashboard/session/resume/%s" s.Id)) ]
               [ Elem.div [ Attr.style "flex: 1; min-width: 0;" ] [
                   Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem;" ] [
-                    Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw s.Id ]
-                    Elem.span [ Attr.class' "meta" ] [ Text.raw age ]
+                    Elem.span [ Attr.style "font-weight: bold;" ] [ textEnc s.Id ]
+                    Elem.span [ Attr.class' "meta" ] [ textEnc age ]
                   ]
                   match s.WorkingDir.Length > 0 with
                   | true ->
                     Elem.div
                       [ Attr.style "font-size: 0.75rem; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-                        Attr.title s.WorkingDir ]
-                      [ Text.raw (sprintf "📁 %s" s.WorkingDir) ]
+                        Attr.title (attrEnc s.WorkingDir) ]
+                      [ Text.raw "📁 "; textEnc s.WorkingDir ]
                   | false -> ()
                   match s.Projects.IsEmpty with
                   | false ->
@@ -589,7 +614,7 @@ let renderSessionPicker (previous: PreviousSession list) =
                       yield! s.Projects |> List.map (fun p ->
                         Elem.span
                           [ Attr.class' "badge"; Attr.style "background: var(--bg-focus); color: var(--fg-dim);" ]
-                          [ Text.raw (Path.GetFileName p) ])
+                          [ textEnc (Path.GetFileName p) ])
                     ]
                   | true -> ()
                 ]
@@ -630,14 +655,14 @@ let renderTestFilterBar (entries: Features.LiveTesting.TestTreemapEntry array) :
         Ds.onEvent ("click", sprintf "$testFilter = '%s'" value)
         Ds.show (sprintf "$testFilter !== '%s'" value)
         Attr.style (sprintf "background:transparent;border:1px solid %s;color:%s;padding:1px 5px;font-size:0.6rem;border-radius:0;cursor:pointer;margin-right:2px;" color color) ]
-      [ Text.raw (sprintf "%s %d" label count) ]
+      [ textEnc (sprintf "%s %d" label count) ]
   let activeBtn (label: string) (value: string) (count: int) (color: string) =
     Elem.button
       [ Attr.class' "test-filter-btn test-filter-active"
         Ds.onEvent ("click", "$testFilter = 'all'")
         Ds.show (sprintf "$testFilter === '%s'" value)
         Attr.style (sprintf "background:%s;color:#fff;padding:1px 5px;font-size:0.6rem;border-radius:0;cursor:pointer;margin-right:2px;border:1px solid %s;" color color) ]
-      [ Text.raw (sprintf "%s %d ✕" label count) ]
+      [ textEnc (sprintf "%s %d ✕" label count) ]
   Elem.div
     [ Attr.class' "test-filter-bar"
       Attr.style "display:flex;align-items:center;gap:2px;margin-bottom:4px;flex-wrap:wrap;" ]
@@ -690,18 +715,18 @@ let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : X
           Elem.div
             [ Attr.style (sprintf "position:absolute;left:%.1fpx;top:%.1fpx;width:%.1fpx;height:%.1fpx;background:%s;opacity:0.85;border:0.5px solid rgba(0,0,0,0.3);overflow:hidden;box-sizing:border-box;"
                 r.X r.Y r.W r.H bgColor)
-              Attr.title title
+              Attr.title (attrEnc title)
               Ds.show (sprintf "$testFilter === 'all' || $testFilter === '%s'" statusFilter) ]
             [ match showLabel with
               | true ->
                 Elem.div [ Attr.style "font-size:0.5rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ] [
-                  Text.raw r.Entry.DisplayName
+                  textEnc r.Entry.DisplayName
                 ]
               | false -> ()
               match showDuration with
               | true ->
                 Elem.div [ Attr.style "font-size:0.45rem;color:rgba(255,255,255,0.7);padding:0 2px;line-height:1;" ] [
-                  Text.raw durationLabel
+                  textEnc durationLabel
                 ]
               | false -> () ]) ]
 
@@ -716,23 +741,23 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
           [ Attr.style "display:flex;align-items:baseline;gap:0.4em;padding:2px 0;border-bottom:1px solid var(--border-normal,#333);" ]
           [ Elem.code
               [ Attr.style "color:var(--fg-cyan,#56b6c2);font-weight:bold;white-space:nowrap;font-size:0.7rem;" ]
-              [ Text.raw (System.Net.WebUtility.HtmlEncode b.Name) ]
+              [ textEnc b.Name ]
             Elem.span
               [ Attr.style "color:var(--fg-dim,#666);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" ]
-              [ Text.raw (sprintf ": %s" (System.Net.WebUtility.HtmlEncode b.TypeSig)) ]
+              [ textEnc (sprintf ": %s" b.TypeSig) ]
             match b.Value with
             | Some v ->
               Elem.span
                 [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;"
-                  Attr.title (System.Net.WebUtility.HtmlEncode v) ]
-                [ Text.raw (sprintf "= %s" (System.Net.WebUtility.HtmlEncode v)) ]
+                  Attr.title (attrEnc v) ]
+                [ textEnc (sprintf "= %s" v) ]
             | None -> ()
             match b.ReferencedIn.Length with
             | 0 -> ()
             | n ->
               Elem.span
                 [ Attr.style "color:var(--fg-yellow,#e5c07b);font-size:0.6rem;white-space:nowrap;" ]
-                [ Text.raw (sprintf "→%d" n) ] ]
+                [ textEnc (sprintf "→%d" n) ] ]
     ]
 
 /// Render the "⏳ Stopping session id:[id]..." card that replaces a session's
@@ -745,9 +770,9 @@ let renderStoppingCard (sessionId: WorkerProtocol.SessionId) =
     [ Attr.id (sprintf "session-card-%s" sid)
       Attr.class' "session-row session-stopping"
       Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal);" ]
-    [ Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw sid ]
+    [ Elem.span [ Attr.style "font-weight: bold;" ] [ textEnc sid ]
       Elem.span [ Attr.class' "meta"; Attr.style "margin-left: 0.5rem;" ] [
-        Text.raw (sprintf "⏳ Stopping session id:%s..." sid)
+        textEnc (sprintf "⏳ Stopping session id:%s..." sid)
       ] ]
 
 /// Render sessions as an HTML fragment with action buttons.
@@ -786,10 +811,10 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
             Elem.div [ Attr.class' "session-card-body" ] [
               // Row 1: session ID + status + selected indicator
               Elem.div [ Attr.class' "session-card-status-row" ] [
-                Elem.span [ Attr.style "font-weight: bold;" ] [ Text.raw sid ]
+                Elem.span [ Attr.style "font-weight: bold;" ] [ textEnc sid ]
                 Elem.span
                   [ Attr.class' (sprintf "status badge %s" statusClass) ]
-                  [ Text.raw (SessionDisplayStatus.label s.Status) ]
+                  [ textEnc (SessionDisplayStatus.label s.Status) ]
                 match isViewing with
                 | true ->
                   Elem.span [ Attr.style "color: var(--fg-green);" ] [ Text.raw "● selected" ]
@@ -798,18 +823,19 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 yield! s.AgentBadges |> List.map (fun badge ->
                   Elem.span
                     [ Attr.class' badge.CssClass
-                      Attr.title (
+                      Attr.title (attrEnc (
                         match badge.DetailLabel.Length > 0 with
                         | true -> sprintf "%s — files: %s" badge.Name badge.DetailLabel
-                        | false -> badge.Name) ]
-                    [ Text.raw (
+                        | false -> badge.Name)) ]
+                    [ Text.raw "🤖 "
+                      textEnc (
                         match badge.IntentLabel.Length > 0 with
-                        | true -> sprintf "🤖 %s (%s)" badge.Name badge.IntentLabel
-                        | false -> sprintf "🤖 %s" badge.Name) ])
+                        | true -> sprintf "%s (%s)" badge.Name badge.IntentLabel
+                        | false -> badge.Name) ])
                 match s.Uptime.Length > 0 with
                 | true ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
-                    Text.raw (sprintf "⏱ %s" s.Uptime)
+                    textEnc (sprintf "⏱ %s" s.Uptime)
                   ]
                 | false -> ()
               ]
@@ -820,7 +846,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 Elem.div
                   [ Attr.class' "status-msg"
                     Attr.style "font-size: 0.7rem; color: var(--fg-yellow); font-style: italic;" ]
-                  [ Text.raw (sprintf "⏳ %s" msg) ]
+                  [ textEnc (sprintf "⏳ %s" msg) ]
               | None -> ()
               // Row 2: working directory
               match s.WorkingDir.Length > 0 with
@@ -828,8 +854,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 Elem.div
                   [ Attr.class' "session-dir"
                     Attr.style "font-size: 0.75rem; color: var(--fg-dim);"
-                    Attr.title s.WorkingDir ]
-                  [ Text.raw (sprintf "📁 %s" s.WorkingDir) ]
+                    Attr.title (attrEnc s.WorkingDir) ]
+                  [ Text.raw "📁 "; textEnc s.WorkingDir ]
               | false -> ()
               // Row 3: projects as tags + evals + last activity
               Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem; flex-wrap: wrap;" ] [
@@ -843,12 +869,12 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   yield! projNames |> Array.map (fun pName ->
                     Elem.span
                       [ Attr.class' "badge"; Attr.style "background: var(--bg-focus); color: var(--fg-dim);" ]
-                      [ Text.raw pName ])
+                      [ textEnc pName ])
                 | false -> ()
                 match s.EvalCount > 0 with
                 | true ->
                   Elem.span [ Attr.class' "meta" ] [
-                    Text.raw (sprintf "evals: %d" s.EvalCount)
+                    textEnc (sprintf "evals: %d" s.EvalCount)
                   ]
                 | false -> ()
                 match s.TestSummary with
@@ -864,7 +890,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Elem.span
                     [ Attr.class' "badge"
                       Attr.style (sprintf "color: %s; font-size: 0.7rem;" badgeColor) ]
-                    [ Text.raw badge ]
+                    [ textEnc badge ]
                 | _ -> ()
                 match s.CoverageSummary with
                 | Some cs when cs.TotalProbes > 0 ->
@@ -890,13 +916,13 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       []
                     Elem.span
                       [ Attr.style "font-size:0.6rem;color:var(--fg-dim);" ]
-                      [ Text.raw pct ]
+                      [ textEnc pct ]
                   ]
                 | _ -> ()
                 match s.LastActivity.Length > 0 with
                 | true ->
                   Elem.span [ Attr.class' "meta"; Attr.style "margin-left: auto;" ] [
-                    Text.raw (sprintf "last: %s" s.LastActivity)
+                    textEnc (sprintf "last: %s" s.LastActivity)
                   ]
                 | false -> ()
                 match s.App with
@@ -910,7 +936,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Elem.div
                     [ Attr.class' "session-card-app"
                       Attr.style (sprintf "flex-basis: 100%%; font-size: 0.7rem; color: %s; overflow-wrap: anywhere;" color) ]
-                    [ Text.raw (AppRun.describeState app) ]
+                    [ textEnc (AppRun.describeState app) ]
               ]
             ]
             Elem.div [ Attr.class' "session-card-actions" ] [
@@ -943,27 +969,27 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 | AppRun.AppEndpoint.Http (url, _) ->
                   Elem.a
                     [ Attr.class' "session-btn session-btn-link"
-                      Attr.href url
+                      Attr.href (attrEnc url)
                       Attr.target "_blank"
                       Attr.rel "noopener"
-                      Attr.title (sprintf "Open %s — save a source file to hot reload it" url) ]
+                      Attr.title (attrEnc (sprintf "Open %s — save a source file to hot reload it" url)) ]
                     [ Text.raw "🌐" ]
                 | AppRun.AppEndpoint.NoServer -> ()
                 Elem.button
                   [ Attr.class' "session-btn session-btn-success"
-                    Attr.title (sprintf "Stop App — %s" (AppRun.describeState s.App))
+                    Attr.title (attrEnc (sprintf "Stop App — %s" (AppRun.describeState s.App)))
                     Ds.onClick (Ds.post (sprintf "/dashboard/stop-app/%s" sid)) ]
                   [ Text.raw "■" ]
               | _, AppRun.AppRunState.Starting _ ->
                 Elem.button
                   [ Attr.class' "session-btn"
                     Attr.disabled
-                    Attr.title (AppRun.describeState s.App) ]
+                    Attr.title (attrEnc (AppRun.describeState s.App)) ]
                   [ Text.raw "⏳" ]
               | [ project ], _ ->
                 Elem.button
                   [ Attr.class' "session-btn session-btn-primary"
-                    Attr.title (runTitle (AppRun.projectName project.Path))
+                    Attr.title (attrEnc (runTitle (AppRun.projectName project.Path)))
                     Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
                   [ Text.raw "▶" ]
               | projects, _ ->
@@ -971,9 +997,9 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   let name = AppRun.projectName project.Path
                   Elem.button
                     [ Attr.class' "session-btn session-btn-primary"
-                      Attr.title (runTitle name)
+                      Attr.title (attrEnc (runTitle name))
                       Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s/%s" sid (Uri.EscapeDataString name))) ]
-                    [ Text.raw (sprintf "▶ %s" name) ]
+                    [ textEnc (sprintf "▶ %s" name) ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.title "Stop — unload the session (saved memory kept)"
@@ -1003,7 +1029,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]
                 [ Elem.summary
                     [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
-                    [ Text.raw (sprintf "🧪 %d tests · %s" s.TestTreemapEntries.Length durationLabel) ]
+                    [ Text.raw "🧪 "
+                      textEnc (sprintf "%d tests · %s" s.TestTreemapEntries.Length durationLabel) ]
                   renderTestFilterBar s.TestTreemapEntries
                   renderTestTreemap s.TestTreemapEntries ]
             // Collapsible bound values explorer
@@ -1014,7 +1041,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]
                 [ Elem.summary
                     [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
-                    [ Text.raw (sprintf "📦 %d bindings" s.BindingEntries.Length) ]
+                    [ Text.raw "📦 "
+                      textEnc (sprintf "%d bindings" s.BindingEntries.Length) ]
                   renderBindingExplorer s.BindingEntries ]
           ])
     Elem.div
@@ -1064,7 +1092,7 @@ let renderSessionFilmstrip (entries: FilmstripEntry list) =
         |> String.concat ""
       Elem.details [] [
         Elem.summary [ Attr.style "cursor: pointer; font-size: 0.75rem; color: var(--fg-dim); user-select: none;" ] [
-          Text.raw (sprintf "⏱ %d evals  %s" entries.Length recentIcons)
+          textEnc (sprintf "⏱ %d evals  %s" entries.Length recentIcons)
         ]
         Elem.div [ Attr.class' "filmstrip-frames" ] [
           yield! entries |> List.map (fun e ->
@@ -1075,10 +1103,10 @@ let renderSessionFilmstrip (entries: FilmstripEntry list) =
               | ms when ms <= 500L -> "eval-medium"
               | _ -> "eval-slow"
             Elem.div [ Attr.class' (sprintf "filmstrip-frame %s" speedCls) ] [
-              Elem.span [ Attr.class' "frame-index" ] [ Text.raw (sprintf "#%d" e.Index) ]
-              Elem.span [ Attr.class' "frame-icon" ] [ Text.raw icon ]
-              Elem.span [ Attr.class' "frame-label" ] [ Text.raw (System.Net.WebUtility.HtmlEncode e.Label) ]
-              Elem.span [ Attr.class' "frame-duration" ] [ Text.raw (sprintf " %dms" e.DurationMs) ]
+              Elem.span [ Attr.class' "frame-index" ] [ textEnc (sprintf "#%d" e.Index) ]
+              Elem.span [ Attr.class' "frame-icon" ] [ textEnc icon ]
+              Elem.span [ Attr.class' "frame-label" ] [ textEnc e.Label ]
+              Elem.span [ Attr.class' "frame-duration" ] [ textEnc (sprintf " %dms" e.DurationMs) ]
             ])
         ]
       ]
@@ -1095,28 +1123,40 @@ let renderCurrentDiagnostics (diags: Diagnostic list) =
     match diags.IsEmpty with
     | true -> ()
     | false ->
-      let badgeText =
+      let plural n = if n = 1 then "" else "s"
+      let badgeNodes =
         match errorCount, warnCount with
-        | e, 0 -> sprintf "🔴 %d error%s" e (if e = 1 then "" else "s")
-        | 0, w -> sprintf "⚠️ %d warning%s" w (if w = 1 then "" else "s")
-        | e, w -> sprintf "🔴 %d error%s · ⚠️ %d warning%s" e (if e = 1 then "" else "s") w (if w = 1 then "" else "s")
+        | e, 0 -> [ Text.raw "🔴 "; textEnc (sprintf "%d error%s" e (plural e)) ]
+        | 0, w -> [ Text.raw "⚠️ "; textEnc (sprintf "%d warning%s" w (plural w)) ]
+        | e, w ->
+          [ Text.raw "🔴 "
+            textEnc (sprintf "%d error%s · " e (plural e))
+            Text.raw "⚠️ "
+            textEnc (sprintf "%d warning%s" w (plural w)) ]
       Elem.details [] [
         Elem.summary [ Attr.style disclosureSummaryStyle ] [
-          Elem.span [ Attr.class' "diag-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
-            Text.raw badgeText
-          ]
+          Elem.span [ Attr.class' "diag-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] badgeNodes
         ]
         Elem.div [ Attr.style "margin-top: 0.25rem;" ] [
           yield! diags |> List.map (fun diag ->
-            let icon = match diag.Severity with DiagError -> "🔴" | DiagWarning -> "⚠️"
+            let icon = match diag.Severity with DiagError -> Text.raw "🔴" | DiagWarning -> Text.raw "⚠️"
             Elem.div [ Attr.class' (sprintf "diag %s" (DiagSeverity.toCssClass diag.Severity)) ] [
-              Elem.span [ Attr.class' "diag-icon" ] [ Text.raw icon ]
+              Elem.span [ Attr.class' "diag-icon" ] [ icon ]
               if diag.Line > 0 || diag.Col > 0 then
-                Elem.span [ Attr.class' "diag-loc" ] [ Text.raw (sprintf " L%d:%d " diag.Line diag.Col) ]
-              Elem.span [ Attr.class' "diag-msg" ] [ Text.raw (System.Net.WebUtility.HtmlEncode diag.Message) ]
+                Elem.span [ Attr.class' "diag-loc" ] [ textEnc (sprintf " L%d:%d " diag.Line diag.Col) ]
+              Elem.span [ Attr.class' "diag-msg" ] [ textEnc diag.Message ]
             ])
         ]
       ]
+  ]
+
+/// Statusline left block: session state + working directory.
+/// Shared by the full-shell render and the switch/teardown SSE patches so the
+/// two can never diverge (the patch once dropped the classes and the encoding).
+let renderStatuslineLeft (stateLabel: string) (workingDir: string) =
+  Elem.div [ Attr.id "statusline-left"; Attr.class' "statusline-left" ] [
+    Elem.div [ Attr.id "statusline-branch"; Attr.class' "statusline-branch" ] [ textEnc stateLabel ]
+    Elem.div [ Attr.id "statusline-file"; Attr.class' "statusline-file" ] [ textEnc workingDir ]
   ]
 
 /// Render the full dynamic content of the dashboard as a single <div id="main">.
@@ -1129,11 +1169,11 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     match snap.ConnectionLabel with
     | Some label ->
       Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] [
-        Text.raw label
+        textEnc label
       ]
     | None ->
       Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] []
-  Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" snap.SessionId; Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard) ] [
+  Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" (attrEnc snap.SessionId); Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard) ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
     // App header — tabline style like sagetech.dev
@@ -1146,10 +1186,10 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       Elem.div [ Attr.class' "tabline-menu"; Attr.style "display:flex;align-items:center;height:100%;flex:1;min-width:0;" ] [
         Elem.div [ Attr.id DomIds.SessionStatus; Attr.class' "tabline-status"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);font-size:12px;" ] [
           Elem.span [ Attr.class' (sprintf "status %s" (DashboardConnectionState.statusBadgeCssClass snap.ConnectionState)); Attr.style "border-radius:0;" ] [
-            Text.raw (DashboardConnectionState.statusBadgeLabel snap.SessionState snap.ConnectionState) ]
+            textEnc (DashboardConnectionState.statusBadgeLabel snap.SessionState snap.ConnectionState) ]
         ]
         Elem.div [ Attr.class' "tabline-info"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:12px;white-space:nowrap;" ] [
-          Text.raw (sprintf "Session: %s" snap.SessionId)
+          textEnc (sprintf "Session: %s" snap.SessionId)
         ]
         Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "tabline-info"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:12px;" ] [ renderEvalStats snap.EvalStats ]
       ]
@@ -1351,26 +1391,23 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     ]
     // Bottom statusline — fixed position
     Elem.div [ Attr.class' "statusline" ] [
-      Elem.div [ Attr.id "statusline-left"; Attr.class' "statusline-left" ] [
-        Elem.div [ Attr.id "statusline-branch"; Attr.class' "statusline-branch" ] [ Text.raw snap.SessionState ]
-        Elem.div [ Attr.id "statusline-file"; Attr.class' "statusline-file" ] [ Text.raw (sprintf "%s" snap.WorkingDir) ]
-      ]
+      renderStatuslineLeft snap.SessionState snap.WorkingDir
       Elem.div [ Attr.class' "statusline-info" ] [
-        Text.raw (DashboardConnectionState.statuslineLabel snap.WorkingDir snap.Version snap.ConnectionState)
+        textEnc (DashboardConnectionState.statuslineLabel snap.WorkingDir snap.Version snap.ConnectionState)
       ]
       Elem.div [ Attr.class' "statusline-right" ] [
         Elem.div [ Attr.class' "statusline-stat" ] [
-          Text.raw (sprintf "%d evals" snap.EvalStats.Count)
+          textEnc (sprintf "%d evals" snap.EvalStats.Count)
         ]
         Elem.div [ Attr.class' "statusline-stat-accent" ] [
-          Text.raw (sprintf "v%s" snap.Version)
+          textEnc (sprintf "v%s" snap.Version)
         ]
       ]
     ]
     // Bottom command line — evaluate input as cmdline
     Elem.div [ Attr.class' "cmdline" ] [
       Elem.span [ Attr.class' "cmdline-prompt" ] [ Text.raw ">" ]
-      Elem.span [ Attr.class' "cmdline-text" ] [ Text.raw (DashboardConnectionState.cmdlineLabel snap.ConnectionState) ]
+      Elem.span [ Attr.class' "cmdline-text" ] [ textEnc (DashboardConnectionState.cmdlineLabel snap.ConnectionState) ]
     ]
   ]
 
@@ -1459,6 +1496,16 @@ let resolveThemePush
 /// Render the hot-reload panel with a file list grouped by directory.
 let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: bool |} list) (watchedCount: int) =
   let total = List.length files
+  // The onclick handlers carry project file paths. Serialize them as JSON
+  // (a JSON string is a valid JS string literal and escapes quotes), then
+  // attribute-encode the whole handler: a quote in a path can break out of
+  // neither the JS string nor the HTML attribute.
+  let jsonObject1 (key: string) (value: string) =
+    System.Text.Json.JsonSerializer.Serialize(dict [ key, value ])
+  let hotReloadPost (action: string) (body: string) =
+    attrEnc (
+      sprintf "fetch('/api/sessions/%s/hotreload/%s',{method:'POST',headers:{'Content-Type':'application/json'},body:%s})"
+        (Uri.EscapeDataString sessionId) action (System.Text.Json.JsonSerializer.Serialize body))
   let grouped =
     files
     |> List.groupBy (fun f ->
@@ -1471,26 +1518,27 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
     Elem.h2 [] [
       match watchedCount with
       | 0 -> Text.raw "Hot Reload: OFF"
-      | n -> Text.raw (sprintf "Hot Reload: ON — %d of %d files" n total)
+      | n -> textEnc (sprintf "Hot Reload: ON — %d of %d files" n total)
     ]
     Elem.div [ Attr.class' "meta"; Attr.style "margin-bottom: 0.5rem; font-size: 0.8rem;" ] [
-      Text.raw (sprintf "%d of %d files watched" watchedCount total)
+      textEnc (sprintf "%d of %d files watched" watchedCount total)
     ]
     Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
       Elem.button
         [ Attr.class' "eval-btn"
           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
-          Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/watch-all',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})" sessionId) ]
+          Attr.create "onclick" (hotReloadPost "watch-all" "{}") ]
         [ Text.raw "Watch All" ]
       Elem.button
         [ Attr.class' "eval-btn"
           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
-          Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/unwatch-all',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})" sessionId) ]
+          Attr.create "onclick" (hotReloadPost "unwatch-all" "{}") ]
         [ Text.raw "Unwatch All" ]
     ]
     Elem.details [] [
       Elem.summary [ Attr.style "cursor: pointer; font-size: 0.75rem; color: var(--fg-dim); user-select: none;" ] [
-        Text.raw (sprintf "📁 %d files" total)
+        Text.raw "📁 "
+        textEnc (sprintf "%d files" total)
       ]
       Elem.div [ Attr.style "max-height: 200px; overflow-y: auto; font-size: 0.75rem;" ] [
         yield! grouped |> List.collect (fun (dir, dirFiles) ->
@@ -1507,9 +1555,10 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
           [
             Elem.div
               [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.8; font-size: 0.7rem; cursor: pointer; display: flex; align-items: center; gap: 4px;"
-                Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/%s',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({%s:'%s'})})" sessionId dirAction dirKey (dir.Replace("\\", "\\\\"))) ]
-              [ Elem.span [ Attr.style (sprintf "color: %s;" dirColor) ] [ Text.raw dirIcon ]
-                Text.raw (sprintf "📁 %s (%d/%d)" dirLabel dirWatchedCount (List.length dirFiles)) ]
+                Attr.create "onclick" (hotReloadPost dirAction (jsonObject1 dirKey dir)) ]
+              [ Elem.span [ Attr.style (sprintf "color: %s;" dirColor) ] [ textEnc dirIcon ]
+                Text.raw "📁 "
+                textEnc (sprintf "%s (%d/%d)" dirLabel dirWatchedCount (List.length dirFiles)) ]
             yield! dirFiles |> List.map (fun f ->
               let fileName =
                 let n = f.path.Replace('\\', '/')
@@ -1520,9 +1569,9 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
               let color = match f.watched with | true -> "var(--fg-blue, #7aa2f7)" | false -> "var(--fg-dim, #565f89)"
               Elem.div
                 [ Attr.style "cursor: pointer; padding: 1px 4px; display: flex; align-items: center; gap: 4px;"
-                  Attr.create "onclick" (sprintf "fetch('/api/sessions/%s/hotreload/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'%s'})})" sessionId (f.path.Replace("\\", "\\\\"))) ]
-                [ Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.8rem;" color) ] [ Text.raw icon ]
-                  Elem.span [ Attr.style (match f.watched with | true -> "opacity: 1" | false -> "opacity: 0.6") ] [ Text.raw fileName ] ]
+                  Attr.create "onclick" (hotReloadPost "toggle" (jsonObject1 "path" f.path)) ]
+                [ Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.8rem;" color) ] [ textEnc icon ]
+                  Elem.span [ Attr.style (match f.watched with | true -> "opacity: 1" | false -> "opacity: 0.6") ] [ textEnc fileName ] ]
             )
           ])
       ]
@@ -1546,11 +1595,11 @@ let renderHotReloadEmpty =
 /// optional token, and the local send history. The send handler is
 /// server-authoritative — the client never assembles the payload.
 let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReviewSnapshot) =
-  let escAttr (s: string) =
-    s.Replace("&", "&amp;").Replace("\"", "&quot;").Replace("<", "&lt;").Replace(">", "&gt;")
   Elem.details [ Attr.id DomIds.FrictionPanel; Attr.class' "panel"; Attr.style "margin-top: 0.5rem;" ] [
     Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
-      Elem.span [] [ Text.raw (sprintf "🧾 Friction (%d events, %d feedback)" snap.EventCount snap.FeedbackCount) ]
+      Elem.span [] [
+        Text.raw "🧾 "
+        textEnc (sprintf "Friction (%d events, %d feedback)" snap.EventCount snap.FeedbackCount) ]
     ]
     match snap.IsEmpty with
     | true ->
@@ -1569,7 +1618,7 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
            Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.72rem; color: var(--fg-dim);" ] [
              for t in tools |> List.truncate 5 do
                Elem.li [] [
-                 Text.raw (sprintf "%s — %d calls, %d blocked, %d abandoned, %d feedback"
+                 textEnc (sprintf "%s — %d calls, %d blocked, %d abandoned, %d feedback"
                    t.Tool t.Invocations t.Blocked t.Abandoned t.ExplicitFeedback)
                ]
            ])
@@ -1582,14 +1631,14 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
            Elem.div [ Attr.style "display: flex; flex-direction: column; gap: 0.3rem;" ] [
              for f in feedback do
                Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; display: block;" ] [
-                 Text.raw (sprintf "%s (%s)" f.Tool f.Kind)
+                 textEnc (sprintf "%s (%s)" f.Tool f.Kind)
                ]
                Elem.textarea
                  [ Attr.class' "eval-input friction-edit"
-                   Attr.create "data-tool" (escAttr f.Tool)
-                   Attr.create "data-kind" (escAttr f.Kind)
+                   Attr.create "data-tool" (attrEnc f.Tool)
+                   Attr.create "data-kind" (attrEnc f.Kind)
                    Attr.style "min-height: 3rem; height: auto; font-size: 0.75rem;" ]
-                  [ Text.raw (System.Net.WebUtility.HtmlEncode f.Reason) ]
+                  [ textEnc f.Reason ]
            ])
         // Endpoint + optional token, bound to signals.
         Elem.label [ Attr.class' "meta"; Attr.style "font-size: 0.7rem; display: block;" ] [
@@ -1631,12 +1680,12 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
          | history ->
            Elem.details [ Attr.style "margin-top: 0.4rem;" ] [
              Elem.summary [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; cursor: pointer;" ] [
-               Text.raw (sprintf "Sent reports (%d)" history.Length)
+               textEnc (sprintf "Sent reports (%d)" history.Length)
              ]
              Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.7rem; color: var(--fg-dim);" ] [
                for s in history |> List.truncate 10 do
                  Elem.li [] [
-                   Text.raw (sprintf "%s — %s (%d events)" s.ReportId (s.SentAtUtc.ToLocalTime().ToString("g")) s.TotalEvents)
+                   textEnc (sprintf "%s — %s (%d events)" s.ReportId (s.SentAtUtc.ToLocalTime().ToString("g")) s.TotalEvents)
                  ]
              ]
            ])
@@ -1653,7 +1702,7 @@ module private LiveTestActivityView =
       tally.Failed, "var(--fg-red, #e74c3c)", "✗" ]
     |> List.filter (fun (n, _, _) -> n > 0)
     |> List.map (fun (n, color, glyph) ->
-      Elem.span [ Attr.style (sprintf "color: %s; margin-right: 0.25rem;" color) ] [ Text.raw (sprintf "%d%s" n glyph) ])
+      Elem.span [ Attr.style (sprintf "color: %s; margin-right: 0.25rem;" color) ] [ textEnc (sprintf "%d%s" n glyph) ])
 
   let header (activity: Activity) : XmlNode list =
     match activity with
@@ -1707,12 +1756,12 @@ let renderLiveTestingPanel (activity: Features.LiveTestActivity.LiveTestActivity
           Ds.indicator Signals.LiveTestingLoading
           Ds.attr' ("disabled", "$liveTestingLoading")
           Ds.onClick (Ds.post endpoint) ]
-        [ Elem.span [ Ds.show "$liveTestingLoading" ] [ Text.raw ("⏳ " + pending) ]
-          Elem.span [ Ds.show "!$liveTestingLoading" ] [ Text.raw label ] ]
+        [ Elem.span [ Ds.show "$liveTestingLoading" ] [ textEnc ("⏳ " + pending) ]
+          Elem.span [ Ds.show "!$liveTestingLoading" ] [ textEnc label ] ]
     ]
     // Reasons carry compiler output, which contains markup characters.
     Elem.div [ Attr.class' "meta"; Attr.style ("font-size: 0.8rem; " + LiveTestActivityView.tone activity) ] [
-      Text.enc (LiveTestActivityView.words activity)
+      textEnc (LiveTestActivityView.words activity)
     ]
   ]
 
@@ -1724,11 +1773,12 @@ let renderSessionContextPanel (ctx: SessionContext) =
   let assembliesSection =
     Elem.details [] [
       Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
-        Text.raw (sprintf "📦 Assemblies (%d)" (ctx.Warmup.AssembliesLoaded |> List.length))
+        Text.raw "📦 "
+        textEnc (sprintf "Assemblies (%d)" (ctx.Warmup.AssembliesLoaded |> List.length))
       ]
       Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em; font-size: 0.7rem;" ] [
         for asm in ctx.Warmup.AssembliesLoaded do
-          Elem.li [] [ Text.raw (SessionContext.assemblyLine asm) ]
+          Elem.li [] [ textEnc (SessionContext.assemblyLine asm) ]
       ]
     ]
 
@@ -1737,18 +1787,19 @@ let renderSessionContextPanel (ctx: SessionContext) =
     let failed = ctx.Warmup.FailedOpens
     Elem.details [] [
       Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
-        Text.raw (sprintf "📂 Namespaces (%d opened, %d failed)"
+        Text.raw "📂 "
+        textEnc (sprintf "Namespaces (%d opened, %d failed)"
           (opened |> List.length) (failed |> List.length))
       ]
       Elem.div [ Attr.style "font-size: 0.7rem;" ] [
         Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em;" ] [
           for b in opened do
             Elem.li [] [
-              Elem.code [] [ Text.raw (SessionContext.openLine b) ]
+              Elem.code [] [ textEnc (SessionContext.openLine b) ]
               match b.DurationMs > 0.0 with
               | true ->
                 Elem.span [ Attr.style "color: var(--fg-dim); margin-left: 0.5em;" ] [
-                  Text.raw (sprintf "(%.1fms)" b.DurationMs)
+                  textEnc (sprintf "(%.1fms)" b.DurationMs)
                 ]
               | false -> ()
             ]
@@ -1757,23 +1808,23 @@ let renderSessionContextPanel (ctx: SessionContext) =
         | false ->
           Elem.details [ Attr.create "open" ""; Attr.style "margin-top: 0.5em;" ] [
             Elem.summary [ Attr.style "color: var(--fg-red); cursor: pointer; font-weight: bold;" ] [
-              Text.raw (sprintf "⚠️ %d Failed Opens (expanded)" failed.Length)
+              textEnc (sprintf "⚠️ %d Failed Opens (expanded)" failed.Length)
             ]
             Elem.div [ Attr.style "padding-left: 0.5em;" ] [
               for f in failed do
                 Elem.div [ Attr.class' "diag-error-block" ] [
                   Elem.div [ Attr.style "font-weight: bold; color: var(--fg-red);" ] [
                     let kind = OpenableKind.label f.Kind
-                    Text.raw (System.Net.WebUtility.HtmlEncode (sprintf "✖ %s (%s)" f.Name kind))
+                    textEnc (sprintf "✖ %s (%s)" f.Name kind)
                     match f.RetryCount > 1 with
                     | true ->
                       Elem.span [ Attr.style "color: var(--fg-dim); font-weight: normal; margin-left: 0.5em;" ] [
-                        Text.raw (sprintf "(%d retries)" f.RetryCount)
+                        textEnc (sprintf "(%d retries)" f.RetryCount)
                       ]
                     | false -> ()
                   ]
                   Elem.div [ Attr.style "color: var(--fg-red); margin-top: 0.2em;" ] [
-                    Text.raw (System.Net.WebUtility.HtmlEncode f.ErrorMessage)
+                    textEnc f.ErrorMessage
                   ]
                   match List.isEmpty f.Diagnostics with
                   | false ->
@@ -1786,16 +1837,16 @@ let renderSessionContextPanel (ctx: SessionContext) =
                           | _ -> "diag"
                         Elem.li [ Attr.class' sevClass; Attr.style "margin: 0.15em 0;" ] [
                           Elem.code [ Attr.class' "diag-code" ] [
-                            Text.raw (sprintf "FS%04d" d.ErrorNumber)
+                            textEnc (sprintf "FS%04d" d.ErrorNumber)
                           ]
                           match d.FileName with
                           | Some fn ->
                             Elem.span [ Attr.style "margin-left: 0.4em; color: var(--fg-dim);" ] [
-                              Text.raw (sprintf "%s:%d:%d" fn d.StartLine d.StartColumn)
+                              textEnc (sprintf "%s:%d:%d" fn d.StartLine d.StartColumn)
                             ]
                           | None -> ()
                           Elem.span [ Attr.style "margin-left: 0.4em;" ] [
-                            Text.raw (System.Net.WebUtility.HtmlEncode d.Message)
+                            textEnc d.Message
                           ]
                         ]
                     ]
@@ -1811,7 +1862,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
     let t = ctx.Warmup.PhaseTiming
     Elem.details [] [
       Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
-        Text.raw (sprintf "⏱️ Warmup Timing (%dms total)" t.TotalMs)
+        textEnc (sprintf "⏱️ Warmup Timing (%dms total)" t.TotalMs)
       ]
       Elem.div [ Attr.style "font-size: 0.7rem; padding-left: 0.5em;" ] [
         let phases = [
@@ -1824,12 +1875,12 @@ let renderSessionContextPanel (ctx: SessionContext) =
           let pct = float ms / float maxMs * 100.0
           Elem.div [ Attr.style "margin: 0.2em 0;" ] [
             Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5em;" ] [
-              Elem.span [ Attr.style "min-width: 120px;" ] [ Text.raw label ]
+              Elem.span [ Attr.style "min-width: 120px;" ] [ textEnc label ]
               Elem.div [ Attr.class' "progress-track" ] [
                 Elem.div [ Attr.style (sprintf "width: %.1f%%; height: 100%%; background: var(--fg-blue); border-radius: 0;" pct) ] []
               ]
               Elem.span [ Attr.style "min-width: 50px; text-align: right; color: var(--fg-dim);" ] [
-                Text.raw (sprintf "%dms" ms)
+                textEnc (sprintf "%dms" ms)
               ]
             ]
           ]
@@ -1843,7 +1894,8 @@ let renderSessionContextPanel (ctx: SessionContext) =
           ctx.FileStatuses
           |> List.filter (fun f -> f.Readiness = Loaded)
           |> List.length
-        Text.raw (sprintf "📄 Files (%d/%d loaded)" loadedCount (ctx.FileStatuses |> List.length))
+        Text.raw "📄 "
+        textEnc (sprintf "Files (%d/%d loaded)" loadedCount (ctx.FileStatuses |> List.length))
       ]
       Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.2em; font-size: 0.7rem;" ] [
         for f in ctx.FileStatuses do
@@ -1854,7 +1906,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
             | LoadFailed -> "var(--fg-red)"
             | NotLoaded -> "var(--fg-dim)"
           Elem.li [ Attr.style (sprintf "color: %s" color) ] [
-            Text.raw (SessionContext.fileLine f)
+            textEnc (SessionContext.fileLine f)
           ]
       ]
     ]
@@ -1862,7 +1914,8 @@ let renderSessionContextPanel (ctx: SessionContext) =
   Elem.div [ Attr.id DomIds.SessionContext; Attr.class' "panel" ] [
     Elem.details [] [
       Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.8rem;" ] [
-        Text.raw (sprintf "🔍 Session Context: %s" summaryText)
+        Text.raw "🔍 "
+        textEnc (sprintf "Session Context: %s" summaryText)
       ]
       Elem.div [ Attr.style "padding-left: 0.5em; margin-top: 0.3em;" ] [
         timingSection
@@ -1889,7 +1942,8 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
   Elem.div [ Attr.id DomIds.BindingsPanel; Attr.class' "panel" ] [
     Elem.details [] [
       Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;" ] [
-        Text.raw (sprintf "📦 Bindings (%d)" activeCount)
+        Text.raw "📦 "
+        textEnc (sprintf "Bindings (%d)" activeCount)
       ]
       match snapshot with
       | None ->
@@ -1903,25 +1957,25 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
             for KeyValue(_, b) in scope.ActiveBindings do
               Elem.div [ Attr.style "display: flex; align-items: baseline; gap: 0.5em; padding: 2px 0; border-bottom: 1px solid var(--border, #333);" ] [
                 Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [
-                  Text.raw (System.Net.WebUtility.HtmlEncode b.Name)
+                  textEnc b.Name
                 ]
                 Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" ] [
-                  Text.raw (System.Net.WebUtility.HtmlEncode b.TypeSig)
+                  textEnc b.TypeSig
                 ]
                 Elem.span [ Attr.style "color: var(--fg-dim, #555); font-size: 0.65rem; white-space: nowrap;" ] [
-                  Text.raw (sprintf "cell %d" b.CellIndex)
+                  textEnc (sprintf "cell %d" b.CellIndex)
                 ]
                 match b.ReferencedIn.Length with
                 | 0 -> ()
                 | n ->
                   Elem.span [ Attr.style "color: var(--fg-yellow, #e5c07b); font-size: 0.65rem; white-space: nowrap;" ] [
-                    Text.raw (sprintf "→%d" n)
+                    textEnc (sprintf "→%d" n)
                   ]
                 match b.Value with
                 | None -> ()
                 | Some v ->
                   Elem.span [ Attr.class' "value-display"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 20em;" ] [
-                    Text.raw (sprintf "= %s" (System.Net.WebUtility.HtmlEncode v))
+                    textEnc (sprintf "= %s" v)
                   ]
               ]
           ]
@@ -1930,14 +1984,15 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
           | _ ->
             Elem.details [ Attr.style "margin-top: 0.5em;" ] [
               Elem.summary [ Attr.style "font-size: 0.7rem; cursor: pointer; color: var(--fg-dim, #666);" ] [
-                Text.raw (sprintf "👻 %d shadowed" shadowedCount)
+                Text.raw "👻 "
+                textEnc (sprintf "%d shadowed" shadowedCount)
               ]
               Elem.div [ Attr.style "font-size: 0.7rem; opacity: 0.6;" ] [
                 for b in scope.ShadowedBindings do
                   Elem.div [ Attr.style "padding: 1px 0;" ] [
-                    Elem.code [] [ Text.raw (System.Net.WebUtility.HtmlEncode b.Name) ]
+                    Elem.code [] [ textEnc b.Name ]
                     Elem.span [ Attr.style "color: var(--fg-dim, #555); margin-left: 0.3em;" ] [
-                      Text.raw (sprintf ": %s (cell %d)" (System.Net.WebUtility.HtmlEncode b.TypeSig) b.CellIndex)
+                      textEnc (sprintf ": %s (cell %d)" b.TypeSig b.CellIndex)
                     ]
                   ]
               ]
@@ -1965,18 +2020,23 @@ let renderLiveBindingsPanel (snapshot: SageFs.Features.LiveValueTree.LiveValueSn
     // bound value holding HTML) must never inject into the dashboard DOM.
     let row =
       Elem.div [ Attr.class' "live-binding-node"; Attr.style (sprintf "padding-left: %dem;" (node.Depth)) ] [
-        Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [ Text.raw (System.Net.WebUtility.HtmlEncode node.Label) ]
-        Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; margin-left: 0.4em;" ] [ Text.raw (System.Net.WebUtility.HtmlEncode node.TypeName) ]
+        Elem.code [ Attr.style "color: var(--fg-cyan, #56b6c2); font-weight: bold; white-space: nowrap;" ] [ textEnc node.Label ]
+        Elem.span [ Attr.style "color: var(--fg-dim, #666); font-size: 0.7rem; margin-left: 0.4em;" ] [ textEnc node.TypeName ]
         Elem.span [ Attr.class' "live-preview"; Attr.style "color: var(--fg-green, #98c379); font-size: 0.7rem; margin-left: 0.4em; overflow-wrap: anywhere;" ] [
-          Text.raw (System.Net.WebUtility.HtmlEncode (sprintf "= %s" node.Preview))
+          textEnc (sprintf "= %s" node.Preview)
         ]
         yield! kindBadge node
       ]
     match hasChildren with
     | false -> row
     | true ->
-      // Per-node signal for open/closed state — survives Datastar morphs
-      let nodeSignal = sprintf "open_%s_%d" (node.Label.Replace(" ", "_").Replace(".", "_").Replace("(", "").Replace(")", "")) node.Depth
+      // Per-node signal for open/closed state — survives Datastar morphs.
+      // The label is FSI-derived data spliced into a Datastar expression inside
+      // an attribute, so reduce it to identifier characters only.
+      let labelIdent =
+        node.Label.Replace("(", "").Replace(")", "")
+        |> String.map (fun c -> match Char.IsAsciiLetterOrDigit c || c = '_' with | true -> c | false -> '_')
+      let nodeSignal = sprintf "open_%s_%d" labelIdent node.Depth
       Elem.details [ Attr.style "font-size: 0.75rem;"
                      Ds.attr' ("open", sprintf "$%s" nodeSignal)
                      Ds.onEvent ("toggle", sprintf "$%s = event.target.open" nodeSignal) ] [
@@ -1994,11 +2054,12 @@ let renderLiveBindingsPanel (snapshot: SageFs.Features.LiveValueTree.LiveValueSn
   Elem.div [ Attr.id DomIds.BindingsPanel; Attr.class' "panel" ] [
     Elem.details [ Ds.attr' ("open", sprintf "$%s" Signals.BindingsPanelOpen); Ds.onEvent ("toggle", sprintf "$%s = event.target.open" Signals.BindingsPanelOpen) ] [
       Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;" ] [
-        Text.raw (sprintf "🔴 Live Bindings (%d)" count)
+        Text.raw "🔴 "
+        textEnc (sprintf "Live Bindings (%d)" count)
         match snapshot with
         | Some _ ->
           Elem.span [ Attr.style "color: var(--fg-dim, #666); font-weight: normal; font-size: 0.65rem; margin-left: 0.5em;" ] [
-            Text.raw (sprintf "gen %d · %s" gen captured)
+            textEnc (sprintf "gen %d · %s" gen captured)
           ]
         | None -> ()
       ]
@@ -2031,22 +2092,24 @@ let private renderDiscoveredProjectsBody (discovered: DiscoveredProjects) = [
   match discovered.Solutions.IsEmpty && discovered.Projects.IsEmpty with
   | true ->
     Elem.div [ Attr.class' "output-line output-error" ] [
-      Text.raw (sprintf "No .sln/.fsproj found in %s" discovered.WorkingDir)
+      textEnc (sprintf "No .sln/.fsproj found in %s" discovered.WorkingDir)
     ]
   | false ->
     Elem.div [ Attr.class' "output-line output-result" ] [
-      Text.raw (sprintf "Found in %s:" discovered.WorkingDir)
+      textEnc (sprintf "Found in %s:" discovered.WorkingDir)
     ]
     match discovered.Solutions.IsEmpty with
     | false ->
       yield! discovered.Solutions |> List.map (fun s ->
         Elem.div [ Attr.class' "output-line output-info"; Attr.style "padding-left: 1rem;" ] [
-          Text.raw (sprintf "📁 %s (solution)" s)
+          Text.raw "📁 "
+          textEnc (sprintf "%s (solution)" s)
         ])
     | true -> ()
     yield! discovered.Projects |> List.map (fun p ->
       Elem.div [ Attr.class' "output-line"; Attr.style "padding-left: 1rem;" ] [
-        Text.raw (sprintf "📄 %s" p)
+        Text.raw "📄 "
+        textEnc p
       ])
     Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 4px;" ] [
       match discovered.Solutions.IsEmpty with
@@ -2065,11 +2128,11 @@ let private renderDiscoverConfigNotes (dirConfig: DirectoryConfig option) =
         match config.Load with
         | Solution path ->
           Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
-            Text.raw (sprintf "⚙️ .SageFs/config.fsx: solution %s" path)
+            textEnc (sprintf "⚙️ .SageFs/config.fsx: solution %s" path)
           ]
         | Projects paths ->
           Elem.div [ Attr.class' "output-line output-info"; Attr.style "margin-bottom: 4px;" ] [
-            Text.raw (sprintf "⚙️ .SageFs/config.fsx: %s" (String.Join(", ", paths)))
+            textEnc (sprintf "⚙️ .SageFs/config.fsx: %s" (String.Join(", ", paths)))
           ]
         | NoLoad ->
           Elem.div [ Attr.class' "output-line meta"; Attr.style "margin-bottom: 4px;" ] [
@@ -2109,10 +2172,9 @@ let pushDiscoverResults (ctx: HttpContext) (dir: string) = task {
 let evalResultError (msg: string) =
   Elem.div [ Attr.id DomIds.EvalResult ] [
     Elem.pre [ Attr.class' "output-line output-error"; Attr.style "margin-top: 0.5rem;" ] [
-      // msg is user/agent-derived (directory names, eval output); encode like
-      // every other output sink so it can never reach the DOM as raw markup
-      // (roast queue item 2 — the last unescaped fragment).
-      Text.raw (System.Net.WebUtility.HtmlEncode msg)
+      // msg is user/agent-derived (directory names, eval output); encoded
+      // here exactly once — callers pass the raw string.
+      textEnc msg
     ]
   ]
 

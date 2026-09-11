@@ -86,6 +86,7 @@
         <Compile Include="ScreenTests.fs" />
         <Compile Include="DashboardSnapshotTests.fs" />
         <Compile Include="McpHardResetRebuildTests.fs" />
+        <Compile Include="DashboardEscapingTests.fs" />
         <Compile Include="MultiUiConsistencyTests.fs" />
         <Compile Include="TuiGuiSharedTests.fs" />
         <Compile Include="ThemePersistenceTests.fs" />

@@ -1006,7 +1006,7 @@ let createEvalHandler
           let resultHtml =
             Elem.div [ Attr.id DomIds.EvalResult ] [
               Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-                Text.raw (System.Net.WebUtility.HtmlEncode displayResult)
+                textEnc displayResult
               ]
             ]
           do! ssePatchNode ctx resultHtml
@@ -1158,7 +1158,7 @@ let createResetHandler
         let resultHtml =
           Elem.div [ Attr.id DomIds.EvalResult ] [
             Elem.pre [ Attr.class' "output-line output-error"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              Text.raw (sprintf "Reset: %s" (System.Net.WebUtility.HtmlEncode errMsg))
+              textEnc (sprintf "Reset: %s" errMsg)
             ]
           ]
         do! ssePatchNode ctx resultHtml
@@ -1172,7 +1172,7 @@ let createResetHandler
         let resultHtml =
           Elem.div [ Attr.id DomIds.EvalResult ] [
             Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              Text.raw (sprintf "Reset: %s" (System.Net.WebUtility.HtmlEncode msg))
+              textEnc (sprintf "Reset: %s" msg)
             ]
           ]
         do! ssePatchNode ctx resultHtml
@@ -1180,7 +1180,7 @@ let createResetHandler
         let clearedOutput =
           Elem.div [ Attr.id DomIds.OutputPanel ] [
             Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [
-              Text.raw (sprintf "Reset: %s" (System.Net.WebUtility.HtmlEncode msg))
+              textEnc (sprintf "Reset: %s" msg)
             ]
           ]
         do! ssePatchNode ctx clearedOutput
@@ -1293,14 +1293,10 @@ let createSessionActionHandler
         let stateLabel = q.GetSessionState nextSession |> SessionState.label
         do! ssePatchNode ctx (
           Elem.div [ Attr.id DomIds.SessionStatus ] [
-            Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ Text.raw stateLabel ]
+            Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ textEnc stateLabel ]
           ])
         let switchedDir = q.GetSessionWorkingDir nextSession
-        do! ssePatchNode ctx (
-          Elem.div [ Attr.id "statusline-left" ] [
-            Elem.div [ Attr.id "statusline-branch" ] [ Text.raw stateLabel ]
-            Elem.div [ Attr.id "statusline-file" ] [ Text.raw switchedDir ]
-          ])
+        do! ssePatchNode ctx (renderStatuslineLeft stateLabel switchedDir)
       | None when teardown && Result.isOk result ->
         // No sessions remain — show the session picker (with Resume Previous).
         retargetStream infra channelClientId None
@@ -1333,15 +1329,11 @@ let createSessionActionHandler
         let stateLabel = q.GetSessionState sessionId |> SessionState.label
         do! ssePatchNode ctx (
           Elem.div [ Attr.id DomIds.SessionStatus ] [
-            Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ Text.raw stateLabel ]
+            Elem.span [ Attr.class' "status status-ready"; Attr.style "border-radius:0;" ] [ textEnc stateLabel ]
           ])
         // Patch the statusline with the switched-to session's working dir + state.
         let switchedDir = q.GetSessionWorkingDir sessionId
-        do! ssePatchNode ctx (
-          Elem.div [ Attr.id "statusline-left" ] [
-            Elem.div [ Attr.id "statusline-branch" ] [ Text.raw stateLabel ]
-            Elem.div [ Attr.id "statusline-file" ] [ Text.raw (System.Net.WebUtility.HtmlEncode switchedDir) ]
-          ])
+        do! ssePatchNode ctx (renderStatuslineLeft stateLabel switchedDir)
       let msg, cssClass =
         match result with
         | Ok m -> m, "output-line output-info"
@@ -1349,7 +1341,7 @@ let createSessionActionHandler
       let resultHtml =
         Elem.div [ Attr.id DomIds.EvalResult ] [
           Elem.pre [ Attr.class' cssClass; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            Text.raw (System.Net.WebUtility.HtmlEncode msg)
+            textEnc msg
           ]
         ]
       do! ssePatchNode ctx resultHtml
@@ -1377,7 +1369,7 @@ let private frictionSendResultDom (ok: bool) (error: string) (reportId: string) 
     then sprintf "Sent (report id: %s)" (if reportId.Length > 0 then reportId else "?")
     else sprintf "Failed: %s" (if error.Length > 0 then error else "unknown error")
   Elem.div [ Attr.class' (sprintf "friction-send-status %s" statusClass); Attr.id DomIds.FrictionSendStatus ] [
-    Elem.pre [ Attr.style "margin: 0; white-space: pre-wrap; font-size: 0.8rem;" ] [ Text.raw statusText ]
+    Elem.pre [ Attr.style "margin: 0; white-space: pre-wrap; font-size: 0.8rem;" ] [ textEnc statusText ]
   ]
 
 /// SHA-256 of the endpoint URL, hex-encoded. We hash rather than store
@@ -1529,7 +1521,7 @@ let createDiscoverHandler : HttpHandler =
         do! ssePatchNode ctx (
           Elem.div [ Attr.id DomIds.DiscoveredProjects ] [
             Elem.span [ Attr.class' "output-line output-error" ] [
-              Text.raw (sprintf "Directory not found: %s" (System.Net.WebUtility.HtmlEncode dir))
+              textEnc (sprintf "Directory not found: %s" dir)
             ]])
       | false, true ->
         do! pushDiscoverResults ctx dir
@@ -1556,7 +1548,7 @@ let createCreateSessionHandler
       | true, _ ->
         do! ssePatchNode ctx (evalResultError "Working directory is required")
       | false, false ->
-        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" (System.Net.WebUtility.HtmlEncode dir)))
+        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
       | false, true ->
         let projects = resolveSessionProjects dir manualProjects
         match projects.IsEmpty with
@@ -1576,7 +1568,7 @@ let createCreateSessionHandler
             do! ssePatchNode ctx (
               Elem.div [ Attr.id DomIds.EvalResult ] [
                 Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
-                  Text.raw (sprintf "Session '%s' created. Switched to it." (WorkerProtocol.SessionId.value newSessionId))
+                  textEnc (sprintf "Session '%s' created. Switched to it." (WorkerProtocol.SessionId.value newSessionId))
                 ]
               ])
           | Error msg ->
@@ -1609,7 +1601,7 @@ let createToggleWarmupAutoOpenHandler
       let configResultNode message cssClass =
         Elem.div [ Attr.id DomIds.EvalResult ] [
           Elem.pre [ Attr.class' (sprintf "output-line %s" cssClass); Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            Text.raw message
+            textEnc message
           ]
         ]
       Response.sseStartResponse ctx |> ignore
@@ -1617,7 +1609,7 @@ let createToggleWarmupAutoOpenHandler
       | true, _ ->
         do! ssePatchNode ctx (evalResultError "Working directory is required")
       | false, false ->
-        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" (System.Net.WebUtility.HtmlEncode dir)))
+        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
       | false, true ->
         // 1) Write the config so FUTURE sessions pick up the setting.
         let configWrite : Result<unit, string> =
@@ -1973,7 +1965,7 @@ let createEndpoints
         do! ssePatchNode ctx (
           Elem.div [ Attr.id DomIds.EvalResult ] [
             Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              Text.raw (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value sessionId))
+              textEnc (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value sessionId))
             ]
           ])
       | Error err ->
@@ -2003,7 +1995,7 @@ let createEndpoints
             do! ssePatchNode ctx (
               Elem.div [ Attr.id DomIds.EvalResult ] [
                 Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-                  Text.raw (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value newSessionId))
+                  textEnc (sprintf "Session '%s' created." (WorkerProtocol.SessionId.value newSessionId))
                 ]
               ])
           | Error err ->
@@ -2055,7 +2047,7 @@ let createEndpoints
       let resultHtml =
         Elem.div [ Attr.id DomIds.EvalResult ] [
           Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-            Text.raw (sprintf "Stopped %d other session(s)" others.Length)
+            textEnc (sprintf "Stopped %d other session(s)" others.Length)
           ]
         ]
       do! ssePatchNode ctx resultHtml
