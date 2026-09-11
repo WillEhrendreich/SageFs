@@ -26,9 +26,9 @@ let private askWorker (ops: SessionManagementOps) (sessionId: SessionId) (msg: W
   }
 
 /// How a failed start reads on the card: a failed build is not a crash.
-let private failedState (project: string) (err: SageFsError) (at: DateTime) =
+let private failedState (project: string) (previous: PreviousAddress) (err: SageFsError) (at: DateTime) =
   match err with
-  | SageFsError.BuildFailed reason -> AppRunState.BuildFailed (project, reason, at)
+  | SageFsError.BuildFailed reason -> AppRunState.BuildFailed (project, reason, at, previous)
   | other -> AppRunState.Crashed (project, SageFsError.describe other, at)
 
 /// Starts the entry point on a Ready worker, records what happened, and
@@ -45,7 +45,7 @@ let rec private launch
     do! ops.SetAppState sessionId (AppRunState.Starting (project, StartPhase.LaunchingEntryPoint, clock ()))
     match! askWorker ops sessionId (WorkerMessage.RunApp (project, previous, newReplyId ())) with
     | Error e ->
-      do! ops.SetAppState sessionId (failedState project e (clock ()))
+      do! ops.SetAppState sessionId (failedState project previous e (clock ()))
       return Error e
     | Ok state ->
       do! ops.SetAppState sessionId state
@@ -100,7 +100,7 @@ and private restartForChanges
       | Error e -> Task.FromResult(Error e)
       | Ok _ -> ops.AwaitReady sessionId readyTimeout
     match ready with
-    | Error e -> do! ops.SetAppState sessionId (failedState project e (clock ()))
+    | Error e -> do! ops.SetAppState sessionId (failedState project previous e (clock ()))
     | Ok () ->
       let! _ = launch ops clock readyTimeout sessionId project previous
       ()
@@ -144,6 +144,11 @@ let runApp
       | Error e -> return Error (SageFsError.AppRunFailed (requested, RunTargetError.describe e))
       | Ok target ->
         let project = target.Path
+        // After a failed rebuild, come back where the app listened so open tabs keep working.
+        let previous =
+          match info.App with
+          | AppRunState.BuildFailed (_, _, _, address) -> address
+          | _ -> PreviousAddress.NoPreviousAddress
         match info.App with
         | AppRunState.Running app when app.Project = project -> return Ok info.App
         | AppRunState.Running app ->
@@ -153,7 +158,7 @@ let runApp
         | AppRunState.NotRunning | AppRunState.Exited _ | AppRunState.Crashed _ | AppRunState.RestartRequired _ | AppRunState.BuildFailed _ ->
           let fail (err: SageFsError) =
             task {
-              do! ops.SetAppState sessionId (failedState project err (clock ()))
+              do! ops.SetAppState sessionId (failedState project previous err (clock ()))
               return Error err
             }
           let! ready =
@@ -176,7 +181,7 @@ let runApp
               }
           match ready with
           | Error e -> return! fail e
-          | Ok () -> return! launch ops clock readyTimeout sessionId project PreviousAddress.NoPreviousAddress
+          | Ok () -> return! launch ops clock readyTimeout sessionId project previous
   }
 
 let stopApp (ops: SessionManagementOps) (sessionId: SessionId) : Task<Result<AppRunState, SageFsError>> =

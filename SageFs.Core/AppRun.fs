@@ -252,7 +252,7 @@ type AppRunState =
   /// The run was stopped because a save changed something that only takes effect at startup.
   | RestartRequired of project: string * first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list * at: DateTime
   /// A rebuild of the app failed: the code did not compile, the app did not crash.
-  | BuildFailed of project: string * reason: string * at: DateTime
+  | BuildFailed of project: string * reason: string * at: DateTime * lastAddress: PreviousAddress
 
 /// What the app state becomes when the session's worker is replaced.
 /// An app being started survives (the card keeps saying what is happening), and
@@ -292,7 +292,7 @@ let describeState (state: AppRunState) : string =
     sprintf "%s is running (no web server)" (projectName project)
   | AppRunState.Exited (project, code, _) -> sprintf "%s exited with code %d" (projectName project) code
   | AppRunState.Crashed (project, reason, _) -> sprintf "%s crashed: %s" (projectName project) reason
-  | AppRunState.BuildFailed (project, reason, _) -> sprintf "%s could not be rebuilt: %s" (projectName project) reason
+  | AppRunState.BuildFailed (project, reason, _, _) -> sprintf "%s could not be rebuilt: %s" (projectName project) reason
   | AppRunState.RestartRequired (project, first, rest, _) ->
     sprintf "%s must restart: %s" (projectName project) (SageFs.Features.ReloadPlanning.ReloadChange.describeAll first rest)
 

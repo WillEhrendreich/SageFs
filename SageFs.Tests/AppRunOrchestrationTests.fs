@@ -301,7 +301,8 @@ let restartForChangesTests =
       let ops, failed = settleOn (function AppRunState.BuildFailed _ -> true | _ -> false) r baseOps
       let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
       match! within failed.Task with
-      | AppRunState.BuildFailed (project, reason, _) ->
+      | AppRunState.BuildFailed (project, reason, _, previous) ->
+        previous |> Expect.equal "remembers where the app listened" (PreviousAddress.ReuseAddress "http://127.0.0.1:5123")
         project |> Expect.equal "the project" web
         reason |> Expect.stringContains "the build error" "build broke"
       | other -> failtestf "expected BuildFailed, got %A" other
@@ -338,5 +339,26 @@ let faultedSessionRunTests =
       |> Expect.equal "rebuild, wait for Ready, then run" [ "restart rebuild=true"; "await-ready"; sprintf "worker:run %s" web ]
       states r |> List.head
       |> Expect.equal "the card says it is rebuilding" (AppRunState.Starting (web, StartPhase.RebuildingSession, at))
+    }
+  ]
+
+[<Tests>]
+let runAfterFailedRebuildTests =
+  testList "AppRunOrchestration run after a failed rebuild" [
+    testTask "WHY — AppRunOrchestration.runApp — Run after a failed rebuild relaunches at the old address because the user's open tab must keep working once the typo is fixed" {
+      let r = record ()
+      let failed =
+        { session webLive [ exe web ] (AppRunState.BuildFailed (web, "Build failed (exit 1)", at, PreviousAddress.ReuseAddress "http://127.0.0.1:5123")) with
+            Status = SessionStatus.Faulted }
+      let ops =
+        { fakeOps failed (worker never.Task) r with
+            RestartSession = fun _ rebuild ->
+              r.Calls.Enqueue (sprintf "restart rebuild=%b" rebuild)
+              Task.FromResult(Ok "restarted") }
+      let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
+      calls r
+      |> List.filter (fun c -> not (c.StartsWith("worker:await", StringComparison.Ordinal)))
+      |> Expect.equal "rebuild, wait for Ready, relaunch at the old address"
+        [ "restart rebuild=true"; "await-ready"; sprintf "worker:run %s at http://127.0.0.1:5123" web ]
     }
   ]
