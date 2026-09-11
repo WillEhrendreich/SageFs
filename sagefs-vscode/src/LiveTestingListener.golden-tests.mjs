@@ -5,7 +5,7 @@ import vm from "node:vm";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const fixturesDir = path.resolve(__dirname, "../../SageFs.Tests/Fixtures/LiveTesting");
+const fixturesDir = path.resolve(__dirname, "../../SageFs.Tests/fixtures/LiveTesting");
 
 const source = fs.readFileSync(path.resolve(__dirname, "../fable-out/LiveTestingListener.js"), "utf8");
 
@@ -81,13 +81,19 @@ const context = {
     this.DeferredTests = DeferredTests;
     this.Reason = Reason;
   },
-  VscTestSummary: function(Total, Passed, Failed, Running, Stale, Disabled, DiscoveryState, DiscoveryGeneration, LastDecision) {
+  // Mirrors the Fable record constructor: keep the field order in step with
+  // VscTestSummary in LiveTestingTypes.fs.
+  VscTestSummary: function(Total, Passed, Failed, Running, Stale, Disabled, NotYetRun, Activity, ActivityText, ActivityShort, DiscoveryState, DiscoveryGeneration, LastDecision) {
     this.Total = Total;
     this.Passed = Passed;
     this.Failed = Failed;
     this.Running = Running;
     this.Stale = Stale;
     this.Disabled = Disabled;
+    this.NotYetRun = NotYetRun;
+    this.Activity = Activity;
+    this.ActivityText = ActivityText;
+    this.ActivityShort = ActivityShort;
     this.DiscoveryState = DiscoveryState;
     this.DiscoveryGeneration = DiscoveryGeneration;
     this.LastDecision = LastDecision;
@@ -173,6 +179,24 @@ run("parseSummary defaults discovery state to discovering when absent", () => {
   const summary = parseSummary({ Total: 0, Passed: 0, Failed: 0, Running: 0, Stale: 0, Disabled: 0 });
   assert(summary.DiscoveryState === "discovering", `expected discovering default, got ${summary.DiscoveryState}`);
   assert(summary.DiscoveryGeneration === 0n || summary.DiscoveryGeneration === 0, "generation defaults to 0");
+});
+
+run("parseSummary reads the daemon's activity so the status bar shows its words", () => {
+  const summary = parseSummary({
+    Total: 12, Passed: 0, Failed: 0, Running: 0, Stale: 0, Disabled: 0, NotYetRun: 12,
+    Activity: "settled", ActivityText: "12 not yet run", ActivityShort: "12 not yet run",
+    DiscoveryState: "ready_with_tests", DiscoveryGeneration: 1,
+  });
+  assert(summary.Activity === "settled", `expected settled, got ${summary.Activity}`);
+  assert(summary.ActivityText === "12 not yet run", `unexpected text: ${summary.ActivityText}`);
+  assert(summary.ActivityShort === "12 not yet run", `unexpected short: ${summary.ActivityShort}`);
+  assert(summary.NotYetRun === 12, `expected NotYetRun=12, got ${summary.NotYetRun}`);
+});
+
+run("parseSummary defaults the activity to empty from an older daemon", () => {
+  const summary = parseSummary({ Total: 3, Passed: 3, Failed: 0, Running: 0, Stale: 0, Disabled: 0 });
+  assert(summary.Activity === "", `expected empty activity, got ${summary.Activity}`);
+  assert(summary.NotYetRun === 0, `expected NotYetRun=0, got ${summary.NotYetRun}`);
 });
 
 if (process.exitCode && process.exitCode !== 0) {

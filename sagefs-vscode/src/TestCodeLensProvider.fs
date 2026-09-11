@@ -55,6 +55,7 @@ let formatTitle (result: LiveTestingTypes.VscTestResult) =
   | LiveTestingTypes.VscTestOutcome.Errored msg -> sprintf "✗ Error: %s" msg
   | LiveTestingTypes.VscTestOutcome.Stale -> "◌ Stale"
   | LiveTestingTypes.VscTestOutcome.PolicyDisabled -> "⊘ Disabled"
+  | LiveTestingTypes.VscTestOutcome.NotYetRun -> "◆ Not yet run"
 
 /// Creates a CodeLens provider for test results
 let create () =

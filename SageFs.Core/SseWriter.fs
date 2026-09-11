@@ -122,7 +122,10 @@ let formatTestSummaryEventWithDiscovery
   (lastDecision: Features.LiveTesting.LiveTestingDecision option)
   (discoveryState: Features.LiveTesting.LiveTestDiscoveryState)
   (discoveryGeneration: int64)
+  (activity: Features.LiveTestActivity.LiveTestActivity)
   : string =
+  // The activity is the session's one state; clients render its words
+  // instead of rebuilding a state from the counts.
   let payload =
     {| Total = summary.Total
        Passed = summary.Passed
@@ -131,6 +134,10 @@ let formatTestSummaryEventWithDiscovery
        Running = summary.Running
        Disabled = summary.Disabled
        Enabled = summary.Enabled
+       NotYetRun = (Features.LiveTestActivity.LiveTestActivity.tallyOf activity).NotYetRun
+       Activity = Features.LiveTestActivity.LiveTestActivity.wireKind activity
+       ActivityText = Features.LiveTestActivity.LiveTestActivity.describe activity
+       ActivityShort = Features.LiveTestActivity.LiveTestActivity.shortLabel activity
        DiscoveryState = Features.LiveTesting.LiveTestDiscoveryState.toWireValue discoveryState
        DiscoveryGeneration = discoveryGeneration
        LastDecision = lastDecision |> Option.map Features.LiveTesting.LiveTestingDecision.toWireModel |}

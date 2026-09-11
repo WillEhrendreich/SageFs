@@ -150,3 +150,44 @@ let describeTests =
       describe (LiveTestActivity.Settled { TestTally.empty with Passed = 12 })
       |> Expect.equal "wording" "All 12 tests passed"
   ]
+
+[<Tests>]
+let wireTests =
+  let short = LiveTestActivity.shortLabel
+  testList "LiveTestActivity wire" [
+    testCase "WHY — LiveTestActivity.wireKind — every activity has a stable snake_case name because clients switch on it" <| fun _ ->
+      [ LiveTestActivity.Off, "off"
+        LiveTestActivity.Discovering, "discovering"
+        LiveTestActivity.DiscoveryFailed "x", "discovery_failed"
+        LiveTestActivity.NoTestsFound [], "no_tests_found"
+        LiveTestActivity.BlockedByCompileErrors ("a.fs", 1, TestTally.empty), "blocked_by_compile_errors"
+        LiveTestActivity.BlockedByFailedRebuild ("x", TestTally.empty), "blocked_by_failed_rebuild"
+        LiveTestActivity.Rebuilding (1, TestTally.empty), "rebuilding"
+        LiveTestActivity.Running TestTally.empty, "running"
+        LiveTestActivity.Settled TestTally.empty, "settled" ]
+      |> List.iter (fun (activity, wire) -> LiveTestActivity.wireKind activity |> Expect.equal (sprintf "%A" activity) wire)
+
+    testCase "WHY — LiveTestActivity.shortLabel — states without counts fit a status bar" <| fun _ ->
+      [ short LiveTestActivity.Off, "Live testing off"
+        short LiveTestActivity.Discovering, "Looking for tests…"
+        short (LiveTestActivity.DiscoveryFailed "could not load Tests.dll"), "Test discovery failed"
+        short (LiveTestActivity.NoTestsFound [ "Expecto" ]), "No tests found"
+        short (LiveTestActivity.BlockedByFailedRebuild ("x", TestTally.empty)), "Tests could not re-run" ]
+      |> List.iter (fun (actual, expected) -> actual |> Expect.equal expected expected)
+
+    testCase "WHY — LiveTestActivity.shortLabel — a compile block names the file and its errors" <| fun _ ->
+      short (LiveTestActivity.BlockedByCompileErrors ("/src/Math.fs", 2, TestTally.empty))
+      |> Expect.equal "plural" "Math.fs: 2 errors"
+      short (LiveTestActivity.BlockedByCompileErrors ("/src/Math.fs", 1, TestTally.empty))
+      |> Expect.equal "singular" "Math.fs: 1 error"
+
+    testCase "WHY — LiveTestActivity.shortLabel — work in progress counts what is waiting" <| fun _ ->
+      short (LiveTestActivity.Rebuilding (2, TestTally.empty)) |> Expect.equal "rebuilding" "Rebuilding 2 tests"
+      short (LiveTestActivity.Running { TestTally.empty with Running = 2; Passed = 8 }) |> Expect.equal "running" "Running 2 of 10"
+
+    testCase "WHY — LiveTestActivity.shortLabel — settled results never read as passed when nothing ran" <| fun _ ->
+      short (LiveTestActivity.Settled { TestTally.empty with NotYetRun = 12 }) |> Expect.equal "not yet run" "12 not yet run"
+      short (LiveTestActivity.Settled { TestTally.empty with Passed = 12 }) |> Expect.equal "all passed" "All 12 passed"
+      short (LiveTestActivity.Settled { TestTally.empty with Passed = 1 }) |> Expect.equal "one passed" "1 passed"
+      short (LiveTestActivity.Settled { TestTally.empty with Passed = 12; Failed = 1 }) |> Expect.equal "mixed" "1 failed · 12 passed"
+  ]

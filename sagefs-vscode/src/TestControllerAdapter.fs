@@ -109,6 +109,8 @@ let create
           run.skipped item
         | VscTestOutcome.PolicyDisabled ->
           run.skipped item
+        // No result yet: reporting one (even skipped) would claim the test ran.
+        | VscTestOutcome.NotYetRun -> ()
       | false, _ -> ()
     scheduleEndRun ()
 

@@ -148,6 +148,8 @@ let applyToEditor (state: VscLiveTestState) (editor: TextEditor) =
           runningRanges.Add(decorationRange line (sprintf "◌ %s (stale — %s)" test.DisplayName reason))
         | VscTestOutcome.PolicyDisabled ->
           passedRanges.Add(decorationRange line (sprintf "⊘ %s (disabled by policy)" test.DisplayName))
+        | VscTestOutcome.NotYetRun ->
+          runningRanges.Add(decorationRange line (sprintf "◆ %s (not yet run)" test.DisplayName))
       | None ->
         runningRanges.Add(decorationRange line (sprintf "◆ %s (not yet run)" test.DisplayName))
     | None -> ()

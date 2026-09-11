@@ -637,7 +637,7 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
       | true ->
         let s = TestSummary.fromStatuses
                   lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
-        do! SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration
+        do! SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration (SageFsModel.liveTestActivityFor activeId model)
             |> writeSseFrame body
         let freshness =
           match lt.RunPhases |> Map.exists (fun _ p -> match p with TestRunPhase.RunningButEdited _ -> true | _ -> false) with
@@ -886,7 +886,7 @@ let wireModelChangeHandlers
         | true ->
           modelChangeState.Value <- { modelChangeState.Value with LastTestSsePushTicks = now }
           ctx.TestEventBroadcast.Trigger(
-            SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration)
+            SageFs.SseWriter.formatTestSummaryEventWithDiscovery ctx.SseJsonOpts (Some activeId) s lt.LastDecision discoveryState lt.DiscoveryGeneration (SageFsModel.liveTestActivityFor activeId model))
           let freshness =
             match lt.RunPhases |> Map.exists (fun _ p -> match p with SageFs.Features.LiveTesting.TestRunPhase.RunningButEdited _ -> true | _ -> false) with
             | true -> SageFs.Features.LiveTesting.ResultFreshness.StaleCodeEdited

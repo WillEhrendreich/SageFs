@@ -167,3 +167,52 @@ module LiveTestActivity =
       sprintf "Rebuilding to re-run %d test%s — showing the last results: %s" testCount plural (lastResults tally)
     | LiveTestActivity.Running tally -> sprintf "Running %d of %d tests…" tally.Running (TestTally.total tally)
     | LiveTestActivity.Settled tally -> TestTally.describe tally
+
+  /// A stable snake_case name per activity, for clients to switch on.
+  let wireKind (activity: LiveTestActivity) : string =
+    match activity with
+    | LiveTestActivity.Off -> "off"
+    | LiveTestActivity.Discovering -> "discovering"
+    | LiveTestActivity.DiscoveryFailed _ -> "discovery_failed"
+    | LiveTestActivity.NoTestsFound _ -> "no_tests_found"
+    | LiveTestActivity.BlockedByCompileErrors _ -> "blocked_by_compile_errors"
+    | LiveTestActivity.BlockedByFailedRebuild _ -> "blocked_by_failed_rebuild"
+    | LiveTestActivity.Rebuilding _ -> "rebuilding"
+    | LiveTestActivity.Running _ -> "running"
+    | LiveTestActivity.Settled _ -> "settled"
+
+  /// The counts behind an activity; states reached before any test is known have none.
+  let tallyOf (activity: LiveTestActivity) : TestTally =
+    match activity with
+    | LiveTestActivity.Running tally
+    | LiveTestActivity.Settled tally
+    | LiveTestActivity.Rebuilding (_, tally)
+    | LiveTestActivity.BlockedByCompileErrors (_, _, tally)
+    | LiveTestActivity.BlockedByFailedRebuild (_, tally) -> tally
+    | LiveTestActivity.Off
+    | LiveTestActivity.Discovering
+    | LiveTestActivity.DiscoveryFailed _
+    | LiveTestActivity.NoTestsFound _ -> TestTally.empty
+
+  /// The wording for a status bar: as short as the state allows, the same words as describe.
+  let shortLabel (activity: LiveTestActivity) : string =
+    let plural count = match count with 1 -> "" | _ -> "s"
+    match activity with
+    | LiveTestActivity.Off -> "Live testing off"
+    | LiveTestActivity.Discovering -> "Looking for tests…"
+    | LiveTestActivity.DiscoveryFailed _ -> "Test discovery failed"
+    | LiveTestActivity.NoTestsFound _ -> "No tests found"
+    | LiveTestActivity.BlockedByCompileErrors (file, errorCount, _) ->
+      let name =
+        match System.IO.Path.GetFileName file with
+        | null -> file
+        | fileName -> fileName
+      sprintf "%s: %d error%s" name errorCount (plural errorCount)
+    | LiveTestActivity.BlockedByFailedRebuild _ -> "Tests could not re-run"
+    | LiveTestActivity.Rebuilding (testCount, _) -> sprintf "Rebuilding %d test%s" testCount (plural testCount)
+    | LiveTestActivity.Running tally -> sprintf "Running %d of %d" tally.Running (TestTally.total tally)
+    | LiveTestActivity.Settled tally ->
+      match tally.Passed, TestTally.total tally with
+      | 1, 1 -> "1 passed"
+      | passed, all when passed > 0 && passed = all -> sprintf "All %d passed" all
+      | _ -> TestTally.buckets tally

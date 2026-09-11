@@ -94,6 +94,7 @@ let sseTests = testList "SSE Writer" [
       let result =
         formatTestSummaryEventWithDiscovery opts (Some "sess-1") summary None
           SageFs.Features.LiveTesting.LiveTestDiscoveryState.ReadyZeroTests 7L
+          (SageFs.Features.LiveTestActivity.LiveTestActivity.NoTestsFound [])
       result |> Expect.stringContains "should be a test_summary event" "event: test_summary"
       result |> Expect.stringContains "should carry session id" "\"SessionId\":\"sess-1\""
       result |> Expect.stringContains "zero-test discovery must be observable" "ready_zero_tests"
@@ -108,8 +109,25 @@ let sseTests = testList "SSE Writer" [
       let result =
         formatTestSummaryEventWithDiscovery opts None summary None
           (SageFs.Features.LiveTesting.LiveTestDiscoveryState.ReadyWithTests 3) 2L
+          (SageFs.Features.LiveTestActivity.LiveTestActivity.Settled { SageFs.Features.LiveTestActivity.TestTally.empty with NotYetRun = 3 })
       result |> Expect.stringContains "non-zero discovery should surface ready_with_tests" "ready_with_tests"
       result |> Expect.stringContains "should carry the discovery generation" "\"DiscoveryGeneration\":2"
+
+    testCase "WHY — the summary carries the session's activity so every client shows the same words" <| fun () ->
+      let opts = JsonSerializerOptions()
+      opts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+      let summary: SageFs.Features.LiveTesting.TestSummary = {
+        Total = 12; Passed = 0; Failed = 0; Stale = 0; Running = 0; Disabled = 0; Enabled = true
+      }
+      let activity =
+        SageFs.Features.LiveTestActivity.LiveTestActivity.Settled { SageFs.Features.LiveTestActivity.TestTally.empty with NotYetRun = 12 }
+      let result =
+        formatTestSummaryEventWithDiscovery opts None summary None
+          (SageFs.Features.LiveTesting.LiveTestDiscoveryState.ReadyWithTests 12) 3L activity
+      result |> Expect.stringContains "names the activity for clients to switch on" "\"Activity\":\"settled\""
+      result |> Expect.stringContains "carries the full wording" "\"ActivityText\":\"12 not yet run\""
+      result |> Expect.stringContains "carries the status-bar wording" "\"ActivityShort\":\"12 not yet run\""
+      result |> Expect.stringContains "counts tests that never ran" "\"NotYetRun\":12"
   ]
 ]
 

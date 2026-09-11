@@ -579,59 +579,20 @@ let openGettingStarted () =
 // ── Status ─────────────────────────────────────────────────────
 
 let describeTestStatusBarTooltip (summary: VscTestSummary) =
-  let reasonLine =
-    match summary.LastDecision with
-    | Some d when d.Reason <> "" -> Some (sprintf "Reason: %s" d.Reason)
-    | _ -> None
-  [ Some (
-      match summary with
-      // Disabled is authoritative regardless of Total: after a disable the
-      // daemon keeps the discovered tests (Total=11, Passed=11) so the state
-      // must read "off", not a stale pass count.
-      | s when s.DiscoveryState = "disabled" -> "$(beaker) Live testing off"
-      | s when s.Total = 0 ->
-        // Zero-test observability: distinguish "discovery not finished" from
-        // "discovery completed with zero tests".
-        match s.DiscoveryState with
-        | "ready_zero_tests" -> "$(beaker) No tests found (discovery complete)"
-        | _ -> "$(sync~spin) Discovering tests..."
-      | s when s.Failed > 0 -> sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total
-      | s when s.Running > 0 -> sprintf "$(sync~spin) Running %d/%d" s.Running s.Total
-      | s when s.Stale > 0 -> sprintf "$(warning) %d/%d stale" s.Stale s.Total
-      | s -> sprintf "$(testing-passed-icon) %d/%d passed" s.Passed s.Total)
-    summary.LastDecision |> Option.map VscLiveTestingDecision.formatHint
-    reasonLine ]
-  |> List.choose id
-  |> String.concat "\n"
+  (VscTestSummary.statusBarView summary).Tooltip
 
 let updateTestStatusBar (summary: VscTestSummary) =
   match testStatusBarItem with
   | None -> ()
   | Some sb ->
-    let text, bg =
-      match summary with
-      // Disabled is authoritative regardless of Total: after a disable the
-      // daemon keeps the discovered tests (Total=11, Passed=11) so the status
-      // must read "off", not a stale pass count.
-      | s when s.DiscoveryState = "disabled" ->
-        "$(beaker) Live testing off", None
-      | s when s.Total = 0 ->
-        match s.DiscoveryState with
-        | "ready_zero_tests" -> "$(beaker) No tests found", None
-        | _ -> "$(sync~spin) Discovering tests...", None
-      | s when s.Failed > 0 ->
-        sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total,
-        Some (newThemeColor "statusBarItem.errorBackground")
-      | s when s.Running > 0 ->
-        sprintf "$(sync~spin) Running %d/%d" s.Running s.Total, None
-      | s when s.Stale > 0 ->
-        sprintf "$(warning) %d/%d stale" s.Stale s.Total,
-        Some (newThemeColor "statusBarItem.warningBackground")
-      | s ->
-        sprintf "$(testing-passed-icon) %d/%d passed" s.Passed s.Total, None
-    sb.text <- text
-    sb.backgroundColor <- bg
-    sb.tooltip <- Some (describeTestStatusBarTooltip summary)
+    let view = VscTestSummary.statusBarView summary
+    sb.text <- view.Text
+    sb.backgroundColor <-
+      match view.Tone with
+      | VscStatusTone.Error -> Some (newThemeColor "statusBarItem.errorBackground")
+      | VscStatusTone.Warning -> Some (newThemeColor "statusBarItem.warningBackground")
+      | VscStatusTone.Plain -> None
+    sb.tooltip <- Some view.Tooltip
     sb.show ()
 
 let updateEvalPerfBar (stats: VscTimelineStats) =

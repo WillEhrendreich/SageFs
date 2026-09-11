@@ -10,6 +10,8 @@ type VscTestOutcome =
   | Errored of message: string
   | Stale
   | PolicyDisabled
+  /// Detected or queued: known, but no result yet — never a pass.
+  | NotYetRun
 
 /// Stable test identity across reloads
 [<RequireQualifiedAccess>]
@@ -181,6 +183,17 @@ type VscTestSummary = {
   Running: int
   Stale: int
   Disabled: int
+  /// Tests detected or queued but not run yet.
+  NotYetRun: int
+  /// The session's live-testing activity from the daemon (off | discovering |
+  /// discovery_failed | no_tests_found | blocked_by_compile_errors |
+  /// blocked_by_failed_rebuild | rebuilding | running | settled); "" from a
+  /// daemon too old to send one.
+  Activity: string
+  /// The daemon's full wording for the activity, shown in tooltips.
+  ActivityText: string
+  /// The daemon's status-bar wording for the activity.
+  ActivityShort: string
   /// Server discovery state wire value: disabled | discovering |
   /// ready_zero_tests | ready_with_tests. Makes a completed zero-test
   /// discovery observable (previously Total=0 was ambiguous between
@@ -259,6 +272,76 @@ type VscLiveTestState = {
   /// or equal generations are ignored (the server already applied them).
   DiscoveryGeneration: int64
 }
+
+[<RequireQualifiedAccess>]
+type VscStatusTone =
+  | Plain
+  | Warning
+  | Error
+
+type VscStatusBarView = {
+  Text: string
+  Tone: VscStatusTone
+  Tooltip: string
+}
+
+module VscTestSummary =
+  /// A daemon too old to send an activity: rebuild the state from the counts.
+  let private legacyText (s: VscTestSummary) =
+    match s with
+    // Disabled is authoritative regardless of Total: after a disable the
+    // daemon keeps the discovered tests, so the state must read "off".
+    | s when s.DiscoveryState = "disabled" -> "$(beaker) Live testing off", VscStatusTone.Plain
+    | s when s.Total = 0 ->
+      match s.DiscoveryState with
+      | "ready_zero_tests" -> "$(beaker) No tests found", VscStatusTone.Plain
+      | _ -> "$(sync~spin) Discovering tests...", VscStatusTone.Plain
+    | s when s.Failed > 0 -> sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total, VscStatusTone.Error
+    | s when s.Running > 0 -> sprintf "$(sync~spin) Running %d/%d" s.Running s.Total, VscStatusTone.Plain
+    | s when s.Stale > 0 -> sprintf "$(warning) %d/%d stale" s.Stale s.Total, VscStatusTone.Warning
+    | s -> sprintf "$(testing-passed-icon) %d/%d passed" s.Passed s.Total, VscStatusTone.Plain
+
+  /// Settled results: the most urgent count picks the icon; never-run tests are not a pass.
+  let private settledIcon (s: VscTestSummary) =
+    match s with
+    | s when s.Failed > 0 -> "$(testing-error-icon)", VscStatusTone.Error
+    | s when s.Stale > 0 -> "$(warning)", VscStatusTone.Warning
+    | s when s.NotYetRun > 0 -> "$(circle-outline)", VscStatusTone.Plain
+    | _ -> "$(testing-passed-icon)", VscStatusTone.Plain
+
+  /// The status bar for a summary: the daemon's words with an icon and tone for the activity.
+  let statusBarView (s: VscTestSummary) : VscStatusBarView =
+    let withIcon icon tone = sprintf "%s %s" icon s.ActivityShort, tone
+    let text, tone =
+      match s.Activity with
+      | "off"
+      | "no_tests_found" -> withIcon "$(beaker)" VscStatusTone.Plain
+      | "discovering"
+      | "rebuilding"
+      | "running" -> withIcon "$(sync~spin)" VscStatusTone.Plain
+      | "discovery_failed"
+      | "blocked_by_compile_errors"
+      | "blocked_by_failed_rebuild" -> withIcon "$(error)" VscStatusTone.Error
+      | "settled" ->
+        let icon, settledTone = settledIcon s
+        withIcon icon settledTone
+      | _ -> legacyText s
+    let headline =
+      match s.ActivityText with
+      | "" -> text
+      | words -> words
+    let reasonLine =
+      match s.LastDecision with
+      | Some d when d.Reason <> "" -> Some (sprintf "Reason: %s" d.Reason)
+      | _ -> None
+    { Text = text
+      Tone = tone
+      Tooltip =
+        [ Some headline
+          s.LastDecision |> Option.map VscLiveTestingDecision.formatHint
+          reasonLine ]
+        |> List.choose id
+        |> String.concat "\n" }
 
 module VscLiveTestState =
   let empty : VscLiveTestState = {
@@ -379,8 +462,20 @@ module VscLiveTestState =
           | VscTestOutcome.Running -> false
           | _ -> true)
         |> Map.count
+    let notYetRun =
+      state.Tests
+      |> Map.filter (fun id _ ->
+        match Map.tryFind id state.Results with
+        | None -> true
+        | Some r -> r.Outcome = VscTestOutcome.NotYetRun)
+      |> Map.count
     { Total = total; Passed = passed; Failed = failed
       Running = state.RunningTests.Count; Stale = stale; Disabled = disabled
+      NotYetRun = notYetRun
+      // Built client-side, with no daemon activity: the view falls back to counts.
+      Activity = ""
+      ActivityText = ""
+      ActivityShort = ""
       DiscoveryState =
         match state.Enabled, total with
         | VscLiveTestingEnabled.LiveTestingOff, _ -> "disabled"

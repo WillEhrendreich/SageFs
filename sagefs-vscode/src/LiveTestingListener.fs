@@ -108,6 +108,10 @@ let parseSummary (data: obj) : VscTestSummary =
     Running = fieldInt "Running" data |> Option.defaultValue 0
     Stale = fieldInt "Stale" data |> Option.defaultValue 0
     Disabled = fieldInt "Disabled" data |> Option.defaultValue 0
+    NotYetRun = fieldInt "NotYetRun" data |> Option.defaultValue 0
+    Activity = fieldString "Activity" data |> Option.defaultValue ""
+    ActivityText = fieldString "ActivityText" data |> Option.defaultValue ""
+    ActivityShort = fieldString "ActivityShort" data |> Option.defaultValue ""
     DiscoveryState = fieldString "DiscoveryState" data |> Option.defaultValue "discovering"
     DiscoveryGeneration = fieldInt "DiscoveryGeneration" data |> Option.map int64 |> Option.defaultValue 0L
     LastDecision = fieldObj "LastDecision" data |> Option.bind parseLastDecision }
@@ -137,6 +141,8 @@ let parseTestResult (entry: obj) : VscTestResult =
     | "Running" -> VscTestOutcome.Running
     | "Stale" -> VscTestOutcome.Stale
     | "PolicyDisabled" -> VscTestOutcome.PolicyDisabled
+    | "Detected"
+    | "Queued" -> VscTestOutcome.NotYetRun
     | _ -> VscTestOutcome.Skipped "unknown status"
   let durationMs =
     match statusCase, fields with
