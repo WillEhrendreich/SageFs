@@ -230,6 +230,7 @@ type RunningApp = {
 type StartPhase =
   | RestartingIntoWebLive
   | LaunchingEntryPoint
+  | RebuildingForChanges of first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list
 
 /// The one app a session may run, as the user should see it.
 [<RequireQualifiedAccess>]
@@ -239,6 +240,8 @@ type AppRunState =
   | Running of RunningApp
   | Exited of project: string * exitCode: int * at: DateTime
   | Crashed of project: string * reason: string * at: DateTime
+  /// The run was stopped because a save changed something that only takes effect at startup.
+  | RestartRequired of project: string * first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list * at: DateTime
 
 /// A worker's report that a run ended applies only while that run is current:
 /// a stale report must not clobber a newer run or a stop the user already made.
@@ -255,12 +258,16 @@ let describeState (state: AppRunState) : string =
     sprintf "Restarting the session with hot reload before starting %s…" (projectName project)
   | AppRunState.Starting (project, StartPhase.LaunchingEntryPoint, _) ->
     sprintf "Starting %s…" (projectName project)
+  | AppRunState.Starting (project, StartPhase.RebuildingForChanges (first, rest), _) ->
+    sprintf "Rebuilding %s: %s…" (projectName project) (SageFs.Features.ReloadPlanning.ReloadChange.describeAll first rest)
   | AppRunState.Running { Project = project; Endpoint = AppEndpoint.Http (url, _) } ->
     sprintf "%s is running at %s" (projectName project) url
   | AppRunState.Running { Project = project; Endpoint = AppEndpoint.NoServer } ->
     sprintf "%s is running (no web server)" (projectName project)
   | AppRunState.Exited (project, code, _) -> sprintf "%s exited with code %d" (projectName project) code
   | AppRunState.Crashed (project, reason, _) -> sprintf "%s crashed: %s" (projectName project) reason
+  | AppRunState.RestartRequired (project, first, rest, _) ->
+    sprintf "%s must restart: %s" (projectName project) (SageFs.Features.ReloadPlanning.ReloadChange.describeAll first rest)
 
 /// The app state as HTTP and MCP clients read it.
 type AppStateView = {
@@ -279,6 +286,7 @@ let toView (state: AppRunState) : AppStateView =
     | AppRunState.Running _ -> "Running"
     | AppRunState.Exited _ -> "Exited"
     | AppRunState.Crashed _ -> "Crashed"
+    | AppRunState.RestartRequired _ -> "RestartRequired"
   let urls, entryPoint, runId =
     match state with
     | AppRunState.Running app ->
@@ -290,7 +298,8 @@ let toView (state: AppRunState) : AppStateView =
     | AppRunState.NotRunning
     | AppRunState.Starting _
     | AppRunState.Exited _
-    | AppRunState.Crashed _ -> [], "", ""
+    | AppRunState.Crashed _
+    | AppRunState.RestartRequired _ -> [], "", ""
   { State = name
     Message = describeState state
     Urls = urls

@@ -253,3 +253,22 @@ let appRunFailedWordingTests =
       SageFs.SageFsError.describe (SageFs.SageFsError.AppRunFailed ("", "No runnable project in this session."))
       |> Expect.equal "the refusal must read as a sentence" "Could not run the app: No runnable project in this session."
   ]
+
+[<Tests>]
+let restartWordingTests =
+  let at = System.DateTime(2026, 9, 11, 0, 0, 0, System.DateTimeKind.Utc)
+  let typeChange = SageFs.Features.ReloadPlanning.ReloadChange.TypeChanged "TodoItem"
+  let valueChange = SageFs.Features.ReloadPlanning.ReloadChange.ValueChanged "getHome"
+  testList "AppRun restart wording" [
+    testCase "WHY — AppRun.describeState — a run ended for a restart names what changed because the user must know why their app went down" <| fun _ ->
+      describeState (AppRunState.RestartRequired ("/src/Web/Web.fsproj", typeChange, [ valueChange ], at))
+      |> Expect.equal "names the app and each change" "Web must restart: type TodoItem changed; getHome changed (it is built at startup)"
+
+    testCase "WHY — AppRun.describeState — rebuilding for changes names them because a long rebuild must not look like a hang" <| fun _ ->
+      describeState (AppRunState.Starting ("/src/Web/Web.fsproj", StartPhase.RebuildingForChanges (typeChange, []), at))
+      |> Expect.equal "names the app and the change" "Rebuilding Web: type TodoItem changed…"
+
+    testCase "WHY — AppRun.toView — a restart-required run reports its own state name because clients switch on it" <| fun _ ->
+      (toView (AppRunState.RestartRequired ("/src/Web/Web.fsproj", typeChange, [], at))).State
+      |> Expect.equal "state name" "RestartRequired"
+  ]

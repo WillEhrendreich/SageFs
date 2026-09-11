@@ -174,6 +174,7 @@ type internal Msg =
   | Stop of AsyncReplyChannel<Result<AppRunState, string>>
   | Finished of runId: string * AppRunState
   | Await of runId: string * TaskCompletionSource<AppRunState>
+  | RequireRestart of first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list * AsyncReplyChannel<AppRunState>
   | Shutdown of AsyncReplyChannel<unit>
 
 let private finishedState (project: string) (outcome: Result<int, exn>) =
@@ -356,6 +357,23 @@ type Runner(timeouts: StartTimeouts, setEnv: SetEnv) =
           | _ ->
             waiter.TrySetResult(stateOf owned) |> ignore
             return! loop owned waiters
+        | RequireRestart (first, rest, reply) ->
+          match owned with
+          | Idle _ ->
+            reply.Reply(stateOf owned)
+            return! loop owned waiters
+          | Live (app, handle, restoreEnv) ->
+            // A console app has no host to stop; the rebuild's worker restart ends it.
+            let final = AppRunState.RestartRequired (app.Project, first, rest, DateTime.UtcNow)
+            let next = Idle final
+            publish next
+            match handle with
+            | HostHandle host -> do! stopHost host
+            | ThreadOnly -> ()
+            setEnv restoreEnv
+            reply.Reply final
+            settle waiters final
+            return! loop next []
         | Shutdown reply ->
           match owned with
           | Live (_, HostHandle host, restoreEnv) ->
@@ -394,6 +412,10 @@ let stop (runner: Runner) : Task<Result<AppRunState, string>> =
   runner.Agent.PostAndAsyncReply(fun reply -> Stop reply) |> Async.StartAsTask
 
 let state (runner: Runner) = runner.State
+
+/// Ends a running app because a save changed something only a rebuild can apply.
+let requireRestart (runner: Runner) (first: SageFs.Features.ReloadPlanning.ReloadChange) (rest: SageFs.Features.ReloadPlanning.ReloadChange list) : Task<AppRunState> =
+  runner.Agent.PostAndAsyncReply(fun reply -> RequireRestart(first, rest, reply)) |> Async.StartAsTask
 
 /// Completes when the app is no longer Running with this run id (or when
 /// the token cancels, with whatever the state is then).

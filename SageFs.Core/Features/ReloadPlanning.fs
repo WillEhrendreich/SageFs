@@ -48,6 +48,21 @@ type ReloadPlan =
   | PatchFunctions of changed: SourceDecl list
   | RestartRequired of first: ReloadChange * rest: ReloadChange list
 
+module ReloadChange =
+  /// How one reason reads on the session card and in MCP replies.
+  let describe (change: ReloadChange) : string =
+    match change with
+    | ReloadChange.TypeChanged name -> sprintf "type %s changed" name
+    | ReloadChange.ValueChanged name -> sprintf "%s changed (it is built at startup)" name
+    | ReloadChange.SignatureChanged name -> sprintf "the signature of %s changed" name
+    | ReloadChange.EntryPointChanged -> "the entry point changed"
+    | ReloadChange.ModuleChanged name -> sprintf "module %s changed" name
+    | ReloadChange.StartupCodeChanged -> "startup code changed"
+    | ReloadChange.DeclarationRemoved name -> sprintf "%s was removed" name
+
+  let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
+    first :: rest |> List.map describe |> String.concat "; "
+
 /// A binding whose head takes arguments compiles to a method; anything else is a value.
 let isFunctionHead (pat: SynPat) =
   match pat with

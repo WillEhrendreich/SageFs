@@ -81,7 +81,7 @@ let runApp
           return Error (SageFsError.AppRunFailed (project, sprintf "%s is already running. → Stop it first." (projectName app.Project)))
         | AppRunState.Starting (starting, _, _) ->
           return Error (SageFsError.AppRunFailed (project, sprintf "%s is already starting. → Wait for it, then retry." (projectName starting)))
-        | AppRunState.NotRunning | AppRunState.Exited _ | AppRunState.Crashed _ ->
+        | AppRunState.NotRunning | AppRunState.Exited _ | AppRunState.Crashed _ | AppRunState.RestartRequired _ ->
           let fail (err: SageFsError) =
             task {
               do! ops.SetAppState sessionId (AppRunState.Crashed (project, SageFsError.describe err, clock ()))

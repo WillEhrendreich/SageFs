@@ -146,3 +146,13 @@ let companionModuleTests =
       planReload (declsOf source) (declsOf edited)
       |> restartChanges |> Expect.equal "only the module" [ ReloadChange.ModuleChanged "Phase" ]
   ]
+
+[<Tests>]
+let changeWordingTests =
+  testList "ReloadPlanning change wording" [
+    testCase "WHY — ReloadChange.describeAll — reads every reason as one sentence because the card has one line for it" <| fun _ ->
+      ReloadChange.describeAll
+        (ReloadChange.TypeChanged "TodoItem")
+        [ ReloadChange.SignatureChanged "render"; ReloadChange.DeclarationRemoved "old"; ReloadChange.EntryPointChanged ]
+      |> Expect.equal "joined in order" "type TodoItem changed; the signature of render changed; old was removed; the entry point changed"
+  ]
