@@ -806,7 +806,15 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
             Attr.style "padding: 10px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
             Attr.create "data-session-id" sid
             Attr.create "aria-current" (match isViewing with | true -> "true" | false -> "false")
-            Ds.onEvent ("click", sprintf "window.location.assign('/dashboard?session=%s')" sid) ]
+            // Switching is signal-driven: the POST carries this page's clientId
+            // signal, so the backend retargets THIS tab's stream and patches
+            // $viewingSessionId (GET /dashboard has no session parameter). One
+            // guard here keeps clicks on the card's own buttons and links from
+            // also switching — no child has to remember to stop propagation.
+            match isViewing with
+            | true -> ()
+            | false ->
+              Ds.onClick (sprintf "evt.target.closest('button, a') || %s" (Ds.post (sprintf "/dashboard/session/switch/%s" sid))) ]
           [
             Elem.div [ Attr.class' "session-card-body" ] [
               // Row 1: session ID + status + selected indicator
@@ -948,7 +956,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               | false ->
                 Elem.button
                   [ Attr.class' "session-btn"
-                    Ds.onEvent ("click", sprintf "event.stopPropagation(); window.location.assign('/dashboard?session=%s')" sid) ]
+                    Attr.title "Switch — show this session's output here"
+                    Ds.onClick (Ds.post (sprintf "/dashboard/session/switch/%s" sid)) ]
                   [ Text.raw "⇄" ]
               | true -> ()
               // Run App — for sessions that own an executable project. Every app
@@ -993,13 +1002,17 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
                   [ Text.raw "▶" ]
               | projects, _ ->
+                // Several executables: each button must say which project it
+                // runs, so it is a labeled pill (auto width, label truncates
+                // with an ellipsis) — text never goes in the 28px icon box.
                 for project in projects do
                   let name = AppRun.projectName project.Path
                   Elem.button
-                    [ Attr.class' "session-btn session-btn-primary"
+                    [ Attr.class' "session-btn session-btn-primary session-btn-labeled"
                       Attr.title (attrEnc (runTitle name))
                       Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s/%s" sid (Uri.EscapeDataString name))) ]
-                    [ textEnc (sprintf "▶ %s" name) ]
+                    [ Elem.span [ Attr.create "aria-hidden" "true" ] [ Text.raw "▶" ]
+                      Elem.span [ Attr.class' "session-btn-label" ] [ textEnc name ] ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.title "Stop — unload the session (saved memory kept)"

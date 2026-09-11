@@ -604,6 +604,25 @@ h2 {
   }
 }
 
+/* A button that must carry text (e.g. "▶ ProjectName" when a session has
+   several runnable projects) keeps the icon buttons' height but sizes to its
+   content, and never grows past the row: the label truncates with an
+   ellipsis (full name in the tooltip) instead of spilling over neighbours. */
+.session-btn-labeled {
+  width: auto;
+  min-width: 28px;
+  max-width: 100%;
+  padding: 0 8px;
+  gap: 5px;
+}
+
+.session-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-btn-danger:hover {
   background: var(--fg-red);
   color: white;
