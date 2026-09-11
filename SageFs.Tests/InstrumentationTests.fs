@@ -291,16 +291,14 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     svcName |> Expect.equal "should include session id" "sagefs-worker-test-session-42"
   }
   test "workerOtelEnvVars includes endpoint when configured" {
-    let original = System.Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
-    try
-      System.Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+    // withEnvVar holds the shared envLock and restores the original value, so a
+    // parallel test reading the same variable never sees this one's value.
+    SageFs.Tests.TestInfrastructure.withEnvVar "OTEL_EXPORTER_OTLP_ENDPOINT" (Some "http://localhost:4317") (fun () ->
       let vars = Instrumentation.workerOtelEnvVars "sess-1"
       let keys = vars |> List.map fst
       keys |> Expect.containsAll "should have endpoint" ["OTEL_EXPORTER_OTLP_ENDPOINT"; "OTEL_SERVICE_NAME"]
       let ep = vars |> List.find (fun (k,_) -> k = "OTEL_EXPORTER_OTLP_ENDPOINT") |> snd
-      ep |> Expect.equal "should propagate endpoint" "http://localhost:4317"
-    finally
-      System.Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", original)
+      ep |> Expect.equal "should propagate endpoint" "http://localhost:4317")
   }
 
   // === Tier 1: SSE span filtering ===

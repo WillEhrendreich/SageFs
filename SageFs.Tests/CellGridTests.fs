@@ -1,6 +1,7 @@
 module SageFs.Tests.CellGridTests
 
 open Expecto
+open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
 open SageFs
@@ -9,55 +10,55 @@ open SageFs.Tests.SharedGenerators
 let cellGridTests = testList "CellGrid bounds safety and value integrity" [
   test "create makes grid of empty cells" {
     let grid = CellGrid.create 3 4
-    Expect.equal (CellGrid.rows grid) 3 "rows"
-    Expect.equal (CellGrid.cols grid) 4 "cols"
-    Expect.equal (CellGrid.get grid 0 0) Cell.empty "cell is empty"
+    CellGrid.rows grid |> Expect.equal "rows" 3
+    CellGrid.cols grid |> Expect.equal "cols" 4
+    CellGrid.get grid 0 0 |> Expect.equal "cell is empty" Cell.empty
   }
 
   test "set and get round-trip" {
     let grid = CellGrid.create 2 2
     let cell = Cell.create 'X' 0x00FF0000u 0x00008000u CellAttrs.Bold
     CellGrid.set grid 1 0 cell
-    Expect.equal (CellGrid.get grid 1 0) cell "should get what was set"
+    CellGrid.get grid 1 0 |> Expect.equal "should get what was set" cell
   }
 
   test "set out of bounds is no-op" {
     let grid = CellGrid.create 2 2
     CellGrid.set grid 5 5 (Cell.create '!' 0u 0u CellAttrs.None)
-    Expect.equal (CellGrid.get grid 0 0) Cell.empty "grid unchanged"
+    CellGrid.get grid 0 0 |> Expect.equal "grid unchanged" Cell.empty
   }
 
   test "get out of bounds returns empty" {
     let grid = CellGrid.create 2 2
-    Expect.equal (CellGrid.get grid -1 0) Cell.empty "negative row"
-    Expect.equal (CellGrid.get grid 0 99) Cell.empty "col overflow"
+    CellGrid.get grid -1 0 |> Expect.equal "negative row" Cell.empty
+    CellGrid.get grid 0 99 |> Expect.equal "col overflow" Cell.empty
   }
 
   test "writeString writes chars with attributes" {
     let grid = CellGrid.create 1 5
     CellGrid.writeString grid 0 1 0x000A0A0Au 0x00141414u CellAttrs.None "Hi"
-    Expect.equal (CellGrid.get grid 0 0) Cell.empty "before string"
-    Expect.equal (CellGrid.get grid 0 1).Char 'H' "first char"
-    Expect.equal (CellGrid.get grid 0 2).Char 'i' "second char"
-    Expect.equal (CellGrid.get grid 0 1).Fg 0x000A0A0Au "fg color"
-    Expect.equal (CellGrid.get grid 0 3) Cell.empty "after string"
+    CellGrid.get grid 0 0 |> Expect.equal "before string" Cell.empty
+    (CellGrid.get grid 0 1).Char |> Expect.equal "first char" 'H'
+    (CellGrid.get grid 0 2).Char |> Expect.equal "second char" 'i'
+    (CellGrid.get grid 0 1).Fg |> Expect.equal "fg color" 0x000A0A0Au
+    CellGrid.get grid 0 3 |> Expect.equal "after string" Cell.empty
   }
 
   test "writeString clips at grid edge" {
     let grid = CellGrid.create 1 3
     CellGrid.writeString grid 0 1 0u 0u CellAttrs.None "Hello"
-    Expect.equal (CellGrid.get grid 0 1).Char 'H' "first in bounds"
-    Expect.equal (CellGrid.get grid 0 2).Char 'e' "second in bounds"
+    (CellGrid.get grid 0 1).Char |> Expect.equal "first in bounds" 'H'
+    (CellGrid.get grid 0 2).Char |> Expect.equal "second in bounds" 'e'
   }
 
   test "fillRect fills rectangular area" {
     let grid = CellGrid.create 3 4
     let cell = Cell.create '#' 0x00010101u 0x00020202u CellAttrs.None
     CellGrid.fillRect grid (Rect.create 0 1 2 2) cell
-    Expect.equal (CellGrid.get grid 0 1).Char '#' "top-left of fill"
-    Expect.equal (CellGrid.get grid 1 2).Char '#' "bottom-right of fill"
-    Expect.equal (CellGrid.get grid 0 0) Cell.empty "outside fill"
-    Expect.equal (CellGrid.get grid 0 3) Cell.empty "outside fill right"
+    (CellGrid.get grid 0 1).Char |> Expect.equal "top-left of fill" '#'
+    (CellGrid.get grid 1 2).Char |> Expect.equal "bottom-right of fill" '#'
+    CellGrid.get grid 0 0 |> Expect.equal "outside fill" Cell.empty
+    CellGrid.get grid 0 3 |> Expect.equal "outside fill right" Cell.empty
   }
 
   test "toText produces correct string" {
@@ -65,7 +66,7 @@ let cellGridTests = testList "CellGrid bounds safety and value integrity" [
     CellGrid.writeString grid 0 0 0u 0u CellAttrs.None "abc"
     CellGrid.writeString grid 1 0 0u 0u CellAttrs.None "def"
     let txt = CellGrid.toText grid
-    Expect.equal txt "abc\r\ndef" "full grid text"
+    txt |> Expect.equal "full grid text" "abc\r\ndef"
   }
 
   test "toTextTrimmed trims trailing spaces" {
@@ -73,113 +74,113 @@ let cellGridTests = testList "CellGrid bounds safety and value integrity" [
     CellGrid.writeString grid 0 0 0u 0u CellAttrs.None "Hi"
     CellGrid.writeString grid 1 0 0u 0u CellAttrs.None "X"
     let txt = CellGrid.toTextTrimmed grid
-    Expect.equal txt "Hi\r\nX" "trimmed trailing spaces"
+    txt |> Expect.equal "trimmed trailing spaces" "Hi\r\nX"
   }
 
   test "clear resets all cells" {
     let grid = CellGrid.create 2 2
     CellGrid.writeString grid 0 0 0x000A0000u 0x00140000u CellAttrs.Bold "AB"
     CellGrid.clear grid
-    Expect.equal (CellGrid.get grid 0 0) Cell.empty "cleared"
-    Expect.equal (CellGrid.get grid 0 1) Cell.empty "cleared"
+    CellGrid.get grid 0 0 |> Expect.equal "cleared" Cell.empty
+    CellGrid.get grid 0 1 |> Expect.equal "cleared" Cell.empty
   }
 
   test "writeString at origin" {
     let grid = CellGrid.create 2 5
     CellGrid.writeString grid 0 0 0u 0u CellAttrs.None "AB"
-    Expect.equal (CellGrid.get grid 0 0).Char 'A' "A at (0,0)"
-    Expect.equal (CellGrid.get grid 0 1).Char 'B' "B at (0,1)"
+    (CellGrid.get grid 0 0).Char |> Expect.equal "A at (0,0)" 'A'
+    (CellGrid.get grid 0 1).Char |> Expect.equal "B at (0,1)" 'B'
   }
 
   test "writeString empty is no-op" {
     let grid = CellGrid.create 2 5
     CellGrid.writeString grid 0 0 0u 0u CellAttrs.None ""
-    Expect.equal (CellGrid.get grid 0 0) Cell.empty "should remain empty"
+    CellGrid.get grid 0 0 |> Expect.equal "should remain empty" Cell.empty
   }
 
   test "fillRect with zero-area rect is no-op" {
     let grid = CellGrid.create 3 3
     let cell = Cell.create '#' 0u 0u CellAttrs.None
     CellGrid.fillRect grid (Rect.create 0 0 0 0) cell
-    Expect.equal (CellGrid.get grid 0 0) Cell.empty "zero area should not fill"
+    CellGrid.get grid 0 0 |> Expect.equal "zero area should not fill" Cell.empty
   }
 ]
 
 let rectTests = testList "Rect geometry preserves invariants" [
   test "create clamps negative values" {
     let r = Rect.create -5 -3 -1 -2
-    Expect.equal r.Row 0 "row clamped"
-    Expect.equal r.Col 0 "col clamped"
-    Expect.equal r.Width 0 "width clamped"
-    Expect.equal r.Height 0 "height clamped"
+    r.Row |> Expect.equal "row clamped" 0
+    r.Col |> Expect.equal "col clamped" 0
+    r.Width |> Expect.equal "width clamped" 0
+    r.Height |> Expect.equal "height clamped" 0
   }
 
   test "isEmpty for zero-size rects" {
-    Expect.isTrue (Rect.isEmpty (Rect.create 0 0 0 5)) "zero width"
-    Expect.isTrue (Rect.isEmpty (Rect.create 0 0 5 0)) "zero height"
-    Expect.isFalse (Rect.isEmpty (Rect.create 0 0 5 5)) "non-empty"
+    Rect.isEmpty (Rect.create 0 0 0 5) |> Expect.isTrue "zero width"
+    Rect.isEmpty (Rect.create 0 0 5 0) |> Expect.isTrue "zero height"
+    Rect.isEmpty (Rect.create 0 0 5 5) |> Expect.isFalse "non-empty"
   }
 
   test "splitH preserves total height" {
     let r = Rect.create 0 0 80 24
     let top, bot = Rect.splitH 10 r
-    Expect.equal top.Height 10 "top height"
-    Expect.equal bot.Height 14 "bot height"
-    Expect.equal top.Row 0 "top starts at 0"
-    Expect.equal bot.Row 10 "bot starts at 10"
-    Expect.equal top.Width 80 "top width preserved"
-    Expect.equal bot.Width 80 "bot width preserved"
+    top.Height |> Expect.equal "top height" 10
+    bot.Height |> Expect.equal "bot height" 14
+    top.Row |> Expect.equal "top starts at 0" 0
+    bot.Row |> Expect.equal "bot starts at 10" 10
+    top.Width |> Expect.equal "top width preserved" 80
+    bot.Width |> Expect.equal "bot width preserved" 80
   }
 
   test "splitV preserves total width" {
     let r = Rect.create 0 0 80 24
     let left, right = Rect.splitV 30 r
-    Expect.equal left.Width 30 "left width"
-    Expect.equal right.Width 50 "right width"
-    Expect.equal left.Col 0 "left col"
-    Expect.equal right.Col 30 "right col"
+    left.Width |> Expect.equal "left width" 30
+    right.Width |> Expect.equal "right width" 50
+    left.Col |> Expect.equal "left col" 0
+    right.Col |> Expect.equal "right col" 30
   }
 
   test "splitH clamps to bounds" {
     let r = Rect.create 0 0 80 24
     let top, bot = Rect.splitH 30 r
-    Expect.equal top.Height 24 "top clamped to full"
-    Expect.equal bot.Height 0 "bot empty"
+    top.Height |> Expect.equal "top clamped to full" 24
+    bot.Height |> Expect.equal "bot empty" 0
   }
 
   test "splitHProp at 0.5 divides evenly" {
     let r = Rect.create 0 0 80 24
     let top, bot = Rect.splitHProp 0.5 r
-    Expect.equal top.Height 12 "top half"
-    Expect.equal bot.Height 12 "bot half"
+    top.Height |> Expect.equal "top half" 12
+    bot.Height |> Expect.equal "bot half" 12
   }
 
   test "splitVProp at 0.65 gives 65% to left" {
     let r = Rect.create 0 0 100 24
     let left, right = Rect.splitVProp 0.65 r
-    Expect.equal left.Width 65 "65% left"
-    Expect.equal right.Width 35 "35% right"
+    left.Width |> Expect.equal "65% left" 65
+    right.Width |> Expect.equal "35% right" 35
   }
 
   test "inset shrinks by margin on all sides" {
     let r = Rect.create 0 0 80 24
     let inner = Rect.inset 1 r
-    Expect.equal inner.Row 1 "row shifted"
-    Expect.equal inner.Col 1 "col shifted"
-    Expect.equal inner.Width 78 "width shrunk"
-    Expect.equal inner.Height 22 "height shrunk"
+    inner.Row |> Expect.equal "row shifted" 1
+    inner.Col |> Expect.equal "col shifted" 1
+    inner.Width |> Expect.equal "width shrunk" 78
+    inner.Height |> Expect.equal "height shrunk" 22
   }
 
   test "inset too large makes empty rect" {
     let r = Rect.create 0 0 4 4
     let inner = Rect.inset 3 r
-    Expect.isTrue (Rect.isEmpty inner) "over-inset is empty"
+    Rect.isEmpty inner |> Expect.isTrue "over-inset is empty"
   }
 
   test "right and bottom edges" {
     let r = Rect.create 5 10 20 15
-    Expect.equal (Rect.right r) 30 "right edge"
-    Expect.equal (Rect.bottom r) 20 "bottom edge"
+    Rect.right r |> Expect.equal "right edge" 30
+    Rect.bottom r |> Expect.equal "bottom edge" 20
   }
 
   testPropertyWithConfig propConfig
@@ -195,11 +196,11 @@ let rectTests = testList "Rect geometry preserves invariants" [
           let expected =
             row >= r.Row && row < r.Row + r.Height
             && col >= r.Col && col < r.Col + r.Width
-          Expect.equal
-            (Rect.contains row col r)
-            expected
-            (sprintf "contains(%d,%d) in rect(%d,%d,%d,%d)"
-              row col r.Row r.Col r.Width r.Height)))
+          Rect.contains row col r
+          |> Expect.equal
+               (sprintf "contains(%d,%d) in rect(%d,%d,%d,%d)"
+                 row col r.Row r.Col r.Width r.Height)
+               expected))
 ]
 
 let drawTests = testList "Draw primitives render correctly" [
@@ -207,40 +208,40 @@ let drawTests = testList "Draw primitives render correctly" [
     let grid = CellGrid.create 3 10
     let dt = DrawTarget.create grid (Rect.create 0 0 10 3)
     Draw.text dt 1 2 (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgDefault) CellAttrs.None "Hi"
-    Expect.equal (CellGrid.get grid 1 2).Char 'H' "H at row=1,col=2"
-    Expect.equal (CellGrid.get grid 1 3).Char 'i' "i at row=1,col=3"
-    Expect.equal (CellGrid.get grid 0 0) Cell.empty "other cells empty"
+    (CellGrid.get grid 1 2).Char |> Expect.equal "H at row=1,col=2" 'H'
+    (CellGrid.get grid 1 3).Char |> Expect.equal "i at row=1,col=3" 'i'
+    CellGrid.get grid 0 0 |> Expect.equal "other cells empty" Cell.empty
   }
 
   test "text clips at clip boundary" {
     let grid = CellGrid.create 3 10
     let dt = DrawTarget.create grid (Rect.create 0 0 5 3)
     Draw.text dt 0 3 (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgDefault) CellAttrs.None "Hello"
-    Expect.equal (CellGrid.get grid 0 3).Char 'H' "H in bounds"
-    Expect.equal (CellGrid.get grid 0 4).Char 'e' "e in bounds"
-    Expect.equal (CellGrid.get grid 0 5) Cell.empty "clipped at 5"
+    (CellGrid.get grid 0 3).Char |> Expect.equal "H in bounds" 'H'
+    (CellGrid.get grid 0 4).Char |> Expect.equal "e in bounds" 'e'
+    CellGrid.get grid 0 5 |> Expect.equal "clipped at 5" Cell.empty
   }
 
   test "fill sets background on all cells" {
     let grid = CellGrid.create 2 3
     let dt = DrawTarget.create grid (Rect.create 0 0 3 2)
     Draw.fill dt (Theme.hexToRgb Theme.bgPanel)
-    Expect.equal (CellGrid.get grid 0 0).Bg (Theme.hexToRgb Theme.bgPanel) "bg set"
-    Expect.equal (CellGrid.get grid 1 2).Bg (Theme.hexToRgb Theme.bgPanel) "bg set corner"
+    (CellGrid.get grid 0 0).Bg |> Expect.equal "bg set" (Theme.hexToRgb Theme.bgPanel)
+    (CellGrid.get grid 1 2).Bg |> Expect.equal "bg set corner" (Theme.hexToRgb Theme.bgPanel)
   }
 
   test "box draws border and returns inner target" {
     let grid = CellGrid.create 5 10
     let dt = DrawTarget.create grid (Rect.create 0 0 10 5)
     let inner = Draw.box dt "Test" (Theme.hexToRgb Theme.borderNormal) (Theme.hexToRgb Theme.bgPanel)
-    Expect.equal (CellGrid.get grid 0 0).Char '\u250C' "top-left corner"
-    Expect.equal (CellGrid.get grid 0 9).Char '\u2510' "top-right corner"
-    Expect.equal (CellGrid.get grid 4 0).Char '\u2514' "bottom-left corner"
-    Expect.equal (CellGrid.get grid 4 9).Char '\u2518' "bottom-right corner"
-    Expect.equal inner.Clip.Row 1 "inner row"
-    Expect.equal inner.Clip.Col 1 "inner col"
-    Expect.equal inner.Clip.Width 8 "inner width"
-    Expect.equal inner.Clip.Height 3 "inner height"
+    (CellGrid.get grid 0 0).Char |> Expect.equal "top-left corner" '┌'
+    (CellGrid.get grid 0 9).Char |> Expect.equal "top-right corner" '┐'
+    (CellGrid.get grid 4 0).Char |> Expect.equal "bottom-left corner" '└'
+    (CellGrid.get grid 4 9).Char |> Expect.equal "bottom-right corner" '┘'
+    inner.Clip.Row |> Expect.equal "inner row" 1
+    inner.Clip.Col |> Expect.equal "inner col" 1
+    inner.Clip.Width |> Expect.equal "inner width" 8
+    inner.Clip.Height |> Expect.equal "inner height" 3
   }
 
   test "box title appears in top border" {
@@ -248,7 +249,7 @@ let drawTests = testList "Draw primitives render correctly" [
     let dt = DrawTarget.create grid (Rect.create 0 0 20 5)
     let _ = Draw.box dt "Output" (Theme.hexToRgb Theme.borderNormal) (Theme.hexToRgb Theme.bgPanel)
     let txt = CellGrid.toText grid
-    Expect.stringContains txt "Output" "title in border"
+    txt |> Expect.stringContains "title in border" "Output"
   }
 
   test "scrolledLines renders visible lines" {
@@ -257,9 +258,9 @@ let drawTests = testList "Draw primitives render correctly" [
     let lines = ["line 0"; "line 1"; "line 2"; "line 3"; "line 4"]
     Draw.scrolledLines dt lines 1 (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgDefault)
     let txt = CellGrid.toTextTrimmed grid
-    Expect.stringContains txt "line 1" "first visible"
-    Expect.stringContains txt "line 2" "second visible"
-    Expect.stringContains txt "line 3" "third visible"
+    txt |> Expect.stringContains "first visible" "line 1"
+    txt |> Expect.stringContains "second visible" "line 2"
+    txt |> Expect.stringContains "third visible" "line 3"
   }
 
   test "statusBar shows left and right text" {
@@ -267,8 +268,8 @@ let drawTests = testList "Draw primitives render correctly" [
     let dt = DrawTarget.create grid (Rect.create 0 0 20 1)
     Draw.statusBar dt "Ready" "0.5ms" (Theme.hexToRgb Theme.fgDefault) (Theme.hexToRgb Theme.bgStatus)
     let txt = CellGrid.toText grid
-    Expect.stringContains txt "Ready" "left text"
-    Expect.stringContains txt "0.5ms" "right text"
+    txt |> Expect.stringContains "left text" "Ready"
+    txt |> Expect.stringContains "right text" "0.5ms"
   }
 ]
 
@@ -284,7 +285,7 @@ let ansiEmitterTests = testList "AnsiEmitter produces correct ANSI sequences" [
     let fgRgb = Theme.hexToRgb Theme.fgDefault
     let fgCode = sprintf "\x1b[38;2;%d;%d;%dm" (int (Theme.rgbR fgRgb)) (int (Theme.rgbG fgRgb)) (int (Theme.rgbB fgRgb))
     let parts = output.Split(fgCode)
-    Expect.isLessThanOrEqual parts.Length 2 "fg code emitted at most once"
+    (parts.Length, 2) |> Expect.isLessThanOrEqual "fg code emitted at most once"
   }
 
   test "alternating colors emit codes at transitions" {
@@ -294,23 +295,23 @@ let ansiEmitterTests = testList "AnsiEmitter produces correct ANSI sequences" [
     CellGrid.set grid 0 2 (Cell.create 'C' 0x000A1420u 0u CellAttrs.None)
     CellGrid.set grid 0 3 (Cell.create 'D' 0x00283C50u 0u CellAttrs.None)
     let output = AnsiEmitter.emitGridOnly grid
-    Expect.stringContains output "38;2;10;20;32" "fg=0A1420 present"
-    Expect.stringContains output "38;2;40;60;80" "fg=283C50 present"
+    output |> Expect.stringContains "fg=0A1420 present" "38;2;10;20;32"
+    output |> Expect.stringContains "fg=283C50 present" "38;2;40;60;80"
   }
 
   test "emit includes cursor positioning and show/hide" {
     let grid = CellGrid.create 2 2
     let output = AnsiEmitter.emit grid 0 0
-    Expect.stringContains output "\x1b[?25l" "hides cursor"
-    Expect.stringContains output "\x1b[?25h" "shows cursor at end"
-    Expect.stringContains output "\x1b[1;1H" "cursor at 1,1"
+    output |> Expect.stringContains "hides cursor" "\x1b[?25l"
+    output |> Expect.stringContains "shows cursor at end" "\x1b[?25h"
+    output |> Expect.stringContains "cursor at 1,1" "\x1b[1;1H"
   }
 
   test "bold attribute emitted" {
     let grid = CellGrid.create 1 1
     CellGrid.set grid 0 0 (Cell.create 'X' 0x00FFFFFFu 0u CellAttrs.Bold)
     let output = AnsiEmitter.emitGridOnly grid
-    Expect.stringContains output "\x1b[1m" "bold code"
+    output |> Expect.stringContains "bold code" "\x1b[1m"
   }
 
   test "same color adjacent cells emit no extra codes" {
@@ -319,7 +320,7 @@ let ansiEmitterTests = testList "AnsiEmitter produces correct ANSI sequences" [
       CellGrid.set grid 0 i (Cell.create (char (65 + i)) 0x002A2A2Au 0u CellAttrs.None)
     let output = AnsiEmitter.emitGridOnly grid
     let parts = output.Split("\x1b[38;2;42;42;42m")
-    Expect.equal parts.Length 2 "exactly one fg=2A2A2A code"
+    parts.Length |> Expect.equal "exactly one fg=2A2A2A code" 2
   }
 ]
 
@@ -333,11 +334,11 @@ let junctionTests = testList "resolveJunctions connects box-drawing characters" 
     Draw.box (DrawTarget.create g (Rect.create 3 0 10 3)) "" brN bgP |> ignore
     Draw.resolveJunctions dt
     let after = CellGrid.toText g
-    Expect.stringContains after "\u251C" "after should have ├"
-    Expect.stringContains after "\u2524" "after should have ┤"
+    after |> Expect.stringContains "after should have ├" "├"
+    after |> Expect.stringContains "after should have ┤" "┤"
     let lines = after.Split('\n')
-    Expect.stringStarts lines.[0] "\u250C" "top-left stays ┌"
-    Expect.stringEnds (lines.[0].TrimEnd()) "\u2510" "top-right stays ┐"
+    lines.[0] |> Expect.stringStarts "top-left stays ┌" "┌"
+    lines.[0].TrimEnd() |> Expect.stringEnds "top-right stays ┐" "┐"
   }
 
   test "single box unchanged" {
@@ -349,7 +350,7 @@ let junctionTests = testList "resolveJunctions connects box-drawing characters" 
     let before = CellGrid.toText g
     Draw.resolveJunctions dt
     let after = CellGrid.toText g
-    Expect.equal after before "single box should not change"
+    after |> Expect.equal "single box should not change" before
   }
 
   test "side-by-side boxes unchanged" {
@@ -362,7 +363,7 @@ let junctionTests = testList "resolveJunctions connects box-drawing characters" 
     let before = CellGrid.toText g
     Draw.resolveJunctions dt
     let after = CellGrid.toText g
-    Expect.equal after before "side-by-side boxes should not change"
+    after |> Expect.equal "side-by-side boxes should not change" before
   }
 
   test "full layout junctions" {
@@ -383,12 +384,12 @@ let junctionTests = testList "resolveJunctions connects box-drawing characters" 
       Draw.box (DrawTarget.create g rect) (PaneId.displayName pid) bC bg |> ignore
     Draw.resolveJunctions dt
     let lines = (CellGrid.toText g).Split('\n')
-    Expect.stringStarts lines.[7] "\u251C" "Output BL → ├"
-    Expect.isTrue (lines.[7].Contains("\u2524")) "Output BR → ┤"
-    Expect.stringStarts lines.[8] "\u251C" "Editor TL → ├"
-    Expect.isTrue (lines.[8].Contains("\u2524")) "Editor TR → ┤"
-    Expect.stringStarts lines.[0] "\u250C" "Output TL stays ┌"
-    Expect.stringStarts lines.[13] "\u2514" "bottom stays └"
+    lines.[7] |> Expect.stringStarts "Output BL → ├" "├"
+    lines.[7].Contains("┤") |> Expect.isTrue "Output BR → ┤"
+    lines.[8] |> Expect.stringStarts "Editor TL → ├" "├"
+    lines.[8].Contains("┤") |> Expect.isTrue "Editor TR → ┤"
+    lines.[0] |> Expect.stringStarts "Output TL stays ┌" "┌"
+    lines.[13] |> Expect.stringStarts "bottom stays └" "└"
   }
 ]
 
@@ -401,7 +402,7 @@ let performanceTests = testList "Performance stays within allocation budgets" [
       CellGrid.clear grid
     sw.Stop()
     let avgUs = sw.Elapsed.TotalMicroseconds / float iterations
-    Expect.isLessThan avgUs 100.0 (sprintf "clear: %.1f µs" avgUs)
+    (avgUs, 100.0) |> Expect.isLessThan (sprintf "clear: %.1f µs" avgUs)
   }
 
   test "Draw cycle 200x60 under 500µs" {
@@ -424,7 +425,7 @@ let performanceTests = testList "Performance stays within allocation budgets" [
       Draw.text inner 2 0 fgR bgP CellAttrs.None "[15:30:02 ERR] Test failed"
     sw.Stop()
     let avgUs = sw.Elapsed.TotalMicroseconds / float iterations
-    Expect.isLessThan avgUs 500.0 (sprintf "draw: %.1f µs" avgUs)
+    (avgUs, 500.0) |> Expect.isLessThan (sprintf "draw: %.1f µs" avgUs)
   }
 
   test "AnsiEmitter.emit 200x60 under 2ms" {
@@ -449,7 +450,7 @@ let performanceTests = testList "Performance stays within allocation budgets" [
       AnsiEmitter.emit grid 55 5 |> ignore
     sw.Stop()
     let avgUs = sw.Elapsed.TotalMicroseconds / float iterations
-    Expect.isLessThan avgUs 2000.0 (sprintf "emit: %.1f µs" avgUs)
+    (avgUs, 2000.0) |> Expect.isLessThan (sprintf "emit: %.1f µs" avgUs)
   }
 
   test "Full frame cycle 200x60 under 6.9ms (144fps)" {
@@ -487,7 +488,7 @@ let performanceTests = testList "Performance stays within allocation budgets" [
     sw.Stop()
     let avgUs = sw.Elapsed.TotalMicroseconds / float iterations
     let avgMs = avgUs / 1000.0
-    Expect.isLessThan avgMs 6.9 (sprintf "full frame: %.2f ms (%.0f fps)" avgMs (1000.0 / avgMs))
+    (avgMs, 6.9) |> Expect.isLessThan (sprintf "full frame: %.2f ms (%.0f fps)" avgMs (1000.0 / avgMs))
   }
 ]
 
@@ -497,34 +498,34 @@ let cellGridPropertyTests = testList "CellGrid properties" [
       Prop.forAll (Arb.fromGen genCell) (fun cell ->
         let grid = CellGrid.create (r.Height + r.Row + 1) (r.Width + r.Col + 1)
         CellGrid.set grid r.Row r.Col cell
-        Expect.equal (CellGrid.get grid r.Row r.Col) cell "roundtrip"))
+        CellGrid.get grid r.Row r.Col |> Expect.equal "roundtrip" cell))
 
   testPropertyWithConfig propConfig "Rect.splitH conserves total height" <|
     Prop.forAll (Arb.fromGen genSmallRect) (fun r ->
       let splitAt = r.Height / 2
       let top, bot = Rect.splitH splitAt r
-      Expect.equal (top.Height + bot.Height) r.Height "height conserved")
+      top.Height + bot.Height |> Expect.equal "height conserved" r.Height)
 
   testPropertyWithConfig propConfig "Rect.splitV conserves total width" <|
     Prop.forAll (Arb.fromGen genSmallRect) (fun r ->
       let splitAt = r.Width / 2
       let left, right = Rect.splitV splitAt r
-      Expect.equal (left.Width + right.Width) r.Width "width conserved")
+      left.Width + right.Width |> Expect.equal "width conserved" r.Width)
 
   testPropertyWithConfig propConfig "Rect.splitH top/bottom are contiguous" <|
     Prop.forAll (Arb.fromGen genSmallRect) (fun r ->
       let splitAt = r.Height / 2
       let top, bot = Rect.splitH splitAt r
-      Expect.equal top.Row r.Row "top starts at original row"
-      Expect.equal bot.Row (r.Row + top.Height) "bottom starts after top")
+      top.Row |> Expect.equal "top starts at original row" r.Row
+      bot.Row |> Expect.equal "bottom starts after top" (r.Row + top.Height))
 
   testPropertyWithConfig propConfig "get out-of-bounds returns Cell.empty" <|
     fun (PositiveInt rows) (PositiveInt cols) ->
       let rows = min rows 50
       let cols = min cols 50
       let grid = CellGrid.create rows cols
-      Expect.equal (CellGrid.get grid rows cols) Cell.empty "out of bounds"
-      Expect.equal (CellGrid.get grid -1 0) Cell.empty "negative"
+      CellGrid.get grid rows cols |> Expect.equal "out of bounds" Cell.empty
+      CellGrid.get grid -1 0 |> Expect.equal "negative" Cell.empty
 
   testPropertyWithConfig propConfig "set out-of-bounds is always a silent no-op" <|
     Prop.forAll (Arb.fromGen genCell) (fun cell ->
@@ -539,10 +540,10 @@ let cellGridPropertyTests = testList "CellGrid properties" [
       CellGrid.set grid -100 -100 cell
       for r in 0 .. 4 do
         for c in 0 .. 4 do
-          Expect.equal
-            (CellGrid.get grid r c)
-            (CellGrid.get clone r c)
-            (sprintf "cell at (%d,%d) should be unchanged" r c))
+          CellGrid.get grid r c
+          |> Expect.equal
+               (sprintf "cell at (%d,%d) should be unchanged" r c)
+               (CellGrid.get clone r c))
 
   testPropertyWithConfig propConfig "set then get at same position returns the set value" <|
     fun (PositiveInt rows) (PositiveInt cols) ->
@@ -559,16 +560,16 @@ let cellGridPropertyTests = testList "CellGrid properties" [
           (fun (r, c) ->
             let grid = CellGrid.create rows cols
             CellGrid.set grid r c cell
-            Expect.equal (CellGrid.get grid r c) cell "roundtrip"))
+            CellGrid.get grid r c |> Expect.equal "roundtrip" cell))
 ]
 
 let cellGridPoolTests = testList "CellGrid.rent/release" [
   testCase "rent creates grid filled with Cell.empty" <| fun _ ->
     let grid = CellGrid.rent 3 4
-    CellGrid.rows grid |> Expecto.Flip.Expect.equal "rows" 3
-    CellGrid.cols grid |> Expecto.Flip.Expect.equal "cols" 4
-    CellGrid.get grid 0 0 |> Expecto.Flip.Expect.equal "empty cell" Cell.empty
-    CellGrid.get grid 2 3 |> Expecto.Flip.Expect.equal "last cell empty" Cell.empty
+    CellGrid.rows grid |> Expect.equal "rows" 3
+    CellGrid.cols grid |> Expect.equal "cols" 4
+    CellGrid.get grid 0 0 |> Expect.equal "empty cell" Cell.empty
+    CellGrid.get grid 2 3 |> Expect.equal "last cell empty" Cell.empty
     CellGrid.release grid
 
   testCase "rent then release does not throw" <| fun _ ->
@@ -579,19 +580,19 @@ let cellGridPoolTests = testList "CellGrid.rent/release" [
     let grid = CellGrid.rent 2 2
     let cell = Cell.create 'Z' 0xFF0000u 0u CellAttrs.Bold
     CellGrid.set grid 0 1 cell
-    CellGrid.get grid 0 1 |> Expecto.Flip.Expect.equal "roundtrip" cell
+    CellGrid.get grid 0 1 |> Expect.equal "roundtrip" cell
     CellGrid.release grid
 
   testCase "rent array length >= rows * cols" <| fun _ ->
     let grid = CellGrid.rent 5 7
-    (grid.Cells.Length >= 5 * 7) |> Expecto.Flip.Expect.isTrue "pool may over-allocate"
+    (grid.Cells.Length >= 5 * 7) |> Expect.isTrue "pool may over-allocate"
     CellGrid.release grid
 
   testCase "clear works on rented grid" <| fun _ ->
     let grid = CellGrid.rent 3 3
     CellGrid.set grid 1 1 (Cell.create 'A' 0u 0u CellAttrs.None)
     CellGrid.clear grid
-    CellGrid.get grid 1 1 |> Expecto.Flip.Expect.equal "cleared" Cell.empty
+    CellGrid.get grid 1 1 |> Expect.equal "cleared" Cell.empty
     CellGrid.release grid
 ]
 
