@@ -9,6 +9,8 @@ open System.Collections.Generic
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Hosting
 open Microsoft.AspNetCore.Http
+open Microsoft.AspNetCore.Http.Metadata
+open Microsoft.AspNetCore.Routing
 open Microsoft.AspNetCore.Hosting.Server
 open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.Extensions.DependencyInjection
@@ -22,6 +24,22 @@ module WorkerHttpTransport =
   /// Opaque server handle — exposes BaseUrl and Dispose.
   type HttpWorkerServer internal (baseUrl: string, app: WebApplication) =
     member _.BaseUrl = baseUrl
+    /// (HTTP method, route template) for every endpoint this server maps.
+    /// Lets tests prove no endpoint bypasses the declared route table.
+    member _.MappedRoutes : (string * string) list =
+      (app :> IEndpointRouteBuilder).DataSources
+      |> Seq.collect (fun ds -> ds.Endpoints)
+      |> Seq.collect (fun e ->
+        match e with
+        | :? RouteEndpoint as re ->
+          let template = re.RoutePattern.RawText |> Option.ofObj |> Option.defaultValue ""
+          let methods =
+            match re.Metadata.GetMetadata<IHttpMethodMetadata>() with
+            | null -> [ "*" ]
+            | m -> m.HttpMethods |> Seq.toList
+          methods |> List.map (fun m -> m, template)
+        | _ -> [])
+      |> Seq.toList
     interface IAsyncDisposable with
       member _.DisposeAsync() = app.StopAsync() |> ValueTask
     interface IDisposable with
@@ -52,92 +70,188 @@ module WorkerHttpTransport =
     do! ctx.Response.WriteAsync(Serialization.serialize resp)
   }
 
-  /// True for paths that execute F# or mutate worker state — the endpoints a
-  /// cross-site browser page must never reach. (`/diag/threadpool` and
-  /// `/status` are read-only and intentionally absent.)
-  let private isMutatingOrRpcPath (path: string) =
-    path.StartsWith("/eval", StringComparison.Ordinal)
-    || path.StartsWith("/check", StringComparison.Ordinal)
-    || path.StartsWith("/typecheck-symbols", StringComparison.Ordinal)
-    || path.StartsWith("/completions", StringComparison.Ordinal)
-    || path.StartsWith("/shutdown", StringComparison.Ordinal)
-    || path.StartsWith("/reset", StringComparison.Ordinal)
-    || path.StartsWith("/hard-reset", StringComparison.Ordinal)
-    || path.StartsWith("/cancel", StringComparison.Ordinal)
-    || path.StartsWith("/load-script", StringComparison.Ordinal)
-    || path.StartsWith("/run-tests", StringComparison.Ordinal)
-    || path.StartsWith("/run-tests-stream", StringComparison.Ordinal)
-    || path.StartsWith("/hotreload/", StringComparison.Ordinal)
-    || path.StartsWith("/run-app", StringComparison.Ordinal)
-    || path.StartsWith("/stop-app", StringComparison.Ordinal)
-    || path.StartsWith("/await-app-change", StringComparison.Ordinal)
+  /// How the origin gate treats a request.
+  [<RequireQualifiedAccess>]
+  type RouteAccess =
+    /// Executes F# or mutates worker state: any cross-site signal or foreign
+    /// origin is rejected (HttpOriginGuard.decide).
+    | Mutating
+    /// Reads state only: loopback origins pass, foreign origins are rejected.
+    | ReadOnly
+    /// The DevReload SSE stream — the one surface a browser page (the user's
+    /// dev app on a loopback origin) legitimately reads cross-origin.
+    | CrossOriginStream
 
-  /// Origin/CSRF gate for the worker HTTP surface — the F#-executing server.
+  /// Access for a GET route. There is no way to declare a POST read-only:
+  /// every `Post` is Mutating by construction.
+  [<RequireQualifiedAccess>]
+  type GetAccess =
+    | ReadOnly
+    | CrossOriginStream
+
+  /// One worker HTTP route. `routes` below is the single source of truth:
+  /// startServer maps endpoints only through it, and the origin gate
+  /// classifies requests from it.
+  [<RequireQualifiedAccess>]
+  type WorkerRoute =
+    | Post of path: string
+    | Get of path: string * access: GetAccess
+
+  [<RequireQualifiedAccess>]
+  module WorkerRoute =
+    let path (route: WorkerRoute) =
+      match route with
+      | WorkerRoute.Post p -> p
+      | WorkerRoute.Get (p, _) -> p
+    let httpMethod (route: WorkerRoute) =
+      match route with
+      | WorkerRoute.Post _ -> "POST"
+      | WorkerRoute.Get _ -> "GET"
+    let access (route: WorkerRoute) =
+      match route with
+      | WorkerRoute.Post _ -> RouteAccess.Mutating
+      | WorkerRoute.Get (_, GetAccess.ReadOnly) -> RouteAccess.ReadOnly
+      | WorkerRoute.Get (_, GetAccess.CrossOriginStream) -> RouteAccess.CrossOriginStream
+
+  /// The worker's route table. (`/diag/threadpool` and `/status` are read-only
+  /// GETs; nothing reachable by GET executes code or mutates state.)
+  module Routes =
+    let diagThreadpool = WorkerRoute.Get ("/diag/threadpool", GetAccess.ReadOnly)
+    let status = WorkerRoute.Get ("/status", GetAccess.ReadOnly)
+    let eval = WorkerRoute.Post "/eval"
+    let check = WorkerRoute.Post "/check"
+    let typecheckSymbols = WorkerRoute.Post "/typecheck-symbols"
+    let completions = WorkerRoute.Post "/completions"
+    let cancel = WorkerRoute.Post "/cancel"
+    let loadScript = WorkerRoute.Post "/load-script"
+    let reset = WorkerRoute.Post "/reset"
+    let hardReset = WorkerRoute.Post "/hard-reset"
+    let runTests = WorkerRoute.Post "/run-tests"
+    let runTestsStream = WorkerRoute.Post "/run-tests-stream"
+    let testDiscovery = WorkerRoute.Get ("/test-discovery", GetAccess.ReadOnly)
+    let instrumentationMaps = WorkerRoute.Get ("/instrumentation-maps", GetAccess.ReadOnly)
+    let shutdown = WorkerRoute.Post "/shutdown"
+    let warmupContext = WorkerRoute.Get ("/warmup-context", GetAccess.ReadOnly)
+    let hotReload = WorkerRoute.Get ("/hotreload", GetAccess.ReadOnly)
+    let hotReloadToggle = WorkerRoute.Post "/hotreload/toggle"
+    let hotReloadWatchAll = WorkerRoute.Post "/hotreload/watch-all"
+    let hotReloadUnwatchAll = WorkerRoute.Post "/hotreload/unwatch-all"
+    let hotReloadWatchProject = WorkerRoute.Post "/hotreload/watch-project"
+    let hotReloadUnwatchProject = WorkerRoute.Post "/hotreload/unwatch-project"
+    let hotReloadWatchDirectory = WorkerRoute.Post "/hotreload/watch-directory"
+    let hotReloadUnwatchDirectory = WorkerRoute.Post "/hotreload/unwatch-directory"
+    let runApp = WorkerRoute.Post "/run-app"
+    let stopApp = WorkerRoute.Post "/stop-app"
+    let awaitAppChange = WorkerRoute.Post "/await-app-change"
+    let devReload = WorkerRoute.Get ("/__sagefs__/reload", GetAccess.CrossOriginStream)
+
+  let routes : WorkerRoute list = [
+    Routes.diagThreadpool; Routes.status; Routes.eval; Routes.check
+    Routes.typecheckSymbols; Routes.completions; Routes.cancel; Routes.loadScript
+    Routes.reset; Routes.hardReset; Routes.runTests; Routes.runTestsStream
+    Routes.testDiscovery; Routes.instrumentationMaps; Routes.shutdown
+    Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle
+    Routes.hotReloadWatchAll; Routes.hotReloadUnwatchAll
+    Routes.hotReloadWatchProject; Routes.hotReloadUnwatchProject
+    Routes.hotReloadWatchDirectory; Routes.hotReloadUnwatchDirectory
+    Routes.runApp; Routes.stopApp; Routes.awaitAppChange
+    Routes.devReload
+  ]
+
+  /// Declared access of every GET route, matched the way ASP.NET routing
+  /// matches: case-insensitively, trailing slash optional.
+  let private getAccessByPath =
+    let d = Dictionary<string, RouteAccess>(StringComparer.OrdinalIgnoreCase)
+    for route in routes do
+      match route with
+      | WorkerRoute.Get (p, _) -> d[p] <- WorkerRoute.access route
+      | WorkerRoute.Post _ -> ()
+    d
+
+  /// Classify one request. Method-driven: every non-GET/HEAD request is
+  /// Mutating, whatever its path — so a newly mapped POST (or a path the table
+  /// does not know, or `/EVAL` in any casing) can never land on a weaker check.
+  /// GET/HEAD take the declared access of their route; unknown GETs 404 and
+  /// are read-only.
+  let classify (httpMethod: string) (path: string) : RouteAccess =
+    match httpMethod.Trim().ToUpperInvariant() with
+    | "GET" | "HEAD" ->
+      let normalized =
+        match path.Length > 1 && path.EndsWith("/", StringComparison.Ordinal) with
+        | true -> path.TrimEnd('/')
+        | false -> path
+      match getAccessByPath.TryGetValue normalized with
+      | true, access -> access
+      | false, _ -> RouteAccess.ReadOnly
+    | _ -> RouteAccess.Mutating
+
+  [<RequireQualifiedAccess>]
+  type GuardVerdict =
+    | Allow
+    /// Allow, and reflect this (loopback) origin in Access-Control-Allow-Origin.
+    | AllowCrossOrigin of origin: string
+    | Reject of reason: string
+
+  /// The origin/CSRF decision for one worker request — pure, so every route
+  /// and header combination is testable without a server.
   ///
   /// The daemon proxies to the worker with NO browser headers (loopback Host,
   /// no Origin/Sec-Fetch-Site), so those requests pass. A browser page is the
   /// only realistic attacker: cross-site fetches carry Sec-Fetch-Site:
-  /// cross-site and a foreign Origin. Fail closed on those for every endpoint
-  /// except the DevReload SSE stream, which the user's local dev app (a
-  /// loopback origin) legitimately reads cross-origin — that one reflects the
-  /// specific loopback origin instead of `*`.
+  /// cross-site and an Origin. Mutating requests get the daemon's own gate
+  /// (HttpOriginGuard.decide); the DevReload stream reflects a loopback origin
+  /// (never `*`); read-only GETs reject foreign origins.
+  let decide
+    (httpMethod: string)
+    (path: string)
+    (hostHeader: string option)
+    (secFetchSite: string option)
+    (origin: string option)
+    : GuardVerdict =
+    match hostHeader with
+    // Non-loopback Host = DNS rebinding / proxy — reject everything.
+    | Some h when not (SageFs.Server.HttpOriginGuard.isLoopbackHost h) ->
+      GuardVerdict.Reject (sprintf "non-loopback Host %s" h)
+    | _ ->
+      match secFetchSite, origin with
+      // Browser signals absent: daemon proxy, curl, editors — allow.
+      | None, None -> GuardVerdict.Allow
+      | _ ->
+        match classify httpMethod path with
+        | RouteAccess.Mutating ->
+          match SageFs.Server.HttpOriginGuard.decide hostHeader secFetchSite origin with
+          | SageFs.Server.HttpOriginGuard.Verdict.Allow -> GuardVerdict.Allow
+          | SageFs.Server.HttpOriginGuard.Verdict.Reject reason -> GuardVerdict.Reject reason
+        | RouteAccess.CrossOriginStream ->
+          match origin with
+          | Some o when SageFs.Server.HttpOriginGuard.isLoopbackOrigin o -> GuardVerdict.AllowCrossOrigin o
+          | Some o -> GuardVerdict.Reject (sprintf "non-loopback Origin %s" o)
+          | None -> GuardVerdict.Allow
+        | RouteAccess.ReadOnly ->
+          match origin with
+          | Some o when not (SageFs.Server.HttpOriginGuard.isLoopbackOrigin o) ->
+            GuardVerdict.Reject (sprintf "non-loopback Origin %s" o)
+          | _ -> GuardVerdict.Allow
+
+  /// Origin/CSRF gate middleware for the worker HTTP surface — applies `decide`.
   let workerOriginGuard (ctx: HttpContext) (next: Func<Task>) = task {
+    let header (name: string) =
+      match ctx.Request.Headers.TryGetValue(name) with
+      | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(string v)) -> Some (string v)
+      | _ -> None
     let hostHeader =
       match ctx.Request.Host.HasValue with
       | true -> Some ctx.Request.Host.Host
       | false -> None
-    let secFetchSite =
-      match ctx.Request.Headers.TryGetValue("Sec-Fetch-Site") with
-      | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(string v)) -> Some (string v)
-      | _ -> None
-    let origin =
-      match ctx.Request.Headers.TryGetValue("Origin") with
-      | true, v when v.Count > 0 && not (String.IsNullOrWhiteSpace(string v)) -> Some (string v)
-      | _ -> None
-    // Non-loopback Host = DNS rebinding / proxy — reject everything.
-    match hostHeader with
-    | Some h when not (SageFs.Server.HttpOriginGuard.isLoopbackHost h) ->
+    let path = ctx.Request.Path.Value |> Option.ofObj |> Option.defaultValue ""
+    match decide ctx.Request.Method path hostHeader (header "Sec-Fetch-Site") (header "Origin") with
+    | GuardVerdict.Allow -> do! next.Invoke()
+    | GuardVerdict.AllowCrossOrigin o ->
+      ctx.Response.Headers["Access-Control-Allow-Origin"] <- o
+      do! next.Invoke()
+    | GuardVerdict.Reject reason ->
       ctx.Response.StatusCode <- 403
-      do! ctx.Response.WriteAsync("Forbidden: non-loopback Host")
-    | _ ->
-      let path = ctx.Request.Path.Value |> Option.ofObj |> Option.defaultValue ""
-      let isSse = path.StartsWith("/__sagefs__/reload", StringComparison.Ordinal)
-      match secFetchSite, origin with
-      // Browser signals absent: daemon proxy, curl, editors — allow.
-      | None, None -> do! next.Invoke()
-      // The SSE stream is the one surface a browser legitimately reads
-      // cross-origin (user's dev app on a loopback origin). Reject remote
-      // origins; echo the specific loopback origin, never *.
-      | _, _ when isSse ->
-        match origin with
-        | Some o when SageFs.Server.HttpOriginGuard.isLoopbackOrigin o ->
-          ctx.Response.Headers["Access-Control-Allow-Origin"] <- o
-          do! next.Invoke()
-        | Some o ->
-          ctx.Response.StatusCode <- 403
-          do! ctx.Response.WriteAsync(sprintf "Forbidden: non-loopback Origin %s" o)
-        | None -> do! next.Invoke()
-      // Mutating/RPC endpoints: any cross-site signal or foreign origin is
-      // rejected before it can execute F# or mutate watch state.
-      | _ when isMutatingOrRpcPath path ->
-        match secFetchSite with
-        | Some site when site <> "same-origin" && site <> "same-site" && site <> "none" ->
-          ctx.Response.StatusCode <- 403
-          do! ctx.Response.WriteAsync(sprintf "Forbidden: cross-site Sec-Fetch-Site %s" site)
-        | _ ->
-          match origin with
-          | Some o when not (SageFs.Server.HttpOriginGuard.isLoopbackOrigin o) ->
-            ctx.Response.StatusCode <- 403
-            do! ctx.Response.WriteAsync(sprintf "Forbidden: non-loopback Origin %s" o)
-          | _ -> do! next.Invoke()
-      // Read-only GETs (/status, /hotreload, /test-discovery, ...) with
-      // browser signals: allow same-origin/loopback-origin, reject foreign.
-      | _ ->
-        match origin with
-        | Some o when not (SageFs.Server.HttpOriginGuard.isLoopbackOrigin o) ->
-          ctx.Response.StatusCode <- 403
-          do! ctx.Response.WriteAsync(sprintf "Forbidden: non-loopback Origin %s" o)
-        | _ -> do! next.Invoke()
+      do! ctx.Response.WriteAsync(sprintf "Forbidden: %s" reason)
   }
 
   /// Start a Kestrel HTTP server dispatching to the given handler.
@@ -189,8 +303,15 @@ module WorkerHttpTransport =
 
       let inline respond' ctx msg = respond handler ctx msg
 
+      // Every endpoint is mapped through its `Routes` entry, so the verb it is
+      // mapped with and the access the origin gate applies come from one table.
+      let map (route: WorkerRoute) (endpoint: Func<HttpContext, Task>) =
+        match route with
+        | WorkerRoute.Post p -> app.MapPost(p, endpoint)
+        | WorkerRoute.Get (p, _) -> app.MapGet(p, endpoint)
+
       // Diagnostic: ThreadPool state for measuring starvation
-      app.MapGet("/diag/threadpool", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.diagThreadpool (Func<HttpContext, Task>(fun ctx -> task {
         let workerThreads = ref 0
         let completionPortThreads = ref 0
         let maxWorkerThreads = ref 0
@@ -209,12 +330,12 @@ module WorkerHttpTransport =
           completionPortThreads.Value maxCompletionPortThreads.Value minCompletionPortThreads.Value)
       })) |> ignore
 
-      app.MapGet("/status", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.status (Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetStatus rid)
       })) |> ignore
 
-      app.MapPost("/eval", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.eval (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let code = (jsonProp doc "code").GetString()
@@ -222,7 +343,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.EvalCode(code, rid))
       })) |> ignore
 
-      app.MapPost("/check", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.check (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let code = (jsonProp doc "code").GetString()
@@ -230,7 +351,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.CheckCode(code, rid))
       })) |> ignore
 
-      app.MapPost("/typecheck-symbols", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.typecheckSymbols (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let code = (jsonProp doc "code").GetString()
@@ -239,7 +360,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.TypeCheckWithSymbols(code, filePath, rid))
       })) |> ignore
 
-      app.MapPost("/completions", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.completions (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let code = (jsonProp doc "code").GetString()
@@ -248,10 +369,10 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.GetCompletions(code, cursorPos, rid))
       })) |> ignore
 
-      app.MapPost("/cancel", Func<HttpContext, Task>(fun ctx ->
+      map Routes.cancel (Func<HttpContext, Task>(fun ctx ->
         respond' ctx WorkerMessage.CancelEval)) |> ignore
 
-      app.MapPost("/load-script", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.loadScript (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let filePath = (jsonProp doc "filePath").GetString()
@@ -259,14 +380,14 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.LoadScript(filePath, rid))
       })) |> ignore
 
-      app.MapPost("/reset", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.reset (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let rid = (jsonProp doc "replyId").GetString()
         return! respond' ctx (WorkerMessage.ResetSession rid)
       })) |> ignore
 
-      app.MapPost("/hard-reset", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.hardReset (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let rebuild = (jsonProp doc "rebuild").GetBoolean()
@@ -274,7 +395,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.HardResetSession(rebuild, rid))
       })) |> ignore
 
-      app.MapPost("/run-tests", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.runTests (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let testsJson = (jsonProp doc "tests").GetRawText()
@@ -284,7 +405,7 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.RunTests(tests, maxParallelism, rid))
       })) |> ignore
 
-      app.MapPost("/run-tests-stream", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.runTestsStream (Func<HttpContext, Task>(fun ctx -> task {
         let streamActivity = Features.LiveTesting.LiveTestingInstrumentation.activitySource.StartActivity("live_testing.stream")
         let streamSw = System.Diagnostics.Stopwatch.StartNew()
         let! body = readBody ctx
@@ -388,17 +509,17 @@ module WorkerHttpTransport =
         | true -> ()
       })) |> ignore
 
-      app.MapGet("/test-discovery", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.testDiscovery (Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetTestDiscovery rid)
       })) |> ignore
 
-      app.MapGet("/instrumentation-maps", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.instrumentationMaps (Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetInstrumentationMaps rid)
       })) |> ignore
 
-      app.MapPost("/run-app", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.runApp (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let project = (jsonProp doc "project").GetString()
@@ -407,14 +528,14 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.RunApp(project, previous, rid))
       })) |> ignore
 
-      app.MapPost("/stop-app", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.stopApp (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let rid = (jsonProp doc "replyId").GetString()
         return! respond' ctx (WorkerMessage.StopApp rid)
       })) |> ignore
 
-      app.MapPost("/await-app-change", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.awaitAppChange (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let runId = (jsonProp doc "runId").GetString()
@@ -422,18 +543,18 @@ module WorkerHttpTransport =
         return! respond' ctx (WorkerMessage.AwaitAppChange(runId, rid))
       })) |> ignore
 
-      app.MapPost("/shutdown", Func<HttpContext, Task>(fun ctx ->
+      map Routes.shutdown (Func<HttpContext, Task>(fun ctx ->
         respond' ctx WorkerMessage.Shutdown)) |> ignore
 
       // Session context endpoint
-      app.MapGet("/warmup-context", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.warmupContext (Func<HttpContext, Task>(fun ctx -> task {
         let wCtx = getWarmupContext ()
         ctx.Response.ContentType <- "application/json"
         do! ctx.Response.WriteAsync(Serialization.serialize wCtx)
       })) |> ignore
 
       // Hot-reload state endpoints
-      app.MapGet("/hotreload", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.hotReload (Func<HttpContext, Task>(fun ctx -> task {
         let state = !hotReloadStateRef
         let files =
           projectFiles
@@ -442,7 +563,7 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| files = files; watchedCount = HotReloadState.watchedCount state |})
       })) |> ignore
 
-      app.MapPost("/hotreload/toggle", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.hotReloadToggle (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let path = (jsonProp doc "path").GetString()
@@ -452,19 +573,19 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| path = path; watched = isNowWatched |})
       })) |> ignore
 
-      app.MapPost("/hotreload/watch-all", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.hotReloadWatchAll (Func<HttpContext, Task>(fun ctx -> task {
         hotReloadStateRef.Value <- HotReloadState.watchAll projectFiles !hotReloadStateRef
         ctx.Response.ContentType <- "application/json"
         do! ctx.Response.WriteAsync(Serialization.serialize {| watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
       })) |> ignore
 
-      app.MapPost("/hotreload/unwatch-all", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.hotReloadUnwatchAll (Func<HttpContext, Task>(fun ctx -> task {
         hotReloadStateRef.Value <- HotReloadState.unwatchAll !hotReloadStateRef
         ctx.Response.ContentType <- "application/json"
         do! ctx.Response.WriteAsync(Serialization.serialize {| watchedCount = 0 |})
       })) |> ignore
 
-      app.MapPost("/hotreload/watch-project", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.hotReloadWatchProject (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let project = (jsonProp doc "project").GetString()
@@ -473,7 +594,7 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| project = project; watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
       })) |> ignore
 
-      app.MapPost("/hotreload/unwatch-project", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.hotReloadUnwatchProject (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let project = (jsonProp doc "project").GetString()
@@ -482,7 +603,7 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| project = project; watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
       })) |> ignore
 
-      app.MapPost("/hotreload/watch-directory", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.hotReloadWatchDirectory (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let dir = (jsonProp doc "directory").GetString()
@@ -492,7 +613,7 @@ module WorkerHttpTransport =
         do! ctx.Response.WriteAsync(Serialization.serialize {| directory = dir; watchedCount = List.length watched |})
       })) |> ignore
 
-      app.MapPost("/hotreload/unwatch-directory", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.hotReloadUnwatchDirectory (Func<HttpContext, Task>(fun ctx -> task {
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let dir = (jsonProp doc "directory").GetString()
@@ -513,7 +634,7 @@ module WorkerHttpTransport =
       let compilingBytes = Text.Encoding.UTF8.GetBytes("""data: {"type":"compiling"}""" + "\n\n")
       let reloadBytes = Text.Encoding.UTF8.GetBytes("""data: {"type":"reload"}""" + "\n\n")
 
-      app.MapGet("/__sagefs__/reload", Func<HttpContext, Task>(fun ctx -> task {
+      map Routes.devReload (Func<HttpContext, Task>(fun ctx -> task {
         ctx.Response.ContentType <- "text/event-stream"
         ctx.Response.Headers["Cache-Control"] <- "no-cache"
         ctx.Response.Headers["Connection"] <- "keep-alive"
