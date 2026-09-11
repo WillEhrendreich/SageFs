@@ -33,7 +33,6 @@
         <Compile Include="ResilientActor.fs" />
         <Compile Include="ProjectLoading.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
-        <Compile Include="AppRun.fs" />
         <Compile Include="ShadowCopy.fs" />
         <Compile Include="WarmUp.fs" />
         <Compile Include="AspireSetup.fs" />
@@ -99,6 +98,8 @@
         <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />
         <Compile Include="SageFsError.fs" />
+        <!-- After SageFsError: an app state carries the structured error that ended its run. -->
+        <Compile Include="AppRun.fs" />
         <Compile Include="ResultEx.fs" />
         <Compile Include="EvalPipeline.fs" />
         <Compile Include="Affordances.fs" />

@@ -95,6 +95,13 @@ and private watchRun
   (generation: RunGeneration)
   (app: RunningApp)
   : unit =
+  // A watch that cannot go on ends the run truthfully: the app may still be
+  // serving, but this daemon no longer knows, and the card must say so.
+  let lostTrack (reason: SageFsError) : Task<unit> =
+    task {
+      let! _ = ops.EndAppRun sessionId generation app.RunId (AppRunState.LostTrack (app.Project, reason, clock ()))
+      ()
+    }
   let rec poll () : Task<unit> =
     task {
       match! askWorker ops sessionId (WorkerMessage.AwaitAppChange (app.RunId, newReplyId ())) with
@@ -105,9 +112,28 @@ and private watchRun
           do! restartForChanges ops clock readyTimeout sessionId generation project previous
         | RunEnd.Recorded
         | RunEnd.NotCurrent -> ()
-      | Error _ -> ()
+      | Error reason -> do! lostTrack reason
     }
-  Task.Run(fun () -> poll () :> Task) |> ignore
+  let watch () : Task<unit> =
+    task {
+      try
+        do! poll ()
+      with ex ->
+        // Nothing else observes this task, so its failure is reported here and
+        // the run is ended with it rather than left Running forever.
+        Utils.Log.warn "[AppRunOrchestration] Watching %s's app failed: %s" (SessionId.value sessionId) ex.Message
+        try do! lostTrack (SageFsError.Unexpected ex)
+        with inner ->
+          Utils.Log.error "[AppRunOrchestration] Could not record that %s's app was lost: %s" (SessionId.value sessionId) inner.Message
+    }
+  let watching = Task.Run(fun () -> watch () :> Task)
+  watching.ContinueWith(
+    (fun (t: Task) ->
+      match t.Exception with
+      | null -> ()
+      | ex -> Utils.Log.error "[AppRunOrchestration] The app watch task faulted: %s" ex.Message),
+    TaskContinuationOptions.OnlyOnFaulted)
+  |> ignore
 
 and private restartForChanges
   (ops: SessionManagementOps)

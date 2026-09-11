@@ -501,6 +501,51 @@ let runOwnershipTests =
   ]
 
 [<Tests>]
+let lostWatchTests =
+  let within (label: string) (t: Task<AppRunState>) =
+    task {
+      let! first = Task.WhenAny(t :> Task, Task.Delay(TimeSpan.FromSeconds 10.))
+      (first = (t :> Task)) |> Expect.isTrue label
+      return t.Result
+    }
+  testList "AppRunOrchestration lost watch" [
+    testTask "WHY — AppRunOrchestration — a long poll that fails ends the run as lost track, naming why and what to do, because a card saying Running forever lies" {
+      let r = record ()
+      let unreachable (msg: WorkerMessage) : Async<WorkerResponse> =
+        match msg with
+        | WorkerMessage.AwaitAppChange _ -> async { return failwith "Connection refused (127.0.0.1:5555)" }
+        | other -> worker never.Task other
+      let ops = fakeOps (session webLive [ exe web ] AppRunState.NotRunning) unreachable r
+      let settled = settleOn (function AppRunState.Running _ | AppRunState.Starting _ -> false | _ -> true) r
+      let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
+      let! final = within "the run stops claiming to be Running" settled.Task
+      (toView final).State |> Expect.equal "a distinct state: the app's status is unknown" "LostTrack"
+      let message = describeState final
+      message |> Expect.stringContains "says why" "Connection refused"
+      message |> Expect.stringContains "says what to do" "→"
+    }
+
+    testTask "WHY — AppRunOrchestration — a report that throws while ending the run still ends it as lost track because an unobserved failure leaves the card stale" {
+      let r = record ()
+      let change = TaskCompletionSource<WorkerResponse>()
+      let baseOps = fakeOps (session webLive [ exe web ] AppRunState.NotRunning) (worker change.Task) r
+      let reports = ref 0
+      let ops =
+        { baseOps with
+            EndAppRun = fun id generation runId final ->
+              match System.Threading.Interlocked.Increment reports with
+              | 1 -> raise (InvalidOperationException "the owner could not be reached")
+              | _ -> baseOps.EndAppRun id generation runId final }
+      let settled = settleOn (function AppRunState.Running _ | AppRunState.Starting _ -> false | _ -> true) r
+      let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
+      change.SetResult(WorkerResponse.AppRunResult ("w", Ok (AppRunState.Exited (web, 0, at))))
+      let! final = within "the run stops claiming to be Running" settled.Task
+      (toView final).State |> Expect.equal "recorded as lost track" "LostTrack"
+      describeState final |> Expect.stringContains "says why" "the owner could not be reached"
+    }
+  ]
+
+[<Tests>]
 let appSlotTests =
   let runningSlot (generation: int64) = { Generation = RunGeneration generation; State = AppRunState.Running (running "run1") }
   testList "AppRun AppSlot owner decisions" [

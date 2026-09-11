@@ -253,6 +253,9 @@ type AppRunState =
   | RestartRequired of project: string * first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list * at: DateTime
   /// A rebuild of the app failed: the code did not compile, the app did not crash.
   | BuildFailed of project: string * reason: string * at: DateTime * lastAddress: PreviousAddress
+  /// Watching the run failed, so what the app is doing is no longer known: it
+  /// may still be serving, or it may be gone. Says why, and what to do about it.
+  | LostTrack of project: string * reason: SageFsError * at: DateTime
 
 /// What the app state becomes when the session's worker is replaced.
 /// An app being started survives (the card keeps saying what is happening), and
@@ -265,6 +268,8 @@ let acrossWorkerRestart (state: AppRunState) : AppRunState =
   | AppRunState.RestartRequired _
   | AppRunState.BuildFailed _ -> state
   | AppRunState.Running _
+  // Whatever the lost run was doing, it died with the worker that hosted it.
+  | AppRunState.LostTrack _
   | AppRunState.NotRunning -> AppRunState.NotRunning
 
 /// A worker's report that a run ended applies only while that run is current:
@@ -352,6 +357,7 @@ module AppSlot =
     | AppRunState.Exited _
     | AppRunState.Crashed _
     | AppRunState.RestartRequired _
+    | AppRunState.LostTrack _
     | AppRunState.BuildFailed _ ->
       // After a failed rebuild, come back where the app listened so open tabs keep working.
       let previous =
@@ -374,6 +380,7 @@ module AppSlot =
     | AppRunState.Exited _
     | AppRunState.Crashed _
     | AppRunState.RestartRequired _
+    | AppRunState.LostTrack _
     | AppRunState.BuildFailed _ -> StopClaim.StopWorkerApp generation, { slot with Generation = generation }
 
   /// A step is recorded only while its generation still owns the app.
@@ -418,6 +425,9 @@ let describeState (state: AppRunState) : string =
   | AppRunState.Exited (project, code, _) -> sprintf "%s exited with code %d" (projectName project) code
   | AppRunState.Crashed (project, reason, _) -> sprintf "%s crashed: %s" (projectName project) reason
   | AppRunState.BuildFailed (project, reason, _, _) -> sprintf "%s could not be rebuilt: %s" (projectName project) reason
+  | AppRunState.LostTrack (project, reason, _) ->
+    sprintf "Lost track of %s: %s. → It may still be serving: press Run to take it over again, or Stop to end it."
+      (projectName project) (SageFsError.describe reason)
   | AppRunState.RestartRequired (project, first, rest, _) ->
     sprintf "%s must restart: %s" (projectName project) (SageFs.Features.ReloadPlanning.ReloadChange.describeAll first rest)
 
@@ -440,6 +450,7 @@ let toView (state: AppRunState) : AppStateView =
     | AppRunState.Crashed _ -> "Crashed"
     | AppRunState.RestartRequired _ -> "RestartRequired"
     | AppRunState.BuildFailed _ -> "BuildFailed"
+    | AppRunState.LostTrack _ -> "LostTrack"
   let urls, entryPoint, runId =
     match state with
     | AppRunState.Running app ->
@@ -453,6 +464,7 @@ let toView (state: AppRunState) : AppStateView =
     | AppRunState.Exited _
     | AppRunState.Crashed _
     | AppRunState.RestartRequired _
+    | AppRunState.LostTrack _
     | AppRunState.BuildFailed _ -> [], "", ""
   { State = name
     Message = describeState state
