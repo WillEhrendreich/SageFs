@@ -385,6 +385,15 @@ let errorHandlingMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: 
 /// Browser-origin/CSRF gate (see HttpOriginGuard). Rejects cross-site and
 /// non-loopback requests before any route runs; local tooling (curl, MCP,
 /// editors, CLI — no browser headers) passes untouched.
+/// Runs a daemon web host until the daemon's stop token is cancelled.
+let runUntilCancelled (app: WebApplication) (stopping: System.Threading.CancellationToken) : Task =
+  task {
+    // RunAsync ignores the daemon's token; tie the host's own lifetime to it so
+    // cancelling (sagefs stop, /api/shutdown) really stops the server.
+    use _ = stopping.Register(fun () -> app.Lifetime.StopApplication())
+    do! app.RunAsync()
+  }
+
 let originGuardMiddleware (ctx: Microsoft.AspNetCore.Http.HttpContext) (next: Func<Task>) = task {
   let host =
     match ctx.Request.Host.HasValue with
@@ -2123,7 +2132,7 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
     } :> Task
   ) |> ignore
 
-let startMcpServer (cfg: McpServerConfig) =
+let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.CancellationToken) =
   task {
     try
       let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
@@ -2213,7 +2222,7 @@ let startMcpServer (cfg: McpServerConfig) =
           wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount cfg.SharedBindingScope lastEvalContext)
 
       logStartup app cfg.Port logPath otelConfigured
-      do! app.RunAsync()
+      do! runUntilCancelled app stopping
     with
     | :? System.IO.IOException as ex when ex.Message.Contains("address") || ex.Message.Contains("already") ->
       Log.error "Port %d is already in use. Another SageFs instance may be running — try 'sagefs status' or use --mcp-port to pick a different port." cfg.Port

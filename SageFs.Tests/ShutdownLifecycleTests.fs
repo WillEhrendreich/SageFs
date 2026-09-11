@@ -110,3 +110,25 @@ let shutdownLifecycleTests =
           try p.Dispose() with _ -> ()
     }
   ]
+
+[<Tests>]
+let webHostStopTests =
+  testList "Daemon web host stop" [
+    testTask "WHY — McpServer.runUntilCancelled — cancelling the daemon's stop token stops its web host because sagefs stop must end the daemon, not just report success" {
+      let app = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder().Build()
+      app.Urls.Add "http://127.0.0.1:0"
+      let stopping = new System.Threading.CancellationTokenSource()
+      try
+        let started = TaskCompletionSource()
+        app.Lifetime.ApplicationStarted.Register(fun () -> started.TrySetResult() |> ignore) |> ignore
+        let running = SageFs.Server.McpServer.runUntilCancelled app stopping.Token
+        let! _ = Task.WhenAny(started.Task, Task.Delay(TimeSpan.FromSeconds 10.))
+        started.Task.IsCompleted |> Expect.isTrue "the host started"
+        stopping.Cancel()
+        let! first = Task.WhenAny(running, Task.Delay(TimeSpan.FromSeconds 10.))
+        (first = running) |> Expect.isTrue "the host stops once the stop token is cancelled"
+      finally
+        stopping.Dispose()
+        (app :> IAsyncDisposable).DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds 10.) |> ignore
+    }
+  ]

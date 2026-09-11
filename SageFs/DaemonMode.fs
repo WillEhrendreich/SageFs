@@ -1092,7 +1092,8 @@ let getPreviousSessions
 let startDashboardServer
   (log: ILogger)
   (dashboardPort: int)
-  (endpoints: HttpEndpoint list) = task {
+  (endpoints: HttpEndpoint list)
+  (stopping: System.Threading.CancellationToken) = task {
   try
     let builder = WebApplication.CreateBuilder()
     builder.Logging
@@ -1124,7 +1125,7 @@ let startDashboardServer
       SageFs.Server.McpServer.originGuardMiddleware ctx next :> Task)) |> ignore
     app.UseRouting().UseFalco(endpoints) |> ignore
     log.LogInformation("Dashboard available at http://localhost:{Port}/dashboard", dashboardPort)
-    do! app.RunAsync()
+    do! McpServer.runUntilCancelled app stopping
   with ex ->
     log.LogWarning("Dashboard failed to start: {Error}", ex.Message)
 }
@@ -1603,7 +1604,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       ActivityTracker = activityTracker
       LiveSnapshotSink = Some (fun sid snap ->
         SageFs.Features.LiveBindingsAdaptive.update liveBindingsAdaptive sid snap)
-    }
+    } cts.Token
 
   let liveTestTickMs = 25
 
@@ -2144,7 +2145,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let hotReloadProxyEndpoints = createHotReloadProxyEndpoints getWorkerBaseUrl httpClient stateChangedEvent
 
   let dashboardTask =
-    startDashboardServer log dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints)
+    startDashboardServer log dashboardPort (dashboardEndpoints @ hotReloadProxyEndpoints) cts.Token
 
   // Workers handle their own warmup, middleware, and file watching.
   // The daemon just needs to wait for the MCP and dashboard servers.

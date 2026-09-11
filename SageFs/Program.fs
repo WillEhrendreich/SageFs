@@ -161,22 +161,26 @@ type StopKillResult =
 ///   readOnPort     - locate the daemon state (stale-pid / no-daemon cases)
 ///   requestShutdown - graceful HTTP shutdown request
 ///   killProcess    - fallback force-kill of the recorded PID
+///   waitForExit    - whether the daemon's process actually exited after the request
 /// A stop that did nothing is NOT success: "No daemon running" and
 /// "Daemon was not running (stale PID N)" both exit NON-zero so automation can
 /// tell a successful stop from a no-op.
+/// Whether the daemon's process exited after a graceful shutdown request.
+[<RequireQualifiedAccess>]
+type StopWait =
+  | Exited
+  | StillRunning
+
 let stopCommand
   (readOnPort: int -> DaemonInfo option)
   (requestShutdown: int -> bool)
   (killProcess: int -> StopKillResult)
+  (waitForExit: int -> StopWait)
   (mcpPort: int)
   =
   match readOnPort mcpPort with
   | Some info ->
-    match requestShutdown mcpPort with
-    | true ->
-      printfn "Daemon shutting down (PID %d)" info.Pid
-      0
-    | false ->
+    let forceKill () =
       match killProcess info.Pid with
       | StopKilled ->
         printfn "Daemon stopped (PID %d)" info.Pid
@@ -189,6 +193,17 @@ let stopCommand
         eprintfn "Stop daemon error for PID %d: %s" info.Pid message
         printfn "Daemon was not running (stale PID %d)" info.Pid
         1
+    match requestShutdown mcpPort with
+    | true ->
+      // Accepting the request is not stopping: report success once the process is gone.
+      match waitForExit info.Pid with
+      | StopWait.Exited ->
+        printfn "Daemon stopped (PID %d)" info.Pid
+        0
+      | StopWait.StillRunning ->
+        eprintfn "Daemon PID %d did not exit after the shutdown request; killing it" info.Pid
+        forceKill ()
+    | false -> forceKill ()
   | None ->
     printfn "No daemon running"
     1
@@ -204,6 +219,17 @@ let private stopKillProcess (pid: int) =
       StopKilled
   with ex ->
     StopProcessGone ex.Message
+
+/// Waits for the daemon's process to exit after a shutdown request.
+let private stopWaitForExit (pid: int) : StopWait =
+  try
+    use proc = System.Diagnostics.Process.GetProcessById(pid)
+    match proc.WaitForExit(10_000) with
+    | true -> StopWait.Exited
+    | false -> StopWait.StillRunning
+  with
+  | :? ArgumentException -> StopWait.Exited
+  | :? InvalidOperationException -> StopWait.Exited
 
 [<EntryPoint>]
 let main args =
@@ -271,7 +297,7 @@ let main args =
 
   | Stop ->
     let mcpPort = parseMcpPort args
-    stopCommand DaemonState.readOnPort DaemonState.requestShutdown stopKillProcess mcpPort
+    stopCommand DaemonState.readOnPort DaemonState.requestShutdown stopKillProcess stopWaitForExit mcpPort
 
   | Status ->
     let mcpPort = parseMcpPort args
