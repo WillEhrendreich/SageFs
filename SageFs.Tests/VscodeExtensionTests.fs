@@ -190,13 +190,36 @@ module VscodeFixture =
   /// listen before the renderer/workspace it targets has finished loading,
   /// so a connect attempted right after waitForCdp succeeds can still see
   /// ECONNREFUSED or a closed socket. Observed in CI: this raced on 2 of 3
-  /// consecutive journey runs.
-  let rec private connectOverCdpWithRetry (playwright: IPlaywright) (attemptsLeft: int) = task {
-    try
-      return! playwright.Chromium.ConnectOverCDPAsync(sprintf "http://127.0.0.1:%d" cdpPort)
-    with :? PlaywrightException when attemptsLeft > 1 ->
-      do! Task.Delay 1000
-      return! connectOverCdpWithRetry playwright (attemptsLeft - 1)
+  /// consecutive journey runs. If every retry is exhausted, re-probe
+  /// /json/version and the launched process's liveness one last time and
+  /// fold both into the exception — a bare PlaywrightException gives no way
+  /// to tell "VS Code crashed after opening the port" apart from "the port
+  /// is up but Playwright's own connect is refused."
+  let connectOverCdpWithRetry (pid: int) (playwright: IPlaywright) (maxAttempts: int) = task {
+    let mutable result = None
+    let mutable lastError : PlaywrightException option = None
+    let mutable attempt = 1
+    while result.IsNone && attempt <= maxAttempts do
+      try
+        let! b = playwright.Chromium.ConnectOverCDPAsync(sprintf "http://127.0.0.1:%d" cdpPort)
+        result <- Some b
+      with :? PlaywrightException as ex ->
+        lastError <- Some ex
+        if attempt < maxAttempts then do! Task.Delay 1000
+      attempt <- attempt + 1
+    match result with
+    | Some b -> return b
+    | None ->
+      let! stillRespondsToHttp = cdpResponds ()
+      let processState =
+        try
+          let p = Process.GetProcessById(pid)
+          if p.HasExited then sprintf "exited (code %d)" p.ExitCode else "running"
+        with :? ArgumentException -> "not found (already exited and reaped)"
+      let lastMessage = lastError |> Option.map (fun e -> e.Message) |> Option.defaultValue "(no exception captured)"
+      return failwithf
+        "CDP connect failed after %d attempts: %s -- /json/version still responds=%b, launched process (pid %d) is %s"
+        maxAttempts lastMessage stillRespondsToHttp pid processState
   }
 
   /// Ensure a VSCode instance is running and Playwright is connected.
@@ -206,11 +229,11 @@ module VscodeFixture =
     | Some b -> return b
     | None ->
       do! killOrphans ()
-      let _pid = launchVscode workspaceDir disableExtensions
+      let pid = launchVscode workspaceDir disableExtensions
       do! waitForCdp 30_000
       let! playwright = Playwright.CreateAsync()
       pw <- Some playwright
-      let! b = connectOverCdpWithRetry playwright 10
+      let! b = connectOverCdpWithRetry pid playwright 10
       browser <- Some b
       return b
   }
