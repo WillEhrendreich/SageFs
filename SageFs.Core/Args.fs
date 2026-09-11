@@ -162,13 +162,37 @@ let buildWorkerSpawnConfig
   ]
   args, envVars
 
-/// Resolve the FSI host exe path relative to the daemon's own location.
-/// The host runs from its OWN host/ subdir (isolated closure — it must not
-/// share a dir with the daemon's files or its fail-closed manifest check
-/// rightly refuses). Dev: <daemon>/host/ (copied post-build). Tool:
-/// <store>/.../tools/<tfm>/any/host/. Pure: takes the daemon's base dir.
-let hostExePath (daemonBaseDir: string) : string =
-  Path.Combine(daemonBaseDir, "host", "SageFs.Host.exe")
+/// How the daemon starts the FSI host. The host runs from its OWN host/ subdir
+/// beside the daemon (isolated closure — its fail-closed manifest check refuses
+/// a shared dir). Dev: <daemon>/host/. Tool: <store>/.../tools/<tfm>/any/host/.
+[<RequireQualifiedAccess>]
+type HostLaunch =
+  | NativeExecutable of path: string
+  | ViaDotnetMuxer of dotnetPath: string * hostDll: string
+
+/// Windows keeps the native SageFs.Host.exe. Unix runs the dll through the
+/// daemon's own dotnet: the extensionless apphost can only find a per-user
+/// runtime (~/.dotnet) when DOTNET_ROOT is set, which a tool shim does not do.
+let resolveHostLaunch
+  (daemonBaseDir: string)
+  (isWindows: bool)
+  (dotnetMuxer: string)
+  (fileExists: string -> bool)
+  : Result<HostLaunch, string> =
+  let hostDir = Path.Combine(daemonBaseDir, "host")
+  let exe = Path.Combine(hostDir, "SageFs.Host.exe")
+  let dll = Path.Combine(hostDir, "SageFs.Host.dll")
+  match isWindows && fileExists exe, fileExists dll with
+  | true, _ -> Ok (HostLaunch.NativeExecutable exe)
+  | false, true -> Ok (HostLaunch.ViaDotnetMuxer (dotnetMuxer, dll))
+  | false, false ->
+    Error (sprintf "The SageFs FSI host is missing from %s. → Reinstall the tool (dotnet tool update -g sagefs) or rebuild SageFs (dotnet build) so host/SageFs.Host.dll exists." hostDir)
+
+/// The dotnet executable at the root of a runtime dir
+/// (<root>/shared/Microsoft.NETCore.App/<version>/).
+let muxerFromRuntimeDir (runtimeDir: string) (isWindows: bool) : string =
+  let root = Path.GetFullPath(Path.Combine(runtimeDir, "..", "..", ".."))
+  Path.Combine(root, (match isWindows with | true -> "dotnet.exe" | false -> "dotnet"))
 
 
 

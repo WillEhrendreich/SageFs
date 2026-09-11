@@ -170,14 +170,40 @@ let workerSpawnConfigTests =
       |> Option.map snd
       |> Expect.equal "projects env" (Some "MyApp.fsproj")
 
-    testCase "hostExePath resolves host/SageFs.Host.exe beside the daemon" <| fun () ->
-      let tmp = Path.Combine(Path.GetTempPath(), sprintf "sagefs-hostpath-%s" (System.Guid.NewGuid().ToString("N")))
-      Directory.CreateDirectory tmp |> ignore
-      try
-        let path = hostExePath tmp
-        Expect.equal "host exe path" (Path.Combine(tmp, "host", "SageFs.Host.exe")) path
-      finally
-        try Directory.Delete(tmp, true) with _ -> ()
+    testCase "WHY — Args.resolveHostLaunch — Windows runs the native SageFs.Host.exe because users identify workers by that process name" <| fun () ->
+      let daemonDir = Path.Combine(Path.GetTempPath(), "sagefs-daemon")
+      let exe = Path.Combine(daemonDir, "host", "SageFs.Host.exe")
+      let dll = Path.Combine(daemonDir, "host", "SageFs.Host.dll")
+      resolveHostLaunch daemonDir true "dotnet.exe" (fun p -> p = exe || p = dll)
+      |> Expect.equal "native exe" (Ok (HostLaunch.NativeExecutable exe))
+
+    testCase "WHY — Args.resolveHostLaunch — Unix runs the host dll through the daemon's dotnet because the extensionless apphost cannot find a per-user runtime without DOTNET_ROOT" <| fun () ->
+      let daemonDir = Path.Combine(Path.GetTempPath(), "sagefs-daemon")
+      let dll = Path.Combine(daemonDir, "host", "SageFs.Host.dll")
+      let apphost = Path.Combine(daemonDir, "host", "SageFs.Host")
+      resolveHostLaunch daemonDir false "/opt/dotnet/dotnet" (fun p -> p = dll || p = apphost)
+      |> Expect.equal "dotnet muxer + host dll" (Ok (HostLaunch.ViaDotnetMuxer ("/opt/dotnet/dotnet", dll)))
+
+    testList "WHY — Args.resolveHostLaunch — every OS and install shape resolves to an existing file or an actionable error because spawning a missing SageFs.Host.exe faulted every session on Linux" [
+      for isWindows in [ true; false ] do
+        for hasExe in [ true; false ] do
+          for hasDll in [ true; false ] do
+            testCase (sprintf "windows=%b exe=%b dll=%b" isWindows hasExe hasDll) <| fun () ->
+              let exists (p: string) =
+                (hasExe && p.EndsWith("SageFs.Host.exe")) || (hasDll && p.EndsWith("SageFs.Host.dll"))
+              match resolveHostLaunch (Path.GetTempPath()) isWindows "dotnet" exists with
+              | Ok (HostLaunch.NativeExecutable exe) -> exists exe |> Expect.isTrue "launches an existing exe"
+              | Ok (HostLaunch.ViaDotnetMuxer (_, dll)) -> exists dll |> Expect.isTrue "launches an existing dll"
+              | Error msg ->
+                (hasDll || (isWindows && hasExe)) |> Expect.isFalse "errors only when nothing launchable exists"
+                msg |> Expect.stringContains "tells the user what to do" "→"
+    ]
+
+    testCase "WHY — Args.muxerFromRuntimeDir — finds dotnet at the runtime root because the host must run on the daemon's own runtime" <| fun () ->
+      let root = Path.Combine(Path.GetTempPath(), "dn")
+      let runtimeDir = Path.Combine(root, "shared", "Microsoft.NETCore.App", "10.0.12") + string Path.DirectorySeparatorChar
+      muxerFromRuntimeDir runtimeDir false |> Expect.equal "unix muxer" (Path.Combine(root, "dotnet"))
+      muxerFromRuntimeDir runtimeDir true |> Expect.equal "windows muxer" (Path.Combine(root, "dotnet.exe"))
 
     testCase "sets SAGEFS_DAEMON_PID to the spawning process id" <| fun () ->
       let _, envVars = buildWorkerSpawnConfig "s" [] false false true SessionWorkflow.Interactive

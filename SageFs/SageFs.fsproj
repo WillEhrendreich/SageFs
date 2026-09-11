@@ -146,10 +146,16 @@
                           PrivateAssets="all"
                           ReferenceOutputAssembly="false" />
 
-        <!-- PackAsTool drops the daemon's own exe when a referenced project
-             also produces an exe (the pack mis-identifies SageFs.Host.exe as
-             the tool). Explicitly include the daemon exe in the payload. -->
+        <!-- PackAsTool drops the daemon's own apphost when a referenced project
+             also produces one (the pack mis-identifies the host's apphost as
+             the tool). Explicitly include the daemon apphost in the payload —
+             SageFs.exe on Windows, extensionless SageFs on Linux/macOS. -->
         <None Include="$(TargetDir)SageFs.exe"
+              Condition="'$(OS)' == 'Windows_NT'"
+              Pack="true"
+              PackagePath="tools\$(TargetFramework)\any" />
+        <None Include="$(TargetDir)SageFs"
+              Condition="'$(OS)' != 'Windows_NT'"
               Pack="true"
               PackagePath="tools\$(TargetFramework)\any" />
 

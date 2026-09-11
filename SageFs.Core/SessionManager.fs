@@ -238,14 +238,27 @@ module SessionManager =
     (onExited: int -> int -> unit)
     : Result<Process, SageFsError> =
     let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) projects false false autoOpenNamespaces workflow
-    // Spawn the FSI HOST exe (separate minimal-closure process), resolved
-    // relative to the daemon's own location. No more in-process `worker`
-    // dispatch — the host is its own process (see plan: fsi-host-supervisor).
-    let exePath = Args.hostExePath (System.AppContext.BaseDirectory)
+    // Spawn the FSI HOST (separate minimal-closure process), resolved relative
+    // to the daemon's own location (see plan: fsi-host-supervisor).
+    let dotnetMuxer =
+      match Environment.GetEnvironmentVariable "DOTNET_HOST_PATH" with
+      | null | "" ->
+        Args.muxerFromRuntimeDir
+          (System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory())
+          (OperatingSystem.IsWindows())
+      | hostPath -> hostPath
+    match Args.resolveHostLaunch System.AppContext.BaseDirectory (OperatingSystem.IsWindows()) dotnetMuxer File.Exists with
+    | Error reason -> Error (SageFsError.WorkerSpawnFailed reason)
+    | Ok launch ->
 
     let psi = ProcessStartInfo()
-    psi.FileName <- exePath
-    psi.Arguments <- args
+    match launch with
+    | Args.HostLaunch.NativeExecutable exe ->
+      psi.FileName <- exe
+      psi.Arguments <- args
+    | Args.HostLaunch.ViaDotnetMuxer (dotnet, hostDll) ->
+      psi.FileName <- dotnet
+      psi.Arguments <- sprintf "\"%s\" %s" hostDll args
     psi.WorkingDirectory <- workingDir
     psi.UseShellExecute <- false
     psi.CreateNoWindow <- true
