@@ -120,26 +120,6 @@ let prefixPatchIntegrationTests = testList "Harmony prefix patch" [
         failwithf "canary should not error on prefix patch, got: %s" ex.Message
     | None ->
       skiptest "could not snapshot method state on this platform"
-
-  testCase "snapshot before and after prefix patch captures different state" <| fun () ->
-    // This test verifies the full snapshot-patch-validate flow used by
-    // DevReloadInjector.patchMethod after the canary integration.
-    let target = typeof<PrefixRunTarget>.GetMethod("Run")
-    let prefix = typeof<PrefixHook>.GetMethod("Prefix", BindingFlags.Public ||| BindingFlags.Static)
-    match snapshotMethodState target with
-    | Some (jitAddr, preBytes) ->
-      // Pre-bytes should be 16 bytes
-      preBytes.Length
-      |> Expect.equal "pre-bytes should be 16 bytes" 16
-      // Post-patch validation should not throw
-      let harmony = Harmony("sagefs.test.devreload.canary.flow")
-      harmony.Patch(target, prefix = HarmonyMethod(prefix)) |> ignore
-      let result = validateDetourCanary jitAddr preBytes
-      // Result must be one of the three valid DU cases
-      match result with
-      | DetourConfirmed | BytesUnchanged | CanaryError _ -> ()
-    | None ->
-      skiptest "could not snapshot method state on this platform"
 ]
 
 // ============================================================================
@@ -165,23 +145,6 @@ let resilienceTests = testList "detour resilience" [
       detourMethod nullLogger m m
     with ex ->
       failwithf "detourMethod should not propagate: %s" ex.Message
-
-  testCase "detourMethod catch clauses cover TypeLoadException shape" <| fun () ->
-    // Verify the TargetInvocationException → TypeLoadException shape
-    // is properly caught. We can't easily manufacture a real stale FSI
-    // assembly, but we can verify the catch clause pattern matches.
-    let ex =
-      TargetInvocationException(
-        "test",
-        TypeLoadException "Could not load type 'FSI_0020'")
-    // The catch pattern in detourMethod is:
-    //   :? TargetInvocationException as ex when (ex.InnerException :? TypeLoadException)
-    // Verify this pattern matches our test exception shape:
-    match ex :> exn with
-    | :? TargetInvocationException as tie when (tie.InnerException :? TypeLoadException) ->
-      true |> Expect.isTrue "catch clause should match TypeLoadException shape"
-    | _ ->
-      failwith "catch clause pattern did not match — fix is broken"
 ]
 
 [<Tests>]

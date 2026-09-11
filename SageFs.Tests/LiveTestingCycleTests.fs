@@ -778,8 +778,11 @@ let cancellationChainTests = testList "CancellationChain" [
     let _t2 = chain.next()
     // Old token must remain accessible — Register should not throw
     t1.IsCancellationRequested |> Expect.isTrue "t1 cancelled"
-    let _reg = t1.Register(fun () -> ())
-    Expect.isTrue "Register on old token should not throw" true
+    // Registering on an already-cancelled token runs the callback at once;
+    // a disposed source would throw ObjectDisposedException instead.
+    let callbackRan = ref false
+    let _reg = t1.Register(fun () -> callbackRan.Value <- true)
+    callbackRan.Value |> Expect.isTrue "Register on the old token should run its callback, not throw"
     chain.dispose()
   }
 ]

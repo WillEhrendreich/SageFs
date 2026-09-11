@@ -1137,16 +1137,14 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
         id.Length |> Expect.equal "16 chars" 16
         id |> Seq.forall Char.IsAsciiHexDigit |> Expect.isTrue "hex chars"
 
-    testPropertyWithConfig propConfig "GutterIcon.toChar is total — never throws" <|
+    testPropertyWithConfig propConfig "GutterIcon.toChar gives distinct icons distinct glyphs because the gutter must tell the states apart" <|
       Prop.forAll
-        (Arb.fromGen (Gen.elements [
-          GutterIcon.TestDiscovered; GutterIcon.TestPassed; GutterIcon.TestFailed
-          GutterIcon.TestRunning; GutterIcon.TestSkipped; GutterIcon.TestFlaky
-          GutterIcon.Covered; GutterIcon.NotCovered
-        ]))
-        (fun icon ->
-          let _ = GutterIcon.toChar icon
-          true |> Expect.isTrue "no exception")
+        (Arb.fromGen (Gen.two (Gen.elements (
+          Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<GutterIcon>)
+          |> Array.map (fun c -> Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(c, [||]) :?> GutterIcon)))))
+        (fun (a, b) ->
+          (GutterIcon.toChar a = GutterIcon.toChar b)
+          |> Expect.equal (sprintf "%A and %A share a glyph only if they are the same icon" a b) (a = b))
   ]
 ]
 

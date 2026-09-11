@@ -198,9 +198,9 @@ let tests =
         Path.Combine(
           Path.GetTempPath(),
           sprintf "sagefs-shadow-nonexist-%s" (Guid.NewGuid().ToString("N").[..7]))
+      // Throwing here fails the test; a no-op must also not create the directory.
       SageFs.ShadowCopy.cleanupShadowDir fakePath
-      // reaching here without exception is the assertion
-      true |> Expect.isTrue "should not throw on nonexistent dir"
+      Directory.Exists fakePath |> Expect.isFalse "cleanup of a missing dir should leave nothing behind"
 
     testCase "cleanupAllPending clears pendingCleanups" <| fun _ ->
       let dir1 = createTestDir ()

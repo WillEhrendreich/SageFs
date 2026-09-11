@@ -784,7 +784,7 @@ let fileWatcherResilienceTests = testList "FileWatcher resilience" [
     callCount |> Expect.equal "no callbacks triggered" 0
   }
 
-  test "start with mix of valid and invalid directories watches the valid ones" {
+  testTask "start with mix of valid and invalid directories watches the valid ones" {
     let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
     Directory.CreateDirectory(tempDir) |> ignore
     try
@@ -794,8 +794,20 @@ let fileWatcherResilienceTests = testList "FileWatcher resilience" [
         DebounceMs = 200
         ExcludePatterns = []
       }
-      use _watcher = FileWatcher.start config DevReload.DevReloadConfig.defaults (fun _ -> ())
-      true |> Expect.isTrue "watcher started successfully"
+      let reported = System.Threading.Tasks.TaskCompletionSource<string>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+      let watcher =
+        FileWatcher.start config DevReload.DevReloadConfig.defaults (fun change ->
+          reported.TrySetResult change.FilePath |> ignore)
+      try
+        do! File.WriteAllTextAsync(Path.Combine(tempDir, "Probe.fs"), "module Probe")
+        let! _ = System.Threading.Tasks.Task.WhenAny(reported.Task, System.Threading.Tasks.Task.Delay 10_000)
+        reported.Task.IsCompleted
+        |> Expect.isTrue "a .fs file written in the valid directory should be reported"
+        let! (path: string) = reported.Task
+        Path.GetFileName path
+        |> Expect.equal "the reported change is the file written in the valid directory" "Probe.fs"
+      finally
+        watcher.Dispose()
     finally
       Directory.Delete(tempDir, true)
   }
@@ -807,8 +819,10 @@ let fileWatcherResilienceTests = testList "FileWatcher resilience" [
       DebounceMs = 200
       ExcludePatterns = []
     }
-    use _watcher = FileWatcher.start config DevReload.DevReloadConfig.defaults (fun _ -> ())
-    true |> Expect.isTrue "empty watcher is safe"
+    let watcher = FileWatcher.start config DevReload.DevReloadConfig.defaults (fun _ -> ())
+    box watcher |> Expect.isNotNull "start should return a disposable even with nothing to watch"
+    // Disposing must not throw: an exception here fails the test.
+    watcher.Dispose()
   }
 ]
 

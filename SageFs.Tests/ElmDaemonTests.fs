@@ -164,19 +164,24 @@ let elmDaemonTests =
     ]
 
     testList "start" [
-      test "returns a runtime with dispatch that can be called" {
+      testTask "returns a runtime with dispatch that can be called" {
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun _ ->
             WorkerResponse.EvalResult ("r", Ok "done", [], Map.empty))
-        let tracker = ElmDaemonTestHelpers.ModelTracker()
+        let reached = Tasks.TaskCompletionSource<unit>(Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+        // EvalStarted echoes the submitted code into the session's output.
+        let onModelChanged (model: SageFsModel) (_: RenderRegion list) =
+          match model.RecentOutput.GetBuffer("s").Exists(fun line -> line.Text = "dispatched-code") with
+          | true -> reached.TrySetResult () |> ignore
+          | false -> ()
         let runtime =
-          ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
+          ElmDaemon.start deps onModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
-        // dispatch is a function — calling it should not throw
         runtime.Dispatch (
-          SageFsMsg.Event (SageFsEvent.EvalStarted ("s", "code")))
-        Threading.Thread.Sleep(50)
-        true |> Expect.isTrue "dispatch should work without error"
+          SageFsMsg.Event (SageFsEvent.EvalStarted ("s", "dispatched-code")))
+        let! _ = Tasks.Task.WhenAny(reached.Task, Tasks.Task.Delay 5000)
+        reached.Task.IsCompleted
+        |> Expect.isTrue "the dispatched message should reach the model"
       }
 
       test "initial model is rendered on start" {
@@ -218,13 +223,13 @@ let elmDaemonTests =
         |> Expect.isTrue "model should contain the eval result"
       }
 
-      test "dispatching an effect-producing message executes the effect" {
-        let mutable evalCalled = false
+      testTask "dispatching an effect-producing message executes the effect" {
+        let evalRequested = Tasks.TaskCompletionSource<string>(Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
         let deps =
           ElmDaemonTestHelpers.mockDeps (fun msg ->
             match msg with
-            | WorkerMessage.EvalCode _ ->
-              evalCalled <- true
+            | WorkerMessage.EvalCode (code, _) ->
+              evalRequested.TrySetResult code |> ignore
               WorkerResponse.EvalResult ("r", Ok "evaluated!", [], Map.empty)
             | _ ->
               WorkerResponse.WorkerError SageFsError.NoActiveSessions)
@@ -232,17 +237,15 @@ let elmDaemonTests =
         let runtime =
           ElmDaemon.start deps tracker.OnModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
-        // Editor.SubmitLine produces an EditorEffect.RequestEval
+        // Submit produces EditorEffect.RequestEval, which the effect handler
+        // sends to the worker as EvalCode (with the empty buffer's text).
         runtime.Dispatch (
           SageFsMsg.Editor (
             EditorAction.Submit))
 
-        // Wait for effect handler to execute
-        tracker.WaitForUpdate 500
-
-        // The effect handler should have been called
-        // (the eval will fail because buffer is empty, but the flow works)
-        true |> Expect.isTrue "effect cycle should execute"
+        let! _ = Tasks.Task.WhenAny(evalRequested.Task, Tasks.Task.Delay 5000)
+        evalRequested.Task.IsCompleted
+        |> Expect.isTrue "the effect handler should send the eval to the worker"
       }
 
       test "GetModel returns current model state" {

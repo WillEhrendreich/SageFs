@@ -331,10 +331,13 @@ let propertyTests = testList "properties" [
       | true -> SessionStatus.isAlive status |> Expect.isTrue "operational ⇒ alive"
       | false -> ())
 
-  testPropertyWithConfig propConfig "toSessionState is total — never throws" <|
+  testPropertyWithConfig propConfig "toSessionState is Ready exactly when operational and Faulted exactly when not alive" <|
     Prop.forAll (Arb.fromGen genSessionStatus) (fun status ->
-      let _ = SessionStatus.toSessionState status
-      true |> Expect.isTrue "no exception")
+      let state = SessionStatus.toSessionState status
+      (state = SessionState.Ready)
+      |> Expect.equal "Ready ⇔ operational" (SessionStatus.isOperational status)
+      (state = SessionState.Faulted)
+      |> Expect.equal "Faulted ⇔ not alive" (not (SessionStatus.isAlive status)))
 
   testPropertyWithConfig propConfig "parse rejects arbitrary non-status strings" <|
     fun (NonEmptyString s) ->
