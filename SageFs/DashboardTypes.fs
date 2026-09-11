@@ -75,6 +75,7 @@ module Signals =
   /// HARD_RESET) so every control is disabled while ANY action is running.
   let [<Literal>] ActionLoading = "actionLoading"
   let [<Literal>] ConfigLoading = "configLoading"
+  let [<Literal>] LiveTestingLoading = "liveTestingLoading"
   let [<Literal>] TempLoading = "tempLoading"
   let [<Literal>] Theme = "theme"
   let [<Literal>] CursorPos = "cursorPos"
@@ -664,6 +665,8 @@ type DashboardQueries = {
   GetLiveTestingStatus: unit -> string
   /// Whether live testing is currently Active or Inactive.
   GetLiveTestingActive: unit -> bool
+  /// The one live-testing state for a session ("" when no session is viewed).
+  GetLiveTestActivity: string -> Features.LiveTestActivity.LiveTestActivity
   /// Read current EvalTimeline stats from the shared feature push state.
   GetEvalTimeline: unit -> Features.EvalTimeline.TimelineStats
   /// Read current daemon health snapshot from the shared feature push state.

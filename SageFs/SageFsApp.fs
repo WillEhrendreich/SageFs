@@ -242,6 +242,17 @@ module SageFsModel =
     PerSessionLiveTesting = Map.empty
   }
 
+  /// The one live-testing state for a session, as every surface shows it. Tests,
+  /// discovery and activation live on the primary cycle; the build block and the
+  /// pending rebuild come from the session's own cycle when it has one.
+  let liveTestActivityFor (sessionId: string) (model: SageFsModel) : Features.LiveTestActivity.LiveTestActivity =
+    let cycle =
+      match Map.tryFind sessionId model.PerSessionLiveTesting with
+      | Some own -> { model.LiveTesting with Compile = own.Compile; PendingRebuild = own.PendingRebuild }
+      | None -> model.LiveTesting
+    Features.LiveTestActivity.LiveTestActivity.activityInput sessionId cycle
+    |> Features.LiveTestActivity.LiveTestActivity.decide
+
   /// Project the current workflow from the session context.
   /// Defaults to Interactive when no session is active.
   let currentWorkflow (model: SageFsModel) : WorkflowTypes.SessionWorkflow =

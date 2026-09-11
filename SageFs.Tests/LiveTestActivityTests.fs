@@ -27,6 +27,7 @@ let private input (activation: LiveTestingActivation) (discovery: DiscoveryProgr
     Discovery = discovery
     Frameworks = [ "Expecto" ]
     Compile = CompileBlock.NoCompileErrors
+    Rebuild = RebuildProgress.NotRebuilding
     Statuses = List.toArray statuses }
 
 let private active = LiveTestingActivation.Active
@@ -76,6 +77,20 @@ let decideTests =
       LiveTestActivity.decide blocked
       |> Expect.equal "blocked" (LiveTestActivity.BlockedByFailedRebuild ("error FS0001: x", { TestTally.empty with Passed = 1 }))
 
+    testCase "WHY — LiveTestActivity.decide — a pending rebuild is Rebuilding and keeps the last results because a clean result must not show while tests wait on a build" <| fun _ ->
+      LiveTestActivity.decide { input active DiscoveryProgress.Completed [ passed ] with Rebuild = RebuildProgress.Rebuilding 2 }
+      |> Expect.equal "rebuilding" (LiveTestActivity.Rebuilding (2, { TestTally.empty with Passed = 1 }))
+
+    testCase "WHY — LiveTestActivity.decide — a compile error outranks the fallback rebuild because the error is what the user must fix" <| fun _ ->
+      let both = { input active DiscoveryProgress.Completed [ passed ] with Compile = CompileBlock.CompileErrors ("/src/Math.fs", 1); Rebuild = RebuildProgress.Rebuilding 2 }
+      LiveTestActivity.decide both
+      |> Expect.equal "blocked" (LiveTestActivity.BlockedByCompileErrors ("/src/Math.fs", 1, { TestTally.empty with Passed = 1 }))
+
+    testCase "WHY — LiveTestActivity.decide — a new rebuild outranks the last failed one because it is retrying now" <| fun _ ->
+      let retrying = { input active DiscoveryProgress.Completed [ passed ] with Compile = CompileBlock.RebuildFailed "error FS0001: x"; Rebuild = RebuildProgress.Rebuilding 1 }
+      LiveTestActivity.decide retrying
+      |> Expect.equal "rebuilding" (LiveTestActivity.Rebuilding (1, { TestTally.empty with Passed = 1 }))
+
     testCase "WHY — LiveTestActivity.decide — any running test makes it Running because old failures must not hide a run in progress" <| fun _ ->
       LiveTestActivity.decide (input active DiscoveryProgress.Completed [ failed; TestRunStatus.Running ])
       |> Expect.equal "running" (LiveTestActivity.Running { TestTally.empty with Failed = 1; Running = 1 })
@@ -110,6 +125,14 @@ let describeTests =
     testCase "WHY — LiveTestActivity.describe — a failed rebuild gives its first line and says the results are from the last good build" <| fun _ ->
       describe (LiveTestActivity.BlockedByFailedRebuild ("\nMath.fs(3,5): error FS0001: expected int\nMath.fs(9,1): error FS0039: y", { TestTally.empty with Passed = 3 }))
       |> Expect.equal "wording" "Tests could not re-run: Math.fs(3,5): error FS0001: expected int — showing the last good results: 3 passed"
+
+    testCase "WHY — LiveTestActivity.describe — rebuilding says how many tests wait on the build and that the results are the last ones" <| fun _ ->
+      describe (LiveTestActivity.Rebuilding (2, { TestTally.empty with Passed = 3 }))
+      |> Expect.equal "wording" "Rebuilding to re-run 2 tests — showing the last results: 3 passed"
+
+    testCase "WHY — LiveTestActivity.describe — rebuilding for one test reads in the singular" <| fun _ ->
+      describe (LiveTestActivity.Rebuilding (1, TestTally.empty))
+      |> Expect.equal "wording" "Rebuilding to re-run 1 test — showing the last results: none yet"
 
     testCase "WHY — LiveTestActivity.describe — running counts the tests in flight" <| fun _ ->
       describe (LiveTestActivity.Running { TestTally.empty with Running = 2; Passed = 8 })

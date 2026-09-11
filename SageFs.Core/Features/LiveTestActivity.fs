@@ -16,12 +16,19 @@ type TestTally = {
   Disabled: int
 }
 
+/// Whether this session's tests are waiting on a rebuild before they re-run.
+[<RequireQualifiedAccess>]
+type RebuildProgress =
+  | NotRebuilding
+  | Rebuilding of testCount: int
+
 /// What the daemon knows about one session's live testing.
 type ActivityInput = {
   Activation: LiveTestingActivation
   Discovery: DiscoveryProgress
   Frameworks: string list
   Compile: CompileBlock
+  Rebuild: RebuildProgress
   Statuses: TestRunStatus array
 }
 
@@ -33,6 +40,7 @@ type LiveTestActivity =
   | NoTestsFound of frameworks: string list
   | BlockedByCompileErrors of file: string * errorCount: int * lastResults: TestTally
   | BlockedByFailedRebuild of reason: string * lastResults: TestTally
+  | Rebuilding of testCount: int * lastResults: TestTally
   | Running of TestTally
   | Settled of TestTally
 
@@ -97,23 +105,32 @@ module LiveTestActivity =
       match Map.tryFind sessionId state.SessionDiscovery with
       | Some progress -> progress
       | None -> DiscoveryProgress.NotRequested
+    // Only this session's worker restarts for its rebuild; an unattributed one is the primary's.
+    let rebuild =
+      match cycle.PendingRebuild with
+      | Some pending when pending.SessionId = Some sessionId || pending.SessionId = None ->
+        RebuildProgress.Rebuilding pending.Tests.Length
+      | _ -> RebuildProgress.NotRebuilding
     { Activation = state.Activation
       Discovery = discovery
       Frameworks = state.DetectedProviders |> List.map providerName |> List.distinct
       Compile = cycle.Compile
+      Rebuild = rebuild
       Statuses = LiveTestState.statusEntriesForSession sessionId state |> Array.map (fun e -> e.Status) }
 
   /// Discovery states apply only while no tests are known, so a rediscovery never
-  /// hides the latest results; a compile error holds the run back but keeps them.
+  /// hides the latest results; a compile error holds the run back but keeps them,
+  /// and a new rebuild outranks the last failed one because it is retrying.
   let decide (input: ActivityInput) : LiveTestActivity =
     let tally = TestTally.ofStatuses input.Statuses
-    match input.Activation, input.Discovery, input.Statuses.Length, input.Compile with
-    | LiveTestingActivation.Inactive, _, _, _ -> LiveTestActivity.Off
-    | _, DiscoveryProgress.Failed reason, 0, _ -> LiveTestActivity.DiscoveryFailed reason
-    | _, (DiscoveryProgress.InProgress | DiscoveryProgress.NotRequested), 0, _ -> LiveTestActivity.Discovering
-    | _, DiscoveryProgress.Completed, 0, _ -> LiveTestActivity.NoTestsFound input.Frameworks
-    | _, _, _, CompileBlock.CompileErrors (file, errorCount) -> LiveTestActivity.BlockedByCompileErrors (file, errorCount, tally)
-    | _, _, _, CompileBlock.RebuildFailed reason -> LiveTestActivity.BlockedByFailedRebuild (reason, tally)
+    match input.Activation, input.Discovery, input.Statuses.Length, input.Compile, input.Rebuild with
+    | LiveTestingActivation.Inactive, _, _, _, _ -> LiveTestActivity.Off
+    | _, DiscoveryProgress.Failed reason, 0, _, _ -> LiveTestActivity.DiscoveryFailed reason
+    | _, (DiscoveryProgress.InProgress | DiscoveryProgress.NotRequested), 0, _, _ -> LiveTestActivity.Discovering
+    | _, DiscoveryProgress.Completed, 0, _, _ -> LiveTestActivity.NoTestsFound input.Frameworks
+    | _, _, _, CompileBlock.CompileErrors (file, errorCount), _ -> LiveTestActivity.BlockedByCompileErrors (file, errorCount, tally)
+    | _, _, _, _, RebuildProgress.Rebuilding testCount -> LiveTestActivity.Rebuilding (testCount, tally)
+    | _, _, _, CompileBlock.RebuildFailed reason, _ -> LiveTestActivity.BlockedByFailedRebuild (reason, tally)
     | _ when tally.Running > 0 -> LiveTestActivity.Running tally
     | _ -> LiveTestActivity.Settled tally
 
@@ -145,5 +162,8 @@ module LiveTestActivity =
         |> Array.tryFind (fun line -> line <> "")
         |> Option.defaultValue "the rebuild failed"
       sprintf "Tests could not re-run: %s — showing the last good results: %s" firstLine (lastResults tally)
+    | LiveTestActivity.Rebuilding (testCount, tally) ->
+      let plural = match testCount with 1 -> "" | _ -> "s"
+      sprintf "Rebuilding to re-run %d test%s — showing the last results: %s" testCount plural (lastResults tally)
     | LiveTestActivity.Running tally -> sprintf "Running %d of %d tests…" tally.Running (TestTally.total tally)
     | LiveTestActivity.Settled tally -> TestTally.describe tally

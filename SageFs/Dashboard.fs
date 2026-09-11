@@ -493,16 +493,7 @@ let buildDashboardSnapshot
       match q.GetLiveBindings sessionId with
       | Some liveSnap -> renderLiveBindingsPanel (Some liveSnap)
       | None -> renderBindingsPanel (resolveBindingsPanelSnapshot (q.GetBindingScopeSnapshot ()) (q.GetSessionBindings sessionId))
-    let liveTestingActive = q.GetLiveTestingActive ()
-    let liveTestingStatus = q.GetLiveTestingStatus ()
-    let (ltPassed, ltFailed) =
-      match daemonHealth with
-      | Some dh ->
-        match dh.LiveTestingSummary with
-        | Some lt -> (Some lt.Passed, Some lt.Failed)
-        | None -> (None, None)
-      | None -> (None, None)
-    let liveTestingPanel = renderLiveTestingPanel liveTestingActive liveTestingStatus ltPassed ltFailed
+    let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
     let warmupProgress = q.GetWarmupProgress sessionId
     let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanels q sessionId stateStr warmupProgress
@@ -645,16 +636,8 @@ let buildNoSessionSnapshot
         | true -> Some (sprintf "%d connected" tracker.TotalCount)
         | false -> Some (String.Join(" ", parts))
       | None -> None
-    let liveTestingActive = q.GetLiveTestingActive ()
-    let liveTestingStatus = q.GetLiveTestingStatus ()
-    let (ltPassed, ltFailed) =
-      match daemonHealth with
-      | Some dh ->
-        match dh.LiveTestingSummary with
-        | Some lt -> (Some lt.Passed, Some lt.Failed)
-        | None -> (None, None)
-      | None -> (None, None)
-    let liveTestingPanel = renderLiveTestingPanel liveTestingActive liveTestingStatus ltPassed ltFailed
+    // No session in view: the activity across every session's tests.
+    let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity "")
     let snap : DashboardSnapshot = {
       Version = infra.Version
       ConnectionState = DashboardConnectionState.Connected
@@ -1841,6 +1824,19 @@ let createApiDispatchHandler
       do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
   }
 
+/// Live-testing toggle route: dispatch the change, then push so the panel shows the
+/// result. The button's in-flight indicator covers the round trip.
+let createLiveTestingToggleHandler
+  (dispatch: SageFsMsg -> unit)
+  (triggerStateChange: unit -> unit)
+  (msg: SageFsMsg)
+  : HttpHandler =
+  fun ctx -> task {
+    dispatch msg
+    triggerStateChange ()
+    Response.sseStartResponse ctx |> ignore
+  }
+
 /// Create all dashboard routes.
 let createEndpoints
   (q: DashboardQueries)
@@ -2019,6 +2015,8 @@ let createEndpoints
     // TUI client API
     yield get "/api/state" (createApiStateHandler q infra)
     yield post "/api/dispatch" (createApiDispatchHandler a.Dispatch)
+    yield post "/dashboard/live-testing/enable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.EnableLiveTesting)
+    yield post "/dashboard/live-testing/disable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.DisableLiveTesting)
     yield post "/dashboard/session/create" (createCreateSessionHandler infra a.CreateSession a.SwitchSession)
     yield post "/dashboard/config/disable-auto-open" (createToggleWarmupAutoOpenHandler a false)
     yield post "/dashboard/config/enable-auto-open" (createToggleWarmupAutoOpenHandler a true)

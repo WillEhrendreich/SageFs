@@ -151,7 +151,10 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
 
 let liveTestingVisibilityTests = testList "live testing visibility" [
 
-  let mkQueries (isActive: bool) (statusLabel: string) : DashboardQueries =
+  let tally (passed: int) (failed: int) =
+    { SageFs.Features.LiveTestActivity.TestTally.empty with Passed = passed; Failed = failed }
+
+  let mkQueries (activity: SageFs.Features.LiveTestActivity.LiveTestActivity) : DashboardQueries =
     {
       GetSessionState = fun _ -> SessionState.Ready
       GetStatusMsg = fun _ -> None
@@ -170,8 +173,9 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetSessionBindings = fun _ -> [||]
       GetLiveBindings = fun _ -> None
       GetBindingScopeSnapshot = fun () -> None
-      GetLiveTestingStatus = fun () -> statusLabel
-      GetLiveTestingActive = fun () -> isActive
+      GetLiveTestingStatus = fun () -> ""
+      GetLiveTestingActive = fun () -> activity <> SageFs.Features.LiveTestActivity.LiveTestActivity.Off
+      GetLiveTestActivity = fun _ -> activity
       GetEvalTimeline =
         fun () -> SageFs.Features.EvalTimeline.TimelineState.empty |> SageFs.Features.EvalTimeline.timelineStats 20
       GetDaemonHealth = fun () -> None
@@ -203,12 +207,51 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       LiveBindingsAdaptive = None
     }
 
-  testTask "buildDashboardSnapshot carries rebuilding status into the live testing panel" {
+  let panelFor (activity: SageFs.Features.LiveTestActivity.LiveTestActivity) = task {
     let! snap, _, _, _ =
-      buildDashboardSnapshot (mkQueries true "🔨 Rebuilding 2 tests") (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default" None
-    let html = snap.LiveTestingPanel |> renderNode
+      buildDashboardSnapshot (mkQueries activity) (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default" None
+    return snap.LiveTestingPanel |> renderNode
+  }
+
+  testTask "buildDashboardSnapshot carries rebuilding status into the live testing panel" {
+    let! html = panelFor (SageFs.Features.LiveTestActivity.LiveTestActivity.Rebuilding (2, tally 3 0))
     Expect.stringContains html "Live Testing: ON" "dashboard should show live testing as active"
-    Expect.stringContains html "🔨 Rebuilding 2 tests" "dashboard should tell users that tests are waiting on compilation"
+    Expect.stringContains html "Rebuilding to re-run 2 tests" "dashboard should tell users that tests are waiting on the build"
+  }
+
+  testTask "WHY — a discovery that found nothing says so instead of Discovering forever" {
+    let! html = panelFor (SageFs.Features.LiveTestActivity.LiveTestActivity.NoTestsFound [ "Expecto" ])
+    Expect.stringContains html "No tests found (Expecto detected)" "the panel must say discovery finished empty"
+    Expect.isFalse (html.Contains "Discovering") "a finished discovery must not read as still discovering"
+  }
+
+  testTask "WHY — a failed discovery shows its reason because a spinner that never ends explains nothing" {
+    let! html = panelFor (SageFs.Features.LiveTestActivity.LiveTestActivity.DiscoveryFailed "could not load Tests.dll")
+    Expect.stringContains html "Could not discover tests: could not load Tests.dll" "the panel must give the reason"
+  }
+
+  testTask "WHY — the enable toggle posts through Datastar and shows it is turning on because a silent click reads as broken" {
+    let! html = panelFor SageFs.Features.LiveTestActivity.LiveTestActivity.Off
+    Expect.stringContains html "/dashboard/live-testing/enable" "enable must post to the dashboard route"
+    Expect.stringContains html "liveTestingLoading" "enable must bind the in-flight indicator"
+    Expect.stringContains html "Turning on" "enable must say it is turning on while in flight"
+    Expect.isFalse (html.Contains "/api/dispatch") "the toggle must not be a fire-and-forget fetch"
+  }
+
+  testTask "WHY — the live-testing toggle route dispatches the change and pushes because the panel only shows what the model holds" {
+    let dispatched = ResizeArray<SageFsMsg>()
+    let mutable pushes = 0
+    let ctx = Microsoft.AspNetCore.Http.DefaultHttpContext()
+    ctx.Response.Body <- new IO.MemoryStream()
+    do! createLiveTestingToggleHandler dispatched.Add (fun () -> pushes <- pushes + 1) SageFsMsg.EnableLiveTesting ctx
+    Expect.isTrue (dispatched |> Seq.exists (function SageFsMsg.EnableLiveTesting -> true | _ -> false)) "the route dispatches EnableLiveTesting"
+    Expect.equal pushes 1 "the route triggers a dashboard push"
+  }
+
+  testTask "WHY — the disable toggle posts through Datastar and shows it is turning off" {
+    let! html = panelFor (SageFs.Features.LiveTestActivity.LiveTestActivity.Settled (tally 1 0))
+    Expect.stringContains html "/dashboard/live-testing/disable" "disable must post to the dashboard route"
+    Expect.stringContains html "Turning off" "disable must say it is turning off while in flight"
   }
 
   // ─── TDD improvement: OFF state must communicate the cost ───────────────────
@@ -219,9 +262,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
   // unexpected CPU usage or flapping test state. The hint must mention
   // "keystroke" so the cost is explicit.
   testTask "OFF state hint warns that tests run on every keystroke" {
-    let! snap, _, _, _ =
-      buildDashboardSnapshot (mkQueries false "Test cycle idle") (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default" None
-    let html = snap.LiveTestingPanel |> renderNode
+    let! html = panelFor SageFs.Features.LiveTestActivity.LiveTestActivity.Off
     // The "off" hint must mention the cost: keystrokes drive test re-runs.
     Expect.stringContains html "keystroke" "OFF hint must mention that tests run on every keystroke"
   }
@@ -233,20 +274,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
   // can be missed. Passed must be green (--fg-green), failed must be red
   // (--fg-red) so the eyes latch onto the failing count.
   testTask "ON state shows passed count in green and failed count in red" {
-    let ltSummary : SageFs.Features.LiveTestHealthSummary = {
-      TotalTests = 7; Passed = 5; Failed = 2; Running = 0
-    }
-    let healthSnap : SageFs.Features.HealthSnapshot = {
-      DaemonPid = 1; DaemonPort = 37749
-      Uptime = TimeSpan.FromSeconds 1.0; Version = "0.0.0"
-      SessionSummaries = []; LiveTestingSummary = Some ltSummary
-      MemoryMB = 0
-    }
-    let queries = { (mkQueries true "Tests: 5 passed / 2 failed") with
-                      GetDaemonHealth = fun () -> Some healthSnap }
-    let! snap, _, _, _ =
-      buildDashboardSnapshot queries (mkInfra ()) (WorkerProtocol.SessionId.validate "session-1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())) (WorkerProtocol.SessionId.newId ()) "" "default" None
-    let html = snap.LiveTestingPanel |> renderNode
+    let! html = panelFor (SageFs.Features.LiveTestActivity.LiveTestActivity.Settled (tally 5 2))
     Expect.stringContains html "--fg-green" "passed count must use green color"
     Expect.stringContains html "--fg-red" "failed count must use red color"
   }
@@ -258,7 +286,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     let mutable hrFetches = 0
     let mutable wCtxFetches = 0
     let queries =
-      { mkQueries true "Test cycle idle" with
+      { mkQueries (SageFs.Features.LiveTestActivity.LiveTestActivity.Settled (tally 0 0)) with
           GetEvalStats = fun _ ->
             evalFetches <- evalFetches + 1
             System.Threading.Tasks.Task.FromResult SageFs.Affordances.EvalStats.empty

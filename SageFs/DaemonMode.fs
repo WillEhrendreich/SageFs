@@ -1891,6 +1891,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         SageFs.ActiveSession.sessionId model.Sessions.ActiveSessionId
         |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
       SageFs.Features.LiveTesting.LiveTestCycleState.liveTestingStatusBarForSession activeId model.LiveTesting
+    GetLiveTestActivity = fun sessionId ->
+      SageFsModel.liveTestActivityFor sessionId (elmRuntime.GetModel())
     GetLiveTestingActive = fun () ->
       let model = elmRuntime.GetModel()
       match model.LiveTesting.TestState.Activation with

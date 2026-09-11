@@ -1644,53 +1644,74 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
   ]
 
 
-/// Render the live testing panel with ON/OFF toggle and test summary when active.
-let renderLiveTestingPanel (isActive: bool) (statusLabel: string) (testsPassed: int option) (testsFailed: int option) =
+module private LiveTestActivityView =
+  type Activity = Features.LiveTestActivity.LiveTestActivity
+
+  /// Passed in green, failed in red, so one failure is not lost in a green count.
+  let counts (tally: Features.LiveTestActivity.TestTally) : XmlNode list =
+    [ tally.Passed, "var(--fg-green, #27ae60)", "✓"
+      tally.Failed, "var(--fg-red, #e74c3c)", "✗" ]
+    |> List.filter (fun (n, _, _) -> n > 0)
+    |> List.map (fun (n, color, glyph) ->
+      Elem.span [ Attr.style (sprintf "color: %s; margin-right: 0.25rem;" color) ] [ Text.raw (sprintf "%d%s" n glyph) ])
+
+  let header (activity: Activity) : XmlNode list =
+    match activity with
+    | Activity.Off -> [ Text.raw "Live Testing: OFF" ]
+    | Activity.Running tally
+    | Activity.Settled tally
+    | Activity.Rebuilding (_, tally)
+    | Activity.BlockedByCompileErrors (_, _, tally)
+    | Activity.BlockedByFailedRebuild (_, tally) ->
+      match counts tally with
+      | [] -> [ Text.raw "Live Testing: ON" ]
+      | shown -> Text.raw "Live Testing: ON — " :: shown
+    | Activity.Discovering
+    | Activity.DiscoveryFailed _
+    | Activity.NoTestsFound _ -> [ Text.raw "Live Testing: ON" ]
+
+  /// Problems read red, work in progress blue, so the line says at a glance whether to act.
+  let tone (activity: Activity) =
+    match activity with
+    | Activity.DiscoveryFailed _
+    | Activity.BlockedByCompileErrors _
+    | Activity.BlockedByFailedRebuild _ -> "color: var(--fg-red, #e74c3c);"
+    | Activity.Settled tally when tally.Failed > 0 -> "color: var(--fg-red, #e74c3c);"
+    | Activity.Discovering
+    | Activity.Rebuilding _
+    | Activity.Running _ -> "color: var(--fg-blue);"
+    | Activity.Off
+    | Activity.NoTestsFound _
+    | Activity.Settled _ -> ""
+
+  let words (activity: Activity) =
+    match activity with
+    | Activity.Off -> "Enable to run tests on every keystroke and file save."
+    | other -> Features.LiveTestActivity.LiveTestActivity.describe other
+
+/// Render the live testing panel from the session's one activity state: the ON/OFF
+/// header with counts, a toggle that shows it is in flight, and the activity in words.
+let renderLiveTestingPanel (activity: Features.LiveTestActivity.LiveTestActivity) =
+  let endpoint, label, pending =
+    match activity with
+    | Features.LiveTestActivity.LiveTestActivity.Off -> "/dashboard/live-testing/enable", "Enable", "Turning on…"
+    | _ -> "/dashboard/live-testing/disable", "Disable", "Turning off…"
   Elem.div [ Attr.id DomIds.LiveTestingPanel; Attr.class' "panel" ] [
-    Elem.h2 [] [
-      match isActive, testsPassed, testsFailed with
-      | false, _, _ -> Text.raw "Live Testing: OFF"
-      | true, Some p, Some f ->
-        Elem.span [] [ Text.raw "Live Testing: ON — " ]
-        Elem.span [ Attr.style "color: var(--fg-green, #27ae60);" ] [
-          Text.raw (sprintf "%d✓" p)
-        ]
-        Elem.span [] [ Text.raw " " ]
-        Elem.span [ Attr.style "color: var(--fg-red, #e74c3c);" ] [
-          Text.raw (sprintf "%d✗" f)
-        ]
-      | true, _, _ -> Text.raw "Live Testing: ON"
-    ]
+    Elem.h2 [] (LiveTestActivityView.header activity)
     Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
-      match isActive with
-      | false ->
-        Elem.button
-          [ Attr.class' "eval-btn"
-            Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
-            Attr.create "onclick" "fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'enableLiveTesting'})})" ]
-          [ Text.raw "Enable" ]
-      | true ->
-        Elem.button
-          [ Attr.class' "eval-btn"
-            Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
-            Attr.create "onclick" "fetch('/api/dispatch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'disableLiveTesting'})})" ]
-          [ Text.raw "Disable" ]
+      Elem.button
+        [ Attr.class' "eval-btn"
+          Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+          Ds.indicator Signals.LiveTestingLoading
+          Ds.attr' ("disabled", "$liveTestingLoading")
+          Ds.onClick (Ds.post endpoint) ]
+        [ Elem.span [ Ds.show "$liveTestingLoading" ] [ Text.raw ("⏳ " + pending) ]
+          Elem.span [ Ds.show "!$liveTestingLoading" ] [ Text.raw label ] ]
     ]
-    match isActive with
-    | false ->
-      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
-        Text.raw "Enable to run tests on every keystroke and file save."
-      ]
-    | true ->
-      match statusLabel.Length > 0 with
-      | true ->
-        Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
-          Text.raw statusLabel
-        ]
-      | false ->
-        Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem;" ] [
-          Text.raw "Discovering tests…"
-        ]
+    // Reasons carry compiler output, which contains markup characters.
+    Elem.div [ Attr.class' "meta"; Attr.style ("font-size: 0.8rem; " + LiveTestActivityView.tone activity) ] [
+      Text.enc (LiveTestActivityView.words activity)
+    ]
   ]
 
 /// Render session context panel with warmup details (assemblies, namespaces, files).

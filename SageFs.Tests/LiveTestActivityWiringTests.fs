@@ -140,11 +140,33 @@ let activityInputTests =
           Discovery = DiscoveryProgress.Completed
           Frameworks = [ "Expecto" ]
           Compile = CompileBlock.CompileErrors ("/src/Math.fs", 2)
+          Rebuild = RebuildProgress.NotRebuilding
           Statuses = [| passed |] }
 
     testCase "WHY — activityInput — a session never asked to discover is NotRequested because nothing is known about it yet" <| fun _ ->
       (LiveTestActivity.activityInput "cc000003" cycle).Discovery
       |> Expect.equal "not requested" DiscoveryProgress.NotRequested
+
+    testCase "WHY — activityInput — this session's pending rebuild counts its waiting tests because they are about to re-run" <| fun _ ->
+      let rebuilding = { cycle with PendingRebuild = Some { pendingRebuild 7L with Tests = [| mine; theirs |] } }
+      (LiveTestActivity.activityInput sid rebuilding).Rebuild
+      |> Expect.equal "rebuilding two" (RebuildProgress.Rebuilding 2)
+
+    testCase "WHY — activityInput — another session's rebuild is not this session's because only that worker restarts" <| fun _ ->
+      let rebuilding = { cycle with PendingRebuild = Some { pendingRebuild 7L with Tests = [| mine |] } }
+      (LiveTestActivity.activityInput otherSid rebuilding).Rebuild
+      |> Expect.equal "not rebuilding" RebuildProgress.NotRebuilding
+
+    testCase "WHY — liveTestActivityFor — a background session's block comes from its own cycle because each session builds separately" <| fun _ ->
+      let model = activeModel ()
+      let withTest =
+        { model with
+            LiveTesting =
+              { cycle with Compile = CompileBlock.NoCompileErrors }
+            PerSessionLiveTesting =
+              Map.ofList [ sid, { LiveTestCycleState.empty with Compile = CompileBlock.RebuildFailed "error FS0001: x" } ] }
+      SageFsModel.liveTestActivityFor sid withTest
+      |> Expect.equal "blocked by its own rebuild" (LiveTestActivity.BlockedByFailedRebuild ("error FS0001: x", { TestTally.empty with Passed = 1 }))
   ]
 
 [<Tests>]
