@@ -80,7 +80,7 @@ let private withHarness runtime run =
       runtime
       cancellation.Token
       ignore
-      (fun _ _ _ -> ())
+      (fun _ _ -> ())
       (fun _ _ -> ())
       ignore
       (fun _ _ -> ())

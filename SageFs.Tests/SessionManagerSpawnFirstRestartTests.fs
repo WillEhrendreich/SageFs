@@ -66,7 +66,7 @@ let private withHarness runtime run =
       runtime
       cancellation.Token
       ignore
-      (fun _ _ _ -> ())
+      (fun _ _ -> ())
       (fun _ _ -> ())
       ignore
       (fun _ _ -> ())
@@ -458,7 +458,7 @@ let sessionManagerProjectRolesTests =
         }
       let cancellation = new CancellationTokenSource()
       let mailbox, _ =
-        createWith runtime.Runtime cancellation.Token ignore (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
+        createWith runtime.Runtime cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
       try
         let! created =
           mailbox.PostAndAsyncReply(fun reply ->
@@ -555,7 +555,7 @@ let workerFaultReportTests =
         }
       let cancellation = new CancellationTokenSource()
       let mailbox, _ =
-        createWith runtime.Runtime cancellation.Token ignore (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
+        createWith runtime.Runtime cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
       try
         let! created =
           mailbox.PostAndAsyncReply(fun reply ->

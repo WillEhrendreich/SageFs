@@ -349,7 +349,7 @@ let sessionManagerLifecycleTests =
 
     testTask "create session, eval code, stop session" {
       let cts = new CancellationTokenSource(120_000)
-      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
+      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
       let! createResult =
         mgr.PostAndAsyncReply(fun reply ->
@@ -419,7 +419,7 @@ let sessionManagerLifecycleTests =
 
     testTask "worker crash is detected and session cleaned up" {
       let cts = new CancellationTokenSource(120_000)
-      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
+      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
       let! createResult =
         mgr.PostAndAsyncReply(fun reply ->
@@ -463,7 +463,7 @@ let sessionManagerLifecycleTests =
 
     testTask "multiple sessions are independent" {
       let cts = new CancellationTokenSource(120_000)
-      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
+      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
       let create () =
         mgr.PostAndAsyncReply(fun reply ->

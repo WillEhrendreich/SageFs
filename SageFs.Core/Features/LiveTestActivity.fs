@@ -16,18 +16,6 @@ type TestTally = {
   Disabled: int
 }
 
-[<RequireQualifiedAccess>]
-type DiscoveryProgress =
-  | NotRequested
-  | InProgress
-  | Failed of reason: string
-  | Completed
-
-[<RequireQualifiedAccess>]
-type CompileBlock =
-  | NoCompileErrors
-  | CompileErrors of file: string * errorCount: int
-
 /// What the daemon knows about one session's live testing.
 type ActivityInput = {
   Activation: LiveTestingActivation
@@ -44,6 +32,7 @@ type LiveTestActivity =
   | DiscoveryFailed of reason: string
   | NoTestsFound of frameworks: string list
   | BlockedByCompileErrors of file: string * errorCount: int * lastResults: TestTally
+  | BlockedByFailedRebuild of reason: string * lastResults: TestTally
   | Running of TestTally
   | Settled of TestTally
 
@@ -87,6 +76,33 @@ module TestTally =
     | _ -> buckets t
 
 module LiveTestActivity =
+  let private frameworkName (framework: TestFramework) =
+    match framework with
+    | TestFramework.Expecto -> "Expecto"
+    | TestFramework.XUnit -> "xUnit"
+    | TestFramework.NUnit -> "NUnit"
+    | TestFramework.MSTest -> "MSTest"
+    | TestFramework.TUnit -> "TUnit"
+    | TestFramework.Unknown name -> name
+
+  let private providerName (provider: ProviderDescription) =
+    match provider with
+    | ProviderDescription.AttributeBased d -> frameworkName d.Name
+    | ProviderDescription.Custom d -> frameworkName d.Name
+
+  /// What the daemon knows about one session, read from that session's cycle.
+  let activityInput (sessionId: string) (cycle: LiveTestCycleState) : ActivityInput =
+    let state = cycle.TestState
+    let discovery =
+      match Map.tryFind sessionId state.SessionDiscovery with
+      | Some progress -> progress
+      | None -> DiscoveryProgress.NotRequested
+    { Activation = state.Activation
+      Discovery = discovery
+      Frameworks = state.DetectedProviders |> List.map providerName |> List.distinct
+      Compile = cycle.Compile
+      Statuses = LiveTestState.statusEntriesForSession sessionId state |> Array.map (fun e -> e.Status) }
+
   /// Discovery states apply only while no tests are known, so a rediscovery never
   /// hides the latest results; a compile error holds the run back but keeps them.
   let decide (input: ActivityInput) : LiveTestActivity =
@@ -97,8 +113,14 @@ module LiveTestActivity =
     | _, (DiscoveryProgress.InProgress | DiscoveryProgress.NotRequested), 0, _ -> LiveTestActivity.Discovering
     | _, DiscoveryProgress.Completed, 0, _ -> LiveTestActivity.NoTestsFound input.Frameworks
     | _, _, _, CompileBlock.CompileErrors (file, errorCount) -> LiveTestActivity.BlockedByCompileErrors (file, errorCount, tally)
+    | _, _, _, CompileBlock.RebuildFailed reason -> LiveTestActivity.BlockedByFailedRebuild (reason, tally)
     | _ when tally.Running > 0 -> LiveTestActivity.Running tally
     | _ -> LiveTestActivity.Settled tally
+
+  let private lastResults (tally: TestTally) =
+    match TestTally.buckets tally with
+    | "" -> "none yet"
+    | listed -> listed
 
   /// The one wording every surface uses.
   let describe (activity: LiveTestActivity) : string =
@@ -108,13 +130,20 @@ module LiveTestActivity =
     | LiveTestActivity.DiscoveryFailed reason -> sprintf "Could not discover tests: %s" reason
     | LiveTestActivity.NoTestsFound [] -> "No tests found — no test framework detected in this session"
     | LiveTestActivity.NoTestsFound frameworks -> sprintf "No tests found (%s detected)" (String.concat ", " frameworks)
-    | LiveTestActivity.BlockedByCompileErrors (file, errorCount, lastResults) ->
+    | LiveTestActivity.BlockedByCompileErrors (file, errorCount, tally) ->
       let name =
         match System.IO.Path.GetFileName file with
         | null -> file
         | fileName -> fileName
       let plural = match errorCount with 1 -> "" | _ -> "s"
-      let results = match TestTally.buckets lastResults with "" -> "none yet" | listed -> listed
-      sprintf "Waiting for %s to compile (%d error%s) — showing the last good results: %s" name errorCount plural results
+      sprintf "Waiting for %s to compile (%d error%s) — showing the last good results: %s" name errorCount plural (lastResults tally)
+    | LiveTestActivity.BlockedByFailedRebuild (reason, tally) ->
+      // A build reason is many lines; the first says what broke.
+      let firstLine =
+        reason.Split '\n'
+        |> Array.map (fun line -> line.Trim())
+        |> Array.tryFind (fun line -> line <> "")
+        |> Option.defaultValue "the rebuild failed"
+      sprintf "Tests could not re-run: %s — showing the last good results: %s" firstLine (lastResults tally)
     | LiveTestActivity.Running tally -> sprintf "Running %d of %d tests…" tally.Running (TestTally.total tally)
     | LiveTestActivity.Settled tally -> TestTally.describe tally

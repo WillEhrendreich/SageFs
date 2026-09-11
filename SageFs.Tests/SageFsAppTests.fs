@@ -2059,8 +2059,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update SageFsMsg.EnableLiveTesting model
     newModel.LiveTesting.TestState.Activation
     |> Expect.equal "should be active" Features.LiveTesting.LiveTestingActivation.Active
-    Set.contains (SageFs.WorkerProtocol.SessionId.value sessionId) newModel.LiveTesting.TestState.PendingDiscoverySessions
-    |> Expect.isTrue "should mark the running session as pending discovery"
+    newModel.LiveTesting.TestState.SessionDiscovery |> Map.tryFind (SageFs.WorkerProtocol.SessionId.value sessionId)
+    |> Expect.equal "should mark the running session's discovery in progress" (Some Features.LiveTesting.DiscoveryProgress.InProgress)
     effects |> Expect.isNonEmpty "should request initial discovery when no tests are discovered yet"
     effects
     |> List.exists (fun effect ->

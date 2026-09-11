@@ -688,10 +688,9 @@ let performGracefulShutdown
   | true -> ()
 }
 
-/// Handle test discovery from SessionManager → Elm model.
 /// Scans project source files with tree-sitter, then dispatches
 /// locations and test cases to the Elm loop.
-let handleTestDiscovery
+let private dispatchDiscoveredTests
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (workingDir: string)
   (log: ILogger)
@@ -738,12 +737,28 @@ let handleTestDiscovery
   match Array.isEmpty locations with
   | false -> dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected (WorkerProtocol.SessionId.value sid, locations)))
   | true -> ()
-  match Array.isEmpty tests with
-  | false -> dispatch (SageFsMsg.Event (SageFsEvent.TestsDiscovered (WorkerProtocol.SessionId.value sid, tests)))
-  | true -> ()
+  // Zero tests is still an answer: it completes this session's discovery.
+  dispatch (SageFsMsg.Event (SageFsEvent.TestsDiscovered (WorkerProtocol.SessionId.value sid, tests)))
   match List.isEmpty providers with
   | false -> dispatch (SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
   | true -> ()
+
+/// Handle a worker's test discovery report from SessionManager → Elm model.
+/// A failure reaches the model with its reason instead of only the log.
+let handleTestDiscovery
+  (readSnapshot: unit -> SessionManager.QuerySnapshot)
+  (workingDir: string)
+  (log: ILogger)
+  (dispatch: SageFsMsg -> unit)
+  (sid: WorkerProtocol.SessionId)
+  (report: SessionManager.TestDiscoveryReport) =
+  match report with
+  | SessionManager.TestDiscoveryReport.Discovered (tests, providers) ->
+    dispatchDiscoveredTests readSnapshot workingDir log dispatch sid tests providers
+  | SessionManager.TestDiscoveryReport.DiscoveryFailed reason ->
+    let id = WorkerProtocol.SessionId.value sid
+    log.LogWarning("[Daemon] Test discovery failed for {SessionId}: {Reason}", id, reason)
+    dispatch (SageFsMsg.Event (SageFsEvent.TestDiscoveryFailed (id, reason)))
 
 /// Parse warmup progress string ("step/total msg") into structured fields.
 let tryParseWarmupProgress (progress: string) =
@@ -1502,8 +1517,8 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   use cts = infra.Cts
   // Test discovery callback — set after elmRuntime is created
-  let mutable onTestDiscoveryCallback : (WorkerProtocol.SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit) =
-    fun _ _ _ -> ()
+  let mutable onTestDiscoveryCallback : (WorkerProtocol.SessionId -> SessionManager.TestDiscoveryReport -> unit) =
+    fun _ _ -> ()
   let mutable onInstrumentationMapsCallback : (WorkerProtocol.SessionId -> Features.LiveTesting.InstrumentationMap array -> unit) =
     fun _ _ -> ()
   let mutable onWarmupProgressCallback : (string -> string -> unit) =
@@ -1514,7 +1529,7 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   let sessionManager, readSnapshot =
     SessionManager.create cts.Token
       (fun () -> stateChangedEvent.Trigger SessionProgress)
-      (fun sid tests providers -> onTestDiscoveryCallback sid tests providers)
+      (fun sid report -> onTestDiscoveryCallback sid report)
       (fun sid maps -> onInstrumentationMapsCallback sid maps)
       (fun sid -> stateChangedEvent.Trigger (SessionReady sid))
       (fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress)

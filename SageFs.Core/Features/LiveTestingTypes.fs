@@ -1356,6 +1356,23 @@ type CachedViews = {
   EditorAnnotations: LineAnnotation array
 }
 
+/// Where one session's test discovery stands.
+[<RequireQualifiedAccess>]
+type DiscoveryProgress =
+  | NotRequested
+  | InProgress
+  | Failed of reason: string
+  | Completed
+
+/// What is holding the next test run back.
+[<RequireQualifiedAccess>]
+type CompileBlock =
+  | NoCompileErrors
+  /// The saved file failed to type-check.
+  | CompileErrors of file: string * errorCount: int
+  /// The rebuild that re-runs the tests failed: build errors, or the worker never came back.
+  | RebuildFailed of reason: string
+
 type LiveTestState = {
   SourceLocations: SourceTestLocation array
   DiscoveredTests: TestCase array
@@ -1389,8 +1406,8 @@ type LiveTestState = {
   /// snapshot tagged with an older generation is stale and must be rejected,
   /// and a re-discovery that removed renamed/deleted tests is observable.
   DiscoveryGeneration: int64
-  /// Sessions currently running an explicit discovery request triggered by live-testing enablement.
-  PendingDiscoverySessions: Set<string>
+  /// Where each session's test discovery stands; a session missing here was never asked.
+  SessionDiscovery: Map<string, DiscoveryProgress>
   LastDecision: LiveTestingDecision option
 }
 
@@ -1490,7 +1507,7 @@ module LiveTestState =
     Cached = CachedViews.empty
     LastDiscoveryTime = System.DateTimeOffset.MinValue
     DiscoveryGeneration = 0L
-    PendingDiscoverySessions = Set.empty
+    SessionDiscovery = Map.empty
     LastDecision = None
   }
 
@@ -3740,6 +3757,8 @@ type LiveTestCycleState = {
   NextRebuildGeneration: int64
   PendingRebuild: PendingRebuildState option
   QueuedRebuild: QueuedRebuildState option
+  /// What is holding this session's next test run back.
+  Compile: CompileBlock
 }
 
 module LiveTestCycleState =
@@ -3760,6 +3779,7 @@ module LiveTestCycleState =
     NextRebuildGeneration = 0L
     PendingRebuild = None
     QueuedRebuild = None
+    Compile = CompileBlock.NoCompileErrors
   }
 
   let liveTestingStatusBarForSession (activeSessionId: string) (state: LiveTestCycleState) : string =
@@ -3961,7 +3981,7 @@ module LiveTestCycleState =
   /// Handles an FCS type-check result: updates state and produces effects.
   /// Success: updates symbol graph, analysis cache, adaptive debounce, then
   /// calls afterTypeCheck to emit RunAffectedTests if symbols changed.
-  /// Failed: no-op (diagnostics handled elsewhere).
+  /// Failed: records the file as blocking the run, then falls back to a rebuild.
   /// Cancelled: updates adaptive debounce backoff.
   let handleFcsResult
     (result: FcsTypeCheckResult)
@@ -4054,9 +4074,15 @@ module LiveTestCycleState =
       | None ->
           state
 
+    /// A clean type-check lifts only its own file's block; another file may still be broken.
+    let liftedBy (filePath: string) (block: CompileBlock) =
+      match block with
+      | CompileBlock.CompileErrors (blocked, _) when blocked = filePath -> CompileBlock.NoCompileErrors
+      | other -> other
+
     match result with
     | FcsTypeCheckResult.Success (filePath, refs) ->
-      let s1 = onFcsComplete filePath refs s
+      let s1 = { onFcsComplete filePath refs s with Compile = liftedBy filePath s.Compile }
       let trigger = s.LastTrigger
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
@@ -4079,7 +4105,7 @@ module LiveTestCycleState =
       let s1' = { s1 with TestState = { s1.TestState with LastDecision = outcome.Decision } }
       let effects', s2 = storePendingRebuild filePath s1'.LatestAnalysisIdentity outcome.Effects s1'
       effects', storeQueuedRebuild filePath s1'.LatestAnalysisIdentity queuedOutcome.Effects s2
-    | FcsTypeCheckResult.Failed (filePath, _errors) ->
+    | FcsTypeCheckResult.Failed (filePath, errors) ->
       let effects =
         TestCycleEffects.fallbackRebuildAfterFailedTypeCheck
           filePath
@@ -4094,7 +4120,9 @@ module LiveTestCycleState =
           { s.TestState with RunPhases = Map.empty }
           s.LastTiming
           s.InstrumentationMaps
-      let effects', s' = storePendingRebuild filePath s.LatestAnalysisIdentity effects s
+      // A failed check has at least one error, even when none came back as text.
+      let blocked = { s with Compile = CompileBlock.CompileErrors (filePath, max 1 errors.Length) }
+      let effects', s' = storePendingRebuild filePath s.LatestAnalysisIdentity effects blocked
       effects', storeQueuedRebuild filePath s.LatestAnalysisIdentity queuedEffects s'
     | FcsTypeCheckResult.Cancelled _ ->
       [], onFcsCanceled s

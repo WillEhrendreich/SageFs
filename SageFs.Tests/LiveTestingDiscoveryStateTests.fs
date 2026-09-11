@@ -101,7 +101,7 @@ let tests =
       let state =
         { LiveTestState.empty with
             Activation = LiveTestingActivation.Active
-            PendingDiscoverySessions = Set.ofList ["session-1"] }
+            SessionDiscovery = Map.ofList [ "session-1", DiscoveryProgress.InProgress ] }
 
       state
       |> LiveTestState.requiresPrimingEval
@@ -194,7 +194,7 @@ let mcpDiscoverySemanticsTests =
       let state =
         { LiveTestState.empty with
             Activation = LiveTestingActivation.Active
-            PendingDiscoverySessions = Set.ofList ["session-1"] }
+            SessionDiscovery = Map.ofList [ "session-1", DiscoveryProgress.InProgress ] }
       let ctx = mkCtxWithState state
 
       let! (json: string) = getLiveTestStatus ctx "copilot" None
@@ -230,7 +230,7 @@ let mcpDiscoverySemanticsTests =
       let state =
         { LiveTestState.empty with
             Activation = LiveTestingActivation.Active
-            PendingDiscoverySessions = Set.ofList ["session-1"] }
+            SessionDiscovery = Map.ofList [ "session-1", DiscoveryProgress.InProgress ] }
       let ctx = mkCtxWithState state
 
       let! (json: string) = getTestTrace ctx

@@ -290,6 +290,7 @@ type SageFsEvent =
   // ── Live testing ──
   | TestLocationsDetected of sessionId: string * locations: Features.LiveTesting.SourceTestLocation array
   | TestsDiscovered of sessionId: string * tests: Features.LiveTesting.TestCase array
+  | TestDiscoveryFailed of sessionId: string * reason: string
   | TestRunStarted of testIds: Features.LiveTesting.TestId array * sessionId: string option
   | TestResultsBatch of results: Features.LiveTesting.TestRunResult array
   | TestRunCompleted of sessionId: string option

@@ -71,6 +71,11 @@ let decideTests =
       LiveTestActivity.decide blocked
       |> Expect.equal "blocked" (LiveTestActivity.BlockedByCompileErrors ("/src/Math.fs", 2, { TestTally.empty with Passed = 1; Stale = 1 }))
 
+    testCase "WHY — LiveTestActivity.decide — a failed rebuild blocks the run with its reason and keeps the last results because nothing re-ran" <| fun _ ->
+      let blocked = { input active DiscoveryProgress.Completed [ passed ] with Compile = CompileBlock.RebuildFailed "error FS0001: x" }
+      LiveTestActivity.decide blocked
+      |> Expect.equal "blocked" (LiveTestActivity.BlockedByFailedRebuild ("error FS0001: x", { TestTally.empty with Passed = 1 }))
+
     testCase "WHY — LiveTestActivity.decide — any running test makes it Running because old failures must not hide a run in progress" <| fun _ ->
       LiveTestActivity.decide (input active DiscoveryProgress.Completed [ failed; TestRunStatus.Running ])
       |> Expect.equal "running" (LiveTestActivity.Running { TestTally.empty with Failed = 1; Running = 1 })
@@ -101,6 +106,10 @@ let describeTests =
     testCase "WHY — LiveTestActivity.describe — a compile block names the file and says the results are from the last good build" <| fun _ ->
       describe (LiveTestActivity.BlockedByCompileErrors ("/src/Math.fs", 2, { TestTally.empty with Passed = 3 }))
       |> Expect.equal "wording" "Waiting for Math.fs to compile (2 errors) — showing the last good results: 3 passed"
+
+    testCase "WHY — LiveTestActivity.describe — a failed rebuild gives its first line and says the results are from the last good build" <| fun _ ->
+      describe (LiveTestActivity.BlockedByFailedRebuild ("\nMath.fs(3,5): error FS0001: expected int\nMath.fs(9,1): error FS0039: y", { TestTally.empty with Passed = 3 }))
+      |> Expect.equal "wording" "Tests could not re-run: Math.fs(3,5): error FS0001: expected int — showing the last good results: 3 passed"
 
     testCase "WHY — LiveTestActivity.describe — running counts the tests in flight" <| fun _ ->
       describe (LiveTestActivity.Running { TestTally.empty with Running = 2; Passed = 8 })

@@ -42,6 +42,21 @@ module SessionManager =
     ProjectRoles: ClassifiedProject list
   }
 
+  /// What a worker said when asked for its tests.
+  [<RequireQualifiedAccess>]
+  type TestDiscoveryReport =
+    | Discovered of tests: Features.LiveTesting.TestCase array * providers: Features.LiveTesting.ProviderDescription list
+    | DiscoveryFailed of reason: string
+
+  module TestDiscoveryReport =
+    let ofResponse (response: WorkerResponse) : TestDiscoveryReport =
+      match response with
+      | WorkerResponse.InitialTestDiscovery (tests, providers) -> TestDiscoveryReport.Discovered (tests, providers)
+      | WorkerResponse.WorkerError err -> TestDiscoveryReport.DiscoveryFailed (SageFsError.describe err)
+      | other ->
+        let case, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(other, typeof<WorkerResponse>)
+        TestDiscoveryReport.DiscoveryFailed (sprintf "Unexpected reply to test discovery: %s" case.Name)
+
   [<RequireQualifiedAccess>]
   type SessionCommand =
     | CreateSession of
@@ -73,7 +88,7 @@ module SessionManager =
     | TouchSession of SessionId
     | WorkerExited of SessionId * workerPid: int * exitCode: int
     | WorkerReady of SessionId * workerPid: int * baseUrl: string * SessionProxy
-    | WorkerTestDiscovery of SessionId * tests: Features.LiveTesting.TestCase array * providers: Features.LiveTesting.ProviderDescription list
+    | WorkerTestDiscovery of SessionId * TestDiscoveryReport
     | WorkerSpawnFailed of SessionId * workerPid: int * string
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
@@ -575,7 +590,7 @@ module SessionManager =
     (runtime: SessionManagerRuntime)
     (ct: CancellationToken)
     (onSessionProgressChanged: unit -> unit)
-    (onTestDiscovery: SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit)
+    (onTestDiscovery: SessionId -> TestDiscoveryReport -> unit)
     (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit)
     (onSessionReady: SessionId -> unit)
     (onWarmupProgress: SessionId -> string -> unit)
@@ -1053,13 +1068,13 @@ module SessionManager =
                   try
                     let rid = System.Guid.NewGuid().ToString("N")
                     let! resp = proxy (WorkerMessage.GetTestDiscovery rid)
-                    match resp with
-                    | WorkerResponse.InitialTestDiscovery(tests, providers) ->
-                      inbox.Post(SessionCommand.WorkerTestDiscovery(id, tests, providers))
-                    | _ -> ()
-                  with ex ->
+                    inbox.Post(SessionCommand.WorkerTestDiscovery(id, TestDiscoveryReport.ofResponse resp))
+                  with
+                  | :? OperationCanceledException -> ()
+                  | ex ->
                     Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "test_discovery" :> obj))
                     Log.error "[SessionManager] Test discovery failed for %s: %s\n%s" (SessionId.value id) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                    inbox.Post(SessionCommand.WorkerTestDiscovery(id, TestDiscoveryReport.DiscoveryFailed ex.Message))
                 }, ct)
                 // Fetch instrumentation maps from the worker
                 Async.Start(async {
@@ -1079,8 +1094,8 @@ module SessionManager =
             // Session was stopped before port discovery completed — ignore
             return state
 
-        | SessionCommand.WorkerTestDiscovery(id, tests, providers) ->
-          onTestDiscovery id tests providers
+        | SessionCommand.WorkerTestDiscovery(id, report) ->
+          onTestDiscovery id report
           return state
 
         | SessionCommand.WorkerSpawnFailed(id, workerPid, msg) ->
@@ -1489,7 +1504,7 @@ module SessionManager =
   let create
     (ct: CancellationToken)
     (onSessionProgressChanged: unit -> unit)
-    (onTestDiscovery: SessionId -> Features.LiveTesting.TestCase array -> Features.LiveTesting.ProviderDescription list -> unit)
+    (onTestDiscovery: SessionId -> TestDiscoveryReport -> unit)
     (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit)
     (onSessionReady: SessionId -> unit)
     (onWarmupProgress: SessionId -> string -> unit)
