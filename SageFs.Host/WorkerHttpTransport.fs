@@ -402,8 +402,9 @@ module WorkerHttpTransport =
         let! body = readBody ctx
         use doc = JsonDocument.Parse(body)
         let project = (jsonProp doc "project").GetString()
+        let previous = SageFs.WorkerProtocol.Serialization.deserialize<AppRun.PreviousAddress> ((jsonProp doc "previous").GetRawText())
         let rid = (jsonProp doc "replyId").GetString()
-        return! respond' ctx (WorkerMessage.RunApp(project, rid))
+        return! respond' ctx (WorkerMessage.RunApp(project, previous, rid))
       })) |> ignore
 
       app.MapPost("/stop-app", Func<HttpContext, Task>(fun ctx -> task {

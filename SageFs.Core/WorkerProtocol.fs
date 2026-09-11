@@ -128,7 +128,7 @@ module WorkerProtocol =
     | RunTests of tests: Features.LiveTesting.TestCase array * maxParallelism: int * replyId: string
     | GetTestDiscovery of replyId: string
     | GetInstrumentationMaps of replyId: string
-    | RunApp of project: string * replyId: string
+    | RunApp of project: string * previous: AppRun.PreviousAddress * replyId: string
     | StopApp of replyId: string
     /// Long poll: answered when the app is no longer Running with this run id.
     | AwaitAppChange of runId: string * replyId: string

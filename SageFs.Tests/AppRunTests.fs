@@ -170,27 +170,27 @@ let private profile urls env : LaunchConfig =
 let planLaunchTests =
   testList "AppRun planLaunch" [
     testCase "WHY — AppRun.planLaunch — without a profile the content root is the project dir and the port is free because a fixed 5000 collides across sessions" <| fun _ ->
-      let plan = planLaunch projectPath LaunchConfig.NoProfile
+      let plan = planLaunch projectPath LaunchConfig.NoProfile PreviousAddress.NoPreviousAddress
       plan.ContentRoot |> Expect.equal "content root" projectDir
       plan.EnvironmentVariables |> Expect.equal "only the content root" [ ("ASPNETCORE_CONTENTROOT", projectDir) ]
       plan.UrlPolicy |> Expect.equal "free loopback port when the app configures none" UrlPolicy.FreeLoopbackPortIfUnset
 
     testCase "WHY — AppRun.planLaunch — profile urls become ASPNETCORE_URLS because the project's configured address must be respected" <| fun _ ->
-      let plan = planLaunch projectPath (profile [ "http://localhost:5043"; "https://localhost:7043" ] [])
+      let plan = planLaunch projectPath (profile [ "http://localhost:5043"; "https://localhost:7043" ] []) PreviousAddress.NoPreviousAddress
       plan.EnvironmentVariables
       |> List.contains ("ASPNETCORE_URLS", "http://localhost:5043;https://localhost:7043")
       |> Expect.isTrue "urls joined with ';'"
       plan.UrlPolicy |> Expect.equal "project-configured" UrlPolicy.ProjectConfigured
 
     testCase "WHY — AppRun.planLaunch — profile env vars override ours with one entry per key because the project's own settings win" <| fun _ ->
-      let plan = planLaunch projectPath (profile [] [ "ASPNETCORE_CONTENTROOT", "/elsewhere"; "X", "1" ])
+      let plan = planLaunch projectPath (profile [] [ "ASPNETCORE_CONTENTROOT", "/elsewhere"; "X", "1" ]) PreviousAddress.NoPreviousAddress
       plan.EnvironmentVariables
       |> Expect.equal "profile wins, one entry per key" [ "ASPNETCORE_CONTENTROOT", "/elsewhere"; "X", "1" ]
       plan.ContentRoot |> Expect.equal "content root follows the override" "/elsewhere"
 
     testProperty "WHY — AppRun.planLaunch — planned env var keys are always distinct because a duplicate key makes the effective value order-dependent" <| fun (keys: string list) ->
       let env = keys |> List.filter (String.IsNullOrWhiteSpace >> not) |> List.map (fun k -> k, "v")
-      let plan = planLaunch projectPath (profile [ "http://localhost:1" ] env)
+      let plan = planLaunch projectPath (profile [ "http://localhost:1" ] env) PreviousAddress.NoPreviousAddress
       let planned = plan.EnvironmentVariables |> List.map fst
       planned = List.distinct planned
   ]
@@ -271,4 +271,21 @@ let restartWordingTests =
     testCase "WHY — AppRun.toView — a restart-required run reports its own state name because clients switch on it" <| fun _ ->
       (toView (AppRunState.RestartRequired ("/src/Web/Web.fsproj", typeChange, [], at))).State
       |> Expect.equal "state name" "RestartRequired"
+  ]
+
+[<Tests>]
+let reuseAddressTests =
+  let projectPath = Path.Combine(Path.GetTempPath(), "src", "Web", "Web.fsproj")
+  testList "AppRun planLaunch reuse" [
+    testCase "WHY — AppRun.planLaunch — a restart reuses the previous address when the project configures none because the user's open tab must keep working" <| fun _ ->
+      let plan = planLaunch projectPath LaunchConfig.NoProfile (PreviousAddress.ReuseAddress "http://127.0.0.1:5123")
+      plan.EnvironmentVariables |> List.contains (urlsVar, "http://127.0.0.1:5123") |> Expect.isTrue "listens at the previous address"
+      plan.UrlPolicy |> Expect.equal "the reused address is not overridden by a free port" UrlPolicy.ReusedAddress
+
+    testCase "WHY — AppRun.planLaunch — the project's configured address wins over the previous one because the app's own choice wins" <| fun _ ->
+      let config =
+        LaunchConfig.Profile { Name = "Web"; ApplicationUrls = [ "http://localhost:5043" ]; EnvironmentVariables = [] }
+      let plan = planLaunch projectPath config (PreviousAddress.ReuseAddress "http://127.0.0.1:5123")
+      plan.EnvironmentVariables |> List.contains (urlsVar, "http://localhost:5043") |> Expect.isTrue "the project's address"
+      plan.UrlPolicy |> Expect.equal "project-configured" UrlPolicy.ProjectConfigured
   ]

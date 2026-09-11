@@ -147,6 +147,14 @@ let parseLaunchSettings (json: string) : Result<LaunchConfig, string> =
 type UrlPolicy =
   | ProjectConfigured
   | FreeLoopbackPortIfUnset
+  /// A restarted run listens where the previous one did, so open browser tabs keep working.
+  | ReusedAddress
+
+/// Where the previous run of this app listened, if it is being restarted.
+[<RequireQualifiedAccess>]
+type PreviousAddress =
+  | NoPreviousAddress
+  | ReuseAddress of url: string
 
 type LaunchPlan = {
   ContentRoot: string
@@ -166,7 +174,7 @@ let private lastWins (pairs: (string * string) list) =
 
 /// Run a project the way `dotnet run` would: content root at the project dir,
 /// launch-profile env vars, and profile urls as ASPNETCORE_URLS.
-let planLaunch (projectPath: string) (config: LaunchConfig) : LaunchPlan =
+let planLaunch (projectPath: string) (config: LaunchConfig) (previous: PreviousAddress) : LaunchPlan =
   let projectDir =
     match Path.GetDirectoryName(Path.GetFullPath projectPath) with
     | null -> Path.GetFullPath "."
@@ -175,17 +183,16 @@ let planLaunch (projectPath: string) (config: LaunchConfig) : LaunchPlan =
     match config with
     | LaunchConfig.NoProfile -> [], []
     | LaunchConfig.Profile p -> p.EnvironmentVariables, p.ApplicationUrls
-  let urlVars =
-    match urls with
-    | [] -> []
-    | urls -> [ (urlsVar, String.Join(";", urls)) ]
+  // The project's own address wins; a restart otherwise keeps the previous one.
+  let urlVars, policy =
+    match urls, previous with
+    | _ :: _, _ -> [ (urlsVar, String.Join(";", urls)) ], UrlPolicy.ProjectConfigured
+    | [], PreviousAddress.ReuseAddress url -> [ (urlsVar, url) ], UrlPolicy.ReusedAddress
+    | [], PreviousAddress.NoPreviousAddress -> [], UrlPolicy.FreeLoopbackPortIfUnset
   let env = lastWins ([ (contentRootVar, projectDir) ] @ profileEnv @ urlVars)
   { ContentRoot = env |> List.find (fun (k, _) -> k = contentRootVar) |> snd
     EnvironmentVariables = env
-    UrlPolicy =
-      match urls with
-      | [] -> UrlPolicy.FreeLoopbackPortIfUnset
-      | _ -> UrlPolicy.ProjectConfigured }
+    UrlPolicy = policy }
 
 [<RequireQualifiedAccess>]
 type AppEndpoint =

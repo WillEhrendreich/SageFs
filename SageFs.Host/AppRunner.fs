@@ -214,7 +214,8 @@ let private launch
         match plan.UrlPolicy with
         | UrlPolicy.FreeLoopbackPortIfUnset ->
           builder.ConfigureAppConfiguration(fun (_: HostBuilderContext) (config: IConfigurationBuilder) -> defaultUrlIfUnset config) |> ignore
-        | UrlPolicy.ProjectConfigured -> ()
+        | UrlPolicy.ProjectConfigured
+        | UrlPolicy.ReusedAddress -> ()
         hostBuilding.TrySetResult() |> ignore
       | "HostBuilt", (:? IHost as host) ->
         match host.Services.GetService(typeof<IHostApplicationLifetime>) with

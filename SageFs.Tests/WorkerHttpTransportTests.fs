@@ -97,7 +97,7 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.CompletionResult(rid, ["System"; "String"])
   | WorkerMessage.CancelEval ->
     return WorkerResponse.EvalCancelled true
-  | WorkerMessage.RunApp(_, rid)
+  | WorkerMessage.RunApp(_, _, rid)
   | WorkerMessage.StopApp rid
   | WorkerMessage.AwaitAppChange(_, rid) ->
     return WorkerResponse.AppRunResult(rid, Ok AppRun.AppRunState.NotRunning)

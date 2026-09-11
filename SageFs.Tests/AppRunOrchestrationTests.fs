@@ -66,14 +66,15 @@ let private never = TaskCompletionSource<WorkerResponse>()
 /// unless the test supplies one.
 let private worker (appChange: Task<WorkerResponse>) (msg: WorkerMessage) : Async<WorkerResponse> =
   match msg with
-  | WorkerMessage.RunApp (_, rid) -> async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.Running (running "run1"))) }
+  | WorkerMessage.RunApp (_, _, rid) -> async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.Running (running "run1"))) }
   | WorkerMessage.StopApp rid -> async { return WorkerResponse.AppRunResult (rid, Ok AppRunState.NotRunning) }
   | WorkerMessage.AwaitAppChange _ -> Async.AwaitTask appChange
   | other -> failwithf "unexpected worker message %A" other
 
 let private messageName (msg: WorkerMessage) =
   match msg with
-  | WorkerMessage.RunApp (project, _) -> sprintf "worker:run %s" project
+  | WorkerMessage.RunApp (project, PreviousAddress.NoPreviousAddress, _) -> sprintf "worker:run %s" project
+  | WorkerMessage.RunApp (project, PreviousAddress.ReuseAddress url, _) -> sprintf "worker:run %s at %s" project url
   | WorkerMessage.StopApp _ -> "worker:stop"
   | WorkerMessage.AwaitAppChange (runId, _) -> sprintf "worker:await %s" runId
   | other -> sprintf "worker:%A" other
@@ -146,7 +147,7 @@ let runAppTests =
       let r = record ()
       let refusing (msg: WorkerMessage) =
         match msg with
-        | WorkerMessage.RunApp (project, rid) ->
+        | WorkerMessage.RunApp (project, _, rid) ->
           async { return WorkerResponse.AppRunResult (rid, Error (SageFsError.AppRunFailed (project, "Web has no entry point"))) }
         | other -> worker never.Task other
       let ops = fakeOps (session webLive [ exe web ] AppRunState.NotRunning) refusing r
@@ -238,4 +239,71 @@ let endAppRunTests =
     testCase "WHY — AppRun.applyEnd — ignores an end after the user already stopped the app because stop is final" <| fun _ ->
       applyEnd AppRunState.NotRunning "run1" (AppRunState.Exited (web, 0, at))
       |> Expect.equal "still stopped" AppRunState.NotRunning
+  ]
+
+[<Tests>]
+let restartForChangesTests =
+  let typeChange = SageFs.Features.ReloadPlanning.ReloadChange.TypeChanged "TodoItem"
+  /// A worker whose first run ends RestartRequired and whose relaunch is run2.
+  let restarting (msg: WorkerMessage) : Async<WorkerResponse> =
+    match msg with
+    | WorkerMessage.RunApp (_, PreviousAddress.NoPreviousAddress, rid) ->
+      async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.Running (running "run1"))) }
+    | WorkerMessage.RunApp (_, PreviousAddress.ReuseAddress _, rid) ->
+      async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.Running (running "run2"))) }
+    | WorkerMessage.AwaitAppChange ("run1", rid) ->
+      async { return WorkerResponse.AppRunResult (rid, Ok (AppRunState.RestartRequired (web, typeChange, [], at))) }
+    | other -> worker never.Task other
+  let settleOn (pick: AppRunState -> bool) (r: Recorded) (ops: SessionManagementOps) =
+    let settled = TaskCompletionSource<AppRunState>()
+    { ops with
+        SetAppState = fun _ state ->
+          r.States.Enqueue state
+          match pick state with
+          | true -> settled.TrySetResult state |> ignore
+          | false -> ()
+          Task.FromResult(()) },
+    settled
+  let within (t: Task<AppRunState>) =
+    task {
+      let! first = Task.WhenAny(t :> Task, Task.Delay(TimeSpan.FromSeconds 10.))
+      (first = (t :> Task)) |> Expect.isTrue "the restart reaches its final state instead of hanging"
+      return t.Result
+    }
+  testList "AppRunOrchestration restart for changes" [
+    testTask "WHY — AppRunOrchestration — a run that ends RestartRequired is rebuilt and relaunched at the same address because the user's open tab must keep working" {
+      let r = record ()
+      let baseOps =
+        { fakeOps (session webLive [ exe web ] AppRunState.NotRunning) restarting r with
+            RestartSession = fun _ rebuild ->
+              r.Calls.Enqueue (sprintf "restart rebuild=%b" rebuild)
+              Task.FromResult(Ok "restarted") }
+      let ops, relaunched =
+        settleOn (function AppRunState.Running app -> app.RunId = "run2" | _ -> false) r baseOps
+      let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
+      let! _ = within relaunched.Task
+      calls r
+      |> List.filter (fun c -> not (c.StartsWith("worker:await", StringComparison.Ordinal)))
+      |> Expect.equal "run, rebuild, wait for Ready, relaunch at the old address"
+        [ sprintf "worker:run %s" web; "restart rebuild=true"; "await-ready"; sprintf "worker:run %s at http://127.0.0.1:5123" web ]
+      states r
+      |> List.exists (function
+        | AppRunState.Starting (_, StartPhase.RebuildingForChanges (c, []), _) -> c = typeChange
+        | _ -> false)
+      |> Expect.isTrue "the card said it was rebuilding for the change"
+    }
+
+    testTask "WHY — AppRunOrchestration — a failed rebuild ends Crashed with the build error because the card must say why the app did not come back" {
+      let r = record ()
+      let baseOps =
+        { fakeOps (session webLive [ exe web ] AppRunState.NotRunning) restarting r with
+            RestartSession = fun _ _ -> Task.FromResult(Error (SageFsError.HardResetFailed "error FS0001: build broke")) }
+      let ops, crashed = settleOn (function AppRunState.Crashed _ -> true | _ -> false) r baseOps
+      let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
+      match! within crashed.Task with
+      | AppRunState.Crashed (project, reason, _) ->
+        project |> Expect.equal "the project" web
+        reason |> Expect.stringContains "the build error" "build broke"
+      | other -> failtestf "expected Crashed, got %A" other
+    }
   ]

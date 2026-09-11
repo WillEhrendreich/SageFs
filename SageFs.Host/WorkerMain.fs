@@ -131,14 +131,14 @@ let shouldQuarantineAssembly (assemblyName: string) =
 
 /// How the worker runs its session's executable project (see AppRunner).
 type AppRunHandlers = {
-  Run: string -> Async<Result<AppRun.AppRunState, SageFsError>>
+  Run: string -> AppRun.PreviousAddress -> Async<Result<AppRun.AppRunState, SageFsError>>
   Stop: unit -> Async<Result<AppRun.AppRunState, SageFsError>>
   AwaitChange: string -> Async<AppRun.AppRunState>
 }
 
 /// For hosts that do not run apps (test harnesses).
 let noAppRuns : AppRunHandlers = {
-  Run = fun project -> async { return Error (SageFsError.AppRunFailed (project, "This host does not run apps.")) }
+  Run = fun project _ -> async { return Error (SageFsError.AppRunFailed (project, "This host does not run apps.")) }
   Stop = fun () -> async { return Ok AppRun.AppRunState.NotRunning }
   AwaitChange = fun _ -> async { return AppRun.AppRunState.NotRunning }
 }
@@ -265,8 +265,8 @@ let handleMessage
     | WorkerMessage.GetInstrumentationMaps _ ->
       return WorkerResponse.InstrumentationMapsResult("", [||])
 
-    | WorkerMessage.RunApp(project, replyId) ->
-      let! result = appRuns.Run project
+    | WorkerMessage.RunApp(project, previous, replyId) ->
+      let! result = appRuns.Run project previous
       return WorkerResponse.AppRunResult(replyId, result)
 
     | WorkerMessage.StopApp replyId ->
@@ -682,7 +682,7 @@ let run (sessionId: string) (port: int) = async {
         (HotReloadState.watchedInDirectory projectDir result.HotReloadStateRef.Value).Length projectDir
     | _ -> ()
   let appRuns : AppRunHandlers = {
-    Run = fun project -> async {
+    Run = fun project previous -> async {
       let prepared =
         AppRunner.resolveProjectAssembly result.ProjectTargets project
         |> Result.bind AppRunner.entryPointOf
@@ -690,7 +690,7 @@ let run (sessionId: string) (port: int) = async {
       match prepared with
       | Error reason -> return Error (SageFsError.AppRunFailed (project, reason))
       | Ok (entry, config) ->
-        let! state = AppRunner.start appRunner project entry (AppRun.planLaunch project config) |> Async.AwaitTask
+        let! state = AppRunner.start appRunner project entry (AppRun.planLaunch project config previous) |> Async.AwaitTask
         match state with
         | AppRun.AppRunState.Running _ -> watchForHotReload project
         | _ -> ()

@@ -434,7 +434,7 @@ let workerProtocolTests =
           StartedAt = at }
 
       testCase "WHY — WorkerMessage.RunApp — round-trips because daemon and worker must agree on the project to run" <| fun _ ->
-        let msg = WorkerMessage.RunApp(project, "r1")
+        let msg = WorkerMessage.RunApp(project, SageFs.AppRun.PreviousAddress.ReuseAddress "http://127.0.0.1:5123", "r1")
         let _, result = roundTrip<WorkerMessage> msg
         result |> Expect.equal "round-trip" msg
 
@@ -467,7 +467,7 @@ let workerProtocolTests =
         result |> Expect.equal "round-trip" resp
 
       testCase "WHY — HttpWorkerClient.toRoute — RunApp posts the project to /run-app because the worker route table is shared" <| fun _ ->
-        let method, path, body = HttpWorkerClient.toRoute (WorkerMessage.RunApp(project, "r1"))
+        let method, path, body = HttpWorkerClient.toRoute (WorkerMessage.RunApp(project, SageFs.AppRun.PreviousAddress.ReuseAddress "http://127.0.0.1:5123", "r1"))
         method |> Expect.equal "method" "POST"
         path |> Expect.equal "path" "/run-app"
         body |> Expect.isSome "has a body"

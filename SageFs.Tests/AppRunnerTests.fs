@@ -31,7 +31,7 @@ let private timeouts : AppRunner.StartTimeouts =
 
 let private noEnv : AppRunner.SetEnv = fun _ -> ()
 
-let private plan (project: string) = planLaunch project LaunchConfig.NoProfile
+let private plan (project: string) = planLaunch project LaunchConfig.NoProfile PreviousAddress.NoPreviousAddress
 
 let private serving (body: string) : AppRunner.EntryPoint =
   { Name = "Web.Program.main"
