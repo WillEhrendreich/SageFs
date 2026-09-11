@@ -202,12 +202,6 @@ type NoInliningTargets =
   | SyntaxTargets of zeroBasedLines: Set<int>
   | UnparsedFragment
 
-let private isFunctionHead (pat: SynPat) =
-  match pat with
-  | SynPat.LongIdent(argPats = SynArgPats.Pats (_ :: _)) -> true
-  | SynPat.LongIdent(argPats = SynArgPats.NamePatPairs(pats = _ :: _)) -> true
-  | _ -> false
-
 let private keywordLine (binding: SynBinding) =
   let (SynBinding(trivia = trivia)) = binding
   trivia.LeadingKeyword.Range.StartLine - 1
@@ -219,7 +213,7 @@ let rec private noInliningLines (decls: SynModuleDecl list) : int list =
     | SynModuleDecl.Let(bindings = bindings) ->
       bindings
       |> List.filter (fun (SynBinding(headPat = pat; trivia = trivia)) ->
-        isFunctionHead pat && not trivia.LeadingKeyword.IsAnd)
+        SageFs.Features.ReloadPlanning.isFunctionHead pat && not trivia.LeadingKeyword.IsAnd)
       |> List.map keywordLine
     | SynModuleDecl.NestedModule(decls = inner) -> noInliningLines inner
     | SynModuleDecl.Types(typeDefns = defns) ->
@@ -233,7 +227,7 @@ let rec private noInliningLines (decls: SynModuleDecl list) : int list =
         |> List.choose (fun m ->
           match m with
           | SynMemberDefn.Member(memberDefn = SynBinding(headPat = pat; trivia = trivia) as b)
-              when trivia.LeadingKeyword.IsStaticMember && isFunctionHead pat -> Some (keywordLine b)
+              when trivia.LeadingKeyword.IsStaticMember && SageFs.Features.ReloadPlanning.isFunctionHead pat -> Some (keywordLine b)
           | _ -> None))
     | _ -> [])
 

@@ -32,6 +32,7 @@
         <Compile Include="EndpointContracts.fs" />
         <Compile Include="ResilientActor.fs" />
         <Compile Include="ProjectLoading.fs" />
+        <Compile Include="Features\ReloadPlanning.fs" />
         <Compile Include="AppRun.fs" />
         <Compile Include="ShadowCopy.fs" />
         <Compile Include="WarmUp.fs" />
