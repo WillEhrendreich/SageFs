@@ -34,6 +34,9 @@ type SageFsError =
   | CheckFailed of reason: string
   | CompletionFailed of sessionId: string * reason: string
   | CancelFailed of reason: string
+  /// A reset replaced the session while this evaluation was still running, so
+  /// its result belongs to a session that no longer exists and was discarded.
+  | EvalSupersededByReset
   // ── Warm-up ──
   | WarmupOpenFailed of name: string * reason: string
   | WarmupContextFailed of sessionId: string * reason: string
@@ -96,6 +99,8 @@ module SageFsError =
       sprintf "Code completion failed for session '%s': %s" id reason
     | SageFsError.CancelFailed reason ->
       sprintf "Cancel failed: %s" reason
+    | SageFsError.EvalSupersededByReset ->
+      "The session was reset while this evaluation was running, so its result was discarded: it ran against the session the reset replaced, and none of its definitions exist in the fresh session."
     | SageFsError.WarmupOpenFailed(name, reason) ->
       sprintf "Failed to open '%s' during warm-up: %s" name reason
     | SageFsError.WarmupContextFailed(id, reason) ->
@@ -151,6 +156,7 @@ module SageFsError =
     | SageFsError.CheckFailed _ -> LogLevel.Warning
     | SageFsError.CompletionFailed _ -> LogLevel.Warning
     | SageFsError.CancelFailed _ -> LogLevel.Warning
+    | SageFsError.EvalSupersededByReset -> LogLevel.Warning
     | SageFsError.WarmupOpenFailed _ -> LogLevel.Warning
     | SageFsError.WarmupContextFailed _ -> LogLevel.Warning
     | SageFsError.HotReloadStateError _ -> LogLevel.Warning
@@ -195,6 +201,7 @@ module SageFsError =
     | SageFsError.CheckFailed _ -> 500
     | SageFsError.CompletionFailed _ -> 500
     | SageFsError.CancelFailed _ -> 500
+    | SageFsError.EvalSupersededByReset -> 500
     | SageFsError.WarmupOpenFailed _ -> 500
     | SageFsError.WarmupContextFailed _ -> 500
     | SageFsError.HotReloadFailed _ -> 500
@@ -229,6 +236,7 @@ module SageFsError =
     | SageFsError.CheckFailed _
     | SageFsError.CompletionFailed _
     | SageFsError.CancelFailed _
+    | SageFsError.EvalSupersededByReset
     | SageFsError.WarmupOpenFailed _
     | SageFsError.WarmupContextFailed _
     | SageFsError.HotReloadFailed _
@@ -252,6 +260,7 @@ module SageFsError =
     | SageFsError.CheckFailed _ -> true
     | SageFsError.CompletionFailed _ -> true
     | SageFsError.CancelFailed _ -> true
+    | SageFsError.EvalSupersededByReset -> true
     | SageFsError.WarmupOpenFailed _ -> true
     | SageFsError.WarmupContextFailed _ -> true
     | SageFsError.HotReloadFailed _ -> true
@@ -302,6 +311,7 @@ module SageFsError =
     | SageFsError.CheckFailed _
     | SageFsError.CompletionFailed _
     | SageFsError.CancelFailed _
+    | SageFsError.EvalSupersededByReset
     | SageFsError.WarmupOpenFailed _
     | SageFsError.WarmupContextFailed _
     | SageFsError.HotReloadFailed _
@@ -339,6 +349,7 @@ module SageFsError =
     | SageFsError.CheckFailed _
     | SageFsError.CompletionFailed _
     | SageFsError.CancelFailed _
+    | SageFsError.EvalSupersededByReset
     | SageFsError.WarmupOpenFailed _
     | SageFsError.WarmupContextFailed _
     | SageFsError.HotReloadFailed _
@@ -370,6 +381,7 @@ module SageFsError =
     | SageFsError.CheckFailed _ -> "Fix the code and resubmit"
     | SageFsError.CompletionFailed _ -> "Retry or run reset_fsi_session"
     | SageFsError.CancelFailed _ -> "Retry or run hard_reset_fsi_session"
+    | SageFsError.EvalSupersededByReset -> "Run the code again in the fresh session"
     | SageFsError.WarmupOpenFailed _ -> "Check that the namespace exists in the project"
     | SageFsError.WarmupContextFailed _ -> "Run hard_reset_fsi_session"
     | SageFsError.HotReloadFailed _ -> "Check the file for syntax errors"
@@ -403,3 +415,10 @@ module SageFsError =
        fields = fieldMap :> System.Collections.Generic.IDictionary<string, obj>
        message = describe err
        suggestedAction = suggestedAction err |}
+
+/// Carries a SageFsError through an exception-typed error channel (the eval
+/// actor's `EvalResponse.EvaluationResult`) so the worker boundary recovers
+/// the structured case instead of flattening it to `ex.ToString()`.
+type SageFsErrorException(error: SageFsError) =
+  inherit System.Exception(SageFsError.describe error)
+  member _.Error = error

@@ -229,10 +229,22 @@ type internal QueryCommand =
   | QueryGetTypeCheckWithSymbols of text: string * filePath: string * AsyncReplyChannel<Diagnostics.TypeCheckWithSymbolsResult>
   | QueryGetBoundValue of name: string * AsyncReplyChannel<obj Option>
 
+/// Which incarnation of the FSI session an eval ran against. Every reset
+/// (soft or hard) replaces the session and advances the generation, so a
+/// result stamped with an older one belongs to a session that no longer exists.
+[<Struct>]
+type SessionGeneration = private SessionGeneration of int64
+
+module SessionGeneration =
+  let initial = SessionGeneration 0L
+  let next (SessionGeneration g) = SessionGeneration (g + 1L)
+
 /// Internal command for the eval actor — only mutation/eval operations
 type internal EvalCommand =
   | EvalRun of EvalRequest * CancellationTokenSource * AsyncReplyChannel<EvalResponse>
-  | EvalFinished of result: Result<EvalResponse * AppState, exn> * sw: Diagnostics.Stopwatch * code: string * AsyncReplyChannel<EvalResponse>
+  /// Posted by the eval thread, which can outlive a reset: `generation` is the
+  /// session incarnation the eval started on.
+  | EvalFinished of result: Result<EvalResponse * AppState, exn> * sw: Diagnostics.Stopwatch * code: string * AsyncReplyChannel<EvalResponse> * generation: SessionGeneration
   | EvalAddMiddleware of Middleware list * AsyncReplyChannel<unit>
   | EvalEnableStdout
   | EvalReset of AsyncReplyChannel<Result<unit, SageFsError>>
@@ -1072,6 +1084,16 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
     // Monotonic generation for live binding snapshots — lets consumers ignore
     // stale/out-of-order snapshots.
     let liveValueGeneration = ref 0L
+    // The session incarnation. Owned by this actor alone: the reset handlers
+    // advance it, EvalRun stamps it on the eval thread's EvalFinished.
+    let sessionGeneration = ref SessionGeneration.initial
+    let supersededResponse (code: string) =
+      let err = SageFsError.EvalSupersededByReset
+      emit (Events.EvalFailed {| Code = code; Error = SageFsError.describe err; Diagnostics = [] |})
+      { EvaluationResult = Error (SageFsErrorException err :> exn)
+        Diagnostics = [||]
+        EvaluatedCode = code
+        Metadata = Map.empty }
     let processEvalCommand (phase: SessionPhase, middleware: Middleware list, evalStats: Affordances.EvalStats) (cmd: EvalCommand) : Async<SessionPhase * Middleware list * Affordances.EvalStats> =
       async {
         // Test-only fault-injection seam (None in production): a throw here
@@ -1111,14 +1133,15 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               let sw = System.Diagnostics.Stopwatch.StartNew()
               emit (Events.EvalRequested {| Code = request.Code; Source = Events.System |})
               let pipeline = pipelineBuildFn (wrapErrorMiddleware :: middleware) (evalFn cts.Token)
+              let generation = sessionGeneration.Value
               // Run eval on a dedicated thread so the actor stays responsive
               // to CancelEval, HardReset, etc. while the eval is in progress.
               let evalThread = Thread(fun () ->
                 try
                   let res, newSt = pipeline (request, st)
-                  mailbox.Post(EvalFinished(Ok(res, newSt), sw, request.Code, reply))
+                  mailbox.Post(EvalFinished(Ok(res, newSt), sw, request.Code, reply, generation))
                 with ex ->
-                  mailbox.Post(EvalFinished(Error ex, sw, request.Code, reply))
+                  mailbox.Post(EvalFinished(Error ex, sw, request.Code, reply, generation))
               )
               evalThread.IsBackground <- true
               evalThread.Name <- sprintf "sagefs-eval-%d" (evalStats.EvalCount + 1)
@@ -1129,7 +1152,18 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               // Unreachable: tryGetEvalAvailabilityError gates these phases with
               // Some above. Kept exhaustive so the phase match is total.
               return (phase, middleware, evalStats)
-        | EvalFinished(result, sw, code, reply) ->
+        | EvalFinished(_, sw, code, reply, generation) when generation <> sessionGeneration.Value ->
+          // Straggler: the eval thread outlived a reset that disposed the
+          // session it ran on and put a fresh one in its place. Its AppState
+          // wraps the disposed session — adopting it would bring that session
+          // back and leak the fresh one — so the result is dropped and the
+          // caller told why. currentEvalCts/Thread are left alone: they belong
+          // to whatever eval runs on the fresh session now.
+          sw.Stop()
+          logger.LogWarning (sprintf "Discarding the result of an eval that outlived a reset (session state: %s)" (SessionPhase.toSessionState phase |> SessionState.label))
+          reply.Reply (supersededResponse code)
+          return (phase, middleware, evalStats)
+        | EvalFinished(result, sw, code, reply, _) ->
           sw.Stop()
           currentEvalCts.Value <- None
           currentEvalThread.Value <- None
@@ -1210,17 +1244,16 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               reply.Reply errResponse
               return (Active (st, Idle), middleware, evalStats)
             | Initializing _ | Faulted _ ->
-              // Straggler: the eval thread was still running when a reset tore
-              // the session down (or the reset failed). Publishing the eval's
-              // stale AppState would resurrect a snapshot of a disposed/null
-              // session — reply with the error and stay in the current phase.
-              logger.LogWarning (sprintf "EvalFinished(Error) arrived outside Active phase (session state: %s); not republishing state: %s" (SessionPhase.toSessionState phase |> SessionState.label) ex.Message)
+              // Unreachable: only a reset leaves the Active phase, and every
+              // reset advances the generation, so an EvalFinished from before
+              // it takes the straggler arm above. Kept so the match is total.
               reply.Reply errResponse
               return (phase, middleware, evalStats)
         | EvalAddMiddleware(additionalMiddleware, r) ->
           r.Reply(())
           return (phase, additionalMiddleware @ middleware, evalStats)
         | EvalReset reply ->
+          sessionGeneration.Value <- SessionGeneration.next sessionGeneration.Value
           try
             publishPhase (Initializing None) evalStats
             logger.LogInfo "🔄 Resetting FSI session..."
@@ -1323,6 +1356,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             reply.Reply(Error (SageFsError.ResetFailed ex.Message))
             return (Faulted reason, middleware, evalStats)
         | EvalHardReset (rebuild, reply) ->
+          sessionGeneration.Value <- SessionGeneration.next sessionGeneration.Value
           try
             publishPhase (Initializing None) evalStats
             logger.LogInfo "🔨 Hard resetting FSI session..."

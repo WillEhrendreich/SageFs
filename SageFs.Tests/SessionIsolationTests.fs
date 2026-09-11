@@ -665,97 +665,6 @@ module ResetIsolation =
         LiveSnapshotSink = None } : McpContext
     ctx, sidStr, resetStarted, allowResetFinish
 
-  let mkTransportFailureCtx () =
-    let result = globalActorResult.Value
-    let sid = testSessionId "aaa00001"
-    let sidStr = WorkerProtocol.SessionId.value sid
-    let sessionMap = ConcurrentDictionary<string, string>()
-    sessionMap.["agent1"] <- sidStr
-    let registryStatus = ref WorkerProtocol.SessionStatus.Ready
-    let workerDied = System.Collections.Generic.List<string>()
-
-    let sessionInfo () : WorkerProtocol.SessionInfo =
-      { Id = sid
-        Name = None
-        Projects = []
-        WorkingDirectory = @"C:\Code\Repos\SageFs"
-        SolutionRoot = None
-        Status = !registryStatus
-        FaultReason = None
-        // A Ready worker has a live process. WorkerPid discriminates a
-        // caller-driven reset (UpdateSessionStatus preserves WorkerPid) from a
-        // SessionManager-owned restart (cold restart clears WorkerPid): a
-        // transport failure on a worker with a pid is a REAL death and must
-        // trigger NotifyWorkerDied recovery, not the restart-in-progress path.
-        WorkerPid = Some 4242
-        WorkerPort = None
-        Workflow = WorkflowTypes.SessionWorkflow.Interactive
-        CreatedAt = DateTime.UtcNow
-        LastActivity = DateTime.UtcNow
-        ActiveProject = None
-        ProjectRoles = []
-        App = SageFs.AppRun.AppRunState.NotRunning }
-
-    let transportFailure =
-      let connectionClosed =
-        System.IO.IOException(
-          "Unable to read data from the transport connection: An existing connection was forcibly closed by the remote host.")
-      System.Net.Http.HttpRequestException("An error occurred while sending the request.", connectionClosed)
-
-    let proxy : WorkerProtocol.SessionProxy =
-      fun msg ->
-        async {
-          match msg with
-          | WorkerProtocol.WorkerMessage.HardResetSession _ ->
-            return raise (AggregateException transportFailure)
-          | other ->
-            return failwithf "unexpected worker message in transport failure test: %A" other
-        }
-
-    let ops : SessionManagementOps = {
-      CreateSession = fun _ _ _ -> Task.FromResult(Ok "new-session")
-      ListSessions = fun () -> Task.FromResult("No sessions")
-      StopSession = fun _ -> Task.FromResult(Ok "stopped")
-      PurgeSession = fun _ -> Task.FromResult(Ok "purged")
-      RestartSession = fun _ _ -> Task.FromResult(Ok "restarted")
-      GetProxy = fun sessionId ->
-        match sessionId = sid with
-        | true -> Task.FromResult(Some proxy)
-        | false -> Task.FromResult(None)
-      GetSessionInfo = fun sessionId ->
-        match sessionId = sid with
-        | true -> Task.FromResult(Some (sessionInfo ()))
-        | false -> Task.FromResult(None)
-      GetAllSessions = fun () -> Task.FromResult([ sessionInfo () ])
-      UpdateSessionStatus = fun _ status ->
-        registryStatus := status
-        Task.FromResult(())
-      NotifyWorkerDied = fun sessionId ->
-        workerDied.Add(WorkerProtocol.SessionId.value sessionId)
-        registryStatus := WorkerProtocol.SessionStatus.Faulted
-      ClaimRun = SageFs.SessionManagementOps.stub.ClaimRun
-      ClaimStop = SageFs.SessionManagementOps.stub.ClaimStop
-      AdvanceRun = SageFs.SessionManagementOps.stub.AdvanceRun
-      EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
-      AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
-      SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available")) }
-
-    let ctx =
-      { FrictionStore = None
-        DiagnosticsChanged = result.DiagnosticsChanged
-        StateChanged = None
-        SessionOps = ops
-        SessionMap = sessionMap
-        McpPort = 0
-        Dispatch = None
-        GetElmModel = None
-        GetElmRegions = None
-        GetWarmupContext = None
-        GetFeatureState = None
-        ActivityTracker = SageFs.AgentActivityTracker.create()
-        LiveSnapshotSink = None } : McpContext
-    ctx, sidStr, workerDied, registryStatus
-
   let tests = Integration.hostList "Reset isolation" [
     testTask "hardResetSession with rebuild only restarts the targeted session" {
       let ctx, restartLog, _ = mkTrackingCtx ()
@@ -855,19 +764,21 @@ module ResetIsolation =
       allowRestartFinish.TrySetResult(()) |> ignore
     }
 
-    testTask "hardResetSession without rebuild only routes to the targeted session" {
+    testTask "hardResetSession without rebuild recycles the targeted session's worker process, and only that session" {
       let ctx, restartLog, routedSessions = mkTrackingCtx ()
 
       let! _ = hardResetSession ctx "agent1" false (Some "aaa00001") None
 
-      // GetProxy is consulted twice: once by session resolution (to classify
-      // routability) and once by routeToSession (to send). Both lookups are on
-      // the SAME session — the invariant is that no OTHER session is touched.
-      routedSessions |> Seq.toList |> Seq.distinct |> Seq.toList
-      |> Expect.equal "only session-AAA routed" ["aaa00001"]
+      // A hard reset without a rebuild still replaces the worker PROCESS (the
+      // owner's spawnFirst) so project assemblies already loaded in the old
+      // worker's Default load context are actually replaced — an in-process
+      // FSI rebuild kept them. Session resolution consults the proxy once;
+      // there is no separate worker-proxy route for this call anymore.
+      routedSessions |> Seq.toList
+      |> Expect.equal "only session-AAA's proxy was consulted, once" ["aaa00001"]
 
-      restartLog.Count
-      |> Expect.equal "no process restarts" 0
+      restartLog |> Seq.toList
+      |> Expect.equal "the owner restarts session-AAA without a rebuild" [("aaa00001", false)]
 
       ctx.SessionMap.["agent2"]
       |> Expect.equal "agent2 session untouched" "bbb00002"
@@ -935,140 +846,6 @@ module ResetIsolation =
       |> Expect.stringContains
         "listSessions should no longer report Ready when live worker status is still warming"
         "Starting"
-    }
-
-    testTask "hardResetSession surfaces transport failures without throwing" {
-      let ctx, sid, workerDied, registryStatus = mkTransportFailureCtx ()
-
-      let! result = hardResetSession ctx "agent1" false (Some sid) None
-
-      result
-      |> Expect.stringContains
-        "hard reset should report a recoverable worker communication error"
-        "Cannot reach session"
-
-      workerDied |> Seq.toList
-      |> Expect.equal
-        "transport failures should mark the worker dead"
-        [ sid ]
-
-      !registryStatus
-      |> Expect.equal
-        "transport failures should leave the snapshot faulted"
-        WorkerProtocol.SessionStatus.Faulted
-    }
-
-    testTask "transport failure during a daemon-owned restart returns poll guidance without faulting the session" {
-      // Scenario: the SessionManager is mid-restart (Status=Restarting AND
-      // WorkerPid=None — the cold-restart registry shape). A reader that
-      // captured a stale proxy observes a transport failure. This must NOT
-      // NotifyWorkerDied (would schedule a competing restart) and must NOT
-      // mark the session Faulted (only the restart owner faults a restarting
-      // session).
-      let result = globalActorResult.Value
-      let sid = testSessionId "aaa00001"
-      let sidStr = WorkerProtocol.SessionId.value sid
-      let sessionMap = ConcurrentDictionary<string, string>()
-      sessionMap.["agent1"] <- sidStr
-      let statuses = ResizeArray<WorkerProtocol.SessionStatus>()
-      let workerDied = System.Collections.Generic.List<string>()
-
-      let transportFailure =
-        let connectionClosed =
-          System.IO.IOException(
-            "Unable to read data from the transport connection: An existing connection was forcibly closed by the remote host.")
-        System.Net.Http.HttpRequestException("An error occurred while sending the request.", connectionClosed)
-
-      let sessionInfo () : WorkerProtocol.SessionInfo =
-        { Id = sid
-          Name = None
-          Projects = []
-          WorkingDirectory = @"C:\Code\Repos\SageFs"
-          SolutionRoot = None
-          Status = WorkerProtocol.SessionStatus.Restarting
-          FaultReason = None
-          // Daemon-owned restart shape: WorkerPid cleared by the cold-restart path.
-          WorkerPid = None
-          WorkerPort = None
-          Workflow = WorkflowTypes.SessionWorkflow.Interactive
-          CreatedAt = DateTime.UtcNow
-          LastActivity = DateTime.UtcNow
-          ActiveProject = None
-          ProjectRoles = []
-          App = SageFs.AppRun.AppRunState.NotRunning }
-
-      let proxy : WorkerProtocol.SessionProxy =
-        fun msg ->
-          async {
-            match msg with
-            | WorkerProtocol.WorkerMessage.HardResetSession _ ->
-              return raise (AggregateException transportFailure)
-            | other ->
-              return failwithf "unexpected worker message in restart-in-progress test: %A" other
-          }
-
-      let ops : SessionManagementOps = {
-        CreateSession = fun _ _ _ -> Task.FromResult(Ok "new-session")
-        ListSessions = fun () -> Task.FromResult("No sessions")
-        StopSession = fun _ -> Task.FromResult(Ok "stopped")
-        PurgeSession = fun _ -> Task.FromResult(Ok "purged")
-        RestartSession = fun _ _ -> Task.FromResult(Ok "restarted")
-        GetProxy = fun sessionId ->
-          match sessionId = sid with
-          | true -> Task.FromResult(Some proxy)
-          | false -> Task.FromResult(None)
-        GetSessionInfo = fun sessionId ->
-          match sessionId = sid with
-          | true -> Task.FromResult(Some (sessionInfo ()))
-          | false -> Task.FromResult(None)
-        GetAllSessions = fun () -> Task.FromResult([ sessionInfo () ])
-        UpdateSessionStatus = fun _ status ->
-          statuses.Add(status)
-          Task.FromResult(())
-        NotifyWorkerDied = fun sessionId ->
-          workerDied.Add(WorkerProtocol.SessionId.value sessionId)
-        ClaimRun = SageFs.SessionManagementOps.stub.ClaimRun
-        ClaimStop = SageFs.SessionManagementOps.stub.ClaimStop
-        AdvanceRun = SageFs.SessionManagementOps.stub.AdvanceRun
-        EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
-        AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
-        SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available")) }
-
-      let ctx =
-        { FrictionStore = None
-          DiagnosticsChanged = result.DiagnosticsChanged
-          StateChanged = None
-          SessionOps = ops
-          SessionMap = sessionMap
-          McpPort = 0
-          Dispatch = None
-          GetElmModel = None
-          GetElmRegions = None
-          GetWarmupContext = None
-          GetFeatureState = None
-          ActivityTracker = SageFs.AgentActivityTracker.create()
-          LiveSnapshotSink = None } : McpContext
-
-      let! result = hardResetSession ctx "agent1" false (Some sidStr) None
-
-      result
-      |> Expect.stringContains
-        "restart-in-progress guidance should tell the agent to poll and not retry"
-        "do NOT retry hard_reset_fsi_session"
-
-      workerDied |> Seq.toList
-      |> Expect.equal
-        "a daemon-owned restart must not post NotifyWorkerDied"
-        []
-
-      statuses |> Seq.toList
-      |> Expect.contains
-        "a daemon-owned restart keeps the session Restarting"
-        WorkerProtocol.SessionStatus.Restarting
-
-      statuses.Contains WorkerProtocol.SessionStatus.Faulted
-      |> Expect.isFalse
-        "a daemon-owned restart must not be marked Faulted by a reader"
     }
 
     testTask "WHY — hardResetSession with rebuild=true — a failed build is recorded as the rebuild outcome and never written to the registry, because the SessionManager owns session status and build-first keeps the worker serving" {

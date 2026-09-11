@@ -151,6 +151,14 @@ let noAppRuns : AppRunHandlers = {
   AwaitChange = fun _ -> async { return AppRun.AppRunState.NotRunning }
 }
 
+/// The error a failed eval reports across the process boundary: a structured
+/// SageFsError the actor raised (e.g. EvalSupersededByReset) keeps its case;
+/// any other exception becomes `fallback` with the full exception text.
+let private toWorkerError (fallback: string -> SageFsError) (ex: exn) : SageFsError =
+  match ex with
+  | :? SageFsErrorException as e -> e.Error
+  | _ -> fallback (ex.ToString())
+
 /// Handle a single WorkerMessage by dispatching to the actor.
 let handleMessage
   (actor: AppActor)
@@ -176,7 +184,7 @@ let handleMessage
         actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Repl
       let diags = response.Diagnostics |> Array.map toWorkerDiagnostic |> Array.toList
-      let result = response.EvaluationResult |> Result.mapError (fun ex -> ex.ToString())
+      let result = response.EvaluationResult |> Result.mapError (toWorkerError SageFsError.EvalFailed)
       let metadata =
         response.Metadata
         |> Map.fold (fun acc k v ->
@@ -201,7 +209,7 @@ let handleMessage
         Log.warn "[WorkerMain] liveTestRunTest found but wrong type: %s" (v.GetType().FullName)
       | None ->
         Log.debug "[WorkerMain] liveTestRunTest NOT found in metadata"
-      return WorkerResponse.EvalResult(replyId, result |> Result.mapError SageFsError.EvalFailed, diags, metadata)
+      return WorkerResponse.EvalResult(replyId, result, diags, metadata)
 
     | WorkerMessage.CheckCode(code, replyId) ->
       let! diags =
@@ -237,8 +245,8 @@ let handleMessage
       let! response =
         actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.HotReload
-      let result = response.EvaluationResult |> Result.mapError (fun ex -> ex.ToString())
-      return WorkerResponse.ScriptLoaded(replyId, result |> Result.mapError SageFsError.ScriptLoadFailed)
+      let result = response.EvaluationResult |> Result.mapError (toWorkerError SageFsError.ScriptLoadFailed)
+      return WorkerResponse.ScriptLoaded(replyId, result)
 
     | WorkerMessage.ResetSession replyId ->
       let! result =

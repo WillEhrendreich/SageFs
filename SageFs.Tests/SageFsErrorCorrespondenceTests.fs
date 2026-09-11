@@ -31,6 +31,7 @@ let allErrors : SageFsError list = [
   SageFsError.CheckFailed "x"
   SageFsError.CompletionFailed ("s1", "x")
   SageFsError.CancelFailed "x"
+  SageFsError.EvalSupersededByReset
   SageFsError.WarmupOpenFailed ("x", "x")
   SageFsError.WarmupContextFailed ("s1", "x")
   SageFsError.HotReloadFailed ("a.fs", "x")

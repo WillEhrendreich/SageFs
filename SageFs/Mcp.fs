@@ -1822,50 +1822,31 @@ module McpTools =
         } |> ignore
         return "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_fsi_status reports the rebuild's progress and outcome."
       | false ->
-        notifyElm ctx (
-          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
-        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-        let previousStatus =
-          info
-          |> Option.map (fun sessionInfo -> sessionInfo.Status)
-          |> Option.defaultValue WorkerProtocol.SessionStatus.Ready
-        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Restarting
+        // A hard reset without a rebuild must still replace the worker
+        // PROCESS: an in-process FSI rebuild keeps whatever the worker's
+        // Default load context already has loaded (the project's own
+        // assemblies included), so new code built since the last spawn was
+        // never picked up — the reply claimed "re-copied assemblies" while
+        // reusing the stale ones. spawnFirst is the only thing that replaces
+        // them. The owner decides Ready/Faulted/pid the same way the
+        // rebuild=true path does, so this call writes no session status.
         compilationStates.TryRemove(sid) |> ignore
         typeIdentityDiagnostics.TryRemove(sid) |> ignore
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
-        let! routeResult =
-          routeToSession ctx sid
-            (fun replyId -> WorkerProtocol.WorkerMessage.HardResetSession(false, WorkerProtocol.SessionId.value replyId))
-        match routeResult with
-        | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Ok msg)) ->
-          do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
+        let! result =
+          task {
+            try return! ctx.SessionOps.RestartSession (toSessionId sid) false
+            with ex -> return Error (SageFsError.Unexpected ex)
+          }
+        match result with
+        | Ok msg ->
           notifyElm ctx (
             SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-          // Pushback: hard-resetting a healthy (Ready) session replaces its
-          // worker and rebuilds state — say so explicitly.
-          let warning =
-            match previousStatus with
-            | WorkerProtocol.SessionStatus.Ready -> "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. "
-            | _ -> ""
-          return sprintf "%s%s" warning msg
-        | Ok (WorkerProtocol.WorkerResponse.HardResetResult(_, Error err)) ->
-          do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+          return "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. " + msg
+        | Error err ->
           notifyElm ctx (
             SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
           return sprintf "Error: %s" (SageFsError.describeForAgent err)
-        | Ok other ->
-          do! setSnapshotStatus ctx sid previousStatus
-          return sprintf "Unexpected response: %A" other
-        | Error msg ->
-          let err = routeErrorMessage msg
-          match routeErrorIsTransportFailure msg with
-          | true ->
-            do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
-            notifyElm ctx (
-              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored err))
-          | false ->
-            do! setSnapshotStatus ctx sid previousStatus
-          return sprintf "Error: %s" err
     })
 
   let cancelEval (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =

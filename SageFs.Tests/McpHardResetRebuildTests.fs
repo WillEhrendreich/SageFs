@@ -15,6 +15,8 @@ type private Probe = {
   Ctx: McpContext
   Restarts: ResizeArray<bool>
   StatusWrites: ResizeArray<WorkerProtocol.SessionStatus>
+  /// Every message routed to the session's worker.
+  Routed: ResizeArray<WorkerProtocol.WorkerMessage>
   Finished: TaskCompletionSource<SessionDisplayStatus>
 }
 
@@ -24,6 +26,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
   let status = ref WorkerProtocol.SessionStatus.Ready
   let restarts = ResizeArray<bool>()
   let writes = ResizeArray<WorkerProtocol.SessionStatus>()
+  let routed = ResizeArray<WorkerProtocol.WorkerMessage>()
   let finished = TaskCompletionSource<SessionDisplayStatus>(TaskCreationOptions.RunContinuationsAsynchronously)
   let info (id: WorkerProtocol.SessionId) : WorkerProtocol.SessionInfo =
     { Id = id; Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
@@ -33,7 +36,13 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
       ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning }
   let ops =
     { SessionManagementOps.stub with
-        GetProxy = fun _ -> Task.FromResult(Some (fun _ -> async { return WorkerProtocol.WorkerResponse.WorkerReady }))
+        GetProxy = fun _ ->
+          Task.FromResult(Some (fun msg -> async {
+            lock routed (fun () -> routed.Add msg)
+            match msg with
+            | WorkerProtocol.WorkerMessage.HardResetSession(_, rid) ->
+              return WorkerProtocol.WorkerResponse.HardResetResult(rid, Ok "Hard reset complete. Fresh session with re-copied assemblies.")
+            | _ -> return WorkerProtocol.WorkerResponse.WorkerReady }))
         GetSessionInfo = fun id -> Task.FromResult(Some (info id))
         UpdateSessionStatus = fun _ s ->
           writes.Add s
@@ -55,7 +64,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
         | _ -> ())
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None; GetFeatureState = None
       ActivityTracker = AgentActivityTracker.create (); LiveSnapshotSink = None }
-  { SessionId = sessionId; Ctx = ctx; Restarts = restarts; StatusWrites = writes; Finished = finished }
+  { SessionId = sessionId; Ctx = ctx; Restarts = restarts; StatusWrites = writes; Routed = routed; Finished = finished }
 
 /// Waits for the background rebuild's final status notification.
 let private awaitOutcome (p: Probe) = task {
@@ -99,6 +108,28 @@ let tests = testList "MCP hard reset rebuild" [
     let! _ = hardReset p
     let! display = awaitOutcome p
     display |> Expect.equal "the display carries the real reason" (SessionDisplayStatus.Errored (SageFsError.describe buildFailed))
+  }
+
+  testTask "WHY — hard_reset rebuild=false — the owner recycles the worker process, because an in-process FSI rebuild keeps the project assemblies already loaded in the worker's default load context and never sees new code" {
+    let p = mkProbe "aaa00005" (Ok "Hard reset accepted — replacement worker spawning.") WorkerProtocol.SessionStatus.Ready
+    let! _ = hardResetSession p.Ctx "agent1" false (Some p.SessionId) None
+    p.Restarts |> Seq.toList |> Expect.equal "RestartSession(rebuild=false) called exactly once" [ false ]
+    p.Routed
+    |> Seq.exists (function WorkerProtocol.WorkerMessage.HardResetSession _ -> true | _ -> false)
+    |> Expect.isFalse "no in-process hard reset is routed to the old worker"
+  }
+
+  testTask "WHY — hard_reset rebuild=false — the MCP layer never writes session status because the SessionManager mailbox is the single owner of the registry" {
+    let p = mkProbe "aaa00006" (Ok "Hard reset accepted — replacement worker spawning.") WorkerProtocol.SessionStatus.Ready
+    let! _ = hardResetSession p.Ctx "agent1" false (Some p.SessionId) None
+    p.StatusWrites |> Seq.toList |> Expect.isEmpty "no registry writes from the tool"
+  }
+
+  testTask "WHY — hard_reset rebuild=false — a refused restart reaches the agent as an error with a next step, because a silent success would hide that nothing was reset" {
+    let refused = SageFsError.HardResetFailed "Hard reset already in progress for this session"
+    let p = mkProbe "aaa00007" (Error refused) WorkerProtocol.SessionStatus.Ready
+    let! reply = hardResetSession p.Ctx "agent1" false (Some p.SessionId) None
+    reply |> Expect.equal "the owner's refusal, with its next step" (sprintf "Error: %s" (SageFsError.describeForAgent refused))
   }
 
   testProperty "WHY — RebuildOutcome.ofResult — a failure counts as still serving exactly when the owner left the session routable, because only the owner knows whether a worker survived" <|

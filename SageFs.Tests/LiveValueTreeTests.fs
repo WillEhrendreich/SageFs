@@ -179,3 +179,90 @@ let liveValueSnapshotTests = testList "LiveValueSnapshot" [
     (total, MaxNodes * (MaxChildren + 1)) |> Expect.isLessThan "bounded by node budget"
     node.Kind |> Expect.equal "kind" NodeKind.Class
 ]
+
+/// A record with enough fields to exercise the children cap.
+type Wide60 = {
+  F01: int; F02: int; F03: int; F04: int; F05: int; F06: int; F07: int; F08: int; F09: int; F10: int
+  F11: int; F12: int; F13: int; F14: int; F15: int; F16: int; F17: int; F18: int; F19: int; F20: int
+  F21: int; F22: int; F23: int; F24: int; F25: int; F26: int; F27: int; F28: int; F29: int; F30: int
+  F31: int; F32: int; F33: int; F34: int; F35: int; F36: int; F37: int; F38: int; F39: int; F40: int
+  F41: int; F42: int; F43: int; F44: int; F45: int; F46: int; F47: int; F48: int; F49: int; F50: int
+  F51: int; F52: int; F53: int; F54: int; F55: int; F56: int; F57: int; F58: int; F59: int; F60: int
+}
+
+type Tree =
+  | Leaf of int
+  | Node of Tree * Tree
+
+type Holder() =
+  member _.Name = "holder"
+  member _.Person = { Name = "Grace"; Age = 85 }
+  member _.Shapes = [ Circle 1.0; Rect (2.0, 3.0) ]
+
+/// One value of every shape the walker distinguishes.
+let private corpus : (string * obj) list =
+  let mutable captured = 7
+  [ "int", box 42
+    "string", box "hello"
+    "long string", box (String.replicate 900 "y")
+    "char", box 'c'
+    "bool", box true
+    "float", box 3.25
+    "nan", box nan
+    "datetime", box (DateTime(2026, 9, 11, 12, 0, 0, DateTimeKind.Utc))
+    "enum", box DayOfWeek.Friday
+    "decimal", box 12.5m
+    "record", box { Name = "Ada"; Age = 37 }
+    "wide record", box ({ F01 = 1; F02 = 2; F03 = 3; F04 = 4; F05 = 5; F06 = 6; F07 = 7; F08 = 8; F09 = 9; F10 = 10
+                          F11 = 11; F12 = 12; F13 = 13; F14 = 14; F15 = 15; F16 = 16; F17 = 17; F18 = 18; F19 = 19; F20 = 20
+                          F21 = 21; F22 = 22; F23 = 23; F24 = 24; F25 = 25; F26 = 26; F27 = 27; F28 = 28; F29 = 29; F30 = 30
+                          F31 = 31; F32 = 32; F33 = 33; F34 = 34; F35 = 35; F36 = 36; F37 = 37; F38 = 38; F39 = 39; F40 = 40
+                          F41 = 41; F42 = 42; F43 = 43; F44 = 44; F45 = 45; F46 = 46; F47 = 47; F48 = 48; F49 = 49; F50 = 50
+                          F51 = 51; F52 = 52; F53 = 53; F54 = 54; F55 = 55; F56 = 56; F57 = 57; F58 = 58; F59 = 59; F60 = 60 } : Wide60)
+    "anonymous record", box {| A = 1; B = "b" |}
+    "list", box [ 1; 2; 3 ]
+    "long list", box [ 1 .. 200 ]
+    "array", box [| 1.5; 2.5 |]
+    "seq of records", box (ResizeArray [ { Name = "x"; Age = 1 }; { Name = "y"; Age = 2 } ])
+    "hash set", box (Collections.Generic.HashSet [ "a"; "b" ])
+    "some", box (Some 5)
+    "some of record", box (Some { Name = "z"; Age = 3 })
+    "union with one field", box (Circle 2.5)
+    "union with two fields", box (Rect (1.0, 2.0))
+    "recursive union", box (Node (Leaf 1, Node (Leaf 2, Leaf 3)))
+    "result", box (Ok 3 : Result<int, string>)
+    "tuple", box (1, "a")
+    "eight tuple", box (1, 2, 3, 4, 5, 6, 7, 8)
+    "struct tuple", box (struct (1, "s"))
+    "map", box (Map.ofList [ "a", 1; "b", 2 ])
+    "map of unions", box (Map.ofList [ 1, Circle 1.0; 2, Rect (1.0, 1.0) ])
+    "dictionary", box (Collections.Generic.Dictionary<string, int>(dict [ "k", 1 ]))
+    "closure", box (fun (x: int) -> x + captured)
+    "closure without captures", box (fun (x: int) -> x + 1)
+    "class", box (Holder())
+    "version", box (System.Version(1, 2, 3))
+    "throwing property", box (ThrowingProp())
+    "node budget", box (Wide())
+    "deep nesting",
+      (let rec build n = if n = 0 then box 1 else box [ build (n - 1) ]
+       build 10)
+    "null", null ]
+
+[<Tests>]
+let liveValueTreeCachedReaderTests = testList "LiveValueTree cached readers" [
+
+  testCase "WHY — the walker with per-type cached readers builds exactly the tree the uncached walker built, so caching changes the cost and nothing the watch window shows" <| fun _ ->
+    for name, value in corpus do
+      buildValueNode name value
+      |> Expect.equal (sprintf "tree for %s" name) (SageFs.Tests.LiveValueTreeReference.buildValueNode name value)
+
+  testCase "WHY — a type walked twice builds the same tree both times, because the second walk reads through the cache the first one filled" <| fun _ ->
+    for name, value in corpus do
+      let first = buildValueNode name value
+      buildValueNode name value |> Expect.equal (sprintf "second tree for %s" name) first
+
+  testProperty "WHY — cached readers match the uncached walker on generated records, unions, maps and tuples" <|
+    fun (people: Person list, shapes: Map<string, Shape option>, pair: int * string, tree: Tree) ->
+      let value = box (people, shapes, pair, tree)
+      buildValueNode "v" value = SageFs.Tests.LiveValueTreeReference.buildValueNode "v" value
+]

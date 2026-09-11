@@ -99,6 +99,91 @@ module LiveValueTree =
     | :? string as s -> s
     | _ -> truncateString (string value)
 
+  // ── Per-type shapes ───────────────────────────────────────────────
+  //
+  // How a value is walked depends only on its runtime type: whether it is a
+  // record/union/tuple/function, its record fields, union cases, readable
+  // properties and closure captures. Working that out is the expensive
+  // reflection, so it runs once per type and every later value of the type
+  // reuses the readers FSharp.Core precomputes. The cache is keyed weakly:
+  // FSI-defined types live in collectible load contexts a reset unloads, and a
+  // strong cache would pin every session's assemblies for the process lifetime.
+
+  type private UnionCaseShape = {
+    CaseName: string
+    FieldNames: string[]
+    ReadFields: obj -> obj[]
+  }
+
+  [<RequireQualifiedAccess>]
+  type private TypeShape =
+    /// string, char, bool, float, DateTime, primitives and enums.
+    | Scalar
+    /// An F# function value: its closure class's fields are the captures.
+    | Closure of captures: (string * FieldInfo)[]
+    | Dictionary
+    /// F# Map, enumerated as KeyValuePair entries.
+    | FSharpMap of key: PropertyInfo * value: PropertyInfo
+    | Sequence of kind: NodeKind
+    | Record of fieldNames: string[] * readFields: (obj -> obj[])
+    | Union of readTag: (obj -> int) * cases: UnionCaseShape[]
+    | Tuple of readFields: (obj -> obj[])
+    /// Any other type: its readable, non-indexed public instance properties.
+    | Class of properties: PropertyInfo[]
+
+  /// Compiler-decorated capture fields (`<captured>v__`) are labelled by the
+  /// captured name.
+  let private captureLabel (rawName: string) =
+    if rawName.StartsWith("<", StringComparison.Ordinal) then
+      let endIdx = rawName.IndexOf('>')
+      if endIdx > 1 then rawName.Substring(1, endIdx - 1) else rawName
+    else rawName
+
+  /// The checks run in the walker's precedence order: collections before the
+  /// F# union check, because an F# list is a union AND IEnumerable.
+  let private classify (t: Type) : TypeShape =
+    if t = typeof<string> || t = typeof<char> || t = typeof<bool> || t = typeof<float>
+       || t = typeof<DateTime> || t.IsPrimitive || t.IsEnum then
+      TypeShape.Scalar
+    elif FSharpType.IsFunction t then
+      t.GetFields(BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+      |> Array.truncate MaxChildren
+      |> Array.map (fun fi -> captureLabel fi.Name, fi)
+      |> TypeShape.Closure
+    elif typeof<IDictionary>.IsAssignableFrom t then
+      TypeShape.Dictionary
+    elif t.IsGenericType && t.GetGenericTypeDefinition() = typedefof<Map<string, obj>> then
+      let entryType =
+        typedefof<Collections.Generic.KeyValuePair<obj, obj>>.MakeGenericType(t.GetGenericArguments())
+      TypeShape.FSharpMap (entryType.GetProperty "Key", entryType.GetProperty "Value")
+    elif typeof<IEnumerable>.IsAssignableFrom t then
+      TypeShape.Sequence (if t.IsArray then NodeKind.Array else NodeKind.List)
+    elif FSharpType.IsRecord t then
+      TypeShape.Record (
+        FSharpType.GetRecordFields t |> Array.map (fun p -> p.Name),
+        FSharpValue.PreComputeRecordReader t)
+    elif FSharpType.IsUnion t then
+      let cases =
+        FSharpType.GetUnionCases t
+        |> Array.map (fun case ->
+          { CaseName = case.Name
+            FieldNames = case.GetFields() |> Array.map (fun fi -> fi.Name)
+            ReadFields = FSharpValue.PreComputeUnionReader case })
+      TypeShape.Union (FSharpValue.PreComputeUnionTagReader t, cases)
+    elif FSharpType.IsTuple t then
+      TypeShape.Tuple (FSharpValue.PreComputeTupleReader t)
+    else
+      t.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
+      |> Array.filter (fun p -> p.GetIndexParameters().Length = 0 && p.CanRead)
+      |> Array.truncate MaxChildren
+      |> TypeShape.Class
+
+  let private shapes = System.Runtime.CompilerServices.ConditionalWeakTable<Type, TypeShape>()
+  let private classifyCallback =
+    System.Runtime.CompilerServices.ConditionalWeakTable<Type, TypeShape>.CreateValueCallback classify
+
+  let private shapeOf (t: Type) = shapes.GetValue(t, classifyCallback)
+
   // ── Reflection walker ─────────────────────────────────────────────
 
   let private isCycle (visited: System.Collections.Generic.HashSet<obj>) (value: obj) =
@@ -136,37 +221,26 @@ module LiveValueTree =
 
         match value with
         | null -> leaf "null" NodeKind.Leaf
-        | :? string as s -> leaf (sprintf "\"%s\"" (truncateString s)) NodeKind.Leaf
-        | :? char -> leaf (scalarPreview value) NodeKind.Leaf
-        | :? bool -> leaf (scalarPreview value) NodeKind.Leaf
-        | :? float -> leaf (scalarPreview value) NodeKind.Leaf
-        | :? DateTime -> leaf (scalarPreview value) NodeKind.Leaf
-        | _ when t.IsPrimitive || t.IsEnum -> leaf (scalarPreview value) NodeKind.Leaf
+        | _ ->
+        match shapeOf t with
+        | TypeShape.Scalar -> leaf (scalarPreview value) NodeKind.Leaf
         // F# function values are FSharpFunc subclasses; the compiler-generated
         // closure class carries captured variables as instance fields. In Debug
-        // builds the fields are decorated (`<captured>v__`); strip the decoration
-        // for the label but keep the field — they ARE the captures.
-        | _ when FSharpType.IsFunction t ->
+        // builds the fields are decorated (`<captured>v__`); the label strips the
+        // decoration but the field is kept — they ARE the captures.
+        | TypeShape.Closure captures ->
           let children =
             try
-              t.GetFields(BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.NonPublic)
-              |> Array.truncate MaxChildren
-              |> Array.map (fun fi ->
-                let rawName = fi.Name
-                let name =
-                  if rawName.StartsWith("<", StringComparison.Ordinal) then
-                    let endIdx = rawName.IndexOf('>')
-                    if endIdx > 1 then rawName.Substring(1, endIdx - 1) else rawName
-                  else rawName
-                let v = fi.GetValue value
-                let child = buildNode visited budget name (depth + 1) v
+              captures
+              |> Array.map (fun (name, fi) ->
+                let child = buildNode visited budget name (depth + 1) (fi.GetValue value)
                 { child with BestEffort = true })
               |> Array.toList
             with _ -> []
           { Label = label; TypeName = typeName; Preview = "<fun>"; Kind = NodeKind.Closure
             Children = children; BestEffort = true; Depth = depth }
-        // Collections BEFORE F# union checks: F# list is a union AND IEnumerable.
-        | :? System.Collections.IDictionary as d ->
+        | TypeShape.Dictionary ->
+          let d = value :?> IDictionary
           let entries = d |> Seq.cast<DictionaryEntry> |> Seq.truncate (MaxChildren + 1) |> Seq.toList
           let preview = entries |> List.truncate MaxChildren
                          |> List.map (fun e -> sprintf "(%s, %s)" (scalarPreview e.Key) (scalarPreview e.Value))
@@ -176,74 +250,68 @@ module LiveValueTree =
             |> List.mapi (fun i e -> buildNode visited budget (keyLabel e.Key) (depth + 1) e.Value)
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
             Children = children; BestEffort = false; Depth = depth }
-        | _ when t.IsGenericType && t.GetGenericTypeDefinition() = typedefof<Map<string, obj>> ->
-          // F# Map — IEnumerable<KeyValuePair<K,V>>, detected by generic def.
+        | TypeShape.FSharpMap (keyProp, valueProp) ->
           let entries =
-            (value :?> System.Collections.IEnumerable)
+            (value :?> IEnumerable)
             |> Seq.cast<obj>
             |> Seq.truncate (MaxChildren + 1)
             |> Seq.toList
+            |> List.truncate MaxChildren
+            |> List.map (fun kv -> keyProp.GetValue kv, valueProp.GetValue kv)
           let preview =
-            entries |> List.truncate MaxChildren
-            |> List.map (fun kv ->
-              let k = kv.GetType().GetProperty("Key").GetValue kv
-              let v = kv.GetType().GetProperty("Value").GetValue kv
-              sprintf "(%s, %s)" (scalarPreview k) (scalarPreview v))
+            entries
+            |> List.map (fun (k, v) -> sprintf "(%s, %s)" (scalarPreview k) (scalarPreview v))
             |> truncateList |> fun s -> "map [" + s + "]"
           let children =
-            entries |> List.truncate MaxChildren
-            |> List.mapi (fun i kv ->
-              let k = kv.GetType().GetProperty("Key").GetValue kv
-              let v = kv.GetType().GetProperty("Value").GetValue kv
-              buildNode visited budget (keyLabel k) (depth + 1) v)
+            entries
+            |> List.map (fun (k, v) -> buildNode visited budget (keyLabel k) (depth + 1) v)
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Map
             Children = children; BestEffort = false; Depth = depth }
-        | :? System.Collections.IEnumerable as e ->
-          let items = e |> Seq.cast<obj> |> Seq.truncate (MaxChildren + 1) |> Seq.toList
+        | TypeShape.Sequence kind ->
+          let items = (value :?> IEnumerable) |> Seq.cast<obj> |> Seq.truncate (MaxChildren + 1) |> Seq.toList
           let shown = items |> List.truncate MaxChildren
           let preview = shown |> List.map scalarPreview |> truncateList |> fun s -> "[" + s + "]"
           let children =
             shown
             |> List.mapi (fun i item -> buildNode visited budget (sprintf "[%d]" i) (depth + 1) item)
-          let kind = if t.IsArray then NodeKind.Array else NodeKind.List
           { Label = label; TypeName = typeName; Preview = preview; Kind = kind
             Children = children; BestEffort = false; Depth = depth }
-        | _ when FSharpType.IsRecord t ->
-          let fields = FSharpValue.GetRecordFields value
-          let fieldInfos = FSharpType.GetRecordFields t
+        | TypeShape.Record (fieldNames, readFields) ->
+          let fields = readFields value
           let preview =
             fields
-            |> Array.mapi (fun i f -> sprintf "%s = %s" fieldInfos.[i].Name (scalarPreview f))
+            |> Array.mapi (fun i f -> sprintf "%s = %s" fieldNames.[i] (scalarPreview f))
             |> Array.toList
             |> truncateList
             |> fun s -> "{ " + s + " }"
           let children =
             fields
-            |> Array.mapi (fun i f -> buildNode visited budget fieldInfos.[i].Name (depth + 1) f)
+            |> Array.mapi (fun i f -> buildNode visited budget fieldNames.[i] (depth + 1) f)
             |> Array.truncate MaxChildren
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Record
             Children = children; BestEffort = false; Depth = depth }
-        | _ when FSharpType.IsUnion t ->
-          let case, caseFields = FSharpValue.GetUnionFields(value, t)
+        | TypeShape.Union (readTag, cases) ->
+          let case = cases.[readTag value]
+          let caseFields = case.ReadFields value
           let preview =
             match caseFields.Length with
-            | 0 -> case.Name
+            | 0 -> case.CaseName
             | _ ->
               let args =
                 caseFields |> Array.map scalarPreview |> Array.toList |> truncateList
                 |> fun s -> "(" + s + ")"
-              case.Name + " " + args
+              case.CaseName + " " + args
           let children =
-            case.GetFields()
-            |> Array.mapi (fun i fi -> buildNode visited budget fi.Name (depth + 1) caseFields.[i])
+            case.FieldNames
+            |> Array.mapi (fun i name -> buildNode visited budget name (depth + 1) caseFields.[i])
             |> Array.truncate MaxChildren
             |> Array.toList
-          let kind = if case.Name = "Some" || case.Name = "None" then NodeKind.Option else NodeKind.Union
+          let kind = if case.CaseName = "Some" || case.CaseName = "None" then NodeKind.Option else NodeKind.Union
           { Label = label; TypeName = typeName; Preview = preview; Kind = kind
             Children = children; BestEffort = false; Depth = depth }
-        | _ when FSharpType.IsTuple t ->
-          let fields = FSharpValue.GetTupleFields value
+        | TypeShape.Tuple readFields ->
+          let fields = readFields value
           let preview = fields |> Array.map scalarPreview |> Array.toList |> truncateList |> fun s -> "(" + s + ")"
           let children =
             fields
@@ -252,12 +320,8 @@ module LiveValueTree =
             |> Array.toList
           { Label = label; TypeName = typeName; Preview = preview; Kind = NodeKind.Tuple
             Children = children; BestEffort = false; Depth = depth }
-        | _ ->
+        | TypeShape.Class props ->
           // Class instance — public instance properties (best-effort for .NET types).
-          let props =
-            t.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
-            |> Array.filter (fun p -> p.GetIndexParameters().Length = 0 && p.CanRead)
-            |> Array.truncate MaxChildren
           let preview =
             props
             |> Array.map (fun p ->
