@@ -309,7 +309,7 @@ let private buildOutputPanels
                   GuidanceCssClass = q.GetSessionGuidanceCss s.Id
                   ActiveProject = q.GetSessionActiveProject s.Id
                   ProjectRoles = q.GetSessionProjectRoles s.Id
-                  RunningApp = q.GetSessionRunningApp s.Id })
+                  App = q.GetSessionApp s.Id })
           let creating = isCreatingSession r.Content
           let sess = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) visible creating
           let sessionPicker =
@@ -563,7 +563,7 @@ let buildDashboardSnapshot
               FrictionPanel = frictionPanel
               ActiveProject = q.GetSessionActiveProject sessionId
               ProjectRoles = q.GetSessionProjectRoles sessionId
-              RunningApp = q.GetSessionRunningApp sessionId
+              App = q.GetSessionApp sessionId
             }
     return snap, sessionId, themeName, {| EvalStats = stats; HotReloadState = hrState; WarmupContext = wCtx; FrictionPanel = frictionPanel |}
   }
@@ -622,7 +622,7 @@ let buildNoSessionSnapshot
           GuidanceCssClass = q.GetSessionGuidanceCss sid
           ActiveProject = q.GetSessionActiveProject sid
           ProjectRoles = q.GetSessionProjectRoles sid
-          RunningApp = q.GetSessionRunningApp sid })
+          App = q.GetSessionApp sid })
     let daemonHealth = q.GetDaemonHealth()
     let daemonHealthPanel =
       match daemonHealth with
@@ -687,7 +687,7 @@ let buildNoSessionSnapshot
       FrictionPanel = Elem.div [ Attr.id DomIds.FrictionPanel ] []
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None
+      App = AppRun.AppRunState.NotRunning
     }
     return snap
   }
@@ -1213,6 +1213,19 @@ let createResetHandler
 ///   - clears the output + eval-result if that session is the one being viewed
 ///   - after the action resolves, auto-switches to the next session in the list
 ///     (or shows the session picker if none remain)
+/// Falco's route data parses values that look numeric, so the session id
+/// "8e940641" reads back as "Infinity"; session routes read the raw value.
+let routeValue (key: string) (ctx: HttpContext) : string =
+  match ctx.Request.RouteValues.TryGetValue key with
+  | true, (:? string as value) -> value
+  | _ -> ""
+
+let mapPostRaw (route: string) (read: HttpContext -> 'T) (handler: 'T -> HttpHandler) : HttpEndpoint =
+  post route (fun ctx -> handler (read ctx) ctx)
+
+let mapGetRaw (route: string) (read: HttpContext -> 'T) (handler: 'T -> HttpHandler) : HttpEndpoint =
+  get route (fun ctx -> handler (read ctx) ctx)
+
 let createSessionActionHandler
   (q: DashboardQueries)
   (infra: DashboardInfra)
@@ -1971,8 +1984,8 @@ let createEndpoints
         do! ssePatchNode ctx (evalResultError err)
     })
     // Resume previous session (re-creates in same working dir)
-    yield mapPost "/dashboard/session/resume/{id}"
-      (fun (r: RequestData) -> r.GetString("id", ""))
+    yield mapPostRaw "/dashboard/session/resume/{id}"
+      (routeValue "id")
       (fun sessionId -> fun ctx -> task {
         let! previous = q.GetPreviousSessions ()
         let channelClientId =
@@ -2009,11 +2022,11 @@ let createEndpoints
     yield post "/dashboard/session/create" (createCreateSessionHandler infra a.CreateSession a.SwitchSession)
     yield post "/dashboard/config/disable-auto-open" (createToggleWarmupAutoOpenHandler a false)
     yield post "/dashboard/config/enable-auto-open" (createToggleWarmupAutoOpenHandler a true)
-    yield mapPost "/dashboard/session/switch/{id}"
-      (fun (r: RequestData) -> r.GetString("id", ""))
+    yield mapPostRaw "/dashboard/session/switch/{id}"
+      (routeValue "id")
       (fun sid -> createSessionActionHandler q infra a.SwitchSession false (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
-    yield mapPost "/dashboard/session/stop/{id}"
-      (fun (r: RequestData) -> r.GetString("id", ""))
+    yield mapPostRaw "/dashboard/session/stop/{id}"
+      (routeValue "id")
       (fun sid -> createSessionActionHandler q infra a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
     yield post "/dashboard/session/stop-others" (fun ctx -> task {
       let! sessions = q.GetAllSessions ()
@@ -2049,23 +2062,29 @@ let createEndpoints
         ]
       do! ssePatchNode ctx resultHtml
     })
-    yield mapPost "/dashboard/session/dispose/{id}"
-      (fun (r: RequestData) -> r.GetString("id", ""))
+    yield mapPostRaw "/dashboard/session/dispose/{id}"
+      (routeValue "id")
       // Dispose == stop: the per-session .sagefs replay binary is gone, so
       // there is no separate "clear saved memory" step anymore (see the
       // event-sourcing story — the .sagefm manifest is the only durable state).
       (fun sid -> createSessionActionHandler q infra a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
-    yield mapPost "/dashboard/session/purge/{id}"
-      (fun (r: RequestData) -> r.GetString("id", ""))
+    yield mapPostRaw "/dashboard/session/purge/{id}"
+      (routeValue "id")
       (fun sid -> createSessionActionHandler q infra a.PurgeSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
-    // Run App / Stop App endpoints for the "Run App" feature
-    yield mapPost "/dashboard/run-app/{id}"
-      (fun (r: RequestData) -> r.GetString("id", ""))
+    // Run App / Stop App: the session's executable project — the only one (or
+    // the active one), or a named one when the session has several.
+    yield mapPostRaw "/dashboard/run-app/{id}"
+      (routeValue "id")
       (fun sid ->
         let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-        createSessionActionHandler q infra (fun s -> a.RunApp s (q.GetSessionActiveProject s |> Option.defaultValue "")) false sessionId)
-    yield mapPost "/dashboard/stop-app/{id}"
-      (fun (r: RequestData) -> r.GetString("id", ""))
+        createSessionActionHandler q infra (fun s -> a.RunApp s AppRun.RunRequest.DefaultTarget) false sessionId)
+    yield mapPostRaw "/dashboard/run-app/{id}/{project}"
+      (fun ctx -> routeValue "id" ctx, routeValue "project" ctx)
+      (fun (sid, project) ->
+        let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+        createSessionActionHandler q infra (fun s -> a.RunApp s (AppRun.RunRequest.Named project)) false sessionId)
+    yield mapPostRaw "/dashboard/stop-app/{id}"
+      (routeValue "id")
       (fun sid ->
         let sessionId = WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         createSessionActionHandler q infra a.StopApp false sessionId)

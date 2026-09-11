@@ -279,22 +279,43 @@ let transformWholeFile (fs: FileStructure) (code: string) : PreprocessResult =
         t.StartsWith("module ") && not (t.Contains("=")))
     match moduleLineIdx with
     | Some idx ->
-      let moduleLine = lines.[idx].Trim()
-      let bodyLines = lines.[idx + 1 ..]
+      // FSI rejects a dotted module binding (`module A.B.C =`), so a dotted
+      // file-level module nests one `module X =` per segment — the shape the
+      // namespace branch emits, and the one whose method paths match the
+      // compiled app for hot-reload detours. Modifiers stay on the leaf.
+      let declaration =
+        let line = lines.[idx].Trim()
+        match line.IndexOf("//", System.StringComparison.Ordinal) with
+        | -1 -> line
+        | cut -> line.Substring(0, cut).TrimEnd()
+      let tokens =
+        declaration.Split(' ', System.StringSplitOptions.RemoveEmptyEntries) |> Array.skip 1
+      let modifiers = tokens |> Array.truncate (max 0 (tokens.Length - 1)) |> Array.toList
+      let parts =
+        tokens
+        |> Array.tryLast
+        |> Option.map (fun name -> name.Split('.') |> Array.filter (fun p -> p <> "") |> Array.toList)
+        |> Option.defaultValue []
       let indentedBody =
-        bodyLines
+        lines.[idx + 1 ..]
         |> Array.map (fun l ->
           match l.Trim() = "" with
           | true -> ""
           | false -> "  " + l)
-      let transformed =
-        [| yield moduleLine + " ="
-           yield! indentedBody |]
         |> String.concat "\n"
-      { Code = transformed
-        LineOffset = 0
-        ColumnOffset = 2
-        OriginalFilePath = Some fs.FilePath }
+      match List.rev parts with
+      | [] ->
+        { Code = code; LineOffset = 0; ColumnOffset = 0
+          OriginalFilePath = Some fs.FilePath }
+      | leaf :: outers ->
+        let leafHeader = System.String.Join(" ", [ yield "module"; yield! modifiers; yield leaf; yield "=" ])
+        let transformed =
+          outers
+          |> List.fold (fun inner part -> sprintf "module %s =\n%s" part (indentCode inner)) (leafHeader + "\n" + indentedBody)
+        { Code = transformed
+          LineOffset = parts.Length - (idx + 1)
+          ColumnOffset = 2 * parts.Length
+          OriginalFilePath = Some fs.FilePath }
     | None ->
       { Code = code; LineOffset = 0; ColumnOffset = 0
         OriginalFilePath = Some fs.FilePath }

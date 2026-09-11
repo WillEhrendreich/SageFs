@@ -191,7 +191,7 @@ let private mkStatusProxy (status: SessionStatus) : SessionProxy =
           EvalCount = 0
           AvgDurationMs = 0L
           MinDurationMs = 0L
-          MaxDurationMs = 0L })
+          MaxDurationMs = 0L; Projects = [] })
     }
 
 let private mkContextForSession (status: SessionStatus) : McpContext * string =
@@ -212,7 +212,7 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     LastActivity = DateTime.UtcNow
     ActiveProject = None
     ProjectRoles = []
-    RunningApp = None
+    App = SageFs.AppRun.AppRunState.NotRunning
   }
   let ops : SessionManagementOps = {
     CreateSession = fun _ _ _ -> Task.FromResult(Ok "stub")
@@ -225,7 +225,9 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     GetAllSessions = fun () -> Task.FromResult([ info ])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
     NotifyWorkerDied = fun _ -> ()
-    UpdateRunningApp = fun _ _ -> Task.FromResult(())
+    SetAppState = fun _ _ -> Task.FromResult(())
+    EndAppRun = fun _ _ _ -> Task.FromResult(())
+    AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
     UpdateActiveProject = fun _ _ -> Task.FromResult(())
     SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
   }

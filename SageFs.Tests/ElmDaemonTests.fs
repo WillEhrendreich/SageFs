@@ -33,7 +33,7 @@ module ElmDaemonTestHelpers =
 
       ProjectRoles = []
 
-      RunningApp = None
+      App = SageFs.AppRun.AppRunState.NotRunning
 
     }
     let proxy (msg: WorkerMessage) =

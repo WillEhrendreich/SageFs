@@ -229,7 +229,7 @@ module SessionStateOverride =
       GuidanceCssClass = ""
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None }
+      App = SageFs.AppRun.AppRunState.NotRunning }
 [<Tests>]
 let stateOverrideTests =
   let open' getState = SageFs.Server.DashboardTypes.overrideSessionStatuses getState (fun _ -> None)
@@ -516,7 +516,7 @@ let perSessionTestSummaryTests =
           GuidanceCssClass = ""
           ActiveProject = None
           ProjectRoles = []
-          RunningApp = None }
+          App = SageFs.AppRun.AppRunState.NotRunning }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -543,7 +543,7 @@ let perSessionTestSummaryTests =
           GuidanceCssClass = ""
           ActiveProject = None
           ProjectRoles = []
-          RunningApp = None }
+          App = SageFs.AppRun.AppRunState.NotRunning }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -578,7 +578,7 @@ let perSessionCoverageTests =
           GuidanceCssClass = ""
           ActiveProject = None
           ProjectRoles = []
-          RunningApp = None }
+          App = SageFs.AppRun.AppRunState.NotRunning }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -605,7 +605,7 @@ let perSessionCoverageTests =
           GuidanceCssClass = ""
           ActiveProject = None
           ProjectRoles = []
-          RunningApp = None }
+          App = SageFs.AppRun.AppRunState.NotRunning }
       let html =
         renderSessions [session] false
         |> renderNode
@@ -812,3 +812,23 @@ let captureToCssClassTests = testList "captureToCssClass" [
   testCase "empty returns empty" (fun () ->
     Expect.equal (captureToCssClass "") "" "empty")
 ]
+
+[<Tests>]
+let routeValueTests =
+  testList "Dashboard route values" [
+    testCase "WHY — Falco route data — reads the session id 8e940641 as the number Infinity, which is why session routes read raw values" <| fun _ ->
+      let ctx = Microsoft.AspNetCore.Http.DefaultHttpContext()
+      ctx.Request.RouteValues.["id"] <- box "8e940641"
+      (Falco.Request.getRoute ctx).GetString("id", "")
+      |> Expecto.Flip.Expect.equal "Falco's typed parse (characterization)" "Infinity"
+
+    testCase "WHY — Dashboard.routeValue — keeps the session id 8e940641 intact because every session button routes by it" <| fun _ ->
+      let ctx = Microsoft.AspNetCore.Http.DefaultHttpContext()
+      ctx.Request.RouteValues.["id"] <- box "8e940641"
+      SageFs.Server.Dashboard.routeValue "id" ctx
+      |> Expecto.Flip.Expect.equal "the raw id" "8e940641"
+
+    testCase "WHY — Dashboard.routeValue — a missing route key reads as empty because session id validation then rejects it" <| fun _ ->
+      SageFs.Server.Dashboard.routeValue "id" (Microsoft.AspNetCore.Http.DefaultHttpContext())
+      |> Expecto.Flip.Expect.equal "empty" ""
+  ]

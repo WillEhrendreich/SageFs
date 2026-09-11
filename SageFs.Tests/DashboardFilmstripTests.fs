@@ -109,7 +109,7 @@ let filmstripSnapshotTests =
 
         ProjectRoles = []
 
-        RunningApp = None
+        App = SageFs.AppRun.AppRunState.NotRunning
 
       }
       let html = snap.FilmstripPanel |> render
@@ -134,7 +134,7 @@ let filmstripSnapshotTests =
 
         ProjectRoles = []
 
-        RunningApp = None
+        App = SageFs.AppRun.AppRunState.NotRunning
 
       }
       let html = renderMainContent snap |> render

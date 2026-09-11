@@ -25,7 +25,7 @@ let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo =
 
   ProjectRoles = []
 
-  RunningApp = None
+  App = SageFs.AppRun.AppRunState.NotRunning
 
 }
 
@@ -169,7 +169,7 @@ let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) pid : Se
 
   ProjectRoles = []
 
-  RunningApp = None
+  App = SageFs.AppRun.AppRunState.NotRunning
 
 }
 

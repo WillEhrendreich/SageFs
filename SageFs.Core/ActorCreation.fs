@@ -72,6 +72,8 @@ type ActorResult = {
   /// Each project file with the assembly path the session actually loads
   /// (the shadow copy when shadowing), for running its entry point.
   ProjectTargets: (string * string) list
+  /// Each loaded project classified as executable, library or test.
+  ProjectRoles: SageFs.ProjectLoading.ClassifiedProject list
 }
 
 /// Phase 1: Create the actor and return callbacks immediately.
@@ -129,7 +131,7 @@ let createActorImmediate a =
     mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled a.OnEvent tracedBuild sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = sln.Projects |> List.map (fun po -> po.ProjectFileName, po.TargetPath) }
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = sln.Projects |> List.map (fun po -> po.ProjectFileName, po.TargetPath); ProjectRoles = SageFs.ProjectLoading.classifyProjects sln.Projects }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

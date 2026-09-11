@@ -45,7 +45,7 @@ let mkHangingSession (proc: Process) =
         LastActivity = DateTime.UtcNow
         ActiveProject = None
         ProjectRoles = []
-        RunningApp = None }
+        App = SageFs.AppRun.AppRunState.NotRunning }
     Process = proc
     // A proxy that never responds — simulates a hung worker whose HTTP server
     // is wedged (the real proxy has no request timeout).
@@ -59,8 +59,7 @@ let mkHangingSession (proc: Process) =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     RestartState = RestartPolicy.emptyState
     ActiveProject = None
-    ProjectRoles = []
-    RunningApp = None }
+    ProjectRoles = [] }
 
 [<Tests>]
 let shutdownLifecycleTests =

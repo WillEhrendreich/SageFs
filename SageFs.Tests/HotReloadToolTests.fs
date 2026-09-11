@@ -41,12 +41,14 @@ let private mkTools
         Workflow = SessionWorkflow.Interactive
         ActiveProject = None
         ProjectRoles = []
-        RunningApp = None
+        App = SageFs.AppRun.AppRunState.NotRunning
       })
     GetAllSessions = fun () -> Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> Task.FromResult(())
     NotifyWorkerDied = fun _ -> ()
-    UpdateRunningApp = fun _ _ -> Task.FromResult(())
+    SetAppState = fun _ _ -> Task.FromResult(())
+    EndAppRun = fun _ _ _ -> Task.FromResult(())
+    AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
     UpdateActiveProject = fun _ _ -> Task.FromResult(())
     SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
   }

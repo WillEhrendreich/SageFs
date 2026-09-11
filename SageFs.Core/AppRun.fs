@@ -239,3 +239,60 @@ type AppRunState =
   | Running of RunningApp
   | Exited of project: string * exitCode: int * at: DateTime
   | Crashed of project: string * reason: string * at: DateTime
+
+/// A worker's report that a run ended applies only while that run is current:
+/// a stale report must not clobber a newer run or a stop the user already made.
+let applyEnd (current: AppRunState) (runId: string) (final: AppRunState) : AppRunState =
+  match current with
+  | AppRunState.Running app when app.RunId = runId -> final
+  | _ -> current
+
+/// One wording for the app's state, wherever the user reads it.
+let describeState (state: AppRunState) : string =
+  match state with
+  | AppRunState.NotRunning -> "Not running"
+  | AppRunState.Starting (project, StartPhase.RestartingIntoWebLive, _) ->
+    sprintf "Restarting the session with hot reload before starting %s…" (projectName project)
+  | AppRunState.Starting (project, StartPhase.LaunchingEntryPoint, _) ->
+    sprintf "Starting %s…" (projectName project)
+  | AppRunState.Running { Project = project; Endpoint = AppEndpoint.Http (url, _) } ->
+    sprintf "%s is running at %s" (projectName project) url
+  | AppRunState.Running { Project = project; Endpoint = AppEndpoint.NoServer } ->
+    sprintf "%s is running (no web server)" (projectName project)
+  | AppRunState.Exited (project, code, _) -> sprintf "%s exited with code %d" (projectName project) code
+  | AppRunState.Crashed (project, reason, _) -> sprintf "%s crashed: %s" (projectName project) reason
+
+/// The app state as HTTP and MCP clients read it.
+type AppStateView = {
+  State: string
+  Message: string
+  Urls: string list
+  EntryPoint: string
+  RunId: string
+}
+
+let toView (state: AppRunState) : AppStateView =
+  let name =
+    match state with
+    | AppRunState.NotRunning -> "NotRunning"
+    | AppRunState.Starting _ -> "Starting"
+    | AppRunState.Running _ -> "Running"
+    | AppRunState.Exited _ -> "Exited"
+    | AppRunState.Crashed _ -> "Crashed"
+  let urls, entryPoint, runId =
+    match state with
+    | AppRunState.Running app ->
+      let urls =
+        match app.Endpoint with
+        | AppEndpoint.Http (primary, others) -> primary :: others
+        | AppEndpoint.NoServer -> []
+      urls, app.EntryPoint, app.RunId
+    | AppRunState.NotRunning
+    | AppRunState.Starting _
+    | AppRunState.Exited _
+    | AppRunState.Crashed _ -> [], "", ""
+  { State = name
+    Message = describeState state
+    Urls = urls
+    EntryPoint = entryPoint
+    RunId = runId }

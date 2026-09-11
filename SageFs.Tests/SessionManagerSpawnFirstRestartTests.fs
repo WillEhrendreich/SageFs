@@ -115,7 +115,7 @@ let private readyProxy =
           EvalCount = 0
           AvgDurationMs = 0L
           MinDurationMs = 0L
-          MaxDurationMs = 0L
+          MaxDurationMs = 0L; Projects = []
         }
         return WorkerResponse.StatusResult(rid, snap)
       | WorkerMessage.GetTestDiscovery rid ->
@@ -436,4 +436,76 @@ let sessionManagerSpawnFirstRestartTests =
         let sessionReady = getManagedSession harness info.Id
         sessionReady.Info.Status
         |> Expect.equal "session must return to Ready after the swap commits" SessionStatus.Ready
+  ]
+
+[<Tests>]
+let sessionManagerProjectRolesTests =
+  testList "SessionManager project roles" [
+    testTask "WHY — SessionManager — a Ready worker's classified projects reach the session because Run App picks its target from them" {
+      let runtime = mkRuntime (fun _ -> Ok "build ok") (fun _ -> Ok(Process.GetCurrentProcess()))
+      let app : SageFs.ProjectLoading.ClassifiedProject =
+        { Path = "/src/App/App.fsproj"; Role = SageFs.ProjectLoading.ProjectRole.Executable; PackageRefs = [] }
+      let proxy (msg: WorkerMessage) =
+        async {
+          match msg with
+          | WorkerMessage.GetStatus rid ->
+            return
+              WorkerResponse.StatusResult(
+                rid,
+                { Status = SessionStatus.Ready; StatusMessage = None; EvalCount = 0
+                  AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = [ app ] })
+          | _ -> return! readyProxy msg
+        }
+      let cancellation = new CancellationTokenSource()
+      let mailbox, _ =
+        createWith runtime.Runtime cancellation.Token ignore (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
+      try
+        let! created =
+          mailbox.PostAndAsyncReply(fun reply ->
+            SessionCommand.CreateSession([ app.Path ], "/src/App", true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+        let info =
+          match created with
+          | Ok info -> info
+          | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
+        let! session = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        let pid =
+          session
+          |> Option.bind (fun s -> s.Info.WorkerPid)
+          |> Option.defaultWith (fun () -> failtest "expected worker pid")
+        mailbox.Post(SessionCommand.WorkerReady(info.Id, pid, "http://localhost:4123", proxy))
+        let deadline = System.DateTime.UtcNow.AddSeconds 10.0
+        let rec settledRoles () =
+          task {
+            let! current = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+            let roles = current |> Option.map (fun s -> s.Info.ProjectRoles) |> Option.defaultValue []
+            match roles, System.DateTime.UtcNow > deadline with
+            | [], false ->
+              do! System.Threading.Tasks.Task.Delay 50
+              return! settledRoles ()
+            | roles, _ -> return roles
+          }
+        let! roles = settledRoles ()
+        roles |> Expect.equal "the worker's executable project must be on the session" [ app ]
+      finally
+        cancellation.Cancel()
+        cancellation.Dispose()
+    }
+  ]
+
+[<Tests>]
+let sessionManagerStaleReadyReportTests =
+  testList "SessionManager stale ready report" [
+    testCase "WHY — SessionManager — a Ready report from the worker being replaced leaves the session Restarting because a stale Ready would release AwaitReady into a session with no worker" <| fun _ ->
+      let runtime = mkRuntime (fun _ -> Ok "build ok") (fun _ -> Ok(Process.GetCurrentProcess()))
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        makeSessionReady harness info
+        let oldPid = getWorkerPid (getManagedSession harness info.Id)
+        let webLive = WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.SwitchWorkflow(info.Id, webLive, reply)) with
+        | Ok _ -> ()
+        | Error err -> failtestf "switch failed: %s" (SageFsError.describe err)
+        harness.Mailbox.Post(SessionCommand.WorkerReportedReady(info.Id, oldPid, []))
+        (getManagedSession harness info.Id).Info.Status
+        |> Expect.equal "the swap is still waiting for the new worker" SessionStatus.Restarting
   ]

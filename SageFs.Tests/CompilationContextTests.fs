@@ -1092,3 +1092,26 @@ let allCompilationContextTests =
     namespaceContainerTests
     blockEvalModuleContextTests
   ]
+
+[<Tests>]
+let dottedFileModuleTests =
+  let source = "// ── header comment ──\n// second line\nmodule MyApp.Web.Program\n\nopen System\n\nlet view () = 1\n"
+  testList "CompilationContext dotted file-level module" [
+    test "WHY — CompilationContext.preprocessForFsi — a dotted file-level module becomes nested modules because FSI rejects 'module A.B.C ='" {
+      let fs = parseFs "Program.fs" source
+      let result, _ = preprocessForFsi (Some fs) EvalMode.File None Set.empty source
+      result.Code |> Expect.stringContains "outermost" "module MyApp ="
+      result.Code |> Expect.stringContains "middle" "module Web ="
+      result.Code |> Expect.stringContains "leaf" "module Program ="
+      result.Code.Contains "module MyApp.Web.Program"
+      |> Expect.isFalse "no dotted module header"
+    }
+
+    test "WHY — CompilationContext.preprocessForFsi — a diagnostic inside a nested dotted module maps back to its source line because the overlay must point at the user's code" {
+      let fs = parseFs "Program.fs" source
+      let result, _ = preprocessForFsi (Some fs) EvalMode.File None Set.empty source
+      let emittedLine = (result.Code.Split('\n') |> Array.findIndex (fun l -> l.Contains "let view")) + 1
+      mapDiagnosticLine result.LineOffset emittedLine
+      |> Expect.equal "the 'let view' line of the source" 7
+    }
+  ]

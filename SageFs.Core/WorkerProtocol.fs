@@ -162,6 +162,8 @@ module WorkerProtocol =
     AvgDurationMs: int64
     MinDurationMs: int64
     MaxDurationMs: int64
+    /// The loaded projects as the worker classified them (only it has the MSBuild properties).
+    Projects: ClassifiedProject list
   }
 
   /// Wire-friendly symbol reference for TypeCheckWithSymbols response
@@ -218,19 +220,6 @@ module WorkerProtocol =
   type SessionProxy = WorkerMessage -> Async<WorkerResponse>
 
   /// Metadata for a managed session — displayed in dashboard, stored in persistence.
-  /// Tracks a running web application started via the "Run App" button.
-  /// Used by the dashboard to show the app URL and enable stopping.
-  type RunningAppInfo = {
-    /// The detected URL of the running app (e.g., "http://localhost:5000")
-    Url: string
-    /// The port the app is listening on
-    Port: int
-    /// When the app was started
-    StartedAt: DateTime
-    /// The entry point expression that was evaluated to start the app
-    EntryPointExpression: string
-  }
-
   type SessionInfo = {
     Id: SessionId
     Name: string option
@@ -250,8 +239,8 @@ module WorkerProtocol =
     ActiveProject: string option
     /// Classification of all projects loaded in this session.
     ProjectRoles: ClassifiedProject list
-    /// State tracking for a running web application.
-    RunningApp: RunningAppInfo option
+    /// The app this session runs ("Run App"), as the user should see it.
+    App: AppRun.AppRunState
   }
 
   /// Utilities for deriving display-friendly paths from session metadata.

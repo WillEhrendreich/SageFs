@@ -47,11 +47,13 @@ module McpSessionIsolation =
                      LastActivity = System.DateTime.UtcNow
                      ActiveProject = None
                      ProjectRoles = []
-                     RunningApp = None })
+                     App = SageFs.AppRun.AppRunState.NotRunning })
           GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
           UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
           NotifyWorkerDied = fun _ -> ()
-          UpdateRunningApp = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+          SetAppState = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+          EndAppRun = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(())
+          AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
           UpdateActiveProject = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
           SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
         }
@@ -153,7 +155,9 @@ module McpSessionIsolation =
             GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
             UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
             NotifyWorkerDied = fun _ -> ()
-            UpdateRunningApp = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+            SetAppState = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+            EndAppRun = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(())
+            AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
             UpdateActiveProject = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
             SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available")) }
           SessionMap = sessionMap
@@ -208,7 +212,7 @@ module SessionResolutionByWorkingDir =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None }
+      App = SageFs.AppRun.AppRunState.NotRunning }
 
   let tests = testList "resolveSessionByWorkingDir" [
     test "returns None for empty session list" {
@@ -292,7 +296,7 @@ module WorkingDirDeepMatching =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None }
+      App = SageFs.AppRun.AppRunState.NotRunning }
 
   let tests = testList "sessionsMatchingWorkingDirDeep" [
 
@@ -348,7 +352,7 @@ module WorkingDirRoutingPriority =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None }
+      App = SageFs.AppRun.AppRunState.NotRunning }
 
   let dummyProxy : WorkerProtocol.SessionProxy =
     fun _msg -> async { return WorkerProtocol.WorkerResponse.WorkerReady }
@@ -368,7 +372,9 @@ module WorkingDirRoutingPriority =
           GetAllSessions = fun () -> Task.FromResult(sessions)
           UpdateSessionStatus = fun _ _ -> Task.FromResult(())
           NotifyWorkerDied = fun _ -> ()
-          UpdateRunningApp = fun _ _ -> Task.FromResult(())
+          SetAppState = fun _ _ -> Task.FromResult(())
+          EndAppRun = fun _ _ _ -> Task.FromResult(())
+          AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
           UpdateActiveProject = fun _ _ -> Task.FromResult(())
           SwitchWorkflow = fun _ _ -> Task.FromResult(Error(SageFsError.HardResetFailed "Not available")) }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
@@ -533,11 +539,13 @@ module ResetIsolation =
                  FaultReason = None
                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
                  CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow
-                 ActiveProject = None; ProjectRoles = []; RunningApp = None })
+                 ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning })
       GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
       UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
       NotifyWorkerDied = fun _ -> ()
-      UpdateRunningApp = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+      SetAppState = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+      EndAppRun = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(())
+      AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
       UpdateActiveProject = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
       SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
     }
@@ -582,7 +590,7 @@ module ResetIsolation =
         LastActivity = DateTime.UtcNow
         ActiveProject = None
         ProjectRoles = []
-        RunningApp = None }
+        App = SageFs.AppRun.AppRunState.NotRunning }
 
     let statusSnapshot () : WorkerProtocol.WorkerStatusSnapshot =
       let status =
@@ -595,7 +603,7 @@ module ResetIsolation =
         EvalCount = 0
         AvgDurationMs = 0L
         MinDurationMs = 0L
-        MaxDurationMs = 0L }
+        MaxDurationMs = 0L; Projects = [] }
 
     let proxy : WorkerProtocol.SessionProxy =
       fun msg ->
@@ -630,7 +638,9 @@ module ResetIsolation =
         registryStatus := status
         Task.FromResult(())
       NotifyWorkerDied = fun _ -> ()
-      UpdateRunningApp = fun _ _ -> Task.FromResult(())
+      SetAppState = fun _ _ -> Task.FromResult(())
+      EndAppRun = fun _ _ _ -> Task.FromResult(())
+      AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
       UpdateActiveProject = fun _ _ -> Task.FromResult(())
       SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available")) }
 
@@ -679,7 +689,7 @@ module ResetIsolation =
         LastActivity = DateTime.UtcNow
         ActiveProject = None
         ProjectRoles = []
-        RunningApp = None }
+        App = SageFs.AppRun.AppRunState.NotRunning }
 
     let transportFailure =
       let connectionClosed =
@@ -718,7 +728,9 @@ module ResetIsolation =
       NotifyWorkerDied = fun sessionId ->
         workerDied.Add(WorkerProtocol.SessionId.value sessionId)
         registryStatus := WorkerProtocol.SessionStatus.Faulted
-      UpdateRunningApp = fun _ _ -> Task.FromResult(())
+      SetAppState = fun _ _ -> Task.FromResult(())
+      EndAppRun = fun _ _ _ -> Task.FromResult(())
+      AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
       UpdateActiveProject = fun _ _ -> Task.FromResult(())
       SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available")) }
 
@@ -787,13 +799,15 @@ module ResetIsolation =
                    LastActivity = DateTime.UtcNow
                    ActiveProject = None
                    ProjectRoles = []
-                   RunningApp = None })
+                   App = SageFs.AppRun.AppRunState.NotRunning })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
           statuses.Add(status)
           Task.FromResult(())
         NotifyWorkerDied = fun _ -> ()
-        UpdateRunningApp = fun _ _ -> Task.FromResult(())
+        SetAppState = fun _ _ -> Task.FromResult(())
+        EndAppRun = fun _ _ _ -> Task.FromResult(())
+        AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         UpdateActiveProject = fun _ _ -> Task.FromResult(())
         SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
       }
@@ -972,7 +986,7 @@ module ResetIsolation =
           LastActivity = DateTime.UtcNow
           ActiveProject = None
           ProjectRoles = []
-          RunningApp = None }
+          App = SageFs.AppRun.AppRunState.NotRunning }
 
       let proxy : WorkerProtocol.SessionProxy =
         fun msg ->
@@ -1004,7 +1018,9 @@ module ResetIsolation =
           Task.FromResult(())
         NotifyWorkerDied = fun sessionId ->
           workerDied.Add(WorkerProtocol.SessionId.value sessionId)
-        UpdateRunningApp = fun _ _ -> Task.FromResult(())
+        SetAppState = fun _ _ -> Task.FromResult(())
+        EndAppRun = fun _ _ _ -> Task.FromResult(())
+        AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         UpdateActiveProject = fun _ _ -> Task.FromResult(())
         SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available")) }
 
@@ -1070,7 +1086,7 @@ module ResetIsolation =
             FaultReason = None
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-            ActiveProject = None; ProjectRoles = []; RunningApp = None
+            ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning
           })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
@@ -1079,7 +1095,9 @@ module ResetIsolation =
             faultedSignal.TrySetResult(()) |> ignore
           Task.FromResult(())
         NotifyWorkerDied = fun _ -> ()
-        UpdateRunningApp = fun _ _ -> Task.FromResult(())
+        SetAppState = fun _ _ -> Task.FromResult(())
+        EndAppRun = fun _ _ _ -> Task.FromResult(())
+        AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         UpdateActiveProject = fun _ _ -> Task.FromResult(())
         SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
       }
@@ -1155,7 +1173,7 @@ module ResetIsolation =
             FaultReason = None
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-            ActiveProject = None; ProjectRoles = []; RunningApp = None
+            ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning
           })
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
@@ -1164,7 +1182,9 @@ module ResetIsolation =
             faultedSignal.TrySetResult(()) |> ignore
           Task.FromResult(())
         NotifyWorkerDied = fun _ -> ()
-        UpdateRunningApp = fun _ _ -> Task.FromResult(())
+        SetAppState = fun _ _ -> Task.FromResult(())
+        EndAppRun = fun _ _ _ -> Task.FromResult(())
+        AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         UpdateActiveProject = fun _ _ -> Task.FromResult(())
         SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
       }
@@ -1353,7 +1373,9 @@ module SessionMapEviction =
         GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult(live)
         UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
         NotifyWorkerDied = fun _ -> ()
-        UpdateRunningApp = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+        SetAppState = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+        EndAppRun = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(())
+        AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         UpdateActiveProject = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
         SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available")) }
       SessionMap = ConcurrentDictionary<string, string>()
@@ -1376,7 +1398,7 @@ module SessionMapEviction =
       LastActivity = System.DateTime.UtcNow
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None }
+      App = SageFs.AppRun.AppRunState.NotRunning }
 
   let tests = testList "SessionMap eviction" [
     test "setActiveSessionId with empty id removes the agent entry" {

@@ -53,6 +53,7 @@
         <Compile Include="WorkerProtocolTests.fs" />
         <Compile Include="AppRunTests.fs" />
         <Compile Include="AppRunnerTests.fs" />
+        <Compile Include="AppRunOrchestrationTests.fs" />
         <Compile Include="HotReloadDetourPlanTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="HttpOriginGuardTests.fs" />

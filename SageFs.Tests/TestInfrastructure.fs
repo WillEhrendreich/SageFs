@@ -102,7 +102,7 @@ let globalActorResult = lazy(
 /// Create a SessionProxy from a test actor result
 let mkProxy (result: ActorResult) : SageFs.WorkerProtocol.SessionProxy =
   fun msg ->
-    SageFs.Server.WorkerMain.handleMessage result.Actor result.GetSessionState result.GetEvalStats result.GetStatusMessage (fun () -> SageFs.Features.LiveTesting.LiveTestHookResult.noOp) (fun _ -> ()) (fun () -> [||], []) SageFs.Server.WorkerMain.noAppRuns msg
+    SageFs.Server.WorkerMain.handleMessage result.Actor result.GetSessionState result.GetEvalStats result.GetStatusMessage result.ProjectRoles (fun () -> SageFs.Features.LiveTesting.LiveTestHookResult.noOp) (fun _ -> ()) (fun () -> [||], []) SageFs.Server.WorkerMain.noAppRuns msg
 
 /// Create a test SessionManagementOps that routes to the global actor
 let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.SessionId) : SageFs.SessionManagementOps =
@@ -130,12 +130,14 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
           LastActivity = System.DateTime.UtcNow
           ActiveProject = None
           ProjectRoles = []
-          RunningApp = None
+          App = SageFs.AppRun.AppRunState.NotRunning
         })
     GetAllSessions = fun () -> System.Threading.Tasks.Task.FromResult([])
     UpdateSessionStatus = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
     NotifyWorkerDied = fun _ -> ()
-    UpdateRunningApp = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+    SetAppState = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
+    EndAppRun = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(())
+    AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
     UpdateActiveProject = fun _ _ -> System.Threading.Tasks.Task.FromResult(())
     SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available")) }
 

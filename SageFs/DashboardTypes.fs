@@ -488,8 +488,8 @@ type ParsedSession = {
   AgentBadges: AgentBadge list
   GuidanceCssClass: string
   ActiveProject: string option
-  ProjectRoles: SageFs.ProjectLoading.ProjectRole list
-  RunningApp: WorkerProtocol.RunningAppInfo option
+  ProjectRoles: SageFs.ProjectLoading.ClassifiedProject list
+  App: AppRun.AppRunState
 }
 
 let parseSessionLines (content: string) =
@@ -536,7 +536,7 @@ let parseSessionLines (content: string) =
             GuidanceCssClass = ""
             ActiveProject = None
             ProjectRoles = []
-            RunningApp = None })
+            App = AppRun.AppRunState.NotRunning })
   |> Array.toList
 
 let isCreatingSession (content: string) =
@@ -685,9 +685,9 @@ type DashboardQueries = {
   /// Get the active project name for a session (for Run App feature).
   GetSessionActiveProject: WorkerProtocol.SessionId -> string option
   /// Get the classified projects for a session (for Run App feature).
-  GetSessionProjectRoles: WorkerProtocol.SessionId -> ProjectRole list
-  /// Get the running app info for a session (for Run App feature).
-  GetSessionRunningApp: WorkerProtocol.SessionId -> WorkerProtocol.RunningAppInfo option
+  GetSessionProjectRoles: WorkerProtocol.SessionId -> ClassifiedProject list
+  /// The app the session runs, as the user should see it.
+  GetSessionApp: WorkerProtocol.SessionId -> AppRun.AppRunState
 }
 
 /// Recently-fetched worker-derived dashboard data, reused across SSE pushes so
@@ -720,9 +720,9 @@ type DashboardActions = {
   PurgeSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   CreateSession: string list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>
   ShutdownCallback: (unit -> unit) option
-  /// Start a web application in the active project.
-  RunApp: WorkerProtocol.SessionId -> string -> Threading.Tasks.Task<Result<string, string>>
-  /// Stop the running web application.
+  /// Run the session's executable project (see AppRunOrchestration).
+  RunApp: WorkerProtocol.SessionId -> AppRun.RunRequest -> Threading.Tasks.Task<Result<string, string>>
+  /// Stop the app the session runs.
   StopApp: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
 }
 
@@ -794,9 +794,9 @@ type DashboardSnapshot = {
   /// Active project selection for "Run App" feature.
   ActiveProject: string option
   /// Classification of all projects in the session.
-  ProjectRoles: SageFs.ProjectLoading.ProjectRole list
-  /// State tracking for a running web application.
-  RunningApp: WorkerProtocol.RunningAppInfo option
+  ProjectRoles: SageFs.ProjectLoading.ClassifiedProject list
+  /// The app the session runs, as the user should see it.
+  App: AppRun.AppRunState
 }
 
 

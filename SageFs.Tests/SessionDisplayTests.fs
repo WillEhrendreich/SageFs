@@ -24,7 +24,7 @@ let mkInfo (id: SessionId) status lastActive : SessionInfo =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    RunningApp = None }
+    App = SageFs.AppRun.AppRunState.NotRunning }
 
 [<Tests>]
 let displayStatusTests = testList "SessionDisplay.displayStatus" [

@@ -146,7 +146,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
             ProjectRoles = []
 
-            RunningApp = None
+            App = SageFs.AppRun.AppRunState.NotRunning
 
           }
           Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
@@ -158,7 +158,6 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
           ProjectRoles = []
 
-          RunningApp = None
 
         }
         state <- ManagerState.addSession id managed state
@@ -183,7 +182,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
           ProjectRoles = []
 
-          RunningApp = None
+          App = SageFs.AppRun.AppRunState.NotRunning
 
         }
         Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
@@ -195,7 +194,6 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
         ProjectRoles = []
 
-        RunningApp = None
 
       }
       let state = ManagerState.addSession id managed ManagerState.empty
@@ -220,7 +218,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
         ProjectRoles = []
 
-        RunningApp = None
+        App = SageFs.AppRun.AppRunState.NotRunning
 
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = url
@@ -232,7 +230,6 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
       ProjectRoles = []
 
-      RunningApp = None
 
     }
     let state =
@@ -260,7 +257,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
         ProjectRoles = []
 
-        RunningApp = None
+        App = SageFs.AppRun.AppRunState.NotRunning
 
       }
       Process = null; Proxy = pendingProxy; WorkerBaseUrl = ""
@@ -272,7 +269,6 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
       ProjectRoles = []
 
-      RunningApp = None
 
     }
     let afterAdd = ManagerState.addSession id managed ManagerState.empty

@@ -68,7 +68,7 @@ let managerStateTests =
 
         ProjectRoles = []
 
-        RunningApp = None
+        App = SageFs.AppRun.AppRunState.NotRunning
 
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -85,7 +85,6 @@ let managerStateTests =
 
         ProjectRoles = []
 
-        RunningApp = None
 
       }
       let state =
@@ -113,7 +112,7 @@ let managerStateTests =
 
         ProjectRoles = []
 
-        RunningApp = None
+        App = SageFs.AppRun.AppRunState.NotRunning
 
       }
       let session : SageFs.SessionManager.ManagedSession = {
@@ -130,7 +129,6 @@ let managerStateTests =
 
         ProjectRoles = []
 
-        RunningApp = None
 
       }
       let state =
@@ -159,7 +157,7 @@ let managerStateTests =
 
           ProjectRoles = []
 
-          RunningApp = None
+          App = SageFs.AppRun.AppRunState.NotRunning
 
         }
         { Info = info
@@ -172,8 +170,7 @@ let managerStateTests =
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           RestartState = SageFs.RestartPolicy.emptyState
           ActiveProject = None
-          ProjectRoles = []
-          RunningApp = None }
+          ProjectRoles = [] }
 
       let sidA = testSessionId "aa000011"
       let sidB = testSessionId "bb000011"

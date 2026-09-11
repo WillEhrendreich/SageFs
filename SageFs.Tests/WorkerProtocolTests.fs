@@ -150,6 +150,10 @@ let workerProtocolTests =
           MinDurationMs = 5L
           MaxDurationMs = 1000L
           StatusMessage = None
+          Projects =
+            [ { Path = "/src/App/App.fsproj"
+                Role = SageFs.ProjectLoading.ProjectRole.Executable
+                PackageRefs = [ "Falco" ] } ]
         }
         let resp = WorkerResponse.StatusResult("r6", status)
         let _, result = roundTrip<WorkerResponse> resp
@@ -285,7 +289,7 @@ let workerProtocolTests =
 
           ProjectRoles = []
 
-          RunningApp = None
+          App = SageFs.AppRun.AppRunState.NotRunning
 
         }
         SessionInfo.displayName info
@@ -310,7 +314,7 @@ let workerProtocolTests =
 
           ProjectRoles = []
 
-          RunningApp = None
+          App = SageFs.AppRun.AppRunState.NotRunning
 
         }
         SessionInfo.displayName info
@@ -370,7 +374,7 @@ let workerProtocolTests =
 
           ProjectRoles = []
 
-          RunningApp = None
+          App = SageFs.AppRun.AppRunState.NotRunning
 
         }
         let _, result = roundTrip<SessionInfo> info

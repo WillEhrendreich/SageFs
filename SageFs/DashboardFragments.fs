@@ -899,6 +899,18 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Text.raw (sprintf "last: %s" s.LastActivity)
                   ]
                 | false -> ()
+                match s.App with
+                | AppRun.AppRunState.NotRunning -> ()
+                | app ->
+                  let color =
+                    match app with
+                    | AppRun.AppRunState.Running _ -> "var(--fg-green)"
+                    | AppRun.AppRunState.Crashed _ -> "var(--fg-red)"
+                    | _ -> "var(--fg-dim)"
+                  Elem.div
+                    [ Attr.class' "session-card-app"
+                      Attr.style (sprintf "flex-basis: 100%%; font-size: 0.7rem; color: %s; overflow-wrap: anywhere;" color) ]
+                    [ Text.raw (AppRun.describeState app) ]
               ]
             ]
             Elem.div [ Attr.class' "session-card-actions" ] [
@@ -913,23 +925,55 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Ds.onEvent ("click", sprintf "event.stopPropagation(); window.location.assign('/dashboard?session=%s')" sid) ]
                   [ Text.raw "⇄" ]
               | true -> ()
-              // Run App / Stop App toggle — only for sessions that own an executable project
-              match s.ProjectRoles |> List.exists (fun r -> r = SageFs.ProjectLoading.ProjectRole.Executable) with
-              | false -> ()
-              | true ->
-                match s.RunningApp with
-                | Some app ->
-                  Elem.button
-                    [ Attr.class' "session-btn session-btn-success"
-                      Attr.title (sprintf "Stop App — running at %s" app.Url)
-                      Ds.onClick (Ds.post (sprintf "/dashboard/stop-app/%s" sid)) ]
-                    [ Text.raw "■ Stop App" ]
-                | None ->
+              // Run App — for sessions that own an executable project. Every app
+              // state has its own control: starting, running (with a link), and
+              // how the last run ended in the run button's tooltip.
+              let runnable =
+                s.ProjectRoles |> List.filter (fun p -> p.Role = SageFs.ProjectLoading.ProjectRole.Executable)
+              let runTitle (name: string) =
+                match s.App with
+                | AppRun.AppRunState.Exited _ | AppRun.AppRunState.Crashed _ ->
+                  sprintf "Run %s with hot reload — last run: %s" name (AppRun.describeState s.App)
+                | _ ->
+                  sprintf "Run %s with hot reload (an Interactive session restarts into WebLive first, losing its REPL bindings)" name
+              match runnable, s.App with
+              | [], _ -> ()
+              | _, AppRun.AppRunState.Running app ->
+                match app.Endpoint with
+                | AppRun.AppEndpoint.Http (url, _) ->
+                  Elem.a
+                    [ Attr.class' "session-btn session-btn-link"
+                      Attr.href url
+                      Attr.target "_blank"
+                      Attr.rel "noopener"
+                      Attr.title (sprintf "Open %s — save a source file to hot reload it" url) ]
+                    [ Text.raw "🌐" ]
+                | AppRun.AppEndpoint.NoServer -> ()
+                Elem.button
+                  [ Attr.class' "session-btn session-btn-success"
+                    Attr.title (sprintf "Stop App — %s" (AppRun.describeState s.App))
+                    Ds.onClick (Ds.post (sprintf "/dashboard/stop-app/%s" sid)) ]
+                  [ Text.raw "■" ]
+              | _, AppRun.AppRunState.Starting _ ->
+                Elem.button
+                  [ Attr.class' "session-btn"
+                    Attr.disabled
+                    Attr.title (AppRun.describeState s.App) ]
+                  [ Text.raw "⏳" ]
+              | [ project ], _ ->
+                Elem.button
+                  [ Attr.class' "session-btn session-btn-primary"
+                    Attr.title (runTitle (AppRun.projectName project.Path))
+                    Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
+                  [ Text.raw "▶" ]
+              | projects, _ ->
+                for project in projects do
+                  let name = AppRun.projectName project.Path
                   Elem.button
                     [ Attr.class' "session-btn session-btn-primary"
-                      Attr.title "Run App — start the web application (switches the session to WebLive mode: expression-only REPL)"
-                      Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
-                    [ Text.raw "▶ Run App" ]
+                      Attr.title (runTitle name)
+                      Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s/%s" sid (Uri.EscapeDataString name))) ]
+                    [ Text.raw (sprintf "▶ %s" name) ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.title "Stop — unload the session (saved memory kept)"

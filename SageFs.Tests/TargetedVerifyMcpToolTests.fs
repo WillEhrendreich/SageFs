@@ -10,7 +10,7 @@ open SageFs.McpTools
 open SageFs.WorkerProtocol
 
 let private dummyProxy (_: WorkerMessage) =
-  async { return WorkerResponse.StatusResult("reply", { Status = SessionStatus.Ready; StatusMessage = None; EvalCount = 0; AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L }) }
+  async { return WorkerResponse.StatusResult("reply", { Status = SessionStatus.Ready; StatusMessage = None; EvalCount = 0; AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = [] }) }
 
 let private mkSessionInfo status =
   { Id = SessionId.newId ()
@@ -27,7 +27,7 @@ let private mkSessionInfo status =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []
-    RunningApp = None }
+    App = SageFs.AppRun.AppRunState.NotRunning }
 
 let private mkSessionContext sid files =
   { SessionId = sid

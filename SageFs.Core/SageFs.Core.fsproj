@@ -100,6 +100,7 @@
         <Compile Include="WorkerProtocol.fs" />
         <Compile Include="Features\Verification.fs" />
         <Compile Include="SessionMode.fs" />
+        <Compile Include="AppRunOrchestration.fs" />
         <Compile Include="HttpWorkerClient.fs" />
         <Compile Include="HostManifest.fs" />
         <Compile Include="VariantSelector.fs" />

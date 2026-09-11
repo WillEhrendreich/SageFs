@@ -35,7 +35,7 @@ let mkSessionInfo (id: SessionId) status =
 
     ProjectRoles = []
 
-    RunningApp = None
+    App = SageFs.AppRun.AppRunState.NotRunning
 
   }
 
@@ -58,7 +58,6 @@ let mkManagedSession (id: SessionId) status =
 
     ProjectRoles = []
 
-    RunningApp = None
 
   }
 

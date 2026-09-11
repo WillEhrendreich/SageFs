@@ -101,6 +101,8 @@ module SageFsError =
       sprintf "Hot reload failed for '%s': %s. Check the file for syntax errors." path reason
     | SageFsError.HotReloadStateError(id, reason) ->
       sprintf "Hot reload state error in session '%s': %s" id reason
+    | SageFsError.AppRunFailed("", reason) ->
+      sprintf "Could not run the app: %s" reason
     | SageFsError.AppRunFailed(project, reason) ->
       sprintf "Could not run '%s': %s" project reason
     | SageFsError.RestartLimitExceeded(count, windowMin) ->

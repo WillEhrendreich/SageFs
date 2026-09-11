@@ -340,10 +340,24 @@ let createSessionOps
       // in WorkerExited handler (checks currentPid <> workerPid) prevents double-restart.
       sessionManager.Post(
         SessionManager.SessionCommand.WorkerExited(sessionId, -1, -1))
-    UpdateRunningApp = fun sessionId runningApp ->
+    SetAppState = fun sessionId app ->
       task {
-        sessionManager.Post(
-          SessionManager.SessionCommand.UpdateRunningApp(sessionId, runningApp))
+        sessionManager.Post(SessionManager.SessionCommand.SetAppState(sessionId, app))
+      }
+    EndAppRun = fun sessionId runId final ->
+      task {
+        sessionManager.Post(SessionManager.SessionCommand.EndAppRun(sessionId, runId, final))
+      }
+    AwaitReady = fun sessionId timeout ->
+      task {
+        try
+          return!
+            sessionManager.PostAndAsyncReply(
+              (fun reply -> SessionManager.SessionCommand.AwaitReady(sessionId, reply)),
+              int timeout.TotalMilliseconds)
+            |> Async.StartAsTask
+        with :? TimeoutException ->
+          return Error (SageFsError.WorkerTimeout (WorkerProtocol.SessionId.value sessionId, "restart", timeout.TotalSeconds))
       }
     UpdateActiveProject = fun sessionId activeProject ->
       task {
@@ -590,9 +604,9 @@ let createHotReloadProxyEndpoints
       let! respBody = resp.Content.ReadAsStringAsync(linked.Token)
       return (respBody, int resp.StatusCode, resp.IsSuccessStatusCode)
     }) ctx
-  let extractSid = fun (r: RequestData) -> r.GetString("sid", "")
-  let proxyGetRoute path = mapGet (sprintf "/api/sessions/{sid}%s" path) extractSid (fun sid -> fun ctx -> proxyGet sid path ctx)
-  let proxyPostRoute path = mapPost (sprintf "/api/sessions/{sid}%s" path) extractSid (fun sid -> fun ctx -> proxyPost sid path ctx)
+  let extractSid = Dashboard.routeValue "sid"
+  let proxyGetRoute path = Dashboard.mapGetRaw (sprintf "/api/sessions/{sid}%s" path) extractSid (fun sid -> fun ctx -> proxyGet sid path ctx)
+  let proxyPostRoute path = Dashboard.mapPostRaw (sprintf "/api/sessions/{sid}%s" path) extractSid (fun sid -> fun ctx -> proxyPost sid path ctx)
   [
     proxyGetRoute "/hotreload"
     proxyPostRoute "/hotreload/toggle"
@@ -1969,12 +1983,12 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       | None -> None
     GetSessionProjectRoles = fun sessionId ->
       match SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) with
-      | Some info -> info.ProjectRoles |> List.map (fun cp -> cp.Role)
+      | Some info -> info.ProjectRoles
       | None -> []
-    GetSessionRunningApp = fun sessionId ->
+    GetSessionApp = fun sessionId ->
       match SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) with
-      | Some info -> info.RunningApp
-      | None -> None
+      | Some info -> info.App
+      | None -> AppRun.AppRunState.NotRunning
   }
 
   let dashboardActions : DashboardActions = {
@@ -2059,48 +2073,16 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
         |> Result.mapError SageFsError.describe
     }
     ShutdownCallback = Some (fun () -> cts.Cancel())
-    RunApp = fun sid project -> task {
-      let sidStr = WorkerProtocol.SessionId.value sid
-      // 1. Switch session to WebLive workflow with default browser refresh config
-      let! workflowResult = sessionOps.SwitchWorkflow sidStr (WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults)
-      match workflowResult with
-      | Error e -> return Error (SageFsError.describe e)
-      | Ok _ ->
-        // 2. Evaluate the entry point — scan for a main/WebApplication builder in the project
-        let evalCode = sprintf """open SageFs.EntryPointDiscovery;; discoverEntryPoint "%s";;""" project
-        let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.EvalCode(evalCode, "run-app"))
-        match result with
-        | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, _, _)) ->
-          // 3. Update session state with running app info
-          let runningApp : WorkerProtocol.RunningAppInfo = {
-            Url = "http://localhost:5000"
-            Port = 5000
-            StartedAt = System.DateTime.UtcNow
-            EntryPointExpression = msg
-          }
-          do! sessionOps.UpdateRunningApp sid (Some runningApp)
-          do! sessionOps.UpdateActiveProject sid (Some project)
-          return Ok (sprintf "App started: %s" msg)
-        | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) -> return Error (SageFsError.describe err)
-        | Ok other -> return Error (sprintf "Unexpected: %A" other)
-        | Error e -> return Error (SageFsError.describe e)
+    RunApp = fun sid request -> task {
+      let! result =
+        AppRunOrchestration.runApp sessionOps (fun () -> DateTime.UtcNow) Timeouts.warmupReadyPollMax sid request
+      elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+      return result |> Result.map AppRun.describeState |> Result.mapError SageFsError.describe
     }
     StopApp = fun sid -> task {
-      let sidStr = WorkerProtocol.SessionId.value sid
-      let! sessionInfo = sessionOps.GetSessionInfo sid
-      match sessionInfo with
-      | None -> return Error "Session not found"
-      | Some info ->
-        match info.RunningApp with
-        | None -> return Error "No app is running"
-        | Some app ->
-          // Stop the Kestrel server and clear running app state
-          let evalCode = sprintf "System.Environment.Exit(0)"
-          let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.EvalCode(evalCode, "stop-app"))
-          do! sessionOps.UpdateRunningApp sid None
-          match result with
-          | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, _, _)) -> return Ok "App stopped"
-          | _ -> return Ok "App stopped"
+      let! result = AppRunOrchestration.stopApp sessionOps sid
+      elmRuntime.Dispatch(SageFsMsg.Editor EditorAction.ListSessions)
+      return result |> Result.map AppRun.describeState |> Result.mapError SageFsError.describe
     }
   }
 

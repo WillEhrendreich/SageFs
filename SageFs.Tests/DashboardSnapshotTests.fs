@@ -86,7 +86,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; RunningApp = None }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         Status = SessionDisplayStatus.Stopped
         StatusMessage = None
@@ -100,7 +100,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; RunningApp = None }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
     ]
     let html = renderSessions sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions" html
@@ -184,7 +184,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetSessionWorkflow = fun _ -> WorkflowTypes.SessionWorkflow.Interactive
       GetSessionActiveProject = fun _ -> None
       GetSessionProjectRoles = fun _ -> []
-      GetSessionRunningApp = fun _ -> None
+      GetSessionApp = fun _ -> SageFs.AppRun.AppRunState.NotRunning
     }
 
   let mkInfra () : DashboardInfra =
@@ -375,7 +375,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; RunningApp = None }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
     ]
     let html = renderSessions sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html
@@ -493,7 +493,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
     ActiveProject = None
     ProjectRoles = []
-    RunningApp = None }
+    App = SageFs.AppRun.AppRunState.NotRunning }
 
   test "renderMainContent shows version" {
     let html = renderMainContent (mkSnap "1.2.3") |> renderNode
@@ -515,13 +515,13 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; RunningApp = None }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
       { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
         IsActive = false; IsSelected = true; ProjectsText = "(B.fsproj)"; EvalCount = 1
         Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; RunningApp = None }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
     ]
     let snap =
       { mkSnap "0.0.0" with
@@ -554,7 +554,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         ActiveProject = None
         ProjectRoles = []
-        RunningApp = None }
+        App = SageFs.AppRun.AppRunState.NotRunning }
     let resolved = resolveViewingSession (Some "0a2b3c4e") [ info sessionA "A.fsproj"; info sessionB "B.fsproj" ]
     Expect.equal resolved (Some sessionB) "stream must retain the browser-requested session"
   }
@@ -1035,7 +1035,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None }
+      App = SageFs.AppRun.AppRunState.NotRunning }
     let html = renderMainContent snap |> renderNode
     let mustHaveIds =
       [ DomIds.Main; DomIds.SessionStatus; DomIds.EvalStats
@@ -1077,7 +1077,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None }
+      App = SageFs.AppRun.AppRunState.NotRunning }
     let html = renderMainContent snap |> renderNode
     Expect.isTrue (html.StartsWith("<div id=\"main\""))"must start with div#main"
   }
@@ -1097,7 +1097,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
       BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None }
+      App = SageFs.AppRun.AppRunState.NotRunning }
   test "Version appears in rendered output" {
     let html = mkSnap "1.2.3" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
     Expect.stringContains html "1.2.3" "version should appear"

@@ -60,7 +60,7 @@ module TestDeps =
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None
+      App = SageFs.AppRun.AppRunState.NotRunning
     }
     let proxy (msg: WorkerMessage) =
       async {
@@ -139,7 +139,7 @@ module TestDeps =
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             ActiveProject = None
             ProjectRoles = []
-            RunningApp = None
+            App = SageFs.AppRun.AppRunState.NotRunning
           }
           return Result.Ok info
         }
@@ -527,7 +527,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None
+      App = SageFs.AppRun.AppRunState.NotRunning
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -624,7 +624,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None
+      App = SageFs.AppRun.AppRunState.NotRunning
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -721,7 +721,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None
+      App = SageFs.AppRun.AppRunState.NotRunning
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -812,7 +812,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None
+      App = SageFs.AppRun.AppRunState.NotRunning
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -909,7 +909,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None
+      App = SageFs.AppRun.AppRunState.NotRunning
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -1032,7 +1032,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None
+      App = SageFs.AppRun.AppRunState.NotRunning
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -1133,7 +1133,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None
+      App = SageFs.AppRun.AppRunState.NotRunning
     }
     let deps : EffectDeps = {
       ResolveSession = fun _ ->
@@ -1340,7 +1340,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
-      RunningApp = None
+      App = SageFs.AppRun.AppRunState.NotRunning
     }
     let warmup : WarmupContext = {
       AssembliesLoaded =
@@ -1412,7 +1412,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   WorkerPort = None
                   FaultReason = None
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive
-                  ActiveProject = None; ProjectRoles = []; RunningApp = None }]
+                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }]
       }
       SleepMs = fun _ -> async { return () }
       GetWarmupContext = None
@@ -1455,7 +1455,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
                   WorkerPort = None
                   FaultReason = None
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive
-                  ActiveProject = None; ProjectRoles = []; RunningApp = None }]
+                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }]
       }
       SleepMs = fun _ -> async { return () }
       GetWarmupContext =

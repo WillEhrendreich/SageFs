@@ -71,6 +71,7 @@ let toStatusSnapshot
   (state: SessionState)
   (stats: Affordances.EvalStats)
   (statusMsg: string option)
+  (projects: SageFs.ProjectLoading.ClassifiedProject list)
   : WorkerStatusSnapshot =
   let avg =
     match stats.EvalCount > 0 with
@@ -88,7 +89,8 @@ let toStatusSnapshot
     EvalCount = stats.EvalCount
     AvgDurationMs = avg
     MinDurationMs = stats.MinDuration.TotalMilliseconds |> int64
-    MaxDurationMs = stats.MaxDuration.TotalMilliseconds |> int64 }
+    MaxDurationMs = stats.MaxDuration.TotalMilliseconds |> int64
+    Projects = projects }
 
 let mergeInitialDiscoveryResults
   (results: Features.LiveTesting.LiveTestHookResult array)
@@ -147,6 +149,7 @@ let handleMessage
   (getState: unit -> SessionState)
   (getStats: unit -> Affordances.EvalStats)
   (getStatusMessage: unit -> string option)
+  (projects: SageFs.ProjectLoading.ClassifiedProject list)
   (getRunTest: unit -> (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>))
   (setRunTest: (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) -> unit)
   (getInitialDiscovery: unit -> Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list)
@@ -244,7 +247,7 @@ let handleMessage
     | WorkerMessage.GetStatus replyId ->
       let state = getState ()
       let stats = getStats ()
-      return WorkerResponse.StatusResult(replyId, toStatusSnapshot state stats (getStatusMessage()))
+      return WorkerResponse.StatusResult(replyId, toStatusSnapshot state stats (getStatusMessage()) projects)
 
     | WorkerMessage.RunTests(tests, maxParallelism, replyId) ->
       let runTest = getRunTest()
@@ -705,7 +708,7 @@ let run (sessionId: string) (port: int) = async {
 
   // Signal readiness over the pipe
   let handler =
-    handleMessage actor result.GetSessionState result.GetEvalStats result.GetStatusMessage
+    handleMessage actor result.GetSessionState result.GetEvalStats result.GetStatusMessage result.ProjectRoles
       getRunTest setDynamicRunTest (fun () -> initialDiscoveredTests, initialProviders) appRuns
 
   let readyHandler (msg: WorkerMessage) = async {

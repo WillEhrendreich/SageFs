@@ -212,7 +212,7 @@ let descriptionPropertyTests =
 
     testCase "reduced MCP surface keeps the tool count surgical"
     <| fun _ ->
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 38
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 41
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

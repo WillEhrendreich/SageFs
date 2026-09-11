@@ -215,3 +215,41 @@ let endpointTests =
       endpointFromAddresses [ "https://localhost:7001" ]
       |> Expect.equal "https primary" (AppEndpoint.Http ("https://localhost:7001", []))
   ]
+
+let private at = DateTime(2026, 9, 10, 12, 0, 0, DateTimeKind.Utc)
+
+let private runningWeb (endpoint: AppEndpoint) : RunningApp =
+  { RunId = "r1"; Project = projectPath; EntryPoint = "Web.Program.main"; Endpoint = endpoint; StartedAt = at }
+
+[<Tests>]
+let stateViewTests =
+  testList "AppRun describeState and toView" [
+    testCase "WHY — AppRun.describeState — every state about a project names it because several sessions may run apps at once" <| fun _ ->
+      [ AppRunState.Starting (projectPath, StartPhase.RestartingIntoWebLive, at)
+        AppRunState.Starting (projectPath, StartPhase.LaunchingEntryPoint, at)
+        AppRunState.Running (runningWeb (AppEndpoint.Http ("http://127.0.0.1:5123", [])))
+        AppRunState.Running (runningWeb AppEndpoint.NoServer)
+        AppRunState.Exited (projectPath, 3, at)
+        AppRunState.Crashed (projectPath, "boom", at) ]
+      |> List.iter (fun s -> describeState s |> Expect.stringContains (sprintf "%A names the project" s) "Web")
+
+    testCase "WHY — AppRun.toView — a running web app exposes every url because clients link to them" <| fun _ ->
+      let view = toView (AppRunState.Running (runningWeb (AppEndpoint.Http ("http://127.0.0.1:5123", [ "https://localhost:7001" ]))))
+      view.State |> Expect.equal "state" "Running"
+      view.Urls |> Expect.equal "primary first" [ "http://127.0.0.1:5123"; "https://localhost:7001" ]
+      view.RunId |> Expect.equal "run id" "r1"
+
+    testCase "WHY — AppRun.toView — a crash carries its reason in the message because clients must show why" <| fun _ ->
+      let view = toView (AppRunState.Crashed (projectPath, "Missing connection string 'Db'", at))
+      view.State |> Expect.equal "state" "Crashed"
+      view.Message |> Expect.stringContains "the reason" "Missing connection string 'Db'"
+      view.Urls |> Expect.isEmpty "no urls"
+  ]
+
+[<Tests>]
+let appRunFailedWordingTests =
+  testList "AppRun failure wording" [
+    testCase "WHY — SageFsError — a run refused before any project was chosen names no empty project because \"Could not run ''\" reads as a broken UI" <| fun _ ->
+      SageFs.SageFsError.describe (SageFs.SageFsError.AppRunFailed ("", "No runnable project in this session."))
+      |> Expect.equal "the refusal must read as a sentence" "Could not run the app: No runnable project in this session."
+  ]

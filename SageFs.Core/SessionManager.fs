@@ -40,8 +40,6 @@ module SessionManager =
     ActiveProject: string option
     /// Classification of all projects loaded in this session.
     ProjectRoles: ClassifiedProject list
-    /// State tracking for a running web application.
-    RunningApp: RunningAppInfo option
   }
 
   [<RequireQualifiedAccess>]
@@ -81,7 +79,12 @@ module SessionManager =
     | StopAll of AsyncReplyChannel<unit>
     | WorkerWarmupProgress of SessionId * progress: string
     | UpdateSessionStatus of SessionId * WorkerProtocol.SessionStatus
-    | UpdateRunningApp of SessionId * WorkerProtocol.RunningAppInfo option
+    /// A worker's ready poll saw Ready; it carries the worker's pid and its classified projects.
+    | WorkerReportedReady of SessionId * workerPid: int * ClassifiedProject list
+    | SetAppState of SessionId * AppRun.AppRunState
+    | EndAppRun of SessionId * runId: string * AppRun.AppRunState
+    /// Answered when the session is Ready (or has failed) — parked until then.
+    | AwaitReady of SessionId * AsyncReplyChannel<Result<unit, SageFsError>>
     | UpdateActiveProject of SessionId * string option
     | SwitchWorkflow of SessionId * WorkflowTypes.SessionWorkflow * AsyncReplyChannel<Result<string, SageFsError>>
 
@@ -104,6 +107,8 @@ module SessionManager =
     /// worker's exit event must be inert against the registered session (its
     /// pid no longer matches once WorkerReady commits the swap).
     PendingSwap: Map<SessionId, ManagedSession>
+    /// Callers waiting for a session to become Ready, settled after every step.
+    ReadyWaiters: Map<SessionId, AsyncReplyChannel<Result<unit, SageFsError>> list>
   }
 
   module ManagerState =
@@ -113,6 +118,7 @@ module SessionManager =
       WarmupProgress = Map.empty
       RebuildsInFlight = Map.empty
       PendingSwap = Map.empty
+      ReadyWaiters = Map.empty
     }
 
     let addSession id session state =
@@ -577,7 +583,7 @@ module SessionManager =
           Workflow = session.Workflow
           ActiveProject = session.ActiveProject
           ProjectRoles = session.ProjectRoles
-          RunningApp = None
+          App = AppRun.AppRunState.NotRunning
         }
         let restarted = {
           Info = info
@@ -591,7 +597,6 @@ module SessionManager =
           RestartState = session.RestartState
           ActiveProject = session.ActiveProject
           ProjectRoles = session.ProjectRoles
-          RunningApp = None
         }
         let newState = ManagerState.addSession id restarted state
         Instrumentation.sessionsRestarted.Add(1L)
@@ -613,11 +618,78 @@ module SessionManager =
       /// Single dispatch step of the mailbox loop, wrapped in the supervise step.
       /// Keeps the giant existing match; callers must end with `return state` for
       /// the untouched case and `return nextState` after a transition.
+      // Spawn-first restart: start the replacement worker (with `workflow`)
+      // BEFORE stopping the old one, so the old worker keeps serving while the
+      // new one warms up, and a spawn failure leaves the session untouched —
+      // still Ready, old worker serving, its true workflow still recorded. The
+      // old worker is parked in PendingSwap and retired when the new worker
+      // reports Ready (see the WorkerReady commit point).
+      let spawnFirst
+        (state: ManagerState)
+        (id: SessionId)
+        (session: ManagedSession)
+        (workflow: WorkflowTypes.SessionWorkflow)
+        (reply: AsyncReplyChannel<Result<string, SageFsError>>)
+        (span: Activity)
+        : ManagerState =
+        match isNull span with
+        | false -> span.SetTag("restart.decision", "spawn_first") |> ignore
+        | true -> ()
+        let onExited workerPid exitCode =
+          inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
+        match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces workflow onExited with
+        | Error err ->
+          reply.Reply(Error err)
+          Instrumentation.failSpan span (SageFsError.describe err)
+          state
+        | Ok proc ->
+          // Registry continuity (P7): the session stays registered for the
+          // whole restart, marked Restarting with a pending proxy. The old
+          // worker's pid stays on Info.WorkerPid until the swap commits, so
+          // its real exit during warmup is ignored by the stale-pid guard (P2).
+          let restarting =
+            { session with
+                Proxy = pendingProxy
+                WorkerBaseUrl = ""
+                Workflow = workflow
+                Info =
+                  { session.Info with
+                      Status = SessionStatus.Restarting
+                      WorkerPort = None
+                      Workflow = workflow
+                      LastActivity = DateTime.UtcNow } }
+          let newState =
+            ManagerState.setPendingSwap id session
+              { ManagerState.addSession id restarting state with
+                  WarmupProgress = Map.remove id state.WarmupProgress }
+          runtime.AwaitWorkerPort id proc inbox ct
+          reply.Reply(Ok "Hard reset accepted — replacement worker spawning.")
+          Instrumentation.sessionsRestarted.Add(1L)
+          Instrumentation.succeedSpan span
+          newState
+
+      // Answer callers parked by AwaitReady once their session is Ready or can
+      // no longer become Ready — whichever step caused it.
+      let settleReadyWaiters (state: ManagerState) : ManagerState =
+        state.ReadyWaiters
+        |> Map.fold (fun (acc: ManagerState) id waiters ->
+          let answer (result: Result<unit, SageFsError>) =
+            for waiter in waiters do waiter.Reply result
+            { acc with ReadyWaiters = Map.remove id acc.ReadyWaiters }
+          match ManagerState.tryGetSession id acc with
+          | None -> answer (Error (SageFsError.SessionNotFound (SessionId.value id)))
+          | Some session ->
+            match session.Info.Status with
+            | SessionStatus.Ready | SessionStatus.Evaluating -> answer (Ok ())
+            | SessionStatus.Faulted | SessionStatus.Stopped ->
+              answer (Error (SageFsError.WorkerSpawnFailed (session.Info.FaultReason |> Option.defaultValue "the session stopped before it became Ready")))
+            | SessionStatus.Starting | SessionStatus.Restarting | SessionStatus.Building _ -> acc) state
+
       let rec loop (state: ManagerState) = async {
         publishSnapshot state
         let! cmd = inbox.Receive()
         let! state' = superviseStep state cmd
-        return! loop state'
+        return! loop (settleReadyWaiters state')
       }
       and step (state: ManagerState) (cmd: SessionCommand) : Async<ManagerState> = async {
         match cmd with
@@ -655,7 +727,7 @@ module SessionManager =
                 Workflow = workflow
                 ActiveProject = None
                 ProjectRoles = []
-                RunningApp = None
+                App = AppRun.AppRunState.NotRunning
               }
               let managed = {
                 Info = info
@@ -669,7 +741,6 @@ module SessionManager =
                 RestartState = RestartPolicy.emptyState
                 ActiveProject = None
                 ProjectRoles = []
-                RunningApp = None
               }
               let newState = ManagerState.addSession sessionId managed state
               reply.Reply(Ok info)
@@ -724,49 +795,7 @@ module SessionManager =
           | Some session ->
             match rebuild with
             | false ->
-              // Spawn-first restart: start the replacement worker BEFORE
-              // stopping the old one, so the old worker keeps serving while
-              // the new one warms up and a spawn failure leaves the session
-              // untouched (still Ready, old worker serving). The old worker is
-              // parked in PendingSwap and retired when the new worker reports
-              // Ready (see the WorkerReady commit point).
-              match isNull span with
-              | false -> span.SetTag("restart.decision", "spawn_first") |> ignore
-              | true -> ()
-              let onExited workerPid exitCode =
-                inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
-              match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
-              | Error err ->
-                // P3 — spawn failure is free: the old worker keeps serving and
-                // the session stays exactly as it was.
-                reply.Reply(Error err)
-                Instrumentation.failSpan span (SageFsError.describe err)
-                return state
-              | Ok proc ->
-                // Registry continuity (P7): the session stays registered for the
-                // whole restart, marked Restarting with a pending proxy. The old
-                // worker's pid stays on Info.WorkerPid until the swap commits, so
-                // its real exit during warmup is ignored by the stale-pid guard
-                // (P2). The old ManagedSession is parked so WorkerReady can stop
-                // it once the new worker is up.
-                let restarting =
-                  { session with
-                      Proxy = pendingProxy
-                      WorkerBaseUrl = ""
-                      Info =
-                        { session.Info with
-                            Status = SessionStatus.Restarting
-                            WorkerPort = None
-                            LastActivity = DateTime.UtcNow } }
-                let newState =
-                  ManagerState.setPendingSwap id session
-                    { ManagerState.addSession id restarting state with
-                        WarmupProgress = Map.remove id state.WarmupProgress }
-                runtime.AwaitWorkerPort id proc inbox ct
-                reply.Reply(Ok "Hard reset accepted — replacement worker spawning.")
-                Instrumentation.sessionsRestarted.Add(1L)
-                Instrumentation.succeedSpan span
-                return newState
+              return spawnFirst state id session session.Workflow reply span
             | true ->
               // rebuild=true: stop the old worker first (bounded), then run
               // `dotnet build` OFF the mailbox loop so other session operations
@@ -968,7 +997,7 @@ module SessionManager =
                         | WorkerResponse.StatusResult(_, snapshot) ->
                           match snapshot.Status with
                           | SessionStatus.Ready ->
-                            inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Ready))
+                            inbox.Post(SessionCommand.WorkerReportedReady(id, workerPid, snapshot.Projects))
                             done' <- true
                           | SessionStatus.Faulted
                           | SessionStatus.Stopped -> done' <- true
@@ -1270,18 +1299,48 @@ module SessionManager =
             return newState
           | None ->
             return state
-        | SessionCommand.UpdateRunningApp(id, runningApp) ->
-          match ManagerState.tryGetSession id state with
+        | SessionCommand.WorkerReportedReady(id, workerPid, roles) ->
+          // Only the session's current worker may declare it Ready: a ready poll
+          // that outlives a spawn-first swap is reporting for the retired worker,
+          // and its Ready would release AwaitReady into a session with no worker.
+          let current =
+            match ManagerState.tryGetSession id state, ManagerState.tryGetPendingSwap id state with
+            | Some session, None when session.Info.WorkerPid = Some workerPid -> Some session
+            | _ -> None
+          match current with
           | Some session ->
             let updated =
               { session with
-                  Info = { session.Info with RunningApp = runningApp }
-                  RunningApp = runningApp }
+                  ProjectRoles = roles
+                  Info = { session.Info with Status = SessionStatus.Ready; ProjectRoles = roles } }
             let newState = ManagerState.addSession id updated state
             onSessionProgressChanged ()
             return newState
           | None ->
+            Log.warn "[SessionManager] Ignoring Ready from worker pid %d for session %s: it is no longer the session's worker" workerPid (SessionId.value id)
             return state
+        | SessionCommand.SetAppState(id, app) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let newState = ManagerState.addSession id { session with Info = { session.Info with App = app } } state
+            onSessionProgressChanged ()
+            return newState
+          | None ->
+            return state
+        | SessionCommand.EndAppRun(id, runId, final) ->
+          match ManagerState.tryGetSession id state with
+          | Some session ->
+            let app = AppRun.applyEnd session.Info.App runId final
+            let newState = ManagerState.addSession id { session with Info = { session.Info with App = app } } state
+            onSessionProgressChanged ()
+            return newState
+          | None ->
+            return state
+        | SessionCommand.AwaitReady(id, reply) ->
+          // Parked here and settled after every step (settleReadyWaiters), so
+          // any path that makes the session Ready or fails it answers the caller.
+          let waiting = state.ReadyWaiters |> Map.tryFind id |> Option.defaultValue []
+          return { state with ReadyWaiters = Map.add id (reply :: waiting) state.ReadyWaiters }
         | SessionCommand.UpdateActiveProject(id, activeProject) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
@@ -1296,13 +1355,20 @@ module SessionManager =
             return state
         | SessionCommand.SwitchWorkflow(id, workflow, reply) ->
           match ManagerState.tryGetSession id state with
+          | Some session when session.Workflow = workflow ->
+            reply.Reply(Ok (sprintf "Session is already in %A mode" workflow))
+            return state
+          | Some _ when ManagerState.tryGetRebuildChannel id state |> Option.isSome ->
+            reply.Reply(Error (SageFsError.HardResetFailed "A rebuild is in progress for this session. → Switch the workflow after it finishes."))
+            return state
           | Some session ->
-            let updated =
-              { session with
-                  Info = { session.Info with Workflow = workflow }
-                  Workflow = workflow }
-            let newState = ManagerState.addSession id updated state
-            reply.Reply(Ok (sprintf "Workflow switched to %A" workflow))
+            // The workflow only takes effect in a fresh worker (hot reload
+            // installs at worker start): restart spawn-first INTO it. The new
+            // workflow is recorded only if that spawn succeeds, so a failed
+            // switch never claims a workflow the serving worker does not have.
+            let span =
+              Instrumentation.startSpan Instrumentation.sessionSource "session.switch_workflow" [("session.id", box id)]
+            let newState = spawnFirst state id session workflow reply span
             onSessionProgressChanged ()
             return newState
           | None ->
@@ -1353,6 +1419,8 @@ module SessionManager =
             tryReply reply (ManagerState.allInfos state)
           | SessionCommand.StopAll reply ->
             tryReply reply ()
+          | SessionCommand.AwaitReady(_, reply) ->
+            tryReply reply (Error (SageFsError.Unexpected ex))
           | _ -> ()
           return state
       }

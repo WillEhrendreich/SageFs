@@ -1755,6 +1755,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
               return 0, 0.0, fallbackSessionStatusLabel sess.Status
           | None -> return 0, 0.0, fallbackSessionStatusLabel sess.Status
         }
+        let appView = SageFs.AppRun.toView sess.App
         results.Add(
           {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
              status = status
@@ -1763,7 +1764,8 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
              workingDirectory = sess.WorkingDirectory
              evalCount = evalCount
              avgDurationMs = avgMs
-             workflowLabel = SageFs.WorkflowTypes.SessionWorkflow.label sess.Workflow |} :> obj)
+             workflowLabel = SageFs.WorkflowTypes.SessionWorkflow.label sess.Workflow
+             app = {| state = appView.State; message = appView.Message; urls = appView.Urls |} |} :> obj)
       do! jsonResponse ctx 200 {| sessions = results |}
     } :> Task
   ) |> ignore

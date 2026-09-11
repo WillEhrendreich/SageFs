@@ -82,7 +82,10 @@ let availableTools (state: SessionState) : string list =
       "get_eval_diff"
       "get_cell_dependencies"
       "discover_features"
-      "suggest_repair" ]
+      "suggest_repair"
+      "list_runnable_projects"
+      "run_app"
+      "stop_app" ]
   | Evaluating ->
     [ "cancel_eval"
       "get_fsi_status"
@@ -181,6 +184,10 @@ let private gatingDomain : Map<string, ToolGate> =
     "get_cell_dependencies", ToolGate.StateGated
     "discover_features", ToolGate.StateGated
     "suggest_repair", ToolGate.StateGated
+    // Running the session's executable project needs a Ready worker.
+    "list_runnable_projects", ToolGate.StateGated
+    "run_app", ToolGate.StateGated
+    "stop_app", ToolGate.StateGated
   ]
 
 /// Look up a tool's gating classification. `None` means the tool is not

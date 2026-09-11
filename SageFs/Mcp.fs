@@ -3749,72 +3749,29 @@ module McpTools =
 
   // ─── Run App / Stop App / List Runnable Projects ──────────────────────
 
-  let runWebApp (ctx: McpContext) (project: string) : Task<string> =
+  let private appStateJson (state: AppRun.AppRunState) = AppRun.toView state
+
+  let runApp (ctx: McpContext) (project: string) : Task<string> =
     withSessionWd ctx "mcp" None (fun sid -> task {
-      let! infoOpt = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-      match infoOpt with
-      | None -> return sprintf "Session %s not found." sid
-      | Some info ->
-        let targetProject =
-          if String.IsNullOrWhiteSpace project then
-            info.ActiveProject |> Option.defaultValue ""
-          else project
-        if String.IsNullOrWhiteSpace targetProject then
-          return "No project specified and no active project set. Use list_runnable_projects to see available projects, or specify a project name."
-        else
-          let executables = info.ProjectRoles |> List.filter (fun cp -> cp.Role = ProjectLoading.ProjectRole.Executable)
-          if executables.IsEmpty then
-            return "No executable projects found in this session. Only projects with OutputType=Exe can be run."
-          else
-            let! workflowResult = ctx.SessionOps.SwitchWorkflow sid (WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults)
-            match workflowResult with
-            | Error e -> return sprintf "Failed to switch workflow: %s" (SageFsError.describe e)
-            | Ok _ ->
-              let evalCode = sprintf """printfn "Starting web application from %s...";; """ targetProject
-              let! routeResult = routeToSession ctx sid (fun replyId -> WorkerProtocol.WorkerMessage.EvalCode(evalCode, "run-app"))
-              return
-                match routeResult with
-                | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, _, _)) ->
-                  let runningApp : WorkerProtocol.RunningAppInfo = {
-                    Url = "http://localhost:5000"
-                    Port = 5000
-                    StartedAt = System.DateTime.UtcNow
-                    EntryPointExpression = targetProject
-                  }
-                  // Update session state (fire-and-forget, session manager will track)
-                  ctx.SessionOps.UpdateRunningApp (toSessionId sid) (Some runningApp) |> ignore
-                  ctx.SessionOps.UpdateActiveProject (toSessionId sid) (Some targetProject) |> ignore
-                  JsonSerializer.Serialize(
-                    {| Status = "Started"
-                       Url = runningApp.Url
-                       Port = runningApp.Port
-                       Project = targetProject
-                       EntryPoint = msg
-                       Workflow = "WebLive" |}, liveTestJsonOpts)
-                | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) -> sprintf "Eval failed: %s" (SageFsError.describe err)
-                | Ok other -> sprintf "Unexpected response: %A" other
-                | Error (Message msg) -> sprintf "Proxy error: %s" msg
-                | Error (TransportFailure msg) -> sprintf "Transport failure: %s" msg
-                | Error (RestartInProgress msg) -> sprintf "Restart in progress: %s" msg
+      let request =
+        match String.IsNullOrWhiteSpace project with
+        | true -> AppRun.RunRequest.DefaultTarget
+        | false -> AppRun.RunRequest.Named project
+      let! result =
+        AppRunOrchestration.runApp ctx.SessionOps (fun () -> DateTime.UtcNow) Timeouts.warmupReadyPollMax (toSessionId sid) request
+      return
+        match result with
+        | Ok state -> JsonSerializer.Serialize(appStateJson state, liveTestJsonOpts)
+        | Error e -> SageFsError.describeForAgent e
     })
 
   let stopApp (ctx: McpContext) : Task<string> =
     withSessionWd ctx "mcp" None (fun sid -> task {
-      let! infoOpt = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-      match infoOpt with
-      | None -> return sprintf "Session %s not found." sid
-      | Some info ->
-        match info.RunningApp with
-        | None ->
-          let jsonData = {| Status = "NoAppRunning"; Project = ""; Url = "" |}
-          return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
-        | Some app ->
-          do! ctx.SessionOps.UpdateRunningApp (toSessionId sid) None
-          let jsonData =
-            {| Status = "Stopped"
-               Project = info.ActiveProject |> Option.defaultValue ""
-               Url = app.Url |}
-          return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
+      let! result = AppRunOrchestration.stopApp ctx.SessionOps (toSessionId sid)
+      return
+        match result with
+        | Ok state -> JsonSerializer.Serialize(appStateJson state, liveTestJsonOpts)
+        | Error e -> SageFsError.describeForAgent e
     })
 
   let listRunnableProjects (ctx: McpContext) : Task<string> =
@@ -3833,6 +3790,7 @@ module McpTools =
           {| TotalProjects = projects.Length
              ExecutableCount = projects |> List.filter (fun p -> p.Role = "Executable") |> List.length
              ActiveProject = info.ActiveProject |> Option.defaultValue ""
+             App = AppRun.describeState info.App
              Projects = projects |}
         return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
     })

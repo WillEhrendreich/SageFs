@@ -1497,46 +1497,40 @@ WORKFLOW: When run_tests shows a failure, call suggest_repair with the test name
         suggestRepair ctx test_name |> withEcho ctx "suggest_repair"
 
     [<McpServerTool>]
-    [<Description("""Start a web application in the current session.
+    [<Description("""Run the session's executable project (OutputType=Exe) inside the session, the way `dotnet run` would, with hot reload.
 
-Discovers executable projects (OutputType=Exe), selects an entry point, and evaluates it to start the app. Switches the session to WebLive workflow if not already.
+Invokes the compiled entry point, applies the project's Properties/launchSettings.json (the first "Project" profile's environment variables and applicationUrl), and uses a free loopback port when the project configures no URL. An Interactive session is first restarted into WebLive so hot reload is installed — its REPL bindings are lost. Saving the project's source files then hot-patches the running app.
 
 Parameters:
-- project: project name or path (optional — uses active project if not specified)
+- project: project name, file name or path (optional — the active project, or the only executable)
 
-OUTPUT: JSON with Status (Started|Failed), Url, Port, Project, EntryPoint, and Workflow (WebLive).
+OUTPUT: JSON with State (Running|Exited|Crashed), Message, Urls, EntryPoint and RunId — or an error that says what to do next.
 
-WORKFLOW: Use this to run a web app for live development. The dashboard "▶ Run App" button does the same thing. Use "stop_app" to shut it down.
-
-NOTE: Switching to WebLive restricts the REPL to expression-only mode (no type redefinition). This is required for hot-reload to work.""")>]
-    member _.run_webapp(
-        [<Description("Project name or path (optional — auto-discovers executable projects)")>]
+WORKFLOW: list_runnable_projects to see what can run → run_app → edit and save to hot reload → stop_app. The dashboard's Run button does the same.""")>]
+    member _.run_app(
+        [<Description("Project name, file name or path (optional — the active project, or the only executable)")>]
         [<Optional; DefaultParameterValue("")>]
         project: string
     ) : Task<string> =
-        logger.LogDebug("MCP-TOOL: run_webapp called, project={Project}", project)
-        runWebApp ctx project |> withEcho ctx "run_webapp"
+        logger.LogDebug("MCP-TOOL: run_app called, project={Project}", project)
+        runApp ctx project |> withEcho ctx "run_app"
 
     [<McpServerTool>]
-    [<Description("""Stop the running web application started via run_webapp.
+    [<Description("""Stop the app started by run_app. Its web host stops gracefully and frees its port; the session keeps running. A console app without a web host cannot be stopped in place — hard-reset the session instead.
 
-Clears the running app state and attempts to shut down the server process.
+OUTPUT: JSON with State (NotRunning) and Message — or an error that says what to do next.
 
-OUTPUT: JSON with Status (Stopped|NoAppRunning), Project, and Url.
-
-WORKFLOW: Use this after run_webapp to clean up. The dashboard "■ Stop App" button does the same thing.""")>]
+WORKFLOW: Use after run_app. The dashboard's Stop App button does the same.""")>]
     member _.stop_app() : Task<string> =
         logger.LogDebug("MCP-TOOL: stop_app called")
         stopApp ctx |> withEcho ctx "stop_app"
 
     [<McpServerTool>]
-    [<Description("""List executable projects in the current session that can be run via run_webapp.
+    [<Description("""List the session's projects and which of them run_app can run (OutputType=Exe).
 
-Shows project classification (Executable/Library/Test) and package references.
+OUTPUT: JSON with TotalProjects, ExecutableCount, ActiveProject, App (the current app state) and Projects (Path, Role, PackageRefs).
 
-OUTPUT: JSON with TotalProjects, ExecutableCount, and Projects array (Path, Role, PackageRefs).
-
-WORKFLOW: Call this before run_webapp to see which projects are available to run, or to inspect what was detected.""")>]
+WORKFLOW: Call before run_app to see what can run.""")>]
     member _.list_runnable_projects() : Task<string> =
         logger.LogDebug("MCP-TOOL: list_runnable_projects called")
         listRunnableProjects ctx |> withEcho ctx "list_runnable_projects"

@@ -175,7 +175,7 @@ let diagnosticsPanelSnapshotTests =
 
         ProjectRoles = []
 
-        RunningApp = None
+        App = SageFs.AppRun.AppRunState.NotRunning
 
       }
       let html = snap.DiagnosticsPanel |> renderToString
@@ -199,7 +199,7 @@ let diagnosticsPanelSnapshotTests =
 
         ProjectRoles = []
 
-        RunningApp = None
+        App = SageFs.AppRun.AppRunState.NotRunning
 
       }
       let html = renderMainContent snap |> renderToString
