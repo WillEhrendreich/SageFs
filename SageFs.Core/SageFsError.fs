@@ -28,6 +28,8 @@ type SageFsError =
   | EvalFailed of reason: string
   | ResetFailed of reason: string
   | HardResetFailed of reason: string
+  /// `dotnet build` failed; the reason carries the compiler errors and what to do.
+  | BuildFailed of reason: string
   | ScriptLoadFailed of reason: string
   | CheckFailed of reason: string
   | CompletionFailed of sessionId: string * reason: string
@@ -85,6 +87,7 @@ module SageFsError =
       sprintf "Reset failed: %s. Try hard_reset_fsi_session for a full restart." reason
     | SageFsError.HardResetFailed reason ->
       sprintf "Hard reset failed: %s. Check that the project builds with 'dotnet build'." reason
+    | SageFsError.BuildFailed reason -> reason
     | SageFsError.ScriptLoadFailed reason ->
       sprintf "Script load failed: %s. Check that the file exists and has valid F# syntax." reason
     | SageFsError.CheckFailed reason ->
@@ -136,6 +139,7 @@ module SageFsError =
     | SageFsError.EvalFailed _ -> LogLevel.Error
     | SageFsError.ResetFailed _ -> LogLevel.Error
     | SageFsError.HardResetFailed _ -> LogLevel.Error
+    | SageFsError.BuildFailed _ -> LogLevel.Error
     | SageFsError.ScriptLoadFailed _ -> LogLevel.Error
     | SageFsError.HotReloadFailed _ -> LogLevel.Error
     | SageFsError.AppRunFailed _ -> LogLevel.Error
@@ -186,6 +190,7 @@ module SageFsError =
     | SageFsError.EvalFailed _ -> 500
     | SageFsError.ResetFailed _ -> 500
     | SageFsError.HardResetFailed _ -> 500
+    | SageFsError.BuildFailed _ -> 500
     | SageFsError.ScriptLoadFailed _ -> 500
     | SageFsError.CheckFailed _ -> 500
     | SageFsError.CompletionFailed _ -> 500
@@ -219,6 +224,7 @@ module SageFsError =
     | SageFsError.EvalFailed _
     | SageFsError.ResetFailed _
     | SageFsError.HardResetFailed _
+    | SageFsError.BuildFailed _
     | SageFsError.ScriptLoadFailed _
     | SageFsError.CheckFailed _
     | SageFsError.CompletionFailed _
@@ -241,6 +247,7 @@ module SageFsError =
     | SageFsError.EvalFailed _ -> true
     | SageFsError.ResetFailed _ -> true
     | SageFsError.HardResetFailed _ -> true
+    | SageFsError.BuildFailed _ -> true
     | SageFsError.ScriptLoadFailed _ -> true
     | SageFsError.CheckFailed _ -> true
     | SageFsError.CompletionFailed _ -> true
@@ -290,6 +297,7 @@ module SageFsError =
     | SageFsError.EvalFailed _
     | SageFsError.ResetFailed _
     | SageFsError.HardResetFailed _
+    | SageFsError.BuildFailed _
     | SageFsError.ScriptLoadFailed _
     | SageFsError.CheckFailed _
     | SageFsError.CompletionFailed _
@@ -326,6 +334,7 @@ module SageFsError =
     | SageFsError.EvalFailed _
     | SageFsError.ResetFailed _
     | SageFsError.HardResetFailed _
+    | SageFsError.BuildFailed _
     | SageFsError.ScriptLoadFailed _
     | SageFsError.CheckFailed _
     | SageFsError.CompletionFailed _
@@ -356,6 +365,7 @@ module SageFsError =
     | SageFsError.EvalFailed _ -> "Fix the code and resubmit"
     | SageFsError.ResetFailed _ -> "Run hard_reset_fsi_session"
     | SageFsError.HardResetFailed _ -> "Check that the project builds with 'dotnet build'"
+    | SageFsError.BuildFailed _ -> "Fix the build errors, then run the app again"
     | SageFsError.ScriptLoadFailed _ -> "Check file exists and has valid F# syntax"
     | SageFsError.CheckFailed _ -> "Fix the code and resubmit"
     | SageFsError.CompletionFailed _ -> "Retry or run reset_fsi_session"

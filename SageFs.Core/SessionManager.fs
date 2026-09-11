@@ -882,7 +882,7 @@ module SessionManager =
               // the old inline path).
               let tombstone = faultedTombstone (Some msg) session
               let newState = ManagerState.addSession id tombstone stateCleared
-              reply.Reply(Error (SageFsError.HardResetFailed msg))
+              reply.Reply(Error (SageFsError.BuildFailed msg))
               onSessionReady id
               onSessionFaulted id msg
               Instrumentation.failSpan rebuildSpan msg

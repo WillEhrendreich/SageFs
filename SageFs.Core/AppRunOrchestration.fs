@@ -25,6 +25,12 @@ let private askWorker (ops: SessionManagementOps) (sessionId: SessionId) (msg: W
         return Error (SageFsError.WorkerCommunicationFailed (sid, ex.Message))
   }
 
+/// How a failed start reads on the card: a failed build is not a crash.
+let private failedState (project: string) (err: SageFsError) (at: DateTime) =
+  match err with
+  | SageFsError.BuildFailed reason -> AppRunState.BuildFailed (project, reason, at)
+  | other -> AppRunState.Crashed (project, SageFsError.describe other, at)
+
 /// Starts the entry point on a Ready worker, records what happened, and
 /// watches a running app until its run ends.
 let rec private launch
@@ -39,7 +45,7 @@ let rec private launch
     do! ops.SetAppState sessionId (AppRunState.Starting (project, StartPhase.LaunchingEntryPoint, clock ()))
     match! askWorker ops sessionId (WorkerMessage.RunApp (project, previous, newReplyId ())) with
     | Error e ->
-      do! ops.SetAppState sessionId (AppRunState.Crashed (project, SageFsError.describe e, clock ()))
+      do! ops.SetAppState sessionId (failedState project e (clock ()))
       return Error e
     | Ok state ->
       do! ops.SetAppState sessionId state
@@ -94,7 +100,7 @@ and private restartForChanges
       | Error e -> Task.FromResult(Error e)
       | Ok _ -> ops.AwaitReady sessionId readyTimeout
     match ready with
-    | Error e -> do! ops.SetAppState sessionId (AppRunState.Crashed (project, SageFsError.describe e, clock ()))
+    | Error e -> do! ops.SetAppState sessionId (failedState project e (clock ()))
     | Ok () ->
       let! _ = launch ops clock readyTimeout sessionId project previous
       ()
@@ -144,10 +150,10 @@ let runApp
           return Error (SageFsError.AppRunFailed (project, sprintf "%s is already running. → Stop it first." (projectName app.Project)))
         | AppRunState.Starting (starting, _, _) ->
           return Error (SageFsError.AppRunFailed (project, sprintf "%s is already starting. → Wait for it, then retry." (projectName starting)))
-        | AppRunState.NotRunning | AppRunState.Exited _ | AppRunState.Crashed _ | AppRunState.RestartRequired _ ->
+        | AppRunState.NotRunning | AppRunState.Exited _ | AppRunState.Crashed _ | AppRunState.RestartRequired _ | AppRunState.BuildFailed _ ->
           let fail (err: SageFsError) =
             task {
-              do! ops.SetAppState sessionId (AppRunState.Crashed (project, SageFsError.describe err, clock ()))
+              do! ops.SetAppState sessionId (failedState project err (clock ()))
               return Error err
             }
           let! ready =

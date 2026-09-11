@@ -203,10 +203,10 @@ let sessionManagerRestartTombstoneTests =
         let info = createSession harness
 
         match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
-        | Error (SageFsError.HardResetFailed reason) ->
+        | Error (SageFsError.BuildFailed reason) ->
           reason |> Expect.equal "build failure should surface the build error" "build boom"
         | other ->
-          failtestf "expected hard reset build failure, got %A" other
+          failtestf "expected a build failure, got %A" other
 
         let session = getManagedSession harness info.Id
         session.Info.Status |> Expect.equal "session should stay present as faulted" SessionStatus.Faulted

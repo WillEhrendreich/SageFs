@@ -293,17 +293,29 @@ let restartForChangesTests =
       |> Expect.isTrue "the card said it was rebuilding for the change"
     }
 
-    testTask "WHY — AppRunOrchestration — a failed rebuild ends Crashed with the build error because the card must say why the app did not come back" {
+    testTask "WHY — AppRunOrchestration — a failed rebuild ends BuildFailed with the compiler output because the card must say why the app did not come back" {
       let r = record ()
       let baseOps =
         { fakeOps (session webLive [ exe web ] AppRunState.NotRunning) restarting r with
-            RestartSession = fun _ _ -> Task.FromResult(Error (SageFsError.HardResetFailed "error FS0001: build broke")) }
+            RestartSession = fun _ _ -> Task.FromResult(Error (SageFsError.BuildFailed "Build failed (exit 1):\nerror FS0001: build broke")) }
+      let ops, failed = settleOn (function AppRunState.BuildFailed _ -> true | _ -> false) r baseOps
+      let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
+      match! within failed.Task with
+      | AppRunState.BuildFailed (project, reason, _) ->
+        project |> Expect.equal "the project" web
+        reason |> Expect.stringContains "the build error" "build broke"
+      | other -> failtestf "expected BuildFailed, got %A" other
+    }
+
+    testTask "WHY — AppRunOrchestration — a restart that fails for another reason ends Crashed because only a failed build is BuildFailed" {
+      let r = record ()
+      let baseOps =
+        { fakeOps (session webLive [ exe web ] AppRunState.NotRunning) restarting r with
+            RestartSession = fun _ _ -> Task.FromResult(Error (SageFsError.WorkerSpawnFailed "host exited")) }
       let ops, crashed = settleOn (function AppRunState.Crashed _ -> true | _ -> false) r baseOps
       let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
       match! within crashed.Task with
-      | AppRunState.Crashed (project, reason, _) ->
-        project |> Expect.equal "the project" web
-        reason |> Expect.stringContains "the build error" "build broke"
+      | AppRunState.Crashed (_, reason, _) -> reason |> Expect.stringContains "the restart failure" "host exited"
       | other -> failtestf "expected Crashed, got %A" other
     }
   ]

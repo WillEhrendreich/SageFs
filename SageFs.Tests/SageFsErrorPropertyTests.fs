@@ -76,6 +76,7 @@ let private genSageFsError =
     genNonEmptyString |> Gen.map SageFsError.EvalFailed
     genNonEmptyString |> Gen.map SageFsError.ResetFailed
     genNonEmptyString |> Gen.map SageFsError.HardResetFailed
+    genNonEmptyString |> Gen.map SageFsError.BuildFailed
     genNonEmptyString |> Gen.map SageFsError.ScriptLoadFailed
     genNonEmptyString |> Gen.map SageFsError.CheckFailed
     gen {
@@ -266,12 +267,12 @@ let sageFsErrorPropertyTests =
           1)
 
     // 9. DU completeness guard — detect new cases
-    testCase "SageFsError DU has exactly 32 cases" <| fun _ ->
+    testCase "SageFsError DU has exactly 33 cases" <| fun _ ->
       allDuCaseInfos
       |> Array.length
       |> Expect.equal
         "SageFsError case count changed — update generators and property tests"
-        32
+        33
 
     // 10. Unexpected wraps exception message
     testPropertyWithConfig propConfig "Unexpected description contains exception message" <|

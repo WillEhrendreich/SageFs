@@ -310,3 +310,19 @@ let acrossWorkerRestartTests =
       let crashed = AppRunState.Crashed (web, "boom", at)
       acrossWorkerRestart crashed |> Expect.equal "still crashed" crashed
   ]
+
+[<Tests>]
+let buildFailedStateTests =
+  let at = System.DateTime(2026, 9, 11, 0, 0, 0, System.DateTimeKind.Utc)
+  let reason = "Build failed (exit 1):\nProgram.fs(172,1): error FS0433: An entry point must be last.\n→ Fix the build errors, then press ▶ Run to rebuild and start the app."
+  let failed = AppRunState.BuildFailed ("/src/Web/Web.fsproj", reason, at)
+  testList "AppRun build failed" [
+    testCase "WHY — AppRun.describeState — a failed rebuild says the app could not be rebuilt, not that it crashed, because the user's code did not compile" <| fun _ ->
+      describeState failed |> Expect.equal "names the app and the build output" (sprintf "Web could not be rebuilt: %s" reason)
+
+    testCase "WHY — AppRun.toView — a failed rebuild reports its own state name because clients switch on it" <| fun _ ->
+      (toView failed).State |> Expect.equal "state name" "BuildFailed"
+
+    testCase "WHY — AppRun.acrossWorkerRestart — a failed rebuild is kept because the card still has to say why" <| fun _ ->
+      acrossWorkerRestart failed |> Expect.equal "still failed" failed
+  ]
