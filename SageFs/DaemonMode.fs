@@ -1273,13 +1273,31 @@ let resumePreviousSessions
 
     log.LogInformation("Resuming {Count} previous session(s) ({Stale} stale duplicates cleaned)",
       uniqueByDir.Length, (aliveSessions.Length - uniqueByDir.Length))
-    // Skip missing directories first (synchronous, fast)
-    let existing, missing =
-      uniqueByDir |> List.partition (fun prev -> IO.Directory.Exists prev.WorkingDir)
-    for prev in missing do
-      log.LogWarning("Skipping session {SessionId} — directory {WorkingDir} no longer exists (will retry next startup)", prev.SessionId, prev.WorkingDir)
-    // Resume all sessions with existing directories — the daemon serves any project
-    let relevant = existing
+    // A session whose directory or every project is gone can never start again:
+    // forget it once rather than retrying (and warning) on every start. One
+    // deleted project among several drops just that project.
+    let decisions =
+      uniqueByDir
+      |> List.map (fun prev ->
+        prev, Features.DaemonManifest.ResumeDecision.decide IO.Directory.Exists IO.File.Exists prev)
+    for prev, decision in decisions do
+      match decision with
+      | Features.DaemonManifest.ResumeDecision.Forget reason ->
+        log.LogWarning("Forgetting session {SessionId} for {WorkingDir}: {Reason}", prev.SessionId, prev.WorkingDir, reason)
+        match Features.DaemonPersistence.removeManifestEntry DaemonState.SageFsDir prev.SessionId with
+        | Ok () -> ()
+        | Error err ->
+          log.LogWarning("Could not remove session {SessionId} from the manifest: {Error}", prev.SessionId, err)
+      | Features.DaemonManifest.ResumeDecision.Resume projects when projects.Length < prev.Projects.Length ->
+        let dropped = prev.Projects |> List.filter (fun p -> not (List.contains p projects))
+        log.LogWarning("Resuming session for {WorkingDir} without deleted project(s): {Dropped}", prev.WorkingDir, String.concat ", " dropped)
+      | Features.DaemonManifest.ResumeDecision.Resume _ -> ()
+    let relevant =
+      decisions
+      |> List.choose (fun (prev, decision) ->
+        match decision with
+        | Features.DaemonManifest.ResumeDecision.Resume projects -> Some { prev with Projects = projects }
+        | Features.DaemonManifest.ResumeDecision.Forget _ -> None)
     // Resume all valid sessions in parallel — each is an independent worker process
     let resumeSpan = Instrumentation.startSpan Instrumentation.sessionSource "sagefs.daemon.session_resume" []
     let resumeTasks =

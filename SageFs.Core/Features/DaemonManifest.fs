@@ -24,6 +24,34 @@ type DaemonManifestState = {
   ActiveSessionId: string option
 }
 
+/// What daemon startup does with a session the manifest says was alive.
+[<RequireQualifiedAccess>]
+type ResumeDecision =
+  | Resume of projects: string list
+  /// Gone for good — forgotten instead of retried (and warned about) on every start.
+  | Forget of reason: string
+
+module ResumeDecision =
+  /// A deleted directory, or every project deleted, can never start again; one
+  /// deleted project among several drops just that project.
+  let decide
+    (directoryExists: string -> bool)
+    (fileExists: string -> bool)
+    (record: DaemonSessionRecord)
+    : ResumeDecision =
+    match directoryExists record.WorkingDir with
+    | false -> ResumeDecision.Forget (sprintf "its directory %s no longer exists" record.WorkingDir)
+    | true ->
+      let resolve (project: string) =
+        match IO.Path.IsPathRooted project with
+        | true -> project
+        | false -> IO.Path.Combine(record.WorkingDir, project)
+      let present, gone = record.Projects |> List.partition (resolve >> fileExists)
+      match present, gone with
+      | [], [] -> ResumeDecision.Resume []
+      | [], _ -> ResumeDecision.Forget (sprintf "its project(s) no longer exist: %s" (String.concat ", " gone))
+      | _ -> ResumeDecision.Resume present
+
 module DaemonManifestState =
   let empty : DaemonManifestState = {
     Sessions = Map.empty

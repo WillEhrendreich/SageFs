@@ -193,6 +193,7 @@
         <Compile Include="AlgebraicPropertyTests.fs" />
         <Compile Include="BinaryFormatTests.fs" />
         <Compile Include="ManifestPersistenceTests.fs" />
+        <Compile Include="DaemonResumeDecisionTests.fs" />
         <Compile Include="PersistenceComplianceTests.fs" />
         <Compile Include="SessionTeardownPersistenceTests.fs" />
         <Compile Include="ParentMonitorTests.fs" />
