@@ -1353,6 +1353,7 @@ let createElmRuntime
   (httpClient: System.Net.Http.HttpClient)
   (stateChangedEvent: Event<DaemonStateChange>)
   (watcherManagerRef: LiveTestWatcherManager option ref)
+  (onModel: SageFsModel -> unit)
   (ct: System.Threading.CancellationToken) =
   let mutable lastStateJson = ""
   let mutable lastLoggedOutputCount = 0
@@ -1453,6 +1454,8 @@ let createElmRuntime
     ElmDaemon.startHeadless
       effectDeps
       (fun model _regions ->
+        (try onModel model
+         with ex -> Log.warn "[elm] model hook threw: %s" ex.Message)
         let activeBuf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
         let outputCount = activeBuf.Count
         let diagCount =
@@ -1583,7 +1586,10 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
 
   // Create EffectDeps from SessionManager + start Elm loop
   let watcherManagerRef = ref (None: LiveTestWatcherManager option)
-  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef cts.Token
+  // Wakes the idle live-testing tick when a model change queues a debounce;
+  // assigned once the tick timer exists (below).
+  let wakeLiveTestTick : (SageFsModel -> unit) ref = ref ignore
+  let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef (fun model -> wakeLiveTestTick.Value model) cts.Token
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()
@@ -1692,18 +1698,35 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // 1s heartbeat instead of a constant 40Hz scan (roast queue item 6). The
   // one-shot reschedule pattern (same as cacheSaveTimer) prevents reentrancy.
   let mutable testCycleTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  // The tick only fires debounces, so it runs fast exactly while one is pending
+  // (needsLiveTestTick) and otherwise idles on a slow heartbeat. It used to
+  // run at 40 Hz for as long as any test had ever been discovered. A model
+  // change that queues a debounce wakes an idle timer at once, so a save is
+  // never held back by the heartbeat. 1 = idling on the heartbeat.
+  let testCycleIdle = ref 0
+  let rescheduleTestCycle (periodMs: int) =
+    if not (isNull testCycleTimerRef) then
+      try testCycleTimerRef.Change(periodMs, System.Threading.Timeout.Infinite) |> ignore
+      with :? System.ObjectDisposedException -> ()
   let testCycleCallback _ =
     try
       let model = elmRuntime.GetModel()
-      let hasLiveTestingActivity =
-        (not (Map.isEmpty model.LiveTesting.TestState.TestSessionMap))
-        || (not (Map.isEmpty model.LiveTesting.TestState.RunPhases))
-      if hasLiveTestingActivity then
-        elmRuntime.Dispatch(SageFsMsg.TestCycleTick DateTimeOffset.UtcNow)
-      let periodMs = if hasLiveTestingActivity then liveTestTickMs else 1000
-      if not (isNull testCycleTimerRef) then
-        try testCycleTimerRef.Change(periodMs, System.Threading.Timeout.Infinite) |> ignore
-        with :? System.ObjectDisposedException -> ()
+      let periodMs =
+        match SageFsModel.needsLiveTestTick model with
+        | true ->
+          System.Threading.Volatile.Write(&testCycleIdle.contents, 0)
+          elmRuntime.Dispatch(SageFsMsg.TestCycleTick DateTimeOffset.UtcNow)
+          liveTestTickMs
+        | false ->
+          System.Threading.Volatile.Write(&testCycleIdle.contents, 1)
+          // Re-check after going idle: a debounce queued since the read above
+          // found the timer not yet idle, so its wake was a no-op.
+          match SageFsModel.needsLiveTestTick (elmRuntime.GetModel()) with
+          | true ->
+            System.Threading.Volatile.Write(&testCycleIdle.contents, 0)
+            liveTestTickMs
+          | false -> 1000
+      rescheduleTestCycle periodMs
     with ex ->
       log.LogWarning("TestCycleTimer callback threw unexpectedly: {Error}", ex.Message)
   let testCycleTimer =
@@ -1712,6 +1735,13 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       null, liveTestTickMs, System.Threading.Timeout.Infinite)
     testCycleTimerRef <- t
     t
+  // Wake only from idle: re-arming on every model change would keep pushing
+  // the fire time back under a steady stream of output events.
+  wakeLiveTestTick.Value <- fun model ->
+    match SageFsModel.needsLiveTestTick model
+          && System.Threading.Interlocked.CompareExchange(&testCycleIdle.contents, 0, 1) = 1 with
+    | true -> rescheduleTestCycle liveTestTickMs
+    | false -> ()
 
   // Periodic test cache save — crash recovery for test results.
   // Fires every 60s, only writes when RunGeneration has advanced since last save.

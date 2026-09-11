@@ -3296,6 +3296,12 @@ module TestCycleDebounce =
       | false -> { db with TreeSitter = tsChannel; Fcs = fcsChannel }
     (tsPayload, fcsPayload), db'
 
+  /// Whether a tick could fire anything: some channel holds a pending operation.
+  /// The test-cycle tick exists only to fire these, so without one it has
+  /// nothing to do and the daemon's timer can idle.
+  let hasPending (db: TestCycleDebounce) =
+    db.TreeSitter.Pending.IsSome || db.Fcs.Pending.IsSome
+
 /// Shared payload for RunAffectedTests / RequestRebuild —
 /// the 6 fields that both effect cases always carry together.
 type TestRunRequest = {

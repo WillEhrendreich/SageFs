@@ -239,6 +239,15 @@ type SageFsModel = {
 }
 
 module SageFsModel =
+  /// Whether the live-testing test-cycle tick has anything to fire: a pending
+  /// tree-sitter or FCS debounce in the primary or any background session. The
+  /// tick only fires debounces, so without one the daemon's timer idles — it
+  /// used to run at 40 Hz for as long as any test had ever been discovered.
+  let needsLiveTestTick (model: SageFsModel) =
+    Features.LiveTesting.TestCycleDebounce.hasPending model.LiveTesting.Debounce
+    || (model.PerSessionLiveTesting
+        |> Map.exists (fun _ cycle -> Features.LiveTesting.TestCycleDebounce.hasPending cycle.Debounce))
+
   let initial () = {
     Editor = EditorState.initial
     Sessions = {

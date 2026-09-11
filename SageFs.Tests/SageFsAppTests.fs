@@ -2654,3 +2654,33 @@ let dispatchRoundTripTests = testList "Dispatch round-trip" [
     apiAction |> Expect.equal "action" "promptChar"
     value |> Expect.equal "value" (Some "x")
 ]
+
+[<Tests>]
+let liveTestTickIdleTests =
+  let now = DateTimeOffset(2026, 9, 11, 12, 0, 0, TimeSpan.Zero)
+  let pending = TestCycleDebounce.onFileSave "/w/App.fs" now TestCycleDebounce.empty
+  testList "live-testing tick idles without pending work" [
+    test "WHY — needsLiveTestTick — with no pending debounce the tick has nothing to fire, because a 40 Hz tick ran forever once any test was discovered" {
+      SageFsModel.needsLiveTestTick (SageFsModel.initial ())
+      |> Expect.isFalse "an idle model needs no tick"
+    }
+    test "WHY — needsLiveTestTick — a pending debounce in the primary session needs the tick, because a save must still run its tests promptly" {
+      let model = SageFsModel.initial ()
+      { model with LiveTesting = { model.LiveTesting with Debounce = pending } }
+      |> SageFsModel.needsLiveTestTick
+      |> Expect.isTrue "a pending save needs the tick"
+    }
+    test "WHY — needsLiveTestTick — a pending debounce in a background session needs the tick" {
+      let model = SageFsModel.initial ()
+      { model with PerSessionLiveTesting = Map.ofList [ "0a2b3c4d", { LiveTestCycleState.empty with Debounce = pending } ] }
+      |> SageFsModel.needsLiveTestTick
+      |> Expect.isTrue "a background session's pending save needs the tick"
+    }
+    test "WHY — needsLiveTestTick — run-phase entries alone do not keep the tick running, because the tick does not advance runs" {
+      let model = SageFsModel.initial ()
+      let state = { model.LiveTesting.TestState with RunPhases = Map.ofList [ "0a2b3c4d", TestRunPhase.Idle ] }
+      { model with LiveTesting = { model.LiveTesting with TestState = state } }
+      |> SageFsModel.needsLiveTestTick
+      |> Expect.isFalse "an idle run phase needs no tick"
+    }
+  ]
