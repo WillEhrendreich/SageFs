@@ -5,21 +5,13 @@ open VerifyExpecto
 open VerifyTests
 open SageFs
 
-do try VerifyTests.VerifierSettings.DisableRequireUniquePrefix() with _ -> ()
-
 /// Layout with all panes visible, for tests that need the Editor pane
 let allPanesLayout = {
   LayoutConfig.defaults with
     VisiblePanes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ] }
 
-let snapshotsDir =
-  System.IO.Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
-
 let verifyGrid (name: string) (text: string) =
-  let settings = VerifySettings()
-  settings.UseDirectory(snapshotsDir)
-  settings.DisableDiff()
-  Verifier.Verify(name, text, "txt", settings).ToTask()
+  SageFs.Tests.TestInfrastructure.Snapshots.verify "TuiGuiSharedTests" name "txt" text
 
 // ─── Helper: build RenderRegion ──────────────────────────────────────────────
 

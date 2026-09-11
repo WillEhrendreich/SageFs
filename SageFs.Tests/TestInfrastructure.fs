@@ -7,6 +7,40 @@ open SageFs.WorkflowTypes
 open System.Collections.Concurrent
 open System.Threading
 
+/// Harness-root Verify configuration — the ONE place that owns the snapshot
+/// directory, the unique-prefix setting and the line-ending scrubber. Program.fs
+/// calls `configure` before any test runs; snapshot tests call `verify` and never
+/// configure Verify themselves (per-file `do try ... with _ -> ()` re-configuration
+/// silently swallowed "settings must be set before the first Verify" failures).
+module Snapshots =
+  /// Committed snapshots live next to the test sources, in every configuration
+  /// (Debug/Release, local/CI) — they are never copied or regenerated per build.
+  let directory = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
+
+  let private configured =
+    lazy (
+      VerifyTests.VerifierSettings.DisableRequireUniquePrefix()
+      // Normalize CRLF to LF so comparisons are immune to git autocrlf /
+      // editor line-ending differences (verified files are committed with LF).
+      VerifyTests.VerifierSettings.AddScrubber(fun builder ->
+        builder.Replace("\r\n", "\n") |> ignore)
+      if not (System.IO.Directory.Exists directory) then
+        System.IO.Directory.CreateDirectory directory |> ignore
+      VerifyExpecto.Verifier.DerivePathInfo(fun _ _ typeName methodName ->
+        VerifyTests.PathInfo(directory = directory, typeName = typeName, methodName = methodName)))
+
+  /// Idempotent: safe to call from every entry point.
+  let configure () : unit = configured.Force()
+
+  /// Verify `value` as a `<typeName>.<name>.verified.<extension>` snapshot.
+  /// `typeName` is explicit because VerifyExpecto derives it from the CALLER's
+  /// source file — which would be this file, not the snapshot test's.
+  let verify (typeName: string) (name: string) (extension: string) (value: string) =
+    let settings = VerifyTests.VerifySettings()
+    settings.UseTypeName typeName
+    settings.DisableDiff()
+    VerifyExpecto.Verifier.Verify(name, value, extension, settings).ToTask()
+
 let quietLogger =
   { new SageFs.Utils.ILogger with
       member _.LogDebug msg = ()

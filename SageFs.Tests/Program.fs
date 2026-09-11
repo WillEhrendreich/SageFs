@@ -185,38 +185,10 @@ let main argv =
     result
   | false ->
 
-  let configureVerify () =
-    VerifierSettings.DisableRequireUniquePrefix()
-    // Global line-ending scrub: normalize CRLF to LF on BOTH the received and
-    // verified content so snapshot comparisons are immune to git autocrlf /
-    // editor line-ending differences. Verified files are committed with LF;
-    // on Windows checkouts they may be materialized as CRLF — without this,
-    // every text snapshot fails with a spurious line-ending mismatch.
-    VerifierSettings.AddScrubber(fun builder ->
-      // Verify passes the content via StringBuilder; normalize \r\n → \n.
-      builder.Replace("\r\n", "\n") |> ignore)
-    let isCI =
-      not (String.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")))
-      || not (String.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")))
-      || not (String.IsNullOrEmpty(Environment.GetEnvironmentVariable("TF_BUILD")))
-
-    let snapshotsDir =
-      if isCI then
-        let assemblyDir =
-          Path.GetDirectoryName(
-            Reflection.Assembly.GetExecutingAssembly().Location
-          )
-        Path.Combine(assemblyDir, "snapshots")
-      else
-        Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
-
-    if not (Directory.Exists snapshotsDir) then
-      Directory.CreateDirectory snapshotsDir |> ignore
-
-    Verifier.DerivePathInfo(fun _ _ typeName methodName ->
-      PathInfo(directory = snapshotsDir, typeName = typeName, methodName = methodName))
-
-  configureVerify ()
+  // Harness-root Verify configuration (snapshot directory, unique-prefix
+  // setting, CRLF scrubber) — owned by TestInfrastructure.Snapshots, never by
+  // individual snapshot test files.
+  SageFs.Tests.TestInfrastructure.Snapshots.configure ()
 
   let includeAll =
     argv |> Array.exists (fun a -> a = "--all" || a = "--integration")

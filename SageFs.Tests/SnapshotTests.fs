@@ -8,15 +8,8 @@ open SageFs
 open SageFs.AppState
 open SageFs.WorkflowTypes
 
-do try VerifierSettings.DisableRequireUniquePrefix() with _ -> ()
-
-let snapshotsDir =Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
-
 let verifyText name (value: string) =
-  let settings = VerifySettings()
-  settings.UseDirectory(snapshotsDir)
-  settings.DisableDiff()
-  Verifier.Verify(name, value, "txt", settings).ToTask()
+  SageFs.Tests.TestInfrastructure.Snapshots.verify "SnapshotTests" name "txt" value
 
 [<Tests>]
 let formatTests =

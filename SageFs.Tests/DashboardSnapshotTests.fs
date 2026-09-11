@@ -11,16 +11,8 @@ open SageFs.Server.Dashboard
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 
-do try VerifyTests.VerifierSettings.DisableRequireUniquePrefix() with _ -> ()
-
-let snapshotsDir =
-  System.IO.Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
-
 let verifyDashboard (name: string) (html: string) =
-  let settings = VerifySettings()
-  settings.UseDirectory(snapshotsDir)
-  settings.DisableDiff()
-  Verifier.Verify(name, html, "html", settings).ToTask()
+  SageFs.Tests.TestInfrastructure.Snapshots.verify "DashboardSnapshotTests" name "html" html
 
 
 let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [

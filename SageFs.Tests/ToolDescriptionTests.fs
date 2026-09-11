@@ -10,16 +10,8 @@ open System.ComponentModel
 open System.Reflection
 open SageFs.Server.McpTools
 
-do try VerifierSettings.DisableRequireUniquePrefix() with _ -> ()
-
-let snapshotsDir =Path.Combine(__SOURCE_DIRECTORY__, "snapshots")
-
 let verifyText name (value: string) =
-  let settings = VerifySettings()
-  settings.UseDirectory(snapshotsDir)
-  settings.DisableDiff()
-  let normalized = value.Replace("\r\n", "\n")
-  Verifier.Verify(name, normalized, "txt", settings).ToTask()
+  SageFs.Tests.TestInfrastructure.Snapshots.verify "ToolDescriptionTests" name "txt" value
 
 /// Extract all [<Description>] attributes from MCP tool methods
 let toolDescriptions =
