@@ -535,3 +535,56 @@ let buildArgumentsTests =
       buildArguments "/src/Web/Web.fsproj"
       |> Expect.equal "build the project without cleaning it first" [ "build"; "/src/Web/Web.fsproj"; "--no-restore" ]
   ]
+
+[<Tests>]
+let workerFaultReportTests =
+  testList "SessionManager worker fault report" [
+    testTask "WHY — SessionManager — a worker that reports Faulted during warmup faults the session with its reason because Run and the card must not wait on a session that cannot become Ready" {
+      let runtime = mkRuntime (fun _ -> Ok "build ok") (fun _ -> Ok(Process.GetCurrentProcess()))
+      let reason = "Missing DLL /src/App/bin/Debug/net10.0/App.dll. Please build your project."
+      let proxy (msg: WorkerMessage) =
+        async {
+          match msg with
+          | WorkerMessage.GetStatus rid ->
+            return
+              WorkerResponse.StatusResult(
+                rid,
+                { Status = SessionStatus.Faulted; StatusMessage = Some reason; EvalCount = 0
+                  AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = [] })
+          | _ -> return! readyProxy msg
+        }
+      let cancellation = new CancellationTokenSource()
+      let mailbox, _ =
+        createWith runtime.Runtime cancellation.Token ignore (fun _ _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
+      try
+        let! created =
+          mailbox.PostAndAsyncReply(fun reply ->
+            SessionCommand.CreateSession([ "/src/App/App.fsproj" ], "/src/App", true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+        let info =
+          match created with
+          | Ok info -> info
+          | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
+        let! session = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        let pid =
+          session
+          |> Option.bind (fun s -> s.Info.WorkerPid)
+          |> Option.defaultWith (fun () -> failtest "expected worker pid")
+        mailbox.Post(SessionCommand.WorkerReady(info.Id, pid, "http://localhost:4123", proxy))
+        let deadline = System.DateTime.UtcNow.AddSeconds 10.0
+        let rec faultReason () =
+          task {
+            let! current = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+            match current |> Option.map (fun s -> s.Info.Status, s.Info.FaultReason), System.DateTime.UtcNow > deadline with
+            | Some (SessionStatus.Faulted, why), _ -> return why
+            | _, true -> return failtest "the session never became Faulted"
+            | _, false ->
+              do! System.Threading.Tasks.Task.Delay 50
+              return! faultReason ()
+          }
+        let! why = faultReason ()
+        why |> Expect.equal "the worker's own reason" (Some reason)
+      finally
+        cancellation.Cancel()
+        cancellation.Dispose()
+    }
+  ]

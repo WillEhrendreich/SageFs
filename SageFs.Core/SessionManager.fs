@@ -81,6 +81,8 @@ module SessionManager =
     | UpdateSessionStatus of SessionId * WorkerProtocol.SessionStatus
     /// A worker's ready poll saw Ready; it carries the worker's pid and its classified projects.
     | WorkerReportedReady of SessionId * workerPid: int * ClassifiedProject list
+    /// A worker's ready poll saw it fault during warmup, with the worker's own reason.
+    | WorkerReportedFaulted of SessionId * workerPid: int * reason: string
     | SetAppState of SessionId * AppRun.AppRunState
     | EndAppRun of SessionId * runId: string * AppRun.AppRunState
     /// Answered when the session is Ready (or has failed) — parked until then.
@@ -1027,7 +1029,12 @@ module SessionManager =
                             inbox.Post(SessionCommand.WorkerReportedReady(id, workerPid, snapshot.Projects))
                             done' <- true
                           | SessionStatus.Faulted
-                          | SessionStatus.Stopped -> done' <- true
+                          | SessionStatus.Stopped ->
+                            let reason =
+                              snapshot.StatusMessage
+                              |> Option.defaultValue "The worker failed during warmup. → Check the daemon log, then hard-reset the session with rebuild=true."
+                            inbox.Post(SessionCommand.WorkerReportedFaulted(id, workerPid, reason))
+                            done' <- true
                           | _ -> ()
                         | _ -> ()
                       with ex ->
@@ -1325,6 +1332,18 @@ module SessionManager =
             onSessionProgressChanged ()
             return newState
           | None ->
+            return state
+        | SessionCommand.WorkerReportedFaulted(id, workerPid, reason) ->
+          // Only the session's current worker may fault it (see WorkerReportedReady).
+          match ManagerState.tryGetSession id state, ManagerState.tryGetPendingSwap id state with
+          | Some session, None when session.Info.WorkerPid = Some workerPid ->
+            Log.warn "[SessionManager] Worker for session %s faulted during warmup: %s" (SessionId.value id) reason
+            let newState = ManagerState.addSession id (faultedTombstone (Some reason) session) state
+            onSessionFaulted id reason
+            onSessionProgressChanged ()
+            return newState
+          | _ ->
+            Log.warn "[SessionManager] Ignoring a fault from worker pid %d for session %s: it is no longer the session's worker" workerPid (SessionId.value id)
             return state
         | SessionCommand.WorkerReportedReady(id, workerPid, roles) ->
           // Only the session's current worker may declare it Ready: a ready poll

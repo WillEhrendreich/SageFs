@@ -103,3 +103,19 @@ let appStateCustomTests =
         (AppStateCustom.tryGetFeature<SageFs.Middleware.HotReloading.State> openedFileKey updated)
         "wrong type returns None"
   ]
+
+[<Tests>]
+let sessionPhaseStatusMessageTests =
+  testList "SessionPhase statusMessage" [
+    testCase "WHY — SessionPhase.statusMessage — a faulted phase reports why because the daemon and the card must show the reason, not just Faulted" <| fun _ ->
+      SessionPhase.statusMessage (Faulted "Missing DLL /src/App/bin/Debug/net10.0/App.dll")
+      |> Expecto.Flip.Expect.equal "the fault reason" (Some "Missing DLL /src/App/bin/Debug/net10.0/App.dll")
+
+    testCase "WHY — SessionPhase.statusMessage — an initializing phase reports its progress because warmup must not look stuck" <| fun _ ->
+      SessionPhase.statusMessage (Initializing (Some "Loading 3 projects"))
+      |> Expecto.Flip.Expect.equal "the progress message" (Some "Loading 3 projects")
+
+    testCase "WHY — SessionPhase.statusMessage — an active phase reports nothing because a ready session has no status to explain" <| fun _ ->
+      SessionPhase.statusMessage (Active (makeState Map.empty, Idle))
+      |> Expecto.Flip.Expect.isNone "no message"
+  ]

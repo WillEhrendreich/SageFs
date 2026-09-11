@@ -162,21 +162,27 @@ type SessionActivity = Idle | Evaluating
 type SessionPhase =
   | Initializing of statusMessage: string option
   | Active of AppState * SessionActivity
-  | Faulted
+  | Faulted of reason: string
 
 module SessionPhase =
+  /// What the phase has to say about itself: warmup progress, or why it faulted.
+  let statusMessage = function
+    | Initializing msg -> msg
+    | Faulted reason -> Some reason
+    | Active _ -> None
+
   /// Derive the legacy SessionState for external consumers (MCP, dashboard, etc.)
   let toSessionState = function
     | Initializing _ -> SessionState.WarmingUp
     | Active (_, Idle) -> SessionState.Ready
     | Active (_, Evaluating) -> SessionState.Evaluating
-    | Faulted -> SessionState.Faulted
+    | Faulted _ -> SessionState.Faulted
 
   /// Extract the AppState when active, None otherwise.
   /// Narrow convenience for callers that genuinely don't need phase distinction.
   let tryAppState = function
     | Active (st, _) -> Some st
-    | Initializing _ | Faulted -> None
+    | Initializing _ | Faulted _ -> None
 
 type MiddlewareNext = EvalRequest * AppState -> EvalResponse * AppState
 type Middleware = MiddlewareNext -> EvalRequest * AppState -> EvalResponse * AppState
@@ -335,7 +341,7 @@ let cleanStdout (raw: string) =
 /// down. Faulted carries no AppState at all, so recovery is via reset.
 let tryGetEvalAvailabilityError (phase: SessionPhase) =
   match phase with
-  | Faulted ->
+  | Faulted _ ->
     Some "Session is faulted. Run hard_reset_fsi_session to recover."
   | Initializing _ ->
     Some "Session is resetting. Wait for reset to complete before evaluating."
@@ -969,11 +975,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           reply.Reply ctx
           return snapshot
         | QueryGetStatusMessage reply ->
-          let msg =
-            match snapshot.Phase with
-            | Initializing msg -> msg
-            | _ -> None
-          reply.Reply msg
+          reply.Reply (SessionPhase.statusMessage snapshot.Phase)
           return snapshot
         | QueryAutocomplete(text, caret, word, reply) ->
           match snapshot.Phase with
@@ -1082,7 +1084,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
         match cmd with
         | EvalEnableStdout ->
           match phase with
-          | Faulted ->
+          | Faulted _ ->
             logger.LogWarning "EnableStdout requested on faulted session; ignoring"
           | Initializing _ ->
             logger.LogWarning "EnableStdout requested during warmup; ignoring"
@@ -1123,7 +1125,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               currentEvalThread.Value <- Some evalThread
               evalThread.Start()
               return (Active (st, Evaluating), middleware, evalStats)
-            | Initializing _ | Faulted ->
+            | Initializing _ | Faulted _ ->
               // Unreachable: tryGetEvalAvailabilityError gates these phases with
               // Some above. Kept exhaustive so the phase match is total.
               return (phase, middleware, evalStats)
@@ -1207,7 +1209,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               |})
               reply.Reply errResponse
               return (Active (st, Idle), middleware, evalStats)
-            | Initializing _ | Faulted ->
+            | Initializing _ | Faulted _ ->
               // Straggler: the eval thread was still running when a reset tore
               // the session down (or the reset failed). Publishing the eval's
               // stale AppState would resurrect a snapshot of a disposed/null
@@ -1253,7 +1255,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             let startupConfig =
               match phase with
               | Active (st, _) -> st.StartupConfig
-              | Initializing _ | Faulted -> None
+              | Initializing _ | Faulted _ -> None
             let autoOpenNamespaces =
               startupConfig
               |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
@@ -1316,9 +1318,10 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             return (Active (newSt, Idle), middleware, evalStats)
           with ex ->
             logger.LogError $"❌ FSI session reset failed: {ex.Message}"
-            publishPhase Faulted evalStats
+            let reason = sprintf "Session reset failed: %s" ex.Message
+            publishPhase (Faulted reason) evalStats
             reply.Reply(Error (SageFsError.ResetFailed ex.Message))
-            return (Faulted, middleware, evalStats)
+            return (Faulted reason, middleware, evalStats)
         | EvalHardReset (rebuild, reply) ->
           try
             publishPhase (Initializing None) evalStats
@@ -1332,7 +1335,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             let startupConfig =
               match phase with
               | Active (st, _) -> st.StartupConfig
-              | Initializing _ | Faulted -> None
+              | Initializing _ | Faulted _ -> None
             let autoOpenNamespaces =
               startupConfig
               |> Option.map (fun cfg -> cfg.AutoOpenNamespaces)
@@ -1539,9 +1542,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               ShadowCopy.cleanupShadowDir newShadowDir
               let msg = sprintf "Session warmup failed: %s" ex.Message
               logger.LogError (sprintf "  ❌ %s" msg)
-              publishPhase Faulted evalStats
+              publishPhase (Faulted msg) evalStats
               reply.Reply(Error (SageFsError.HardResetFailed msg))
-              return (Faulted, middleware, evalStats)
+              return (Faulted msg, middleware, evalStats)
             | Ok (newSession, newRecorder, _, warmupFailures, warmupCtx) ->
             warmupCts.Dispose()
             let newSt =
@@ -1579,9 +1582,10 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             return (Active (newSt, Idle), middleware, evalStats)
           with ex ->
             logger.LogError (sprintf "❌ Hard reset failed: %s" ex.Message)
-            publishPhase Faulted evalStats
+            let reason = sprintf "Hard reset failed: %s" ex.Message
+            publishPhase (Faulted reason) evalStats
             reply.Reply(Error (SageFsError.HardResetFailed ex.Message))
-            return (Faulted, middleware, evalStats)
+            return (Faulted reason, middleware, evalStats)
       }
 
     let init () =
@@ -1696,8 +1700,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           // hard_reset_fsi_session commands (the reset handlers rebuild state
           // from the actor closure captures). This replaces the old tombstone
           // that held Unchecked.defaultof Session/OutStream.
-          publishPhase Faulted Affordances.EvalStats.empty
-          return (Faulted, [], Affordances.EvalStats.empty)
+          publishPhase (Faulted msg) Affordances.EvalStats.empty
+          return (Faulted msg, [], Affordances.EvalStats.empty)
       }
 
     let safeProcessEval = ResilientActor.wrapLoop logger "eval-actor" processEvalCommand
@@ -1820,9 +1824,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
     | _ -> None
   let getStatusMessage () =
     let snap = System.Threading.Volatile.Read(&latestSnapshot)
-    match snap.Phase with
-    | Initializing msg -> msg
-    | _ -> None
+    SessionPhase.statusMessage snap.Phase
   let cancelCurrentEval () =
     actor.PostAndAsyncReply(fun reply -> CancelEval reply)
     |> Async.StartAsTask
