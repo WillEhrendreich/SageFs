@@ -184,6 +184,21 @@ module VscodeFixture =
       failwithf "CDP port %d not available after %dms" cdpPort timeoutMs
   }
 
+  /// Connect Playwright to the CDP endpoint, retrying through the race where
+  /// `/json/version` (waitForCdp's own check) already answers but the actual
+  /// WebSocket target isn't attached yet — an Electron app's debug port can
+  /// listen before the renderer/workspace it targets has finished loading,
+  /// so a connect attempted right after waitForCdp succeeds can still see
+  /// ECONNREFUSED or a closed socket. Observed in CI: this raced on 2 of 3
+  /// consecutive journey runs.
+  let rec private connectOverCdpWithRetry (playwright: IPlaywright) (attemptsLeft: int) = task {
+    try
+      return! playwright.Chromium.ConnectOverCDPAsync(sprintf "http://127.0.0.1:%d" cdpPort)
+    with :? PlaywrightException when attemptsLeft > 1 ->
+      do! Task.Delay 1000
+      return! connectOverCdpWithRetry playwright (attemptsLeft - 1)
+  }
+
   /// Ensure a VSCode instance is running and Playwright is connected.
   /// Reuses existing connection if already established.
   let ensureBrowser (workspaceDir: string) (disableExtensions: bool) = task {
@@ -192,12 +207,10 @@ module VscodeFixture =
     | None ->
       do! killOrphans ()
       let _pid = launchVscode workspaceDir disableExtensions
-      do! waitForCdp 15000
+      do! waitForCdp 30_000
       let! playwright = Playwright.CreateAsync()
       pw <- Some playwright
-      let! b =
-        playwright.Chromium.ConnectOverCDPAsync(
-          sprintf "http://127.0.0.1:%d" cdpPort)
+      let! b = connectOverCdpWithRetry playwright 10
       browser <- Some b
       return b
   }
