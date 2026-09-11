@@ -418,4 +418,67 @@ let workerProtocolTests =
         body.Value |> Expect.stringContains "body contains filePath" "file.fsx"
         body.Value |> Expect.stringContains "body contains replyId" "r1"
     ]
+
+    testList "App run protocol" [
+      let project = "/src/Web/Web.fsproj"
+      let at = DateTime(2026, 9, 10, 12, 0, 0, DateTimeKind.Utc)
+      let running : AppRun.RunningApp =
+        { RunId = "run1"
+          Project = project
+          EntryPoint = "Web.Program.main"
+          Endpoint = AppRun.AppEndpoint.Http ("http://127.0.0.1:5123", [ "https://localhost:7001" ])
+          StartedAt = at }
+
+      testCase "WHY — WorkerMessage.RunApp — round-trips because daemon and worker must agree on the project to run" <| fun _ ->
+        let msg = WorkerMessage.RunApp(project, "r1")
+        let _, result = roundTrip<WorkerMessage> msg
+        result |> Expect.equal "round-trip" msg
+
+      testCase "WHY — WorkerMessage.StopApp — round-trips because stop must reach the worker that owns the app" <| fun _ ->
+        let msg = WorkerMessage.StopApp "r2"
+        let _, result = roundTrip<WorkerMessage> msg
+        result |> Expect.equal "round-trip" msg
+
+      testCase "WHY — WorkerMessage.AwaitAppChange — round-trips because the daemon long-polls a specific run" <| fun _ ->
+        let msg = WorkerMessage.AwaitAppChange("run1", "r3")
+        let _, result = roundTrip<WorkerMessage> msg
+        result |> Expect.equal "round-trip" msg
+
+      testCase "WHY — WorkerResponse.AppRunResult — every app state round-trips because the dashboard renders each one" <| fun _ ->
+        [ AppRun.AppRunState.NotRunning
+          AppRun.AppRunState.Starting (project, AppRun.StartPhase.RestartingIntoWebLive, at)
+          AppRun.AppRunState.Starting (project, AppRun.StartPhase.LaunchingEntryPoint, at)
+          AppRun.AppRunState.Running running
+          AppRun.AppRunState.Running { running with Endpoint = AppRun.AppEndpoint.NoServer }
+          AppRun.AppRunState.Exited (project, 3, at)
+          AppRun.AppRunState.Crashed (project, "Missing connection string 'Db'", at) ]
+        |> List.iter (fun state ->
+          let resp = WorkerResponse.AppRunResult("r1", Ok state)
+          let _, result = roundTrip<WorkerResponse> resp
+          result |> Expect.equal (sprintf "%A round-trips" state) resp)
+
+      testCase "WHY — WorkerResponse.AppRunResult — an error round-trips because run failures must reach the user" <| fun _ ->
+        let resp = WorkerResponse.AppRunResult("r1", Error (SageFsError.AppRunFailed (project, "no entry point")))
+        let _, result = roundTrip<WorkerResponse> resp
+        result |> Expect.equal "round-trip" resp
+
+      testCase "WHY — HttpWorkerClient.toRoute — RunApp posts the project to /run-app because the worker route table is shared" <| fun _ ->
+        let method, path, body = HttpWorkerClient.toRoute (WorkerMessage.RunApp(project, "r1"))
+        method |> Expect.equal "method" "POST"
+        path |> Expect.equal "path" "/run-app"
+        body |> Expect.isSome "has a body"
+        body.Value |> Expect.stringContains "body carries the project" "Web.fsproj"
+        body.Value |> Expect.stringContains "body carries the replyId" "r1"
+
+      testCase "WHY — HttpWorkerClient.toRoute — StopApp posts to /stop-app because stop must not be a cacheable GET" <| fun _ ->
+        let method, path, _ = HttpWorkerClient.toRoute (WorkerMessage.StopApp "r2")
+        method |> Expect.equal "method" "POST"
+        path |> Expect.equal "path" "/stop-app"
+
+      testCase "WHY — HttpWorkerClient.toRoute — AwaitAppChange posts the run id to /await-app-change because the long poll is per run" <| fun _ ->
+        let method, path, body = HttpWorkerClient.toRoute (WorkerMessage.AwaitAppChange("run1", "r3"))
+        method |> Expect.equal "method" "POST"
+        path |> Expect.equal "path" "/await-app-change"
+        body.Value |> Expect.stringContains "body carries the run id" "run1"
+    ]
   ]

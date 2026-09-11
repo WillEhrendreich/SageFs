@@ -97,6 +97,10 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.CompletionResult(rid, ["System"; "String"])
   | WorkerMessage.CancelEval ->
     return WorkerResponse.EvalCancelled true
+  | WorkerMessage.RunApp(_, rid)
+  | WorkerMessage.StopApp rid
+  | WorkerMessage.AwaitAppChange(_, rid) ->
+    return WorkerResponse.AppRunResult(rid, Ok AppRun.AppRunState.NotRunning)
   | WorkerMessage.LoadScript(path, rid) ->
     return WorkerResponse.ScriptLoaded(rid, Ok (sprintf "Loaded %s" path))
   | WorkerMessage.ResetSession rid ->

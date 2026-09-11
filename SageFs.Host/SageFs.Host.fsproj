@@ -27,6 +27,7 @@
     <ItemGroup>
         <Compile Include="DevReloadMiddleware.fs" />
         <Compile Include="DevReloadInjector.fs" />
+        <Compile Include="AppRunner.fs" />
         <Compile Include="WorkerHttpTransport.fs" />
         <Compile Include="WorkerMain.fs" />
         <Compile Include="Program.fs" />

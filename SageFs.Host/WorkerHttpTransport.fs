@@ -68,6 +68,9 @@ module WorkerHttpTransport =
     || path.StartsWith("/run-tests", StringComparison.Ordinal)
     || path.StartsWith("/run-tests-stream", StringComparison.Ordinal)
     || path.StartsWith("/hotreload/", StringComparison.Ordinal)
+    || path.StartsWith("/run-app", StringComparison.Ordinal)
+    || path.StartsWith("/stop-app", StringComparison.Ordinal)
+    || path.StartsWith("/await-app-change", StringComparison.Ordinal)
 
   /// Origin/CSRF gate for the worker HTTP surface — the F#-executing server.
   ///
@@ -393,6 +396,29 @@ module WorkerHttpTransport =
       app.MapGet("/instrumentation-maps", Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetInstrumentationMaps rid)
+      })) |> ignore
+
+      app.MapPost("/run-app", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let project = (jsonProp doc "project").GetString()
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.RunApp(project, rid))
+      })) |> ignore
+
+      app.MapPost("/stop-app", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.StopApp rid)
+      })) |> ignore
+
+      app.MapPost("/await-app-change", Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let runId = (jsonProp doc "runId").GetString()
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.AwaitAppChange(runId, rid))
       })) |> ignore
 
       app.MapPost("/shutdown", Func<HttpContext, Task>(fun ctx ->

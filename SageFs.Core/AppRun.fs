@@ -217,3 +217,25 @@ let endpointFromAddresses (addresses: string list) : AppEndpoint =
   | _, [] -> AppEndpoint.NoServer
   | Some primary, all -> AppEndpoint.Http (primary, all |> List.filter (fun u -> u <> primary))
   | None, first :: rest -> AppEndpoint.Http (first, rest)
+
+type RunningApp = {
+  RunId: string
+  Project: string
+  EntryPoint: string
+  Endpoint: AppEndpoint
+  StartedAt: DateTime
+}
+
+[<RequireQualifiedAccess>]
+type StartPhase =
+  | RestartingIntoWebLive
+  | LaunchingEntryPoint
+
+/// The one app a session may run, as the user should see it.
+[<RequireQualifiedAccess>]
+type AppRunState =
+  | NotRunning
+  | Starting of project: string * phase: StartPhase * since: DateTime
+  | Running of RunningApp
+  | Exited of project: string * exitCode: int * at: DateTime
+  | Crashed of project: string * reason: string * at: DateTime

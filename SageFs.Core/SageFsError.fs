@@ -38,6 +38,8 @@ type SageFsError =
   // ── Hot reload ──
   | HotReloadFailed of path: string * reason: string
   | HotReloadStateError of sessionId: string * reason: string
+  // ── Running apps ──
+  | AppRunFailed of project: string * reason: string
   // ── Restart policy ──
   | RestartLimitExceeded of restartCount: int * windowMinutes: float
   // ── Infrastructure ──
@@ -99,6 +101,8 @@ module SageFsError =
       sprintf "Hot reload failed for '%s': %s. Check the file for syntax errors." path reason
     | SageFsError.HotReloadStateError(id, reason) ->
       sprintf "Hot reload state error in session '%s': %s" id reason
+    | SageFsError.AppRunFailed(project, reason) ->
+      sprintf "Could not run '%s': %s" project reason
     | SageFsError.RestartLimitExceeded(count, windowMin) ->
       sprintf "Worker restarted %d times within %.0f minutes — giving up. Check the log file for crash details and restart SageFs." count windowMin
     | SageFsError.DaemonStartFailed reason ->
@@ -132,6 +136,7 @@ module SageFsError =
     | SageFsError.HardResetFailed _ -> LogLevel.Error
     | SageFsError.ScriptLoadFailed _ -> LogLevel.Error
     | SageFsError.HotReloadFailed _ -> LogLevel.Error
+    | SageFsError.AppRunFailed _ -> LogLevel.Error
     | SageFsError.SseConnectionError _ -> LogLevel.Error
     | SageFsError.Unexpected _ -> LogLevel.Error
     // Warning — degraded but recoverable
@@ -187,6 +192,7 @@ module SageFsError =
     | SageFsError.WarmupContextFailed _ -> 500
     | SageFsError.HotReloadFailed _ -> 500
     | SageFsError.HotReloadStateError _ -> 500
+    | SageFsError.AppRunFailed _ -> 500
     | SageFsError.DaemonStartFailed _ -> 500
     | SageFsError.Unexpected _ -> 500
 
@@ -198,6 +204,7 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _ -> true
     | SageFsError.JsonParseError _ -> true
     | SageFsError.ToolNotAvailable _ -> true
+    | SageFsError.AppRunFailed _
     | SageFsError.DuplicateSession _
     | SageFsError.SessionCreationFailed _
     | SageFsError.SessionStopFailed _
@@ -241,6 +248,7 @@ module SageFsError =
     | SageFsError.HotReloadFailed _ -> true
     | SageFsError.HotReloadStateError _ -> true
     | SageFsError.DaemonStartFailed _ -> true
+    | SageFsError.AppRunFailed _ -> true
     | SageFsError.Unexpected _ -> true
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
@@ -266,6 +274,7 @@ module SageFsError =
     | SageFsError.WorkerHttpError _ -> true
     | SageFsError.PipeClosed -> true
     | SageFsError.SseConnectionError _ -> true
+    | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
     | SageFsError.NoActiveSessions
@@ -297,6 +306,7 @@ module SageFsError =
     | SageFsError.PortInUse _ -> true
     | SageFsError.RestartLimitExceeded _ -> true
     | SageFsError.DuplicateSession _ -> true
+    | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
     | SageFsError.NoActiveSessions
@@ -352,6 +362,7 @@ module SageFsError =
     | SageFsError.WarmupContextFailed _ -> "Run hard_reset_fsi_session"
     | SageFsError.HotReloadFailed _ -> "Check the file for syntax errors"
     | SageFsError.HotReloadStateError _ -> "Run hard_reset_fsi_session"
+    | SageFsError.AppRunFailed _ -> "Run list_runnable_projects to see which projects can run"
     | SageFsError.RestartLimitExceeded _ -> "Check the log file and restart SageFs"
     | SageFsError.DaemonStartFailed _ -> "Check port availability and .NET SDK"
     | SageFsError.DaemonNotRunning -> "Start SageFs with 'sagefs'"

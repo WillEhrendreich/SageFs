@@ -44,6 +44,15 @@ module HttpWorkerClient =
       "GET", sprintf "/test-discovery?replyId=%s" (Uri.EscapeDataString rid), None
     | WorkerMessage.GetInstrumentationMaps rid ->
       "GET", sprintf "/instrumentation-maps?replyId=%s" (Uri.EscapeDataString rid), None
+    | WorkerMessage.RunApp(project, rid) ->
+      "POST", "/run-app",
+      Some (Serialization.serialize {| project = project; replyId = rid |})
+    | WorkerMessage.StopApp rid ->
+      "POST", "/stop-app",
+      Some (Serialization.serialize {| replyId = rid |})
+    | WorkerMessage.AwaitAppChange(runId, rid) ->
+      "POST", "/await-app-change",
+      Some (Serialization.serialize {| runId = runId; replyId = rid |})
     | WorkerMessage.Shutdown ->
       "POST", "/shutdown", None
 

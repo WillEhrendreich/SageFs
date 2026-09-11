@@ -127,6 +127,20 @@ let shouldQuarantineAssembly (assemblyName: string) =
   not (assemblyName.EndsWith(".resources.dll", StringComparison.OrdinalIgnoreCase))
   && not (isWorkerRuntimeCritical assemblyName)
 
+/// How the worker runs its session's executable project (see AppRunner).
+type AppRunHandlers = {
+  Run: string -> Async<Result<AppRun.AppRunState, SageFsError>>
+  Stop: unit -> Async<Result<AppRun.AppRunState, SageFsError>>
+  AwaitChange: string -> Async<AppRun.AppRunState>
+}
+
+/// For hosts that do not run apps (test harnesses).
+let noAppRuns : AppRunHandlers = {
+  Run = fun project -> async { return Error (SageFsError.AppRunFailed (project, "This host does not run apps.")) }
+  Stop = fun () -> async { return Ok AppRun.AppRunState.NotRunning }
+  AwaitChange = fun _ -> async { return AppRun.AppRunState.NotRunning }
+}
+
 /// Handle a single WorkerMessage by dispatching to the actor.
 let handleMessage
   (actor: AppActor)
@@ -136,6 +150,7 @@ let handleMessage
   (getRunTest: unit -> (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>))
   (setRunTest: (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) -> unit)
   (getInitialDiscovery: unit -> Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list)
+  (appRuns: AppRunHandlers)
   (msg: WorkerMessage)
   : Async<WorkerResponse> =
   async {
@@ -246,6 +261,18 @@ let handleMessage
 
     | WorkerMessage.GetInstrumentationMaps _ ->
       return WorkerResponse.InstrumentationMapsResult("", [||])
+
+    | WorkerMessage.RunApp(project, replyId) ->
+      let! result = appRuns.Run project
+      return WorkerResponse.AppRunResult(replyId, result)
+
+    | WorkerMessage.StopApp replyId ->
+      let! result = appRuns.Stop ()
+      return WorkerResponse.AppRunResult(replyId, result)
+
+    | WorkerMessage.AwaitAppChange(runId, replyId) ->
+      let! state = appRuns.AwaitChange runId
+      return WorkerResponse.AppRunResult(replyId, Ok state)
 
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
@@ -638,10 +665,48 @@ let run (sessionId: string) (port: int) = async {
         })
       Some (FileWatcher.start config DevReload.DevReloadConfig.defaults onFileChanged)
 
+  let appRunner = AppRunner.create AppRunner.defaultTimeouts AppRunner.processEnv
+  let watchForHotReload (projectPath: string) =
+    match workerConfig.Workflow, IO.Path.GetDirectoryName(IO.Path.GetFullPath projectPath) with
+    | WorkflowTypes.SessionWorkflow.WebLive _, (NonNull projectDir) ->
+      let sources =
+        IO.Directory.GetFiles(projectDir, "*.fs", IO.SearchOption.AllDirectories)
+        |> Array.filter (fun f ->
+          let n = f.Replace('\\', '/')
+          not (n.Contains("/obj/") || n.Contains("/bin/")))
+      result.HotReloadStateRef.Value <- HotReloadState.watchByDirectory projectDir sources result.HotReloadStateRef.Value
+      Log.info "Run App: watching %d source file(s) in %s for hot reload"
+        (HotReloadState.watchedInDirectory projectDir result.HotReloadStateRef.Value).Length projectDir
+    | _ -> ()
+  let appRuns : AppRunHandlers = {
+    Run = fun project -> async {
+      let prepared =
+        AppRunner.resolveProjectAssembly result.ProjectTargets project
+        |> Result.bind AppRunner.entryPointOf
+        |> Result.bind (fun entry -> AppRunner.readLaunchConfig project |> Result.map (fun config -> entry, config))
+      match prepared with
+      | Error reason -> return Error (SageFsError.AppRunFailed (project, reason))
+      | Ok (entry, config) ->
+        let! state = AppRunner.start appRunner project entry (AppRun.planLaunch project config) |> Async.AwaitTask
+        match state with
+        | AppRun.AppRunState.Running _ -> watchForHotReload project
+        | _ -> ()
+        return Ok state }
+    Stop = fun () -> async {
+      let project =
+        match AppRunner.state appRunner with
+        | AppRun.AppRunState.Running app -> app.Project
+        | _ -> ""
+      let! stopped = AppRunner.stop appRunner |> Async.AwaitTask
+      return stopped |> Result.mapError (fun reason -> SageFsError.AppRunFailed (project, reason)) }
+    AwaitChange = fun runId -> async {
+      use cts = new CancellationTokenSource(TimeSpan.FromMinutes 5.0)
+      return! AppRunner.awaitChange appRunner runId cts.Token |> Async.AwaitTask } }
+
   // Signal readiness over the pipe
   let handler =
     handleMessage actor result.GetSessionState result.GetEvalStats result.GetStatusMessage
-      getRunTest setDynamicRunTest (fun () -> initialDiscoveredTests, initialProviders)
+      getRunTest setDynamicRunTest (fun () -> initialDiscoveredTests, initialProviders) appRuns
 
   let readyHandler (msg: WorkerMessage) = async {
     match msg with

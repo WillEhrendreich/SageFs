@@ -128,6 +128,10 @@ module WorkerProtocol =
     | RunTests of tests: Features.LiveTesting.TestCase array * maxParallelism: int * replyId: string
     | GetTestDiscovery of replyId: string
     | GetInstrumentationMaps of replyId: string
+    | RunApp of project: string * replyId: string
+    | StopApp of replyId: string
+    /// Long poll: answered when the app is no longer Running with this run id.
+    | AwaitAppChange of runId: string * replyId: string
     | Shutdown
 
   /// F# compiler diagnostic serialized for worker→daemon transport.
@@ -204,6 +208,7 @@ module WorkerProtocol =
     | TestRunResults of replyId: string * results: Features.LiveTesting.TestRunResult array
     | InitialTestDiscovery of tests: Features.LiveTesting.TestCase array * providers: Features.LiveTesting.ProviderDescription list
     | InstrumentationMapsResult of replyId: string * maps: Features.LiveTesting.InstrumentationMap array
+    | AppRunResult of replyId: string * result: Result<AppRun.AppRunState, SageFsError>
     | WorkerReady
     | WorkerShuttingDown
     | WorkerError of SageFsError

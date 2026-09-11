@@ -105,6 +105,11 @@ let private genSageFsError =
       return SageFsError.HotReloadStateError(id, reason)
     }
     gen {
+      let! project = genNonEmptyString
+      let! reason = genNonEmptyString
+      return SageFsError.AppRunFailed(project, reason)
+    }
+    gen {
       let! count = Gen.choose (1, 20)
       let! minutes = Gen.choose (1, 60) |> Gen.map float
       return SageFsError.RestartLimitExceeded(count, minutes)
@@ -261,12 +266,12 @@ let sageFsErrorPropertyTests =
           1)
 
     // 9. DU completeness guard — detect new cases
-    testCase "SageFsError DU has exactly 31 cases" <| fun _ ->
+    testCase "SageFsError DU has exactly 32 cases" <| fun _ ->
       allDuCaseInfos
       |> Array.length
       |> Expect.equal
         "SageFsError case count changed — update generators and property tests"
-        31
+        32
 
     // 10. Unexpected wraps exception message
     testPropertyWithConfig propConfig "Unexpected description contains exception message" <|
