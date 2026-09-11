@@ -68,24 +68,21 @@ open SageFs.Features.FeatureHooks
 let w7FeatureHooksIncrementalCacheTests =
   testList "W7 — FeaturePushState incremental scope/timeline caching" [
 
-    testCase "empty state has None CachedScope and empty CachedTimeline" <| fun _ ->
-      FeaturePushState.empty.CachedScope
-      |> Expect.isNone "empty state has no cached scope"
+    testCase "empty state has an empty scope and an empty timeline" <| fun _ ->
+      (scope FeaturePushState.empty).Bindings
+      |> Expect.isEmpty "empty state has no bindings in scope"
       FeaturePushState.empty.CachedTimeline
       |> Expect.equal "empty state has empty timeline" EvalTimeline.TimelineState.empty
 
-    testCase "recordEval populates CachedScope" <| fun _ ->
+    testCase "recordEval puts the binding in scope" <| fun _ ->
       let state = recordEval "let x = 1" "val x: int = 1" 10L FeaturePushState.empty
-      state.CachedScope |> Expect.isSome "CachedScope is set after recordEval"
+      (scope state).Bindings |> Expect.hasLength "one binding after one eval" 1
 
-    testCase "recordEval CachedScope contains the new binding" <| fun _ ->
+    testCase "recordEval scope contains the new binding" <| fun _ ->
       let state = recordEval "let answer = 42" "val answer: int = 42" 5L FeaturePushState.empty
-      match state.CachedScope with
-      | None -> failtest "CachedScope should be Some"
-      | Some scope ->
-        scope.ActiveBindings
-        |> Map.containsKey "answer"
-        |> Expect.isTrue "cached scope contains 'answer' binding"
+      (scope state).ActiveBindings
+      |> Map.containsKey "answer"
+      |> Expect.isTrue "scope contains 'answer' binding"
 
     testCase "recordEval updates CachedTimeline incrementally" <| fun _ ->
       let state1 = recordEval "let a = 1" "val a: int = 1" 100L FeaturePushState.empty
@@ -118,22 +115,16 @@ let w7FeatureHooksIncrementalCacheTests =
         |> recordEval "let a = 1" "val a: int = 1" 10L
         |> recordEval "let b = 2" "val b: int = 2" 20L
         |> recordEval "let c = 3" "val c: int = 3" 30L
-      match state.CachedScope with
-      | None -> failtest "CachedScope should be populated"
-      | Some scope ->
-        scope.ActiveBindings |> Map.count
-        |> Expect.equal "three active bindings in scope" 3
+      (scope state).ActiveBindings |> Map.count
+      |> Expect.equal "three active bindings in scope" 3
 
     testCase "shadowed binding reduces ActiveBindings count" <| fun _ ->
       let state =
         FeaturePushState.empty
         |> recordEval "let x = 1" "val x: int = 1" 10L
         |> recordEval "let x = 2" "val x: int = 2" 10L  // shadows x
-      match state.CachedScope with
-      | None -> failtest "CachedScope should be populated"
-      | Some scope ->
-        scope.ActiveBindings |> Map.count
-        |> Expect.equal "one active binding (x shadowed then redefined)" 1
+      (scope state).ActiveBindings |> Map.count
+      |> Expect.equal "one active binding (x shadowed then redefined)" 1
 
   ]
 

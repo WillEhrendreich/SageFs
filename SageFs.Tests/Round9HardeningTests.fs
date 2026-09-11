@@ -113,20 +113,20 @@ let w1w5EvalHistoryCapTests =
       state3.EvalHistory.Head.CellIndex |> Expect.equal "third eval gets CellIndex 2" 2
 
     testCase "NextCellIndex advances even when EvalHistory is at cap" <| fun _ ->
-      // Use a small iteration count that exceeds MaxEvalHistory to prove the cap.
-      // recordEval does O(n) work per call (scope rebuild), so 10K iterations = O(n²) ≈ minutes.
-      // Instead: iterate 50 times, verify cap at MaxEvalHistory is at most 50.
-      let testCap = min 50 FeatureHooks.MaxEvalHistory
+      // An injected 50-cell cap, exceeded by 2 evals, so the cap is really hit.
+      let testCap = 50
       let iterations = testCap + 2
+      let cap =
+        match EvalStore.HistoryCap.tryCreate testCap with
+        | Ok c -> c
+        | Error reason -> failtest reason
       let finalState =
         List.fold
           (fun s i -> FeatureHooks.recordEval (sprintf "let x%d = %d" i i) (sprintf "val x%d: int = %d" i i) 1L s)
-          FeatureHooks.FeaturePushState.empty
+          (FeatureHooks.FeaturePushState.withCap cap)
           [0 .. iterations - 1]
       finalState.NextCellIndex |> Expect.equal "NextCellIndex should be iterations" iterations
-      // History length should be min(iterations, MaxEvalHistory)
-      (finalState.EvalHistory.Length <= FeatureHooks.MaxEvalHistory)
-        |> Expect.isTrue "EvalHistory should be capped at MaxEvalHistory"
+      finalState.EvalHistory.Length |> Expect.equal "EvalHistory holds exactly the cap" testCap
 
     testCase "no duplicate CellIndex values after many evals" <| fun _ ->
       let testCap = min 50 FeatureHooks.MaxEvalHistory
@@ -148,16 +148,13 @@ let w1w5EvalHistoryCapTests =
           [0..4]
       state.EvalHistory.Head.CellIndex |> Expect.equal "head of history is most recent" 4
 
-    testCase "CachedScope reflects all entries after evals" <| fun _ ->
+    testCase "the scope reflects all entries after evals" <| fun _ ->
       let state =
         List.fold
           (fun s i -> FeatureHooks.recordEval (sprintf "let bind%d = %d" i i) (sprintf "val bind%d: int = %d" i i) 1L s)
           FeatureHooks.FeaturePushState.empty
           [0..9]
-      match state.CachedScope with
-      | None -> failtest "CachedScope should be Some after evals"
-      | Some scope ->
-        scope.Bindings |> Expect.hasLength "scope has 10 bindings" 10
+      (FeatureHooks.scope state).Bindings |> Expect.hasLength "scope has 10 bindings" 10
   ]
 
 // ---------------------------------------------------------------------------

@@ -2001,9 +2001,10 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       |> List.sortBy (fun d -> match d.Severity with DiagError -> 0 | DiagWarning -> 1)
     GetFilmstripEntries = fun () ->
       let state = System.Threading.Volatile.Read(&sharedFeatureState.contents)
-      state.EvalHistory
-      |> List.rev
-      |> List.truncate 20
+      // The 20 most recent evals, oldest first — the filmstrip shows its
+      // newest frame last. (Reversing the whole history and taking 20 showed
+      // the session's FIRST 20 evals forever, after walking up to 10k cells.)
+      SageFs.Features.FeatureHooks.recentEvals 20 state
       |> List.map (fun entry ->
         let outcome =
           match entry.Result with

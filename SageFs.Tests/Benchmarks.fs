@@ -213,6 +213,37 @@ type ActionPrioritizerBenchmarks() =
   member _.Compose() =
     ActionPrioritizer.compose coverageReports impactReports staleCells
 
+// 9. FeatureHooks.recordEval per-eval cost as the history grows. It runs on
+// the /exec path before the reply, so it must be flat across 100 / 1k / 10k
+// (at the cap: every eval evicts) / 10,001 cells. The state is persistent, so
+// every invocation records onto the same N-cell history.
+module RecordEvalCells =
+  let cell i =
+    match i % 3 with
+    | 0 -> sprintf "let v%d = x + %d" i i, sprintf "val v%d: int = %d" i i
+    | 1 -> sprintf "let x = v%d * 2" (i - 1), sprintf "val x: int = %d" i
+    | _ -> sprintf "x + v%d" (i - 2), sprintf "val it: int = %d" i
+
+[<MemoryDiagnoser>]
+type RecordEvalScaling() =
+  let mutable state = FeatureHooks.FeaturePushState.empty
+
+  [<Params(100, 1000, 10000, 10001)>]
+  member val HistoryCells = 0 with get, set
+
+  [<GlobalSetup>]
+  member this.Setup() =
+    state <-
+      [ 0 .. this.HistoryCells - 1 ]
+      |> List.fold (fun st i ->
+        let code, result = RecordEvalCells.cell i
+        FeatureHooks.recordEval code result 5L st) FeatureHooks.FeaturePushState.empty
+
+  [<Benchmark>]
+  member this.RecordOneEval() =
+    let code, result = RecordEvalCells.cell this.HistoryCells
+    FeatureHooks.recordEval code result 5L state
+
 module BenchmarkRunner =
   let run (argv: string[]) =
     let config =
@@ -232,6 +263,7 @@ module BenchmarkRunner =
          typeof<SseFormatting>
          typeof<CellGridOverlay>
          typeof<AnsiEmitDiff>
-         typeof<ActionPrioritizerBenchmarks> |]
+         typeof<ActionPrioritizerBenchmarks>
+         typeof<RecordEvalScaling> |]
     BenchmarkSwitcher.FromTypes(types).Run(argv, config) |> ignore
     0

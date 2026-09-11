@@ -87,6 +87,7 @@
         <Compile Include="Features\Diagnostician.fs" />
         <Compile Include="RetryPolicy.fs" />
         <Compile Include="SseWriter.fs" />
+    <Compile Include="Features\EvalStore.fs" />
     <Compile Include="Features\FeatureHooks.fs" />
     <Compile Include="Features\FrictionTelemetryTypes.fs" />
         <Compile Include="Features\FrictionTelemetry.fs" />

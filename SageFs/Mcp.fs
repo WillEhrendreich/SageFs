@@ -2705,16 +2705,10 @@ module McpTools =
           return formatFileCoverageResponse annotations testState
     }
 
-  /// Build a CellGraph from the current FeaturePushState.
-  /// Uses the incrementally-maintained graph when populated (roast item 8).
+  /// The dependency graph of the current FeaturePushState — materialized once
+  /// per history version from the indexed eval store and shared by all readers.
   let private buildCellGraphFromState (state: Features.FeatureHooks.FeaturePushState) : Features.CellDependencyGraph.CellGraph =
-    state.CachedCellGraph
-    |> Option.defaultWith (fun () ->
-      let cells =
-        state.EvalHistory
-        |> List.map (fun e ->
-          Features.CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
-      Features.CellDependencyGraph.buildGraph cells)
+    Features.FeatureHooks.cellGraph state
 
   /// Convert BindingScopeSnapshot active bindings to Ghostwriter ScopeBinding list.
   let private toScopeBindings (snapshot: Features.BindingExplorer.BindingScopeSnapshot) : Features.ScopeBinding list =
@@ -2837,9 +2831,7 @@ module McpTools =
                     |> Option.map (fun n -> (tc.Id, tc.DisplayName, n)))
                   |> Array.toList
                 let scopeBindings =
-                  match state.CachedScope with
-                  | Some snapshot -> toScopeBindings snapshot
-                  | None -> []
+                  toScopeBindings (Features.FeatureHooks.scope state)
                 let report =
                   Features.Diagnostician.Diagnostician.compose
                     graph failuresForDiag scopeBindings state.CachedTimeline
@@ -3005,8 +2997,7 @@ module McpTools =
         | _ ->
           let graph = buildCellGraphFromState state
           let scope =
-            state.CachedScope
-            |> Option.defaultWith (fun () -> Features.FeatureHooks.buildScopeFromState state)
+            Features.FeatureHooks.scope state
           let existingBinding = scope.ActiveBindings |> Map.tryFind bindingName
           let original =
             existingBinding
@@ -3036,8 +3027,7 @@ module McpTools =
       | Some getState ->
         let state = getState ()
         let scope =
-          state.CachedScope
-          |> Option.defaultWith (fun () -> Features.FeatureHooks.buildScopeFromState state)
+          Features.FeatureHooks.scope state
         let bindings = toScopeBindings scope
         match bindings with
         | [] -> return "No bindings in scope — evaluate some cells first."
@@ -3341,9 +3331,7 @@ module McpTools =
 
         // Get scope bindings for Ghostwriter suggestions
         let scopeBindings =
-          match state.CachedScope with
-          | Some snapshot -> toScopeBindings snapshot
-          | None -> []
+          toScopeBindings (Features.FeatureHooks.scope state)
 
         let report =
           Features.Diagnostician.Diagnostician.compose
@@ -3732,8 +3720,7 @@ module McpTools =
               | Some sym, _ ->
                 let graph = buildCellGraphFromState state
                 let scope =
-                  state.CachedScope
-                  |> Option.defaultWith (fun () -> Features.FeatureHooks.buildScopeFromState state)
+                  Features.FeatureHooks.scope state
                 match scope.ActiveBindings |> Map.tryFind sym with
                 | None -> None
                 | Some binding ->

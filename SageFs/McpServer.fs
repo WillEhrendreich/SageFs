@@ -961,9 +961,7 @@ let wireModelChangeHandlers
         let state, scopeSse =
           SageFs.Features.FeatureHooks.computeBindingScopePush ctx.SseJsonOpts sid state
         // W12(R10): Volatile.Write ensures the MCP-thread write is visible to dashboard HTTP threads.
-        let scopeSnapshot =
-          state.CachedScope
-          |> Option.defaultWith (fun () -> SageFs.Features.FeatureHooks.buildScopeFromState state)
+        let scopeSnapshot = SageFs.Features.FeatureHooks.scope state
         System.Threading.Volatile.Write(&sharedBindingScope.contents, Some scopeSnapshot)
         let state, timelineSse =
           SageFs.Features.FeatureHooks.computeEvalTimelinePush ctx.SseJsonOpts sid state
@@ -1000,12 +998,10 @@ let wireModelChangeHandlers
       match isRunComplete && not lt.Cached.FailureNarratives.IsEmpty with
       | true ->
         let state = featurePushState.Value
-        let graph =
-          let cells =
-            state.EvalHistory
-            |> List.map (fun e ->
-              SageFs.Features.CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
-          SageFs.Features.CellDependencyGraph.buildGraph cells
+        // This runs on the Elm drain thread on every ModelChanged while a
+        // failure narrative exists: read the graph and scope recordEval
+        // already indexed (shared with the feature push), never rebuild them.
+        let graph = SageFs.Features.FeatureHooks.cellGraph state
         let failuresWithNarratives =
           lt.DiscoveredTests
           |> Array.choose (fun tc ->
@@ -1013,15 +1009,12 @@ let wireModelChangeHandlers
             |> Option.map (fun n -> (tc.Id, tc.DisplayName, n)))
           |> Array.toList
         let scopeBindings =
-          match state.CachedScope with
-          | Some snapshot ->
-            snapshot.ActiveBindings
-            |> Map.toList
-            |> List.map (fun (_key, info) ->
-              { SageFs.Features.ScopeBinding.Name = info.Name
-                SageFs.Features.ScopeBinding.TypeSig = info.TypeSig
-                SageFs.Features.ScopeBinding.Value = info.Value })
-          | None -> []
+          (SageFs.Features.FeatureHooks.scope state).ActiveBindings
+          |> Map.toList
+          |> List.map (fun (_key, info) ->
+            { SageFs.Features.ScopeBinding.Name = info.Name
+              SageFs.Features.ScopeBinding.TypeSig = info.TypeSig
+              SageFs.Features.ScopeBinding.Value = info.Value })
         let report =
           SageFs.Features.Diagnostician.Diagnostician.compose
             graph failuresWithNarratives scopeBindings state.CachedTimeline

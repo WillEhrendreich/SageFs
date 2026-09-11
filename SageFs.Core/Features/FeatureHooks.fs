@@ -1,12 +1,6 @@
 module SageFs.Features.FeatureHooks
 
-type EvalHistoryEntry = {
-  CellIndex: int
-  Code: string
-  Result: string
-  DurationMs: int64
-  Timestamp: System.DateTimeOffset
-}
+type EvalHistoryEntry = EvalStore.EvalHistoryEntry
 
 type FeaturePushState = {
   LastOutputText: string
@@ -14,137 +8,76 @@ type FeaturePushState = {
   LastCellDepsSse: string option
   LastBindingScopeSse: string option
   LastEvalTimelineSse: string option
-  EvalHistory: EvalHistoryEntry list
-  /// W5(R9): Monotonic cell index counter — never derived from EvalHistory.Length.
-  /// Survives EvalHistory capping without producing duplicate CellIndex values.
-  NextCellIndex: int
-  /// Incrementally maintained map of binding name → cell index.
-  /// Updated in recordEval to avoid O(n) rebuild on every SSE push.
-  KnownBindings: Map<string, int>
-  /// Cached binding scope snapshot, updated incrementally in recordEval.
-  CachedScope: BindingExplorer.BindingScopeSnapshot option
-  /// Cached cell-dependency graph, updated incrementally in recordEval
-  /// (roast item 8 — the push previously rebuilt the whole ≤10k-cell graph).
-  CachedCellGraph: CellDependencyGraph.CellGraph option
+  /// The retained eval history: bounded, id-indexed, each cell tokenized
+  /// once when recorded, so recording an eval costs the same at 100 cells
+  /// as at the 10,000-cell cap (see EvalStore).
+  History: EvalStore.Store
+  /// Binding scope of `History`, built on first read and then shared by
+  /// every reader of this state (SSE push, dashboard, MCP tools). Never
+  /// built on the `/exec` path.
+  Scope: Lazy<BindingExplorer.BindingScopeSnapshot>
+  /// Cell-dependency graph of `History`, built on first read and shared.
+  CellGraph: Lazy<CellDependencyGraph.CellGraph>
   /// Cached timeline state, updated incrementally in recordEval.
   CachedTimeline: EvalTimeline.TimelineState
-  /// Incremental equivalent of the old per-eval `EvalHistory |> List.rev |>
-  /// List.map (to CellInput)` — kept newest-first and appended with a single
-  /// cons per eval so the reference scan in `appendCell` never re-maps (and
-  /// allocates) a fresh ≤10k-element list on every eval (roast queue item 4).
-  PriorCellInputs: BindingExplorer.CellInput list
 }
+  with
+  /// Retained entries, newest first. Walks the whole history — hot paths use
+  /// `recentEvals` instead.
+  member s.EvalHistory : EvalHistoryEntry list = EvalStore.newestFirst s.History
+  /// Monotonic id of the next cell — never derived from the history length,
+  /// so ids stay unique after the cap starts evicting.
+  member s.NextCellIndex = s.History.NextId
+  /// Newest cell that bound each name.
+  member s.KnownBindings = s.History.KnownBindings
+
+[<Literal>]
+let MaxEvalHistory = EvalStore.HistoryCap.StandardCells
 
 module FeaturePushState =
-  let empty = {
+  let private emptyScope : BindingExplorer.BindingScopeSnapshot =
+    { Bindings = []; ActiveBindings = Map.empty; ShadowedBindings = [] }
+
+  let private emptyGraph : CellDependencyGraph.CellGraph =
+    { Cells = Map.empty; Edges = [] }
+
+  /// A fresh state whose history retains the most recent `cap` cells.
+  let withCap (cap: EvalStore.HistoryCap) = {
     LastOutputText = ""
     LastEvalDiffSse = None
     LastCellDepsSse = None
     LastBindingScopeSse = None
     LastEvalTimelineSse = None
-    EvalHistory = []
-    NextCellIndex = 0
-    KnownBindings = Map.empty
-    CachedScope = None
-    CachedCellGraph = None
+    History = EvalStore.empty cap
+    Scope = Lazy<_>.CreateFromValue emptyScope
+    CellGraph = Lazy<_>.CreateFromValue emptyGraph
     CachedTimeline = EvalTimeline.TimelineState.empty
-    PriorCellInputs = []
   }
 
-let [<Literal>] MaxEvalHistory = 10_000
+  let empty = withCap EvalStore.HistoryCap.standard
 
 let recordEval (code: string) (result: string) (durationMs: int64) (state: FeaturePushState) =
-  // W5(R9): Use NextCellIndex (monotonic counter) not EvalHistory.Length.
-  // EvalHistory.Length decreases when the cap is applied; NextCellIndex never does.
-  let idx = state.NextCellIndex
-  let entry = {
-    CellIndex = idx
-    Code = code
-    Result = result
-    DurationMs = durationMs
-    Timestamp = System.DateTimeOffset.UtcNow
-  }
-  let newBindings =
-    result.Split('\n')
-    |> Array.choose (fun line ->
-      let trimmed = line.Trim()
-      match trimmed.StartsWith("val ") with
-      | false -> None
-      | true ->
-        let nameEnd = trimmed.IndexOfAny([| ':'; ' ' |], 4)
-        match nameEnd > 4 with
-        | false -> None
-        | true -> Some (trimmed.Substring(4, nameEnd - 4), entry.CellIndex))
-    |> Array.fold (fun acc (name, cellIdx) -> Map.add name cellIdx acc) state.KnownBindings
-  // W1(R9): Cap EvalHistory at MaxEvalHistory to prevent unbounded O(n) growth.
-  // Prepend is O(1); truncate drops the oldest entries at the tail.
-  let cappedHistory = (entry :: state.EvalHistory) |> List.truncate MaxEvalHistory
-  // Incremental cell-input list: single cons per eval (newest-first). This
-  // replaces the per-eval `List.rev + List.map` of the whole ≤10k history that
-  // appendCell's reference scan used to receive (roast queue item 4) — the
-  // allocation and re-walk were O(n) on every eval, O(n²) across a session.
-  let priorCellInputs = state.PriorCellInputs
-  let newCellInput : BindingExplorer.CellInput =
-    { CellIndex = idx; FsiOutput = result; Source = code }
-  let priorCellInputs' = newCellInput :: priorCellInputs |> List.truncate MaxEvalHistory
-  // The binding scope is updated INCREMENTALLY: only the new cell can change
-  // the scope, so merge it into the cached snapshot instead of rebuilding the
-  // whole scope from up to 10,000 retained cells on every eval (roast §6 —
-  // that was O(n) per eval, O(n²) total). The merge cannot evict cells, so
-  // when the history cap actually truncated (an eviction), fall back to the
-  // full rebuild.
-  let didTruncate = cappedHistory.Length < (entry :: state.EvalHistory).Length
-  let newScope =
-    match didTruncate with
-    | true ->
-      let allCellInputs =
-        cappedHistory
-        |> List.rev
-        |> List.map (fun e ->
-          let ci: BindingExplorer.CellInput =
-            { CellIndex = e.CellIndex; FsiOutput = e.Result; Source = e.Code }
-          ci)
-      BindingExplorer.buildScopeSnapshot allCellInputs
-    | false ->
-      match state.CachedScope with
-      | None ->
-        // First eval — build from the single cell.
-        BindingExplorer.buildScopeSnapshot
-          [ { BindingExplorer.CellInput.CellIndex = idx
-              FsiOutput = result
-              Source = code } ]
-      | Some prior ->
-        BindingExplorer.appendCell newCellInput priorCellInputs prior
-  // The cell-dependency graph is maintained the same way: append the new
-  // cell incrementally; on history-cap eviction fall back to a full rebuild
-  // (an evicted cell's frozen Consumes could reference a name whose producer
-  // was evicted, and only a rebuild re-resolves the survivors).
-  let newCellGraph =
-    match didTruncate with
-    | true ->
-      cappedHistory
-      |> List.rev
-      |> List.map (fun e -> CellDependencyGraph.analyzeCell newBindings e.CellIndex e.Code e.Result)
-      |> CellDependencyGraph.buildGraph
-    | false ->
-      match state.CachedCellGraph with
-      | None ->
-        // First eval — build from the single cell.
-        CellDependencyGraph.buildGraph
-          [ CellDependencyGraph.analyzeCell newBindings idx code result ]
-      | Some prior ->
-        CellDependencyGraph.appendCell newBindings prior idx code result
+  let history = EvalStore.record code result durationMs System.DateTimeOffset.UtcNow state.History
   let timelineEntry: EvalTimeline.TimelineEntry =
-    { CellId = idx; StartMs = 0L; DurationMs = durationMs; Status = EvalTimeline.Success }
-  let newTimeline = EvalTimeline.TimelineState.record timelineEntry state.CachedTimeline
+    { CellId = state.History.NextId; StartMs = 0L; DurationMs = durationMs; Status = EvalTimeline.Success }
   { state with
-      EvalHistory = cappedHistory
-      NextCellIndex = idx + 1
-      KnownBindings = newBindings
-      CachedScope = Some newScope
-      CachedCellGraph = Some newCellGraph
-      CachedTimeline = newTimeline
-      PriorCellInputs = priorCellInputs' }
+      History = history
+      Scope = lazy (EvalStore.materializeScope history)
+      CellGraph = lazy (EvalStore.materializeGraph history)
+      CachedTimeline = EvalTimeline.TimelineState.record timelineEntry state.CachedTimeline }
+
+/// The binding scope of the retained history (empty before the first eval).
+let scope (state: FeaturePushState) : BindingExplorer.BindingScopeSnapshot =
+  state.Scope.Force()
+
+/// The dependency graph of the retained history (empty before the first eval).
+let cellGraph (state: FeaturePushState) : CellDependencyGraph.CellGraph =
+  state.CellGraph.Force()
+
+/// The `count` most recent evals, oldest first, so the newest is last.
+/// Costs O(count), not O(history).
+let recentEvals (count: int) (state: FeaturePushState) : EvalHistoryEntry list =
+  EvalStore.newest count state.History |> List.rev
 
 let computeEvalDiffPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (currentOutputText: string) (state: FeaturePushState) =
   let diff = EvalDiff.diffLines (Some state.LastOutputText) (Some currentOutputText)
@@ -157,34 +90,14 @@ let computeEvalDiffPush (opts: System.Text.Json.JsonSerializerOptions) (sessionI
     { updatedState with LastEvalDiffSse = Some sseStr }, Some sseStr
 
 let computeCellDepsPush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (state: FeaturePushState) =
-  // Use the incrementally-maintained graph; fall back to a full rebuild only
-  // if no eval has populated the cache yet (roast item 8).
-  let graph =
-    state.CachedCellGraph
-    |> Option.defaultWith (fun () ->
-      state.EvalHistory
-      |> List.map (fun (e: EvalHistoryEntry) ->
-        CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
-      |> CellDependencyGraph.buildGraph)
-  let sseStr = SageFs.SseWriter.formatCellDependenciesEvent opts sessionId graph
+  let sseStr = SageFs.SseWriter.formatCellDependenciesEvent opts sessionId (cellGraph state)
   if Some sseStr = state.LastCellDepsSse then
     { state with LastCellDepsSse = Some sseStr }, None
   else
     { state with LastCellDepsSse = Some sseStr }, Some sseStr
 
-let buildScopeFromState (state: FeaturePushState) =
-  state.EvalHistory
-  |> List.map (fun (e: EvalHistoryEntry) ->
-    { BindingExplorer.CellInput.CellIndex = e.CellIndex
-      BindingExplorer.CellInput.FsiOutput = e.Result
-      BindingExplorer.CellInput.Source = e.Code } : BindingExplorer.CellInput)
-  |> BindingExplorer.buildScopeSnapshot
-
 let computeBindingScopePush (opts: System.Text.Json.JsonSerializerOptions) (sessionId: string option) (state: FeaturePushState) =
-  let snapshot =
-    state.CachedScope
-    |> Option.defaultWith (fun () -> buildScopeFromState state)
-  let sseStr = SageFs.SseWriter.formatBindingScopeMapEvent opts sessionId snapshot
+  let sseStr = SageFs.SseWriter.formatBindingScopeMapEvent opts sessionId (scope state)
   if Some sseStr = state.LastBindingScopeSse then
     { state with LastBindingScopeSse = Some sseStr }, None
   else

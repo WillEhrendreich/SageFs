@@ -5,9 +5,68 @@ open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
 open System.Text.Json
+open SageFs.Features
 open SageFs.Features.FeatureHooks
 
 let sseJsonOpts = JsonSerializerOptions(PropertyNamingPolicy = JsonNamingPolicy.CamelCase)
+
+/// From-scratch binding scope of the retained history — the oracle the
+/// indexed store must reproduce exactly.
+let private fullScope (state: FeaturePushState) =
+  state.EvalHistory
+  |> List.rev
+  |> List.map (fun e ->
+    let cell : BindingExplorer.CellInput =
+      { CellIndex = e.CellIndex; FsiOutput = e.Result; Source = e.Code }
+    cell)
+  |> BindingExplorer.buildScopeSnapshot
+
+/// From-scratch dependency graph of the retained history (every retained
+/// cell re-analyzed against the latest KnownBindings) — the other oracle.
+let private fullGraph (state: FeaturePushState) =
+  state.EvalHistory
+  |> List.rev
+  |> List.map (fun e -> CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
+  |> CellDependencyGraph.buildGraph
+
+let private run steps =
+  steps |> List.fold (fun st (code, result) -> recordEval code result 5L st) FeaturePushState.empty
+
+let private capOf cells =
+  match EvalStore.HistoryCap.tryCreate cells with
+  | Ok cap -> cap
+  | Error reason -> failtest reason
+
+let private expectScopeMatchesRebuild (state: FeaturePushState) =
+  let expected = fullScope state
+  let actual = scope state
+  actual.Bindings |> Expect.equal "bindings match a rebuild" expected.Bindings
+  actual.ActiveBindings |> Expect.equal "active bindings match a rebuild" expected.ActiveBindings
+  actual.ShadowedBindings |> Expect.equal "shadowed bindings match a rebuild" expected.ShadowedBindings
+
+let private expectGraphMatchesRebuild (state: FeaturePushState) =
+  let expected = fullGraph state
+  let actual = cellGraph state
+  actual.Cells |> Expect.equal "cells match a rebuild" expected.Cells
+  actual.Edges |> Expect.equal "edges match a rebuild" expected.Edges
+
+// Cells that stress every reference rule: redefinition, shadowing, `it`,
+// dotted access (`x.Length` does not consume x), primed and operator names,
+// multi-binding cells, `mutable` (whose explorer name is "mutable m"),
+// string/comment mentions and failed cells that bind nothing.
+let private genName = Gen.elements [ "a"; "b"; "x"; "it"; "x'"; "(+.)" ]
+
+let private genExpr =
+  Gen.elements [ "1"; "a"; "b + a"; "x.Length"; "Foo.x"; "x'"; "a(+.)b"; "\"a\""; "it"; "mutable m"; "m"; "// b" ]
+
+let private genStep =
+  Gen.oneof [
+    Gen.map2 (fun n e -> sprintf "let %s = %s" n e, sprintf "val %s: int = 42" n) genName genExpr
+    Gen.map3 (fun n1 n2 e -> sprintf "let %s, %s = %s, 2" n1 n2 e, sprintf "val %s: int = 1\nval %s: int = 2" n1 n2) genName genName genExpr
+    Gen.map (fun e -> e, "val it: int = 3") genExpr
+    Gen.map (fun e -> e, "error FS0039: The value or constructor is not defined.") genExpr
+    Gen.map (fun e -> sprintf "let mutable m = %s" e, "val mutable m: int = 1") genExpr
+  ]
 
 [<Tests>]
 let featureHookTests = testList "Feature Hook Computation" [
@@ -82,127 +141,148 @@ let featureHookTests = testList "Feature Hook Computation" [
     }
   ]
 
-  testList "incremental CachedScope equivalence" [
-    // recordEval's fast path merges the new cell into CachedScope instead of
-    // rebuilding from all retained cells. The result must be identical to the
-    // full rebuild from the accumulated history (roast §6 regression guard).
-    test "redefinition + cross-cell refs: incremental scope equals full rebuild" {
-      let steps = [
+  testList "indexed scope equals a rebuild" [
+    test "redefinition + cross-cell refs" {
+      run [
         "let x = 1", "val x: int = 1"
         "let y = x + 1", "val y: int = 2"
         "let x = 10", "val x: int = 10"
         "let z = x + y", "val z: int = 12"
       ]
-      let state =
-        steps
-        |> List.fold (fun st (code, result) -> recordEval code result 5L st) FeaturePushState.empty
-      let expected =
-        state.EvalHistory
-        |> List.rev
-        |> List.map (fun e ->
-          let cell : SageFs.Features.BindingExplorer.CellInput = {
-            CellIndex = e.CellIndex
-            FsiOutput = e.Result
-            Source = e.Code
-          }
-          cell)
-        |> SageFs.Features.BindingExplorer.buildScopeSnapshot
-      match state.CachedScope with
-      | None -> failwith "CachedScope should exist after evals"
-      | Some actual ->
-        actual.Bindings |> Expect.equal "bindings match full rebuild" expected.Bindings
-        actual.ActiveBindings |> Expect.equal "active map matches" expected.ActiveBindings
-        actual.ShadowedBindings |> Expect.equal "shadowed list matches" expected.ShadowedBindings
+      |> expectScopeMatchesRebuild
     }
 
-    test "first eval populates CachedScope" {
+    test "the first eval's binding is in scope" {
       let state = FeaturePushState.empty |> recordEval "let x = 1" "val x: int = 1" 50L
-      state.CachedScope |> Expect.isSome "first eval should populate scope"
+      (scope state).ActiveBindings |> Map.containsKey "x" |> Expect.isTrue "x is active after its eval"
+    }
+
+    test "no evals: an empty scope and an empty graph" {
+      (scope FeaturePushState.empty).Bindings |> Expect.isEmpty "no bindings before any eval"
+      (cellGraph FeaturePushState.empty).Cells |> Expect.isEmpty "no cells before any eval"
     }
   ]
 
-  testList "incremental CachedCellGraph equivalence" [
-    // recordEval appends the new cell to CachedCellGraph instead of rebuilding
-    // the graph from all retained cells. The result must be IDENTICAL to a
-    // full rebuild from the same history (roast item 8 regression guard).
-    let fullRebuild (state: FeaturePushState) =
-      state.EvalHistory
-      |> List.rev
-      |> List.map (fun e -> SageFs.Features.CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
-      |> SageFs.Features.CellDependencyGraph.buildGraph
-
-    test "redefinition + cross-cell refs: incremental graph equals full rebuild" {
-      let steps = [
+  testList "indexed graph equals a rebuild" [
+    test "redefinition + cross-cell refs" {
+      run [
         "let x = 1", "val x: int = 1"
         "let y = x + 1", "val y: int = 2"
         "let x = 10", "val x: int = 10"
         "let z = x + y", "val z: int = 12"
         "let w = z * 2", "val w: int = 24"
       ]
-      let state =
-        steps
-        |> List.fold (fun st (code, result) -> recordEval code result 5L st) FeaturePushState.empty
-      match state.CachedCellGraph with
-      | None -> failwith "CachedCellGraph should exist after evals"
-      | Some actual ->
-        let expected = fullRebuild state
-        actual.Cells |> Expect.equal "cells match full rebuild" expected.Cells
-        actual.Edges |> Expect.equal "edges match full rebuild" expected.Edges
+      |> expectGraphMatchesRebuild
     }
 
     test "shadowed binding retargets consumers to the latest producer" {
-      let steps = [
+      run [
         "let a = 1", "val a: int = 1"
         "let b = a + 1", "val b: int = 2"
         "let a = 100", "val a: int = 100"
       ]
-      let state =
-        steps
-        |> List.fold (fun st (code, result) -> recordEval code result 5L st) FeaturePushState.empty
-      match state.CachedCellGraph with
-      | None -> failwith "CachedCellGraph should exist after evals"
-      | Some actual ->
-        let expected = fullRebuild state
-        actual.Edges |> Expect.equal "retargeted edges match full rebuild" expected.Edges
-        actual.Cells |> Expect.equal "cells match full rebuild" expected.Cells
+      |> expectGraphMatchesRebuild
     }
 
-    test "independent cells accumulate edges incrementally" {
-      let steps = [
+    test "independent cells accumulate edges" {
+      run [
         "let p = 1", "val p: int = 1"
         "let q = 2", "val q: int = 2"
         "let r = p + q", "val r: int = 3"
       ]
-      let state =
-        steps
-        |> List.fold (fun st (code, result) -> recordEval code result 5L st) FeaturePushState.empty
-      match state.CachedCellGraph with
-      | None -> failwith "CachedCellGraph should exist after evals"
-      | Some actual ->
-        let expected = fullRebuild state
-        actual.Edges |> Expect.equal "edges match full rebuild" expected.Edges
-        actual.Cells |> Expect.equal "cells match full rebuild" expected.Cells
+      |> expectGraphMatchesRebuild
     }
 
     test "a cell consuming a binding redefined by a later independent cell" {
-      // b consumes a; later c redefines a but b is not re-consumed — the full
-      // rebuild resolves b's frozen Consumes through the LATEST producer (c),
-      // and the incremental path must produce the same retargeted edge.
-      let steps = [
+      run [
         "let a = 1", "val a: int = 1"
         "let b = a", "val b: int = 1"
         "let c = a + 1", "val c: int = 2"
         "let a = 5", "val a: int = 5"
       ]
+      |> expectGraphMatchesRebuild
+    }
+  ]
+
+  testList "incremental caches agree with a from-scratch rebuild" [
+    test "an older cell that mentions a name defined later depends on the defining cell" {
+      // The user evaluates `y + 1` before defining y (it fails), then defines
+      // y. A rebuild links the failed cell to y's producer; the old append
+      // path only retargeted names that already had a producer, so it missed it.
       let state =
-        steps
-        |> List.fold (fun st (code, result) -> recordEval code result 5L st) FeaturePushState.empty
-      match state.CachedCellGraph with
-      | None -> failwith "CachedCellGraph should exist after evals"
-      | Some actual ->
-        let expected = fullRebuild state
-        actual.Edges |> Expect.equal "edges match full rebuild" expected.Edges
-        actual.Cells |> Expect.equal "cells match full rebuild" expected.Cells
+        run [
+          "y + 1", "error FS0039: The value or constructor 'y' is not defined."
+          "let y = 1", "val y: int = 1"
+        ]
+      expectGraphMatchesRebuild state
+      (cellGraph state).Edges |> Expect.equal "the failed cell depends on y's producer" [ (1, 0) ]
+    }
+
+    test "a cell binding two names shadows an older same-named binding once" {
+      let state =
+        run [
+          "let a = 1", "val a: int = 1"
+          "let a, b = 2, 3", "val a: int = 2\nval b: int = 3"
+        ]
+      expectScopeMatchesRebuild state
+      let first = (scope state).Bindings |> List.head
+      first.ShadowedBy |> Expect.equal "shadowed by cell 1 exactly once" [ 1 ]
+    }
+
+    testPropertyWithConfig
+      { FsCheckConfig.defaultConfig with maxTest = 300 }
+      "random eval sequences under a small cap: indexed scope and graph equal a rebuild of the retained cells" <|
+      Prop.forAll (Arb.fromGen (Gen.zip (Gen.choose (1, 6)) (Gen.listOf genStep))) (fun (capCells, steps) ->
+        let state =
+          steps
+          |> List.fold (fun st (code, result) -> recordEval code result 5L st) (FeaturePushState.withCap (capOf capCells))
+        let kept = min capCells steps.Length
+        state.EvalHistory
+        |> List.rev
+        |> List.map (fun e -> e.CellIndex, e.Code, e.Result)
+        |> Expect.equal "exactly the newest cells are retained, oldest first"
+             (steps
+              |> List.mapi (fun i (code, result) -> i, code, result)
+              |> List.skip (steps.Length - kept))
+        state.NextCellIndex |> Expect.equal "cell ids never repeat" steps.Length
+        state.KnownBindings
+        |> Expect.equal "known bindings remember the newest producer of every name ever bound"
+             (steps
+              |> List.mapi (fun i (_, result) -> i, result)
+              |> List.fold (fun known (i, result) ->
+                CellDependencyGraph.producedNames result |> List.fold (fun k name -> Map.add name i k) known) Map.empty)
+        expectScopeMatchesRebuild state
+        expectGraphMatchesRebuild state)
+  ]
+
+  testList "history cap" [
+    test "the standard cap keeps the newest 10,000 cells and evicts the oldest on eval 10,001" {
+      let state =
+        [ 0 .. MaxEvalHistory ]
+        |> List.fold (fun st i -> recordEval (sprintf "let v%d = %d" i i) (sprintf "val v%d: int = %d" i i) 1L st) FeaturePushState.empty
+      EvalStore.count state.History |> Expect.equal "history is at the cap" MaxEvalHistory
+      EvalStore.oldestId state.History |> Expect.equal "cell 0 was evicted" 1
+      state.NextCellIndex |> Expect.equal "ids keep counting" (MaxEvalHistory + 1)
+      (scope state).ActiveBindings |> Map.containsKey "v0" |> Expect.isFalse "the evicted cell's binding left the scope"
+      (scope state).ActiveBindings |> Map.count |> Expect.equal "every retained binding is active" MaxEvalHistory
+    }
+
+    test "a cap below one cell is refused with the reason" {
+      EvalStore.HistoryCap.tryCreate 0
+      |> Result.mapError (fun reason -> reason.Contains "at least 1 cell")
+      |> Expect.equal "zero cells is not a history" (Error true)
+    }
+
+    test "recentEvals returns the newest cells, oldest first" {
+      let state =
+        [ 0 .. 24 ]
+        |> List.fold (fun st i -> recordEval (sprintf "%d" i) (sprintf "val it: int = %d" i) 1L st) FeaturePushState.empty
+      recentEvals 20 state
+      |> List.map (fun e -> e.CellIndex)
+      |> Expect.equal "the 20 most recent evals, newest last" [ 5 .. 24 ]
+      recentEvals 20 (FeaturePushState.empty |> recordEval "1" "val it: int = 1" 1L)
+      |> List.map (fun e -> e.CellIndex)
+      |> Expect.equal "fewer evals than asked for returns them all" [ 0 ]
     }
   ]
 
@@ -232,67 +312,6 @@ let featureHookTests = testList "Feature Hook Computation" [
       d1 |> Expect.isNone "cell deps should be deduped"
       d2 |> Expect.isNone "binding scope should be deduped"
       d3 |> Expect.isNone "eval timeline should be deduped"
-    }
-  ]
-
-  testList "CachedCellGraph random-sequence equivalence" [
-    // Strongest proof the incremental graph matches a full rebuild: random
-    // sequences of cells (with redefinitions, shadowing, references, and
-    // independent cells) must produce byte-identical Cells + Edges.
-    let genName =
-      Gen.elements [ "a"; "b"; "c"; "x" ]
-    let genExpr =
-      Gen.elements [ "1"; "a"; "b"; "c"; "x"; "a + 1"; "b + a" ]
-    let genStep =
-      Gen.map2 (fun name expr ->
-        (sprintf "let %s = %s" name expr, sprintf "val %s: int = 42" name)) genName genExpr
-    let fullRebuildGraph (state: FeaturePushState) =
-      state.EvalHistory
-      |> List.rev
-      |> List.map (fun e -> SageFs.Features.CellDependencyGraph.analyzeCell state.KnownBindings e.CellIndex e.Code e.Result)
-      |> SageFs.Features.CellDependencyGraph.buildGraph
-    testPropertyWithConfig
-      { FsCheckConfig.defaultConfig with
-          maxTest = 200
-          endSize = 15 } "random cell sequences: incremental graph equals full rebuild" <|
-      fun (steps: (string * string) list) ->
-        let state =
-          steps
-          |> List.fold (fun st (code, result) -> recordEval code result 5L st) FeaturePushState.empty
-        match state.CachedCellGraph with
-        | None -> true // empty sequence — trivially equal
-        | Some actual ->
-          let expected = fullRebuildGraph state
-          actual.Cells = expected.Cells && actual.Edges = expected.Edges
-  ]
-
-  testList "PriorCellInputs incremental list" [
-    // recordEval must NOT re-map the entire EvalHistory into CellInput records
-    // on every eval (that allocates a fresh ≤10k-element list per eval — the
-    // O(n²) driver per roast queue item 4). The stored list is the incremental
-    // equivalent; this test pins it to exactly what the old re-map produced
-    // (EvalHistory is stored newest-first, and PriorCellInputs keeps the same
-    // order — appendCell only scans it, never indexes positionally).
-    test "PriorCellInputs mirrors EvalHistory as newest-first CellInputs" {
-      let steps = [
-        "let a = 1", "val a: int = 1"
-        "let b = 2", "val b: int = 2"
-        "let c = 3", "val c: int = 3"
-      ]
-      let state =
-        steps
-        |> List.fold (fun st (code, result) -> recordEval code result 5L st) FeaturePushState.empty
-      let expected =
-        state.EvalHistory
-        |> List.map (fun e ->
-          let cell : SageFs.Features.BindingExplorer.CellInput = {
-            CellIndex = e.CellIndex
-            FsiOutput = e.Result
-            Source = e.Code
-          }
-          cell)
-      state.PriorCellInputs
-      |> Expect.equal "prior cells are the newest-first re-map, without re-mapping" expected
     }
   ]
 ]
