@@ -410,15 +410,6 @@ module SessionDisplayStatus =
     | SessionDisplayStatus.Lost -> "lost"
     | SessionDisplayStatus.Stopped -> "stopped"
 
-  let ofTuiString (raw: string) =
-    match raw.Trim().ToLowerInvariant() with
-    | "running" -> SessionDisplayStatus.Running
-    | "starting" | "restarting" -> SessionDisplayStatus.Starting
-    | "faulted" | "error" -> SessionDisplayStatus.Faulted
-    | "lost" -> SessionDisplayStatus.Lost
-    | "stopped" -> SessionDisplayStatus.Stopped
-    | _ -> SessionDisplayStatus.Running
-
   let ofSessionState = function
     | SessionState.Ready -> SessionDisplayStatus.Running
     | SessionState.Evaluating -> SessionDisplayStatus.Running
@@ -471,12 +462,13 @@ module DashboardConnectionState =
     | DashboardConnectionState.Connected -> "SageFs -- ready"
     | DashboardConnectionState.Disconnected -> "SageFs -- daemon not running"
 
+/// One sidebar card. Which card is being viewed is NOT a property of the card:
+/// renderers are always told the viewing session explicitly (the page's
+/// viewingSessionId signal), so no card can claim to be viewed on its own.
 type ParsedSession = {
   Id: WorkerProtocol.SessionId
   Status: SessionDisplayStatus
   StatusMessage: string option
-  IsActive: bool
-  IsSelected: bool
   ProjectsText: string
   EvalCount: int
   Uptime: string
@@ -493,55 +485,73 @@ type ParsedSession = {
   App: AppRun.AppRunState
 }
 
-let parseSessionLines (content: string) =
-  let sessionRegex = Regex(@"^([> ])\s+(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?(\s*up:(?:just now|\S+))?(\s*dir:\S.*?)?(\s*last:.+)?$")
-  let extractTag (prefix: string) (value: string) =
-    let v = value.Trim()
-    match v.StartsWith(prefix, StringComparison.Ordinal) with
-    | true -> v.Substring(prefix.Length).Trim()
-    | false -> ""
-  content.Split('\n')
-  |> Array.filter (fun (l: string) ->
-    l.Length > 0
-    && not (l.StartsWith("───", StringComparison.Ordinal))
-    && not (l.StartsWith("⏳", StringComparison.Ordinal))
-    && not (l.Contains("↑↓ nav"))
-    && not (l.Contains("Enter switch"))
-    && not (l.Contains("Ctrl+Tab cycle")))
-  |> Array.choose (fun (l: string) ->
-    let m = sessionRegex.Match(l)
-    match m.Success with
-    | false -> None
-    | true ->
-      let evalsMatch = Regex.Match(m.Groups.[6].Value, @"evals:(\d+)")
-      let rawId = m.Groups.[2].Value
-      match WorkerProtocol.SessionId.validate rawId with
-      | Error _ -> None
-      | Ok sessionId ->
-        Some
-          { Id = sessionId
-            Status = SessionDisplayStatus.ofTuiString m.Groups.[3].Value
-            StatusMessage = None
-            IsActive = m.Groups.[4].Value.Contains("*")
-            IsSelected = m.Groups.[1].Value = ">"
-            ProjectsText = m.Groups.[5].Value.Trim()
-            EvalCount = match evalsMatch.Success with | true -> int evalsMatch.Groups.[1].Value | false -> 0
-            Uptime = extractTag "up:" m.Groups.[7].Value
-            WorkingDir = extractTag "dir:" m.Groups.[8].Value
-            LastActivity = extractTag "last:" m.Groups.[9].Value
-            TestSummary = None
-            CoverageSummary = None
-            TestTreemapEntries = [||]
-            BindingEntries = [||]
-            AgentBadges = []
-            GuidanceCssClass = ""
-            ActiveProject = None
-            ProjectRoles = []
-            App = AppRun.AppRunState.NotRunning })
-  |> Array.toList
+/// A span of time in the sidebar's words: "just now", "5m", "2h", "3d".
+let spanLabel (span: TimeSpan) =
+  match span with
+  | s when s.TotalMinutes < 1.0 -> "just now"
+  | s when s.TotalHours < 1.0 -> sprintf "%dm" (int s.TotalMinutes)
+  | s when s.TotalDays < 1.0 -> sprintf "%dh" (int s.TotalHours)
+  | s -> sprintf "%dd" (int s.TotalDays)
 
-let isCreatingSession (content: string) =
-  content.Contains("⏳ Creating session...")
+/// One session's sidebar card, built from typed state only: the registry's
+/// SessionInfo (status, projects, directory, fault reason, app), the session's
+/// warmup progress, and its eval count. The sidebar used to regex-parse these
+/// back out of the TUI's text rendering, which silently dropped any session
+/// whose project list contained ")" and showed errored or stale sessions as
+/// running. The status message follows the status: warmup progress while
+/// starting, the fault reason only while faulted or lost — never a stale
+/// reason on a running card.
+let sessionCardOf
+  (now: DateTime)
+  (warmupProgress: string option)
+  (evalCount: int)
+  (info: WorkerProtocol.SessionInfo)
+  : ParsedSession =
+  let status = WorkerProtocol.SessionStatus.toSessionState info.Status |> SessionDisplayStatus.ofSessionState
+  { Id = info.Id
+    Status = status
+    StatusMessage =
+      match status with
+      | SessionDisplayStatus.Starting -> warmupProgress
+      | SessionDisplayStatus.Faulted
+      | SessionDisplayStatus.Lost -> info.FaultReason
+      | SessionDisplayStatus.Running
+      | SessionDisplayStatus.Stopped -> None
+    ProjectsText =
+      match info.Projects with
+      | [] -> ""
+      | projects ->
+        sprintf "(%s)" (projects |> List.map System.IO.Path.GetFileNameWithoutExtension |> String.concat ", ")
+    EvalCount = evalCount
+    Uptime = spanLabel (now - info.CreatedAt)
+    WorkingDir = info.WorkingDirectory
+    LastActivity =
+      match spanLabel (now - info.LastActivity) with
+      | "just now" -> "just now"
+      | label -> label + " ago"
+    TestSummary = None
+    CoverageSummary = None
+    TestTreemapEntries = [||]
+    BindingEntries = [||]
+    AgentBadges = []
+    GuidanceCssClass = ""
+    ActiveProject = info.ActiveProject
+    ProjectRoles = info.ProjectRoles
+    App = info.App }
+
+/// Every session the sidebar lists — all but Stopped — in registry order (the
+/// same order the initial page and viewing reconciliation use).
+let liveSessionCards
+  (now: DateTime)
+  (warmupProgress: WorkerProtocol.SessionId -> string option)
+  (evalCounts: Map<WorkerProtocol.SessionId, int>)
+  (sessions: WorkerProtocol.SessionInfo list)
+  : ParsedSession list =
+  sessions
+  |> List.filter (fun s -> s.Status <> WorkerProtocol.SessionStatus.Stopped)
+  |> List.map (fun s ->
+    let evals = evalCounts |> Map.tryFind s.Id |> Option.defaultValue 0
+    sessionCardOf now (warmupProgress s.Id) evals s)
 
 /// A previously-known session that can be resumed.
 type PreviousSession = {
@@ -592,27 +602,6 @@ let parseDiagLines (content: string) : Diagnostic list =
         Line = 0
         Col = 0 })
   |> Array.toList
-
-/// Override parsed session statuses with live SessionState data.
-/// The TUI text may be stale — live state is the source of truth.
-/// Uninitialized here means "the actor doesn't know about this session"
-/// (e.g. the worker process died, or the session was never fully started).
-/// We surface it explicitly as "lost" rather than "stopped" so the user
-/// can distinguish a session that was deliberately stopped from one
-/// whose worker is gone, and decide to restart or dispose it.
-let overrideSessionStatuses
-  (getState: WorkerProtocol.SessionId -> SessionState)
-  (getStatusMsg: WorkerProtocol.SessionId -> string option)
-  (sessions: ParsedSession list) : ParsedSession list =
-  sessions
-  |> List.map (fun (s: ParsedSession) ->
-    let liveStatus = getState s.Id |> SessionDisplayStatus.ofSessionState
-    let guidanceCls =
-      match liveStatus with
-      | SessionDisplayStatus.Faulted -> "session-faulted"
-      | SessionDisplayStatus.Lost -> "session-lost"
-      | _ -> ""
-    { s with Status = liveStatus; GuidanceCssClass = guidanceCls; StatusMessage = getStatusMsg s.Id })
 
 /// A single system alarm entry — phase name, exception message, and when it fired.
 type SystemAlarmEntry = {
@@ -691,6 +680,10 @@ type DashboardQueries = {
   GetSessionProjectRoles: WorkerProtocol.SessionId -> ClassifiedProject list
   /// The app the session runs, as the user should see it.
   GetSessionApp: WorkerProtocol.SessionId -> AppRun.AppRunState
+  /// Each session's eval count, from the Elm model's typed session registry.
+  GetSessionEvalCounts: unit -> Map<WorkerProtocol.SessionId, int>
+  /// Whether a session is being created right now (the sidebar's placeholder).
+  IsCreatingSession: unit -> bool
 }
 
 /// Recently-fetched worker-derived dashboard data, reused across SSE pushes so

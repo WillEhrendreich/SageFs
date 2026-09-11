@@ -290,6 +290,24 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
     ]
   ]
 
+/// Every session the sidebar lists, in registry order, as typed cards (never
+/// re-parsed from the TUI's text) with the per-session enrichments each card
+/// renders: tests, coverage, bindings, agent presence.
+let buildSessionCards (q: DashboardQueries) : System.Threading.Tasks.Task<ParsedSession list> =
+  task {
+    let! sessions = q.GetAllSessions ()
+    return
+      liveSessionCards DateTime.UtcNow q.GetStatusMsg (q.GetSessionEvalCounts ()) sessions
+      |> List.map (fun card ->
+        { card with
+            TestSummary = q.GetSessionTestSummary card.Id
+            CoverageSummary = q.GetSessionCoverageSummary card.Id
+            TestTreemapEntries = q.GetSessionTestTreemap card.Id
+            BindingEntries = q.GetSessionBindings card.Id
+            AgentBadges = q.GetSessionAgentBadges card.Id
+            GuidanceCssClass = q.GetSessionGuidanceCss card.Id })
+  }
+
 let private buildOutputPanels
   (q: DashboardQueries)
   (sessionId: WorkerProtocol.SessionId)
@@ -298,6 +316,13 @@ let private buildOutputPanels
   : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode> =
   task {
     let! previous = q.GetPreviousSessions ()
+    let! cards = buildSessionCards q
+    let creating = q.IsCreatingSession ()
+    let sessionsPanel = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) cards creating
+    let sessionPicker =
+      match cards.IsEmpty && not creating with
+      | true -> renderSessionPicker previous
+      | false -> renderSessionPickerEmpty
     // Build a meaningful placeholder so the output panel always shows SOMETHING
     // when the session exists but hasn't produced eval output yet.
     let emptyPlaceholder =
@@ -324,40 +349,9 @@ let private buildOutputPanels
             | true -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) lines emptyPlaceholder
             | false -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) lines "No output yet"
           | None -> renderOutputForSession (WorkerProtocol.SessionId.value sessionId) [] emptyPlaceholder
-        let sessRegion = regions |> List.tryFind (fun r -> r.Id = "sessions")
-        match sessRegion with
-        | Some r ->
-          let parsed = parseSessionLines r.Content
-          let corrected = overrideSessionStatuses q.GetSessionState q.GetStatusMsg parsed
-          let visible =
-            corrected
-            |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
-            |> List.map (fun s ->
-              let testSummary = q.GetSessionTestSummary s.Id
-              let coverageSummary = q.GetSessionCoverageSummary s.Id
-              let treemapEntries = q.GetSessionTestTreemap s.Id
-              let bindingEntries = q.GetSessionBindings s.Id
-              { s with
-                  TestSummary = testSummary
-                  CoverageSummary = coverageSummary
-                  TestTreemapEntries = treemapEntries
-                  BindingEntries = bindingEntries
-                  AgentBadges = q.GetSessionAgentBadges s.Id
-                  GuidanceCssClass = q.GetSessionGuidanceCss s.Id
-                  ActiveProject = q.GetSessionActiveProject s.Id
-                  ProjectRoles = q.GetSessionProjectRoles s.Id
-                  App = q.GetSessionApp s.Id })
-          let creating = isCreatingSession r.Content
-          let sess = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) visible creating
-          let sessionPicker =
-            match visible.IsEmpty && not creating with
-            | true -> renderSessionPicker previous
-            | false -> renderSessionPickerEmpty
-          (outNode, sess, sessionPicker)
-        | None ->
-          (outNode, renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) [] false, renderSessionPickerEmpty)
+        (outNode, sessionsPanel, sessionPicker)
       | None ->
-        (renderOutputForSession (WorkerProtocol.SessionId.value sessionId) [] emptyPlaceholder, renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) [] false, renderSessionPickerEmpty)
+        (renderOutputForSession (WorkerProtocol.SessionId.value sessionId) [] emptyPlaceholder, sessionsPanel, sessionPicker)
     return computeResult ()
   }
 
@@ -688,41 +682,8 @@ let buildNoSessionSnapshot
     // The sidebar MUST list the live sessions (so a session created while
     // viewing the picker is clickable without a page reload), mirroring the
     // enrichment buildOutputPanels applies to the session view's sidebar.
-    let! liveSessions = q.GetAllSessions ()
-    // Show every non-stopped session in the sidebar — mirror the session view,
-    // which filters Stopped out of the visible list.
-    let visibleSessions =
-      liveSessions
-      |> List.filter (fun (s: WorkerProtocol.SessionInfo) -> s.Status <> WorkerProtocol.SessionStatus.Stopped)
-    let liveRows =
-      visibleSessions
-      |> List.map (fun (s: WorkerProtocol.SessionInfo) ->
-        let sid = s.Id
-        let parsedStatus = WorkerProtocol.SessionStatus.toSessionState s.Status |> SessionDisplayStatus.ofSessionState
-        let uptime =
-          let span = DateTime.UtcNow - s.CreatedAt
-          match span.TotalMinutes < 1.0 with
-          | true -> "just now"
-          | false -> sprintf "%.0fm" span.TotalMinutes
-        { Id = sid
-          Status = parsedStatus
-          StatusMessage = s.FaultReason
-          IsActive = (s.Status = WorkerProtocol.SessionStatus.Ready || s.Status = WorkerProtocol.SessionStatus.Evaluating)
-          IsSelected = false
-          ProjectsText = String.concat ", " (s.Projects |> List.map Path.GetFileName)
-          EvalCount = 0
-          Uptime = uptime
-          WorkingDir = s.WorkingDirectory
-          LastActivity = ""
-          TestSummary = q.GetSessionTestSummary sid
-          CoverageSummary = q.GetSessionCoverageSummary sid
-          TestTreemapEntries = q.GetSessionTestTreemap sid
-          BindingEntries = q.GetSessionBindings sid
-          AgentBadges = q.GetSessionAgentBadges sid
-          GuidanceCssClass = q.GetSessionGuidanceCss sid
-          ActiveProject = q.GetSessionActiveProject sid
-          ProjectRoles = q.GetSessionProjectRoles sid
-          App = q.GetSessionApp sid })
+    // The same typed cards the session view lists (Stopped filtered out).
+    let! liveRows = buildSessionCards q
     let daemonHealth = q.GetDaemonHealth()
     let daemonHealthPanel =
       match daemonHealth with
@@ -1357,16 +1318,10 @@ let createSessionActionHandler
               sessions
               |> List.map (fun s -> s.Id)
               |> List.filter (fun id -> id <> sessionId)
-            // Sidebar order comes from the Elm sessions region — use it for "next in list".
-            let orderedIds =
-              match q.GetElmRegionsForSession sessionId with
-              | Some regions ->
-                regions
-                |> List.tryFind (fun r -> r.Id = "sessions")
-                |> Option.map (fun r -> parseSessionLines r.Content |> List.map (fun s -> s.Id))
-                |> Option.defaultValue remainingIds
-              | None -> remainingIds
-            let orderedRemaining = orderedIds |> List.filter (fun id -> List.contains id remainingIds)
+            // The sidebar lists sessions in registry order — "next in list" is
+            // the session after the torn-down one in that same order.
+            let orderedIds = sessions |> List.map (fun s -> s.Id)
+            let orderedRemaining = remainingIds
             match orderedRemaining with
             | [] -> return None
             | ids ->
@@ -1386,16 +1341,9 @@ let createSessionActionHandler
           | Some outputRegion ->
             do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content) "No output yet")
           | None -> ()
-          match regions |> List.tryFind (fun r -> r.Id = "sessions") with
-          | Some sessRegion ->
-            let parsed = parseSessionLines sessRegion.Content
-            let corrected = overrideSessionStatuses q.GetSessionState q.GetStatusMsg parsed
-            let visible =
-              corrected
-              |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
-            do! ssePatchNode ctx (renderSessions visible false)
-          | None -> ()
         | None -> ()
+        let! cards = buildSessionCards q
+        do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value nextSession) cards (q.IsCreatingSession ()))
         let stateLabel = q.GetSessionState nextSession |> SessionState.label
         do! ssePatchNode ctx (
           Elem.div [ Attr.id DomIds.SessionStatus ] [
@@ -1421,16 +1369,9 @@ let createSessionActionHandler
           | Some outputRegion ->
             do! ssePatchNode ctx (renderOutput (parseOutputLines outputRegion.Content) "No output yet")
           | None -> ()
-          match regions |> List.tryFind (fun r -> r.Id = "sessions") with
-          | Some sessRegion ->
-            let parsed = parseSessionLines sessRegion.Content
-            let corrected = overrideSessionStatuses q.GetSessionState q.GetStatusMsg parsed
-            let visible =
-              corrected
-              |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
-            do! ssePatchNode ctx (renderSessions visible false)
-          | None -> ()
         | None -> ()
+        let! cards = buildSessionCards q
+        do! ssePatchNode ctx (renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) cards (q.IsCreatingSession ()))
         // Patch the tabline status with the switched-to session's state.
         let stateLabel = q.GetSessionState sessionId |> SessionState.label
         do! ssePatchNode ctx (

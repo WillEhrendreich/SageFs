@@ -2059,6 +2059,11 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
       match SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) with
       | Some info -> info.App
       | None -> AppRun.AppRunState.NotRunning
+    GetSessionEvalCounts = fun () ->
+      elmRuntime.GetModel().Sessions.Sessions
+      |> List.map (fun s -> s.Id, s.EvalCount)
+      |> Map.ofList
+    IsCreatingSession = fun () -> elmRuntime.GetModel().CreatingSession
   }
 
   let dashboardActions : DashboardActions = {

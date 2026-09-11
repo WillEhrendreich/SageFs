@@ -10,7 +10,7 @@ open SageFs.Server.DashboardFragments
 let private mkCardSession (id: string) (projects: (string * ProjectLoading.ProjectRole) list) : ParsedSession =
   let sid = WorkerProtocol.SessionId.validate id |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
   { Id = sid; Status = SessionDisplayStatus.Running; StatusMessage = None
-    IsActive = true; IsSelected = false; ProjectsText = "(A.fsproj)"; EvalCount = 1
+    ProjectsText = "(A.fsproj)"; EvalCount = 1
     Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
     TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
     BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""

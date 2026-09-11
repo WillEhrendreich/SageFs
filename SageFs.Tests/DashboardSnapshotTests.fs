@@ -68,8 +68,6 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4d" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         Status = SessionDisplayStatus.Running
         StatusMessage = None
-        IsActive = true
-        IsSelected = true
         ProjectsText = "(MyProj.fsproj, Tests.fsproj)"
         EvalCount = 15
         Uptime = "3m"
@@ -82,8 +80,6 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         Status = SessionDisplayStatus.Stopped
         StatusMessage = None
-        IsActive = false
-        IsSelected = false
         ProjectsText = ""
         EvalCount = 0
         Uptime = ""
@@ -94,12 +90,12 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
     ]
-    let html = renderSessions sessions false |> renderNode
+    let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions" html
   }
 
   testTask "renderSessions empty" {
-    let html = renderSessions [] false |> renderNode
+    let html = renderSessionsForSession "" [] false |> renderNode
     do! verifyDashboard "dashboard_sessions_empty" html
   }
 
@@ -181,6 +177,8 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetSessionActiveProject = fun _ -> None
       GetSessionProjectRoles = fun _ -> []
       GetSessionApp = fun _ -> SageFs.AppRun.AppRunState.NotRunning
+      GetSessionEvalCounts = fun () -> Map.empty
+      IsCreatingSession = fun () -> false
     }
 
   let mkInfra () : DashboardInfra =
@@ -385,8 +383,6 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4d" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         Status = SessionDisplayStatus.Running
         StatusMessage = None
-        IsActive = true
-        IsSelected = true
         ProjectsText = "(MyProj.fsproj)"
         EvalCount = 42
         Uptime = "15m"
@@ -397,7 +393,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
     ]
-    let html = renderSessions sessions false |> renderNode
+    let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html
   }
   testTask "renderDiagnostics with zero line col" {
@@ -559,13 +555,13 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     let sessionB = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
     let sessions = [
       { Id = sessionA; Status = SessionDisplayStatus.Running; StatusMessage = None
-        IsActive = true; IsSelected = false; ProjectsText = "(A.fsproj)"; EvalCount = 1
+        ProjectsText = "(A.fsproj)"; EvalCount = 1
         Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
       { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
-        IsActive = false; IsSelected = true; ProjectsText = "(B.fsproj)"; EvalCount = 1
+        ProjectsText = "(B.fsproj)"; EvalCount = 1
         Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""

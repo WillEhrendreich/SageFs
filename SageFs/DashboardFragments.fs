@@ -796,10 +796,19 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
           match isViewing with
           | true -> "output-result session-selected"
           | false -> ""
+        // A faulted or lost session is marked from its own status; agent
+        // guidance (a contested session) is its own, separate class.
+        let statusCls =
+          match s.Status with
+          | SessionDisplayStatus.Faulted -> " session-faulted"
+          | SessionDisplayStatus.Lost -> " session-lost"
+          | SessionDisplayStatus.Running
+          | SessionDisplayStatus.Starting
+          | SessionDisplayStatus.Stopped -> ""
         let guidanceCls =
           match s.GuidanceCssClass.Length > 0 with
-          | true -> sprintf " %s" s.GuidanceCssClass
-          | false -> ""
+          | true -> sprintf "%s %s" statusCls s.GuidanceCssClass
+          | false -> statusCls
         Elem.div
           [ Attr.id (sprintf "session-card-%s" sid)
             Attr.class' (sprintf "session-row %s%s" cls guidanceCls)
@@ -1075,14 +1084,6 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
       ]
   ]
 
-let renderSessions (sessions: ParsedSession list) (creating: bool) =
-  let viewingSessionId =
-    sessions
-    |> List.tryFind (fun session -> session.IsSelected)
-    |> Option.orElseWith (fun () -> sessions |> List.tryFind (fun session -> session.IsActive))
-    |> Option.map (fun session -> WorkerProtocol.SessionId.value session.Id)
-    |> Option.defaultValue ""
-  renderSessionsForSession viewingSessionId sessions creating
 
 
 
@@ -1424,42 +1425,6 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     ]
   ]
 
-let renderRegionForSse (getSessionState: WorkerProtocol.SessionId -> SessionState) (getStatusMsg: WorkerProtocol.SessionId -> string option) (region: RenderRegion) =
-  match region.Id with
-  | "output" -> Some (renderOutput (parseOutputLines region.Content) "No output yet")
-  | "sessions" ->
-    let parsed = parseSessionLines region.Content
-    let corrected = overrideSessionStatuses getSessionState getStatusMsg parsed
-    let visible =
-      corrected
-      |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
-    Some (renderSessions visible (isCreatingSession region.Content))
-  | _ -> None
-
-let pushRegions
-  (ctx: HttpContext)
-  (regions: RenderRegion list)
-  (getPreviousSessions: unit -> Threading.Tasks.Task<PreviousSession list>)
-  (getSessionState: WorkerProtocol.SessionId -> SessionState)
-  (getStatusMsg: WorkerProtocol.SessionId -> string option)
-  = task {
-    for region in regions do
-      match renderRegionForSse getSessionState getStatusMsg region with
-      | Some html -> do! ssePatchNode ctx html
-      | None -> ()
-      // When sessions region is pushed, also push picker visibility
-      match region.Id = "sessions" with
-      | true ->
-        let sessions = parseSessionLines region.Content
-        let creating = isCreatingSession region.Content
-        match sessions.IsEmpty && not creating with
-        | true ->
-          let! previous = getPreviousSessions ()
-          do! ssePatchNode ctx (renderSessionPicker previous)
-        | false ->
-          do! ssePatchNode ctx renderSessionPickerEmpty
-      | false -> ()
-  }
 
 /// Decides whether a theme push is needed after a state change.
 /// Returns Some themeName if push needed, None otherwise.

@@ -57,39 +57,6 @@ module DashboardParsing =
         severity, l, 0, 0)
     |> Array.toList
 
-  type ParsedSession = {
-    Id: string; Status: string; IsActive: bool; IsSelected: bool
-    ProjectsText: string; EvalCount: int
-    Uptime: string; WorkingDir: string; LastActivity: string
-  }
-
-  let parseSessionLines (content: string) =
-    let sessionRegex = Regex(@"^([> ])\s+(\S+)\s*\[([^\]]+)\](\s*\*)?(\s*\([^)]*\))?(\s*evals:\d+)?(\s*up:(?:just now|\S+))?(\s*dir:\S.*?)?(\s*last:.+)?$")
-    let extractTag (prefix: string) (value: string) =
-      let v = value.Trim()
-      if v.StartsWith(prefix) then v.Substring(prefix.Length).Trim()
-      else ""
-    content.Split('\n')
-    |> Array.filter (fun (l: string) -> l.Length > 0)
-    |> Array.map (fun (l: string) ->
-      let m = sessionRegex.Match(l)
-      if m.Success then
-        let evalsMatch = Regex.Match(m.Groups.[6].Value, @"evals:(\d+)")
-        { Id = m.Groups.[2].Value
-          Status = m.Groups.[3].Value
-          IsActive = m.Groups.[4].Value.Contains("*")
-          IsSelected = m.Groups.[1].Value = ">"
-          ProjectsText = m.Groups.[5].Value.Trim()
-          EvalCount = if evalsMatch.Success then int evalsMatch.Groups.[1].Value else 0
-          Uptime = extractTag "up:" m.Groups.[7].Value
-          WorkingDir = extractTag "dir:" m.Groups.[8].Value
-          LastActivity = extractTag "last:" m.Groups.[9].Value }
-      else
-        { Id = l.Trim(); Status = "unknown"; IsActive = false; IsSelected = false
-          ProjectsText = ""; EvalCount = 0
-          Uptime = ""; WorkingDir = ""; LastActivity = "" })
-    |> Array.toList
-
 [<Tests>]
 let tests = testList "Dashboard parsing" [
   testCase "output: parses timestamped result line" (fun () ->
@@ -150,150 +117,54 @@ let tests = testList "Dashboard parsing" [
     let result = DashboardParsing.parseDiagLines "some random diagnostic"
     Expect.equal result [("Warning", "some random diagnostic", 0, 0)] "fallback to Warning 0,0")
 
-  testCase "session: parses full session line with all fields" (fun () ->
-    let line = "> session-abc [running] * (MyProj, Other) evals:5 up:2h15m dir:C:\\Code\\Test last:3m ago"
-    let result = DashboardParsing.parseSessionLines line
-    Expect.equal result.Length 1 "should parse one session"
-    let s = result.[0]
-    Expect.equal s.Id "session-abc" "id"
-    Expect.equal s.Status "running" "status"
-    Expect.isTrue s.IsActive "active"
-    Expect.isTrue s.IsSelected "selected"
-    Expect.equal s.EvalCount 5 "evals"
-    Expect.equal s.Uptime "2h15m" "uptime"
-    Expect.stringContains s.WorkingDir "Code" "working dir"
-    Expect.equal s.LastActivity "3m ago" "last activity")
-
-  testCase "session: parses minimal session line" (fun () ->
-    let result = DashboardParsing.parseSessionLines "  session-1 [starting]"
-    Expect.equal result.Length 1 "should parse"
-    let s = result.[0]
-    Expect.equal s.Id "session-1" "id"
-    Expect.equal s.Status "starting" "status"
-    Expect.isFalse s.IsActive "not active"
-    Expect.isFalse s.IsSelected "not selected"
-    Expect.equal s.Uptime "" "no uptime"
-    Expect.equal s.WorkingDir "" "no dir"
-    Expect.equal s.LastActivity "" "no last")
-
-  testCase "session: parses 'just now' uptime" (fun () ->
-    let result = DashboardParsing.parseSessionLines "  session-1 [running] up:just now last:just now"
-    let s = result.[0]
-    Expect.stringContains s.Uptime "just now" "just now uptime"
-    Expect.stringContains s.LastActivity "just now" "just now last")
-
-  testCase "session: multiple sessions" (fun () ->
-    let lines = "> session-1 [running] * up:1h\n  session-2 [starting] up:5m"
-    let result = DashboardParsing.parseSessionLines lines
-    Expect.equal result.Length 2 "two sessions"
-    Expect.equal result.[0].Id "session-1" "first id"
-    Expect.isTrue result.[0].IsSelected "first selected"
-    Expect.equal result.[1].Id "session-2" "second id"
-    Expect.isFalse result.[1].IsSelected "second not selected")
-
-  testCase "session: error status with reason" (fun () ->
-    let result = DashboardParsing.parseSessionLines "  session-x [error: crashed]"
-    let s = result.[0]
-    Expect.equal s.Status "error: crashed" "error with reason")
-
-  testCase "session: selected vs unselected parsing" (fun () ->
-    let line = "  session-abc [running] *"
-    let result = DashboardParsing.parseSessionLines line
-    let s = result.[0]
-    Expect.isFalse s.IsSelected "unselected session"
-    Expect.isTrue s.IsActive "but still active")
 ]
 
-/// Tests for the live session state override (Bug #3)
-module SessionStateOverride =
-  open SageFs
-  open SageFs.Server.Dashboard
-  open SageFs.Server.DashboardTypes
+/// Sidebar cards are built from typed session state. They used to be
+/// regex-parsed back out of the TUI's text and then status-overridden.
+module SidebarCards =
+  let now = System.DateTime(2026, 9, 11, 12, 0, 0, System.DateTimeKind.Utc)
 
-  let mkSession (id: WorkerProtocol.SessionId) (status: SessionDisplayStatus) =
-    { ParsedSession.Id = id
-      Status = status
-      StatusMessage = None
-      IsActive = false
-      IsSelected = false
-      ProjectsText = ""
-      EvalCount = 0
-      Uptime = ""
-      WorkingDir = ""
-      LastActivity = ""
-      TestSummary = None
-      CoverageSummary = None
-      TestTreemapEntries = [||]
-      BindingEntries = [||]
-      AgentBadges = []
-      GuidanceCssClass = ""
-      ActiveProject = None
-      ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning }
+  let info (id: string) (status: WorkerProtocol.SessionStatus) (projects: string list) : WorkerProtocol.SessionInfo =
+    { Id = WorkerProtocol.SessionId.validate id |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+      Name = None; Projects = projects; WorkingDirectory = "/w"; SolutionRoot = None
+      CreatedAt = now.AddMinutes -5.0; LastActivity = now.AddMinutes -3.0
+      Status = status; FaultReason = None; WorkerPid = None; WorkerPort = None
+      Workflow = WorkflowTypes.SessionWorkflow.Interactive
+      ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
+
+  let card (session: WorkerProtocol.SessionInfo) = sessionCardOf now None 0 session
+
 [<Tests>]
-let stateOverrideTests =
-  let open' getState = SageFs.Server.DashboardTypes.overrideSessionStatuses getState (fun _ -> None)
-  let mk = SessionStateOverride.mkSession
-  let s1 = WorkerProtocol.SessionId.validate "s1" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-  let s2 = WorkerProtocol.SessionId.validate "s2" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
-  testList "Session state override" [
-    testCase "Ready maps to running" (fun () ->
-      let r = open' (fun _ -> SessionState.Ready) [mk s1 SessionDisplayStatus.Starting]
-      Expect.equal (List.head r).Status SessionDisplayStatus.Running "Ready = running")
+let sidebarCardTests =
+  let info = SidebarCards.info
+  testList "Sidebar cards from typed state" [
+    testCase "WHY — sessionCardOf — a project list containing ')' keeps its card, because the TUI regex silently dropped such sessions from the sidebar" (fun () ->
+      let c = SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [ "/w/Weird (v2).fsproj" ])
+      Expect.equal c.ProjectsText "(Weird (v2))" "the project name survives intact")
 
-    testCase "Evaluating maps to running" (fun () ->
-      let r = open' (fun _ -> SessionState.Evaluating) [mk s1 SessionDisplayStatus.Starting]
-      Expect.equal (List.head r).Status SessionDisplayStatus.Running "Evaluating = running")
+    testCase "Ready and Evaluating sessions are running" (fun () ->
+      Expect.equal (SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])).Status SessionDisplayStatus.Running "Ready = running"
+      Expect.equal (SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Evaluating [])).Status SessionDisplayStatus.Running "Evaluating = running")
 
-    testCase "WarmingUp maps to starting" (fun () ->
-      let r = open' (fun _ -> SessionState.WarmingUp) [mk s1 SessionDisplayStatus.Running]
-      Expect.equal (List.head r).Status SessionDisplayStatus.Starting "WarmingUp = starting")
+    testCase "WHY — sessionCardOf — a faulted session shows as faulted with its reason, because the regex fallback showed errored sessions as running" (fun () ->
+      let faulted = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Faulted [] with FaultReason = Some "warmup timed out" }
+      let c = SidebarCards.card faulted
+      Expect.equal c.Status SessionDisplayStatus.Faulted "Faulted = faulted"
+      Expect.equal c.StatusMessage (Some "warmup timed out") "the reason is shown")
 
-    testCase "Faulted maps to faulted" (fun () ->
-      let r = open' (fun _ -> SessionState.Faulted) [mk s1 SessionDisplayStatus.Running]
-      Expect.equal (List.head r).Status SessionDisplayStatus.Faulted "Faulted = faulted")
+    testCase "WHY — sessionCardOf — a running session never shows a stale fault reason, because the registry keeps FaultReason after recovery" (fun () ->
+      let recovered = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [] with FaultReason = Some "warmup timed out" }
+      Expect.isNone (SidebarCards.card recovered).StatusMessage "no message on a running card")
 
-    testCase "Uninitialized maps to lost" (fun () ->
-      let r = open' (fun _ -> SessionState.Uninitialized) [mk s1 SessionDisplayStatus.Running]
-      Expect.equal (List.head r).Status SessionDisplayStatus.Lost "Uninitialized = lost (worker gone, needs restart)")
+    testCase "a starting session shows its warmup progress" (fun () ->
+      let c = sessionCardOf SidebarCards.now (Some "[3/10] open System") 0 (info "0a2b3c4d" WorkerProtocol.SessionStatus.Starting [])
+      Expect.equal c.Status SessionDisplayStatus.Starting "Starting = starting"
+      Expect.equal c.StatusMessage (Some "[3/10] open System") "warmup progress is the message")
 
-    testCase "overrides each session independently" (fun () ->
-      let sessions = [ mk s1 SessionDisplayStatus.Starting; mk s2 SessionDisplayStatus.Running ]
-      let getState (sid: WorkerProtocol.SessionId) =
-        if WorkerProtocol.SessionId.value sid = (WorkerProtocol.SessionId.value s1) then SessionState.Ready else SessionState.Faulted
-      let r = open' getState sessions
-      Expect.equal (List.head r).Status SessionDisplayStatus.Running "s1 becomes running"
-      Expect.equal (r |> List.item 1).Status SessionDisplayStatus.Faulted "s2 becomes faulted")
-  ]
-
-/// Tests for TUI chrome filtering in session parsing (Bug #2)
-[<Tests>]
-let ghostSessionTests =
-  testList "Ghost session filtering (Bug #2)" [
-    testCase "filters TUI keyboard shortcut lines" (fun () ->
-      let input = "  0a2b3c4d [running] *\n↑↓ nav · Enter switch"
-      let sessions = SageFs.Server.DashboardTypes.parseSessionLines input
-      Expect.equal sessions.Length 1 "only real session, no ghost from shortcuts")
-
-    testCase "filters box-drawing border lines" (fun () ->
-      let input = "  0a2b3c4d [running] *\n──────────"
-      let sessions = SageFs.Server.DashboardTypes.parseSessionLines input
-      Expect.equal sessions.Length 1 "border lines filtered")
-
-    testCase "filters spinner lines" (fun () ->
-      let input = "  0a2b3c4d [running] *\n⏳ Loading..."
-      let sessions = SageFs.Server.DashboardTypes.parseSessionLines input
-      Expect.equal sessions.Length 1 "spinner lines filtered")
-
-    testCase "filters Ctrl+Tab cycle lines" (fun () ->
-      let input = "  0a2b3c4d [running] *\nCtrl+Tab cycle sessions"
-      let sessions = SageFs.Server.DashboardTypes.parseSessionLines input
-      Expect.equal sessions.Length 1 "Ctrl+Tab line filtered")
-
-    testCase "preserves all valid sessions" (fun () ->
-      let input = "  0a2b3c4d [running] *\n  0a2b3c4e [starting]"
-      let sessions = SageFs.Server.DashboardTypes.parseSessionLines input
-      Expect.equal sessions.Length 2 "both valid sessions kept")
+    testCase "uptime and last activity use the sidebar's words" (fun () ->
+      let c = SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
+      Expect.equal c.Uptime "5m" "up five minutes"
+      Expect.equal c.LastActivity "3m ago" "last active three minutes ago")
   ]
 
 /// Tests for error formatting in eval handler (Bug #6)
@@ -429,66 +300,42 @@ let connectionCountTests =
 
 [<Tests>]
 let stoppedSessionFilterTests =
-  let parse = SageFs.Server.DashboardTypes.parseSessionLines
-  let override' getState = SageFs.Server.DashboardTypes.overrideSessionStatuses getState (fun _ -> None)
-  let sessB = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+  let info = SidebarCards.info
+  let ids (cards: ParsedSession list) = cards |> List.map (fun c -> WorkerProtocol.SessionId.value c.Id)
   testList "Stopped session filtering" [
-    testCase "lost sessions are KEPT visible (worker gone, user can restart)" (fun () ->
-      // Uninitialized now maps to "lost" (not "stopped"). The sidebar keeps
-      // lost sessions visible with a yellow border so the user can see
-      // which ones need a restart, rather than silently hiding them.
-      let input = "  0a2b3c4d [running] *\n  0a2b3c4e [running]"
-      let parsed = parse input
-      let getState (sid: WorkerProtocol.SessionId) =
-        if WorkerProtocol.SessionId.value sid = (WorkerProtocol.SessionId.value sessB) then SageFs.SessionState.Uninitialized
-        else SageFs.SessionState.Ready
-      let corrected = override' getState parsed
-      let visible = corrected |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
-      Expect.equal visible.Length 2 "lost session is NOT filtered out"
-      let visibleLost = corrected |> List.filter (fun s -> s.Status = SessionDisplayStatus.Lost)
-      Expect.equal visibleLost.Length 1 "0a2b3c4e has lost status"
-      Expect.equal (WorkerProtocol.SessionId.value visibleLost.[0].Id) "0a2b3c4e" "lost session identified")
+    testCase "stopped sessions are left out; the rest keep registry order" (fun () ->
+      let cards =
+        liveSessionCards SidebarCards.now (fun _ -> None) Map.empty
+          [ info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
+            info "0a2b3c4e" WorkerProtocol.SessionStatus.Stopped []
+            info "0a2b3c4f" WorkerProtocol.SessionStatus.Starting [] ]
+      Expect.equal (ids cards) [ "0a2b3c4d"; "0a2b3c4f" ] "stopped hidden, order kept")
 
-    testCase "faulted sessions are kept visible" (fun () ->
-      let input = "  0a2b3c4d [running] *\n  0a2b3c4e [running]"
-      let parsed = parse input
-      let getState (sid: WorkerProtocol.SessionId) =
-        if WorkerProtocol.SessionId.value sid = (WorkerProtocol.SessionId.value sessB) then SageFs.SessionState.Faulted
-        else SageFs.SessionState.Ready
-      let corrected = override' getState parsed
-      let visible = corrected |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
-      Expect.equal visible.Length 2 "faulted session stays visible")
+    testCase "faulted sessions stay visible so the user can restart them" (fun () ->
+      let cards =
+        liveSessionCards SidebarCards.now (fun _ -> None) Map.empty
+          [ info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
+            info "0a2b3c4e" WorkerProtocol.SessionStatus.Faulted [] ]
+      Expect.equal (ids cards) [ "0a2b3c4d"; "0a2b3c4e" ] "faulted session stays visible")
 
-    testCase "all-lost sessions remain visible (no longer hidden)" (fun () ->
-      // Previously Uninitialized mapped to "stopped" and was hidden.
-      // Now it maps to "lost" and stays visible.
-      let input = "  0a2b3c4d [running]\n  0a2b3c4e [starting]"
-      let parsed = parse input
-      let getState _ = SageFs.SessionState.Uninitialized
-      let corrected = override' getState parsed
-      let visible = corrected |> List.filter (fun s -> s.Status <> SessionDisplayStatus.Stopped)
-      Expect.equal visible.Length 2 "lost sessions are NOT filtered out"
-      Expect.equal (List.length visible) (List.length corrected) "all sessions remain visible"
-      let lostCount = visible |> List.filter (fun s -> s.Status = SessionDisplayStatus.Lost) |> List.length
-      Expect.equal lostCount 2 "both sessions show as lost")
+    testCase "each card carries its session's eval count" (fun () ->
+      let a = info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
+      let cards = liveSessionCards SidebarCards.now (fun _ -> None) (Map.ofList [ a.Id, 7 ]) [ a ]
+      Expect.equal (cards |> List.map _.EvalCount) [ 7 ] "eval count from the typed registry")
   ]
 
 [<Tests>]
 let perSessionTestSummaryTests =
-  let parse = SageFs.Server.DashboardTypes.parseSessionLines
+  let newCard () = SidebarCards.card (SidebarCards.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
   testList "Per-session test summary" [
-    testCase "parsed sessions have TestSummary = None by default" (fun () ->
-      let input = "  0a2b3c4d [running] *"
-      let sessions = parse input
-      Expect.isNone sessions.[0].TestSummary "parsed sessions start with no test summary")
+    testCase "cards have TestSummary = None until enriched" (fun () ->
+      Expect.isNone (newCard ()).TestSummary "cards start with no test summary")
 
     testCase "TestSummary can be injected via record update" (fun () ->
-      let input = "  0a2b3c4d [running] *"
-      let sessions = parse input
       let summary =
         { SageFs.Features.LiveTesting.TestSummary.empty with
             Total = 42; Passed = 40; Failed = 2 }
-      let enriched = { sessions.[0] with TestSummary = Some summary }
+      let enriched = { newCard () with TestSummary = Some summary }
       Expect.isSome enriched.TestSummary "should have summary"
       Expect.equal enriched.TestSummary.Value.Total 42 "total 42"
       Expect.equal enriched.TestSummary.Value.Failed 2 "failed 2")
@@ -501,8 +348,6 @@ let perSessionTestSummaryTests =
         { Id = WorkerProtocol.SessionId.validate "sess-a" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
           Status = SessionDisplayStatus.Running
           StatusMessage = None
-          IsActive = true
-          IsSelected = false
           ProjectsText = "(MyProj)"
           EvalCount = 5
           Uptime = "2m"
@@ -518,7 +363,7 @@ let perSessionTestSummaryTests =
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning }
       let html =
-        renderSessions [session] false
+        renderSessionsForSession "" [session] false
         |> renderNode
       Expect.isTrue (html.Contains("✓8")) "should contain passed badge"
       Expect.isTrue (html.Contains("✗2")) "should contain failed badge")
@@ -528,8 +373,6 @@ let perSessionTestSummaryTests =
         { Id = WorkerProtocol.SessionId.validate "sess-a" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
           Status = SessionDisplayStatus.Running
           StatusMessage = None
-          IsActive = true
-          IsSelected = false
           ProjectsText = "(MyProj)"
           EvalCount = 5
           Uptime = "2m"
@@ -545,7 +388,7 @@ let perSessionTestSummaryTests =
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning }
       let html =
-        renderSessions [session] false
+        renderSessionsForSession "" [session] false
         |> renderNode
       Expect.isFalse (html.Contains("✓")) "no pass badge when no tests"
       Expect.isFalse (html.Contains("✗")) "no fail badge when no tests")
@@ -563,8 +406,6 @@ let perSessionCoverageTests =
         { Id = WorkerProtocol.SessionId.validate "sess-cov" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
           Status = SessionDisplayStatus.Running
           StatusMessage = None
-          IsActive = true
-          IsSelected = false
           ProjectsText = "(MyProj)"
           EvalCount = 5
           Uptime = "2m"
@@ -580,7 +421,7 @@ let perSessionCoverageTests =
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning }
       let html =
-        renderSessions [session] false
+        renderSessionsForSession "" [session] false
         |> renderNode
       Expect.isTrue (html.Contains("linear-gradient")) "should render gradient"
       Expect.isTrue (html.Contains("75%")) "should show percentage")
@@ -590,8 +431,6 @@ let perSessionCoverageTests =
         { Id = WorkerProtocol.SessionId.validate "sess-nocov" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
           Status = SessionDisplayStatus.Running
           StatusMessage = None
-          IsActive = true
-          IsSelected = false
           ProjectsText = "(MyProj)"
           EvalCount = 5
           Uptime = "2m"
@@ -607,7 +446,7 @@ let perSessionCoverageTests =
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning }
       let html =
-        renderSessions [session] false
+        renderSessionsForSession "" [session] false
         |> renderNode
       Expect.isFalse (html.Contains("linear-gradient")) "no gradient without coverage")
   ]

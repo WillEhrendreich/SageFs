@@ -3,6 +3,7 @@ module SageFs.Tests.SessionCreationUxTests
 open System
 open Expecto
 open Expecto.Flip
+open Falco.Markup
 open SageFs
 open SageFs.Tests.SharedGenerators
 
@@ -86,23 +87,14 @@ let sessionsRenderTests = testList "Sessions panel creating indicator" [
     sessionsRegion.Content.Contains("⏳ Creating session...")
     |> Expect.isFalse "should not contain creating text"
 
-  testCase "dashboard parseSessionLines filters creating line" <| fun () ->
-    let content =
-      "  ses-abc [running] * (Test.fsproj) evals:5 up:2m dir:. last:just now\n\
-       ⏳ Creating session...\n\
-       ─── ↑↓ nav · Enter switch · Del stop · Ctrl+Tab cycle"
-    let parsed = SageFs.Server.DashboardTypes.parseSessionLines content
-    parsed
-    |> List.length
-    |> Expect.equal "should have 1 session" 1
+  testCase "WHY — dashboard sidebar — shows the creating placeholder from the typed creating flag, because it used to text-match the TUI region" <| fun () ->
+    SageFs.Server.DashboardFragments.renderSessionsForSession "" [] true
+    |> renderNode
+    |> Expect.stringContains "should contain creating text" "⏳ Creating session..."
 
-  testCase "dashboard isCreatingSession detects creating line" <| fun () ->
-    SageFs.Server.DashboardTypes.isCreatingSession "ses\n⏳ Creating session..."
-    |> Expect.isTrue "should detect creating"
-
-  testCase "dashboard isCreatingSession returns false without it" <| fun () ->
-    SageFs.Server.DashboardTypes.isCreatingSession "ses\nother"
-    |> Expect.isFalse "should not detect creating"
+  testCase "dashboard sidebar hides the creating placeholder when no session is being created" <| fun () ->
+    (SageFs.Server.DashboardFragments.renderSessionsForSession "" [] false |> renderNode).Contains("⏳ Creating session...")
+    |> Expect.isFalse "should not contain creating text"
 ]
 
 let tests = testList "Session creation UX" [
