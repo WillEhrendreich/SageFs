@@ -132,3 +132,16 @@ let webHostStopTests =
         (app :> IAsyncDisposable).DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds 10.) |> ignore
     }
   ]
+
+[<Tests>]
+let timerStopTests =
+  testList "Daemon timer stop" [
+    testTask "WHY — DaemonMode.disposeTimerAndWait — an idle timer is joined at once because every daemon shutdown used to sit out the full wait timeouts" {
+      let timer = new System.Threading.Timer((fun _ -> ()), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite)
+      let watch = Stopwatch.StartNew()
+      let! stop = SageFs.Server.DaemonMode.disposeTimerAndWait timer (TimeSpan.FromSeconds 2.)
+      watch.Stop()
+      stop |> Expect.equal "an idle timer has no callback to wait for" SageFs.Server.DaemonMode.TimerStop.Joined
+      (watch.Elapsed < TimeSpan.FromSeconds 1.5) |> Expect.isTrue (sprintf "joined without sitting out the timeout (took %O)" watch.Elapsed)
+    }
+  ]

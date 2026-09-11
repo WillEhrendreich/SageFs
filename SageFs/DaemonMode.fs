@@ -1089,6 +1089,33 @@ let getPreviousSessions
 }
 
 /// Start dashboard web server with Brotli compression.
+/// How a timer's disposal ended: its in-flight callback finished, or it did not in time.
+[<RequireQualifiedAccess>]
+type TimerStop =
+  | Joined
+  | StillRunning
+
+/// Disposes a timer and waits for any in-flight callback to finish.
+let disposeTimerAndWait (timer: System.Threading.Timer) (timeout: TimeSpan) : Task<TimerStop> =
+  task {
+    // Timer.Dispose(WaitHandle) signals the kernel handle directly; a
+    // ManualResetEventSlim's own Wait never observes that, so wait on a kernel event.
+    let finished = new System.Threading.ManualResetEvent(false)
+    match timer.Dispose(finished) with
+    | false ->
+      finished.Dispose()
+      return TimerStop.Joined
+    | true ->
+      let! joined = Task.Run(fun () -> finished.WaitOne(timeout))
+      match joined with
+      | true ->
+        finished.Dispose()
+        return TimerStop.Joined
+      | false ->
+        // The timer may still signal the event later, so it stays undisposed.
+        return TimerStop.StillRunning
+  }
+
 let startDashboardServer
   (log: ILogger)
   (dashboardPort: int)
@@ -2276,30 +2303,14 @@ let run (mcpPort: int) (flags: Args.DaemonFlags) = task {
   // W30(R12): Use Dispose(WaitHandle) for testCycleTimer — matches cacheSaveTimer treatment.
   // Bare Dispose() returns immediately; any in-flight 200ms tick callback could still be running
   // and call elmRuntime.Dispatch() after the elm runtime starts shutting down.
-  let testCycleTimerDone = new System.Threading.ManualResetEventSlim(false)
-  testCycleTimer.Dispose(testCycleTimerDone.WaitHandle) |> ignore
-  // W33(R13): 3s timeout (was 1s) + conditional Dispose to prevent ObjectDisposedException.
-  // If Wait times out, the timer infrastructure may try to signal the disposed WaitHandle,
-  // causing ObjectDisposedException in the timer system. Only Dispose when timer has stopped.
-  let! testCycleTimerJoined = System.Threading.Tasks.Task.Run(fun () -> testCycleTimerDone.Wait(System.TimeSpan.FromSeconds 3.0))
-  match testCycleTimerJoined with
-  | false -> log.LogWarning("testCycleTimer shutdown wait timed out — callback may still be running")
-  | true -> testCycleTimerDone.Dispose()
-  // W18+W19(R11): Use Dispose(WaitHandle) to block until any in-flight cacheSaveCallback
-  // completes before performGracefulShutdown writes the manifest. Bare Dispose() returns
-  // immediately — the callback could still be running and write its manifest AFTER shutdown
-  // stamps StoppedAt, overwriting those stamps and making sessions appear alive on next run.
-  let cacheSaveTimerDone = new System.Threading.ManualResetEventSlim(false)
-  cacheSaveTimer.Dispose(cacheSaveTimerDone.WaitHandle) |> ignore
-  // W37(R14): Only Dispose cacheSaveTimerDone if Wait returned true (callback finished).
-  // If Wait times out (false), the callback is still running and may call Set() later.
-  // Disposing while Set() is in-flight causes ObjectDisposedException (same as W33/R13).
-  let! cacheSaveTimerJoined = System.Threading.Tasks.Task.Run(fun () -> cacheSaveTimerDone.Wait(System.TimeSpan.FromSeconds 5.0))
-  // W24(R12): Dispose ManualResetEventSlim after Wait — accessing .WaitHandle lazily creates
-  // a kernel event handle; not calling Dispose() leaks that handle until process exit.
-  match cacheSaveTimerJoined with
-  | false -> log.LogWarning("cacheSaveTimer shutdown wait timed out — callback may still be running")
-  | true -> cacheSaveTimerDone.Dispose()
+  match! disposeTimerAndWait testCycleTimer (TimeSpan.FromSeconds 3.0) with
+  | TimerStop.StillRunning -> log.LogWarning("testCycleTimer shutdown wait timed out — callback may still be running")
+  | TimerStop.Joined -> ()
+  // Wait for an in-flight cacheSaveCallback before performGracefulShutdown writes the
+  // manifest, so a late periodic save cannot overwrite its StoppedAt stamps.
+  match! disposeTimerAndWait cacheSaveTimer (TimeSpan.FromSeconds 5.0) with
+  | TimerStop.StillRunning -> log.LogWarning("cacheSaveTimer shutdown wait timed out — callback may still be running")
+  | TimerStop.Joined -> ()
   // Dispose activity cleanup timer (best-effort, no wait needed — cleanup is idempotent)
   try activityCleanupTimer.Dispose()
   with :? System.ObjectDisposedException -> ()

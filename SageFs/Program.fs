@@ -224,7 +224,8 @@ let private stopKillProcess (pid: int) =
 let private stopWaitForExit (pid: int) : StopWait =
   try
     use proc = System.Diagnostics.Process.GetProcessById(pid)
-    match proc.WaitForExit(10_000) with
+    // Room for a normal graceful shutdown (manifest save, stopping workers) before the fallback kill.
+    match proc.WaitForExit(30_000) with
     | true -> StopWait.Exited
     | false -> StopWait.StillRunning
   with
