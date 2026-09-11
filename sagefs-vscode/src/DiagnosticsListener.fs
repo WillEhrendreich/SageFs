@@ -29,6 +29,9 @@ let start (port: int) (dc: DiagnosticCollection) (log: (string -> unit) option) 
           let endCol = (fieldInt "endColumn" diag |> Option.defaultValue 1) - 1 |> max 0
           let range = newRange startLine startCol endLine endCol
           let d = newDiagnostic range message severity
+          // Names SageFs in the Problems panel, so its diagnostics are never
+          // mistaken for the F# language server's as-you-type checks.
+          d?source <- "SageFs"
 
           if not (byFile.ContainsKey file) then
             byFile.[file] <- ResizeArray()
