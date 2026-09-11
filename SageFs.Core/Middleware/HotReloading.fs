@@ -412,6 +412,67 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
     (ex.InnerException :? TypeInitializationException) ->
     logger.LogDebug (sprintf "Hot-reload detour skipped (type init failure): %s — %s" method.Name ex.InnerException.Message)
 
+/// Pairs each older method with a same-named, compatible method offered by the
+/// evaluated assembly: the older entry point gets detoured onto the newer one.
+/// Every distinct older copy is paired, not just the best match: in
+/// --multiemit- mode a running app's closure may hold any prior eval's copy.
+/// A method is never paired with itself (MonoMod: "Cannot detour a method to
+/// itself!"). Targets are only methods first defined by THIS eval: the
+/// accumulated assembly re-offers every older copy on each eval, and pairing
+/// two older copies both ways made their entry points jump to each other
+/// forever (100% CPU, unsuspendable). Older copies only ever point at strictly
+/// newer code, so detours cannot form a cycle.
+let planDetours
+  (isNewThisEval: Method -> bool)
+  (compatible: Method -> Method -> bool)
+  (newMethods: Method list)
+  (existing: Map<string, Method list>)
+  : (Method * Method) list =
+  newMethods
+  |> List.filter isNewThisEval
+  |> List.collect (fun newMethod ->
+    match Map.tryFind newMethod.MethodInfo.Name existing with
+    | None -> []
+    | Some candidates ->
+      candidates
+      |> List.filter (fun old -> old.MethodInfo <> newMethod.MethodInfo && compatible old newMethod)
+      |> List.map (fun old -> old, newMethod))
+
+let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newMethod: Method) =
+  // Chesterton's fence: .ParameterType/.ReturnType can throw
+  // TypeLoadException when FSI redefines a type across compilation
+  // units. Even with the hotReloadEnabled gate, this can happen for
+  // hot-reload workflows that redefine types. Catch and skip gracefully.
+  try
+    let getParams m =
+      m.MethodInfo.GetParameters() |> Array.map _.ParameterType
+
+    // Chesterton's fence: only detour USER module functions, not
+    // FSI bookkeeping. In single-assembly mode the accumulated
+    // assembly contains REPL temp accessors (get_it, set_it,
+    // get_asm, ...) and the framework's own methods; detouring
+    // those is collateral damage — patching FSI's `it` accessor
+    // corrupted the running session. A detourable method must have
+    // a dotted module path (WebAppFixture.Greeting.greeting) and a
+    // name that is not an FSI temp-value accessor.
+    let isDetourable (m: Method) =
+      let name = m.MethodInfo.Name
+      let full = m.FullName
+      full.Contains(".")
+      && not (name.StartsWith("get_", StringComparison.Ordinal) && full.StartsWith("get_", StringComparison.Ordinal))
+      && not (name = "get_it" || name = "set_it" || name = "get_asm")
+
+    isDetourable newMethod
+    && getParams existingMethod = getParams newMethod
+    && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
+    && existingMethod.FullName.EndsWith(newMethod.FullName, StringComparison.Ordinal)
+  with
+  | :? TypeLoadException as ex ->
+    logger.LogDebug(
+      sprintf "Hot-reload param comparison skipped (TypeLoadException): %s — %s"
+        newMethod.FullName ex.Message)
+    false
+
 let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assembly) (st: State) =
   // Chesterton's fence: the `prev = asm` dedup only applies to NON-dynamic
   // assemblies. In WebLive the FSI session runs with --multiemit- (single
@@ -451,64 +512,9 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
       match hotReloadEnabled with
       | false -> []
       | true ->
-        newMethods
-        |> Seq.collect (fun newMethod ->
-          Map.tryFind newMethod.MethodInfo.Name st.Methods
-          |> Option.map (fun existing ->
-            existing
-            |> Seq.filter (fun existingMethod ->
-              // Chesterton's fence: .ParameterType/.ReturnType can throw
-              // TypeLoadException when FSI redefines a type across compilation
-              // units. Even with the hotReloadEnabled gate, this can happen for
-              // hot-reload workflows that redefine types. Catch and skip gracefully.
-              try
-                let getParams m =
-                  m.MethodInfo.GetParameters() |> Array.map _.ParameterType
-
-                // Chesterton's fence: only detour USER module functions, not
-                // FSI bookkeeping. In single-assembly mode the accumulated
-                // assembly contains REPL temp accessors (get_it, set_it,
-                // get_asm, ...) and the framework's own methods; detouring
-                // those is collateral damage — patching FSI's `it` accessor
-                // corrupted the running session. A detourable method must have
-                // a dotted module path (WebAppFixture.Greeting.greeting) and a
-                // name that is not an FSI temp-value accessor.
-                let isDetourable (m: Method) =
-                  let name = m.MethodInfo.Name
-                  let full = m.FullName
-                  full.Contains(".")
-                  && not (name.StartsWith("get_", StringComparison.Ordinal) && full.StartsWith("get_", StringComparison.Ordinal))
-                  && not (name = "get_it" || name = "set_it" || name = "get_asm")
-
-                // Chesterton's fence: never detour a method onto itself. In
-                // WebLive's --multiemit- single-assembly mode the FSI assembly
-                // ACCUMULATES every eval's methods, and st.Methods (merged
-                // from prior evals) contains the very method being considered
-                // as "new" — pairing it with itself makes MonoMod throw
-                // "Cannot detour a method to itself!" and the eval crashes.
-                existingMethod.MethodInfo <> newMethod.MethodInfo
-                && isDetourable newMethod
-                && getParams existingMethod = getParams newMethod
-                && existingMethod.MethodInfo.ReturnType = newMethod.MethodInfo.ReturnType
-                && existingMethod.FullName.EndsWith(newMethod.FullName, StringComparison.Ordinal)
-              with
-              | :? TypeLoadException as ex ->
-                logger.LogDebug(
-                  sprintf "Hot-reload param comparison skipped (TypeLoadException): %s — %s"
-                    newMethod.FullName ex.Message)
-                false)
-            // Chesterton's fence: detour EVERY distinct older method with a
-            // matching signature onto the newest, not just the best-scoring
-            // one. In single-assembly FSI mode each re-eval leaves the prior
-            // eval's method in the accumulated assembly AND in st.Methods, and
-            // the running app's route closure may have captured ANY of them
-            // (the #load's FSI_0005, a prior re-eval's FSI_0007, ...). Picking
-            // only the "best" left the actually-captured method undetoured and
-            // the app kept serving the old value. Detouring all of them is
-            // safe (Harmony just rewrites each entry point to the newest).
-            |> Seq.map (fun oldMethod -> oldMethod, newMethod))
-          |> Option.defaultValue Seq.empty)
-        |> Seq.toList
+        let known =
+          Collections.Generic.HashSet<MethodInfo>(st.Methods |> Map.toSeq |> Seq.collect snd |> Seq.map _.MethodInfo)
+        planDetours (fun m -> not (known.Contains m.MethodInfo)) (compatibleForDetour logger) newMethods st.Methods
 
     // Apply Harmony detours — already gated by replacementPairs being [] when disabled.
     for methodToReplace, newMethod in replacementPairs do
