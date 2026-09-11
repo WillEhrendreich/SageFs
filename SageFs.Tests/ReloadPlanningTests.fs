@@ -156,3 +156,27 @@ let changeWordingTests =
         [ ReloadChange.SignatureChanged "render"; ReloadChange.DeclarationRemoved "old"; ReloadChange.EntryPointChanged ]
       |> Expect.equal "joined in order" "type TodoItem changed; the signature of render changed; old was removed; the entry point changed"
   ]
+
+[<Tests>]
+let confirmPatchTests =
+  let before = declsOf baselineSource
+  let render = before.Decls |> List.find (fun d -> d.Name = "render")
+  let helper =
+    { render with Name = "helper"; Header = "let helper (x: int)"; Text = "let helper (x: int) = x + 1" }
+  testList "ReloadPlanning confirmPatch" [
+    testCase "WHY — ReloadPlanning.confirmPatch — a patched function that was detoured is applied because the running app now calls the new body" <| fun _ ->
+      confirmPatch before [ render ] [ "Demo.Web.Program.render" ]
+      |> Expect.equal "applied" PatchOutcome.Applied
+
+    testCase "WHY — ReloadPlanning.confirmPatch — a new function needs no detour because nothing compiled calls it yet" <| fun _ ->
+      confirmPatch before [ helper ] []
+      |> Expect.equal "applied" PatchOutcome.Applied
+
+    testCase "WHY — ReloadPlanning.confirmPatch — an existing function that was not detoured requires a restart because its compiled signature changed" <| fun _ ->
+      confirmPatch before [ render ] []
+      |> Expect.equal "restart for render" (PatchOutcome.RestartNeeded (ReloadChange.SignatureChanged "render", []))
+
+    testCase "WHY — ReloadPlanning.confirmPatch — a detour of a same-suffixed method does not count because prerender is not render" <| fun _ ->
+      confirmPatch before [ render ] [ "Demo.Web.Program.prerender" ]
+      |> Expect.equal "restart for render" (PatchOutcome.RestartNeeded (ReloadChange.SignatureChanged "render", []))
+  ]

@@ -264,3 +264,24 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
   match restarts with
   | first :: rest -> ReloadPlan.RestartRequired (first, rest)
   | [] -> ReloadPlan.PatchFunctions (outcomes |> List.choose (function DeclOutcome.Patch d -> Some d | _ -> None))
+
+[<RequireQualifiedAccess>]
+type PatchOutcome =
+  | Applied
+  | RestartNeeded of first: ReloadChange * rest: ReloadChange list
+
+/// A patched function that already existed must have been detoured onto its new
+/// copy (reloadedMethods are the full names of the methods that were detoured);
+/// one that was not had its compiled signature changed, so the app must restart.
+let confirmPatch (before: FileDecls) (patched: SourceDecl list) (reloadedMethods: string list) : PatchOutcome =
+  let existed (f: SourceDecl) =
+    before.Decls |> List.exists (fun d -> d.Kind = DeclKind.FunctionDecl && d.Name = f.Name)
+  let detoured (f: SourceDecl) =
+    reloadedMethods |> List.exists (fun m -> m = f.Name || m.EndsWith("." + f.Name, StringComparison.Ordinal))
+  let notDetoured =
+    patched
+    |> List.filter (fun f -> existed f && not (detoured f))
+    |> List.map (fun f -> ReloadChange.SignatureChanged f.Name)
+  match notDetoured with
+  | first :: rest -> PatchOutcome.RestartNeeded (first, rest)
+  | [] -> PatchOutcome.Applied

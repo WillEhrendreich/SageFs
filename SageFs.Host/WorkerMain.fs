@@ -136,6 +136,14 @@ type AppRunHandlers = {
   AwaitChange: string -> Async<AppRun.AppRunState>
 }
 
+/// How a saved source file reaches the worker.
+[<RequireQualifiedAccess>]
+type private ReloadRoute =
+  /// The file belongs to the running app: patch its functions in place, bound to
+  /// the compiled types and state, or restart the app.
+  | PatchRunningApp of baseline: Features.ReloadPlanning.FileDecls
+  | ReevaluateFile
+
 /// For hosts that do not run apps (test harnesses).
 let noAppRuns : AppRunHandlers = {
   Run = fun project _ -> async { return Error (SageFsError.AppRunFailed (project, "This host does not run apps.")) }
@@ -467,6 +475,11 @@ let run (sessionId: string) (port: int) = async {
     | None -> projectRunTest
   let setDynamicRunTest v = System.Threading.Interlocked.Exchange(latestDynamicRunTest, Some v) |> ignore
 
+  let appRunner = AppRunner.create AppRunner.defaultTimeouts AppRunner.processEnv
+  // The source each running app's DLL was built from, advanced after every
+  // applied patch: what a save is compared with to decide patch vs restart.
+  let reloadBaselines = System.Collections.Concurrent.ConcurrentDictionary<string, Features.ReloadPlanning.FileDecls>()
+
   // Start file watcher unless no-watch was set
   let fileWatcher =
     match workerConfig.NoWatch || List.isEmpty result.ProjectDirectories with
@@ -496,6 +509,89 @@ let run (sessionId: string) (port: int) = async {
       // content is evaluated. Without this, rapid saves queue up multiple evals that
       // flash red errors before the final green.
       let perFileCts = System.Collections.Concurrent.ConcurrentDictionary<string, CancellationTokenSource>()
+      let reloadedMethodsOf (response: EvalResponse) =
+        response.Metadata
+        |> Map.tryFind "reloadedMethods"
+        |> Option.bind (fun v ->
+          match v with
+          | :? (string list) as methods -> Some methods
+          | _ -> None)
+        |> Option.defaultValue []
+      // Chesterton's fence: broadcastCompilationFailed ensures the browser
+      // overlay transitions from "Recompiling..." to the error message.
+      // Without this, compilation errors leave the overlay stuck on blue
+      // "Recompiling..." forever — the #1 reported DX issue.
+      let broadcastEvalFailure (filePath: string) (lineOffset: int) (response: EvalResponse) (ex: exn) =
+        let fileName = IO.Path.GetFileName filePath
+        let summary = sprintf "%s: %s" fileName ex.Message
+        // Extract structured diagnostics with source-mapped line numbers.
+        // Chesterton's fence: lineOffset compensates for lines added/removed by
+        // CompilationContext preprocessing (module wrapper, #load directives).
+        // Without applying this offset, browser error overlay shows FSI-internal
+        // line numbers that don't match the user's source file — the #1 DX
+        // complaint from the expert panel.
+        let diagnostics =
+          response.Diagnostics
+          |> Array.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Error || d.Severity = Features.Diagnostics.DiagnosticSeverity.Warning)
+          |> Array.map (fun d ->
+            ({ File = fileName
+               Line = Middleware.CompilationContext.mapDiagnosticLine lineOffset d.Range.StartLine
+               EndLine = Middleware.CompilationContext.mapDiagnosticLine lineOffset d.Range.EndLine
+               Column = d.Range.StartColumn
+               EndColumn = d.Range.EndColumn
+               Severity = Features.Diagnostics.DiagnosticSeverity.label d.Severity
+               DiagCode =
+                 match d.Subcategory with
+                 | s when String.IsNullOrWhiteSpace s -> None
+                 | s -> Some s
+               Message = d.Message
+               SourceContext = None
+               SourceContextStartLine = None } : DevReload.DevReloadDiagnostic)
+            |> DevReload.DevReloadDiagnostic.addSourceContext)
+          |> Array.toList
+        DevReload.broadcastCompilationFailed summary diagnostics
+        Log.warn "Reload failed for %s: %s\n%s" fileName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      let routeFor (filePath: string) =
+        match AppRunner.state appRunner, reloadBaselines.TryGetValue(IO.Path.GetFullPath filePath) with
+        | AppRun.AppRunState.Running _, (true, baseline) -> ReloadRoute.PatchRunningApp baseline
+        | _ -> ReloadRoute.ReevaluateFile
+      let requireRestart (fileName: string) first rest = async {
+        Log.info "Run App: %s — %s; restarting the app" fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
+        let! _ = AppRunner.requireRestart appRunner first rest |> Async.AwaitTask
+        () }
+      // Patch the running app in place when only function bodies changed; anything
+      // that takes effect at startup restarts it (see ReloadPlanning).
+      let reloadRunningApp (filePath: string) (baseline: Features.ReloadPlanning.FileDecls) = async {
+        let fileName = IO.Path.GetFileName filePath
+        match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText filePath) with
+        | Error reason ->
+          DevReload.broadcastCompilationFailed (sprintf "Parse failed for %s: %s" fileName reason) []
+        | Ok current ->
+          match Features.ReloadPlanning.planReload baseline current with
+          | Features.ReloadPlanning.ReloadPlan.PatchFunctions [] ->
+            Log.info "Run App: %s saved with no function change — nothing to reload" fileName
+          | Features.ReloadPlanning.ReloadPlan.PatchFunctions functions ->
+            DevReload.broadcastCompiling (Some fileName)
+            let patch = Middleware.CompilationContext.emitStableIdentity filePath current functions
+            let request = { Code = patch.Code; Args = Map.ofList ["hotReload", box true] }
+            use localCts = new CancellationTokenSource()
+            let! response = actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
+            match response.EvaluationResult with
+            | Error ex -> broadcastEvalFailure filePath patch.LineOffset response ex
+            | Ok _ ->
+              let reloaded = reloadedMethodsOf response
+              match Features.ReloadPlanning.confirmPatch baseline functions reloaded with
+              | Features.ReloadPlanning.PatchOutcome.Applied ->
+                reloadBaselines.[IO.Path.GetFullPath filePath] <- current
+                // The detour middleware already refreshed the browser when a method moved.
+                match reloaded with
+                | [] -> DevReload.broadcastReload ()
+                | _ -> ()
+                Log.info "Run App: hot reloaded %s: %s" fileName (functions |> List.map _.Name |> String.concat ", ")
+              | Features.ReloadPlanning.PatchOutcome.RestartNeeded (first, rest) ->
+                do! requireRestart fileName first rest
+          | Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest) ->
+            do! requireRestart fileName first rest }
       let onFileChanged (change: FileWatcher.FileChange) =
         let ext = IO.Path.GetExtension(change.FilePath)
         let kind = match change.Kind with
@@ -537,6 +633,9 @@ let run (sessionId: string) (port: int) = async {
                   Log.debug "File changed but not in hot-reload watch set: %s (watched: %d files)"
                     (IO.Path.GetFileName filePath) (HotReloadState.watchedCount !result.HotReloadStateRef)
                 | true ->
+                match routeFor filePath with
+                | ReloadRoute.PatchRunningApp baseline -> do! reloadRunningApp filePath baseline
+                | ReloadRoute.ReevaluateFile ->
                 Log.debug "[DevReload] Reloading watched file: %s" (IO.Path.GetFileName filePath)
                 DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))
                 // Chesterton's fence: read file and preprocess through CompilationContext
@@ -593,14 +692,7 @@ let run (sessionId: string) (port: int) = async {
                   | Some (:? (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) as runTest) ->
                     setDynamicRunTest runTest
                   | _ -> ()
-                  let reloaded =
-                    response.Metadata
-                    |> Map.tryFind "reloadedMethods"
-                    |> Option.bind (fun v ->
-                      match v with
-                      | :? (string list) as methods -> Some methods
-                      | _ -> None)
-                    |> Option.defaultValue []
+                  let reloaded = reloadedMethodsOf response
                   let fileName = IO.Path.GetFileName filePath
                   match List.isEmpty reloaded with
                   | false ->
@@ -613,40 +705,7 @@ let run (sessionId: string) (port: int) = async {
                     // forever — violating the Compiling→(Reload|CompilationFailed) contract.
                     DevReload.broadcastReload ()
                     Log.info "Reloaded %s (new types/functions, no methods detouring)" fileName
-                | Error ex ->
-                  // Chesterton's fence: broadcastCompilationFailed ensures the browser
-                  // overlay transitions from "Recompiling..." to the error message.
-                  // Without this, compilation errors leave the overlay stuck on blue
-                  // "Recompiling..." forever — the #1 reported DX issue.
-                  let fileName = IO.Path.GetFileName filePath
-                  let summary = sprintf "%s: %s" fileName ex.Message
-                  // Extract structured diagnostics with source-mapped line numbers.
-                  // Chesterton's fence: preprocessed.LineOffset compensates for lines
-                  // added/removed by CompilationContext preprocessing (module wrapper,
-                  // #load directives). Without applying this offset, browser error
-                  // overlay shows FSI-internal line numbers that don't match the user's
-                  // source file — the #1 DX complaint from the expert panel.
-                  let diagnostics =
-                    response.Diagnostics
-                    |> Array.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Error || d.Severity = Features.Diagnostics.DiagnosticSeverity.Warning)
-                    |> Array.map (fun d ->
-                      ({ File = fileName
-                         Line = Middleware.CompilationContext.mapDiagnosticLine preprocessed.LineOffset d.Range.StartLine
-                         EndLine = Middleware.CompilationContext.mapDiagnosticLine preprocessed.LineOffset d.Range.EndLine
-                         Column = d.Range.StartColumn
-                         EndColumn = d.Range.EndColumn
-                         Severity = Features.Diagnostics.DiagnosticSeverity.label d.Severity
-                         DiagCode =
-                           match d.Subcategory with
-                           | s when String.IsNullOrWhiteSpace s -> None
-                           | s -> Some s
-                         Message = d.Message
-                         SourceContext = None
-                         SourceContextStartLine = None } : DevReload.DevReloadDiagnostic)
-                      |> DevReload.DevReloadDiagnostic.addSourceContext)
-                    |> Array.toList
-                  DevReload.broadcastCompilationFailed summary diagnostics
-                  Log.warn "Reload failed for %s: %s\n%s" fileName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                | Error ex -> broadcastEvalFailure filePath preprocessed.LineOffset response ex
               | FileWatcher.FileChangeAction.SoftReset ->
                 Log.info "Project file changed — soft reset needed"
                 let! _ = actor.PostAndAsyncReply(fun rc -> ResetSession rc)
@@ -668,7 +727,6 @@ let run (sessionId: string) (port: int) = async {
         })
       Some (FileWatcher.start config DevReload.DevReloadConfig.defaults onFileChanged)
 
-  let appRunner = AppRunner.create AppRunner.defaultTimeouts AppRunner.processEnv
   let watchForHotReload (projectPath: string) =
     match workerConfig.Workflow, IO.Path.GetDirectoryName(IO.Path.GetFullPath projectPath) with
     | WorkflowTypes.SessionWorkflow.WebLive _, (NonNull projectDir) ->
@@ -678,6 +736,11 @@ let run (sessionId: string) (port: int) = async {
           let n = f.Replace('\\', '/')
           not (n.Contains("/obj/") || n.Contains("/bin/")))
       result.HotReloadStateRef.Value <- HotReloadState.watchByDirectory projectDir sources result.HotReloadStateRef.Value
+      // First capture wins: it is the source this worker's DLL was built from.
+      for source in sources do
+        match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText source) with
+        | Ok decls -> reloadBaselines.TryAdd(IO.Path.GetFullPath source, decls) |> ignore
+        | Error reason -> Log.warn "Run App: %s cannot be patched in place (%s)" source reason
       Log.info "Run App: watching %d source file(s) in %s for hot reload"
         (HotReloadState.watchedInDirectory projectDir result.HotReloadStateRef.Value).Length projectDir
     | _ -> ()
