@@ -400,6 +400,49 @@ let reconcileViewing
     | first :: _ -> ViewingDecision.SwitchTo first.Id
     | [] -> ViewingDecision.ShowPicker
 
+/// Whether a daemon state change can alter the worker-fetched panels (eval
+/// stats, hot-reload state, warmup context), so the push must re-fetch them
+/// instead of reusing the TTL cache — reusing it across a real change would
+/// render identical HTML and wrongly suppress the morph.
+let invalidatesWorkerData (change: DaemonStateChange) =
+  match change with
+  | DaemonStateChange.ModelChanged _
+  | DaemonStateChange.HotReloadChanged _
+  | DaemonStateChange.FileReloaded _
+  | DaemonStateChange.WarmupProgress _
+  | DaemonStateChange.SessionReady _
+  | DaemonStateChange.SessionSwitched _
+  | DaemonStateChange.SessionFaulted _ -> true
+  | DaemonStateChange.SessionProgress
+  | DaemonStateChange.SystemAlarm _ -> false
+
+/// Whether a coalesced burst of stream commands asked this connection to view
+/// another session.
+[<RequireQualifiedAccess>]
+type BurstRetarget =
+  | NoRetarget
+  /// View this session (None = the picker) — the last retarget in the burst.
+  | RetargetTo of WorkerProtocol.SessionId option
+
+/// One push's worth of coalesced stream commands. A burst of state changes is
+/// rendered once, but a retarget arriving inside the burst is never dropped:
+/// the browser has already moved its viewing-session signal, and a lost
+/// retarget leaves the stream re-rendering the old session over the switch.
+type StreamBurst = { Retarget: BurstRetarget; WorkerInvalidated: bool }
+
+module StreamBurst =
+  let empty = { Retarget = BurstRetarget.NoRetarget; WorkerInvalidated = false }
+
+  let add (burst: StreamBurst) (command: DashboardStreamCommand) =
+    match command with
+    | DashboardStreamCommand.RetargetView target ->
+      { burst with Retarget = BurstRetarget.RetargetTo target }
+    | DashboardStreamCommand.StateChange change ->
+      { burst with WorkerInvalidated = burst.WorkerInvalidated || invalidatesWorkerData change }
+
+  let ofCommands (commands: DashboardStreamCommand list) =
+    commands |> List.fold add empty
+
 /// Read the page client id from a signals JSON body; empty when absent.
 let private clientIdFromSignals (doc: System.Text.Json.JsonDocument) =
   match doc.RootElement.TryGetProperty(Signals.ClientId) with
@@ -958,41 +1001,23 @@ let createStreamHandler
               | ex -> Log.debug "[Dashboard SSE] pushState after retarget failed: %s" ex.Message
               return! loop ()
             | Some (DashboardStreamCommand.StateChange change) ->
-              // Other state changes — drain + coalesce + push
-              // Worker-affecting events invalidate the worker-data TTL cache so
-              // the push re-fetches eval stats / hot-reload / warmup context:
-              // reusing a cache across a real change would render identical
-              // HTML and wrongly suppress the morph.
-              let invalidatesWorkerData (c: DaemonStateChange) =
-                match c with
-                | DaemonStateChange.ModelChanged _
-                | DaemonStateChange.HotReloadChanged _
-                | DaemonStateChange.FileReloaded _
-                | DaemonStateChange.WarmupProgress _
-                | DaemonStateChange.SessionReady _
-                | DaemonStateChange.SessionSwitched _
-                | DaemonStateChange.SessionFaulted _ -> true
-                | DaemonStateChange.SessionProgress
-                | DaemonStateChange.SystemAlarm _ -> false
-              let mutable workerInvalidated = invalidatesWorkerData change
+              // A burst of state changes renders once: drain, throttle, drain,
+              // push. A retarget that arrives mid-burst is applied, never
+              // dropped — under a steady stream of model changes the mailbox is
+              // almost always mid-burst, and a dropped retarget left the page
+              // re-rendering the old session over the user's switch.
+              let mutable burst = StreamBurst.add StreamBurst.empty (DashboardStreamCommand.StateChange change)
               while inbox.CurrentQueueLength > 0 do
                 let! drained = inbox.Receive()
-                match drained with
-                | DashboardStreamCommand.StateChange c ->
-                  if invalidatesWorkerData c then
-                    workerInvalidated <- true
-                | DashboardStreamCommand.RetargetView _ -> ()
-                ()
+                burst <- StreamBurst.add burst drained
               do! Async.Sleep 100
               while inbox.CurrentQueueLength > 0 do
                 let! drained = inbox.Receive()
-                match drained with
-                | DashboardStreamCommand.StateChange c ->
-                  if invalidatesWorkerData c then
-                    workerInvalidated <- true
-                | DashboardStreamCommand.RetargetView _ -> ()
-                ()
-              if workerInvalidated then
+                burst <- StreamBurst.add burst drained
+              match burst.Retarget with
+              | BurstRetarget.RetargetTo target -> retargetTo target
+              | BurstRetarget.NoRetarget -> ()
+              if burst.WorkerInvalidated then
                 lastWorkerFetch <- DateTime.MinValue
               try
                 do! pushState () |> Async.AwaitTask

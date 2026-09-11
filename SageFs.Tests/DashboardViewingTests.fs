@@ -5,6 +5,8 @@ open Expecto
 open Expecto.Flip
 open FsCheck
 open SageFs
+open SageFs.Server
+open SageFs.Server.DashboardTypes
 open SageFs.Server.Dashboard
 
 let private info (i: int) (status: WorkerProtocol.SessionStatus) : WorkerProtocol.SessionInfo =
@@ -61,4 +63,49 @@ let tests = testList "Dashboard viewing reconcile" [
       | ViewingDecision.Keep sid -> Some sid = current && List.contains sid liveIds
       | ViewingDecision.SwitchTo sid -> List.tryHead liveIds = Some sid && not (current |> Option.exists (fun c -> List.contains c liveIds))
       | ViewingDecision.ShowPicker -> List.isEmpty liveIds
+]
+
+let private sidN i = (ready i).Id
+
+let private modelChanged = DashboardStreamCommand.StateChange (DaemonStateChange.ModelChanged (1, 0))
+
+[<Tests>]
+let burstTests = testList "Dashboard stream burst" [
+  test "WHY — StreamBurst — a retarget inside a burst of state changes survives, because a dropped retarget left the page re-rendering the old session over the user's switch" {
+    (StreamBurst.ofCommands [ modelChanged; DashboardStreamCommand.RetargetView (Some (sidN 2)); modelChanged ]).Retarget
+    |> Expect.equal "the retarget is kept" (BurstRetarget.RetargetTo (Some (sidN 2)))
+  }
+
+  test "WHY — StreamBurst — a burst of state changes alone keeps the current view" {
+    (StreamBurst.ofCommands [ modelChanged; modelChanged ]).Retarget
+    |> Expect.equal "no retarget" BurstRetarget.NoRetarget
+  }
+
+  test "WHY — StreamBurst — a retarget to the picker survives too, because a torn-down session must not reappear" {
+    (StreamBurst.ofCommands [ DashboardStreamCommand.RetargetView None; modelChanged ]).Retarget
+    |> Expect.equal "picker retarget kept" (BurstRetarget.RetargetTo None)
+  }
+
+  testProperty "WHY — StreamBurst — the last retarget in any burst wins, because the browser's final viewing-session signal is the truth" <|
+    fun (steps: (bool * byte) list) ->
+      let commands =
+        steps
+        |> List.map (fun (isRetarget, i) ->
+          match isRetarget with
+          | true -> DashboardStreamCommand.RetargetView (Some (sidN (int i)))
+          | false -> modelChanged)
+      let expected =
+        steps
+        |> List.filter fst
+        |> List.tryLast
+        |> Option.map (fun (_, i) -> BurstRetarget.RetargetTo (Some (sidN (int i))))
+        |> Option.defaultValue BurstRetarget.NoRetarget
+      (StreamBurst.ofCommands commands).Retarget = expected
+
+  test "WHY — StreamBurst — only worker-affecting changes invalidate the worker cache, because a progress tick must not force worker HTTP round-trips" {
+    (StreamBurst.ofCommands [ DashboardStreamCommand.StateChange DaemonStateChange.SessionProgress ]).WorkerInvalidated
+    |> Expect.isFalse "progress alone keeps the cache"
+    (StreamBurst.ofCommands [ DashboardStreamCommand.StateChange DaemonStateChange.SessionProgress; modelChanged ]).WorkerInvalidated
+    |> Expect.isTrue "a model change invalidates it"
+  }
 ]
