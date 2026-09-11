@@ -473,10 +473,20 @@ let checkDaemonSessionAuthority (targetDir: string) (mcpPort: int) =
         (sprintf "Not checked for %s — could not inspect daemon sessions" targetDir)
         (sprintf "The daemon is running, but /api/sessions could not be read: %s" detail)
 
+/// SAGEFS_BIND_HOST must be a loopback form — the daemon refuses to start
+/// otherwise (SageFsConfig.LoopbackHost.parse carries the why and the fix).
+let checkBindHost () =
+  match SageFs.SageFsConfig.BindHost with
+  | Ok host ->
+    pass "Bind host" (sprintf "Bind host: %s (loopback only)" (SageFs.SageFsConfig.LoopbackHost.urlHost host))
+  | Error message ->
+    fail "Bind host" "Bind host: SAGEFS_BIND_HOST is not a loopback address — the daemon will not start" message
+
 let runAll (dir: string) (mcpPort: int) (dashPort: int) =
   [ checkDotnetSdk ()
     checkFsiAvailable ()
     checkFsproj dir
+    checkBindHost ()
     checkPort "MCP port"       mcpPort
     checkPort "Dashboard port" dashPort
     checkDaemon mcpPort

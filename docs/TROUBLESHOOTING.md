@@ -134,7 +134,7 @@ starting SageFs (or in your shell profile).
 | `SAGEFS_BUILD_TIMEOUT_MINUTES` | `10` | Max time for `dotnet build` during hard reset |
 | `SAGEFS_WORKER_HTTP_READ_SECONDS` | `30` | HTTP read timeout for daemon→worker communication |
 | `SAGEFS_WORKER_STARTUP_TIMEOUT_MS` | `120000` | Worker process startup timeout (milliseconds) |
-| `SAGEFS_BIND_HOST` | `127.0.0.1` | Bind address (set to `0.0.0.0` for Docker) |
+| `SAGEFS_BIND_HOST` | `localhost` | Loopback bind address: `localhost`, `127.0.0.1` or `::1`. Any other value stops the daemon at startup (see [Docker / Remote Containers](#docker--remote-containers)) |
 | `SAGEFS_MCP_PORT` | `37749` | MCP server port |
 
 **Example** — slow CI machine with large project:
@@ -191,8 +191,22 @@ See [#18](https://github.com/WillEhrendreich/SageFs/issues/18).
 
 ### Docker / Remote Containers
 
-Set `SAGEFS_BIND_HOST=0.0.0.0` so the daemon listens on all interfaces, not
-just localhost.
+SageFs only listens on loopback. Its HTTP ports evaluate F# as your user and
+have no authentication, so binding all interfaces (`SAGEFS_BIND_HOST=0.0.0.0`)
+would hand code execution to anyone on the network. The daemon refuses to
+start with a non-loopback `SAGEFS_BIND_HOST`, and `sagefs check` reports it.
+
+To reach a daemon in a container, forward ports 37749 and 37750 to the
+container's loopback instead:
+
+- **VS Code Dev Containers**: add `"forwardPorts": [37749, 37750]` to
+  `devcontainer.json`. VS Code tunnels to the container's loopback.
+- **Docker on Linux**: `docker run --network host ...`
+- **Anything with SSH**: `ssh -L 37749:localhost:37749 -L 37750:localhost:37750 <host>`
+
+Browser requests must come from the dashboard itself. A page served from any
+other origin, including another `localhost` port, is refused. Request bodies
+must be sent as `Content-Type: application/json`.
 
 ---
 

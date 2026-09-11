@@ -64,10 +64,51 @@ let DefaultDashboardPort = 37750
 let WorkerStartupTimeoutMs : int =
   envInt "SAGEFS_WORKER_STARTUP_TIMEOUT_MS" 120_000
 
+/// The loopback interface the daemon's HTTP listeners (MCP, dashboard) bind.
+/// There is deliberately no non-loopback case: SageFs evaluates arbitrary F#
+/// for whoever reaches those ports and has no authentication, so a LAN bind
+/// would be remote code execution. See LoopbackHost.parse.
+[<RequireQualifiedAccess>]
+type LoopbackHost =
+  /// "localhost" — Kestrel listens on both 127.0.0.1 and [::1].
+  | Localhost
+  | Ipv4
+  | Ipv6
+
+[<RequireQualifiedAccess>]
+module LoopbackHost =
+
+  /// The host as it appears in a URL.
+  let urlHost (host: LoopbackHost) : string =
+    match host with
+    | LoopbackHost.Localhost -> "localhost"
+    | LoopbackHost.Ipv4 -> "127.0.0.1"
+    | LoopbackHost.Ipv6 -> "[::1]"
+
+  /// The Kestrel listen URL for a port on this host.
+  let listenUrl (host: LoopbackHost) (port: int) : string =
+    sprintf "http://%s:%d" (urlHost host) port
+
+  /// Parse a SAGEFS_BIND_HOST value. Empty means the default (localhost);
+  /// anything that is not a loopback form is an error that says why and what
+  /// to do instead.
+  let parse (raw: string) : Result<LoopbackHost, string> =
+    match raw.Trim().ToLowerInvariant() with
+    | "" | "localhost" -> Ok LoopbackHost.Localhost
+    | "127.0.0.1" -> Ok LoopbackHost.Ipv4
+    | "::1" | "[::1]" -> Ok LoopbackHost.Ipv6
+    | _ ->
+      Error (
+        sprintf
+          "SAGEFS_BIND_HOST=%s is not supported. SageFs runs F# for anyone who can reach its HTTP ports and has no authentication, so it only listens on loopback. Unset SAGEFS_BIND_HOST, or set it to localhost, 127.0.0.1 or ::1. To use SageFs inside a container, forward ports 37749 and 37750 to the container's loopback instead of binding all interfaces: VS Code Dev Containers \"forwardPorts\", `docker run --network host` (Linux), or `ssh -L 37749:localhost:37749 -L 37750:localhost:37750`."
+          (raw.Trim()))
+
 /// Bind host for HTTP servers (MCP and Dashboard).
 /// SAGEFS_BIND_HOST is read here only — all other modules use this value.
-let BindHost : string =
-  envString "SAGEFS_BIND_HOST" "127.0.0.1"
+/// An Error here stops the daemon at startup (Program.runDaemon) and fails
+/// `sagefs check`.
+let BindHost : Result<LoopbackHost, string> =
+  LoopbackHost.parse (envString "SAGEFS_BIND_HOST" "")
 
 /// Whether this process is running under external supervision (auto-restart on crash).
 let IsSupervised : bool =

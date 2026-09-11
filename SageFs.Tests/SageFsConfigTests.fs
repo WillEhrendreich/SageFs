@@ -42,9 +42,30 @@ let sageFsConfigTests =
       (SageFsConfig.RestartCount, 0)
       |> Expect.isGreaterThanOrEqual "restart count must be non-negative"
 
-    testCase "BindHost is non-empty" <| fun _ ->
-      SageFsConfig.BindHost
-      |> Expect.isNotEmpty "bind host must not be empty"
+    testCase "LoopbackHost.parse accepts exactly the loopback forms" <| fun _ ->
+      for raw, expected in [ "", SageFsConfig.LoopbackHost.Localhost
+                             "localhost", SageFsConfig.LoopbackHost.Localhost
+                             " LOCALHOST ", SageFsConfig.LoopbackHost.Localhost
+                             "127.0.0.1", SageFsConfig.LoopbackHost.Ipv4
+                             "::1", SageFsConfig.LoopbackHost.Ipv6
+                             "[::1]", SageFsConfig.LoopbackHost.Ipv6 ] do
+        SageFsConfig.LoopbackHost.parse raw
+        |> Expect.equal (sprintf "%A must parse as loopback" raw) (Ok expected)
+
+    testCase "LoopbackHost.parse refuses a LAN bind and says what to do instead" <| fun _ ->
+      for raw in [ "0.0.0.0"; "192.168.1.20"; "::"; "*"; "+"; "sagefs.local"; "localhost.evil.com" ] do
+        match SageFsConfig.LoopbackHost.parse raw with
+        | Ok host -> failtestf "%s must be refused, parsed as %A" raw host
+        | Error message ->
+          message |> Expect.stringContains "the error names the variable" "SAGEFS_BIND_HOST"
+          message |> Expect.stringContains "the error explains why" "no authentication"
+          message |> Expect.stringContains "the error gives the container alternative" "forwardPorts"
+
+    testCase "every LoopbackHost round-trips through its listen URL" <| fun _ ->
+      for host in [ SageFsConfig.LoopbackHost.Localhost; SageFsConfig.LoopbackHost.Ipv4; SageFsConfig.LoopbackHost.Ipv6 ] do
+        let url = SageFsConfig.LoopbackHost.listenUrl host 37749
+        SageFs.Server.HttpOriginGuard.isLoopbackOrigin url
+        |> Expect.isTrue (sprintf "%s must be a loopback origin" url)
 
     testCase "OtelProtocol has a default value" <| fun _ ->
       SageFsConfig.OtelProtocol
