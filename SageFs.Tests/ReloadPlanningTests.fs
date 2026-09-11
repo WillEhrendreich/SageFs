@@ -28,7 +28,13 @@ let private declsOf (source: string) =
   | Ok decls -> decls
   | Error reason -> failtestf "extractDecls failed: %s" reason
 
+/// Line endings in the fixture follow the checkout (CRLF on Windows), while
+/// edit targets are written with "\n" — compare and edit in LF so an edit can
+/// never silently miss (the planner itself is line-ending agnostic).
+let private lf (text: string) = text.Replace("\r\n", "\n")
+
 let private replace (oldText: string) (newText: string) (source: string) =
+  let source, oldText, newText = lf source, lf oldText, lf newText
   match source.Contains oldText with
   | true -> source.Replace(oldText, newText)
   | false -> failtestf "fixture edit target not found: %s" oldText
