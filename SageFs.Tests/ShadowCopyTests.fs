@@ -215,3 +215,59 @@ let tests =
         safeDelete dir1
         safeDelete dir2
   ]
+
+let private liveOnly (alive: Set<int>) (pid: int) =
+  match alive.Contains pid with
+  | true -> SageFs.ShadowCopy.OwnerLiveness.Running
+  | false -> SageFs.ShadowCopy.OwnerLiveness.Gone
+
+[<Tests>]
+let staleSweepTests =
+  testList "ShadowCopy stale sweep" [
+    testCase "WHY — ShadowDirOwner — a shadow dir records the process that owns it, because only its owner may decide it is garbage" <| fun _ ->
+      let dir = SageFs.ShadowCopy.createShadowDir ()
+      try
+        SageFs.ShadowCopy.ShadowDirOwner.ofDirName dir
+        |> Expect.equal "created dirs are owned by this process" (SageFs.ShadowCopy.ShadowDirOwner.OwnedBy Environment.ProcessId)
+      finally
+        safeDelete dir
+
+    testCase "WHY — ShadowDirOwner — a legacy name without an owner is UnknownOwner, because its owner can never be proven dead" <| fun _ ->
+      SageFs.ShadowCopy.ShadowDirOwner.ofDirName "/tmp/sagefs-shadow-20c3008c"
+      |> Expect.equal "legacy dirs have no owner" SageFs.ShadowCopy.ShadowDirOwner.UnknownOwner
+
+    testProperty "WHY — staleShadowDirs — only dirs whose owner is provably gone are swept, because deleting a live worker's shadow copy breaks every compile in that session" <|
+      fun (owners: (FsCheck.NonNegativeInt * bool) list) (legacyCount: byte) ->
+        let owned =
+          owners |> List.mapi (fun i (pid, alive) -> sprintf "/tmp/sagefs-shadow-%d-%08x" (pid.Get + 1) i, pid.Get + 1, alive)
+        let alivePids = owned |> List.choose (fun (_, pid, alive) -> match alive with | true -> Some pid | false -> None) |> Set.ofList
+        let legacy = [ for i in 1 .. int legacyCount % 5 -> sprintf "/tmp/sagefs-shadow-%08x" i ]
+        let swept =
+          SageFs.ShadowCopy.staleShadowDirs (liveOnly alivePids) ((owned |> List.map (fun (d, _, _) -> d)) @ legacy)
+          |> Set.ofList
+        let expected =
+          owned
+          |> List.choose (fun (d, pid, _) -> match alivePids.Contains pid with | true -> None | false -> Some d)
+          |> Set.ofList
+        swept = expected
+
+    testCase "WHY — staleShadowDirs — an owner whose liveness cannot be determined keeps its dir, because a sweep must fail closed" <| fun _ ->
+      SageFs.ShadowCopy.staleShadowDirs (fun _ -> SageFs.ShadowCopy.OwnerLiveness.Unknown) [ "/tmp/sagefs-shadow-4242-0000abcd" ]
+      |> Expect.isEmpty "unknown liveness is never swept"
+
+    testCase "WHY — cleanupStaleDirsIn — another running process's shadow dir survives a sweep, because one session's hard reset deleted every other session's shadow copy" <| fun _ ->
+      let root = Directory.CreateTempSubdirectory("sagefs-sweep-").FullName
+      try
+        let live = Directory.CreateDirectory(Path.Combine(root, sprintf "sagefs-shadow-%d-aaaaaaaa" Environment.ProcessId)).FullName
+        let gone = Directory.CreateDirectory(Path.Combine(root, "sagefs-shadow-999999999-bbbbbbbb")).FullName
+        let legacy = Directory.CreateDirectory(Path.Combine(root, "sagefs-shadow-cccccccc")).FullName
+        SageFs.ShadowCopy.cleanupStaleDirsIn root (fun pid ->
+          match pid = Environment.ProcessId with
+          | true -> SageFs.ShadowCopy.OwnerLiveness.Running
+          | false -> SageFs.ShadowCopy.OwnerLiveness.Gone)
+        Directory.Exists live |> Expect.isTrue "a live owner's shadow dir is kept"
+        Directory.Exists legacy |> Expect.isTrue "an ownerless legacy dir is kept"
+        Directory.Exists gone |> Expect.isFalse "a dead owner's shadow dir is swept"
+      finally
+        safeDelete root
+  ]
