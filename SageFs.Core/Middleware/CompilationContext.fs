@@ -588,3 +588,41 @@ let mapDiagnosticLine (lineOffset: int) (line: int) = line - lineOffset
 
 /// Adjust a diagnostic column by the preprocessing offset.
 let mapDiagnosticColumn (columnOffset: int) (col: int) = max 0 (col - columnOffset)
+
+// ─────────────────────────────────────────────────────────────────
+// Stable-identity reload (Run App)
+// ─────────────────────────────────────────────────────────────────
+
+/// Re-emits only the given functions inside the file's module path, opened onto
+/// the COMPILED module (`open global.…`) so they bind to the running app's own
+/// types and state; `#` line directives keep diagnostics on the source lines.
+let emitStableIdentity
+    (filePath: string)
+    (decls: SageFs.Features.ReloadPlanning.FileDecls)
+    (functions: SageFs.Features.ReloadPlanning.SourceDecl list)
+    : PreprocessResult =
+  let path = decls.ModulePath
+  let pad depth = String.replicate depth "  "
+  let body = pad path.Length
+  let headers = path |> List.mapi (fun depth part -> sprintf "%smodule %s =" (pad depth) part)
+  let opens = decls.Opens |> List.map (fun o -> sprintf "%sopen %s" body o)
+  let compiledModule =
+    match path with
+    | [] -> []
+    | _ -> [ sprintf "%sopen global.%s" body (String.concat "." path) ]
+  let directiveFile = filePath.Replace("\\", "\\\\").Replace("\"", "\\\"")
+  let emitted =
+    functions
+    |> List.collect (fun f ->
+      let text =
+        splitLines f.Text
+        |> Array.map (fun l ->
+          match l.Trim() with
+          | "" -> ""
+          | _ -> body + l)
+        |> Array.toList
+      sprintf "# %d \"%s\"" f.StartLine directiveFile :: text)
+  { Code = headers @ opens @ compiledModule @ emitted |> String.concat "\n"
+    LineOffset = 0
+    ColumnOffset = 2 * path.Length
+    OriginalFilePath = Some filePath }

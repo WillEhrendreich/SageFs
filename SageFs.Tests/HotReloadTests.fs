@@ -784,3 +784,22 @@ let noInliningScopeTests =
       |> Array.exists (fun (a, b) -> a.TrimStart().StartsWith("[<MethodImpl", StringComparison.Ordinal) && b.StartsWith("let outer", StringComparison.Ordinal))
       |> Flip.Expect.isTrue "the attribute sits directly above outer"
   ]
+
+[<Tests>]
+let noInliningDirectiveTests =
+  testList "HotReloading injectNoInlining line directives" [
+    testCase "WHY — HotReloading.injectNoInlining — the attribute goes above a line directive because the directive must number its own declaration" <| fun _ ->
+      let result = injectNoInlining "module M =\n# 9 \"f.fs\"\n  let count (xs: int list) =\n    xs.Length"
+      let lines = result.Split('\n')
+      let directive = lines |> Array.findIndex (fun l -> l = "# 9 \"f.fs\"")
+      lines.[directive + 1].TrimStart().StartsWith("let count", StringComparison.Ordinal)
+      |> Flip.Expect.isTrue "the directive sits directly above let count"
+      lines.[directive - 1].TrimStart().StartsWith("[<MethodImpl", StringComparison.Ordinal)
+      |> Flip.Expect.isTrue "the attribute sits directly above the directive"
+
+    testCase "WHY — HotReloading.injectNoInlining — an attribute already above a line directive is not repeated because MethodImpl allows only one" <| fun _ ->
+      let code = "module M =\n  [<MethodImpl(MethodImplOptions.NoInlining)>]\n# 9 \"f.fs\"\n  let count (xs: int list) =\n    xs.Length"
+      injectNoInlining code
+      |> fun r -> r.Split('\n') |> Array.filter (fun l -> l.TrimStart().StartsWith("[<MethodImpl", StringComparison.Ordinal)) |> Array.length
+      |> Flip.Expect.equal "still one attribute" 1
+  ]

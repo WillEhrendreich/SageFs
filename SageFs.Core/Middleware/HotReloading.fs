@@ -698,6 +698,11 @@ let injectNoInlining (code: string) =
     // closure; injecting a SECOND attribute on the watcher's re-eval makes FSI
     // fail with "MethodImplAttribute has AllowMultiple=false" — the save then
     // errors instead of hot-reloading (P0 gap).
+    let isLineDirective (line: string) =
+      let t = line.TrimStart()
+      (t.Length > 2 && t.StartsWith("# ", StringComparison.Ordinal) && Char.IsDigit t.[2])
+      || t.StartsWith("#line ", StringComparison.Ordinal)
+    // Blank lines and line directives may sit between a binding and its attributes.
     let hasExistingAttribute (idx: int) =
       let mutable j = idx - 1
       let mutable found = false
@@ -705,6 +710,7 @@ let injectNoInlining (code: string) =
         let t = lines.[j].Trim()
         match t with
         | "" -> j <- j - 1
+        | _ when isLineDirective lines.[j] -> j <- j - 1
         | _ ->
           if t.StartsWith("[<MethodImpl", StringComparison.Ordinal)
              || t.StartsWith("[<System.Runtime.CompilerServices.MethodImpl", StringComparison.Ordinal) then
@@ -712,16 +718,24 @@ let injectNoInlining (code: string) =
           else
             j <- -1 // stop at the first non-blank, non-attribute line
       found
+    // A line directive numbers the next physical line, so an attribute goes above
+    // the directive; otherwise every line after it would be reported one too late.
+    let insertionPoint (idx: int) =
+      match idx > 0 && isLineDirective lines.[idx - 1] with
+      | true -> idx - 1
+      | false -> idx
+    let attributeAt =
+      injectionLines
+      |> Seq.filter (hasExistingAttribute >> not)
+      |> Seq.map (fun idx -> insertionPoint idx, lines.[idx].Length - lines.[idx].TrimStart().Length)
+      |> Map.ofSeq
     let sb = System.Text.StringBuilder()
     sb.Append("open System.Runtime.CompilerServices\n") |> ignore
     for i in 0 .. lines.Length - 1 do
-      match Set.contains i injectionLines && not (hasExistingAttribute i) with
-      | true ->
-        let line = lines.[i]
-        let indent = line.Length - line.TrimStart().Length
-        let prefix = System.String(' ', indent)
-        sb.Append(prefix + "[<MethodImpl(MethodImplOptions.NoInlining)>]\n") |> ignore
-      | false -> ()
+      match Map.tryFind i attributeAt with
+      | Some indent ->
+        sb.Append(System.String(' ', indent) + "[<MethodImpl(MethodImplOptions.NoInlining)>]\n") |> ignore
+      | None -> ()
       sb.Append(lines.[i] + "\n") |> ignore
     sb.ToString()
 

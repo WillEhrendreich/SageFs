@@ -1115,3 +1115,46 @@ let dottedFileModuleTests =
       |> Expect.equal "the 'let view' line of the source" 7
     }
   ]
+
+[<Tests>]
+let stableIdentityEmitTests =
+  let source = "// header\nmodule Demo.Web.Program\n\nopen System\n\ntype Item = { Id: int }\n\nlet mutable items: Item list = []\n\nlet render (xs: Item list) =\n  sprintf \"%d items\" xs.Length\n\nlet total () = items.Length\n"
+  let decls =
+    match SageFs.Features.ReloadPlanning.extractDecls source with
+    | Ok d -> d
+    | Error e -> failwithf "fixture does not extract: %s" e
+  let fn (name: string) = decls.Decls |> List.find (fun d -> d.Name = name)
+  let emitted = emitStableIdentity "/src/Program.fs" decls [ fn "render" ]
+  let lines = emitted.Code.Split('\n')
+  let indexOf (text: string) = lines |> Array.findIndex (fun l -> l.Trim() = text)
+  testList "CompilationContext stable-identity emit" [
+    test "WHY — CompilationContext.emitStableIdentity — nests the file's module path because FSI rejects a dotted module header" {
+      emitted.Code |> Expect.stringContains "outermost" "module Demo ="
+      emitted.Code |> Expect.stringContains "middle" "module Web ="
+      emitted.Code |> Expect.stringContains "leaf" "module Program ="
+    }
+
+    test "WHY — CompilationContext.emitStableIdentity — opens the compiled module with global. because a bare name resolves to an older FSI copy" {
+      lines |> Array.exists (fun l -> l.Trim() = "open global.Demo.Web.Program")
+      |> Expect.isTrue "opens the compiled module"
+    }
+
+    test "WHY — CompilationContext.emitStableIdentity — re-emits the file's opens before the compiled module's open because the module's own names must win" {
+      indexOf "open System" < indexOf "open global.Demo.Web.Program"
+      |> Expect.isTrue "file opens come first"
+    }
+
+    test "WHY — CompilationContext.emitStableIdentity — emits only the requested functions because types and state must stay the compiled ones" {
+      emitted.Code |> Expect.stringContains "the requested function" "let render (xs: Item list) ="
+      emitted.Code.Contains "type Item" |> Expect.isFalse "no type re-definition"
+      emitted.Code.Contains "let mutable items" |> Expect.isFalse "no state re-definition"
+      emitted.Code.Contains "let total" |> Expect.isFalse "no unrequested function"
+    }
+
+    test "WHY — CompilationContext.emitStableIdentity — marks each function with its source line because diagnostics must point at the user's file" {
+      lines
+      |> Array.pairwise
+      |> Array.exists (fun (a, b) -> a = "# 10 \"/src/Program.fs\"" && b.TrimStart().StartsWith("let render", System.StringComparison.Ordinal))
+      |> Expect.isTrue "a line directive for line 10 precedes render"
+    }
+  ]

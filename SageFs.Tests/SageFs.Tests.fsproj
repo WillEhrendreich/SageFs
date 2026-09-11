@@ -9,6 +9,8 @@
 
     <ItemGroup>
         <Compile Include="TestInfrastructure.fs" />
+        <Compile Include="StableIdentityProbeFixture.fs" />
+        <Compile Include="StableIdentityEvalTests.fs" />
         <Compile Include="SageFsConfigTests.fs" />
         <Compile Include="AppStateCustomTests.fs" />
         <Compile Include="DaemonModeProxyTests.fs" />
