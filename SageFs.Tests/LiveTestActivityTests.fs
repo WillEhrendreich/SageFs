@@ -126,6 +126,15 @@ let describeTests =
       describe (LiveTestActivity.BlockedByFailedRebuild ("\nMath.fs(3,5): error FS0001: expected int\nMath.fs(9,1): error FS0039: y", { TestTally.empty with Passed = 3 }))
       |> Expect.equal "wording" "Tests could not re-run: Math.fs(3,5): error FS0001: expected int — showing the last good results: 3 passed"
 
+    testCase "WHY — LiveTestActivity.describe — a failed rebuild shows the compiler error, not the build's header line, because the error is what the user must fix" <| fun _ ->
+      let reason =
+        "Build failed (exit 1):\n"
+        + "/home/u/App/Hello.fs(50,20): error FS0001: This expression was expected to have type    'int'    but here has type    'string'\n"
+        + "→ Fix the build errors, then press ▶ Run to rebuild and start the app."
+      describe (LiveTestActivity.BlockedByFailedRebuild (reason, { TestTally.empty with Passed = 3 }))
+      |> Expect.equal "wording"
+        "Tests could not re-run: Hello.fs(50,20): error FS0001: This expression was expected to have type 'int' but here has type 'string' — showing the last good results: 3 passed"
+
     testCase "WHY — LiveTestActivity.describe — rebuilding says how many tests wait on the build and that the results are the last ones" <| fun _ ->
       describe (LiveTestActivity.Rebuilding (2, { TestTally.empty with Passed = 3 }))
       |> Expect.equal "wording" "Rebuilding to re-run 2 tests — showing the last results: 3 passed"

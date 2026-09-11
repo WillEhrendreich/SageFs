@@ -139,6 +139,30 @@ module LiveTestActivity =
     | "" -> "none yet"
     | listed -> listed
 
+  /// The line of a failed build the user must act on: the first compiler error
+  /// (file name only, whitespace runs collapsed) — not the build's header line
+  /// or its hints; else the first line there is.
+  let private rebuildHeadline (reason: string) =
+    let lines =
+      reason.Split '\n'
+      |> Array.map (fun line -> System.Text.RegularExpressions.Regex.Replace(line.Trim(), @"\s+", " "))
+      |> Array.filter (fun line -> line <> "")
+    let withFileNameOnly (line: string) =
+      let errorAt = line.IndexOf(": error ", System.StringComparison.Ordinal)
+      match line.LastIndexOf('(', errorAt) with
+      | locationAt when locationAt > 0 ->
+        match System.IO.Path.GetFileName(line.Substring(0, locationAt)) with
+        | null
+        | "" -> line
+        | fileName -> fileName + line.Substring locationAt
+      | _ -> line
+    match lines |> Array.tryFind (fun line -> line.Contains(": error ", System.StringComparison.Ordinal)) with
+    | Some error -> withFileNameOnly error
+    | None ->
+      match Array.tryHead lines with
+      | Some first -> first
+      | None -> "the rebuild failed"
+
   /// The one wording every surface uses.
   let describe (activity: LiveTestActivity) : string =
     match activity with
@@ -155,13 +179,7 @@ module LiveTestActivity =
       let plural = match errorCount with 1 -> "" | _ -> "s"
       sprintf "Waiting for %s to compile (%d error%s) — showing the last good results: %s" name errorCount plural (lastResults tally)
     | LiveTestActivity.BlockedByFailedRebuild (reason, tally) ->
-      // A build reason is many lines; the first says what broke.
-      let firstLine =
-        reason.Split '\n'
-        |> Array.map (fun line -> line.Trim())
-        |> Array.tryFind (fun line -> line <> "")
-        |> Option.defaultValue "the rebuild failed"
-      sprintf "Tests could not re-run: %s — showing the last good results: %s" firstLine (lastResults tally)
+      sprintf "Tests could not re-run: %s — showing the last good results: %s" (rebuildHeadline reason) (lastResults tally)
     | LiveTestActivity.Rebuilding (testCount, tally) ->
       let plural = match testCount with 1 -> "" | _ -> "s"
       sprintf "Rebuilding to re-run %d test%s — showing the last results: %s" testCount plural (lastResults tally)
