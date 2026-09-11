@@ -5,6 +5,8 @@ open Expecto
 open Expecto.Flip
 open SageFs.AppState
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 let quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 
 let createActorResult () =
@@ -13,7 +15,7 @@ let createActorResult () =
 
 [<Tests>]
 let evalCancellationTests =
-  testList "[Integration] Eval cancellation" [
+  Integration.hostList "Eval cancellation" [
 
     testCase "CancelEval returns false when no eval is running"
     <| fun _ ->

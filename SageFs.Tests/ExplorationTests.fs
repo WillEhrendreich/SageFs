@@ -4,9 +4,11 @@ open Expecto
 open SageFs
 open SageFs.McpTools
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 [<Tests>]
 let tests =
-  testSequenced <| testList "[Integration] Package/Namespace Explorer" [
+  testSequenced <| Integration.hostList "Package/Namespace Explorer" [
 
     testList "exploreNamespace" [
       testCase "lists types in System.IO namespace"

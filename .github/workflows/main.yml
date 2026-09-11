@@ -40,11 +40,10 @@ jobs:
     - name: Test
       shell: bash
       run: |
-        set +e
+        # Expecto exits 1 when a test FAILED and 2 when a test ERRORED (threw);
+        # 0 only when everything passed. Exit 2 is NOT a cosmetic no-TTY code —
+        # accepting it would turn every errored test green.
         dotnet run --no-build --project SageFs.Tests -- --summary
-        rc=$?
-        # Expecto exit code 2 = no TTY (cosmetic); treat as success
-        if [ $rc -eq 0 ] || [ $rc -eq 2 ]; then exit 0; else exit $rc; fi
       timeout-minutes: 10
 
     - name: Mutation score gate
@@ -61,15 +60,21 @@ jobs:
       timeout-minutes: 5
 
   integration-host:
-    # Roast-2 item 3: the [Integration] suites that exercise real FSI sessions,
-    # real SageFs.Host spawns, and Harmony detours NEVER ran in CI (the default
-    # run excludes [Integration] and no job passed --all). This job runs the
-    # curated self-contained subset (--integration-host) — real processes, no
-    # external daemon or browser. Browser journeys run via the suite's own
-    # --integration-browser entry point in the dashboard-browser-e2e workflow;
-    # the daemon smoke journey runs in the smoke workflow.
+    # Every [Integration] suite that can run on a bare runner runs HERE. The
+    # suites are registered structurally (TestInfrastructure.Integration) with
+    # the runner that owns them; --integration-host runs EVERY suite registered
+    # as `Host` — real FSI sessions, real SageFs.Host spawns, Harmony detours,
+    # real daemons on reserved ports with isolated SAGEFS_DATA_DIRs, the HTTP
+    # API against the samples. A new host suite joins this job by construction,
+    # not by editing a curated list. Browser/VS Code journeys are registered
+    # against their own entry points (--integration-browser/-hr/-lt/-vsc) and
+    # run in the dashboard-browser-e2e workflow and the vscode-journeys job.
+    # Windows only for now: on Linux/macOS every session spawn fails because
+    # Args.hostExePath hardcodes SageFs.Host.exe (the apphost there is the
+    # extensionless SageFs.Host) — a product bug to fix before adding a
+    # Linux leg here.
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
     - uses: actions/checkout@v5
@@ -94,15 +99,21 @@ jobs:
     - name: Build
       run: dotnet build -c Release
 
-    - name: Run host integration suites
+    # The HTTP API suites create real sessions on these samples (the Falco +
+    # Datastar webapp and the FromCSharp live-testing sample).
+    - name: Build samples for the HTTP API suites
+      run: |
+        dotnet build samples/demos/SageFs.Samples.WebappDatastar/SageFs.Samples.WebappDatastar.fsproj -c Release --nologo
+        dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Release --nologo
+
+    - name: Run every host integration suite
       shell: bash
       run: |
-        set +e
+        # Exit codes are NOT laundered here: Expecto returns 2 when any test
+        # ERRORED (an exception, e.g. a failed session spawn) — treating 2 as
+        # success would turn every errored integration test green.
         dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --integration-host --summary
-        rc=$?
-        # Expecto exit code 2 = no TTY (cosmetic); treat as success
-        if [ $rc -eq 0 ] || [ $rc -eq 2 ]; then exit 0; else exit $rc; fi
-      timeout-minutes: 15
+      timeout-minutes: 35
 
   extensions:
     runs-on: ubuntu-latest
@@ -316,16 +327,13 @@ jobs:
     - name: Run VS Code DoD journeys
       shell: bash
       run: |
-        set +e
+        # Exit 1 = a journey failed, 2 = a journey errored (threw), non-zero
+        # also on a missing Code.exe. Only 0 is green.
         dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --integration-vsc 2>&1
-        rc=$?
-        # Exit 2 = no TTY (cosmetic, Expecto); the runner itself exits non-zero
-        # on failure (and on a missing Code.exe) so 0/2 both mean green.
-        if [ $rc -eq 0 ] || [ $rc -eq 2 ]; then exit 0; else exit $rc; fi
       timeout-minutes: 15
 
   release-artifacts:
-    needs: [build, extensions, vs-extension, vscode-journeys, benchmarks]
+    needs: [build, integration-host, extensions, vs-extension, vscode-journeys, benchmarks]
     runs-on: windows-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:

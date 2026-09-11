@@ -25,7 +25,7 @@ open SageFs.Tests.TestInfrastructure
 module StartupConfigTests =
   
   let tests =
-    testList "[Integration] StartupConfig type and storage" [
+    Integration.hostList "StartupConfig type and storage" [
       
       testCase "StartupConfig should have all required fields"
       <| fun _ ->
@@ -67,7 +67,7 @@ module StartupConfigTests =
 module GetStartupInfoTests =
   
   let tests =
-    testList "[Integration] get_startup_info tool" [
+    Integration.hostList "get_startup_info tool" [
       
       testCase "get_startup_info should return structured startup information"
       <| fun _ ->
@@ -104,21 +104,29 @@ module GetStartupInfoTests =
           let ctx = sharedCtx ()
           
           let! result = getStartupInfoJson ctx "test" None
-          
-          Expect.stringContains result "\"commandLineArgs\"" "Should contain JSON field names"
+
+          // Startup info is per-session since the session-architecture
+          // unification (the daemon no longer holds one global StartupConfig):
+          // the JSON carries the session identity, not FSI command-line args.
+          use doc = System.Text.Json.JsonDocument.Parse result
+          let root = doc.RootElement
+          Expect.equal (root.GetProperty("sessionId").GetString()) ctx.SessionMap.["test"] "Should identify the session"
+          Expect.isTrue (root.TryGetProperty("workingDirectory") |> fst) "Should carry the working directory"
+          Expect.isTrue (root.TryGetProperty("status") |> fst) "Should carry the session status"
         }
         |> Async.AwaitTask
         |> Async.RunSynchronously
       
-      testCase "get_startup_info should include usage tips for LLMs"
+      testCase "get_startup_info names the session and its status for LLMs"
       <| fun _ ->
         task {
           let ctx = sharedCtx ()
-          
+
           let! result = getStartupInfo ctx "test" None
-          
-          // Should guide LLMs on how to use SageFs properly
-          Expect.stringContains result "SageFs" "Should mention SageFs"
+
+          // The per-session startup header an agent uses to orient itself.
+          Expect.stringContains result (sprintf "- Session: %s" ctx.SessionMap.["test"]) "Should name the session"
+          Expect.stringContains result "- Status: " "Should report the session status"
         }
         |> Async.AwaitTask
         |> Async.RunSynchronously
@@ -131,7 +139,7 @@ module GetStartupInfoTests =
 module EnhancedStatusTests =
   
   let tests =
-    testList "[Integration] Enhanced get_fsi_status with startup context" [
+    Integration.hostList "Enhanced get_fsi_status with startup context" [
       
       testCase "get_fsi_status should include startup information section"
       <| fun _ ->
@@ -155,7 +163,7 @@ module EnhancedStatusTests =
 module ProjectDiscoveryTests =
 
   let tests =
-    testList "[Integration] Project discovery for LLMs" [
+    Integration.hostList "Project discovery for LLMs" [
 
       testCase "loadSolution runs without error and returns a solution"
       <| fun _ ->

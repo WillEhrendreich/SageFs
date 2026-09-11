@@ -18,6 +18,8 @@ open SageFs
 open SageFs.Server
 open SageFs.Server.DaemonMode
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 /// 8-char lowercase hex, matching WorkerProtocol.SessionId.validate.
 let private sid (raw: string) =
   match WorkerProtocol.SessionId.validate raw with
@@ -125,7 +127,7 @@ open SageFs.Server.DaemonMode
 let liveTestWatcherAttributionTests =
   testList "LiveTestWatcherManager session attribution" [
 
-    testCase "[Integration] file save in a shared dir fires FileReloaded for every owning session" <| fun _ ->
+    Integration.hostCase "file save in a shared dir fires FileReloaded for every owning session" <| fun _ ->
       let dir = Path.Combine(Path.GetTempPath(), "sagefs-watcher-test-" + Guid.NewGuid().ToString("N"))
       Directory.CreateDirectory(dir) |> ignore
       let sA = sid "aaaaaaaa"
@@ -156,7 +158,7 @@ let liveTestWatcherAttributionTests =
         try File.Delete(Path.Combine(dir, "Lib.fs")) with _ -> ()
         try Directory.Delete(dir, true) with _ -> ()
 
-    testCase "[Integration] removing one session's claim stops only its FileReloaded events" <| fun _ ->
+    Integration.hostCase "removing one session's claim stops only its FileReloaded events" <| fun _ ->
       let dir = Path.Combine(Path.GetTempPath(), "sagefs-watcher-test-" + Guid.NewGuid().ToString("N"))
       Directory.CreateDirectory(dir) |> ignore
       let sA = sid "aaaaaaaa"

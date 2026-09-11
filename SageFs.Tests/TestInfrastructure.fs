@@ -41,6 +41,143 @@ module Snapshots =
     settings.DisableDiff()
     VerifyExpecto.Verifier.Verify(name, value, extension, settings).ToTask()
 
+/// The repo-built SageFs daemon executable that real-process integration
+/// suites spawn. Resolves the platform's apphost name (SageFs.exe on Windows,
+/// the extensionless SageFs on Linux/macOS) across Debug and Release outputs,
+/// newest build wins. It deliberately NEVER falls back to a bare "SageFs" on
+/// PATH: that silently runs whatever (possibly stale) global tool is installed
+/// instead of the code under test — and on Linux the global tool is named
+/// `sagefs`, so the fallback simply failed to start.
+module SageFsBinary =
+  let private repoRoot =
+    System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, ".."))
+
+  let private fileName =
+    match System.OperatingSystem.IsWindows() with
+    | true -> "SageFs.exe"
+    | false -> "SageFs"
+
+  /// Every location a repo build can place the daemon executable.
+  let candidates =
+    [ "Debug"; "Release" ]
+    |> List.map (fun cfg ->
+      System.IO.Path.Combine(repoRoot, "SageFs", "bin", cfg, "net10.0", fileName))
+
+  /// The newest built executable. When none is built, the first candidate is
+  /// returned so Process.Start fails naming the exact expected path.
+  let path () =
+    candidates
+    |> List.filter System.IO.File.Exists
+    |> List.sortByDescending System.IO.File.GetLastWriteTimeUtc
+    |> List.tryHead
+    |> Option.defaultValue candidates.Head
+
+/// Structural registry of [Integration] suites. Every integration suite is
+/// registered here together with the runner that owns it, so:
+///  - the default run excludes registered suites by the IDENTITY of their test
+///    bodies (not by a name convention a suite can forget), and refuses to run
+///    if any "[Integration]"-tagged test bypassed the registry;
+///  - --integration-host runs EVERY suite registered as Host, so a new
+///    self-contained suite joins CI by construction — no curated list.
+/// Registration happens in each test file's module initialization, which is
+/// LAZY: a file registers only when something touches it (measured: 0 suites
+/// registered before assembly discovery, 73 after). `registered` therefore
+/// forces discovery once before answering.
+module Integration =
+  type Runner =
+    /// Self-contained: real processes, FSI sessions, daemons on reserved ports
+    /// with isolated SAGEFS_DATA_DIRs — runs on a bare CI runner via
+    /// --integration-host.
+    | Host
+    /// Needs infrastructure a dedicated entry point provisions (a browser, VS
+    /// Code, a daemon that runner owns); the payload names that entry point.
+    | Dedicated of entryPoint: string
+
+  let private registry = System.Collections.Generic.List<Runner * Expecto.Test>()
+
+  /// Register an existing test (list or case) as an integration suite.
+  let register (runner: Runner) (test: Expecto.Test) : Expecto.Test =
+    lock registry (fun () -> registry.Add((runner, test)))
+    test
+
+  let private tagged (name: string) = "[Integration] " + name
+
+  /// A self-contained integration test list (runs under --integration-host).
+  let hostList (name: string) (tests: Expecto.Test list) =
+    Expecto.Tests.testList (tagged name) tests |> register Host
+
+  /// A self-contained integration test case inside an otherwise-unit list.
+  let hostCase (name: string) (body: unit -> unit) =
+    Expecto.Tests.testCase (tagged name) body |> register Host
+
+  /// Touch every [<Tests>] value in this assembly so every file's lazy module
+  /// initialization — and with it every registration — has run.
+  let private discovery =
+    lazy (
+      Expecto.Impl.testFromAssembly (System.Reflection.Assembly.GetExecutingAssembly())
+      |> ignore)
+
+  let registered () =
+    discovery.Force()
+    lock registry (fun () -> List.ofSeq registry)
+
+  /// Every suite registered as Host, in registration (compile) order.
+  let hostSuites () =
+    registered ()
+    |> List.choose (fun (runner, test) ->
+      match runner with
+      | Host -> Some test
+      | Dedicated _ -> None)
+
+  let rec private leaves (t: Expecto.Test) : Expecto.TestCode list =
+    match t with
+    | Expecto.TestCase (code, _) -> [ code ]
+    | Expecto.TestList (tests, _) -> tests |> List.collect leaves
+    | Expecto.TestLabel (_, inner, _) -> leaves inner
+    | Expecto.Sequenced (_, inner) -> leaves inner
+
+  /// Remove from `tree` every test whose BODY (its TestCode object) belongs to
+  /// one of the `excluded` suites; containers the pruning empties are dropped.
+  /// Matching is by reference on the test-body objects, never on names:
+  /// Expecto's assembly discovery rebuilds the root node of each [<Tests>]
+  /// value but keeps every leaf's TestCode object (measured: all 169
+  /// registered leaves found by reference in the discovered tree, while no
+  /// registered root node was). Pure — `excluded` is passed in — so it is
+  /// testable in isolation.
+  let exclude (excluded: Expecto.Test list) (tree: Expecto.Test) : Expecto.Test =
+    let bodies = System.Collections.Generic.HashSet<obj>(HashIdentity.Reference)
+    for suite in excluded do
+      for code in leaves suite do
+        bodies.Add(box code) |> ignore
+    let rec prune (t: Expecto.Test) : Expecto.Test option =
+      match t with
+      | Expecto.TestCase (code, _) ->
+        match bodies.Contains(box code) with
+        | true -> None
+        | false -> Some t
+      | Expecto.TestList (tests, focus) ->
+        match tests |> List.choose prune with
+        | [] when not tests.IsEmpty -> None
+        | kept -> Some (Expecto.TestList (kept, focus))
+      | Expecto.TestLabel (name, inner, focus) ->
+        prune inner |> Option.map (fun i -> Expecto.TestLabel (name, i, focus))
+      | Expecto.Sequenced (how, inner) ->
+        prune inner |> Option.map (fun i -> Expecto.Sequenced (how, i))
+    prune tree
+    |> Option.defaultValue (Expecto.TestList ([], Expecto.FocusState.Normal))
+
+  /// The default-suite tree: everything except the registered integration suites.
+  let excludeRegistered (tree: Expecto.Test) =
+    exclude (registered () |> List.map snd) tree
+
+  /// Full names in `tree` that still carry the "[Integration]" tag — tests that
+  /// bypassed the registry. The default runner refuses to run while any exist.
+  let unregisteredTagged (tree: Expecto.Test) =
+    tree
+    |> Expecto.Test.toTestCodeList
+    |> List.map (fun flat -> String.concat "/" flat.name)
+    |> List.filter (fun name -> name.Contains "[Integration]")
+
 let quietLogger =
   { new SageFs.Utils.ILogger with
       member _.LogDebug msg = ()

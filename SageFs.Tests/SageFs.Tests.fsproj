@@ -344,6 +344,7 @@
         <Compile Include="DaemonStateChangeContractTests.fs" />
         <Compile Include="FrictionCaptureDurabilityTests.fs" />
         <Compile Include="FrictionSendSafetyTests.fs" />
+        <Compile Include="IntegrationRegistryTests.fs" />
         <Compile Include="DashboardBrowserRunner.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
@@ -385,5 +386,20 @@
                           PrivateAssets="all"
                           ReferenceOutputAssembly="false" />
     </ItemGroup>
+
+    <!-- The [Integration] SessionManager lifecycle suite drives the REAL
+         SessionManager in-process, which spawns the FSI host from
+         AppContext.BaseDirectory/host/ (Args.hostExePath) — the daemon's
+         layout. Mirror that layout in the test output so the suite spawns the
+         freshly built host instead of failing on a missing host/ dir. -->
+    <Target Name="CopyHostForInProcessSessionManager" AfterTargets="Build">
+        <ItemGroup>
+            <TestHostFiles Include="..\SageFs.Host\bin\$(Configuration)\net10.0\**\*"
+                           Exclude="..\SageFs.Host\bin\$(Configuration)\net10.0\**\*.runtimeconfig.dev.json" />
+        </ItemGroup>
+        <Copy SourceFiles="@(TestHostFiles)"
+              DestinationFiles="@(TestHostFiles->'$(OutDir)host\%(RecursiveDir)%(Filename)%(Extension)')"
+              SkipUnchangedFiles="true" />
+    </Target>
 
 </Project>

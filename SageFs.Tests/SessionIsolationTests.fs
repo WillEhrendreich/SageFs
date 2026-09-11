@@ -80,7 +80,7 @@ module McpSessionIsolation =
         return Error (ex.Message)
     }
 
-  let tests = testSequenced <| testList "[Integration] MCP session isolation" [
+  let tests = testSequenced <| Integration.hostList "MCP session isolation" [
 
     testTask "switchSession updates only the given context's SessionMap for that agent" {
       let ctx1, _ = ctxWithTracking "aaaaaa01"
@@ -750,7 +750,7 @@ module ResetIsolation =
         LiveSnapshotSink = None } : McpContext
     ctx, sidStr, workerDied, registryStatus
 
-  let tests = testList "[Integration] Reset isolation" [
+  let tests = Integration.hostList "Reset isolation" [
     testTask "hardResetSession with rebuild only restarts the targeted session" {
       let ctx, restartLog, _ = mkTrackingCtx ()
 

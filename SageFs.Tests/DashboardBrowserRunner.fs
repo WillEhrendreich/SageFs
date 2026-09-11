@@ -22,12 +22,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
   let repoRoot =
     Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
 
-  let exe =
-    let debugExe = Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
-    let releaseExe = Path.Combine(repoRoot, "SageFs", "bin", "Release", "net10.0", "SageFs.exe")
-    if File.Exists debugExe then debugExe
-    elif File.Exists releaseExe then releaseExe
-    else "SageFs"
+  let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
   // Reserve an MCP port up front; the dashboard port is mcp+1 (SageFs binds
   // both). Reserving via port 0 would pick an unrelated port, so instead let
@@ -330,12 +325,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
   let repoRoot =
     Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
 
-  let exe =
-    let debugExe = Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
-    let releaseExe = Path.Combine(repoRoot, "SageFs", "bin", "Release", "net10.0", "SageFs.exe")
-    if File.Exists debugExe then debugExe
-    elif File.Exists releaseExe then releaseExe
-    else "SageFs"
+  let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
   let pickFreePort () =
     use l = new TcpListener(IPAddress.Loopback, 0)
@@ -550,12 +540,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
   let repoRoot =
     Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
 
-  let exe =
-    let debugExe = Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
-    let releaseExe = Path.Combine(repoRoot, "SageFs", "bin", "Release", "net10.0", "SageFs.exe")
-    if File.Exists debugExe then debugExe
-    elif File.Exists releaseExe then releaseExe
-    else "SageFs"
+  let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
   let pickFreePort () =
     use l = new TcpListener(IPAddress.Loopback, 0)
@@ -774,12 +759,7 @@ let runVscodeDoDJourneys (cliArgs: string array) : int =
   let repoRoot =
     Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
 
-  let exe =
-    let debugExe = Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
-    let releaseExe = Path.Combine(repoRoot, "SageFs", "bin", "Release", "net10.0", "SageFs.exe")
-    if File.Exists debugExe then debugExe
-    elif File.Exists releaseExe then releaseExe
-    else "SageFs"
+  let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
   let pickFreePort () =
     use l = new TcpListener(IPAddress.Loopback, 0)

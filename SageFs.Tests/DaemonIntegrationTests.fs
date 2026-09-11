@@ -11,24 +11,20 @@ open SageFs.Server
 open SageFs.WorkerProtocol
 open SageFs.Tests.SharedGenerators
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 // ─── Helpers ───────────────────────────────────────────────────────
 
 let testProjectDir =
   Path.GetFullPath(
     Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Tests"))
 
-let SageFsExe =
-  let localExe =
-    Path.Combine(
-      __SOURCE_DIRECTORY__, "..", "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
-  let toolDir =
-    Path.Combine(
-      Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-      ".dotnet", "tools")
-  let exe = Path.Combine(toolDir, "SageFs.exe")
-  if File.Exists localExe then localExe
-  elif File.Exists exe then exe
-  else "SageFs" // fall back to PATH
+let SageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
+
+/// A fresh, throwaway SAGEFS_DATA_DIR so CLI subcommands and daemons spawned
+/// by these tests never read or write the real ~/.SageFs.
+let isolatedDataDir () =
+  Path.Combine(Path.GetTempPath(), "sagefs-test", Guid.NewGuid().ToString("N"))
 
 /// Kill a process by PID, swallowing errors.
 let tryKill (pid: int) =
@@ -190,7 +186,7 @@ let managerStateTests =
 
 [<Tests>]
 let daemonCliTests =
-  testList "[Integration] Daemon CLI subcommands" [
+  Integration.hostList "Daemon CLI subcommands" [
 
     testCase "SageFs status returns 1 when no daemon running" <| fun _ ->
       let psi = ProcessStartInfo()
@@ -199,6 +195,7 @@ let daemonCliTests =
       psi.UseShellExecute <- false
       psi.RedirectStandardOutput <- true
       psi.CreateNoWindow <- true
+      psi.Environment.["SAGEFS_DATA_DIR"] <- isolatedDataDir ()
 
       use proc = Process.Start(psi)
       let output = proc.StandardOutput.ReadToEnd()
@@ -207,19 +204,23 @@ let daemonCliTests =
       proc.ExitCode |> Expect.equal "exit code 1" 1
       output |> Expect.stringContains "says no daemon" "No daemon running"
 
-    testCase "SageFs stop returns 0 when no daemon running" <| fun _ ->
+    // `sagefs stop` with nothing to stop is a no-op, and a no-op is NOT a
+    // successful stop: it exits 1 so automation can tell them apart
+    // (SageFs/Program.fs `stopCommand`).
+    testCase "SageFs stop returns 1 when no daemon running" <| fun _ ->
       let psi = ProcessStartInfo()
       psi.FileName <- SageFsExe
       psi.Arguments <- "stop --mcp-port 39990"
       psi.UseShellExecute <- false
       psi.RedirectStandardOutput <- true
       psi.CreateNoWindow <- true
+      psi.Environment.["SAGEFS_DATA_DIR"] <- isolatedDataDir ()
 
       use proc = Process.Start(psi)
       let output = proc.StandardOutput.ReadToEnd()
       proc.WaitForExit(5000) |> ignore
 
-      proc.ExitCode |> Expect.equal "exit code 0" 0
+      proc.ExitCode |> Expect.equal "a no-op stop exits 1" 1
       output |> Expect.stringContains "says no daemon" "No daemon running"
 
     testCase "SageFs --help mentions daemon subcommands" <| fun _ ->
@@ -229,6 +230,7 @@ let daemonCliTests =
       psi.UseShellExecute <- false
       psi.RedirectStandardOutput <- true
       psi.CreateNoWindow <- true
+      psi.Environment.["SAGEFS_DATA_DIR"] <- isolatedDataDir ()
 
       use proc = Process.Start(psi)
       let output = proc.StandardOutput.ReadToEnd()
@@ -248,7 +250,7 @@ let daemonCliTests =
 
 [<Tests>]
 let daemonLifecycleTests =
-  testList "[Integration] Daemon lifecycle" [
+  Integration.hostList "Daemon lifecycle" [
 
     testCase "start daemon, check status, stop" <| fun _ ->
       // Start daemon in background with a unique port to avoid conflicts
@@ -259,9 +261,10 @@ let daemonLifecycleTests =
       psi.UseShellExecute <- false
       psi.CreateNoWindow <- true
       psi.WorkingDirectory <- testProjectDir
-      // Isolate persisted state so the daemon never resumes real ~/.SageFs sessions.
-      psi.Environment.["SAGEFS_DATA_DIR"] <-
-        Path.Combine(Path.GetTempPath(), "sagefs-test", Guid.NewGuid().ToString("N"))
+      // Isolate persisted state so the daemon never resumes real ~/.SageFs
+      // sessions; status/stop below share the same data dir.
+      let dataDir = isolatedDataDir ()
+      psi.Environment.["SAGEFS_DATA_DIR"] <- dataDir
 
       let daemonProc = Process.Start(psi)
       try
@@ -285,6 +288,7 @@ let daemonLifecycleTests =
         statusPsi.UseShellExecute <- false
         statusPsi.RedirectStandardOutput <- true
         statusPsi.CreateNoWindow <- true
+        statusPsi.Environment.["SAGEFS_DATA_DIR"] <- dataDir
 
         use statusProc = Process.Start(statusPsi)
         let statusOutput = statusProc.StandardOutput.ReadToEnd()
@@ -302,13 +306,14 @@ let daemonLifecycleTests =
         stopPsi.UseShellExecute <- false
         stopPsi.RedirectStandardOutput <- true
         stopPsi.CreateNoWindow <- true
+        stopPsi.Environment.["SAGEFS_DATA_DIR"] <- dataDir
 
         use stopProc = Process.Start(stopPsi)
         let stopOutput = stopProc.StandardOutput.ReadToEnd()
         stopProc.WaitForExit(5000) |> ignore
 
         stopProc.ExitCode |> Expect.equal "stop exits 0" 0
-        stopOutput |> Expect.stringContains "says shutting down" "hutting down"
+        stopOutput |> Expect.stringContains "reports the stopped daemon's pid" (sprintf "Daemon stopped (PID %d)" daemonProc.Id)
 
         // Verify daemon process actually exited (poll with timeout)
         let mutable exited = false
@@ -345,7 +350,7 @@ let cleanupSession
 
 [<Tests>]
 let sessionManagerLifecycleTests =
-  testList "[Integration] SessionManager lifecycle" [
+  Integration.hostList "SessionManager lifecycle" [
 
     testTask "create session, eval code, stop session" {
       let cts = new CancellationTokenSource(120_000)
@@ -365,6 +370,14 @@ let sessionManagerLifecycleTests =
         |> Expect.isNotNull "has session id"
         info.WorkerPid
         |> Expect.isSome "has worker PID"
+
+        // CreateSession answers at spawn; the proxy is routable only once the
+        // worker reports Ready (before that it is the pending proxy).
+        let! (ready: Result<unit, SageFsError>) =
+          mgr.PostAndAsyncReply(fun reply ->
+            SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
+          |> Async.StartAsTask
+        ready |> Expect.isOk "the worker reaches Ready before the first eval"
 
         let! (session: SageFs.SessionManager.ManagedSession option) =
           mgr.PostAndAsyncReply(fun reply ->
@@ -417,7 +430,7 @@ let sessionManagerLifecycleTests =
         cts.Dispose()
     }
 
-    testTask "worker crash is detected and session cleaned up" {
+    testTask "worker crash is detected and the session is restarted on a new worker" {
       let cts = new CancellationTokenSource(120_000)
       let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
@@ -432,6 +445,12 @@ let sessionManagerLifecycleTests =
       | Ok info ->
       try
         info.WorkerPid |> Expect.isSome "has worker PID"
+        // A crash means a worker that was serving: wait for Ready first.
+        let! (ready: Result<unit, SageFsError>) =
+          mgr.PostAndAsyncReply(fun reply ->
+            SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
+          |> Async.StartAsTask
+        ready |> Expect.isOk "the worker reaches Ready before it is killed"
         let pid = info.WorkerPid.Value
 
         // Kill the worker process externally
@@ -441,21 +460,24 @@ let sessionManagerLifecycleTests =
           p.WaitForExit(5000) |> ignore
         with _ -> ()
 
-        // Give the WorkerExited message time to propagate (async poll)
-        let mutable cleaned = false
+        // Supervision restarts a crashed worker with backoff (RestartPolicy):
+        // the session stays registered and comes back on a new process.
+        let mutable restartedPid = None
         let sw = System.Diagnostics.Stopwatch.StartNew()
-        while not cleaned && sw.ElapsedMilliseconds < 2000L do
+        while restartedPid.IsNone && sw.ElapsedMilliseconds < 60_000L do
           let! (sessions: SageFs.WorkerProtocol.SessionInfo list) =
             mgr.PostAndAsyncReply(fun reply ->
               SageFs.SessionManager.SessionCommand.ListSessions reply)
             |> Async.StartAsTask
-          cleaned <-
-            sessions |> List.forall (fun s -> s.Id <> info.Id)
-          if not cleaned then do! System.Threading.Tasks.Task.Delay 100
+          restartedPid <-
+            sessions
+            |> List.tryFind (fun s -> s.Id = info.Id)
+            |> Option.bind (fun s -> s.WorkerPid)
+            |> Option.filter (fun p -> p <> pid)
+          if restartedPid.IsNone then do! System.Threading.Tasks.Task.Delay 100
 
-        cleaned
-        |> Expect.isTrue
-          "session should be removed after worker crash"
+        restartedPid
+        |> Expect.isSome "the crashed session is restarted on a new worker process"
       finally
         cleanupSession mgr info.Id
         cts.Dispose()
@@ -465,14 +487,17 @@ let sessionManagerLifecycleTests =
       let cts = new CancellationTokenSource(120_000)
       let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
-      let create () =
+      // Two sessions for the SAME directory are one session by design — the
+      // owner rejects the duplicate — so the second lives in its own dir.
+      let otherDir = System.IO.Directory.CreateTempSubdirectory("sagefs-multi-").FullName
+      let create (dir: string) =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
-            [], testProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+            [], dir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
         |> Async.StartAsTask
 
-      let result1 = create ()
-      let result2 = create ()
+      let result1 = create testProjectDir
+      let result2 = create otherDir
 
       let! result1 = result1
       let! result2 = result2
@@ -492,6 +517,14 @@ let sessionManagerLifecycleTests =
           info1.WorkerPid.Value
           |> Expect.notEqual "different PIDs"
             info2.WorkerPid.Value
+
+          // Proxies are routable only once each worker reports Ready.
+          for id in [ info1.Id; info2.Id ] do
+            let! (ready: Result<unit, SageFsError>) =
+              mgr.PostAndAsyncReply(fun reply ->
+                SageFs.SessionManager.SessionCommand.AwaitReady(id, reply))
+              |> Async.StartAsTask
+            ready |> Expect.isOk "each worker reaches Ready before its eval"
 
           // Get proxies
           let getProxy id =
@@ -563,5 +596,6 @@ let sessionManagerLifecycleTests =
       | _, Error err ->
         failwithf "session 2 create failed: %s" (SageFsError.describe err)
       cts.Dispose()
+      try System.IO.Directory.Delete(otherDir, true) with _ -> ()
     }
   ]

@@ -7,6 +7,8 @@ open Expecto
 open Expecto.Flip
 open Microsoft.Playwright
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 /// Deadline-based wait on an ACTUAL condition — never a fixed sleep. Probes
 /// every 100ms until `probe` is true or `timeoutMs` elapses; returns whether
 /// the condition was met (callers assert or diagnose on false).
@@ -390,6 +392,16 @@ let repoRoot =
 // from the default run), and the --integration-vsc runner fails fast with an
 // actionable message when Code.exe is missing (VscodeFixture.isAvailable).
 
+/// The smoke/extension-behavior tests drive a VS Code window on the repo root
+/// against whatever daemon is already on the default port — no runner owns
+/// that daemon, so they run only on demand (--all), never in CI.
+let private onDemandVscode =
+  Integration.Dedicated "--all (on demand: VS Code + a daemon already running on 37749)"
+
+/// The DoD journeys: DashboardBrowserRunner.runVscodeDoDJourneys owns the
+/// daemon and session.
+let private vscodeDoDRunner = Integration.Dedicated "--integration-vsc"
+
 /// Run a test against VSCode with extensions disabled (pure UI tests).
 let vscodeUiTest name (body: IPage -> Task<unit>) =
   testTask (sprintf "[Integration] VSCode UI: %s" name) {
@@ -397,6 +409,7 @@ let vscodeUiTest name (body: IPage -> Task<unit>) =
     let! page = VscodeFixture.getPage ()
     do! body page
   }
+  |> Integration.register onDemandVscode
 
 /// Run a test against VSCode with extensions enabled (extension tests).
 let vscodeExtTest name (body: IPage -> Task<unit>) =
@@ -405,6 +418,7 @@ let vscodeExtTest name (body: IPage -> Task<unit>) =
     let! page = VscodeFixture.getPage ()
     do! body page
   }
+  |> Integration.register onDemandVscode
 
 /// Like vscodeExtTest, but opens a specific workspace directory (used by the
 /// DoD journeys, which target the FromCSharp sample's 11 Expecto tests rather
@@ -415,6 +429,7 @@ let vscodeExtTestIn (workspaceDir: string) name (body: IPage -> Task<unit>) =
     let! page = VscodeFixture.getPage ()
     do! body page
   }
+  |> Integration.register vscodeDoDRunner
 
 /// Like vscodeExtTestIn, but ALWAYS starts with a fresh VS Code instance
 /// (tears down any reused one first). The DoD journeys need this: live-testing
@@ -427,6 +442,7 @@ let vscodeExtTestFresh (workspaceDir: string) name (body: IPage -> Task<unit>) =
     let! page = VscodeFixture.getPage ()
     do! body page
   }
+  |> Integration.register vscodeDoDRunner
 
 // ---------------------------------------------------------------------------
 // Smoke tests — extensions disabled, verifies fixture works

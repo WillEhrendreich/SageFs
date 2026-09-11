@@ -6,6 +6,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.AppState
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 let quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 
 let createActorResult () =
@@ -18,7 +20,7 @@ let waitForSessionState (result: SageFs.ActorCreation.ActorResult) (state: Sessi
 
 [<Tests>]
 let evalActorResilienceTests =
-  testList "[Integration] Eval actor resilience" [
+  Integration.hostList "Eval actor resilience" [
 
     testCase "eval actor survives a handler exception and keeps processing commands" <| fun _ ->
       let result = createActorResult ()

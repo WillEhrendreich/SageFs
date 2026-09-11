@@ -5,6 +5,8 @@ open Expecto
 open Expecto.Flip
 open SageFs.AppState
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 let quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
 
 let createActorResult () =
@@ -13,7 +15,7 @@ let createActorResult () =
 
 [<Tests>]
 let actorSplitTests =
-  testList "[Integration] Actor split" [
+  Integration.hostList "Actor split" [
 
     testCase "GetSessionPhase responds during long eval"
     <| fun _ ->

@@ -8,6 +8,8 @@ open Expecto
 open Microsoft.Playwright
 open SageFs.Tests.DashboardBrowserTests
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 /// HR-DASH browser journeys — real save -> changed running app through the
 /// live dashboard. These run under `--integration-hr` (HotReloadBrowserRunner
 /// owns the daemon + a WebLive session on a temp WebAppFixture copy whose app
@@ -88,6 +90,7 @@ let private hrPlaywrightTest name (body: IPage -> Task<unit>) =
         PlaywrightFixture.closePage(page).GetAwaiter().GetResult()
     }
     t.GetAwaiter().GetResult())
+  |> Integration.register (Integration.Dedicated "--integration-hr")
 
 [<Tests>]
 let tests =

@@ -106,28 +106,25 @@ let main argv =
       1
   | false ->
 
-  // Run the self-contained [Integration] suites — real FSI sessions, real
-  // SageFs.Host spawns, Harmony patches — that need NO external daemon or
-  // browser. CI invokes this with --integration-host after a build; it is the
-  // curated subset of --all that can run on a bare runner. Suites that need a
-  // running daemon or a display are deliberately excluded — the dashboard
-  // browser journeys run under --integration-browser (DashboardBrowserRunner
-  // owns the daemon lifecycle), and the remaining daemon/display suites run
-  // under the smoke workflow.
+  // Run EVERY self-contained [Integration] suite — real FSI sessions, real
+  // SageFs.Host spawns, Harmony detours, real daemons on reserved ports with
+  // isolated SAGEFS_DATA_DIRs, the HTTP API against the samples. The set is
+  // structural: every suite registered as `Integration.Host`
+  // (TestInfrastructure.Integration), so a new host suite runs here by
+  // construction. Suites that need a browser or VS Code are registered against
+  // their own entry points (--integration-browser/-hr/-lt/-vsc below).
   let isIntegrationHost = argv |> Array.exists (fun a -> a = "--integration-host")
   match isIntegrationHost with
   | true ->
     let hostArgv = argv |> Array.filter (fun a -> a <> "--integration-host")
+    // Sequenced: these suites share process-global state — the one
+    // TestInfrastructure.globalActorResult FSI actor (which the reset suites
+    // reset), Harmony patches, environment variables. Run in parallel, a reset
+    // in one suite lands mid-eval in another (observed: "State: WarmingUp",
+    // "Expected Active phase, got Initializing" in suites that pass alone).
     let hostIntegrationTests =
-      testList "Integration (host)" [
-        SageFs.Tests.WebAppHotReloadVerificationTests.webAppHotReloadVerificationTests
-        SageFs.Tests.EvalCancellationTests.evalCancellationTests
-        SageFs.Tests.EvalActorResilienceTests.evalActorResilienceTests
-        SageFs.Tests.HarmonyCanaryTests.allTests
-        SageFs.Tests.MethodPatcherTests.tests
-        SageFs.Tests.FsiCrossSubmissionTests.allTests
-        SageFs.Tests.DaemonStateChangeContractTests.daemonStateChangeContractTests
-      ]
+      testSequenced (
+        testList "Integration (host)" (SageFs.Tests.TestInfrastructure.Integration.hostSuites ()))
     let result = Tests.runTestsWithCLIArgs [] hostArgv hostIntegrationTests
     Environment.Exit result
     result
@@ -209,18 +206,25 @@ let main argv =
     | true ->
       Tests.runTestsInAssemblyWithCLIArgs [] filteredArgv
     | false ->
-      // Default: exclude [Integration] and [Benchmark] tests.
+      // Default: exclude the registered [Integration] suites (structurally, by
+      // the identity of their test bodies — see TestInfrastructure.Integration)
+      // and [Benchmark] tests.
       // Run with --all or --integration to include them.
       let tests =
         Impl.testFromThisAssembly ()
         |> Option.defaultValue (testList "empty" [])
+        |> SageFs.Tests.TestInfrastructure.Integration.excludeRegistered
         |> Test.filter
           defaultConfig.joinWith.asString
-          (fun z ->
-            let name = defaultConfig.joinWith.format z
-            not (name.Contains "[Integration]")
-            && not (name.Contains "[Benchmark]"))
-      Tests.runTestsWithCLIArgs [] filteredArgv tests
+          (fun z -> not ((defaultConfig.joinWith.format z).Contains "[Benchmark]"))
+      // Fail closed: an "[Integration]"-tagged test that bypassed the registry
+      // would silently join the fast default run.
+      match SageFs.Tests.TestInfrastructure.Integration.unregisteredTagged tests with
+      | [] -> Tests.runTestsWithCLIArgs [] filteredArgv tests
+      | leaked ->
+        eprintfn "Integration tests are not registered — build them with Integration.hostList/hostCase or Integration.register in TestInfrastructure:"
+        leaked |> List.iter (eprintfn "  %s")
+        1
 
   // Force exit: Kestrel ConsoleLifetime and other test infrastructure may leave
   // foreground threads alive after all tests complete, preventing clean shutdown.

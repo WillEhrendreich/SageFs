@@ -107,7 +107,7 @@ let allTests =
     // These test that types/values defined in one FSI eval are usable
     // in a subsequent eval — the core behavior --multiemit- enables.
     // Assertions check for error ABSENCE only (not output format).
-    testList "[Integration] type sharing" [
+    Integration.hostList "type sharing" [
       testCase "record type from eval 1 can be instantiated in eval 2" <| fun _ ->
         let uid = nextUid ()
         let typeName = sprintf "Rec_%s" uid
@@ -153,7 +153,7 @@ let allTests =
     ]
 
     // ── Property tests: parameterized cross-submission ────────
-    testList "[Integration] properties" [
+    Integration.hostList "properties" [
       ptestPropertyWithConfig propCfg
         "record with N fields (1-8) survives cross-submission"
       <| fun (fieldCount: PositiveInt) ->

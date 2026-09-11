@@ -12,6 +12,8 @@ open Expecto.Flip
 open SageFs
 open SageFs.WorkerProtocol
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 // ============================================================================
 // Deterministic end-to-end verification of the web-app hot-reload path:
 //   real SageFs.Host process  ->  FSI session  ->  ASP.NET Core app starts
@@ -221,7 +223,7 @@ let private writeFixtureFile (path: string) (content: string) =
 let webAppHotReloadVerificationTests =
   testList "WebApp hot-reload verification" [
 
-    testCase "[Integration] real file save hot-reloads a running module-declared app (save-driven, no restart)" <| fun () ->
+    Integration.hostCase "real file save hot-reloads a running module-declared app (save-driven, no restart)" <| fun () ->
       let fDir = fixtureDir ()
       let appSource = Path.Combine(fDir, "Greeting.fs")
       Expect.isTrue "fixture Greeting.fs should exist" (File.Exists appSource)
@@ -288,7 +290,7 @@ let webAppHotReloadVerificationTests =
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
-    testCase "[Integration] compile-error save keeps last valid behavior and repair hot-reloads it" <| fun () ->
+    Integration.hostCase "compile-error save keeps last valid behavior and repair hot-reloads it" <| fun () ->
       let fDir = fixtureDir ()
       let appSource = Path.Combine(fDir, "Greeting.fs")
       let original = File.ReadAllText(appSource)

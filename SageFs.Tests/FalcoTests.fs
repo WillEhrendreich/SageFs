@@ -11,6 +11,8 @@ open SageFs.Args
 open Falco
 open Falco.Markup
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 let logger =
   { new SageFs.Utils.ILogger with
       member _.LogDebug msg = printfn "[DEBUG] %s" msg
@@ -104,7 +106,7 @@ let testHttpGetWithRetry (url: string) (maxRetries: int) (delayMs: int) =
 
 [<Tests>]
 let tests =
-  testSequenced <| testList "[Integration] Falco web application tests" [
+  testSequenced <| Integration.hostList "Falco web application tests" [
 
     testCase "create and start basic Falco web app"
     <| fun _ ->

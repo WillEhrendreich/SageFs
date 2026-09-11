@@ -5,6 +5,8 @@ open System.Threading.Tasks
 open Expecto
 open Microsoft.Playwright
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 /// Helpers for Playwright assertions inside Expecto.
 module PlaywrightExpect =
   let isVisibleAsync (locator: ILocator) (msg: string) = task {
@@ -191,6 +193,7 @@ let playwrightTest name (body: IPage -> Task<unit>) =
         PlaywrightFixture.closePage(page).GetAwaiter().GetResult()
     }
     t.GetAwaiter().GetResult())
+  |> Integration.register (Integration.Dedicated "--integration-browser")
 
 /// Like playwrightTest but does NOT auto-navigate — gives a raw page
 /// so the test can set up route interceptions before navigation.
@@ -204,6 +207,7 @@ let playwrightTestRaw name (body: IPage -> Task<unit>) =
         PlaywrightFixture.closePage(page).GetAwaiter().GetResult()
     }
     t.GetAwaiter().GetResult())
+  |> Integration.register (Integration.Dedicated "--integration-browser")
 
 [<Tests>]
 // All dashboard browser journeys share one daemon, one FSI session and one

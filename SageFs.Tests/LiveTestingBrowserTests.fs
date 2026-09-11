@@ -7,6 +7,8 @@ open Expecto
 open Microsoft.Playwright
 open SageFs.Tests.DashboardBrowserTests
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 /// LT-DASH browser journeys — real live-testing through the live dashboard:
 /// enable in the panel, watch the session's Expecto tests get discovered and
 /// run, then edit a source file on disk and watch the failing test surface in
@@ -62,6 +64,7 @@ let private ltPlaywrightTest name (body: IPage -> Task<unit>) =
         PlaywrightFixture.closePage(page).GetAwaiter().GetResult()
     }
     t.GetAwaiter().GetResult())
+  |> Integration.register (Integration.Dedicated "--integration-lt")
 
 /// Click Enable until the panel shows ON. The #live-testing-panel is a plain
 /// div (not a collapsible <details>), always visible in the sidebar.

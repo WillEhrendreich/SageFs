@@ -14,15 +14,27 @@ open SageFs.WorkerProtocol
 // Tests that MCP tools can interact with SageFs actor
 // Tests the REAL McpTools module from SageFs.Mcp
 
+/// sharedCtxWith routes only the "test" agent to its session (MCP resolves the
+/// active session per agent through SessionMap). These tests speak as several
+/// named agents collaborating in ONE session, so every agent they use is
+/// routed to the same session — otherwise each call correctly answers
+/// "No active session".
+let private agentCtx () =
+  let sessionId = SessionId.newId ()
+  let ctx = sharedCtxWith sessionId
+  for agent in [ "test-agent"; "claude"; "agent1"; "agent2"; "ai-helper" ] do
+    ctx.SessionMap.[agent] <- SessionId.value sessionId
+  ctx
+
 [<Tests>]
 let tests =
-  testSequenced <| testList "[Integration] MCP Server Integration tests" [
+  testSequenced <| Integration.hostList "MCP Server Integration tests" [
 
     testCase "sendFSharpCode tool executes code"
     <| fun _ ->
       task {
         printfn "Testing sendFSharpCode tool..."
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let! result = sendFSharpCode ctx "test-agent" "let x = 42"OutputFormat.Text None None None None None None
 
@@ -38,7 +50,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing sendFSharpCode without event tracking..."
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let! result = sendFSharpCode ctx "claude" "let aiValue = 100" OutputFormat.Text None None None None None None
         Expect.stringContains result "val aiValue" "Should still execute successfully"
@@ -52,7 +64,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing getRecentEvents tool..."
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let! _ = sendFSharpCode ctx "agent1" "let a = 1" OutputFormat.Text None None None None None None
         let! _ = sendFSharpCode ctx "agent2" "let b = 2" OutputFormat.Text None None None None None None
@@ -71,12 +83,12 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing getStatus tool..."
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let! result = getStatus ctx "test" None None
 
         printfn "Status: %s" result
-        Expect.stringContains result "status-session" "Should show session ID"
+        Expect.stringContains result (sprintf "Session: %s" ctx.SessionMap.["test"]) "Should show session ID"
         Expect.stringContains result "send_fsharp_code" "Should list available tools"
         Expect.stringContains result "Events: 0" "Should report zero tracked events"
 
@@ -90,7 +102,7 @@ let tests =
       task {
         printfn "Testing loadFSharpScript tool..."
         let actor = globalActorResult.Value.Actor
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         // Create a temp script file
         let tempFile = System.IO.Path.GetTempFileName()
@@ -102,12 +114,25 @@ let tests =
           let! result = loadFSharpScript ctx "test-agent" fsiFile None None
 
           printfn "Load result: %s" result
-          Expect.stringContains result "Success" "Should load successfully"
-          Expect.stringContains result "2 statements" "Should load 2 statements"
+          // The worker #loads the script as one unit and returns FSI's own
+          // load output (the per-statement "Success: N statements" summary went
+          // away with the worker-only session architecture).
+          Expect.stringContains result "val scriptVar1" "Should define scriptVar1"
+          Expect.stringContains result "val scriptVar2" "Should define scriptVar2"
 
-          // Verify variables are defined
+          // Verify the variables are usable. #load binds them in the script's
+          // own module (FSI names it after the file — the "module FSI_NNNN.X"
+          // line above), so qualify through the module FSI reported.
+          let loadedModule =
+            result.Split('\n')
+            |> Array.tryPick (fun line ->
+              let line = line.Trim()
+              match line.StartsWith "module " with
+              | true -> Some (line.Substring("module ".Length).Split('.') |> Array.last)
+              | false -> None)
+            |> Option.defaultWith (fun () -> failtestf "load output should name the loaded module: %s" result)
           let request = {
-            Code = "scriptVar1 + scriptVar2"
+            Code = sprintf "%s.scriptVar1 + %s.scriptVar2" loadedModule loadedModule
             Args = Map.empty
           }
 
@@ -133,7 +158,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing multi-agent collaboration..."
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         // Agent 1 defines something
         let! result1 = sendFSharpCode ctx "agent1" "let sharedData = [1; 2; 3]" OutputFormat.Text None None None None None None
@@ -153,7 +178,7 @@ let tests =
       task {
         printfn "Testing console+MCP collaboration..."
         let actor = globalActorResult.Value.Actor
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let request1 = {
           Code = "let userValue = 42"
@@ -175,7 +200,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing sendFSharpCode with compilation error..."
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let! result = sendFSharpCode ctx "test-agent" "let x = invalid syntax" OutputFormat.Text None None None None None None
 
@@ -191,7 +216,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing sendFSharpCode with runtime error..."
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let! result = sendFSharpCode ctx "test-agent" "1 / 0" OutputFormat.Text None None None None None None
 
@@ -207,7 +232,7 @@ let tests =
     <| fun _ ->
       task {
         printfn "Testing loadFSharpScript with non-existent file..."
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let! result = loadFSharpScript ctx "test-agent" "C:\\nonexistent\\file.fsx"None None
 
@@ -219,11 +244,15 @@ let tests =
       |> Async.AwaitTask
       |> Async.RunSynchronously
 
-    testCase "loadFSharpScript with partially failing script"
+    // A script is #loaded as ONE compilation unit, so a broken statement fails
+    // the whole load (FSI semantics) — reported as an Error with the reason,
+    // not as "Partial: 1 succeeded, 1 failed" (that per-statement contract was
+    // removed with the worker-only session architecture).
+    testCase "loadFSharpScript with a failing statement reports the load error"
     <| fun _ ->
       task {
-        printfn "Testing loadFSharpScript with partial failures..."
-        let ctx = sharedCtxWith (SessionId.newId())
+        printfn "Testing loadFSharpScript with a failing statement..."
+        let ctx = agentCtx ()
 
         // Create script with one good and one bad statement
         let tempFile = System.IO.Path.GetTempFileName()
@@ -234,12 +263,11 @@ let tests =
         try
           let! result = loadFSharpScript ctx "test-agent" fsiFile None None
 
-          printfn "Partial failure result: %s" result
-          Expect.stringContains result "Partial:" "Should report partial success"
-          Expect.stringContains result "1 succeeded" "Should show success count"
-          Expect.stringContains result "1 failed" "Should show failure count"
+          printfn "Failing script result: %s" result
+          Expect.isTrue (result.StartsWith "Error:") "Should report the load as an error"
+          Expect.stringContains result "Script load failed" "Should say the script load failed"
 
-          printfn "Partial failure test passed"
+          printfn "Failing script test passed"
         finally
           System.IO.File.Delete(fsiFile)
 
@@ -252,14 +280,16 @@ let tests =
     testCase "sendFSharpCode with Json format returns structured JSON"
     <| fun _ ->
       task {
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let! result = sendFSharpCode ctx "test-agent" "let jsonTestVal = 42;;"OutputFormat.Json None None None None None None
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
         Expect.isTrue (root.GetProperty("success").GetBoolean()) "should report success"
-        Expect.stringContains (root.GetProperty("code").GetString()) "jsonTestVal" "should include code"
+        // Tool responses never echo the submitted code back (the agent already
+        // has it); the evaluated binding is in `result`.
+        Expect.stringContains (root.GetProperty("result").GetString()) "jsonTestVal" "should include the evaluated binding"
       }
       |> Async.AwaitTask
       |> Async.RunSynchronously
@@ -267,7 +297,7 @@ let tests =
     testCase "sendFSharpCode with Json format returns error structure on failure"
     <| fun _ ->
       task {
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let! result = sendFSharpCode ctx "test-agent" "let x: int = \"not an int\";;"OutputFormat.Json None None None None None None
 
@@ -282,7 +312,7 @@ let tests =
     testCase "sendFSharpCode with Json format returns array for multiple statements"
     <| fun _ ->
       task {
-        let ctx = sharedCtxWith (SessionId.newId())
+        let ctx = agentCtx ()
 
         let! result = sendFSharpCode ctx "test-agent" "let a1 = 1;;\nlet b1 = 2;;"OutputFormat.Json None None None None None None
 

@@ -85,7 +85,7 @@ let formatDiagnosticsTests =
 
 [<Tests>]
 let checkFSharpCodeTests =
-  testList "[Integration] checkFSharpCode backing function" [
+  Integration.hostList "checkFSharpCode backing function" [
 
     testCase "checkFSharpCode with valid code returns no issues"
     <| fun _ ->
@@ -93,7 +93,9 @@ let checkFSharpCodeTests =
         let ctx = sharedCtx ()
         let! result = checkFSharpCode ctx "test" "let x = 42" None None
         result
-        |> Expect.stringContains "valid code should have no issues" "No issues found"
+        // check_fsharp_code's own clean-result wording (Mcp.fs checkFSharpCode),
+        // distinct from McpAdapter.formatDiagnosticsResult's "No issues found."
+        |> Expect.stringContains "valid code should have no errors" "No errors found"
       }
       |> Async.AwaitTask
       |> Async.RunSynchronously
@@ -128,7 +130,7 @@ let checkFSharpCodeTests =
         let! result = checkFSharpCode ctx "test" "let z = 1 / 0" None None
         // Division by zero is a runtime error, not a compile error
         result
-        |> Expect.stringContains "should pass compile check" "No issues found"
+        |> Expect.stringContains "should pass compile check" "No errors found"
       }
       |> Async.AwaitTask
       |> Async.RunSynchronously
@@ -136,7 +138,7 @@ let checkFSharpCodeTests =
 
 [<Tests>]
 let accumulatedDiagnosticsTests =
-  testList "[Integration] accumulated diagnostics in AppState" [
+  Integration.hostList "accumulated diagnostics in AppState" [
 
     testCase "AppState has Diagnostics field of type DiagnosticsStore"
     <| fun _ ->

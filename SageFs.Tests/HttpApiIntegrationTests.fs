@@ -14,6 +14,8 @@ open Expecto
 open Expecto.Flip
 open SageFs.Features
 
+module Integration = SageFs.Tests.TestInfrastructure.Integration
+
 // ─── Shared Helpers ───────────────────────────────────────────────
 
 let repoRoot =
@@ -41,17 +43,7 @@ let smokeSampleProject =
 
 let smokeSampleProjectDir = Path.GetDirectoryName(smokeSampleProject)
 
-let sageFsExe =
-  let localExe =
-    Path.Combine(repoRoot, "SageFs", "bin", "Debug", "net10.0", "SageFs.exe")
-  let toolDir =
-    Path.Combine(
-      Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-      ".dotnet", "tools")
-  let exe = Path.Combine(toolDir, "SageFs.exe")
-  if File.Exists localExe then localExe
-  elif File.Exists exe then exe
-  else "SageFs"
+let sageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
 let private daemonStartupHealthPollInterval = TimeSpan.FromMilliseconds(100.0)
 
@@ -350,7 +342,7 @@ do AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
 
 [<Tests>]
 let integrationTests =
-  testSequenced <| testList "[Integration] HTTP API" [
+  testSequenced <| Integration.hostList "HTTP API" [
 
     // ── Core endpoints ──────────────────────────────────────────
 
@@ -777,7 +769,7 @@ let integrationTests =
 
 [<Tests>]
 let httpApiRoutingTests =
-  testList "[Integration] HTTP API routing" [
+  Integration.hostList "HTTP API routing" [
     testTask "POST /api/sessions/{sid}/buffer-changed accepts unsaved buffer content" {
       let port = reserveLoopbackPort (Some (38800 + (Random().Next(100))))
       let! proc, client =
@@ -943,7 +935,7 @@ let httpApiRoutingTests =
 
 [<Tests>]
 let httpApiLiveTestingCompiledProjectTests =
-  testList "[Integration] HTTP API compiled live testing" [
+  Integration.hostList "HTTP API compiled live testing" [
     testTask "editing a compiled F# file reruns tests against rebuilt output without an explicit rerun" {
       let tempProjectDir = smokeSampleProjectDir
       let tempProjectPath = smokeSampleProject
@@ -1088,7 +1080,7 @@ let httpApiLiveTestingCompiledProjectTests =
 
 [<Tests>]
 let daemonStartupSmokeTest =
-  testList "[Integration] Daemon startup smoke" [
+  Integration.hostList "Daemon startup smoke" [
     testCase "Daemon starts on fresh port and /health responds" <| fun _ ->
       let port = reserveLoopbackPort (Some (38100 + (Random().Next(100))))
       let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
