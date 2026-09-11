@@ -2068,7 +2068,9 @@ let mapAnalysisRoutes (app: WebApplication) (rctx: RouteContext) =
       let cursor = System.Math.Max(0, System.Math.Min(cursor, code.Length))
       let workingDirectory =
         tryGetJsonStringAliases root [ "workingDirectory"; "working_directory" ]
-      let! items = SageFs.McpTools.getCompletionsItems rctx.McpContext "http" code cursor workingDirectory
+      // An editor that knows its session routes by id: a working directory can match several.
+      let sessionId = tryGetJsonStringAliases root [ "sessionId"; "session_id" ]
+      let! items = SageFs.McpTools.getCompletionsItems rctx.McpContext "http" code cursor sessionId workingDirectory
       do! rawJsonResponse ctx (SageFs.McpAdapter.formatCompletionsJson items)
     } :> Task
   ) |> ignore

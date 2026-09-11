@@ -525,14 +525,16 @@ let explore (name: string) (c: Client) =
       return None
   }
 
-/// Call /dashboard/completions with "Name." to get structured JSON:
+/// Ask one session for the members of "Name." as structured JSON:
 /// { completions: [{ label, kind, insertText, detail? }], count }
 let exploreCompletions (qualifiedName: string) (sessionId: string) (c: Client) =
   promise {
     try
       let code = sprintf "%s." qualifiedName
-      let body = jsonStringify {| code = code; cursorPos = code.Length; sessionId = sessionId |}
-      let! resp = dashHttpPost c "/dashboard/completions" body 10000
+      // /dashboard/completions answers as an SSE stream for the dashboard's dropdown;
+      // the JSON contract is the MCP API, routed to this session by id.
+      let body = jsonStringify {| code = code; cursor_position = code.Length; sessionId = sessionId |}
+      let! resp = httpPost c "/api/completions" body 10000
       match resp.statusCode with
       | 200 -> return Some resp.body
       | _ ->

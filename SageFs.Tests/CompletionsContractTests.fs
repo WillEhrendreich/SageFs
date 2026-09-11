@@ -93,7 +93,7 @@ let completionsContractTests =
     testList "getCompletionsItems routing" [
       testTask "maps worker completion labels to structured items" {
         let ctx = mkCtxWithWorkerResponse (WorkerProtocol.WorkerResponse.CompletionResult("rid-1", ["List"; "map ("; "x"])) "aaa00001"
-        let! items = getCompletionsItems ctx "mcp" "L" 1 None
+        let! items = getCompletionsItems ctx "mcp" "L" 1 None None
         items
         |> List.map (fun i -> i.DisplayText)
         |> Expect.equal "all three labels routed" ["List"; "map ("; "x"]
@@ -107,9 +107,26 @@ let completionsContractTests =
 
       testTask "no completions returns empty list" {
         let ctx = mkCtxWithWorkerResponse (WorkerProtocol.WorkerResponse.CompletionResult("rid-2", [])) "aaa00001"
-        let! items = getCompletionsItems ctx "mcp" "" 0 None
+        let! items = getCompletionsItems ctx "mcp" "" 0 None None
         items
         |> Expect.isEmpty "empty worker result stays empty"
+      }
+
+      testTask "WHY — getCompletionsItems — a request naming its session reaches that session because a working directory can match several (the VS Code Type Explorer knows its session id)" {
+        let baseCtx = mkCtxWithWorkerResponse (WorkerProtocol.WorkerResponse.CompletionResult("rid-3", ["Length"; "Substring ("])) "aaa00001"
+        let named = "bbb00002"
+        let ctx =
+          { baseCtx with
+              SessionOps =
+                { baseCtx.SessionOps with
+                    GetProxy = fun id ->
+                      match WorkerProtocol.SessionId.value id = named with
+                      | true -> baseCtx.SessionOps.GetProxy id
+                      | false -> Task.FromResult None } }
+        let! items = getCompletionsItems ctx "http" "s." 2 (Some named) None
+        items
+        |> List.map (fun i -> i.DisplayText)
+        |> Expect.equal "the named session's completions" ["Length"; "Substring ("]
       }
     ]
 

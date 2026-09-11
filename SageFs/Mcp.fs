@@ -1885,10 +1885,11 @@ module McpTools =
     (agent: string)
     (code: string)
     (cursorPosition: int)
+    (sessionId: string option)
     (workingDirectory: string option)
     : Task<Features.AutoCompletion.CompletionItem list> =
     task {
-      let! resolution = resolveSessionId ctx agent None workingDirectory
+      let! resolution = resolveSessionId ctx agent sessionId workingDirectory
       match resolution with
       | Routable sid ->
         let! routeResult =
