@@ -509,3 +509,29 @@ let sessionManagerStaleReadyReportTests =
         (getManagedSession harness info.Id).Info.Status
         |> Expect.equal "the swap is still waiting for the new worker" SessionStatus.Restarting
   ]
+
+[<Tests>]
+let buildFailureReasonTests =
+  let fs0433 =
+    "/src/Web/Program.fs(160,1): error FS0433: A function labeled with the 'EntryPointAttribute' attribute must be the last declaration in the last file in the compilation sequence. [/src/Web/Web.fsproj]"
+  testList "SessionManager build failure reason" [
+    testCase "WHY — SessionManager.buildFailureReason — names the compiler errors dotnet build printed because the card must say why the app did not come back" <| fun _ ->
+      let reason = buildFailureReason 1 [ "  Determining projects to restore..."; fs0433; fs0433; "Build FAILED." ] []
+      reason |> Expect.stringContains "the compiler error" "Program.fs(160,1): error FS0433"
+      reason.Split("error FS0433").Length - 1 |> Expect.equal "each error once" 1
+      reason.Contains "[/src/Web/Web.fsproj]" |> Expect.isFalse "no project-path noise"
+      reason |> Expect.stringContains "what to do" "→"
+
+    testCase "WHY — SessionManager.buildFailureReason — falls back to the output tail when no error line is found because an empty reason tells the user nothing" <| fun _ ->
+      let reason = buildFailureReason 1 [ "line a"; "something went wrong" ] [ "boom" ]
+      reason |> Expect.stringContains "stdout tail" "something went wrong"
+      reason |> Expect.stringContains "stderr tail" "boom"
+  ]
+
+[<Tests>]
+let buildArgumentsTests =
+  testList "SessionManager rebuild arguments" [
+    testCase "WHY — SessionManager.buildArguments — a rebuild is incremental because a clean build deletes the last good output first and one typo would leave nothing to run" <| fun _ ->
+      buildArguments "/src/Web/Web.fsproj"
+      |> Expect.equal "build the project without cleaning it first" [ "build"; "/src/Web/Web.fsproj"; "--no-restore" ]
+  ]

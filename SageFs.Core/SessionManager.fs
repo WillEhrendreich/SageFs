@@ -465,6 +465,32 @@ module SessionManager =
     | true -> projFile
     | false -> Path.Combine(workingDir, projFile)
 
+  /// Why a `dotnet build` failed, as the session card and MCP should show it.
+  let buildFailureReason (exitCode: int) (stdout: string list) (stderr: string list) : string =
+    let output = stdout @ stderr
+    // MSBuild ends each diagnostic with " [<project path>]"; the path is noise on a card.
+    let withoutProject (line: string) =
+      let trimmed = line.Trim()
+      match trimmed.EndsWith("]", StringComparison.Ordinal), trimmed.LastIndexOf(" [", StringComparison.Ordinal) with
+      | true, cut when cut > 0 -> trimmed.Substring(0, cut)
+      | _ -> trimmed
+    let errors =
+      output
+      |> List.filter (fun l -> l.Contains(": error ", StringComparison.Ordinal))
+      |> List.map withoutProject
+      |> List.distinct
+    let detail =
+      match errors with
+      | [] -> output |> List.filter (fun l -> l.Trim() <> "") |> List.rev |> List.truncate 15 |> List.rev |> String.concat "\n"
+      | found -> found |> List.truncate 10 |> String.concat "\n"
+    sprintf "Build failed (exit %d):\n%s\n→ Fix the build errors, then press ▶ Run to rebuild and start the app." exitCode detail
+
+  /// The `dotnet` arguments of a session rebuild. Incremental on purpose: a
+  /// clean build deletes the last good output before compiling, so one compile
+  /// error would leave the project with nothing to run until built by hand.
+  let buildArguments (buildProject: string) : string list =
+    [ "build"; buildProject; "--no-restore" ]
+
   let runBuildAsync (projects: string list) (workingDir: string) : Async<Result<string, string>> =
     async {
       let primaryProject = projects |> List.tryHead
@@ -478,10 +504,8 @@ module SessionManager =
           RedirectStandardError = true,
           UseShellExecute = false,
           WorkingDirectory = workingDir)
-        psi.ArgumentList.Add("build")
-        psi.ArgumentList.Add(buildProject)
-        psi.ArgumentList.Add("--no-restore")
-        psi.ArgumentList.Add("--no-incremental")
+        for arg in buildArguments buildProject do
+          psi.ArgumentList.Add(arg)
         let proc = Process.Start(psi)
         let stderrLines = System.Collections.Generic.List<string>()
         let stderrTask =
@@ -490,10 +514,13 @@ module SessionManager =
             while not (isNull line) do
               stderrLines.Add(line)
               line <- proc.StandardError.ReadLine())
+        // dotnet build prints compiler errors on stdout, so both streams are kept.
+        let stdoutLines = System.Collections.Generic.List<string>()
         let stdoutTask =
           System.Threading.Tasks.Task.Run(fun () ->
             let mutable line = proc.StandardOutput.ReadLine()
             while not (isNull line) do
+              stdoutLines.Add(line)
               line <- proc.StandardOutput.ReadLine())
         let! ct = Async.CancellationToken
         let tcs = System.Threading.Tasks.TaskCompletionSource<bool>()
@@ -517,7 +544,7 @@ module SessionManager =
           proc.Dispose()
           match exitCode <> 0 with
           | true ->
-            return Error (sprintf "Build failed (exit %d): %s" exitCode (String.concat "\n" stderrLines))
+            return Error (buildFailureReason exitCode (List.ofSeq stdoutLines) (List.ofSeq stderrLines))
           | false ->
             return Ok "Build succeeded"
     }

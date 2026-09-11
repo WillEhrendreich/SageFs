@@ -151,9 +151,17 @@ let runApp
               return Error err
             }
           let! ready =
-            match info.Workflow with
-            | WorkflowTypes.SessionWorkflow.WebLive _ -> Task.FromResult(Ok ())
-            | WorkflowTypes.SessionWorkflow.Interactive ->
+            match info.Status, info.Workflow with
+            // No worker (its last build failed, or it was stopped): Run rebuilds it first.
+            | (SessionStatus.Faulted | SessionStatus.Stopped), _ ->
+              task {
+                do! ops.SetAppState sessionId (AppRunState.Starting (project, StartPhase.RebuildingSession, clock ()))
+                match! ops.RestartSession sessionId true with
+                | Error e -> return Error e
+                | Ok _ -> return! ops.AwaitReady sessionId readyTimeout
+              }
+            | _, WorkflowTypes.SessionWorkflow.WebLive _ -> Task.FromResult(Ok ())
+            | _, WorkflowTypes.SessionWorkflow.Interactive ->
               task {
                 do! ops.SetAppState sessionId (AppRunState.Starting (project, StartPhase.RestartingIntoWebLive, clock ()))
                 match! ops.SwitchWorkflow sid (WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults) with

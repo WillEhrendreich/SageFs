@@ -236,6 +236,8 @@ type RunningApp = {
 [<RequireQualifiedAccess>]
 type StartPhase =
   | RestartingIntoWebLive
+  /// The session has no worker (its last build failed), so Run rebuilds it first.
+  | RebuildingSession
   | LaunchingEntryPoint
   | RebuildingForChanges of first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list
 
@@ -263,6 +265,8 @@ let describeState (state: AppRunState) : string =
   | AppRunState.NotRunning -> "Not running"
   | AppRunState.Starting (project, StartPhase.RestartingIntoWebLive, _) ->
     sprintf "Restarting the session with hot reload before starting %s…" (projectName project)
+  | AppRunState.Starting (project, StartPhase.RebuildingSession, _) ->
+    sprintf "Rebuilding %s…" (projectName project)
   | AppRunState.Starting (project, StartPhase.LaunchingEntryPoint, _) ->
     sprintf "Starting %s…" (projectName project)
   | AppRunState.Starting (project, StartPhase.RebuildingForChanges (first, rest), _) ->

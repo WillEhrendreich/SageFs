@@ -307,3 +307,24 @@ let restartForChangesTests =
       | other -> failtestf "expected Crashed, got %A" other
     }
   ]
+
+[<Tests>]
+let faultedSessionRunTests =
+  testList "AppRunOrchestration run on a faulted session" [
+    testTask "WHY — AppRunOrchestration.runApp — Run on a session whose rebuild failed rebuilds it first because after fixing the code Run is the one button the user presses" {
+      let r = record ()
+      let faulted = { session webLive [ exe web ] AppRunState.NotRunning with Status = SessionStatus.Faulted }
+      let ops =
+        { fakeOps faulted (worker never.Task) r with
+            RestartSession = fun _ rebuild ->
+              r.Calls.Enqueue (sprintf "restart rebuild=%b" rebuild)
+              Task.FromResult(Ok "restarted") }
+      let! result = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
+      result |> Expect.equal "the relaunched app" (Ok (AppRunState.Running (running "run1")))
+      calls r
+      |> List.filter (fun c -> not (c.StartsWith("worker:await", StringComparison.Ordinal)))
+      |> Expect.equal "rebuild, wait for Ready, then run" [ "restart rebuild=true"; "await-ready"; sprintf "worker:run %s" web ]
+      states r |> List.head
+      |> Expect.equal "the card says it is rebuilding" (AppRunState.Starting (web, StartPhase.RebuildingSession, at))
+    }
+  ]
