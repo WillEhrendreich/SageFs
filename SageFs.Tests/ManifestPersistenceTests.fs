@@ -3,6 +3,8 @@ module SageFs.Tests.ManifestPersistenceTests
 open System
 open Expecto
 open Expecto.Flip
+open FsCheck
+open FsCheck.FSharp
 open SageFs
 open SageFs.Features.ManifestTypes
 open SageFs.Features
@@ -289,6 +291,129 @@ let manifestHostileHeaderTests = testList "DaemonManifest hostile header rejecti
       loaded.Entries |> Expect.hasLength "one entry loads" 1
     | Error e -> failwithf "valid manifest rejected: %s" e
 ]
+
+// ── Codec laws over generated manifests ──
+
+let private genManifestText =
+  ArbMap.defaults
+  |> ArbMap.generate<string>
+  |> Gen.map (fun s ->
+    match s with
+    | null -> ""
+    // A lone surrogate is not valid UTF-16, so it cannot survive UTF-8.
+    | s -> s |> String.filter (fun c -> not (Char.IsSurrogate c)))
+
+let private genHexId =
+  Gen.listOfLength 8 (Gen.elements ([ '0' .. '9' ] @ [ 'a' .. 'f' ]))
+  |> Gen.map (fun cs -> String(List.toArray cs))
+
+/// The format stores unix milliseconds, so instants are generated at that precision.
+let private genInstant =
+  gen {
+    let! seconds = Gen.choose (0, Int32.MaxValue)
+    let! ms = Gen.choose (0, 999)
+    return DateTimeOffset.FromUnixTimeMilliseconds(int64 seconds * 1000L + int64 ms)
+  }
+
+let private genEntry (genStopped: Gen<DateTimeOffset option>) =
+  gen {
+    let! sid = Gen.oneof [ genHexId; genManifestText ]
+    let! projectCount = Gen.choose (0, 4)
+    let! projects = Gen.listOfLength projectCount genManifestText
+    let! workDir = genManifestText
+    let! created = genInstant
+    let! stopped = genStopped
+    return { SessionId = sid; Projects = projects; WorkingDir = workDir; CreatedAt = created; StoppedAt = stopped }
+  }
+
+let private genManifest =
+  gen {
+    let! count = Gen.choose (0, 8)
+    let! entries = Gen.listOfLength count (genEntry (Gen.oneof [ Gen.constant None; genInstant |> Gen.map Some ]))
+    let! active = Gen.oneof [ Gen.constant None; genHexId |> Gen.map Some ]
+    let! createdAtMs = ArbMap.defaults |> ArbMap.generate<int64>
+    return { Entries = entries; ActiveSessionId = active; CreatedAtMs = createdAtMs }
+  }
+
+let private isError (r: Result<'a, string>) =
+  match r with
+  | Error _ -> true
+  | Ok _ -> false
+
+[<Tests>]
+let manifestCodecPropertyTests =
+  let config = { FsCheckConfig.defaultConfig with maxTest = 200 }
+  testList "DaemonManifest codec laws" [
+    testPropertyWithConfig config
+      "WHY — ManifestReader.read — decoding what ManifestWriter.write encoded gives back the same manifest because daemon.sagefm is the only record of which sessions to resume"
+    <| Prop.forAll (Arb.fromGen genManifest) (fun manifest ->
+      ManifestReader.read (ManifestWriter.write manifest) = Ok manifest)
+
+    testPropertyWithConfig config
+      "WHY — ManifestReader.read — every truncation of a manifest is an Error, never a shorter manifest, because a torn write must not silently forget sessions"
+    <| Prop.forAll
+         (Arb.fromGen (gen {
+            let! manifest = genManifest
+            let bytes = ManifestWriter.write manifest
+            let! cut = Gen.choose (0, bytes.Length - 1)
+            return bytes, cut }))
+         (fun (bytes, cut) -> isError (ManifestReader.read bytes.[0 .. cut - 1]))
+
+    testPropertyWithConfig config
+      "WHY — ManifestReader.read — any single flipped bit is an Error, never a different manifest, because disk corruption must not resurrect or drop sessions"
+    <| Prop.forAll
+         (Arb.fromGen (gen {
+            let! manifest = genManifest
+            let bytes = ManifestWriter.write manifest
+            let! position = Gen.choose (0, bytes.Length - 1)
+            let! bit = Gen.choose (0, 7)
+            return bytes, position, bit }))
+         (fun (bytes, position, bit) ->
+           let flipped = Array.copy bytes
+           flipped.[position] <- flipped.[position] ^^^ (1uy <<< bit)
+           isError (ManifestReader.read flipped))
+
+    testPropertyWithConfig config
+      "WHY — ManifestReader.read — arbitrary bytes behind a valid magic are an Error, not an exception, because daemon startup must survive any file it finds"
+    <| Prop.forAll
+         (Arb.fromGen (ArbMap.defaults |> ArbMap.generate<byte[]>))
+         (fun tail ->
+           let tail = match tail with null -> [||] | t -> t
+           isError (ManifestReader.read (Array.append [| 0x53uy; 0x46uy; 0x4Duy; 0x31uy; 1uy; 0uy; 1uy; 0uy |] tail)))
+
+    testPropertyWithConfig config
+      "WHY — ManifestMapping — a manifest state saved and loaded back is the same state because a daemon restart must resume exactly the sessions it had"
+    <| Prop.forAll
+         (Arb.fromGen (gen {
+            // Resume forgets sessions stopped over 7 days ago, so these stopped recently.
+            let genRecent =
+              Gen.choose (0, 6 * 24 * 60)
+              |> Gen.map (fun minutes ->
+                let now = DateTimeOffset.UtcNow
+                Some (DateTimeOffset.FromUnixTimeMilliseconds(now.ToUnixTimeMilliseconds() - int64 minutes * 60_000L)))
+            let! count = Gen.choose (0, 8)
+            let! entries = Gen.listOfLength count (genEntry (Gen.oneof [ Gen.constant None; genRecent ]))
+            let! active = Gen.oneof [ Gen.constant None; genHexId |> Gen.map Some ]
+            let sessions =
+              entries
+              |> List.map (fun e ->
+                let record : DaemonManifest.DaemonSessionRecord =
+                  { SessionId = e.SessionId
+                    Projects = e.Projects
+                    WorkingDir = e.WorkingDir
+                    CreatedAt = e.CreatedAt
+                    StoppedAt = e.StoppedAt }
+                e.SessionId, record)
+              |> Map.ofList
+            let state : DaemonManifest.DaemonManifestState = { Sessions = sessions; ActiveSessionId = active }
+            return state }))
+         (fun state ->
+           state
+           |> ManifestMapping.fromManifestState
+           |> ManifestWriter.write
+           |> ManifestReader.read
+           |> Result.map ManifestMapping.toManifestState = Ok state)
+  ]
 
 [<Tests>]
 let manifestMappingTests = testList "ManifestMapping" [

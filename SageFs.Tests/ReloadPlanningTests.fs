@@ -2,6 +2,8 @@ module SageFs.Tests.ReloadPlanningTests
 
 open Expecto
 open Expecto.Flip
+open FsCheck
+open FsCheck.FSharp
 open SageFs.Features.ReloadPlanning
 
 let private baselineSource = """// header comment
@@ -210,4 +212,182 @@ let accessTests =
     testCase "WHY — ReloadChange.describe — names the function and the member it cannot reach because the card must say why the app restarted" <| fun _ ->
       ReloadChange.describe (ReloadChange.UsesNonPublicMember ("answer", "secret"))
       |> Expect.equal "wording" "answer uses secret, which is not public, so it cannot be patched in place"
+  ]
+
+// ── Planner laws over generated declaration sets ──
+
+let private namePool = [ "alpha"; "beta"; "gamma"; "delta"; "epsilon"; "zeta"; "eta"; "theta" ]
+
+let private allKinds =
+  [ DeclKind.TypeDecl; DeclKind.ValueDecl; DeclKind.FunctionDecl
+    DeclKind.EntryPointDecl; DeclKind.NestedModuleDecl; DeclKind.StartupCode ]
+
+/// A body that may mention other declarations by name, so the
+/// non-public-member rule is exercised.
+let private genBody =
+  gen {
+    let! a = Gen.elements ("x" :: "0" :: namePool)
+    let! op = Gen.elements [ "+"; "*"; "-" ]
+    let! b = Gen.elements ("1" :: "x" :: namePool)
+    return sprintf "%s %s %s" a op b
+  }
+
+let private mkDecl (name: string) (kind: DeclKind) (access: DeclAccess) (body: string) : SourceDecl =
+  let accessText =
+    match access with
+    | DeclAccess.Public -> ""
+    | DeclAccess.Internal -> "internal "
+    | DeclAccess.Private -> "private "
+  let header, text =
+    match kind with
+    | DeclKind.FunctionDecl -> sprintf "let %s%s x" accessText name, sprintf "let %s%s x = %s" accessText name body
+    | DeclKind.ValueDecl -> sprintf "let %s%s" accessText name, sprintf "let %s%s = %s" accessText name body
+    | DeclKind.EntryPointDecl -> sprintf "let %s args" name, sprintf "[<EntryPoint>]\nlet %s args = %s" name body
+    | DeclKind.TypeDecl -> "", sprintf "type %s%s = { Value: int } // %s" accessText name body
+    | DeclKind.NestedModuleDecl -> "", sprintf "module %s%s =\n  let inner = %s" accessText name body
+    | DeclKind.StartupCode -> "", sprintf "printfn \"%%d\" (%s)" body
+  { Name = name; Kind = kind; Access = access; Header = header; Text = text; StartLine = 1; EndLine = 1 }
+
+let private genDeclNamed (name: string) =
+  gen {
+    let! kind = Gen.elements allKinds
+    let! access =
+      Gen.frequency [
+        4, Gen.constant DeclAccess.Public
+        1, Gen.constant DeclAccess.Internal
+        1, Gen.constant DeclAccess.Private ]
+    let! body = genBody
+    return mkDecl name kind access body
+  }
+
+let private fileOf (decls: SourceDecl list) = { ModulePath = [ "Demo"; "App" ]; Opens = [ "System" ]; Decls = decls }
+
+/// Every declaration has its own name.
+let private genUniqueFile =
+  gen {
+    let! count = Gen.choose (1, namePool.Length)
+    let! decls = namePool |> List.truncate count |> Gen.collectToList genDeclNamed
+    return fileOf decls
+  }
+
+/// Names may repeat (shadowing, a type and its companion module).
+let private genFileWithRepeats =
+  gen {
+    let! count = Gen.choose (0, 10)
+    let! names = Gen.listOfLength count (Gen.elements namePool)
+    let! decls = names |> Gen.collectToList genDeclNamed
+    return fileOf decls
+  }
+
+/// A genuine edit to a declaration's code; a function keeps its header.
+let private edit (d: SourceDecl) = { d with Text = d.Text + " + 7" }
+
+let private reasonsOf (plan: ReloadPlan) =
+  match plan with
+  | ReloadPlan.PatchFunctions _ -> Set.empty
+  | ReloadPlan.RestartRequired (first, rest) -> Set.ofList (first :: rest)
+
+/// What editing a declaration other than a function body must report.
+let private expectedChangeFor (d: SourceDecl) =
+  match d.Kind with
+  | DeclKind.TypeDecl -> ReloadChange.TypeChanged d.Name
+  | DeclKind.ValueDecl -> ReloadChange.ValueChanged d.Name
+  | DeclKind.FunctionDecl -> ReloadChange.SignatureChanged d.Name
+  | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
+  | DeclKind.NestedModuleDecl -> ReloadChange.ModuleChanged d.Name
+  | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
+
+/// What removing a declaration must report.
+let private expectedRemovalFor (d: SourceDecl) =
+  match d.Kind with
+  | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
+  | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
+  | DeclKind.TypeDecl
+  | DeclKind.ValueDecl
+  | DeclKind.FunctionDecl
+  | DeclKind.NestedModuleDecl -> ReloadChange.DeclarationRemoved d.Name
+
+let private tokens (text: string) = text.Split([| ' '; '\n'; '('; ')' |], System.StringSplitOptions.RemoveEmptyEntries) |> Set.ofArray
+
+[<Tests>]
+let planReloadPropertyTests =
+  let config = { FsCheckConfig.defaultConfig with maxTest = 300 }
+  testList "ReloadPlanning planReload laws" [
+    testPropertyWithConfig config
+      "WHY — ReloadPlanning.planReload — any declaration set planned against itself patches nothing because a save with no code change must never disturb the app"
+    <| Prop.forAll (Arb.fromGen genFileWithRepeats) (fun file ->
+      planReload file file = ReloadPlan.PatchFunctions [])
+
+    testPropertyWithConfig config
+      "WHY — ReloadPlanning.planReload — trailing whitespace on any declaration patches nothing because an editor's whitespace trim is not a code change"
+    <| Prop.forAll (Arb.fromGen genFileWithRepeats) (fun file ->
+      let padded =
+        { file with Decls = file.Decls |> List.map (fun d -> { d with Text = d.Text.Replace("\n", "  \n") + "   "; Header = d.Header + " " }) }
+      planReload file padded = ReloadPlan.PatchFunctions [])
+
+    testPropertyWithConfig config
+      "WHY — ReloadPlanning.planReload — body-only function edits patch exactly the edited functions, restarting only for a non-public member they cannot reach, because nothing else changed"
+    <| Prop.forAll
+         (Arb.fromGen (gen {
+            let! file = genUniqueFile
+            let! flags = Gen.listOfLength file.Decls.Length (Gen.elements [ true; false ])
+            return file, flags }))
+         (fun (file, flags) ->
+           let editedDecls =
+             List.zip file.Decls flags
+             |> List.map (fun (d, flag) ->
+               match flag && d.Kind = DeclKind.FunctionDecl with
+               | true -> edit d
+               | false -> d)
+           let edited =
+             List.zip file.Decls flags
+             |> List.filter (fun (d, flag) -> flag && d.Kind = DeclKind.FunctionDecl)
+             |> List.map (fst >> edit)
+           let editedNames = edited |> List.map _.Name |> Set.ofList
+           let hidden =
+             file.Decls |> List.filter (fun d -> d.Access <> DeclAccess.Public && not (editedNames.Contains d.Name))
+           let unreachable =
+             edited
+             |> List.choose (fun f ->
+               hidden
+               |> List.tryFind (fun h -> h.Name <> f.Name && (tokens f.Text).Contains h.Name)
+               |> Option.map (fun h -> ReloadChange.UsesNonPublicMember (f.Name, h.Name)))
+           match planReload file (fileOf editedDecls), unreachable with
+           | ReloadPlan.PatchFunctions patched, [] -> (patched |> List.map _.Name |> Set.ofList) = editedNames
+           | ReloadPlan.RestartRequired (first, rest), _ :: _ -> Set.ofList (first :: rest) = Set.ofList unreachable
+           | _ -> false)
+
+    testPropertyWithConfig config
+      "WHY — ReloadPlanning.planReload — editing one more startup-only declaration keeps every earlier restart reason and adds its own because restart reasons only accumulate"
+    <| Prop.forAll
+         (Arb.fromGen (gen {
+            let! file = genUniqueFile
+            // The extra edit targets a declaration that only takes effect at startup.
+            let! targetKind = Gen.elements (allKinds |> List.filter (fun k -> k <> DeclKind.FunctionDecl))
+            let! target = genDeclNamed "omega" |> Gen.map (fun d -> mkDecl d.Name targetKind d.Access "0")
+            let! flags = Gen.listOfLength file.Decls.Length (Gen.elements [ true; false ])
+            return fileOf (file.Decls @ [ target ]), flags, target }))
+         (fun (file, flags, target) ->
+           let before =
+             List.zip file.Decls (flags @ [ false ])
+             |> List.map (fun (d, flag) ->
+               match flag with
+               | true -> edit d
+               | false -> d)
+           let after = before |> List.map (fun d -> match d.Name = target.Name with | true -> edit d | false -> d)
+           let reasonsBefore = reasonsOf (planReload file (fileOf before))
+           let reasonsAfter = reasonsOf (planReload file (fileOf after))
+           Set.isSubset reasonsBefore reasonsAfter && reasonsAfter.Contains (expectedChangeFor target))
+
+    testPropertyWithConfig config
+      "WHY — ReloadPlanning.planReload — removing any declaration requires a restart naming it because running code may still use it"
+    <| Prop.forAll
+         (Arb.fromGen (gen {
+            let! file = genUniqueFile
+            let! removed = Gen.choose (0, file.Decls.Length - 1)
+            return file, removed }))
+         (fun (file, removed) ->
+           let target = file.Decls.[removed]
+           let current = fileOf (file.Decls |> List.indexed |> List.filter (fun (i, _) -> i <> removed) |> List.map snd)
+           (reasonsOf (planReload file current)).Contains (expectedRemovalFor target))
   ]

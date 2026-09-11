@@ -4,6 +4,8 @@ open System
 open System.IO
 open Expecto
 open Expecto.Flip
+open FsCheck
+open FsCheck.FSharp
 open SageFs
 open SageFs.WorkerProtocol
 open SageFs.Features.LiveTesting
@@ -14,9 +16,96 @@ let roundTrip<'T> (value: 'T) =
   let result = Serialization.deserialize<'T> json
   json, result
 
+// ── Wire generators ──
+// Every value the daemon and worker can put on the wire. The overrides keep the
+// generators inside what the protocol actually carries: strings are non-null
+// and valid UTF-16 (JSON cannot carry a lone surrogate), floats are finite
+// (JSON has no NaN/Infinity), and DateTimes are UTC or unspecified (the
+// processes share one clock, never a local-time conversion).
+
+let private genWireString =
+  ArbMap.defaults
+  |> ArbMap.generate<string>
+  |> Gen.map (fun s ->
+    match s with
+    | null -> ""
+    | s -> s |> String.filter (fun c -> not (Char.IsSurrogate c)))
+
+let private genFiniteFloat =
+  ArbMap.defaults
+  |> ArbMap.generate<float>
+  |> Gen.filter (fun f -> not (Double.IsNaN f || Double.IsInfinity f))
+
+/// Ticks spread over years 0001-6700 (Int32.MaxValue * 1e9 stays below DateTime.MaxValue).
+let private genTicks = Gen.choose (0, Int32.MaxValue) |> Gen.map (fun t -> int64 t * 1_000_000_000L)
+
+let private genWireDateTime =
+  gen {
+    let! ticks = genTicks
+    let! kind = Gen.elements [ DateTimeKind.Utc; DateTimeKind.Unspecified ]
+    return DateTime(ticks, kind)
+  }
+
+let private genWireDateTimeOffset =
+  gen {
+    let! ticks = genTicks
+    let! offsetMinutes = Gen.choose (-14 * 60, 14 * 60)
+    let dt = DateTime(ticks + int64 (abs offsetMinutes) * TimeSpan.TicksPerMinute + TimeSpan.TicksPerDay)
+    return DateTimeOffset(dt, TimeSpan.FromMinutes (float offsetMinutes))
+  }
+
+let private scalarArbs =
+  ArbMap.defaults
+  |> ArbMap.mergeArb (Arb.fromGen genWireString)
+  |> ArbMap.mergeArb (Arb.fromGen genFiniteFloat)
+  |> ArbMap.mergeArb (Arb.fromGen genWireDateTime)
+  |> ArbMap.mergeArb (Arb.fromGen genWireDateTimeOffset)
+  // Only reachable through SageFsError.Unexpected, which is filtered out below.
+  |> ArbMap.mergeArb (Arb.fromGen (Gen.constant (exn "unreachable")))
+
+/// SageFsError.Unexpected carries a live .NET exception, which has no JSON
+/// round-trip; the worker never sends it (WorkerMain maps failures to the
+/// string-carrying cases), so it is outside the wire contract under test.
+let private genWireError =
+  scalarArbs
+  |> ArbMap.generate<SageFsError>
+  |> Gen.filter (fun e ->
+    match e with
+    | SageFsError.Unexpected _ -> false
+    | _ -> true)
+
+let private wireArbs = scalarArbs |> ArbMap.mergeArb (Arb.fromGen genWireError)
+
+let genWorkerMessage = wireArbs |> ArbMap.generate<WorkerMessage>
+let genWorkerResponse = wireArbs |> ArbMap.generate<WorkerResponse>
+
 [<Tests>]
 let workerProtocolTests =
   testList "WorkerProtocol" [
+
+    testList "codec properties" [
+      testPropertyWithConfig propConfig
+        "WHY — Serialization — every WorkerMessage deserializes to exactly what was serialized because the worker must run the request the daemon sent"
+      <| Prop.forAll (Arb.fromGen genWorkerMessage) (fun msg ->
+        snd (roundTrip<WorkerMessage> msg) = msg)
+
+      testPropertyWithConfig lightConfig
+        "WHY — Serialization — every WorkerResponse deserializes to exactly what was serialized because the daemon must see the worker's real outcome"
+      <| Prop.forAll (Arb.fromGen genWorkerResponse) (fun resp ->
+        snd (roundTrip<WorkerResponse> resp) = resp)
+
+      testPropertyWithConfig lightConfig
+        "WHY — Serialization — re-serializing a decoded WorkerResponse reproduces the same JSON because no field may be dropped or rewritten in transit"
+      <| Prop.forAll (Arb.fromGen genWorkerResponse) (fun resp ->
+        let json, decoded = roundTrip<WorkerResponse> resp
+        Serialization.serialize<WorkerResponse> decoded = json)
+
+      testPropertyWithConfig lightConfig
+        "WHY — Serialization — every SessionInfo round-trips because the dashboard and editors render sessions from this JSON"
+      <| Prop.forAll
+           (Arb.fromGen (wireArbs |> ArbMap.mergeArb (Arb.fromGen genSessionId) |> ArbMap.generate<SessionInfo>))
+           (fun info -> snd (roundTrip<SessionInfo> info) = info)
+    ]
 
     testList "WorkerMessage round-trip" [
 
