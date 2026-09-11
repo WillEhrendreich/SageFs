@@ -268,6 +268,51 @@ module VscodeFixture =
     | None -> ()
   }
 
+/// Every VS Code command the E2E journeys drive through the command
+/// palette, as a closed set — no call site may pass an arbitrary string.
+/// The palette matches typed text against a command's TITLE, never its
+/// internal id (VS Code has never matched by id — microsoft/vscode#113165
+/// requests that as a still-open feature) — so mistyping "sagefs.enableLiveTesting"
+/// (the id) instead of "SageFs: Enable Live Testing" (the title) leaves the
+/// quick-pick showing zero matches and Enter silently dispatches nothing.
+/// `SageFsPaletteCommandContractTests` (VscodeExtensionTests.fs) checks every
+/// `id` here against the extension's own package.json, so a renamed command
+/// there fails a FAST default-suite test instead of silently breaking a
+/// [Integration]-only VS Code journey.
+type SageFsPaletteCommand =
+  | FocusHotReloadView
+  | HotReloadWatchAll
+  | HotReloadRefresh
+  | EnableLiveTesting
+  | DisableLiveTesting
+  | ShowSageFsContainer
+  | FocusOutputView
+
+module SageFsPaletteCommand =
+  /// The command id declared in sagefs-vscode/package.json — None for a
+  /// VS Code built-in (or VS Code auto-generated per-view focus command)
+  /// that isn't declared there, so the contract test has nothing to check.
+  let id =
+    function
+    | FocusHotReloadView -> None // VS Code auto-generates "<viewId>.focus" per view; not in contributes.commands
+    | HotReloadWatchAll -> Some "sagefs.hotReloadWatchAll"
+    | HotReloadRefresh -> Some "sagefs.hotReloadRefresh"
+    | EnableLiveTesting -> Some "sagefs.enableLiveTesting"
+    | DisableLiveTesting -> Some "sagefs.disableLiveTesting"
+    | ShowSageFsContainer -> None // VS Code built-in, auto-generated from contributes.viewsContainers
+    | FocusOutputView -> None // VS Code built-in
+
+  /// The exact text to type into the command palette (Ctrl+Shift+P).
+  let title =
+    function
+    | FocusHotReloadView -> "SageFs: Focus on Hot Reload Files View"
+    | HotReloadWatchAll -> "SageFs: Watch All Files"
+    | HotReloadRefresh -> "SageFs: Refresh Hot Reload"
+    | EnableLiveTesting -> "SageFs: Enable Live Testing"
+    | DisableLiveTesting -> "SageFs: Disable Live Testing"
+    | ShowSageFsContainer -> "View: Show SageFs"
+    | FocusOutputView -> "Output: Focus on Output View"
+
 /// Helpers for interacting with VSCode through Playwright.
 module VscodeHelpers =
   /// The fuzzy matcher's readiness between typing and Enter is the ONE
@@ -290,7 +335,15 @@ module VscodeHelpers =
       let! visible = paletteVisible page ()
       return not visible })
 
-  let executeCommand (page: IPage) (command: string) = task {
+  let private quickPickRowsJs =
+    "(() => { var rows = document.querySelectorAll('.quick-input-list .monaco-list-row');" +
+    " var out = []; rows.forEach(function(r){ out.push(r.textContent.trim()); }); return out; })()"
+
+  /// Drive the command palette and report which rows were actually visible
+  /// as matches right before Enter — the caller's diagnostic of last resort
+  /// when the command's effect never shows up (did our title not match
+  /// anything, or did it match and the extension-side handler not run?).
+  let executeCommandDiagnosed (page: IPage) (command: SageFsPaletteCommand) = task {
     // Palette execution is the ONLY reliable command path under CDP: a
     // synthesized `command:` anchor click (executeCommandUri) does not route
     // to the extension host. Each step WAITS for the UI state it needs — a
@@ -298,11 +351,17 @@ module VscodeHelpers =
     // editor → command silently never runs).
     do! page.Keyboard.PressAsync("Control+Shift+p")
     let! _opened = waitForPalette 5_000 page
-    do! page.Keyboard.TypeAsync(command)
+    do! page.Keyboard.TypeAsync(SageFsPaletteCommand.title command)
     do! Task.Delay(matcherSettleMs)
+    let! matches = page.EvaluateAsync<string[]>(quickPickRowsJs)
     do! page.Keyboard.PressAsync("Enter")
     // The palette closes once the command is dispatched.
     let! _closed = waitForPaletteClosed 5_000 page
+    return matches |> Array.toList
+  }
+
+  let executeCommand (page: IPage) (command: SageFsPaletteCommand) = task {
+    let! _matches = executeCommandDiagnosed page command
     ()
   }
 
@@ -507,7 +566,7 @@ let extensionTests = testList "VSCode extension behavior" [
 
   vscodeExtTest "output channel exists" (fun page -> task {
     // Open Output panel and switch to SageFs channel
-    do! VscodeHelpers.executeCommand page "Output: Focus on Output View"
+    do! VscodeHelpers.executeCommand page FocusOutputView
     // The output panel area should contain "SageFs" somewhere once rendered.
     let js =
       "(() => { var el = document.querySelector('.panel'); " +
@@ -621,6 +680,14 @@ let dodJourneys =
       // HasText filter cannot match it) — the palette view command
       // (`workbench.view.extension.sagefs`) fuzzy-matches many "SageFs"
       // commands and can land elsewhere.
+      // Diagnostic captured regardless of outcome: every activity-bar action
+      // item's aria-label/title, so a failure below shows whether the icon
+      // ever existed under a different label (a VS Code UI change) rather
+      // than just "missing".
+      let activityBarLabelsJs =
+        "(() => { var items = document.querySelectorAll('.activitybar .action-item');" +
+        " var r = []; items.forEach(function(i){ r.push(i.getAttribute('aria-label') || i.title || '(none)'); });" +
+        " return JSON.stringify(r); })()"
       let iconClicked =
         page.EvaluateAsync<string>(
           "(() => { var items = document.querySelectorAll('.activitybar .action-item');" +
@@ -639,8 +706,13 @@ let dodJourneys =
             " return t && t.textContent.indexOf('SageFs') >= 0 ? 'yes' : 'no'; })()")
         return r = "yes" }
       let! containerOpen = waitUntil 5_000 containerIsOpen
+      let mutable containerPaletteMatches = []
+      let mutable activityBarLabelsAtFailure = ""
       if iconResult <> "ok" || not containerOpen then
-        do! VscodeHelpers.executeCommand page "workbench.view.extension.sagefs"
+        let! labels = page.EvaluateAsync<string>(activityBarLabelsJs)
+        activityBarLabelsAtFailure <- labels
+        let! matches = VscodeHelpers.executeCommandDiagnosed page ShowSageFsContainer
+        containerPaletteMatches <- matches
         let! _opened = waitUntil 5_000 containerIsOpen
         ()
       // Activate the hot-reload view via its generated FOCUS command run by
@@ -663,7 +735,7 @@ let dodJourneys =
       let navSw = Diagnostics.Stopwatch.StartNew()
       let mutable viewActive = false
       while not viewActive && navSw.ElapsedMilliseconds < 60_000L do
-        do! VscodeHelpers.executeCommand page "SageFs: Focus on Hot Reload Files View"
+        do! VscodeHelpers.executeCommand page FocusHotReloadView
         let! active = waitUntil 3_000 hotReloadViewActive
         viewActive <- active
       // Query the tree rows from the hot-reload pane's BODY (the element
@@ -678,7 +750,7 @@ let dodJourneys =
         "     var out = []; rows.forEach(function(r){ out.push(r.textContent); });" +
         "     return out.join(' | '); } }" +
         " return ''; })()"
-      do! VscodeHelpers.executeCommand page "sagefs.hotReloadWatchAll"
+      do! VscodeHelpers.executeCommand page HotReloadWatchAll
       // The tree rows render either per-file "● watching" descriptions or
       // directory "N/M watched" descriptions.
       let sw = Diagnostics.Stopwatch.StartNew()
@@ -707,13 +779,13 @@ let dodJourneys =
             " var r = []; vs.forEach(function(v){ r.push(v.className); });" +
             " return JSON.stringify(r); })()")
         failwithf
-          "HR-VSC: tree never showed watching/watched. rows='%s' titles='%s' viewIds='%s' sidebar='%s' status='%s'"
-          rows titles viewIds sidebar status
+          "HR-VSC: tree never showed watching/watched. rows='%s' titles='%s' viewIds='%s' sidebar='%s' status='%s' activityBarLabelsAtOpenFailure='%s' showContainerPaletteMatches='%A'"
+          rows titles viewIds sidebar status activityBarLabelsAtFailure containerPaletteMatches
       let! rows = page.EvaluateAsync<string>(rowsJs)
       let hasWatchState =
         (rows.Contains("watching") || rows.Contains("watched"))
         && not (rows.Contains("No session active"))
-      do! VscodeHelpers.executeCommand page "sagefs.hotReloadRefresh"
+      do! VscodeHelpers.executeCommand page HotReloadRefresh
       let! watchStateAfterRefresh =
         waitUntil 10_000 (fun () -> task {
           let! rows2 = page.EvaluateAsync<string>(rowsJs)
@@ -737,7 +809,7 @@ let dodJourneys =
       try
         // Enable live testing via the extension command; the daemon's baseline
         // run has the 11 tests passing.
-        do! VscodeHelpers.executeCommand page "sagefs.enableLiveTesting"
+        let! enableMatches = VscodeHelpers.executeCommandDiagnosed page EnableLiveTesting
         // The extension flashes "$(check) Live testing enabled" on success and
         // may show a "daemon not running" modal on failure — watch both for a
         // few seconds so a silent no-op is distinguishable from a slow run.
@@ -778,7 +850,9 @@ let dodJourneys =
             }
           let! daemonLt = daemonDiag
           let! status = VscodeHelpers.getStatusBarText page
-          failwithf "LT-VSC: baseline never reached 11/11 passed. status='%s' daemonLT='%s'" status daemonLt
+          failwithf
+            "LT-VSC: baseline never reached 11/11 passed. status='%s' daemonLT='%s' handlerEvidence='%s' enableLiveTestingPaletteMatches='%A'"
+            status daemonLt handlerEvidence enableMatches
         Expect.isTrue "baseline should reach 11/11 passed before breaking the file" baselineGreen
         writeHello (original.Replace(canonicalAdd, brokenAdd))
         let sw = Diagnostics.Stopwatch.StartNew()
@@ -822,10 +896,47 @@ let dodJourneys =
           let! status = VscodeHelpers.getStatusBarText page
           failwithf "LT-VSC: status bar never recovered to 11/11 passed. status='%s'" status
         // Disable again and confirm the status bar returns to the off state.
-        do! VscodeHelpers.executeCommand page "sagefs.disableLiveTesting"
+        do! VscodeHelpers.executeCommand page DisableLiveTesting
         do! vscodeWaitForStatusText 30_000 page "Live testing off"
       finally
         // Restore Hello.fs regardless of outcome.
         try writeHello original with _ -> ()
     })
+  ]
+
+// ---------------------------------------------------------------------------
+// SageFsPaletteCommand contract: no VS Code required, so this runs in the
+// FAST default suite — a title renamed in package.json (or a typo introduced
+// in the DU) fails here immediately, instead of surfacing as a silent no-op
+// deep inside a slow [Integration]-only VS Code journey.
+// ---------------------------------------------------------------------------
+
+[<Tests>]
+let sageFsPaletteCommandContractTests =
+  testList "SageFsPaletteCommand contract" [
+    testCase "every command with a declared id matches its package.json title" <| fun _ ->
+      let packageJsonPath =
+        IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "sagefs-vscode", "package.json")
+      use doc = Text.Json.JsonDocument.Parse(IO.File.ReadAllText packageJsonPath)
+      let titleById =
+        doc.RootElement.GetProperty("contributes").GetProperty("commands").EnumerateArray()
+        |> Seq.map (fun c -> c.GetProperty("command").GetString(), c.GetProperty("title").GetString())
+        |> Map.ofSeq
+      let allCommands =
+        [ FocusHotReloadView; HotReloadWatchAll; HotReloadRefresh
+          EnableLiveTesting; DisableLiveTesting; ShowSageFsContainer; FocusOutputView ]
+      for cmd in allCommands do
+        match SageFsPaletteCommand.id cmd with
+        | None -> () // VS Code built-in / auto-generated — nothing in package.json to check
+        | Some cmdId ->
+          match Map.tryFind cmdId titleById with
+          | None ->
+            failwithf
+              "SageFsPaletteCommand.%A declares id '%s' but sagefs-vscode/package.json has no such command"
+              cmd cmdId
+          | Some packageTitle ->
+            SageFsPaletteCommand.title cmd
+            |> Expect.equal
+              (sprintf "SageFsPaletteCommand.%A's palette title must match package.json's title for '%s'" cmd cmdId)
+              packageTitle
   ]
