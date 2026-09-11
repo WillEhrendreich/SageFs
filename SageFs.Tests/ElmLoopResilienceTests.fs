@@ -393,13 +393,13 @@ let elmLoopAlarmTests =
 
     testTask "Effect throws: OnSystemAlarm is called with 'effect' phase" {
       let alarms = System.Collections.Generic.List<string * string>()
-      let effSignal = new System.Threading.ManualResetEventSlim(false)
+      let effSignal = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
       let prog : ElmProgram<int, int, int, int> = {
         Update = fun msg model -> model + msg, [1]
         Render = fun model -> [model]
         ExecuteEffect = fun _ _ ->
           async {
-            effSignal.Set()
+            effSignal.TrySetResult () |> ignore
             failwith "effect-alarm-test"
           }
         OnModelChanged = fun _ _ -> ()
@@ -407,7 +407,7 @@ let elmLoopAlarmTests =
       }
       let rt = ElmLoop.start prog 0 System.Threading.CancellationToken.None
       rt.Dispatch 1
-      effSignal.Wait(2000) |> ignore
+      let! _ = Task.WhenAny(effSignal.Task, Task.Delay 2000)
       let! fired = waitForAsync (fun () -> alarms |> Seq.exists (fun (p, _) -> p = "effect")) 2000
       fired |> Expect.isTrue "effect alarm should fire"
       let effectAlarms = alarms |> Seq.filter (fun (p, _) -> p = "effect") |> Seq.toList
@@ -483,7 +483,7 @@ let elmLoopBackpressureTests =
       let rt = ElmLoop.start prog 0 cts.Token
 
       rt.Dispatch 1                              // wake drain; model=0 hits gate
-      drainStarted.Wait(2000) |> ignore          // drain is now inside Update holding lock
+      let! _ = drainStarted.WaitAsync(2000)      // drain is now inside Update holding lock
       for _ in 1..300 do rt.Dispatch 1          // 300 msgs pile into ConcurrentQueue
       do! Task.Delay 50                          // let all enqueues settle
       releaseGate.Set()                          // unblock drain
@@ -567,7 +567,8 @@ let elmLoopCoalescingTests =
       let rt = ElmLoop.startWithCoalescer CoalescingMsg.tryAbsorbPending prog 0 cts.Token
 
       rt.Dispatch Gate
-      drainStarted.Wait(2000)
+      let! gateHeld = drainStarted.WaitAsync(2000)
+      gateHeld
       |> Expect.isTrue "gate message should block the drain so pending work can accumulate"
       rt.Dispatch (Tick 1)
       rt.Dispatch (Tick 2)
@@ -609,7 +610,8 @@ let elmLoopCoalescingTests =
       let rt = ElmLoop.startWithCoalescer CoalescingMsg.tryAbsorbPending prog 0 cts.Token
 
       rt.Dispatch Gate
-      drainStarted.Wait(2000)
+      let! gateHeld = drainStarted.WaitAsync(2000)
+      gateHeld
       |> Expect.isTrue "gate message should block the drain so pending batches can merge"
       rt.Dispatch (Batch [ 1 ])
       rt.Dispatch (Batch [ 2; 3 ])

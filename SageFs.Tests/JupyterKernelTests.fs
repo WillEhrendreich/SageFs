@@ -195,25 +195,23 @@ let jupyterKernelTests =
     ]
 
     testList "ExecuteRequest handling" [
-      test "successful eval produces Ok reply" {
+      testAsync "successful eval produces Ok reply" {
         let handler : ExecuteHandler = fun _code _silent ->
           async { return Ok { Output = "42"; MimeType = "text/plain" } }
         let request = { Code = "1 + 41"; Silent = false; StoreHistory = true; AllowStdin = false }
-        let result =
+        let! result =
           Protocol.handleExecuteRequest handler 1 request
-          |> Async.RunSynchronously
         match result with
         | ExecuteReplyOk reply ->
           reply.ExecutionCount |> Expect.equal "count" 1
         | ExecuteReplyError _ -> failtest "expected Ok"
       }
-      test "failed eval produces Error reply" {
+      testAsync "failed eval produces Error reply" {
         let handler : ExecuteHandler = fun _code _silent ->
           async { return Error { Ename = "CompileError"; Evalue = "FS0001"; Traceback = ["line 1: type mismatch"] } }
         let request = { Code = "bad code"; Silent = false; StoreHistory = true; AllowStdin = false }
-        let result =
+        let! result =
           Protocol.handleExecuteRequest handler 1 request
-          |> Async.RunSynchronously
         match result with
         | ExecuteReplyError reply ->
           reply.Ename |> Expect.equal "ename" "CompileError"
@@ -221,28 +219,28 @@ let jupyterKernelTests =
           reply.Traceback |> Expect.hasLength "traceback" 1
         | ExecuteReplyOk _ -> failtest "expected Error"
       }
-      test "execution count increments" {
+      testAsync "execution count increments" {
         let handler : ExecuteHandler = fun _code _silent ->
           async { return Ok { Output = "ok"; MimeType = "text/plain" } }
         let request = { Code = "()"; Silent = false; StoreHistory = true; AllowStdin = false }
-        let r1 = Protocol.handleExecuteRequest handler 5 request |> Async.RunSynchronously
+        let! r1 = Protocol.handleExecuteRequest handler 5 request
         match r1 with
         | ExecuteReplyOk reply -> reply.ExecutionCount |> Expect.equal "count=5" 5
         | _ -> failtest "expected Ok"
       }
-      test "silent execution suppresses output" {
-        let mutable received = false
+      testAsync "silent execution suppresses output" {
+        let received = ref false
         let handler : ExecuteHandler = fun _code silent ->
-          received <- true
+          received.Value <- true
           async { return Ok { Output = "42"; MimeType = "text/plain" } }
         let request = { Code = "()"; Silent = true; StoreHistory = false; AllowStdin = false }
-        let _r = Protocol.handleExecuteRequest handler 1 request |> Async.RunSynchronously
-        received |> Expect.isTrue "handler was called"
+        let! _r = Protocol.handleExecuteRequest handler 1 request
+        received.Value |> Expect.isTrue "handler was called"
       }
     ]
 
     testList "CompleteRequest handling" [
-      test "basic completion produces matches" {
+      testAsync "basic completion produces matches" {
         let handler : CompleteHandler = fun code pos ->
           async {
             return {
@@ -253,43 +251,41 @@ let jupyterKernelTests =
             }
           }
         let request = { Code = "List."; CursorPos = 5 }
-        let result =
+        let! result =
           Protocol.handleCompleteRequest handler request
-          |> Async.RunSynchronously
         result.Matches |> Expect.hasLength "3 completions" 3
         result.Status |> Expect.equal "status ok" "ok"
       }
-      test "empty completions" {
+      testAsync "empty completions" {
         let handler : CompleteHandler = fun _code _pos ->
           async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
         let request = { Code = "xyz"; CursorPos = 3 }
-        let result =
+        let! result =
           Protocol.handleCompleteRequest handler request
-          |> Async.RunSynchronously
         result.Matches |> Expect.isEmpty "no matches"
       }
     ]
 
     testList "IsComplete handling" [
-      test "complete code returns complete" {
+      testAsync "complete code returns complete" {
         let handler : IsCompleteHandler = fun code ->
           async { return CompleteStatus.Complete }
-        let result = Protocol.handleIsComplete handler "let x = 1" |> Async.RunSynchronously
+        let! result = Protocol.handleIsComplete handler "let x = 1"
         result |> Expect.equal "complete" CompleteStatus.Complete
       }
-      test "incomplete code returns incomplete with indent" {
+      testAsync "incomplete code returns incomplete with indent" {
         let handler : IsCompleteHandler = fun _code ->
           async { return CompleteStatus.Incomplete "  " }
-        let result = Protocol.handleIsComplete handler "let f x =" |> Async.RunSynchronously
+        let! result = Protocol.handleIsComplete handler "let f x ="
         match result with
         | CompleteStatus.Incomplete indent ->
           indent |> Expect.equal "indent" "  "
         | _ -> failtest "expected Incomplete"
       }
-      test "invalid code returns invalid" {
+      testAsync "invalid code returns invalid" {
         let handler : IsCompleteHandler = fun _code ->
           async { return CompleteStatus.Invalid }
-        let result = Protocol.handleIsComplete handler "###" |> Async.RunSynchronously
+        let! result = Protocol.handleIsComplete handler "###"
         result |> Expect.equal "invalid" CompleteStatus.Invalid
       }
     ]
@@ -385,7 +381,7 @@ let jupyterKernelTests =
     testList "FsiBridge" [
 
       testList "executeHandler" [
-        test "successful eval maps to Jupyter Ok" {
+        testAsync "successful eval maps to Jupyter Ok" {
           let mockProxy : WorkerProtocol.SessionProxy = fun msg ->
             async {
               match msg with
@@ -395,7 +391,7 @@ let jupyterKernelTests =
               | _ -> return failwith "unexpected message"
             }
           let handler = FsiBridge.executeHandler mockProxy
-          let result = handler "1 + 41" false |> Async.RunSynchronously
+          let! result = handler "1 + 41" false
           match result with
           | Ok output ->
             output.Output |> Expect.equal "output" "42"
@@ -403,7 +399,7 @@ let jupyterKernelTests =
           | Error _ -> failtest "expected Ok"
         }
 
-        test "eval error maps to Jupyter Error with diagnostics as traceback" {
+        testAsync "eval error maps to Jupyter Error with diagnostics as traceback" {
           let diag : WorkerProtocol.WorkerDiagnostic = {
             Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
             Message = "type mismatch"
@@ -418,7 +414,7 @@ let jupyterKernelTests =
               | _ -> return failwith "unexpected"
             }
           let handler = FsiBridge.executeHandler mockProxy
-          let result = handler "bad" false |> Async.RunSynchronously
+          let! result = handler "bad" false
           match result with
           | Error err ->
             err.Ename |> Expect.equal "ename" "FSharpError"
@@ -427,11 +423,11 @@ let jupyterKernelTests =
           | Ok _ -> failtest "expected Error"
         }
 
-        test "WorkerError maps to Jupyter Error" {
+        testAsync "WorkerError maps to Jupyter Error" {
           let mockProxy : WorkerProtocol.SessionProxy = fun _msg ->
             async { return WorkerProtocol.WorkerResponse.WorkerError(SageFsError.PipeClosed) }
           let handler = FsiBridge.executeHandler mockProxy
-          let result = handler "code" false |> Async.RunSynchronously
+          let! result = handler "code" false
           match result with
           | Error err -> err.Ename |> Expect.equal "ename" "WorkerError"
           | Ok _ -> failtest "expected Error"
@@ -439,7 +435,7 @@ let jupyterKernelTests =
       ]
 
       testList "completeHandler" [
-        test "maps worker completions to Jupyter format" {
+        testAsync "maps worker completions to Jupyter format" {
           let mockProxy : WorkerProtocol.SessionProxy = fun msg ->
             async {
               match msg with
@@ -448,37 +444,37 @@ let jupyterKernelTests =
               | _ -> return failwith "unexpected"
             }
           let handler = FsiBridge.completeHandler mockProxy
-          let result = handler "List." 5 |> Async.RunSynchronously
+          let! result = handler "List." 5
           result.Matches |> Expect.hasLength "3 matches" 3
           result.Status |> Expect.equal "status" "ok"
         }
 
-        test "unexpected response returns empty matches" {
+        testAsync "unexpected response returns empty matches" {
           let mockProxy : WorkerProtocol.SessionProxy = fun _msg ->
             async { return WorkerProtocol.WorkerResponse.WorkerReady }
           let handler = FsiBridge.completeHandler mockProxy
-          let result = handler "x" 1 |> Async.RunSynchronously
+          let! result = handler "x" 1
           result.Matches |> Expect.isEmpty "empty"
         }
       ]
 
       testList "isCompleteHandler" [
-        test "code ending with ;; is complete" {
+        testAsync "code ending with ;; is complete" {
           let handler = FsiBridge.isCompleteHandler ()
-          let result = handler "let x = 42;;" |> Async.RunSynchronously
+          let! result = handler "let x = 42;;"
           result |> Expect.equal "complete" CompleteStatus.Complete
         }
-        test "code ending with = is incomplete" {
+        testAsync "code ending with = is incomplete" {
           let handler = FsiBridge.isCompleteHandler ()
-          let result = handler "let f x =" |> Async.RunSynchronously
+          let! result = handler "let f x ="
           match result with
           | CompleteStatus.Incomplete indent ->
             indent |> Expect.equal "indent" "  "
           | _ -> failtest "expected Incomplete"
         }
-        test "regular code is unknown" {
+        testAsync "regular code is unknown" {
           let handler = FsiBridge.isCompleteHandler ()
-          let result = handler "let x = 42" |> Async.RunSynchronously
+          let! result = handler "let x = 42"
           result |> Expect.equal "unknown" CompleteStatus.Unknown
         }
       ]
@@ -497,25 +493,25 @@ let jupyterKernelTests =
     ]
 
     testList "Router" [
-      test "KernelInfoRequest route produces IOPub status messages" {
+      testAsync "KernelInfoRequest route produces IOPub status messages" {
         let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = ""; MimeType = "text/plain" } }
         let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
         let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
         let msg = mkKernelInfoRequest ()
-        let result = Router.route exec comp isComp KernelState.initial msg |> Async.RunSynchronously
+        let! result = Router.route exec comp isComp KernelState.initial msg
         result.IOPub |> Expect.hasLength "2 IOPub messages" 2
         result.IOPub |> List.head |> Expect.equal "busy" (IOPubMessage.StatusMessage KernelStatus.Busy)
         result.IOPub |> List.last |> Expect.equal "idle" (IOPubMessage.StatusMessage KernelStatus.Idle)
         result.NewState.Status |> Expect.equal "state unchanged" KernelStatus.Idle
       }
 
-      test "ExecuteRequest route transitions state and produces IOPub" {
+      testAsync "ExecuteRequest route transitions state and produces IOPub" {
         let exec : ExecuteHandler = fun code _ ->
           async { return Ok { Output = code; MimeType = "text/plain" } }
         let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
         let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
         let msg = mkExecRequest "let x = 42"
-        let result = Router.route exec comp isComp KernelState.initial msg |> Async.RunSynchronously
+        let! result = Router.route exec comp isComp KernelState.initial msg
         // Should have Busy, ExecuteResult, Idle
         result.IOPub |> Expect.hasLength "3 IOPub messages" 3
         result.IOPub |> List.head |> Expect.equal "busy" (IOPubMessage.StatusMessage KernelStatus.Busy)
@@ -524,18 +520,18 @@ let jupyterKernelTests =
         result.NewState.Status |> Expect.equal "back to idle" KernelStatus.Idle
       }
 
-      test "failed ExecuteRequest produces ErrorOutput IOPub" {
+      testAsync "failed ExecuteRequest produces ErrorOutput IOPub" {
         let exec : ExecuteHandler = fun _ _ ->
           async { return Error { Ename = "CompileError"; Evalue = "FS0001"; Traceback = ["error at line 1"] } }
         let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
         let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
         let msg = mkExecRequest "bad code"
-        let result = Router.route exec comp isComp KernelState.initial msg |> Async.RunSynchronously
+        let! result = Router.route exec comp isComp KernelState.initial msg
         let hasError = result.IOPub |> List.exists (function IOPubMessage.ErrorOutput _ -> true | _ -> false)
         hasError |> Expect.isTrue "should have error IOPub"
       }
 
-      test "ShutdownRequest transitions to ShuttingDown" {
+      testAsync "ShutdownRequest transitions to ShuttingDown" {
         let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = ""; MimeType = "text/plain" } }
         let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
         let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
@@ -544,11 +540,12 @@ let jupyterKernelTests =
             ParentHeader = None
             Metadata = Map.empty
             Content = MessageContent.ShutdownRequest false }
-        let result = Router.route exec comp isComp KernelState.initial msg |> Async.RunSynchronously
+        let! result = Router.route exec comp isComp KernelState.initial msg
         result.NewState.Status |> Expect.equal "shutting down" KernelStatus.ShuttingDown
       }
 
-      testProperty "Router always returns IOPub list starting with Busy (for known message types)" <| fun () ->
+      // The inputs are fixed, so this is an example over each known message type.
+      testAsync "Router always returns IOPub list starting with Busy (for known message types)" {
         let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = "ok"; MimeType = "text/plain" } }
         let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
         let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
@@ -557,9 +554,12 @@ let jupyterKernelTests =
           mkExecRequest "1+1"
           mkCompleteRequest "List." 5
         ]
-        messages |> List.forall (fun msg ->
-          let result = Router.route exec comp isComp KernelState.initial msg |> Async.RunSynchronously
-          result.IOPub |> List.head = IOPubMessage.StatusMessage KernelStatus.Busy)
+        for msg in messages do
+          let! result = Router.route exec comp isComp KernelState.initial msg
+          result.IOPub
+          |> List.head
+          |> Expect.equal (sprintf "%s should start with Busy" msg.Header.MsgType) (IOPubMessage.StatusMessage KernelStatus.Busy)
+      }
     ]
 
     testList "IOPub types" [
@@ -570,15 +570,14 @@ let jupyterKernelTests =
     ]
 
     testList "KernelLifecycle" [
-      test "processMessage for execute produces IOPub events and reply" {
+      testAsync "processMessage for execute produces IOPub events and reply" {
         let exec : ExecuteHandler = fun code _ ->
           async { return Ok { Output = code; MimeType = "text/plain" } }
         let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
         let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
         let msg = mkExecRequest "let x = 42"
-        let events, newState =
+        let! events, newState =
           KernelLifecycle.processMessage exec comp isComp KernelState.initial msg
-          |> Async.RunSynchronously
         // Should have: PublishIOPub(busy), PublishIOPub(execute_result), PublishIOPub(idle), SendReply
         events |> List.exists (function KernelLifecycle.PublishIOPub ("status", s) -> s.Contains("busy") | _ -> false)
         |> Expect.isTrue "has busy status"
@@ -589,7 +588,7 @@ let jupyterKernelTests =
         newState.ExecutionCount |> Expect.equal "count = 1" 1
       }
 
-      test "processMessage for shutdown emits ShutdownRequested event" {
+      testAsync "processMessage for shutdown emits ShutdownRequested event" {
         let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = ""; MimeType = "text/plain" } }
         let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
         let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
@@ -597,9 +596,8 @@ let jupyterKernelTests =
           { Header = mkHeader "shutdown_request"
             ParentHeader = None; Metadata = Map.empty
             Content = MessageContent.ShutdownRequest true }
-        let events, newState =
+        let! events, newState =
           KernelLifecycle.processMessage exec comp isComp KernelState.initial msg
-          |> Async.RunSynchronously
         events |> List.exists (function KernelLifecycle.ShutdownRequested true -> true | _ -> false)
         |> Expect.isTrue "has shutdown event with restart=true"
         newState.Status |> Expect.equal "shutting down" KernelStatus.ShuttingDown
@@ -620,7 +618,8 @@ let jupyterKernelTests =
         |> Expect.isTrue "argv has {connection_file}"
       }
 
-      testProperty "processMessage always emits at least one event" <| fun () ->
+      // The inputs are fixed, so this is an example over each known message type.
+      testAsync "processMessage always emits at least one event" {
         let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = "ok"; MimeType = "text/plain" } }
         let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
         let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
@@ -629,11 +628,11 @@ let jupyterKernelTests =
           mkExecRequest "1+1"
           mkCompleteRequest "List." 5
         ]
-        messages |> List.forall (fun msg ->
-          let events, _ =
+        for msg in messages do
+          let! events, _ =
             KernelLifecycle.processMessage exec comp isComp KernelState.initial msg
-            |> Async.RunSynchronously
-          events.Length > 0)
+          events |> Expect.isNonEmpty (sprintf "%s should emit at least one event" msg.Header.MsgType)
+      }
     ]
 
     testList "CLI parsing" [

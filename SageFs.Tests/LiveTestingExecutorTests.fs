@@ -92,7 +92,7 @@ let attributeDiscoveryTests = testList "AttributeDiscovery" [
     | _ -> failtest "Expected Custom"
   }
 
-  test "run closure executes discovered module let binding tests" {
+  testAsync "run closure executes discovered module let binding tests" {
     let fixtureModuleName =
       typeof<ExpectoModuleBindingFixture.Marker>.DeclaringType.FullName
 
@@ -106,7 +106,7 @@ let attributeDiscoveryTests = testList "AttributeDiscovery" [
       match fixtureTest with
       | None -> failtest "fixture test was not discovered"
       | Some tc ->
-        let outcome = discovery.RunTest tc |> Async.RunSynchronously
+        let! outcome = discovery.RunTest tc
         match outcome with
         | TestResult.Passed _ -> ()
         | other -> failtestf "Expected Passed, got %A" other
@@ -126,9 +126,9 @@ let attributeDiscoveryTests = testList "AttributeDiscovery" [
 ]
 
 let reflectionExecutorTests = testList "ReflectionExecutor" [
-  test "executeMethod handles parameter mismatch gracefully" {
+  testAsync "executeMethod handles parameter mismatch gracefully" {
     let mi = typeof<string>.GetMethod("IsNullOrEmpty", [| typeof<string> |])
-    let result = ReflectionExecutor.executeMethod mi |> Async.RunSynchronously
+    let! result = ReflectionExecutor.executeMethod mi
     match result with
     | TestResult.Failed _ -> ()
     | TestResult.Passed _ -> ()
@@ -241,33 +241,32 @@ let private syntheticExecutor : TestExecutor =
 let private syntheticAsm = typeof<SyntheticTestClass>.Assembly
 
 let issue32RegressionTests = testList "Issue #32: attr executors wired into RunTest" [
-  test "totality: every discovered attr test is executable (not NotRun)" {
+  testAsync "totality: every discovered attr test is executable (not NotRun)" {
     let result = TestOrchestrator.discoverAll [ syntheticExecutor ] syntheticAsm
-    result.Tests
-    |> List.iter (fun tc ->
-      let outcome = result.RunTest tc |> Async.RunSynchronously
+    for tc in result.Tests do
+      let! outcome = result.RunTest tc
       match outcome with
       | TestResult.NotRun -> failtestf "Test '%s' returned NotRun — not wired!" tc.FullName
-      | _ -> ())
+      | _ -> ()
   }
 
-  test "passing attr test returns Passed" {
+  testAsync "passing attr test returns Passed" {
     let result = TestOrchestrator.discoverAll [ syntheticExecutor ] syntheticAsm
     let passing =
       result.Tests
       |> List.find (fun tc -> tc.FullName.Contains "PassingTest")
-    let outcome = result.RunTest passing |> Async.RunSynchronously
+    let! outcome = result.RunTest passing
     match outcome with
     | TestResult.Passed _ -> ()
     | other -> failtestf "Expected Passed, got %A" other
   }
 
-  test "failing attr test returns Failed" {
+  testAsync "failing attr test returns Failed" {
     let result = TestOrchestrator.discoverAll [ syntheticExecutor ] syntheticAsm
     let failing =
       result.Tests
       |> List.find (fun tc -> tc.FullName.Contains "FailingTest")
-    let outcome = result.RunTest failing |> Async.RunSynchronously
+    let! outcome = result.RunTest failing
     match outcome with
     | TestResult.Failed _ -> ()
     | other -> failtestf "Expected Failed, got %A" other
@@ -280,7 +279,7 @@ let issue32RegressionTests = testList "Issue #32: attr executors wired into RunT
     Set.count uniqueIds |> Expect.equal "all IDs should be unique" (List.length ids)
   }
 
-  test "constructor DI class returns Skipped, not Failed" {
+  testAsync "constructor DI class returns Skipped, not Failed" {
     let diExecutor : TestExecutor =
       let desc = {
         Name = TestFramework.Unknown "SyntheticDI"
@@ -298,14 +297,14 @@ let issue32RegressionTests = testList "Issue #32: attr executors wired into RunT
       |> List.tryFind (fun tc -> tc.FullName.Contains "NeedsConstructorArg")
     match diTest with
     | Some tc ->
-      let outcome = result.RunTest tc |> Async.RunSynchronously
+      let! outcome = result.RunTest tc
       match outcome with
       | TestResult.Skipped _ -> ()
       | other -> failtestf "Expected Skipped for DI class, got %A" other
     | None -> skiptest "NeedsConstructorArg test not discovered"
   }
 
-  test "mixed executors: custom + attr dispatch correctly" {
+  testAsync "mixed executors: custom + attr dispatch correctly" {
     let result =
       TestOrchestrator.discoverAll
         (syntheticExecutor :: BuiltInExecutors.builtIn)
@@ -314,19 +313,18 @@ let issue32RegressionTests = testList "Issue #32: attr executors wired into RunT
     let attrTests =
       result.Tests |> List.filter (fun tc -> tc.Framework = TestFramework.Unknown "SyntheticFact")
     (List.length attrTests > 0) |> Expect.isTrue "should have synthetic attr tests"
-    attrTests
-    |> List.iter (fun tc ->
-      let outcome = result.RunTest tc |> Async.RunSynchronously
+    for tc in attrTests do
+      let! outcome = result.RunTest tc
       match outcome with
       | TestResult.NotRun -> failtestf "Attr test '%s' returned NotRun in mixed mode" tc.FullName
-      | _ -> ())
+      | _ -> ()
     // Expecto (custom) tests should also be executable
     let expectoTests =
       result.Tests |> List.filter (fun tc -> tc.Framework = TestFramework.Expecto)
     match expectoTests with
     | [] -> skiptest "No expecto tests found — assembly may not expose them"
     | first :: _ ->
-      let outcome = result.RunTest first |> Async.RunSynchronously
+      let! outcome = result.RunTest first
       match outcome with
       | TestResult.NotRun -> failtestf "Expecto test '%s' returned NotRun" first.FullName
       | _ -> ()
@@ -390,29 +388,27 @@ let issue38RegressionTests = testList "Issue #38: Theory+InlineData rows counted
     ids |> Set.count |> Expect.equal "all row IDs should be unique" 3
   }
 
-  test "discoverAll expands Theory rows and all are executable" {
+  testAsync "discoverAll expands Theory rows and all are executable" {
     let result = TestOrchestrator.discoverAll [ syntheticTheoryExecutor ] theoryAsm
     let theoryTests = result.Tests |> List.filter (fun tc -> tc.FullName.Contains "ParameterisedTest")
     theoryTests
     |> List.length
     |> Expect.equal "should produce 3 test cases for ParameterisedTest" 3
-    theoryTests
-    |> List.iter (fun tc ->
-      let outcome = result.RunTest tc |> Async.RunSynchronously
+    for tc in theoryTests do
+      let! outcome = result.RunTest tc
       match outcome with
       | TestResult.NotRun -> failtestf "Theory test '%s' returned NotRun — not wired!" tc.FullName
-      | _ -> ())
+      | _ -> ()
   }
 
-  test "discoverAll Theory runners pass correct args (passing test)" {
+  testAsync "discoverAll Theory runners pass correct args (passing test)" {
     let result = TestOrchestrator.discoverAll [ syntheticTheoryExecutor ] theoryAsm
     let theoryTests = result.Tests |> List.filter (fun tc -> tc.FullName.Contains "ParameterisedTest")
-    theoryTests
-    |> List.iter (fun tc ->
-      let outcome = result.RunTest tc |> Async.RunSynchronously
+    for tc in theoryTests do
+      let! outcome = result.RunTest tc
       match outcome with
       | TestResult.Passed _ -> ()
-      | other -> failtestf "Expected Passed for '%s', got %A" tc.FullName other)
+      | other -> failtestf "Expected Passed for '%s', got %A" tc.FullName other
   }
 ]
 
@@ -439,7 +435,7 @@ let asyncFsCheckReflectionTests = testList "AsyncFsCheck reflection" [
     | None -> skiptest "SageFs.Tests assembly not loaded"
   }
 
-  test "AsyncFsCheck tests can be executed via reflection" {
+  testAsync "AsyncFsCheck tests can be executed via reflection" {
     let testsAsm =
       System.AppDomain.CurrentDomain.GetAssemblies()
       |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
@@ -452,9 +448,8 @@ let asyncFsCheckReflectionTests = testList "AsyncFsCheck reflection" [
           lookup |> Map.toSeq |> Seq.tryFind (fun (_, rft) -> rft.Tag = 3)
         match fsCheckEntry with
         | Some (name, rft) ->
-          let result =
+          let! result =
             BuiltInExecutors.ExpectoExecutor.executeReflected cache rft System.Threading.CancellationToken.None
-            |> Async.RunSynchronously
           match result with
           | TestResult.Passed _ -> ()
           | TestResult.Failed (f, _) ->
@@ -466,7 +461,7 @@ let asyncFsCheckReflectionTests = testList "AsyncFsCheck reflection" [
     | None -> skiptest "SageFs.Tests assembly not loaded"
   }
 
-  test "no AsyncFsCheck tests fail with 'could not reflect property'" {
+  testAsync "no AsyncFsCheck tests fail with 'could not reflect property'" {
     let testsAsm =
       System.AppDomain.CurrentDomain.GetAssemblies()
       |> Array.tryFind (fun a -> a.GetName().Name = "SageFs.Tests")
@@ -479,17 +474,16 @@ let asyncFsCheckReflectionTests = testList "AsyncFsCheck reflection" [
           lookup |> Map.toList |> List.filter (fun (_, rft) -> rft.Tag = 3)
         // Run a sample of up to 10 AsyncFsCheck tests
         let sample = fsCheckTests |> List.truncate 10
-        let mutable propertyReflectionErrors = 0
+        let propertyReflectionErrors = ref 0
         for (_, rft) in sample do
-          let result =
+          let! result =
             BuiltInExecutors.ExpectoExecutor.executeReflected cache rft System.Threading.CancellationToken.None
-            |> Async.RunSynchronously
           match result with
           | TestResult.Failed (TestFailure.ExceptionThrown(msg, _), _)
               when msg.Contains("could not reflect") ->
-            propertyReflectionErrors <- propertyReflectionErrors + 1
+            propertyReflectionErrors.Value <- propertyReflectionErrors.Value + 1
           | _ -> ()
-        propertyReflectionErrors
+        propertyReflectionErrors.Value
         |> Expect.equal "no AsyncFsCheck tests should fail with reflection error" 0
       | None -> failtest "could not build reflection cache"
     | None -> skiptest "SageFs.Tests assembly not loaded"

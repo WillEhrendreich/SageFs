@@ -46,49 +46,72 @@ let private mkRuntime
     GetStartCalls = fun () -> startCalls
   }
 
-/// PostAndReply bounded by a timeout — returns None when the mailbox is dead or
-/// blocked (the failure mode this suite exists to prevent).
-let private tryPostAndReply (timeoutMs: int) (mailbox: MailboxProcessor<SessionCommand>) (build: AsyncReplyChannel<'a> -> SessionCommand) : 'a option =
-  let task = mailbox.PostAndAsyncReply(build) |> Async.StartAsTask
-  match task.Wait(timeoutMs) with
-  | true -> Some task.Result
-  | false -> None
-
-let private withHarness runtime run =
-  use cancellation = new CancellationTokenSource()
-  let faultedEvents = ResizeArray<SessionId * string>()
-  let mailbox, readSnapshot =
-    createWith
-      runtime
-      cancellation.Token
-      ignore
-      (fun _ _ -> ())
-      (fun _ _ -> ())
-      ignore
-      (fun _ _ -> ())
-      (fun sid msg -> faultedEvents.Add(sid, msg))
-
-  let harness = {
-    Mailbox = mailbox
-    ReadSnapshot = readSnapshot
-    FaultedEvents = faultedEvents
-    Cancellation = cancellation
+/// The task's result if it finishes within the timeout, None otherwise.
+let private completesWithin (timeoutMs: int) (work: Task<'a>) : Task<'a option> =
+  task {
+    let! winner = Task.WhenAny(work :> Task, Task.Delay timeoutMs)
+    match Object.ReferenceEquals(winner, work) with
+    | true ->
+      let! result = work
+      return Some result
+    | false -> return None
   }
 
-  try
-    run harness
-  finally
+/// PostAndReply bounded by a timeout — returns None when the mailbox is dead or
+/// blocked (the failure mode this suite exists to prevent).
+let private tryPostAndReply (timeoutMs: int) (mailbox: MailboxProcessor<SessionCommand>) (build: AsyncReplyChannel<'a> -> SessionCommand) : Task<'a option> =
+  mailbox.PostAndAsyncReply(build) |> Async.StartAsTask |> completesWithin timeoutMs
+
+let private postAndReply (mailbox: MailboxProcessor<SessionCommand>) (build: AsyncReplyChannel<'a> -> SessionCommand) : Task<'a> =
+  mailbox.PostAndAsyncReply(build) |> Async.StartAsTask
+
+let private withHarness runtime (run: Harness -> Task<unit>) : Task<unit> =
+  task {
+    use cancellation = new CancellationTokenSource()
+    let faultedEvents = ResizeArray<SessionId * string>()
+    let mailbox, readSnapshot =
+      createWith
+        runtime
+        cancellation.Token
+        ignore
+        (fun _ _ -> ())
+        (fun _ _ -> ())
+        ignore
+        (fun _ _ -> ())
+        (fun sid msg -> faultedEvents.Add(sid, msg))
+
+    let harness = {
+      Mailbox = mailbox
+      ReadSnapshot = readSnapshot
+      FaultedEvents = faultedEvents
+      Cancellation = cancellation
+    }
+
+    let! failure =
+      task {
+        try
+          do! run harness
+          return None
+        with ex -> return Some (Runtime.ExceptionServices.ExceptionDispatchInfo.Capture ex)
+      }
     // Bounded teardown: a mailbox killed by the scenario under test must not
     // hang the suite forever.
-    tryPostAndReply 2000 mailbox (fun reply -> SessionCommand.StopAll reply)
-    |> ignore
+    let! _ = tryPostAndReply 2000 mailbox (fun reply -> SessionCommand.StopAll reply)
     cancellation.Cancel()
+    match failure with
+    | Some captured -> captured.Throw()
+    | None -> ()
+  }
 
-let private createSessionFor (projects: string list) (workingDir: string) (harness: Harness) =
-  match harness.Mailbox.PostAndReply(fun reply ->
-    SessionCommand.CreateSession(projects, workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
-  | Ok info -> info
-  | Error err -> failtestf "create session failed: %s" (SageFsError.describe err)
+let private createSessionFor (projects: string list) (workingDir: string) (harness: Harness) : Task<SessionInfo> =
+  task {
+    let! created =
+      postAndReply harness.Mailbox (fun reply ->
+        SessionCommand.CreateSession(projects, workingDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+    match created with
+    | Ok info -> return info
+    | Error err -> return failtestf "create session failed: %s" (SageFsError.describe err)
+  }
 
 let private createSession (harness: Harness) =
   createSessionFor [ "Test.fsproj" ] @"C:\Test" harness
@@ -100,7 +123,7 @@ let private okStart (_call: int) : Result<Process, SageFsError> =
 let sessionManagerMailboxSupervisionTests =
   testList "SessionManager mailbox supervision" [
 
-    testCase "unexpected StopWorker exception does not kill the mailbox" <| fun _ ->
+    testTask "unexpected StopWorker exception does not kill the mailbox" {
       let stopFailure = ref false
       let runtime =
         mkRuntime
@@ -113,12 +136,12 @@ let sessionManagerMailboxSupervisionTests =
           })
           (fun () -> async { return Ok "build ok" })
 
-      withHarness runtime.Runtime <| fun harness ->
-        let info = createSession harness
+      do! withHarness runtime.Runtime (fun harness -> task {
+        let! info = createSession harness
 
         // Make the next stop throw inside the mailbox handler.
         stopFailure.Value <- true
-        match tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.StopSession(info.Id, reply)) with
+        match! tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.StopSession(info.Id, reply)) with
         | Some (Error (SageFsError.SessionStopFailed _)) -> ()
         | Some other -> failtestf "expected fail-closed SessionStopFailed, got %A" other
         | None ->
@@ -128,16 +151,18 @@ let sessionManagerMailboxSupervisionTests =
 
         // The mailbox must still process commands and the session must not be
         // silently orphaned.
-        let sessions = harness.Mailbox.PostAndReply(fun reply -> SessionCommand.ListSessions reply)
+        let! sessions = postAndReply harness.Mailbox (fun reply -> SessionCommand.ListSessions reply)
         sessions
         |> List.map (fun s -> s.Id)
         |> Expect.contains "session survives a handler exception (no silent orphan)" info.Id
 
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.StopSession(info.Id, reply)) with
+        match! postAndReply harness.Mailbox (fun reply -> SessionCommand.StopSession(info.Id, reply)) with
         | Ok () -> ()
         | Error err -> failtestf "clean stop after handler exception failed: %s" (SageFsError.describe err)
+      })
+    }
 
-    testCase "handler exception leaves the CQRS snapshot consistent (fail-closed)" <| fun _ ->
+    testTask "handler exception leaves the CQRS snapshot consistent (fail-closed)" {
       let stopFailure = ref false
       let runtime =
         mkRuntime
@@ -150,12 +175,12 @@ let sessionManagerMailboxSupervisionTests =
           })
           (fun () -> async { return Ok "build ok" })
 
-      withHarness runtime.Runtime <| fun harness ->
-        let infoA = createSessionFor [ "A.fsproj" ] @"C:\A" harness
-        let infoB = createSessionFor [ "B.fsproj" ] @"C:\B" harness
+      do! withHarness runtime.Runtime (fun harness -> task {
+        let! infoA = createSessionFor [ "A.fsproj" ] @"C:\A" harness
+        let! infoB = createSessionFor [ "B.fsproj" ] @"C:\B" harness
 
         stopFailure.Value <- true
-        match tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.StopSession(infoA.Id, reply)) with
+        match! tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.StopSession(infoA.Id, reply)) with
         | Some (Error (SageFsError.SessionStopFailed _)) -> ()
         | _ -> failtest "expected fail-closed SessionStopFailed on the throwing stop"
         stopFailure.Value <- false
@@ -166,16 +191,18 @@ let sessionManagerMailboxSupervisionTests =
         QuerySnapshot.tryGetSession infoB.Id snap |> Expect.isSome "session B still visible after failed stop"
 
         // And the unaffected session can still be stopped normally.
-        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.StopSession(infoB.Id, reply)) with
+        match! postAndReply harness.Mailbox (fun reply -> SessionCommand.StopSession(infoB.Id, reply)) with
         | Ok () -> ()
         | Error err -> failtestf "clean stop of unaffected session failed: %s" (SageFsError.describe err)
+      })
+    }
   ]
 
 [<Tests>]
 let sessionManagerOffMailboxBuildTests =
   testList "SessionManager off-mailbox cold build" [
 
-    testCase "list_sessions stays responsive while a cold-restart build runs" <| fun _ ->
+    testTask "list_sessions stays responsive while a cold-restart build runs" {
       let buildStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
       let releaseBuild = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
       let runtime =
@@ -188,38 +215,34 @@ let sessionManagerOffMailboxBuildTests =
             return Ok "build ok"
           })
 
-      withHarness runtime.Runtime <| fun harness ->
-        let info = createSession harness
-        let restartTask =
-          harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
-          |> Async.StartAsTask
+      do! withHarness runtime.Runtime (fun harness -> task {
+        let! info = createSession harness
+        let restartTask = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
 
         try
-          buildStarted.Task.Wait(2000) |> Expect.isTrue "cold build should have started"
+          let! started = completesWithin 2000 buildStarted.Task
+          started |> Expect.isSome "cold build should have started"
 
           // While the build is in flight, list_sessions must still answer promptly.
-          let listTask =
-            harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.ListSessions reply)
-            |> Async.StartAsTask
-          match listTask.Wait(1000) with
-          | true ->
-            listTask.Result
+          match! tryPostAndReply 1000 harness.Mailbox (fun reply -> SessionCommand.ListSessions reply) with
+          | Some sessions ->
+            sessions
             |> List.map (fun s -> s.Id)
             |> Expect.contains "session stays registered while the build runs" info.Id
-          | false ->
+          | None ->
             failtest "list_sessions blocked behind the cold build (mailbox serialized by dotnet build)"
 
           releaseBuild.TrySetResult(true) |> ignore
-          match restartTask.Wait(5000) with
-          | true ->
-            match restartTask.Result with
-            | Ok msg -> msg |> Expect.stringContains "completion should report respawn" "Hard reset complete"
-            | Error err -> failtestf "cold restart failed: %s" (SageFsError.describe err)
-          | false -> failtest "cold restart did not complete after the build finished"
+          match! completesWithin 5000 restartTask with
+          | Some (Ok msg) -> msg |> Expect.stringContains "completion should report respawn" "Hard reset complete"
+          | Some (Error err) -> failtestf "cold restart failed: %s" (SageFsError.describe err)
+          | None -> failtest "cold restart did not complete after the build finished"
         finally
           releaseBuild.TrySetResult(true) |> ignore
+      })
+    }
 
-    testCase "create_session stays responsive while a cold-restart build runs" <| fun _ ->
+    testTask "create_session stays responsive while a cold-restart build runs" {
       let buildStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
       let releaseBuild = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
       let runtime =
@@ -232,33 +255,32 @@ let sessionManagerOffMailboxBuildTests =
             return Ok "build ok"
           })
 
-      withHarness runtime.Runtime <| fun harness ->
-        let info = createSession harness
-        let restartTask =
-          harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
-          |> Async.StartAsTask
+      do! withHarness runtime.Runtime (fun harness -> task {
+        let! info = createSession harness
+        let restartTask = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
 
         try
-          buildStarted.Task.Wait(2000) |> Expect.isTrue "cold build should have started"
+          let! started = completesWithin 2000 buildStarted.Task
+          started |> Expect.isSome "cold build should have started"
 
           // A brand-new session (different dir) must be creatable during the build.
-          match tryPostAndReply 1500 harness.Mailbox (fun reply ->
+          match! tryPostAndReply 1500 harness.Mailbox (fun reply ->
             SessionCommand.CreateSession([ "C.fsproj" ], @"C:\C", true, WorkflowTypes.SessionWorkflow.Interactive, reply)) with
           | Some (Ok second) -> second.Id |> Expect.notEqual "second session has its own id" info.Id
           | Some (Error err) -> failtestf "create_session during build failed: %s" (SageFsError.describe err)
           | None -> failtest "create_session blocked behind the cold build"
 
           releaseBuild.TrySetResult(true) |> ignore
-          match restartTask.Wait(5000) with
-          | true ->
-            match restartTask.Result with
-            | Ok _ -> ()
-            | Error err -> failtestf "cold restart failed: %s" (SageFsError.describe err)
-          | false -> failtest "cold restart did not complete after the build finished"
+          match! completesWithin 5000 restartTask with
+          | Some (Ok _) -> ()
+          | Some (Error err) -> failtestf "cold restart failed: %s" (SageFsError.describe err)
+          | None -> failtest "cold restart did not complete after the build finished"
         finally
           releaseBuild.TrySetResult(true) |> ignore
+      })
+    }
 
-    testCase "second hard reset while a rebuild is in flight is rejected at the owner" <| fun _ ->
+    testTask "second hard reset while a rebuild is in flight is rejected at the owner" {
       let buildStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
       let releaseBuild = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
       let runtime =
@@ -271,18 +293,17 @@ let sessionManagerOffMailboxBuildTests =
             return Ok "build ok"
           })
 
-      withHarness runtime.Runtime <| fun harness ->
-        let info = createSession harness
-        let firstRestart =
-          harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
-          |> Async.StartAsTask
+      do! withHarness runtime.Runtime (fun harness -> task {
+        let! info = createSession harness
+        let firstRestart = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
 
         try
-          buildStarted.Task.Wait(2000) |> Expect.isTrue "first cold build should have started"
+          let! started = completesWithin 2000 buildStarted.Task
+          started |> Expect.isSome "first cold build should have started"
 
           // A concurrent hard reset of the same session must be rejected, not
           // queued behind the build and not double-spawned.
-          match tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
+          match! tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
           | Some (Error (SageFsError.HardResetFailed msg)) ->
             msg |> Expect.stringContains "rejection should explain the in-flight rebuild" "already in progress"
           | Some (Error otherErr) ->
@@ -291,20 +312,20 @@ let sessionManagerOffMailboxBuildTests =
           | None -> failtest "second hard reset hung instead of being rejected"
 
           releaseBuild.TrySetResult(true) |> ignore
-          match firstRestart.Wait(5000) with
-          | true ->
-            match firstRestart.Result with
-            | Ok _ -> ()
-            | Error err -> failtestf "first cold restart failed: %s" (SageFsError.describe err)
-          | false -> failtest "first cold restart did not complete"
+          match! completesWithin 5000 firstRestart with
+          | Some (Ok _) -> ()
+          | Some (Error err) -> failtestf "first cold restart failed: %s" (SageFsError.describe err)
+          | None -> failtest "first cold restart did not complete"
 
           // create (1) + respawn (1) — the rejected second reset must not spawn.
           runtime.GetStartCalls()
           |> Expect.equal "exactly one replacement worker spawned" 2
         finally
           releaseBuild.TrySetResult(true) |> ignore
+      })
+    }
 
-    testCase "crash-recovery ScheduleRestart does not double-spawn during an in-flight cold rebuild" <| fun _ ->
+    testTask "crash-recovery ScheduleRestart does not double-spawn during an in-flight cold rebuild" {
       let buildStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
       let releaseBuild = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously)
       let runtime =
@@ -317,20 +338,19 @@ let sessionManagerOffMailboxBuildTests =
             return Ok "build ok"
           })
 
-      withHarness runtime.Runtime <| fun harness ->
-        let info = createSession harness
-        let restartTask =
-          harness.Mailbox.PostAndAsyncReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
-          |> Async.StartAsTask
+      do! withHarness runtime.Runtime (fun harness -> task {
+        let! info = createSession harness
+        let restartTask = postAndReply harness.Mailbox (fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
 
         try
-          buildStarted.Task.Wait(2000) |> Expect.isTrue "cold build should have started"
+          let! started = completesWithin 2000 buildStarted.Task
+          started |> Expect.isSome "cold build should have started"
 
           // Simulate the old worker's crash-recovery timer firing mid-build.
           harness.Mailbox.Post(SessionCommand.ScheduleRestart info.Id)
 
           // Round-trip proves the mailbox was free to dequeue the ScheduleRestart.
-          match tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.GetSession(info.Id, reply)) with
+          match! tryPostAndReply 1500 harness.Mailbox (fun reply -> SessionCommand.GetSession(info.Id, reply)) with
           | Some _ -> ()
           | None -> failtest "mailbox unresponsive while the cold build runs"
 
@@ -340,12 +360,12 @@ let sessionManagerOffMailboxBuildTests =
           |> Expect.equal "ScheduleRestart must not spawn during an in-flight cold rebuild" 1
 
           releaseBuild.TrySetResult(true) |> ignore
-          match restartTask.Wait(5000) with
-          | true ->
-            match restartTask.Result with
-            | Ok _ -> ()
-            | Error err -> failtestf "cold restart failed: %s" (SageFsError.describe err)
-          | false -> failtest "cold restart did not complete after the build finished"
+          match! completesWithin 5000 restartTask with
+          | Some (Ok _) -> ()
+          | Some (Error err) -> failtestf "cold restart failed: %s" (SageFsError.describe err)
+          | None -> failtest "cold restart did not complete after the build finished"
         finally
           releaseBuild.TrySetResult(true) |> ignore
+      })
+    }
   ]

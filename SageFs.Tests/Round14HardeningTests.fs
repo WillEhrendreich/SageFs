@@ -89,50 +89,42 @@ let w35CorruptRenameTests =
 let w36HandlePruneResultTests =
   testList "W36(R14) — handlePrune returns Result<bool, string>" [
 
-    testCase "handlePrune with daemon running returns Error (not Ok false)" <| fun _ ->
+    testTask "handlePrune with daemon running returns Error (not Ok false)" {
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r14-%s" (Guid.NewGuid().ToString("N")))
       let fakeDaemon () : Task<DaemonInfo option> =
         Task.FromResult(Some { Pid = 12345; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "0.1.0"; ApiVersion = None; SessionCount = None })
-      let result =
-        SageFs.Server.DaemonMode.handlePrune dir nullLog fakeDaemon pruneFlags
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
+      let! result = SageFs.Server.DaemonMode.handlePrune dir nullLog fakeDaemon pruneFlags
       match result with
       | Result.Error msg ->
         msg |> Expect.stringContains "error message should mention PID 12345" "12345"
       | Result.Ok _ -> failtest "handlePrune should return Error when daemon is running, not Ok"
+    }
 
-    testCase "handlePrune with CorruptData returns Error (not Ok false)" <| fun _ ->
+    testTask "handlePrune with CorruptData returns Error (not Ok false)" {
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r14-%s" (Guid.NewGuid().ToString("N")))
       IO.Directory.CreateDirectory(dir) |> ignore
       try
         IO.File.WriteAllBytes(IO.Path.Combine(dir, "daemon.sagefm"), [| 0xFFuy; 0xFEuy; 0xFDuy |])
-        let result =
-          SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemonTask pruneFlags
-          |> Async.AwaitTask
-          |> Async.RunSynchronously
+        let! result = SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemonTask pruneFlags
         match result with
         | Result.Error _ -> ()  // correct: CorruptData returns Error
         | Result.Ok _ -> failtest "handlePrune should return Error for corrupt manifest"
       finally
         IO.Directory.Delete(dir, true)
+    }
 
-    testCase "handlePrune NotFound returns Ok true (nothing to prune — not an error)" <| fun _ ->
+    testTask "handlePrune NotFound returns Ok true (nothing to prune — not an error)" {
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r14-%s" (Guid.NewGuid().ToString("N")))
       // No dir created → loadManifest returns NotFound → nothing to prune → Ok true
-      let result =
-        SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemonTask pruneFlags
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
+      let! result = SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemonTask pruneFlags
       result |> Expect.equal "NotFound → Ok true (nothing to prune, but prune was requested)" (Result.Ok true)
+    }
 
-    testCase "handlePrune with Prune=false returns Ok false (not requested — not an error)" <| fun _ ->
+    testTask "handlePrune with Prune=false returns Ok false (not requested — not an error)" {
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r14-%s" (Guid.NewGuid().ToString("N")))
-      let result =
-        SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemonTask noPruneFlags
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
+      let! result = SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemonTask noPruneFlags
       result |> Expect.equal "Prune=false → Ok false (not requested)" (Result.Ok false)
+    }
   ]
 
 // ---------------------------------------------------------------------------
@@ -169,21 +161,23 @@ let w37CacheSaveTimerDisposeTests =
       joined |> Expect.isFalse "Wait should time out when MRSE is never set"
       // No ObjectDisposedException = correct behavior
 
-    testCase "10s budget is sufficient for periodic cache save callbacks" <| fun _ ->
+    testTask "10s budget is sufficient for periodic cache save callbacks" {
       // Pattern documentation: Timer.Dispose(WaitHandle) for shutdown hygiene.
       let mrse = new System.Threading.ManualResetEventSlim(false)
-      let mutable callbackRan = false
+      let callbackRan = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
       let t = new System.Threading.Timer(
-        System.Threading.TimerCallback(fun _ -> callbackRan <- true),
+        System.Threading.TimerCallback(fun _ -> callbackRan.TrySetResult () |> ignore),
         null, 10, System.Threading.Timeout.Infinite)
-      System.Threading.Thread.Sleep(50)
+      let! _ = Task.WhenAny(callbackRan.Task, Task.Delay 10_000)
+      callbackRan.Task.IsCompleted |> Expect.isTrue "the timer callback should fire"
       let disposeOk = t.Dispose(mrse.WaitHandle)
+      disposeOk |> Expect.isTrue "Timer.Dispose(WaitHandle) should dispose a live timer"
+      // The wait on the dispose handle is the pattern under test; signaling is best-effort.
       let signaled = mrse.Wait(System.TimeSpan.FromSeconds 10.0)
       match signaled with
       | true -> mrse.Dispose()
       | false -> ()
-      // Pattern must not throw. Signaling is best-effort under ThreadPool pressure.
-      (disposeOk || true) |> Expect.isTrue "Timer.Dispose(WaitHandle) should not throw"
+    }
   ]
 
 // ---------------------------------------------------------------------------
@@ -401,27 +395,23 @@ let w41NotFoundLogLevelTests =
 let w42TaskCheckDaemonRunningTests =
   testList "W42(R14) — handlePrune checkDaemonRunning: unit -> Task<DaemonInfo option>" [
 
-    testCase "handlePrune accepts Task-returning checkDaemonRunning (W42 type contract)" <| fun _ ->
+    testTask "handlePrune accepts Task-returning checkDaemonRunning (W42 type contract)" {
       // This test verifies the new signature compiles: unit -> Task<DaemonInfo option>.
       // If handlePrune still takes unit -> DaemonInfo option, noDaemonTask won't type-check.
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r14-%s" (Guid.NewGuid().ToString("N")))
-      let result =
-        SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemonTask noPruneFlags
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
+      let! result = SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemonTask noPruneFlags
       result |> Expect.equal "Task-returning noDaemon with Prune=false → Ok false" (Result.Ok false)
+    }
 
-    testCase "handlePrune with Task daemon-detected returns Error (W42 + W36 combined)" <| fun _ ->
+    testTask "handlePrune with Task daemon-detected returns Error (W42 + W36 combined)" {
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r14-%s" (Guid.NewGuid().ToString("N")))
       let taskDaemon () : Task<DaemonInfo option> =
         Task.FromResult(Some { Pid = 99; Port = 37749; DashboardPort = 37750; StartedAt = DateTime.UtcNow; WorkingDirectory = "/"; Version = "test"; ApiVersion = None; SessionCount = None })
-      let result =
-        SageFs.Server.DaemonMode.handlePrune dir nullLog taskDaemon pruneFlags
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
+      let! result = SageFs.Server.DaemonMode.handlePrune dir nullLog taskDaemon pruneFlags
       match result with
       | Result.Error _ -> ()
       | Result.Ok _ -> failtest "Should return Error when daemon detected via Task injection"
+    }
   ]
 
 [<Tests>]

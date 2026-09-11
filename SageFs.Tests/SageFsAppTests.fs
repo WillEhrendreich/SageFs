@@ -2266,27 +2266,28 @@ let sageFsRenderTests = testList "SageFsRender" [
 
 [<Tests>]
 let elmIntegrationTests = testList "ElmLoop integration" [
-  testCase "SageFs program wires update+render correctly" <| fun _ ->
-    let mutable lastRegions : RenderRegion list = []
-    let mutable lastModel : SageFsModel option = None
-    let signal = new System.Threading.ManualResetEventSlim(false)
+  testTask "SageFs program wires update+render correctly" {
+    let lastRegions = ref ([] : RenderRegion list)
+    let lastModel = ref (None : SageFsModel option)
+    // One release per render: each dispatch below changes the model exactly once.
+    let rendered = new System.Threading.SemaphoreSlim(0)
     let program : ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> = {
       Update = SageFsUpdate.update
       Render = SageFsRender.render
       ExecuteEffect = fun _ _ -> async { () }
       OnModelChanged = fun model regions ->
-        lastModel <- Some model
-        lastRegions <- regions
-        signal.Set()
+        lastModel.Value <- Some model
+        lastRegions.Value <- regions
+        rendered.Release() |> ignore
       OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
-    signal.Wait(1000) |> ignore; signal.Reset()
-    lastRegions |> Expect.hasLength "initial render should have 6 regions" 6
+    let! _ = rendered.WaitAsync(1000)
+    lastRegions.Value |> Expect.hasLength "initial render should have 6 regions" 6
 
     dispatch (SageFsMsg.Editor (EditorAction.InsertChar 'h'))
-    signal.Wait(1000) |> ignore; signal.Reset()
-    lastModel.Value.Editor.Buffer
+    let! _ = rendered.WaitAsync(1000)
+    lastModel.Value.Value.Editor.Buffer
     |> ValidatedBuffer.text
     |> Expect.equal "should have h" "h"
 
@@ -2296,37 +2297,38 @@ let elmIntegrationTests = testList "ElmLoop integration" [
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     dispatch (SageFsMsg.Event (SageFsEvent.SessionCreated snap))
-    signal.Wait(1000) |> ignore; signal.Reset()
+    let! _ = rendered.WaitAsync(1000)
 
     dispatch (SageFsMsg.Event (SageFsEvent.EvalCompleted ("aa000001", "val x = 42", [])))
-    signal.Wait(1000) |> ignore; signal.Reset()
-    outputFor "aa000001" lastModel.Value
+    let! _ = rendered.WaitAsync(1000)
+    outputFor "aa000001" lastModel.Value.Value
     |> Expect.hasLength "should have output" 1
-    let outputRegion = lastRegions |> List.find (fun r -> r.Id = "output")
+    let outputRegion = lastRegions.Value |> List.find (fun r -> r.Id = "output")
     outputRegion.Content
     |> Expect.stringContains "should show in render" "val x = 42"
+  }
 
-  testCase "unchanged ListSessions polls stay silent but real session refreshes still render" <| fun _ ->
-    let signal = new System.Threading.ManualResetEventSlim(false)
-    let mutable callbackCount = 0
+  testTask "unchanged ListSessions polls stay silent but real session refreshes still render" {
+    let rendered = new System.Threading.SemaphoreSlim(0)
+    let callbackCount = ref 0
     let program : ElmProgram<SageFsModel, SageFsMsg, SageFsEffect, RenderRegion> = {
       Update = SageFsUpdate.update
       Render = SageFsRender.render
       ExecuteEffect = fun _ _ -> async { () }
       OnModelChanged = fun _ _ ->
-        callbackCount <- callbackCount + 1
-        signal.Set()
+        callbackCount.Value <- callbackCount.Value + 1
+        rendered.Release() |> ignore
       OnSystemAlarm = fun _ _ -> ()
     }
     let dispatch = (ElmLoop.start program (SageFsModel.initial()) System.Threading.CancellationToken.None).Dispatch
-    signal.Wait(1000) |> ignore
-    signal.Reset()
-    let initialCallbackCount = callbackCount
+    let! _ = rendered.WaitAsync(1000)
+    let initialCallbackCount = callbackCount.Value
 
     dispatch (SageFsMsg.Editor EditorAction.ListSessions)
-    signal.Wait(250)
+    let! renderedAgain = rendered.WaitAsync(250)
+    renderedAgain
     |> Expect.isFalse "an unchanged poll should not trigger another render"
-    callbackCount
+    callbackCount.Value
     |> Expect.equal "callback count should stay the same after the no-op poll" initialCallbackCount
 
     let snap : SessionSnapshot = {
@@ -2335,10 +2337,12 @@ let elmIntegrationTests = testList "ElmLoop integration" [
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "" }
     dispatch (SageFsMsg.Event (SageFsEvent.SessionsRefreshed [snap]))
-    signal.Wait(1000)
+    let! refreshed = rendered.WaitAsync(1000)
+    refreshed
     |> Expect.isTrue "a real session refresh should still render"
-    callbackCount
+    callbackCount.Value
     |> Expect.equal "real session refresh should render exactly once" (initialCallbackCount + 1)
+  }
 
   testTask "effects are dispatched asynchronously" {
     let mutable effectExecuted = false

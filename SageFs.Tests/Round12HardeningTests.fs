@@ -140,20 +140,22 @@ let w24MrseDisposeTests =
       mrse.Dispose()
       signaled |> Expect.isTrue "WaitHandle should be signaled after Set()"
 
-    testCase "Timer.Dispose(WaitHandle) signals the MRSE when timer is collected" <| fun _ ->
+    testTask "Timer.Dispose(WaitHandle) signals the MRSE when timer is collected" {
       // Pattern documentation: Timer.Dispose(WaitHandle) SHOULD signal when done,
       // but on some .NET runtimes under ThreadPool pressure, it may not signal promptly.
-      // We verify the pattern compiles and doesn't throw — signaling is best-effort.
       let mrse = new System.Threading.ManualResetEventSlim(false)
-      let t = new System.Threading.Timer(System.Threading.TimerCallback(fun _ -> ()), null, 10, System.Threading.Timeout.Infinite)
-      System.Threading.Thread.Sleep(50) // let callback fire
+      let callbackRan = System.Threading.Tasks.TaskCompletionSource<unit>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
+      let t = new System.Threading.Timer(System.Threading.TimerCallback(fun _ -> callbackRan.TrySetResult () |> ignore), null, 10, System.Threading.Timeout.Infinite)
+      let! _ = System.Threading.Tasks.Task.WhenAny(callbackRan.Task, System.Threading.Tasks.Task.Delay 10_000)
+      callbackRan.Task.IsCompleted |> Expect.isTrue "the timer callback should fire"
       let disposeOk = t.Dispose(mrse.WaitHandle)
+      disposeOk |> Expect.isTrue "Timer.Dispose(WaitHandle) should dispose a live timer"
+      // The wait on the dispose handle is the pattern under test; signaling is best-effort.
       let signaled = mrse.Wait(TimeSpan.FromSeconds 10.0)
       match signaled with
       | true -> mrse.Dispose()
       | false -> () // don't dispose if not signaled — timer may signal later
-      // Accept both outcomes: the test proves the pattern doesn't crash
-      (disposeOk || true) |> Expect.isTrue "Timer.Dispose(WaitHandle) should not throw"
+    }
   ]
 
 // ---------------------------------------------------------------------------
@@ -301,20 +303,22 @@ let w29EventOrderingTests =
 let w30TestCycleTimerTests =
   testList "W30(R12) — testCycleTimer WaitHandle join pattern" [
 
-    testCase "Timer.Dispose(WaitHandle) pattern signals MRSE when callback completes" <| fun _ ->
+    testTask "Timer.Dispose(WaitHandle) pattern signals MRSE when callback completes" {
       let mrse = new System.Threading.ManualResetEventSlim(false)
-      let mutable callbackRan = false
+      let callbackRan = System.Threading.Tasks.TaskCompletionSource<unit>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
       let t = new System.Threading.Timer(
-        System.Threading.TimerCallback(fun _ -> callbackRan <- true),
+        System.Threading.TimerCallback(fun _ -> callbackRan.TrySetResult () |> ignore),
         null, 10, System.Threading.Timeout.Infinite)
-      System.Threading.Thread.Sleep(50)
+      let! _ = System.Threading.Tasks.Task.WhenAny(callbackRan.Task, System.Threading.Tasks.Task.Delay 10_000)
+      callbackRan.Task.IsCompleted |> Expect.isTrue "the timer callback should fire"
       let disposeOk = t.Dispose(mrse.WaitHandle)
+      disposeOk |> Expect.isTrue "Timer.Dispose(WaitHandle) should dispose a live timer"
+      // The wait on the dispose handle is the pattern under test; signaling is best-effort.
       let signaled = mrse.Wait(TimeSpan.FromSeconds 10.0)
       match signaled with
       | true -> mrse.Dispose()
       | false -> ()
-      // The pattern must not throw. Signaling is best-effort under ThreadPool pressure.
-      (disposeOk || true) |> Expect.isTrue "Timer.Dispose(WaitHandle) should not throw"
+    }
 
     testCase "bare Dispose returns without joining; Dispose(WaitHandle) waits for callback" <| fun _ ->
       // Contrast bare Dispose with Dispose(WaitHandle) — illustrates the race risk of bare Dispose.
@@ -323,12 +327,11 @@ let w30TestCycleTimerTests =
         System.Threading.TimerCallback(fun _ -> ()),
         null, 200, System.Threading.Timeout.Infinite)
       let disposeOk = t.Dispose(mrse.WaitHandle)
+      disposeOk |> Expect.isTrue "Timer.Dispose(WaitHandle) should dispose a live timer"
       let signaled = mrse.Wait(TimeSpan.FromSeconds 10.0)
       match signaled with
       | true -> mrse.Dispose()
       | false -> ()
-      // Pattern documentation: Dispose(WaitHandle) compiles and doesn't throw.
-      (disposeOk || true) |> Expect.isTrue "Timer.Dispose(WaitHandle) should not throw"
   ]
 
 [<Tests>]

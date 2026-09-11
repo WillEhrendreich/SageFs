@@ -44,28 +44,37 @@ let parentMonitorAliveTests = testList "ParentMonitor.isDaemonAlive" [
 [<Tests>]
 let parentMonitorRunTests = testList "ParentMonitor.run" [
 
-  testCase "cancels cts when daemon pid disappears" <| fun _ ->
-    use cts = new CancellationTokenSource()
-    // Always report dead — monitor should cancel promptly.
-    let mutable logLines = []
-    let monitor =
-      ParentMonitor.run (fun _ -> None) 999999 cts (fun msg -> logLines <- msg :: logLines)
-    let task = monitor |> Async.StartAsTask
-    task.Wait(10_000) |> ignore
-    cts.IsCancellationRequested
-    |> Expect.isTrue "cts should be cancelled after daemon death detected"
-    (not (List.isEmpty logLines))
-    |> Expect.isTrue "should log that the daemon died"
+  testTask "cancels cts when daemon pid disappears" {
+    let cts = new CancellationTokenSource()
+    try
+      // Always report dead — monitor should cancel promptly.
+      let logLines = ref []
+      let monitor =
+        ParentMonitor.run (fun _ -> None) 999999 cts (fun msg -> logLines.Value <- msg :: logLines.Value)
+      let running = monitor |> Async.StartAsTask
+      let! _ = Tasks.Task.WhenAny(running :> Tasks.Task, Tasks.Task.Delay 10_000)
+      cts.IsCancellationRequested
+      |> Expect.isTrue "cts should be cancelled after daemon death detected"
+      (not (List.isEmpty logLines.Value))
+      |> Expect.isTrue "should log that the daemon died"
+    finally
+      cts.Dispose()
+  }
 
-  testCase "does not cancel while daemon alive" <| fun _ ->
-    use cts = new CancellationTokenSource()
-    let self = Process.GetCurrentProcess()
-    let monitor =
-      ParentMonitor.run (fun _ -> Some self) self.Id cts ignore
-    let task = monitor |> Async.StartAsTask
-    // Give it a few poll cycles while the daemon (us) stays alive.
-    Thread.Sleep(ParentMonitor.pollIntervalMs * 3)
-    cts.IsCancellationRequested
-    |> Expect.isFalse "should not cancel while daemon alive"
-    task |> ignore
+  testTask "does not cancel while daemon alive" {
+    let cts = new CancellationTokenSource()
+    try
+      let self = Process.GetCurrentProcess()
+      let monitor =
+        ParentMonitor.run (fun _ -> Some self) self.Id cts ignore
+      let _running = monitor |> Async.StartAsTask
+      // Give it a few poll cycles while the daemon (us) stays alive.
+      do! Tasks.Task.Delay(ParentMonitor.pollIntervalMs * 3)
+      cts.IsCancellationRequested
+      |> Expect.isFalse "should not cancel while daemon alive"
+      // Stop the monitor: it exits at its next poll instead of running on.
+      cts.Cancel()
+    finally
+      cts.Dispose()
+  }
 ]
