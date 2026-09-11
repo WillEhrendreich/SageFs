@@ -318,8 +318,8 @@ jobs:
         dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
         dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
 
-    - name: Build SageFs tool (Release) for the journeys
-      run: dotnet build SageFs/SageFs.fsproj -c Release --nologo
+    - name: Build SageFs tool and test runner (Release) for the journeys
+      run: dotnet build SageFs.Tests/SageFs.Tests.fsproj -c Release --nologo
 
     - name: Build FromCSharp sample (Debug) for the journeys
       run: dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Debug --nologo
