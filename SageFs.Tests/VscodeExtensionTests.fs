@@ -339,10 +339,21 @@ module VscodeHelpers =
     "(() => { var rows = document.querySelectorAll('.quick-input-list .monaco-list-row');" +
     " var out = []; rows.forEach(function(r){ out.push(r.textContent.trim()); }); return out; })()"
 
-  /// Drive the command palette and report which rows were actually visible
-  /// as matches right before Enter — the caller's diagnostic of last resort
-  /// when the command's effect never shows up (did our title not match
-  /// anything, or did it match and the extension-side handler not run?).
+  /// Full account of one palette-driven command dispatch, so a caller's
+  /// failure message can distinguish every distinct silent-no-op cause: the
+  /// palette never opening (Ctrl+Shift+P didn't register, or the window
+  /// wasn't focused), our title matching nothing (a rename, or the command
+  /// not registered in this VS Code build), or a match closing the palette
+  /// without the extension-side effect ever landing (a real product bug).
+  type PaletteDriveResult = {
+    Opened: bool
+    MatchesSeen: string list
+    ClosedAfterEnter: bool
+  }
+
+  /// Drive the command palette and report exactly what happened at each
+  /// step — the caller's diagnostic of last resort when the command's effect
+  /// never shows up.
   let executeCommandDiagnosed (page: IPage) (command: SageFsPaletteCommand) = task {
     // Palette execution is the ONLY reliable command path under CDP: a
     // synthesized `command:` anchor click (executeCommandUri) does not route
@@ -350,18 +361,18 @@ module VscodeHelpers =
     // fixed sleep can race (palette not open yet → keystrokes land in the
     // editor → command silently never runs).
     do! page.Keyboard.PressAsync("Control+Shift+p")
-    let! _opened = waitForPalette 5_000 page
+    let! opened = waitForPalette 5_000 page
     do! page.Keyboard.TypeAsync(SageFsPaletteCommand.title command)
     do! Task.Delay(matcherSettleMs)
     let! matches = page.EvaluateAsync<string[]>(quickPickRowsJs)
     do! page.Keyboard.PressAsync("Enter")
     // The palette closes once the command is dispatched.
-    let! _closed = waitForPaletteClosed 5_000 page
-    return matches |> Array.toList
+    let! closed = waitForPaletteClosed 5_000 page
+    return { Opened = opened; MatchesSeen = matches |> Array.toList; ClosedAfterEnter = closed }
   }
 
   let executeCommand (page: IPage) (command: SageFsPaletteCommand) = task {
-    let! _matches = executeCommandDiagnosed page command
+    let! _result = executeCommandDiagnosed page command
     ()
   }
 
@@ -706,13 +717,13 @@ let dodJourneys =
             " return t && t.textContent.indexOf('SageFs') >= 0 ? 'yes' : 'no'; })()")
         return r = "yes" }
       let! containerOpen = waitUntil 5_000 containerIsOpen
-      let mutable containerPaletteMatches = []
+      let mutable showContainerDrive : VscodeHelpers.PaletteDriveResult option = None
       let mutable activityBarLabelsAtFailure = ""
       if iconResult <> "ok" || not containerOpen then
         let! labels = page.EvaluateAsync<string>(activityBarLabelsJs)
         activityBarLabelsAtFailure <- labels
-        let! matches = VscodeHelpers.executeCommandDiagnosed page ShowSageFsContainer
-        containerPaletteMatches <- matches
+        let! drive = VscodeHelpers.executeCommandDiagnosed page ShowSageFsContainer
+        showContainerDrive <- Some drive
         let! _opened = waitUntil 5_000 containerIsOpen
         ()
       // Activate the hot-reload view via its generated FOCUS command run by
@@ -779,8 +790,8 @@ let dodJourneys =
             " var r = []; vs.forEach(function(v){ r.push(v.className); });" +
             " return JSON.stringify(r); })()")
         failwithf
-          "HR-VSC: tree never showed watching/watched. rows='%s' titles='%s' viewIds='%s' sidebar='%s' status='%s' activityBarLabelsAtOpenFailure='%s' showContainerPaletteMatches='%A'"
-          rows titles viewIds sidebar status activityBarLabelsAtFailure containerPaletteMatches
+          "HR-VSC: tree never showed watching/watched. rows='%s' titles='%s' viewIds='%s' sidebar='%s' status='%s' activityBarLabelsAtOpenFailure='%s' showContainerDrive='%A'"
+          rows titles viewIds sidebar status activityBarLabelsAtFailure showContainerDrive
       let! rows = page.EvaluateAsync<string>(rowsJs)
       let hasWatchState =
         (rows.Contains("watching") || rows.Contains("watched"))
@@ -851,7 +862,7 @@ let dodJourneys =
           let! daemonLt = daemonDiag
           let! status = VscodeHelpers.getStatusBarText page
           failwithf
-            "LT-VSC: baseline never reached 11/11 passed. status='%s' daemonLT='%s' handlerEvidence='%s' enableLiveTestingPaletteMatches='%A'"
+            "LT-VSC: baseline never reached 11/11 passed. status='%s' daemonLT='%s' handlerEvidence='%s' enableLiveTestingDrive='%A'"
             status daemonLt handlerEvidence enableMatches
         Expect.isTrue "baseline should reach 11/11 passed before breaking the file" baselineGreen
         writeHello (original.Replace(canonicalAdd, brokenAdd))
