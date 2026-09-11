@@ -840,8 +840,10 @@ module ResetIsolation =
       restartStarted.Task.IsCompleted
       |> Expect.isTrue "background restart should have started"
 
+      // The SessionManager owns the registry: a build-first rebuild keeps the
+      // live worker serving, so the tool must not mark the session Restarting.
       statuses |> Seq.toList
-      |> Expect.contains "session should be marked restarting immediately" WorkerProtocol.SessionStatus.Restarting
+      |> Expect.isEmpty "the tool writes no session status"
 
       allowRestartFinish.TrySetResult(()) |> ignore
     }
@@ -1061,15 +1063,16 @@ module ResetIsolation =
         "a daemon-owned restart must not be marked Faulted by a reader"
     }
 
-    testTask "WHY — hardResetSession with rebuild=true — updates snapshot to Faulted when RestartSession returns Error because stale Restarting snapshot causes subsequent tool calls to fail silently" {
+    testTask "WHY — hardResetSession with rebuild=true — a failed build is recorded as the rebuild outcome and never written to the registry, because the SessionManager owns session status and build-first keeps the worker serving" {
       // Create context where RestartSession can be controlled via TCS
       let result = globalActorResult.Value
-      let sidStr = "aaa00001"
+      let sidStr = "bbb00011"
       let sessionMap = ConcurrentDictionary<string, string>()
       sessionMap.["agent1"] <- sidStr
       let statuses = ResizeArray<WorkerProtocol.SessionStatus>()
       let restartResult = TaskCompletionSource<Result<string, SageFsError>>()
       let faultedSignal = TaskCompletionSource<unit>()
+      let finished = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
 
       let ops : SessionManagementOps = {
         CreateSession = fun _ _ _ -> Task.FromResult(Ok "new-session")
@@ -1117,38 +1120,38 @@ module ResetIsolation =
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveSnapshotSink = None } : McpContext
 
-      // Act: call hardReset — this returns immediately after setting Restarting
+      // The background rebuild reports its outcome as one final status event.
+      let ctx =
+        { ctx with
+            Dispatch = Some (fun msg ->
+              match msg with
+              | SageFsMsg.Event (SageFsEvent.SessionStatusChanged _) -> finished.TrySetResult(()) |> ignore
+              | _ -> ()) }
+
       let! message = hardResetSession ctx "agent1" true (Some sidStr) None
 
       message
       |> Expect.stringContains "should return immediately with status message" "Hard reset initiated"
 
-      // Restarting should have been set synchronously
-      statuses |> Seq.toList
-      |> Expect.contains "Restarting should be set before returning" WorkerProtocol.SessionStatus.Restarting
-
-      // Signal the RestartSession to fail
       restartResult.TrySetResult(Error (SageFsError.HardResetFailed "build failed"))
       |> Expect.isTrue "should be able to complete restart TCS"
 
-      // Poll for Faulted status update (fire-and-forget task is async)
-      let sw = System.Diagnostics.Stopwatch.StartNew()
-      let mutable gotFaulted = false
-      while not gotFaulted && sw.ElapsedMilliseconds < 5000L do
-        do! Task.Delay(50)
-        gotFaulted <- faultedSignal.Task.IsCompleted
+      let! winner = Task.WhenAny(finished.Task :> Task, Task.Delay 5000)
+      obj.ReferenceEquals(winner, finished.Task)
+      |> Expect.isTrue "the background rebuild must report an outcome"
 
-      gotFaulted |> Expect.isTrue
-        "snapshot should be updated to Faulted within timeout — without this fix the snapshot stays stuck in Restarting"
-
-      // Final snapshot should have been Faulted (last status update)
       statuses |> Seq.toList
-      |> Expect.contains "snapshot should be Faulted after RestartSession error" WorkerProtocol.SessionStatus.Faulted
+      |> Expect.isEmpty "the tool writes no session status — the SessionManager owns it"
+
+      match rebuildOutcomes.TryGetValue sidStr with
+      | true, RebuildOutcome.FailedStillServing (SageFsError.HardResetFailed "build failed", _) -> ()
+      | _, other -> failtestf "expected FailedStillServing carrying the build error, got %A" other
     }
 
-    testTask "WHY — hardResetSession with rebuild=true — updates snapshot to Faulted when RestartSession throws because unhandled exceptions in fire-and-forget tasks leave the session stuck Restarting indefinitely" {
+    testTask "WHY — hardResetSession with rebuild=true — an exception from RestartSession is recorded as a failed rebuild and reported, never swallowed, because a fire-and-forget task must surface its failure" {
       let result = globalActorResult.Value
-      let sidStr = "aaa00001"
+      let sidStr = "bbb00012"
+      let finished = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
       let sessionMap = ConcurrentDictionary<string, string>()
       sessionMap.["agent1"] <- sidStr
       let statuses = ResizeArray<WorkerProtocol.SessionStatus>()
@@ -1204,31 +1207,32 @@ module ResetIsolation =
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveSnapshotSink = None } : McpContext
 
+      // The background rebuild reports its outcome as one final status event.
+      let ctx =
+        { ctx with
+            Dispatch = Some (fun msg ->
+              match msg with
+              | SageFsMsg.Event (SageFsEvent.SessionStatusChanged _) -> finished.TrySetResult(()) |> ignore
+              | _ -> ()) }
+
       let! message = hardResetSession ctx "agent1" true (Some sidStr) None
 
       message
       |> Expect.stringContains "should return immediately" "Hard reset initiated"
 
-      // Wait for RestartSession to be called (it will throw)
-      let swCall = System.Diagnostics.Stopwatch.StartNew()
-      let mutable gotCalled = false
-      while not gotCalled && swCall.ElapsedMilliseconds < 5000L do
-        do! Task.Delay(50)
-        gotCalled <- restartCalled.Task.IsCompleted
-      gotCalled |> Expect.isTrue "RestartSession should be invoked"
+      let! winner = Task.WhenAny(finished.Task :> Task, Task.Delay 5000)
+      obj.ReferenceEquals(winner, finished.Task)
+      |> Expect.isTrue "the background rebuild must report an outcome, not swallow the exception"
 
-      // Poll for Faulted status update
-      let swFault = System.Diagnostics.Stopwatch.StartNew()
-      let mutable gotFaulted = false
-      while not gotFaulted && swFault.ElapsedMilliseconds < 5000L do
-        do! Task.Delay(50)
-        gotFaulted <- faultedSignal.Task.IsCompleted
-
-      gotFaulted |> Expect.isTrue
-        "snapshot should be Faulted after RestartSession throws — fire-and-forget must not silently swallow exceptions"
+      restartCalled.Task.IsCompleted |> Expect.isTrue "RestartSession should be invoked"
 
       statuses |> Seq.toList
-      |> Expect.contains "snapshot should be Faulted after exception" WorkerProtocol.SessionStatus.Faulted
+      |> Expect.isEmpty "the tool writes no session status — the SessionManager owns it"
+
+      match rebuildOutcomes.TryGetValue sidStr with
+      | true, RebuildOutcome.FailedStillServing (SageFsError.Unexpected ex, _) ->
+        ex.Message |> Expect.stringContains "the outcome carries the exception" "unexpected crash in RestartSession"
+      | _, other -> failtestf "expected a failed rebuild carrying the exception, got %A" other
     }
 
     testTask "concurrent agents: resetting one never touches the other's session" {

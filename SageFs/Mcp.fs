@@ -752,6 +752,47 @@ module McpTools =
   let typeIdentityDiagnostics =
     Collections.Concurrent.ConcurrentDictionary<string, string>()
 
+  /// The outcome of the last rebuild an agent requested for a session. A
+  /// build-first rebuild that fails keeps the live worker serving, so no fault
+  /// event ever fires — get_fsi_status (where hard_reset points agents) is the
+  /// one place the outcome, and the compiler errors, are reported.
+  [<RequireQualifiedAccess>]
+  type RebuildOutcome =
+    | InProgress of startedAt: DateTime
+    | Succeeded of finishedAt: DateTime
+    /// The build failed; the session keeps serving its previous build.
+    | FailedStillServing of error: SageFsError * finishedAt: DateTime
+    /// The build failed and no worker is serving the session.
+    | FailedNotServing of error: SageFsError * finishedAt: DateTime
+
+  module RebuildOutcome =
+    /// Classify a finished rebuild from the owner's reply and the session's
+    /// registry status afterwards — the SessionManager decides whether the
+    /// session still serves; this only reads its verdict.
+    let ofResult (finishedAt: DateTime) (result: Result<string, SageFsError>) (after: WorkerProtocol.SessionStatus option) =
+      match result, after with
+      | Ok _, _ -> RebuildOutcome.Succeeded finishedAt
+      | Error e, Some (WorkerProtocol.SessionStatus.Ready | WorkerProtocol.SessionStatus.Evaluating | WorkerProtocol.SessionStatus.Building _) ->
+        RebuildOutcome.FailedStillServing (e, finishedAt)
+      | Error e, _ -> RebuildOutcome.FailedNotServing (e, finishedAt)
+
+    let private clock (at: DateTime) = at.ToLocalTime().ToString("HH:mm:ss")
+
+    /// One status line for get_fsi_status.
+    let describe (now: DateTime) = function
+      | RebuildOutcome.InProgress startedAt ->
+        sprintf "🔨 Rebuild in progress (%.0fs) — the current worker keeps serving until the new build is ready." (now - startedAt).TotalSeconds
+      | RebuildOutcome.Succeeded finishedAt ->
+        sprintf "✅ Last rebuild succeeded at %s." (clock finishedAt)
+      | RebuildOutcome.FailedStillServing (error, finishedAt) ->
+        sprintf "⚠️ Last rebuild failed at %s — still serving the previous build.\n%s" (clock finishedAt) (SageFsError.describeForAgent error)
+      | RebuildOutcome.FailedNotServing (error, finishedAt) ->
+        sprintf "🔴 Last rebuild failed at %s — no worker is serving this session.\n%s" (clock finishedAt) (SageFsError.describeForAgent error)
+
+  /// Per-session outcome of the last agent-requested rebuild (see RebuildOutcome).
+  let rebuildOutcomes =
+    Collections.Concurrent.ConcurrentDictionary<string, RebuildOutcome>()
+
   /// Temporal dedup cache — prevents re-evaluating identical code within 2s window.
   let evalDedupCache = Features.EvalDedup.DedupCache.defaultCache ()
 
@@ -1526,7 +1567,11 @@ module McpTools =
             |> SessionOperations.CoordinationEnrichment.enrichStatusWithPresences DateTime.UtcNow presences
           // Also record this status check as agent activity
           AgentActivityTracker.recordToolCall ctx.ActivityTracker agent sid None None DateTime.UtcNow
-          return enriched
+          let rebuildLine =
+            match rebuildOutcomes.TryGetValue sid with
+            | true, outcome -> "\n" + RebuildOutcome.describe DateTime.UtcNow outcome
+            | false, _ -> ""
+          return enriched + rebuildLine
         | Ok other ->
           return sprintf "Unexpected response: %A" other
         | Error (RestartInProgress msg) ->
@@ -1740,57 +1785,45 @@ module McpTools =
 
   let hardResetSession (ctx: McpContext) (agent: string) (rebuild: bool) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     withSessionAllowFaulted ctx agent sessionId workingDirectory (fun sid -> task {
-      notifyElm ctx (
-        SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
       match rebuild with
       | true ->
-        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Restarting
         compilationStates.TryRemove(sid) |> ignore
         typeIdentityDiagnostics.TryRemove(sid) |> ignore
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
+        rebuildOutcomes.[sid] <- RebuildOutcome.InProgress DateTime.UtcNow
         notifyElm ctx (
           SageFsEvent.WarmupProgress (1, 4, "Building project..."))
-        // Fire-and-forget: build + restart happens in background.
-        // Return immediately so MCP tool call doesn't time out (~30s build).
-        // Client polls get_fsi_status or list_sessions to check completion.
-        // IMPORTANT: Always update snapshot status on both success and error,
-        // and catch exceptions. Without this, a failed RestartSession silently
-        // leaves the snapshot stuck in Restarting — causing subsequent tool calls
-        // to fail with "still warming up" or SessionMissing friction.
+        // Fire-and-forget: the build runs in the background so the MCP call
+        // doesn't time out; get_fsi_status reports progress and the outcome.
+        //
+        // The SessionManager mailbox is the single owner of both the session
+        // registry and restart coalescing: it rejects a second hard reset
+        // while a rebuild is in flight, keeps the live worker serving through
+        // a build-first rebuild, and marks a cold restart Restarting itself.
+        // So this tool writes NO session status and runs no read-then-act
+        // pre-check — an earlier "competing restart" check read back this
+        // call's own Restarting marker and silently skipped the rebuild.
         task {
-          try
-            // Second-line defense against competing restarts: the primary guard
-            // (resolveSessionId → WarmingUp/Unroutable) stops a reader from even
-            // entering hardReset while a session is starting or restarting. This
-            // check covers the narrow race where this tool call was admitted just
-            // before another restart marked the registry `Restarting`: if so, that
-            // restart owns the recovery — do NOT schedule a competing RestartSession
-            // (SessionManager serializes them, but a queued second restart would
-            // discard the first one's brand-new worker for no reason).
-            let! inFlightInfo = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-            match inFlightInfo with
-            | Some i when i.Status = WorkerProtocol.SessionStatus.Restarting ->
-              notifyElm ctx (
-                SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
-              ()
-            | _ ->
-              let! result = ctx.SessionOps.RestartSession (toSessionId sid) true
-              match result with
-              | Ok msg ->
-                do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
-                notifyElm ctx (
-                  SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
-              | Error err ->
-                do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
-                notifyElm ctx (
-                  SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
-          with ex ->
-            do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
-            notifyElm ctx (
-              SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (sprintf "Hard reset threw: %s" ex.Message)))
+          let! result =
+            task {
+              try return! ctx.SessionOps.RestartSession (toSessionId sid) true
+              with ex -> return Error (SageFsError.Unexpected ex)
+            }
+          let now = DateTime.UtcNow
+          let! after = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+          let outcome = RebuildOutcome.ofResult now result (after |> Option.map (fun info -> info.Status))
+          rebuildOutcomes.[sid] <- outcome
+          let display =
+            match outcome, after with
+            | RebuildOutcome.FailedNotServing (error, _), _ -> SessionDisplayStatus.Errored (SageFsError.describe error)
+            | _, Some info -> SessionDisplay.displayStatus now info
+            | _, None -> SessionDisplayStatus.Errored "Session is no longer registered"
+          notifyElm ctx (SageFsEvent.SessionStatusChanged (sid, display))
         } |> ignore
-        return "Hard reset initiated — rebuilding project. Use get_fsi_status to check when ready."
+        return "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_fsi_status reports the rebuild's progress and outcome."
       | false ->
+        notifyElm ctx (
+          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Restarting))
         let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
         let previousStatus =
           info
