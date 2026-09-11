@@ -978,12 +978,16 @@ type LiveTestWatcherManager
     watchers.GetOrAdd(dir, fun d ->
       let watcher = new System.IO.FileSystemWatcher(d)
       watcher.IncludeSubdirectories <- true
-      watcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite
+      // FileName too: editors that save safely (vim, JetBrains, sed -i) write a
+      // temp file and rename it over the source, which is a rename, not a write.
+      watcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite ||| System.IO.NotifyFilters.FileName
       watcher.Filters.Add("*.fs")
       watcher.Filters.Add("*.fsx")
       let handler = handleFileChanged [d]
       watcher.Changed.Add(handler)
       watcher.Created.Add(handler)
+      // A rename's FullPath is the new name — the source file that was saved.
+      watcher.Renamed.Add(fun e -> handler e)
       watcher.EnableRaisingEvents <- true
       Log.info "[watcher] Registered file watcher for %s" d
       watcher, sharedDebounceTimer) |> ignore
