@@ -12,6 +12,7 @@ open SageFs.WorkerProtocol
 type private Verb =
   | Start
   | Stop
+  | Build
 
 type private Harness = {
   Mailbox: MailboxProcessor<SessionCommand>
@@ -50,6 +51,7 @@ let private mkRuntime
         RunBuildAsync =
           fun _ _ -> async {
             buildCalls <- buildCalls + 1
+            verbs.Add Verb.Build
             return runBuild buildCalls
           }
       }
@@ -222,7 +224,7 @@ let sessionManagerSpawnFirstRestartTests =
         runtime.Verbs |> Seq.toList
         |> Expect.equal "spawn failure must not stop the old worker" [ Verb.Start; Verb.Start ]
 
-    testCase "T4 — rebuild hard reset keeps stop-then-spawn order" <| fun _ ->
+    testCase "T4 — rebuild hard reset builds while the old worker serves, then swaps spawn-first" <| fun _ ->
       let runtime =
         mkRuntime
           (fun _ -> Ok "build ok")
@@ -236,12 +238,39 @@ let sessionManagerSpawnFirstRestartTests =
         | Ok _ -> ()
         | Error err -> failtestf "rebuild restart failed: %s" (SageFsError.describe err)
 
+        // The build runs first with the old worker untouched; only a good build
+        // spawns the replacement, which retires the old worker on its Ready (T7).
         runtime.Verbs |> Seq.toList
-        |> Expect.equal "rebuild restart must stop the old worker before spawning" [ Verb.Start; Verb.Stop; Verb.Start ]
-        runtime.GetStartCalls()
-        |> Expect.equal "rebuild restart spawns one replacement" 2
+        |> Expect.equal "rebuild restart must build before spawning, without stopping the serving worker" [ Verb.Start; Verb.Build; Verb.Start ]
         runtime.GetBuildCalls()
         |> Expect.equal "rebuild restart runs one build" 1
+        let session = getManagedSession harness info.Id
+        session.Info.Status
+        |> Expect.equal "the swap is in progress" SessionStatus.Restarting
+
+    testCase "T4b — a failed rebuild leaves the session Ready on its running worker because a compile error must not kill a working session" <| fun _ ->
+      let runtime =
+        mkRuntime
+          (fun _ -> Error "Hello.fs(3,5): error FS0001: expected int")
+          (fun _ -> Ok(Process.GetCurrentProcess()))
+
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        makeSessionReady harness info
+        let originalPid = getManagedSession harness info.Id |> getWorkerPid
+
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
+        | Error (SageFsError.BuildFailed reason) ->
+          reason |> Expect.equal "the caller gets the build error" "Hello.fs(3,5): error FS0001: expected int"
+        | other -> failtestf "expected BuildFailed, got %A" other
+
+        let session = getManagedSession harness info.Id
+        session.Info.Status |> Expect.equal "the session keeps serving" SessionStatus.Ready
+        session.Info.WorkerPid |> Expect.equal "on the same worker" (Some originalPid)
+        runtime.Verbs |> Seq.toList
+        |> Expect.equal "the running worker is never stopped and nothing is spawned" [ Verb.Start; Verb.Build ]
+        harness.FaultedEvents |> Seq.length
+        |> Expect.equal "a failed build is not a session fault" 0
 
     testCase "T5 — the retired worker's exit during a swap is ignored" <| fun _ ->
       let runtime =

@@ -674,6 +674,7 @@ module SessionManager =
         (session: ManagedSession)
         (workflow: WorkflowTypes.SessionWorkflow)
         (reply: AsyncReplyChannel<Result<string, SageFsError>>)
+        (acceptedMessage: string)
         (span: Activity)
         : ManagerState =
         match isNull span with
@@ -707,7 +708,7 @@ module SessionManager =
               { ManagerState.addSession id restarting state with
                   WarmupProgress = Map.remove id state.WarmupProgress }
           runtime.AwaitWorkerPort id proc inbox ct
-          reply.Reply(Ok "Hard reset accepted — replacement worker spawning.")
+          reply.Reply(Ok acceptedMessage)
           Instrumentation.sessionsRestarted.Add(1L)
           Instrumentation.succeedSpan span
           newState
@@ -839,16 +840,34 @@ module SessionManager =
           | Some session ->
             match rebuild with
             | false ->
-              return spawnFirst state id session session.Workflow reply span
+              return spawnFirst state id session session.Workflow reply "Hard reset accepted — replacement worker spawning." span
             | true ->
-              // rebuild=true: stop the old worker first (bounded), then run
-              // `dotnet build` OFF the mailbox loop so other session operations
-              // (list/create/stop) stay responsive for the whole build. The
-              // caller's reply channel is parked in state and NOT answered yet —
-              // the FINAL Ok/Error is delivered when RebuildCompleted is
-              // processed (the mailbox is the single respawn point), so the
-              // caller's PostAndAsyncReply resolves only once the restart has
-              // actually completed.
+              // rebuild=true runs `dotnet build` OFF the mailbox loop so other
+              // session operations (list/create/stop) stay responsive for the
+              // whole build. The caller's reply channel is parked in state and
+              // NOT answered yet — the FINAL Ok/Error is delivered when
+              // RebuildCompleted is processed (the mailbox is the single respawn
+              // point).
+              let buildInBackground stateInFlight =
+                Async.Start(async {
+                  let! buildResult = runtime.RunBuildAsync session.Projects session.WorkingDir
+                  inbox.Post(SessionCommand.RebuildCompleted(id, buildResult, reply))
+                }, ct)
+                stateInFlight
+              match session.Info.WorkerPid with
+              | Some _ ->
+                // Build first: the live worker keeps serving the last good build
+                // for the whole build, so a build that fails (a typo mid-edit)
+                // never costs the user a working session. Only a good build swaps
+                // in the replacement, spawn-first. The worker loads shadow
+                // copies, so the build never fights it for file locks.
+                match isNull span with
+                | false -> span.SetTag("restart.decision", "build_first") |> ignore
+                | true -> ()
+                Instrumentation.succeedSpan span
+                return buildInBackground (ManagerState.setRebuildInFlight id reply state)
+              | None ->
+              // No live worker (faulted or stopped): nothing to keep serving.
               match isNull span with
               | false -> span.SetTag("restart.decision", "cold_restart") |> ignore
               | true -> ()
@@ -869,13 +888,8 @@ module SessionManager =
                 let afterMark = ManagerState.addSession id restarting state
                 { afterMark with
                     WarmupProgress = Map.remove id afterMark.WarmupProgress }
-              let stateInFlight = ManagerState.setRebuildInFlight id reply stateAfterStop
               Instrumentation.succeedSpan span
-              Async.Start(async {
-                let! buildResult = runtime.RunBuildAsync session.Projects session.WorkingDir
-                inbox.Post(SessionCommand.RebuildCompleted(id, buildResult, reply))
-              }, ct)
-              return stateInFlight
+              return buildInBackground (ManagerState.setRebuildInFlight id reply stateAfterStop)
           | None ->
             reply.Reply(Error (SageFsError.SessionNotFound (SessionId.value id)))
             Instrumentation.failSpan span (sprintf "Session %s not found" (SessionId.value id))
@@ -891,10 +905,17 @@ module SessionManager =
           match ManagerState.tryGetSession id state with
           | Some session ->
             let stateCleared = ManagerState.clearRebuildInFlight id state
-            match buildResult with
-            | Error msg ->
-              // Build failed → faulted tombstone (same fail-closed contract as
-              // the old inline path).
+            match buildResult, session.Info.WorkerPid with
+            | Error msg, Some _ ->
+              // The live worker still serves the last good build: the failure is
+              // the caller's to show, not a reason to kill a working session.
+              reply.Reply(Error (SageFsError.BuildFailed msg))
+              Instrumentation.failSpan rebuildSpan msg
+              return stateCleared
+            | Ok _buildMsg, Some _ ->
+              return spawnFirst stateCleared id session session.Workflow reply "Hard reset complete — worker respawning with fresh assemblies." rebuildSpan
+            | Error msg, None ->
+              // No worker to fall back to → faulted tombstone that says why.
               let tombstone = faultedTombstone (Some msg) session
               let newState = ManagerState.addSession id tombstone stateCleared
               reply.Reply(Error (SageFsError.BuildFailed msg))
@@ -902,7 +923,7 @@ module SessionManager =
               onSessionFaulted id msg
               Instrumentation.failSpan rebuildSpan msg
               return newState
-            | Ok _buildMsg ->
+            | Ok _buildMsg, None ->
               let newState, spawnResult = spawnColdReplacement id session inbox rebuildSpan stateCleared
               match spawnResult with
               | Ok () ->
@@ -1436,7 +1457,7 @@ module SessionManager =
             // switch never claims a workflow the serving worker does not have.
             let span =
               Instrumentation.startSpan Instrumentation.sessionSource "session.switch_workflow" [("session.id", box id)]
-            let newState = spawnFirst state id session workflow reply span
+            let newState = spawnFirst state id session workflow reply "Hard reset accepted — replacement worker spawning." span
             onSessionProgressChanged ()
             return newState
           | None ->
