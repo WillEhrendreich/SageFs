@@ -166,6 +166,16 @@ let liveValueSnapshotTests = testList "LiveValueSnapshot" [
     snap.Bindings.Length |> Expect.equal "capped at MaxBindings" MaxBindings
     snap.Truncated |> Expect.isTrue "binding cap sets Truncated"
 
+  testCase "WHY — LiveValueTree.buildSnapshot — capping keeps the MOST RECENTLY bound values, not the oldest, because FsiEvaluationSession.GetBoundValues() returns declaration order (empirically verified: first-declared name is first in the list) and a live value WATCH exists to show what the user just defined, not what they defined at session start" <| fun _ ->
+    // Oldest-first input, as the real FSI session hands it to AppState.fs.
+    let oldestFirst =
+      [ for i in 1 .. (MaxBindings + 50) -> sprintf "v%d" i, "int", box i ]
+    let snap = buildSnapshot "sess1" 1L oldestFirst
+    let names = snap.Bindings |> List.map (fun b -> b.Name)
+    let expectedMostRecent =
+      [ for i in 51 .. (MaxBindings + 50) -> sprintf "v%d" i ]
+    names |> Expect.equal "kept the last MaxBindings declared, not the first" expectedMostRecent
+
   testCase "node budget bounds expansion of hostile graphs" <| fun _ ->
     // A wide object whose children are themselves wide objects. Without a node
     // budget the expansion is exponential (50^depth); the budget must cap the

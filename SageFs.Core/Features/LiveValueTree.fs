@@ -362,7 +362,15 @@ module LiveValueTree =
     (generation: int64)
     (boundValues: (string * string * obj) list)
     : LiveValueSnapshot =
-    let capped = boundValues |> List.truncate MaxBindings
+    // boundValues arrives oldest-first (FsiEvaluationSession.GetBoundValues's
+    // own declaration order — verified empirically: the first-declared name is
+    // first in the list, and rebinding a name does not move its position).
+    // Truncating that directly would silently keep the OLDEST MaxBindings
+    // names and drop everything the user has defined since — backwards for a
+    // live value WATCH, which exists to show what was just defined. Reverse
+    // to newest-first, truncate to the most recent MaxBindings, then reverse
+    // back so the kept subset still displays oldest-of-the-kept first.
+    let capped = boundValues |> List.rev |> List.truncate MaxBindings |> List.rev
     let bindings =
       capped
       |> List.map (fun (name, typeSig, value) ->
