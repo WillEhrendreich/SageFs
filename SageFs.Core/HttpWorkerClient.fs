@@ -265,9 +265,15 @@ module HttpWorkerClient =
           | SseData.TestResult json -> deliverResult onResult json
           | SseData.Coverage json ->
             try
+              // Wire format is packed base64 words (CoverageBitmap.toBase64),
+              // not one JSON bool per probe — unpacked back to a bool array
+              // here so onCoverage's contract is unchanged.
               use doc = System.Text.Json.JsonDocument.Parse(json)
-              let hitsArr = doc.RootElement.GetProperty("hits")
-              let hits = [| for i in 0 .. hitsArr.GetArrayLength() - 1 -> hitsArr.[i].GetBoolean() |]
+              let count = doc.RootElement.GetProperty("count").GetInt32()
+              let words = doc.RootElement.GetProperty("words").GetString()
+              let hits =
+                Features.LiveTesting.CoverageBitmap.ofBase64 count words
+                |> Features.LiveTesting.CoverageBitmap.toBoolArray
               onCoverage hits
             with ex ->
               Utils.Log.warn "[HttpWorkerClient] Coverage data parse failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")))

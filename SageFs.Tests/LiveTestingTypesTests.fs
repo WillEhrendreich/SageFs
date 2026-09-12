@@ -76,6 +76,13 @@ let changedEntriesFor
   LiveTestState.orderedStatusEntries state
   |> Array.filter (fun entry -> Set.contains entry.TestId changedIds)
 
+/// Sizes chosen to straddle a SIMD vector's word width (2 on SSE2/NEON, 4 on
+/// AVX2, 8 on AVX-512) from multiple angles: exactly one vector, one vector
+/// plus a partial tail, several vectors, and a large odd count — so a
+/// vectorized rewrite of CoverageBitmap's ops cannot silently mishandle its
+/// remainder loop and still pass.
+let private wideSizes = [ 128; 129; 256; 257; 999; 1024; 1025; 4096; 4099 ]
+
 [<Tests>]
 let liveTestingTypesTests = testList "LiveTestingTypes" [
 
@@ -977,6 +984,75 @@ let liveTestingTypesTests = testList "LiveTestingTypes" [
       | _ ->
         let result = CoverageBitmap.xorDiff bm bm
         CoverageBitmap.popCount result = 0
+  ]
+
+  testList "CoverageBitmap ops at SIMD-scale sizes (multi-word, not just one word)" [
+    for size in wideSizes do
+      testCase (sprintf "equivalent is reflexive at %d elements" size) <| fun _ ->
+        let bm = Array.init size (fun i -> i % 7 = 0) |> CoverageBitmap.ofBoolArray
+        CoverageBitmap.equivalent bm bm
+        |> Expect.isTrue (sprintf "%d-element bitmap should equal itself" size)
+
+      testCase (sprintf "equivalent detects a single flipped bit at %d elements" size) <| fun _ ->
+        let arr = Array.init size (fun i -> i % 3 = 0)
+        let bm1 = CoverageBitmap.ofBoolArray arr
+        for flipIndex in [ 0; size / 2; size - 1 ] do
+          let flipped = Array.copy arr
+          flipped.[flipIndex] <- not flipped.[flipIndex]
+          let bm2 = CoverageBitmap.ofBoolArray flipped
+          CoverageBitmap.equivalent bm1 bm2
+          |> Expect.isFalse (sprintf "flip at index %d of %d should be detected" flipIndex size)
+
+      testCase (sprintf "intersect/xorDiff/union agree with a naive bool-array reference at %d elements" size) <| fun _ ->
+        let a = Array.init size (fun i -> i % 7 = 0)
+        let b = Array.init size (fun i -> i % 5 = 0)
+        let bmA = CoverageBitmap.ofBoolArray a
+        let bmB = CoverageBitmap.ofBoolArray b
+        let expectedAnd = Array.map2 (&&) a b
+        let expectedXor = Array.map2 (<>) a b
+        let expectedOr = Array.map2 (||) a b
+        CoverageBitmap.intersect bmA bmB |> CoverageBitmap.toBoolArray
+        |> Expect.equal (sprintf "AND reference mismatch at %d elements" size) expectedAnd
+        CoverageBitmap.xorDiff bmA bmB |> CoverageBitmap.toBoolArray
+        |> Expect.equal (sprintf "XOR reference mismatch at %d elements" size) expectedXor
+        CoverageBitmap.union bmA bmB |> CoverageBitmap.toBoolArray
+        |> Expect.equal (sprintf "OR reference mismatch at %d elements" size) expectedOr
+
+      testCase (sprintf "popCount matches a naive count at %d elements" size) <| fun _ ->
+        let arr = Array.init size (fun i -> i % 4 = 0)
+        let bm = CoverageBitmap.ofBoolArray arr
+        CoverageBitmap.popCount bm
+        |> Expect.equal (sprintf "popCount mismatch at %d elements" size) (arr |> Array.filter id |> Array.length)
+  ]
+
+  testList "CoverageBitmap wire format (base64-packed words, not one JSON bool per probe)" [
+    test "WHY — CoverageBitmap.toBase64/ofBase64 — an empty bitmap round-trips because a run with zero probes must still produce a valid wire payload" {
+      let bm = CoverageBitmap.empty
+      CoverageBitmap.ofBase64 bm.Count (CoverageBitmap.toBase64 bm)
+      |> CoverageBitmap.equivalent bm
+      |> Expect.isTrue "empty bitmap round-trips through base64"
+    }
+
+    for size in wideSizes @ [ 1; 63; 64; 65 ] do
+      testCase (sprintf "WHY — CoverageBitmap.toBase64/ofBase64 — %d probes round-trip exactly because a lossy pack would silently corrupt coverage data" size) <| fun _ ->
+        let bits = Array.init size (fun i -> i % 3 = 0)
+        let bm = CoverageBitmap.ofBoolArray bits
+        let wire = CoverageBitmap.toBase64 bm
+        CoverageBitmap.ofBase64 bm.Count wire
+        |> CoverageBitmap.toBoolArray
+        |> Expect.equal (sprintf "%d-probe round-trip" size) bits
+
+    test "WHY — CoverageBitmap.toBase64 — the packed wire payload is far smaller than one JSON bool per probe because that is the whole point of packing it" {
+      let size = 10_000
+      let bits = Array.init size (fun i -> i % 2 = 0)
+      let bm = CoverageBitmap.ofBoolArray bits
+      let packedBytes = (CoverageBitmap.toBase64 bm).Length
+      // A naive `[true,false,...]` JSON array costs ~5-6 bytes per probe.
+      let naiveJsonBytesLowerBound = size * 4
+      (packedBytes, naiveJsonBytesLowerBound)
+      |> Expect.isLessThan
+        (sprintf "packed %d bytes should be far below the naive JSON lower bound %d for %d probes" packedBytes naiveJsonBytesLowerBound size)
+    }
   ]
 
   testList "ILCoverage.computeLineCoverage" [

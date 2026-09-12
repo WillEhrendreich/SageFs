@@ -2,6 +2,7 @@ namespace SageFs.Features.LiveTesting
 
 open System
 open System.IO
+open System.Numerics
 open System.Reflection
 open System.Security.Cryptography
 open System.Text
@@ -607,18 +608,36 @@ module CoverageBitmap =
         result.[i] <- (bm.Bits.[word] &&& (1UL <<< bit)) <> 0UL
       result
 
-  /// Check if two bitmaps have identical coverage (same size + same bits).
-  /// JIT auto-vectorizes this comparison loop.
-  let equivalent (a: CoverageBitmap) (b: CoverageBitmap) : bool =
-    match a.Count <> b.Count with
-    | true -> false
+  /// Pack the bitmap's words into a base64 string for the wire — 8 bytes per
+  /// word before base64's 4:3 expansion, versus one JSON `true,`/`false,`
+  /// token (5-6 bytes) per individual probe. This is the wire format;
+  /// `Count` still has to travel alongside it (a corruption-shortened byte
+  /// buffer would otherwise silently truncate the last word's probes).
+  let toBase64 (bm: CoverageBitmap) : string =
+    let bytes = Array.zeroCreate<byte> (bm.Bits.Length * 8)
+    Buffer.BlockCopy(bm.Bits, 0, bytes, 0, bytes.Length)
+    Convert.ToBase64String(bytes)
+
+  /// Unpack a base64-encoded word buffer back into a CoverageBitmap. `count`
+  /// is the true probe count (carried alongside the payload, not recovered
+  /// from byte length — the last word can be padded with unused bits).
+  let ofBase64 (count: int) (base64: string) : CoverageBitmap =
+    match count = 0 with
+    | true -> empty
     | false ->
-      let mutable eq = true
-      let mutable i = 0
-      while eq && i < a.Bits.Length do
-        eq <- a.Bits.[i] = b.Bits.[i]
-        i <- i + 1
-      eq
+      let bytes = Convert.FromBase64String(base64)
+      let words = wordsNeeded count
+      let bits = Array.zeroCreate<uint64> words
+      Buffer.BlockCopy(bytes, 0, bits, 0, bytes.Length)
+      { Bits = bits; Count = count }
+
+  /// Check if two bitmaps have identical coverage (same size + same bits).
+  /// SequenceEqual on a Span<uint64> is a BCL-vectorized memory comparison —
+  /// unlike a hand-written while-loop with a data-dependent early exit (the
+  /// previous implementation here), which the JIT does NOT auto-vectorize.
+  let equivalent (a: CoverageBitmap) (b: CoverageBitmap) : bool =
+    a.Count = b.Count
+    && System.MemoryExtensions.SequenceEqual(ReadOnlySpan<uint64> a.Bits, ReadOnlySpan<uint64> b.Bits)
 
   /// Count number of set bits (covered probes).
   let popCount (bm: CoverageBitmap) : int =
@@ -627,21 +646,42 @@ module CoverageBitmap =
       total <- total + (System.Numerics.BitOperations.PopCount(w) |> int)
     total
 
+  /// Apply a bitwise op word-by-word using System.Numerics.Vector<uint64> —
+  /// the JIT lowers this to real hardware SIMD instructions (SSE2/AVX2/NEON,
+  /// whichever the running CPU has) — with a scalar remainder loop for the
+  /// words left over when the word count isn't a multiple of the vector
+  /// width. `a` and `b` must be the same length; callers check Count first.
+  let inline private zipWords
+    ([<InlineIfLambda>] vecOp: Vector<uint64> -> Vector<uint64> -> Vector<uint64>)
+    ([<InlineIfLambda>] scalarOp: uint64 -> uint64 -> uint64)
+    (a: uint64 array)
+    (b: uint64 array)
+    : uint64 array =
+    let len = a.Length
+    let result = Array.zeroCreate<uint64> len
+    let width = Vector<uint64>.Count
+    let mutable i = 0
+    while i + width <= len do
+      (vecOp (Vector<uint64>(a, i)) (Vector<uint64>(b, i))).CopyTo(result, i)
+      i <- i + width
+    while i < len do
+      result.[i] <- scalarOp a.[i] b.[i]
+      i <- i + 1
+    result
+
   /// Bitwise AND — intersection of two coverage bitmaps.
   let intersect (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
     match a.Count <> b.Count with
     | true -> failwithf "CoverageBitmap.intersect size mismatch: a.Count=%d, b.Count=%d" a.Count b.Count
     | false -> ()
-    let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] &&& b.Bits.[i])
-    { Bits = bits; Count = a.Count }
+    { Bits = zipWords (&&&) (&&&) a.Bits b.Bits; Count = a.Count }
 
   /// Bitwise XOR — symmetric difference of two coverage bitmaps.
   let xorDiff (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
     match a.Count <> b.Count with
     | true -> failwithf "CoverageBitmap.xorDiff size mismatch: a.Count=%d, b.Count=%d" a.Count b.Count
     | false -> ()
-    let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] ^^^ b.Bits.[i])
-    { Bits = bits; Count = a.Count }
+    { Bits = zipWords (^^^) (^^^) a.Bits b.Bits; Count = a.Count }
 
   /// Bitwise OR — union of two coverage bitmaps.
   let union (a: CoverageBitmap) (b: CoverageBitmap) : CoverageBitmap =
@@ -649,8 +689,7 @@ module CoverageBitmap =
     | true, _ -> empty
     | _, true -> failwithf "CoverageBitmap.union size mismatch: a.Count=%d, b.Count=%d" a.Count b.Count
     | false, false ->
-      let bits = Array.init a.Bits.Length (fun i -> a.Bits.[i] ||| b.Bits.[i])
-      { Bits = bits; Count = a.Count }
+      { Bits = zipWords (|||) (|||) a.Bits b.Bits; Count = a.Count }
 
   /// Check if a specific probe index is set.
   let isSet (index: int) (bm: CoverageBitmap) : bool =

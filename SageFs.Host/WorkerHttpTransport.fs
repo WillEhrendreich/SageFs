@@ -502,7 +502,13 @@ module WorkerHttpTransport =
             with _ -> false)
         match Features.LiveTesting.CoverageInstrumenter.discoverAndCollectHits loadedAssemblies with
         | Some hits ->
-          let coverageJson = Serialization.serialize {| hits = hits |}
+          // Packed base64 words on the wire, not one JSON bool per probe —
+          // see CoverageBitmap.toBase64 for the size rationale.
+          let bitmap = Features.LiveTesting.CoverageBitmap.ofBoolArray hits
+          let coverageJson =
+            Serialization.serialize
+              {| count = bitmap.Count
+                 words = Features.LiveTesting.CoverageBitmap.toBase64 bitmap |}
           let coverageLine = sprintf "event: coverage\ndata: %s\n\n" coverageJson
           let coverageBytes = Text.Encoding.UTF8.GetBytes(coverageLine)
           do! writer.WriteAsync(coverageBytes, 0, coverageBytes.Length)
