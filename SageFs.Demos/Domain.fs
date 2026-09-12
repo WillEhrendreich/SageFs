@@ -432,6 +432,9 @@ type Key =
   | Down
   | F of int
   | Char of char
+  // §4.3: backspace-and-retype of one character is the mechanism behind an
+  // explicit `Typo` step; the Wave-1 `Key` DU had no way to express it.
+  | Backspace
 
 module Key =
   // TODO(shape): the plan is silent on whether shortcut letters get their
@@ -585,7 +588,12 @@ type ComposePlan =
   { Segments: string list
     Layout: Map<ActorId, Rect>
     Style: Style
-    Captions: Caption list }
+    Captions: Caption list
+    // Same length as Segments/Captions — one per step, in step order; `[]` for
+    // a step with no pointer motion. Magnifier is the editor pane's rect when
+    // the layout has one (None for DashboardOnly). (§4.6)
+    PointerPaths: Point list list
+    Magnifier: Rect option }
 
 /// One ffmpeg filtergraph operation, modeled as data so a filter chain is
 /// testable and can never drift into a broken hand-written command string
@@ -646,17 +654,35 @@ type Input =
   | ToolVersions
   | NvimPluginCommit of string
 
-/// The full set of fingerprint categories one scenario declares (§4.10) —
-/// coarse-but-safe whole trees, composed by `Client × Sample × Capability`.
-type Inputs = Input list
+/// One fingerprint category already resolved to its current content hash
+/// (§4.10). A category alone can't be hashed or diffed against a prior
+/// recording, so this is what `Fingerprint.ofInputs`/`check` actually take:
+/// pre-hashed data (a git blob hash, computed by the edge in Wave 3), never
+/// a filesystem/git lookup of their own.
+/// TODO(shape): additive for the Schedule/Fingerprint planners (Wave 2).
+type ResolvedInput = { Category: Input; Hash: Digest }
 
-/// Whether a manifest already recorded a digest for a scenario. A DU instead
-/// of `Digest option`, so "never recorded" is a first-class reason rather
-/// than an absent value a caller must remember to interpret.
+/// The full set of fingerprint categories one scenario declares, each
+/// already resolved to its current content hash (§4.10) — coarse-but-safe
+/// whole trees, composed by `Client × Sample × Capability`.
+/// TODO(shape): the Wave-1 skeleton had this as bare `Input list`; a bare
+/// category can't be hashed, so Wave 2 pairs each with its resolved digest.
+type Inputs = ResolvedInput list
+
+/// Whether a manifest already recorded input digests for a scenario. A DU
+/// instead of `Inputs option`, so "never recorded" is a first-class reason
+/// rather than an absent value a caller must remember to interpret.
+/// TODO(shape): `At` carries the previously-resolved per-input digests
+/// (not one combined blob) because `Fingerprint.check` must report EXACTLY
+/// which `Input` categories changed (§4.10's "sagefs.nvim @ 3f2a…→ce2f…,
+/// SageFs.Samples.RaylibGame/RaylibGame.fs" example) — one aggregate digest
+/// can prove *that* something changed but never *what*. `manifest.json`
+/// persisting this same per-input list (rather than a lone hash) is Wave 3's
+/// concern, not this pure module's.
 [<RequireQualifiedAccess>]
 type RecordedDigest =
   | Never
-  | At of Digest
+  | At of Inputs
 
 /// `sagefs-demos check`'s result for one scenario (§4.10, §1).
 [<RequireQualifiedAccess>]

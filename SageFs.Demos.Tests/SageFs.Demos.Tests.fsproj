@@ -7,6 +7,16 @@
 
   <ItemGroup>
     <Compile Include="DomainTests.fs" />
+    <Compile Include="LayoutTests.fs" />
+    <Compile Include="StoryboardTests.fs" />
+    <Compile Include="MotionTests.fs" />
+    <Compile Include="CadenceTests.fs" />
+    <Compile Include="KeymapTests.fs" />
+    <Compile Include="InputTests.fs" />
+    <Compile Include="ComposeTests.fs" />
+    <Compile Include="FfmpegTests.fs" />
+    <Compile Include="ScheduleTests.fs" />
+    <Compile Include="FingerprintTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
