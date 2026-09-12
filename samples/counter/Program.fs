@@ -4,6 +4,7 @@ module SageFs.Samples.Counter.Program
 
 open Raylib_cs
 open System
+open SageFs.Samples.DemoEnv
 
 type CounterTheme =
   { Background: Color
@@ -270,10 +271,22 @@ let initState () =
     LastChange = 0
     LastInteraction = "boot" }
 
+// ── Demo-recording controls (env-driven, off by default — see DemoEnv.fs) ──
+// SAGEFS_DEMO_WINDOW="x,y,w,h" places/sizes the window at startup.
+// Unset or malformed values leave the window exactly as it was before this file existed.
+let private envVar name = Environment.GetEnvironmentVariable name |> Option.ofObj
+let demoWindow = parseWindow (envVar "SAGEFS_DEMO_WINDOW")
+
 [<EntryPoint>]
 let main _argv =
   Raylib.InitWindow(screenWidth, screenHeight, "Counter Studio — SageFs sample")
   Raylib.SetTargetFPS(60)
+
+  match demoWindow with
+  | Some spec ->
+    Raylib.SetWindowPosition(spec.X, spec.Y)
+    Raylib.SetWindowSize(spec.Width, spec.Height)
+  | None -> ()
 
   let mutable state = initState ()
 

@@ -13,6 +13,7 @@ module SageFs.Samples.RaylibGame.Program
 
 open Raylib_cs
 open System.Numerics
+open SageFs.Samples.DemoEnv
 
 // ── Game state (pure F# records) ──
 type Star = {
@@ -46,8 +47,19 @@ let screenWidth  = 800
 let screenHeight = 600
 // └──────────────────────────────────────────────────────────────┘
 
+// ── Demo-recording controls (env-driven, off by default — see DemoEnv.fs) ──
+// SAGEFS_DEMO_WINDOW="x,y,w,h" places/sizes the window at startup.
+// SAGEFS_DEMO_SEED=<int> seeds the RNG below for reproducible runs.
+// Unset or malformed values leave both exactly as they were before this file existed.
+let private envVar name = System.Environment.GetEnvironmentVariable name |> Option.ofObj
+let demoWindow = parseWindow (envVar "SAGEFS_DEMO_WINDOW")
+let demoSeed = parseSeed (envVar "SAGEFS_DEMO_SEED")
+
 // ── Pure game logic (no side effects) ──
-let rng = System.Random()
+let rng =
+  match demoSeed with
+  | Some seed -> System.Random(seed)
+  | None -> System.Random()
 
 let inline isKeyDown key : bool = Raylib.IsKeyDown key
 let inline isKeyPressed key : bool = Raylib.IsKeyPressed key
@@ -132,6 +144,12 @@ let initState () : GameState = {
 let main _argv =
   Raylib.InitWindow(screenWidth, screenHeight, "⭐ Star Catcher — SageFs + Raylib")
   Raylib.SetTargetFPS(60)
+
+  match demoWindow with
+  | Some spec ->
+    Raylib.SetWindowPosition(spec.X, spec.Y)
+    Raylib.SetWindowSize(spec.Width, spec.Height)
+  | None -> ()
 
   let mutable state = initState()
 

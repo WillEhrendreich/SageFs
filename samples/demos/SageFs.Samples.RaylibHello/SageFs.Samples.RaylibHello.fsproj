@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../../DemoEnv.fs" Link="DemoEnv.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

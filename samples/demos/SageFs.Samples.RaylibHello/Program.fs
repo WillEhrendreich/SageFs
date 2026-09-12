@@ -14,6 +14,7 @@ module SageFs.Samples.RaylibHello.Program
 
 open Raylib_cs
 open System.Numerics
+open SageFs.Samples.DemoEnv
 
 // ── Everything that changes goes here — make it a function ──
 // SageFs hot-patches function bodies at runtime (via Harmony).
@@ -62,10 +63,22 @@ let drawFrame (time: float32) =
 let screenWidth  = 800
 let screenHeight = 600
 
+// ── Demo-recording controls (env-driven, off by default — see DemoEnv.fs) ──
+// SAGEFS_DEMO_WINDOW="x,y,w,h" places/sizes the window at startup.
+// Unset or malformed values leave the window exactly as it was before this file existed.
+let private envVar name = System.Environment.GetEnvironmentVariable name |> Option.ofObj
+let demoWindow = parseWindow (envVar "SAGEFS_DEMO_WINDOW")
+
 [<EntryPoint>]
 let main _argv =
   Raylib.InitWindow(screenWidth, screenHeight, "SageFs + Raylib Demo")
   Raylib.SetTargetFPS(60)
+
+  match demoWindow with
+  | Some spec ->
+    Raylib.SetWindowPosition(spec.X, spec.Y)
+    Raylib.SetWindowSize(spec.Width, spec.Height)
+  | None -> ()
 
   // ── Game loop ──
   while not (Raylib.WindowShouldClose()) do

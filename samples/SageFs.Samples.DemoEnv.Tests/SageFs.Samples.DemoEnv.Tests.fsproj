@@ -6,12 +6,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="../../DemoEnv.fs" Link="DemoEnv.fs" />
+    <Compile Include="../DemoEnv.fs" Link="DemoEnv.fs" />
+    <Compile Include="DemoEnvTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Raylib-cs" />
+    <PackageReference Include="Expecto" />
   </ItemGroup>
 
 </Project>
