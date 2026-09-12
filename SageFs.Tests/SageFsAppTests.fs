@@ -2687,4 +2687,18 @@ let liveTestTickIdleTests =
       |> SageFsModel.needsLiveTestTick
       |> Expect.isFalse "an idle run phase needs no tick"
     }
+    test "WHY — needsLiveTestTick — an ACTIVELY RUNNING run phase still needs no tick, because LiveTestCycleState.tick only ever reads Debounce — a run in flight advances by direct message dispatch (RunAffectedTests results arriving), never by this poll" {
+      let model = SageFsModel.initial ()
+      let generation = RunGeneration.next RunGeneration.zero
+      let state =
+        { model.LiveTesting.TestState with
+            RunPhases =
+              Map.ofList [
+                "0a2b3c4d", TestRunPhase.Running generation
+                "1b2c3d4e", TestRunPhase.RunningButEdited generation
+              ] }
+      { model with LiveTesting = { model.LiveTesting with TestState = state } }
+      |> SageFsModel.needsLiveTestTick
+      |> Expect.isFalse "an in-flight run with no pending debounce needs no tick"
+    }
   ]
