@@ -145,20 +145,23 @@ VS Code: Use the built-in .NET debugger. Create a `launch.json` that targets `Sa
 
 Visual Studio / Rider: Open `SageFs.slnx`, set `SageFs.Tests` as the startup project, and hit F5.
 
-### Running Benchmarks
+### Performance guards
 
-BenchmarkDotNet benchmarks cover 5 critical paths (CellGrid allocation, manifest persistence, error description, SSE formatting, msgLabel caching). Run in Release mode:
+Performance is guarded locally, in the normal test run — not by a separate CI
+job on noisy shared runners. The heavyweight BenchmarkDotNet suite was removed:
+it gated releases on microbenchmark variance for paths no user feels (the
+deprecated TUI, features with no product consumer), while the one benchmark that
+measured a real hot path — the per-eval binding-scope rebuild — was never in the
+threshold gate at all.
 
-```bash
-# List all available benchmarks
-dotnet run -c Release --project SageFs.Tests -- --benchmark --list flat
-
-# Run a specific benchmark by pattern
-dotnet run -c Release --project SageFs.Tests -- --benchmark --filter "*CellGrid*"
-
-# Run all benchmarks
-dotnet run -c Release --project SageFs.Tests -- --benchmark
-```
+In its place, `PerfTests.fs` carries lightweight guards that run every time you
+run the suite. They assert **algorithmic scaling ratios** (`PerfBudget.fs`)
+rather than absolute wall-clock budgets: the ratio of a large-workload cost to a
+small one isolates the algorithm's growth and is independent of how fast or busy
+the machine is, so the check is meaningful locally and never flakes. The current
+guard proves `recordEval` stays sub-linear as the eval history grows (the O(n^2)
+regression the roast flagged). Add a new guard the same way when you touch a
+genuine hot path; do heavier one-off profiling ad hoc in the REPL.
 
 ### The Pack/Reinstall Cycle
 

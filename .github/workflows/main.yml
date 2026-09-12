@@ -183,44 +183,11 @@ jobs:
         if-no-files-found: error
         retention-days: 1
 
-  benchmarks:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-
-    steps:
-    - uses: actions/checkout@v5
-
-    - name: Checkout forked MCP SDK
-      uses: actions/checkout@v5
-      with:
-        repository: WillEhrendreich/ModelContextProtocolSdk
-        path: mcp-sdk
-
-    - name: Install Dotnet
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: '10.0.x'
-
-    - name: Build forked MCP SDK packages
-      run: |
-        dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-        dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-        dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-
-    - name: Run benchmarks
-      run: dotnet run -c Release --project SageFs.Tests -- --benchmark --filter "*" --exporters json
-      timeout-minutes: 15
-
-    - name: Check regression thresholds
-      run: dotnet fsi scripts/check-benchmarks.fsx BenchmarkDotNet.Artifacts/results
-
-    - name: Upload benchmark artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: benchmark-results
-        path: BenchmarkDotNet.Artifacts/results/
-        retention-days: 3
+  # Performance is guarded locally now, in the normal Expecto suite (PerfTests.fs
+  # / PerfBudget.fs), not by a CI job: the BenchmarkDotNet suite gated releases on
+  # microbenchmark variance for paths no user feels, while never gating the one
+  # hot path that mattered. Perf work is local-first; CI runs the fast scaling
+  # guard as part of the default test run in the `build` job.
 
   # vscode-journeys (HR-VSC-E2E, LT-VSC-E2E) was removed 2026-09-12: it never
   # passed since being wired in. The real bug it caught (executeCommand typing
@@ -237,7 +204,7 @@ jobs:
   # obligation.
 
   release-artifacts:
-    needs: [build, integration-host, extensions, benchmarks]
+    needs: [build, integration-host, extensions]
     runs-on: windows-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:

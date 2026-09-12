@@ -236,7 +236,7 @@
         <Compile Include="BatchFlusherTests.fs" />
         <Compile Include="BatchFlusherPropertyTests.fs" />
         <Compile Include="LifecyclePropertyTests.fs" />
-        <Compile Include="Benchmarks.fs" />
+        <Compile Include="PerfBudget.fs" />
         <Compile Include="FsiCrossSubmissionTests.fs" />
         <Compile Include="Round4HardeningTests.fs" />
         <Compile Include="Round5HardeningTests.fs" />
@@ -337,7 +337,7 @@
         <Compile Include="CliStopExitCodeTests.fs" />
         <Compile Include="FsiOutputParserTests.fs" />
         <Compile Include="SseReplayTests.fs" />
-        <Compile Include="SseSerializationBenchmarks.fs" />
+        <Compile Include="PerfTests.fs" />
         <Compile Include="SsePropertyTests.fs" />
         <Compile Include="SseContractComplianceTests.fs" />
         <Compile Include="ManifestBackupRecoveryTests.fs" />
@@ -361,7 +361,6 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="BenchmarkDotNet" />
         <PackageReference Include="Expecto" />
         <PackageReference Include="Expecto.FsCheck" />
         <PackageReference Include="Expecto.Hopac" />
