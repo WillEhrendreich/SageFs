@@ -20,7 +20,9 @@ let sessionDisplayStatusUnificationTests =
     testCase "WHY — exactly one SessionDisplayStatus type exists because two DUs with one name let the sidebar and the event stream disagree about the same session" <| fun _ ->
       named
       |> Array.map (fun t -> t.FullName)
-      |> Expect.equal "one definition, in SageFs.SessionDisplayStatus" [| "SageFs+SessionDisplayStatus" |]
+      // A type declared directly in `namespace SageFs` has a dotted FullName;
+      // "+" would mean it was nested in a module, which it must not be.
+      |> Expect.equal "one definition, in SageFs.SessionDisplayStatus" [| "SageFs.SessionDisplayStatus" |]
 
     testCase "WHY — the unified DU's Faulted case carries the reason because both former shapes needed it: Errored had one, Faulted had none, and a card must say why" <| fun _ ->
       let cases = FSharpType.GetUnionCases(typeof<SageFs.SessionDisplayStatus>)
