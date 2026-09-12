@@ -1900,8 +1900,9 @@ module SageFsRender =
             match s.Status with
             | SessionDisplayStatus.Running -> "running"
             | SessionDisplayStatus.Starting -> "starting"
-            | SessionDisplayStatus.Errored r -> sprintf "error: %s" r
-            | SessionDisplayStatus.Suspended -> "suspended"
+            | SessionDisplayStatus.Faulted r -> sprintf "error: %s" r
+            | SessionDisplayStatus.Lost -> "lost"
+            | SessionDisplayStatus.Stopped -> "suspended"
             | SessionDisplayStatus.Stale -> "stale"
             | SessionDisplayStatus.Restarting -> "restarting"
           let active = match activeId with | ActiveSession.Viewing id when id = s.Id -> " *" | _ -> ""
@@ -2098,9 +2099,9 @@ module SageFsEffectHandler =
         | SessionLifecycleStatus.Starting _ -> SessionDisplayStatus.Starting
         | SessionLifecycleStatus.Evaluating _ -> SessionDisplayStatus.Running
         | SessionLifecycleStatus.Building _ -> SessionDisplayStatus.Running
-        | SessionLifecycleStatus.Faulted _ -> SessionDisplayStatus.Errored "faulted"
+        | SessionLifecycleStatus.Faulted reason -> SessionDisplayStatus.Faulted (reason |> Option.defaultValue "faulted")
         | SessionLifecycleStatus.Restarting _ -> SessionDisplayStatus.Restarting
-        | SessionLifecycleStatus.Stopped -> SessionDisplayStatus.Suspended
+        | SessionLifecycleStatus.Stopped -> SessionDisplayStatus.Stopped
       LastActivity = info.LastActivity
       EvalCount = 0
       UpSince = info.CreatedAt
@@ -2258,7 +2259,7 @@ module SageFsEffectHandler =
               | SmartReset.Outcome.EscalatedToHardReset _ ->
                 SessionDisplayStatus.Restarting
               | SmartReset.Outcome.AllResetsFailed _ ->
-                SessionDisplayStatus.Errored "all resets failed"
+                SessionDisplayStatus.Faulted "all resets failed"
             dispatch (SageFsMsg.Event (
               SageFsEvent.SessionStatusChanged (SessionId.value sid, status)))
           })

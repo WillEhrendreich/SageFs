@@ -800,10 +800,12 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
         // guidance (a contested session) is its own, separate class.
         let statusCls =
           match s.Status with
-          | SessionDisplayStatus.Faulted -> " session-faulted"
+          | SessionDisplayStatus.Faulted _ -> " session-faulted"
           | SessionDisplayStatus.Lost -> " session-lost"
           | SessionDisplayStatus.Running
           | SessionDisplayStatus.Starting
+          | SessionDisplayStatus.Restarting
+          | SessionDisplayStatus.Stale
           | SessionDisplayStatus.Stopped -> ""
         let guidanceCls =
           match s.GuidanceCssClass.Length > 0 with

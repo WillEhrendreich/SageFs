@@ -38,10 +38,10 @@ let private genSessionDisplayStatus =
   Gen.oneof [
     Gen.constant SessionDisplayStatus.Running
     Gen.constant SessionDisplayStatus.Starting
-    Gen.constant SessionDisplayStatus.Suspended
+    Gen.constant SessionDisplayStatus.Stopped
     Gen.constant SessionDisplayStatus.Stale
     Gen.constant SessionDisplayStatus.Restarting
-    Gen.constant (SessionDisplayStatus.Errored "test error")
+    Gen.constant (SessionDisplayStatus.Faulted "test error")
   ]
 
 let private genSessionSnapshot =

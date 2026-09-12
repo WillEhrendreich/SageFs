@@ -444,11 +444,11 @@ let elmSessionEventTests = testList "Elm session events" [
     let m', _ =
       SageFsUpdate.update
         (SageFsMsg.Event
-          (SageFsEvent.SessionStatusChanged ("aa000b02", SessionDisplayStatus.Errored "test error")))
+          (SageFsEvent.SessionStatusChanged ("aa000b02", SessionDisplayStatus.Faulted "test error")))
         threeSessionModel
     m'.Sessions.Sessions
     |> List.find (fun s -> s.Id = testSessionId "aa000b02")
-    |> fun s -> s.Status |> Expect.equal "updated status" (SessionDisplayStatus.Errored "test error")
+    |> fun s -> s.Status |> Expect.equal "updated status" (SessionDisplayStatus.Faulted "test error")
     m'.Sessions.Sessions
     |> List.find (fun s -> s.Id = testSessionId "aa000a01")
     |> fun s -> s.Status |> Expect.equal "other unchanged" SessionDisplayStatus.Running

@@ -737,12 +737,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
           (SageFsModel.initial()).Sessions with
             Sessions = [snap]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
-    let event = SageFsEvent.SessionStatusChanged ("aa000001", SessionDisplayStatus.Errored "faulted")
+    let event = SageFsEvent.SessionStatusChanged ("aa000001", SessionDisplayStatus.Faulted "faulted")
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     match newModel.Sessions.Sessions.[0].Status with
-    | SessionDisplayStatus.Errored _ -> ()
-    | other -> failtestf "expected Errored, got %A" other
+    | SessionDisplayStatus.Faulted _ -> ()
+    | other -> failtestf "expected Faulted, got %A" other
 
   testCase "SessionStatusChanged to Restarting disposes the watcher claim when live testing is active" <| fun _ ->
     // Phase 3.6 (dispose/recreate across disable/restart): a hard reset emits
@@ -833,7 +833,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     | other -> failtestf "expected a single DisposeFileWatcher on stop, got %A" other
 
   testCase "SessionStatusChanged for unknown session is no-op" <| fun _ ->
-    let event = SageFsEvent.SessionStatusChanged ("x", SessionDisplayStatus.Errored "x")
+    let event = SageFsEvent.SessionStatusChanged ("x", SessionDisplayStatus.Faulted "x")
     let newModel, effects =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     effects |> Expect.isEmpty "no effects"
@@ -2236,7 +2236,7 @@ let sageFsRenderTests = testList "SageFsRender" [
       let statuses = [|
         SessionDisplayStatus.Running
         SessionDisplayStatus.Starting
-        SessionDisplayStatus.Suspended
+        SessionDisplayStatus.Stopped
         SessionDisplayStatus.Stale
         SessionDisplayStatus.Restarting |]
       let sessions =

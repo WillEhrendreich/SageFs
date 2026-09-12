@@ -149,7 +149,7 @@ let sidebarCardTests =
     testCase "WHY — sessionCardOf — a faulted session shows as faulted with its reason, because the regex fallback showed errored sessions as running" (fun () ->
       let faulted = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Faulted [] with Status = WorkerProtocol.SessionLifecycleStatus.Faulted (Some "warmup timed out") }
       let c = SidebarCards.card faulted
-      Expect.equal c.Status SessionDisplayStatus.Faulted "Faulted = faulted"
+      Expect.equal c.Status (SessionDisplayStatus.Faulted "warmup timed out") "Faulted = faulted"
       Expect.equal c.StatusMessage (Some "warmup timed out") "the reason is shown")
 
     testCase "WHY — sessionCardOf — a running session can never show a stale fault reason, because Ready structurally carries no fault reason at all" (fun () ->

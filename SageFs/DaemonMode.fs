@@ -1984,8 +1984,9 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
             | SageFs.SessionDisplayStatus.Running -> SageFs.Features.SessionHealthStatus.Ready
             | SageFs.SessionDisplayStatus.Starting -> SageFs.Features.SessionHealthStatus.WarmingUp
             | SageFs.SessionDisplayStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
-            | SageFs.SessionDisplayStatus.Errored _ -> SageFs.Features.SessionHealthStatus.Faulted
-            | SageFs.SessionDisplayStatus.Suspended -> SageFs.Features.SessionHealthStatus.Stopped
+            | SageFs.SessionDisplayStatus.Faulted _ -> SageFs.Features.SessionHealthStatus.Faulted
+            | SageFs.SessionDisplayStatus.Lost -> SageFs.Features.SessionHealthStatus.Faulted
+            | SageFs.SessionDisplayStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
             | SageFs.SessionDisplayStatus.Stale -> SageFs.Features.SessionHealthStatus.Stopped
           let projectName =
             match s.Projects with

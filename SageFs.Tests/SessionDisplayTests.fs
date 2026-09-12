@@ -46,25 +46,22 @@ let displayStatusTests = testList "SessionDisplay.displayStatus" [
     SessionDisplay.displayStatus now info
     |> Expect.equal "should be Starting" SessionDisplayStatus.Starting
 
-  testCase "Faulted maps to Errored" <| fun _ ->
+  testCase "Faulted maps to Faulted" <| fun _ ->
     let info = mkInfo (testSessionId "aa000001") SessionStatus.Faulted now
     SessionDisplay.displayStatus now info
     |> function
-      | SessionDisplayStatus.Errored _ -> ()
-      | other -> failwith (sprintf "Expected Errored, got %A" other)
+      | SessionDisplayStatus.Faulted _ -> ()
+      | other -> failwith (sprintf "Expected Faulted, got %A" other)
 
   testCase "Restarting maps to Restarting" <| fun _ ->
     let info = mkInfo (testSessionId "aa000001") SessionStatus.Restarting now
     SessionDisplay.displayStatus now info
     |> Expect.equal "should be Restarting" SessionDisplayStatus.Restarting
 
-  testCase "Stopped maps to Errored" <| fun _ ->
+  testCase "Stopped maps to Stopped" <| fun _ ->
     let info = mkInfo (testSessionId "aa000001") SessionStatus.Stopped now
     SessionDisplay.displayStatus now info
-    |> function
-      | SessionDisplayStatus.Errored msg ->
-        msg |> Expect.stringContains "should mention stopped" "stopped"
-      | other -> failwith (sprintf "Expected Errored, got %A" other)
+    |> Expect.equal "should be Stopped" SessionDisplayStatus.Stopped
 
   testCase "Evaluating but stale maps to Stale" <| fun _ ->
     let staleTime = now.AddMinutes(-15.0)
@@ -155,10 +152,10 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
     |> List.exists (fun a -> a.Label = "Switch" && not a.Enabled)
     |> Expect.isTrue "Switch should be disabled for active"
 
-  testCase "errored session has Restart affordance" <| fun _ ->
+  testCase "faulted session has Restart affordance" <| fun _ ->
     let snap = {
       Id = testSessionId "aa000001"; Name = None; Projects = ["Test.fsproj"]
-      Status = SessionDisplayStatus.Errored "crash"
+      Status = SessionDisplayStatus.Faulted "crash"
       LastActivity = now; EvalCount = 0
       UpSince = now.AddHours(-1.0); WorkingDirectory = "" }
     let affordances = SessionDisplay.sessionAffordances Map.empty (ActiveSession.Viewing (testSessionId "aa000001")) snap

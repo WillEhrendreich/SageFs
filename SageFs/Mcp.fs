@@ -1820,7 +1820,7 @@ module McpTools =
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
         do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (SageFsError.describe err)))
         notifyElm ctx (
-          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
         return sprintf "Error: %s" (SageFsError.describeForAgent err)
       | Ok other ->
         do! setSnapshotStatus ctx sid previousStatus
@@ -1831,7 +1831,7 @@ module McpTools =
         | true ->
           do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some err))
           notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored err))
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted err))
         | false ->
           do! setSnapshotStatus ctx sid previousStatus
         return sprintf "Error: %s" err
@@ -1877,7 +1877,7 @@ module McpTools =
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
         do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (SageFsError.describe err)))
         notifyElm ctx (
-          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
         return Error err
       | Ok other ->
         do! setSnapshotStatus ctx sid previousStatus
@@ -1888,7 +1888,7 @@ module McpTools =
         | true ->
           do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some reason))
           notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored reason))
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted reason))
           return Error (SageFsError.WorkerCommunicationFailed (sid, reason))
         | false ->
           do! setSnapshotStatus ctx sid previousStatus
@@ -1955,9 +1955,9 @@ module McpTools =
           rebuildOutcomes.[sid] <- outcome
           let display =
             match outcome, after with
-            | RebuildOutcome.FailedNotServing (error, _), _ -> SessionDisplayStatus.Errored (SageFsError.describe error)
+            | RebuildOutcome.FailedNotServing (error, _), _ -> SessionDisplayStatus.Faulted (SageFsError.describe error)
             | _, Some info -> SessionDisplay.displayStatus now info
-            | _, None -> SessionDisplayStatus.Errored "Session is no longer registered"
+            | _, None -> SessionDisplayStatus.Faulted "Session is no longer registered"
           notifyElm ctx (SageFsEvent.SessionStatusChanged (sid, display))
         } |> ignore
         return "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_fsi_status reports the rebuild's progress and outcome."
@@ -1985,7 +1985,7 @@ module McpTools =
           return "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. " + msg
         | Error err ->
           notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
           return sprintf "Error: %s" (SageFsError.describeForAgent err)
     })
 
@@ -2015,9 +2015,9 @@ module McpTools =
           rebuildOutcomes.[sid] <- outcome
           let display =
             match outcome, after with
-            | RebuildOutcome.FailedNotServing (error, _), _ -> SessionDisplayStatus.Errored (SageFsError.describe error)
+            | RebuildOutcome.FailedNotServing (error, _), _ -> SessionDisplayStatus.Faulted (SageFsError.describe error)
             | _, Some info -> SessionDisplay.displayStatus now info
-            | _, None -> SessionDisplayStatus.Errored "Session is no longer registered"
+            | _, None -> SessionDisplayStatus.Faulted "Session is no longer registered"
           notifyElm ctx (SageFsEvent.SessionStatusChanged (sid, display))
         } |> ignore
         return Ok "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_fsi_status reports the rebuild's progress and outcome."
@@ -2037,7 +2037,7 @@ module McpTools =
           return Ok ("⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. " + msg)
         | Error err ->
           notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
           return Error err
     })
 

@@ -108,7 +108,7 @@ let tests = testList "MCP hard reset rebuild" [
     let p = mkProbe "aaa00004" (Error buildFailed) WorkerProtocol.SessionStatus.Faulted
     let! _ = hardReset p
     let! display = awaitOutcome p
-    display |> Expect.equal "the display carries the real reason" (SessionDisplayStatus.Errored (SageFsError.describe buildFailed))
+    display |> Expect.equal "the display carries the real reason" (SessionDisplayStatus.Faulted (SageFsError.describe buildFailed))
   }
 
   testTask "WHY — hard_reset rebuild=false — the owner recycles the worker process, because an in-process FSI rebuild keeps the project assemblies already loaded in the worker's default load context and never sees new code" {

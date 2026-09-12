@@ -391,38 +391,14 @@ type AgentBadge = {
   DetailLabel: string
 }
 
-/// Display-level session status for the dashboard sidebar.
+/// Display-level session status for the dashboard sidebar. This is the one
+/// SessionDisplayStatus type (SessionDisplay.fs, namespace SageFs), brought
+/// into scope by `open SageFs` above, along with its companion module
+/// (label/cssClass/ofSessionState) declared next to it. It used to be
+/// redeclared here with its own reason-less Faulted/Lost/Stopped cases, so
+/// the sidebar and the MCP/TUI event stream could disagree about the same
+/// session (roast-4 #6).
 /// Distinct from SessionState (daemon lifecycle) and WorkerProtocol.SessionStatus (wire protocol).
-/// Every case is explicit — no stringly-typed fallback.
-[<RequireQualifiedAccess>]
-type SessionDisplayStatus =
-  | Running
-  | Starting
-  | Faulted
-  | Lost
-  | Stopped
-
-module SessionDisplayStatus =
-  let label = function
-    | SessionDisplayStatus.Running -> "running"
-    | SessionDisplayStatus.Starting -> "starting"
-    | SessionDisplayStatus.Faulted -> "faulted"
-    | SessionDisplayStatus.Lost -> "lost"
-    | SessionDisplayStatus.Stopped -> "stopped"
-
-  let ofSessionState = function
-    | SessionState.Ready -> SessionDisplayStatus.Running
-    | SessionState.Evaluating -> SessionDisplayStatus.Running
-    | SessionState.WarmingUp -> SessionDisplayStatus.Starting
-    | SessionState.Faulted -> SessionDisplayStatus.Faulted
-    | SessionState.Uninitialized -> SessionDisplayStatus.Lost
-
-  let cssClass = function
-    | SessionDisplayStatus.Running -> "status-ready"
-    | SessionDisplayStatus.Starting -> "status-warming"
-    | SessionDisplayStatus.Faulted -> "status-faulted"
-    | SessionDisplayStatus.Lost -> "status-faulted"
-    | SessionDisplayStatus.Stopped -> "status-faulted"
 
 /// Type-safe daemon connection state for the dashboard.
 /// Illegal states unrepresentable: the browser CANNOT show "Ready" or "No session"
@@ -507,15 +483,20 @@ let sessionCardOf
   (evalCount: int)
   (info: WorkerProtocol.SessionInfo)
   : ParsedSession =
-  let status = WorkerProtocol.SessionLifecycleStatus.toSessionState info.Status |> SessionDisplayStatus.ofSessionState
+  // info carries the real SessionLifecycleStatus, so the fault reason (if
+  // any) is derived from it directly rather than through the reason-less
+  // SessionState — the same source SessionDisplay.displayStatus uses.
+  let status = SessionDisplay.displayStatus now info
   { Id = info.Id
     Status = status
     StatusMessage =
       match status with
       | SessionDisplayStatus.Starting -> warmupProgress
-      | SessionDisplayStatus.Faulted
+      | SessionDisplayStatus.Faulted reason -> Some reason
       | SessionDisplayStatus.Lost -> WorkerProtocol.SessionLifecycleStatus.faultReason info.Status
       | SessionDisplayStatus.Running
+      | SessionDisplayStatus.Restarting
+      | SessionDisplayStatus.Stale
       | SessionDisplayStatus.Stopped -> None
     ProjectsText =
       match info.Projects with

@@ -3,15 +3,58 @@ namespace SageFs
 open System
 open WorkerProtocol
 
-/// What the user sees — simplified from internal SessionStatus
+/// What the user sees — simplified from internal SessionStatus. The single
+/// definition for every surface (sidebar, MCP/TUI event stream, dashboard):
+/// this DU used to be declared twice — once here with Errored/Suspended, once
+/// in DashboardTypes.fs with reason-less Faulted/Lost/Stopped — so a session
+/// could read Errored on one surface and Faulted on another for the same
+/// underlying state.
 [<RequireQualifiedAccess>]
 type SessionDisplayStatus =
   | Running
   | Starting
-  | Errored of reason: string
-  | Suspended
-  | Stale
   | Restarting
+  /// Carries why: replaces both the old Errored (which had a reason) and the
+  /// old reason-less Faulted — a card must always be able to say why.
+  | Faulted of reason: string
+  /// The daemon lost track of the session (e.g. no worker was ever recorded).
+  | Lost
+  /// Stopped deliberately — the same meaning as the old Suspended case.
+  | Stopped
+  | Stale
+
+/// Formatting and derivation for SessionDisplayStatus, kept next to the type
+/// itself (not as a separately, differently-scoped module) so exactly one
+/// entity in the assembly is named SessionDisplayStatus.
+module SessionDisplayStatus =
+  let label = function
+    | SessionDisplayStatus.Running -> "running"
+    | SessionDisplayStatus.Starting -> "starting"
+    | SessionDisplayStatus.Restarting -> "restarting"
+    | SessionDisplayStatus.Faulted _ -> "faulted"
+    | SessionDisplayStatus.Lost -> "lost"
+    | SessionDisplayStatus.Stopped -> "stopped"
+    | SessionDisplayStatus.Stale -> "stale"
+
+  /// Only for a caller that genuinely has no SessionInfo (and so no fault
+  /// reason to carry). Everywhere a SessionInfo is available, derive the
+  /// status via SessionDisplay.displayStatus instead, which carries the real
+  /// fault reason from SessionLifecycleStatus.
+  let ofSessionState = function
+    | SessionState.Ready -> SessionDisplayStatus.Running
+    | SessionState.Evaluating -> SessionDisplayStatus.Running
+    | SessionState.WarmingUp -> SessionDisplayStatus.Starting
+    | SessionState.Faulted -> SessionDisplayStatus.Faulted "session faulted"
+    | SessionState.Uninitialized -> SessionDisplayStatus.Lost
+
+  let cssClass = function
+    | SessionDisplayStatus.Running -> "status-ready"
+    | SessionDisplayStatus.Starting -> "status-warming"
+    | SessionDisplayStatus.Restarting -> "status-warming"
+    | SessionDisplayStatus.Faulted _ -> "status-faulted"
+    | SessionDisplayStatus.Lost -> "status-faulted"
+    | SessionDisplayStatus.Stopped -> "status-faulted"
+    | SessionDisplayStatus.Stale -> "status-faulted"
 
 /// A point-in-time snapshot of a session for display
 type SessionSnapshot = {
@@ -76,12 +119,12 @@ module SessionDisplay =
       | false -> SessionDisplayStatus.Running
     | SessionLifecycleStatus.Starting _ ->
       SessionDisplayStatus.Starting
-    | SessionLifecycleStatus.Faulted _ ->
-      SessionDisplayStatus.Errored "Session faulted"
+    | SessionLifecycleStatus.Faulted reason ->
+      SessionDisplayStatus.Faulted (reason |> Option.defaultValue "Session faulted")
     | SessionLifecycleStatus.Restarting _ ->
       SessionDisplayStatus.Restarting
     | SessionLifecycleStatus.Stopped ->
-      SessionDisplayStatus.Errored "Session stopped"
+      SessionDisplayStatus.Stopped
 
   /// Build a snapshot from internal session info
   let snapshot (now: DateTime) (info: SessionInfo) : SessionSnapshot =
@@ -127,10 +170,15 @@ module SessionDisplay =
             Enabled = true }
       | false -> ()
       match snap.Status with
-      | SessionDisplayStatus.Errored _ ->
+      | SessionDisplayStatus.Faulted _ ->
         yield
           { Action = EditorAction.CreateSession snap.Projects
             Label = "Restart"
             KeyHint = None
             Enabled = true }
-      | _ -> () ]
+      | SessionDisplayStatus.Running
+      | SessionDisplayStatus.Starting
+      | SessionDisplayStatus.Restarting
+      | SessionDisplayStatus.Lost
+      | SessionDisplayStatus.Stopped
+      | SessionDisplayStatus.Stale -> () ]
