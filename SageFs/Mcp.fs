@@ -1390,20 +1390,30 @@ module McpTools =
               | true -> ()
             with ex -> Log.warn "Failed to deserialize hook result: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()
-          // Live bound-value snapshot → adaptive live-bindings store (dashboard watch window).
-          match metadata |> Map.tryFind "liveValueSnapshotError" with
-          | Some err -> Log.warn "[Mcp.evalSingleStatement] liveValueSnapshot capture error: %s" err
-          | None -> ()
-          match metadata |> Map.tryFind "liveValueSnapshot" with
-          | Some json ->
-            try
-              let snap =
-                WorkerProtocol.Serialization.deserialize<Features.LiveValueTree.LiveValueSnapshot> json
-              match ctx.LiveSnapshotSink with
-              | Some sink ->
-                sink sid { snap with SessionId = sid }
-              | None -> ()
-            with ex -> Log.warn "Failed to deserialize live value snapshot: %s" ex.Message
+          // Live bound-value snapshot → adaptive live-bindings store (dashboard
+          // watch window). Pulled AFTER the eval reply, never attached to it
+          // (roast-4 #2) — fire-and-forget so a slow or failed reflection
+          // walk can never delay this eval's result to the caller.
+          match ctx.LiveSnapshotSink with
+          | Some sink ->
+            Async.Start (
+              async {
+                let! liveResult =
+                  routeToSession ctx sid
+                    (fun replyId -> WorkerProtocol.WorkerMessage.GetLiveValues (WorkerProtocol.SessionId.value replyId))
+                  |> Async.AwaitTask
+                match liveResult with
+                | Ok (WorkerProtocol.WorkerResponse.LiveValuesResult(_, json)) ->
+                  try
+                    let snap =
+                      WorkerProtocol.Serialization.deserialize<Features.LiveValueTree.LiveValueSnapshot> json
+                    sink sid { snap with SessionId = sid }
+                  with ex -> Log.warn "Failed to deserialize live value snapshot: %s" ex.Message
+                | Ok other ->
+                  Log.warn "Unexpected live-values response for %s: %A" sid other
+                | Error e ->
+                  Log.warn "Live value pull failed for %s: %A" sid e
+              })
           | None -> ()
           match metadata |> Map.tryFind "assemblyLoadErrors" with
           | Some json ->

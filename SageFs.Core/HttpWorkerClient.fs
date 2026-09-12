@@ -14,6 +14,8 @@ module HttpWorkerClient =
     match msg with
     | WorkerMessage.GetStatus rid ->
       "GET", sprintf "/status?replyId=%s" (Uri.EscapeDataString rid), None
+    | WorkerMessage.GetLiveValues rid ->
+      "GET", sprintf "/live-values?replyId=%s" (Uri.EscapeDataString rid), None
     | WorkerMessage.EvalCode(code, rid) ->
       "POST", "/eval",
       Some (Serialization.serialize {| code = code; replyId = rid |})

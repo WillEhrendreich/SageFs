@@ -192,6 +192,9 @@ type Command =
   | CancelEval of AsyncReplyChannel<bool>
   | Autocomplete of text: string * caret: int * word: string * AsyncReplyChannel<list<AutoCompletion.CompletionItem>>
   | GetBoundValue of name: string * AsyncReplyChannel<obj Option>
+  /// Pulled on demand, after the eval reply — never attached to it (roast-4
+  /// #2). Serialized JSON of a Features.LiveValueTree.LiveValueSnapshot.
+  | GetLiveValues of AsyncReplyChannel<string>
   | AddMiddleware of Middleware list * AsyncReplyChannel<unit>
   | GetDiagnostics of text: string * AsyncReplyChannel<Diagnostics.Diagnostic array>
   | GetTypeCheckWithSymbols of text: string * filePath: string * AsyncReplyChannel<Diagnostics.TypeCheckWithSymbolsResult>
@@ -249,6 +252,10 @@ type internal EvalCommand =
   | EvalEnableStdout
   | EvalReset of AsyncReplyChannel<Result<unit, SageFsError>>
   | EvalHardReset of rebuild: bool * AsyncReplyChannel<Result<string, SageFsError>>
+  /// Serialized on the eval actor because reading the FSI session's bound
+  /// values must not race a concurrent eval/reset — but it is no longer on
+  /// the eval reply path, so it costs no eval its latency (roast-4 #2).
+  | EvalGetLiveValues of AsyncReplyChannel<string>
 
 /// Test-only fault-injection seam for the eval-actor resilience tests
 /// (SageFs.Tests/EvalActorResilienceTests.fs). When set, the eval actor's
@@ -942,6 +949,36 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
 /// Default is `buildPipeline`. Tracing module provides an instrumented alternative.
 type PipelineBuildFn = Middleware list -> MiddlewareNext -> MiddlewareNext
 
+/// Reflection-walk an FSI session's bound values into a JSON-serialized
+/// Features.LiveValueTree.LiveValueSnapshot, for the dashboard's watch
+/// window. Pulled on demand (Command.GetLiveValues / EvalCommand.EvalGetLiveValues)
+/// AFTER an eval reply, never attached to it — the walk used to sit between
+/// the eval finishing and the caller getting its result (roast-4 #2).
+let captureLiveValueSnapshotJson (session: FsiEvaluationSession) (generationRef: int64 ref) : string =
+  try
+    let boundValues =
+      session.GetBoundValues()
+      |> List.map (fun bv ->
+        let value =
+          try bv.Value.ReflectionValue
+          with _ -> null
+        let typeSig =
+          try
+            match bv.Value.ReflectionType with
+            | null -> ""
+            | t -> t.Name
+          with _ -> ""
+        (bv.Name, typeSig, value))
+    let generation = System.Threading.Interlocked.Increment(&generationRef.contents)
+    let snap = Features.LiveValueTree.buildSnapshot "" generation boundValues
+    // Use WorkerProtocol.Serialization (FSharp.SystemTextJson) so the
+    // NodeKind DU and other F# types serialize correctly.
+    WorkerProtocol.Serialization.serialize snap
+  with ex ->
+    Log.warn "[AppState] Live value snapshot capture failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+    let generation = System.Threading.Interlocked.Increment(&generationRef.contents)
+    WorkerProtocol.Serialization.serialize (Features.LiveValueTree.buildSnapshot "" generation [])
+
 let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) =
   let diagnosticsChangedEvent = Event<Features.DiagnosticsStore.T>()
   let emit evt = try onEvent evt with ex -> logger.LogWarning (sprintf "Event emission failed: %s" ex.Message)
@@ -1171,36 +1208,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           | Ok(res, newSt) ->
             let evalStats' = Affordances.EvalStats.record sw.Elapsed evalStats
             publishSnapshot newSt Idle evalStats'
-            // Live binding watch window: capture the REAL bound values from the
-            // FSI session (not the printed text) and attach a serialized tree to
-            // the response metadata so the daemon can update its adaptive store.
-            let resWithLiveValues =
-              try
-                // Session id is stamped by the worker/daemon boundary — the
-                // daemon keys its adaptive store by the session id it knows.
-                let boundValues =
-                  newSt.Session.GetBoundValues()
-                  |> List.map (fun bv ->
-                    let value =
-                      try bv.Value.ReflectionValue
-                      with _ -> null
-                    let typeSig =
-                      try
-                        match bv.Value.ReflectionType with
-                        | null -> ""
-                        | t -> t.Name
-                      with _ -> ""
-                    (bv.Name, typeSig, value))
-                let generation = System.Threading.Interlocked.Increment(&liveValueGeneration.contents)
-                let snap = Features.LiveValueTree.buildSnapshot "" generation boundValues
-                // Use WorkerProtocol.Serialization (FSharp.SystemTextJson) so the
-                // NodeKind DU and other F# types serialize correctly.
-                let json = WorkerProtocol.Serialization.serialize snap
-                { res with Metadata = res.Metadata |> Map.add "liveValueSnapshot" (box json) }
-              with ex ->
-                Log.warn "[AppState] Live value snapshot capture failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-                { res with Metadata = res.Metadata |> Map.add "liveValueSnapshotError" (box ex.Message) }
-            match resWithLiveValues.EvaluationResult with
+            match res.EvaluationResult with
             | Ok result ->
               emit (Events.EvalCompleted {|
                 Code = code
@@ -1224,7 +1232,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                 emit (Events.EvalTraced {| Code = code; Stages = stages; TotalMs = totalMs |})
               | _ -> ()
             | None -> ()
-            reply.Reply resWithLiveValues
+            // Live values (watch window) are no longer attached here — pulled
+            // on demand via GetLiveValues, off this reply path (roast-4 #2).
+            reply.Reply res
             return (Active (newSt, Idle), middleware, evalStats')
           | Error ex ->
             let errResponse = {
@@ -1252,6 +1262,16 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
         | EvalAddMiddleware(additionalMiddleware, r) ->
           r.Reply(())
           return (phase, additionalMiddleware @ middleware, evalStats)
+        | EvalGetLiveValues reply ->
+          // Serialized with evals (it reads the FSI session's live bound
+          // values), but off the eval REPLY path — pulled on demand after
+          // the caller already has its eval result (roast-4 #2).
+          match phase with
+          | Active (st, _) ->
+            reply.Reply (captureLiveValueSnapshotJson st.Session liveValueGeneration)
+          | Initializing _ | Faulted _ ->
+            reply.Reply (WorkerProtocol.Serialization.serialize (Features.LiveValueTree.buildSnapshot "" 0L []))
+          return (phase, middleware, evalStats)
         | EvalReset reply ->
           sessionGeneration.Value <- SessionGeneration.next sessionGeneration.Value
           try
@@ -1774,6 +1794,11 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           queryActor.Post(QueryGetTypeCheckWithSymbols(text, filePath, reply))
         | GetBoundValue(name, reply) ->
           queryActor.Post(QueryGetBoundValue(name, reply))
+        | GetLiveValues reply ->
+          // Must serialize with evals (reads the live FSI session), so this
+          // goes to the eval actor, not the query actor — but it is a pull
+          // the caller issues after its own eval reply, so it never delays one.
+          evalActor.Post(EvalGetLiveValues reply)
 
         // Cancel — cooperative via CTS + thread interrupt for blocked evals
         | CancelEval reply ->

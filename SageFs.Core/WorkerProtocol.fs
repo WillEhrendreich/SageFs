@@ -235,6 +235,11 @@ module WorkerProtocol =
     | ResetSession of replyId: string
     | HardResetSession of rebuild: bool * replyId: string
     | GetStatus of replyId: string
+    /// Pulled by the daemon on demand, AFTER an eval reply — never attached
+    /// to one. Building the live-value snapshot (reflection walk + JSON) used
+    /// to sit between the eval finishing and the caller getting its result;
+    /// this request lets the daemon ask for it separately (roast-4 #2).
+    | GetLiveValues of replyId: string
     | RunTests of tests: Features.LiveTesting.TestCase array * maxParallelism: int * replyId: string
     | GetTestDiscovery of replyId: string
     | GetInstrumentationMaps of replyId: string
@@ -313,6 +318,9 @@ module WorkerProtocol =
     | TypeCheckWithSymbolsResult of replyId: string * hasErrors: bool * diagnostics: WorkerDiagnostic list * symbolRefs: WorkerSymbolRef list
     | CompletionResult of replyId: string * completions: string list
     | StatusResult of replyId: string * status: WorkerStatusSnapshot
+    /// Reply to GetLiveValues: the same JSON a Features.LiveValueTree.LiveValueSnapshot
+    /// serializes to today (the daemon already deserializes that type).
+    | LiveValuesResult of replyId: string * snapshotJson: string
     | EvalCancelled of wasRunning: bool
     | ResetResult of replyId: string * result: Result<unit, SageFsError>
     | HardResetResult of replyId: string * result: Result<string, SageFsError>

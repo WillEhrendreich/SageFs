@@ -191,12 +191,6 @@ let handleMessage
           match v with
           | :? SageFs.Features.LiveTesting.LiveTestHookResultDto as dto ->
             acc |> Map.add k (WorkerProtocol.Serialization.serialize dto)
-          | :? string as s when k = "liveValueSnapshot" ->
-            // Live binding watch window — already a serialized JSON tree.
-            acc |> Map.add k s
-          | :? string as s when k = "liveValueSnapshotError" ->
-            // Diagnostic: capture failed — surface the reason to the daemon log.
-            acc |> Map.add k s
           | _ -> acc) Map.empty
       // Capture RunTest closure from the latest discovery
       let metaKeys = response.Metadata |> Map.toList |> List.map fst |> String.concat ", "
@@ -264,6 +258,10 @@ let handleMessage
       let state = getState ()
       let stats = getStats ()
       return WorkerResponse.StatusResult(replyId, toStatusSnapshot state stats (getStatusMessage()) projects)
+
+    | WorkerMessage.GetLiveValues replyId ->
+      let! json = actor.PostAndAsyncReply(fun rc -> GetLiveValues rc)
+      return WorkerResponse.LiveValuesResult(replyId, json)
 
     | WorkerMessage.RunTests(tests, maxParallelism, replyId) ->
       let runTest = getRunTest()

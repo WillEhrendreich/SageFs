@@ -118,6 +118,7 @@ module WorkerHttpTransport =
   module Routes =
     let diagThreadpool = WorkerRoute.Get ("/diag/threadpool", GetAccess.ReadOnly)
     let status = WorkerRoute.Get ("/status", GetAccess.ReadOnly)
+    let liveValues = WorkerRoute.Get ("/live-values", GetAccess.ReadOnly)
     let eval = WorkerRoute.Post "/eval"
     let check = WorkerRoute.Post "/check"
     let typecheckSymbols = WorkerRoute.Post "/typecheck-symbols"
@@ -146,7 +147,7 @@ module WorkerHttpTransport =
     let devReload = WorkerRoute.Get ("/__sagefs__/reload", GetAccess.CrossOriginStream)
 
   let routes : WorkerRoute list = [
-    Routes.diagThreadpool; Routes.status; Routes.eval; Routes.check
+    Routes.diagThreadpool; Routes.status; Routes.liveValues; Routes.eval; Routes.check
     Routes.typecheckSymbols; Routes.completions; Routes.cancel; Routes.loadScript
     Routes.reset; Routes.hardReset; Routes.runTests; Routes.runTestsStream
     Routes.testDiscovery; Routes.instrumentationMaps; Routes.shutdown
@@ -349,6 +350,11 @@ module WorkerHttpTransport =
       map Routes.status (Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetStatus rid)
+      })) |> ignore
+
+      map Routes.liveValues (Func<HttpContext, Task>(fun ctx -> task {
+        let rid = ctx.Request.Query["replyId"].ToString()
+        return! respond' ctx (WorkerMessage.GetLiveValues rid)
       })) |> ignore
 
       map Routes.eval (Func<HttpContext, Task>(fun ctx -> task {

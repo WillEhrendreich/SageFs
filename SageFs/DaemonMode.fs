@@ -2120,7 +2120,7 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
       let sidStr = WorkerProtocol.SessionId.value sid
       let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.EvalCode(code, "dash"))
       match result with
-      | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, metadata)) ->
+      | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Ok msg, diags, _metadata)) ->
         let! _ =
           dispatchOutputAndWait
             elmRuntime
@@ -2128,18 +2128,30 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
             sidStr
             (SageFsMsg.Event (
               SageFsEvent.EvalCompleted (sidStr, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
-        // Live binding watch window: feed the reflection-walked snapshot into the
-        // adaptive store. Subscribers fire only on real change; the existing
-        // EvalCompleted → ModelChanged morph re-renders the dashboard panel.
-        match metadata |> Map.tryFind "liveValueSnapshot" with
-        | Some json ->
-          try
-            let snap =
-              WorkerProtocol.Serialization.deserialize<SageFs.Features.LiveValueTree.LiveValueSnapshot> json
-            SageFs.Features.LiveBindingsAdaptive.update liveBindingsAdaptive sidStr { snap with SessionId = sidStr }
-          with ex ->
-            Log.warn "[DaemonMode] Failed to parse live value snapshot for %s: %s" sidStr ex.Message
-        | None -> ()
+        // Live binding watch window: pulled AFTER the eval reply, never
+        // attached to it (roast-4 #2) — fire-and-forget so a slow or failed
+        // reflection walk can never delay the caller's eval result. Fed into
+        // the adaptive store; subscribers fire only on real change, and the
+        // existing EvalCompleted → ModelChanged morph re-renders the panel.
+        Async.Start (
+          async {
+            let! liveResult =
+              proxyToSession getProxyStr notifyWorkerDiedStr sidStr
+                (WorkerProtocol.WorkerMessage.GetLiveValues (sprintf "live-%s" sidStr))
+              |> Async.AwaitTask
+            match liveResult with
+            | Ok (WorkerProtocol.WorkerResponse.LiveValuesResult(_, json)) ->
+              try
+                let snap =
+                  WorkerProtocol.Serialization.deserialize<SageFs.Features.LiveValueTree.LiveValueSnapshot> json
+                SageFs.Features.LiveBindingsAdaptive.update liveBindingsAdaptive sidStr { snap with SessionId = sidStr }
+              with ex ->
+                Log.warn "[DaemonMode] Failed to parse live value snapshot for %s: %s" sidStr ex.Message
+            | Ok other ->
+              Log.warn "[DaemonMode] Unexpected live-values response for %s: %A" sidStr other
+            | Error e ->
+              Log.warn "[DaemonMode] Live value pull failed for %s: %s" sidStr (SageFsError.describe e)
+          })
         return Ok msg
       | Ok (WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _)) ->
         let msg = SageFsError.describe err
