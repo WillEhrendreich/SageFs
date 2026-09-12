@@ -164,6 +164,39 @@ let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: 
 let private disclosureSummaryStyle =
   "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;"
 
+/// A `<details>` accordion whose open/closed state lives in a Datastar signal
+/// instead of the DOM `open` attribute.
+///
+/// The SSE fallback re-renders `#main` on every tick (a ticking label defeats
+/// the no-change dedupe), and a morph replaces the element WITHOUT `open` —
+/// so a raw `<details>` snaps every open accordion shut about once a second.
+/// Signals live in Datastar's client-side store, not the DOM: binding `open`
+/// to `$signalName` means the surviving signal re-supplies `open` after every
+/// morph, and the `toggle` event keeps the signal in sync with what the user
+/// actually clicked (and, since Datastar sends signals with every `@post`,
+/// "synced with the server" — the server sees the current open state on the
+/// next action).
+///
+/// For a signal with a fixed, known name, declare its initial state once via
+/// `Ds.signal (name, initialOpen)` in the page's signal list (`Dashboard.fs`)
+/// so the GET render, the SSE stream, and every morph agree on the same
+/// starting value. A signal name computed per-item (one `<details>` per row
+/// in a dynamically-sized list, e.g. per session or per tree node) needs no
+/// separate declaration: until the user toggles it, `$name` reads as
+/// undefined (falsy) everywhere — GET, stream, and morph alike — which
+/// renders closed, and the first `toggle` creates the signal in the store.
+let signalDetails (signalName: string) (attrs: XmlAttribute list) (children: XmlNode list) : XmlNode =
+  Elem.details
+    (attrs
+     @ [ Ds.attr' ("open", sprintf "$%s" signalName)
+         Ds.onEvent ("toggle", sprintf "$%s = event.target.open" signalName) ])
+    children
+
+/// Reduce arbitrary (possibly FSI-derived) text to identifier characters, for
+/// splicing into a Datastar signal name inside an attribute expression.
+let private signalIdent (s: string) : string =
+  s |> String.map (fun c -> match Char.IsAsciiLetterOrDigit c || c = '_' with | true -> c | false -> '_')
+
 let renderAlarmBanner (alarms: SystemAlarmEntry list) =
   match alarms with
   | [] ->
@@ -186,7 +219,7 @@ let renderAlarmBanner (alarms: SystemAlarmEntry list) =
           ]
         ])
     Elem.div [ Attr.id DomIds.AlarmBanner; Attr.class' "alarm-banner" ] [
-      Elem.details [] [
+      signalDetails Signals.AlarmBannerOpen [] [
         Elem.summary [ Attr.style disclosureSummaryStyle ] [
           Elem.span [ Attr.class' "alarm-icon" ] [ Text.raw "🚨" ]
           Elem.span [ Attr.class' "alarm-title" ] [
@@ -319,7 +352,7 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
           sprintf "%d failure%s · %d have no baseline yet" total (if total = 1 then "" else "s") suppressed
         | suppressed ->
           sprintf "%d failure%s · %d with context · %d no baseline" total (if total = 1 then "" else "s") view.Entries.Length suppressed
-      Elem.details [] [
+      signalDetails Signals.FailureNarrativesOpen [] [
         Elem.summary [ Attr.style disclosureSummaryStyle ] [
           Elem.span [ Attr.class' "failure-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] [
             Text.raw "🔴 "
@@ -1060,7 +1093,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 match totalMs with
                 | ms when ms >= 1000.0 -> sprintf "%.1fs" (ms / 1000.0)
                 | ms -> sprintf "%.0fms" ms
-              Elem.details
+              signalDetails
+                (sprintf "testTreemapOpen_%s" sid)
                 [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]
                 [ Elem.summary
                     [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
@@ -1072,7 +1106,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
             match s.BindingEntries.Length with
             | 0 -> ()
             | _ ->
-              Elem.details
+              signalDetails
+                (sprintf "sessionBindingsOpen_%s" sid)
                 [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]
                 [ Elem.summary
                     [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
@@ -1117,7 +1152,7 @@ let renderSessionFilmstrip (entries: FilmstripEntry list) =
         |> List.map (fun e ->
           match e.Outcome with EvalSuccess -> "✓" | EvalError -> "✗" | EvalCancelled -> "⊘")
         |> String.concat ""
-      Elem.details [] [
+      signalDetails Signals.FilmstripOpen [] [
         Elem.summary [ Attr.style "cursor: pointer; font-size: 0.75rem; color: var(--fg-dim); user-select: none;" ] [
           textEnc (sprintf "⏱ %d evals  %s" entries.Length recentIcons)
         ]
@@ -1160,7 +1195,7 @@ let renderCurrentDiagnostics (diags: Diagnostic list) =
             textEnc (sprintf "%d error%s · " e (plural e))
             Text.raw "⚠️ "
             textEnc (sprintf "%d warning%s" w (plural w)) ]
-      Elem.details [] [
+      signalDetails Signals.DiagnosticsOpen [] [
         Elem.summary [ Attr.style disclosureSummaryStyle ] [
           Elem.span [ Attr.class' "diag-count-badge"; Attr.style "font-weight: bold; margin-right: 0.5rem;" ] badgeNodes
         ]
@@ -1259,7 +1294,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             snap.OutputPanel
           ]
           // Eval area — collapsed by default via <details>
-          Elem.create "details" [ Attr.id DomIds.EvaluateSection; Attr.class' "eval-area" ] [
+          signalDetails Signals.EvaluateSectionOpen [ Attr.id DomIds.EvaluateSection; Attr.class' "eval-area" ] [
             Elem.create "summary" [ Attr.class' "flex-between"; Attr.style "cursor: pointer;" ] [
               Elem.span [ Attr.style "color: var(--fg-blue); font-weight: bold; font-size: 0.85rem;" ] [ Text.raw "▸ Evaluate" ]
               Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
@@ -1371,7 +1406,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             snap.SessionContextPanel
             snap.FrictionPanel
           ]
-          Elem.details
+          signalDetails
+            Signals.NewSessionOpen
             [ Attr.class' "panel new-session-panel" ]
             [
               Elem.summary
@@ -1530,7 +1566,7 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
           Attr.create "onclick" (hotReloadPost "unwatch-all" "{}") ]
         [ Text.raw "Unwatch All" ]
     ]
-    Elem.details [] [
+    signalDetails Signals.HotReloadFilesOpen [] [
       Elem.summary [ Attr.style "cursor: pointer; font-size: 0.75rem; color: var(--fg-dim); user-select: none;" ] [
         Text.raw "📁 "
         textEnc (sprintf "%d files" total)
@@ -1590,7 +1626,7 @@ let renderHotReloadEmpty =
 /// optional token, and the local send history. The send handler is
 /// server-authoritative — the client never assembles the payload.
 let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReviewSnapshot) =
-  Elem.details [ Attr.id DomIds.FrictionPanel; Attr.class' "panel"; Attr.style "margin-top: 0.5rem;" ] [
+  signalDetails Signals.FrictionPanelOpen [ Attr.id DomIds.FrictionPanel; Attr.class' "panel"; Attr.style "margin-top: 0.5rem;" ] [
     Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
       Elem.span [] [
         Text.raw "🧾 "
@@ -1673,7 +1709,7 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
         (match snap.SentReports with
          | [] -> Elem.div [] []
          | history ->
-           Elem.details [ Attr.style "margin-top: 0.4rem;" ] [
+           signalDetails Signals.FrictionHistoryOpen [ Attr.style "margin-top: 0.4rem;" ] [
              Elem.summary [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; cursor: pointer;" ] [
                textEnc (sprintf "Sent reports (%d)" history.Length)
              ]
@@ -1767,7 +1803,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
   let summaryText = SessionContext.summary ctx
 
   let assembliesSection =
-    Elem.details [] [
+    signalDetails Signals.SessionContextAssembliesOpen [] [
       Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
         Text.raw "📦 "
         textEnc (sprintf "Assemblies (%d)" (ctx.Warmup.AssembliesLoaded |> List.length))
@@ -1781,7 +1817,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
   let namespacesSection =
     let opened = ctx.Warmup.NamespacesOpened
     let failed = ctx.Warmup.FailedOpens
-    Elem.details [] [
+    signalDetails Signals.SessionContextNamespacesOpen [] [
       Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
         Text.raw "📂 "
         textEnc (sprintf "Namespaces (%d opened, %d failed)"
@@ -1802,7 +1838,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
         ]
         match List.isEmpty failed with
         | false ->
-          Elem.details [ Attr.create "open" ""; Attr.style "margin-top: 0.5em;" ] [
+          signalDetails Signals.SessionContextFailedOpensOpen [ Attr.style "margin-top: 0.5em;" ] [
             Elem.summary [ Attr.style "color: var(--fg-red); cursor: pointer; font-weight: bold;" ] [
               textEnc (sprintf "⚠️ %d Failed Opens (expanded)" failed.Length)
             ]
@@ -1856,7 +1892,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
 
   let timingSection =
     let t = ctx.Warmup.PhaseTiming
-    Elem.details [] [
+    signalDetails Signals.SessionContextTimingOpen [] [
       Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
         textEnc (sprintf "⏱️ Warmup Timing (%dms total)" t.TotalMs)
       ]
@@ -1884,7 +1920,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
     ]
 
   let filesSection =
-    Elem.details [] [
+    signalDetails Signals.SessionContextFilesOpen [] [
       Elem.summary [ Attr.style "font-size: 0.75rem; cursor: pointer;" ] [
         let loadedCount =
           ctx.FileStatuses
@@ -1908,7 +1944,7 @@ let renderSessionContextPanel (ctx: SessionContext) =
     ]
 
   Elem.div [ Attr.id DomIds.SessionContext; Attr.class' "panel" ] [
-    Elem.details [] [
+    signalDetails Signals.SessionContextOpen [] [
       Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.8rem;" ] [
         Text.raw "🔍 "
         textEnc (sprintf "Session Context: %s" summaryText)
@@ -1936,7 +1972,9 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
   let shadowedCount =
     snapshot |> Option.map (fun s -> s.ShadowedBindings.Length) |> Option.defaultValue 0
   Elem.div [ Attr.id DomIds.BindingsPanel; Attr.class' "panel" ] [
-    Elem.details [] [
+    // Shares Signals.BindingsPanelOpen with renderLiveBindingsPanel — the two
+    // are mutually exclusive renders of the same DOM id, so one open state.
+    signalDetails Signals.BindingsPanelOpen [] [
       Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;" ] [
         Text.raw "📦 "
         textEnc (sprintf "Bindings (%d)" activeCount)
@@ -1978,7 +2016,7 @@ let renderBindingsPanel (snapshot: Features.BindingExplorer.BindingScopeSnapshot
           match shadowedCount with
           | 0 -> ()
           | _ ->
-            Elem.details [ Attr.style "margin-top: 0.5em;" ] [
+            signalDetails Signals.ShadowedBindingsOpen [ Attr.style "margin-top: 0.5em;" ] [
               Elem.summary [ Attr.style "font-size: 0.7rem; cursor: pointer; color: var(--fg-dim, #666);" ] [
                 Text.raw "👻 "
                 textEnc (sprintf "%d shadowed" shadowedCount)
@@ -2029,13 +2067,8 @@ let renderLiveBindingsPanel (snapshot: SageFs.Features.LiveValueTree.LiveValueSn
       // Per-node signal for open/closed state — survives Datastar morphs.
       // The label is FSI-derived data spliced into a Datastar expression inside
       // an attribute, so reduce it to identifier characters only.
-      let labelIdent =
-        node.Label.Replace("(", "").Replace(")", "")
-        |> String.map (fun c -> match Char.IsAsciiLetterOrDigit c || c = '_' with | true -> c | false -> '_')
-      let nodeSignal = sprintf "open_%s_%d" labelIdent node.Depth
-      Elem.details [ Attr.style "font-size: 0.75rem;"
-                     Ds.attr' ("open", sprintf "$%s" nodeSignal)
-                     Ds.onEvent ("toggle", sprintf "$%s = event.target.open" nodeSignal) ] [
+      let nodeSignal = sprintf "open_%s_%d" (signalIdent (node.Label.Replace("(", "").Replace(")", ""))) node.Depth
+      signalDetails nodeSignal [ Attr.style "font-size: 0.75rem;" ] [
         Elem.summary [ Attr.style "cursor: pointer; user-select: none; list-style: none;" ] [ row ]
         Elem.div [ Attr.style "margin-top: 2px;" ] [
           yield! node.Children |> List.map renderNode
@@ -2048,7 +2081,7 @@ let renderLiveBindingsPanel (snapshot: SageFs.Features.LiveValueTree.LiveValueSn
     |> Option.map (fun s -> s.CapturedAt.ToLocalTime().ToString("HH:mm:ss"))
     |> Option.defaultValue ""
   Elem.div [ Attr.id DomIds.BindingsPanel; Attr.class' "panel" ] [
-    Elem.details [ Ds.attr' ("open", sprintf "$%s" Signals.BindingsPanelOpen); Ds.onEvent ("toggle", sprintf "$%s = event.target.open" Signals.BindingsPanelOpen) ] [
+    signalDetails Signals.BindingsPanelOpen [] [
       Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.9rem; user-select: none;" ] [
         Text.raw "🔴 "
         textEnc (sprintf "Live Bindings (%d)" count)

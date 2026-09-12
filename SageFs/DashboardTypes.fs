@@ -83,6 +83,26 @@ module Signals =
   let [<Literal>] ExpandedDashboard = "expandedDashboard"
   let [<Literal>] BindingsPanelOpen = "bindingsPanelOpen"
   let [<Literal>] FrictionDrawerOpen = "frictionDrawerOpen"
+  // Accordion open/closed state — one signal per static <details> panel, so
+  // the panel survives the ~1s SSE-fallback morph (see signalDetails).
+  let [<Literal>] AlarmBannerOpen = "alarmBannerOpen"
+  let [<Literal>] FailureNarrativesOpen = "failureNarrativesOpen"
+  let [<Literal>] FilmstripOpen = "filmstripOpen"
+  let [<Literal>] DiagnosticsOpen = "diagnosticsOpen"
+  let [<Literal>] EvaluateSectionOpen = "evaluateSectionOpen"
+  let [<Literal>] NewSessionOpen = "newSessionOpen"
+  let [<Literal>] HotReloadFilesOpen = "hotReloadFilesOpen"
+  let [<Literal>] FrictionPanelOpen = "frictionPanelOpen"
+  let [<Literal>] FrictionHistoryOpen = "frictionHistoryOpen"
+  let [<Literal>] SessionContextOpen = "sessionContextOpen"
+  let [<Literal>] SessionContextAssembliesOpen = "sessionContextAssembliesOpen"
+  let [<Literal>] SessionContextNamespacesOpen = "sessionContextNamespacesOpen"
+  /// Failed-opens is expanded by default — a warning the user should see, not
+  /// hide behind a click.
+  let [<Literal>] SessionContextFailedOpensOpen = "sessionContextFailedOpensOpen"
+  let [<Literal>] SessionContextTimingOpen = "sessionContextTimingOpen"
+  let [<Literal>] SessionContextFilesOpen = "sessionContextFilesOpen"
+  let [<Literal>] ShadowedBindingsOpen = "shadowedBindingsOpen"
   let [<Literal>] FrictionEndpoint = "frictionEndpoint"
   let [<Literal>] FrictionToken = "frictionToken"
   let [<Literal>] FrictionEdits = "frictionEdits"

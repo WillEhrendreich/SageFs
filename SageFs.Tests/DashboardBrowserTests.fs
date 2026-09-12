@@ -294,6 +294,29 @@ let tests =
       LocatorWaitForOptions(State = WaitForSelectorState.Visible))
   })
 
+  playwrightTest "accordion open state survives the periodic SSE morph" (fun page -> task {
+    // Root cause (commit cdeb7567): the SSE fallback re-renders #main about
+    // once a second because a ticking uptime/relative-time label defeats the
+    // no-change dedupe, and a plain <details> loses its DOM-only `open`
+    // attribute on that morph. The fix makes `open` a Datastar signal
+    // (signalDetails in DashboardFragments.fs) instead of DOM-only state, so
+    // Datastar re-applies it from the surviving signal after every morph.
+    // This test proves that DIRECTLY — no DashboardDom.throughPanelReset
+    // reopen-retry helper — by opening the accordion once and asserting it
+    // is still open after outlasting at least two 1-second SSE-fallback
+    // ticks (Timeouts.sseEventInterval).
+    do! PlaywrightExpect.waitForSSE 10_000 page
+    do! DashboardDom.openEvalArea page
+    let isOpen () =
+      page.EvaluateAsync<bool>(
+        "() => { var el = document.querySelector('#evaluate-section'); return el ? el.open : false; }")
+    let! openedNow = isOpen ()
+    Expect.isTrue openedNow "evaluate section opened"
+    do! page.WaitForTimeoutAsync(2500.0f)
+    let! stillOpen = isOpen ()
+    Expect.isTrue stillOpen "evaluate section stays open across the periodic SSE morph"
+  })
+
   playwrightTest "session status renders with state" (fun page -> task {
     // The tabline #session-status carries the state pill; the session id
     // renders in the sibling .tabline-info. Both are inside #main, pushed
