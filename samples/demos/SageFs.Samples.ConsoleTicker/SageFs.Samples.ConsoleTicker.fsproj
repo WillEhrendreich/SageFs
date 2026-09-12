@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <LangVersion>preview</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Ticker.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- No product dependency pulls FSharp.Core in as copy-local for a
+         package-free console app; without this the built binary can't find
+         it at run time even though it compiles fine. -->
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+
+</Project>
