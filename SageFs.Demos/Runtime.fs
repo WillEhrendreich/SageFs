@@ -86,6 +86,13 @@ let resolveDotnetRoot () : Async<Result<string, string>> =
 let private chromiumDir () : string =
   Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, ".cache", "ms-playwright", "chromium-1208", "chrome-linux64")
 
+/// The bundled cursor/ripple PNG assets (§8, §9), copied next to this
+/// assembly's DLL by the fsproj's `CopyToOutputDirectory` items — resolved
+/// the same way `chromiumDir` resolves its own bundled dependency: one fixed
+/// path under this tool's own directory, never a runtime download.
+let private assetPath (fileName: string) : string =
+  Path.Combine(AppContext.BaseDirectory, "assets", fileName)
+
 // ---------------------------------------------------------------------------
 // Domain (Scenario) -> Wire (ScenarioPlan) mapping. This is the ONLY place
 // the rich planner vocabulary is flattened for the cell-agent — the mapping
@@ -293,10 +300,19 @@ let renderArtifacts (scenario: Scenario) (domainLog: StepLog) (artifactsDir: str
       |> List.sortBy (fun s -> s.Index)
       |> List.collect (fun s -> [ "-i"; s.Segment ])
 
+    // The cursor/ripple asset inputs `Ffmpeg.render` wired at pad indices
+    // `total` and `total + 1` (right after every step's own segment input,
+    // in exactly this order) — `-loop 1` makes each static PNG repeat for
+    // the whole encode instead of ending after its one frame.
+    let assetInputArgs =
+      [ "-loop"; "1"; "-i"; assetPath "cursor.png"
+        "-loop"; "1"; "-i"; assetPath "ripple.png" ]
+
     let! encodeCode, encodeErr =
       ffmpeg (
         [ "-y" ]
         @ inputArgs
+        @ assetInputArgs
         @ [ "-filter_complex"; filterComplex
             "-map"; "[vmp4]"; "-c:v"; "libx264"; "-pix_fmt"; "yuv420p"; mp4Path
             "-map"; "[outv]"; "-loop"; "0"; gifPath ]

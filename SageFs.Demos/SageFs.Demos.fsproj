@@ -15,6 +15,22 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Bundled demo assets (§8, §9): a crisp, anti-aliased synthetic cursor
+         (28px arrow, hotspot at pixel (2,2)) and click-ripple ring PNG, both
+         generated once via ImageMagick at 4x scale then downscaled for
+         anti-aliasing (drawbox/drawtext cannot draw a smooth diagonal or a
+         circle — see Ffmpeg.fs's module doc). Copied next to the built DLL
+         so Runtime.fs can resolve them via AppContext.BaseDirectory exactly
+         like the rest of the tool's own asset resolution (chromiumDir). -->
+    <None Include="assets\cursor.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="assets\ripple.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="Domain.fs" />
     <Compile Include="Motion.fs" />
     <Compile Include="Cadence.fs" />

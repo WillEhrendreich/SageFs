@@ -56,14 +56,6 @@ let private isCrop = function FilterGraph.Crop _ -> true | _ -> false
 let private isOverlay = function FilterGraph.Overlay _ -> true | _ -> false
 let private isDrawTextStyled = function FilterGraph.DrawTextStyled _ -> true | _ -> false
 
-let private isCursorBox = function
-  | FilterGraph.DrawBoxTimed(_, _, None, Thickness.Fill, Some _) -> true
-  | _ -> false
-
-let private isRippleBox = function
-  | FilterGraph.DrawBoxTimed(_, _, _, Thickness.Outline _, _) -> true
-  | _ -> false
-
 let private isCaptionBandBox = function
   | FilterGraph.DrawBoxTimed(_, _, Some _, Thickness.Fill, None) -> true
   | _ -> false
@@ -105,8 +97,24 @@ let tests =
       testCase "Fps" <| fun _ ->
         FilterGraph.Fps 12 |> toCommandString |> Expect.equal "fps filter" "fps=12"
 
-      testCase "Overlay" <| fun _ ->
-        FilterGraph.Overlay(620, 300) |> toCommandString |> Expect.equal "overlay filter" "overlay=620:300"
+      testCase "Overlay with fixed extents and no enable gate" <| fun _ ->
+        FilterGraph.Overlay(Extent.Fixed 620, Extent.Fixed 300, None)
+        |> toCommandString
+        |> Expect.equal "overlay filter, eof_action=endall always on (§4.6: never repeat, against an infinite -loop 1 asset)" "overlay=x=620:y=300:eof_action=endall"
+
+      testCase "Overlay with expression extents (quoted) and an enable gate" <| fun _ ->
+        FilterGraph.Overlay(Extent.Expr "620-overlay_w/2", Extent.Expr "300-overlay_h/2", Some "between(t,0.5,0.75)")
+        |> toCommandString
+        |> Expect.equal
+          "expression extents single-quoted, enable gate appended"
+          "overlay=x='620-overlay_w/2':y='300-overlay_h/2':eof_action=endall:enable='between(t,0.5,0.75)'"
+
+      testCase "ScaleTimed always uses named w=/h= args and eval=frame" <| fun _ ->
+        FilterGraph.ScaleTimed(Extent.Expr "clip(8+80*(t-0.5),8,28)", Extent.Expr "clip(8+80*(t-0.5),8,28)")
+        |> toCommandString
+        |> Expect.equal
+          "time-varying scale re-evaluates its expression every frame"
+          "scale=w='clip(8+80*(t-0.5),8,28)':h='clip(8+80*(t-0.5),8,28)':eval=frame"
 
       testCase "DrawBox with a Kanagawa hex color" <| fun _ ->
         FilterGraph.DrawBox({ X = 0; Y = 664; W = 1280; H = 56 }, "#1f1f28")
@@ -154,9 +162,9 @@ let tests =
 
       testCase "Chain nests recursively" <| fun _ ->
         let inner = FilterGraph.Chain [ FilterGraph.Crop { X = 0; Y = 0; W = 10; H = 10 }; FilterGraph.Scale(20, 20) ]
-        FilterGraph.Chain [ inner; FilterGraph.Overlay(0, 0) ]
+        FilterGraph.Chain [ inner; FilterGraph.Overlay(Extent.Fixed 0, Extent.Fixed 0, None) ]
         |> toCommandString
-        |> Expect.equal "nested Chains flatten to one comma-joined string" "crop=10:10:0:0,scale=20:20,overlay=0:0"
+        |> Expect.equal "nested Chains flatten to one comma-joined string" "crop=10:10:0:0,scale=20:20,overlay=x=0:y=0:eof_action=endall"
 
       testCase "DrawBoxTimed with fixed extents, no alpha, filled, ungated" <| fun _ ->
         let rect = { Left = Extent.Fixed 10; Top = Extent.Fixed 20; BoxWidth = Extent.Fixed 30; BoxHeight = Extent.Fixed 40 }
@@ -210,9 +218,9 @@ let tests =
       testCase "Complex joins its nodes with ';' — ffmpeg's own filter_complex node separator" <| fun _ ->
         FilterGraph.Complex
           [ FilterGraph.Labeled([ Pad.Input 0 ], FilterGraph.Split 2, [ Pad.Named "a"; Pad.Named "b" ])
-            FilterGraph.Labeled([ Pad.Named "a"; Pad.Named "b" ], FilterGraph.Overlay(0, 0), [ Pad.Named "out" ]) ]
+            FilterGraph.Labeled([ Pad.Named "a"; Pad.Named "b" ], FilterGraph.Overlay(Extent.Fixed 0, Extent.Fixed 0, None), [ Pad.Named "out" ]) ]
         |> toCommandString
-        |> Expect.equal "semicolon-joined filter_complex nodes" "[0:v]split=2[a][b];[a][b]overlay=0:0[out]"
+        |> Expect.equal "semicolon-joined filter_complex nodes" "[0:v]split=2[a][b];[a][b]overlay=x=0:y=0:eof_action=endall[out]"
     ]
 
     testCase "toCommandString is stable: the same FilterGraph renders to the same string every call" <| fun _ ->
@@ -253,14 +261,16 @@ let tests =
 
       testCase "render's per-step nodes are wired to Input 0, Input 1, ... in step order" <| fun _ ->
         let nodes = render samplePlan |> allNodes
-        let stepInputPads =
-          nodes
-          |> List.choose (function
-            | FilterGraph.Labeled([ Pad.Input i ], _, _) -> Some i
-            | _ -> None)
-          |> List.distinct
-          |> List.sort
-        stepInputPads |> Expect.equal "one Labeled node reading straight from each -i input, in order" [ 0 .. samplePlan.Segments.Length - 1 ]
+        // A step's own segment pad may be the SOLE input of its content node
+        // (no recorded motion) or share a node with the cursor-image pad
+        // (`Labeled([Pad.Input i; cursorPad], Overlay ..., _)` — a cursor
+        // hold is a two-input node), so "contains", not "is exactly", is the
+        // correct check for "this step's segment is wired in".
+        let usesStepInput i =
+          nodes |> List.exists (function FilterGraph.Labeled(ins, _, _) -> List.contains (Pad.Input i) ins | _ -> false)
+        [ 0 .. samplePlan.Segments.Length - 1 ]
+        |> List.forall usesStepInput
+        |> Expect.isTrue "every step's own segment input pad is consumed by some node in the graph, in step order"
 
       testCase "render's palette stage is a real two-pass split/palettegen/paletteuse, ending at pad 'outv', with a 3rd tap for the .mp4 (§4.6, §9)" <| fun _ ->
         let nodes = render samplePlan |> allNodes
@@ -298,26 +308,50 @@ let tests =
         leaves |> List.filter isDrawTextStyled |> List.length
         |> Expect.equal "two styled texts per step: the counter and the caption" (samplePlan.Segments.Length * 2)
 
-      testCase "render overlays the cursor + ripple only for the step with a non-empty pointer path" <| fun _ ->
+      testCase "render overlays the cursor image + ripple image only for the step with a non-empty pointer path" <| fun _ ->
         let nodes = render stepContentPlan |> allNodes
-        match nodes |> List.tryPick (function FilterGraph.Labeled([ Pad.Input 0 ], f, _) -> Some f | _ -> None) with
-        | None -> failtest "expected step 0's own node"
-        | Some step0 ->
-          let leaves = allLeaves step0
-          leaves |> List.exists isCursorBox |> Expect.isTrue "step 0 (non-empty pointer path) draws a cursor"
-          leaves |> List.exists isRippleBox |> Expect.isTrue "step 0 draws a click ripple"
-        match nodes |> List.tryPick (function FilterGraph.Labeled([ Pad.Input 1 ], f, _) -> Some f | _ -> None) with
-        | None -> failtest "expected step 1's own node"
-        | Some step1 ->
-          let leaves = allLeaves step1
-          leaves |> List.exists isCursorBox |> Expect.isFalse "step 1 (empty pointer path) draws no cursor"
-          leaves |> List.exists isRippleBox |> Expect.isFalse "step 1 draws no ripple"
+        // The cursor/ripple PNG assets are the two ffmpeg inputs Ffmpeg.render
+        // wires right after every step's own segment input (§4.6's own doc).
+        let cursorPad = Pad.Input stepContentPlan.Segments.Length
+        let ripplePad = Pad.Input(stepContentPlan.Segments.Length + 1)
+
+        // The caption/dots are applied BEFORE the cursor overlay (§4.6: a
+        // real ffmpeg defect otherwise silently drops the caption from some
+        // point in the timeline onward), so a cursor-hold overlay's first
+        // input is a NAMED pad like "c0_captioned", never `Pad.Input i`
+        // directly — tie it to a step by the `c<index>_` label prefix
+        // `Ffmpeg.render`'s own per-step naming convention uses.
+        let isNamedWithPrefix (prefix: string) =
+          function
+          | Pad.Named n -> n.StartsWith prefix
+          | Pad.Input _ -> false
+
+        let hasCursorHoldFor stepIndex =
+          nodes
+          |> List.exists (function
+            | FilterGraph.Labeled (ins, FilterGraph.Overlay _, _) ->
+              List.contains cursorPad ins && ins |> List.exists (isNamedWithPrefix (sprintf "c%d_" stepIndex))
+            | _ -> false)
+
+        let hasRippleScale () =
+          nodes |> List.exists (function FilterGraph.Labeled ([ pad ], FilterGraph.ScaleTimed _, _) -> pad = ripplePad | _ -> false)
+
+        hasCursorHoldFor 0 |> Expect.isTrue "step 0 (non-empty pointer path) overlays the cursor image at least once"
+        hasRippleScale () |> Expect.isTrue "the ripple image is scaled over time for the step that clicked"
+        hasCursorHoldFor 1 |> Expect.isFalse "step 1 (empty pointer path) never overlays the cursor image"
 
       testCase "render's progress dots mark each step's OWN index Accent and every other step Panel" <| fun _ ->
         let nodes = render stepContentPlan |> allNodes
-        let dotsOf padIndex =
+        // The caption+dots node is the FIRST node in a step's own
+        // sub-sequence (applied before any cursor/ripple, §4.6) — its output
+        // pad is either "s<index>" directly (no motion to follow) or
+        // "c<index>_captioned" (motion follows); check both.
+        let dotsOf stepIndex =
+          let candidateOutputs = [ Pad.Named(sprintf "s%d" stepIndex); Pad.Named(sprintf "c%d_captioned" stepIndex) ]
           nodes
-          |> List.tryPick (function FilterGraph.Labeled([ Pad.Input i ], f, _) when i = padIndex -> Some(allLeaves f) | _ -> None)
+          |> List.tryPick (function
+            | FilterGraph.Labeled(_, f, [ out ]) when List.contains out candidateOutputs -> Some(allLeaves f)
+            | _ -> None)
           |> Option.defaultValue []
           |> List.choose (function FilterGraph.DrawBox(_, color) -> Some color | _ -> None)
         let step0Dots = dotsOf 0
@@ -343,8 +377,8 @@ let tests =
               Timings = [ timing 0 2500 1800 ]
               Magnifier = None }
         let nodes = render oneStepPlan |> allNodes
-        nodes |> List.exists (function FilterGraph.Labeled([ Pad.Input 0 ], _, _) -> true | _ -> false)
-        |> Expect.isTrue "the one step reads straight from input 0"
+        nodes |> List.exists (function FilterGraph.Labeled(ins, _, _) -> List.contains (Pad.Input 0) ins | _ -> false)
+        |> Expect.isTrue "the one step's segment input (input 0) is consumed somewhere in the graph"
         match tryFindLabeled isConcat nodes with
         | Some(ins, FilterGraph.Concat 1, _) -> ins.Length |> Expect.equal "concat of one input is still well-formed" 1
         | other -> failtestf "expected a 1-input Concat node, got %A" other

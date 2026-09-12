@@ -681,7 +681,14 @@ type Thickness =
 type FilterGraph =
   | Scale of width: int * height: int
   | Fps of int
-  | Overlay of x: int * y: int
+  /// A two-input filter: overlays a second video/image pad onto the first at
+  /// (`x`,`y`), optionally gated to a time window. `x`/`y` are `Extent` (not
+  /// bare ints) so a position can reference ffmpeg's own `overlay_w`/
+  /// `overlay_h` runtime variables (e.g. `"620-overlay_w/2"` to keep a
+  /// time-varying-sized overlay centered) without the composer having to
+  /// duplicate whatever sizing formula scaled that overlay in the first
+  /// place (§4.6, §9's click ripple).
+  | Overlay of x: Extent * y: Extent * enable: string option
   | DrawBox of Rect * color: string
   | DrawText of text: string * x: int * y: int
   | Crop of Rect
@@ -706,6 +713,12 @@ type FilterGraph =
   /// magnifier) or a two-pass palette needs, since neither can be expressed
   /// as a single-input `Chain` (§4.6).
   | Split of outputs: int
+  /// `scale` with `Extent` width/height and `eval=frame` always on — needed
+  /// when a dimension is a `t`-varying expression (ffmpeg's `scale` only
+  /// re-evaluates expression options once at init unless told otherwise),
+  /// which is how the click ripple's PNG grows 8→28px over 250ms (§9)
+  /// without the composer hand-computing per-frame sizes itself.
+  | ScaleTimed of width: Extent * height: Extent
   /// One `-filter_complex` node: `inputs` feed `filter` (itself often a
   /// `Chain`), producing `outputs`. The ONLY place a bracketed pad name is
   /// attached to a filter.
