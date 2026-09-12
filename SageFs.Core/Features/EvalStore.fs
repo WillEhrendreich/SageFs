@@ -163,6 +163,18 @@ let newestFirst (store: Store) : EvalHistoryEntry list =
 let chronological (store: Store) : EvalHistoryEntry list =
   Map.foldBack (fun _ cell acc -> cell.Entry :: acc) store.Cells []
 
+/// The two most recent entries matching `predicate`, as (older, newer) — for
+/// diffing consecutive evals. `history` must be newest-first (as
+/// `newestFirst`/`newest` produce it); filtering a newest-first list
+/// preserves newest-first order among the matches, so the first two matches
+/// are directly (newer, older) with no reversal needed — the bug this
+/// replaces was a manual List.rev/truncate dance that silently swapped which
+/// entry was "old" and which was "new".
+let recentPair (predicate: EvalHistoryEntry -> bool) (history: EvalHistoryEntry list) : (EvalHistoryEntry * EvalHistoryEntry) option =
+  match history |> List.filter predicate with
+  | newer :: older :: _ -> Some (older, newer)
+  | _ -> None
+
 /// The binding scope of the retained cells — identical to
 /// `BindingExplorer.buildScopeSnapshot` over them, but references come from
 /// the word index instead of matching every name against every cell.

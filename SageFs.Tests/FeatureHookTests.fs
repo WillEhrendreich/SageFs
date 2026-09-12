@@ -314,4 +314,37 @@ let featureHookTests = testList "Feature Hook Computation" [
       d3 |> Expect.isNone "eval timeline should be deduped"
     }
   ]
+
+  testList "EvalStore.recentPair" [
+    let mkHistEntry cellIndex result : EvalStore.EvalHistoryEntry =
+      { CellIndex = cellIndex; Code = ""; Result = result; DurationMs = 0L; Timestamp = System.DateTimeOffset.UnixEpoch }
+
+    test "WHY — EvalStore.recentPair — of the two most recent matches, the newer one lands second because get_eval_diff must never show a diff backwards (additions read as removals)" {
+      // Newest-first, as state.EvalHistory always is: E5 is the most recent.
+      let history = [ mkHistEntry 4 "E5"; mkHistEntry 3 "E4"; mkHistEntry 2 "E3"; mkHistEntry 1 "E2"; mkHistEntry 0 "E1" ]
+      match EvalStore.recentPair (fun _ -> true) history with
+      | Some (older, newer) ->
+        older.Result |> Expect.equal "the older of the two most recent evals" "E4"
+        newer.Result |> Expect.equal "the newer of the two most recent evals" "E5"
+      | None -> failtest "expected a pair"
+    }
+
+    test "WHY — EvalStore.recentPair — a predicate picks the two most recent MATCHING entries, still oldest-then-newest, because get_eval_diff's cellIndex filter must compare that cell's own last two evals" {
+      let history =
+        [ mkHistEntry 1 "cell1-v3"; mkHistEntry 0 "cell0-v2"; mkHistEntry 1 "cell1-v2"
+          mkHistEntry 0 "cell0-v1"; mkHistEntry 1 "cell1-v1" ]
+      match EvalStore.recentPair (fun e -> e.CellIndex = 1) history with
+      | Some (older, newer) ->
+        older.Result |> Expect.equal "cell 1's second-most-recent eval" "cell1-v2"
+        newer.Result |> Expect.equal "cell 1's most recent eval" "cell1-v3"
+      | None -> failtest "expected a pair"
+    }
+
+    test "WHY — EvalStore.recentPair — fewer than two matches is None because there is nothing to diff against" {
+      EvalStore.recentPair (fun _ -> true) [ mkHistEntry 0 "only one" ]
+      |> Expect.isNone "a single entry cannot form a pair"
+      EvalStore.recentPair (fun _ -> true) []
+      |> Expect.isNone "an empty history cannot form a pair"
+    }
+  ]
 ]

@@ -3370,9 +3370,7 @@ module McpTools =
               stats.MeanMs |> Option.map (sprintf "  Mean: %.1fms") |> Option.defaultValue "  Mean: —"
               ""
               yield!
-                timeline.Entries
-                |> List.rev
-                |> List.truncate 20
+                Features.EvalTimeline.recentChronological 20 timeline
                 |> List.map (fun e ->
                   let icon =
                     match e.Status with
@@ -3455,23 +3453,17 @@ module McpTools =
         | [] -> return "No eval history — nothing to diff."
         | [_single] -> return "Only one eval in history — nothing to diff against."
         | history ->
-          let recent = history |> List.rev
           let (oldOutput, newOutput) =
+            let pairFor predicate =
+              Features.EvalStore.recentPair predicate history
+              |> Option.map (fun (older, newer) -> Some older.Result, Some newer.Result)
+              |> Option.defaultValue (None, None)
             match cellIndex with
             | Some idx ->
-              let matching = recent |> List.filter (fun e -> e.CellIndex = idx) |> List.rev
-              match matching with
-              | a :: b :: _ -> (Some a.Result, Some b.Result)
-              | _ ->
-                let last2 = recent |> List.rev |> List.truncate 2
-                match last2 with
-                | [a; b] -> (Some a.Result, Some b.Result)
-                | _ -> (None, None)
-            | None ->
-              let last2 = recent |> List.rev |> List.truncate 2
-              match last2 with
-              | [a; b] -> (Some a.Result, Some b.Result)
-              | _ -> (None, None)
+              match Features.EvalStore.recentPair (fun e -> e.CellIndex = idx) history with
+              | Some (older, newer) -> Some older.Result, Some newer.Result
+              | None -> pairFor (fun _ -> true)
+            | None -> pairFor (fun _ -> true)
           let lines = Features.EvalDiff.diffLines oldOutput newOutput
           let summary = Features.EvalDiff.summarize lines
           return Features.EvalDiff.formatSummary summary

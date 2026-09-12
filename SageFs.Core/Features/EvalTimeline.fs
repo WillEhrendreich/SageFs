@@ -41,6 +41,14 @@ let sparkline (width: int) (state: TimelineState) : string =
     |> Array.ofList
     |> System.String
 
+/// The `count` most recent entries, in chronological (oldest-first) display
+/// order. Entries are stored newest-first, so this truncates BEFORE
+/// reversing — truncating after reversing would return the `count` OLDEST
+/// entries instead of the most recent ones (the bug this function replaces:
+/// callers were doing `Entries |> List.rev |> List.truncate n`).
+let recentChronological (count: int) (state: TimelineState) : TimelineEntry list =
+  state.Entries |> List.truncate count |> List.rev
+
 let percentile (pct: float) (state: TimelineState) : float option =
   if state.Entries |> List.isEmpty then None
   else

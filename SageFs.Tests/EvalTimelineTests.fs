@@ -50,6 +50,25 @@ let evalTimelineTests = testList "EvalTimeline" [
       let s = sparkline 20 state
       s.Length |> Expect.equal "should be 1 char" 1
 
+    testCase "WHY — EvalTimeline.recentChronological — the most RECENT entries survive truncation, in chronological order, because entries are stored newest-first and truncating after reversing would silently keep the oldest ones instead" <| fun () ->
+      // 30 evals, recorded oldest (cell 0) to newest (cell 29); Entries end up
+      // newest-first: [29; 28; ...; 1; 0].
+      let state =
+        [ 0 .. 29 ]
+        |> List.fold (fun s i -> TimelineState.record (mkEntry i 10L) s) TimelineState.empty
+      let recent = recentChronological 20 state
+      recent |> List.map (fun e -> e.CellId)
+      |> Expect.equal "the 20 most recent cells (10..29), oldest-first for display"
+        [ 10 .. 29 ]
+
+    testCase "WHY — EvalTimeline.recentChronological — asking for more than exist returns everything, still chronological" <| fun () ->
+      let state =
+        [ 0 .. 4 ]
+        |> List.fold (fun s i -> TimelineState.record (mkEntry i 10L) s) TimelineState.empty
+      recentChronological 20 state
+      |> List.map (fun e -> e.CellId)
+      |> Expect.equal "all 5, oldest-first" [ 0 .. 4 ]
+
     testCase "full range bars" <| fun () ->
       let entries = [ for i in 1 .. 8 -> mkEntry i (int64 (i * 10)) ]
       let state = entries |> List.fold (fun s e -> TimelineState.record e s) TimelineState.empty
