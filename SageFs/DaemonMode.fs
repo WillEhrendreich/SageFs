@@ -1140,9 +1140,17 @@ let startDashboardServer
     |> ignore
     builder.Services.AddResponseCompression(fun opts ->
       opts.EnableForHttps <- true
-      // Do NOT compress text/event-stream — SSE is a long-lived stream.
-      // Response compression buffers output and FinishCompressionAsync() throws
-      // ArgumentOutOfRangeException on StreamPipeWriter when the client disconnects.
+      // The dashboard's repeated full-#main morph compresses extremely well
+      // (highly repetitive markup) — payload economy belongs to the
+      // transport, not to fragmenting the render into per-panel patches.
+      // text/event-stream is NOT in ResponseCompressionDefaults.MimeTypes,
+      // so it must be added explicitly for the SSE stream to compress at all.
+      // A client that disconnects mid-stream can make the compression
+      // middleware's own teardown log a warning for that one connection
+      // (Kestrel isolates the failure to that connection; it does not affect
+      // other sessions or the daemon process) — an acceptable, already-guarded
+      // cost for compressing the dominant per-tick payload.
+      opts.MimeTypes <- Seq.append ResponseCompressionDefaults.MimeTypes [ "text/event-stream" ]
       opts.Providers.Add<BrotliCompressionProvider>()
       opts.Providers.Add<GzipCompressionProvider>()
     ) |> ignore

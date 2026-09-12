@@ -829,12 +829,15 @@ let createStreamHandler
         // GET render: the sidebar Sessions panel and chrome stay visible, and
         // the no-change guard compares like-for-like full-shell HTML.
         let! snap = buildNoSessionSnapshot q infra
-        let mainHtml = renderNode (renderMainContent snap)
+        // Render once: the node built here is reused for the patch below
+        // instead of calling renderMainContent a second time.
+        let mainNode = renderMainContent snap
+        let mainHtml = renderNode mainNode
         match mainHtml = lastPushedMain with
         | true -> () // no-change tick — nothing to send
         | false ->
           lastPushedMain <- mainHtml
-          do! ssePatchNode ctx (renderMainContent snap)
+          do! ssePatchNode ctx mainNode
           do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | Some sessionId ->
       let cached = tryGetFreshWorkerCache sessionId
@@ -884,15 +887,18 @@ let createStreamHandler
       if sessionChanged then
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
       // Render once, morph only on change: identical snapshots (timer poll
-      // ticks with no state movement) send zero payload bytes.
-      let mainHtml = renderNode (renderMainContent snap)
+      // ticks with no state movement) send zero payload bytes. The node
+      // built here is reused for the patch below instead of calling
+      // renderMainContent a second time.
+      let mainNode = renderMainContent snap
+      let mainHtml = renderNode mainNode
       match mainHtml = lastPushedMain with
       | true -> () // no-change tick — nothing to send
       | false ->
         // DIAGNOSTIC: log when SSE stream sends a changed snapshot
         Log.info "[pushState] sending changed mainHtml.Length=%d sessionId=%s" mainHtml.Length (WorkerProtocol.SessionId.value sessionId)
         lastPushedMain <- mainHtml
-        do! ssePatchNode ctx (renderMainContent snap)
+        do! ssePatchNode ctx mainNode
     }
 
     try
@@ -1055,10 +1061,12 @@ let createEvalHandler
           // long-lived stream morph while this POST is still resolving.
           let! snap, _, _, _ =
             buildDashboardSnapshot q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None
-          // DIAGNOSTIC: log output panel HTML to verify content is present
-          let mainHtml = renderNode (renderMainContent snap)
+          // DIAGNOSTIC: log output panel HTML to verify content is present.
+          // Render once — the node built here is reused for the patch below.
+          let mainNode = renderMainContent snap
+          let mainHtml = renderNode mainNode
           Log.info "[eval-POST] mainHtml.Length=%d sessionId=%s" mainHtml.Length (WorkerProtocol.SessionId.value sessionId)
-          do! ssePatchNode ctx (renderMainContent snap)
+          do! ssePatchNode ctx mainNode
           let displayResult, cssClass =
             match result with
             | Ok msg -> msg, "output-line output-result"
