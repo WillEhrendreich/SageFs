@@ -198,7 +198,12 @@ let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<strin
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
       auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
       SageFs.Instrumentation.failSpan span ex.Message
-      let! _ = recordToolResult ctx toolName (sprintf "Error: %s" ex.Message) (int sw.Elapsed.TotalMilliseconds)
+      // Route the recorded friction text through the SageFsError algebra
+      // instead of the bare exception message: an unclassified exception
+      // becomes Unexpected, still described+actioned uniformly with every
+      // other structured error. The "Error:" prefix is preserved —
+      // classifyFrictionOutcome branches on it.
+      let! _ = recordToolResult ctx toolName (sprintf "Error: %s" (SageFs.SageFsError.describeForAgent (SageFs.SageFsError.Unexpected ex))) (int sw.Elapsed.TotalMilliseconds)
       return raise ex
   }
 
@@ -224,7 +229,9 @@ let withEchoNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string>)
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
       auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
       SageFs.Instrumentation.failSpan span ex.Message
-      let! _ = recordToolResult ctx toolName (sprintf "Error: %s" ex.Message) (int sw.Elapsed.TotalMilliseconds)
+      // See withEcho above — route through the algebra, keep the "Error:"
+      // prefix classifyFrictionOutcome branches on.
+      let! _ = recordToolResult ctx toolName (sprintf "Error: %s" (SageFs.SageFsError.describeForAgent (SageFs.SageFsError.Unexpected ex))) (int sw.Elapsed.TotalMilliseconds)
       return raise ex
   }
 

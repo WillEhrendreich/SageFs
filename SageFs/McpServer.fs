@@ -305,6 +305,24 @@ let structuredErrorBody (err: SageFsError) =
 let unexpectedErrorBody (ex: exn) =
   structuredErrorBody (SageFsError.Unexpected ex)
 
+/// Run a `SageFsIO` computation and translate it straight to an HTTP
+/// response through the `SageFsError` algebra: `Ok v` writes `okStatus`
+/// with `okBody v`; `Error err` writes `SageFsError.toHttpStatus err` with
+/// `structuredErrorBody err`. The one place a route needs both success and
+/// failure shapes should reach for this instead of hand-rolling the
+/// Ok/Error match every time.
+let respondIO
+    (ctx: Microsoft.AspNetCore.Http.HttpContext)
+    (okStatus: int)
+    (okBody: 'a -> obj)
+    (io: SageFsIO<'a>) : Task =
+  task {
+    let! result = io
+    match result with
+    | Ok value -> do! jsonResponse ctx okStatus (okBody value)
+    | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+  } :> Task
+
 let private writeRequestTooLargeResponse (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
   do! jsonResponse ctx 413 {| success = false; error = "Request body too large" |}
 }
@@ -1321,7 +1339,7 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
                   rctx.SseContext.TestEventBroadcast.Trigger(hbStr)
             with :? System.OperationCanceledException -> ()
           } :> System.Threading.Tasks.Task))
-      let! result, hadError = SageFs.McpTools.evalFSharpCodeWithOutcome rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine None
+      let! result, outcome = SageFs.McpTools.evalFSharpCodeWithOutcome rctx.McpContext "cli-integrated" code SageFs.McpTools.OutputFormat.Text None wd filePath evalMode blockStartLine None
       sw.Stop()
       heartbeatCts.Cancel()
       let! _ = heartbeatTask
@@ -1349,15 +1367,24 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
       | _ -> ()
       // Truthful contract: success reflects the typed worker outcome (an eval
       // that failed to compile/run has success=false), never string sniffing.
-      // HTTP stays 200 — the request WAS processed and the result text is for
-      // the client to display; editors treat non-2xx as transport failure.
-      // The failure body also carries `error` so standard { success, error }
-      // client parsers surface the diagnostic instead of "Unknown error".
-      let body =
-        match hadError with
-        | false -> {| success = true; result = result |} :> obj
-        | true -> {| success = false; result = result; error = result |} :> obj
-      do! jsonResponse ctx 200 body
+      // HTTP stays 200 for a request that WAS processed — the result text is
+      // for the client to display; editors treat non-2xx as transport
+      // failure. The failure body also carries `error` so standard
+      // { success, error } client parsers surface the diagnostic instead of
+      // "Unknown error". A request that never ran at all — the session
+      // couldn't be routed to, or the worker couldn't be reached — is a
+      // genuine infra failure and gets a real non-2xx status via the
+      // SageFsError algebra instead of being flattened into the same
+      // success=false shape as a compile error.
+      match outcome with
+      | SageFs.McpTools.Evaluated hadError ->
+        let body =
+          match hadError with
+          | false -> {| success = true; result = result |} :> obj
+          | true -> {| success = false; result = result; error = result |} :> obj
+        do! jsonResponse ctx 200 body
+      | SageFs.McpTools.InfraFailure err ->
+        do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
     } :> Task
   ) |> ignore
   app.MapPost("/reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -1561,11 +1588,23 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
       // Structured error for the Faulted/Stopped case: the VS Code client
       // branches on `error` and shows { message, suggestedAction } with an
       // action button — a null error leaves it rendering a bare icon with
-      // no message. Populate it from the faulted session's reason when one
-      // exists (sessionStates carry the faulted session's faultReason).
+      // no message. Routed through the SageFsError algebra instead of a
+      // hand-rolled { message, suggestedAction } shape (roast: production
+      // never called the algebra `toJson`/`describe`/`suggestedAction` was
+      // built for) — `errorDetails` carries the same case/fields/message/
+      // suggestedAction shape `structuredErrorBody` produces at every other
+      // error boundary, for agents and logs that want the structured case.
       let sessionError =
         sessionStates
-        |> Array.tryPick (fun s -> SageFs.Features.DaemonHealth.structuredErrorForFault s.status s.faultReason)
+        |> Array.tryPick (fun s ->
+          let isFaultedOrStopped = s.status = "Faulted" || s.status = "Stopped"
+          match isFaultedOrStopped, s.faultReason with
+          | true, Some reason when reason <> "" ->
+            let err = SageFsError.WorkerCommunicationFailed (s.id, reason)
+            Some (box {| message = SageFsError.describe err
+                         suggestedAction = SageFsError.suggestedAction err
+                         errorDetails = SageFsError.toJson err |})
+          | _ -> None)
         |> Option.defaultValue (null :> obj)
       do! jsonResponse ctx 200
             {| healthy = healthy

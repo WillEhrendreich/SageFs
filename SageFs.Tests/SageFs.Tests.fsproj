@@ -116,6 +116,7 @@
         <Compile Include="RestartPolicyCorrespondenceTests.fs" />
         <Compile Include="ResultExCorrespondenceTests.fs" />
         <Compile Include="SageFsErrorCorrespondenceTests.fs" />
+        <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
         <Compile Include="LiveTestingBrowserTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />

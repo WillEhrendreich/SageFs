@@ -106,6 +106,26 @@ let tests =
       let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive response
       result |> Expect.stringContains "Should include helpful suggestion for type errors" "Tip:"
 
+    // WHY — SageFsErrorException is exactly how a SageFsError travels through
+    // this exception-typed channel; formatEvalResult must recover the
+    // structured case and use the algebra's own suggestedAction instead of
+    // re-deriving one via fragile substring matching (ErrorMessages) over
+    // free-form text, the way it does for a plain, unclassified exception.
+    testCase "McpAdapter.formatEvalResult uses the SageFsError algebra for a SageFsErrorException"
+    <| fun _ ->
+      let ex = SageFsErrorException(SageFsError.WorkerCommunicationFailed ("abc123", "connection reset"))
+      let response: EvalResponse = {
+        EvaluationResult = Error ex
+        Diagnostics = [||]
+        EvaluatedCode = "1 + 1"
+        Metadata = Map.empty
+      }
+      let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive response
+      result
+      |> Expect.stringContains "describes the classified case" "Cannot reach session 'abc123': connection reset"
+      result
+      |> Expect.stringContains "carries the algebra's own suggestedAction verbatim, not a re-derived ErrorMessages Tip" "Run hard_reset_fsi_session"
+
     testCase "McpAdapter.formatEvents handles empty list"
     <| fun _ ->
       let result = McpAdapter.formatEvents []
