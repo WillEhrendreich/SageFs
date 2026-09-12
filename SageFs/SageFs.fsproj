@@ -226,11 +226,17 @@
                         Exclude="..\SageFs.Host\bin\$(Configuration)\$(HostTargetFramework)\**\*.runtimeconfig.dev.json"
                         Condition="Exists('..\SageFs.Host\bin\$(Configuration)\$(HostTargetFramework)')" />
         </ItemGroup>
+        <!-- Start from an empty host/ dir every build. The host's startup check
+             is fail-closed against its vetted manifest, so a file that a
+             PREVIOUS build put here and this build no longer ships (e.g. the
+             SQLite DLLs after friction storage moved out of the host closure)
+             would make the host refuse to start on every incrementally-built
+             tree — CI, on a clean checkout, would never see it. -->
+        <RemoveDir Directories="$(TargetDir)host" />
         <!-- Copy the host's FULL output into the daemon's host/ subdir so the
              daemon spawns host/SageFs.Host.exe with its isolated closure. -->
         <Copy SourceFiles="@(HostFiles)"
-              DestinationFiles="@(HostFiles->'$(TargetDir)host\%(RecursiveDir)%(Filename)%(Extension)')"
-              SkipUnchangedFiles="true" />
+              DestinationFiles="@(HostFiles->'$(TargetDir)host\%(RecursiveDir)%(Filename)%(Extension)')" />
     </Target>
 
 </Project>
