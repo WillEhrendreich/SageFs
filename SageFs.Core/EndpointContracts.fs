@@ -26,7 +26,7 @@ module EndpointContracts =
   /// API contract version. Increment when endpoints are added, removed, or
   /// have breaking changes to request/response shapes. Plugins can check this
   /// against their minimum required version to detect incompatibility.
-  let apiVersion = 2
+  let apiVersion = 3
 
   /// All daemon endpoints grouped by category.
   let coreEndpoints = [
@@ -48,6 +48,8 @@ module EndpointContracts =
     Endpoint.create POST "/api/sessions/{sid}/buffer-changed" "Sessions" "Submit unsaved editor buffer content"
     Endpoint.create GET "/api/sessions/{sid}/export-fsx" "Sessions" "Export session as .fsx"
     Endpoint.create GET "/api/sessions/{sid}/warmup-context" "Sessions" "Get warmup context"
+    Endpoint.create POST "/api/sessions/{sid}/run-app" "Sessions" "Run a session's app"
+    Endpoint.create POST "/api/sessions/{sid}/stop-app" "Sessions" "Stop a session's app"
   ]
 
   let liveTestingEndpoints = [
@@ -126,6 +128,8 @@ module EndpointContracts =
     POST, "/api/sessions/create"
     POST, "/api/sessions/switch"
     POST, "/api/sessions/stop"
+    POST, "/api/sessions/{sid}/run-app"
+    POST, "/api/sessions/{sid}/stop-app"
     POST, "/api/live-testing/enable"
     POST, "/api/live-testing/disable"
     POST, "/api/completions"

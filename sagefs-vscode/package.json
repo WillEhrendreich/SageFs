@@ -209,6 +209,16 @@
         "icon": "$(debug-restart)"
       },
       {
+        "command": "sagefs.runApp",
+        "title": "SageFs: Run App",
+        "icon": "$(play)"
+      },
+      {
+        "command": "sagefs.stopApp",
+        "title": "SageFs: Stop App",
+        "icon": "$(primitive-square)"
+      },
+      {
         "command": "sagefs.evalAdvance",
         "title": "SageFs: Evaluate & Advance",
         "icon": "$(run-below)"
@@ -445,6 +455,16 @@
         {
           "command": "sagefs.stopSessionInline",
           "when": "view == sagefs-sessions && viewItem =~ /session-(active|inactive)/ && viewItem != session-stopped",
+          "group": "inline"
+        },
+        {
+          "command": "sagefs.runApp",
+          "when": "view == sagefs-sessions && viewItem =~ /session-active/",
+          "group": "inline"
+        },
+        {
+          "command": "sagefs.stopApp",
+          "when": "view == sagefs-sessions && viewItem =~ /session-active/",
           "group": "inline"
         }
       ]

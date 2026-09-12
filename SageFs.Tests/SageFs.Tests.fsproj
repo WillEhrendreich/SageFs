@@ -60,6 +60,7 @@
         <Compile Include="LiveTestActivityTests.fs" />
         <Compile Include="AppRunnerTests.fs" />
         <Compile Include="AppRunOrchestrationTests.fs" />
+        <Compile Include="SessionAppRoutesHttpTests.fs" />
         <Compile Include="HotReloadDetourPlanTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="HttpOriginGuardTests.fs" />

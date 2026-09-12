@@ -2,6 +2,7 @@ module SageFs.Vscode.SageFsClient
 
 open Fable.Core
 open Fable.Core.JsInterop
+open SageFs.Vscode.AppRunPure
 open SageFs.Vscode.BufferBridge
 open SageFs.Vscode.DaemonDiscovery
 open SageFs.Vscode.JsHelpers
@@ -308,6 +309,44 @@ let postBufferChanged (request: BufferChangedRequest) (c: Client) =
     (jsonStringify {| filePath = request.FilePath; content = request.Content |})
     15000
 
+/// Run/stop a session's app: either the daemon's AppStateView (200), or the
+/// SageFsError case/message/suggestedAction it returned (any other status —
+/// see SageFs/McpServer.fs's run-app/stop-app routes for the exact contract).
+type AppRunOutcome =
+  | AppState of AppStateView
+  | AppRunError of HealthError
+
+let private parseAppStateView (parsed: obj) : AppStateView =
+  { State = fieldString "State" parsed |> Option.defaultValue "Unknown"
+    Message = fieldString "Message" parsed |> Option.defaultValue ""
+    Urls = fieldStringArray "Urls" parsed |> Option.map Array.toList |> Option.defaultValue []
+    EntryPoint = fieldString "EntryPoint" parsed |> Option.defaultValue ""
+    RunId = fieldString "RunId" parsed |> Option.defaultValue "" }
+
+let private parseAppRunError (parsed: obj) : HealthError =
+  { case = fieldString "case" parsed |> Option.defaultValue "Unknown"
+    message = fieldString "message" parsed |> Option.defaultValue "Unknown error"
+    suggestedAction = fieldString "suggestedAction" parsed |> Option.defaultValue "" }
+
+let private postAppRun (path: string) (body: string) (timeout: int) (c: Client) : JS.Promise<AppRunOutcome> =
+  promise {
+    try
+      let! resp = httpPost c path body timeout
+      let parsed = jsonParse resp.body
+      match resp.statusCode with
+      | 200 -> return AppState (parseAppStateView parsed)
+      | _ -> return AppRunError (parseAppRunError parsed)
+    with err ->
+      return AppRunError { case = "NetworkError"; message = string err; suggestedAction = "" }
+  }
+
+/// project = None (or blank) asks the daemon to pick its default runnable target.
+let runApp (sessionId: string) (project: string option) (c: Client) : JS.Promise<AppRunOutcome> =
+  postAppRun (sprintf "/api/sessions/%s/run-app" sessionId) (requestBodyForRunApp project) 120000 c
+
+let stopApp (sessionId: string) (c: Client) : JS.Promise<AppRunOutcome> =
+  postAppRun (sprintf "/api/sessions/%s/stop-app" sessionId) "{}" 30000 c
+
 let parseSystemStatus (parsed: obj) =
   { supervised = fieldBool "supervised" parsed |> Option.defaultValue false
     restartCount = fieldInt "restartCount" parsed |> Option.defaultValue 0
@@ -387,7 +426,7 @@ let discoverDaemon (candidateMcpPorts: int list) (c: Client) =
 
   loop candidateMcpPorts
 
-let [<Literal>] expectedApiVersion = 2
+let [<Literal>] expectedApiVersion = 3
 
 let checkVersion (status: SystemStatus) : Result<unit, string> =
   match status.apiVersion with

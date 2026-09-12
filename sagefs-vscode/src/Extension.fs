@@ -7,6 +7,7 @@ open SageFs.Vscode.JsHelpers
 open SageFs.Vscode.SafeInterop
 
 module Client = SageFs.Vscode.SageFsClient
+module AppRunPure = SageFs.Vscode.AppRunPure
 module Diag = SageFs.Vscode.DiagnosticsListener
 module Lens = SageFs.Vscode.CodeLensProvider
 module Completion = SageFs.Vscode.CompletionProvider
@@ -38,6 +39,7 @@ let mutable outputChannel: OutputChannel option = None
 let mutable statusBarItem: StatusBarItem option = None
 let mutable testStatusBarItem: StatusBarItem option = None
 let mutable evalPerfStatusBar: StatusBarItem option = None
+let mutable appStatusBarItem: StatusBarItem option = None
 let mutable diagnosticsDisposable: Disposable option = None
 let mutable sseDisposable: Disposable option = None
 let mutable diagnosticCollection: DiagnosticCollection option = None
@@ -1172,6 +1174,65 @@ let evalAllBlocks () =
 let hardResetCmd () =
   simpleCommand "Hard reset complete" (Client.hardReset true)
 
+/// Reflects the session's app state on the status bar: the play glyph with
+/// the URL while running, a hidden item when nothing is running, and the
+/// daemon's own wording (never a bare "failed") for anything else — see
+/// AppRunPure.statusBarText for the exact per-state mapping.
+let updateAppStatusBar (outcome: Client.AppRunOutcome) =
+  match appStatusBarItem with
+  | None -> ()
+  | Some sb ->
+    match outcome with
+    | Client.AppState view ->
+      match AppRunPure.statusBarText view with
+      | Some text ->
+        sb.text <- text
+        sb.tooltip <- Some view.Message
+        sb.command <- Some (if view.State = "NotRunning" then "sagefs.runApp" else "sagefs.stopApp")
+        sb.show ()
+      | None ->
+        sb.hide ()
+    | Client.AppRunError err ->
+      sb.text <- sprintf "⚠ %s" err.message
+      sb.tooltip <- Some err.suggestedAction
+      sb.command <- Some "sagefs.runApp"
+      sb.show ()
+
+/// Run a session's app. Prompts for an optional project name — blank means
+/// let the daemon pick its default runnable target.
+let runAppCmd () =
+  withClient (fun c ->
+    promise {
+      match activeSessionId with
+      | None ->
+        Window.showWarningMessage "No active SageFs session. Create or switch to one first." [||] |> ignore
+      | Some sid ->
+        let! projOpt = Window.showInputBox "Project to run (leave blank for the default target)"
+        let project =
+          match projOpt with
+          | Some p when p.Trim().Length > 0 -> Some (p.Trim())
+          | _ -> None
+        let! outcome = Client.runApp sid project c
+        updateAppStatusBar outcome
+        match outcome with
+        | Client.AppRunError err -> Window.showErrorMessage (sprintf "SageFs: %s" err.message) [||] |> ignore
+        | Client.AppState _ -> ()
+    })
+
+let stopAppCmd () =
+  withClient (fun c ->
+    promise {
+      match activeSessionId with
+      | None ->
+        Window.showWarningMessage "No active SageFs session." [||] |> ignore
+      | Some sid ->
+        let! outcome = Client.stopApp sid c
+        updateAppStatusBar outcome
+        match outcome with
+        | Client.AppRunError err -> Window.showErrorMessage (sprintf "SageFs: %s" err.message) [||] |> ignore
+        | Client.AppState _ -> ()
+    })
+
 let createSessionCmd () =
   withClient (fun c ->
     promise {
@@ -1685,6 +1746,11 @@ let activate (context: ExtensionContext) =
   evalPerfStatusBar <- Some esb
   context.subscriptions.Add (esb :> obj :?> Disposable)
 
+  let asb = Window.createStatusBarItem StatusBarAlignment.Left 47.
+  asb.command <- Some "sagefs.runApp"
+  appStatusBarItem <- Some asb
+  context.subscriptions.Add (asb :> obj :?> Disposable)
+
   let dc = Languages.createDiagnosticCollection "sagefs"
   diagnosticCollection <- Some dc
   context.subscriptions.Add (dc :> obj :?> Disposable)
@@ -1792,6 +1858,8 @@ let activate (context: ExtensionContext) =
   reg "sagefs.switchSession" (fun _ -> switchSessionCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.stopSession" (fun _ -> stopSessionCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.switchWorkflow" (fun _ -> switchWorkflowCmd () |> promiseIgnoreLog logToOutput)
+  reg "sagefs.runApp" (fun _ -> runAppCmd () |> promiseIgnoreLog logToOutput)
+  reg "sagefs.stopApp" (fun _ -> stopAppCmd () |> promiseIgnoreLog logToOutput)
 
   // Tree view inline actions for Sessions panel
   reg "sagefs.switchToSession" (fun args ->

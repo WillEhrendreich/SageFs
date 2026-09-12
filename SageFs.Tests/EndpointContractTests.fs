@@ -63,7 +63,7 @@ let endpointContractTests = testList "EndpointContracts" [
     test "VS Code contract has expected count" {
       vscodeContract
       |> List.length
-      |> Expect.equal "should have 13 endpoints" 13
+      |> Expect.equal "should have 15 endpoints" 15
     }
   ]
 
@@ -76,7 +76,7 @@ let endpointContractTests = testList "EndpointContracts" [
     test "apiVersion matches current contract shape" {
       // Pin the version so any contract change forces a conscious version bump
       apiVersion
-      |> Expect.equal "apiVersion should be 2 for current contract" 2
+      |> Expect.equal "apiVersion should be 3 for current contract" 3
     }
 
     test "VS Code extension expectedApiVersion matches daemon apiVersion" {
@@ -155,7 +155,7 @@ let endpointContractTests = testList "EndpointContracts" [
       |> List.length
       |> Expect.equal
         "endpoint count changed — update contracts and bump this number"
-        34
+        36
     }
   ]
 

@@ -460,6 +460,37 @@ let readJsonBody (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
   return System.Text.Json.JsonDocument.Parse(body)
 }
 
+/// Read an optional `project` string from the request body for run-app.
+/// A missing, empty, or property-less body all mean "no project requested"
+/// (the caller falls back to the default target) — unlike readJsonProp,
+/// this never falls back to treating the whole raw body as the value.
+let readOptionalProjectName (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+  match ctx.Request.ContentLength with
+  | contentLength when contentLength.HasValue && contentLength.Value > maxRequestBodyBytes ->
+    do! writeRequestTooLargeResponse ctx
+    raise RequestTooLarge
+    return None  // unreachable
+  | _ ->
+  use reader = new System.IO.StreamReader(ctx.Request.Body)
+  let! body = reader.ReadToEndAsync()
+  match int64 (System.Text.Encoding.UTF8.GetByteCount(body)) > maxRequestBodyBytes with
+  | true ->
+    do! writeRequestTooLargeResponse ctx
+    raise RequestTooLarge
+    return None  // unreachable
+  | false ->
+  match System.String.IsNullOrWhiteSpace body with
+  | true -> return None
+  | false ->
+    try
+      use doc = System.Text.Json.JsonDocument.Parse(body)
+      match doc.RootElement.TryGetProperty("project") with
+      | true, v when v.ValueKind = System.Text.Json.JsonValueKind.String ->
+        return (match v.GetString() with "" -> None | s -> Some s)
+      | _ -> return None
+    with :? System.Text.Json.JsonException -> return None
+}
+
 let tryGetJsonStringAliases (root: System.Text.Json.JsonElement) (names: string list) =
   let normalize value =
     match String.IsNullOrWhiteSpace value with
@@ -1921,6 +1952,52 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         match result with
         | Ok msg -> do! jsonResponse ctx 200 {| success = true; message = msg |}
         | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+    } :> Task
+  ) |> ignore
+  // Run/stop a session's app from any editor client (previously dashboard-
+  // and MCP-only). Body/response shape is the shared contract editors code
+  // against — see AGENTS.md for the exact fields.
+  app.MapPost("/api/sessions/{sid}/run-app", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let raw = ctx.Request.RouteValues.["sid"] |> string
+      match SageFs.WorkerProtocol.SessionId.validate raw with
+      | Error msg ->
+        do! jsonResponse ctx 400 {| success = false; error = msg |}
+      | Ok sid ->
+        let! projectOpt = readOptionalProjectName ctx
+        let request =
+          match projectOpt with
+          | Some name -> SageFs.AppRun.RunRequest.Named name
+          | None -> SageFs.AppRun.RunRequest.DefaultTarget
+        let! result =
+          SageFs.AppRunOrchestration.runApp
+            rctx.Config.SessionOps
+            (fun () -> System.DateTime.UtcNow)
+            SageFs.Timeouts.warmupReadyPollMax
+            sid
+            request
+        match rctx.Dispatch with
+        | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+        | None -> ()
+        match result with
+        | Ok state -> do! jsonResponse ctx 200 (SageFs.AppRun.toView state)
+        | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (SageFsError.toJson err)
+    } :> Task
+  ) |> ignore
+  app.MapPost("/api/sessions/{sid}/stop-app", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let raw = ctx.Request.RouteValues.["sid"] |> string
+      match SageFs.WorkerProtocol.SessionId.validate raw with
+      | Error msg ->
+        do! jsonResponse ctx 400 {| success = false; error = msg |}
+      | Ok sid ->
+        let! result = SageFs.AppRunOrchestration.stopApp rctx.Config.SessionOps sid
+        match rctx.Dispatch with
+        | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+        | None -> ()
+        match result with
+        | Ok state -> do! jsonResponse ctx 200 (SageFs.AppRun.toView state)
+        | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (SageFsError.toJson err)
     } :> Task
   ) |> ignore
 
