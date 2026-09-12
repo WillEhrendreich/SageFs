@@ -398,11 +398,50 @@ let classifyProject (proj: ProjectOptions) : ClassifiedProject =
 let classifyProjects (projects: ProjectOptions list) : ClassifiedProject list =
   projects |> List.map classifyProject
 
+/// Orders projects so every project appears AFTER all of its own project
+/// references (a dependency-first topological sort by `ReferencedProjects`).
+///
+/// WHY: Ionide's `WorkspaceLoader` returns the explicitly-requested project(s)
+/// first, followed by their transitive references in discovery order — NOT
+/// dependency order. Feeding FSI `-r:` flags in that order (the dependent
+/// project's assembly referenced BEFORE the assembly it depends on) makes FCS
+/// resolve an ambiguous cross-assembly name incorrectly: verified live, when
+/// `SageFs.Tests.dll` (declaring namespace `SageFs.Tests`) was referenced
+/// before `SageFs.dll` (declaring `[<RequireQualifiedAccess>] PaneId` — a
+/// union type living directly in namespace `SageFs`, with a case named
+/// `Tests`), resolving `SageFs.Tests.EvalTimelineTests` failed with "the
+/// union case 'Tests' ... requires the union type name ('PaneId')" instead of
+/// finding the sibling namespace — a bogus ambiguity between the namespace
+/// segment and the qualified-access union case. Referencing `SageFs.dll`
+/// first (as a normal build's dependency order does) resolves it correctly.
+/// (roast-4 #0, dogfood REPL gate.)
+let private topoSortByProjectReferences (projects: ProjectOptions list) : ProjectOptions list =
+  let byPath =
+    projects
+    |> List.map (fun p -> Path.GetFullPath p.ProjectFileName, p)
+    |> Map.ofList
+  let visited = System.Collections.Generic.HashSet<string>()
+  let result = System.Collections.Generic.List<ProjectOptions>()
+  let rec visit (p: ProjectOptions) =
+    let key = Path.GetFullPath p.ProjectFileName
+    match visited.Add(key) with
+    | false -> ()
+    | true ->
+      for r in p.ReferencedProjects do
+        match byPath.TryFind(Path.GetFullPath r.ProjectFileName) with
+        | Some referenced -> visit referenced
+        | None -> ()
+      result.Add(p)
+  for p in projects do
+    visit p
+  result |> List.ofSeq
+
 let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
-  let projectDlls = sln.Projects |> Seq.map _.TargetPath
+  let orderedProjects = topoSortByProjectReferences sln.Projects
+  let projectDlls = orderedProjects |> Seq.map _.TargetPath
 
   let nugetDlls =
-    sln.Projects |> Seq.collect _.PackageReferences |> Seq.map _.FullPath
+    orderedProjects |> Seq.collect _.PackageReferences |> Seq.map _.FullPath
 
   let otherDlls = sln.References
 
@@ -417,8 +456,27 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
   // and referenced projects' reference assemblies), resolved to outputs that
   // exist — after a Release-only build they point into obj/Debug and would
   // otherwise kill FSI at startup with a bare StopProcessingExn.
+  //
+  // WHY the file-name dedupe against allDlls: Ionide's OtherOptions carries
+  // each project's OWN "-r:" flags as MSBuild originally emitted them —
+  // including project-to-project references resolved to their COMPILE-TIME
+  // "obj/<Config>/<TFM>/ref/X.dll" reference assemblies, which are NEVER
+  // rewritten to the shadow-copy path the way projectDlls' TargetPath is.
+  // Feeding FSI both "-r:<shadow>/X.dll" (allDlls, real IL, the assembly the
+  // session actually executes) AND "-r:.../obj/.../ref/X.dll" (compilerRefs,
+  // a distinct file with the SAME assembly identity) hands the compiler two
+  // separate physical files for one logical assembly — a needless duplicate
+  // reference (and, on a Release-only build, a stale/missing-DLL risk since
+  // the ref/ path is never shadow-copied). allDlls already carries the one
+  // copy FSI should execute against, so any compilerRefs entry naming the
+  // same file is dropped.
+  let allDllNames =
+    allDlls
+    |> Seq.map Path.GetFileName
+    |> Set.ofSeq
+
   let compilerRefs =
-    sln.Projects
+    orderedProjects
     |> Seq.collect _.OtherOptions
     |> Seq.filter (fun s ->
       s.StartsWith("-r:", System.StringComparison.Ordinal)
@@ -426,6 +484,7 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
     |> Seq.map (fun s ->
       let path = s.Substring 3
       resolveSiblingConfigOutput path |> Option.defaultValue path)
+    |> Seq.filter (fun path -> not (allDllNames.Contains(Path.GetFileName path)))
     |> Seq.distinct
     |> List.ofSeq
 
@@ -443,7 +502,7 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
   // We explicitly exclude --warnaserror (too strict for REPL) and --optimize
   // (irrelevant for interactive eval).
   let fsiSafeFlags =
-    sln.Projects
+    orderedProjects
     |> Seq.collect _.OtherOptions
     |> Seq.filter (fun s ->
       s.StartsWith("--checknulls", System.StringComparison.Ordinal)
