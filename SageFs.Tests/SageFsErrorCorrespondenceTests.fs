@@ -19,6 +19,7 @@ let allErrors : SageFsError list = [
   SageFsError.SessionCreationFailed "path"
   SageFsError.SessionStopFailed ("s1", "reason")
   SageFsError.SessionSwitchFailed ("s1", "reason")
+  SageFsError.SessionNotRoutable "x"
   SageFsError.WorkerCommunicationFailed ("s1", "x")
   SageFsError.WorkerSpawnFailed "sdk"
   SageFsError.WorkerTimeout ("s1", "eval", 30.0)

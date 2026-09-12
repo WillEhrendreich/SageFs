@@ -18,6 +18,12 @@ type SageFsError =
   | DuplicateSession of existingSessionId: string * workingDirectory: string
   | SessionStopFailed of sessionId: string * reason: string
   | SessionSwitchFailed of sessionId: string * reason: string
+  /// The target session could not be routed to at all — gone, still warming
+  /// up, faulted, or otherwise unroutable. `reason` is the resolution's own
+  /// description (SessionResolution/RouteError already computed it; this
+  /// case just carries it instead of it being formatted straight to a
+  /// display string with no structure for a caller to branch on).
+  | SessionNotRoutable of reason: string
   // ── Worker communication ──
   | WorkerCommunicationFailed of sessionId: string * reason: string
   | WorkerSpawnFailed of reason: string
@@ -74,6 +80,8 @@ module SageFsError =
       sprintf "Failed to stop session '%s': %s" id reason
     | SageFsError.SessionSwitchFailed(id, reason) ->
       sprintf "Failed to switch to session '%s': %s. Use list_sessions to check available sessions." id reason
+    | SageFsError.SessionNotRoutable reason ->
+      sprintf "Session not reachable: %s" reason
     | SageFsError.WorkerCommunicationFailed(id, reason) ->
       sprintf "Cannot reach session '%s': %s. The worker may have crashed — try hard_reset_fsi_session." id reason
     | SageFsError.WorkerSpawnFailed reason ->
@@ -164,6 +172,7 @@ module SageFsError =
     // Information — expected conditions, not bugs
     | SageFsError.ToolNotAvailable _ -> LogLevel.Information
     | SageFsError.SessionNotFound _ -> LogLevel.Information
+    | SageFsError.SessionNotRoutable _ -> LogLevel.Information
     | SageFsError.NoActiveSessions -> LogLevel.Information
     | SageFsError.AmbiguousSessions _ -> LogLevel.Information
     | SageFsError.DaemonNotRunning -> LogLevel.Information
@@ -171,6 +180,7 @@ module SageFsError =
   let toHttpStatus = function
     // 404 Not Found
     | SageFsError.SessionNotFound _ -> 404
+    | SageFsError.SessionNotRoutable _ -> 404
     | SageFsError.NoActiveSessions -> 404
     | SageFsError.DaemonNotRunning -> 404
     // 400 Bad Request
@@ -213,6 +223,7 @@ module SageFsError =
   /// Client errors: 4xx — the request was malformed or referred to missing resources.
   let isClientError = function
     | SageFsError.SessionNotFound _ -> true
+    | SageFsError.SessionNotRoutable _ -> true
     | SageFsError.NoActiveSessions -> true
     | SageFsError.DaemonNotRunning -> true
     | SageFsError.AmbiguousSessions _ -> true
@@ -270,6 +281,7 @@ module SageFsError =
     | SageFsError.Unexpected _ -> true
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
+    | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
     | SageFsError.AmbiguousSessions _
     | SageFsError.JsonParseError _
@@ -295,6 +307,7 @@ module SageFsError =
     | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
+    | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
     | SageFsError.AmbiguousSessions _
     | SageFsError.JsonParseError _
@@ -329,6 +342,7 @@ module SageFsError =
     | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
+    | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
     | SageFsError.AmbiguousSessions _
     | SageFsError.JsonParseError _
@@ -368,6 +382,7 @@ module SageFsError =
     | SageFsError.DuplicateSession _ -> "Run switch_session to select the existing session"
     | SageFsError.SessionStopFailed _ -> "Try hard_reset_fsi_session"
     | SageFsError.SessionSwitchFailed _ -> "Run list_sessions to check available sessions"
+    | SageFsError.SessionNotRoutable _ -> "Run get_fsi_status or list_sessions to check session state"
     | SageFsError.WorkerCommunicationFailed _ -> "Run hard_reset_fsi_session"
     | SageFsError.WorkerSpawnFailed _ -> "Check .NET SDK installation with 'dotnet --info'"
     | SageFsError.WorkerTimeout _ -> "Retry or run hard_reset_fsi_session"

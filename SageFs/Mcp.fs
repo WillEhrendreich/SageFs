@@ -1137,6 +1137,15 @@ module McpTools =
       | other -> return sprintf "Error: %s" (formatSessionResolution other)
     }
 
+  /// Result-returning sibling of withSession — see withSessionWdResult's doc.
+  let withSessionResult (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) (f: string -> Task<Result<string, SageFsError>>) : Task<Result<string, SageFsError>> =
+    task {
+      let! resolution = resolveSessionId ctx agent sessionId workingDirectory
+      match resolution with
+      | Routable sid -> return! f sid
+      | other -> return Error (SageFsError.SessionNotRoutable (formatSessionResolution other))
+    }
+
   /// Recovery variant for tools that must be able to reach a session that
   /// needs recovery even when its worker proxy is not installed:
   /// reset_fsi_session and hard_reset_fsi_session are exactly how an agent
@@ -1159,9 +1168,35 @@ module McpTools =
       | other -> return sprintf "Error: %s" (formatSessionResolution other)
     }
 
+  /// Result-returning sibling of withSessionAllowFaulted — see
+  /// withSessionWdResult's doc.
+  let withSessionAllowFaultedResult (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) (f: string -> Task<Result<string, SageFsError>>) : Task<Result<string, SageFsError>> =
+    task {
+      let! resolution = resolveSessionId ctx agent sessionId workingDirectory
+      match resolution with
+      | Routable sid -> return! f sid
+      | FaultedSession sid -> return! f sid
+      | Unroutable (sid, _) -> return! f sid
+      | other -> return Error (SageFsError.SessionNotRoutable (formatSessionResolution other))
+    }
+
   /// Overload without sessionId parameter (uses None).
   let withSessionWd (ctx: McpContext) (agent: string) (workingDirectory: string option) (f: string -> Task<string>) : Task<string> =
     withSession ctx agent None workingDirectory f
+
+  /// Result-returning sibling of withSessionWd, for callers (the plain HTTP
+  /// surface) that need to branch on success/failure structurally instead of
+  /// string-sniffing a formatted "Error: ..." prefix. A resolution failure
+  /// becomes SessionNotRoutable carrying the exact same message
+  /// formatSessionResolution already produces — no information lost, just
+  /// not flattened to a bare string before the caller ever sees it.
+  let withSessionWdResult (ctx: McpContext) (agent: string) (workingDirectory: string option) (f: string -> Task<Result<string, SageFsError>>) : Task<Result<string, SageFsError>> =
+    task {
+      let! resolution = resolveSessionId ctx agent None workingDirectory
+      match resolution with
+      | Routable sid -> return! f sid
+      | other -> return Error (SageFsError.SessionNotRoutable (formatSessionResolution other))
+    }
 
   let setSnapshotStatus (ctx: McpContext) (sid: string) (status: WorkerProtocol.SessionStatus) =
     ctx.SessionOps.UpdateSessionStatus (toSessionId sid) status
@@ -1699,6 +1734,24 @@ module McpTools =
         | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
     })
 
+  /// Result-returning sibling of loadFSharpScript. ScriptLoaded's own Error
+  /// case and WorkerError already carry a real SageFsError — this just stops
+  /// throwing that structure away by formatting it into "Error: ..." text
+  /// for a caller that is only going to check the prefix and discard the rest.
+  let loadFSharpScriptResult (ctx: McpContext) (agentName: string) (filePath: string) (sessionId: string option) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+    withSessionResult ctx agentName sessionId workingDirectory (fun sid -> task {
+      let! routeResult =
+        routeToSession ctx sid
+          (fun replyId -> WorkerProtocol.WorkerMessage.LoadScript(filePath, WorkerProtocol.SessionId.value replyId))
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Ok msg)) -> Ok msg
+        | Ok (WorkerProtocol.WorkerResponse.ScriptLoaded(_, Error err)) -> Error err
+        | Ok (WorkerProtocol.WorkerResponse.WorkerError err) -> Error err
+        | Ok other -> Ok (sprintf "Unexpected response: %A" other)
+        | Error msg -> Error (SageFsError.ScriptLoadFailed (routeErrorMessage msg))
+    })
+
   let resetSession (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     withSessionAllowFaulted ctx agent sessionId workingDirectory (fun sid -> task {
       let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
@@ -1753,6 +1806,63 @@ module McpTools =
         | false ->
           do! setSnapshotStatus ctx sid previousStatus
         return sprintf "Error: %s" err
+    })
+
+  /// Result-returning sibling of resetSession. Same side effects (status
+  /// writes, notifyElm) — only the return value stops being a formatted
+  /// "Error: ..."/"...NOTE: ..." string a caller has to sniff a prefix off.
+  let resetSessionResult (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+    withSessionAllowFaultedResult ctx agent sessionId workingDirectory (fun sid -> task {
+      let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+      let previousStatus =
+        info
+        |> Option.map (fun sessionInfo -> sessionInfo.Status)
+        |> Option.defaultValue WorkerProtocol.SessionStatus.Ready
+      do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Starting
+      notifyElm ctx (
+        SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
+      let! routeResult =
+        task {
+          try
+            let resetTask =
+              routeToSession ctx sid
+                (fun replyId -> WorkerProtocol.WorkerMessage.ResetSession (WorkerProtocol.SessionId.value replyId))
+            return! resetTask.WaitAsync(Timeouts.softResetCancellation)
+          with
+          | :? OperationCanceledException ->
+            return Result.Error (Message (sprintf "Session '%s' did not respond to reset after %A. The session may be stuck. Try recovery: use stop_session followed by create_session to force a fresh start." sid Timeouts.softResetCancellation))
+        }
+      match routeResult with
+      | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
+        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
+        compilationStates.TryRemove(sid) |> ignore
+        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
+        notifyElm ctx (
+          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+        let warning =
+          match previousStatus with
+          | WorkerProtocol.SessionStatus.Ready -> "⚠️ NOTE: resetting clears all REPL definitions and evaluation history. "
+          | _ -> ""
+        return Ok (sprintf "%sSession reset successfully. All previous definitions have been cleared." warning)
+      | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
+        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+        notifyElm ctx (
+          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+        return Error err
+      | Ok other ->
+        do! setSnapshotStatus ctx sid previousStatus
+        return Ok (sprintf "Unexpected response: %A" other)
+      | Error msg ->
+        let reason = routeErrorMessage msg
+        match routeErrorIsTransportFailure msg with
+        | true ->
+          do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+          notifyElm ctx (
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored reason))
+          return Error (SageFsError.WorkerCommunicationFailed (sid, reason))
+        | false ->
+          do! setSnapshotStatus ctx sid previousStatus
+          return Error (SageFsError.ResetFailed reason)
     })
 
   let checkFSharpCode (ctx: McpContext) (agent: string) (code: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
@@ -1849,6 +1959,58 @@ module McpTools =
           return sprintf "Error: %s" (SageFsError.describeForAgent err)
     })
 
+  /// Result-returning sibling of hardResetSession. rebuild=true's own reply
+  /// is unconditionally informational (the real outcome lands later via
+  /// get_fsi_status, same as before) — only rebuild=false's Error err, which
+  /// already carries a real SageFsError, stops being flattened into text.
+  let hardResetSessionResult (ctx: McpContext) (agent: string) (rebuild: bool) (sessionId: string option) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+    withSessionAllowFaultedResult ctx agent sessionId workingDirectory (fun sid -> task {
+      match rebuild with
+      | true ->
+        compilationStates.TryRemove(sid) |> ignore
+        typeIdentityDiagnostics.TryRemove(sid) |> ignore
+        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
+        rebuildOutcomes.[sid] <- RebuildOutcome.InProgress DateTime.UtcNow
+        notifyElm ctx (
+          SageFsEvent.WarmupProgress (1, 4, "Building project..."))
+        task {
+          let! result =
+            task {
+              try return! ctx.SessionOps.RestartSession (toSessionId sid) true
+              with ex -> return Error (SageFsError.Unexpected ex)
+            }
+          let now = DateTime.UtcNow
+          let! after = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+          let outcome = RebuildOutcome.ofResult now result (after |> Option.map (fun info -> info.Status))
+          rebuildOutcomes.[sid] <- outcome
+          let display =
+            match outcome, after with
+            | RebuildOutcome.FailedNotServing (error, _), _ -> SessionDisplayStatus.Errored (SageFsError.describe error)
+            | _, Some info -> SessionDisplay.displayStatus now info
+            | _, None -> SessionDisplayStatus.Errored "Session is no longer registered"
+          notifyElm ctx (SageFsEvent.SessionStatusChanged (sid, display))
+        } |> ignore
+        return Ok "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_fsi_status reports the rebuild's progress and outcome."
+      | false ->
+        compilationStates.TryRemove(sid) |> ignore
+        typeIdentityDiagnostics.TryRemove(sid) |> ignore
+        Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
+        let! result =
+          task {
+            try return! ctx.SessionOps.RestartSession (toSessionId sid) false
+            with ex -> return Error (SageFsError.Unexpected ex)
+          }
+        match result with
+        | Ok msg ->
+          notifyElm ctx (
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+          return Ok ("⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. " + msg)
+        | Error err ->
+          notifyElm ctx (
+            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
+          return Error err
+    })
+
   let cancelEval (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun sid -> task {
       let! routeResult =
@@ -1863,6 +2025,27 @@ module McpTools =
           "No evaluation in progress."
         | Ok other -> sprintf "Unexpected response: %A" other
         | Error msg -> sprintf "Error: %s" (routeErrorMessage msg)
+    })
+
+  /// Result-returning sibling of cancelEval, for callers that branch on
+  /// success/failure structurally (the plain HTTP surface) instead of
+  /// string-sniffing. Carries routeToSession's own Result straight through
+  /// instead of formatting it into a display string and then re-parsing
+  /// that string's prefix one layer up.
+  let cancelEvalResult (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
+    withSessionWdResult ctx agent workingDirectory (fun sid -> task {
+      let! routeResult =
+        routeToSession ctx sid
+          (fun _ -> WorkerProtocol.WorkerMessage.CancelEval)
+      return
+        match routeResult with
+        | Ok (WorkerProtocol.WorkerResponse.EvalCancelled true) ->
+          notifyElm ctx (SageFsEvent.EvalCancelled sid)
+          Ok "Evaluation cancelled."
+        | Ok (WorkerProtocol.WorkerResponse.EvalCancelled false) ->
+          Ok "No evaluation in progress."
+        | Ok other -> Ok (sprintf "Unexpected response: %A" other)
+        | Error msg -> Error (SageFsError.CancelFailed (routeErrorMessage msg))
     })
 
   let getCompletions (ctx: McpContext) (agent: string) (code: string) (cursorPosition: int) (workingDirectory: string option) : Task<string> =

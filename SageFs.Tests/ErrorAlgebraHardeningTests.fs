@@ -76,6 +76,7 @@ let private genError =
       let! r = genStr
       return SageFsError.SessionSwitchFailed(s, r)
     }
+    genStr |> Gen.map SageFsError.SessionNotRoutable
     gen {
       let! s = genStr
       let! r = genStr

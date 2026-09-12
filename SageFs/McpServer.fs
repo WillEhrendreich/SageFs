@@ -1331,12 +1331,10 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
   ) |> ignore
   app.MapPost("/reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      let! result = SageFs.McpTools.resetSession rctx.McpContext "http" None None
-      // resetSession prefixes failures with "Error: " — check the prefix, not
-      // a substring, so a success message containing the word Error is not
-      // misreported as a failure.
-      let failed = result.StartsWith("Error", StringComparison.Ordinal)
-      do! jsonResponse ctx (if failed then 500 else 200) {| success = not failed; message = result |}
+      let! result = SageFs.McpTools.resetSessionResult rctx.McpContext "http" None None
+      match result with
+      | Ok message -> do! jsonResponse ctx 200 {| success = true; message = message |}
+      | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
     } :> Task
   ) |> ignore
   app.MapPost("/hard-reset", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -1348,25 +1346,26 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
           | true, prop -> prop.GetBoolean()
           | false, _ -> false
         with :? System.Text.Json.JsonException -> false
-      let! result = SageFs.McpTools.hardResetSession rctx.McpContext "http" rebuild None None
-      let failed = result.StartsWith("Error", StringComparison.Ordinal)
-      do! jsonResponse ctx (if failed then 500 else 200) {| success = not failed; message = result |}
+      let! result = SageFs.McpTools.hardResetSessionResult rctx.McpContext "http" rebuild None None
+      match result with
+      | Ok message -> do! jsonResponse ctx 200 {| success = true; message = message |}
+      | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
     } :> Task
   ) |> ignore
   app.MapPost("/cancel", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      let! result = SageFs.McpTools.cancelEval rctx.McpContext "http" None
-      match result.StartsWith("Error") with
-      | true -> do! jsonResponse ctx 500 {| received = false; error = result |}
-      | false -> do! jsonResponse ctx 200 {| received = true; message = result |}
+      let! result = SageFs.McpTools.cancelEvalResult rctx.McpContext "http" None
+      match result with
+      | Ok message -> do! jsonResponse ctx 200 {| received = true; message = message |}
+      | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
     } :> Task
   ) |> ignore
   app.MapPost("/api/cancel-eval", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      let! result = SageFs.McpTools.cancelEval rctx.McpContext "http" None
-      match result.StartsWith("Error") with
-      | true -> do! jsonResponse ctx 500 {| received = false; error = result |}
-      | false -> do! jsonResponse ctx 200 {| received = true; message = result |}
+      let! result = SageFs.McpTools.cancelEvalResult rctx.McpContext "http" None
+      match result with
+      | Ok message -> do! jsonResponse ctx 200 {| received = true; message = message |}
+      | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
     } :> Task
   ) |> ignore
   app.MapPost("/load-script", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
@@ -1411,10 +1410,10 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
       | false ->
         do! jsonResponse ctx 403 {| success = false; error = "Path is outside the session working directory" |}
       | true ->
-      let! result = SageFs.McpTools.loadFSharpScript rctx.McpContext "http" canonical None None
-      match result.StartsWith("Error") with
-      | true -> do! jsonResponse ctx 500 {| received = false; error = result |}
-      | false -> do! jsonResponse ctx 200 {| received = true; message = result |}
+      let! result = SageFs.McpTools.loadFSharpScriptResult rctx.McpContext "http" canonical None None
+      match result with
+      | Ok message -> do! jsonResponse ctx 200 {| received = true; message = message |}
+      | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
     } :> Task
   ) |> ignore
 

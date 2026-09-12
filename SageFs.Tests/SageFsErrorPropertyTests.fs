@@ -54,6 +54,7 @@ let private genSageFsError =
       let! reason = genNonEmptyString
       return SageFsError.SessionSwitchFailed(id, reason)
     }
+    genNonEmptyString |> Gen.map SageFsError.SessionNotRoutable
     gen {
       let! id = genNonEmptyString
       let! reason = genNonEmptyString
@@ -268,12 +269,12 @@ let sageFsErrorPropertyTests =
           1)
 
     // 9. DU completeness guard — detect new cases
-    testCase "SageFsError DU has exactly 34 cases" <| fun _ ->
+    testCase "SageFsError DU has exactly 35 cases" <| fun _ ->
       allDuCaseInfos
       |> Array.length
       |> Expect.equal
         "SageFsError case count changed — update generators and property tests"
-        34
+        35
 
     // 10. Unexpected wraps exception message
     testPropertyWithConfig propConfig "Unexpected description contains exception message" <|
