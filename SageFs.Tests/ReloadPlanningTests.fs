@@ -190,6 +190,23 @@ let confirmPatchTests =
   ]
 
 [<Tests>]
+let baselineIsTrustworthyTests =
+  let epoch = System.DateTime(2026, 1, 1, 0, 0, 0, System.DateTimeKind.Utc)
+  testList "ReloadPlanning baselineIsTrustworthy" [
+    testCase "WHY — ReloadPlanning.baselineIsTrustworthy — a source file untouched since the build is a trustworthy baseline because it is exactly what the loaded assembly compiled from" <| fun _ ->
+      baselineIsTrustworthy epoch epoch
+      |> Expect.isTrue "source written at the same instant as the build is trustworthy"
+
+    testCase "WHY — ReloadPlanning.baselineIsTrustworthy — a source file written before the build is trustworthy because the build necessarily read it as-is" <| fun _ ->
+      baselineIsTrustworthy epoch (epoch - System.TimeSpan.FromMinutes 5.0)
+      |> Expect.isTrue "source older than the build is trustworthy"
+
+    testCase "WHY — ReloadPlanning.baselineIsTrustworthy — a source file edited after the build is NOT trustworthy because capturing it as \"baseline\" would silently absorb an edit the running assembly never saw, and planReload would then see current = baseline and never surface it" <| fun _ ->
+      baselineIsTrustworthy epoch (epoch + System.TimeSpan.FromSeconds 1.0)
+      |> Expect.isFalse "source newer than the build must not be trusted as the baseline"
+  ]
+
+[<Tests>]
 let accessTests =
   let source =
     "module Demo.Access\n\ntype internal Hidden = { V: int }\n\nlet private secret () = 41\n\nlet answer () =\n  secret () + 1\n\nlet shout (s: string) = s.ToUpper()\n"

@@ -274,6 +274,14 @@ let private outcomeOf (baseline: Map<DeclKind * string * int, SourceDecl>) (key,
     | false -> DeclOutcome.Restart (ReloadChange.SignatureChanged current.Name)
   | Some _, _ -> DeclOutcome.Restart (changeFor current)
 
+/// A source file is a trustworthy hot-reload baseline only if it was not
+/// touched after the build that produced the assembly currently running —
+/// otherwise `extractDecls` on it would capture an edit the running app
+/// never saw, and `planReload` would see current = baseline and silently
+/// never surface that edit as a change to patch or restart for.
+let baselineIsTrustworthy (assemblyWriteTimeUtc: DateTime) (sourceWriteTimeUtc: DateTime) : bool =
+  sourceWriteTimeUtc <= assemblyWriteTimeUtc
+
 let private isIdentifier (name: string) =
   System.Text.RegularExpressions.Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_']*$")
 

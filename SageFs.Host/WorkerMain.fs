@@ -735,7 +735,7 @@ let run (sessionId: string) (port: int) = async {
         })
       Some (FileWatcher.start config DevReload.DevReloadConfig.defaults onFileChanged)
 
-  let watchForHotReload (projectPath: string) =
+  let watchForHotReload (projectPath: string) (assemblyPath: string) =
     match workerConfig.Workflow, IO.Path.GetDirectoryName(IO.Path.GetFullPath projectPath) with
     | WorkflowTypes.SessionWorkflow.WebLive _, (NonNull projectDir) ->
       let sources =
@@ -744,11 +744,24 @@ let run (sessionId: string) (port: int) = async {
           let n = f.Replace('\\', '/')
           not (n.Contains("/obj/") || n.Contains("/bin/")))
       result.HotReloadStateRef.Value <- HotReloadState.watchByDirectory projectDir sources result.HotReloadStateRef.Value
-      // First capture wins: it is the source this worker's DLL was built from.
+      // The baseline must be the source the loaded assembly was actually built
+      // from. Fail closed: if the assembly's write time can't be read, treat
+      // every source file as untrustworthy rather than risk silently baking
+      // an unbuild edit into the baseline (see ReloadPlanning.baselineIsTrustworthy).
+      let assemblyWriteTimeUtc =
+        try IO.File.GetLastWriteTimeUtc assemblyPath
+        with _ -> DateTime.MinValue
       for source in sources do
-        match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText source) with
-        | Ok decls -> reloadBaselines.TryAdd(IO.Path.GetFullPath source, decls) |> ignore
-        | Error reason -> Log.warn "Run App: %s cannot be patched in place (%s)" source reason
+        let sourceWriteTimeUtc =
+          try IO.File.GetLastWriteTimeUtc source
+          with _ -> DateTime.MaxValue
+        match Features.ReloadPlanning.baselineIsTrustworthy assemblyWriteTimeUtc sourceWriteTimeUtc with
+        | false ->
+          Log.warn "Run App: %s was modified after the build — it will be fully re-evaluated (not diff-patched) on its next save" source
+        | true ->
+          match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText source) with
+          | Ok decls -> reloadBaselines.TryAdd(IO.Path.GetFullPath source, decls) |> ignore
+          | Error reason -> Log.warn "Run App: %s cannot be patched in place (%s)" source reason
       Log.info "Run App: watching %d source file(s) in %s for hot reload"
         (HotReloadState.watchedInDirectory projectDir result.HotReloadStateRef.Value).Length projectDir
     | _ -> ()
@@ -756,14 +769,14 @@ let run (sessionId: string) (port: int) = async {
     Run = fun project previous -> async {
       let prepared =
         AppRunner.resolveProjectAssembly result.ProjectTargets project
-        |> Result.bind AppRunner.entryPointOf
-        |> Result.bind (fun entry -> AppRunner.readLaunchConfig project |> Result.map (fun config -> entry, config))
+        |> Result.bind (fun asm -> AppRunner.entryPointOf asm |> Result.map (fun entry -> asm, entry))
+        |> Result.bind (fun (asm, entry) -> AppRunner.readLaunchConfig project |> Result.map (fun config -> asm, entry, config))
       match prepared with
       | Error reason -> return Error (SageFsError.AppRunFailed (project, reason))
-      | Ok (entry, config) ->
+      | Ok (asm, entry, config) ->
         let! state = AppRunner.start appRunner project entry (AppRun.planLaunch project config previous) |> Async.AwaitTask
         match state with
-        | AppRun.AppRunState.Running _ -> watchForHotReload project
+        | AppRun.AppRunState.Running _ -> watchForHotReload project asm.Location
         | _ -> ()
         return Ok state }
     Stop = fun scope -> async {
