@@ -68,54 +68,49 @@ let private withDogfoodSession (run: SessionProxy -> unit) =
 [<Tests>]
 let dogfoodReplTests =
   Integration.hostList "Dogfood REPL: SageFs developing SageFs" [
-    // PENDING, not done: roast-4 #0(a). SageFs.Host statically links
-    // SageFs.Core, and — empirically confirmed via AppDomain.CurrentDomain
-    // .GetAssemblies() at process start and via direct /eval probes of a
-    // live host process — this is NOT a simple "first load wins" ordering
-    // race. SageFs.Core.dll is listed in SageFs.Host.deps.json, so it is a
-    // Trusted-Platform-Assembly (TPA) for the host process. TPA-listed
-    // dependencies of the entry assembly are resolved by the NATIVE
-    // hostfxr/hostpolicy binder, which is consulted BEFORE any managed
-    // AssemblyLoadContext's "is this identity already loaded" check —
-    // confirmed by eagerly loading the session project's own SageFs.Core.dll
-    // via AssemblyLoadContext.Default.LoadFromAssemblyPath as the very first
-    // action in `main` (before any other Core-typed code in the process was
-    // JIT-compiled, verified empty via GetAssemblies() immediately prior):
-    // the eager load did not throw, but the resulting eval still resolved
-    // `typeof<SageFs.SageFsError>.Assembly.Location` to the host's own TPA
-    // path, and the "adopted" assembly never appeared in
-    // AppDomain.CurrentDomain.GetAssemblies() at all — the TPA binder simply
-    // never consulted it. No AssemblyLoadContext-only trick from inside
-    // `main` (nor from a module-level `do` — F# does NOT run every compiled
-    // file's top-level bindings before `[<EntryPoint>] main`; only the
-    // module actually touched by the call graph initializes) can override a
-    // TPA-listed identity for the entry assembly's own process.
+    // roast-4 #0(a). SageFs.Host statically links SageFs.Core, and —
+    // empirically confirmed via AppDomain.CurrentDomain.GetAssemblies() at
+    // process start and via direct /eval probes of a live host process —
+    // this is NOT a simple "first load wins" ordering race that an
+    // in-process trick can fix. SageFs.Core.dll is listed in
+    // SageFs.Host.deps.json, so it is a Trusted-Platform-Assembly (TPA) for
+    // the host process; TPA-listed dependencies of the entry assembly are
+    // resolved by the NATIVE hostfxr/hostpolicy binder, which the CLR
+    // consults BEFORE any managed AssemblyLoadContext's "is this identity
+    // already loaded" check ever runs. Confirmed by eagerly loading the
+    // session project's own SageFs.Core.dll via
+    // AssemblyLoadContext.Default.LoadFromAssemblyPath as the very first
+    // action in the host's `main` (before any other Core-typed code in the
+    // process was JIT-compiled, verified empty via GetAssemblies()
+    // immediately prior): the eager load did not throw, but the resulting
+    // eval still resolved `typeof<SageFs.SageFsError>.Assembly.Location` to
+    // the host's own TPA path, and the "adopted" assembly never appeared in
+    // AppDomain.CurrentDomain.GetAssemblies() at all.
     //
-    // The only mechanism that would work without racing concurrent workers
-    // on the SHARED host/ directory: have the DAEMON (SessionManager
-    // .startWorkerProcess in SageFs.Core, not the host process itself) copy
-    // the host/ directory into a fresh PER-SESSION temp directory with
-    // SageFs.Core.dll (+.pdb) replaced by the session project's own build
-    // BEFORE spawning — so the spawned process's OWN TPA list is built from
-    // a directory whose SageFs.Core.dll already IS the project's build, with
-    // no ALC trickery needed. That is real design and implementation work
-    // outside this item's scope (a session-launch change, not a host
-    // bootstrap step) — tracked as its own follow-up rather than forced in
-    // here. This test is un-pended by that change and must pass then.
-    ptestCase "WHY — the project's own SageFs.Core wins over the host's copy, because a REPL that runs the installed tool's bits instead of the build it was asked to load cannot show new code (roast-4 #0)" <| fun _ ->
+    // The fix instead happens BEFORE the host process exists:
+    // SessionManager.startWorkerProcess (SageFs.Core/SessionManager.fs)
+    // calls HostCoreAdoption.resolveLaunchRoot, which — when a session
+    // project ships its own same-version build of SageFs.Core — materializes
+    // a fresh PER-SESSION private copy of the shared host/ directory with
+    // SageFs.Core.dll (+.pdb) substituted for the project's own build, and
+    // launches the worker from THAT directory instead of the shared one.
+    // The spawned process's own TPA list is then built from a directory
+    // whose SageFs.Core.dll already IS the project's build — no ALC
+    // trickery needed. The shared host/ directory is never mutated (that
+    // would race concurrent sessions' spawns); a genuine version mismatch
+    // is refused (fail-closed) before the worker is ever spawned.
+    testCase "WHY — the project's own SageFs.Core wins over the host's copy, because a REPL that runs the installed tool's bits instead of the build it was asked to load cannot show new code (roast-4 #0)" <| fun _ ->
       withDogfoodSession (fun proxy ->
         match evalIn proxy "dogfood-core" "typeof<SageFs.SageFsError>.Assembly.Location;;" with
         | Error err -> failtestf "eval failed: %s" (SageFsError.describe err)
         | Ok output ->
           let normalized = output.Replace('\\', '/')
-          // The host process's own closure: the installed tool's host/ dir or
-          // the dev build's SageFs.Host/bin. Either means the REPL is running
-          // the host's SageFs.Core, not the project's.
-          (normalized.Contains "/host/" || normalized.Contains "SageFs.Host/")
-          |> Expect.isFalse (sprintf "SageFs.Core must not resolve to the host's closure, got: %s" output)
-          // The project's build reaches the session through its shadow copy.
-          normalized.Contains "sagefs-shadow"
-          |> Expect.isTrue (sprintf "SageFs.Core must be the project's shadow-copied build, got: %s" output))
+          // Evidence that HostCoreAdoption.materialize actually ran: the
+          // REPL's SageFs.Core resolves out of the per-session private host
+          // directory the daemon materializes for a project that ships its
+          // own build, not out of the shared/original host closure.
+          normalized.Contains "sagefs-host-adopt-"
+          |> Expect.isTrue (sprintf "SageFs.Core must resolve to the per-session materialized private host copy (see HostCoreAdoption), got: %s" output))
 
     testCase "WHY — the SageFs.Tests namespace is reachable by name, because warmup auto-open must never let a referenced assembly's union case (PaneId.Tests) shadow a namespace of the project being developed (roast-4 #0)" <| fun _ ->
       withDogfoodSession (fun proxy ->

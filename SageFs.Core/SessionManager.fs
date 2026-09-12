@@ -274,8 +274,26 @@ module SessionManager =
           (System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory())
           (OperatingSystem.IsWindows())
       | hostPath -> hostPath
-    match Args.resolveHostLaunch System.AppContext.BaseDirectory (OperatingSystem.IsWindows()) dotnetMuxer File.Exists with
+    // roast-4 #0(a): if the session's own projects ship a build of
+    // SageFs.Core matching the running daemon's version — dogfooding SageFs
+    // on SageFs — launch the worker from a fresh PRIVATE copy of the host
+    // directory with SageFs.Core.dll substituted for the project's own
+    // build, so the worker's REPL runs the code the session was created to
+    // develop instead of the shared host's statically-linked copy. See
+    // HostCoreAdoption's doc comment for why this can't be done by any
+    // trick inside the spawned host process itself (SageFs.Core.dll is a
+    // Trusted-Platform-Assembly for that process; the native binder wins
+    // before any managed AssemblyLoadContext gets a say). A genuine version
+    // mismatch is refused (fail-closed) rather than spawning a worker whose
+    // Core build cannot match the daemon supervising it.
+    let hostVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version
+    match HostCoreAdoption.resolveLaunchRoot System.AppContext.BaseDirectory (SessionId.value sessionId) projects hostVersion with
     | Error reason -> Error (SageFsError.WorkerSpawnFailed reason)
+    | Ok (launchRoot, hostCleanup) ->
+    match Args.resolveHostLaunch launchRoot (OperatingSystem.IsWindows()) dotnetMuxer File.Exists with
+    | Error reason ->
+      hostCleanup |> Option.iter (fun cleanup -> try cleanup () with _ -> ())
+      Error (SageFsError.WorkerSpawnFailed reason)
     | Ok launch ->
 
     let psi = ProcessStartInfo()
@@ -306,13 +324,19 @@ module SessionManager =
 
     match proc.Start() with
     | false ->
+      hostCleanup |> Option.iter (fun cleanup -> try cleanup () with _ -> ())
       Error (SageFsError.WorkerSpawnFailed "Failed to start worker process")
     | true ->
       let workerPid = proc.Id
       proc.Exited.Add(fun _ ->
         try
           onExited workerPid proc.ExitCode
-        with _ -> ())
+        with _ -> ()
+        // The private per-session host copy (if one was materialized) is
+        // only needed while this worker process is running — once it has
+        // exited, its own SageFs.Host.dll/SageFs.Core.dll are no longer
+        // read from disk, so it is safe to remove.
+        hostCleanup |> Option.iter (fun cleanup -> try cleanup () with _ -> ()))
       Ok proc
 
   /// Read the worker's stdout until WORKER_PORT is reported, then post

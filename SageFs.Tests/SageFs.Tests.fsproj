@@ -345,6 +345,7 @@
         <Compile Include="HostManifestTests.fs" />
         <Compile Include="VariantSelectorTests.fs" />
         <Compile Include="HostAdaptationTests.fs" />
+        <Compile Include="HostCoreAdoptionTests.fs" />
         <Compile Include="SupervisorPortHandshakeTests.fs" />
         <Compile Include="WebAppHotReloadVerificationTests.fs" />
         <Compile Include="DaemonStateChangeContractTests.fs" />
