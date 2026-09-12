@@ -227,7 +227,15 @@ jobs:
     # journeys' profile, then runs the real journeys against the FromCSharp
     # sample; the runner fails fast if Code.exe is still absent.
     needs: extensions
-    runs-on: windows-latest
+    # Pinned to windows-2022 (not windows-latest): on windows-2025-vs2026
+    # (released 2026-09-07, days before this pin), the portable VS Code we
+    # install crashes or stops answering its CDP debug port shortly after
+    # launch on ~every run — confirmed via VscodeExtensionTests.fs's own
+    # process-liveness diagnostics (one run found the launched process gone
+    # entirely; another found it still running but no longer serving CDP).
+    # That's an Electron/runner-image compatibility issue, not a test bug.
+    # Revisit this pin once windows-2025-vs2026 has had time to stabilize.
+    runs-on: windows-2022
     timeout-minutes: 25
 
     steps:
