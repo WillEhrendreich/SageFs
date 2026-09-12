@@ -249,6 +249,10 @@ type AppRunState =
   | Running of RunningApp
   | Exited of project: string * exitCode: int * at: DateTime
   | Crashed of project: string * reason: string * at: DateTime
+  /// The app never ran: the worker didn't come up, or refused the launch —
+  /// not a crash. A crash implies something ran and then died; this is a
+  /// start that could not happen at all.
+  | CouldNotStart of project: string * reason: SageFsError * at: DateTime
   /// The run was stopped because a save changed something that only takes effect at startup.
   | RestartRequired of project: string * first: SageFs.Features.ReloadPlanning.ReloadChange * rest: SageFs.Features.ReloadPlanning.ReloadChange list * at: DateTime
   /// A rebuild of the app failed: the code did not compile, the app did not crash.
@@ -265,6 +269,7 @@ let acrossWorkerRestart (state: AppRunState) : AppRunState =
   | AppRunState.Starting _
   | AppRunState.Exited _
   | AppRunState.Crashed _
+  | AppRunState.CouldNotStart _
   | AppRunState.RestartRequired _
   | AppRunState.BuildFailed _ -> state
   | AppRunState.Running _
@@ -356,6 +361,7 @@ module AppSlot =
     | AppRunState.NotRunning
     | AppRunState.Exited _
     | AppRunState.Crashed _
+    | AppRunState.CouldNotStart _
     | AppRunState.RestartRequired _
     | AppRunState.LostTrack _
     | AppRunState.BuildFailed _ ->
@@ -379,6 +385,7 @@ module AppSlot =
     | AppRunState.Running _
     | AppRunState.Exited _
     | AppRunState.Crashed _
+    | AppRunState.CouldNotStart _
     | AppRunState.RestartRequired _
     | AppRunState.LostTrack _
     | AppRunState.BuildFailed _ -> StopClaim.StopWorkerApp generation, { slot with Generation = generation }
@@ -424,6 +431,8 @@ let describeState (state: AppRunState) : string =
     sprintf "%s is running (no web server)" (projectName project)
   | AppRunState.Exited (project, code, _) -> sprintf "%s exited with code %d" (projectName project) code
   | AppRunState.Crashed (project, reason, _) -> sprintf "%s crashed: %s" (projectName project) reason
+  | AppRunState.CouldNotStart (project, reason, _) ->
+    sprintf "%s could not start: %s" (projectName project) (SageFsError.describe reason)
   | AppRunState.BuildFailed (project, reason, _, _) ->
     sprintf "%s could not be rebuilt: %s\n→ Fix the build errors, then press ▶ Run to rebuild and start the app."
       (projectName project) reason
@@ -450,6 +459,7 @@ let toView (state: AppRunState) : AppStateView =
     | AppRunState.Running _ -> "Running"
     | AppRunState.Exited _ -> "Exited"
     | AppRunState.Crashed _ -> "Crashed"
+    | AppRunState.CouldNotStart _ -> "CouldNotStart"
     | AppRunState.RestartRequired _ -> "RestartRequired"
     | AppRunState.BuildFailed _ -> "BuildFailed"
     | AppRunState.LostTrack _ -> "LostTrack"
@@ -465,6 +475,7 @@ let toView (state: AppRunState) : AppStateView =
     | AppRunState.Starting _
     | AppRunState.Exited _
     | AppRunState.Crashed _
+    | AppRunState.CouldNotStart _
     | AppRunState.RestartRequired _
     | AppRunState.LostTrack _
     | AppRunState.BuildFailed _ -> [], "", ""

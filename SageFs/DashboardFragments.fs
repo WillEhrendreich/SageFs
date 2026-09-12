@@ -948,7 +948,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   let color =
                     match app with
                     | AppRun.AppRunState.Running _ -> "var(--fg-green)"
-                    | AppRun.AppRunState.Crashed _ | AppRun.AppRunState.BuildFailed _ | AppRun.AppRunState.LostTrack _ -> "var(--fg-red)"
+                    | AppRun.AppRunState.Crashed _ | AppRun.AppRunState.CouldNotStart _ | AppRun.AppRunState.BuildFailed _ | AppRun.AppRunState.LostTrack _ -> "var(--fg-red)"
                     | _ -> "var(--fg-dim)"
                   Elem.div
                     [ Attr.class' "session-card-app"
@@ -976,7 +976,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 s.ProjectRoles |> List.filter (fun p -> p.Role = SageFs.ProjectLoading.ProjectRole.Executable)
               let runTitle (name: string) =
                 match s.App with
-                | AppRun.AppRunState.Exited _ | AppRun.AppRunState.Crashed _ | AppRun.AppRunState.BuildFailed _ | AppRun.AppRunState.LostTrack _ ->
+                | AppRun.AppRunState.Exited _ | AppRun.AppRunState.Crashed _ | AppRun.AppRunState.CouldNotStart _ | AppRun.AppRunState.BuildFailed _ | AppRun.AppRunState.LostTrack _ ->
                   sprintf "Run %s with hot reload — last run: %s" name (AppRun.describeState s.App)
                 | _ ->
                   sprintf "Run %s with hot reload (an Interactive session restarts into WebLive first, losing its REPL bindings)" name

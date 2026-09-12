@@ -39,11 +39,13 @@ let private askWorker (ops: SessionManagementOps) (sessionId: SessionId) (msg: W
         return Error (SageFsError.WorkerCommunicationFailed (sid, ex.Message))
   }
 
-/// How a failed start reads on the card: a failed build is not a crash.
+/// How a failed start reads on the card: a failed build is not a crash, and
+/// nothing else on this path ever ran, so it is not a crash either — the app
+/// never started.
 let private failedState (project: string) (previous: PreviousAddress) (err: SageFsError) (at: DateTime) =
   match err with
   | SageFsError.BuildFailed(_, diagnostics) -> AppRunState.BuildFailed (project, BuildDiagnostic.describe diagnostics, at, previous)
-  | other -> AppRunState.Crashed (project, SageFsError.describe other, at)
+  | other -> AppRunState.CouldNotStart (project, other, at)
 
 /// Starts the entry point on a Ready worker, records what happened, and
 /// watches a running app until its run ends. A run a later Stop or Run has
