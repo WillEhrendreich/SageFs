@@ -212,59 +212,6 @@ let private cellSpec (sagefsBin: string) (demosBin: string) (dotnetRoot: string)
         "__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/50_mesa.json" ]
     InnerCommand = [ "/bin/sh"; "-c"; innerScript ] }
 
-// ---------------------------------------------------------------------------
-// Real ffmpeg execution over the returned StepLog (§4.6). `Compose.plan` /
-// `Ffmpeg.render` / `Ffmpeg.toCommandString` are called for real (per the
-// job's own instruction) to produce the planned FilterGraph and its string
-// form; seeing them through to actual pixels here is done with the smallest
-// real invocation that is both (a) driven by that plan's own filter *nodes*
-// (never a hand-typed filter name) and (b) an ffmpeg command that is
-// actually valid to run. Two nodes the pure planner already emits —
-// `Overlay` (the synthetic cursor: modeled today as a single resting-point
-// overlay with no second input stream to composite, `Ffmpeg.fs`'s own
-// documented Wave-3 TODO) and multi-segment `Concat` (needs labelled pads a
-// linear `Chain` string can't carry) — are not yet expressible as a single
-// runnable `-vf`/`-filter_complex` string; wiring those is real work still
-// ahead (see the job's final report), not silently faked here. Everything
-// this function DOES run (`mpdecimate`, `setpts`, `palettegen`,
-// `paletteuse`) uses `Ffmpeg.toCommandString` for every node's name+args.
-module GifFilters =
-
-  let rec private flatten (graph: FilterGraph) : FilterGraph list =
-    match graph with
-    | FilterGraph.Chain items -> items |> List.collect flatten
-    | leaf -> [ leaf ]
-
-  let private nodeStringOrDefault (predicate: FilterGraph -> bool) (fallback: string) (nodes: FilterGraph list) : string =
-    nodes |> List.tryFind predicate |> Option.map Ffmpeg.toCommandString |> Option.defaultValue fallback
-
-  /// The two-pass GIF palette technique (`split` + `palettegen` +
-  /// `paletteuse`) is inherent ffmpeg mechanics that a single linear `Chain`
-  /// string cannot express (`palettegen` emits a still-image stream,
-  /// `paletteuse` needs BOTH the original video and that palette as two
-  /// separate inputs) — the `split[a][b];[a]...[p];[b][p]...` skeleton below
-  /// is therefore hand-written, but every filter's name and arguments inside
-  /// it come from `Ffmpeg.toCommandString` on the planner's own nodes.
-  ///
-  /// `mpdecimate`/`setpts` are deliberately NOT applied to the real encode
-  /// yet, even though the plan always includes them (§4.6's dedup/retime
-  /// pair): `hello-dashboard`'s raw capture is a mostly-static dashboard with
-  /// no composited cursor/caption motion (that overlay compositing is the
-  /// Wave-3 gap noted above), so real content genuinely repeats frame to
-  /// frame and `mpdecimate` collapses the ~40-frame capture down to ~10 —
-  /// under a useful/watchable frame count for a demo GIF. Once the cursor
-  /// overlay is actually composited (so every frame during a motion/typing
-  /// step visibly differs), dedup drops only the genuinely-idle frames again
-  /// and this exclusion should be removed. Documented as a known deviation,
-  /// not silently dropped: `mpdecimate`/`setpts` are still real nodes in the
-  /// returned `FilterGraph` and are rendered into the manifest's planned
-  /// filter string via `Ffmpeg.toCommandString` either way.
-  let gifFilterComplex (graph: FilterGraph) : string =
-    let nodes = flatten graph
-    let palettegen = nodes |> nodeStringOrDefault (function FilterGraph.PaletteGen _ -> true | _ -> false) "palettegen=stats_mode=diff"
-    let paletteuse = nodes |> nodeStringOrDefault (function FilterGraph.PaletteUse _ -> true | _ -> false) "paletteuse=dither=sierra2_4a"
-    sprintf "split[a][b];[a]%s[p];[b][p]%s" palettegen paletteuse
-
 let private ffmpeg (args: string list) : Async<int * string> =
   async {
     let psi = ProcessStartInfo("ffmpeg", RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false)
@@ -278,24 +225,6 @@ let private ffmpeg (args: string list) : Async<int * string> =
     return proc.ExitCode, err
   }
 
-/// Concatenates every step segment into one file. A single-segment scenario
-/// (today's `hello-dashboard`) is a plain stream copy; a future multi-step
-/// scenario uses ffmpeg's `-f concat` demuxer (a real, standard mechanism —
-/// distinct from the `FilterGraph.Concat` DU case, which needs the
-/// `-filter_complex` pad-labelling this smoke recording does not yet build).
-let private concatSegments (segments: string list) (outputPath: string) : Async<Result<unit, string>> =
-  async {
-    match segments with
-    | [] -> return Error "no segments to concatenate"
-    | [ only ] ->
-      let! code, err = ffmpeg [ "-y"; "-i"; only; "-c"; "copy"; outputPath ]
-      return if code = 0 then Ok() else Error err
-    | many ->
-      let listFile = Path.ChangeExtension(outputPath, ".filelist.txt")
-      File.WriteAllLines(listFile, many |> List.map (sprintf "file '%s'"))
-      let! code, err = ffmpeg [ "-y"; "-f"; "concat"; "-safe"; "0"; "-i"; listFile; "-c"; "copy"; outputPath ]
-      return if code = 0 then Ok() else Error err
-  }
 
 type RecordedArtifacts =
   { Gif: string
@@ -332,8 +261,19 @@ let private writeManifest (path: string) (scenarioId: string) (log: StepLog) : u
   let json = System.Text.Json.JsonSerializer.Serialize(manifest, System.Text.Json.JsonSerializerOptions(WriteIndented = true))
   File.WriteAllText(path, json)
 
-/// Runs the pure `Compose`/`Ffmpeg` planners over `domainLog`, then the real
-/// ffmpeg invocations described above, writing every artifact §1 names under
+/// Runs the pure `Compose`/`Ffmpeg` planners over `domainLog`, then executes
+/// the resulting `FilterGraph` as ONE real, multi-input ffmpeg invocation
+/// (§4.6, per the job's own instruction: `Compose.plan → Ffmpeg.render →
+/// toCommandString` must be the actual source of the executed graph, never a
+/// parallel hand-built one) — one `-i` per step segment (matching the
+/// `Pad.Input i` indices `Ffmpeg.render` wired), the whole planned graph as
+/// `-filter_complex`, and two `-map`s pulling the GIF-ready `[outv]` pad and
+/// the `[vmp4]` tap (`Ffmpeg.render`'s own 3-way post-decimate split — a
+/// filtergraph pad has exactly one consumer, so the mp4 output needs its own
+/// tap rather than reusing a palette-branch pad) out of that SAME graph for
+/// the two output files — so the `.gif` and the constant-frame-rate `.mp4`
+/// are both real products of the one planned filtergraph, not two
+/// separately-encoded passes. Writes every artifact §1 names under
 /// `artifactsDir`.
 let renderArtifacts (scenario: Scenario) (domainLog: StepLog) (artifactsDir: string) : Async<Result<RecordedArtifacts, string>> =
   async {
@@ -341,35 +281,29 @@ let renderArtifacts (scenario: Scenario) (domainLog: StepLog) (artifactsDir: str
     let layout = Layout.rects scenario.Layout { Width = 1280; Height = 720 }
     let composePlan = Compose.plan domainLog layout Style.kanagawa
     let filterGraph = Ffmpeg.render composePlan
-    // Exercises the one render-to-string function the whole tool uses
-    // (§4.6) — persisted into the manifest below as the recorded plan, even
-    // though (see Compose2's doc) today's real pixel path runs a hand-built
-    // two-pass palette skeleton whose leaf filters are read back OUT of this
-    // same string via `GifFilters.gifFilterComplex`.
-    let plannedFilterString = Ffmpeg.toCommandString filterGraph
-
-    let concatPath = Path.Combine(artifactsDir, "concat.mkv")
-
-    match! concatSegments (domainLog.Steps |> List.map (fun s -> s.Segment)) concatPath with
-    | Error e -> return Error(sprintf "ffmpeg concat failed: %s" e)
-    | Ok() ->
+    let filterComplex = Ffmpeg.toCommandString filterGraph
 
     let gifPath = Path.Combine(artifactsDir, "scenario.gif")
     let mp4Path = Path.Combine(artifactsDir, "scenario.mp4")
     let stillsDir = Path.Combine(artifactsDir, "stills")
     Directory.CreateDirectory stillsDir |> ignore
 
-    let filterComplex = GifFilters.gifFilterComplex filterGraph
-    let! gifCode, gifErr = ffmpeg [ "-y"; "-i"; concatPath; "-filter_complex"; filterComplex; gifPath ]
+    let inputArgs =
+      domainLog.Steps
+      |> List.sortBy (fun s -> s.Index)
+      |> List.collect (fun s -> [ "-i"; s.Segment ])
 
-    if gifCode <> 0 then
-      return Error(sprintf "ffmpeg gif render failed:\nfilter: %s\nplanned: %s\n%s" filterComplex plannedFilterString gifErr)
-    else
+    let! encodeCode, encodeErr =
+      ffmpeg (
+        [ "-y" ]
+        @ inputArgs
+        @ [ "-filter_complex"; filterComplex
+            "-map"; "[vmp4]"; "-c:v"; "libx264"; "-pix_fmt"; "yuv420p"; mp4Path
+            "-map"; "[outv]"; "-loop"; "0"; gifPath ]
+      )
 
-    let! mp4Code, mp4Err = ffmpeg [ "-y"; "-i"; concatPath; "-c:v"; "libx264"; "-pix_fmt"; "yuv420p"; mp4Path ]
-
-    if mp4Code <> 0 then
-      return Error(sprintf "ffmpeg mp4 render failed: %s" mp4Err)
+    if encodeCode <> 0 then
+      return Error(sprintf "ffmpeg render failed:\nfilter_complex: %s\n%s" filterComplex encodeErr)
     else
 
     for step in domainLog.Steps do

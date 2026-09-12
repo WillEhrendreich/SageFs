@@ -120,6 +120,14 @@ let tests =
       |> List.length
       |> Expect.equal "one overlay-worthy pointer path (the click step)" 1
 
+    testCase "plan carries each step's own StartedMs/EndedMs/ObservedAtMs as Timings, in step order (§4.6)" <| fun _ ->
+      let composePlan = plan heroStepLog editorLeftLayout Style.kanagawa
+      composePlan.Timings
+      |> List.map (fun t -> t.StartedMs, t.EndedMs, t.ObservedAtMs)
+      |> Expect.equal
+        "one StepTiming per step, matching the StepLog's own timing fields"
+        (heroStepLog.Steps |> List.map (fun s -> s.StartedMs, s.EndedMs, s.ObservedAtMs))
+
     testCase "plan segments line up with the StepLog's own segment paths" <| fun _ ->
       let composePlan = plan heroStepLog editorLeftLayout Style.kanagawa
       composePlan.Segments
@@ -147,6 +155,7 @@ let tests =
           let composePlan = plan log editorLeftLayout Style.kanagawa
           composePlan.Captions.Length = log.Steps.Length
           && composePlan.PointerPaths.Length = log.Steps.Length
-          && composePlan.Segments.Length = log.Steps.Length)
+          && composePlan.Segments.Length = log.Steps.Length
+          && composePlan.Timings.Length = log.Steps.Length)
         |> Check.QuickThrowOnFailure
   ]

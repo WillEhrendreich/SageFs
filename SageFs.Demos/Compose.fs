@@ -29,4 +29,7 @@ let plan (log: StepLog) (layout: Map<ActorId, Rect>) (style: Style) : ComposePla
     Style = style
     Captions = log.Steps |> List.map (fun step -> step.Caption)
     PointerPaths = log.Steps |> List.map (fun step -> step.PointerPath)
+    Timings =
+      log.Steps
+      |> List.map (fun step -> { StartedMs = step.StartedMs; EndedMs = step.EndedMs; ObservedAtMs = step.ObservedAtMs })
     Magnifier = editorRect layout }
