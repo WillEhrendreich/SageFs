@@ -169,18 +169,12 @@ let main argv =
     result
   | false ->
 
-  // Run the [Integration] VS Code DoD journeys (HR-VSC-E2E, LT-VSC-E2E):
-  // REAL VS Code + the SageFs extension against a real daemon with a session
-  // on the FromCSharp sample, asserting real client state (hot-reload tree,
-  // live-testing status bar). CI invokes this with --integration-vsc after a
-  // Release build + installing the extension VSIX into the test profile.
-  let isIntegrationVsc = argv |> Array.exists (fun a -> a = "--integration-vsc")
-  match isIntegrationVsc with
-  | true ->
-    let result = SageFs.Tests.DashboardBrowserRunner.runVscodeDoDJourneys argv
-    Environment.Exit result
-    result
-  | false ->
+  // The CDP-driven VS Code DoD journeys (HR-VSC-E2E, LT-VSC-E2E) that used
+  // to run here via --integration-vsc were retired 2026-09-12 — see issue
+  // #133 and VscodeCommandProofTests.fs's header. That file's tests are
+  // registered under Integration.hostList and run via --integration-host
+  // like every other real-daemon [Integration] suite; no separate CLI flag
+  // or runner is needed.
 
   // Harness-root Verify configuration (snapshot directory, unique-prefix
   // setting, CRLF scrubber) — owned by TestInfrastructure.Snapshots, never by

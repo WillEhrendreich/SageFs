@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Only the one production file this suite actually calls into —
+         Vscode.fs, for Commands.executeCommand — not a ProjectReference to
+         the whole extension, which would pull every production module
+         (tree providers, code lenses, etc., plus JsHelpers.fs's own
+         relative import of src/sse-helpers.js, which does not exist in
+         this project's separate output directory) into this proof suite's
+         compiled output for no reason. sleep lives in Bindings.fs instead
+         of reusing JsHelpers.sleep for exactly that reason. -->
+    <Compile Include="../src/Vscode.fs" />
+    <Compile Include="Command.fs" />
+    <Compile Include="DaemonContract.fs" />
+    <Compile Include="Bindings.fs" />
+    <Compile Include="ExtensionHostSuite.fs" />
+    <Compile Include="Launcher.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Fable.Core" />
+    <PackageReference Include="Fable.Promise" />
+  </ItemGroup>
+</Project>

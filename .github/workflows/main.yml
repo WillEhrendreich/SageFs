@@ -65,12 +65,15 @@ jobs:
     # the runner that owns them; --integration-host runs EVERY suite registered
     # as `Host` — real FSI sessions, real SageFs.Host spawns, Harmony detours,
     # real daemons on reserved ports with isolated SAGEFS_DATA_DIRs, the HTTP
-    # API against the samples. A new host suite joins this job by construction,
-    # not by editing a curated list. Browser/VS Code journeys are registered
-    # against their own entry points (--integration-browser/-hr/-lt/-vsc) and
-    # run in the dashboard-browser-e2e workflow. --integration-vsc (VS Code
-    # journeys) is on-demand only — see quality/definition-of-done.json's
-    # deferred HR-VSC-E2E/LT-VSC-E2E rows and issue #133.
+    # API against the samples, and (VscodeCommandProofTests.fs) a real VS Code
+    # extension host proving the extension's commands reach the real daemon —
+    # @vscode/test-electron calls vscode.commands.executeCommand directly, no
+    # UI automation, no debug port, so it's a normal Host suite like every
+    # other real-daemon test here (see issue #133 for what replaced the old
+    # CDP-driven journeys). A new host suite joins this job by construction,
+    # not by editing a curated list. Dashboard browser journeys are registered
+    # against their own entry points (--integration-browser/-hr/-lt) and run
+    # in the dashboard-browser-e2e workflow instead.
     # Windows only for now: on Linux/macOS every session spawn fails because
     # Args.hostExePath hardcodes SageFs.Host.exe (the apphost there is the
     # extensionless SageFs.Host) — a product bug to fix before adding a
@@ -92,6 +95,11 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
     - name: Build forked MCP SDK packages
       run: |
         dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
@@ -107,6 +115,19 @@ jobs:
       run: |
         dotnet build samples/demos/SageFs.Samples.WebappDatastar/SageFs.Samples.WebappDatastar.fsproj -c Release --nologo
         dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Release --nologo
+
+    # VscodeCommandProofTests.fs loads the extension directly from source
+    # (extensionDevelopmentPath) — no VSIX packaging or install step needed.
+    # @vscode/test-electron downloads and caches its own VS Code copy; no
+    # portable-download step needed either (that was only ever required for
+    # the retired CDP fixture's --remote-debugging-port launch).
+    - name: Build VS Code extension and its command-proof suite
+      working-directory: sagefs-vscode
+      run: |
+        dotnet tool restore
+        npm ci
+        npm run compile
+        npm run compile:test-electron
 
     - name: Run every host integration suite
       shell: bash

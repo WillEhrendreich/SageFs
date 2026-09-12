@@ -646,11 +646,13 @@
     "compile": "dotnet fable src --outDir fable-out && node esbuild.mjs",
     "watch": "dotnet fable watch src --outDir fable-out",
     "compile:ts": "tsc -p ./",
-    "test:golden": "node src/LiveTestingListener.golden-tests.mjs"
+    "test:golden": "node src/LiveTestingListener.golden-tests.mjs",
+    "compile:test-electron": "dotnet fable test-electron --outDir test-electron-out && node test-electron/esbuild.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^3.1.0",
     "esbuild": "^0.24.2",
     "typescript": "^5.5.0"
   }
