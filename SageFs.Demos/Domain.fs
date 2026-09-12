@@ -192,6 +192,13 @@ module ScenarioId =
       | Capability.Agent -> [ clientTok ]
     cap :: tokens |> String.concat "-" |> ScenarioId
 
+  /// An explicit escape hatch for scenario ids that do NOT compose from
+  /// `Capability × Client × AppKind` — today only the Phase-0/1 throwaway
+  /// smoke scenario (`hello-dashboard`, demo-gif-plan.md §10 Phase 1), which
+  /// predates the matrix and is never one of the `matrix` values in §6. Every
+  /// matrix-composed scenario must go through `derive`, never this.
+  let ofRaw (text: string) : ScenarioId = ScenarioId text
+
   let value (ScenarioId s) : string = s
 
 // ---------------------------------------------------------------------------

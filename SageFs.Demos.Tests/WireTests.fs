@@ -1,0 +1,60 @@
+/// Proves the one JSON contract that crosses the sandbox namespace wall
+/// (demo-gif-plan.md §4.1): `ScenarioPlan`/`StepLog` round-trip through
+/// `serialize*`/`deserialize*` unchanged — the exact mechanism the Phase-0
+/// spike proved end to end, exercised here without ever spawning a cell.
+module SageFs.Demos.Tests.WireTests
+
+open Expecto
+open Expecto.Flip
+open SageFs.Demos.Wire
+
+let private samplePlan: ScenarioPlan =
+  { ScenarioId = "hello-dashboard"
+    ChromePath = "/chrome-bin/chrome"
+    PageUrl = "http://127.0.0.1:47750/dashboard"
+    UserDataDir = "/home/demo/chrome-profile"
+    OutDir = "/out"
+    Steps =
+      [ { Index = 0
+          Caption = "1/1 · Press Quick Start"
+          ClickSelector = Some "[data-testid=quick-start]"
+          TypeText = None
+          ExpectSelector = Some "[data-testid=session-card]"
+          DwellMs = 1500 } ] }
+
+let private sampleStepLog: StepLog =
+  { ScenarioId = "hello-dashboard"
+    Steps =
+      [ { Index = 0
+          Caption = "1/1 · Press Quick Start"
+          Segment = "/out/step-00.mkv"
+          StartedMs = 0L
+          EndedMs = 2140L
+          PointerPath = [ [| 620; 300 |]; [| 630; 298 |] ]
+          ObservedAtMs = 1980L
+          Outcome = "Passed"
+          Message = "'[data-testid=session-card]' appeared" } ] }
+
+[<Tests>]
+let tests =
+  testList "Wire" [
+
+    testCase "ScenarioPlan round-trips through serializePlan/deserializePlan unchanged" <| fun _ ->
+      samplePlan |> serializePlan |> deserializePlan |> Expect.equal "round-tripped plan equals the original" samplePlan
+
+    testCase "StepLog round-trips through serializeStepLog/deserializeStepLog unchanged" <| fun _ ->
+      sampleStepLog
+      |> serializeStepLog
+      |> deserializeStepLog
+      |> Expect.equal "round-tripped StepLog equals the original" sampleStepLog
+
+    testCase "serializePlan produces one JSON line (the stdio pipe carries exactly one line, §4.1)" <| fun _ ->
+      samplePlan |> serializePlan |> (fun s -> s.Contains "\n") |> Expect.isFalse "no embedded newline"
+
+    testCase "a ScenarioPlan step with no click/type/expect (an Await step) still round-trips" <| fun _ ->
+      let awaitOnly =
+        { samplePlan with
+            Steps = [ { Index = 0; Caption = "wait"; ClickSelector = None; TypeText = None; ExpectSelector = None; DwellMs = 500 } ] }
+
+      awaitOnly |> serializePlan |> deserializePlan |> Expect.equal "round-trips with every optional field None" awaitOnly
+  ]

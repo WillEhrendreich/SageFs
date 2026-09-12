@@ -32,6 +32,11 @@ otel-*.png
 **/TestResults.junit.xml
 
 BenchmarkDotNet.Artifacts/
+# sagefs-demos recording scratch output (demo-gif-plan.md §1, §4.1) — the
+# published, committed artifacts live under docs/demos/, written only by an
+# explicit `sagefs-demos publish` step (Part II). artifacts/ is throwaway
+# local build output, same as bin/obj/.
+/artifacts/
 viz-output/*
 !viz-output/code-city/
 viz-output/code-city/*

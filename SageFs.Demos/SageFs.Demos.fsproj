@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="FSharp.Core" />
+    <PackageReference Include="Microsoft.Playwright" />
   </ItemGroup>
 
   <ItemGroup>
@@ -25,6 +26,14 @@
     <Compile Include="Compose.fs" />
     <Compile Include="Storyboard.fs" />
     <Compile Include="Fingerprint.fs" />
+    <Compile Include="Wire.fs" />
+    <Compile Include="XTest.fs" />
+    <Compile Include="Sandbox.fs" />
+    <Compile Include="Actors\Dashboard.fs" />
+    <Compile Include="Recorder.fs" />
+    <Compile Include="CellAgent.fs" />
+    <Compile Include="Scenarios.fs" />
+    <Compile Include="Runtime.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
