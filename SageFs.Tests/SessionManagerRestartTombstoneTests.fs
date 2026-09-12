@@ -48,7 +48,7 @@ let private readyProxy =
     }
 
 let private mkRuntime
-  (runBuild: int -> Result<string, string>)
+  (runBuild: int -> Result<string, SageFsError>)
   (startWorker: int -> Result<Process, SageFsError>) =
   let mutable buildCalls = 0
   let mutable startCalls = 0
@@ -200,7 +200,7 @@ let sessionManagerRestartTombstoneTests =
     testCase "WHY — a failed rebuild leaves a live session as it was because the build error is the caller's to show, not a reason to kill the worker" <| fun _ ->
       let runtime =
         mkRuntime
-          (fun _ -> Error "build boom")
+          (fun _ -> Error (SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "build boom" ])))
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
       withHarness runtime.Runtime <| fun harness ->
@@ -208,8 +208,8 @@ let sessionManagerRestartTombstoneTests =
         let before = getManagedSession harness info.Id
 
         match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
-        | Error (SageFsError.BuildFailed reason) ->
-          reason |> Expect.equal "build failure should surface the build error" "build boom"
+        | Error (SageFsError.BuildFailed(_, diagnostics)) ->
+          BuildDiagnostic.describe diagnostics |> Expect.equal "build failure should surface the build error" "build boom"
         | other ->
           failtestf "expected a build failure, got %A" other
 
@@ -314,7 +314,7 @@ let sessionManagerRestartTombstoneTests =
     testCase "WHY — the worker crashing after a failed rebuild is handled as a crash, because the failed build never touched it" <| fun _ ->
       let runtime =
         mkRuntime
-          (fun _ -> Error "build boom")
+          (fun _ -> Error (SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "build boom" ])))
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
       withHarness runtime.Runtime <| fun harness ->
@@ -402,7 +402,7 @@ let sessionManagerRestartTombstoneTests =
         mkRuntime
           (fun call ->
             match call with
-            | 1 -> Error "build boom"
+            | 1 -> Error (SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "build boom" ]))
             | _ -> Ok "build ok")
           (fun _ -> Ok(Process.GetCurrentProcess()))
 

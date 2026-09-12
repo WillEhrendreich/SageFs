@@ -192,8 +192,9 @@ let discoveryReportTests =
       |> Expect.equal "discovered" (SessionManager.TestDiscoveryReport.Discovered ([| test |], []))
 
     testCase "WHY — TestDiscoveryReport.ofResponse — a worker error is DiscoveryFailed with its description because the user must see why" <| fun _ ->
-      SessionManager.TestDiscoveryReport.ofResponse (WorkerProtocol.WorkerResponse.WorkerError (SageFsError.BuildFailed "Tests.dll is missing"))
-      |> Expect.equal "failed" (SessionManager.TestDiscoveryReport.DiscoveryFailed "Tests.dll is missing")
+      let err = SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "Tests.dll is missing" ])
+      SessionManager.TestDiscoveryReport.ofResponse (WorkerProtocol.WorkerResponse.WorkerError err)
+      |> Expect.equal "failed" (SessionManager.TestDiscoveryReport.DiscoveryFailed (SageFsError.describe err))
 
     testCase "WHY — TestDiscoveryReport.ofResponse — any other reply is DiscoveryFailed because silently dropping it leaves discovery pending forever" <| fun _ ->
       match SessionManager.TestDiscoveryReport.ofResponse (WorkerProtocol.WorkerResponse.EvalCancelled false) with

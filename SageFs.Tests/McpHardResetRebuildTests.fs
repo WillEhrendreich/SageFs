@@ -75,7 +75,8 @@ let private awaitOutcome (p: Probe) = task {
 
 let private hardReset (p: Probe) = hardResetSession p.Ctx "agent1" true (Some p.SessionId) None
 
-let private buildFailed = SageFsError.BuildFailed "Program.fs(3,5): error FS0039: The value 'x' is not defined"
+let private buildFailed =
+  SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "Program.fs(3,5): error FS0039: The value 'x' is not defined" ])
 
 [<Tests>]
 let tests = testList "MCP hard reset rebuild" [

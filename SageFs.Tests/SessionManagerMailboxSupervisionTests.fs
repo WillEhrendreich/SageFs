@@ -30,7 +30,7 @@ type private Runtime = {
 let private mkRuntime
   (startWorker: int -> Result<Process, SageFsError>)
   (stopWorker: unit -> Async<unit>)
-  (runBuild: unit -> Async<Result<string, string>>) =
+  (runBuild: unit -> Async<Result<string, SageFsError>>) =
   let mutable startCalls = 0
   {
     Runtime =

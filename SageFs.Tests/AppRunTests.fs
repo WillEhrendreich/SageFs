@@ -314,11 +314,18 @@ let acrossWorkerRestartTests =
 [<Tests>]
 let buildFailedStateTests =
   let at = System.DateTime(2026, 9, 11, 0, 0, 0, System.DateTimeKind.Utc)
-  let reason = "Build failed (exit 1):\nProgram.fs(172,1): error FS0433: An entry point must be last.\n→ Fix the build errors, then press ▶ Run to rebuild and start the app."
+  // The reason a surface stores is factual, hint-free diagnostic text — the
+  // "press ▶ Run" call to action is describeState's own job to append, not
+  // something baked into the stored reason (SageFsError.BuildFailed carries
+  // structured BuildDiagnostics; AppRunOrchestration flattens them to this
+  // string via BuildDiagnostic.describe, with no hint).
+  let reason = "Program.fs(172,1): error FS0433: An entry point must be last."
   let failed = AppRunState.BuildFailed ("/src/Web/Web.fsproj", reason, at, PreviousAddress.ReuseAddress "http://127.0.0.1:5123")
   testList "AppRun build failed" [
-    testCase "WHY — AppRun.describeState — a failed rebuild says the app could not be rebuilt, not that it crashed, because the user's code did not compile" <| fun _ ->
-      describeState failed |> Expect.equal "names the app and the build output" (sprintf "Web could not be rebuilt: %s" reason)
+    testCase "WHY — AppRun.describeState — a failed rebuild says the app could not be rebuilt, then appends the dashboard's own call to action, because the stored reason must stay hint-free for every surface" <| fun _ ->
+      describeState failed
+      |> Expect.equal "names the app, the build output, and this surface's own hint"
+        (sprintf "Web could not be rebuilt: %s\n→ Fix the build errors, then press ▶ Run to rebuild and start the app." reason)
 
     testCase "WHY — AppRun.toView — a failed rebuild reports its own state name because clients switch on it" <| fun _ ->
       (toView failed).State |> Expect.equal "state name" "BuildFailed"

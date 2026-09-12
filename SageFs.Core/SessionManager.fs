@@ -78,7 +78,7 @@ module SessionManager =
     /// ever blocking the loop on `dotnet build`.
     | RebuildCompleted of
         SessionId *
-        buildResult: Result<string, string> *
+        buildResult: Result<string, SageFsError> *
         AsyncReplyChannel<Result<string, SageFsError>>
     | GetSession of
         SessionId *
@@ -231,7 +231,7 @@ module SessionManager =
     StartWorkerProcess: SessionId -> string list -> string -> bool -> WorkflowTypes.SessionWorkflow -> (int -> int -> unit) -> Result<Process, SageFsError>
     AwaitWorkerPort: SessionId -> Process -> MailboxProcessor<SessionCommand> -> CancellationToken -> unit
     StopWorker: ManagedSession -> Async<unit>
-    RunBuildAsync: string list -> string -> Async<Result<string, string>>
+    RunBuildAsync: string list -> string -> Async<Result<string, SageFsError>>
   }
 
   /// A proxy that rejects calls while the worker is still starting up.
@@ -486,8 +486,10 @@ module SessionManager =
     | true -> projFile
     | false -> Path.Combine(workingDir, projFile)
 
-  /// Why a `dotnet build` failed, as the session card and MCP should show it.
-  let buildFailureReason (exitCode: int) (stdout: string list) (stderr: string list) : string =
+  /// The diagnostics from a failed `dotnet build`, as structured data — no
+  /// surface-specific call to action baked in (see BuildDiagnostic.describe
+  /// and SageFsError.BuildFailed's own doc comment for why).
+  let buildDiagnosticsOf (stdout: string list) (stderr: string list) : BuildDiagnostic list =
     let output = stdout @ stderr
     // MSBuild ends each diagnostic with " [<project path>]"; the path is noise on a card.
     let withoutProject (line: string) =
@@ -500,11 +502,13 @@ module SessionManager =
       |> List.filter (fun l -> l.Contains(": error ", StringComparison.Ordinal))
       |> List.map withoutProject
       |> List.distinct
-    let detail =
-      match errors with
-      | [] -> output |> List.filter (fun l -> l.Trim() <> "") |> List.rev |> List.truncate 15 |> List.rev |> String.concat "\n"
-      | found -> found |> List.truncate 10 |> String.concat "\n"
-    sprintf "Build failed (exit %d):\n%s\n→ Fix the build errors, then press ▶ Run to rebuild and start the app." exitCode detail
+    match errors with
+    | [] ->
+      output
+      |> List.filter (fun l -> l.Trim() <> "")
+      |> List.rev |> List.truncate 15 |> List.rev
+      |> List.map BuildDiagnostic.ofLine
+    | found -> found |> List.truncate 10 |> List.map BuildDiagnostic.ofLine
 
   /// The `dotnet` arguments of a session rebuild. Incremental on purpose: a
   /// clean build deletes the last good output before compiling, so one compile
@@ -512,7 +516,7 @@ module SessionManager =
   let buildArguments (buildProject: string) : string list =
     [ "build"; buildProject; "--no-restore" ]
 
-  let runBuildAsync (projects: string list) (workingDir: string) : Async<Result<string, string>> =
+  let runBuildAsync (projects: string list) (workingDir: string) : Async<Result<string, SageFsError>> =
     async {
       let primaryProject = projects |> List.tryHead
       match primaryProject with
@@ -558,14 +562,18 @@ module SessionManager =
         | true ->
           try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill build process on timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           proc.Dispose()
-          return Error "Build timed out (10 min limit)"
+          let timeoutDiagnostic =
+            { File = None; Line = None; Column = None; Code = None
+              Severity = BuildDiagnosticSeverity.Error
+              Message = "Build timed out (10 min limit)" }
+          return Error (SageFsError.BuildFailed(-1, [ timeoutDiagnostic ]))
         | false ->
           let! _ = System.Threading.Tasks.Task.WhenAll(stderrTask, stdoutTask) |> Async.AwaitTask
           let exitCode = proc.ExitCode
           proc.Dispose()
           match exitCode <> 0 with
           | true ->
-            return Error (buildFailureReason exitCode (List.ofSeq stdoutLines) (List.ofSeq stderrLines))
+            return Error (SageFsError.BuildFailed(exitCode, buildDiagnosticsOf (List.ofSeq stdoutLines) (List.ofSeq stderrLines)))
           | false ->
             return Ok "Build succeeded"
     }
@@ -910,19 +918,21 @@ module SessionManager =
           | Some session ->
             let stateCleared = ManagerState.clearRebuildInFlight id state
             match buildResult, SessionLifecycleStatus.workerPid session.Info.Status with
-            | Error msg, Some _ ->
+            | Error err, Some _ ->
               // The live worker still serves the last good build: the failure is
               // the caller's to show, not a reason to kill a working session.
-              reply.Reply(Error (SageFsError.BuildFailed msg))
+              let msg = SageFsError.describe err
+              reply.Reply(Error err)
               Instrumentation.failSpan rebuildSpan msg
               return stateCleared
             | Ok _buildMsg, Some _ ->
               return spawnFirst stateCleared id session session.Workflow reply "Hard reset complete — worker respawning with fresh assemblies." rebuildSpan
-            | Error msg, None ->
+            | Error err, None ->
               // No worker to fall back to → faulted tombstone that says why.
+              let msg = SageFsError.describe err
               let tombstone = faultedTombstone (Some msg) session
               let newState = ManagerState.addSession id tombstone stateCleared
-              reply.Reply(Error (SageFsError.BuildFailed msg))
+              reply.Reply(Error err)
               onSessionReady id
               onSessionFaulted id msg
               Instrumentation.failSpan rebuildSpan msg

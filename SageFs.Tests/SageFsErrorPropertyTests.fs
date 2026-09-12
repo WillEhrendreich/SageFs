@@ -77,7 +77,11 @@ let private genSageFsError =
     genNonEmptyString |> Gen.map SageFsError.EvalFailed
     genNonEmptyString |> Gen.map SageFsError.ResetFailed
     genNonEmptyString |> Gen.map SageFsError.HardResetFailed
-    genNonEmptyString |> Gen.map SageFsError.BuildFailed
+    gen {
+      let! exitCode = Gen.choose (1, 255)
+      let! message = genNonEmptyString
+      return SageFsError.BuildFailed(exitCode, [ BuildDiagnostic.ofLine message ])
+    }
     genNonEmptyString |> Gen.map SageFsError.ScriptLoadFailed
     genNonEmptyString |> Gen.map SageFsError.CheckFailed
     gen {
@@ -150,6 +154,7 @@ let private allDuCaseInstances =
         | t when t = typeof<exn> -> box (Exception "test")
         | t when t = typeof<SessionState> -> box SessionState.Ready
         | t when t = typeof<string list> -> box [ "a"; "b" ]
+        | t when t = typeof<BuildDiagnostic list> -> box [ BuildDiagnostic.ofLine "test error" ]
         | t -> failwithf "Unhandled field type %s in case %s" t.Name case.Name)
     FSharpValue.MakeUnion(case, fields) :?> SageFsError)
 

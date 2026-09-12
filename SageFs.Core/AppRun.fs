@@ -424,7 +424,9 @@ let describeState (state: AppRunState) : string =
     sprintf "%s is running (no web server)" (projectName project)
   | AppRunState.Exited (project, code, _) -> sprintf "%s exited with code %d" (projectName project) code
   | AppRunState.Crashed (project, reason, _) -> sprintf "%s crashed: %s" (projectName project) reason
-  | AppRunState.BuildFailed (project, reason, _, _) -> sprintf "%s could not be rebuilt: %s" (projectName project) reason
+  | AppRunState.BuildFailed (project, reason, _, _) ->
+    sprintf "%s could not be rebuilt: %s\n→ Fix the build errors, then press ▶ Run to rebuild and start the app."
+      (projectName project) reason
   | AppRunState.LostTrack (project, reason, _) ->
     sprintf "Lost track of %s: %s. → It may still be serving: press Run to take it over again, or Stop to end it."
       (projectName project) (SageFsError.describe reason)

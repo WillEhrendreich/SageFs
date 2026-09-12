@@ -22,6 +22,7 @@ let private allErrorCases : SageFsError list =
         | t when t = typeof<exn> -> box (Exception "test")
         | t when t = typeof<string list> -> box ([ "a"; "b" ] : string list)
         | t when t = typeof<SessionState> -> box SessionState.Ready
+        | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
         | _ -> box "unknown")
     FSharpValue.MakeUnion(case, fields) :?> SageFsError)
   |> Array.toList

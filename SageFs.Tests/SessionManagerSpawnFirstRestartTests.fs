@@ -29,7 +29,7 @@ type private RuntimeHarness = {
 }
 
 let private mkRuntime
-  (runBuild: int -> Result<string, string>)
+  (runBuild: int -> Result<string, SageFsError>)
   (startWorker: int -> Result<Process, SageFsError>) =
   let mutable buildCalls = 0
   let mutable startCalls = 0
@@ -257,7 +257,7 @@ let sessionManagerSpawnFirstRestartTests =
     testCase "T4b — a failed rebuild leaves the session Ready on its running worker because a compile error must not kill a working session" <| fun _ ->
       let runtime =
         mkRuntime
-          (fun _ -> Error "Hello.fs(3,5): error FS0001: expected int")
+          (fun _ -> Error (SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "Hello.fs(3,5): error FS0001: expected int" ])))
           (fun _ -> Ok(Process.GetCurrentProcess()))
 
       withHarness runtime.Runtime <| fun harness ->
@@ -266,8 +266,9 @@ let sessionManagerSpawnFirstRestartTests =
         let originalPid = getManagedSession harness info.Id |> getWorkerPid
 
         match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply)) with
-        | Error (SageFsError.BuildFailed reason) ->
-          reason |> Expect.equal "the caller gets the build error" "Hello.fs(3,5): error FS0001: expected int"
+        | Error (SageFsError.BuildFailed(_, diagnostics)) ->
+          BuildDiagnostic.describe diagnostics
+          |> Expect.equal "the caller gets the build error" "Hello.fs(3,5): error FS0001: expected int"
         | other -> failtestf "expected BuildFailed, got %A" other
 
         let session = getManagedSession harness info.Id
@@ -550,21 +551,30 @@ let sessionManagerStaleReadyReportTests =
   ]
 
 [<Tests>]
-let buildFailureReasonTests =
+let buildDiagnosticsOfTests =
   let fs0433 =
     "/src/Web/Program.fs(160,1): error FS0433: A function labeled with the 'EntryPointAttribute' attribute must be the last declaration in the last file in the compilation sequence. [/src/Web/Web.fsproj]"
-  testList "SessionManager build failure reason" [
-    testCase "WHY — SessionManager.buildFailureReason — names the compiler errors dotnet build printed because the card must say why the app did not come back" <| fun _ ->
-      let reason = buildFailureReason 1 [ "  Determining projects to restore..."; fs0433; fs0433; "Build FAILED." ] []
-      reason |> Expect.stringContains "the compiler error" "Program.fs(160,1): error FS0433"
-      reason.Split("error FS0433").Length - 1 |> Expect.equal "each error once" 1
-      reason.Contains "[/src/Web/Web.fsproj]" |> Expect.isFalse "no project-path noise"
-      reason |> Expect.stringContains "what to do" "→"
+  testList "SessionManager build diagnostics" [
+    testCase "WHY — SessionManager.buildDiagnosticsOf — names the compiler errors dotnet build printed, deduplicated and stripped of project-path noise, because the card must say why the app did not come back without repeating itself" <| fun _ ->
+      let diagnostics = buildDiagnosticsOf [ "  Determining projects to restore..."; fs0433; fs0433; "Build FAILED." ] []
+      diagnostics |> List.length |> Expect.equal "one distinct diagnostic despite the duplicate line" 1
+      let d = diagnostics.[0]
+      d.File |> Expect.equal "the source file" (Some "/src/Web/Program.fs")
+      d.Line |> Expect.equal "the line" (Some 160)
+      d.Column |> Expect.equal "the column" (Some 1)
+      d.Code |> Expect.equal "the diagnostic code" (Some "FS0433")
+      d.Severity |> Expect.equal "an error, not a warning" BuildDiagnosticSeverity.Error
+      d.Message.Contains "[/src/Web/Web.fsproj]" |> Expect.isFalse "no project-path noise carried into the message"
+      // No hint baked in here — that is a surface's job (SageFsError.suggestedAction,
+      // or AppRun.fs's own dashboard-card wording), never the parsed diagnostic data.
+      d.Message.Contains "→" |> Expect.isFalse "no call-to-action leaks into diagnostic data"
 
-    testCase "WHY — SessionManager.buildFailureReason — falls back to the output tail when no error line is found because an empty reason tells the user nothing" <| fun _ ->
-      let reason = buildFailureReason 1 [ "line a"; "something went wrong" ] [ "boom" ]
-      reason |> Expect.stringContains "stdout tail" "something went wrong"
-      reason |> Expect.stringContains "stderr tail" "boom"
+    testCase "WHY — SessionManager.buildDiagnosticsOf — falls back to the output tail as location-less diagnostics when no error line is found because reporting nothing tells the user nothing" <| fun _ ->
+      let diagnostics = buildDiagnosticsOf [ "line a"; "something went wrong" ] [ "boom" ]
+      diagnostics |> List.exists (fun d -> d.File.IsNone && d.Message = "something went wrong")
+      |> Expect.isTrue "the stdout tail line survives as a location-less diagnostic"
+      diagnostics |> List.exists (fun d -> d.File.IsNone && d.Message = "boom")
+      |> Expect.isTrue "the stderr tail line survives as a location-less diagnostic"
   ]
 
 [<Tests>]

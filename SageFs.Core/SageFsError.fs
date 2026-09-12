@@ -3,6 +3,70 @@ namespace SageFs
 open Microsoft.Extensions.Logging
 open Microsoft.FSharp.Reflection
 
+[<RequireQualifiedAccess>]
+type BuildDiagnosticSeverity =
+  | Error
+  | Warning
+
+/// One line of `dotnet build` output classified as a diagnostic. Location is
+/// None when the line has no MSBuild `path(line,col):` shape — a build-tool
+/// crash or a bare summary line has nothing to point at, and that absence is
+/// a real fact about the diagnostic, not something to paper over with a
+/// fabricated 0,0 location.
+type BuildDiagnostic = {
+  File: string option
+  Line: int option
+  Column: int option
+  Severity: BuildDiagnosticSeverity
+  /// The compiler/MSBuild diagnostic code (e.g. "FS0039"), when the line
+  /// carried one — kept separate from Message so a surface can link or
+  /// filter by code without re-parsing text.
+  Code: string option
+  Message: string
+}
+
+module BuildDiagnostic =
+  let private msbuildLine =
+    System.Text.RegularExpressions.Regex(
+      @"^(?<file>.+?)\((?<line>\d+),(?<col>\d+)\):\s*(?<severity>error|warning)\s+(?<code>\S+):\s*(?<message>.*?)\s*(?:\[.*\])?$",
+      System.Text.RegularExpressions.RegexOptions.Compiled)
+
+  /// Parse one line of `dotnet build` output. A line that doesn't match
+  /// MSBuild's "path(line,col): severity CODE: message [project]" shape
+  /// becomes a location-less Error diagnostic carrying the raw text verbatim.
+  let ofLine (line: string) : BuildDiagnostic =
+    let trimmed = line.Trim()
+    let m = msbuildLine.Match(trimmed)
+    match m.Success with
+    | true ->
+      { File = Some m.Groups.["file"].Value
+        Line = Some (int m.Groups.["line"].Value)
+        Column = Some (int m.Groups.["col"].Value)
+        Severity =
+          match m.Groups.["severity"].Value with
+          | "warning" -> BuildDiagnosticSeverity.Warning
+          | _ -> BuildDiagnosticSeverity.Error
+        Code = Some m.Groups.["code"].Value
+        Message = m.Groups.["message"].Value }
+    | false ->
+      { File = None; Line = None; Column = None; Severity = BuildDiagnosticSeverity.Error; Code = None; Message = trimmed }
+
+  /// Plain factual text — no call to action. Every surface (dashboard card,
+  /// MCP tool response, HTTP body) words its own hint from this data instead
+  /// of inheriting one baked into the domain error. Faithfully reconstructs
+  /// MSBuild's own line shape for a parsed diagnostic.
+  let describe (diagnostics: BuildDiagnostic list) : string =
+    let severityWord = function
+      | BuildDiagnosticSeverity.Error -> "error"
+      | BuildDiagnosticSeverity.Warning -> "warning"
+    diagnostics
+    |> List.map (fun d ->
+      match d.File, d.Line, d.Column, d.Code with
+      | Some f, Some l, Some c, Some code -> sprintf "%s(%d,%d): %s %s: %s" f l c (severityWord d.Severity) code d.Message
+      | Some f, Some l, Some c, None -> sprintf "%s(%d,%d): %s" f l c d.Message
+      | _ -> d.Message)
+    |> String.concat "\n"
+
 /// Unified error type for the entire SageFs system.
 /// Every Result<..., SageFsError> across all layers uses this single DU.
 /// NO wildcard matches in module functions — compiler catches missing cases.
@@ -34,8 +98,10 @@ type SageFsError =
   | EvalFailed of reason: string
   | ResetFailed of reason: string
   | HardResetFailed of reason: string
-  /// `dotnet build` failed; the reason carries the compiler errors and what to do.
-  | BuildFailed of reason: string
+  /// `dotnet build` failed. Structured diagnostics, not prose with a baked-in
+  /// UI hint — a surface words its own call to action from `suggestedAction`
+  /// or its own display logic (see AppRun.fs's dashboard-card describe).
+  | BuildFailed of exitCode: int * diagnostics: BuildDiagnostic list
   | ScriptLoadFailed of reason: string
   | CheckFailed of reason: string
   | CompletionFailed of sessionId: string * reason: string
@@ -98,7 +164,8 @@ module SageFsError =
       sprintf "Reset failed: %s. Try hard_reset_fsi_session for a full restart." reason
     | SageFsError.HardResetFailed reason ->
       sprintf "Hard reset failed: %s. Check that the project builds with 'dotnet build'." reason
-    | SageFsError.BuildFailed reason -> reason
+    | SageFsError.BuildFailed(exitCode, diagnostics) ->
+      sprintf "Build failed (exit %d):\n%s" exitCode (BuildDiagnostic.describe diagnostics)
     | SageFsError.ScriptLoadFailed reason ->
       sprintf "Script load failed: %s. Check that the file exists and has valid F# syntax." reason
     | SageFsError.CheckFailed reason ->

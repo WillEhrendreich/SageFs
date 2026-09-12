@@ -325,7 +325,7 @@ let restartForChangesTests =
       let r = record ()
       let baseOps =
         { fakeOps (session webLive [ exe web ] AppRunState.NotRunning) restarting r with
-            RestartSession = fun _ _ -> Task.FromResult(Error (SageFsError.BuildFailed "Build failed (exit 1):\nerror FS0001: build broke")) }
+            RestartSession = fun _ _ -> Task.FromResult(Error (SageFsError.BuildFailed(1, [ BuildDiagnostic.ofLine "error FS0001: build broke" ]))) }
       let ops, failed = settleOn (function AppRunState.BuildFailed _ -> true | _ -> false) r baseOps
       let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
       match! within failed.Task with

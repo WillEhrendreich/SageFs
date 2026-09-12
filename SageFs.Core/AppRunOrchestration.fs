@@ -42,7 +42,7 @@ let private askWorker (ops: SessionManagementOps) (sessionId: SessionId) (msg: W
 /// How a failed start reads on the card: a failed build is not a crash.
 let private failedState (project: string) (previous: PreviousAddress) (err: SageFsError) (at: DateTime) =
   match err with
-  | SageFsError.BuildFailed reason -> AppRunState.BuildFailed (project, reason, at, previous)
+  | SageFsError.BuildFailed(_, diagnostics) -> AppRunState.BuildFailed (project, BuildDiagnostic.describe diagnostics, at, previous)
   | other -> AppRunState.Crashed (project, SageFsError.describe other, at)
 
 /// Starts the entry point on a Ready worker, records what happened, and

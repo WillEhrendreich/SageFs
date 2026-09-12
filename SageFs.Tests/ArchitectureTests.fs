@@ -153,6 +153,7 @@ let architectureTests =
               | t when t = typeof<exn> -> box (System.Exception "test")
               | t when t = typeof<string list> -> box ([] : string list)
               | t when t = typeof<SessionState> -> box SessionState.Uninitialized
+              | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
@@ -181,6 +182,7 @@ let architectureTests =
               | t when t = typeof<exn> -> box (System.Exception "test")
               | t when t = typeof<string list> -> box ([] : string list)
               | t when t = typeof<SessionState> -> box SessionState.Uninitialized
+              | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
@@ -207,6 +209,7 @@ let architectureTests =
               | t when t = typeof<exn> -> box (System.Exception "boom")
               | t when t = typeof<string list> -> box ([ "a"; "b" ] : string list)
               | t when t = typeof<SessionState> -> box SessionState.Uninitialized
+              | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
               | _ -> box null)
           let err =
             FSharp.Reflection.FSharpValue.MakeUnion(case, args) :?> SageFsError
