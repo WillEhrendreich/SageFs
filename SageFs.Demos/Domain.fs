@@ -586,6 +586,16 @@ module Style =
       Warn = "#e6c384"
       Bad = "#ff5d62" }
 
+/// One step's own timing, in the runner's stopwatch-relative milliseconds
+/// (§4.1's `StepLog`: `StartedMs`/`EndedMs`/`ObservedAtMs`) — needed by the
+/// composer to place the click ripple at the moment its expectation was
+/// actually observed, and to spread the synthetic-cursor holds across the
+/// step's own recorded duration (§4.6, §9).
+type StepTiming =
+  { StartedMs: int
+    EndedMs: int
+    ObservedAtMs: int }
+
 /// The pure plan `Compose.plan` produces from a `StepLog` — everything
 /// `Ffmpeg.render` needs to build the one filtergraph, with no ffmpeg-string
 /// concerns leaking into it.
@@ -600,12 +610,73 @@ type ComposePlan =
     // a step with no pointer motion. Magnifier is the editor pane's rect when
     // the layout has one (None for DashboardOnly). (§4.6)
     PointerPaths: Point list list
+    // Same length as Segments — each segment's own local timing, used to
+    // place the cursor holds and the click ripple within THAT segment's own
+    // timeline (every `-i` input to a multi-input `-filter_complex` has its
+    // own PTS starting near zero, so ripple/cursor timing is always relative
+    // to the owning step, never the whole concatenated run). (§4.6)
+    Timings: StepTiming list
     Magnifier: Rect option }
+
+/// A pad name in a `-filter_complex` graph (§4.6): `Input i` is ffmpeg's own
+/// `-i` stream (rendered `i:v`), `Named s` is a label produced by an earlier
+/// node in the same graph (rendered `s`). Modeling pads as data means a
+/// `[0:v]`/`[s3]`-style bracket never has to be hand-formatted more than once
+/// (`Ffmpeg.toCommandString` is the one place that happens).
+[<RequireQualifiedAccess>]
+type Pad =
+  | Input of index: int
+  | Named of label: string
+
+/// One dimension of a `drawbox` rectangle: either a fixed pixel value or a
+/// raw ffmpeg filter EXPRESSION string (ffmpeg's own `t`-in-seconds
+/// expression language, e.g. `"min(8+80*t,28)"`) — needed for the click
+/// ripple's 8px→28px growth over 250ms (§9), which a fixed `Rect` cannot
+/// express. `Expr` is deliberately just a `string`: ffmpeg's expression
+/// grammar is its own closed language already validated by ffmpeg itself at
+/// run time, and re-typing it as an F# AST here would just be a second,
+/// out-of-sync parser for the same thing `toCommandString` already treats as
+/// a single opaque, hand-verified literal (mirrors `toCommandString`'s own
+/// "every case below is a fixed, hand-verified ffmpeg filter syntax" doctrine
+/// applied at the sub-argument level).
+[<RequireQualifiedAccess>]
+type Extent =
+  | Fixed of pixels: int
+  | Expr of expression: string
+
+/// A `drawbox` rectangle whose edges may vary over time (§9's growing click
+/// ripple) or stay fixed (every other box this tool draws). Field names
+/// deliberately differ from `Rect`'s `X`/`Y`/`W`/`H` (`Left`/`Top`/
+/// `BoxWidth`/`BoxHeight`) — F# resolves an ambiguous `{ X = ...; Y = ... }`
+/// record literal to whichever same-named-field record was declared LAST, so
+/// reusing `Rect`'s field names here would silently repoint every existing
+/// `Rect` literal in `Layout.fs`/`CellAgent.fs` at this new type instead.
+type TimedRect =
+  { Left: Extent
+    Top: Extent
+    BoxWidth: Extent
+    BoxHeight: Extent }
+
+/// Whether a `drawbox` is solid or a hollow ring of the given pixel width —
+/// the click ripple (§9: "Accent ring") is a hollow, growing box; the caption
+/// band and progress dots are solid fills.
+[<RequireQualifiedAccess>]
+type Thickness =
+  | Fill
+  | Outline of pixels: int
 
 /// One ffmpeg filtergraph operation, modeled as data so a filter chain is
 /// testable and can never drift into a broken hand-written command string
 /// (§4.6). `MpDecimate`/`SetPts` are applied together, deliberately never
 /// alongside `Fps` (§4.6: the dedup/fps ordering bug this avoids).
+///
+/// `Labeled`/`Complex` are what let this DU express a REAL multi-input
+/// `-filter_complex` (§4.6 Wave-3 gap this module closes): `Labeled(ins,
+/// filter, outs)` renders as ffmpeg's own `[in1][in2]...filterchain[out1]`
+/// node syntax, and `Complex` joins an ordered list of such nodes with `;` —
+/// ffmpeg's own node separator — so a `Concat`/`Overlay`/`PaletteUse` node
+/// can finally carry the pad labels its multi-input ffmpeg filter actually
+/// requires, entirely as typed data.
 [<RequireQualifiedAccess>]
 type FilterGraph =
   | Scale of width: int * height: int
@@ -620,6 +691,28 @@ type FilterGraph =
   | PaletteGen of statsMode: string
   | PaletteUse of dither: string
   | Chain of FilterGraph list
+  /// A `drawbox` that may be translucent (`alpha`), time-varying
+  /// (`TimedRect`'s `Extent.Expr` edges), a hollow ring (`Thickness.Outline`),
+  /// and/or gated to a time window (`enable`, ffmpeg's own `between(t,a,b)`
+  /// idiom) — the synthetic cursor hold, the click ripple, and the
+  /// translucent caption band (§9) are all this one case.
+  | DrawBoxTimed of rect: TimedRect * color: string * alpha: float option * thickness: Thickness * enable: string option
+  /// A `drawtext` with the color/size/optional time-gating `DrawText` does
+  /// not carry — the caption text, the tabular step counter, and (were it
+  /// ever gated to one step) any other styled overlay text (§9).
+  | DrawTextStyled of text: string * x: int * y: int * color: string * fontSize: int * enable: string option
+  /// ffmpeg's `split` filter: one input pad fanning out to N identical output
+  /// pads — the mechanism a self-referential picture-in-picture (the
+  /// magnifier) or a two-pass palette needs, since neither can be expressed
+  /// as a single-input `Chain` (§4.6).
+  | Split of outputs: int
+  /// One `-filter_complex` node: `inputs` feed `filter` (itself often a
+  /// `Chain`), producing `outputs`. The ONLY place a bracketed pad name is
+  /// attached to a filter.
+  | Labeled of inputs: Pad list * filter: FilterGraph * outputs: Pad list
+  /// An ordered list of `Labeled` (or other) nodes forming one full
+  /// `-filter_complex` graph, `;`-joined by `toCommandString`.
+  | Complex of nodes: FilterGraph list
 
 // ---------------------------------------------------------------------------
 // The runner ⇄ cell-agent wire shapes (§4.1) and freshness (§4.10).
