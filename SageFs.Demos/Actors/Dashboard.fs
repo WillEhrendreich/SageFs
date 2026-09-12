@@ -18,6 +18,19 @@ type Handle =
 
 let private testIdSelector (id: DashboardId) : string = sprintf "[data-testid=%s]" (DashboardId.testId id)
 
+/// Xvfb runs `-nocursor` (§4.3, `Runtime.fs`), which suppresses the X11
+/// hardware cursor — but not Chromium's own CSS-drawn cursor (the hand over
+/// `cursor: pointer` elements, the I-beam over text). The synthetic-cursor
+/// design (§4.3: "the cursor is synthetic ... the capture is not polluted by
+/// a tiny grey arrow") requires the CAPTURED frame to have zero real cursors
+/// of any kind, so every page this actor drives gets `cursor: none` forced
+/// on every element before anything is recorded.
+let private hideRealCursor (page: IPage) : Async<unit> =
+  async {
+    let! _ = page.AddStyleTagAsync(PageAddStyleTagOptions(Content = "*, *::before, *::after { cursor: none !important; }")) |> Async.AwaitTask
+    ()
+  }
+
 /// Launches Chromium `--app=<pageUrl>` placed at `rect`. §4.12: waits on
 /// `LoadState.Load`, NEVER `LoadState.NetworkIdle` — the dashboard holds a
 /// long-lived SSE `EventSource` open for the life of the page by design, so
@@ -54,6 +67,7 @@ let launch (chromePath: string) (userDataDir: string) (rect: Rect) (pageUrl: str
         context.WaitForPageAsync() |> Async.AwaitTask |> Async.RunSynchronously
 
     let! _ = page.WaitForLoadStateAsync(LoadState.Load) |> Async.AwaitTask
+    do! hideRealCursor page
     return { Playwright = playwright; Context = context; Page = page }
   }
 

@@ -58,15 +58,22 @@ let private CaptionFont = "Noto Sans"
 let private CaptionFontSize = 22
 
 /// §9: "28 px arrow ... cursor fill" / "click ripple = Accent ring 8→28px
-/// over 250ms". ffmpeg's `drawbox` only draws axis-aligned rectangles (no
-/// vector paths, no native circle/arrow primitive — confirmed against this
-/// machine's `ffmpeg -filters`), so the cursor is a small stack of
-/// decreasing-width bars forming a pixelated arrow silhouette (the same
-/// technique classic bitmap cursors use), never a font glyph — a glyph
-/// depends on the active font actually shipping that codepoint, which is not
-/// guaranteed the way a `drawbox` stack is.
+/// over 250ms". `drawbox` only draws axis-aligned rectangles — no vector
+/// paths, no native circle/arrow primitive (confirmed against this
+/// machine's `ffmpeg -filters`) — so a stack of rectangles can only ever
+/// stair-step a diagonal edge or a ring; a real screen-recorder-quality
+/// cursor and ripple are pre-rendered, anti-aliased PNGs (`assets/cursor.png`,
+/// `assets/ripple.png` — generated once via ImageMagick at 4x scale then
+/// downscaled, per §9/§8) composited with `overlay`, exactly how every real
+/// screen recorder draws a synthetic pointer. `CursorHotspotX/Y` is the pixel
+/// offset from the cursor image's top-left corner to its ACTUAL pointer tip
+/// (baked into the asset's own geometry, not detected at runtime), so the
+/// tip — not the image's corner — lands on the recorded pointer coordinate.
 [<Literal>]
-let private CursorSize = 28
+let private CursorHotspotX = 2
+
+[<Literal>]
+let private CursorHotspotY = 2
 
 [<Literal>]
 let private RippleFromSize = 8
@@ -147,7 +154,21 @@ let rec toCommandString (graph: FilterGraph) : string =
   match graph with
   | FilterGraph.Scale (width, height) -> sprintf "scale=%d:%d" width height
   | FilterGraph.Fps fps -> sprintf "fps=%d" fps
-  | FilterGraph.Overlay (x, y) -> sprintf "overlay=%d:%d" x y
+  | FilterGraph.Overlay (x, y, enable) ->
+    // `eof_action=endall` (never the `overlay` filter's own default,
+    // `repeat`): every overlay in this tool composites a FINITE video
+    // against an INFINITE `-loop 1` PNG asset (cursor/ripple), and
+    // `repeat` freezes the finite input's last frame and keeps pulling
+    // frames from the still-infinite one FOREVER instead of ending —
+    // confirmed directly against this machine's ffmpeg (a 2.6s clip
+    // never finished encoding). `endall` ends the filter's output as
+    // soon as the SHORTER of the two inputs ends, which is always the
+    // finite video here (and is a no-op for the magnifier's two
+    // same-length inputs).
+    let core = sprintf "overlay=x=%s:y=%s:eof_action=endall" (extentString x) (extentString y)
+    match enable with
+    | Some expr -> core + sprintf ":enable='%s'" expr
+    | None -> core
   | FilterGraph.DrawBox (rect, color) ->
     sprintf "drawbox=x=%d:y=%d:w=%d:h=%d:color=%s:t=fill" rect.X rect.Y rect.W rect.H (colorArg None color)
   | FilterGraph.DrawText (text, x, y) -> sprintf "drawtext=text='%s':x=%d:y=%d" (escapeDrawText text) x y
@@ -185,6 +206,8 @@ let rec toCommandString (graph: FilterGraph) : string =
     | Some expr -> core + sprintf ":enable='%s'" expr
     | None -> core
   | FilterGraph.Split outputs -> sprintf "split=%d" outputs
+  | FilterGraph.ScaleTimed (width, height) ->
+    sprintf "scale=w=%s:h=%s:eval=frame" (extentString width) (extentString height)
   | FilterGraph.Labeled (inputs, filter, outputs) ->
     let ins = inputs |> List.map bracket |> String.concat ""
     let outs = outputs |> List.map bracket |> String.concat ""
@@ -195,76 +218,84 @@ let rec toCommandString (graph: FilterGraph) : string =
 // render — the §4.6 GIF pipeline, built as a real multi-input filter_complex.
 // ---------------------------------------------------------------------------
 
-/// The synthetic cursor for one held position (§4.3 "cursor is synthetic",
-/// §9's 28px arrow): a small stack of decreasing-width `Ink`-filled bars,
-/// each preceded by a 1px-larger `Rule` bar and a 2px-larger `#16161d` bar so
-/// the outline and drop-shadow show at the silhouette's edges (§9: "1.5px
-/// Rule outline plus a 1px #16161d drop for contrast"). Gated to `enable` so
-/// it is visible only while this hold is the active sample (§4.6).
-let private cursorArrow (style: Style) (enable: string) (origin: Point) : FilterGraph list =
-  let steps = 5
-  let stepH = CursorSize / steps
+/// One ffmpeg `if(lt(t,threshold),value,...)` ladder: `samples` are
+/// (holdEndSec, valueDuringThatHold) pairs for every hold EXCEPT the last,
+/// `finalValue` is the value once `t` passes every threshold. This is what
+/// lets ONE `overlay` filter carry the cursor across every recorded sample —
+/// the alternative (one chained `overlay` filter per hold, gated by its own
+/// `enable` window) is DATA-equivalent but was measured directly against
+/// this machine's ffmpeg to be drastically slower: ~20 chained `overlay`
+/// filters over a 3s clip took minutes, because ffmpeg re-synchronizes the
+/// looped image input at every single chained filter. A single filter whose
+/// position EXPRESSION varies with `t` costs one filter's overhead no matter
+/// how many holds it encodes.
+let private ifLadder (samples: (float * int) list) (finalValue: int) : string =
+  List.foldBack (fun (threshold, value) acc -> sprintf "if(lt(t,%s),%d,%s)" (formatFactor threshold) value acc) samples (string finalValue)
 
-  let bar (color: string) (offset: int) : FilterGraph list =
-    [ for i in 0 .. steps - 1 ->
-        let w = CursorSize - i * stepH + offset
-        let rect =
-          { Left = Extent.Fixed(origin.X - offset / 2)
-            Top = Extent.Fixed(origin.Y + i * stepH - offset / 2)
-            BoxWidth = Extent.Fixed(max 1 w)
-            BoxHeight = Extent.Fixed(stepH + offset) }
-        FilterGraph.DrawBoxTimed(rect, color, None, Thickness.Fill, Some enable) ]
+/// Builds the `x`/`y` position expressions for the WHOLE cursor path in one
+/// step: `points` held in sequence, each for an equal share of `durationSec`
+/// (§4.1's `PointerPath` carries no per-sample timestamp, so even spacing
+/// across the step's own recorded `[Started,Ended]` window is the honest
+/// reading of the data actually available — unchanged from the original
+/// per-hold design, just now expressed as one pair of formulas instead of N
+/// separately-gated filters).
+let private cursorMotionExprs (points: Point list) (durationSec: float) : string * string =
+  let n = points.Length
+  let holdEndSec i = durationSec * float (i + 1) / float n
 
-  // Drop shadow (largest offset, drawn first so later layers paint over it),
-  // then the Rule outline, then the Ink fill on top — back-to-front so the
-  // outline and shadow read as a border around the fill, not underneath it.
-  (bar "#16161d" 4) @ (bar style.Rule 2) @ (bar style.Ink 0)
+  let samples =
+    points
+    |> List.take (n - 1)
+    |> List.mapi (fun i point -> holdEndSec i, point)
 
-/// The click ripple (§9: "Accent ring 8→28px over 250ms"): a hollow,
-/// growing `drawbox` centered on `origin`, gated to the ripple's own time
-/// window so it appears only around the moment the step's expectation was
-/// observed (§4.6).
-let private clickRipple (style: Style) (startSec: float) (origin: Point) : FilterGraph =
+  let lastPoint = List.last points
+  let xLadder = ifLadder (samples |> List.map (fun (t, p) -> t, p.X - CursorHotspotX)) (lastPoint.X - CursorHotspotX)
+  let yLadder = ifLadder (samples |> List.map (fun (t, p) -> t, p.Y - CursorHotspotY)) (lastPoint.Y - CursorHotspotY)
+  xLadder, yLadder
+
+/// The single `Overlay` compositing the pre-rendered cursor image
+/// (`cursorPad`, an ffmpeg `-i cursor.png -loop 1` input Runtime.fs appends)
+/// onto `inPad` across the WHOLE step, positioned by `cursorMotionExprs`
+/// (§4.6). One filter for the whole path, not one per sample — see
+/// `ifLadder`'s doc for why that matters.
+let private cursorMotion (cursorPad: Pad) (points: Point list) (durationSec: float) (inPad: Pad) (outPad: Pad) : FilterGraph =
+  let xExpr, yExpr = cursorMotionExprs points durationSec
+
+  FilterGraph.Labeled(
+    [ inPad; cursorPad ],
+    FilterGraph.Overlay(Extent.Expr xExpr, Extent.Expr yExpr, Some(sprintf "between(t,0,%s)" (formatFactor durationSec))),
+    [ outPad ]
+  )
+
+/// The click ripple (§9: "Accent ring 8→28px over 250ms"): the pre-rendered
+/// ring PNG (`ripplePad`), `ScaleTimed` to a size that grows over the
+/// ripple's own window, then overlaid centered on `origin` using ffmpeg's
+/// own `overlay_w`/`overlay_h` runtime variables — so the centering formula
+/// never has to duplicate whatever `ScaleTimed` computed. The size
+/// expression is `clip`ped to `[RippleFromSize,RippleToSize]` for ALL time,
+/// not just the active window: `scale` (unlike `drawbox`/`overlay`) has no
+/// `enable` gate, so it re-evaluates every frame of the whole clip, and an
+/// unclamped `8 + rate*(t-start)` goes negative long before/after the
+/// window and crashes `scale` with an invalid (non-positive) dimension —
+/// confirmed directly against this machine's ffmpeg. The visible ON/OFF
+/// gating is entirely the `overlay`'s own `enable`.
+let private rippleNodes (ripplePad: Pad) (index: int) (startSec: float) (origin: Point) (inPad: Pad) (outPad: Pad) : FilterGraph list =
   let endSec = startSec + RippleDurationSec
   let growthPerSec = float (RippleToSize - RippleFromSize) / RippleDurationSec
-  let sizeExpr = sprintf "min(%d+%s*(t-%s),%d)" RippleFromSize (formatFactor growthPerSec) (formatFactor startSec) RippleToSize
-  let halfExpr = sprintf "(%s)/2" sizeExpr
+  let rawSizeExpr = sprintf "%d+%s*(t-%s)" RippleFromSize (formatFactor growthPerSec) (formatFactor startSec)
+  let sizeExpr = sprintf "clip(%s,%d,%d)" rawSizeExpr RippleFromSize RippleToSize
+  let scaledPad = Pad.Named(sprintf "ring%d" index)
 
-  let rect =
-    { Left = Extent.Expr(sprintf "%d-%s" origin.X halfExpr)
-      Top = Extent.Expr(sprintf "%d-%s" origin.Y halfExpr)
-      BoxWidth = Extent.Expr sizeExpr
-      BoxHeight = Extent.Expr sizeExpr }
-
-  FilterGraph.DrawBoxTimed(rect, style.Accent, None, Thickness.Outline 2, Some(sprintf "between(t,%s,%s)" (formatFactor startSec) (formatFactor endSec)))
-
-/// The full per-step cursor overlay: one `cursorArrow` hold per recorded
-/// pointer sample, evenly spread across the step's own segment duration
-/// (`StepRecord`/`Wire.WireStep` carry no per-sample timestamp — §4.1's
-/// `PointerPath` is a plain point list — so even spacing across the
-/// segment's own `[Started,Ended]` window is the honest reading of the data
-/// actually available), plus a ripple at the step's own observed-at time
-/// using the path's LAST point (§4.3: motion resolves to the click target's
-/// centre, so the final sample is where the click landed).
-let private cursorOverlay (style: Style) (timing: StepTiming) (pointerPath: Point list) : FilterGraph list =
-  match pointerPath with
-  | [] -> []
-  | points ->
-    let durationSec = float (max 1 (timing.EndedMs - timing.StartedMs)) / 1000.0
-    let n = points.Length
-
-    let holds =
-      points
-      |> List.mapi (fun i point ->
-        let startSec = durationSec * float i / float n
-        let endSec = if i = n - 1 then durationSec else durationSec * float (i + 1) / float n
-        cursorArrow style (sprintf "between(t,%s,%s)" (formatFactor startSec) (formatFactor endSec)) point)
-      |> List.collect id
-
-    let rippleStartSec =
-      max 0.0 (min (durationSec - RippleDurationSec) (float (timing.ObservedAtMs - timing.StartedMs) / 1000.0))
-
-    holds @ [ clickRipple style rippleStartSec (List.last points) ]
+  [ FilterGraph.Labeled([ ripplePad ], FilterGraph.ScaleTimed(Extent.Expr sizeExpr, Extent.Expr sizeExpr), [ scaledPad ])
+    FilterGraph.Labeled(
+      [ inPad; scaledPad ],
+      FilterGraph.Overlay(
+        Extent.Expr(sprintf "%d-overlay_w/2" origin.X),
+        Extent.Expr(sprintf "%d-overlay_h/2" origin.Y),
+        Some(sprintf "between(t,%s,%s)" (formatFactor startSec) (formatFactor endSec))
+      ),
+      [ outPad ]
+    ) ]
 
 /// The caption band for one step (§9): a translucent `Ground`-colored band
 /// across the bottom of the canvas, the caption in `Ink`, and a tabular
@@ -294,37 +325,110 @@ let private stepDots (style: Style) (currentIndex: int) (total: int) : FilterGra
       let color = if index = currentIndex then style.Accent else style.Panel
       FilterGraph.DrawBox({ X = x; Y = y; W = DotSize; H = DotSize }, color) ]
 
+/// Threads the per-step content — the caption band, counter and progress
+/// dots, then the cursor holds and the click ripple (§4.6, §9) — as a linear
+/// sequence of nodes from `startPad` to `endPad`. Splices directly into the
+/// enclosing node list: `toCommandString`'s `Complex` case `;`-joins
+/// regardless of nesting depth, so a list of `Labeled` nodes here is exactly
+/// as valid spliced into `render`'s top-level `Complex` as it is wrapped in
+/// one of its own (`withMagnifier` relies on the same fact).
+///
+/// The caption/dots come FIRST, before the cursor/ripple overlays — not
+/// last, despite neither §4.6's prose order nor visual layering requiring
+/// it (the caption band and the cursor/ripple never occupy the same pixels
+/// in this tool's layouts). This ordering is load-bearing for a real ffmpeg
+/// defect, confirmed by bisection directly against this machine's ffmpeg: a
+/// `drawtext`/`drawbox` chain fed from the OUTPUT of an `enable`+
+/// `eof_action=endall`-gated `overlay` silently renders NOTHING from some
+/// point in the timeline onward (the caption vanishes only after the first
+/// enable-gated overlay's window has opened at least once — reproduced with
+/// the cursor motion overlay alone, no ripple needed), while the identical
+/// `drawtext`/`drawbox` chain feeding INTO that same overlay chain (this
+/// ordering) is unaffected. Moving caption/dots ahead of the overlays keeps
+/// the exact same pixels composited — only the ffmpeg node order changes.
+let private contentNodes
+  (style: Style)
+  (cursorPad: Pad)
+  (ripplePad: Pad)
+  (index: int)
+  (total: int)
+  (timing: StepTiming)
+  (caption: Caption)
+  (pointerPath: Point list)
+  (startPad: Pad)
+  (endPad: Pad)
+  : FilterGraph list =
+
+  let freshLabel suffix = Pad.Named(sprintf "c%d_%s" index suffix)
+
+  match pointerPath with
+  | [] -> [ FilterGraph.Labeled([ startPad ], FilterGraph.Chain(captionBand style index total caption @ stepDots style index total), [ endPad ]) ]
+  | points ->
+    let captionedPad = freshLabel "captioned"
+    let captionNode = FilterGraph.Labeled([ startPad ], FilterGraph.Chain(captionBand style index total caption @ stepDots style index total), [ captionedPad ])
+
+    let durationSec = float (max 1 (timing.EndedMs - timing.StartedMs)) / 1000.0
+    let motionPad = freshLabel "motion"
+    let motionNode = cursorMotion cursorPad points durationSec captionedPad motionPad
+
+    let rippleStartSec =
+      max 0.0 (min (durationSec - RippleDurationSec) (float (timing.ObservedAtMs - timing.StartedMs) / 1000.0))
+
+    let ripple = rippleNodes ripplePad index rippleStartSec (List.last points) motionPad endPad
+
+    captionNode :: motionNode :: ripple
+
 /// The 2× picture-in-picture magnifier over the editor pane (§4.6): a
 /// self-referential PiP needs two copies of the SAME step input (`split`),
 /// one cropped+scaled and overlaid onto the other — a single-input `Chain`
 /// cannot express "overlay a video onto a cropped copy of itself" because
 /// `overlay` is a two-input ffmpeg filter. Docked to the canvas's top-right
-/// so it never overlaps the caption band at the bottom. Wraps the step's own
-/// already-composited overlay chain (`bodyChain`) as the base layer so the
-/// magnifier sits on TOP of the cursor/ripple/caption, not underneath them.
-let private withMagnifier (rect: Rect) (bodyChain: FilterGraph) (mainPad: Pad) (outPad: Pad) : FilterGraph =
+/// so it never overlaps the caption band at the bottom. Threads the step's
+/// own already-composited content nodes as the base layer so the magnifier
+/// sits on TOP of the cursor/ripple/caption, not underneath them.
+let private withMagnifier (index: int) (rect: Rect) (bodyNodes: FilterGraph list) (bodyOut: Pad) (mainPad: Pad) (outPad: Pad) : FilterGraph =
   let scaledWidth, scaledHeight = rect.W * 2, rect.H * 2
   let dockX = CanvasWidth - scaledWidth
-  let splitA, splitB = Pad.Named "mag_body", Pad.Named "mag_src"
-  let bodyOut, magOut = Pad.Named "mag_bodied", Pad.Named "mag_pip"
+  // Indexed by step: two magnified steps in the same scenario would
+  // otherwise both emit a label named "mag_src", and ffmpeg's filtergraph
+  // labels are scenario-wide, not step-scoped — a bug that happened to be
+  // invisible while every scenario this tool has actually recorded so far
+  // had at most one magnified step.
+  let splitA, splitB = Pad.Named(sprintf "mag%d_body" index), Pad.Named(sprintf "mag%d_src" index)
+  let magOut = Pad.Named(sprintf "mag%d_pip" index)
 
-  FilterGraph.Complex
-    [ FilterGraph.Labeled([ mainPad ], FilterGraph.Split 2, [ splitA; splitB ])
-      FilterGraph.Labeled([ splitA ], bodyChain, [ bodyOut ])
-      FilterGraph.Labeled([ splitB ], FilterGraph.Chain [ FilterGraph.Crop rect; FilterGraph.Scale(scaledWidth, scaledHeight) ], [ magOut ])
-      FilterGraph.Labeled([ bodyOut; magOut ], FilterGraph.Overlay(dockX, 0), [ outPad ]) ]
+  FilterGraph.Complex(
+    [ FilterGraph.Labeled([ mainPad ], FilterGraph.Split 2, [ splitA; splitB ]) ]
+    @ bodyNodes
+    @ [ FilterGraph.Labeled([ splitB ], FilterGraph.Chain [ FilterGraph.Crop rect; FilterGraph.Scale(scaledWidth, scaledHeight) ], [ magOut ])
+        FilterGraph.Labeled([ bodyOut; magOut ], FilterGraph.Overlay(Extent.Fixed dockX, Extent.Fixed 0, None), [ outPad ]) ]
+  )
 
-/// Builds the per-step overlay chain (cursor+ripple, caption band, counter,
+/// Builds the per-step node sequence (cursor+ripple, caption band, counter,
 /// progress dots — §4.6, §9) for one step, wrapped in the magnifier's
 /// self-split when the layout has an editor pane, wired to `mainPad` in and
 /// `outPad` out.
-let private stepNode (style: Style) (magnifier: Rect option) (index: int) (total: int) (timing: StepTiming) (caption: Caption) (pointerPath: Point list) (mainPad: Pad) (outPad: Pad) : FilterGraph =
-  let overlays = cursorOverlay style timing pointerPath @ captionBand style index total caption @ stepDots style index total
-  let bodyChain = FilterGraph.Chain overlays
-
+let private stepNode
+  (style: Style)
+  (magnifier: Rect option)
+  (cursorPad: Pad)
+  (ripplePad: Pad)
+  (index: int)
+  (total: int)
+  (timing: StepTiming)
+  (caption: Caption)
+  (pointerPath: Point list)
+  (mainPad: Pad)
+  (outPad: Pad)
+  : FilterGraph =
   match magnifier with
-  | Some rect -> withMagnifier rect bodyChain mainPad outPad
-  | None -> FilterGraph.Labeled([ mainPad ], bodyChain, [ outPad ])
+  | Some rect ->
+    let bodyStart = Pad.Named(sprintf "mag%d_body" index)
+    let bodyOut = Pad.Named(sprintf "s%d_bodied" index)
+    let bodyNodes = contentNodes style cursorPad ripplePad index total timing caption pointerPath bodyStart bodyOut
+    withMagnifier index rect bodyNodes bodyOut mainPad outPad
+  | None ->
+    FilterGraph.Complex(contentNodes style cursorPad ripplePad index total timing caption pointerPath mainPad outPad)
 
 /// Builds the filtergraph for the §4.6 GIF pipeline, as a real multi-input
 /// `-filter_complex`: each step's own `-i` input pad gets its cursor/ripple
@@ -344,23 +448,30 @@ let private stepNode (style: Style) (magnifier: Rect option) (index: int) (total
 /// via the standard two-pass `split` → `palettegen(stats_mode=diff)` →
 /// `paletteuse(dither=sierra2_4a)` technique (§4.6) — itself only expressible
 /// with labeled pads, which is exactly what this DU now models. Every ffmpeg
-/// filtergraph pad has exactly ONE consumer (a second `-map`/filter input
-/// reading an already-consumed pad is a runtime "does not exist ... or was
+/// filtergraph LABEL has exactly ONE consumer (a second `-map`/filter input
+/// reading an already-consumed label is a runtime "does not exist ... or was
 /// already used elsewhere" error — confirmed directly against this machine's
-/// ffmpeg), so the post-decimate `[vd]` pad is split a further THREE ways —
-/// `v1`/`v2` for the palette technique's own two branches, and `vmp4` purely
-/// so a constant-frame-rate `.mp4` output can map a copy without stealing the
+/// ffmpeg; a raw `-i` input pad has no such limit, which is what lets every
+/// cursor hold and every step reuse the same cursor/ripple asset inputs), so
+/// the post-decimate `[vd]` pad is split a further THREE ways — `v1`/`v2`
+/// for the palette technique's own two branches, and `vmp4` purely so a
+/// constant-frame-rate `.mp4` output can map a copy without stealing the
 /// palette branches' only input. The final `[outv]` pad is the GIF-ready
-/// stream; `[vmp4]` is what the `.mp4` output maps (§9).
+/// stream; `[vmp4]` is what the `.mp4` output maps (§9). The cursor/ripple
+/// PNG assets are the two `-i` inputs Runtime.fs appends right after every
+/// step's own segment input, so their pad indices are always `total` and
+/// `total + 1`.
 let render (plan: ComposePlan) : FilterGraph =
   let total = plan.Segments.Length
+  let cursorPad = Pad.Input total
+  let ripplePad = Pad.Input(total + 1)
 
   let stepNodes =
     [ for index in 0 .. total - 1 ->
         let timing = plan.Timings.[index]
         let caption = plan.Captions.[index]
         let pointerPath = plan.PointerPaths.[index]
-        stepNode plan.Style plan.Magnifier index total timing caption pointerPath (Pad.Input index) (Pad.Named(sprintf "s%d" index)) ]
+        stepNode plan.Style plan.Magnifier cursorPad ripplePad index total timing caption pointerPath (Pad.Input index) (Pad.Named(sprintf "s%d" index)) ]
 
   let stepPads = [ for index in 0 .. total - 1 -> Pad.Named(sprintf "s%d" index) ]
 
