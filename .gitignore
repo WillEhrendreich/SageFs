@@ -52,3 +52,17 @@ test-output.txt
 .playwright-mcp/
 .slopwatch/
 .claude/
+
+# Coverage output — regenerated locally/in CI, never committed (90MB+).
+coverage.cobertura.xml
+coverage-report/
+
+# Roast/audit docs and cross-agent handoff docs are intentionally untracked
+# working files (per standing preference) — re-committed by accident once
+# in c6be863d; this keeps that from happening again.
+/release-blockers.md
+/standby-session-rework.md
+/sagefs-roast.md
+/sagefs-roast-2.md
+/sagefs-roast-3.md
+/sagefs-roast-4.md
