@@ -90,11 +90,12 @@
     <Compile Include="Features\FeatureHooks.fs" />
     <Compile Include="Features\FrictionTelemetryTypes.fs" />
         <Compile Include="Features\FrictionTelemetry.fs" />
-        <Compile Include="Features\FrictionSqlite.fs" />
         <Compile Include="Features\FrictionSanitize.fs" />
-       <Compile Include="Features\FrictionReviewView.fs" />
         <Compile Include="Features\FrictionOtelProjection.fs" />
-        <Compile Include="Features\McpFrictionRecorder.fs" />
+        <!-- FrictionSqlite.fs, FrictionReviewView.fs, McpFrictionRecorder.fs
+             moved to SageFs.fsproj — friction storage is daemon-only; the
+             worker process (SageFs.Host) never referenced them, so they
+             pulled Microsoft.Data.Sqlite into its closure for nothing. -->
         <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />
         <Compile Include="SageFsError.fs" />
@@ -190,16 +191,15 @@
         <PackageReference Include="Fantomas.Core" />
         <PackageReference Include="FSharp.SystemTextJson" />
         <PackageReference Include="FsToolkit.ErrorHandling" />
-        <PackageReference Include="Microsoft.Data.Sqlite" />
         <!-- Explicit logging abstractions pin: FSharp.Compiler.Service does not
              always surface it transitively; the central-version pin keeps the
              closure stable across TFMs. -->
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-        <!-- Direct reference to the native SQLite library: pins the transitive
-             SQLitePCLRaw.lib.e_sqlite3 to a version bundling SQLite >= 3.50.2,
-             resolving CVE-2025-6965 (GHSA-2m69-gcr7-jv3q). The 2.1.x managed
-             provider is ABI-compatible with the patched native lib. -->
-        <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
+        <!-- SQLite (friction storage) is daemon-only — see SageFs.fsproj, which
+             carries Microsoft.Data.Sqlite/SQLitePCLRaw.lib.e_sqlite3 and the
+             CVE-2025-6965 pin comment. SageFs.Host (the worker process) never
+             touches friction storage, so it must not link SQLite's native
+             library into its closure. -->
         <PackageReference Include="Mono.Cecil" GeneratePathProperty="true" />
     </ItemGroup>
 
