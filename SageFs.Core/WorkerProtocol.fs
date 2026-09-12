@@ -113,6 +113,116 @@ module WorkerProtocol =
       | SessionStatus.Restarting -> true
       | SessionStatus.Faulted | SessionStatus.Stopped -> false
 
+  /// A daemon-tracked worker process's id and, once it reports one, its HTTP port.
+  type WorkerHandle = { Pid: int; Port: int option }
+
+  /// The daemon's own live status for one managed session (SessionInfo.Status).
+  /// Distinct from the worker's simpler self-reported SessionStatus (used in
+  /// WorkerStatusSnapshot) — a worker process has no notion of "my own pid as
+  /// tracked by my supervisor" or "the fault reason the daemon chose to record
+  /// for me," so folding those into the wire type would force a worker to
+  /// fabricate data it doesn't own. This type instead folds what used to be
+  /// three independent optional fields on SessionInfo (FaultReason/WorkerPid/
+  /// WorkerPort) into the status itself, so illegal combinations — Ready with
+  /// no pid, a stale fault reason surviving into Ready, a stale port
+  /// surviving into Faulted — become unrepresentable.
+  [<RequireQualifiedAccess>]
+  type SessionLifecycleStatus =
+    | Starting of WorkerHandle
+    | Ready of WorkerHandle
+    | Evaluating of WorkerHandle
+    /// Worker is running a dotnet build or similar multi-second compilation step.
+    | Building of buildReason: string * worker: WorkerHandle
+    | Faulted of reason: string option
+    /// A restart in flight. Carries the OLD worker's pid ONLY so a late
+    /// exit/ready event from that dying process can be recognized as stale
+    /// and ignored (see the WorkerExited/WorkerReady stale-pid guards in
+    /// SessionManager) — it is not a live worker. None when there was no
+    /// prior worker (a cold restart after a Faulted/Stopped session).
+    | Restarting of previousWorkerPid: int option
+    | Stopped
+
+  /// Conversion and query utilities for SessionLifecycleStatus.
+  module SessionLifecycleStatus =
+    let workerPid = function
+      | SessionLifecycleStatus.Starting w
+      | SessionLifecycleStatus.Ready w
+      | SessionLifecycleStatus.Evaluating w -> Some w.Pid
+      | SessionLifecycleStatus.Building(_, w) -> Some w.Pid
+      | SessionLifecycleStatus.Restarting pid -> pid
+      | SessionLifecycleStatus.Faulted _ | SessionLifecycleStatus.Stopped -> None
+
+    let workerPort = function
+      | SessionLifecycleStatus.Starting w
+      | SessionLifecycleStatus.Ready w
+      | SessionLifecycleStatus.Evaluating w -> w.Port
+      | SessionLifecycleStatus.Building(_, w) -> w.Port
+      | SessionLifecycleStatus.Faulted _
+      | SessionLifecycleStatus.Restarting _
+      | SessionLifecycleStatus.Stopped -> None
+
+    let faultReason = function
+      | SessionLifecycleStatus.Faulted reason -> reason
+      | _ -> None
+
+    /// Update the port on a status that carries a worker handle; a no-op on
+    /// any status that doesn't (Faulted/Restarting/Stopped never do).
+    let withWorkerPort (port: int option) = function
+      | SessionLifecycleStatus.Starting w -> SessionLifecycleStatus.Starting { w with Port = port }
+      | SessionLifecycleStatus.Ready w -> SessionLifecycleStatus.Ready { w with Port = port }
+      | SessionLifecycleStatus.Evaluating w -> SessionLifecycleStatus.Evaluating { w with Port = port }
+      | SessionLifecycleStatus.Building(reason, w) -> SessionLifecycleStatus.Building(reason, { w with Port = port })
+      | other -> other
+
+    let label = function
+      | SessionLifecycleStatus.Starting _ -> "Starting"
+      | SessionLifecycleStatus.Ready _ -> "Ready"
+      | SessionLifecycleStatus.Evaluating _ -> "Evaluating"
+      | SessionLifecycleStatus.Building(reason, _) -> sprintf "Building (%s)" reason
+      | SessionLifecycleStatus.Faulted _ -> "Faulted"
+      | SessionLifecycleStatus.Restarting _ -> "Restarting"
+      | SessionLifecycleStatus.Stopped -> "Stopped"
+
+    /// Convert to SessionState for affordance checking.
+    let toSessionState = function
+      | SessionLifecycleStatus.Starting _ -> SessionState.WarmingUp
+      | SessionLifecycleStatus.Ready _ -> SessionState.Ready
+      | SessionLifecycleStatus.Evaluating _ -> SessionState.Evaluating
+      | SessionLifecycleStatus.Building _ -> SessionState.Evaluating
+      | SessionLifecycleStatus.Faulted _ -> SessionState.Faulted
+      | SessionLifecycleStatus.Restarting _ -> SessionState.WarmingUp
+      | SessionLifecycleStatus.Stopped -> SessionState.Faulted
+
+    /// Can accept new work?
+    let isOperational = function
+      | SessionLifecycleStatus.Ready _ -> true
+      | _ -> false
+
+    /// Alive (not stopped or faulted)?
+    let isAlive = function
+      | SessionLifecycleStatus.Starting _ | SessionLifecycleStatus.Ready _
+      | SessionLifecycleStatus.Evaluating _ | SessionLifecycleStatus.Building _
+      | SessionLifecycleStatus.Restarting _ -> true
+      | SessionLifecycleStatus.Faulted _ | SessionLifecycleStatus.Stopped -> false
+
+    /// Reconcile the daemon's own lifecycle status with what the worker
+    /// itself just self-reported (WorkerStatusSnapshot.Status, the simpler
+    /// wire-protocol SessionStatus). The worker's report carries no pid/port
+    /// — it has no notion of how the daemon is tracking it — so those are
+    /// carried over from whatever the daemon currently has recorded.
+    let ofWorkerReport (current: SessionLifecycleStatus) (reported: SessionStatus) : SessionLifecycleStatus =
+      let handle () : WorkerHandle =
+        { Pid = workerPid current |> Option.defaultValue 0
+          Port = workerPort current }
+      match reported with
+      | SessionStatus.Starting -> SessionLifecycleStatus.Starting (handle ())
+      | SessionStatus.Ready -> SessionLifecycleStatus.Ready (handle ())
+      | SessionStatus.Evaluating -> SessionLifecycleStatus.Evaluating (handle ())
+      | SessionStatus.Building reason -> SessionLifecycleStatus.Building (reason, handle ())
+      | SessionStatus.Faulted -> SessionLifecycleStatus.Faulted (faultReason current)
+      | SessionStatus.Restarting -> SessionLifecycleStatus.Restarting (workerPid current)
+      | SessionStatus.Stopped -> SessionLifecycleStatus.Stopped
+
   /// All messages the daemon can send to a worker process.
   [<RequireQualifiedAccess>]
   type WorkerMessage =
@@ -228,12 +338,7 @@ module WorkerProtocol =
     SolutionRoot: string option
     CreatedAt: DateTime
     LastActivity: DateTime
-    Status: SessionStatus
-    FaultReason: string option
-    WorkerPid: int option
-    /// HTTP port the worker process listens on, for DevReload SSE URL wiring.
-    /// None until the worker reports WORKER_PORT= on stdout.
-    WorkerPort: int option
+    Status: SessionLifecycleStatus
     Workflow: WorkflowTypes.SessionWorkflow
     /// The project currently in focus for "Run App" operations.
     ActiveProject: string option

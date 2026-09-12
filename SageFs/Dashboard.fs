@@ -385,7 +385,7 @@ let reconcileViewing
   (current: WorkerProtocol.SessionId option)
   (sessions: WorkerProtocol.SessionInfo list)
   : ViewingDecision =
-  let live = sessions |> List.filter (fun s -> s.Status <> WorkerProtocol.SessionStatus.Stopped)
+  let live = sessions |> List.filter (fun s -> s.Status <> WorkerProtocol.SessionLifecycleStatus.Stopped)
   match current with
   | None -> ViewingDecision.ShowPicker
   | Some sid when live |> List.exists (fun s -> s.Id = sid) -> ViewingDecision.Keep sid

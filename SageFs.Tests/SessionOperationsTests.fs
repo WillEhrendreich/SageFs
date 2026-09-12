@@ -16,10 +16,7 @@ let mkSession (id: SessionId) lastActive (status: SessionStatus) : SessionInfo =
   SolutionRoot = None
   CreatedAt = DateTime(2026, 1, 1)
   LastActivity = lastActive
-  Status = status
-  FaultReason = None
-  WorkerPid = Some 100
-  WorkerPort = None
+  Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 100; Port = None }) status
   Workflow = WorkflowTypes.SessionWorkflow.Interactive
   ActiveProject = None
 
@@ -152,7 +149,15 @@ let describeErrorTests = testList "SageFsError.describe (session errors)" [
 
 let now = DateTime(2026, 2, 14, 12, 0, 0)
 
-let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) pid : SessionInfo = {
+/// A pid of None can only be represented by a status with no worker handle —
+/// Restarting None is the closest analog to the old "Starting with no PID"
+/// fixture, since Starting/Ready/Evaluating/Building now always carry one.
+let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) (pid: int option) : SessionInfo =
+  let newStatus =
+    match pid with
+    | None -> SessionLifecycleStatus.Restarting None
+    | Some p -> SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = p; Port = None }) status
+  {
   Id = id
   Name = None
   Projects = ["Test.fsproj"]
@@ -160,10 +165,7 @@ let mkSessionWithPid (id: SessionId) lastActive (status: SessionStatus) pid : Se
   SolutionRoot = None
   CreatedAt = DateTime(2026, 2, 14, 10, 0, 0)
   LastActivity = lastActive
-  Status = status
-  FaultReason = None
-  WorkerPid = pid
-  WorkerPort = None
+  Status = newStatus
   Workflow = WorkflowTypes.SessionWorkflow.Interactive
   ActiveProject = None
 

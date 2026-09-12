@@ -24,7 +24,7 @@ let tests =
         TargetedVerification.createReport
           { Intent = VerificationIntent.VerifyChangedBehavior ("UserPreferences.loadFromFile", RegressionRisk.LocalizedBehavior)
             NamedGuard = None
-            SessionObservation = observation [ "session-1" ] (Some SessionStatus.Ready) None None
+            SessionObservation = observation [ "session-1" ] (Some (SessionLifecycleStatus.Ready { Pid = 1; Port = None })) None None
             LoadedState = LoadedDefinitionState.ConfirmedCurrent "UserPreferences.fs@v2" }
           None
           None
@@ -38,7 +38,7 @@ let tests =
         TargetedVerification.createReport
           { Intent = VerificationIntent.ExploreBehavior "UserPreferences.loadFromFile"
             NamedGuard = None
-            SessionObservation = observation [ "session-1" ] (Some SessionStatus.Ready) (Some (LoadedDefinitionState.ConfirmedStale ("disk-v2", "loaded-v1"))) None
+            SessionObservation = observation [ "session-1" ] (Some (SessionLifecycleStatus.Ready { Pid = 1; Port = None })) (Some (LoadedDefinitionState.ConfirmedStale ("disk-v2", "loaded-v1"))) None
             LoadedState = LoadedDefinitionState.ConfirmedStale ("disk-v2", "loaded-v1") }
           (Some (SnippetObservation.SnippetPassed "looks green"))
           None
@@ -51,7 +51,7 @@ let tests =
         TargetedVerification.createReport
           { Intent = VerificationIntent.ExploreBehavior "UserPreferences.loadFromFile"
             NamedGuard = None
-            SessionObservation = observation [ "session-1" ] (Some SessionStatus.Ready) None (Some "TypeLoadException")
+            SessionObservation = observation [ "session-1" ] (Some (SessionLifecycleStatus.Ready { Pid = 1; Port = None })) None (Some "TypeLoadException")
             LoadedState = LoadedDefinitionState.ConfirmedCurrent "UserPreferences.fs@v2" }
           None
           None
@@ -64,7 +64,7 @@ let tests =
         TargetedVerification.createReport
           { Intent = VerificationIntent.VerifyChangedBehavior ("UserPreferences.loadFromFile", RegressionRisk.SharedContract)
             NamedGuard = Some guard
-            SessionObservation = observation [ "session-1" ] (Some SessionStatus.Ready) None None
+            SessionObservation = observation [ "session-1" ] (Some (SessionLifecycleStatus.Ready { Pid = 1; Port = None })) None None
             LoadedState = LoadedDefinitionState.ConfirmedCurrent "UserPreferences.fs@v2" }
           None
           None

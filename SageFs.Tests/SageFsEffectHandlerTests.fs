@@ -53,10 +53,7 @@ module TestDeps =
       SolutionRoot = None
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
-      Status = SessionStatus.Ready
-      FaultReason = None
-      WorkerPid = Some 999
-      WorkerPort = None
+      Status = SessionLifecycleStatus.Ready { Pid = 999; Port = None }
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
@@ -132,10 +129,7 @@ module TestDeps =
             SolutionRoot = None
             CreatedAt = DateTime.UtcNow
             LastActivity = DateTime.UtcNow
-            Status = SessionStatus.Starting
-            FaultReason = None
-            WorkerPid = None
-            WorkerPort = None
+            Status = SessionLifecycleStatus.Starting { Pid = 0; Port = None }
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             ActiveProject = None
             ProjectRoles = []
@@ -536,10 +530,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       SolutionRoot = None
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
-      Status = status
-      FaultReason = None
-      WorkerPid = Some 999
-      WorkerPort = None
+      Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 999; Port = None }) status
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
@@ -633,10 +624,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       SolutionRoot = None
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
-      Status = status
-      FaultReason = None
-      WorkerPid = Some 999
-      WorkerPort = None
+      Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 999; Port = None }) status
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
@@ -730,10 +718,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       SolutionRoot = None
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
-      Status = status
-      FaultReason = None
-      WorkerPid = Some 999
-      WorkerPort = None
+      Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 999; Port = None }) status
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
@@ -821,10 +806,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       SolutionRoot = None
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
-      Status = status
-      FaultReason = None
-      WorkerPid = Some 999
-      WorkerPort = None
+      Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 999; Port = None }) status
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
@@ -918,10 +900,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       SolutionRoot = None
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
-      Status = status
-      FaultReason = None
-      WorkerPid = Some 999
-      WorkerPort = None
+      Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 999; Port = None }) status
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
@@ -1041,10 +1020,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       SolutionRoot = None
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
-      Status = status
-      FaultReason = None
-      WorkerPid = Some 999
-      WorkerPort = None
+      Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 999; Port = None }) status
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
@@ -1142,10 +1118,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       SolutionRoot = None
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
-      Status = status
-      FaultReason = None
-      WorkerPid = Some 999
-      WorkerPort = None
+      Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 999; Port = None }) status
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
@@ -1350,9 +1323,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
       Id = testSessionId "00000001"; Name = None; Projects = ["Proj.fsproj"]
       WorkingDirectory = "/code"; SolutionRoot = None
       CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-      Status = SessionStatus.Ready; WorkerPid = Some 42
-      WorkerPort = None
-      FaultReason = None
+      Status = SessionLifecycleStatus.Ready { Pid = 42; Port = None }
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
       ProjectRoles = []
@@ -1424,9 +1395,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         return [{ Id = testSessionId "00000002"; Name = None; Projects = ["T.fsproj"]
                   WorkingDirectory = "."; SolutionRoot = None
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-                  Status = SessionStatus.Ready; WorkerPid = Some 1
-                  WorkerPort = None
-                  FaultReason = None
+                  Status = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive
                   ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }]
       }
@@ -1467,9 +1436,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
         return [{ Id = testSessionId "00000003"; Name = None; Projects = ["T.fsproj"]
                   WorkingDirectory = "."; SolutionRoot = None
                   CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-                  Status = SessionStatus.Starting; WorkerPid = None
-                  WorkerPort = None
-                  FaultReason = None
+                  Status = SessionLifecycleStatus.Starting { Pid = 0; Port = None }
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive
                   ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }]
       }

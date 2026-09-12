@@ -614,7 +614,7 @@ process-wide kill switch for hot reload.""")>]
                        | Ok s -> s
                        | Error _ -> SageFs.WorkerProtocol.SessionId.newId ()
             let! infoOpt = ctx.SessionOps.GetSessionInfo sid
-            let workerPort = infoOpt |> Option.bind (fun i -> i.WorkerPort) |> Option.defaultValue 0
+            let workerPort = infoOpt |> Option.bind (fun i -> SageFs.WorkerProtocol.SessionLifecycleStatus.workerPort i.Status) |> Option.defaultValue 0
             if disabledByEnvVar then
                 SageFs.DevReload.DevReloadHealthTracker.transition SageFs.DevReload.Disabled
                 return resultJson false workerPort "Disabled (SAGEFS_DEVRELOAD env var)" true

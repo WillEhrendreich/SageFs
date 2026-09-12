@@ -369,10 +369,7 @@ let workerProtocolTests =
           SolutionRoot = Some @"C:\Code\Repos\SageFs"
           CreatedAt = DateTime(2026, 1, 1)
           LastActivity = DateTime(2026, 1, 1)
-          Status = SessionStatus.Ready
-          FaultReason = None
-          WorkerPid = Some 1234
-          WorkerPort = None
+          Status = SessionLifecycleStatus.Ready { Pid = 1234; Port = None }
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           ActiveProject = None
 
@@ -394,10 +391,7 @@ let workerProtocolTests =
           SolutionRoot = None
           CreatedAt = DateTime(2026, 1, 1)
           LastActivity = DateTime(2026, 1, 1)
-          Status = SessionStatus.Ready
-          FaultReason = None
-          WorkerPid = None
-          WorkerPort = None
+          Status = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           ActiveProject = None
 
@@ -454,10 +448,7 @@ let workerProtocolTests =
           SolutionRoot = Some @"C:\Code\Repos\Test"
           CreatedAt = DateTime(2026, 2, 13, 12, 0, 0)
           LastActivity = DateTime(2026, 2, 13, 12, 30, 0)
-          Status = SessionStatus.Evaluating
-          FaultReason = None
-          WorkerPid = Some 5678
-          WorkerPort = None
+          Status = SessionLifecycleStatus.Evaluating { Pid = 5678; Port = None }
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           ActiveProject = None
 

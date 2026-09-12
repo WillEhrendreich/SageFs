@@ -1417,12 +1417,12 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
     } :> Task
   ) |> ignore
 
-let fallbackSessionStatusLabel (status: SageFs.WorkerProtocol.SessionStatus) =
+let fallbackSessionStatusLabel (status: SageFs.WorkerProtocol.SessionLifecycleStatus) =
   match status with
-  | SageFs.WorkerProtocol.SessionStatus.Starting -> "Starting"
-  | SageFs.WorkerProtocol.SessionStatus.Restarting -> "Restarting"
-  | SageFs.WorkerProtocol.SessionStatus.Faulted -> "Faulted"
-  | SageFs.WorkerProtocol.SessionStatus.Stopped -> "Stopped"
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Starting _ -> "Starting"
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Restarting _ -> "Restarting"
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted _ -> "Faulted"
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Stopped -> "Stopped"
   | _ -> "Disconnected"
 
 let resolveSessionStatusLabel
@@ -1501,9 +1501,9 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
               {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
                  projectName = projectName
                  status = statusLabel
-                 faultReason = sess.FaultReason
+                 faultReason = SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status
                  workingDirectory = sess.WorkingDirectory
-                 workerPid = sess.WorkerPid
+                 workerPid = SageFs.WorkerProtocol.SessionLifecycleStatus.workerPid sess.Status
                  lastActivity = lastActivity
                  workflowLabel = SageFs.WorkflowTypes.SessionWorkflow.label sess.Workflow |}
             return summary, payload
@@ -1717,7 +1717,7 @@ let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
           float snap.MinDurationMs,
           float snap.MaxDurationMs
         | _ ->
-          info |> Option.map (fun i -> SageFs.WorkerProtocol.SessionStatus.label i.Status) |> Option.defaultValue "Unknown",
+          info |> Option.map (fun i -> SageFs.WorkerProtocol.SessionLifecycleStatus.label i.Status) |> Option.defaultValue "Unknown",
           0, 0.0, 0.0, 0.0
       let workingDir =
         info |> Option.map (fun i -> i.WorkingDirectory) |> Option.defaultValue ""
@@ -1804,7 +1804,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         results.Add(
           {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
              status = status
-             faultReason = sess.FaultReason
+             faultReason = SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status
              projects = sess.Projects
              workingDirectory = sess.WorkingDirectory
              evalCount = evalCount

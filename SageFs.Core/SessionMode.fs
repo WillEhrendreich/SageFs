@@ -23,7 +23,7 @@ type SessionManagementOps = {
   GetAllSessions: unit -> Task<SessionInfo list>
   /// Update the daemon-side snapshot status for an existing session.
   /// Used when the worker changes phase without a full process restart.
-  UpdateSessionStatus: SessionId -> SessionStatus -> Task<unit>
+  UpdateSessionStatus: SessionId -> SessionLifecycleStatus -> Task<unit>
   /// Notify that a worker died unexpectedly (pipe broken mid-request).
   /// Closes the race window between pipe failure and proc.Exited event firing.
   NotifyWorkerDied: SessionId -> unit

@@ -300,7 +300,7 @@ module SessionOperations =
     let projects = info.Projects |> String.concat ", "
     let lastActive = formatRelativeTime now info.LastActivity
     let pid =
-      match info.WorkerPid with
+      match SessionLifecycleStatus.workerPid info.Status with
       | Some p -> sprintf "(PID %d)" p
       | None -> "(no PID)"
     let occLabel =
@@ -308,7 +308,7 @@ module SessionOperations =
       | Some occs -> sprintf "  Occupancy: %s" (SessionOccupancy.format occs)
       | None -> ""
     sprintf "%s  %s  %s  %s  %s\n  Started: %s  Last active: %s  Projects: %s%s"
-      (SessionId.value info.Id) name info.WorkingDirectory (SessionStatus.label info.Status) pid
+      (SessionId.value info.Id) name info.WorkingDirectory (SessionLifecycleStatus.label info.Status) pid
       (info.CreatedAt.ToString("yyyy-MM-dd HH:mm"))
       lastActive
       projects

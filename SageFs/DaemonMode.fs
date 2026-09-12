@@ -327,7 +327,7 @@ let createSessionOps
       task { return SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) }
     GetAllSessions = fun () ->
       task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
-    UpdateSessionStatus = fun sessionId status ->
+    UpdateSessionStatus = fun sessionId (status: WorkerProtocol.SessionLifecycleStatus) ->
       task {
         sessionManager.Post(
           SessionManager.SessionCommand.UpdateSessionStatus(sessionId, status))
@@ -478,7 +478,7 @@ let logManifestCommit (log: ILogger) (level: LogLevel) (what: string) (result: F
 let getSessionStateFromSnapshot (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: WorkerProtocol.SessionId) =
   let snapshot = readSnapshot()
   match SessionManager.QuerySnapshot.tryGetSession sid snapshot with
-  | Some info -> WorkerProtocol.SessionStatus.toSessionState info.Status
+  | Some info -> WorkerProtocol.SessionLifecycleStatus.toSessionState info.Status
   | None -> SessionState.Uninitialized
 
 /// Get working directory for a session from CQRS snapshot.
@@ -2277,7 +2277,7 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
       // workers behind when graceful shutdown is delayed or wedged.
       readSnapshot()
       |> SessionManager.QuerySnapshot.allSessions
-      |> List.choose (fun session -> session.WorkerPid)
+      |> List.choose (fun session -> WorkerProtocol.SessionLifecycleStatus.workerPid session.Status)
       |> SessionManager.killWorkerPids
       Environment.Exit(1)) |> ignore
     try cts.Cancel() with :? ObjectDisposedException -> ())
@@ -2291,7 +2291,7 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
     // primary defense for hard kills that skip ProcessExit entirely.
     readSnapshot()
     |> SessionManager.QuerySnapshot.allSessions
-    |> List.choose (fun session -> session.WorkerPid)
+    |> List.choose (fun session -> WorkerProtocol.SessionLifecycleStatus.workerPid session.Status)
     |> SessionManager.killWorkerPids)
 
   // Start MCP and dashboard servers FIRST so ports are listening

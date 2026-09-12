@@ -40,10 +40,7 @@ let tests =
                    Projects = []
                    WorkingDirectory = ""
                    SolutionRoot = None
-                   Status = WorkerProtocol.SessionStatus.Ready
-                   FaultReason = None
-                   WorkerPid = None
-                   WorkerPort = None
+                   Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None }
                    Workflow = WorkflowTypes.SessionWorkflow.Interactive
                    CreatedAt = DateTime.UtcNow
                    LastActivity = DateTime.UtcNow

@@ -29,10 +29,7 @@ let private mkCtxWithWorkerResponse (workerResponse: WorkerProtocol.WorkerRespon
                Projects = []
                WorkingDirectory = ""
                SolutionRoot = None
-               Status = WorkerProtocol.SessionStatus.Ready
-               FaultReason = None
-               WorkerPid = Some 4242
-               WorkerPort = None
+               Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 4242; Port = None }
                Workflow = WorkflowTypes.SessionWorkflow.Interactive
                CreatedAt = DateTime.UtcNow
                LastActivity = DateTime.UtcNow

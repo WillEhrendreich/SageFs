@@ -102,8 +102,12 @@ let private getManagedSession (harness: Harness) sessionId =
   | None -> failtestf "expected session %s to exist" (SessionId.value sessionId)
 
 let private getWorkerPid (session: ManagedSession) =
-  session.Info.WorkerPid
+  SessionLifecycleStatus.workerPid session.Info.Status
   |> Option.defaultWith (fun () -> failtest "expected worker pid")
+
+let private isReady = function SessionLifecycleStatus.Ready _ -> true | _ -> false
+let private isRestarting = function SessionLifecycleStatus.Restarting _ -> true | _ -> false
+let private isFaulted = function SessionLifecycleStatus.Faulted _ -> true | _ -> false
 
 /// A proxy that reports Ready on status probe — simulates a live worker.
 let private readyProxy =
@@ -140,7 +144,7 @@ let private makeSessionReady (harness: Harness) (info: SessionInfo) =
   // Ready after the valid transport is installed.
   harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
   |> ignore
-  harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionStatus.Ready))
+  harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionLifecycleStatus.Ready { Pid = pid; Port = Some 4123 }))
   harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
   |> ignore
 
@@ -161,7 +165,7 @@ let sessionManagerSpawnFirstRestartTests =
         |> Expect.equal "becoming ready must not spawn a standby worker" 1
 
         let session = getManagedSession harness info.Id
-        session.Info.Status |> Expect.equal "session stays ready" SessionStatus.Ready
+        session.Info.Status |> isReady |> Expect.isTrue "session stays ready"
 
     testCase "T2 — non-rebuild hard reset spawns the replacement before stopping the old worker" <| fun _ ->
       let runtime =
@@ -189,7 +193,8 @@ let sessionManagerSpawnFirstRestartTests =
         // continuity — never a missing-session window).
         let session = getManagedSession harness info.Id
         session.Info.Status
-        |> Expect.equal "session stays registered as Restarting during the swap" SessionStatus.Restarting
+        |> isRestarting
+        |> Expect.isTrue "session stays registered as Restarting during the swap"
 
     testCase "T3 — non-rebuild hard reset with a spawn failure leaves the session Ready and serving" <| fun _ ->
       let runtime =
@@ -215,8 +220,8 @@ let sessionManagerSpawnFirstRestartTests =
 
         let session = getManagedSession harness info.Id
         session.Info.Status
-        |> Expect.equal "spawn failure must leave the session Ready (old worker still serving)" SessionStatus.Ready
-        session.Info.WorkerPid
+        |> Expect.equal "spawn failure must leave the session Ready (old worker still serving)" (SessionLifecycleStatus.Ready { Pid = originalPid; Port = Some 4123 })
+        SessionLifecycleStatus.workerPid session.Info.Status
         |> Expect.equal "spawn failure must not change the worker pid" (Some originalPid)
 
         // The failed spawn attempt did call StartWorkerProcess, but the old
@@ -246,7 +251,8 @@ let sessionManagerSpawnFirstRestartTests =
         |> Expect.equal "rebuild restart runs one build" 1
         let session = getManagedSession harness info.Id
         session.Info.Status
-        |> Expect.equal "the swap is in progress" SessionStatus.Restarting
+        |> isRestarting
+        |> Expect.isTrue "the swap is in progress"
 
     testCase "T4b — a failed rebuild leaves the session Ready on its running worker because a compile error must not kill a working session" <| fun _ ->
       let runtime =
@@ -265,8 +271,8 @@ let sessionManagerSpawnFirstRestartTests =
         | other -> failtestf "expected BuildFailed, got %A" other
 
         let session = getManagedSession harness info.Id
-        session.Info.Status |> Expect.equal "the session keeps serving" SessionStatus.Ready
-        session.Info.WorkerPid |> Expect.equal "on the same worker" (Some originalPid)
+        session.Info.Status |> Expect.equal "the session keeps serving" (SessionLifecycleStatus.Ready { Pid = originalPid; Port = Some 4123 })
+        SessionLifecycleStatus.workerPid session.Info.Status |> Expect.equal "on the same worker" (Some originalPid)
         runtime.Verbs |> Seq.toList
         |> Expect.equal "the running worker is never stopped and nothing is spawned" [ Verb.Start; Verb.Build ]
         harness.FaultedEvents |> Seq.length
@@ -299,7 +305,8 @@ let sessionManagerSpawnFirstRestartTests =
 
         let session = getManagedSession harness info.Id
         session.Info.Status
-        |> Expect.notEqual "retired worker exit must not tombstone or remove the session" SessionStatus.Faulted
+        |> isFaulted
+        |> Expect.isFalse "retired worker exit must not tombstone or remove the session"
 
         // The session should still be present and eventually complete when the
         // new worker reports ready.
@@ -344,8 +351,8 @@ let sessionManagerSpawnFirstRestartTests =
 
         let session = getManagedSession harness info.Id
         session.Info.Status
-        |> Expect.equal "spawn failure during swap must revert to the old Ready worker" SessionStatus.Ready
-        session.Info.WorkerPid
+        |> Expect.equal "spawn failure during swap must revert to the old Ready worker" (SessionLifecycleStatus.Ready { Pid = oldPid; Port = Some 4123 })
+        SessionLifecycleStatus.workerPid session.Info.Status
         |> Expect.equal "revert must restore the old worker pid" (Some oldPid)
         harness.FaultedEvents |> Seq.length
         |> Expect.equal "revert must not fire a fault callback" 0
@@ -387,7 +394,7 @@ let sessionManagerSpawnFirstRestartTests =
         |> ignore
 
         let session = getManagedSession harness info.Id
-        session.Info.WorkerPid
+        SessionLifecycleStatus.workerPid session.Info.Status
         |> Expect.equal "ready must commit the new worker pid" (Some otherProcess.Id)
 
         runtime.Verbs |> Seq.toList
@@ -438,10 +445,11 @@ let sessionManagerSpawnFirstRestartTests =
         |> ignore
 
         let sessionAfterStale = getManagedSession harness info.Id
-        sessionAfterStale.Info.WorkerPid
+        SessionLifecycleStatus.workerPid sessionAfterStale.Info.Status
         |> Expect.equal "stale ready must not overwrite the registered old pid mid-swap" (Some oldPid)
         sessionAfterStale.Info.Status
-        |> Expect.equal "stale ready must not flip the session out of Restarting" SessionStatus.Restarting
+        |> isRestarting
+        |> Expect.isTrue "stale ready must not flip the session out of Restarting"
 
         // The NEW worker's ready still commits the swap normally.
         harness.Mailbox.Post(
@@ -454,17 +462,18 @@ let sessionManagerSpawnFirstRestartTests =
         |> ignore
 
         let session = getManagedSession harness info.Id
-        session.Info.WorkerPid
+        SessionLifecycleStatus.workerPid session.Info.Status
         |> Expect.equal "the new worker's ready must still commit the swap" (Some otherProcess.Id)
 
         // Mirror the worker ready-poll: once the swap commits, the poll probes
         // the new worker and flips the registry to Ready.
-        harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionStatus.Ready))
+        harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionLifecycleStatus.Ready { Pid = otherProcess.Id; Port = Some 4124 }))
         harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
         |> ignore
         let sessionReady = getManagedSession harness info.Id
         sessionReady.Info.Status
-        |> Expect.equal "session must return to Ready after the swap commits" SessionStatus.Ready
+        |> isReady
+        |> Expect.isTrue "session must return to Ready after the swap commits"
   ]
 
 [<Tests>]
@@ -499,7 +508,7 @@ let sessionManagerProjectRolesTests =
         let! session = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
         let pid =
           session
-          |> Option.bind (fun s -> s.Info.WorkerPid)
+          |> Option.bind (fun s -> SessionLifecycleStatus.workerPid s.Info.Status)
           |> Option.defaultWith (fun () -> failtest "expected worker pid")
         mailbox.Post(SessionCommand.WorkerReady(info.Id, pid, "http://localhost:4123", proxy))
         let deadline = System.DateTime.UtcNow.AddSeconds 10.0
@@ -536,7 +545,8 @@ let sessionManagerStaleReadyReportTests =
         | Error err -> failtestf "switch failed: %s" (SageFsError.describe err)
         harness.Mailbox.Post(SessionCommand.WorkerReportedReady(info.Id, oldPid, []))
         (getManagedSession harness info.Id).Info.Status
-        |> Expect.equal "the swap is still waiting for the new worker" SessionStatus.Restarting
+        |> isRestarting
+        |> Expect.isTrue "the swap is still waiting for the new worker"
   ]
 
 [<Tests>]
@@ -596,15 +606,15 @@ let workerFaultReportTests =
         let! session = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
         let pid =
           session
-          |> Option.bind (fun s -> s.Info.WorkerPid)
+          |> Option.bind (fun s -> SessionLifecycleStatus.workerPid s.Info.Status)
           |> Option.defaultWith (fun () -> failtest "expected worker pid")
         mailbox.Post(SessionCommand.WorkerReady(info.Id, pid, "http://localhost:4123", proxy))
         let deadline = System.DateTime.UtcNow.AddSeconds 10.0
         let rec faultReason () =
           task {
             let! current = mailbox.PostAndAsyncReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
-            match current |> Option.map (fun s -> s.Info.Status, s.Info.FaultReason), System.DateTime.UtcNow > deadline with
-            | Some (SessionStatus.Faulted, why), _ -> return why
+            match current |> Option.map (fun s -> s.Info.Status), System.DateTime.UtcNow > deadline with
+            | Some (SessionLifecycleStatus.Faulted why), _ -> return why
             | _, true -> return failtest "the session never became Faulted"
             | _, false ->
               do! System.Threading.Tasks.Task.Delay 50

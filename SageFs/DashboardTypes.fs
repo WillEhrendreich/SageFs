@@ -507,14 +507,14 @@ let sessionCardOf
   (evalCount: int)
   (info: WorkerProtocol.SessionInfo)
   : ParsedSession =
-  let status = WorkerProtocol.SessionStatus.toSessionState info.Status |> SessionDisplayStatus.ofSessionState
+  let status = WorkerProtocol.SessionLifecycleStatus.toSessionState info.Status |> SessionDisplayStatus.ofSessionState
   { Id = info.Id
     Status = status
     StatusMessage =
       match status with
       | SessionDisplayStatus.Starting -> warmupProgress
       | SessionDisplayStatus.Faulted
-      | SessionDisplayStatus.Lost -> info.FaultReason
+      | SessionDisplayStatus.Lost -> WorkerProtocol.SessionLifecycleStatus.faultReason info.Status
       | SessionDisplayStatus.Running
       | SessionDisplayStatus.Stopped -> None
     ProjectsText =
@@ -548,7 +548,7 @@ let liveSessionCards
   (sessions: WorkerProtocol.SessionInfo list)
   : ParsedSession list =
   sessions
-  |> List.filter (fun s -> s.Status <> WorkerProtocol.SessionStatus.Stopped)
+  |> List.filter (fun s -> s.Status <> WorkerProtocol.SessionLifecycleStatus.Stopped)
   |> List.map (fun s ->
     let evals = evalCounts |> Map.tryFind s.Id |> Option.defaultValue 0
     sessionCardOf now (warmupProgress s.Id) evals s)

@@ -15,13 +15,13 @@ let private info (i: int) (status: WorkerProtocol.SessionStatus) : WorkerProtoco
     |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
   { Id = sid; Name = None; Projects = []; WorkingDirectory = "/w"; SolutionRoot = None
     CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
-    Status = status; FaultReason = None; WorkerPid = None; WorkerPort = None
+    Status = WorkerProtocol.SessionLifecycleStatus.ofWorkerReport (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None }) status
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning }
 
 let private ready i = info i WorkerProtocol.SessionStatus.Ready
 
-let private isLive (s: WorkerProtocol.SessionInfo) = s.Status <> WorkerProtocol.SessionStatus.Stopped
+let private isLive (s: WorkerProtocol.SessionInfo) = s.Status <> WorkerProtocol.SessionLifecycleStatus.Stopped
 
 [<Tests>]
 let tests = testList "Dashboard viewing reconcile" [

@@ -9,7 +9,7 @@ open SageFs.Tests.SharedGenerators
 
 let now = DateTime(2026, 2, 14, 12, 0, 0)
 
-let mkInfo (id: SessionId) status lastActive : SessionInfo =
+let mkInfo (id: SessionId) (status: SessionStatus) lastActive : SessionInfo =
   { Id = id
     Name = None
     Projects = ["Test.fsproj"]
@@ -17,10 +17,7 @@ let mkInfo (id: SessionId) status lastActive : SessionInfo =
     SolutionRoot = None
     CreatedAt = DateTime(2026, 2, 14, 10, 0, 0)
     LastActivity = lastActive
-    Status = status
-    FaultReason = None
-    WorkerPid = Some 1234
-    WorkerPort = None
+    Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 1234; Port = None }) status
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []

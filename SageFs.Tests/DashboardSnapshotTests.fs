@@ -591,10 +591,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         SolutionRoot = None
         CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
-        Status = WorkerProtocol.SessionStatus.Ready
-        FaultReason = None
-        WorkerPid = None
-        WorkerPort = None
+        Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None }
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         ActiveProject = None
         ProjectRoles = []

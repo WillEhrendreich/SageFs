@@ -18,10 +18,10 @@ open SageFs.WorkerProtocol
 let private newReplyId () = Guid.NewGuid().ToString("N").Substring(0, 8)
 
 /// What must happen before the entry point can start, given where the session is.
-let startPhaseFor (status: SessionStatus) (workflow: WorkflowTypes.SessionWorkflow) : StartPhase =
+let startPhaseFor (status: SessionLifecycleStatus) (workflow: WorkflowTypes.SessionWorkflow) : StartPhase =
   match status, workflow with
   // No worker (its last build failed, or it was stopped): Run rebuilds it first.
-  | (SessionStatus.Faulted | SessionStatus.Stopped), _ -> StartPhase.RebuildingSession
+  | (SessionLifecycleStatus.Faulted _ | SessionLifecycleStatus.Stopped), _ -> StartPhase.RebuildingSession
   | _, WorkflowTypes.SessionWorkflow.WebLive _ -> StartPhase.LaunchingEntryPoint
   | _, WorkflowTypes.SessionWorkflow.Interactive -> StartPhase.RestartingIntoWebLive
 

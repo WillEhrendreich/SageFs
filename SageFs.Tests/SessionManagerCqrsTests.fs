@@ -26,10 +26,7 @@ let mkSessionInfo (id: SessionId) status =
     SolutionRoot = None
     CreatedAt = DateTime.MinValue
     LastActivity = DateTime.MinValue
-    Status = status
-    FaultReason = None
-    WorkerPid = None
-    WorkerPort = None
+    Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 100; Port = None }) status
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
 
@@ -227,7 +224,7 @@ let querySnapshotTests = testList "QuerySnapshot projection" [
     let result = QuerySnapshot.tryGetSession idX snap
     result |> Expect.isSome "should find session"
     (result |> Option.get).Status
-    |> Expect.equal "status is Ready" SessionStatus.Ready
+    |> Expect.equal "status is Ready" (SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 100; Port = None }) SessionStatus.Ready)
   }
 
   test "tryGetSession returns None for missing session" {
@@ -406,7 +403,7 @@ let snapshotDashboardTests = testList "Snapshot dashboard helpers" [
     let info = QuerySnapshot.tryGetSession idS1 snap
     let sessionState =
       info
-      |> Option.map (fun i -> SessionStatus.toSessionState i.Status)
+      |> Option.map (fun i -> SessionLifecycleStatus.toSessionState i.Status)
       |> Option.defaultValue SessionState.Uninitialized
     sessionState |> Expect.equal "should be Ready" SessionState.Ready
   }

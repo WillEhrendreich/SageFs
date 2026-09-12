@@ -292,10 +292,7 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
           Projects = []
           WorkingDirectory = ""
           SolutionRoot = None
-          Status = SageFs.WorkerProtocol.SessionStatus.Ready
-          FaultReason = None
-          WorkerPid = None
-          WorkerPort = None
+          Status = SageFs.WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None }
           Workflow = SessionWorkflow.Interactive
           CreatedAt = System.DateTime.UtcNow
           LastActivity = System.DateTime.UtcNow

@@ -116,17 +116,18 @@ let sessionLifecycleTests = testList "SessionLifecycle" [
 
   testList "statusAfterExit" [
     test "Graceful maps to Stopped" {
-      SessionLifecycle.statusAfterExit SessionLifecycle.ExitOutcome.Graceful
-      |> Expect.equal "stopped" SessionStatus.Stopped
+      SessionLifecycle.statusAfterExit None SessionLifecycle.ExitOutcome.Graceful
+      |> Expect.equal "stopped" SessionLifecycleStatus.Stopped
     }
-    test "RestartAfter maps to Restarting" {
+    test "RestartAfter maps to Restarting, keeping the exited worker's pid to guard against its late events" {
       SessionLifecycle.statusAfterExit
+        (Some 4242)
         (SessionLifecycle.ExitOutcome.RestartAfter(TimeSpan.FromSeconds 1.0, RestartPolicy.emptyState))
-      |> Expect.equal "restarting" SessionStatus.Restarting
+      |> Expect.equal "restarting" (SessionLifecycleStatus.Restarting (Some 4242))
     }
-    test "Abandoned maps to Faulted" {
-      SessionLifecycle.statusAfterExit (SessionLifecycle.ExitOutcome.Abandoned SageFsError.PipeClosed)
-      |> Expect.equal "faulted" SessionStatus.Faulted
+    test "Abandoned maps to Faulted with the abandonment's own reason" {
+      SessionLifecycle.statusAfterExit None (SessionLifecycle.ExitOutcome.Abandoned SageFsError.PipeClosed)
+      |> Expect.equal "faulted" (SessionLifecycleStatus.Faulted (Some (SageFsError.describe SageFsError.PipeClosed)))
     }
   ]
 ]

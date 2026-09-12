@@ -55,10 +55,7 @@ let managerStateTests =
         SolutionRoot = None
         CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
-        Status = SessionStatus.Ready
-        FaultReason = None
-        WorkerPid = Some 1234
-        WorkerPort = None
+        Status = SessionLifecycleStatus.Ready { Pid = 1234; Port = None }
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         ActiveProject = None
 
@@ -99,10 +96,7 @@ let managerStateTests =
         SolutionRoot = None
         CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
-        Status = SessionStatus.Ready
-        FaultReason = None
-        WorkerPid = None
-        WorkerPort = None
+        Status = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         ActiveProject = None
 
@@ -144,10 +138,7 @@ let managerStateTests =
           SolutionRoot = None
           CreatedAt = DateTime.UtcNow
           LastActivity = DateTime.UtcNow
-          Status = SessionStatus.Ready
-          FaultReason = None
-          WorkerPid = None
-          WorkerPort = None
+          Status = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           ActiveProject = None
 
@@ -368,7 +359,7 @@ let sessionManagerLifecycleTests =
       try
         SessionId.value info.Id
         |> Expect.isNotNull "has session id"
-        info.WorkerPid
+        SessionLifecycleStatus.workerPid info.Status
         |> Expect.isSome "has worker PID"
 
         // CreateSession answers at spawn; the proxy is routable only once the
@@ -444,14 +435,14 @@ let sessionManagerLifecycleTests =
       | Error err -> failwithf "create failed: %s" (SageFsError.describe err)
       | Ok info ->
       try
-        info.WorkerPid |> Expect.isSome "has worker PID"
+        SessionLifecycleStatus.workerPid info.Status |> Expect.isSome "has worker PID"
         // A crash means a worker that was serving: wait for Ready first.
         let! (ready: Result<unit, SageFsError>) =
           mgr.PostAndAsyncReply(fun reply ->
             SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
           |> Async.StartAsTask
         ready |> Expect.isOk "the worker reaches Ready before it is killed"
-        let pid = info.WorkerPid.Value
+        let pid = (SessionLifecycleStatus.workerPid info.Status).Value
 
         // Kill the worker process externally
         try
@@ -472,7 +463,7 @@ let sessionManagerLifecycleTests =
           restartedPid <-
             sessions
             |> List.tryFind (fun s -> s.Id = info.Id)
-            |> Option.bind (fun s -> s.WorkerPid)
+            |> Option.bind (fun s -> SessionLifecycleStatus.workerPid s.Status)
             |> Option.filter (fun p -> p <> pid)
           if restartedPid.IsNone then do! System.Threading.Tasks.Task.Delay 100
 
@@ -510,13 +501,13 @@ let sessionManagerLifecycleTests =
           |> Expect.notEqual "different session ids" info2.Id
 
           // Both have different worker PIDs
-          info1.WorkerPid
+          SessionLifecycleStatus.workerPid info1.Status
           |> Expect.isSome "session 1 has PID"
-          info2.WorkerPid
+          SessionLifecycleStatus.workerPid info2.Status
           |> Expect.isSome "session 2 has PID"
-          info1.WorkerPid.Value
+          (SessionLifecycleStatus.workerPid info1.Status).Value
           |> Expect.notEqual "different PIDs"
-            info2.WorkerPid.Value
+            (SessionLifecycleStatus.workerPid info2.Status).Value
 
           // Proxies are routable only once each worker reports Ready.
           for id in [ info1.Id; info2.Id ] do

@@ -20,10 +20,7 @@ let private mkSessionInfo status =
     SolutionRoot = Some @"C:\Code\Repos\SageFs"
     CreatedAt = DateTime.UtcNow
     LastActivity = DateTime.UtcNow
-    Status = status
-    FaultReason = None
-    WorkerPid = None
-    WorkerPort = None
+    Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 1; Port = None }) status
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     ActiveProject = None
     ProjectRoles = []

@@ -38,20 +38,20 @@ let sessionLifecycleMutationTests = testList "SessionLifecycle mutations" [
   // ── statusAfterExit ───────────────────────────────────────────────────────
 
   testCase "WHY — statusAfterExit_Graceful_must_be_Stopped — clean exit means stopped" <| fun () ->
-    let real = SessionLifecycle.statusAfterExit SessionLifecycle.ExitOutcome.Graceful
-    let mutant = SessionStatus.Restarting  // mutant: wrong status
+    let real = SessionLifecycle.statusAfterExit None SessionLifecycle.ExitOutcome.Graceful
+    let mutant = SessionLifecycleStatus.Restarting None  // mutant: wrong status
     if real = mutant then
       failwith "Mutation survived — statusAfterExit mapped Graceful to Restarting"
 
   testCase "WHY — statusAfterExit_RestartAfter_must_be_Restarting — restart decision means restarting" <| fun () ->
-    let real = SessionLifecycle.statusAfterExit (SessionLifecycle.ExitOutcome.RestartAfter (TimeSpan.FromSeconds(1.0), state0))
-    let mutant = SessionStatus.Stopped  // mutant: wrong status
+    let real = SessionLifecycle.statusAfterExit (Some 4242) (SessionLifecycle.ExitOutcome.RestartAfter (TimeSpan.FromSeconds(1.0), state0))
+    let mutant = SessionLifecycleStatus.Stopped  // mutant: wrong status
     if real = mutant then
       failwith "Mutation survived — statusAfterExit mapped RestartAfter to Stopped"
 
   testCase "WHY — statusAfterExit_Abandoned_must_be_Faulted — give-up means faulted" <| fun () ->
-    let real = SessionLifecycle.statusAfterExit (SessionLifecycle.ExitOutcome.Abandoned (SageFsError.RestartLimitExceeded(5, 5.0)))
-    let mutant = SessionStatus.Stopped  // mutant: wrong status
+    let real = SessionLifecycle.statusAfterExit None (SessionLifecycle.ExitOutcome.Abandoned (SageFsError.RestartLimitExceeded(5, 5.0)))
+    let mutant = SessionLifecycleStatus.Stopped  // mutant: wrong status
     if real = mutant then
       failwith "Mutation survived — statusAfterExit mapped Abandoned to Stopped"
 

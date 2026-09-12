@@ -93,7 +93,7 @@ module SessionManager =
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
     | WorkerWarmupProgress of SessionId * progress: string
-    | UpdateSessionStatus of SessionId * WorkerProtocol.SessionStatus
+    | UpdateSessionStatus of SessionId * WorkerProtocol.SessionLifecycleStatus
     /// A worker's ready poll saw Ready; it carries the worker's pid and its classified projects.
     | WorkerReportedReady of SessionId * workerPid: int * ClassifiedProject list
     /// A worker's ready poll saw it fault during warmup, with the worker's own reason.
@@ -582,9 +582,7 @@ module SessionManager =
         WorkerBaseUrl = ""
         Info =
           { session.Info with
-              Status = SessionStatus.Faulted
-              FaultReason = reason
-              WorkerPid = None
+              Status = SessionLifecycleStatus.Faulted reason
               LastActivity = DateTime.UtcNow } }
 
   let internal defaultRuntime = {
@@ -606,6 +604,7 @@ module SessionManager =
     (onWarmupProgress: SessionId -> string -> unit)
     (onSessionFaulted: SessionId -> string -> unit) =
     let snapshotRef = ref QuerySnapshot.empty
+    let isRestarting = function SessionLifecycleStatus.Restarting _ -> true | _ -> false
     /// Spawn a cold replacement worker for a session whose old worker was
     /// already stopped. Used by the plain rebuild=false restart (inline) and by
     /// the RebuildCompleted handler (off-mailbox build). Returns the next state
@@ -630,10 +629,7 @@ module SessionManager =
           SolutionRoot = session.Info.SolutionRoot
           CreatedAt = session.Info.CreatedAt
           LastActivity = DateTime.UtcNow
-          Status = SessionStatus.Starting
-          FaultReason = None
-          WorkerPid = Some proc.Id
-          WorkerPort = None
+          Status = SessionLifecycleStatus.Starting { Pid = proc.Id; Port = None }
           Workflow = session.Workflow
           ActiveProject = session.Info.ActiveProject
           ProjectRoles = session.ProjectRoles
@@ -709,8 +705,7 @@ module SessionManager =
                 Workflow = workflow
                 Info =
                   { session.Info with
-                      Status = SessionStatus.Restarting
-                      WorkerPort = None
+                      Status = SessionLifecycleStatus.Restarting (SessionLifecycleStatus.workerPid session.Info.Status)
                       Workflow = workflow
                       LastActivity = DateTime.UtcNow } }
           let newState =
@@ -735,10 +730,12 @@ module SessionManager =
           | None -> answer (Error (SageFsError.SessionNotFound (SessionId.value id)))
           | Some session ->
             match session.Info.Status with
-            | SessionStatus.Ready | SessionStatus.Evaluating -> answer (Ok ())
-            | SessionStatus.Faulted | SessionStatus.Stopped ->
-              answer (Error (SageFsError.WorkerSpawnFailed (session.Info.FaultReason |> Option.defaultValue "the session stopped before it became Ready")))
-            | SessionStatus.Starting | SessionStatus.Restarting | SessionStatus.Building _ -> acc) state
+            | SessionLifecycleStatus.Ready _ | SessionLifecycleStatus.Evaluating _ -> answer (Ok ())
+            | SessionLifecycleStatus.Faulted reason ->
+              answer (Error (SageFsError.WorkerSpawnFailed (reason |> Option.defaultValue "the session stopped before it became Ready")))
+            | SessionLifecycleStatus.Stopped ->
+              answer (Error (SageFsError.WorkerSpawnFailed "the session stopped before it became Ready"))
+            | SessionLifecycleStatus.Starting _ | SessionLifecycleStatus.Restarting _ | SessionLifecycleStatus.Building _ -> acc) state
 
       let rec loop (state: ManagerState) = async {
         publishSnapshot state
@@ -775,10 +772,7 @@ module SessionManager =
                 SolutionRoot = SessionInfo.findSolutionRoot workingDir
                 CreatedAt = DateTime.UtcNow
                 LastActivity = DateTime.UtcNow
-                Status = SessionStatus.Starting
-                FaultReason = None
-                WorkerPid = Some proc.Id
-                WorkerPort = None
+                Status = SessionLifecycleStatus.Starting { Pid = proc.Id; Port = None }
                 Workflow = workflow
                 ActiveProject = None
                 ProjectRoles = []
@@ -864,7 +858,7 @@ module SessionManager =
                   inbox.Post(SessionCommand.RebuildCompleted(id, buildResult, reply))
                 }, ct)
                 stateInFlight
-              match session.Info.WorkerPid with
+              match SessionLifecycleStatus.workerPid session.Info.Status with
               | Some _ ->
                 // Build first: the live worker keeps serving the last good build
                 // for the whole build, so a build that fails (a typo mid-edit)
@@ -892,7 +886,7 @@ module SessionManager =
               let stateAfterStop =
                 let restarting =
                   { session with
-                      Info = { session.Info with Status = SessionStatus.Restarting; WorkerPid = None; WorkerPort = None }
+                      Info = { session.Info with Status = SessionLifecycleStatus.Restarting None }
                       Proxy = pendingProxy
                       WorkerBaseUrl = "" }
                 let afterMark = ManagerState.addSession id restarting state
@@ -915,7 +909,7 @@ module SessionManager =
           match ManagerState.tryGetSession id state with
           | Some session ->
             let stateCleared = ManagerState.clearRebuildInFlight id state
-            match buildResult, session.Info.WorkerPid with
+            match buildResult, SessionLifecycleStatus.workerPid session.Info.Status with
             | Error msg, Some _ ->
               // The live worker still serves the last good build: the failure is
               // the caller's to show, not a reason to kill a working session.
@@ -987,12 +981,12 @@ module SessionManager =
             let isStaleReady =
               match ManagerState.tryGetPendingSwap id state with
               | Some oldSession ->
-                workerPid > 0 && oldSession.Info.WorkerPid = Some workerPid
+                workerPid > 0 && SessionLifecycleStatus.workerPid oldSession.Info.Status = Some workerPid
               | None ->
                 // No swap pending: a ready whose pid differs from an already-
                 // registered live pid is a straggler from a replaced worker
                 // (e.g. a double-spawned older process reporting late).
-                match session.Info.WorkerPid with
+                match SessionLifecycleStatus.workerPid session.Info.Status with
                 | Some currentPid -> workerPid > 0 && currentPid <> workerPid
                 | None -> false
             match isStaleReady with
@@ -1036,8 +1030,7 @@ module SessionManager =
                       WorkerBaseUrl = baseUrl
                       Info =
                         { session.Info with
-                            WorkerPort = workerPort
-                            WorkerPid = Some workerPid
+                            Status = SessionLifecycleStatus.Starting { Pid = workerPid; Port = workerPort }
                             App = app } }
                 let stateAfterInstall =
                   { ManagerState.addSession id updated state with
@@ -1068,7 +1061,7 @@ module SessionManager =
                     | true ->
                       let reason = sprintf "Session warmup timed out after %.0fs — worker did not reach Ready state. Use hard_reset_fsi_session with rebuild=true to retry." elapsed.TotalSeconds
                       Log.warn "[SessionManager] %s (session %s)" reason (SessionId.value id)
-                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionStatus.Faulted))
+                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionLifecycleStatus.Faulted None))
                       onSessionFaulted id reason
                       done' <- true
                     | false ->
@@ -1140,7 +1133,7 @@ module SessionManager =
               // is NOT stale: the pending worker genuinely failed to come up.
               // Fail-closed per P3/P4: revert the swap — restore the old session
               // (still Ready, old worker serving) and clear the pending entry.
-              match session.Info.WorkerPid with
+              match SessionLifecycleStatus.workerPid session.Info.Status with
               | Some oldPid when oldPid <> workerPid && workerPid > 0 ->
                 Log.warn "[SessionManager] Replacement worker spawn failed for session %s; reverting to the still-serving old worker: %s" (SessionId.value id) msg
                 let newState =
@@ -1163,7 +1156,7 @@ module SessionManager =
               // would tombstone the FRESH worker to Faulted. The pid on the
               // message exists precisely so this race can be closed (the same
               // discipline WorkerExited already applies).
-              match session.Info.WorkerPid with
+              match SessionLifecycleStatus.workerPid session.Info.Status with
               | Some currentPid when workerPid > 0 && currentPid <> workerPid ->
                 Log.warn "[SessionManager] Ignoring stale WorkerSpawnFailed for session %s (event pid %d != current pid %d)" (SessionId.value id) workerPid currentPid
                 return state
@@ -1187,7 +1180,7 @@ module SessionManager =
             // Ready (or the swap reverts). Treat its exit as inert so it can
             // never be mistaken for a real crash of the registered session.
             match ManagerState.tryGetPendingSwap id state with
-            | Some oldSession when workerPid > 0 && oldSession.Info.WorkerPid = Some workerPid ->
+            | Some oldSession when workerPid > 0 && SessionLifecycleStatus.workerPid oldSession.Info.Status = Some workerPid ->
               Log.warn "[SessionManager] Ignoring retired worker exit for session %s during spawn-first restart (pid %d)" (SessionId.value id) workerPid
               match isNull span with
               | false -> span.SetTag("stale_event", true) |> ignore
@@ -1198,7 +1191,7 @@ module SessionManager =
             // Ignore stale exit events from old workers (e.g., after RestartSession)
             // Also ignore synthetic NotifyWorkerDied events (workerPid = -1) which
             // should not be treated as real process exits.
-            match session.Info.WorkerPid with
+            match SessionLifecycleStatus.workerPid session.Info.Status with
             | None when workerPid > 0 ->
               match isNull span with
               | false -> span.SetTag("stale_event", true) |> ignore
@@ -1218,7 +1211,7 @@ module SessionManager =
                 session.RestartState
                 exitCode
                 DateTime.UtcNow
-            let newStatus = SessionLifecycle.statusAfterExit outcome
+            let newStatus = SessionLifecycle.statusAfterExit (Some workerPid) outcome
             match outcome with
             | SessionLifecycle.ExitOutcome.Graceful ->
               match isNull span with
@@ -1272,7 +1265,7 @@ module SessionManager =
           // session is in flight — the RebuildCompleted handler is the single
           // respawn point, and a worker spawned here would be orphaned/raced by
           // the rebuild's own replacement.
-          | Some session when session.Info.Status = SessionStatus.Restarting
+          | Some session when isRestarting session.Info.Status
                               && (ManagerState.tryGetRebuildChannel id state |> Option.isSome) ->
             // Rebuild in flight: do nothing. The off-mailbox build completion
             // owns the respawn. The timer that fired us will not re-fire (the
@@ -1282,7 +1275,7 @@ module SessionManager =
             | true -> ()
             Instrumentation.succeedSpan recoverySpan
             return state
-          | Some session when session.Info.Status = SessionStatus.Restarting ->
+          | Some session when isRestarting session.Info.Status ->
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
             match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
@@ -1294,10 +1287,7 @@ module SessionManager =
                     WorkerBaseUrl = ""
                     Info =
                       { session.Info with
-                          Status = SessionStatus.Starting
-                          FaultReason = None
-                          WorkerPid = Some proc.Id
-                          WorkerPort = None
+                          Status = SessionLifecycleStatus.Starting { Pid = proc.Id; Port = None }
                           LastActivity = DateTime.UtcNow } }
               let newState = ManagerState.addSession id restarted state
               runtime.AwaitWorkerPort id proc inbox ct
@@ -1374,13 +1364,16 @@ module SessionManager =
         | SessionCommand.UpdateSessionStatus(id, newStatus) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
-            let faultReason =
+            // Faulted None means "no explicit reason given" — keep whatever
+            // reason the session already carries, or fall back to a default.
+            let resolvedStatus =
               match newStatus with
-              | SessionStatus.Faulted when session.Info.FaultReason.IsNone ->
-                Some "Session warmup timed out — worker did not reach Ready state."
-              | _ -> session.Info.FaultReason
+              | SessionLifecycleStatus.Faulted None ->
+                let existing = SessionLifecycleStatus.faultReason session.Info.Status
+                SessionLifecycleStatus.Faulted (existing |> Option.orElse (Some "Session warmup timed out — worker did not reach Ready state."))
+              | _ -> newStatus
             let updated =
-              { session with Info = { session.Info with Status = newStatus; FaultReason = faultReason } }
+              { session with Info = { session.Info with Status = resolvedStatus } }
             let newState = ManagerState.addSession id updated state
             onSessionProgressChanged ()
             return newState
@@ -1389,7 +1382,7 @@ module SessionManager =
         | SessionCommand.WorkerReportedFaulted(id, workerPid, reason) ->
           // Only the session's current worker may fault it (see WorkerReportedReady).
           match ManagerState.tryGetSession id state, ManagerState.tryGetPendingSwap id state with
-          | Some session, None when session.Info.WorkerPid = Some workerPid ->
+          | Some session, None when SessionLifecycleStatus.workerPid session.Info.Status = Some workerPid ->
             Log.warn "[SessionManager] Worker for session %s faulted during warmup: %s" (SessionId.value id) reason
             let newState = ManagerState.addSession id (faultedTombstone (Some reason) session) state
             onSessionFaulted id reason
@@ -1404,14 +1397,15 @@ module SessionManager =
           // and its Ready would release AwaitReady into a session with no worker.
           let current =
             match ManagerState.tryGetSession id state, ManagerState.tryGetPendingSwap id state with
-            | Some session, None when session.Info.WorkerPid = Some workerPid -> Some session
+            | Some session, None when SessionLifecycleStatus.workerPid session.Info.Status = Some workerPid -> Some session
             | _ -> None
           match current with
           | Some session ->
+            let handle : WorkerHandle = { Pid = workerPid; Port = SessionLifecycleStatus.workerPort session.Info.Status }
             let updated =
               { session with
                   ProjectRoles = roles
-                  Info = { session.Info with Status = SessionStatus.Ready; ProjectRoles = roles } }
+                  Info = { session.Info with Status = SessionLifecycleStatus.Ready handle; ProjectRoles = roles } }
             let newState = ManagerState.addSession id updated state
             onSessionProgressChanged ()
             return newState

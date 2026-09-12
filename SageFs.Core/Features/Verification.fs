@@ -62,7 +62,7 @@ type SessionTrust =
 module SessionTrust =
   type SessionObservation = {
     MatchingSessionIds: string list
-    SessionStatus: SessionStatus option
+    SessionStatus: SessionLifecycleStatus option
     LoadedState: LoadedDefinitionState option
     TypeIdentityDiagnostic: string option
   }
@@ -80,15 +80,15 @@ module SessionTrust =
         | [] -> SessionTrust.Missing
         | [ singleSession ] ->
           match observation.SessionStatus with
-          | Some SessionStatus.Ready ->
+          | Some (SessionLifecycleStatus.Ready _) ->
             SessionTrust.Trusted singleSession
-          | Some SessionStatus.Starting
-          | Some SessionStatus.Restarting
-          | Some SessionStatus.Evaluating
-          | Some (SessionStatus.Building _) ->
+          | Some (SessionLifecycleStatus.Starting _)
+          | Some (SessionLifecycleStatus.Restarting _)
+          | Some (SessionLifecycleStatus.Evaluating _)
+          | Some (SessionLifecycleStatus.Building _) ->
             SessionTrust.WarmingUp singleSession
           | Some status ->
-            SessionTrust.Unavailable (singleSession, SessionStatus.label status)
+            SessionTrust.Unavailable (singleSession, SessionLifecycleStatus.label status)
           | None ->
             SessionTrust.Unavailable (singleSession, "Unknown")
         | many -> SessionTrust.Ambiguous many

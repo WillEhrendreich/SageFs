@@ -84,14 +84,14 @@ let lifecyclePropertyTests = testList "SessionLifecycle properties" [
         SessionLifecycle.ExitOutcome.Abandoned SageFsError.PipeClosed
       ]
       for outcome in outcomes do
-        let status = SessionLifecycle.statusAfterExit outcome
+        let status = SessionLifecycle.statusAfterExit (Some 4242) outcome
         match outcome with
         | SessionLifecycle.ExitOutcome.Graceful ->
-          status |> Expect.equal "Graceful→Stopped" SessionStatus.Stopped
+          status |> Expect.equal "Graceful→Stopped" SessionLifecycleStatus.Stopped
         | SessionLifecycle.ExitOutcome.RestartAfter _ ->
-          status |> Expect.equal "RestartAfter→Restarting" SessionStatus.Restarting
-        | SessionLifecycle.ExitOutcome.Abandoned _ ->
-          status |> Expect.equal "Abandoned→Faulted" SessionStatus.Faulted
+          status |> Expect.equal "RestartAfter→Restarting, keeping the exited worker's pid" (SessionLifecycleStatus.Restarting (Some 4242))
+        | SessionLifecycle.ExitOutcome.Abandoned err ->
+          status |> Expect.equal "Abandoned→Faulted with the abandonment's own reason" (SessionLifecycleStatus.Faulted (Some (SageFsError.describe err)))
 
   testPropertyWithConfig propConfig "exhausted policy always gives up" <|
     fun () ->
@@ -138,9 +138,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
             WorkingDirectory = "C:\\test"
             SolutionRoot = None; CreatedAt = DateTime.UtcNow
             LastActivity = DateTime.UtcNow
-            Status = SessionStatus.Ready; WorkerPid = Some 1234
-            WorkerPort = None
-            FaultReason = None
+            Status = SessionLifecycleStatus.Ready { Pid = 1234; Port = None }
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             ActiveProject = None
 
@@ -166,7 +164,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
 
   testPropertyWithConfig propConfig "snapshot preserves session status" <|
     fun () ->
-      let status = pick genSessionStatus
+      let status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 1234; Port = None }) (pick genSessionStatus)
       let id = SessionId.newId()
       let managed = {
         ManagedSession.Info = {
@@ -174,9 +172,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
           WorkingDirectory = "C:\\test"
           SolutionRoot = None; CreatedAt = DateTime.UtcNow
           LastActivity = DateTime.UtcNow
-          Status = status; WorkerPid = Some 1234
-          WorkerPort = None
-          FaultReason = None
+          Status = status
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           ActiveProject = None
 
@@ -210,9 +206,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
         WorkingDirectory = "C:\\test"
         SolutionRoot = None; CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
-        Status = SessionStatus.Ready; WorkerPid = Some 1
-        WorkerPort = None
-        FaultReason = None
+        Status = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         ActiveProject = None
 
@@ -249,9 +243,7 @@ let querySnapshotTests = testList "QuerySnapshot projection properties" [
         WorkingDirectory = "C:\\test"
         SolutionRoot = None; CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
-        Status = SessionStatus.Ready; WorkerPid = Some 1
-        WorkerPort = None
-        FaultReason = None
+        Status = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         ActiveProject = None
 

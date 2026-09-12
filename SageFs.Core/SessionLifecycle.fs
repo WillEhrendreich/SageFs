@@ -36,9 +36,11 @@ module SessionLifecycle =
       | RestartPolicy.Decision.GiveUp error ->
         ExitOutcome.Abandoned error
 
-  /// Determine the new session status from an exit outcome.
-  let statusAfterExit (outcome: ExitOutcome) : SessionStatus =
+  /// Determine the new session status from an exit outcome. The exited
+  /// worker's own pid is carried into Restarting only so a late event from
+  /// it can be recognized as stale (see SessionManager's stale-pid guards).
+  let statusAfterExit (exitedWorkerPid: int option) (outcome: ExitOutcome) : SessionLifecycleStatus =
     match outcome with
-    | ExitOutcome.Graceful -> SessionStatus.Stopped
-    | ExitOutcome.RestartAfter _ -> SessionStatus.Restarting
-    | ExitOutcome.Abandoned _ -> SessionStatus.Faulted
+    | ExitOutcome.Graceful -> SessionLifecycleStatus.Stopped
+    | ExitOutcome.RestartAfter _ -> SessionLifecycleStatus.Restarting exitedWorkerPid
+    | ExitOutcome.Abandoned err -> SessionLifecycleStatus.Faulted (Some (SageFsError.describe err))

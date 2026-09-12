@@ -34,10 +34,7 @@ let private mkTools
         SolutionRoot = None
         CreatedAt = System.DateTime.UtcNow
         LastActivity = System.DateTime.UtcNow
-        Status = SessionStatus.Ready
-        FaultReason = None
-        WorkerPid = Some 42
-        WorkerPort = workerPort
+        Status = SessionLifecycleStatus.Ready { Pid = 42; Port = workerPort }
         Workflow = SessionWorkflow.Interactive
         ActiveProject = None
         ProjectRoles = []

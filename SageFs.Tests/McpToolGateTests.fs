@@ -203,10 +203,7 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     Projects = []
     WorkingDirectory = workingDir
     SolutionRoot = None
-    Status = status
-    FaultReason = None
-    WorkerPid = Some 42
-    WorkerPort = None
+    Status = SessionLifecycleStatus.ofWorkerReport (SessionLifecycleStatus.Ready { Pid = 42; Port = None }) status
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     CreatedAt = DateTime.UtcNow
     LastActivity = DateTime.UtcNow

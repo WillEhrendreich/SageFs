@@ -19,13 +19,13 @@ let tests =
         match System.String.IsNullOrWhiteSpace sessionId with
         | true -> "session-1"
         | false -> sessionId.Trim()
-      match SessionTrust.classify (observation [ sessionId ] (Some SessionStatus.Ready) None None) with
+      match SessionTrust.classify (observation [ sessionId ] (Some (SessionLifecycleStatus.Ready { Pid = 1; Port = None })) None None) with
       | SessionTrust.Trusted trustedId -> trustedId = sessionId
       | _ -> false
 
     testPropertyWithConfig propConfig "ambiguity is stable under permutation" <| fun () ->
-      let left = SessionTrust.classify (observation [ "a"; "b"; "c" ] (Some SessionStatus.Ready) None None)
-      let right = SessionTrust.classify (observation [ "c"; "a"; "b" ] (Some SessionStatus.Ready) None None)
+      let left = SessionTrust.classify (observation [ "a"; "b"; "c" ] (Some (SessionLifecycleStatus.Ready { Pid = 1; Port = None })) None None)
+      let right = SessionTrust.classify (observation [ "c"; "a"; "b" ] (Some (SessionLifecycleStatus.Ready { Pid = 1; Port = None })) None None)
       match left, right with
       | SessionTrust.Ambiguous xs, SessionTrust.Ambiguous ys -> Set.ofList xs = Set.ofList ys
       | _ -> false
@@ -35,7 +35,7 @@ let tests =
         match System.String.IsNullOrWhiteSpace sessionId with
         | true -> "session-1"
         | false -> sessionId.Trim()
-      match SessionTrust.classify (observation [ sessionId ] (Some SessionStatus.Ready) (Some (LoadedDefinitionState.ConfirmedStale ("disk", "loaded"))) None) with
+      match SessionTrust.classify (observation [ sessionId ] (Some (SessionLifecycleStatus.Ready { Pid = 1; Port = None })) (Some (LoadedDefinitionState.ConfirmedStale ("disk", "loaded"))) None) with
       | SessionTrust.Trusted _ -> false
       | _ -> true
   ]

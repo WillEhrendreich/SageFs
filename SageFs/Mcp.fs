@@ -769,10 +769,10 @@ module McpTools =
     /// Classify a finished rebuild from the owner's reply and the session's
     /// registry status afterwards — the SessionManager decides whether the
     /// session still serves; this only reads its verdict.
-    let ofResult (finishedAt: DateTime) (result: Result<string, SageFsError>) (after: WorkerProtocol.SessionStatus option) =
+    let ofResult (finishedAt: DateTime) (result: Result<string, SageFsError>) (after: WorkerProtocol.SessionLifecycleStatus option) =
       match result, after with
       | Ok _, _ -> RebuildOutcome.Succeeded finishedAt
-      | Error e, Some (WorkerProtocol.SessionStatus.Ready | WorkerProtocol.SessionStatus.Evaluating | WorkerProtocol.SessionStatus.Building _) ->
+      | Error e, Some (WorkerProtocol.SessionLifecycleStatus.Ready _ | WorkerProtocol.SessionLifecycleStatus.Evaluating _ | WorkerProtocol.SessionLifecycleStatus.Building _) ->
         RebuildOutcome.FailedStillServing (e, finishedAt)
       | Error e, _ -> RebuildOutcome.FailedNotServing (e, finishedAt)
 
@@ -846,7 +846,7 @@ module McpTools =
       |> List.map (fun s ->
         sprintf "%s (%s, dir: %s)"
           (WorkerProtocol.SessionId.value s.Id)
-          (WorkerProtocol.SessionStatus.label s.Status)
+          (WorkerProtocol.SessionLifecycleStatus.label s.Status)
           s.WorkingDirectory)
       |> String.concat "; "
 
@@ -860,7 +860,7 @@ module McpTools =
   let private formatSessionRoutingChoice (session: WorkerProtocol.SessionInfo) =
     sprintf "  %s  %s  %s"
       (WorkerProtocol.SessionId.value session.Id)
-      (WorkerProtocol.SessionStatus.label session.Status)
+      (WorkerProtocol.SessionLifecycleStatus.label session.Status)
       session.WorkingDirectory
 
   let private formatWorkingDirectoryAmbiguity (prefix: string) (workingDir: string) (sessions: WorkerProtocol.SessionInfo list) =
@@ -950,9 +950,11 @@ module McpTools =
         | None ->
           let! info = ctx.SessionOps.GetSessionInfo validId
           match info with
-          | Some i when i.Status = WorkerProtocol.SessionStatus.Starting
-                     || i.Status = WorkerProtocol.SessionStatus.Restarting ->
-            return Result.Error (Message (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sessionId (WorkerProtocol.SessionStatus.label i.Status)))
+          | Some i when (match i.Status with
+                         | WorkerProtocol.SessionLifecycleStatus.Starting _
+                         | WorkerProtocol.SessionLifecycleStatus.Restarting _ -> true
+                         | _ -> false) ->
+            return Result.Error (Message (sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
           | _ ->
             return Result.Error (Message (sprintf "Session '%s' not found" sessionId))
         | Some send ->
@@ -974,21 +976,21 @@ module McpTools =
               // catch and which can schedule a second restart) and must NOT mark
               // the session Faulted. Only the restart owner faults a restarting
               // session.
-              // Discriminator: a daemon-owned restart sets Status to
-              // Starting/Restarting AND clears WorkerPid (SessionManager cold-
-              // restart path). A caller-driven reset (resetSession / hardReset
-              // rebuild=false) flips Status via UpdateSessionStatus, which
-              // PRESERVES WorkerPid — so a transport failure there is a real
-              // worker death and must trigger NotifyWorkerDied recovery.
+              // Discriminator: a daemon-owned cold restart with no prior
+              // worker is Restarting with no pid to guard (SessionManager
+              // cold-restart path — see RestartSession/ScheduleRestart).
+              // A caller-driven reset (resetSession / hardReset rebuild=false)
+              // flips Status via UpdateSessionStatus, which PRESERVES the
+              // worker handle (see preservedHandle), so its pid is never None
+              // — a transport failure there is a real worker death and must
+              // trigger NotifyWorkerDied recovery.
               let! info = ctx.SessionOps.GetSessionInfo validId
               match info with
-              | Some i when (i.Status = WorkerProtocol.SessionStatus.Starting
-                            || i.Status = WorkerProtocol.SessionStatus.Restarting)
-                          && i.WorkerPid.IsNone ->
-                return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Poll get_fsi_status every 5-10s; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionStatus.label i.Status)))
+              | Some i when (match i.Status with WorkerProtocol.SessionLifecycleStatus.Restarting None -> true | _ -> false) ->
+                return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Poll get_fsi_status every 5-10s; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
               | _ ->
                 ctx.SessionOps.NotifyWorkerDied validId
-                do! ctx.SessionOps.UpdateSessionStatus validId WorkerProtocol.SessionStatus.Faulted
+                do! ctx.SessionOps.UpdateSessionStatus validId (WorkerProtocol.SessionLifecycleStatus.Faulted None)
                 return Result.Error transportError
             | None ->
               return raise ex
@@ -1000,8 +1002,8 @@ module McpTools =
   /// session is genuinely absent (never created, or explicitly stopped).
   type SessionResolution =
     | Routable of sessionId: string
-    | WarmingUp of sessionId: string * status: WorkerProtocol.SessionStatus
-    | Unroutable of sessionId: string * status: WorkerProtocol.SessionStatus
+    | WarmingUp of sessionId: string * status: WorkerProtocol.SessionLifecycleStatus
+    | Unroutable of sessionId: string * status: WorkerProtocol.SessionLifecycleStatus
     | FaultedSession of sessionId: string
     | Gone of message: string
 
@@ -1017,11 +1019,11 @@ module McpTools =
     | Some i when proxyAvailable -> Routable (WorkerProtocol.SessionId.value i.Id)
     | Some i ->
       match i.Status with
-      | WorkerProtocol.SessionStatus.Starting
-      | WorkerProtocol.SessionStatus.Restarting ->
+      | WorkerProtocol.SessionLifecycleStatus.Starting _
+      | WorkerProtocol.SessionLifecycleStatus.Restarting _ ->
         WarmingUp (WorkerProtocol.SessionId.value i.Id, i.Status)
-      | WorkerProtocol.SessionStatus.Faulted
-      | WorkerProtocol.SessionStatus.Stopped ->
+      | WorkerProtocol.SessionLifecycleStatus.Faulted _
+      | WorkerProtocol.SessionLifecycleStatus.Stopped ->
         FaultedSession (WorkerProtocol.SessionId.value i.Id)
       | _ ->
         Unroutable (WorkerProtocol.SessionId.value i.Id, i.Status)
@@ -1034,9 +1036,9 @@ module McpTools =
   let formatSessionResolution = function
     | Routable _ -> ""
     | WarmingUp (sid, status) ->
-      sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionStatus.label status)
+      sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | Unroutable (sid, status) ->
-      sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_fsi_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionStatus.label status)
+      sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_fsi_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | FaultedSession sid ->
       sprintf "Session '%s' is faulted. Run reset_fsi_session or hard_reset_fsi_session to recover." sid
     | Gone msg -> msg
@@ -1083,12 +1085,16 @@ module McpTools =
           | None ->
             let! info = ctx.SessionOps.GetSessionInfo validCandidate
             match info with
-            | Some i when i.Status = WorkerProtocol.SessionStatus.Starting
-                       || i.Status = WorkerProtocol.SessionStatus.Restarting ->
+            | Some i when (match i.Status with
+                           | WorkerProtocol.SessionLifecycleStatus.Starting _
+                           | WorkerProtocol.SessionLifecycleStatus.Restarting _ -> true
+                           | _ -> false) ->
               setActiveSessionId ctx agent ""
               return WarmingUp (candidate, i.Status)
-            | Some i when i.Status = WorkerProtocol.SessionStatus.Faulted
-                       || i.Status = WorkerProtocol.SessionStatus.Stopped ->
+            | Some i when (match i.Status with
+                           | WorkerProtocol.SessionLifecycleStatus.Faulted _
+                           | WorkerProtocol.SessionLifecycleStatus.Stopped -> true
+                           | _ -> false) ->
               setActiveSessionId ctx agent ""
               return FaultedSession candidate
             | Some i ->
@@ -1198,8 +1204,18 @@ module McpTools =
       | other -> return Error (SageFsError.SessionNotRoutable (formatSessionResolution other))
     }
 
-  let setSnapshotStatus (ctx: McpContext) (sid: string) (status: WorkerProtocol.SessionStatus) =
+  let setSnapshotStatus (ctx: McpContext) (sid: string) (status: WorkerProtocol.SessionLifecycleStatus) =
     ctx.SessionOps.UpdateSessionStatus (toSessionId sid) status
+
+  /// The worker handle to carry across a caller-driven status flip (reset /
+  /// hard-reset rebuild=false) that does NOT respawn the worker process — its
+  /// pid/port are unchanged, so whatever the session already has is carried
+  /// forward. A session with no live handle yet (already Faulted) has no real
+  /// pid to preserve; 0 is a safe placeholder because it can never equal a
+  /// real OS pid, so no stale-pid guard elsewhere can ever match it.
+  let private preservedHandle (status: WorkerProtocol.SessionLifecycleStatus) : WorkerProtocol.WorkerHandle =
+    { Pid = WorkerProtocol.SessionLifecycleStatus.workerPid status |> Option.defaultValue 0
+      Port = WorkerProtocol.SessionLifecycleStatus.workerPort status }
 
   /// Get the session status via proxy, returning the SessionState.
   let getSessionState (ctx: McpContext) (sessionId: string) : Task<SessionState> =
@@ -1256,7 +1272,7 @@ module McpTools =
           // Worker-authoritative state for the routable session.
           return! requireTool ctx sid toolName
         | WarmingUp (_, status) | Unroutable (_, status) ->
-          let state = WorkerProtocol.SessionStatus.toSessionState status
+          let state = WorkerProtocol.SessionLifecycleStatus.toSessionState status
           return
             Affordances.checkToolCallAllowed state toolName
             |> Result.mapError SageFsError.describeForAgent
@@ -1556,7 +1572,7 @@ module McpTools =
           System.Text.Json.JsonSerializer.Serialize(
             {| state = "Rebuilding"
                sessionId = sid
-               status = WorkerProtocol.SessionStatus.label status
+               status = WorkerProtocol.SessionLifecycleStatus.label status
                message = formatSessionResolution resolution
                available = availableTools |})
       | FaultedSession sid ->
@@ -1575,16 +1591,18 @@ module McpTools =
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.StatusResult(_, snapshot)) ->
           let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
-          match info with
-          | Some sessionInfo when sessionInfo.Status <> snapshot.Status ->
-            do! ctx.SessionOps.UpdateSessionStatus (toSessionId sid) snapshot.Status
+          let reconciled =
+            info |> Option.map (fun sessionInfo -> WorkerProtocol.SessionLifecycleStatus.ofWorkerReport sessionInfo.Status snapshot.Status)
+          match info, reconciled with
+          | Some sessionInfo, Some newStatus when sessionInfo.Status <> newStatus ->
+            do! ctx.SessionOps.UpdateSessionStatus (toSessionId sid) newStatus
           | _ -> ()
           let baseStatus =
-            match info with
-            | Some sessionInfo ->
-              let syncedInfo = { sessionInfo with Status = snapshot.Status }
+            match info, reconciled with
+            | Some sessionInfo, Some newStatus ->
+              let syncedInfo = { sessionInfo with Status = newStatus }
               McpAdapter.formatProxyStatus sid eventCount snapshot syncedInfo ctx.McpPort
-            | None ->
+            | _ ->
               let state = WorkerProtocol.SessionStatus.toSessionState snapshot.Status
               McpAdapter.formatEnhancedStatus sid eventCount state None None
           // Enrich with multi-agent coordination data.
@@ -1636,7 +1654,7 @@ module McpTools =
              | true -> "None"
              | false -> String.concat ", " (sessionInfo.Projects |> List.map Path.GetFileName))
             ctx.McpPort
-            (WorkerProtocol.SessionStatus.label sessionInfo.Status)
+            (WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status)
         // Fetch and append warmup detail
         let! warmupDetail =
           match ctx.GetWarmupContext with
@@ -1649,7 +1667,7 @@ module McpTools =
                   SessionId = sid
                   ProjectNames = sessionInfo.Projects
                   WorkingDir = sessionInfo.WorkingDirectory
-                  Status = WorkerProtocol.SessionStatus.label sessionInfo.Status
+                  Status = WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status
                   Warmup = warmup
                   FileStatuses = []
                   Workflow = WorkflowTypes.SessionWorkflow.Interactive
@@ -1675,7 +1693,7 @@ module McpTools =
                workingDirectory = sessionInfo.WorkingDirectory
                projects = sessionInfo.Projects
                mcpPort = ctx.McpPort
-               status = WorkerProtocol.SessionStatus.label sessionInfo.Status |})
+               status = WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status |})
       | None ->
         return """{"status": "initializing", "message": "Session is still warming up. This typically takes 15-30s. Use get_recent_fsi_events to monitor warmup progress. Do NOT sleep-poll or create a new session."}"""
     })
@@ -1758,8 +1776,9 @@ module McpTools =
       let previousStatus =
         info
         |> Option.map (fun sessionInfo -> sessionInfo.Status)
-        |> Option.defaultValue WorkerProtocol.SessionStatus.Ready
-      do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Starting
+        |> Option.defaultValue (WorkerProtocol.SessionLifecycleStatus.Faulted None)
+      let handle = preservedHandle previousStatus
+      do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Starting handle)
       notifyElm ctx (
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
       let! routeResult =
@@ -1775,7 +1794,7 @@ module McpTools =
         }
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
-        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
+        do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Ready handle)
         compilationStates.TryRemove(sid) |> ignore
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         notifyElm ctx (
@@ -1785,11 +1804,11 @@ module McpTools =
         // nothing to lose, so no warning.
         let warning =
           match previousStatus with
-          | WorkerProtocol.SessionStatus.Ready -> "⚠️ NOTE: resetting clears all REPL definitions and evaluation history. "
+          | WorkerProtocol.SessionLifecycleStatus.Ready _ -> "⚠️ NOTE: resetting clears all REPL definitions and evaluation history. "
           | _ -> ""
         return sprintf "%sSession reset successfully. All previous definitions have been cleared." warning
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
-        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+        do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (SageFsError.describe err)))
         notifyElm ctx (
           SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
         return sprintf "Error: %s" (SageFsError.describeForAgent err)
@@ -1800,7 +1819,7 @@ module McpTools =
         let err = routeErrorMessage msg
         match routeErrorIsTransportFailure msg with
         | true ->
-          do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+          do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some err))
           notifyElm ctx (
             SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored err))
         | false ->
@@ -1817,8 +1836,9 @@ module McpTools =
       let previousStatus =
         info
         |> Option.map (fun sessionInfo -> sessionInfo.Status)
-        |> Option.defaultValue WorkerProtocol.SessionStatus.Ready
-      do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Starting
+        |> Option.defaultValue (WorkerProtocol.SessionLifecycleStatus.Faulted None)
+      let handle = preservedHandle previousStatus
+      do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Starting handle)
       notifyElm ctx (
         SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
       let! routeResult =
@@ -1834,18 +1854,18 @@ module McpTools =
         }
       match routeResult with
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Ok ())) ->
-        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Ready
+        do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Ready handle)
         compilationStates.TryRemove(sid) |> ignore
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         notifyElm ctx (
           SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
         let warning =
           match previousStatus with
-          | WorkerProtocol.SessionStatus.Ready -> "⚠️ NOTE: resetting clears all REPL definitions and evaluation history. "
+          | WorkerProtocol.SessionLifecycleStatus.Ready _ -> "⚠️ NOTE: resetting clears all REPL definitions and evaluation history. "
           | _ -> ""
         return Ok (sprintf "%sSession reset successfully. All previous definitions have been cleared." warning)
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
-        do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+        do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (SageFsError.describe err)))
         notifyElm ctx (
           SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored (SageFsError.describe err)))
         return Error err
@@ -1856,7 +1876,7 @@ module McpTools =
         let reason = routeErrorMessage msg
         match routeErrorIsTransportFailure msg with
         | true ->
-          do! setSnapshotStatus ctx sid WorkerProtocol.SessionStatus.Faulted
+          do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some reason))
           notifyElm ctx (
             SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Errored reason))
           return Error (SageFsError.WorkerCommunicationFailed (sid, reason))
@@ -2247,7 +2267,7 @@ module McpTools =
       match duplicates with
       | dup :: _ ->
         let sid = WorkerProtocol.SessionId.value dup.Id
-        let status = WorkerProtocol.SessionStatus.label dup.Status
+        let status = WorkerProtocol.SessionLifecycleStatus.label dup.Status
         return sprintf "⚠️ A session for this project already exists (session '%s', status: %s). Use switch_session to target it instead of creating a duplicate. Creating duplicate sessions causes resource starvation. If the existing session is stuck, use stop_session to remove it first, then retry create_session." sid status
       | [] ->
       let! result = ctx.SessionOps.CreateSession projects workingDir workflow

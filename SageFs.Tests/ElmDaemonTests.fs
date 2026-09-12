@@ -24,10 +24,7 @@ module ElmDaemonTestHelpers =
       SolutionRoot = None
       CreatedAt = DateTime.UtcNow
       LastActivity = DateTime.UtcNow
-      Status = SessionStatus.Ready
-      FaultReason = None
-      WorkerPid = Some 999
-      WorkerPort = None
+      Status = SessionLifecycleStatus.Ready { Pid = 999; Port = None }
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None
 

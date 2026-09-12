@@ -38,10 +38,7 @@ module McpSessionIsolation =
               Some { WorkerProtocol.SessionInfo.Id = id
                      Name = None
                      Projects = []; WorkingDirectory = ""; SolutionRoot = None
-                     Status = WorkerProtocol.SessionStatus.Ready
-                     FaultReason = None
-                     WorkerPid = None
-                     WorkerPort = None
+                     Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 0; Port = None }
                      Workflow = WorkflowTypes.SessionWorkflow.Interactive
                      CreatedAt = System.DateTime.UtcNow
                      LastActivity = System.DateTime.UtcNow
@@ -205,10 +202,7 @@ module SessionResolutionByWorkingDir =
   let mkInfo id workDir : WorkerProtocol.SessionInfo =
     { Id = id; Name = None; Projects = []
       WorkingDirectory = workDir; SolutionRoot = None
-      Status = WorkerProtocol.SessionStatus.Ready
-      FaultReason = None
-      WorkerPid = None
-      WorkerPort = None
+      Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 0; Port = None }
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
       LastActivity = System.DateTime.UtcNow
@@ -289,10 +283,7 @@ module WorkingDirDeepMatching =
   let mkInfo id workDir : WorkerProtocol.SessionInfo =
     { Id = id; Name = None; Projects = []
       WorkingDirectory = workDir; SolutionRoot = None
-      Status = WorkerProtocol.SessionStatus.Ready
-      FaultReason = None
-      WorkerPid = None
-      WorkerPort = None
+      Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 0; Port = None }
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
       LastActivity = System.DateTime.UtcNow
@@ -345,10 +336,7 @@ module WorkingDirRoutingPriority =
   let mkInfo id workDir : WorkerProtocol.SessionInfo =
     { Id = id; Name = Some (WorkerProtocol.SessionId.value id); Projects = []
       WorkingDirectory = workDir; SolutionRoot = None
-      Status = WorkerProtocol.SessionStatus.Ready
-      FaultReason = None
-      WorkerPid = Some 1234
-      WorkerPort = None
+      Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1234; Port = None }
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
       LastActivity = System.DateTime.UtcNow
@@ -537,9 +525,7 @@ module ResetIsolation =
         System.Threading.Tasks.Task.FromResult(
           Some { WorkerProtocol.SessionInfo.Id = id
                  Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
-                 Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None
-                 WorkerPort = None
-                 FaultReason = None
+                 Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 0; Port = None }
                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
                  CreatedAt = System.DateTime.UtcNow; LastActivity = System.DateTime.UtcNow
                  ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning })
@@ -575,7 +561,7 @@ module ResetIsolation =
     let sidStr = WorkerProtocol.SessionId.value sid
     let sessionMap = ConcurrentDictionary<string, string>()
     sessionMap.["agent1"] <- sidStr
-    let registryStatus = ref WorkerProtocol.SessionStatus.Ready
+    let registryStatus = ref (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None })
     let resetStarted = System.Threading.Tasks.TaskCompletionSource<unit>()
     let allowResetFinish = System.Threading.Tasks.TaskCompletionSource<unit>()
 
@@ -586,9 +572,6 @@ module ResetIsolation =
         WorkingDirectory = @"C:\Code\Repos\SageFs"
         SolutionRoot = None
         Status = !registryStatus
-        FaultReason = None
-        WorkerPid = None
-        WorkerPort = None
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         CreatedAt = DateTime.UtcNow
         LastActivity = DateTime.UtcNow
@@ -684,7 +667,7 @@ module ResetIsolation =
       sessionMap.["agent1"] <- "aaa00001"
       let restartStarted = TaskCompletionSource<unit>()
       let allowRestartFinish = TaskCompletionSource<unit>()
-      let statuses = ResizeArray<WorkerProtocol.SessionStatus>()
+      let statuses = ResizeArray<WorkerProtocol.SessionLifecycleStatus>()
 
       let ops : SessionManagementOps = {
         CreateSession = fun _ _ _ -> Task.FromResult(Ok "test-session")
@@ -705,10 +688,7 @@ module ResetIsolation =
                    Projects = []
                    WorkingDirectory = ""
                    SolutionRoot = None
-                   Status = WorkerProtocol.SessionStatus.Ready
-                   FaultReason = None
-                   WorkerPid = None
-                   WorkerPort = None
+                   Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 0; Port = None }
                    Workflow = WorkflowTypes.SessionWorkflow.Interactive
                    CreatedAt = DateTime.UtcNow
                    LastActivity = DateTime.UtcNow
@@ -854,7 +834,7 @@ module ResetIsolation =
       let sidStr = "bbb00011"
       let sessionMap = ConcurrentDictionary<string, string>()
       sessionMap.["agent1"] <- sidStr
-      let statuses = ResizeArray<WorkerProtocol.SessionStatus>()
+      let statuses = ResizeArray<WorkerProtocol.SessionLifecycleStatus>()
       let restartResult = TaskCompletionSource<Result<string, SageFsError>>()
       let faultedSignal = TaskCompletionSource<unit>()
       let finished = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
@@ -870,8 +850,7 @@ module ResetIsolation =
           Task.FromResult(Some {
             Id = id
             Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
-            Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None; WorkerPort = None
-            FaultReason = None
+            Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 0; Port = None }
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
             ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning
@@ -879,7 +858,7 @@ module ResetIsolation =
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
           statuses.Add(status)
-          if status = WorkerProtocol.SessionStatus.Faulted then
+          if (match status with WorkerProtocol.SessionLifecycleStatus.Faulted _ -> true | _ -> false) then
             faultedSignal.TrySetResult(()) |> ignore
           Task.FromResult(())
         NotifyWorkerDied = fun _ -> ()
@@ -940,7 +919,7 @@ module ResetIsolation =
       let finished = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
       let sessionMap = ConcurrentDictionary<string, string>()
       sessionMap.["agent1"] <- sidStr
-      let statuses = ResizeArray<WorkerProtocol.SessionStatus>()
+      let statuses = ResizeArray<WorkerProtocol.SessionLifecycleStatus>()
       let restartCalled = TaskCompletionSource<unit>()
       let faultedSignal = TaskCompletionSource<unit>()
 
@@ -958,8 +937,7 @@ module ResetIsolation =
           Task.FromResult(Some {
             Id = id
             Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
-            Status = WorkerProtocol.SessionStatus.Ready; WorkerPid = None; WorkerPort = None
-            FaultReason = None
+            Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 0; Port = None }
             Workflow = WorkflowTypes.SessionWorkflow.Interactive
             CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
             ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning
@@ -967,7 +945,7 @@ module ResetIsolation =
         GetAllSessions = fun () -> Task.FromResult([])
         UpdateSessionStatus = fun _ status ->
           statuses.Add(status)
-          if status = WorkerProtocol.SessionStatus.Faulted then
+          if (match status with WorkerProtocol.SessionLifecycleStatus.Faulted _ -> true | _ -> false) then
             faultedSignal.TrySetResult(()) |> ignore
           Task.FromResult(())
         NotifyWorkerDied = fun _ -> ()
@@ -1183,8 +1161,7 @@ module SessionMapEviction =
   let mkInfo id workDir : WorkerProtocol.SessionInfo =
     { Id = id; Name = None; Projects = []
       WorkingDirectory = workDir; SolutionRoot = None
-      Status = WorkerProtocol.SessionStatus.Ready
-      FaultReason = None; WorkerPid = None; WorkerPort = None
+      Status = WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 0; Port = None }
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = System.DateTime.UtcNow
       LastActivity = System.DateTime.UtcNow

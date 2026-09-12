@@ -39,10 +39,7 @@ let private session (workflow: WorkflowTypes.SessionWorkflow) (projects: Classif
     SolutionRoot = None
     CreatedAt = at
     LastActivity = at
-    Status = SessionStatus.Ready
-    FaultReason = None
-    WorkerPid = Some 1
-    WorkerPort = Some 5555
+    Status = SessionLifecycleStatus.Ready { Pid = 1; Port = Some 5555 }
     Workflow = workflow
     ActiveProject = None
     ProjectRoles = projects
@@ -357,7 +354,7 @@ let faultedSessionRunTests =
   testList "AppRunOrchestration run on a faulted session" [
     testTask "WHY — AppRunOrchestration.runApp — Run on a session whose rebuild failed rebuilds it first because after fixing the code Run is the one button the user presses" {
       let r = record ()
-      let faulted = { session webLive [ exe web ] AppRunState.NotRunning with Status = SessionStatus.Faulted }
+      let faulted = { session webLive [ exe web ] AppRunState.NotRunning with Status = SessionLifecycleStatus.Faulted None }
       let ops =
         { fakeOps faulted (worker never.Task) r with
             RestartSession = fun _ rebuild ->
@@ -380,7 +377,7 @@ let runAfterFailedRebuildTests =
       let r = record ()
       let failed =
         { session webLive [ exe web ] (AppRunState.BuildFailed (web, "Build failed (exit 1)", at, PreviousAddress.ReuseAddress "http://127.0.0.1:5123")) with
-            Status = SessionStatus.Faulted }
+            Status = SessionLifecycleStatus.Faulted None }
       let ops =
         { fakeOps failed (worker never.Task) r with
             RestartSession = fun _ rebuild ->

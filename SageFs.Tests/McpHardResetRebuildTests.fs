@@ -14,7 +14,7 @@ type private Probe = {
   SessionId: string
   Ctx: McpContext
   Restarts: ResizeArray<bool>
-  StatusWrites: ResizeArray<WorkerProtocol.SessionStatus>
+  StatusWrites: ResizeArray<WorkerProtocol.SessionLifecycleStatus>
   /// Every message routed to the session's worker.
   Routed: ResizeArray<WorkerProtocol.WorkerMessage>
   Finished: TaskCompletionSource<SessionDisplayStatus>
@@ -23,14 +23,14 @@ type private Probe = {
 /// Each test owns its session id: rebuildOutcomes is daemon-global, and tests
 /// run in parallel.
 let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsError>) (statusAfter: WorkerProtocol.SessionStatus) : Probe =
-  let status = ref WorkerProtocol.SessionStatus.Ready
+  let status = ref (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 42; Port = Some 1 })
   let restarts = ResizeArray<bool>()
-  let writes = ResizeArray<WorkerProtocol.SessionStatus>()
+  let writes = ResizeArray<WorkerProtocol.SessionLifecycleStatus>()
   let routed = ResizeArray<WorkerProtocol.WorkerMessage>()
   let finished = TaskCompletionSource<SessionDisplayStatus>(TaskCreationOptions.RunContinuationsAsynchronously)
   let info (id: WorkerProtocol.SessionId) : WorkerProtocol.SessionInfo =
     { Id = id; Name = None; Projects = []; WorkingDirectory = ""; SolutionRoot = None
-      Status = status.Value; FaultReason = None; WorkerPid = Some 42; WorkerPort = Some 1
+      Status = status.Value
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       CreatedAt = DateTime.UtcNow; LastActivity = DateTime.UtcNow
       ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning }
@@ -50,7 +50,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
           Task.FromResult(())
         RestartSession = fun _ rebuild ->
           restarts.Add rebuild
-          status.Value <- statusAfter
+          status.Value <- WorkerProtocol.SessionLifecycleStatus.ofWorkerReport status.Value statusAfter
           Task.FromResult restartResult }
   let sessionMap = Collections.Concurrent.ConcurrentDictionary<string, string>()
   sessionMap.["agent1"] <- sessionId
@@ -135,16 +135,20 @@ let tests = testList "MCP hard reset rebuild" [
   testProperty "WHY — RebuildOutcome.ofResult — a failure counts as still serving exactly when the owner left the session routable, because only the owner knows whether a worker survived" <|
     fun (status: WorkerProtocol.SessionStatus) ->
       let at = DateTime(2026, 9, 11, 12, 0, 0, DateTimeKind.Utc)
+      let lifecycleStatus =
+        WorkerProtocol.SessionLifecycleStatus.ofWorkerReport
+          (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None })
+          status
       let serving =
-        match status with
-        | WorkerProtocol.SessionStatus.Ready
-        | WorkerProtocol.SessionStatus.Evaluating
-        | WorkerProtocol.SessionStatus.Building _ -> true
+        match lifecycleStatus with
+        | WorkerProtocol.SessionLifecycleStatus.Ready _
+        | WorkerProtocol.SessionLifecycleStatus.Evaluating _
+        | WorkerProtocol.SessionLifecycleStatus.Building _ -> true
         | _ -> false
       let expected =
         match serving with
         | true -> RebuildOutcome.FailedStillServing (buildFailed, at)
         | false -> RebuildOutcome.FailedNotServing (buildFailed, at)
-      RebuildOutcome.ofResult at (Error buildFailed) (Some status) = expected
-      && RebuildOutcome.ofResult at (Ok "done") (Some status) = RebuildOutcome.Succeeded at
+      RebuildOutcome.ofResult at (Error buildFailed) (Some lifecycleStatus) = expected
+      && RebuildOutcome.ofResult at (Ok "done") (Some lifecycleStatus) = RebuildOutcome.Succeeded at
 ]

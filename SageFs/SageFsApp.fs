@@ -2094,13 +2094,13 @@ module SageFsEffectHandler =
       Projects = info.Projects
       Status =
         match info.Status with
-        | SessionStatus.Ready -> SessionDisplayStatus.Running
-        | SessionStatus.Starting -> SessionDisplayStatus.Starting
-        | SessionStatus.Evaluating -> SessionDisplayStatus.Running
-        | SessionStatus.Building _ -> SessionDisplayStatus.Running
-        | SessionStatus.Faulted -> SessionDisplayStatus.Errored "faulted"
-        | SessionStatus.Restarting -> SessionDisplayStatus.Restarting
-        | SessionStatus.Stopped -> SessionDisplayStatus.Suspended
+        | SessionLifecycleStatus.Ready _ -> SessionDisplayStatus.Running
+        | SessionLifecycleStatus.Starting _ -> SessionDisplayStatus.Starting
+        | SessionLifecycleStatus.Evaluating _ -> SessionDisplayStatus.Running
+        | SessionLifecycleStatus.Building _ -> SessionDisplayStatus.Running
+        | SessionLifecycleStatus.Faulted _ -> SessionDisplayStatus.Errored "faulted"
+        | SessionLifecycleStatus.Restarting _ -> SessionDisplayStatus.Restarting
+        | SessionLifecycleStatus.Stopped -> SessionDisplayStatus.Suspended
       LastActivity = info.LastActivity
       EvalCount = 0
       UpSince = info.CreatedAt
@@ -2145,7 +2145,7 @@ module SageFsEffectHandler =
           match deps.GetWarmupContext with
           | Some getCtx ->
             let readySession =
-              sessions |> List.tryFind (fun s -> s.Status = SessionStatus.Ready)
+              sessions |> List.tryFind (fun s -> match s.Status with SessionLifecycleStatus.Ready _ -> true | _ -> false)
             match readySession with
             | Some info ->
               let! ctx = getCtx info.Id
@@ -2446,7 +2446,7 @@ module SageFsEffectHandler =
                     let mutable proxyObservedMs : float option = None
                     let recordReadyObservation status =
                       match readyObservedMs, status with
-                      | None, Some SessionStatus.Ready ->
+                      | None, Some (SessionLifecycleStatus.Ready _) ->
                         let elapsedMs = waitStopwatch.Elapsed.TotalMilliseconds
                         readyObservedMs <- Some elapsedMs
                         Instrumentation.liveTestingRebuildReadyWaitMs.Record(elapsedMs)
@@ -2473,7 +2473,7 @@ module SageFsEffectHandler =
                       recordReadyObservation status
                       recordProxyObservation hasStreamingProxy
                       match status, hasStreamingProxy with
-                      | Some SessionStatus.Ready, true ->
+                      | Some (SessionLifecycleStatus.Ready _), true ->
                         waitStopwatch.Stop()
                         rebuildStopwatch.Stop()
                         Instrumentation.liveTestingRebuildPipelineMs.Record(rebuildStopwatch.Elapsed.TotalMilliseconds)

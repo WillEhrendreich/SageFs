@@ -128,7 +128,7 @@ module SidebarCards =
     { Id = WorkerProtocol.SessionId.validate id |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
       Name = None; Projects = projects; WorkingDirectory = "/w"; SolutionRoot = None
       CreatedAt = now.AddMinutes -5.0; LastActivity = now.AddMinutes -3.0
-      Status = status; FaultReason = None; WorkerPid = None; WorkerPort = None
+      Status = WorkerProtocol.SessionLifecycleStatus.ofWorkerReport (WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = None }) status
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
 
@@ -147,13 +147,13 @@ let sidebarCardTests =
       Expect.equal (SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Evaluating [])).Status SessionDisplayStatus.Running "Evaluating = running")
 
     testCase "WHY — sessionCardOf — a faulted session shows as faulted with its reason, because the regex fallback showed errored sessions as running" (fun () ->
-      let faulted = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Faulted [] with FaultReason = Some "warmup timed out" }
+      let faulted = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Faulted [] with Status = WorkerProtocol.SessionLifecycleStatus.Faulted (Some "warmup timed out") }
       let c = SidebarCards.card faulted
       Expect.equal c.Status SessionDisplayStatus.Faulted "Faulted = faulted"
       Expect.equal c.StatusMessage (Some "warmup timed out") "the reason is shown")
 
-    testCase "WHY — sessionCardOf — a running session never shows a stale fault reason, because the registry keeps FaultReason after recovery" (fun () ->
-      let recovered = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [] with FaultReason = Some "warmup timed out" }
+    testCase "WHY — sessionCardOf — a running session can never show a stale fault reason, because Ready structurally carries no fault reason at all" (fun () ->
+      let recovered = info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
       Expect.isNone (SidebarCards.card recovered).StatusMessage "no message on a running card")
 
     testCase "a starting session shows its warmup progress" (fun () ->

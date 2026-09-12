@@ -114,8 +114,12 @@ let private getManagedSession (harness: Harness) sessionId =
   | None -> failtestf "expected session %s to exist" (SessionId.value sessionId)
 
 let private getWorkerPid (session: ManagedSession) =
-  session.Info.WorkerPid
+  SessionLifecycleStatus.workerPid session.Info.Status
   |> Option.defaultWith (fun () -> failtest "expected worker pid")
+
+let private isRestarting = function SessionLifecycleStatus.Restarting _ -> true | _ -> false
+let private isStarting = function SessionLifecycleStatus.Starting _ -> true | _ -> false
+let private isFaulted = function SessionLifecycleStatus.Faulted _ -> true | _ -> false
 
 [<Tests>]
 let sessionManagerRestartTombstoneTests =
@@ -144,10 +148,10 @@ let sessionManagerRestartTombstoneTests =
 
         let session = getManagedSession harness info.Id
         session.Info.Status
-        |> Expect.equal
+        |> isFaulted
+        |> Expect.isTrue
           "invalid worker ready transport should fault the session instead of installing a broken proxy"
-          SessionStatus.Faulted
-        session.Info.WorkerPid
+        SessionLifecycleStatus.workerPid session.Info.Status
         |> Expect.equal "faulted tombstone clears worker pid after invalid worker ready" None
         session.WorkerBaseUrl
         |> Expect.equal "faulted tombstone clears base url after invalid worker ready" ""
@@ -189,7 +193,7 @@ let sessionManagerRestartTombstoneTests =
         // until the replacement reports Ready.
         let restarting = getManagedSession harness info.Id
         restarting.Info.Status
-        |> Expect.equal "session should transition through Restarting under spawn-first" SessionStatus.Restarting
+        |> Expect.equal "session should transition through Restarting under spawn-first, keeping the old worker's pid to guard against its late exit" (SessionLifecycleStatus.Restarting (Some pid))
         runtime.GetStartCalls()
         |> Expect.equal "spawn-first restart spawns one replacement worker" 2
 
@@ -211,7 +215,8 @@ let sessionManagerRestartTombstoneTests =
 
         let session = getManagedSession harness info.Id
         session.Info.Status |> Expect.equal "the session keeps its status" before.Info.Status
-        session.Info.WorkerPid |> Expect.equal "the session keeps its worker" before.Info.WorkerPid
+        SessionLifecycleStatus.workerPid session.Info.Status
+        |> Expect.equal "the session keeps its worker" (SessionLifecycleStatus.workerPid before.Info.Status)
 
         let snapshot = harness.ReadSnapshot()
         (QuerySnapshot.tryGetSession info.Id snapshot |> Option.get).Status
@@ -241,7 +246,8 @@ let sessionManagerRestartTombstoneTests =
 
         let session = getManagedSession harness info.Id
         session.Info.Status |> Expect.equal "the session keeps its status" before.Info.Status
-        session.Info.WorkerPid |> Expect.equal "the session keeps its worker" before.Info.WorkerPid
+        SessionLifecycleStatus.workerPid session.Info.Status
+        |> Expect.equal "the session keeps its worker" (SessionLifecycleStatus.workerPid before.Info.Status)
         harness.FaultedEvents |> Seq.length
         |> Expect.equal "a failed spawn with a live worker is not a session fault" 0
 
@@ -269,7 +275,7 @@ let sessionManagerRestartTombstoneTests =
       withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
         let originalPid =
-          info.WorkerPid
+          SessionLifecycleStatus.workerPid info.Status
           |> Option.defaultWith (fun () -> failtest "expected worker pid")
 
         // Fault the session first so the rebuild takes the cold path — with a
@@ -287,7 +293,7 @@ let sessionManagerRestartTombstoneTests =
 
         let afterRestart = getManagedSession harness info.Id
         let replacementPid =
-          afterRestart.Info.WorkerPid
+          SessionLifecycleStatus.workerPid afterRestart.Info.Status
           |> Option.defaultWith (fun () -> failtest "expected replacement worker pid")
         replacementPid
         |> Expect.notEqual "replacement should have a distinct pid from the original" originalPid
@@ -299,8 +305,8 @@ let sessionManagerRestartTombstoneTests =
 
         let session = getManagedSession harness info.Id
         session.Info.Status
-        |> Expect.equal "stale spawn failure must not tombstone the fresh worker" SessionStatus.Starting
-        session.Info.WorkerPid
+        |> Expect.equal "stale spawn failure must not tombstone the fresh worker" (SessionLifecycleStatus.Starting { Pid = replacementPid; Port = None })
+        SessionLifecycleStatus.workerPid session.Info.Status
         |> Expect.equal "fresh worker pid survives the stale spawn failure" (Some replacementPid)
         harness.FaultedEvents.Count
         |> Expect.equal "stale spawn failure should not fire a fault callback" faultsBefore
@@ -314,7 +320,7 @@ let sessionManagerRestartTombstoneTests =
       withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
         let originalPid =
-          info.WorkerPid
+          SessionLifecycleStatus.workerPid info.Status
           |> Option.defaultWith (fun () -> failtest "expected worker pid")
 
         harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, true, reply))
@@ -328,7 +334,8 @@ let sessionManagerRestartTombstoneTests =
         QuerySnapshot.tryGetSession info.Id snapshot
         |> Expect.isSome "the session stays registered"
         (QuerySnapshot.tryGetSession info.Id snapshot |> Option.get).Status
-        |> Expect.notEqual "a crash is recovered, not left as a tombstone of the earlier failed build" SessionStatus.Faulted
+        |> isFaulted
+        |> Expect.isFalse "a crash is recovered, not left as a tombstone of the earlier failed build"
 
     testCase "abandoned worker exit keeps a faulted tombstone session" <| fun _ ->
       let runtime =
@@ -350,18 +357,18 @@ let sessionManagerRestartTombstoneTests =
           harness.Mailbox.Post(SessionCommand.WorkerExited(info.Id, workerPid, 1))
 
           harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
-          |> Option.map (fun session -> session.Info.Status)
+          |> Option.map (fun session -> isRestarting session.Info.Status)
           |> Expect.equal
             (sprintf "crash %d should move the session into restarting" attempt)
-            (Some SessionStatus.Restarting)
+            (Some true)
 
           harness.Mailbox.Post(SessionCommand.ScheduleRestart info.Id)
 
           let restarted = getManagedSession harness info.Id
           restarted.Info.Status
-          |> Expect.equal
+          |> isStarting
+          |> Expect.isTrue
             (sprintf "manual restart %d should register the replacement worker" attempt)
-            SessionStatus.Starting
 
         let finalWorkerPid =
           getManagedSession harness info.Id
@@ -372,8 +379,9 @@ let sessionManagerRestartTombstoneTests =
         |> ignore
 
         let session = getManagedSession harness info.Id
-        session.Info.Status |> Expect.equal "abandoned worker exit should leave a faulted tombstone" SessionStatus.Faulted
-        session.Info.WorkerPid |> Expect.equal "faulted tombstone clears worker pid after abandoned exit" None
+        session.Info.Status |> isFaulted |> Expect.isTrue "abandoned worker exit should leave a faulted tombstone"
+        SessionLifecycleStatus.workerPid session.Info.Status
+        |> Expect.equal "faulted tombstone clears worker pid after abandoned exit" None
         session.WorkerBaseUrl |> Expect.equal "faulted tombstone clears base url after abandoned exit" ""
         pendingProxyLooksPending session.Proxy |> Expect.isTrue "abandoned exit should leave the pending proxy installed"
 
@@ -381,7 +389,8 @@ let sessionManagerRestartTombstoneTests =
         QuerySnapshot.tryGetSession info.Id snapshot
         |> Expect.isSome "abandoned exit should keep the session in the CQRS snapshot"
         (QuerySnapshot.tryGetSession info.Id snapshot |> Option.get).Status
-        |> Expect.equal "snapshot reports the faulted tombstone after abandonment" SessionStatus.Faulted
+        |> isFaulted
+        |> Expect.isTrue "snapshot reports the faulted tombstone after abandonment"
 
         harness.FaultedEvents |> Seq.length
         |> Expect.equal "abandoned exit should fire one fault callback" 1
@@ -414,8 +423,9 @@ let sessionManagerRestartTombstoneTests =
 
         let session = getManagedSession harness info.Id
         session.Info.Status
-        |> Expect.equal "the replacement is swapping in" SessionStatus.Restarting
-        session.Info.WorkerPid
+        |> isRestarting
+        |> Expect.isTrue "the replacement is swapping in"
+        SessionLifecycleStatus.workerPid session.Info.Status
         |> Expect.isSome "the serving worker stays registered until the swap commits"
         pendingProxyLooksPending session.Proxy
         |> Expect.isTrue "calls wait for the replacement to become ready"
@@ -432,18 +442,18 @@ let sessionManagerRestartTombstoneTests =
       withHarness runtime.Runtime <| fun harness ->
         let info = createSession harness
         let originalPid =
-          info.WorkerPid
+          SessionLifecycleStatus.workerPid info.Status
           |> Option.defaultWith (fun () -> failtest "expected worker pid")
 
         harness.Mailbox.Post(SessionCommand.WorkerExited(info.Id, originalPid, 1))
         harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
-        |> Option.map (fun session -> session.Info.Status)
-        |> Expect.equal "worker exit should move the session into restarting state" (Some SessionStatus.Restarting)
+        |> Option.map (fun session -> isRestarting session.Info.Status)
+        |> Expect.equal "worker exit should move the session into restarting state" (Some true)
 
         harness.Mailbox.Post(SessionCommand.ScheduleRestart info.Id)
 
         let session = getManagedSession harness info.Id
-        session.Info.Status |> Expect.equal "failed scheduled restart keeps the session registered" SessionStatus.Restarting
+        session.Info.Status |> isRestarting |> Expect.isTrue "failed scheduled restart keeps the session registered"
         runtime.GetStartCalls() |> Expect.equal "all worker spawn attempts should flow through the injected runtime" 2
 
     testCase "abandoned crash recovery keeps a faulted tombstone session" <| fun _ ->
@@ -464,8 +474,8 @@ let sessionManagerRestartTombstoneTests =
         harness.Mailbox.Post(SessionCommand.WorkerExited(info.Id, originalPid, 1))
 
         harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
-        |> Option.map (fun session -> session.Info.Status)
-        |> Expect.equal "worker exit should move the session into restarting state" (Some SessionStatus.Restarting)
+        |> Option.map (fun session -> isRestarting session.Info.Status)
+        |> Expect.equal "worker exit should move the session into restarting state" (Some true)
 
         // Rapid crashes are STARTUP crashes: the circuit breaker faults at
         // the startup ceiling (3), not MaxRestarts (5).
@@ -476,17 +486,18 @@ let sessionManagerRestartTombstoneTests =
 
           let session = getManagedSession harness info.Id
           session.Info.Status
-          |> Expect.equal
+          |> isRestarting
+          |> Expect.isTrue
             (sprintf "spawn failure %d should keep the session restarting until retries are exhausted" attempt)
-            SessionStatus.Restarting
 
         harness.Mailbox.Post(SessionCommand.ScheduleRestart info.Id)
         harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
         |> ignore
 
         let session = getManagedSession harness info.Id
-        session.Info.Status |> Expect.equal "abandoned crash recovery should leave a faulted tombstone" SessionStatus.Faulted
-        session.Info.WorkerPid |> Expect.equal "faulted tombstone clears worker pid after abandoned crash recovery" None
+        session.Info.Status |> isFaulted |> Expect.isTrue "abandoned crash recovery should leave a faulted tombstone"
+        SessionLifecycleStatus.workerPid session.Info.Status
+        |> Expect.equal "faulted tombstone clears worker pid after abandoned crash recovery" None
         session.WorkerBaseUrl |> Expect.equal "faulted tombstone clears base url after abandoned crash recovery" ""
         pendingProxyLooksPending session.Proxy |> Expect.isTrue "abandoned crash recovery should leave the pending proxy installed"
 
@@ -494,7 +505,8 @@ let sessionManagerRestartTombstoneTests =
         QuerySnapshot.tryGetSession info.Id snapshot
         |> Expect.isSome "abandoned crash recovery should keep the session in the CQRS snapshot"
         (QuerySnapshot.tryGetSession info.Id snapshot |> Option.get).Status
-        |> Expect.equal "snapshot reports the faulted tombstone after abandoned crash recovery" SessionStatus.Faulted
+        |> isFaulted
+        |> Expect.isTrue "snapshot reports the faulted tombstone after abandoned crash recovery"
 
         harness.FaultedEvents |> Seq.length
         |> Expect.equal "abandoned crash recovery should fire one fault callback" 1

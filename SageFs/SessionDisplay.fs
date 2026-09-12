@@ -68,19 +68,19 @@ module SessionDisplay =
   /// Map internal SessionStatus to display status
   let displayStatus (now: DateTime) (info: SessionInfo) : SessionDisplayStatus =
     match info.Status with
-    | SessionStatus.Ready
-    | SessionStatus.Evaluating
-    | SessionStatus.Building _ ->
+    | SessionLifecycleStatus.Ready _
+    | SessionLifecycleStatus.Evaluating _
+    | SessionLifecycleStatus.Building _ ->
       match now - info.LastActivity > staleDuration with
       | true -> SessionDisplayStatus.Stale
       | false -> SessionDisplayStatus.Running
-    | SessionStatus.Starting ->
+    | SessionLifecycleStatus.Starting _ ->
       SessionDisplayStatus.Starting
-    | SessionStatus.Faulted ->
+    | SessionLifecycleStatus.Faulted _ ->
       SessionDisplayStatus.Errored "Session faulted"
-    | SessionStatus.Restarting ->
+    | SessionLifecycleStatus.Restarting _ ->
       SessionDisplayStatus.Restarting
-    | SessionStatus.Stopped ->
+    | SessionLifecycleStatus.Stopped ->
       SessionDisplayStatus.Errored "Session stopped"
 
   /// Build a snapshot from internal session info
