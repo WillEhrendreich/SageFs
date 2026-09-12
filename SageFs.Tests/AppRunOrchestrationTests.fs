@@ -179,7 +179,7 @@ let runAppTests =
       states r |> Expect.isEmpty "no state was claimed"
     }
 
-    testTask "WHY — AppRunOrchestration.runApp — a worker that cannot start the app leaves Crashed with its reason because the card must say why" {
+    testTask "WHY — AppRunOrchestration.runApp — a worker that refuses to start the app leaves CouldNotStart with its reason, not Crashed, because nothing ran and the card must say why (roast-4 #3)" {
       let r = record ()
       let refusing (msg: WorkerMessage) =
         match msg with
@@ -189,23 +189,35 @@ let runAppTests =
       let ops = fakeOps (session webLive [ exe web ] AppRunState.NotRunning) refusing r
       let! result = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
       result |> Result.isError |> Expect.isTrue "reported as an error"
-      match states r |> List.last with
-      | AppRunState.Crashed (project, reason, _) ->
-        project |> Expect.equal "the project" web
-        reason |> Expect.stringContains "the worker's reason" "no entry point"
-      | other -> failtestf "expected Crashed last, got %A" other
+      // The worker refused to start the app — it never ran, so this is
+      // CouldNotStart, not Crashed (roast-4 #3).
+      let last = states r |> List.last
+      let case, fields = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(last, typeof<AppRunState>)
+      case.Name |> Expect.equal "refused at start is CouldNotStart" "CouldNotStart"
+      fields |> Array.exists (fun f -> match f with :? string as s -> s = web | _ -> false)
+      |> Expect.isTrue "names the project"
+      SageFs.AppRun.describeState last
+      |> Expect.stringContains "the worker's reason" "no entry point"
     }
 
-    testTask "WHY — AppRunOrchestration.runApp — a failed restart into WebLive is Crashed, not left Starting, because a stuck spinner lies" {
+    testTask "WHY — AppRunOrchestration.runApp — a failed restart into WebLive is CouldNotStart, not Crashed and not left Starting, because the app never ran: 'crashed' would tell the user their code died when it was the worker that never came up (roast-4 #3)" {
       let r = record ()
       let ops =
         { fakeOps (session interactive [ exe web ] AppRunState.NotRunning) (worker never.Task) r with
             AwaitReady = fun _ _ -> Task.FromResult(Error (SageFsError.WorkerSpawnFailed "host exited")) }
       let! result = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
       result |> Result.isError |> Expect.isTrue "reported as an error"
-      match states r |> List.last with
-      | AppRunState.Crashed (_, reason, _) -> reason |> Expect.stringContains "the restart failure" "host exited"
-      | other -> failtestf "expected Crashed last, got %A" other
+      let last = states r |> List.last
+      let case, fields = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(last, typeof<AppRunState>)
+      case.Name |> Expect.equal "the app never started, so it could not start" "CouldNotStart"
+      // CouldNotStart of project * reason: SageFsError * at — the structured
+      // error survives, it is not flattened to prose.
+      fields |> Array.exists (fun f -> f :? SageFsError)
+      |> Expect.isTrue "carries the SageFsError that stopped the start"
+      SageFs.AppRun.describeState last
+      |> Expect.stringContains "says it could not start, and why" "host exited"
+      (SageFs.AppRun.describeState last).Contains("crashed", StringComparison.OrdinalIgnoreCase)
+      |> Expect.isFalse "never says crashed for something that never ran"
       calls r |> List.exists (fun c -> c.StartsWith("worker:run", StringComparison.Ordinal)) |> Expect.isFalse "never launched"
     }
 
@@ -336,16 +348,21 @@ let restartForChangesTests =
       | other -> failtestf "expected BuildFailed, got %A" other
     }
 
-    testTask "WHY — AppRunOrchestration — a restart that fails for another reason ends Crashed because only a failed build is BuildFailed" {
+    testTask "WHY — AppRunOrchestration — a restart that fails for a non-build reason ends CouldNotStart because only a failed build is BuildFailed and nothing ever ran to crash (roast-4 #3)" {
       let r = record ()
       let baseOps =
         { fakeOps (session webLive [ exe web ] AppRunState.NotRunning) restarting r with
             RestartSession = fun _ _ -> Task.FromResult(Error (SageFsError.WorkerSpawnFailed "host exited")) }
-      let ops, crashed = settleOn (function AppRunState.Crashed _ -> true | _ -> false) r baseOps
+      // A restart that never brought a worker up is a start that could not
+      // happen — CouldNotStart, not Crashed (roast-4 #3). Matched by case name
+      // so this test compiles (and fails) before the case exists.
+      let isCouldNotStart (s: AppRunState) =
+        (fst (Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(s, typeof<AppRunState>))).Name = "CouldNotStart"
+      let ops, couldNotStart = settleOn isCouldNotStart r baseOps
       let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
-      match! within crashed.Task with
-      | AppRunState.Crashed (_, reason, _) -> reason |> Expect.stringContains "the restart failure" "host exited"
-      | other -> failtestf "expected Crashed, got %A" other
+      let! settled = within couldNotStart.Task
+      SageFs.AppRun.describeState settled
+      |> Expect.stringContains "the restart failure, on a CouldNotStart state" "host exited"
     }
   ]
 

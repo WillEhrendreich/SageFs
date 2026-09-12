@@ -37,6 +37,7 @@
         <Compile Include="ActorCreationTests.fs" />
         <Compile Include="ActorEventEmissionTests.fs" />
         <Compile Include="EvalCancellationTests.fs" />
+        <Compile Include="LiveValuesPullTests.fs" />
         <Compile Include="EvalActorResilienceTests.fs" />
         <Compile Include="EvalActorStragglerTests.fs" />
         <Compile Include="FaultedEvalTests.fs" />
@@ -63,6 +64,7 @@
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="HttpOriginGuardTests.fs" />
         <Compile Include="DaemonIntegrationTests.fs" />
+        <Compile Include="DogfoodReplTests.fs" />
         <Compile Include="SessionOperationsTests.fs" />
         <Compile Include="MultiAgentCoordinationTests.fs" />
         <Compile Include="AgentActivityTrackerTests.fs" />
@@ -80,6 +82,7 @@
         <Compile Include="ElmLoopMsgLabelTests.fs" />
         <Compile Include="ElmLoopStateMachineTests.fs" />
         <Compile Include="DashboardParsingTests.fs" />
+        <Compile Include="SessionDisplayStatusUnificationTests.fs" />
         <Compile Include="DirectoryConfigTests.fs" />
         <Compile Include="ConnectionTrackerTests.fs" />
         <Compile Include="TerminalUITests.fs" />
@@ -401,6 +404,9 @@
             <TestHostFiles Include="..\SageFs.Host\bin\$(Configuration)\net10.0\**\*"
                            Exclude="..\SageFs.Host\bin\$(Configuration)\net10.0\**\*.runtimeconfig.dev.json" />
         </ItemGroup>
+        <!-- Empty host/ first: the host refuses to start (fail-closed manifest
+             check) if a retired file from a previous build is still here. -->
+        <RemoveDir Directories="$(OutDir)host" />
         <Copy SourceFiles="@(TestHostFiles)"
               DestinationFiles="@(TestHostFiles->'$(OutDir)host\%(RecursiveDir)%(Filename)%(Extension)')"
               SkipUnchangedFiles="true" />

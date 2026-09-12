@@ -87,4 +87,24 @@ let definitionOfDoneTests =
       errors
       |> List.exists (fun error -> error.Contains "blocks release readiness")
       |> Expect.isFalse "no current deferred journeys may block release readiness"
+
+    testCase "WHY — every verified row cites resolvable evidence (an Actions run id or a commit SHA) and never 'green locally', because evidence nobody else can open is not evidence (roast-4 #12)" <| fun () ->
+      use doc = JsonDocument.Parse(File.ReadAllText matrixPath)
+      let rows = doc.RootElement.GetProperty("rows").EnumerateArray() |> Seq.toArray
+      let runId = System.Text.RegularExpressions.Regex(@"\b\d{8,}\b")
+      let sha = System.Text.RegularExpressions.Regex(@"\b[0-9a-f]{7,40}\b")
+      let offenders =
+        rows
+        |> Array.filter (fun row -> stringProperty "status" row = "verified")
+        |> Array.choose (fun row ->
+          let id = stringProperty "id" row
+          let evidence = stringProperty "evidence" row
+          let saysGreenLocally = evidence.Contains("green locally", StringComparison.OrdinalIgnoreCase)
+          let resolvable = runId.IsMatch evidence || sha.IsMatch evidence
+          match saysGreenLocally, resolvable with
+          | false, true -> None
+          | true, _ -> Some (sprintf "%s: 'green locally' is not evidence" id)
+          | false, false -> Some (sprintf "%s: no run id or commit SHA to resolve" id))
+        |> Array.toList
+      offenders |> Expect.isEmpty "every verified row must be resolvable by someone else"
   ]
