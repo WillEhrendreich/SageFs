@@ -90,6 +90,7 @@
         <Compile Include="CellGridTests.fs" />
         <Compile Include="ScreenTests.fs" />
         <Compile Include="DashboardSnapshotTests.fs" />
+        <Compile Include="DashboardTestIdTests.fs" />
         <Compile Include="McpHardResetRebuildTests.fs" />
         <Compile Include="DashboardEscapingTests.fs" />
         <Compile Include="SessionCardActionsTests.fs" />

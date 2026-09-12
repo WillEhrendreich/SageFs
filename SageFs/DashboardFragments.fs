@@ -51,6 +51,11 @@ let textEnc (s: string) : XmlNode = Text.raw (htmlEscape s)
 /// directory, title, or path would otherwise break out of the attribute.
 let attrEnc (s: string) : string = htmlEscape s
 
+/// Stable automation hook for demo/E2E tooling. `name` is always a literal
+/// from the fixed kebab-case vocabulary the demos tooling mirrors — never a
+/// computed string — so a renamed control breaks a contract test, not a demo.
+let testid (name: string) = Attr.create "data-testid" name
+
 let renderKeyboardHelp () =
   let shortcut key desc =
     Elem.tr [] [
@@ -468,7 +473,7 @@ let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list
 
 /// Render output lines as an HTML fragment.
 let renderOutputForSession (sessionId: string) (lines: OutputLine list) (placeholder: string) =
-  Elem.div [ Attr.id DomIds.OutputPanel; Attr.create "data-session-id" (attrEnc sessionId) ] [
+  Elem.div [ Attr.id DomIds.OutputPanel; testid "session-output"; Attr.create "data-session-id" (attrEnc sessionId) ] [
     match lines.IsEmpty with
     | true ->
       Elem.span [ Attr.class' "meta" ] [ textEnc placeholder ]
@@ -534,6 +539,7 @@ let renderSessionPicker (previous: PreviousSession list) =
         // Option 1: Create in temp directory
         Elem.div
           [ Attr.class' "picker-card"
+            testid "quick-start"
             Ds.indicator Signals.TempLoading
             Ds.onClick (Ds.post "/dashboard/session/create-temp") ]
           [ Elem.h3 [] [
@@ -769,6 +775,7 @@ let renderStoppingCard (sessionId: WorkerProtocol.SessionId) =
   Elem.div
     [ Attr.id (sprintf "session-card-%s" sid)
       Attr.class' "session-row session-stopping"
+      testid "session-card"
       Attr.style "padding: 8px 0; border-bottom: 1px solid var(--border-normal);" ]
     [ Elem.span [ Attr.style "font-weight: bold;" ] [ textEnc sid ]
       Elem.span [ Attr.class' "meta"; Attr.style "margin-left: 0.5rem;" ] [
@@ -815,6 +822,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
           [ Attr.id (sprintf "session-card-%s" sid)
             Attr.class' (sprintf "session-row %s%s" cls guidanceCls)
             Attr.style "padding: 10px 0; border-bottom: 1px solid var(--border-normal); cursor: pointer;"
+            testid "session-card"
             Attr.create "data-session-id" sid
             Attr.create "aria-current" (match isViewing with | true -> "true" | false -> "false")
             // Switching is signal-driven: the POST carries this page's clientId
@@ -997,6 +1005,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 | AppRun.AppEndpoint.NoServer -> ()
                 Elem.button
                   [ Attr.class' "session-btn session-btn-success"
+                    testid "stop-app"
                     Attr.title (attrEnc (sprintf "Stop App — %s" (AppRun.describeState s.App)))
                     Ds.onClick (Ds.post (sprintf "/dashboard/stop-app/%s" sid)) ]
                   [ Text.raw "■" ]
@@ -1009,6 +1018,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               | [ project ], _ ->
                 Elem.button
                   [ Attr.class' "session-btn session-btn-primary"
+                    testid "run-app"
                     Attr.title (attrEnc (runTitle (AppRun.projectName project.Path)))
                     Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
                   [ Text.raw "▶" ]
@@ -1020,6 +1030,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   let name = AppRun.projectName project.Path
                   Elem.button
                     [ Attr.class' "session-btn session-btn-primary session-btn-labeled"
+                      testid "run-app"
                       Attr.title (attrEnc (runTitle name))
                       Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s/%s" sid (Uri.EscapeDataString name))) ]
                     [ Elem.span [ Attr.create "aria-hidden" "true" ] [ Text.raw "▶" ]
@@ -1292,6 +1303,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 // click can never double-fire a destructive reset behind an eval.
                 Elem.button
                   [ Attr.class' "eval-btn"
+                    testid "eval"
                     Ds.indicator Signals.ActionLoading
                     Ds.attr' ("disabled", "$actionLoading")
                     Ds.onClick (Ds.post "/dashboard/eval") ]
@@ -1300,6 +1312,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                     Text.raw "[EVAL]" ]
                 Elem.button
                   [ Attr.class' "eval-btn eval-btn-reset"
+                    testid "reset"
                     Ds.indicator Signals.ActionLoading
                     Ds.attr' ("disabled", "$actionLoading")
                     Ds.onClick (Ds.post "/dashboard/reset") ]
@@ -1308,6 +1321,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                     Text.raw "[RESET]" ]
                 Elem.button
                   [ Attr.class' "eval-btn eval-btn-reset eval-btn-hard"
+                    testid "hard-reset"
                     Ds.indicator Signals.ActionLoading
                     Ds.attr' ("disabled", "$actionLoading")
                     Ds.onClick (Ds.post "/dashboard/hard-reset") ]
@@ -1395,6 +1409,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 Elem.button
                   [ Attr.class' "eval-btn"
                     Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem; display: inline-flex; align-items: center; justify-content: center; gap: 2px; height: 2rem;"
+                    testid "new-session"
                     Ds.indicator Signals.CreateLoading
                     Ds.attr' ("disabled", "$createLoading")
                     Ds.onClick (Ds.post "/dashboard/session/create") ]
@@ -1733,6 +1748,7 @@ let renderLiveTestingPanel (activity: Features.LiveTestActivity.LiveTestActivity
       Elem.button
         [ Attr.class' "eval-btn"
           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+          testid "live-testing-toggle"
           Ds.indicator Signals.LiveTestingLoading
           Ds.attr' ("disabled", "$liveTestingLoading")
           Ds.onClick (Ds.post endpoint) ]
