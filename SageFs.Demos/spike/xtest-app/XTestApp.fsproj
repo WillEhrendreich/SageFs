@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>xtestapp</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Throwaway spike, deliberately isolated from the repo's solution/build
+         (see SageFs.Demos/spike/README - not wired into any .fsproj/.slnx).
+         Opt out of the repo-root Directory.Packages.props central package
+         management so this one PackageReference can pin its own version
+         without touching the shared Directory.Packages.props. -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Explicit FSharp.Core reference: with ManagePackageVersionsCentrally
+         turned off above, the F# SDK's implicit-FSharp.Core-reference logic
+         picks up an empty $(FSharpCoreImplicitPackageVersion) here (the repo's
+         Directory.Packages.props pins FSharp.Core for its own CPM-managed
+         projects, and that import happens before this project's own
+         ManagePackageVersionsCentrally=false takes effect) - the result is a
+         self-contained publish with FSharp.Core silently absent, which
+         SIGABRTs at startup with FileNotFoundException. Pinning it explicitly
+         here sidesteps the implicit-reference path entirely. -->
+    <PackageReference Include="FSharp.Core" Version="10.1.401" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.58.0" />
+  </ItemGroup>
+</Project>
