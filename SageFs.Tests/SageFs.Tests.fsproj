@@ -113,6 +113,17 @@
         <Compile Include="SessionLifecycleMutationTests.fs" />
         <Compile Include="CoverageViewMutationTests.fs" />
         <Compile Include="CoverageViewProjectMutationTests.fs" />
+        <Compile Include="RestartPolicyBoundaryMutationTests.fs" />
+        <Compile Include="WatchdogMutationTests.fs" />
+        <Compile Include="VariantSelectorMutationTests.fs" />
+        <Compile Include="SessionOperationsMutationTests.fs" />
+        <Compile Include="WorkflowTypesMutationTests.fs" />
+        <Compile Include="AffordancesMutationTests.fs" />
+        <Compile Include="BinaryPrimitivesMutationTests.fs" />
+        <Compile Include="TestCachePersistenceMutationTests.fs" />
+        <Compile Include="EvalStoreMutationTests.fs" />
+        <Compile Include="SessionDisplayMutationTests.fs" />
+        <Compile Include="ReloadPlanningDecisionMutationTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
         <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
