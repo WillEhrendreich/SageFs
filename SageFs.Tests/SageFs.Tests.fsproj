@@ -116,6 +116,7 @@
         <Compile Include="RestartPolicyCorrespondenceTests.fs" />
         <Compile Include="ResultExCorrespondenceTests.fs" />
         <Compile Include="SageFsErrorCorrespondenceTests.fs" />
+        <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
         <Compile Include="LiveTestingBrowserTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
@@ -199,6 +200,7 @@
         <Compile Include="NotebookExportTests.fs" />
         <Compile Include="SseFeatureFormatTests.fs" />
         <Compile Include="DomainModelSseTests.fs" />
+        <Compile Include="EvalStoreTests.fs" />
         <Compile Include="FeatureHookTests.fs" />
         <Compile Include="AlgebraicPropertyTests.fs" />
         <Compile Include="BinaryFormatTests.fs" />
@@ -235,7 +237,7 @@
         <Compile Include="BatchFlusherTests.fs" />
         <Compile Include="BatchFlusherPropertyTests.fs" />
         <Compile Include="LifecyclePropertyTests.fs" />
-        <Compile Include="Benchmarks.fs" />
+        <Compile Include="PerfBudget.fs" />
         <Compile Include="FsiCrossSubmissionTests.fs" />
         <Compile Include="Round4HardeningTests.fs" />
         <Compile Include="Round5HardeningTests.fs" />
@@ -336,7 +338,7 @@
         <Compile Include="CliStopExitCodeTests.fs" />
         <Compile Include="FsiOutputParserTests.fs" />
         <Compile Include="SseReplayTests.fs" />
-        <Compile Include="SseSerializationBenchmarks.fs" />
+        <Compile Include="PerfTests.fs" />
         <Compile Include="SsePropertyTests.fs" />
         <Compile Include="SseContractComplianceTests.fs" />
         <Compile Include="ManifestBackupRecoveryTests.fs" />
@@ -360,7 +362,6 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="BenchmarkDotNet" />
         <PackageReference Include="Expecto" />
         <PackageReference Include="Expecto.FsCheck" />
         <PackageReference Include="Expecto.Hopac" />

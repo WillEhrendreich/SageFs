@@ -143,13 +143,15 @@ let renderCurrentDiagnosticsTests =
     test "diagnostics wrapped in collapsible details element" {
       let diags = [ { Severity = DiagError; Message = "err"; Line = 1; Col = 1 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      Expect.stringContains html "<details>" "should wrap diagnostics in <details> for collapse"
+      // Not "<details>" — the accordion's open state is a Datastar signal
+      // (signalDetails), so the tag carries "open"/"data-on-toggle" attributes.
+      Expect.stringContains html "<details" "should wrap diagnostics in <details> for collapse"
       Expect.stringContains html "<summary" "should have summary element with count badge"
     }
 
     test "empty diagnostics have no details element" {
       let html = renderCurrentDiagnostics [] |> renderToString
-      Expect.isFalse (html.Contains "<details>") "empty diagnostics should not render collapsible wrapper"
+      Expect.isFalse (html.Contains "<details") "empty diagnostics should not render collapsible wrapper"
     }
 
   ]

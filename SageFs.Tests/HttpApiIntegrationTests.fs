@@ -435,6 +435,33 @@ let integrationTests =
       doc.Dispose()
     }
 
+    // WHY — a compile/runtime failure means the code RAN (200, success=false,
+    // above); a session that can never be routed to means the code NEVER ran
+    // at all. Those are different failure classes (SageFs-roast: production
+    // flattened both into the same success=false shape) and must produce
+    // different HTTP statuses: this proves the infra case is a real non-2xx
+    // via the SageFsError algebra, not the eval-failure 200.
+    testTask "POST /exec reports an infra failure as a non-2xx, distinct from a code-eval failure" {
+      let client = getSharedClient()
+      let unmatchedDir =
+        Path.Combine(Path.GetTempPath(), "sagefs-exec-infra-" + Guid.NewGuid().ToString("N"))
+      let payload =
+        {| code = "1 + 1;;"
+           working_directory = unmatchedDir |}
+      let! status, body = postJson client "/exec" payload
+      status |> Expect.notEqual "infra failure is not the eval-failure 200" 200
+
+      let doc = JsonDocument.Parse(body: string)
+      try
+        let root = doc.RootElement
+        root.GetProperty("success").GetBoolean()
+        |> Expect.isFalse "not successful"
+        root.GetProperty("errorDetails").GetProperty("case").GetString()
+        |> Expect.equal "classified through the SageFsError algebra" "SessionNotRoutable"
+      finally
+        doc.Dispose()
+    }
+
     testTask "POST /exec routes to existing session by working_directory" {
       let client = getSharedClient()
       do! ensureSession client webSampleProject testProjectDir

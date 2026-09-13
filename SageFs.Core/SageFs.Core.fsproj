@@ -99,6 +99,8 @@
         <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />
         <Compile Include="SageFsError.fs" />
+        <!-- After SageFsError: the railway effect type over the algebra. -->
+        <Compile Include="SageFsIO.fs" />
         <!-- After SageFsError: an app state carries the structured error that ended its run. -->
         <Compile Include="AppRun.fs" />
         <Compile Include="ResultEx.fs" />

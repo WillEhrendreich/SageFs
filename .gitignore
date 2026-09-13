@@ -24,7 +24,13 @@ playwright-report/
 analyzers/community
 
 .fake
-mcp-sdk-nupkg/
+# nuget.config declares mcp-sdk-nupkg/ as a local package source, so the
+# directory must exist whenever NuGet reads that config -- including at the
+# moment `dotnet fsi ci-pipeline.fsx` resolves its own `#r "nuget:"` on a cold
+# machine, BEFORE any pipeline stage can pack into it. Track an empty dir via
+# .gitkeep (a missing local source is NU1301) while ignoring the packed output.
+mcp-sdk-nupkg/*
+!mcp-sdk-nupkg/.gitkeep
 mcp-sdk/
 *.log
 aspire-traces.png
@@ -71,3 +77,7 @@ coverage-report/
 /sagefs-roast-2.md
 /sagefs-roast-3.md
 /sagefs-roast-4.md
+
+# Local output of the ci-pipeline.fsx release stages (nupkg + vsix + manifest);
+# on CI it is uploaded as the release-assets artifact, never committed.
+release/

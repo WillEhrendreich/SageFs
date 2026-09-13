@@ -164,10 +164,18 @@ module DashboardDom =
     do! PlaywrightExpect.isVisibleAsync evalInput "eval input visible after opening"
   }
 
-  /// Open the New Session accordion (a <details> collapsed by default).
+  /// Open the New Session accordion (a <details class="new-session-panel">
+  /// collapsed by default). Checks the current open state first — like
+  /// `openEvalArea` — so it is a no-op when already open and safe to call
+  /// repeatedly from `throughPanelReset` (a second unconditional click would
+  /// instead toggle it closed again).
   let openNewSession (page: IPage) = task {
-    let toggle = page.GetByText("New Session").First
-    do! toggle.ClickAsync()
+    let! isOpen =
+      page.EvaluateAsync<bool>(
+        "() => { var el = document.querySelector('.new-session-panel'); return el ? el.open : false; }")
+    if not isOpen then
+      let toggle = page.GetByText("New Session").First
+      do! toggle.ClickAsync()
   }
 
   /// The eval code textarea — located by its stable id, never by role/name
@@ -177,6 +185,41 @@ module DashboardDom =
   /// The EVAL button — first .eval-btn inside the evaluate section.
   let evalButton (page: IPage) =
     page.Locator("#evaluate-section .eval-btn").First
+
+  /// Open the Friction panel (a <details id="friction-panel"> collapsed by
+  /// default). No-op when already open — safe to call repeatedly from
+  /// `throughPanelReset`.
+  let openFrictionPanel (page: IPage) = task {
+    let! isOpen =
+      page.EvaluateAsync<bool>(
+        "() => { var el = document.querySelector('#friction-panel'); return el ? el.open : false; }")
+    if not isOpen then
+      let summary = page.Locator("#friction-panel summary")
+      do! summary.ClickAsync()
+  }
+
+  /// Retry a `(reopen-panel, body)` pair when `body` fails — a `<details>`
+  /// accordion's open/closed state lives only in the browser (the server
+  /// never renders `open`), and the dashboard's periodic 1-second SSE
+  /// fallback push (Dashboard.fs's `Timeouts.sseEventInterval`) renders a
+  /// ticking uptime label into #main that almost never byte-matches the
+  /// previous push — so the no-change dedupe rarely suppresses it, and the
+  /// resulting full-#main morph snaps every accordion back to its
+  /// server-rendered (always closed) default. On a loaded/cold machine, any
+  /// two steps here that span more than ~1s can race that reset: a
+  /// Playwright actionability timeout ("element is not visible") on a
+  /// locator inside the panel, or an `IsVisibleAsync` snapshot that reads
+  /// false because the panel just snapped shut. Reopening and retrying the
+  /// whole step converges quickly since each attempt only needs to win a
+  /// short window before the next tick; a genuine product failure keeps
+  /// failing every attempt and still surfaces once `attemptsLeft` reaches 0.
+  let rec throughPanelReset (reopen: unit -> Task<unit>) (attemptsLeft: int) (body: unit -> Task<unit>) : Task<unit> = task {
+    do! reopen ()
+    try
+      do! body ()
+    with _ when attemptsLeft > 0 ->
+      do! throughPanelReset reopen (attemptsLeft - 1) body
+  }
 
 /// Helper to run an async Playwright test body inside Expecto.
 /// All dashboard browser tests are tagged [Integration] since they
@@ -249,6 +292,29 @@ let tests =
     do! helpBtn.ClickAsync()
     do! helpWrapper.WaitForAsync(
       LocatorWaitForOptions(State = WaitForSelectorState.Visible))
+  })
+
+  playwrightTest "accordion open state survives the periodic SSE morph" (fun page -> task {
+    // Root cause (commit cdeb7567): the SSE fallback re-renders #main about
+    // once a second because a ticking uptime/relative-time label defeats the
+    // no-change dedupe, and a plain <details> loses its DOM-only `open`
+    // attribute on that morph. The fix makes `open` a Datastar signal
+    // (signalDetails in DashboardFragments.fs) instead of DOM-only state, so
+    // Datastar re-applies it from the surviving signal after every morph.
+    // This test proves that DIRECTLY — no DashboardDom.throughPanelReset
+    // reopen-retry helper — by opening the accordion once and asserting it
+    // is still open after outlasting at least two 1-second SSE-fallback
+    // ticks (Timeouts.sseEventInterval).
+    do! PlaywrightExpect.waitForSSE 10_000 page
+    do! DashboardDom.openEvalArea page
+    let isOpen () =
+      page.EvaluateAsync<bool>(
+        "() => { var el = document.querySelector('#evaluate-section'); return el ? el.open : false; }")
+    let! openedNow = isOpen ()
+    Expect.isTrue openedNow "evaluate section opened"
+    do! page.WaitForTimeoutAsync(2500.0f)
+    let! stillOpen = isOpen ()
+    Expect.isTrue stillOpen "evaluate section stays open across the periodic SSE morph"
   })
 
   playwrightTest "session status renders with state" (fun page -> task {
@@ -336,40 +402,44 @@ let tests =
 
   playwrightTest "evaluate simple expression" (fun page -> task {
     do! PlaywrightExpect.waitForSSE 15_000 page
-    do! DashboardDom.openEvalArea page
     let textarea = DashboardDom.textarea page
-    do! textarea.FillAsync("let x = 1 + 1;;")
-    do! (DashboardDom.evalButton page).ClickAsync()
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      do! textarea.FillAsync("let x = 1 + 1;;")
+      do! (DashboardDom.evalButton page).ClickAsync()
+    })
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val x: int = 2"
     do! PlaywrightExpect.waitForTextareaCleared 10_000 textarea
   })
 
   playwrightTest "evaluate with Alt+Enter shortcut" (fun page -> task {
     do! PlaywrightExpect.waitForSSE 15_000 page
-    do! DashboardDom.openEvalArea page
     let textarea = DashboardDom.textarea page
-    do! textarea.ClickAsync()
-    do! textarea.FillAsync("""printfn "Hello, World!" """)
-    do! page.Keyboard.PressAsync("Alt+Enter")
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      do! textarea.ClickAsync()
+      do! textarea.FillAsync("""printfn "Hello, World!" """)
+      do! page.Keyboard.PressAsync("Alt+Enter")
+    })
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val it: unit = ()"
     do! PlaywrightExpect.waitForTextareaCleared 10_000 textarea
   })
 
   playwrightTest "evaluate multiline code" (fun page -> task {
     do! PlaywrightExpect.waitForSSE 15_000 page
-    do! DashboardDom.openEvalArea page
     let textarea = DashboardDom.textarea page
-    do! textarea.FillAsync("let add x y =\n  x + y\nadd 5 3;;")
-    do! (DashboardDom.evalButton page).ClickAsync()
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      do! textarea.FillAsync("let add x y =\n  x + y\nadd 5 3;;")
+      do! (DashboardDom.evalButton page).ClickAsync()
+    })
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "int = 8"
   })
 
   playwrightTest "evaluate code with errors" (fun page -> task {
     do! PlaywrightExpect.waitForSSE 15_000 page
-    do! DashboardDom.openEvalArea page
     let textarea = DashboardDom.textarea page
-    do! textarea.FillAsync("let x = undefinedVariable;;")
-    do! (DashboardDom.evalButton page).ClickAsync()
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      do! textarea.FillAsync("let x = undefinedVariable;;")
+      do! (DashboardDom.evalButton page).ClickAsync()
+    })
     // The dashboard renders eval failures as an "Evaluation failed" line in
     // the output panel (the FSI exception message, not the raw FS-code text).
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "Evaluation failed"
@@ -377,31 +447,41 @@ let tests =
 
   playwrightTest "consecutive evaluations maintain scope" (fun page -> task {
     do! PlaywrightExpect.waitForSSE 15_000 page
-    do! DashboardDom.openEvalArea page
     let textarea = DashboardDom.textarea page
     let evalBtn = DashboardDom.evalButton page
 
-    do! textarea.FillAsync("let x = 5;;")
-    do! evalBtn.ClickAsync()
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      do! textarea.FillAsync("let x = 5;;")
+      do! evalBtn.ClickAsync()
+    })
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val x: int = 5"
 
     // Each eval's SSE morph can re-collapse the Evaluate accordion — reopen
-    // before the next interaction.
-    do! DashboardDom.openEvalArea page
-    do! textarea.FillAsync("let y = x + 3;;")
-    do! evalBtn.ClickAsync()
+    // before the next interaction (throughPanelReset also covers the
+    // periodic 1s fallback push racing the same reopen-then-act window).
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      do! textarea.FillAsync("let y = x + 3;;")
+      do! evalBtn.ClickAsync()
+    })
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val y: int = 8"
 
-    do! DashboardDom.openEvalArea page
-    do! textarea.FillAsync("x + y;;")
-    do! evalBtn.ClickAsync()
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      do! textarea.FillAsync("x + y;;")
+      do! evalBtn.ClickAsync()
+    })
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "val it: int = 13"
   })
 
   playwrightTest "keyboard help shows shortcuts" (fun page -> task {
     // Help toggle lives inside the collapsed Evaluate accordion — open it.
+    // The accordion carries no server-tracked open state, so the periodic 1s
+    // SSE fallback push (see DashboardDom.throughPanelReset) can re-collapse
+    // it at any point; re-confirm it is open immediately before each step
+    // that depends on it rather than trusting a single open call up front
+    // (the 500ms settle below is exactly the kind of gap that race needs).
     do! DashboardDom.openEvalArea page
     do! page.WaitForTimeoutAsync(500.0f)
+    do! DashboardDom.openEvalArea page
     let helpWrapper = page.Locator("#keyboard-help-wrapper")
     // $helpVisible starts true — the shortcuts table is visible on load.
     do! helpWrapper.WaitForAsync(
@@ -414,11 +494,17 @@ let tests =
     do! PlaywrightExpect.isVisibleAsync ctrlL "Ctrl+L listed"
     let tabKey = page.GetByText("Tab")
     do! PlaywrightExpect.isVisibleAsync tabKey "Tab listed"
-    // Toggle closed, then open again.
+    // Toggle closed, then open again. Each click's target lives inside the
+    // same accordion, so reconfirm it is open right before every click —
+    // a blind whole-body retry isn't safe here since a click that DID land
+    // toggles the $helpVisible signal, and retrying from scratch would
+    // double-flip it.
     let helpBtn = page.Locator("#evaluate-section .panel-header-btn").First
+    do! DashboardDom.openEvalArea page
     do! helpBtn.ClickAsync()
     do! helpWrapper.WaitForAsync(
       LocatorWaitForOptions(State = WaitForSelectorState.Hidden))
+    do! DashboardDom.openEvalArea page
     do! helpBtn.ClickAsync()
     do! helpWrapper.WaitForAsync(
       LocatorWaitForOptions(State = WaitForSelectorState.Visible))
@@ -546,24 +632,29 @@ let tests =
     let evalSection = page.Locator("#evaluate-section")
     do! PlaywrightExpect.isVisibleAsync evalSection "evaluate section visible"
     do! PlaywrightExpect.waitForText 10_000 evalSection "Evaluate"
-    // Evaluate is a <details class="eval-area"> collapsed by default — open it.
-    do! DashboardDom.openEvalArea page
-    // Textarea with the F# placeholder
-    let textarea = page.Locator(".eval-input").First
-    do! PlaywrightExpect.isVisibleAsync textarea "textarea visible"
-    let! placeholder = textarea.GetAttributeAsync("placeholder")
-    Expect.isTrue (
-      placeholder <> null
-      && System.Text.RegularExpressions.Regex.IsMatch(placeholder, "Enter F# code"))
-      "textarea placeholder mentions Enter F# code"
-    // Eval button
-    let evalBtn =
-      page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Eval"))
-    do! PlaywrightExpect.isVisibleAsync evalBtn "Eval button visible"
-    // Reset button (first match — [RESET] or ↻ Reset)
-    let resetBtn =
-      page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Reset")).First
-    do! PlaywrightExpect.isVisibleAsync resetBtn "Reset button visible"
+    // Evaluate is a <details class="eval-area"> collapsed by default, and
+    // the periodic 1s SSE fallback push can re-collapse it between these
+    // sequential IsVisibleAsync snapshots on a loaded machine — reopen and
+    // retry the whole assertion block through throughPanelReset rather than
+    // each check individually.
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      // Textarea with the F# placeholder
+      let textarea = page.Locator(".eval-input").First
+      do! PlaywrightExpect.isVisibleAsync textarea "textarea visible"
+      let! placeholder = textarea.GetAttributeAsync("placeholder")
+      Expect.isTrue (
+        placeholder <> null
+        && System.Text.RegularExpressions.Regex.IsMatch(placeholder, "Enter F# code"))
+        "textarea placeholder mentions Enter F# code"
+      // Eval button
+      let evalBtn =
+        page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Eval"))
+      do! PlaywrightExpect.isVisibleAsync evalBtn "Eval button visible"
+      // Reset button (first match — [RESET] or ↻ Reset)
+      let resetBtn =
+        page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Reset")).First
+      do! PlaywrightExpect.isVisibleAsync resetBtn "Reset button visible"
+    })
   })
 
   playwrightTest "page structure: clear output button in panel header" (fun page -> task {
@@ -574,22 +665,26 @@ let tests =
 
   playwrightTest "page structure: create session section has inputs and buttons" (fun page -> task {
     do! PlaywrightExpect.waitForSSE 10_000 page
-    // "New Session" is a <details> collapsed by default — open it.
-    do! DashboardDom.openNewSession page
-    // Working directory input (placeholder contains "path\to\project")
-    let dirInput = page.Locator("input[placeholder*=\"path\\\\to\\\\project\"]")
-    do! PlaywrightExpect.isVisibleAsync dirInput "working directory input visible"
-    // Discover button
-    let discoverBtn =
-      page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Discover")).First
-    do! PlaywrightExpect.isVisibleAsync discoverBtn "Discover button visible"
-    // Manual projects input
-    let manualInput = page.Locator("input[placeholder*=\"MyProject.fsproj\"]")
-    do! PlaywrightExpect.isVisibleAsync manualInput "manual projects input visible"
-    // Create session button
-    let createBtn =
-      page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Create")).First
-    do! PlaywrightExpect.isVisibleAsync createBtn "Create button visible"
+    // "New Session" is a <details> collapsed by default, and the periodic
+    // 1s SSE fallback push can re-collapse it between these sequential
+    // IsVisibleAsync snapshots on a loaded machine — reopen and retry the
+    // whole assertion block (see DashboardDom.throughPanelReset).
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openNewSession page) 5 (fun () -> task {
+      // Working directory input (placeholder contains "path\to\project")
+      let dirInput = page.Locator("input[placeholder*=\"path\\\\to\\\\project\"]")
+      do! PlaywrightExpect.isVisibleAsync dirInput "working directory input visible"
+      // Discover button
+      let discoverBtn =
+        page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Discover")).First
+      do! PlaywrightExpect.isVisibleAsync discoverBtn "Discover button visible"
+      // Manual projects input
+      let manualInput = page.Locator("input[placeholder*=\"MyProject.fsproj\"]")
+      do! PlaywrightExpect.isVisibleAsync manualInput "manual projects input visible"
+      // Create session button
+      let createBtn =
+        page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Create")).First
+      do! PlaywrightExpect.isVisibleAsync createBtn "Create button visible"
+    })
   })
 
   // --- TS journey ports (friction-panel-journey.spec.ts) ---
@@ -693,25 +788,27 @@ let tests =
     let panel = page.Locator("#friction-panel")
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
     // Open the <details> so the send form is in the accessibility tree.
-    let! isOpen =
-      page.EvaluateAsync<bool>(
-        "() => { var el = document.querySelector('#friction-panel'); return el ? el.open : false; }")
-    if not isOpen then
-      do! panel.Locator("summary").ClickAsync()
+    do! DashboardDom.openFrictionPanel page
     // The previous journey left one feedback record; the send form is present.
     let sendBtn =
       panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Send Report"))
     let! sendCount = sendBtn.CountAsync()
     Expect.equal sendCount 1 "send form present from the recorded feedback"
 
-    // 1. No endpoint -> inline validation error (server-authoritative).
-    do! sendBtn.ClickAsync()
+    // 1. No endpoint -> inline validation error (server-authoritative). The
+    // panel's open state can race the periodic 1s SSE fallback push between
+    // opening it and clicking Send — reopen-and-retry through the click
+    // (see DashboardDom.throughPanelReset).
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openFrictionPanel page) 5
+          (fun () -> task { do! sendBtn.ClickAsync() })
     do! PlaywrightExpect.waitForText 15_000 (page.Locator("#friction-send-status")) "missing endpoint"
 
     // 2. Non-loopback plaintext http -> rejected before any network I/O.
     let endpoint = panel.Locator("input").First
-    do! endpoint.FillAsync("http://example.com/ingest")
-    do! sendBtn.ClickAsync()
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openFrictionPanel page) 5 (fun () -> task {
+      do! endpoint.FillAsync("http://example.com/ingest")
+      do! sendBtn.ClickAsync()
+    })
     let status = page.Locator("#friction-send-status")
     do! PlaywrightExpect.waitForText 15_000 status "endpoint must be an absolute https URL"
   })

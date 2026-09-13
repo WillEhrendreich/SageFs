@@ -18,13 +18,6 @@ let main argv =
       failures |> List.iter (eprintfn "QUALITY GATE: %s")
       1
   | false ->
-  // Run BenchmarkDotNet if --benchmark flag is passed
-  let isBenchmark = argv |> Array.exists (fun a -> a = "--benchmark")
-  match isBenchmark with
-  | true ->
-    let benchArgv = argv |> Array.filter (fun a -> a <> "--benchmark")
-    SageFs.Tests.Benchmarks.BenchmarkRunner.run benchArgv
-  | false ->
 
   // Run mutation score report if --mutation-score flag is passed
   let isMutationScore = argv |> Array.exists (fun a -> a = "--mutation-score")
@@ -201,16 +194,12 @@ let main argv =
       Tests.runTestsInAssemblyWithCLIArgs [] filteredArgv
     | false ->
       // Default: exclude the registered [Integration] suites (structurally, by
-      // the identity of their test bodies — see TestInfrastructure.Integration)
-      // and [Benchmark] tests.
+      // the identity of their test bodies — see TestInfrastructure.Integration).
       // Run with --all or --integration to include them.
       let tests =
         Impl.testFromThisAssembly ()
         |> Option.defaultValue (testList "empty" [])
         |> SageFs.Tests.TestInfrastructure.Integration.excludeRegistered
-        |> Test.filter
-          defaultConfig.joinWith.asString
-          (fun z -> not ((defaultConfig.joinWith.format z).Contains "[Benchmark]"))
       // Fail closed: an "[Integration]"-tagged test that bypassed the registry
       // would silently join the fast default run.
       match SageFs.Tests.TestInfrastructure.Integration.unregisteredTagged tests with

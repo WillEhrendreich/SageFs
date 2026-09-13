@@ -59,9 +59,22 @@ module McpAdapter =
       match result.EvaluationResult with
       | Ok output -> sprintf "Result: %s" output
       | Error ex ->
-          let suggestion = ex.Message |> ErrorMessages.categorize |> ErrorMessages.getSuggestion
-          let enhanced = WorkflowErrorContext.enhance workflow ex.Message suggestion
-          sprintf "Error: %s\n%s%s" ex.Message enhanced diagnosticsSection
+          match ex with
+          | :? SageFsErrorException as se ->
+            // SageFsErrorException is exactly how a SageFsError travels
+            // through this exception-typed channel (see its own doc
+            // comment) — the algebra already knows what happened and what
+            // to do about it, so use its own suggestedAction instead of
+            // re-deriving one via fragile substring matching over free-form
+            // text (ErrorMessages.categorize).
+            let errText = SageFsError.describe se.Error
+            let suggestion = SageFsError.suggestedAction se.Error
+            let enhanced = WorkflowErrorContext.enhance workflow errText suggestion
+            sprintf "Error: %s\n%s%s" errText enhanced diagnosticsSection
+          | _ ->
+            let suggestion = ex.Message |> ErrorMessages.categorize |> ErrorMessages.getSuggestion
+            let enhanced = WorkflowErrorContext.enhance workflow ex.Message suggestion
+            sprintf "Error: %s\n%s%s" ex.Message enhanced diagnosticsSection
     
     match String.IsNullOrEmpty(stdout) with
     | true -> output
@@ -894,6 +907,18 @@ module McpTools =
     | Message _ -> false
     | RestartInProgress _ -> false
 
+  /// Classify a `RouteError` (routeToSession's failure channel) into the
+  /// `SageFsError` algebra: a plain `Message` means the session itself could
+  /// not be routed to (not found, still warming up, invalid id — the same
+  /// "not routable right now" family `SessionNotRoutable` already covers at
+  /// every other resolveSessionId boundary); `TransportFailure` and
+  /// `RestartInProgress` both mean the worker process could not be reached,
+  /// which is exactly what `WorkerCommunicationFailed` describes.
+  let routeErrorToSageFsError (sid: string) = function
+    | Message msg -> SageFsError.SessionNotRoutable msg
+    | TransportFailure msg -> SageFsError.WorkerCommunicationFailed (sid, msg)
+    | RestartInProgress msg -> SageFsError.WorkerCommunicationFailed (sid, msg)
+
   let innermostException (ex: exn) =
     let rec loop (current: exn) =
       match current.InnerException with
@@ -1350,8 +1375,33 @@ module McpTools =
         WorkerProtocol.WorkerResponse.EvalResult(rid, result, adjusted, meta)
       | other -> other
 
+  /// Outcome of running code through /exec's pipeline: distinguishes an eval
+  /// that ran and failed (a compile/runtime error — the request WAS
+  /// processed, its text lives in the formatted output) from an eval that
+  /// never ran at all because the session couldn't be routed to or the
+  /// worker couldn't be reached. `Evaluated` keeps the truthful-200 contract
+  /// (client code is wrong, not SageFs); `InfraFailure` carries the
+  /// `SageFsError` the algebra already classifies (SessionNotRoutable,
+  /// WorkerCommunicationFailed, ...) so a caller — and /exec's HTTP status —
+  /// can tell "your code is wrong" from "SageFs itself is unreachable"
+  /// instead of both being flattened into the same success=false shape.
+  type EvalExecOutcome =
+    | Evaluated of failed: bool
+    | InfraFailure of SageFsError
+
+  module EvalExecOutcome =
+    /// Combine outcomes from statements evaluated in sequence within one
+    /// call: an infra failure anywhere means nothing after it could have
+    /// run against a session that was never reachable, so it wins outright;
+    /// otherwise failures accumulate the way the old bool flag did.
+    let combine (a: EvalExecOutcome) (b: EvalExecOutcome) : EvalExecOutcome =
+      match a, b with
+      | InfraFailure _, _ -> a
+      | _, InfraFailure _ -> b
+      | Evaluated f1, Evaluated f2 -> Evaluated (f1 || f2)
+
   /// Evaluate a single FSI statement, dispatch Elm events, return formatted output.
-  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) : Task<string * bool> = task {
+  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) : Task<string * EvalExecOutcome> = task {
     notifyElm ctx (SageFsEvent.EvalStarted (sid, statement))
     let workflow = getWorkflowForSession ctx sid
     let! routeResult =
@@ -1426,7 +1476,7 @@ module McpTools =
             with ex -> Log.warn "Failed to deserialize assembly load errors: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()
           // Success — the typed Ok outcome, not string sniffing, decides truth.
-          (formatted, false)
+          (formatted, Evaluated false)
         | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
           let errText = SageFsError.describe err
           // Track TypeLoadException so targeted_verify can flag the session as compromised.
@@ -1437,23 +1487,35 @@ module McpTools =
           | _ -> ()
           notifyElm ctx (
             SageFsEvent.EvalFailed (sid, errText))
-          (formatted, true)
-        | _ -> (formatted, false)
+          // The eval RAN — it's a compile/runtime failure in the user's code,
+          // not an infra failure. Keeps the truthful-200 contract: /exec
+          // stays 200 with the error text in `result`.
+          (formatted, Evaluated true)
+        | WorkerProtocol.WorkerResponse.WorkerError err ->
+          // The worker replied but could not run the eval at all (e.g. still
+          // starting up) — this already IS a classified SageFsError, so
+          // route it through the algebra instead of flattening it to a bool.
+          notifyElm ctx (SageFsEvent.EvalFailed (sid, SageFsError.describe err))
+          (formatted, InfraFailure err)
+        | _ -> (formatted, Evaluated false)
       | Error msg ->
         let err = routeErrorMessage msg
         notifyElm ctx (SageFsEvent.EvalFailed (sid, err))
-        (sprintf "Error: %s" err, true)
+        (sprintf "Error: %s" err, InfraFailure (routeErrorToSageFsError sid msg))
   }
 
-  /// Evaluate F# code. Returns (formatted output, true when any statement
-  /// failed) — the error flag comes from the typed worker outcome, never
-  /// string sniffing. Most callers use `sendFSharpCode` (string-only view).
+  /// Evaluate F# code. Returns (formatted output, outcome) — `Evaluated
+  /// failed` when the code ran (a compile/runtime failure still counts as
+  /// ran: /exec keeps its truthful-200 contract), `InfraFailure err` when it
+  /// never ran because the session/worker was unreachable. The distinction
+  /// comes from the typed worker outcome, never string sniffing. Most
+  /// callers use `sendFSharpCode` (string-only view).
   let evalFSharpCodeWithOutcome
       (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat)
       (sessionId: string option) (workingDirectory: string option)
       (filePath: string option) (evalMode: string option) (blockStartLine: int option)
       (intent: string option)
-      : Task<string * bool> =
+      : Task<string * EvalExecOutcome> =
     task {
       let! resolution = resolveSessionId ctx agentName sessionId workingDirectory
       match resolution with
@@ -1465,7 +1527,7 @@ module McpTools =
           | Some cached ->
             Log.debug "Eval dedup hit for session %s (code hash %08x)" sid (code.GetHashCode())
             Instrumentation.fsiEvals.Add(1L)
-            return (cached, false)
+            return (cached, Evaluated false)
           | None ->
 
           let state =
@@ -1507,11 +1569,11 @@ module McpTools =
           AgentActivityTracker.recordToolCall ctx.ActivityTracker agentName sid filePath intent DateTime.UtcNow
 
           let mutable allOutputs = []
-          let mutable anyError = false
+          let mutable outcome = Evaluated false
           for statement in statements do
-            let! output, errored = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset statement
+            let! output, stmtOutcome = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset statement
             allOutputs <- output :: allOutputs
-            if errored then anyError <- true
+            outcome <- EvalExecOutcome.combine outcome stmtOutcome
 
           let finalOutput =
             match format with
@@ -1532,10 +1594,10 @@ module McpTools =
               let advisories = SessionOperations.FileOverlapAdvisory.compute agentName [fp] presences
               SessionOperations.CoordinationEnrichment.enrichEvalWithAdvisories advisories finalOutput
             | None -> finalOutput
-          return (enrichedOutput, anyError)
+          return (enrichedOutput, outcome)
         }
       | other ->
-        return (sprintf "Error: %s" (formatSessionResolution other), true)
+        return (sprintf "Error: %s" (formatSessionResolution other), InfraFailure (SageFsError.SessionNotRoutable (formatSessionResolution other)))
     }
 
   /// String-only view of evalFSharpCodeWithOutcome — keeps existing callers.
