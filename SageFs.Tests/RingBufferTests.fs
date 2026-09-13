@@ -166,6 +166,51 @@ let ringBufferTests =
       }
     ]
 
+    testList "immutability — retained snapshots must not alias" [
+      test "a retained snapshot's toList is unchanged by later pushes, including wraparound" {
+        let snap1 = create 3 |> push 1 |> push 2 |> push 3
+        let before = snap1 |> toList
+        // Push enough further items to force the internal array to wrap around
+        // multiple times over the SAME underlying array if push mutates in place.
+        let _final = snap1 |> pushMany [ 4; 5; 6; 7; 8 ]
+        snap1 |> toList |> Expect.equal "snap1.toList must not change after later pushes" before
+      }
+
+      test "a retained snapshot's tryGet results are unchanged by later pushes" {
+        let snap1 = create 3 |> push 1 |> push 2 |> push 3
+        let before0 = snap1 |> tryGet 0
+        let before1 = snap1 |> tryGet 1
+        let before2 = snap1 |> tryGet 2
+        let _final = snap1 |> pushMany [ 4; 5; 6; 7; 8 ]
+        snap1 |> tryGet 0 |> Expect.equal "tryGet 0 must not change" before0
+        snap1 |> tryGet 1 |> Expect.equal "tryGet 1 must not change" before1
+        snap1 |> tryGet 2 |> Expect.equal "tryGet 2 must not change" before2
+      }
+
+      test "two snapshots taken at different points both keep their own contents independently" {
+        let snap1 = create 3 |> pushMany [ 1; 2; 3 ]
+        let snap2 = snap1 |> pushMany [ 4; 5 ]
+        let snap3 = snap2 |> pushMany [ 6; 7; 8; 9 ]
+        // Force further mutation after all snapshots were captured.
+        let _final = snap3 |> pushMany [ 10; 11; 12 ]
+        snap1 |> toList |> Expect.equal "snap1 independent" [ 3; 2; 1 ]
+        snap2 |> toList |> Expect.equal "snap2 independent" [ 5; 4; 3 ]
+        snap3 |> toList |> Expect.equal "snap3 independent" [ 9; 8; 7 ]
+      }
+
+      testProperty "a snapshot captured mid-sequence keeps its toList/tryGet results regardless of later pushes"
+        (fun (cap: PositiveInt) (before: int list) (after: int list) ->
+          let c = min cap.Get 30
+          let snap = before |> List.fold (fun b i -> push i b) (create c)
+          let snapToList = snap |> toList
+          let snapTryGets = [ for age in 0 .. (count snap) - 1 -> tryGet age snap ]
+          let _laterSnap = after |> List.fold (fun b i -> push i b) snap
+          let stillToList = snap |> toList
+          let stillTryGets = [ for age in 0 .. (count snap) - 1 -> tryGet age snap ]
+          stillToList = snapToList && stillTryGets = snapTryGets
+        )
+    ]
+
     testList "property tests" [
       testProperty "count never exceeds capacity" (fun (cap: PositiveInt) (items: int list) ->
         let c = min cap.Get 100
