@@ -28,48 +28,51 @@ let smartResetOutcomeTests =
 let smartResetExecuteTests =
   testList "SmartReset execute" [
 
-    testCase "soft reset succeeds → no escalation" <| fun _ ->
+    testTask "soft reset succeeds → no escalation" {
       let mutable hardCalled = false
       let soft () = task { return Ok () }
       let hard () = task { hardCalled <- true; return Ok "hard done" }
 
-      SmartReset.execute soft hard
-      |> Async.AwaitTask |> Async.RunSynchronously
+      let! outcome = SmartReset.execute soft hard
+      outcome
       |> Expect.equal "should be SoftResetSucceeded" SmartReset.Outcome.SoftResetSucceeded
 
       hardCalled
       |> Expect.isFalse "hard reset should NOT have been called"
+    }
 
-    testCase "soft reset fails → escalates to hard reset" <| fun _ ->
+    testTask "soft reset fails → escalates to hard reset" {
       let soft () = task { return Error "FSI stuck" }
       let hard () = task { return Ok "rebuilt and reloaded" }
 
-      SmartReset.execute soft hard
-      |> Async.AwaitTask |> Async.RunSynchronously
+      let! outcome = SmartReset.execute soft hard
+      outcome
       |> Expect.equal
         "should be EscalatedToHardReset"
         (SmartReset.Outcome.EscalatedToHardReset "rebuilt and reloaded")
+    }
 
-    testCase "both fail → AllResetsFailed with both errors" <| fun _ ->
+    testTask "both fail → AllResetsFailed with both errors" {
       let soft () = task { return Error "soft fail" }
       let hard () = task { return Error "hard fail" }
 
-      SmartReset.execute soft hard
-      |> Async.AwaitTask |> Async.RunSynchronously
+      let! outcome = SmartReset.execute soft hard
+      outcome
       |> Expect.equal
         "should be AllResetsFailed"
         (SmartReset.Outcome.AllResetsFailed("soft fail", "hard fail"))
+    }
 
-    testCase "hard reset receives rebuild=false by default" <| fun _ ->
+    testTask "hard reset receives rebuild=false by default" {
       let mutable receivedRebuild = None
       let soft () = task { return Error "nope" }
       let hard () = task { receivedRebuild <- Some false; return Ok "done" }
 
-      SmartReset.execute soft hard
-      |> Async.AwaitTask |> Async.RunSynchronously |> ignore
+      let! _ = SmartReset.execute soft hard
 
       receivedRebuild
       |> Expect.equal "should have called hard reset" (Some false)
+    }
 
   ]
 

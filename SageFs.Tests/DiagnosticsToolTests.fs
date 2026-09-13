@@ -87,106 +87,81 @@ let formatDiagnosticsTests =
 let checkFSharpCodeTests =
   Integration.hostList "checkFSharpCode backing function" [
 
-    testCase "checkFSharpCode with valid code returns no issues"
-    <| fun _ ->
-      task {
-        let ctx = sharedCtx ()
-        let! result = checkFSharpCode ctx "test" "let x = 42" None None
-        result
-        // check_fsharp_code's own clean-result wording (Mcp.fs checkFSharpCode),
-        // distinct from McpAdapter.formatDiagnosticsResult's "No issues found."
-        |> Expect.stringContains "valid code should have no errors" "No errors found"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+    testTask "checkFSharpCode with valid code returns no issues" {
+      let ctx = sharedCtx ()
+      let! result = checkFSharpCode ctx "test" "let x = 42" None None
+      result
+      // check_fsharp_code's own clean-result wording (Mcp.fs checkFSharpCode),
+      // distinct from McpAdapter.formatDiagnosticsResult's "No issues found."
+      |> Expect.stringContains "valid code should have no errors" "No errors found"
+    }
 
-    testCase "checkFSharpCode with type error returns diagnostic"
-    <| fun _ ->
-      task {
-        let ctx = sharedCtx ()
-        let! result = checkFSharpCode ctx "test" "let x: int = \"hello\"" None None
-        result
-        |> Expect.stringContains "should report error" "[error]"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+    testTask "checkFSharpCode with type error returns diagnostic" {
+      let ctx = sharedCtx ()
+      let! result = checkFSharpCode ctx "test" "let x: int = \"hello\"" None None
+      result
+      |> Expect.stringContains "should report error" "[error]"
+    }
 
-    testCase "checkFSharpCode with undefined value returns diagnostic"
-    <| fun _ ->
-      task {
-        let ctx = sharedCtx ()
-        let! result = checkFSharpCode ctx "test" "let y = undefinedValue + 1" None None
-        result
-        |> Expect.stringContains "should report undefined" "[error]"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+    testTask "checkFSharpCode with undefined value returns diagnostic" {
+      let ctx = sharedCtx ()
+      let! result = checkFSharpCode ctx "test" "let y = undefinedValue + 1" None None
+      result
+      |> Expect.stringContains "should report undefined" "[error]"
+    }
 
-    testCase "checkFSharpCode does not execute code (no side effects)"
-    <| fun _ ->
-      task {
-        let ctx = sharedCtx ()
-        // Check code that would throw at runtime — diagnostics should still work
-        let! result = checkFSharpCode ctx "test" "let z = 1 / 0" None None
-        // Division by zero is a runtime error, not a compile error
-        result
-        |> Expect.stringContains "should pass compile check" "No errors found"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+    testTask "checkFSharpCode does not execute code (no side effects)" {
+      let ctx = sharedCtx ()
+      // Check code that would throw at runtime — diagnostics should still work
+      let! result = checkFSharpCode ctx "test" "let z = 1 / 0" None None
+      // Division by zero is a runtime error, not a compile error
+      result
+      |> Expect.stringContains "should pass compile check" "No errors found"
+    }
   ]
 
 [<Tests>]
 let accumulatedDiagnosticsTests =
   Integration.hostList "accumulated diagnostics in AppState" [
 
-    testCase "AppState has Diagnostics field of type DiagnosticsStore"
-    <| fun _ ->
-      task {
-        let result = globalActorResult.Value
-        let! phase = result.Actor.PostAndAsyncReply(GetSessionPhase)
-        let st =
-          match phase with
-          | Active (st, _) -> st
-          | other -> failwithf "Expected Active phase, got %A" other
-        // Just verify the field exists and is a valid store (may have accumulated entries from other tests)
-        st.Diagnostics
-        |> DiagnosticsStore.all
-        |> ignore
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+    testTask "AppState has Diagnostics field of type DiagnosticsStore" {
+      let result = globalActorResult.Value
+      let! phase = result.Actor.PostAndAsyncReply(GetSessionPhase)
+      let st =
+        match phase with
+        | Active (st, _) -> st
+        | other -> failwithf "Expected Active phase, got %A" other
+      // Just verify the field exists and is a valid store (may have accumulated entries from other tests)
+      st.Diagnostics
+      |> DiagnosticsStore.all
+      |> ignore
+    }
 
-    testCase "GetDiagnostics with errors accumulates new diagnostics in state"
-    <| fun _ ->
-      task {
-        let result = globalActorResult.Value
-        let! phaseBefore = result.Actor.PostAndAsyncReply(GetSessionPhase)
-        let stBefore =
-          match phaseBefore with
-          | Active (st, _) -> st
-          | other -> failwithf "Expected Active phase, got %A" other
-        let countBefore = stBefore.Diagnostics |> DiagnosticsStore.allFlat |> List.length
-        let uniqueCode = sprintf "let accumTest_%d: int = \"oops\"" (System.Random.Shared.Next())
-        let! _diags = result.Actor.PostAndAsyncReply(fun rc -> GetDiagnostics(uniqueCode, rc))
-        let! phaseAfter = result.Actor.PostAndAsyncReply(GetSessionPhase)
-        let stAfter =
-          match phaseAfter with
-          | Active (st, _) -> st
-          | other -> failwithf "Expected Active phase, got %A" other
-        let countAfter = stAfter.Diagnostics |> DiagnosticsStore.allFlat |> List.length
-        (countAfter > countBefore)
-        |> Expect.isTrue "diagnostics count should increase after GetDiagnostics with errors"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+    testTask "GetDiagnostics with errors accumulates new diagnostics in state" {
+      let result = globalActorResult.Value
+      let! phaseBefore = result.Actor.PostAndAsyncReply(GetSessionPhase)
+      let stBefore =
+        match phaseBefore with
+        | Active (st, _) -> st
+        | other -> failwithf "Expected Active phase, got %A" other
+      let countBefore = stBefore.Diagnostics |> DiagnosticsStore.allFlat |> List.length
+      let uniqueCode = sprintf "let accumTest_%d: int = \"oops\"" (System.Random.Shared.Next())
+      let! _diags = result.Actor.PostAndAsyncReply(fun rc -> GetDiagnostics(uniqueCode, rc))
+      let! phaseAfter = result.Actor.PostAndAsyncReply(GetSessionPhase)
+      let stAfter =
+        match phaseAfter with
+        | Active (st, _) -> st
+        | other -> failwithf "Expected Active phase, got %A" other
+      let countAfter = stAfter.Diagnostics |> DiagnosticsStore.allFlat |> List.length
+      (countAfter > countBefore)
+      |> Expect.isTrue "diagnostics count should increase after GetDiagnostics with errors"
+    }
 
-    testCase "DiagnosticsChanged event fires when diagnostics are updated"
-    <| fun _ ->
-      task {
-        let result = globalActorResult.Value
-        let mutable received = None
-        use _sub = result.DiagnosticsChanged.Subscribe(fun store -> received <- Some store)
+    testTask "DiagnosticsChanged event fires when diagnostics are updated" {
+      let result = globalActorResult.Value
+      let mutable received = None
+      let sub = result.DiagnosticsChanged.Subscribe(fun store -> received <- Some store)
+      try
         let uniqueCode = sprintf "let eventTest_%d: int = \"wrong\"" (System.Random.Shared.Next())
         let! _diags = result.Actor.PostAndAsyncReply(fun rc -> GetDiagnostics(uniqueCode, rc))
         // Give the event a moment to fire (it's synchronous in the actor loop, but subscription is async)
@@ -194,9 +169,9 @@ let accumulatedDiagnosticsTests =
         received
         |> Option.isSome
         |> Expect.isTrue "DiagnosticsChanged event should have fired"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+      finally
+        sub.Dispose()
+    }
   ]
 
 [<Tests>]

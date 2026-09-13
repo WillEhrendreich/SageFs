@@ -41,29 +41,32 @@ let sseTests = testList "SSE Writer" [
   ]
 
   testList "trySendBytes" [
-    testCase "writes bytes to stream successfully" <| fun () ->
+    testTask "writes bytes to stream successfully" {
       use ms = new MemoryStream()
       let bytes = Encoding.UTF8.GetBytes("hello")
-      let result = trySendBytes ms bytes |> Async.AwaitTask |> Async.RunSynchronously
+      let! result = trySendBytes ms bytes
       result |> Expect.isOk "should succeed"
       ms.ToArray() |> Encoding.UTF8.GetString
       |> Expect.equal "should have written content" "hello"
+    }
 
-    testCase "returns Error on disposed stream" <| fun () ->
+    testTask "returns Error on disposed stream" {
       let ms = new MemoryStream()
       ms.Dispose()
       let bytes = Encoding.UTF8.GetBytes("hello")
-      let result = trySendBytes ms bytes |> Async.AwaitTask |> Async.RunSynchronously
+      let! result = trySendBytes ms bytes
       result |> Expect.isError "should fail on disposed stream"
+    }
   ]
 
   testList "trySendSseEvent" [
-    testCase "sends formatted SSE event to stream" <| fun () ->
+    testTask "sends formatted SSE event to stream" {
       use ms = new MemoryStream()
-      let result = trySendSseEvent ms "test" "data" |> Async.AwaitTask |> Async.RunSynchronously
+      let! result = trySendSseEvent ms "test" "data"
       result |> Expect.isOk "should succeed"
       ms.ToArray() |> Encoding.UTF8.GetString
       |> Expect.equal "should have formatted SSE" "event: test\ndata: data\n\n"
+    }
   ]
 
   testList "formatTestSummaryEvent" [
