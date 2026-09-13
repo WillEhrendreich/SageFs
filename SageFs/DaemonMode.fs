@@ -1573,45 +1573,6 @@ let run
   // The single owner of daemon.sagefm: every manifest write in this daemon goes through it.
   use manifestOwner = Features.ManifestOwner.start (Log.asILogger ()) DaemonState.SageFsDir
 
-  // The single owner of this daemon's implicit cohort (cohort-integration-plan.md
-  // Slice 2, D1/D2/D4/D5): holds the live CohortState, appends every applied
-  // command to a SQLite ledger, and publishes the projected CohortFrame
-  // wait-free for reads (Claims v1 MCP tools, McpTools.fs).
-  // getSessionSnapshots (item 13a of sagefs-multiagent-vision.md) is left as
-  // `[||]` deliberately, NOT wired to real per-session test state, pending a
-  // decision on session→member attribution. `Features.CohortTestProjection`
-  // (new, this item) can turn a session's (already session-filtered)
-  // `LiveTestState` view into the Pass/Fail/Stale `Cohort.TestId` lists and
-  // generation a `SessionSnapshot` needs — the SAME per-session filter
-  // `GetSessionTestSummary` uses below (`LiveTestState.statusEntriesForSession`)
-  // — but no `Cohort.SessionSnapshot.Member` can be set correctly from here
-  // yet: `MemberTable.MemberId` (the cohort's member identity) is bound to an
-  // MCP/browser CONNECTION (Mcp.fs's `memberIdFor`), never to a SageFs FSI
-  // session, and no reachable registry maps one to the other cleanly today.
-  // `Mcp.McpTools.McpContext.SessionMap` (member key -> session id) is built
-  // and kept entirely inside `McpServer.startMcpServer` (McpServer.fs:639)
-  // and never returned to this function. `AgentActivityTracker` (owned here,
-  // `activityTracker` below) is reachable, but it is session -> LAST agent
-  // to call a tool against it, keyed by a STRING display form
-  // (`MemberTable.MemberId.display`) with no inverse back to the real
-  // `MemberId` value, and it is many-to-one (more than one agent can have
-  // called into the same session) — reconstructing `MemberId` by parsing the
-  // "mcp:"/"browser:" prefix back off that string would be a guess, and nothing
-  // here confirms the guessed member ever actually joined the cohort. Setting
-  // `Member = None` for a real session would silently mislabel it as the
-  // integration row (Cohort.fs:851-852, SessionSnapshot's own doc), which is
-  // worse than leaving the matrix empty. Wiring this closure to real sessions
-  // is deferred until a clean session->member registry exists (candidates:
-  // thread a `SessionId option` through cohort `Join`, or have McpServer
-  // return/expose its `SessionMap` keyed by the real `MemberId`).
-  use cohortOwner =
-    Features.CohortOwner.start
-      (Log.asILogger ())
-      (Features.CohortLedgerSqlite.Sqlite.create (System.IO.Path.Combine(DaemonState.SageFsDir, "cohort.ledger.db")))
-      (fun () -> System.DateTime.UtcNow)
-      Features.CohortOwner.productionEntropy
-      (fun () -> [||])
-
   use cts = infra.Cts
 
   // Ownership rule 2 (§3.1): an externally-spawned daemon with --owner-pid
@@ -1664,6 +1625,37 @@ let run
   // assigned once the tick timer exists (below).
   let wakeLiveTestTick : (SageFsModel -> unit) ref = ref ignore
   let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef (fun model -> wakeLiveTestTick.Value model) cts.Token
+
+  // The single owner of this daemon's implicit cohort (cohort-integration-plan.md
+  // Slice 2, D1/D2/D4/D5): holds the live CohortState, appends every applied
+  // command to a SQLite ledger, and publishes the projected CohortFrame
+  // wait-free for reads (Claims v1 MCP tools, McpTools.fs). Constructed here,
+  // AFTER `elmRuntime` (not alongside `manifestOwner` above), because item
+  // 13c's `getSessionTestOutcomes` closure reads `elmRuntime.GetModel()` —
+  // there is nothing to close over any earlier in this function.
+  //
+  // item 13a left this hardcoded to `[||]`/no outcomes because no
+  // session->member mapping existed. Item 13c closed that gap: `join_cohort`
+  // (Mcp.fs) now resolves and records the caller's session on `MemberRecord`,
+  // so `CohortOwner.frameOf` can build its own `SessionSnapshot[]` straight
+  // off `head.State.Members` — this closure only needs to answer "what are
+  // THIS session's Pass/Fail/Stale tests and generation", the exact question
+  // `Features.CohortTestProjection.projectSession` (item 13a) already
+  // answers from a `LiveTestState`, filtered the SAME way
+  // `GetSessionTestSummary` below filters it
+  // (`LiveTestState.statusEntriesForSession`).
+  let getCohortSessionTestOutcomes (sessionId: string) : Features.CohortOwner.SessionTestOutcomes =
+    let state = elmRuntime.GetModel().LiveTesting.TestState
+    let projection, generation = Features.CohortTestProjection.projectSession sessionId state
+    projection.PassingTests, projection.FailingTests, projection.StaleTests, generation
+
+  use cohortOwner =
+    Features.CohortOwner.start
+      (Log.asILogger ())
+      (Features.CohortLedgerSqlite.Sqlite.create (System.IO.Path.Combine(DaemonState.SageFsDir, "cohort.ledger.db")))
+      (fun () -> System.DateTime.UtcNow)
+      Features.CohortOwner.productionEntropy
+      getCohortSessionTestOutcomes
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()

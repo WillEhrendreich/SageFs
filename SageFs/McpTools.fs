@@ -1702,16 +1702,20 @@ v1 has no separate "create cohort" step: the FIRST agent to join an empty cohort
 
 WHEN TO USE: Once per agent, before acquiring claims or requesting a landing, when multiple agents/sub-agents may be touching this repo concurrently.
 
-OUTPUT: Confirmation text, noting whether you became the conductor.""")>]
+OUTPUT: Confirmation text, noting whether you became the conductor and which session (if any) you were bound to for the per-session test matrix.""")>]
     member _.join_cohort(
         [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Identifies you in cohort membership and claim ownership.")>]
         agentName: string,
         [<Description("Your role: 'Implementer', 'Verifier', or 'Observer'.")>]
-        role: string
+        role: string,
+        [<Description("Working directory of the MCP client — resolved to a session id (the same routing send_fsharp_code uses) and recorded so the cohort's per-session test matrix can attribute that checkout's test outcomes to you. Optional: omit to fall back to your active session or the daemon's own working directory.")>]
+        [<Optional; DefaultParameterValue("")>]
+        working_directory: string
     ) : Task<string> =
-        logger.LogDebug("MCP-TOOL: join_cohort called by {AgentName}, role={Role}", agentName, role)
+        let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
+        logger.LogDebug("MCP-TOOL: join_cohort called by {AgentName}, role={Role}, workingDir={Dir}", agentName, role, working_directory)
         task {
-          let! result = SageFs.McpTools.joinCohort ctx agentName role
+          let! result = SageFs.McpTools.joinCohort ctx agentName role wd
           return
             match result with
             | Ok text -> text, None

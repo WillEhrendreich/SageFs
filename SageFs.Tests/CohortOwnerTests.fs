@@ -49,8 +49,8 @@ let cohortOwnerTests =
 
     testTask "joining publishes the member in the read frame" {
       let ledger = InMemory.create<MemberId> ()
-      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun () -> [||])
-      let! result = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer))
+      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      let! result = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
       result |> Result.isOk |> Expect.isTrue "the join is accepted"
       owner.ReadFrame().MemberIds
       |> Array.contains alice
@@ -59,9 +59,9 @@ let cohortOwnerTests =
 
     testTask "N accepted commands append N dense, increasing ledger entries" {
       let ledger = InMemory.create<MemberId> ()
-      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun () -> [||])
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer))
-      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier))
+      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None))
       let! _ = owner.Commit(CohortCommand.RenewLease alice)
       let entries = ledger.ReadAll ()
       entries |> List.length |> Expect.equal "three accepted commands, three entries" 3
@@ -72,20 +72,20 @@ let cohortOwnerTests =
 
     testTask "a fresh owner replaying the same ledger reconstructs an identical frame" {
       let ledger = InMemory.create<MemberId> ()
-      use ownerA = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun () -> [||])
-      let! _ = ownerA.Commit(CohortCommand.Join(alice, JoinableRole.Implementer))
-      let! _ = ownerA.Commit(CohortCommand.Join(bob, JoinableRole.Verifier))
+      use ownerA = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      let! _ = ownerA.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let! _ = ownerA.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None))
       let! _ = ownerA.Commit(CohortCommand.AcquireClaim(alice, ClaimScope.File "A.fs", "working on A"))
       let frameA = ownerA.ReadFrame()
-      use ownerB = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun () -> [||])
+      use ownerB = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
       let frameB = ownerB.ReadFrame()
       frameB |> Expect.equal "replay over the same ledger reconstructs an identical frame" frameA
     }
 
     testTask "a refused command leaves the frame and the ledger unchanged" {
       let ledger = InMemory.create<MemberId> ()
-      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun () -> [||])
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer))
+      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
       let frameBefore = owner.ReadFrame()
       let entriesBefore = ledger.ReadAll ()
       // alice never acquired this claim id, so releasing it is refused.
@@ -99,9 +99,9 @@ let cohortOwnerTests =
 
     testTask "a command refused for one member does not let it touch another member's claim" {
       let ledger = InMemory.create<MemberId> ()
-      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun () -> [||])
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer))
-      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier))
+      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None))
       let! _ = owner.Commit(CohortCommand.AcquireClaim(alice, ClaimScope.File "Shared.fs", "purpose"))
       let claimId =
         owner.ReadFrame().ClaimIds
@@ -120,40 +120,61 @@ let cohortOwnerTests =
       |> Expect.equal "the claim is still held by alice, not bob" aliceIndex
     }
 
-    testTask "session snapshots supplied by getSessionSnapshots populate the frame's test bitplanes" {
+    testTask "WHY — a member joined WITH a session shows that session's outcomes in the frame (item 13c)" {
       let ledger = InMemory.create<MemberId> ()
       let t1 = Cohort.TestId "t1"
       let t2 = Cohort.TestId "t2"
-      let snapshot: Cohort.SessionSnapshot<MemberId> = {
-        Member = None
-        SessionId = "sess-1"
-        Generation = 7L
-        PassingTests = [ t1 ]
-        FailingTests = [ t2 ]
-        StaleTests = []
-      }
-      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun () -> [| snapshot |])
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer))
+      let outcomesFor (sid: string) : CohortOwner.SessionTestOutcomes =
+        if sid = "sess-1" then [ t1 ], [ t2 ], [], 7L else [], [], [], 0L
+      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) outcomesFor
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, Some "sess-1"))
       let frame = owner.ReadFrame()
-      frame.TestIds |> Expect.equal "TestIds is the distinct, sorted union of every session's tests" [| t1; t2 |]
-      frame.SessionGens |> Expect.equal "SessionGens carries the supplied session's generation" [| 7L |]
-      frame.Pass.[0] |> Expect.equal "session row 0 passes t1, not t2" [| true; false |]
-      frame.Fail.[0] |> Expect.equal "session row 0 fails t2, not t1" [| false; true |]
-      frame.Stale.[0] |> Expect.equal "session row 0 has no stale tests" [| false; false |]
+      frame.TestIds |> Expect.equal "TestIds is the distinct, sorted union of every bound session's tests" [| t1; t2 |]
+      frame.SessionGens |> Expect.equal "SessionGens carries the joined member's session generation" [| 7L |]
+      frame.Pass.[0] |> Expect.equal "the member's row passes t1, not t2" [| true; false |]
+      frame.Fail.[0] |> Expect.equal "the member's row fails t2, not t1" [| false; true |]
+      frame.Stale.[0] |> Expect.equal "the member's row has no stale tests" [| false; false |]
     }
 
-    testTask "getSessionSnapshots is re-read on every applied command, not cached from startup" {
+    testTask "WHY — a member joined WITHOUT a session contributes no row to the matrix" {
+      let ledger = InMemory.create<MemberId> ()
+      let t1 = Cohort.TestId "should-never-appear"
+      // If frameOf ever attributed a row to a session-less member, this
+      // outcome would leak into the frame even though nothing bound "sess-1".
+      let outcomesFor (_: string) : CohortOwner.SessionTestOutcomes = [ t1 ], [], [], 1L
+      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) outcomesFor
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      owner.ReadFrame().TestIds
+      |> Expect.equal "no session means no row, so no tests appear" [||]
+    }
+
+    testTask "getSessionTestOutcomes is re-read on every applied command, not cached from startup" {
       let ledger = InMemory.create<MemberId> ()
       let t1 = Cohort.TestId "t1"
-      let live: Cohort.SessionSnapshot<MemberId>[] ref = ref [||]
-      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun () -> live.Value)
+      let live: (Cohort.TestId list * Cohort.TestId list * Cohort.TestId list * int64) ref = ref ([], [], [], 0L)
+      use owner = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> live.Value)
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, Some "sess-1"))
       owner.ReadFrame().TestIds
-      |> Expect.equal "no session snapshots were supplied at startup" [||]
-      live.Value <-
-        [| { Member = None; SessionId = "sess-1"; Generation = 1L
-             PassingTests = [ t1 ]; FailingTests = []; StaleTests = [] } |]
-      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer))
+      |> Expect.equal "no outcomes were supplied at startup" [||]
+      live.Value <- [ t1 ], [], [], 1L
+      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, Some "sess-2"))
       owner.ReadFrame().TestIds
-      |> Expect.equal "the next applied command re-reads getSessionSnapshots and picks up the new session" [| t1 |]
+      |> Expect.equal "the next applied command re-reads getSessionTestOutcomes and picks up the new value" [| t1 |]
+    }
+
+    testTask "WHY — replay preserves the joined member's session (item 13c)" {
+      let ledger = InMemory.create<MemberId> ()
+      use ownerA = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L))
+      let! _ = ownerA.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, Some "sess-1"))
+      // A fresh owner over the same ledger must reconstruct the SAME
+      // Session-bound member — proving `replay` (which folds `decide` over
+      // the recorded commands, Cohort.fs) round-trips `MemberRecord.Session`
+      // via the ledger alone, not via any in-memory state carried forward.
+      let t1 = Cohort.TestId "t1"
+      let outcomesFor (sid: string) : CohortOwner.SessionTestOutcomes =
+        if sid = "sess-1" then [ t1 ], [], [], 3L else [], [], [], 0L
+      use ownerB = CohortOwner.start silentLogger ledger (fixedClock epoch) (counterEntropy ()) outcomesFor
+      ownerB.ReadFrame().TestIds
+      |> Expect.equal "replay reconstructed alice's session binding, so her outcomes populate the frame" [| t1 |]
     }
   ]
