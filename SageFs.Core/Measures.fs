@@ -27,6 +27,16 @@ module Measures =
   /// the same meaning without the collision.
   [<Measure>] type ledgerSeq
 
+  /// Bytes — sizing (budgets, buffer/payload lengths), kept apart from ms/fence/
+  /// ledgerSeq/slot so a byte count can never compile where a duration or a
+  /// counter was meant (SageFs.Cohort §4.3: "units of measure keep the counters
+  /// apart").
+  [<Measure>] type bytes
+
+  /// A build/worker slot — a count of concurrently in-flight build or worker
+  /// slots, kept apart from the other counters for the same reason as `bytes`.
+  [<Measure>] type slot
+
   /// Convert a TimeSpan to float<ms>.
   let inline toMs (ts: System.TimeSpan) : float<ms> =
     LanguagePrimitives.FloatWithMeasure<ms> ts.TotalMilliseconds

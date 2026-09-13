@@ -23,12 +23,18 @@ open SageFs.Measures
 ///   construction — there is no channel through which one member's command can
 ///   mutate another member's claim by merely naming itself the same thing.
 /// - **`Authority`/`JoinableRole` are included** because the vision asks for their
-///   shape here (§4.2), but the total `cohortTools : SessionState * Authority *
-///   CohortPhase -> Set<ToolName>` affordance function that *consumes* them, and
-///   its solo-user-invariant property (§7.3 #8), is Phase 1 item 11 (§8.1) — it
-///   would require depending on `Affordances.fs`/`SessionState`, which sits
-///   outside this island. `decide` does not yet check `Authority` on any command;
-///   that wiring lands with item 8's `Authority.tryPresent`.
+///   shape here (§4.2). Phase 1 item 8 added `Authority.present` (a total, pure
+///   lookup — `CohortState.Conductor` is the only door) and wired `decide` to
+///   check it on the two conductor-only commands (`ReassignClaim`,
+///   `DelegateConductor`). The total `cohortTools : SessionState * Authority *
+///   CohortPhase -> Set<ToolName>` affordance function that *consumes* `Authority`
+///   for MCP tool-listing filtering, and its solo-user-invariant property (§7.3
+///   #8), is still Phase 1 item 11 (§8.1) — it would require depending on
+///   `Affordances.fs`/`SessionState`, which sits outside this island. Likewise the
+///   MCP-boundary `Authority.tryPresent : MemberId -> CohortState -> Result<Authority,
+///   SageFsError>` the vision text names (token presentation at the transport
+///   edge) is a later item's concern — this module's `present` is pure state, so
+///   it is total and returns `Authority<'m>` directly, never `SageFsError`.
 /// - **`Decision`/`record_decision`** (the ledger's human-facing decision log, the
 ///   second half of §5.2) is Phase 1 item 10, not built here. The ledger
 ///   primitive this file *does* build (`LedgerEntry`/`replay`) is what item 10
@@ -267,6 +273,11 @@ module Cohort =
     /// what makes v1 landing "strictly serial" (§5.4) structural rather than a
     /// convention `decide`'s callers have to honor.
     Queue: LandingId list
+    /// The conductor binding (§4.2). `None` until the first member joins an
+    /// empty-membership cohort — v1 has no separate `create_cohort` command, so
+    /// the first `Join` IS create_cohort's conductor binding. Moved only by
+    /// `DelegateConductor`; never a value a member can assert about itself.
+    Conductor: 'm option
   }
 
   /// The well-known git "no parent" sha — a real, meaningful sentinel (`git
@@ -287,7 +298,24 @@ module Cohort =
       Claims = Map.empty
       Landings = Map.empty
       Queue = []
+      Conductor = None
     }
+
+  module Authority =
+    /// The ONLY door (§4.2): a member's id becomes an `Authority` by looking it up
+    /// in `CohortState`. Total — a non-member is `Anonymous`, never an error.
+    /// `Conductor` is read straight off the `Conductor` binding in state; it is
+    /// never a value a caller can assert about itself by naming a role in `Join`.
+    /// The vision's MCP-boundary `tryPresent : MemberId -> CohortState ->
+    /// Result<Authority, SageFsError>` (token presentation at the transport edge)
+    /// is a later item's concern — this lookup is pure state, so it stays total.
+    let present (who: 'm) (state: CohortState<'m>) : Authority<'m> =
+      match state.Conductor with
+      | Some c when c = who -> Authority.Conductor who
+      | _ ->
+        match Map.tryFind who state.Members with
+        | Some { Presence = MemberPresence.Present; Role = role } -> Authority.Member(who, role)
+        | _ -> Authority.Anonymous
 
   // ── Commands, events, effects (§7.1: effects are data) ────────────────────
 
@@ -301,9 +329,14 @@ module Cohort =
     | Tick
     | AcquireClaim of who: 'm * scope: ClaimScope * purpose: string
     | ReleaseClaim of who: 'm * claimId: ClaimId * fence: int64<fence>
-    /// Conductor action: reassign an `Orphaned` claim. Not yet gated by
-    /// `Authority.Conductor` — see the module-level scope note.
+    /// Conductor action: reassign an `Orphaned` claim. Gated by `Authority.present
+    /// by state = Authority.Conductor _` (Phase 1 item 8) — refused with
+    /// `CohortError.NotConductor` otherwise.
     | ReassignClaim of by: 'm * claimId: ClaimId * toMember: 'm
+    /// Conductor action: rebind `Conductor` to another Present member (§4.2's
+    /// "delegate conductor to member X rebinds it"). Gated the same way as
+    /// `ReassignClaim`.
+    | DelegateConductor of by: 'm * toMember: 'm
     /// The member's own watcher observed a save; warn (never block — a claim
     /// cannot stop an edit, §5.1) if it landed inside someone else's claim.
     | ObserveSave of who: 'm * path: string
@@ -323,6 +356,11 @@ module Cohort =
     | MemberJoined of 'm * JoinableRole
     | MemberDeparted of 'm * since: DateTime
     | LeaseRenewed of 'm
+    /// The `Conductor` binding was made for the first time — v1's `create_cohort`
+    /// (§4.2), fired alongside `MemberJoined` for the cohort's first joiner only.
+    | ConductorBound of 'm
+    /// The `Conductor` binding moved from one Present member to another.
+    | ConductorDelegated of from: 'm * to': 'm
     | ClaimAcquired of ClaimId * ClaimScope * holder: 'm * fence: int64<fence>
     | ClaimReleased of ClaimId * by: 'm * fence: int64<fence>
     | ClaimOrphaned of ClaimId * previousHolder: 'm * fence: int64<fence>
@@ -362,6 +400,9 @@ module Cohort =
     | NotLandingRequester of LandingId * 'm
     | LandingNotAtFrontOfQueue of LandingId
     | LandingNotInExpectedState of LandingId * expected: string
+    /// A conductor-only command (`ReassignClaim`, `DelegateConductor`) was issued
+    /// by a member whose `Authority.present` is not `Conductor _` (§4.2).
+    | NotConductor of 'm
 
   // ── Id minting from entropy (never Guid.NewGuid, §7.1) ────────────────────
 
@@ -455,7 +496,15 @@ module Cohort =
       | _ ->
         let record = { Role = role; Presence = MemberPresence.Present; LastRenewal = clock }
         let newState = { state with Members = Map.add who record state.Members }
-        Ok(newState, [ CohortEvent.MemberJoined(who, role) ], [])
+        match state.Conductor with
+        | None ->
+          // v1 create_cohort semantics (§4.2): the first member to join an
+          // empty-membership cohort becomes the conductor. There is no separate
+          // CreateCohort command in v1 — this IS that binding.
+          let bound = { newState with Conductor = Some who }
+          Ok(bound, [ CohortEvent.MemberJoined(who, role); CohortEvent.ConductorBound who ], [])
+        | Some _ ->
+          Ok(newState, [ CohortEvent.MemberJoined(who, role) ], [])
 
     | CohortCommand.Depart who ->
       if not (isPresent state who) then Error(CohortError.MemberNotPresent who)
@@ -526,32 +575,44 @@ module Cohort =
           Ok(newState, [ CohortEvent.ClaimReleased(claimId, who, fence) ], [])
         | _ -> Error(CohortError.NotClaimHolder(claimId, who))
 
-    | CohortCommand.ReassignClaim(_by, claimId, toMember) ->
-      match Map.tryFind claimId state.Claims with
-      | None -> Error(CohortError.UnknownClaim claimId)
-      | Some claim ->
-        match claim.State with
-        | ClaimState.Orphaned _ ->
-          if not (isPresent state toMember) then Error(CohortError.MemberNotPresent toMember)
-          else
-            // Property 1: reactivating an Orphaned claim must not create a
-            // second simultaneously-Held claim over an overlapping scope —
-            // the same exclusivity AcquireClaim enforces on a fresh claim.
-            let conflict =
-              state.Claims
-              |> Map.toList
-              |> List.tryPick (fun (otherId, c) ->
-                match c.State with
-                | ClaimState.Held holder when otherId <> claimId && ClaimScope.overlaps c.Scope claim.Scope -> Some holder
-                | _ -> None)
-            match conflict with
-            | Some holder -> Error(CohortError.ClaimConflict(claim.Scope, holder))
-            | None ->
-              let fence = state.NextFence + 1L<fence>
-              let updated = { claim with Fence = fence; State = ClaimState.Held toMember }
-              let newState = { state with NextFence = fence; Claims = Map.add claimId updated state.Claims }
-              Ok(newState, [ CohortEvent.ClaimReassigned(claimId, toMember, fence) ], [])
-        | _ -> Error(CohortError.ClaimNotOrphaned claimId)
+    | CohortCommand.ReassignClaim(by, claimId, toMember) ->
+      match Authority.present by state with
+      | Authority.Conductor _ ->
+        match Map.tryFind claimId state.Claims with
+        | None -> Error(CohortError.UnknownClaim claimId)
+        | Some claim ->
+          match claim.State with
+          | ClaimState.Orphaned _ ->
+            if not (isPresent state toMember) then Error(CohortError.MemberNotPresent toMember)
+            else
+              // Property 1: reactivating an Orphaned claim must not create a
+              // second simultaneously-Held claim over an overlapping scope —
+              // the same exclusivity AcquireClaim enforces on a fresh claim.
+              let conflict =
+                state.Claims
+                |> Map.toList
+                |> List.tryPick (fun (otherId, c) ->
+                  match c.State with
+                  | ClaimState.Held holder when otherId <> claimId && ClaimScope.overlaps c.Scope claim.Scope -> Some holder
+                  | _ -> None)
+              match conflict with
+              | Some holder -> Error(CohortError.ClaimConflict(claim.Scope, holder))
+              | None ->
+                let fence = state.NextFence + 1L<fence>
+                let updated = { claim with Fence = fence; State = ClaimState.Held toMember }
+                let newState = { state with NextFence = fence; Claims = Map.add claimId updated state.Claims }
+                Ok(newState, [ CohortEvent.ClaimReassigned(claimId, toMember, fence) ], [])
+          | _ -> Error(CohortError.ClaimNotOrphaned claimId)
+      | _ -> Error(CohortError.NotConductor by)
+
+    | CohortCommand.DelegateConductor(by, toMember) ->
+      match Authority.present by state with
+      | Authority.Conductor _ ->
+        if not (isPresent state toMember) then Error(CohortError.MemberNotPresent toMember)
+        else
+          let newState = { state with Conductor = Some toMember }
+          Ok(newState, [ CohortEvent.ConductorDelegated(by, toMember) ], [])
+      | _ -> Error(CohortError.NotConductor by)
 
     | CohortCommand.ObserveSave(who, path) ->
       let violating =
