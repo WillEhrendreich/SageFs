@@ -285,9 +285,115 @@ let baselineIsTrustworthy (assemblyWriteTimeUtc: DateTime) (sourceWriteTimeUtc: 
 let private isIdentifier (name: string) =
   System.Text.RegularExpressions.Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_']*$")
 
-/// A whole-identifier use of `name`, not part of a longer or qualified name.
-let private mentions (text: string) (name: string) =
-  System.Text.RegularExpressions.Regex.IsMatch(text, sprintf @"(?<![\w.'])%s(?![\w'])" (System.Text.RegularExpressions.Regex.Escape name))
+/// Blanks out comments and string/char literals (replacing them with spaces, so
+/// column positions and neighboring identifiers are unaffected) so identifier
+/// extraction can never mistake prose or literal data for a real reference.
+/// Handles `//` line comments, nested `(* *)` block comments, regular/verbatim/
+/// triple-quoted strings, and simple char literals.
+let private stripCommentsAndStrings (text: string) : string =
+  let n = text.Length
+  let buf = System.Text.StringBuilder(text)
+  let blank i j = for k in i .. j - 1 do buf.[k] <- ' '
+  let rec go i =
+    if i >= n then ()
+    elif i + 1 < n && text.[i] = '/' && text.[i + 1] = '/' then
+      let e = match text.IndexOf('\n', i) with | -1 -> n | idx -> idx
+      blank i e
+      go e
+    elif i + 1 < n && text.[i] = '(' && text.[i + 1] = '*' then
+      let rec find depth k =
+        if k >= n then n
+        elif k + 1 < n && text.[k] = '(' && text.[k + 1] = '*' then find (depth + 1) (k + 2)
+        elif k + 1 < n && text.[k] = '*' && text.[k + 1] = ')' then
+          match depth with
+          | 1 -> k + 2
+          | _ -> find (depth - 1) (k + 2)
+        else find depth (k + 1)
+      let e = find 1 (i + 2)
+      blank i e
+      go e
+    elif i + 1 < n && text.[i] = '@' && text.[i + 1] = '"' then
+      let rec find k =
+        if k >= n then n
+        elif k + 1 < n && text.[k] = '"' && text.[k + 1] = '"' then find (k + 2)
+        elif text.[k] = '"' then k + 1
+        else find (k + 1)
+      let e = find (i + 2)
+      blank i e
+      go e
+    elif i + 2 < n && text.[i] = '"' && text.[i + 1] = '"' && text.[i + 2] = '"' then
+      let e = match text.IndexOf("\"\"\"", i + 3) with | -1 -> n | idx -> idx + 3
+      blank i e
+      go e
+    elif text.[i] = '"' then
+      let rec find k =
+        if k >= n then n
+        elif text.[k] = '\\' && k + 1 < n then find (k + 2)
+        elif text.[k] = '"' then k + 1
+        else find (k + 1)
+      let e = find (i + 1)
+      blank i e
+      go e
+    elif text.[i] = '\'' && i + 2 < n && text.[i + 1] = '\\' then
+      match text.IndexOf('\'', i + 2) with
+      | idx when idx > i && idx - i <= 8 ->
+        blank i (idx + 1)
+        go (idx + 1)
+      | _ -> go (i + 1)
+    elif text.[i] = '\'' && i + 2 < n && text.[i + 1] <> '\'' && text.[i + 2] = '\'' then
+      blank i (i + 3)
+      go (i + 3)
+    else go (i + 1)
+  go 0
+  buf.ToString()
+
+let private identifierPattern =
+  System.Text.RegularExpressions.Regex(@"[A-Za-z_][A-Za-z0-9_']*", System.Text.RegularExpressions.RegexOptions.Compiled)
+
+/// Every bare identifier a piece of source text refers to. Comments and string/char
+/// literals are stripped first, so a name that only appears as prose or literal
+/// data is never mistaken for a reference — and a qualified use (`Module.name`)
+/// is still found, because the identifier itself still appears in the text.
+let private identifiersOf (text: string) : Set<string> =
+  identifierPattern.Matches(stripCommentsAndStrings text)
+  |> Seq.cast<System.Text.RegularExpressions.Match>
+  |> Seq.map (fun m -> m.Value)
+  |> Set.ofSeq
+
+/// The names a hidden type also exposes without ever spelling its own name: a
+/// union case (`Circle 1.0` never says `Shape`) or a record field (`{ Timeout = 5 }`
+/// never says `Config`) both make a patch depend on the type just as much as
+/// spelling its name would — so both must count as "uses this hidden type".
+let private innerNamesOf (typeDecl: SourceDecl) : string list =
+  try
+    // A TypeDecl's Text is captured from the SynTypeDefn's own range, which starts
+    // after the `type`/`and` keyword — put it back so the wrapped snippet parses.
+    let wrapped = "module __Hidden__\ntype " + typeDecl.Text
+    match Fantomas.FCS.Parse.parseFile false (SourceText.ofString wrapped) [] with
+    | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = decls) ])), diagnostics
+        when not (diagnostics |> List.exists (fun d -> d.Severity.IsError)) ->
+      decls
+      |> List.collect (function
+        | SynModuleDecl.Types(typeDefns = defns) ->
+          defns
+          |> List.collect (fun (SynTypeDefn(typeRepr = repr)) ->
+            match repr with
+            | SynTypeDefnRepr.Simple(simpleRepr = SynTypeDefnSimpleRepr.Union(unionCases = cases)) ->
+              cases |> List.map (fun (SynUnionCase(ident = SynIdent(ident, _))) -> ident.idText)
+            | SynTypeDefnRepr.Simple(simpleRepr = SynTypeDefnSimpleRepr.Record(recordFields = fields)) ->
+              fields |> List.choose (fun (SynField(idOpt = idOpt)) -> idOpt |> Option.map _.idText)
+            | _ -> [])
+        | _ -> [])
+    | _ -> []
+  with _ -> []
+
+/// The names that count as "using" a hidden declaration: its own name, plus —
+/// for a type — the case/field names a patch can reference without ever
+/// naming the type itself.
+let private targetNamesOf (decl: SourceDecl) : string list =
+  match decl.Kind with
+  | DeclKind.TypeDecl -> decl.Name :: innerNamesOf decl
+  | _ -> [ decl.Name ]
 
 /// Types, values and startup code are compared with the source the running app
 /// was built from; a function may be patched only if its header is unchanged.
@@ -308,13 +414,15 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
   let hidden =
     current.Decls
     |> List.filter (fun d -> d.Access <> DeclAccess.Public && not (patchedNames.Contains d.Name) && isIdentifier d.Name)
+  let hiddenTargets = hidden |> List.map (fun h -> h, targetNamesOf h |> List.filter isIdentifier |> Set.ofList)
   let unreachable =
     outcomes
     |> List.choose (function
       | DeclOutcome.Patch f ->
-        hidden
-        |> List.tryFind (fun h -> h.Name <> f.Name && mentions f.Text h.Name)
-        |> Option.map (fun h -> ReloadChange.UsesNonPublicMember (f.Name, h.Name))
+        let used = identifiersOf f.Text
+        hiddenTargets
+        |> List.tryFind (fun (h, names) -> h.Name <> f.Name && names |> Set.exists (fun n -> Set.contains n used))
+        |> Option.map (fun (h, _) -> ReloadChange.UsesNonPublicMember (f.Name, h.Name))
       | _ -> None)
   let restarts =
     (outcomes |> List.choose (function DeclOutcome.Restart c -> Some c | _ -> None)) @ removed @ unreachable
