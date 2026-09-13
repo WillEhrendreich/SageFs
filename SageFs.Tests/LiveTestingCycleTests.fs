@@ -1196,7 +1196,7 @@ let TestCycleTimingDispatchTests = testList "cycle timing dispatch" [
       Timestamp = System.DateTimeOffset.UtcNow
     }
 
-    let msg = SageFsMsg.Event (SageFsEvent.TestCycleTimingRecorded timing)
+    let msg = SageFsMsg.Event (TuiEvent.TestCycleTimingRecorded timing)
     let model1, effects = SageFsUpdate.update msg model0
 
     model1.LiveTesting.LastTiming
@@ -1267,8 +1267,8 @@ let TestCycleTimingDispatchTests = testList "cycle timing dispatch" [
     }
 
     let model0 = (SageFsModel.initial())
-    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestCycleTimingRecorded timing1)) model0
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestCycleTimingRecorded timing2)) model1
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestCycleTimingRecorded timing1)) model0
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestCycleTimingRecorded timing2)) model1
 
     match model2.LiveTesting.LastTiming with
     | Some t ->
@@ -1478,21 +1478,21 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
       Status = SessionDisplayStatus.Running; LastActivity = System.DateTime.UtcNow
       EvalCount = 0; UpSince = System.DateTime.UtcNow; WorkingDirectory = "C:\\Test"
     }
-    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) model0
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered (sessionIdStr, [| testCase |]))) model1
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap)) model0
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sessionIdStr, [| testCase |]))) model1
     model2.LiveTesting.TestState.DiscoveredTests |> Array.length |> Expect.equal "should have 1 discovered test" 1
 
-    let model3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some sessionIdStr))) model2
+    let model3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid |], Some sessionIdStr))) model2
     let result = {
       TestRunResult.TestId = tid; TestName = "myTest should work"
       Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 42.0)
       Timestamp = System.DateTimeOffset.UtcNow
       Output = None
     }
-    let model4, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| result |])) model3
+    let model4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch [| result |])) model3
     model4.LiveTesting.TestState.LastResults |> Map.tryFind tid |> Expect.isSome "should have result for test"
 
-    let model5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some sessionIdStr))) model4
+    let model5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sessionIdStr))) model4
     model5.LiveTesting.TestState.RunPhases |> Map.tryFind sessionIdStr
     |> fun p -> match p with | Some TestRunPhase.Idle -> () | other -> failwithf "Expected Idle but got %A" other
   }
@@ -1522,16 +1522,16 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
     let m0 = (SageFsModel.initial())
     let snap1 = { SessionSnapshot.Id = s1; Name = Some "S1"; Projects = ["A.fsproj"]; Status = SessionDisplayStatus.Running; LastActivity = System.DateTime.UtcNow; EvalCount = 0; UpSince = System.DateTime.UtcNow; WorkingDirectory = "C:\\A" }
     let snap2 = { SessionSnapshot.Id = s2; Name = Some "S2"; Projects = ["B.fsproj"]; Status = SessionDisplayStatus.Running; LastActivity = System.DateTime.UtcNow; EvalCount = 0; UpSince = System.DateTime.UtcNow; WorkingDirectory = "C:\\B" }
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap1)) m0
-    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap2)) m1
-    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered (s1Str, [| tc1 |]))) m2
-    let m4, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered (s2Str, [| tc2 |]))) m3
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap1)) m0
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap2)) m1
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (s1Str, [| tc1 |]))) m2
+    let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (s2Str, [| tc2 |]))) m3
     m4.LiveTesting.TestState.TestSessionMap |> Map.find tid1 |> Expect.equal "t1 in s1" s1Str
     m4.LiveTesting.TestState.TestSessionMap |> Map.find tid2 |> Expect.equal "t2 in s2" s2Str
 
-    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid1 |], Some s1Str))) m4
+    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid1 |], Some s1Str))) m4
     let r1 = { TestRunResult.TestId = tid1; TestName = "t1"; Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0); Timestamp = System.DateTimeOffset.UtcNow; Output = None }
-    let m6, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r1 |])) m5
+    let m6, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch [| r1 |])) m5
     let s2Status = m6.LiveTesting.TestState.StatusIndex.Entries |> Array.tryFind (fun e -> e.TestId = tid2)
     match s2Status with
     | Some entry -> match entry.Status with | TestRunStatus.Passed _ -> failwith "s2's test should NOT be Passed" | _ -> ()

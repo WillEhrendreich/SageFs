@@ -43,6 +43,7 @@
 
     <ItemGroup>
         <Compile Include="DaemonState.fs" />
+        <Compile Include="SseEvent.fs" />
         <!-- The daemon's Elm kernel + render stack (moved out of SageFs.Core so the
              FSI host closure ships the session engine only). Order is dependency-driven:
              leaves first, SageFsApp/ElmDaemon last. -->
@@ -58,7 +59,7 @@
         <Compile Include="Editor.fs" />
         <Compile Include="ElmLoop.fs" />
         <Compile Include="SessionDisplay.fs" />
-        <Compile Include="SageFsEvent.fs" />
+        <Compile Include="TuiEvent.fs" />
         <Compile Include="TestsPane.fs" />
         <Compile Include="SageFsApp.fs" />
         <Compile Include="ElmDaemon.fs" />
@@ -77,7 +78,6 @@
         <Compile Include="Dashboard.fs" />
         <Compile Include="McpPushNotifications.fs" />
         <Compile Include="McpStateHandlers.fs" />
-        <Compile Include="SessionEvents.fs" />
         <Compile Include="JupyterKernel.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpTools.fs" />

@@ -60,7 +60,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
       StateChanged = None; SessionOps = ops; SessionMap = sessionMap; McpPort = 0
       Dispatch = Some (fun msg ->
         match msg with
-        | SageFsMsg.Event (SageFsEvent.SessionStatusChanged (_, display)) -> finished.TrySetResult display |> ignore
+        | SageFsMsg.Event (TuiEvent.SessionStatusChanged (_, display)) -> finished.TrySetResult display |> ignore
         | _ -> ())
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None; GetFeatureState = None
       ActivityTracker = AgentActivityTracker.create (); LiveSnapshotSink = None }

@@ -737,14 +737,14 @@ type DashboardActions = {
 /// right tab's stream (and never a daemon-global session).
 [<RequireQualifiedAccess>]
 type DashboardStreamCommand =
-  | StateChange of DaemonStateChange
+  | StateChange of SseEvent
   | RetargetView of WorkerProtocol.SessionId option
 
 /// Infrastructure dependencies — event sources, tracking, themes.
 type DashboardInfra = {
   Version: string
   McpPort: int
-  StateChanged: IEvent<DaemonStateChange> option
+  StateChanged: IEvent<SseEvent> option
   ConnectionTracker: ConnectionTracker option
   SessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>
   GetCompletions: WorkerProtocol.SessionId -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>

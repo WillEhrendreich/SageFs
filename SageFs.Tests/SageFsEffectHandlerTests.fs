@@ -232,7 +232,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     snd log.EvalCalls.[0]
     |> Expect.equal "code" "let x = 42"
     match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.EvalCompleted (sid, output, _)) ->
+    | SageFsMsg.Event (TuiEvent.EvalCompleted (sid, output, _)) ->
       sid |> Expect.equal "session" "a1b2c3d4"
       output |> Expect.equal "output" "val x = 42"
     | other -> failtestf "expected EvalCompleted, got %A" other
@@ -254,7 +254,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           (fun m -> dispatched <- m :: dispatched)
           (SageFsEffect.Editor (EditorEffect.RequestEval "bad"))
     match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.EvalFailed (_, err)) ->
+    | SageFsMsg.Event (TuiEvent.EvalFailed (_, err)) ->
       err |> Expect.stringContains "err" "type mismatch"
     | other -> failtestf "expected EvalFailed, got %A" other
   }
@@ -270,7 +270,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     log.ConfigureAutoOpenCalls
     |> Expect.equal "should call config helper" [@"C:\Code\Repos\TestProject"]
     match dispatched with
-    | [SageFsMsg.Event (SageFsEvent.OutputEmitted line)] ->
+    | [SageFsMsg.Event (TuiEvent.OutputEmitted line)] ->
       line.Kind |> Expect.equal "should emit system output" OutputKind.System
       line.Text |> Expect.stringContains "should describe the opt-out" "Disabled warmup auto-open"
     | other ->
@@ -297,7 +297,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           (fun m -> dispatched <- m :: dispatched)
           (SageFsEffect.Editor (EditorEffect.RequestEval "code"))
     match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.EvalCompleted (_, _, diags)) ->
+    | SageFsMsg.Event (TuiEvent.EvalCompleted (_, _, diags)) ->
       diags |> Expect.hasLength "1 diag" 1
       diags.[0].Message |> Expect.equal "msg" "FS0001"
       diags.[0].Severity |> Expect.equal "sev" DiagnosticSeverity.Error
@@ -318,7 +318,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           (fun m -> dispatched <- m :: dispatched)
           (SageFsEffect.Editor (EditorEffect.RequestCompletion ("x.", 2)))
     match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.CompletionReady items) ->
+    | SageFsMsg.Event (TuiEvent.CompletionReady items) ->
       items |> Expect.hasLength "2 items" 2
       items.[0].Label |> Expect.equal "first" "ToString"
     | other -> failtestf "expected CompletionReady, got %A" other
@@ -349,7 +349,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     dispatched
     |> List.exists (fun msg ->
       match msg with
-      | SageFsMsg.Event (SageFsEvent.TestsDiscovered (sid, tests)) ->
+      | SageFsMsg.Event (TuiEvent.TestsDiscovered (sid, tests)) ->
         sid = "a1b2c3d4" && tests.Length = 1
       | _ -> false)
     |> Expect.isTrue "should dispatch discovered tests back into the Elm loop"
@@ -362,7 +362,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           (fun m -> dispatched <- m :: dispatched)
           (SageFsEffect.Editor (EditorEffect.RequestEval "x"))
     match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.EvalFailed (_, err)) ->
+    | SageFsMsg.Event (TuiEvent.EvalFailed (_, err)) ->
       err |> Expect.stringContains "no sessions" "No active"
     | other -> failtestf "expected error, got %A" other
   }
@@ -377,7 +377,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           (SageFsEffect.Editor EditorEffect.RequestSessionList)
     log.SessionListCalls |> Expect.equal "called" 1
     match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.SessionsRefreshed snaps) ->
+    | SageFsMsg.Event (TuiEvent.SessionsRefreshed snaps) ->
       snaps |> Expect.hasLength "one session" 1
       snaps.[0].Id |> Expect.equal "id" (testSessionId "a1b2c3d4")
     | other -> failtestf "expected SessionsRefreshed, got %A" other
@@ -389,7 +389,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           (fun m -> dispatched <- m :: dispatched)
           (SageFsEffect.Editor (EditorEffect.RequestSessionSwitch "s2"))
     match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.SessionSwitched (_, toId)) ->
+    | SageFsMsg.Event (TuiEvent.SessionSwitched (_, toId)) ->
       toId |> Expect.equal "to" "s2"
     | other -> failtestf "expected SessionSwitched, got %A" other
   }
@@ -407,7 +407,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     // dispatched is prepend-order: [SessionSwitched; SessionCreated]
     let created =
       dispatched |> List.tryPick (function
-        | SageFsMsg.Event (SageFsEvent.SessionCreated snap) -> Some snap
+        | SageFsMsg.Event (TuiEvent.SessionCreated snap) -> Some snap
         | _ -> None)
     match created with
     | Some snap ->
@@ -425,7 +425,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           (SageFsEffect.Editor (EditorEffect.RequestSessionStop "00000001"))
     log.SessionStopCalls |> Expect.equal "called" [testSessionId "00000001"]
     match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.SessionStopped sid) ->
+    | SageFsMsg.Event (TuiEvent.SessionStopped sid) ->
       sid |> Expect.equal "id" "00000001"
     | other -> failtestf "expected SessionStopped, got %A" other
   }
@@ -443,7 +443,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
           (fun m -> dispatched <- m :: dispatched)
           (SageFsEffect.Editor (EditorEffect.RequestSessionStop "00000001"))
     match dispatched.[0] with
-    | SageFsMsg.Event (SageFsEvent.EvalFailed (_, err)) ->
+    | SageFsMsg.Event (TuiEvent.EvalFailed (_, err)) ->
       err |> Expect.stringContains "fail" "Stop failed"
     | other -> failtestf "expected error, got %A" other
   }
@@ -1371,7 +1371,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     dispatched
     |> List.exists (fun m ->
       match m with
-      | SageFsMsg.Event (SageFsEvent.WarmupContextUpdated ctx) ->
+      | SageFsMsg.Event (TuiEvent.WarmupContextUpdated ctx) ->
         ctx.SessionId = "00000001"
       | _ -> false)
     |> Expect.isTrue "Should dispatch WarmupContextUpdated for Ready session"
@@ -1411,7 +1411,7 @@ let fullLoopTests = testList "Full ElmLoop + EffectHandler" [
     dispatched
     |> List.exists (fun m ->
       match m with
-      | SageFsMsg.Event (SageFsEvent.WarmupContextUpdated _) -> true
+      | SageFsMsg.Event (TuiEvent.WarmupContextUpdated _) -> true
       | _ -> false)
     |> Expect.isFalse
           "Should NOT dispatch WarmupContextUpdated when GetWarmupContext is None"
@@ -1528,7 +1528,7 @@ module RunEndHarness =
         messages
         |> Seq.collect (fun m ->
           match m with
-          | SageFsMsg.Event (SageFsEvent.TestResultsBatch batch) -> Seq.ofArray batch
+          | SageFsMsg.Event (TuiEvent.TestResultsBatch batch) -> Seq.ofArray batch
           | _ -> Seq.empty)
         |> Seq.toArray
       let completion () =
@@ -1536,7 +1536,7 @@ module RunEndHarness =
           messages
           |> Seq.exists (fun m ->
             match m with
-            | SageFsMsg.Event (SageFsEvent.TestRunCompleted _) -> true
+            | SageFsMsg.Event (TuiEvent.TestRunCompleted _) -> true
             | _ -> false)
         match completed with
         | true -> ReportedCompletion

@@ -104,7 +104,7 @@ module McpSessionIsolation =
       dispatched
       |> Seq.filter (fun msg ->
         match msg with
-        | SageFsMsg.Event (SageFsEvent.SessionSwitched _) -> true
+        | SageFsMsg.Event (TuiEvent.SessionSwitched _) -> true
         | _ -> false)
       |> Seq.length
       |> Expect.equal "switchSession should not dispatch SessionSwitched to Elm" 0
@@ -860,7 +860,7 @@ module ResetIsolation =
         { ctx with
             Dispatch = Some (fun msg ->
               match msg with
-              | SageFsMsg.Event (SageFsEvent.SessionStatusChanged _) -> finished.TrySetResult(()) |> ignore
+              | SageFsMsg.Event (TuiEvent.SessionStatusChanged _) -> finished.TrySetResult(()) |> ignore
               | _ -> ()) }
 
       let! message = hardResetSession ctx "agent1" true (Some sidStr) None
@@ -947,7 +947,7 @@ module ResetIsolation =
         { ctx with
             Dispatch = Some (fun msg ->
               match msg with
-              | SageFsMsg.Event (SageFsEvent.SessionStatusChanged _) -> finished.TrySetResult(()) |> ignore
+              | SageFsMsg.Event (TuiEvent.SessionStatusChanged _) -> finished.TrySetResult(()) |> ignore
               | _ -> ()) }
 
       let! message = hardResetSession ctx "agent1" true (Some sidStr) None

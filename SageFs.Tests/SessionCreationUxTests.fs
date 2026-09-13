@@ -49,7 +49,7 @@ let creatingSessionGuardTests = testList "CreatingSession guard" [
     let model = { (SageFsModel.initial()) with CreatingSession = true }
     let model', _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnap (testSessionId "aa001230"))))
+        (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap (testSessionId "aa001230"))))
         model
     model'.CreatingSession
     |> Expect.isFalse "should be false after SessionCreated"
@@ -58,7 +58,7 @@ let creatingSessionGuardTests = testList "CreatingSession guard" [
     let model = { (SageFsModel.initial()) with CreatingSession = true }
     let model', _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.EvalFailed ("", "Create failed: something went wrong")))
+        (SageFsMsg.Event (TuiEvent.EvalFailed ("", "Create failed: something went wrong")))
         model
     model'.CreatingSession
     |> Expect.isFalse "should be false after create failure"
@@ -67,7 +67,7 @@ let creatingSessionGuardTests = testList "CreatingSession guard" [
     let model = { (SageFsModel.initial()) with CreatingSession = true }
     let model', _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.EvalFailed ("", "Some other error")))
+        (SageFsMsg.Event (TuiEvent.EvalFailed ("", "Some other error")))
         model
     model'.CreatingSession
     |> Expect.isTrue "should still be true for non-create errors"

@@ -260,10 +260,14 @@ type FileWatchAction =
   | Deleted
   | Renamed
 
-/// Events that flow through the Elm loop, driving all UI updates.
-/// Every state change in SageFs is expressed as one of these events.
+/// Events that flow through the Elm loop, driving all UI updates for the
+/// deprecated TUI frontend. Named `TuiEvent` (not `SageFsEvent`) because
+/// `SageFs.Features.Events.SageFsEvent` (Core) is the canonical F# domain
+/// event vocabulary — two distinct types sharing one name was a roast-5 §1
+/// finding (SageFs.Core/Features/Events.fs:37 vs the pre-rename name here).
+/// Every state change in the deprecated TUI is expressed as one of these events.
 [<RequireQualifiedAccess>]
-type SageFsEvent =
+type TuiEvent =
   // ── Eval lifecycle ──
   | EvalStarted of sessionId: string * code: string
   | EvalCompleted of sessionId: string * output: string * diagnostics: Features.Diagnostics.Diagnostic list

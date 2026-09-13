@@ -601,7 +601,7 @@ let setSseHeaders (ctx: Microsoft.AspNetCore.Http.HttpContext) =
 /// Configuration for the MCP server — replaces 8 positional params on startMcpServer.
 type McpServerConfig = {
   DiagnosticsChanged: IEvent<SageFs.Features.DiagnosticsStore.T>
-  StateChanged: IEvent<DaemonStateChange> option
+  StateChanged: IEvent<SseEvent> option
   FrictionStore: SageFs.Features.FrictionSqlite.FrictionStore option
   Port: int
   /// Loopback interface to listen on (SageFsConfig.BindHost, validated at startup).
@@ -677,16 +677,16 @@ let replaySessionSnapshot (ctx: SseContext) (body: System.IO.Stream) =
           let! ctxOpt = getCtx activeId
           match ctxOpt with
           | Some wctx ->
-            let evt = SageFs.SessionEvents.WarmupContextSnapshot(activeId, wctx)
-            do! evt |> SageFs.SessionEvents.formatSessionSseEvent |> writeSseFrame body
+            let evt = SseEvent.WarmupContextSnapshot(activeId, wctx)
+            do! evt |> SseEvent.format |> writeSseFrame body
           | None -> ()
           match ctx.GetHotReloadState with
           | Some getHr ->
             let! hrOpt = getHr activeId
             match hrOpt with
             | Some watchedFiles ->
-              let hrEvt = SageFs.SessionEvents.HotReloadSnapshot(activeId, watchedFiles)
-              do! hrEvt |> SageFs.SessionEvents.formatSessionSseEvent |> writeSseFrame body
+              let hrEvt = SseEvent.HotReloadSnapshot(activeId, watchedFiles)
+              do! hrEvt |> SseEvent.format |> writeSseFrame body
             | None -> ()
           | None -> ()
         | false -> ()
@@ -760,16 +760,16 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
 
 // ── Session event subscription: push HotReload/SessionReady via SSE ──
 
-/// Subscribe to DaemonStateChange events and push session-level SSE events
+/// Subscribe to SseEvent events and push session-level SSE events
 /// (warmup context snapshot, hotreload state) to all connected clients.
 let wireSessionEventSubscription
-  (stateChanged: IEvent<DaemonStateChange>)
+  (stateChanged: IEvent<SseEvent>)
   (ctx: SseContext) =
   match ctx.GetElmModel, ctx.GetWarmupContext with
   | Some _getModel, Some getCtx ->
     stateChanged.Subscribe(fun change ->
       match change with
-      | DaemonStateChange.HotReloadChanged sid ->
+      | SseEvent.HotReloadChanged sid ->
         task {
           try
             // Session-isolation: the event carries the affected session. Never
@@ -782,8 +782,8 @@ let wireSessionEventSubscription
               let! hrOpt = getHr activeId
               match hrOpt with
               | Some watchedFiles ->
-                let evt = SageFs.SessionEvents.HotReloadSnapshot(activeId, watchedFiles)
-                ctx.SessionEventBroadcast.Trigger(SageFs.SessionEvents.formatSessionSseEvent evt)
+                let evt = SseEvent.HotReloadSnapshot(activeId, watchedFiles)
+                ctx.SessionEventBroadcast.Trigger(SseEvent.format evt)
               | None -> ()
             | None -> ()
           with
@@ -795,7 +795,7 @@ let wireSessionEventSubscription
           | true -> Log.error "[SSE] HotReload push fault: %s" t.Exception.InnerException.Message
           | false -> ())
         |> ignore
-      | DaemonStateChange.SessionReady sid ->
+      | SseEvent.SessionReady sid ->
         ctx.ServerTracker.AccumulateEvent(PushEvent.WarmupCompleted)
         let sidStr = SageFs.WorkerProtocol.SessionId.value sid
         task {
@@ -805,16 +805,16 @@ let wireSessionEventSubscription
               let! ctxOpt = getCtx sidStr
               match ctxOpt with
               | Some wctx ->
-                let evt = SageFs.SessionEvents.WarmupContextSnapshot(sidStr, wctx)
-                ctx.SessionEventBroadcast.Trigger(SageFs.SessionEvents.formatSessionSseEvent evt)
+                let evt = SseEvent.WarmupContextSnapshot(sidStr, wctx)
+                ctx.SessionEventBroadcast.Trigger(SseEvent.format evt)
               | None -> ()
               match ctx.GetHotReloadState with
               | Some getHr ->
                 let! hrOpt = getHr sidStr
                 match hrOpt with
                 | Some watchedFiles ->
-                  let hrEvt = SageFs.SessionEvents.HotReloadSnapshot(sidStr, watchedFiles)
-                  ctx.SessionEventBroadcast.Trigger(SageFs.SessionEvents.formatSessionSseEvent hrEvt)
+                  let hrEvt = SseEvent.HotReloadSnapshot(sidStr, watchedFiles)
+                  ctx.SessionEventBroadcast.Trigger(SseEvent.format hrEvt)
                 | None -> ()
               | None -> ()
             | false -> ()
@@ -835,24 +835,41 @@ let wireSessionEventSubscription
             Log.error "[SSE] SessionReady push fault: %s" msg
           | false -> ())
         |> ignore
-      | DaemonStateChange.WarmupProgress(sid, step, total, msg) ->
+      | SseEvent.WarmupProgress(sid, step, total, msg) ->
         let sidStr = SageFs.WorkerProtocol.SessionId.value sid
         let sseFrame = SageFs.SseWriter.formatWarmupProgressEvent ctx.SseJsonOpts (Some sidStr) step total msg
         ctx.SessionEventBroadcast.Trigger(sseFrame)
-      | DaemonStateChange.FileReloaded (_sid, path) ->
+      | SseEvent.FileReloaded (_sid, path) ->
         ctx.ServerTracker.AccumulateEvent(PushEvent.FileReloaded path)
-      | DaemonStateChange.SessionFaulted (_sid, error) ->
+      | SseEvent.SessionFaulted (_sid, error) ->
         ctx.ServerTracker.AccumulateEvent(PushEvent.SessionFaulted error)
-      | _ -> ()) |> ignore
+      // Handled by wireModelChangeHandlers's own subscription instead.
+      | SseEvent.ModelChanged _
+      | SseEvent.SystemAlarm _ -> ()
+      // No session-scoped follow-up needed for these.
+      | SseEvent.SessionProgress
+      | SseEvent.SessionSwitched _ -> ()
+      // Session-channel cases never arrive on this stream — DaemonMode.fs
+      // only ever triggers the nine "state" channel cases above — but the
+      // match stays exhaustive (no wildcard) so a future emitter of one of
+      // these through stateChangedEvent is forced to decide its handling here.
+      | SseEvent.WarmupContextSnapshot _
+      | SseEvent.HotReloadSnapshot _
+      | SseEvent.HotReloadFileToggled _
+      | SseEvent.SessionActivated _
+      | SseEvent.SessionCreated _
+      | SseEvent.SessionStopped _
+      | SseEvent.WorkflowSwitching _
+      | SseEvent.WorkflowSwitched _ -> ()) |> ignore
   | _ -> ()
 
 // ── Model change handlers: state change → SSE + MCP notifications ──
 
-/// Wire DaemonStateChange.ModelChanged events to the handler pipeline.
+/// Wire SseEvent.ModelChanged events to the handler pipeline.
 /// Creates handler closures and subscribes them to the event.
 /// Returns the subscription disposable.
 let wireModelChangeHandlers
-  (stateChanged: IEvent<DaemonStateChange>)
+  (stateChanged: IEvent<SseEvent>)
   (ctx: SseContext)
   (fsiBindings: Map<string, SageFs.SseWriter.FsiBinding> ref)
   (featurePushState: SageFs.Features.FeatureHooks.FeaturePushState ref)
@@ -1107,7 +1124,7 @@ let wireModelChangeHandlers
 
   stateChanged.Subscribe(fun change ->
     match change with
-    | DaemonStateChange.ModelChanged (outputCount, diagCount) ->
+    | SseEvent.ModelChanged (outputCount, diagCount) ->
       try
         ctx.ServerTracker.AccumulateEvent(
           PushEvent.StateChanged(outputCount, diagCount))
@@ -1144,9 +1161,28 @@ let wireModelChangeHandlers
       | :? System.Text.Json.JsonException as jex ->
         Log.warn "[MCP] State change JSON error (non-fatal): %s\n%s" jex.Message (jex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       | ex -> Log.error "[MCP] State change handler error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-    | DaemonStateChange.SystemAlarm (phase, msg) ->
+    | SseEvent.SystemAlarm (phase, msg) ->
       ctx.ServerTracker.AccumulateEvent(PushEvent.SystemAlarm (phase, msg))
-    | _ -> ())
+    // Handled by wireSessionEventSubscription's own subscription instead.
+    | SseEvent.HotReloadChanged _
+    | SseEvent.SessionReady _
+    | SseEvent.WarmupProgress _
+    | SseEvent.FileReloaded _
+    | SseEvent.SessionFaulted _ -> ()
+    // No model-change follow-up needed for these.
+    | SseEvent.SessionProgress
+    | SseEvent.SessionSwitched _ -> ()
+    // Session-channel cases never arrive on this stream (see the matching
+    // note in wireSessionEventSubscription) — kept exhaustive, not a
+    // wildcard, so a future rewire is forced to decide here too.
+    | SseEvent.WarmupContextSnapshot _
+    | SseEvent.HotReloadSnapshot _
+    | SseEvent.HotReloadFileToggled _
+    | SseEvent.SessionActivated _
+    | SseEvent.SessionCreated _
+    | SseEvent.SessionStopped _
+    | SseEvent.WorkflowSwitching _
+    | SseEvent.WorkflowSwitched _ -> ())
 
 
 // Start MCP server in background
@@ -1717,7 +1753,7 @@ let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
         let stateSource =
           evt |> Observable.map (fun change ->
             change
-            |> DaemonStateChange.toJson
+            |> SseEvent.toJson
             |> SageFs.SseWriter.formatSseEvent "state")
         do! runSseWriteLoop
               ctx.Response.Body
@@ -1898,7 +1934,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
           SageFs.McpTools.setActiveSessionId rctx.McpContext "http" sidStr
           match rctx.Dispatch with
           | Some d ->
-            d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sidStr)))
+            d (SageFs.SageFsMsg.Event (SageFs.TuiEvent.SessionSwitched (None, sidStr)))
             d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
           | None -> ()
           do! jsonResponse ctx 200 {| success = true; sessionId = sidStr |}
@@ -2141,7 +2177,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
                     error = sprintf "No discovered tests matched the explicit run filters (%s)." filterSummary
                   |}
               | false ->
-                  dispatch (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.RunTestsRequested tests))
+                  dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.RunTestsRequested tests))
                   do! jsonResponse ctx 200 {|
                     success = true
                     queued = tests.Length
@@ -2308,7 +2344,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       let stateChangedStr : IEvent<string> option =
         cfg.StateChanged |> Option.map (fun evt ->
           let bridge = Event<string>()
-          evt.Add(DaemonStateChange.toJson >> bridge.Trigger)
+          evt.Add(SseEvent.toJson >> bridge.Trigger)
           bridge.Publish)
       let featurePushState =
         cfg.SharedFeatureState |> Option.defaultWith (fun () -> ref SageFs.Features.FeatureHooks.FeaturePushState.empty)

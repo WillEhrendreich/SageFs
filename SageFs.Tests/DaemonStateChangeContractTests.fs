@@ -1,6 +1,6 @@
 module SageFs.Tests.DaemonStateChangeContractTests
 
-/// Contract tests for DaemonStateChange event payloads.
+/// Contract tests for SseEvent event payloads.
 ///
 /// Session-isolation blocker (quality-gap plan): HotReloadChanged previously
 /// carried NO session identity, so downstream code fetched hot-reload state
@@ -28,11 +28,11 @@ let private sid (raw: string) =
 
 [<Tests>]
 let daemonStateChangeContractTests =
-  testList "DaemonStateChange event contract" [
+  testList "SseEvent event contract" [
 
     testCase "HotReloadChanged serializes with the affected session ID" <| fun _ ->
       let s = sid "a1b2c3d4"
-      let json = DaemonStateChange.toJson (DaemonStateChange.HotReloadChanged s)
+      let json = SseEvent.toJson (SseEvent.HotReloadChanged s)
       json
       |> Expect.stringContains "payload should carry the session id" "\"sessionId\":\"a1b2c3d4\""
       json
@@ -40,7 +40,7 @@ let daemonStateChangeContractTests =
 
     testCase "FileReloaded serializes with the owning session ID and path" <| fun _ ->
       let s = sid "deadbeef"
-      let json = DaemonStateChange.toJson (DaemonStateChange.FileReloaded (s, "C:\\proj\\src\\Lib.fs"))
+      let json = SseEvent.toJson (SseEvent.FileReloaded (s, "C:\\proj\\src\\Lib.fs"))
       json
       |> Expect.stringContains "payload should carry the session id" "\"sessionId\":\"deadbeef\""
       json
@@ -49,8 +49,8 @@ let daemonStateChangeContractTests =
     testCase "HotReloadChanged for session B does not match session A's payload" <| fun _ ->
       // Two sessions toggling hot reload produce distinguishable payloads —
       // a client viewing session A can reject session B's event by sessionId.
-      let a = DaemonStateChange.toJson (DaemonStateChange.HotReloadChanged (sid "11111111"))
-      let b = DaemonStateChange.toJson (DaemonStateChange.HotReloadChanged (sid "22222222"))
+      let a = SseEvent.toJson (SseEvent.HotReloadChanged (sid "11111111"))
+      let b = SseEvent.toJson (SseEvent.HotReloadChanged (sid "22222222"))
       a
       |> Expect.stringContains "A payload should name A" "\"sessionId\":\"11111111\""
       b
@@ -63,8 +63,8 @@ let daemonStateChangeContractTests =
       // a reloaded path to each owning session. The payloads must differ by
       // session even for the identical path.
       let sharedPath = "C:\\shared\\src\\Lib.fs"
-      let forA = DaemonStateChange.toJson (DaemonStateChange.FileReloaded (sid "aaaa1111", sharedPath))
-      let forB = DaemonStateChange.toJson (DaemonStateChange.FileReloaded (sid "bbbb2222", sharedPath))
+      let forA = SseEvent.toJson (SseEvent.FileReloaded (sid "aaaa1111", sharedPath))
+      let forB = SseEvent.toJson (SseEvent.FileReloaded (sid "bbbb2222", sharedPath))
       forA
       |> Expect.stringContains "session A payload should name A" "\"sessionId\":\"aaaa1111\""
       forB

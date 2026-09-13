@@ -157,7 +157,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
          [SageFsEffect.Editor EditorEffect.RequestSessionList]
 
   testCase "EvalCompleted adds output line" <| fun _ ->
-    let event = SageFsEvent.EvalCompleted ("s1", "val x = 42", [])
+    let event = TuiEvent.EvalCompleted ("s1", "val x = 42", [])
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     let out = outputFor "s1" newModel
@@ -168,14 +168,14 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "should have output text" "val x = 42"
 
   testCase "EvalFailed adds error output" <| fun _ ->
-    let event = SageFsEvent.EvalFailed ("s1", "type mismatch")
+    let event = TuiEvent.EvalFailed ("s1", "type mismatch")
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     (outputFor "s1" newModel).[0].Kind
     |> Expect.equal "should be Error" OutputKind.Error
 
   testCase "EvalCancelled adds info line" <| fun _ ->
-    let event = SageFsEvent.EvalCancelled "s1"
+    let event = TuiEvent.EvalCancelled "s1"
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     (outputFor "s1" newModel).[0].Kind
@@ -188,7 +188,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Timestamp = DateTime.UtcNow
       SessionId = "" }
     let newModel, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.OutputEmitted line)) (SageFsModel.initial())
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.OutputEmitted line)) (SageFsModel.initial())
     let out = activeOutput newModel
     out |> Expect.hasLength "should have one output" 1
     out.[0] |> Expect.equal "should add the emitted line" line
@@ -197,7 +197,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let items = [
       { Label = "toString"; Kind = "method"; Detail = Some "string -> string" }
     ]
-    let event = SageFsEvent.CompletionReady items
+    let event = TuiEvent.CompletionReady items
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     newModel.Editor.CompletionMenu |> Expect.isSome "should have menu"
@@ -210,7 +210,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "" }
-    let event = SageFsEvent.SessionCreated snap
+    let event = TuiEvent.SessionCreated snap
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     newModel.Sessions.Sessions
@@ -252,7 +252,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
             Sessions = [snap]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
     let model2, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap)) model
     model2.Sessions.Sessions
     |> Expect.hasLength "should still have exactly 1 session" 1
 
@@ -270,7 +270,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
     let updated = { snap with EvalCount = 42 }
     let model2, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated updated)) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated updated)) model
     model2.Sessions.Sessions
     |> Expect.hasLength "should have 1 session" 1
     model2.Sessions.Sessions.[0].EvalCount
@@ -293,8 +293,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
           (SageFsModel.initial()).Sessions with
             Sessions = [snapA; snapB]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snapA)) model
-    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snapB)) m1
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snapA)) model
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snapB)) m1
     m2.Sessions.Sessions
     |> Expect.hasLength "should still have exactly 2 sessions" 2
     let snap1 = {
@@ -311,7 +311,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
           (SageFsModel.initial()).Sessions with
             Sessions = [snap1; snap2] }
     }
-    let event = SageFsEvent.SessionSwitched (Some "aa000001", "aa000002")
+    let event = TuiEvent.SessionSwitched (Some "aa000001", "aa000002")
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.Sessions.ActiveSessionId
@@ -337,7 +337,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         Sessions = {
           (SageFsModel.initial()).Sessions with
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
-    let event = SageFsEvent.SessionsRefreshed [snap1; snap2]
+    let event = TuiEvent.SessionsRefreshed [snap1; snap2]
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.Sessions.Sessions
@@ -363,7 +363,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         Sessions = {
           (SageFsModel.initial()).Sessions with
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000002") } }
-    let event = SageFsEvent.SessionsRefreshed [snap1; snap2]
+    let event = TuiEvent.SessionsRefreshed [snap1; snap2]
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.Sessions.ActiveSessionId
@@ -379,7 +379,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "." }
-    let event = SageFsEvent.SessionsRefreshed [snap]
+    let event = TuiEvent.SessionsRefreshed [snap]
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     newModel.Sessions.ActiveSessionId
@@ -396,7 +396,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
           (SageFsModel.initial()).Sessions with
             Sessions = [snap] }
     }
-    let event = SageFsEvent.SessionStopped "aa000001"
+    let event = TuiEvent.SessionStopped "aa000001"
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.Sessions.Sessions
@@ -416,7 +416,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         ] }
     let newModel, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.SessionStopped "aa000001")) model
+        (SageFsMsg.Event (TuiEvent.SessionStopped "aa000001")) model
     outputFor "aa000001" newModel |> Expect.isEmpty "stopped session output released"
     outputFor "aa000002" newModel
     |> Seq.map (fun l -> l.Text)
@@ -431,7 +431,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Severity = DiagnosticSeverity.Error
       ErrorNumber = 1
     }
-    let event = SageFsEvent.DiagnosticsUpdated ("s1", [diag])
+    let event = TuiEvent.DiagnosticsUpdated ("s1", [diag])
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     newModel.Diagnostics
@@ -440,7 +440,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.hasLength "should have 1 diagnostic" 1
 
   testCase "WarmupCompleted with no failures adds info" <| fun _ ->
-    let event = SageFsEvent.WarmupCompleted (TimeSpan.FromSeconds 2.0, [])
+    let event = TuiEvent.WarmupCompleted (TimeSpan.FromSeconds 2.0, [])
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     (activeOutput newModel).[0].Text
@@ -448,7 +448,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "WarmupCompleted with failures adds error lines" <| fun _ ->
     let event =
-      SageFsEvent.WarmupCompleted (TimeSpan.FromSeconds 2.0, ["ns1"; "ns2"])
+      TuiEvent.WarmupCompleted (TimeSpan.FromSeconds 2.0, ["ns1"; "ns2"])
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     activeOutput newModel
@@ -471,7 +471,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     }
     let updated, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.WarmupContextUpdated incomingCtx))
+        (SageFsMsg.Event (TuiEvent.WarmupContextUpdated incomingCtx))
         model
     obj.ReferenceEquals(updated, model)
     |> Expect.isTrue "should not rebuild the model for non-render timestamp churn"
@@ -493,7 +493,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     }
     let updated, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.WarmupContextUpdated incomingCtx))
+        (SageFsMsg.Event (TuiEvent.WarmupContextUpdated incomingCtx))
         model
     obj.ReferenceEquals(updated, model)
     |> Expect.isFalse "should rebuild the model when visible file readiness changes"
@@ -505,7 +505,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "FileReloaded success adds info line" <| fun _ ->
     let event =
-      SageFsEvent.FileReloaded ("test.fs", TimeSpan.FromMilliseconds 50.0, Ok "loaded")
+      TuiEvent.FileReloaded ("test.fs", TimeSpan.FromMilliseconds 50.0, Ok "loaded")
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     (activeOutput newModel).[0].Kind
@@ -513,14 +513,14 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "FileReloaded failure adds error line" <| fun _ ->
     let event =
-      SageFsEvent.FileReloaded ("test.fs", TimeSpan.FromMilliseconds 50.0, Error "parse error")
+      TuiEvent.FileReloaded ("test.fs", TimeSpan.FromMilliseconds 50.0, Error "parse error")
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     (activeOutput newModel).[0].Kind
     |> Expect.equal "should be Error" OutputKind.Error
 
   testCase "EvalStarted adds info output line" <| fun _ ->
-    let event = SageFsEvent.EvalStarted ("s1", "let x = 1")
+    let event = TuiEvent.EvalStarted ("s1", "let x = 1")
     let newModel, effects =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     let out = outputFor "s1" newModel
@@ -541,7 +541,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
           (SageFsModel.initial()).Sessions with
             Sessions = [snap] }
     }
-    let event = SageFsEvent.SessionStale ("aa000001", TimeSpan.FromMinutes 15.0)
+    let event = TuiEvent.SessionStale ("aa000001", TimeSpan.FromMinutes 15.0)
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.Sessions.Sessions.[0].Status
@@ -642,7 +642,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "EvalFailed with Create failed: clears CreatingSession" <| fun _ ->
     let model = { (SageFsModel.initial()) with CreatingSession = true }
-    let event = SageFsEvent.EvalFailed ("s1", "Create failed: some reason")
+    let event = TuiEvent.EvalFailed ("s1", "Create failed: some reason")
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.CreatingSession
@@ -650,7 +650,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
   testCase "EvalFailed with normal error keeps CreatingSession" <| fun _ ->
     let model = { (SageFsModel.initial()) with CreatingSession = true }
-    let event = SageFsEvent.EvalFailed ("s1", "type mismatch")
+    let event = TuiEvent.EvalFailed ("s1", "type mismatch")
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.CreatingSession
@@ -674,7 +674,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
             Sessions = [snap1; snap2]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") }
         Diagnostics = Map.ofList ["aa000001", []; "aa000002", []] }
-    let event = SageFsEvent.SessionStopped "aa000001"
+    let event = TuiEvent.SessionStopped "aa000001"
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.Sessions.Sessions
@@ -704,7 +704,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
             Sessions = [snap1; snap2]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
     let newModel, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "aa000002")) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionStopped "aa000002")) model
     newModel.Sessions.ActiveSessionId
     |> Expect.equal "should stay s1" (ActiveSession.Viewing (testSessionId "aa000001"))
 
@@ -721,7 +721,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
             Sessions = [snap]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
     let newModel, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "aa000001")) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionStopped "aa000001")) model
     newModel.Sessions.Sessions |> Expect.isEmpty "sessions empty"
     newModel.Sessions.ActiveSessionId
     |> Expect.equal "should be AwaitingSession" ActiveSession.AwaitingSession
@@ -738,7 +738,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
           (SageFsModel.initial()).Sessions with
             Sessions = [snap]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
-    let event = SageFsEvent.SessionStatusChanged ("aa000001", SessionDisplayStatus.Faulted "faulted")
+    let event = TuiEvent.SessionStatusChanged ("aa000001", SessionDisplayStatus.Faulted "faulted")
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     match newModel.Sessions.Sessions.[0].Status with
@@ -769,7 +769,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         LiveTesting = {
           baseModel.LiveTesting with
             TestState = { baseModel.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let event = SageFsEvent.SessionStatusChanged ("aa000001", SessionDisplayStatus.Restarting)
+    let event = TuiEvent.SessionStatusChanged ("aa000001", SessionDisplayStatus.Restarting)
     let _, effects =
       SageFsUpdate.update (SageFsMsg.Event event) model
     match effects with
@@ -798,7 +798,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         LiveTesting = {
           baseModel.LiveTesting with
             TestState = { baseModel.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let event = SageFsEvent.SessionStatusChanged ("aa000001", SessionDisplayStatus.Running)
+    let event = TuiEvent.SessionStatusChanged ("aa000001", SessionDisplayStatus.Running)
     let _, effects =
       SageFsUpdate.update (SageFsMsg.Event event) model
     match effects with
@@ -824,7 +824,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         LiveTesting = {
           baseModel.LiveTesting with
             TestState = { baseModel.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
-    let event = SageFsEvent.SessionStopped "aa000001"
+    let event = TuiEvent.SessionStopped "aa000001"
     let _, effects =
       SageFsUpdate.update (SageFsMsg.Event event) model
     match effects with
@@ -834,14 +834,14 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     | other -> failtestf "expected a single DisposeFileWatcher on stop, got %A" other
 
   testCase "SessionStatusChanged for unknown session is no-op" <| fun _ ->
-    let event = SageFsEvent.SessionStatusChanged ("x", SessionDisplayStatus.Faulted "x")
+    let event = TuiEvent.SessionStatusChanged ("x", SessionDisplayStatus.Faulted "x")
     let newModel, effects =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     effects |> Expect.isEmpty "no effects"
     newModel.Sessions.Sessions |> Expect.isEmpty "still empty"
 
   testCase "WarmupProgress adds step/total info line" <| fun _ ->
-    let event = SageFsEvent.WarmupProgress(2, 4, "Loading namespaces")
+    let event = TuiEvent.WarmupProgress(2, 4, "Loading namespaces")
     let newModel, effects =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     effects |> Expect.isEmpty "no effects"
@@ -871,7 +871,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       mkPassedRunResult "test.batch.b" "test.batch.b" 7.0
     |]
     let updated, effects =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch results)) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch results)) model
     updated.RecentOutput.ActiveCount(updated.Sessions.ActiveSessionId)
     |> Expect.equal "streaming batches should not spam the visible output pane" 0
     updated.PendingRunSummary
@@ -904,11 +904,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       mkSkippedRunResult "test.summary.skip" "test.summary.skip" "quarantined"
     |]
     let model1, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1)) model0
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch batch1)) model0
     let model2, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch2)) model1
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch batch2)) model1
     let completed, effects =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some "s"))) model2
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some "s"))) model2
     completed.RecentOutput.ActiveCount(completed.Sessions.ActiveSessionId)
     |> Expect.equal "completion should add exactly one visible summary line" 1
     let summary = completed.RecentOutput.GetActiveBuffer(completed.Sessions.ActiveSessionId)
@@ -974,7 +974,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
     let afterComplete, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some sid)))
+        (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sid)))
         afterAnalysis
 
     let pending =
@@ -1053,7 +1053,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
     let afterComplete, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some backgroundSid)))
+        (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some backgroundSid)))
         afterAnalysis
 
     afterComplete.LiveTesting.PendingRebuild
@@ -1085,7 +1085,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |]
     let discoveredModel, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s", discovered)))
         (SageFsModel.initial())
     let discoveredEntries = discoveredModel.LiveTesting.TestState.StatusIndex.Entries
 
@@ -1122,7 +1122,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |]
     let discoveredModel, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s", discovered)))
         (SageFsModel.initial())
     let beforeEntries = discoveredModel.LiveTesting.TestState.StatusIndex.Entries
     let unaffectedBefore =
@@ -1130,7 +1130,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
     let started, startEffects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| discovered.[0].Id |], Some "s")))
+        (SageFsMsg.Event (TuiEvent.TestRunStarted ([| discovered.[0].Id |], Some "s")))
         discoveredModel
     let startedEntries = started.LiveTesting.TestState.StatusIndex.Entries
     let affectedStarted =
@@ -1149,7 +1149,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
     let completed, completeEffects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some "s")))
+        (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some "s")))
         started
     let completedEntries = completed.LiveTesting.TestState.StatusIndex.Entries
     let affectedCompleted =
@@ -1173,7 +1173,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |]
     let discoveredModel, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s", discovered)))
         (SageFsModel.initial())
     let activeModel, _ =
       SageFsUpdate.update
@@ -1185,7 +1185,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
     let updated, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.AffectedTestsComputed [| discovered.[0].Id |]))
+        (SageFsMsg.Event (TuiEvent.AffectedTestsComputed [| discovered.[0].Id |]))
         activeModel
     let updatedEntries = updated.LiveTesting.TestState.StatusIndex.Entries
     let affectedUpdated =
@@ -1209,7 +1209,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |]
     let discoveredModel, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s", discovered)))
         (SageFsModel.initial())
     let activeModel, _ =
       SageFsUpdate.update
@@ -1221,7 +1221,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
     let updated, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.RunTestsRequested [| discovered.[0] |]))
+        (SageFsMsg.Event (TuiEvent.RunTestsRequested [| discovered.[0] |]))
         activeModel
     let updatedEntries = updated.LiveTesting.TestState.StatusIndex.Entries
     let affectedUpdated =
@@ -1246,12 +1246,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         "duplicate"
     let model1, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| discovered |])))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-1", [| discovered |])))
         (SageFsModel.initial())
     let firstDiscoveryTime = model1.LiveTesting.TestState.LastDiscoveryTime
     let model2, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| discovered |])))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-1", [| discovered |])))
         model1
     obj.ReferenceEquals(model2, model1)
     |> Expect.isTrue "duplicate discovery should be observationally silent"
@@ -1277,13 +1277,13 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     }
     let model1, firstEffects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| discovered |])))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-1", [| discovered |])))
         baseModel
     firstEffects
     |> Expect.hasLength "initial discovery should still trigger one execution request" 1
     let _, duplicateEffects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| discovered |])))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-1", [| discovered |])))
         model1
     duplicateEffects
     |> Expect.isEmpty "duplicate discovery should not retrigger execution"
@@ -1307,17 +1307,17 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
     let model1, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| sessionOneOriginal |])))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-1", [| sessionOneOriginal |])))
         (SageFsModel.initial())
 
     let model2, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-2", [| otherSession |])))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-2", [| otherSession |])))
         model1
 
     let model3, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| sessionOneUpdated |])))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-1", [| sessionOneUpdated |])))
         model2
 
     model3.LiveTesting.TestState.DiscoveredTests
@@ -1346,15 +1346,15 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |]
     let model1, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s-1", [| discovered |])))
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-1", [| discovered |])))
         (SageFsModel.initial())
     let model2, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestLocationsDetected ("s-1", locations)))
+        (SageFsMsg.Event (TuiEvent.TestLocationsDetected ("s-1", locations)))
         model1
     let model3, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.TestLocationsDetected ("s-1", locations)))
+        (SageFsMsg.Event (TuiEvent.TestLocationsDetected ("s-1", locations)))
         model2
     obj.ReferenceEquals(model3, model2)
     |> Expect.isTrue "duplicate source locations should not force another rerender"
@@ -1370,12 +1370,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       mkPassedRunResult "test.queue.d" "test.queue.d" 2.0
     |]
     let pending = ResizeArray<SageFsMsg>()
-    pending.Add(SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1))
+    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch batch1))
 
     let absorbed =
       SageFsMsgQueueCoalescing.tryAbsorbPending
         pending
-        (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch2))
+        (SageFsMsg.Event (TuiEvent.TestResultsBatch batch2))
 
     absorbed
     |> Expect.isTrue "result batches from the same pending run should merge so redraw work collapses without dropping any tests"
@@ -1400,13 +1400,13 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       mkPassedRunResult "test.queue.boundary.b" "test.queue.boundary.b" 6.0
     |]
     let pending = ResizeArray<SageFsMsg>()
-    pending.Add(SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1))
-    pending.Add(SageFsMsg.Event (SageFsEvent.TestRunCompleted (Some "s-queue")))
+    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch batch1))
+    pending.Add(SageFsMsg.Event (TuiEvent.TestRunCompleted (Some "s-queue")))
 
     let absorbed =
       SageFsMsgQueueCoalescing.tryAbsorbPending
         pending
-        (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch2))
+        (SageFsMsg.Event (TuiEvent.TestResultsBatch batch2))
 
     absorbed
     |> Expect.isFalse "a completion marker closes the pending run segment, so later batches must stay separate"
@@ -1423,9 +1423,9 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         let name = sprintf "test.queue.medium.b.%d" i
         mkPassedRunResult name name 1.0)
     let pending = ResizeArray<SageFsMsg>()
-    pending.Add(SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1))
+    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch batch1))
 
-    let incoming = SageFsMsg.Event (SageFsEvent.TestResultsBatch batch2)
+    let incoming = SageFsMsg.Event (TuiEvent.TestResultsBatch batch2)
     let absorbed =
       SageFsMsgQueueCoalescing.tryAbsorbPending pending incoming
 
@@ -1460,9 +1460,9 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         let name = sprintf "test.queue.large.b.%d" i
         mkPassedRunResult name name 1.0)
     let pending = ResizeArray<SageFsMsg>()
-    pending.Add(SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1))
+    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch batch1))
 
-    let incoming = SageFsMsg.Event (SageFsEvent.TestResultsBatch batch2)
+    let incoming = SageFsMsg.Event (TuiEvent.TestResultsBatch batch2)
     let absorbed =
       SageFsMsgQueueCoalescing.tryAbsorbPending pending incoming
 
@@ -1478,7 +1478,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let allNames =
       pending
       |> Seq.collect (function
-        | SageFsMsg.Event (SageFsEvent.TestResultsBatch batch) -> batch |> Seq.map (fun result -> result.TestName)
+        | SageFsMsg.Event (TuiEvent.TestResultsBatch batch) -> batch |> Seq.map (fun result -> result.TestName)
         | _ -> Seq.empty)
       |> Seq.toArray
 
@@ -1500,11 +1500,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let baseModel =
       let discoveredModel, _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", discovered)))
+          (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s", discovered)))
           (SageFsModel.initial())
       let startedModel, _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestRunStarted (discovered |> Array.map (fun t -> t.Id), Some "s")))
+          (SageFsMsg.Event (TuiEvent.TestRunStarted (discovered |> Array.map (fun t -> t.Id), Some "s")))
           discoveredModel
       startedModel
 
@@ -1547,12 +1547,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         EvalCount = 7
         LastActivity = DateTime.UtcNow }
     let pending = ResizeArray<SageFsMsg>()
-    pending.Add(SageFsMsg.Event (SageFsEvent.SessionsRefreshed [snap1]))
+    pending.Add(SageFsMsg.Event (TuiEvent.SessionsRefreshed [snap1]))
 
     let absorbed =
       SageFsMsgQueueCoalescing.tryAbsorbPending
         pending
-        (SageFsMsg.Event (SageFsEvent.SessionsRefreshed [snap2]))
+        (SageFsMsg.Event (TuiEvent.SessionsRefreshed [snap2]))
 
     absorbed
     |> Expect.isTrue "stale session snapshots should collapse to the latest truth while the loop is still busy"
@@ -1560,7 +1560,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.hasLength "only one pending refresh should remain after coalescing" 1
 
     match pending[0] with
-    | SageFsMsg.Event (SageFsEvent.SessionsRefreshed [merged]) ->
+    | SageFsMsg.Event (TuiEvent.SessionsRefreshed [merged]) ->
       merged.Status
       |> Expect.equal "the latest refresh should win because older session truth is stale by the time it renders"
            SessionDisplayStatus.Running
@@ -1583,12 +1583,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         FileReadiness.Stale
         true
     let pending = ResizeArray<SageFsMsg>()
-    pending.Add(SageFsMsg.Event (SageFsEvent.WarmupContextUpdated context1))
+    pending.Add(SageFsMsg.Event (TuiEvent.WarmupContextUpdated context1))
 
     let absorbed =
       SageFsMsgQueueCoalescing.tryAbsorbPending
         pending
-        (SageFsMsg.Event (SageFsEvent.WarmupContextUpdated context2))
+        (SageFsMsg.Event (TuiEvent.WarmupContextUpdated context2))
 
     absorbed
     |> Expect.isTrue "warmup snapshots should collapse to the latest visible truth while the loop is still draining older work"
@@ -1596,7 +1596,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.hasLength "only one pending warmup snapshot should remain after coalescing" 1
 
     match pending[0] with
-    | SageFsMsg.Event (SageFsEvent.WarmupContextUpdated merged) ->
+    | SageFsMsg.Event (TuiEvent.WarmupContextUpdated merged) ->
       let file = merged.FileStatuses |> List.head
       file.Readiness
       |> Expect.equal "the newest warmup readiness should win over stale pending state"
@@ -1625,11 +1625,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let batch4 = [| mkPassedRunResult "test.reduce.d" "test.reduce.d" 1.0 |]
     let reduced =
       [|
-        SageFsMsg.Event (SageFsEvent.TestResultsBatch batch1)
+        SageFsMsg.Event (TuiEvent.TestResultsBatch batch1)
         SageFsMsg.BufferedTestResults { TotalResultCount = batch2.Length; Batches = [ batch2 ] }
         SageFsMsg.BufferedTestResults { TotalResultCount = batch3.Length; Batches = [ batch3 ] }
         SageFsMsg.Editor EditorAction.ListSessions
-        SageFsMsg.Event (SageFsEvent.TestResultsBatch batch4)
+        SageFsMsg.Event (TuiEvent.TestResultsBatch batch4)
       |]
       |> SageFsDispatchReduction.reduceDispatchBatch
 
@@ -1666,7 +1666,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let model = {
       (SageFsModel.initial()) with
         Diagnostics = Map.ofList ["s1", [diag1]] }
-    let event = SageFsEvent.DiagnosticsUpdated ("s1", [diag2])
+    let event = TuiEvent.DiagnosticsUpdated ("s1", [diag2])
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     let diags = newModel.Diagnostics |> Map.find "s1"
@@ -1680,7 +1680,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let newModel, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) (SageFsModel.initial())
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap)) (SageFsModel.initial())
     newModel.Sessions.ActiveSessionId
     |> Expect.equal "should auto-select" (ActiveSession.Viewing (testSessionId "aa000001"))
     ActiveSession.isViewing newModel.Sessions.Sessions.[0].Id newModel.Sessions.ActiveSessionId
@@ -1706,7 +1706,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "." }
     let newModel, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap2)) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap2)) model
     newModel.Sessions.ActiveSessionId
     |> Expect.equal "should still be s1" (ActiveSession.Viewing (testSessionId "aa000001"))
     newModel.Sessions.Sessions
@@ -1725,7 +1725,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
             Sessions = [mkSnap (testSessionId "aa000001"); mkSnap (testSessionId "aa000002"); mkSnap (testSessionId "aa000003")]
             ActiveSessionId = ActiveSession.Viewing (testSessionId "aa000001") } }
     let newModel, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000003"))) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some "aa000001", "aa000003"))) model
     newModel.Sessions.ActiveSessionId
     |> Expect.equal "should be s3" (ActiveSession.Viewing (testSessionId "aa000003"))
     newModel.Sessions.Sessions
@@ -1753,7 +1753,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         LiveTesting = primaryState
         PerSessionLiveTesting = Map.ofList [ "aa000002", backgroundState ] }
     let newModel, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
     newModel.LiveTesting.LastTrigger
     |> Expect.equal "active live-testing state should now be session aa000002's state" RunTrigger.Keystroke
     newModel.PerSessionLiveTesting
@@ -1781,7 +1781,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         LiveTesting = primaryState
         PerSessionLiveTesting = Map.ofList [ "aa000002", backgroundState ] }
     let newModel, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
     newModel.PerSessionLiveTesting
     |> Map.find "aa000001"
     |> fun cycle -> cycle.LastTrigger
@@ -1808,9 +1808,9 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         LiveTesting = stateA
         PerSessionLiveTesting = Map.ofList [ "aa000002", stateB ] }
     let afterB, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
     let afterA, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000002", "aa000001"))) afterB
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some "aa000002", "aa000001"))) afterB
     afterA.LiveTesting.LastTrigger
     |> Expect.equal "switching back should restore session aa000001's live-testing state" RunTrigger.FileSave
     afterA.PerSessionLiveTesting
@@ -1861,7 +1861,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         LiveTesting = primaryState
         PerSessionLiveTesting = Map.ofList [ "aa000002", backgroundState ] }
     let newModel, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
     LiveTestCycleState.liveTestingStatusBarForSession "aa000002" newModel.LiveTesting
     |> Expect.stringContains
       "promoted session should keep the rebuilding banner so the active UI stays truthful"
@@ -1920,7 +1920,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         LiveTesting = stateA
         PerSessionLiveTesting = Map.ofList [ "aa000002", stateB ] }
     let newModel, _ =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
 
     let promotedPending =
       newModel.LiveTesting.PendingRebuild
@@ -2001,7 +2001,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         PerSessionLiveTesting =
           Map.ofList [ "aa000002", { LiveTestCycleState.empty with LastTrigger = RunTrigger.Keystroke } ] }
     let _, effects =
-      SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some "aa000001", "aa000002"))) model
     effects
     |> Expect.isEmpty "switching sessions should only reassociate live-testing state, not start new work"
 
@@ -2298,10 +2298,10 @@ let elmIntegrationTests = testList "ElmLoop integration" [
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "" }
-    dispatch (SageFsMsg.Event (SageFsEvent.SessionCreated snap))
+    dispatch (SageFsMsg.Event (TuiEvent.SessionCreated snap))
     let! _ = rendered.WaitAsync(1000)
 
-    dispatch (SageFsMsg.Event (SageFsEvent.EvalCompleted ("aa000001", "val x = 42", [])))
+    dispatch (SageFsMsg.Event (TuiEvent.EvalCompleted ("aa000001", "val x = 42", [])))
     let! _ = rendered.WaitAsync(1000)
     outputFor "aa000001" lastModel.Value.Value
     |> Expect.hasLength "should have output" 1
@@ -2338,7 +2338,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
       Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
       UpSince = DateTime.UtcNow; WorkingDirectory = "" }
-    dispatch (SageFsMsg.Event (SageFsEvent.SessionsRefreshed [snap]))
+    dispatch (SageFsMsg.Event (TuiEvent.SessionsRefreshed [snap]))
     let! refreshed = rendered.WaitAsync(1000)
     refreshed
     |> Expect.isTrue "a real session refresh should still render"
@@ -2359,7 +2359,7 @@ let elmIntegrationTests = testList "ElmLoop integration" [
           | SageFsEffect.Editor (EditorEffect.RequestEval code) ->
             dispatch (
               SageFsMsg.Event (
-                SageFsEvent.EvalCompleted (
+                TuiEvent.EvalCompleted (
                   "s1", sprintf "val it = %s" code, [])))
           | _ -> ()
         }

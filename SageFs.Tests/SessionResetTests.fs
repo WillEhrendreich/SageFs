@@ -106,7 +106,7 @@ let private mkPushbackCtx (restartResult: Result<string, SageFsError>) =
       McpPort = 0
       Dispatch = Some (fun msg ->
         match msg with
-        | SageFsMsg.Event (SageFsEvent.SessionStatusChanged (_, display)) -> statusEvents.Add display
+        | SageFsMsg.Event (TuiEvent.SessionStatusChanged (_, display)) -> statusEvents.Add display
         | _ -> ())
       GetElmModel = None
       GetElmRegions = None

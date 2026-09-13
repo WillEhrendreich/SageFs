@@ -1,7 +1,7 @@
 module SageFs.Tests.McpWireProtocolTests
 
 /// Tests that pin the MCP wire protocol surface: tool registration
-/// completeness, SessionEvent JSON shapes, and SSE frame format.
+/// completeness, SseEvent JSON shapes, and SSE frame format.
 /// Build wire protocol tests next to PluginContractTests (per expert consensus).
 
 open System
@@ -11,7 +11,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.WarmUp
-open SageFs.SessionEvents
+open SageFs.Server
 
 // ─── Tool Registration ────────────────────────────────────────────
 
@@ -122,7 +122,7 @@ let private minimalWarmup : WarmupContext =
 let sessionEventSerializationTests = testList "SessionEvent serialization" [
   test "WarmupContextSnapshot has correct type and sessionId" {
     let evt = WarmupContextSnapshot("sess-1", { minimalWarmup with SourceFilesScanned = 5; PhaseTiming = { ScanSourceFilesMs = 0L; ScanAssembliesMs = 0L; OpenNamespacesMs = 0L; TotalMs = 100L } })
-    let json = serializeSessionEvent evt
+    let json = SseEvent.toJson evt
     expectJsonField json "type" "warmup_context_snapshot"
     expectJsonField json "sessionId" "sess-1"
     let doc = JsonDocument.Parse(json)
@@ -140,7 +140,7 @@ let sessionEventSerializationTests = testList "SessionEvent serialization" [
         NamespacesOpened = [{ Name = "System"; Kind = OpenableKind.Namespace; Source = "auto"; DurationMs = 0.0 }]
         FailedOpens = [{ Name = "Bad"; Kind = OpenableKind.Namespace; ErrorMessage = "err"; Diagnostics = []; RetryCount = 1; DurationMs = 0.0 }]
     })
-    let json = serializeSessionEvent evt
+    let json = SseEvent.toJson evt
     let doc = JsonDocument.Parse(json)
     let ctx = doc.RootElement.GetProperty("context")
     let asms = ctx.GetProperty("assembliesLoaded")
@@ -156,7 +156,7 @@ let sessionEventSerializationTests = testList "SessionEvent serialization" [
   }
 
   test "HotReloadSnapshot serializes watched files" {
-    let json = serializeSessionEvent (HotReloadSnapshot("s1", ["a.fs"; "b.fs"]))
+    let json = SseEvent.toJson (HotReloadSnapshot("s1", ["a.fs"; "b.fs"]))
     expectJsonField json "type" "hotreload_snapshot"
     let doc = JsonDocument.Parse(json)
     let files = doc.RootElement.GetProperty("watchedFiles")
@@ -165,7 +165,7 @@ let sessionEventSerializationTests = testList "SessionEvent serialization" [
   }
 
   test "HotReloadFileToggled serializes toggle state" {
-    let json = serializeSessionEvent (HotReloadFileToggled("s1", "x.fs", false))
+    let json = SseEvent.toJson (HotReloadFileToggled("s1", "x.fs", false))
     expectJsonField json "type" "hotreload_file_toggled"
     expectJsonField json "file" "x.fs"
     let doc = JsonDocument.Parse(json)
@@ -174,13 +174,13 @@ let sessionEventSerializationTests = testList "SessionEvent serialization" [
   }
 
   test "SessionActivated has type and sessionId" {
-    let json = serializeSessionEvent (SessionActivated "abc")
+    let json = SseEvent.toJson (SessionActivated "abc")
     expectJsonField json "type" "session_activated"
     expectJsonField json "sessionId" "abc"
   }
 
   test "SessionCreated serializes project names" {
-    let json = serializeSessionEvent (SessionCreated("s1", ["P1"; "P2"]))
+    let json = SseEvent.toJson (SessionCreated("s1", ["P1"; "P2"]))
     expectJsonField json "type" "session_created"
     let doc = JsonDocument.Parse(json)
     let projects = doc.RootElement.GetProperty("projectNames")
@@ -189,7 +189,7 @@ let sessionEventSerializationTests = testList "SessionEvent serialization" [
   }
 
   test "SessionStopped has type and sessionId" {
-    let json = serializeSessionEvent (SessionStopped "s-dead")
+    let json = SseEvent.toJson (SessionStopped "s-dead")
     expectJsonField json "type" "session_stopped"
     expectJsonField json "sessionId" "s-dead"
   }
@@ -204,7 +204,7 @@ let sessionEventSerializationTests = testList "SessionEvent serialization" [
       SessionStopped "s"
     ]
     for evt in events do
-      let json = serializeSessionEvent evt
+      let json = SseEvent.toJson evt
       let doc = JsonDocument.Parse(json)
       doc.RootElement.GetProperty("type").GetString()
       |> Expect.isNotNull "type field exists"

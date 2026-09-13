@@ -333,10 +333,10 @@ let architectureTests =
         |> Array.exists (fun n ->
           n = "SageFs.McpPushNotifications"
           || n = "SageFs.McpStateHandlers"
-          || n = "SageFs.SessionEvents"
+          || n = "SageFs.Server.SseEvent"
           || n = "SageFs.JupyterKernel")
         |> Expect.isFalse
-          "MCP push/state handlers, SessionEvents, and JupyterKernel belong in the daemon project, not Core"
+          "MCP push/state handlers, the unified SseEvent wire vocabulary, and JupyterKernel belong in the daemon project, not Core"
 
       testCase "SageFs.Core must not contain the daemon Elm kernel"
       <| fun _ ->

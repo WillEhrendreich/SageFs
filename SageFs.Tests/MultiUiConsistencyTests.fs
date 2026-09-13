@@ -279,10 +279,10 @@ let threeSessionModel =
   let m0 = (SageFsModel.initial())
   let apply evt m = SageFsUpdate.update (SageFsMsg.Event evt) m |> fst
   m0
-  |> apply (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000a01") ["A.fsproj"]))
-  |> apply (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000b02") ["B.fsproj"]))
-  |> apply (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000c03") ["C.fsproj"]))
-  |> apply (SageFsEvent.SessionSwitched (None, "aa000a01"))
+  |> apply (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000a01") ["A.fsproj"]))
+  |> apply (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000b02") ["B.fsproj"]))
+  |> apply (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000c03") ["C.fsproj"]))
+  |> apply (TuiEvent.SessionSwitched (None, "aa000a01"))
 
 let elmSessionSwitchingTests = testList "Elm session switching" [
   testCase "SessionSelect at index 0 emits RequestSessionSwitch for first session" <| fun _ ->
@@ -359,7 +359,7 @@ let elmSessionCyclingTests = testList "Elm session cycling" [
 
   testCase "CycleNext with single session produces no effects" <| fun _ ->
     let m0 = (SageFsModel.initial())
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000001") ["X.fsproj"]))) m0
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000001") ["X.fsproj"]))) m0
     let model = { m1 with Editor = { m1.Editor with SelectedSessionIndex = Some 0 } }
     let _, effs = SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) model
     effs |> List.length |> Expect.equal "no effects for single session" 0
@@ -381,7 +381,7 @@ let elmSessionCyclingTests = testList "Elm session cycling" [
 
 let elmSessionEventTests = testList "Elm session events" [
   testCase "SessionSwitched updates ActiveSessionId and derived active flags" <| fun _ ->
-    let m', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "aa000b02"))) threeSessionModel
+    let m', _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, "aa000b02"))) threeSessionModel
     m'.Sessions.ActiveSessionId |> Expect.equal "active updated" (ActiveSession.Viewing (testSessionId "aa000b02"))
     m'.Sessions.Sessions
     |> List.find (fun s -> s.Id = testSessionId "aa000b02")
@@ -396,7 +396,7 @@ let elmSessionEventTests = testList "Elm session events" [
 
   testCase "SessionCreated adds new session to list" <| fun _ ->
     let snap = mkSnapshot (testSessionId "aa000d04") ["D.fsproj"]
-    let m', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) threeSessionModel
+    let m', _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap)) threeSessionModel
     m'.Sessions.Sessions |> List.length |> Expect.equal "4 sessions" 4
     m'.Sessions.Sessions
     |> List.exists (fun s -> s.Id = testSessionId "aa000d04")
@@ -406,20 +406,20 @@ let elmSessionEventTests = testList "Elm session events" [
     let m0 = (SageFsModel.initial())
     m0.Sessions.ActiveSessionId |> Expect.equal "initially awaiting" ActiveSession.AwaitingSession
     let snap = mkSnapshot (testSessionId "aa000001") ["X.fsproj"]
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated snap)) m0
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap)) m0
     m1.Sessions.ActiveSessionId |> Expect.equal "auto-activated" (ActiveSession.Viewing (testSessionId "aa000001"))
     m1.Sessions.Sessions |> List.find (fun s -> s.Id = testSessionId "aa000001")
     |> fun s -> SessionDisplay.isActive m1.Sessions.ActiveSessionId s |> Expect.isTrue "first is active"
 
   testCase "SessionStopped removes session" <| fun _ ->
-    let m', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "aa000b02")) threeSessionModel
+    let m', _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionStopped "aa000b02")) threeSessionModel
     m'.Sessions.Sessions |> List.length |> Expect.equal "2 left" 2
     m'.Sessions.Sessions
     |> List.exists (fun s -> s.Id = testSessionId "aa000b02")
     |> Expect.isFalse "aa000b02 removed"
 
   testCase "SessionStopped of non-active preserves active" <| fun _ ->
-    let m', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "aa000c03")) threeSessionModel
+    let m', _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionStopped "aa000c03")) threeSessionModel
     m'.Sessions.ActiveSessionId |> Expect.equal "still aa000a01" (ActiveSession.Viewing (testSessionId "aa000a01"))
     m'.Sessions.Sessions
     |> List.find (fun s -> s.Id = testSessionId "aa000a01")
@@ -429,7 +429,7 @@ let elmSessionEventTests = testList "Elm session events" [
     let switches = ["aa000b02"; "aa000c03"; "aa000a01"; "aa000c03"; "aa000b02"]
     let finalModel =
       switches |> List.fold (fun m sid ->
-        let m', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, sid))) m
+        let m', _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, sid))) m
         m') threeSessionModel
     finalModel.Sessions.ActiveSessionId |> Expect.equal "last switch wins" (ActiveSession.Viewing (testSessionId "aa000b02"))
     finalModel.Sessions.Sessions
@@ -445,7 +445,7 @@ let elmSessionEventTests = testList "Elm session events" [
     let m', _ =
       SageFsUpdate.update
         (SageFsMsg.Event
-          (SageFsEvent.SessionStatusChanged ("aa000b02", SessionDisplayStatus.Faulted "test error")))
+          (TuiEvent.SessionStatusChanged ("aa000b02", SessionDisplayStatus.Faulted "test error")))
         threeSessionModel
     m'.Sessions.Sessions
     |> List.find (fun s -> s.Id = testSessionId "aa000b02")
@@ -620,25 +620,25 @@ let keyMapSessionTests = testList "keymap session shortcuts" [
 let multiSessionLifecycleTests = testList "multi-session lifecycle" [
   testCase "create 3 sessions, cycle through all, verify each becomes active" <| fun _ ->
     let m0 = (SageFsModel.initial())
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000001") ["A.fsproj"]))) m0
-    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000002") ["B.fsproj"]))) m1
-    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000003") ["C.fsproj"]))) m2
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000001") ["A.fsproj"]))) m0
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000002") ["B.fsproj"]))) m1
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000003") ["C.fsproj"]))) m2
     m3.Sessions.ActiveSessionId |> Expect.equal "first auto-active" (ActiveSession.Viewing (testSessionId "aa000001"))
     m3.Sessions.Sessions |> List.length |> Expect.equal "3 sessions" 3
     let m4, effs4 = SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) m3
     effs4 |> List.length |> Expect.equal "cycle emits effect" 1
-    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "aa000002"))) m4
+    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, "aa000002"))) m4
     m5.Sessions.ActiveSessionId |> Expect.equal "now s2" (ActiveSession.Viewing (testSessionId "aa000002"))
     let m6, _ = SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) m5
-    let m7, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "aa000003"))) m6
+    let m7, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, "aa000003"))) m6
     m7.Sessions.ActiveSessionId |> Expect.equal "now s3" (ActiveSession.Viewing (testSessionId "aa000003"))
     let m8, _ = SageFsUpdate.update (SageFsMsg.Editor EditorAction.SessionCycleNext) m7
-    let m9, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "aa000001"))) m8
+    let m9, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, "aa000001"))) m8
     m9.Sessions.ActiveSessionId |> Expect.equal "wraps to s1" (ActiveSession.Viewing (testSessionId "aa000001"))
 
   testCase "stop active session, verify fallback" <| fun _ ->
     let m0 = threeSessionModel
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "aa000a01")) m0
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionStopped "aa000a01")) m0
     m1.Sessions.Sessions |> List.length |> Expect.equal "2 left" 2
     m1.Sessions.Sessions
     |> List.exists (fun s -> s.Id = testSessionId "aa000a01")
@@ -649,15 +649,15 @@ let multiSessionLifecycleTests = testList "multi-session lifecycle" [
 
   testCase "create, switch, stop, switch back — full lifecycle" <| fun _ ->
     let m0 = (SageFsModel.initial())
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000001") ["A.fsproj"]))) m0
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000001") ["A.fsproj"]))) m0
     m1.Sessions.ActiveSessionId |> Expect.equal "s1 active" (ActiveSession.Viewing (testSessionId "aa000001"))
-    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000002") ["B.fsproj"]))) m1
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000002") ["B.fsproj"]))) m1
     m2.Sessions.ActiveSessionId |> Expect.equal "still s1" (ActiveSession.Viewing (testSessionId "aa000001"))
-    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "aa000002"))) m2
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, "aa000002"))) m2
     m3.Sessions.ActiveSessionId |> Expect.equal "now s2" (ActiveSession.Viewing (testSessionId "aa000002"))
-    let m4, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "aa000002")) m3
+    let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionStopped "aa000002")) m3
     m4.Sessions.Sessions |> List.length |> Expect.equal "1 left" 1
-    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "aa000001"))) m4
+    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, "aa000001"))) m4
     m5.Sessions.ActiveSessionId |> Expect.equal "back to s1" (ActiveSession.Viewing (testSessionId "aa000001"))
 
   testCase "SessionNavDown clamps to session count" <| fun _ ->
@@ -677,11 +677,11 @@ let multiSessionLifecycleTests = testList "multi-session lifecycle" [
 
   testCase "all UIs see same session list after create+switch+stop" <| fun _ ->
     let m0 = (SageFsModel.initial())
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000001") ["A.fsproj"]))) m0
-    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000002") ["B.fsproj"]))) m1
-    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionCreated (mkSnapshot (testSessionId "aa000003") ["C.fsproj"]))) m2
-    let m4, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, "aa000002"))) m3
-    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionStopped "aa000003")) m4
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000001") ["A.fsproj"]))) m0
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000002") ["B.fsproj"]))) m1
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnapshot (testSessionId "aa000003") ["C.fsproj"]))) m2
+    let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, "aa000002"))) m3
+    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionStopped "aa000003")) m4
     let rendered = SageFsRender.render m5
     let json = serializeRegions "aa000002" "Ready" 0 0.0 rendered
     let tuiParse = parseStateEvent json
@@ -706,7 +706,7 @@ let multiSessionLifecycleTests = testList "multi-session lifecycle" [
     let switches = ["aa000a01"; "aa000b02"; "aa000c03"; "aa000b02"; "aa000a01"]
     let finalModel =
       switches |> List.fold (fun m sid ->
-        let m', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.SessionSwitched (None, sid))) m
+        let m', _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, sid))) m
         m') threeSessionModel
     finalModel.Sessions.Sessions
     |> List.filter (fun s -> SessionDisplay.isActive finalModel.Sessions.ActiveSessionId s)

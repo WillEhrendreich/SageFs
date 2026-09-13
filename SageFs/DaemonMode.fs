@@ -109,7 +109,7 @@ type DaemonInfra = {
   FrictionStore: SageFs.Features.FrictionSqlite.FrictionStore option
   DaemonStreamId: string
   Cts: CancellationTokenSource
-  StateChangedEvent: Event<DaemonStateChange>
+  StateChangedEvent: Event<SseEvent>
   /// Timeout for agent-facing worker fetches (MCP tools, SSE).
   McpFetchTimeoutSec: float
   /// Timeout for user-facing worker fetches (dashboard).
@@ -177,7 +177,7 @@ let createDaemonInfrastructure () : DaemonInfra =
     FrictionStore = frictionStore
     DaemonStreamId = "daemon-sessions"
     Cts = new CancellationTokenSource()
-    StateChangedEvent = Event<DaemonStateChange>()
+    StateChangedEvent = Event<SseEvent>()
     McpFetchTimeoutSec = 5.0
     DashboardFetchTimeoutSec = 0.5
   }
@@ -538,7 +538,7 @@ let getEvalStatsFromWorker
 let createHotReloadProxyEndpoints
   (getWorkerBaseUrl: WorkerProtocol.SessionId -> string option)
   (httpClient: Net.Http.HttpClient)
-  (stateChangedEvent: Event<DaemonStateChange>)
+  (stateChangedEvent: Event<SseEvent>)
   : HttpEndpoint list =
   let proxyToWorker (sidStr: string) (workerPath: string) (httpCall: string -> Threading.Tasks.Task<string * int * bool>) (ctx: HttpContext) = task {
     match WorkerProtocol.SessionId.validate sidStr with
@@ -721,12 +721,12 @@ let private dispatchDiscoveredTests
         | false -> Array.empty)
     | false -> Array.empty
   match Array.isEmpty locations with
-  | false -> dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected (WorkerProtocol.SessionId.value sid, locations)))
+  | false -> dispatch (SageFsMsg.Event (TuiEvent.TestLocationsDetected (WorkerProtocol.SessionId.value sid, locations)))
   | true -> ()
   // Zero tests is still an answer: it completes this session's discovery.
-  dispatch (SageFsMsg.Event (SageFsEvent.TestsDiscovered (WorkerProtocol.SessionId.value sid, tests)))
+  dispatch (SageFsMsg.Event (TuiEvent.TestsDiscovered (WorkerProtocol.SessionId.value sid, tests)))
   match List.isEmpty providers with
-  | false -> dispatch (SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
+  | false -> dispatch (SageFsMsg.Event (TuiEvent.ProvidersDetected providers))
   | true -> ()
 
 /// Handle a worker's test discovery report from SessionManager → Elm model.
@@ -744,7 +744,7 @@ let handleTestDiscovery
   | SessionManager.TestDiscoveryReport.DiscoveryFailed reason ->
     let id = WorkerProtocol.SessionId.value sid
     log.LogWarning("[Daemon] Test discovery failed for {SessionId}: {Reason}", id, reason)
-    dispatch (SageFsMsg.Event (SageFsEvent.TestDiscoveryFailed (id, reason)))
+    dispatch (SageFsMsg.Event (TuiEvent.TestDiscoveryFailed (id, reason)))
 
 /// Parse warmup progress string ("step/total msg") into structured fields.
 let tryParseWarmupProgress (progress: string) =
@@ -754,7 +754,7 @@ let tryParseWarmupProgress (progress: string) =
 let handleWarmupProgress (dispatch: SageFsMsg -> unit) (_sid: string) (progress: string) =
   match tryParseWarmupProgress progress with
   | Some (step, total, msg) ->
-    dispatch (SageFsMsg.Event (SageFsEvent.WarmupProgress (step, total, msg)))
+    dispatch (SageFsMsg.Event (TuiEvent.WarmupProgress (step, total, msg)))
   | None -> ()
 
 /// Periodic cache + manifest save callback.
@@ -1355,7 +1355,7 @@ let createElmRuntime
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (httpClient: System.Net.Http.HttpClient)
-  (stateChangedEvent: Event<DaemonStateChange>)
+  (stateChangedEvent: Event<SseEvent>)
   (watcherManagerRef: LiveTestWatcherManager option ref)
   (onModel: SageFsModel -> unit)
   (ct: System.Threading.CancellationToken) =
@@ -1500,7 +1500,7 @@ let createElmRuntime
 /// its long-lived SSE stream still sees the previous output snapshot.
 let dispatchOutputAndWait
   (elmRuntime: ElmRuntime<SageFsModel, SageFsMsg, RenderRegion>)
-  (stateChanged: IEvent<DaemonStateChange>)
+  (stateChanged: IEvent<SseEvent>)
   (sessionId: string)
   (message: SageFsMsg)
   = task {
@@ -1622,7 +1622,7 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
 
   // Wire instrumentation maps from SessionManager → Elm model
   onInstrumentationMapsCallback <- fun sid maps ->
-    elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.InstrumentationMapsReady (WorkerProtocol.SessionId.value sid, maps)))
+    elmRuntime.Dispatch(SageFsMsg.Event (TuiEvent.InstrumentationMapsReady (WorkerProtocol.SessionId.value sid, maps)))
 
   // Wire warmup progress from SessionManager → Elm model + SSE broadcast
   onWarmupProgressCallback <- fun sid progress ->
@@ -1650,7 +1650,7 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
   let _bindingScopeSubscription =
     stateChangedEvent.Publish.Subscribe(fun change ->
       match change with
-      | DaemonStateChange.ModelChanged (outputCount, _) when outputCount <> lastBindingOutputCount.Value ->
+      | SseEvent.ModelChanged (outputCount, _) when outputCount <> lastBindingOutputCount.Value ->
         lastBindingOutputCount.Value <- outputCount
         let model = elmRuntime.GetModel()
         // Use GetActiveBuffer (not GetBuffer) to handle AwaitingSession → staging buffer case.
@@ -2227,7 +2227,7 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
             stateChangedEvent.Publish
             sidStr
             (SageFsMsg.Event (
-              SageFsEvent.EvalCompleted (sidStr, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
+              TuiEvent.EvalCompleted (sidStr, msg, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic)))
         // Live binding watch window: pulled AFTER the eval reply, never
         // attached to it (roast-4 #2) — fire-and-forget so a slow or failed
         // reflection walk can never delay the caller's eval result. Fed into
@@ -2260,7 +2260,7 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
             elmRuntime
             stateChangedEvent.Publish
             sidStr
-            (SageFsMsg.Event (SageFsEvent.EvalFailed (sidStr, msg)))
+            (SageFsMsg.Event (TuiEvent.EvalFailed (sidStr, msg)))
         return Error msg
       | Ok other -> return Error (sprintf "Unexpected: %A" other)
       | Error e -> return Error (SageFsError.describe e)
@@ -2285,7 +2285,7 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
     Dispatch = fun msg -> elmRuntime.Dispatch msg
     SwitchSession = fun sid -> task {
       let sidStr = WorkerProtocol.SessionId.value sid
-      elmRuntime.Dispatch(SageFsMsg.Event (SageFsEvent.SessionSwitched (None, sidStr)))
+      elmRuntime.Dispatch(SageFsMsg.Event (TuiEvent.SessionSwitched (None, sidStr)))
       stateChangedEvent.Trigger(SessionSwitched sid)
       return Ok (sprintf "Switched to session '%s'" sidStr)
     }

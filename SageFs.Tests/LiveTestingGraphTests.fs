@@ -1050,7 +1050,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                       TestState = { model0.LiveTesting.TestState with
                                                       Activation = LiveTestingActivation.Active
                                                       DiscoveredTests = tests } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "s"))) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid |], Some "s"))) model1
     let entry =
       model2.LiveTesting.TestState.StatusIndex.Entries
       |> Array.tryFind (fun e -> e.TestId = tid)
@@ -1076,7 +1076,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                       TestState = { model0.LiveTesting.TestState with
                                                       Activation = LiveTestingActivation.Active
                                                       DiscoveredTests = tests } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tidA |], Some "s"))) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tidA |], Some "s"))) model1
     let entryB =
       model2.LiveTesting.TestState.StatusIndex.Entries
       |> Array.tryFind (fun e -> e.TestId = tidB)
@@ -1103,8 +1103,8 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                                       Activation = LiveTestingActivation.Active
                                                       DiscoveredTests = tests
                                                       LastResults = Map.ofList [ tid, result ] } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", tests))) model1
-    let model3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "test-session"))) model2
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered ("test-session", tests))) model1
+    let model3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid |], Some "test-session"))) model2
     let entry =
       model3.LiveTesting.TestState.StatusIndex.Entries
       |> Array.tryFind (fun e -> e.TestId = tid)
@@ -1133,7 +1133,7 @@ let optimisticGutterTests = testList "optimistic gutter transitions" [
                                       TestState = { model0.LiveTesting.TestState with
                                                       Activation = LiveTestingActivation.Active
                                                       DiscoveredTests = tests } } }
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tid |], Some "s"))) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid |], Some "s"))) model1
     TestRunPhase.isAnyRunning model2.LiveTesting.TestState.RunPhases
     |> Expect.isTrue "phase should be Running after TestRunStarted dispatch"
   }
