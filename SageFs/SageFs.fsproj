@@ -63,6 +63,7 @@
         <Compile Include="TestsPane.fs" />
         <Compile Include="SageFsApp.fs" />
         <Compile Include="ElmDaemon.fs" />
+        <Compile Include="CohortLandingVerify.fs" />
         <Compile Include="TerminalUI.fs" />
         <Compile Include="JumpToTest.fs" />
         <Compile Include="Screen.fs" />
