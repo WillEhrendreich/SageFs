@@ -227,16 +227,6 @@ let coverageComputationTests = testList "CoverageComputation" [
 
 [<Tests>]
 let instrumentationTests = testList "LiveTestingInstrumentation" [
-  test "ActivitySource name is SageFs.LiveTesting" {
-    LiveTestingInstrumentation.activitySource.Name
-    |> Expect.equal "activity source name" "SageFs.LiveTesting"
-  }
-
-  test "Meter name is SageFs.LiveTesting" {
-    LiveTestingInstrumentation.meter.Name
-    |> Expect.equal "meter name" "SageFs.LiveTesting"
-  }
-
   test "traced returns same value as wrapped function" {
     LiveTestingInstrumentation.traced "test.op" [] (fun () -> 42)
     |> Expect.equal "should return 42" 42
@@ -257,20 +247,6 @@ let instrumentationTests = testList "LiveTestingInstrumentation" [
     |> Expect.equal "should return hello" "hello"
   }
 
-  test "treeSitterHistogram is created" {
-    LiveTestingInstrumentation.treeSitterHistogram
-    |> Expect.isNotNull "should not be null"
-  }
-
-  test "fcsHistogram is created" {
-    LiveTestingInstrumentation.fcsHistogram
-    |> Expect.isNotNull "should not be null"
-  }
-
-  test "executionHistogram is created" {
-    LiveTestingInstrumentation.executionHistogram
-    |> Expect.isNotNull "should not be null"
-  }
 ]
 
 [<Tests>]

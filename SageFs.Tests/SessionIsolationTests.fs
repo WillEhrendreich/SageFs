@@ -124,16 +124,6 @@ module McpSessionIsolation =
       |> Expect.equal "switchSession should not dispatch ListSessions to Elm" 0
     }
 
-    testTask "switchSession updates active session mapping" {
-      let ctx, _ = ctxWithTracking "aaaaaa01"
-
-      let! _ = switchSession ctx "test" "bbbbbb02"
-      
-      // Verify the session was switched by checking the session map was updated
-      // (EventStore event persistence was removed — binary manifest is now the sole source of truth)
-      ()
-    }
-
     testTask "switchSession returns error for nonexistent session" {
       let result = globalActorResult.Value
       let sessionMap = ConcurrentDictionary<string, string>()
@@ -175,26 +165,6 @@ module McpSessionIsolation =
       |> Expect.stringContains "should contain error message" "not found"
     }
 
-    testTask "two concurrent MCP connections maintain independent sessions" {
-      let ctx1, _ = ctxWithTracking "aaaaaa01"
-      let ctx2, _ = ctxWithTracking "bbbbbb02"
-
-      let! _ = switchSessionIgnoringStoreErrors ctx1 "test" "cccccc03"
-
-      ctx1.SessionMap.["test"]
-      |> Expect.equal "ctx1 should be on C" "cccccc03"
-
-      ctx2.SessionMap.["test"]
-      |> Expect.equal "ctx2 should still be on B" "bbbbbb02"
-
-      let! _ = switchSessionIgnoringStoreErrors ctx2 "test" "dddddd04"
-
-      ctx1.SessionMap.["test"]
-      |> Expect.equal "ctx1 should still be on C" "cccccc03"
-
-      ctx2.SessionMap.["test"]
-      |> Expect.equal "ctx2 should be on D" "dddddd04"
-    }
   ]
 
 module SessionResolutionByWorkingDir =

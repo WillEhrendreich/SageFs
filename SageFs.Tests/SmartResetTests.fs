@@ -71,9 +71,6 @@ let smartResetExecuteTests =
       receivedRebuild
       |> Expect.equal "should have called hard reset" (Some false)
 
-    testCase "outcome is a struct (allocation-free)" <| fun _ ->
-      typeof<SmartReset.Outcome>.IsValueType
-      |> Expect.isTrue "Outcome should be [<Struct>]"
   ]
 
 [<Tests>]

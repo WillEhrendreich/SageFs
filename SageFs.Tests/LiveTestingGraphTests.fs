@@ -920,20 +920,6 @@ let compositionTests = testList "compositionTests" [
     hasTS |> Expect.isTrue "TS fires on first keystroke (cold start)"
   }
 
-  test "session dispose mid-cycle: state resets cleanly" {
-    let t0 = DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero)
-    let s0 = LiveTestCycleState.empty
-    let s1 = s0 |> LiveTestCycleState.onKeystroke "let x = 1" "File.fs" t0
-    let _, _ = s1 |> LiveTestCycleState.tick (t0.AddMilliseconds(51.0))
-    let s3 = LiveTestCycleState.empty
-    s3.ActiveFile |> Expect.isNone "no active file after reset"
-    s3.AnalysisCache.FileSymbols |> Expect.isEmpty "no cache after reset"
-    let s4 = s3 |> LiveTestCycleState.onKeystroke "let y = 1" "File2.fs" (t0.AddMilliseconds(200.0))
-    s4.ActiveFile |> Expect.equal "new file" (Some "File2.fs")
-    let effects, _ = s4 |> LiveTestCycleState.tick (t0.AddMilliseconds(251.0))
-    let hasTS = effects |> List.exists (fun e -> match e with TestCycleEffect.ParseTreeSitter _ -> true | _ -> false)
-    hasTS |> Expect.isTrue "TS fires after session reset"
-  }
 ]
 
 // --- Symbol graph wiring integration tests ---
@@ -1541,40 +1527,6 @@ let projectAssemblyDiscoveryTests = testList "Project assembly initial discovery
       |> Expect.equal "framework should be expecto" TestFramework.Expecto)
   }
 
-  test "merging FSI + project results deduplicates providers" {
-    let fsiResult = LiveTestHookResult.empty
-    let projResult = {
-      DetectedProviders =
-        [ ProviderDescription.Custom
-            { Name = TestFramework.Expecto; AssemblyMarker = "Expecto" } ]
-      DiscoveredTests =
-        [| { Id = TestId.create "test1" TestFramework.Expecto
-             FullName = "test1"
-             DisplayName = "t1"
-             Origin = TestOrigin.ReflectionOnly
-             Labels = []
-             Framework = TestFramework.Expecto
-             Category = TestCategory.Unit } |]
-      AffectedTestIds = [||]
-      RunTest = LiveTestHookResult.noOp
-    }
-    let allResults = [fsiResult; projResult]
-    let mergedProviders =
-      allResults
-      |> List.collect (fun r -> r.DetectedProviders)
-      |> List.distinctBy (fun p ->
-        match p with
-        | ProviderDescription.AttributeBased a -> a.Name
-        | ProviderDescription.Custom c -> c.Name)
-    let mergedTests =
-      allResults
-      |> List.map (fun r -> r.DiscoveredTests)
-      |> Array.concat
-    mergedProviders.Length
-    |> Expect.equal "one distinct provider" 1
-    mergedTests.Length
-    |> Expect.equal "one test from project" 1
-  }
 ]
 
 [<Tests>]

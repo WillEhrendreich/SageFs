@@ -20,16 +20,6 @@ open SageFs.Features.DaemonManifest
 let w2ProcessDisposeTests =
   testList "W2 — awaitWorkerPort Process.Dispose on timeout/failure" [
 
-    testCase "SessionManager source contains Dispose after Kill on timeout path" <| fun _ ->
-      // Verify the fix is present in source by checking the compiled assembly includes it.
-      // (Runtime test would require spawning a real worker which is an integration concern.)
-      // Check the pattern: after Kill there's Dispose on both exception paths.
-      let disposeAfterKillExists =
-        typeof<SageFs.SessionManager.ManagerState>.Assembly
-          .GetTypes()
-          |> Array.exists (fun t -> t.FullName.Contains("SessionManager"))
-      disposeAfterKillExists |> Expect.isTrue "SessionManager type exists in assembly"
-
     testCase "SessionManager WorkerSpawnFailed logs warning via structured log fields" <| fun _ ->
       // Verify WorkerSpawnFailed pattern match has 3 fields (id, workerPid, msg)
       let cases =

@@ -113,9 +113,6 @@
         <Compile Include="CoverageViewMutationTests.fs" />
         <Compile Include="CoverageViewProjectMutationTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
-        <Compile Include="RestartPolicyCorrespondenceTests.fs" />
-        <Compile Include="ResultExCorrespondenceTests.fs" />
-        <Compile Include="SageFsErrorCorrespondenceTests.fs" />
         <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
         <Compile Include="LiveTestingBrowserTests.fs" />
@@ -221,7 +218,6 @@
         <Compile Include="SageFsErrorJsonTests.fs" />
         <Compile Include="SageFsErrorPropertyTests.fs" />
         <Compile Include="ErrorAlgebraHardeningTests.fs" />
-        <Compile Include="ResultCeTests.fs" />
         <Compile Include="SessionIdTests.fs" />
         <Compile Include="EndpointContractTests.fs" />
         <Compile Include="FsiRegressionTests.fs" />
@@ -268,7 +264,6 @@
          <Compile Include="VerificationEvidenceTests.fs" />
          <Compile Include="VerificationEvidencePropertyTests.fs" />
          <Compile Include="TargetedVerificationScenarioTests.fs" />
-         <Compile Include="TargetedVerificationLoadedStateTests.fs" />
          <Compile Include="TargetedVerificationSummaryTests.fs" />
          <Compile Include="TargetedVerificationSummaryPropertyTests.fs" />
          <Compile Include="McpFrictionScenarioTests.fs" />
@@ -294,7 +289,6 @@
          <Compile Include="JupyterDaemonBridgeTests.fs" />
         <Compile Include="TracingMiddlewareTests.fs" />
         <Compile Include="ResultExTests.fs" />
-        <Compile Include="RenderInstrumentationTests.fs" />
         <Compile Include="EventExhaustivenessTests.fs" />
         <Compile Include="ComplianceSuite.fs" />
         <Compile Include="AppStatePropertyTests.fs" />

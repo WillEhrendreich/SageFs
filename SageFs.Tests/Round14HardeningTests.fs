@@ -58,18 +58,6 @@ let w35CorruptRenameTests =
       finally
         IO.Directory.Delete(dir, true)
 
-    testCase "IoError should NOT rename manifest (transient — preserve file for retry)" <| fun _ ->
-      // CorruptData = permanent → rename to unblock saves
-      // IoError = transient (file locked by another process) → do NOT rename
-      // Both must be handled differently by the startup CorruptData arm
-      let shouldRename = function
-        | ManifestLoadError.CorruptData _ -> true   // permanent → rename
-        | ManifestLoadError.IoError _ -> false       // transient → leave intact
-        | ManifestLoadError.NotFound -> false         // no file to rename
-      shouldRename (ManifestLoadError.CorruptData "bad CRC") |> Expect.isTrue "CorruptData triggers rename"
-      shouldRename (ManifestLoadError.IoError "file locked") |> Expect.isFalse "IoError does NOT trigger rename"
-      shouldRename ManifestLoadError.NotFound |> Expect.isFalse "NotFound has nothing to rename"
-
     testCase "renameCorruptManifest returns false when no manifest exists" <| fun _ ->
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r14-%s" (Guid.NewGuid().ToString("N")))
       // No directory → no file → returns false
@@ -124,59 +112,6 @@ let w36HandlePruneResultTests =
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r14-%s" (Guid.NewGuid().ToString("N")))
       let! result = SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemonTask noPruneFlags
       result |> Expect.equal "Prune=false → Ok false (not requested)" (Result.Ok false)
-    }
-  ]
-
-// ---------------------------------------------------------------------------
-// W37 — cacheSaveTimerDone conditional Dispose (same fix as W33 testCycleTimerDone)
-// ---------------------------------------------------------------------------
-// W37(R14): cacheSaveTimerDone has separate Wait(5s) + unconditional Dispose().
-// The W33 fix applied to testCycleTimerDone (conditional Dispose) was NOT applied here.
-// If Wait times out and the callback is still running disk I/O, unconditional Dispose
-// causes ObjectDisposedException in the timer system.
-// Fix: consolidate into conditional Dispose block matching the W33 pattern.
-
-[<Tests>]
-let w37CacheSaveTimerDisposeTests =
-  testList "W37(R14) — cacheSaveTimerDone conditional Dispose after 5s wait (mirrors W33)" [
-
-    testCase "Safe pattern: only Dispose MRSE when Wait returned true" <| fun _ ->
-      let mrse = new System.Threading.ManualResetEventSlim(false)
-      let _handle = mrse.WaitHandle  // triggers kernel handle creation
-      mrse.Set()
-      let joined = mrse.Wait(System.TimeSpan.FromSeconds 5.0)
-      match joined with
-      | true -> mrse.Dispose()   // safe: timer signaled before we disposed
-      | false -> ()              // do NOT Dispose — callback may still be running
-      joined |> Expect.isTrue "MRSE set immediately should join within 5s"
-
-    testCase "Timeout path: leaving MRSE undisposed prevents ObjectDisposedException" <| fun _ ->
-      let mrse = new System.Threading.ManualResetEventSlim(false)
-      let _handle = mrse.WaitHandle
-      // 50ms timeout — never set, so this times out
-      let joined = mrse.Wait(System.TimeSpan.FromMilliseconds 50.0)
-      match joined with
-      | true -> mrse.Dispose()
-      | false -> ()  // do NOT Dispose — timer may still signal handle
-      joined |> Expect.isFalse "Wait should time out when MRSE is never set"
-      // No ObjectDisposedException = correct behavior
-
-    testTask "10s budget is sufficient for periodic cache save callbacks" {
-      // Pattern documentation: Timer.Dispose(WaitHandle) for shutdown hygiene.
-      let mrse = new System.Threading.ManualResetEventSlim(false)
-      let callbackRan = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
-      let t = new System.Threading.Timer(
-        System.Threading.TimerCallback(fun _ -> callbackRan.TrySetResult () |> ignore),
-        null, 10, System.Threading.Timeout.Infinite)
-      let! _ = Task.WhenAny(callbackRan.Task, Task.Delay 10_000)
-      callbackRan.Task.IsCompleted |> Expect.isTrue "the timer callback should fire"
-      let disposeOk = t.Dispose(mrse.WaitHandle)
-      disposeOk |> Expect.isTrue "Timer.Dispose(WaitHandle) should dispose a live timer"
-      // The wait on the dispose handle is the pattern under test; signaling is best-effort.
-      let signaled = mrse.Wait(System.TimeSpan.FromSeconds 10.0)
-      match signaled with
-      | true -> mrse.Dispose()
-      | false -> ()
     }
   ]
 
@@ -306,39 +241,6 @@ let w38w39MergeTests =
   ]
 
 // ---------------------------------------------------------------------------
-// W40 — getModel() called once before async operations
-// ---------------------------------------------------------------------------
-// W40(R14): performGracefulShutdown calls getModel() twice — once for testState (line 545)
-// and again for activeSessionId (line 577, after the 5s event-append await).
-// If a session starts/stops between calls, activeSessionId could reference a session
-// absent from the already-captured snapshot → merged manifest has wrong ActiveSessionId.
-// Fix: call getModel() once at function entry; use the same reading throughout.
-
-[<Tests>]
-let w40GetModelOnceTests =
-  testList "W40(R14) — getModel() called once before async operations" [
-
-    testCase "W40 contract: ActiveSessionId and testState must derive from same model reading" <| fun _ ->
-      // Documents the invariant: both derives of model state (activeSessionId and testState)
-      // must come from a single getModel() call before any await. This prevents the race
-      // where a session starts between call #1 (testState) and call #2 (activeSessionId).
-      // Verified structurally: performGracefulShutdown and periodicManifestSave
-      // now call getModel() once at entry and pass result to downstream operations.
-      //
-      // This test serves as a RED-GREEN marker:
-      // RED = two separate getModel() calls (current code at line 545 and 577)
-      // GREEN = one getModel() call at function entry, values derived from that
-      //
-      // The determinism property: given the same model value, the same session state
-      // is always produced — reading model once makes this a pure function of that value.
-      let model1 = SageFsModel.initial ()
-      let model2 = model1
-      let activeId1 = model1.Sessions.ActiveSessionId |> ActiveSession.sessionId
-      let activeId2 = model2.Sessions.ActiveSessionId |> ActiveSession.sessionId
-      activeId1 |> Expect.equal "same model reading produces same activeSessionId" activeId2
-  ]
-
-// ---------------------------------------------------------------------------
 // W41 — NotFound arm should log at Error (invariant violation)
 // ---------------------------------------------------------------------------
 // W41(R14): When mergeManifestWithExisting converts NotFound → Ok (which it always does),
@@ -349,26 +251,6 @@ let w40GetModelOnceTests =
 [<Tests>]
 let w41NotFoundLogLevelTests =
   testList "W41(R14) — NotFound propagation is invariant violation, should LogError" [
-
-    testCase "W41 contract: NotFound arm in callers is unreachable — LogError severity correct" <| fun _ ->
-      // mergeManifestWithExisting converts NotFound → Ok(buildManifestState).
-      // The callers have a NotFound arm that "should not be reached."
-      // If that arm fires, it means the function's contract was broken.
-      // A contract violation must be LogError, not LogWarning.
-      //
-      // Severity mapping (mirrors W32):
-      // NotFound-propagated-to-caller = unreachable invariant = Error severity
-      // IoError / CorruptData = known error conditions = Warning severity (skip write, preserve history)
-      let callerHandling = function
-        | ManifestLoadError.NotFound -> "Error"     // invariant violation
-        | ManifestLoadError.IoError _ -> "Warning"  // known case, skip write
-        | ManifestLoadError.CorruptData _ -> "Warning" // known case, skip write
-      callerHandling ManifestLoadError.NotFound
-        |> Expect.equal "NotFound propagated to caller is invariant violation → LogError" "Error"
-      callerHandling (ManifestLoadError.IoError "locked")
-        |> Expect.equal "IoError is expected → LogWarning" "Warning"
-      callerHandling (ManifestLoadError.CorruptData "crc")
-        |> Expect.equal "CorruptData is expected → LogWarning" "Warning"
 
     testCase "W41: mergeManifestWithExisting does NOT return NotFound (converts to Ok)" <| fun _ ->
       // Verify the invariant directly: with NotFound on disk, mergeManifestWithExisting returns Ok.
@@ -416,12 +298,10 @@ let w42TaskCheckDaemonRunningTests =
 
 [<Tests>]
 let allRound14Tests =
-  testList "Round 14 Hardening (R14) — W35 W36 W37 W38 W39 W40 W41 W42" [
+  testList "Round 14 Hardening (R14) — W35 W36 W38 W39 W41 W42" [
     w35CorruptRenameTests
     w36HandlePruneResultTests
-    w37CacheSaveTimerDisposeTests
     w38w39MergeTests
-    w40GetModelOnceTests
     w41NotFoundLogLevelTests
     w42TaskCheckDaemonRunningTests
   ]

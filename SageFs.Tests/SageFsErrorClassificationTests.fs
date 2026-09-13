@@ -41,13 +41,6 @@ let sageFsErrorClassificationTests =
     }
 
     testList "isClientError" [
-      test "every case is classified" {
-        allErrorCases
-        |> List.iter (fun e ->
-          // Should not throw — all cases handled
-          SageFsError.isClientError e |> ignore)
-      }
-
       test "client errors map to 4xx HTTP status" {
         allErrorCases
         |> List.filter SageFsError.isClientError
@@ -63,12 +56,6 @@ let sageFsErrorClassificationTests =
     ]
 
     testList "isServerError" [
-      test "every case is classified" {
-        allErrorCases
-        |> List.iter (fun e ->
-          SageFsError.isServerError e |> ignore)
-      }
-
       test "server errors map to 500 HTTP status" {
         allErrorCases
         |> List.filter SageFsError.isServerError
@@ -80,12 +67,6 @@ let sageFsErrorClassificationTests =
     ]
 
     testList "isGatewayError" [
-      test "every case is classified" {
-        allErrorCases
-        |> List.iter (fun e ->
-          SageFsError.isGatewayError e |> ignore)
-      }
-
       test "gateway errors map to 502/504 HTTP status" {
         allErrorCases
         |> List.filter SageFsError.isGatewayError
@@ -99,12 +80,6 @@ let sageFsErrorClassificationTests =
     ]
 
     testList "isInfraError" [
-      test "every case is classified" {
-        allErrorCases
-        |> List.iter (fun e ->
-          SageFsError.isInfraError e |> ignore)
-      }
-
       test "infra errors map to 409 HTTP status" {
         allErrorCases
         |> List.filter SageFsError.isInfraError

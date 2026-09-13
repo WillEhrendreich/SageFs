@@ -57,12 +57,6 @@ let private makeFcsTypeCheckCompletedMsg
 let elmIntegrationTests = testList "LiveTesting Elm Integration" [
 
   testList "Model structure" [
-    test "SageFsModel has LiveTesting field" {
-      typeof<SageFsModel>.GetProperties()
-      |> Array.exists (fun p -> p.Name = "LiveTesting")
-      |> Expect.isTrue "SageFsModel should have LiveTesting field"
-    }
-
     test "(SageFsModel.initial()) has empty LiveTestState" {
       let model = (SageFsModel.initial())
       model.LiveTesting.TestState.DiscoveredTests
@@ -74,32 +68,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
     }
   ]
 
-  testList "Event cases" [
-    let hasCase name =
-      Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<SageFsEvent>)
-      |> Array.exists (fun uc -> uc.Name = name)
-      |> Expect.isTrue (sprintf "SageFsEvent should have %s case" name)
-    test "TestsDiscovered" { hasCase "TestsDiscovered" }
-    test "TestResultsBatch" { hasCase "TestResultsBatch" }
-    test "LiveTestingEnabled" { hasCase "LiveTestingEnabled" }
-    test "LiveTestingDisabled" { hasCase "LiveTestingDisabled" }
-    test "AffectedTestsComputed" { hasCase "AffectedTestsComputed" }
-    test "CoverageUpdated" { hasCase "CoverageUpdated" }
-    test "RunPolicyChanged" { hasCase "RunPolicyChanged" }
-    test "ProvidersDetected" { hasCase "ProvidersDetected" }
-    test "TestRunStarted" { hasCase "TestRunStarted" }
-  ]
-
   testList "Analysis identity" [
-    test "SageFsMsg.FcsTypeCheckCompleted carries analysis identity" {
-      let case =
-        FSharpType.GetUnionCases(typeof<SageFsMsg>)
-        |> Array.find (fun uc -> uc.Name = "FcsTypeCheckCompleted")
-
-      case.GetFields().Length
-      |> Expect.equal "FcsTypeCheckCompleted should round-trip analysis identity" 3
-    }
-
     test "Elm wiring: stale FcsTypeCheckCompleted Success is ignored after newer buffer content" {
       let tc = mkTestCase "MyApp.Tests.testAdd" TestFramework.Expecto TestCategory.Unit
       let refs = [

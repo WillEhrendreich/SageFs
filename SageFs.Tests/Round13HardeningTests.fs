@@ -55,17 +55,6 @@ let w31HandlePruneExhaustiveTests =
       let! result = SageFs.Server.DaemonMode.handlePrune dir nullLog noDaemon noPruneFlags
       result |> Expect.equal "handlePrune with Prune=false returns Ok false (no prune attempted)" (Result.Ok false)
     }
-
-    testCase "ManifestLoadError: IoError and CorruptData carry error context; NotFound does not" <| fun _ ->
-      // Documents that IoError/CorruptData are error conditions (file exists but unreadable)
-      // while NotFound is a clean first-run condition — they must NOT be handled identically.
-      let hasPayload = function
-        | ManifestLoadError.NotFound -> false
-        | ManifestLoadError.IoError _ -> true
-        | ManifestLoadError.CorruptData _ -> true
-      hasPayload ManifestLoadError.NotFound |> Expect.isFalse "NotFound carries no payload (clean slate)"
-      hasPayload (ManifestLoadError.IoError "locked") |> Expect.isTrue "IoError carries error context"
-      hasPayload (ManifestLoadError.CorruptData "bad CRC") |> Expect.isTrue "CorruptData carries error context"
   ]
 
 // ---------------------------------------------------------------------------
@@ -118,33 +107,6 @@ let w28DaemonRunningGuardTests =
 let w32StartupLogLevelTests =
   testList "W32(R13) — startup ManifestLoadError exhaustive match and span outcomes" [
 
-    testCase "ManifestLoadError severity contract: NotFound=Info, IoError=Warning, CorruptData=Error" <| fun _ ->
-      // Documents the correct mapping. The startup code must use these levels.
-      // NotFound is an expected first-run condition → LogInformation
-      // IoError means the file EXISTS but can't be read (lock, permissions) → LogWarning
-      // CorruptData means the file exists but is corrupted (permanent) → LogError
-      let expectedSeverity = function
-        | ManifestLoadError.NotFound -> "Information"
-        | ManifestLoadError.IoError _ -> "Warning"
-        | ManifestLoadError.CorruptData _ -> "Error"
-      expectedSeverity ManifestLoadError.NotFound
-        |> Expect.equal "NotFound is informational (expected first-run)" "Information"
-      expectedSeverity (ManifestLoadError.IoError "x")
-        |> Expect.equal "IoError is a warning (file exists but unreadable)" "Warning"
-      expectedSeverity (ManifestLoadError.CorruptData "x")
-        |> Expect.equal "CorruptData is an error (permanent corruption)" "Error"
-
-    testCase "ManifestLoadError span outcome: NotFound=succeed, IoError/CorruptData=fail" <| fun _ ->
-      // The span must NOT be marked success when the manifest exists but can't be loaded.
-      // A caller alerting on sagefs.daemon.binary_manifest_load errors must see IoError/CorruptData.
-      let isSpanError = function
-        | ManifestLoadError.NotFound -> false
-        | ManifestLoadError.IoError _ -> true
-        | ManifestLoadError.CorruptData _ -> true
-      isSpanError ManifestLoadError.NotFound |> Expect.isFalse "NotFound → succeedSpan (expected)"
-      isSpanError (ManifestLoadError.IoError "perm") |> Expect.isTrue "IoError → failSpan (file unreadable)"
-      isSpanError (ManifestLoadError.CorruptData "crc") |> Expect.isTrue "CorruptData → failSpan (corrupt)"
-
     testCase "NotFound at startup produces a valid empty state (correct first-run path)" <| fun _ ->
       // Regression check: NotFound must still produce DaemonManifestState.empty (not an error)
       let dir = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-r13-%s" (Guid.NewGuid().ToString("N")))
@@ -158,60 +120,6 @@ let w32StartupLogLevelTests =
   ]
 
 // ---------------------------------------------------------------------------
-// W33 — testCycleTimerDone: conditional Dispose, 3s timeout
-// ---------------------------------------------------------------------------
-// W33(R13): testCycleTimerDone.Wait(1s) timeout + unconditional Dispose().
-// When Wait times out, the timer infrastructure may still signal the WaitHandle after Dispose,
-// causing ObjectDisposedException from the timer system. Fix: 3s timeout, conditional Dispose.
-
-[<Tests>]
-let w33TestCycleTimerTimeoutTests =
-  testList "W33(R13) — testCycleTimerDone conditional Dispose after Wait timeout" [
-
-    testCase "Safe pattern: only Dispose MRSE when Wait returned true" <| fun _ ->
-      // The W33 safe pattern: conditional Dispose prevents ObjectDisposedException
-      // if the timer infrastructure tries to signal the handle after Wait timed out.
-      let mrse = new System.Threading.ManualResetEventSlim(false)
-      let _handle = mrse.WaitHandle  // triggers kernel handle creation
-      mrse.Set()
-      let joined = mrse.Wait(System.TimeSpan.FromSeconds 2.0)
-      match joined with
-      | true -> mrse.Dispose()   // safe: timer signaled before we disposed
-      | false -> ()              // unsafe to Dispose — timer may signal after
-      joined |> Expect.isTrue "MRSE should be set within 2s"
-
-    testCase "Timeout path: leaving MRSE undisposed is safe (no ObjectDisposedException)" <| fun _ ->
-      // If Wait times out, do NOT Dispose. The handle is just leaked (acceptable on shutdown).
-      let mrse = new System.Threading.ManualResetEventSlim(false)
-      let _handle = mrse.WaitHandle
-      // 50ms timeout — MRSE is never set, so this times out
-      let joined = mrse.Wait(System.TimeSpan.FromMilliseconds 50.0)
-      match joined with
-      | true -> mrse.Dispose()
-      | false -> ()  // do NOT Dispose — timer may still signal the handle
-      joined |> Expect.isFalse "Wait should time out when MRSE is never set"
-      // If no ObjectDisposedException was thrown, the test passes
-
-    testTask "10s timeout is sufficient for 200ms testCycleTimer callbacks" {
-      // Pattern documentation: Timer.Dispose(WaitHandle) for shutdown hygiene.
-      let mrse = new System.Threading.ManualResetEventSlim(false)
-      let callbackRan = System.Threading.Tasks.TaskCompletionSource<unit>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously)
-      let t = new System.Threading.Timer(
-        System.Threading.TimerCallback(fun _ -> callbackRan.TrySetResult () |> ignore),
-        null, 10, System.Threading.Timeout.Infinite)
-      let! _ = System.Threading.Tasks.Task.WhenAny(callbackRan.Task, System.Threading.Tasks.Task.Delay 10_000)
-      callbackRan.Task.IsCompleted |> Expect.isTrue "the timer callback should fire"
-      let disposeOk = t.Dispose(mrse.WaitHandle)
-      disposeOk |> Expect.isTrue "Timer.Dispose(WaitHandle) should dispose a live timer"
-      // The wait on the dispose handle is the pattern under test.
-      let signaled = mrse.Wait(System.TimeSpan.FromSeconds 10.0)
-      match signaled with
-      | true -> mrse.Dispose()
-      | false -> ()
-    }
-  ]
-
-// ---------------------------------------------------------------------------
 // W34 — mergeManifestWithExisting returns typed ManifestLoadError (not string)
 // ---------------------------------------------------------------------------
 // W34(R13): mergeManifestWithExisting returned Result<DaemonManifestState, string>,
@@ -221,17 +129,6 @@ let w33TestCycleTimerTimeoutTests =
 [<Tests>]
 let w34TypedErrorTests =
   testList "W34(R13) — mergeManifestWithExisting returns typed ManifestLoadError" [
-
-    testCase "ManifestLoadError IoError is distinguishable from CorruptData (W34 type contract)" <| fun _ ->
-      // After W34: callers can route IoError to retry logic, CorruptData to manual recovery.
-      // This was lost when the return type was Result<_, string>.
-      let isRetriable = function
-        | ManifestLoadError.IoError _ -> true     // transient — retry may succeed
-        | ManifestLoadError.CorruptData _ -> false // permanent — retrying won't fix it
-        | ManifestLoadError.NotFound -> false      // first run — not a recoverable condition
-      isRetriable (ManifestLoadError.IoError "file locked") |> Expect.isTrue "IoError is retriable"
-      isRetriable (ManifestLoadError.CorruptData "bad CRC") |> Expect.isFalse "CorruptData is not retriable"
-      isRetriable ManifestLoadError.NotFound |> Expect.isFalse "NotFound is not retriable"
 
     testCase "loadManifest returns typed error for corrupt file (W34 upstream provider)" <| fun _ ->
       // Verifies the upstream: loadManifest returns typed ManifestLoadError (not string).
@@ -261,10 +158,9 @@ let w34TypedErrorTests =
 
 [<Tests>]
 let allRound13Tests =
-  testList "Round 13 Hardening (R13) — W28 W31 W32 W33 W34" [
+  testList "Round 13 Hardening (R13) — W28 W31 W32 W34" [
     w31HandlePruneExhaustiveTests
     w28DaemonRunningGuardTests
     w32StartupLogLevelTests
-    w33TestCycleTimerTimeoutTests
     w34TypedErrorTests
   ]

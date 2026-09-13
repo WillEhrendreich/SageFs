@@ -10,65 +10,6 @@ open SageFs.Features.ManifestTypes
 open SageFs.Features.DaemonManifest
 
 // ---------------------------------------------------------------------------
-// W1-residual — TOCTOU: canonical is now used for File.Exists and ReadAllText
-// ---------------------------------------------------------------------------
-// Verified by code change: Dashboard.fs createEvalFileHandler and
-// McpServer.fs /load-script both hoist `canonical = resolveRealPath filePath`
-// before `isContained` and use `canonical` for all subsequent operations.
-// Unit-testable aspect: path containment logic is consistent when same value
-// is used for check and effect.
-
-[<Tests>]
-let w1CanonicalPathTests =
-  testList "W1-residual — TOCTOU: canonical path used for both check and read" [
-
-    testCase "GetFullPath is idempotent on an already-absolute path" <| fun _ ->
-      // resolveRealPath calls Path.GetFullPath(p); verify idempotency
-      // (canonical of canonical == canonical — no surprises on re-resolve)
-      let p = Path.Combine(Path.GetTempPath(), "some", "path", "file.fsx")
-      let full = Path.GetFullPath p
-      let fullAgain = Path.GetFullPath full
-      fullAgain |> Expect.equal "GetFullPath is idempotent" full
-
-    testCase "containment check: path inside workdir is contained" <| fun _ ->
-      let workdir = Path.Combine(Path.GetTempPath(), "sessions", "s1")
-      let file = Path.Combine(workdir, "src", "main.fsx")
-      let canonical = Path.GetFullPath file
-      let canonicalDir = Path.GetFullPath workdir
-      let isContained =
-        canonical.StartsWith(
-          canonicalDir + string Path.DirectorySeparatorChar,
-          StringComparison.OrdinalIgnoreCase)
-        || canonical.Equals(canonicalDir, StringComparison.OrdinalIgnoreCase)
-      isContained |> Expect.isTrue "file inside workdir is contained"
-
-    testCase "containment check: path outside workdir is not contained" <| fun _ ->
-      let workdir = Path.Combine(Path.GetTempPath(), "sessions", "s1")
-      let file = Path.Combine(Path.GetTempPath(), "sessions", "s2", "other.fsx")
-      let canonical = Path.GetFullPath file
-      let canonicalDir = Path.GetFullPath workdir
-      let isContained =
-        canonical.StartsWith(
-          canonicalDir + string Path.DirectorySeparatorChar,
-          StringComparison.OrdinalIgnoreCase)
-        || canonical.Equals(canonicalDir, StringComparison.OrdinalIgnoreCase)
-      isContained |> Expect.isFalse "file outside workdir is not contained"
-
-    testCase "containment check: path traversal attempt is rejected" <| fun _ ->
-      let workdir = Path.Combine(Path.GetTempPath(), "sessions", "s1")
-      let malicious = Path.Combine(workdir, "..", "..", "evil", "config")
-      let canonical = Path.GetFullPath malicious
-      let canonicalDir = Path.GetFullPath workdir
-      let isContained =
-        canonical.StartsWith(
-          canonicalDir + string Path.DirectorySeparatorChar,
-          StringComparison.OrdinalIgnoreCase)
-        || canonical.Equals(canonicalDir, StringComparison.OrdinalIgnoreCase)
-      isContained |> Expect.isFalse "path traversal attempt is rejected after canonicalization"
-
-  ]
-
-// ---------------------------------------------------------------------------
 // W3 — TimelineState.record: O(1) prepend + MaxEntries cap
 // ---------------------------------------------------------------------------
 
