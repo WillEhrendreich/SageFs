@@ -11,7 +11,8 @@ let mkDiag severity line msg : Diagnostic =
   { Severity = severity
     Range = { StartLine = line; StartColumn = 0; EndLine = line; EndColumn = 0 }
     Subcategory = ""
-    Message = msg }
+    Message = msg
+    ErrorNumber = 0 }
 
 let extractDiagErrorsTests = testList "extractDiagErrors" [
   test "empty diagnostics yields empty list" {

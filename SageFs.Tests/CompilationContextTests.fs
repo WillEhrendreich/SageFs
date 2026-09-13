@@ -472,7 +472,8 @@ let responseDiagnosticTests =
         { Severity = Features.Diagnostics.DiagnosticSeverity.Error
           Message = "type mismatch"
           StartLine = 7; StartColumn = 6
-          EndLine = 7; EndColumn = 12 }
+          EndLine = 7; EndColumn = 12
+          ErrorNumber = 1 }
       let response =
         WorkerResponse.EvalResult("r1", Ok "done", [diag], Map.empty)
       let adjusted =
@@ -491,7 +492,8 @@ let responseDiagnosticTests =
         { Severity = Features.Diagnostics.DiagnosticSeverity.Warning
           Message = "unused"
           StartLine = 5; StartColumn = 3
-          EndLine = 5; EndColumn = 8 }
+          EndLine = 5; EndColumn = 8
+          ErrorNumber = 0 }
       let response =
         WorkerResponse.EvalResult("r1", Ok "ok", [diag], Map.empty)
       let adjusted =
@@ -517,7 +519,8 @@ let responseDiagnosticTests =
         { Severity = Features.Diagnostics.DiagnosticSeverity.Error
           Message = "err"
           StartLine = 3; StartColumn = 1
-          EndLine = 3; EndColumn = 5 }
+          EndLine = 3; EndColumn = 5
+          ErrorNumber = 0 }
       let response =
         WorkerResponse.EvalResult("r1", Error (SageFsError.EvalFailed "x"), [diag], Map.empty)
       let adjusted =

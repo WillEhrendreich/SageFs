@@ -47,6 +47,7 @@ let tests =
         Subcategory = "typecheck"
         Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 10 }
         Severity = Features.Diagnostics.DiagnosticSeverity.Error
+        ErrorNumber = 39
       }
       let response: EvalResponse = {
         EvaluationResult = Error ex
@@ -477,6 +478,7 @@ let structuredOutputTests =
         Subcategory = "typecheck"
         Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 3 }
         Severity = Features.Diagnostics.DiagnosticSeverity.Error
+        ErrorNumber = 39
       }
       let response: EvalResponse = {
         EvaluationResult = Error ex
@@ -699,7 +701,8 @@ let workerEvalJsonTests =
     <| fun _ ->
       let diag : WorkerProtocol.WorkerDiagnostic =
         { Severity = Features.Diagnostics.DiagnosticSeverity.Error
-          Message = "bad code"; StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 8 }
+          Message = "bad code"; StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 8
+          ErrorNumber = 0 }
       let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "done", [diag], Map.empty)
       let json = McpAdapter.formatWorkerEvalResultJson resp
       let doc = JsonDocument.Parse(json)
@@ -710,7 +713,8 @@ let workerEvalJsonTests =
     <| fun _ ->
       let diag : WorkerProtocol.WorkerDiagnostic =
         { Severity = Features.Diagnostics.DiagnosticSeverity.Warning
-          Message = "unused binding"; StartLine = 3; StartColumn = 4; EndLine = 3; EndColumn = 10 }
+          Message = "unused binding"; StartLine = 3; StartColumn = 4; EndLine = 3; EndColumn = 10
+          ErrorNumber = 0 }
       let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "done", [diag], Map.empty)
       let json = McpAdapter.formatWorkerEvalResultJson resp
       let doc = JsonDocument.Parse(json)

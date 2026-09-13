@@ -429,6 +429,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Subcategory = "typecheck"
       Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
       Severity = DiagnosticSeverity.Error
+      ErrorNumber = 1
     }
     let event = SageFsEvent.DiagnosticsUpdated ("s1", [diag])
     let newModel, _ =
@@ -1655,11 +1656,13 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let diag1 = {
       Message = "first"; Subcategory = "a"
       Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 1 }
-      Severity = DiagnosticSeverity.Error }
+      Severity = DiagnosticSeverity.Error
+      ErrorNumber = 0 }
     let diag2 = {
       Message = "second"; Subcategory = "b"
       Range = { StartLine = 2; StartColumn = 0; EndLine = 2; EndColumn = 1 }
-      Severity = DiagnosticSeverity.Warning }
+      Severity = DiagnosticSeverity.Warning
+      ErrorNumber = 0 }
     let model = {
       (SageFsModel.initial()) with
         Diagnostics = Map.ofList ["s1", [diag1]] }
@@ -2146,6 +2149,7 @@ let sageFsRenderTests = testList "SageFsRender" [
             Subcategory = "typecheck"
             Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
             Severity = DiagnosticSeverity.Error
+            ErrorNumber = 1
           }] ]
     }
     let regions = SageFsRender.render model
@@ -2566,7 +2570,8 @@ let renderConsistencyTests = testList "Render consistency" [
           "aa100001", [
             { Severity = DiagnosticSeverity.Warning; Message = "unused var"
               Subcategory = ""
-              Range = { StartLine = 1; StartColumn = 1; EndLine = 1; EndColumn = 5 } }
+              Range = { StartLine = 1; StartColumn = 1; EndLine = 1; EndColumn = 5 }
+              ErrorNumber = 0 }
           ] ] }
 
   testCase "render is deterministic — same model produces same regions" <| fun _ ->

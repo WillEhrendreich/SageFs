@@ -62,11 +62,13 @@ let workerDiagnosticTests = testList "WorkerDiagnostic" [
       Severity = Features.Diagnostics.DiagnosticSeverity.Error
       Message = "boom"
       StartLine = 1; StartColumn = 2; EndLine = 3; EndColumn = 4
+      ErrorNumber = 39
     }
     let d = WorkerDiagnostic.toDiagnostic wd
     d.Message |> Expect.equal "message" "boom"
     d.Severity |> Expect.equal "severity" Features.Diagnostics.DiagnosticSeverity.Error
     d.Range.StartLine |> Expect.equal "startLine" 1
+    d.ErrorNumber |> Expect.equal "errorNumber" 39
     d.Range.StartColumn |> Expect.equal "startCol" 2
     d.Range.EndLine |> Expect.equal "endLine" 3
     d.Range.EndColumn |> Expect.equal "endCol" 4

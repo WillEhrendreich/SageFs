@@ -2018,7 +2018,8 @@ module McpTools =
             let remediation =
               diags
               |> List.tryHead
-              |> Option.map (fun d -> SageFs.ErrorMessages.getSuggestion (SageFs.ErrorMessages.categorize d.Message))
+              |> Option.map (fun d ->
+                SageFs.ErrorMessages.getSuggestion (SageFs.ErrorMessages.categorizeByNumber (Some d.ErrorNumber) d.Message))
               |> Option.defaultValue ""
             String.concat "\n" lines + "\n\n" + remediation
         | Ok other -> sprintf "Unexpected response: %A" other

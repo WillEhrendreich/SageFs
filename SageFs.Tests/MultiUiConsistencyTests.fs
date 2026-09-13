@@ -200,7 +200,8 @@ let multiConsumerTests = testList "multi-consumer consistency" [
               { Message = "unused"
                 Subcategory = ""
                 Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-                Severity = Features.Diagnostics.DiagnosticSeverity.Warning }
+                Severity = Features.Diagnostics.DiagnosticSeverity.Warning
+                ErrorNumber = 0 }
             ] ] }
     let r1 = SageFsRender.render model
     let r2 = SageFsRender.render model

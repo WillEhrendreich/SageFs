@@ -199,6 +199,7 @@ let workerProtocolTests =
           StartColumn = 0
           EndLine = 1
           EndColumn = 5
+          ErrorNumber = 0
         }
         let resp = WorkerResponse.EvalResult("r2", Ok "val x = 42", [diag], Map.empty)
         let _, result = roundTrip<WorkerResponse> resp
@@ -219,10 +220,29 @@ let workerProtocolTests =
           StartColumn = 4
           EndLine = 3
           EndColumn = 10
+          ErrorNumber = 39
         }
         let resp = WorkerResponse.CheckResult("r4", [diag])
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp
+
+      testCase "CheckResult diagnostic ErrorNumber round-trips"
+      <| fun _ ->
+        let diag = {
+          Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
+          Message = "undefined value"
+          StartLine = 3
+          StartColumn = 4
+          EndLine = 3
+          EndColumn = 10
+          ErrorNumber = 39
+        }
+        let resp = WorkerResponse.CheckResult("r4b", [diag])
+        let _, result = roundTrip<WorkerResponse> resp
+        match result with
+        | WorkerResponse.CheckResult(_, [d]) ->
+          d.ErrorNumber |> Expect.equal "ErrorNumber should round-trip" 39
+        | other -> failwithf "unexpected: %A" other
 
       testCase "CompletionResult round-trips"
       <| fun _ ->
@@ -301,6 +321,7 @@ let workerProtocolTests =
           Message = "unused variable"
           StartLine = 1; StartColumn = 4
           EndLine = 1; EndColumn = 5
+          ErrorNumber = 0
         }
         let sym1 = { WorkerSymbolRef.SymbolFullName = "MyModule.add"; IsFromDefinition = false; FilePath = "MyModule.fs"; Line = 10 }
         let sym2 = { WorkerSymbolRef.SymbolFullName = "MyModule.validate"; IsFromDefinition = true; FilePath = "MyModule.fs"; Line = 20 }

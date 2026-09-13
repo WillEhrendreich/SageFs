@@ -2081,6 +2081,7 @@ module SageFsEffectHandler =
             EndColumn = d.EndColumn
           }
           Severity = d.Severity
+          ErrorNumber = d.ErrorNumber
         })
       SageFsMsg.Event (
         SageFsEvent.EvalCompleted (SessionId.value sessionId, output, diagnostics))
