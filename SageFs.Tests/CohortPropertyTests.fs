@@ -729,12 +729,58 @@ let cohortPropertyTests =
       }
     ]
 
-    testList "deferred (8, 9 — Phase 1 items 8 and 11)" [
-      test "8: cohortTools solo-user invariant" {
-        Tests.skiptest "needs cohortTools/Affordances.availableTools (Phase 1 item 11, §8.1) — out of Cohort.fs's scope"
+    // Properties 8 and 9, un-skipped for Phase 1 item 11 / cohort-integration-
+    // plan.md Slice 3. `Affordances.cohortTools` is a SCOPED v1 of the
+    // vision's full `SessionState * Authority * CohortPhase -> Set<ToolName>`
+    // (§8.1): keyed on `Authority` alone (no `CohortPhase` — v1's implicit
+    // cohort has no phase lifecycle to match on — see Affordances.fs's
+    // module doc for the full rationale), and scoped to the 7 COHORT tools
+    // only rather than the whole MCP tool surface. Both properties below are
+    // adapted to that scope, not the vision's literal phrasing.
+    testList "cohort affordances (8, 9 — Phase 1 item 11, §8.1, Slice 3 v1 scope)" [
+
+      test "8: cohortTools Anonymous is the solo/no-cohort status-only surface" {
+        // Adaptation of the vision's solo-user invariant (`cohortTools state
+        // Authority.Anonymous phase = Affordances.availableTools state`):
+        // Slice 3's `cohortTools` only covers cohort tools, so its
+        // Anonymous-authority analogue is "a caller with no cohort
+        // membership sees only the read-only status tool from `cohortTools`
+        // itself." `join_cohort` is deliberately NOT folded into the
+        // Anonymous case (see `cohortTools`'/`alwaysReachableCohortTools`'
+        // doc) — it is reachable via the separate always-reachable set
+        // instead, so a fresh caller can still always join. Both halves of
+        // that invariant are asserted here.
+        Affordances.cohortTools Authority.Anonymous
+        |> Expect.equal "Anonymous sees only get_cohort_status from cohortTools itself" (set [ Affordances.CohortTool.GetStatus ])
+        Affordances.checkCohortToolAllowed Authority.Anonymous Affordances.CohortTool.GetStatus
+        |> Expect.isTrue "get_cohort_status must stay reachable to an unjoined caller"
+        Affordances.checkCohortToolAllowed Authority.Anonymous Affordances.CohortTool.Join
+        |> Expect.isTrue "join_cohort must stay reachable to an unjoined caller, or nobody could ever join a cohort"
+        Affordances.checkCohortToolAllowed Authority.Anonymous Affordances.CohortTool.AcquireClaim
+        |> Expect.isFalse "an unjoined caller may not acquire a claim"
+        Affordances.checkCohortToolAllowed Authority.Anonymous Affordances.CohortTool.ReassignClaim
+        |> Expect.isFalse "an unjoined caller may not reassign a claim"
       }
-      test "9: cohortTools totality" {
-        Tests.skiptest "needs cohortTools (Phase 1 item 11) — totality is compiler-checked once that match exists, not a runtime property"
-      }
+
+      testPropertyWithConfig cohortConfig "9: cohortTools is total over Authority<Agent> and never empty" <| fun (agentIdx: int) (variant: int) ->
+        let agent = agentOf agentIdx
+        let authority =
+          match abs variant % 5 with
+          | 0 -> Authority.Anonymous
+          | 1 -> Authority.Member(agent, JoinableRole.Implementer)
+          | 2 -> Authority.Member(agent, JoinableRole.Verifier)
+          | 3 -> Authority.Member(agent, JoinableRole.Observer)
+          | _ -> Authority.Conductor agent
+        // Totality over `Authority<'m>` is itself compiler-checked — the
+        // `match` in `cohortTools` is exhaustive with no wildcard arm, so an
+        // unhandled case is a build error, not a runtime gap (no
+        // registration-integrity test needed, unlike the string-keyed
+        // `gatingDomain` table). What this property adds is the runtime
+        // guarantee that totality: every reachable `Authority` value yields
+        // a genuinely usable (non-empty) tool set — an authority silently
+        // resolving to the empty set would be a real lockout bug the
+        // compiler's exhaustiveness check alone cannot catch.
+        not (Set.isEmpty (Affordances.cohortTools authority))
+        && Set.contains Affordances.CohortTool.GetStatus (Affordances.cohortTools authority)
     ]
   ]

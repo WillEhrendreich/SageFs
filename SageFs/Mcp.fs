@@ -1400,6 +1400,51 @@ module McpTools =
         |> Result.mapError SageFsError.describeForAgent
     }
 
+  /// Reverse lookup from MCP tool name to `Affordances.CohortTool` — built
+  /// once from the single `toToolName` source of truth (no second literal
+  /// name list to drift, per MEMORY.md "no magic strings anywhere").
+  let private cohortToolByName: Map<string, Affordances.CohortTool> =
+    Affordances.CohortTool.all
+    |> List.map (fun t -> Affordances.CohortTool.toToolName t, t)
+    |> Map.ofList
+
+  /// Authority-aware pre-check for cohort tools (cohort-integration-plan.md
+  /// Slice 3, item 11): an EARLIER, friendlier refusal than `Cohort.decide`'s
+  /// own `NotConductor`/`NotClaimHolder` — that core enforcement is untouched
+  /// and still runs regardless of this gate. `None` when `toolName` is not a
+  /// cohort tool at all, so the caller falls through to the existing
+  /// session-state gate below (cohort tools are `AlwaysAvailable` there —
+  /// this is a second, role-based dimension layered on top of it).
+  ///
+  /// Resolves the caller's `Authority` from the owner's published
+  /// `CohortFrame` (`Affordances.authorityOfMember`) using the BOUND
+  /// identity (`memberIdFor agent` — never a self-declared role argument).
+  /// No cohort owner wired (`ctx.CohortOwner = None`, pre-Slice-2 unit
+  /// tests) resolves to `Authority.Anonymous`, same as an unjoined caller.
+  let private checkCohortAuthorityGate (ctx: McpContext) (agent: string) (toolName: string) : Result<unit, string> option =
+    match Map.tryFind toolName cohortToolByName with
+    | None -> None
+    | Some tool ->
+      let who = memberIdFor agent
+      let authority =
+        match ctx.CohortOwner with
+        | Some owner -> Affordances.authorityOfMember who (owner.ReadFrame())
+        | None -> Cohort.Authority.Anonymous
+      if Affordances.checkCohortToolAllowed authority tool then
+        Some (Ok ())
+      else
+        let roleText =
+          match authority with
+          | Cohort.Authority.Anonymous -> "not (yet) a member of this cohort"
+          | Cohort.Authority.Member(_, role) -> sprintf "a %A" role
+          | Cohort.Authority.Conductor _ -> "the conductor" // unreachable: every tool is allowed for Conductor
+        let reason =
+          sprintf "%s cannot call %s: your role (%s) does not permit it."
+            (MemberTable.MemberId.display who) toolName roleText
+        let suggestion =
+          "Join as Implementer for claim/landing tools, or ask the cohort conductor to perform this action (or delegate the conductor role to you)."
+        Some (Error (SageFsError.describeForAgent (SageFsError.CohortActionFailed(reason, suggestion))))
+
   /// ── Affordance call gate ─────────────────────────────────────────────────
   ///
   /// Structural enforcement point for the affordance model. The MCP server's
@@ -1415,6 +1460,10 @@ module McpTools =
   ///     `workingDirectory` mirror the routing inputs the tool body will use, so
   ///     the gate evaluates the SAME session the tool would target.
   ///   - undeclared      — fails closed (ToolNotAvailable).
+  ///
+  /// Cohort tools additionally pass through `checkCohortAuthorityGate` FIRST
+  /// (Slice 3, item 11) — a role-based dimension the session-state gate below
+  /// has no concept of.
   let enforceToolCallGate
     (ctx: McpContext)
     (agent: string)
@@ -1423,6 +1472,9 @@ module McpTools =
     (toolName: string)
     : Task<Result<unit, string>> =
     task {
+      match checkCohortAuthorityGate ctx agent toolName with
+      | Some result -> return result
+      | None ->
       match Affordances.toolGate toolName with
       | Some Affordances.ToolGate.AlwaysAvailable ->
         return Ok ()
@@ -4388,28 +4440,8 @@ module McpTools =
     | Some owner -> Ok owner
     | None -> Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
 
-  /// Best-effort last-known conductor for `get_cohort_status`'s display.
-  /// `Cohort.CohortFrame` (Cohort.fs's read model) does NOT carry the
-  /// `Conductor` binding — it is trimmed to what `decide`'s state and test
-  /// outcomes can produce (see Cohort.fs's module-level scope note) — so
-  /// there is no way to read it from `owner.ReadFrame()` without touching
-  /// Cohort.fs, which this slice must not do. Tracked here instead, from the
-  /// `ConductorBound`/`ConductorDelegated` events every cohort commit in this
-  /// module observes. Process-lifetime only: it resets to `None` across a
-  /// daemon restart until the next cohort command re-establishes it — v1's
-  /// single known limitation of this workaround, noted in the Slice 2 report.
-  let private lastKnownConductor : MemberTable.MemberId option ref = ref None
-
-  let private observeConductorEvents (events: Cohort.CohortEvent<MemberTable.MemberId> list) =
-    for e in events do
-      match e with
-      | Cohort.CohortEvent.ConductorBound who -> lastKnownConductor.Value <- Some who
-      | Cohort.CohortEvent.ConductorDelegated(_, toMember) -> lastKnownConductor.Value <- Some toMember
-      | _ -> ()
-
   /// Dispatch one `CohortCommand` through the owner, mapping any refusal to
-  /// `SageFsError` at this boundary (roast §10) and updating the best-effort
-  /// conductor tracker on success.
+  /// `SageFsError` at this boundary (roast §10).
   let private commitCohort (ctx: McpContext) (cmd: Cohort.CohortCommand<MemberTable.MemberId>)
       : Task<Result<Cohort.CohortEvent<MemberTable.MemberId> list * Cohort.CohortEffect<MemberTable.MemberId> list, SageFsError>> =
     task {
@@ -4418,9 +4450,7 @@ module McpTools =
       | Ok owner ->
         let! result = owner.Commit cmd
         match result with
-        | Ok(events, effects) ->
-          observeConductorEvents events
-          return Ok(events, effects)
+        | Ok(events, effects) -> return Ok(events, effects)
         | Error err -> return Error (cohortErrorToSageFsError err)
     }
 
@@ -4490,9 +4520,13 @@ module McpTools =
   let private renderCohortFrame (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
     let sb = System.Text.StringBuilder()
     let conductorText =
-      match lastKnownConductor.Value with
+      // `frame.Conductor` (Slice 3, item 11) — read straight off the
+      // published frame, correct across daemon restarts (replaced the
+      // process-lifetime `lastKnownConductor` cache the Slice 2 report
+      // flagged as a known limitation).
+      match frame.Conductor with
       | Some who -> MemberTable.MemberId.display who
-      | None -> "(unknown — no cohort command observed by this process yet)"
+      | None -> "(none yet — no member has joined this cohort)"
     sb.AppendLine(sprintf "Cohort ledger head: v%d" (int64 frame.Version)) |> ignore
     sb.AppendLine(sprintf "Conductor: %s" conductorText) |> ignore
     sb.AppendLine(sprintf "Members (%d):" frame.MemberIds.Length) |> ignore
