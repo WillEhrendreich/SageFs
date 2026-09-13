@@ -39,15 +39,16 @@ module ErrorMessages =
   /// and unambiguous where the message text is not (a translated FSI, or an
   /// atypical phrasing, defeats `categorize`'s substring matching).
   ///
-  /// NOTE: as of this writing, no production call site has an `ErrorNumber`
-  /// to pass in — `SageFs.Core/Features/Diagnostics.fs`'s `Diagnostic` and
-  /// `SageFs.Core/WorkerProtocol.fs`'s `WorkerDiagnostic` (the wire type used
-  /// by check_fsharp_code's diagnostics) both drop `FSharpDiagnostic.ErrorNumber`
-  /// when they map from the raw FCS diagnostic, and the eval-failure paths in
-  /// `SageFs/Mcp.fs` classify a flattened exception/error string that never
-  /// carried a number to begin with. This function exists so that plumbing is
-  /// ready the moment a caller can supply the number; see the roast-5 item #10
-  /// report for exactly what would need to change to thread it through.
+  /// `SageFs.Core/Features/Diagnostics.fs`'s `Diagnostic` and
+  /// `SageFs.Core/WorkerProtocol.fs`'s `WorkerDiagnostic` both carry
+  /// `ErrorNumber` end to end (FCS diagnostic → worker → daemon), and
+  /// `check_fsharp_code` (`SageFs/Mcp.fs`'s `checkFSharpCode`) classifies its
+  /// diagnostics through this function instead of `categorize`'s substring
+  /// matching (roast-5 item #10). The flattened exception/error-string paths
+  /// in `SageFs/Mcp.fs` (`formatWorkerEvalResult`, eval-failure tracking)
+  /// still call `categorize` directly — they have no structured diagnostic to
+  /// pull a number from, only composed text, so `categorizeByNumber None`
+  /// would just fall back to the same text classification anyway.
   let categorizeByNumber (errorNumber: int option) (errorText: string) : ErrorCategory =
     match errorNumber with
     | Some 39 -> ErrorCategory.NameError // FS0039: the value/name is not defined

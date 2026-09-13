@@ -64,7 +64,8 @@ let toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiagnostic =
     StartLine = d.Range.StartLine
     StartColumn = d.Range.StartColumn
     EndLine = d.Range.EndLine
-    EndColumn = d.Range.EndColumn }
+    EndColumn = d.Range.EndColumn
+    ErrorNumber = d.ErrorNumber }
 
 /// Convert internal SessionState + EvalStats to WorkerStatusSnapshot.
 let toStatusSnapshot

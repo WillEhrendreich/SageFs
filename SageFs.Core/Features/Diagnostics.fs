@@ -32,6 +32,11 @@ type Diagnostic = {
   Subcategory: string
   Range: Range
   Severity: DiagnosticSeverity
+  /// The FCS diagnostic's stable `ErrorNumber` (the "39" in "FS0039"), or 0
+  /// when this Diagnostic was not derived from a compiler diagnostic (a
+  /// hand-built test fixture, for instance). Locale-proof classification
+  /// input for `ErrorMessages.categorizeByNumber` — see roast-5 item #10.
+  ErrorNumber: int
 } with
 
   static member mkDiagnostic(fsDiagnostic: FSharpDiagnostic) =
@@ -48,6 +53,7 @@ type Diagnostic = {
       Message = fsDiagnostic.Message
       Severity = mapSeverity fsDiagnostic.Severity
       Subcategory = fsDiagnostic.Subcategory
+      ErrorNumber = fsDiagnostic.ErrorNumber
       Range = {
         StartLine = range.StartLine
         StartColumn = range.StartColumn

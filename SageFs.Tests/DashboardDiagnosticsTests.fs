@@ -23,7 +23,8 @@ let private makeFeatureDiag
         StartColumn = startCol
         EndLine = startLine
         EndColumn = startCol + msg.Length }
-    Severity = sev }
+    Severity = sev
+    ErrorNumber = 0 }
 
 let private renderToString (node: XmlNode) = renderNode node
 

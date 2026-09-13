@@ -1946,6 +1946,7 @@ let mcpAdapterPureTests = testList "McpAdapter pure" [
         Severity = DiagnosticSeverity.Error
         Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 10 }
         Subcategory = ""
+        ErrorNumber = 1
       }
       let json = McpAdapter.formatDiagnosticsResultJson [| diag |]
       let doc = JsonDocument.Parse(json)
@@ -1960,6 +1961,7 @@ let mcpAdapterPureTests = testList "McpAdapter pure" [
         Severity = DiagnosticSeverity.Warning
         Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
         Subcategory = ""
+        ErrorNumber = 0
       }
       let json = McpAdapter.formatDiagnosticsResultJson [| mkDiag "a"; mkDiag "b"; mkDiag "c" |]
       let doc = JsonDocument.Parse(json)

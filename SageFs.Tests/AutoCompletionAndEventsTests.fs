@@ -195,6 +195,7 @@ let diagnosticEventTests = testList "DiagnosticEvent" [
       Subcategory = "parse"
       Range = { StartLine = 1; StartColumn = 2; EndLine = 3; EndColumn = 4 }
       Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
+      ErrorNumber = 0
     }
     let event = DiagnosticEvent.fromDiagnostic diag
     event.Message |> Expect.equal "message should match" "test error"
@@ -211,6 +212,7 @@ let diagnosticEventTests = testList "DiagnosticEvent" [
       Subcategory = ""
       Range = { StartLine = 10; StartColumn = 0; EndLine = 10; EndColumn = 5 }
       Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Warning
+      ErrorNumber = 0
     }
     let event = DiagnosticEvent.fromDiagnostic diag
     event.Severity |> Expect.equal "should be warning" SageFs.Features.Diagnostics.DiagnosticSeverity.Warning

@@ -26,6 +26,7 @@ let formatDiagnosticsTests =
           Subcategory = "typecheck"
           Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
           Severity = DiagnosticSeverity.Error
+          ErrorNumber = 39
         }
       |]
       let result = McpAdapter.formatDiagnosticsResult diags
@@ -42,6 +43,7 @@ let formatDiagnosticsTests =
           Subcategory = "typecheck"
           Range = { StartLine = 3; StartColumn = 0; EndLine = 3; EndColumn = 10 }
           Severity = DiagnosticSeverity.Warning
+          ErrorNumber = 1
         }
       |]
       McpAdapter.formatDiagnosticsResult diags
@@ -55,6 +57,7 @@ let formatDiagnosticsTests =
           Subcategory = "parse"
           Range = { StartLine = 5; StartColumn = 3; EndLine = 5; EndColumn = 8 }
           Severity = DiagnosticSeverity.Error
+          ErrorNumber = 10
         }
       |]
       McpAdapter.formatDiagnosticsResult diags
@@ -68,12 +71,14 @@ let formatDiagnosticsTests =
           Subcategory = "typecheck"
           Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
           Severity = DiagnosticSeverity.Error
+          ErrorNumber = 0
         }
         {
           Message = "second warning"
           Subcategory = "typecheck"
           Range = { StartLine = 2; StartColumn = 0; EndLine = 2; EndColumn = 5 }
           Severity = DiagnosticSeverity.Warning
+          ErrorNumber = 0
         }
       |]
       let result = McpAdapter.formatDiagnosticsResult diags
@@ -190,7 +195,8 @@ let diagnosticsSseFormatTests =
         |> DiagnosticsStore.add "let x = 1" [|
           { Message = "test warning"; Subcategory = "typecheck"
             Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-            Severity = DiagnosticSeverity.Warning }
+            Severity = DiagnosticSeverity.Warning
+            ErrorNumber = 0 }
         |]
       let result = McpAdapter.formatDiagnosticsStoreAsJson store
       result |> Expect.stringContains "should contain message" "test warning"

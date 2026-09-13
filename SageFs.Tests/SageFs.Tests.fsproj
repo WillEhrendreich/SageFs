@@ -368,6 +368,7 @@
         <Compile Include="CoverageTreemapTests.fs" />
         <Compile Include="FrictionClassificationTests.fs" />
         <Compile Include="PendingRunSummaryTests.fs" />
+        <Compile Include="ErrorNumberClassificationTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

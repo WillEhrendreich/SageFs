@@ -284,6 +284,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
       Message = "FS0001"
       StartLine = 1; StartColumn = 5
       EndLine = 1; EndColumn = 10
+      ErrorNumber = 1
     }
     let deps = TestDeps.singleSession log (fun msg ->
       match msg with

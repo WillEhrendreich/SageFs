@@ -14,6 +14,7 @@ let mkDiag message severity line =
     Subcategory = "typecheck"
     Range = { StartLine = line; StartColumn = 0; EndLine = line; EndColumn = 10 }
     Severity = severity
+    ErrorNumber = 0
   }
 
 [<Tests>]

@@ -417,6 +417,7 @@ let jupyterKernelTests =
             Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
             Message = "type mismatch"
             StartLine = 1; StartColumn = 5; EndLine = 1; EndColumn = 10
+            ErrorNumber = 1
           }
           let mockProxy : WorkerProtocol.SessionProxy = fun msg ->
             async {

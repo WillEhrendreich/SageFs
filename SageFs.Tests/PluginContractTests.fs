@@ -45,7 +45,8 @@ let mkDiag msg sev line col : Diagnostic =
   { Message = msg
     Subcategory = ""
     Range = { StartLine = line; StartColumn = col; EndLine = line; EndColumn = col + 5 }
-    Severity = sev }
+    Severity = sev
+    ErrorNumber = 0 }
 
 // ─── SessionContext Rendering ──────────────────────────────────────
 
@@ -451,6 +452,7 @@ let diagnosticsJsonTests =
         Subcategory = ""
         Range = { StartLine = 5; StartColumn = 10; EndLine = 5; EndColumn = 20 }
         Severity = DiagnosticSeverity.Error
+        ErrorNumber = 1
       }
       let result = McpAdapter.formatDiagnosticsResultJson [| diag |]
       use doc = JsonDocument.Parse(result)
@@ -476,6 +478,7 @@ let diagnosticsJsonTests =
         Subcategory = ""
         Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
         Severity = DiagnosticSeverity.Warning
+        ErrorNumber = 0
       }
       let result = McpAdapter.formatDiagnosticsResultJson [| diag |]
       use doc = JsonDocument.Parse(result)

@@ -257,6 +257,9 @@ module WorkerProtocol =
     StartColumn: int
     EndLine: int
     EndColumn: int
+    /// The FCS diagnostic's stable `ErrorNumber` (the "39" in "FS0039"), or 0
+    /// when not derived from a compiler diagnostic. See roast-5 item #10.
+    ErrorNumber: int
   }
 
   /// Conversion from wire-format WorkerDiagnostic to domain Diagnostic.
@@ -267,7 +270,8 @@ module WorkerProtocol =
         Subcategory = ""
         Range = { StartLine = wd.StartLine; StartColumn = wd.StartColumn
                   EndLine = wd.EndLine; EndColumn = wd.EndColumn }
-        Severity = wd.Severity }
+        Severity = wd.Severity
+        ErrorNumber = wd.ErrorNumber }
 
   /// Point-in-time snapshot of worker session health and performance metrics.
   type WorkerStatusSnapshot = {

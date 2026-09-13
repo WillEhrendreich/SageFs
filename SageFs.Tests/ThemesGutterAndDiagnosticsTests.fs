@@ -15,6 +15,7 @@ let mkDiag msg sev : Diagnostic = {
   Message = msg; Subcategory = "test"
   Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
   Severity = sev
+  ErrorNumber = 0
 }
 
 // --- ThemePresets ---
