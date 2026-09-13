@@ -31,9 +31,7 @@ let private agentCtx () =
 let tests =
   testSequenced <| Integration.hostList "MCP Server Integration tests" [
 
-    testCase "sendFSharpCode tool executes code"
-    <| fun _ ->
-      task {
+    testTask "sendFSharpCode tool executes code" {
         printfn "Testing sendFSharpCode tool..."
         let ctx = agentCtx ()
 
@@ -44,12 +42,8 @@ let tests =
 
         printfn "sendFSharpCode tool test passed"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "sendFSharpCode tool does not require event tracking"
-    <| fun _ ->
-      task {
+    testTask "sendFSharpCode tool does not require event tracking" {
         printfn "Testing sendFSharpCode without event tracking..."
         let ctx = agentCtx ()
 
@@ -58,12 +52,8 @@ let tests =
 
         printfn "Non-event-tracking test passed"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "getRecentEvents tool returns formatted events"
-    <| fun _ ->
-      task {
+    testTask "getRecentEvents tool returns formatted events" {
         printfn "Testing getRecentEvents tool..."
         let ctx = agentCtx ()
 
@@ -77,12 +67,8 @@ let tests =
 
         printfn "getRecentEvents tool test passed"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "getStatus tool returns session info"
-    <| fun _ ->
-      task {
+    testTask "getStatus tool returns session info" {
         printfn "Testing getStatus tool..."
         let ctx = agentCtx ()
 
@@ -95,12 +81,8 @@ let tests =
 
         printfn "getStatus tool test passed"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "loadFSharpScript tool loads and executes script"
-    <| fun _ ->
-      task {
+    testTask "loadFSharpScript tool loads and executes script" {
         printfn "Testing loadFSharpScript tool..."
         let actor = globalActorResult.Value.Actor
         let ctx = agentCtx ()
@@ -152,12 +134,8 @@ let tests =
           if System.IO.File.Exists(tempFile) then
             System.IO.File.Delete(tempFile)
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "Multiple MCP agents can collaborate in same session"
-    <| fun _ ->
-      task {
+    testTask "Multiple MCP agents can collaborate in same session" {
         printfn "Testing multi-agent collaboration..."
         let ctx = agentCtx ()
 
@@ -171,12 +149,8 @@ let tests =
 
         printfn "Multi-agent collaboration test passed"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "Console and MCP can work together (simulated)"
-    <| fun _ ->
-      task {
+    testTask "Console and MCP can work together (simulated)" {
         printfn "Testing console+MCP collaboration..."
         let actor = globalActorResult.Value.Actor
         let ctx = agentCtx ()
@@ -194,12 +168,8 @@ let tests =
 
         printfn "Console+MCP collaboration test passed"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "sendFSharpCode handles compilation error"
-    <| fun _ ->
-      task {
+    testTask "sendFSharpCode handles compilation error" {
         printfn "Testing sendFSharpCode with compilation error..."
         let ctx = agentCtx ()
 
@@ -210,12 +180,8 @@ let tests =
 
         printfn "Compilation error test passed"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "sendFSharpCode handles runtime error"
-    <| fun _ ->
-      task {
+    testTask "sendFSharpCode handles runtime error" {
         printfn "Testing sendFSharpCode with runtime error..."
         let ctx = agentCtx ()
 
@@ -226,12 +192,8 @@ let tests =
 
         printfn "Runtime error test passed"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "loadFSharpScript with non-existent file returns error"
-    <| fun _ ->
-      task {
+    testTask "loadFSharpScript with non-existent file returns error" {
         printfn "Testing loadFSharpScript with non-existent file..."
         let ctx = agentCtx ()
 
@@ -242,16 +204,12 @@ let tests =
 
         printfn "Non-existent file test passed"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
     // A script is #loaded as ONE compilation unit, so a broken statement fails
     // the whole load (FSI semantics) — reported as an Error with the reason,
     // not as "Partial: 1 succeeded, 1 failed" (that per-statement contract was
     // removed with the worker-only session architecture).
-    testCase "loadFSharpScript with a failing statement reports the load error"
-    <| fun _ ->
-      task {
+    testTask "loadFSharpScript with a failing statement reports the load error" {
         printfn "Testing loadFSharpScript with a failing statement..."
         let ctx = agentCtx ()
 
@@ -275,15 +233,11 @@ let tests =
           if System.IO.File.Exists(tempFile) then
             System.IO.File.Delete(tempFile)
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "sendFSharpCode with Json format returns structured JSON"
-    <| fun _ ->
-      task {
+    testTask "sendFSharpCode with Json format returns structured JSON" {
         let ctx = agentCtx ()
 
-        let! result = sendFSharpCode ctx "test-agent" "let jsonTestVal = 42;;"OutputFormat.Json None None None None None None
+        let! (result: string) = sendFSharpCode ctx "test-agent" "let jsonTestVal = 42;;"OutputFormat.Json None None None None None None
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
@@ -292,36 +246,26 @@ let tests =
         // has it); the evaluated binding is in `result`.
         (root.GetProperty("result").GetString()) |> Expect.stringContains "should include the evaluated binding" "jsonTestVal"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "sendFSharpCode with Json format returns error structure on failure"
-    <| fun _ ->
-      task {
+    testTask "sendFSharpCode with Json format returns error structure on failure" {
         let ctx = agentCtx ()
 
-        let! result = sendFSharpCode ctx "test-agent" "let x: int = \"not an int\";;"OutputFormat.Json None None None None None None
+        let! (result: string) = sendFSharpCode ctx "test-agent" "let x: int = \"not an int\";;"OutputFormat.Json None None None None None None
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
         (root.GetProperty("success").GetBoolean()) |> Expect.isFalse "should report failure"
         (root.GetProperty("error").GetString()) |> Expect.isNonEmpty "should have error message"
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
 
-    testCase "sendFSharpCode with Json format returns array for multiple statements"
-    <| fun _ ->
-      task {
+    testTask "sendFSharpCode with Json format returns array for multiple statements" {
         let ctx = agentCtx ()
 
-        let! result = sendFSharpCode ctx "test-agent" "let a1 = 1;;\nlet b1 = 2;;"OutputFormat.Json None None None None None None
+        let! (result: string) = sendFSharpCode ctx "test-agent" "let a1 = 1;;\nlet b1 = 2;;"OutputFormat.Json None None None None None None
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
         root.ValueKind |> Expect.equal "should be a JSON array" System.Text.Json.JsonValueKind.Array
         (root.GetArrayLength()) |> Expect.equal "should have 2 results" 2
       }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
   ]
