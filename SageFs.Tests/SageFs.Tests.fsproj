@@ -384,6 +384,7 @@
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="CohortAffordancesTests.fs" />
         <Compile Include="CohortPanelTests.fs" />
+        <Compile Include="CohortGitTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
