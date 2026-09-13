@@ -31,6 +31,7 @@
     <Compile Include="TestCodeLensProvider.fs" />
     <Compile Include="CoverageViewCodeLensProvider.fs" />
     <Compile Include="InlineDecorations.fs" />
+    <Compile Include="DebugRects.fs" />
     <Compile Include="Extension.fs" />
   </ItemGroup>
   <ItemGroup>

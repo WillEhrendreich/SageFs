@@ -22,6 +22,7 @@
     <Compile Include="ScenariosTests.fs" />
     <Compile Include="CellAgentTests.fs" />
     <Compile Include="AppActorTests.fs" />
+    <Compile Include="VsCodeActorTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

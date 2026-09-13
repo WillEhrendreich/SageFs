@@ -28,6 +28,7 @@ module FileAnnoCov = SageFs.Vscode.FileAnnotationCoverage
 module Blocks = SageFs.Vscode.CodeBlocks
 module Discovery = SageFs.Vscode.DaemonDiscovery
 module BufferBridge = SageFs.Vscode.BufferBridge
+module DebugRects = SageFs.Vscode.DebugRects
 
 open SageFs.Vscode.LiveTestingTypes
 open SageFs.Vscode.FeatureTypes
@@ -1695,6 +1696,196 @@ let checkHealth () =
       |> ignore
   }
 
+// ── sagefs.debug.rectFor (demo-actors-plan.md §2.1, roast H5) ───
+//
+// The demo recorder's VS Code actor needs real screen coordinates to drive
+// a human-shaped X11 cursor at, WITHOUT CDP/`--remote-debugging-port`
+// (roast H5's #133 flakiness). This command resolves a named target
+// ("caret"|"editor"|"statusBar"|"view:<id>") to a screen rect using only
+// extension-host-genuine facts: an OS window-geometry query this process
+// performs itself (xdotool, run via the same `execFileAsync` every other
+// CLI-shelling command in this file already uses — not a CDP call), and
+// real vscode config/caret state. `DebugRects.resolve` (zero Fable
+// dependency, contract-tested under plain `dotnet fsi`) turns those facts
+// into a rect. Reachable two ways, both genuine: (1) in-process, via
+// `vscode.commands.executeCommand("sagefs.debug.rectFor", target)` — any
+// other extension or an Extension Development Host test proof can call it
+// directly; (2) out-of-process, via the loopback HTTP listener below — the
+// demo cell-agent runs as a separate OS process with no access to the
+// extension host's JS runtime, so it needs a real control channel (the
+// plan's own permitted "a small bundled companion entry, or a file/loopback
+// the ext reads") to reach into the running extension host at all.
+
+[<Emit("$0.registerCommand($1, $2)")>]
+let private registerCommandValue (c: obj) (command: string) (handler: obj -> JS.Promise<obj>) : Disposable = jsNative
+
+[<Emit("require('http').createServer($0)")>]
+let private createHttpServer (handler: obj -> obj -> unit) : obj = jsNative
+
+[<Emit("$0.listen($1, $2)")>]
+let private httpListen (server: obj) (port: int) (host: string) : unit = jsNative
+
+[<Emit("$0.url")>]
+let private reqUrl (req: obj) : string = jsNative
+
+[<Emit("$0.writeHead($1, $2)")>]
+let private resWriteHead (res: obj) (status: int) (headers: obj) : unit = jsNative
+
+[<Emit("$0.end($1)")>]
+let private resEnd (res: obj) (body: string) : unit = jsNative
+
+[<Emit("(process.env[$0] || null)")>]
+let private getEnvVar (name: string) : string option = jsNative
+
+/// The one query point where this process (the extension host) asks the
+/// window manager for its OWN top-level window's rect — an X11 query, not
+/// CDP-DOM. Searches by window name rather than PID because the extension
+/// host runs in a separate Node process from the Electron window it draws;
+/// safe inside a demo cell, which places exactly one VS Code window on its
+/// private `:99` display (`SageFs.Demos.Actors.VsCode`).
+let private resolveOwnWindowRect () : JS.Promise<DebugRects.WindowRect option> =
+  promise {
+    try
+      let! searchOut = execFileAsync "xdotool" [| "search"; "--name"; "Visual Studio Code" |]
+
+      let winId =
+        searchOut.Split([| '\n' |], System.StringSplitOptions.RemoveEmptyEntries)
+        |> Array.tryHead
+        |> Option.map (fun s -> s.Trim())
+
+      match winId with
+      | None -> return None
+      | Some id ->
+        let! geomOut = execFileAsync "xdotool" [| "getwindowgeometry"; "--shell"; id |]
+
+        let facts =
+          geomOut.Split('\n')
+          |> Array.choose (fun line ->
+            match line.Split('=') with
+            | [| k; v |] -> Some(k.Trim(), v.Trim())
+            | _ -> None)
+          |> Map.ofArray
+
+        let tryFloat key =
+          facts.TryFind key
+          |> Option.bind (fun s ->
+            match System.Double.TryParse s with
+            | true, v -> Some v
+            | _ -> None)
+
+        match tryFloat "X", tryFloat "Y", tryFloat "WIDTH", tryFloat "HEIGHT" with
+        | Some x, Some y, Some w, Some h -> return Some { DebugRects.X = x; DebugRects.Y = y; DebugRects.W = w; DebugRects.H = h }
+        | _ -> return None
+    with _ ->
+      return None
+  }
+
+/// Real workbench chrome facts this extension can read — see
+/// `DebugRects.ChromeConfig`'s own doc for which fields are a live config
+/// read vs. a documented product assumption (the sidebar is explicitly
+/// closed by the demo actor before it ever calls this command).
+let private currentChromeConfig () : DebugRects.ChromeConfig =
+  let workbenchCfg = Workspace.getConfiguration "workbench"
+  let activityBarLocation: string = workbenchCfg.get ("activityBar.location", "default")
+  let sideBarLocation: string = workbenchCfg.get ("sideBar.location", "left")
+  let statusBarVisible: bool = workbenchCfg.get ("statusBar.visible", true)
+
+  { DebugRects.ActivityBarVisible = activityBarLocation <> "hidden"
+    DebugRects.SideBarVisible = false
+    DebugRects.SideBarOnLeft = sideBarLocation <> "right"
+    DebugRects.SideBarWidth = DebugRects.DefaultSideBarWidth
+    DebugRects.StatusBarVisible = statusBarVisible }
+
+/// The real active caret position and real font settings — `None` when
+/// there is no active editor, an honest absence `DebugRects.resolve`
+/// already knows how to handle for `RectTarget.Caret`.
+let private currentCaretConfig () : DebugRects.CaretConfig option =
+  match Window.getActiveTextEditor () with
+  | None -> None
+  | Some ed ->
+    let editorCfg = Workspace.getConfiguration "editor"
+    let fontSize: float = editorCfg.get ("fontSize", 14.0)
+    let lineHeight: float = editorCfg.get ("lineHeight", 0.0)
+
+    Some
+      { DebugRects.Line = ed.selection.active.line
+        DebugRects.Character = ed.selection.active.character
+        DebugRects.FontSize = fontSize
+        DebugRects.LineHeight = lineHeight }
+
+let private rectJson (r: DebugRects.WindowRect) : obj =
+  createObj [ "x" ==> r.X; "y" ==> r.Y; "w" ==> r.W; "h" ==> r.H ]
+
+/// Resolves one target string to `{x,y,w,h}` or `null` (an unparseable
+/// target, no VS Code window found, or the target genuinely cannot be
+/// resolved yet — always an honest `null`, never a fabricated rect).
+let private debugRectForAsync (targetStr: string) : JS.Promise<obj> =
+  promise {
+    match DebugRects.RectTarget.parse targetStr with
+    | None -> return box null
+    | Some target ->
+      let! windowOpt = resolveOwnWindowRect ()
+
+      match windowOpt with
+      | None -> return box null
+      | Some window ->
+        let chrome = currentChromeConfig ()
+        let caret = currentCaretConfig ()
+
+        match DebugRects.resolve window chrome caret target with
+        | None -> return box null
+        | Some rect -> return rectJson rect
+  }
+
+/// The loopback control channel the OUT-OF-PROCESS demo cell-agent uses
+/// (§2.1's "no CDP" mandate rules out a debug port; this is a plain HTTP
+/// GET the extension host itself serves). Bound to loopback only, inside
+/// the demo cell's own private `--unshare-net` network namespace — never
+/// reachable from outside that cell, and never the daemon's own
+/// 37749/37750 ports. Port is `SAGEFS_DEBUG_RECTS_PORT` (set by
+/// `SageFs.Demos.Runtime.VsCode`'s cell env) or a fixed default so a
+/// manual/dev launch still works without the env var.
+let private startDebugRectsServer () =
+  let port =
+    match getEnvVar "SAGEFS_DEBUG_RECTS_PORT" with
+    | Some s ->
+      match System.Int32.TryParse s with
+      | true, v -> v
+      | _ -> 47751
+    | None -> 47751
+
+  let parseTarget (url: string) : string option =
+    match url.IndexOf '?' with
+    | -1 -> None
+    | i ->
+      url.Substring(i + 1).Split '&'
+      |> Array.tryPick (fun kv ->
+        match kv.Split '=' with
+        | [| "target"; v |] -> Some v
+        | _ -> None)
+
+  let handler (req: obj) (res: obj) =
+    match parseTarget (reqUrl req) with
+    | None ->
+      resWriteHead res 400 (createObj [])
+      resEnd res "{\"error\":\"missing target\"}"
+    | Some target ->
+      debugRectForAsync target
+      |> Promise.map (fun result ->
+        resWriteHead res 200 (createObj [ "Content-Type" ==> "application/json" ])
+        resEnd res (jsonStringify result))
+      |> Promise.catch (fun err ->
+        resWriteHead res 500 (createObj [])
+        resEnd res (sprintf "{\"error\":%s}" (jsonStringify (string err))))
+      |> ignore
+
+  try
+    let server = createHttpServer handler
+    httpListen server port "127.0.0.1"
+    logDebug (sprintf "sagefs.debug.rectFor loopback listening on 127.0.0.1:%d" port)
+  with ex ->
+    logDebug (sprintf "sagefs.debug.rectFor loopback server failed to start: %s" (string ex))
+
 let hijackIonideSendToFsi (subs: ResizeArray<Disposable>) =
   for cmd in [| "fsi.SendSelection"; "fsi.SendLine"; "fsi.SendFile" |] do
     try
@@ -1849,6 +2040,13 @@ let activate (context: ExtensionContext) =
   reg "sagefs.openDashboard" (fun _ -> openDashboard () |> promiseIgnoreLog logToOutput)
   reg "sagefs.switchProject" (fun _ -> switchProject () |> promiseIgnoreLog logToOutput)
   reg "sagefs.checkHealth" (fun _ -> checkHealth () |> promiseIgnoreLog logToOutput)
+  // sagefs.debug.rectFor (demo-actors-plan.md §2.1): a value-returning
+  // registration (`Commands.registerCommand` above is `unit`-returning) so
+  // `executeCommand("sagefs.debug.rectFor", target)` resolves to the rect
+  // itself, plus the loopback control channel the out-of-process demo
+  // cell-agent uses.
+  context.subscriptions.Add(registerCommandValue commandsExports "sagefs.debug.rectFor" (fun args -> debugRectForAsync (unbox<string> args)))
+  startDebugRectsServer ()
   reg "sagefs.openGettingStarted" (fun _ -> openGettingStarted () |> promiseIgnoreLog logToOutput)
   reg "sagefs.sessionMenu" (fun _ -> sessionMenu () |> promiseIgnoreLog logToOutput)
   reg "sagefs.resetSession" (fun _ -> resetSessionCmd () |> promiseIgnoreLog logToOutput)
