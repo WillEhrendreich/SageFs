@@ -1,8 +1,9 @@
 namespace SageFs
 
 /// Generic fixed-capacity ring buffer for time-travel model snapshots.
-/// Structural sharing via F# immutable records means snapshots that
-/// differ in only a few fields share most of their memory.
+/// Each push is copy-on-write: it allocates a fresh backing array, so every
+/// returned buffer is a fully independent, truly immutable snapshot — a
+/// retained buffer is never mutated by a later push derived from it.
 module RingBuffer =
 
   /// A fixed-capacity ring buffer holding up to `capacity` items.
@@ -26,11 +27,16 @@ module RingBuffer =
       invalidArg "capacity" "Ring buffer capacity must be positive"
 
   /// Push a new item into the buffer. If full, the oldest item is evicted.
+  /// Copy-on-write: allocates a new backing array so any retained buffer
+  /// (e.g. a time-travel snapshot, an SSE replay position, a journal view)
+  /// is never mutated by this or any later push.
   let push (item: 'T) (buf: RingBuffer<'T>) : RingBuffer<'T> =
     let capacity = buf.Items.Length
     let newHead = (buf.Head + capacity - 1) % capacity
-    buf.Items.[newHead] <- item
+    let items = Array.copy buf.Items
+    items.[newHead] <- item
     { buf with
+        Items = items
         Head = newHead
         Count = min (buf.Count + 1) capacity
         TotalPushed = buf.TotalPushed + 1L }
