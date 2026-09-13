@@ -49,7 +49,7 @@ let cohortPanelTests =
       html |> Expect.stringContains "explains how to join, instead of rendering nothing" "join_cohort"
 
     testCase "WHY — a joined member renders their id and role" <| fun _ ->
-      let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer) ]
+      let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "shows the singular member count in the heading" "Cohort — 1 member"
       html |> Expect.stringContains "shows the member's display id" (MemberId.display alice)
@@ -57,7 +57,7 @@ let cohortPanelTests =
 
     testCase "WHY — two members pluralize the heading count" <| fun _ ->
       let frame =
-        frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer); CohortCommand.Join(bob, JoinableRole.Verifier) ]
+        frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None); CohortCommand.Join(bob, JoinableRole.Verifier, None) ]
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "pluralizes members in the heading" "Cohort — 2 members"
       html |> Expect.stringContains "shows the second member's role" "Verifier"
@@ -65,7 +65,7 @@ let cohortPanelTests =
     testCase "WHY — a held claim renders its scope and the holder's display id, not the raw MemberId case" <| fun _ ->
       let frame =
         frameAfter
-          [ CohortCommand.Join(alice, JoinableRole.Implementer)
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
             CohortCommand.AcquireClaim(alice, ClaimScope.File "src/Foo.fs", "editing") ]
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "shows the claimed file path" "src/Foo.fs"
@@ -74,14 +74,14 @@ let cohortPanelTests =
     testCase "WHY — the ledger version in the panel is the frame's Version (the ledger Seq), not a fabricated counter" <| fun _ ->
       let frame =
         frameAfter
-          [ CohortCommand.Join(alice, JoinableRole.Implementer)
+          [ CohortCommand.Join(alice, JoinableRole.Implementer, None)
             CohortCommand.AcquireClaim(alice, ClaimScope.Project "src/Foo.fsproj", "working") ]
       frame.Version |> Expect.equal "two applied commands land ledger seq 1 (0-indexed)" 1L<ledgerSeq>
       let html = renderCohortPanel frame |> render
       html |> Expect.stringContains "renders the ledger version" (sprintf "Ledger v%d" (int64 frame.Version))
 
     testCase "WHY — renderMainContent always includes the cohort panel, so it can never be a blank/missing sidebar section" <| fun _ ->
-      let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Observer) ]
+      let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Observer, None) ]
       let cohortPanel = renderCohortPanel frame
       let snap : DashboardTypes.DashboardSnapshot =
         { DashboardTypes.DashboardSnapshot.Version = "0.0.0"

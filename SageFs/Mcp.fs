@@ -4546,23 +4546,55 @@ module McpTools =
     sb.AppendLine("Landing queue: not yet in the v1 read model (Cohort.fs's CohortFrame is trimmed to members/claims/test bitplanes; see its module doc).") |> ignore
     sb.ToString()
 
+  /// Resolve the caller's SESSION (checkout) for `join_cohort` (item 13c of
+  /// sagefs-multiagent-vision.md), via the SAME routing every other tool
+  /// uses (`resolveSessionId`): an explicit `workingDirectory` wins, then the
+  /// agent's active-session mapping, then the daemon's own working directory
+  /// or its one-and-only session. Any resolution that names a real,
+  /// registered session (Routable/WarmingUp/Unroutable/FaultedSession) is
+  /// bound — the member doesn't need a currently-ROUTABLE worker, just an
+  /// existing session id to attribute test outcomes to later. Only `Gone`
+  /// (no matching/ambiguous/no session at all) resolves to `None`: the
+  /// member still joins, it just contributes no row to the cohort's test
+  /// matrix (`CohortOwner.frameOf`) until it joins again with a resolvable
+  /// session.
+  let private resolveJoinSession (ctx: McpContext) (agentName: string) (workingDirectory: string option) : Task<string option> =
+    task {
+      let! resolution = resolveSessionId ctx agentName None workingDirectory
+      return
+        match resolution with
+        | Routable sid
+        | WarmingUp(sid, _)
+        | Unroutable(sid, _)
+        | FaultedSession sid -> Some sid
+        | Gone _ -> None
+    }
+
   /// Join the implicit per-daemon cohort as `role` (Implementer/Verifier/
   /// Observer). v1 has no separate `create_cohort` command — the first
   /// member to join an empty cohort becomes its conductor automatically
   /// (`Cohort.decide`'s own semantics for `Join`), so this tool doubles as
-  /// create_cohort for the first caller.
-  let joinCohort (ctx: McpContext) (agentName: string) (role: string) : Task<Result<string, SageFsError>> =
+  /// create_cohort for the first caller. `workingDirectory` (item 13c) is
+  /// resolved to a session id via `resolveJoinSession` and stored on the
+  /// member (`MemberRecord.Session`) so the cohort frame can later attribute
+  /// this member's checkout's test outcomes to it (`CohortOwner.frameOf`).
+  let joinCohort (ctx: McpContext) (agentName: string) (role: string) (workingDirectory: string option) : Task<Result<string, SageFsError>> =
     task {
       match parseJoinableRole role with
       | Error e -> return Error e
       | Ok r ->
         let who = memberIdFor agentName
-        let! result = commitCohort ctx (Cohort.CohortCommand.Join(who, r))
+        let! sessionOpt = resolveJoinSession ctx agentName workingDirectory
+        let! result = commitCohort ctx (Cohort.CohortCommand.Join(who, r, sessionOpt))
         return
           result
           |> Result.map (fun (events, _) ->
             let becameConductor = events |> List.exists (function Cohort.CohortEvent.ConductorBound _ -> true | _ -> false)
-            sprintf "Joined cohort as %s (%s).%s" (MemberTable.MemberId.display who) (string r) (if becameConductor then " You are the conductor (first to join)." else ""))
+            let sessionNote =
+              match sessionOpt with
+              | Some sid -> sprintf " Bound to session %s." sid
+              | None -> " No session was resolved — you won't appear in the per-session test matrix until you join again from a working directory that matches a session."
+            sprintf "Joined cohort as %s (%s).%s%s" (MemberTable.MemberId.display who) (string r) (if becameConductor then " You are the conductor (first to join)." else "") sessionNote)
     }
 
   let leaveCohort (ctx: McpContext) (agentName: string) : Task<Result<string, SageFsError>> =

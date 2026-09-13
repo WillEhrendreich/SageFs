@@ -171,7 +171,7 @@ let private testIdsOf (n: int) (prefix: string) = [ for i in 1 .. (abs n % 5) ->
 
 let private applyIntent (h: Harness) (intent: Intent) : Harness =
   match intent with
-  | IJoin(a, role) -> applyCommand h (CohortCommand.Join(agentOf a, role))
+  | IJoin(a, role) -> applyCommand h (CohortCommand.Join(agentOf a, role, None))
   | IDepart a -> applyCommand h (CohortCommand.Depart(agentOf a))
   | IRenewLease a -> applyCommand h (CohortCommand.RenewLease(agentOf a))
   | ITick minutes -> applyCommand { h with Clock = h.Clock.AddMinutes(float (abs minutes % 90)) } CohortCommand.Tick
@@ -250,7 +250,7 @@ let private toLedger (intents: Intent list) : LedgerEntry<Agent> list =
   for intent in intents do
     let cmdOpt =
       match intent with
-      | IJoin(a, role) -> Some(CohortCommand.Join(agentOf a, role))
+      | IJoin(a, role) -> Some(CohortCommand.Join(agentOf a, role, None))
       | IDepart a -> Some(CohortCommand.Depart(agentOf a))
       | IRenewLease a -> Some(CohortCommand.RenewLease(agentOf a))
       | ITick minutes ->
@@ -497,7 +497,7 @@ let cohortPropertyTests =
       testPropertyWithConfig cohortConfig "4: a stale fence is refused whatever else the command carries" <| fun (scopeIdx: int) ->
         let a = agentOf 1
         let h0 = initHarness ()
-        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer))
+        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None))
         let h2 = applyCommand h1 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose"))
         match h2.State.Claims |> Map.toList with
         | [ (cid, claim) ] ->
@@ -521,7 +521,7 @@ let cohortPropertyTests =
           let state =
             { CohortState.empty () with
                 IntegrationHead = h2'
-                Members = Map.ofList [ requester, { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch } ]
+                Members = Map.ofList [ requester, { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None } ]
                 Claims = Map.ofList [ claim.Id, claim ]
                 Landings = Map.ofList [ req.Id, req ]
                 Queue = [ req.Id ] }
@@ -539,7 +539,7 @@ let cohortPropertyTests =
       testPropertyWithConfig cohortConfig "12: a departed member's stale-fence command never changes the claim it no longer holds" <| fun (scopeIdx: int) ->
         let a = agentOf 1
         let h0 = initHarness ()
-        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer))
+        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None))
         let h2 = applyCommand h1 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose"))
         match h2.State.Claims |> Map.toList with
         | [ (cid, claimBeforeDepart) ] ->
@@ -557,8 +557,8 @@ let cohortPropertyTests =
         let a = { Id = 1; Display = "shared-name" }
         let hostile = { Id = 2; Display = "shared-name" }
         let h0 = initHarness ()
-        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer))
-        let h2 = applyCommand h1 (CohortCommand.Join(hostile, JoinableRole.Implementer))
+        let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None))
+        let h2 = applyCommand h1 (CohortCommand.Join(hostile, JoinableRole.Implementer, None))
         let h3 = applyCommand h2 (CohortCommand.AcquireClaim(a, scopeOf scopeIdx, "purpose"))
         match h3.State.Claims |> Map.toList with
         | [ (cid, claim) ] ->
@@ -579,13 +579,13 @@ let cohortPropertyTests =
 
         let runPlan (flaky: bool) =
           let h0 = initHarness ()
-          let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer))
+          let h1 = applyCommand h0 (CohortCommand.Join(a, JoinableRole.Implementer, None))
           let landed = ResizeArray<string>()
           let mutable h = h1
           for i in 1 .. planLength do
             if flaky then
               h <- applyCommand h (CohortCommand.Depart a)
-              h <- applyCommand h (CohortCommand.Join(a, JoinableRole.Implementer))
+              h <- applyCommand h (CohortCommand.Join(a, JoinableRole.Implementer, None))
             h <- applyCommand h (CohortCommand.AcquireClaim(a, scopeOf i, "purpose"))
             let cid = h.State.Claims |> Map.toList |> List.map fst |> List.last
             let fence = h.State.Claims.[cid].Fence
@@ -630,9 +630,9 @@ let cohortPropertyTests =
         let other = agentOf 1
         let target = agentOf 2
         let h0 = initHarness ()
-        let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer)) // first joiner: becomes conductor
-        let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer))
-        let h3 = applyCommand h2 (CohortCommand.Join(target, JoinableRole.Implementer))
+        let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer, None)) // first joiner: becomes conductor
+        let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer, None))
+        let h3 = applyCommand h2 (CohortCommand.Join(target, JoinableRole.Implementer, None))
         let h4 = applyCommand h3 (CohortCommand.AcquireClaim(other, scopeOf scopeIdx, "purpose"))
         match h4.State.Claims |> Map.toList with
         | [ (cid, _) ] ->
@@ -658,8 +658,8 @@ let cohortPropertyTests =
         let other = agentOf 1
         let stranger = agentOf 2 // never joins
         let h0 = initHarness ()
-        let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer))
-        let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer))
+        let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer, None))
+        let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer, None))
         let refusedByNonConductor =
           match decide h2.Clock [| 1uy |] h2.State (CohortCommand.DelegateConductor(other, other)) with
           | Error(CohortError.NotConductor by) -> by = other

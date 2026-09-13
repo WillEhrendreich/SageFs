@@ -195,6 +195,13 @@ module Cohort =
     Role: JoinableRole
     Presence: MemberPresence
     LastRenewal: DateTime
+    /// Which SESSION (checkout) this member works in, if any (item 13c,
+    /// sagefs-multiagent-vision.md). `None` means the member joined without a
+    /// resolvable session — still a full member, just absent from the test
+    /// matrix (`CohortOwner.frameOf` only attributes a row to members with
+    /// `Some sid`). Set once at `Join` time; there is no v1 command to rebind
+    /// it after joining (a member who switches checkouts departs and rejoins).
+    Session: string option
   }
 
   // ── Claims (§5.1, §4.3) ─────────────────────────────────────────────────
@@ -321,7 +328,10 @@ module Cohort =
 
   [<RequireQualifiedAccess>]
   type CohortCommand<'m> =
-    | Join of who: 'm * role: JoinableRole
+    /// `session` (item 13c) is the caller's resolved SESSION (checkout) id, if
+    /// any — the shell resolves this (Mcp.fs's `join_cohort`), `decide` only
+    /// stores it verbatim in the new `MemberRecord`.
+    | Join of who: 'm * role: JoinableRole * session: string option
     | Depart of who: 'm
     | RenewLease of who: 'm
     /// The shell posts this periodically; `decide` derives who has gone silent
@@ -353,7 +363,9 @@ module Cohort =
 
   [<RequireQualifiedAccess>]
   type CohortEvent<'m> =
-    | MemberJoined of 'm * JoinableRole
+    /// Carries the same `session` `Join` was given (item 13c) so `replay`
+    /// reconstructs an identical `MemberRecord.Session` from the ledger alone.
+    | MemberJoined of 'm * JoinableRole * session: string option
     | MemberDeparted of 'm * since: DateTime
     | LeaseRenewed of 'm
     /// The `Conductor` binding was made for the first time — v1's `create_cohort`
@@ -490,11 +502,11 @@ module Cohort =
       : Result<CohortState<'m> * CohortEvent<'m> list * CohortEffect<'m> list, CohortError<'m>> =
     match command with
 
-    | CohortCommand.Join(who, role) ->
+    | CohortCommand.Join(who, role, session) ->
       match Map.tryFind who state.Members with
       | Some { Presence = MemberPresence.Present } -> Error(CohortError.DuplicateJoin who)
       | _ ->
-        let record = { Role = role; Presence = MemberPresence.Present; LastRenewal = clock }
+        let record = { Role = role; Presence = MemberPresence.Present; LastRenewal = clock; Session = session }
         let newState = { state with Members = Map.add who record state.Members }
         match state.Conductor with
         | None ->
@@ -502,9 +514,9 @@ module Cohort =
           // empty-membership cohort becomes the conductor. There is no separate
           // CreateCohort command in v1 — this IS that binding.
           let bound = { newState with Conductor = Some who }
-          Ok(bound, [ CohortEvent.MemberJoined(who, role); CohortEvent.ConductorBound who ], [])
+          Ok(bound, [ CohortEvent.MemberJoined(who, role, session); CohortEvent.ConductorBound who ], [])
         | Some _ ->
-          Ok(newState, [ CohortEvent.MemberJoined(who, role) ], [])
+          Ok(newState, [ CohortEvent.MemberJoined(who, role, session) ], [])
 
     | CohortCommand.Depart who ->
       if not (isPresent state who) then Error(CohortError.MemberNotPresent who)

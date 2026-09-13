@@ -133,6 +133,15 @@ let private callTool (client: McpClient) (name: string) (args: (string * obj) li
 let private joinCohort (client: McpClient) (agentName: string) (role: string) =
   callTool client "join_cohort" [ "agentName", box agentName; "role", box role ]
 
+/// Item 13c: `join_cohort`'s new optional `working_directory` — resolved to a
+/// session id the same way `send_fsharp_code` resolves it (Mcp.fs's
+/// `resolveSessionId`) and recorded on the joining member.
+let private joinCohortWithDir (client: McpClient) (agentName: string) (role: string) (workingDirectory: string) =
+  callTool client "join_cohort" [ "agentName", box agentName; "role", box role; "working_directory", box workingDirectory ]
+
+let private createSession (client: McpClient) (projects: string) (workingDirectory: string) =
+  callTool client "create_session" [ "projects", box projects; "working_directory", box workingDirectory ]
+
 let private getCohortStatus (client: McpClient) =
   callTool client "get_cohort_status" []
 
@@ -184,6 +193,39 @@ let cohortMcpToolsTests =
 
         status
         |> Expect.stringContains "the conductor line should name a real member, not the unknown placeholder" "Conductor: mcp:"
+      })
+    }
+
+    testTask "WHY — join_cohort with working_directory binds the member to the matching session (item 13c)" {
+      do! withDaemon (fun port -> task {
+        use! client = connect port
+        let projectFile = System.IO.Path.GetFileName SageFs.Tests.HttpApiIntegrationTests.smokeSampleProject
+        let workingDir = SageFs.Tests.HttpApiIntegrationTests.smokeSampleProjectDir
+
+        let! createResult = createSession client projectFile workingDir
+        let sessionId = createResult.Split('\n').[0].Trim()
+        String.IsNullOrWhiteSpace sessionId
+        |> Expect.isFalse "create_session should report a session id on its first line"
+
+        let! joinResult = joinCohortWithDir client "checkout-binder" "Implementer" workingDir
+        joinResult
+        |> Expect.stringContains
+          "join_cohort resolves working_directory to the just-created session and reports it"
+          (sprintf "Bound to session %s" sessionId)
+      })
+    }
+
+    testTask "WHY — join_cohort with no resolvable session still joins, but says so honestly (item 13c)" {
+      do! withDaemon (fun port -> task {
+        use! client = connect port
+        // No session exists yet in this fresh, isolated daemon, and no
+        // working_directory is given — resolution falls all the way through
+        // to Gone, so the member joins with no session bound.
+        let! joinResult = joinCohort client "no-session-agent" "Observer"
+        joinResult
+        |> Expect.stringContains "the member still joins" "Joined cohort as"
+        joinResult
+        |> Expect.stringContains "an unresolved session is reported honestly, not silently dropped" "No session was resolved"
       })
     }
 

@@ -40,6 +40,14 @@ let private genMember =
 let private genRole =
   Gen.elements [ JoinableRole.Implementer; JoinableRole.Verifier; JoinableRole.Observer ]
 
+/// Covers both shapes of the new (item 13c) `session` field so the codec
+/// round-trip actually exercises `Some`/`None`, not just one of them.
+let private genSessionOpt : Gen<string option> =
+  Gen.oneof [
+    Gen.constant None
+    Gen.elements [ "sess-1"; "sess-2" ] |> Gen.map Some
+  ]
+
 let private genScope =
   Gen.oneof [
     Gen.elements [ "A.fs"; "B.fs" ] |> Gen.map ClaimScope.File
@@ -62,7 +70,7 @@ let private genShortList (g: Gen<'a>) : Gen<'a list> =
 
 let private genCommand : Gen<CohortCommand<MemberId>> =
   Gen.oneof [
-    Gen.map2 (fun m r -> CohortCommand.Join(m, r)) genMember genRole
+    Gen.map3 (fun m r s -> CohortCommand.Join(m, r, s)) genMember genRole genSessionOpt
     Gen.map CohortCommand.Depart genMember
     Gen.map CohortCommand.RenewLease genMember
     Gen.constant CohortCommand.Tick
@@ -123,7 +131,7 @@ let private genLandingState : Gen<LandingState<MemberId>> =
 
 let private genEvent : Gen<CohortEvent<MemberId>> =
   Gen.oneof [
-    Gen.map2 (fun m r -> CohortEvent.MemberJoined(m, r)) genMember genRole
+    Gen.map3 (fun m r s -> CohortEvent.MemberJoined(m, r, s)) genMember genRole genSessionOpt
     Gen.map2 (fun m d -> CohortEvent.MemberDeparted(m, d)) genMember genDateTime
     Gen.map CohortEvent.LeaseRenewed genMember
     Gen.map CohortEvent.ConductorBound genMember

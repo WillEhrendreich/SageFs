@@ -41,18 +41,53 @@ module CohortOwner =
     NextSeq: int64<ledgerSeq>
   }
 
-  /// The read model for `head`, folding in whatever `getSessionSnapshots`
-  /// returns at call time (item 13a of sagefs-multiagent-vision.md — Slice 1
-  /// left this hardcoded to `noSessions`; this is that seam wired open).
-  /// `getSessionSnapshots` is called fresh on every `frameOf`, so the matrix
-  /// reflects current per-session test state each time a cohort command
-  /// lands or the owner (re)starts — NOT continuously on every test tick; a
-  /// tick-driven refresh is a later item (see `handle`'s call site below).
+  /// One session's Pass/Fail/Stale `Cohort.TestId` lists plus its generation
+  /// — exactly what `Cohort.SessionSnapshot` needs beyond `Member`/`SessionId`
+  /// (which `frameOf` itself supplies, per member). The shell's closure
+  /// (`DaemonMode.fs`) is a thin wrapper over
+  /// `CohortTestProjection.projectSession` + `generationOf`.
+  /// Public (unlike `handle`/`frameOf`): it appears in `start`'s public
+  /// signature, the same way `SessionSnapshot` did before this item.
+  type SessionTestOutcomes = Cohort.TestId list * Cohort.TestId list * Cohort.TestId list * int64
+
+  /// The read model for `head` (item 13c of sagefs-multiagent-vision.md —
+  /// completes item 13a's seam, which item 13a left hardcoded to `noSessions`
+  /// because no session->member mapping existed yet). Item 13c's `Join`
+  /// change gives every member a `Session: string option`
+  /// (`MemberRecord.Session`), so `frameOf` builds the `SessionSnapshot[]`
+  /// itself: one row per member with `Session = Some sid`, its outcomes
+  /// fetched fresh via `getSessionTestOutcomes sid`. A member with
+  /// `Session = None` contributes no row — it is a full member, just not
+  /// attributed to any checkout's tests. The integration session
+  /// (`Member = None`, row 0, Cohort.fs's `SessionSnapshot` doc) is item 14's
+  /// concern, not built here.
+  ///
+  /// `getSessionTestOutcomes` is called fresh (once per bound member) on
+  /// every `frameOf`, so the matrix reflects current per-session test state
+  /// each time a cohort command lands or the owner (re)starts — NOT
+  /// continuously on every test tick; a tick-driven refresh is a later item
+  /// (see `handle`'s call site below).
   let internal frameOf
-    (getSessionSnapshots: unit -> SessionSnapshot<MemberId>[])
+    (getSessionTestOutcomes: string -> SessionTestOutcomes)
     (head: LedgerHead<MemberId>)
     : CohortFrame<MemberId> =
-    project head (getSessionSnapshots ())
+    let snapshots =
+      head.State.Members
+      |> Map.toArray
+      |> Array.choose (fun (m, record) ->
+        match record.Session with
+        | None -> None
+        | Some sid ->
+          let passing, failing, stale, gen = getSessionTestOutcomes sid
+          Some {
+            Member = Some m
+            SessionId = sid
+            Generation = gen
+            PassingTests = passing
+            FailingTests = failing
+            StaleTests = stale
+          })
+    project head snapshots
 
   let private notify (logger: Utils.ILogger) (reply: Result<CohortEvent<MemberId> list * CohortEffect<MemberId> list, CohortError<MemberId>> -> unit) (result: Result<CohortEvent<MemberId> list * CohortEffect<MemberId> list, CohortError<MemberId>>) =
     try reply result
@@ -63,7 +98,7 @@ module CohortOwner =
     (ledger: LedgerPort<MemberId>)
     (clock: unit -> DateTime)
     (entropy: unit -> byte[])
-    (getSessionSnapshots: unit -> SessionSnapshot<MemberId>[])
+    (getSessionTestOutcomes: string -> SessionTestOutcomes)
     (publish: CohortFrame<MemberId> -> unit)
     (owner: OwnerState)
     (command: Command)
@@ -77,7 +112,7 @@ module CohortOwner =
         | Ok(newState, events, effects) ->
           let seq = owner.NextSeq
           ledger.Append { Seq = seq; Clock = now; Entropy = bytes; Command = cmd; Events = events }
-          publish (frameOf getSessionSnapshots { Seq = seq; State = newState })
+          publish (frameOf getSessionTestOutcomes { Seq = seq; State = newState })
           notify logger reply (Ok(events, effects))
           return { Cohort = newState; NextSeq = seq + 1L<ledgerSeq> }
         | Error err ->
@@ -123,10 +158,12 @@ module CohortOwner =
   /// (production defaults: `DateTime.UtcNow` and `productionEntropy`) so
   /// tests can drive `decide` with deterministic values — this shell is
   /// where real time and randomness enter; the pure core never reads them.
-  /// `getSessionSnapshots` is the item-13a seam: the shell's own read of
-  /// current per-session test state, folded into every frame this owner
-  /// publishes (`frameOf`). Tests that don't care about the matrix pass
-  /// `fun () -> [||]`, matching Slice 1's original hardcoded behavior.
+  /// `getSessionTestOutcomes` is the item-13c seam (completing item 13a's,
+  /// which had no session->member mapping to read from): the shell's own
+  /// per-session test-outcome lookup, called once per session-bound member
+  /// on every frame this owner publishes (`frameOf`). Tests that don't care
+  /// about the matrix pass `fun _ -> ([], [], [], 0L)`, matching Slice 1's
+  /// original hardcoded (empty-matrix) behavior.
   /// Startup state is `Cohort.replay (ledger.ReadAll())`: the ledger is the
   /// only source of truth, so restarting the owner over the same ledger
   /// reconstructs an identical `CohortState`/`CohortFrame`.
@@ -135,7 +172,7 @@ module CohortOwner =
     (ledger: LedgerPort<MemberId>)
     (clock: unit -> DateTime)
     (entropy: unit -> byte[])
-    (getSessionSnapshots: unit -> SessionSnapshot<MemberId>[])
+    (getSessionTestOutcomes: string -> SessionTestOutcomes)
     : Handle =
     let entries = ledger.ReadAll ()
     let head = replayHead entries
@@ -143,10 +180,10 @@ module CohortOwner =
       match entries with
       | [] -> 0L<ledgerSeq>
       | _ -> head.Seq + 1L<ledgerSeq>
-    let frameRef = ref (frameOf getSessionSnapshots head)
+    let frameRef = ref (frameOf getSessionTestOutcomes head)
     let publish (frame: CohortFrame<MemberId>) =
       Interlocked.Exchange(frameRef, frame) |> ignore
-    let step = ResilientActor.wrapLoop logger "cohort-owner" (handle logger ledger clock entropy getSessionSnapshots publish)
+    let step = ResilientActor.wrapLoop logger "cohort-owner" (handle logger ledger clock entropy getSessionTestOutcomes publish)
     let mailbox =
       MailboxProcessor.Start(fun inbox ->
         let rec loop owner = async {
