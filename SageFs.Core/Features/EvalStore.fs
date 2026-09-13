@@ -9,13 +9,34 @@
 /// free identifiers, the names it binds) and indexed by id. Ids are dense and
 /// monotonic, so the retained window is always `[NextId - count, NextId)` and
 /// evicting the oldest cell is a single keyed removal. Recording an eval costs
-/// O(size of the new cell × log history) whether the history holds 100 cells
-/// or is sitting at the cap. The binding scope and dependency graph are
-/// materialized from the index only when someone reads them; every reference
-/// check in that materialization is a hash/tree probe, not a regex.
+/// O(size of the new cell) whether the history holds 100 cells or is sitting
+/// at the cap. The binding scope and dependency graph are materialized from
+/// the index only when someone reads them; every reference check in that
+/// materialization is a hash/tree probe, not a regex.
 ///
-/// The store is immutable: an older version handed to another thread never
-/// observes later writes.
+/// Retained cells live in fixed-size CHUNKS (plain arrays), not a
+/// `Map<int,StoredCell>`. A 10,000-cell persistent balanced tree is ~10,000
+/// separate small node objects that every gen0/gen1 GC has to trace to find
+/// out what's still reachable — allocation per eval was already flat (each
+/// `record` only ever allocates O(log history) new tree nodes), but the LIVE
+/// object graph the collector scans every pass grows with history size, and
+/// that scan cost is what made steady-state recordEval ~5x slower at 10,000
+/// cells than at 1,000 even though the algorithm itself is unchanged. A chunk
+/// of `ChunkCapacity` cells is ONE array (one object header, contiguous,
+/// cache-friendly) instead of `ChunkCapacity` tree-node objects, so the live
+/// object count for the retained history drops from O(history) to
+/// O(history / ChunkCapacity) — tens of objects instead of tens of thousands.
+///
+/// Only the tail chunk is ever written to, and only by copying it (bounded by
+/// `ChunkCapacity`, never by history size) into a brand new array — existing
+/// chunks are never mutated in place, so an older `Store` handed to another
+/// thread never observes a later record's writes, exactly as the persistent
+/// Map did. Eviction only ever drops whole chunks once every cell in them has
+/// aged out, so up to `ChunkCapacity - 1` already-evicted cells' memory can
+/// linger briefly (a bounded, constant amount, independent of the cap) before
+/// the chunk holding them is finally dropped — every public read (`newest`,
+/// `chronological`, `materializeScope`/`materializeGraph`, ...) still only
+/// ever sees exactly the logical window `[NextId - Count, NextId)`.
 module SageFs.Features.EvalStore
 
 open System
@@ -59,12 +80,37 @@ type StoredCell = {
   FreeIdentifiers: string[]
 }
 
+/// How many cells one chunk array holds. Bounds the cost of every write
+/// (append copies at most this many cells, never the whole history) and the
+/// lingering-after-eviction memory (at most this many cells' worth).
+[<Literal>]
+let private ChunkCapacity = 256
+
+/// A fixed-size, append-only slice of the retained history: cells
+/// `[0, FilledCount)` of `Cells` are populated, starting at cell id `BaseId`.
+/// Every chunk but the most recently created one is completely full. Chunks
+/// are never mutated after being taken over by a new `Store` value —
+/// `record` and eviction always build a new array (or a new chunk) rather
+/// than write through an existing one.
+type Chunk = {
+  BaseId: int
+  Cells: StoredCell[]
+  FilledCount: int
+}
+
 type Store = {
   Cap: HistoryCap
   /// The id the next recorded cell gets. Never decreases.
   NextId: int
-  /// Retained cells by id: exactly the ids `[NextId - Cells.Count, NextId)`.
-  Cells: Map<int, StoredCell>
+  /// Logical count of retained cells: exactly the ids `[NextId - Count,
+  /// NextId)`. May be smaller than the total cells still physically present
+  /// in `Chunks` — see the module doc on lingering eviction.
+  Count: int
+  /// Oldest-to-newest chunks of retained (and briefly, just-evicted) cells.
+  /// Not part of the public contract — treat as an implementation detail of
+  /// this module; use `count`/`newest`/`chronological`/`materializeScope`/
+  /// `materializeGraph` to read the retained history.
+  Chunks: Chunk[]
   /// Inverted index: `\b` word -> retained cells whose source contains it.
   CellsByWord: Map<string, Set<int>>
   /// Newest cell (ever recorded, retained or not) that bound each name.
@@ -78,15 +124,74 @@ type Store = {
 let empty (cap: HistoryCap) : Store =
   { Cap = cap
     NextId = 0
-    Cells = Map.empty
+    Count = 0
+    Chunks = [||]
     CellsByWord = Map.empty
     KnownBindings = Map.empty
     UnusualKnownNames = Set.empty }
 
-let count (store: Store) = store.Cells.Count
+let count (store: Store) = store.Count
 
 /// Id of the oldest retained cell (equals `NextId` when nothing is retained).
-let oldestId (store: Store) = store.NextId - store.Cells.Count
+let oldestId (store: Store) = store.NextId - store.Count
+
+/// Find a cell by id among the physically-present chunks (which may
+/// momentarily include a handful of already-evicted cells — see the module
+/// doc). Callers only ever pass ids within `[oldestId store, NextId)`.
+let private tryFindCell (id: int) (store: Store) : StoredCell option =
+  store.Chunks
+  |> Array.tryPick (fun c ->
+    match id >= c.BaseId && id < c.BaseId + c.FilledCount with
+    | true -> Some c.Cells.[id - c.BaseId]
+    | false -> None)
+
+/// Every LOGICALLY retained cell, ascending by id — i.e. exactly `[NextId -
+/// Count, NextId)`, skipping any cells a chunk is still physically holding
+/// past their eviction.
+let private allCellsAscending (store: Store) : (int * StoredCell) seq =
+  let oldest = oldestId store
+  seq {
+    for c in store.Chunks do
+      let startOffset = max 0 (oldest - c.BaseId)
+      for i in startOffset .. c.FilledCount - 1 do
+        yield (c.BaseId + i, c.Cells.[i])
+  }
+
+/// Append one cell, copying only the tail chunk (or starting a fresh one) —
+/// cost bounded by `ChunkCapacity`, never by history size. Every other chunk
+/// is shared, unmutated, with whichever `Store` still references it.
+let private appendCell (cell: StoredCell) (chunks: Chunk[]) : Chunk[] =
+  let id = cell.Entry.CellIndex
+  let freshChunk () =
+    let arr : StoredCell[] = Array.zeroCreate ChunkCapacity
+    arr.[0] <- cell
+    { BaseId = id; Cells = arr; FilledCount = 1 }
+  match chunks.Length with
+  | 0 -> [| freshChunk () |]
+  | n ->
+    let last = chunks.[n - 1]
+    match last.FilledCount = ChunkCapacity with
+    | true -> Array.append chunks [| freshChunk () |]
+    | false ->
+      let arr = Array.copy last.Cells
+      arr.[last.FilledCount] <- cell
+      let copy = Array.copy chunks
+      copy.[n - 1] <- { last with Cells = arr; FilledCount = last.FilledCount + 1 }
+      copy
+
+/// Drop every leading chunk that is now ENTIRELY below `newOldest` — never
+/// the tail chunk, which always holds the just-recorded cell. Most evictions
+/// drop nothing here (a chunk only empties out once every ChunkCapacity
+/// evictions); this is what lets those already-evicted cells linger briefly
+/// rather than force a copy on every single eviction.
+let private dropStaleChunks (newOldest: int) (chunks: Chunk[]) : Chunk[] =
+  let rec staleCount i =
+    match i < chunks.Length - 1 && chunks.[i].BaseId + chunks.[i].FilledCount <= newOldest with
+    | true -> staleCount (i + 1)
+    | false -> i
+  match staleCount 0 with
+  | 0 -> chunks
+  | n -> chunks.[n ..]
 
 let private addToIndex (id: int) (words: string[]) (index: Map<string, Set<int>>) =
   words
@@ -112,15 +217,18 @@ let private removeFromIndex (id: int) (words: string[]) (index: Map<string, Set<
 
 let private evictOldest (store: Store) : Store =
   let oldest = oldestId store
-  match Map.tryFind oldest store.Cells with
+  match tryFindCell oldest store with
   | Some cell ->
+    let newOldest = oldest + 1
     { store with
-        Cells = Map.remove oldest store.Cells
+        Count = store.Count - 1
+        Chunks = dropStaleChunks newOldest store.Chunks
         CellsByWord = removeFromIndex oldest cell.Words store.CellsByWord }
   | None -> store
 
-/// Record one eval. Costs O(new cell × log history) at every history size,
-/// including at and beyond the cap, where the oldest cell is evicted.
+/// Record one eval. Costs O(size of the new cell), bounded independent of
+/// history size, at every history size including at and beyond the cap,
+/// where the oldest cell is evicted.
 let record (code: string) (result: string) (durationMs: int64) (timestamp: DateTimeOffset) (store: Store) : Store =
   let id = store.NextId
   let produces = CellDependencyGraph.producedNames result
@@ -134,7 +242,8 @@ let record (code: string) (result: string) (durationMs: int64) (timestamp: DateT
   let recorded =
     { store with
         NextId = id + 1
-        Cells = Map.add id cell store.Cells
+        Count = store.Count + 1
+        Chunks = appendCell cell store.Chunks
         CellsByWord = addToIndex id cell.Words store.CellsByWord
         KnownBindings = produces |> List.fold (fun known name -> Map.add name id known) store.KnownBindings
         UnusualKnownNames =
@@ -143,25 +252,25 @@ let record (code: string) (result: string) (durationMs: int64) (timestamp: DateT
             match IdentifierScan.isFreeIdentifierToken name with
             | true -> names
             | false -> Set.add name names) store.UnusualKnownNames }
-  match recorded.Cells.Count > HistoryCap.cells store.Cap with
+  match recorded.Count > HistoryCap.cells store.Cap with
   | true -> evictOldest recorded
   | false -> recorded
 
-/// The `n` most recent entries, newest first. O(n log history).
+/// The `n` most recent entries, newest first. O(n).
 let newest (n: int) (store: Store) : EvalHistoryEntry list =
   let stop = max (oldestId store) (store.NextId - n)
   [ for id in store.NextId - 1 .. -1 .. stop do
-      match Map.tryFind id store.Cells with
+      match tryFindCell id store with
       | Some cell -> yield cell.Entry
       | None -> () ]
 
 /// Every retained entry, newest first. O(history) — for on-demand readers.
 let newestFirst (store: Store) : EvalHistoryEntry list =
-  store.Cells |> Map.fold (fun acc _ cell -> cell.Entry :: acc) []
+  allCellsAscending store |> Seq.fold (fun acc (_, cell) -> cell.Entry :: acc) []
 
 /// Every retained entry, oldest first. O(history) — for on-demand readers.
 let chronological (store: Store) : EvalHistoryEntry list =
-  Map.foldBack (fun _ cell acc -> cell.Entry :: acc) store.Cells []
+  allCellsAscending store |> Seq.map (fun (_, cell) -> cell.Entry) |> Seq.toList
 
 /// The two most recent entries matching `predicate`, as (older, newer) — for
 /// diffing consecutive evals. `history` must be newest-first (as
@@ -179,7 +288,7 @@ let recentPair (predicate: EvalHistoryEntry -> bool) (history: EvalHistoryEntry 
 /// `BindingExplorer.buildScopeSnapshot` over them, but references come from
 /// the word index instead of matching every name against every cell.
 let materializeScope (store: Store) : BindingExplorer.BindingScopeSnapshot =
-  let cells = store.Cells |> Map.toList
+  let cells = allCellsAscending store |> List.ofSeq
   // Every cell that binds each name, oldest first (repeats kept: a cell that
   // binds a name twice shadows older bindings twice, as the rebuild does).
   let binders = Dictionary<string, ResizeArray<int>>(StringComparer.Ordinal)
@@ -248,7 +357,7 @@ let materializeGraph (store: Store) : CellDependencyGraph.CellGraph =
   let oldest = oldestId store
   let producerOf name = Map.tryFind name store.KnownBindings
   let infos : CellDependencyGraph.CellInfo list =
-    [ for KeyValue (id, cell) in store.Cells ->
+    [ for id, cell in allCellsAscending store ->
         let plain =
           cell.FreeIdentifiers
           |> Seq.filter (fun name ->
