@@ -224,3 +224,129 @@ let checkToolCallAllowed (state: SessionState) (toolName: string) : Result<unit,
     // Fail closed: a tool that is not declared in the gating domain has no
     // availability policy, so it must never bypass the model.
     Error (SageFsError.ToolNotAvailable(toolName, state, availableTools state))
+
+// ── Cohort affordances (Phase 1 item 11, §8.1; cohort-integration-plan.md
+//    Slice 3) ─────────────────────────────────────────────────────────────
+//
+// The vision's full affordance function is `SessionState * Authority *
+// CohortPhase -> Set<ToolName>` (§8.1). This is a SCOPED v1: `CohortPhase` is
+// DEFERRED — v1's implicit per-daemon cohort (Slice 2, `Cohort.CohortState`)
+// has no phase field, so there is no Forming/Active/Landing/Closed lifecycle
+// to match on yet, and `Cohort.decide` already enforces authority at the
+// core (`NotConductor`/`NotClaimHolder`). So `cohortTools` here is keyed on
+// `Authority` alone, and its job is narrower than the vision's: filter the
+// cohort MCP TOOL LIST by the caller's role, as an earlier, friendlier
+// signal than the core's own refusal — not a full state/phase matrix.
+//
+// Repo doctrine ("no magic strings anywhere"): the closed set of cohort MCP
+// tool names becomes a DU with one exhaustive to-string function, same as
+// `ToolGate` above.
+
+[<RequireQualifiedAccess>]
+type CohortTool =
+  | Join
+  | Leave
+  | AcquireClaim
+  | ReleaseClaim
+  | ReassignClaim
+  | RequestLanding
+  | GetStatus
+
+module CohortTool =
+  /// The exact MCP tool names the 7 cohort tools are registered under
+  /// (`Affordances.fs`'s own `gatingDomain` "Cohort tools v1" entries above —
+  /// all `AlwaysAvailable` there at the per-SESSION-state layer; this module
+  /// is the authority-aware refinement layered on top for Slice 3).
+  let toToolName =
+    function
+    | CohortTool.Join -> "join_cohort"
+    | CohortTool.Leave -> "leave_cohort"
+    | CohortTool.AcquireClaim -> "acquire_claim"
+    | CohortTool.ReleaseClaim -> "release_claim"
+    | CohortTool.ReassignClaim -> "reassign_claim"
+    | CohortTool.RequestLanding -> "request_landing"
+    | CohortTool.GetStatus -> "get_cohort_status"
+
+  let all: CohortTool list =
+    [ CohortTool.Join
+      CohortTool.Leave
+      CohortTool.AcquireClaim
+      CohortTool.ReleaseClaim
+      CohortTool.ReassignClaim
+      CohortTool.RequestLanding
+      CohortTool.GetStatus ]
+
+/// Total over `Cohort.Authority<'m>` (property 9, cohort-integration-plan.md
+/// Slice 3) — the compiler checks the `match` is exhaustive, so no
+/// registration-integrity test is needed for this one (unlike the
+/// string-keyed `gatingDomain` above). The v1 role table (CohortPhase
+/// collapsed, since v1 has none — see the module-doc above):
+///
+///   Anonymous                    -> status only
+///   Member(_, Observer)          -> status only
+///   Member(_, Verifier)          -> status only
+///   Member(_, Implementer)       -> status, join, leave, claim/release, request_landing
+///   Conductor _                  -> every tool, including reassign_claim
+///
+/// `join_cohort` is deliberately NOT threaded into the `Anonymous` arm here
+/// — see `alwaysReachableCohortTools`.
+let cohortTools (authority: Cohort.Authority<'m>) : Set<CohortTool> =
+  match authority with
+  | Cohort.Authority.Anonymous ->
+    set [ CohortTool.GetStatus ]
+  | Cohort.Authority.Member(_, Cohort.JoinableRole.Observer) ->
+    set [ CohortTool.GetStatus ]
+  | Cohort.Authority.Member(_, Cohort.JoinableRole.Verifier) ->
+    set [ CohortTool.GetStatus ]
+  | Cohort.Authority.Member(_, Cohort.JoinableRole.Implementer) ->
+    set [ CohortTool.GetStatus
+          CohortTool.Join
+          CohortTool.Leave
+          CohortTool.AcquireClaim
+          CohortTool.ReleaseClaim
+          CohortTool.RequestLanding ]
+  | Cohort.Authority.Conductor _ ->
+    Set.ofList CohortTool.all
+
+/// Tools that must stay reachable to EVERY caller regardless of authority —
+/// most importantly a not-yet-a-member `Anonymous` caller, who could
+/// otherwise never reach `join_cohort` at all (nobody could ever join a
+/// cohort). Mirrors the `gatingDomain` table above, which already makes
+/// `join_cohort`/`get_cohort_status` `AlwaysAvailable` regardless of SESSION
+/// state; this is the same treatment at the authority layer. The invariant
+/// this preserves: a fresh caller can always `join_cohort` and always
+/// `get_cohort_status`.
+let alwaysReachableCohortTools: Set<CohortTool> =
+  set [ CohortTool.Join; CohortTool.GetStatus ]
+
+/// Resolve a caller's `Authority` from a published `CohortFrame` — the
+/// frame-based mirror of `Cohort.Authority.present` (which reads
+/// `CohortState` directly; the MCP gate only ever holds the owner's
+/// published `CohortFrame`, D4, never the state itself). `Conductor` is read
+/// from the frame's own `Conductor` field first; otherwise the caller is
+/// looked up by identity in the frame's parallel `MemberIds`/`MemberRole`/
+/// `MemberSeat` arrays — a `Departed` seat resolves to `Anonymous`, the same
+/// as `Authority.present`'s `MemberPresence.Present` guard — and a caller
+/// found in neither is `Anonymous`, never an error (total, like
+/// `Authority.present`).
+let authorityOfMember (who: 'm) (frame: Cohort.CohortFrame<'m>) : Cohort.Authority<'m> =
+  match frame.Conductor with
+  | Some c when c = who ->
+    Cohort.Authority.Conductor who
+  | _ ->
+    match frame.MemberIds |> Array.tryFindIndex ((=) who) with
+    | Some i ->
+      match frame.MemberSeat.[i] with
+      | Cohort.SeatState.Present -> Cohort.Authority.Member(who, frame.MemberRole.[i])
+      | Cohort.SeatState.Departed _ -> Cohort.Authority.Anonymous
+    | None ->
+      Cohort.Authority.Anonymous
+
+/// Whether `tool` may be invoked by `authority`: `cohortTools authority`
+/// widened by the always-reachable set (join/status — see
+/// `alwaysReachableCohortTools`). Pure; the MCP gate (`Mcp.fs`) resolves
+/// `authority` via `authorityOfMember` and calls this before a cohort tool
+/// body runs.
+let checkCohortToolAllowed (authority: Cohort.Authority<'m>) (tool: CohortTool) : bool =
+  Set.contains tool alwaysReachableCohortTools
+  || Set.contains tool (cohortTools authority)

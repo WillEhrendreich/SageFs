@@ -226,13 +226,18 @@ let cohortMcpToolsTests =
       })
     }
 
-    testTask "release by a non-holder identity is refused (NotClaimHolder-derived error)" {
+    testTask "release by a non-holder Implementer is refused (NotClaimHolder-derived error)" {
       do! withDaemon (fun port -> task {
         use! holder = connect port
         use! other = connect port
 
         let! _ = joinCohort holder "holder" "Implementer"
-        let! _ = joinCohort other "bystander" "Verifier"
+        // Slice 3 (item 11): `release_claim` is only in an Implementer's
+        // `cohortTools` set (a Verifier is refused earlier, at the role
+        // gate — see the dedicated test below), so `other` must itself be
+        // an Implementer to reach `Cohort.decide`'s own NotClaimHolder
+        // check, which is what this test targets.
+        let! _ = joinCohort other "bystander" "Implementer"
         let! acquireResult = acquireClaim holder "holder" "file:src/NotHeld.fs" "editing NotHeld.fs"
         let claimId = claimIdFromAcquireResult acquireResult
 
@@ -242,7 +247,26 @@ let cohortMcpToolsTests =
       })
     }
 
-    testTask "reassign by a non-conductor is refused (NotConductor-derived error)" {
+    testTask "release by a Verifier is refused before reaching the core (Slice 3 role gate)" {
+      do! withDaemon (fun port -> task {
+        use! holder = connect port
+        use! other = connect port
+
+        let! _ = joinCohort holder "holder" "Implementer"
+        let! _ = joinCohort other "bystander" "Verifier"
+        let! acquireResult = acquireClaim holder "holder" "file:src/NotHeld2.fs" "editing NotHeld2.fs"
+        let claimId = claimIdFromAcquireResult acquireResult
+
+        // A Verifier's `cohortTools` (Affordances.fs, Slice 3) does not
+        // include `release_claim` — refused at the authority gate, before
+        // `Cohort.decide` ever sees the command (never a NotClaimHolder).
+        let! releaseResult = releaseClaim other "bystander" claimId 1L
+        releaseResult
+        |> Expect.stringContains "a Verifier's release_claim call must be refused by the role gate" "does not permit it"
+      })
+    }
+
+    testTask "reassign by a non-conductor is refused before reaching the core (Slice 3 role gate)" {
       do! withDaemon (fun port -> task {
         use! conductor = connect port
         use! nonConductor = connect port
@@ -254,9 +278,18 @@ let cohortMcpToolsTests =
         let! acquireResult = acquireClaim conductor "the-conductor" "file:src/Reassign.fs" "editing Reassign.fs"
         let claimId = claimIdFromAcquireResult acquireResult
 
+        // Slice 3 (item 11): `reassign_claim` is in NO role's `cohortTools`
+        // set except `Conductor` — a caller whose Authority (resolved from
+        // the same frame `Cohort.decide` itself reads) is not Conductor is
+        // always refused HERE, at the role gate, before `Cohort.decide` runs
+        // at all. This makes the core's own `NotConductor` refusal
+        // unreachable via this MCP path (it is still exercised directly
+        // against `decide` by CohortPropertyTests.fs's property 19) — the
+        // role gate is a strictly earlier, friendlier version of the same
+        // guarantee, not a bypass of it.
         let! reassignResult = reassignClaim nonConductor "not-the-conductor" claimId "the-conductor"
         reassignResult
-        |> Expect.stringContains "a non-conductor's reassign must be refused" "not the cohort conductor"
+        |> Expect.stringContains "a non-conductor's reassign must be refused by the role gate" "does not permit it"
       })
     }
   ]

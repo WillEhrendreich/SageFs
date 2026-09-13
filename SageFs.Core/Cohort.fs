@@ -867,6 +867,12 @@ module Cohort =
     Version: int64<ledgerSeq>
     SessionGens: int64[]
     Dirty: FrameRegions
+    /// The `Conductor` binding (§4.2), carried on the frame so a shell that
+    /// only holds `CohortFrame` (never `CohortState`) can still resolve an
+    /// `Authority` (Slice 3, cohort-integration-plan.md item 11) — see
+    /// `Affordances.authorityOfMember`. `None` until the first member joins
+    /// (mirrors `CohortState.Conductor`, §4.2).
+    Conductor: 'm option
     MemberIds: 'm[]
     MemberRole: JoinableRole[]
     MemberSeat: SeatState[]
@@ -911,6 +917,7 @@ module Cohort =
       Version = head.Seq
       SessionGens = snapshots |> Array.map (fun s -> s.Generation)
       Dirty = FrameRegions.Members ||| FrameRegions.Claims ||| FrameRegions.Matrix
+      Conductor = head.State.Conductor
       MemberIds = memberIds
       MemberRole = members |> Array.map (fun (_, r) -> r.Role)
       MemberSeat =
