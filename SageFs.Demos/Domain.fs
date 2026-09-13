@@ -391,11 +391,17 @@ type Signal =
   | AppOutputChanged
   | HotReloadApplied
   | TestRunCompleted
+  /// The daemon's own session-status label (§9 fix) has actually reached
+  /// "Ready" — not just "the session card appeared", which fires while the
+  /// session is still `WarmingUp` and stops the recording before anything
+  /// interesting happens.
+  | SessionReady
 
 module Signal =
   let appOutputChanged = Signal.AppOutputChanged
   let hotReloadApplied = Signal.HotReloadApplied
   let testRunCompleted = Signal.TestRunCompleted
+  let sessionReady = Signal.SessionReady
 
 /// An API-level setup action (`Action.Setup`) — not filmed, used to get a
 /// scenario into its starting state (e.g. opening a file before the story
@@ -419,6 +425,13 @@ type Target =
   | NvimCommandLine
   | AppWindowPoint of RelativePoint
   | WindowCenter of ActorId
+  /// An explicit escape hatch for a dashboard element that is not in the
+  /// `DashboardId` vocabulary because it carries no `data-testid` (e.g. the
+  /// eval code textarea, which has only a plain `id`) — a raw CSS/Playwright
+  /// selector, used ONLY when adding a real `data-testid` to the dashboard
+  /// is not warranted for one demo-only target. Every other target stays a
+  /// closed, typed vocabulary; this is the deliberate, documented exception.
+  | DashboardCssSelector of selector: string
 
 /// A key on the chord/shortcut vocabulary (§4.3 `Keymap`). `Char` covers
 /// arbitrary typed text (fed by `Cadence.keys`); the named letters below are
@@ -459,6 +472,24 @@ type Action =
   | Typo of Target * wrong: Text * right: Text
   | Setup of ClientCommand
   | Await of Signal
+  /// Type `text` at `typeTarget` (clicking it first, exactly like `Type`),
+  /// THEN click `submitTarget` — e.g. type an F# expression into the eval
+  /// box, then click the `[EVAL]` button — as one filmed step, with the
+  /// cursor moving continuously from the type target to the submit target
+  /// rather than resetting. Distinct from two separate `Step`s so the
+  /// caption ("3/3 · Evaluate F#") narrates it as the one beat it visually
+  /// is; §9's "watch SageFs evaluate F# live" demo needs exactly this.
+  | TypeThenClick of typeTarget: Target * text: Text * seed: CadenceSeed * submitTarget: Target
+  /// Click `preClickTarget` (e.g. expand a collapsed panel), THEN type
+  /// `text` at `typeTarget`, THEN click `submitTarget` — all as one
+  /// uninterrupted step. Distinct from chaining a separate pre-click step
+  /// before a `TypeThenClick` one: measured directly against real
+  /// recordings, a dashboard whose collapsed-panel state does not survive
+  /// its own server-driven re-render (a genuine upstream defect, out of
+  /// scope here) can re-collapse the panel in the gap BETWEEN two steps —
+  /// even a short one — so the expand click and the typing that depends on
+  /// it must land inside the SAME step, with no step boundary between them.
+  | ClickThenTypeThenClick of preClickTarget: Target * typeTarget: Target * text: Text * seed: CadenceSeed * submitTarget: Target
 
 [<RequireQualifiedAccess>]
 type Expectation =
@@ -468,6 +499,13 @@ type Expectation =
   | TestOutcome of TestId * Outcome
   | NvimBufferContains of Text
   | AppOutputChanged of Region
+  /// A raw selector's text content contains `text` — the general-purpose
+  /// observation `PageShows` cannot express (it only checks a `DashboardId`
+  /// selector's PRESENCE, never its text — §9's "session reached Ready", not
+  /// just "the card exists", and "the eval result value appeared" both need
+  /// a text-content check on an arbitrary selector, not just a data-testid
+  /// existence check).
+  | PageTextContains of selector: string * text: string
 
 type Step =
   { Caption: Caption
@@ -541,9 +579,27 @@ type Wave = Cell list
 // ---------------------------------------------------------------------------
 
 /// The live X11 server's keysym → keycode table, fetched once per cell
-/// (`GetKeyboardMapping`) so `Keymap.resolve` never hard-codes a layout.
-/// TODO(shape): minimal placeholder for the fetched mapping shape.
-type KeyboardMapping = { KeysymToKeycode: Map<int, int> }
+/// (`XTest.keyboardMapping`, via `XGetKeyboardMapping`) so `Keymap.resolve`
+/// never hard-codes a layout. `ShiftedKeysyms` names every keysym in
+/// `KeysymToKeycode` that is reachable ONLY by holding Shift while pressing
+/// its keycode — an uppercase letter's keysym shares a keycode with its
+/// lowercase sibling (`A`/`a` both live on one physical key), and a shifted
+/// punctuation symbol shares a keycode with its unshifted sibling (`|`/`\`,
+/// `>`/`.`) — exactly how a real X11 keyboard mapping is shaped: one keysym
+/// per shift level per keycode, never one keycode per printable character.
+/// A prior placeholder (`identity mapping: keysym == keycode`, never
+/// replaced with a real live fetch) sent raw ASCII codepoints as literal
+/// X11 keycodes to a real display — every punctuation/digit character
+/// landed on whatever unrelated physical key happened to share that keycode
+/// number, corrupting typed text end to end (confirmed against a real
+/// recording: `[1..10] |> List.sum` rendered as `` `ll`'ool ``). This type
+/// exists so that corruption is structurally impossible once the mapping is
+/// actually fetched live: `Keymap.resolve` decides "does this need Shift"
+/// from `ShiftedKeysyms`, never from `Char.IsUpper` alone (which cannot see
+/// shifted punctuation at all).
+type KeyboardMapping =
+  { KeysymToKeycode: Map<int, int>
+    ShiftedKeysyms: Set<int> }
 
 /// One XTEST wire event, delivered by the bundled `libXtst` P/Invoke edge —
 /// never a hand-rolled X11 wire codec (§4.3).
@@ -719,6 +775,12 @@ type FilterGraph =
   /// which is how the click ripple's PNG grows 8→28px over 250ms (§9)
   /// without the composer hand-computing per-frame sizes itself.
   | ScaleTimed of width: Extent * height: Extent
+  /// `tpad=stop_mode=clone:stop_duration=<seconds>` — clones the LAST frame
+  /// for `stopDurationSec` more seconds before the stream ends (§9: "final
+  /// frame held 2.0s before the loop restarts"). Without this the GIF's own
+  /// infinite loop snaps straight back to frame 0 the instant the last real
+  /// frame's own short per-frame delay elapses.
+  | Tpad of stopDurationSec: float
   /// One `-filter_complex` node: `inputs` feed `filter` (itself often a
   /// `Chain`), producing `outputs`. The ONLY place a bracketed pad name is
   /// attached to a filter.

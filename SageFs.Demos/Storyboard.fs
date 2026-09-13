@@ -30,6 +30,7 @@ let private clientActorId (client: Client) : ActorId =
 let private targetActorId (client: Client) (target: Target) : ActorId option =
   match target with
   | Target.DashboardElement _ -> Some ActorId.Dashboard
+  | Target.DashboardCssSelector _ -> Some ActorId.Dashboard
   | Target.EditorPosition _ -> Some (clientActorId client)
   | Target.PaletteItem _ -> Some (clientActorId client)
   | Target.NvimCommandLine -> Some ActorId.Neovim
@@ -44,6 +45,8 @@ let private actionTarget (action: Action) : Target option =
   | Action.Click target -> Some target
   | Action.Type (target, _, _) -> Some target
   | Action.Typo (target, _, _) -> Some target
+  | Action.TypeThenClick (typeTarget, _, _, _) -> Some typeTarget
+  | Action.ClickThenTypeThenClick (preClickTarget, _, _, _, _) -> Some preClickTarget
   | Action.Chord _
   | Action.Setup _
   | Action.Await _ -> None

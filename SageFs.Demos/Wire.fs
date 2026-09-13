@@ -14,15 +14,23 @@ module SageFs.Demos.Wire
 open System.Text.Json
 open System.Text.Json.Serialization
 
-/// One step already resolved to primitive, cell-agent-executable terms: a
-/// `data-testid` CSS selector to click (if any), the text to type (if any),
-/// the selector this step's `Expectation` must observe (if any), and how
-/// long to dwell after that observation lands (§9's "≥ 1.0s dwell").
+/// One step already resolved to primitive, cell-agent-executable terms: an
+/// OPTIONAL selector to click FIRST, before anything else this step does
+/// (`PreClickSelector` — `Action.ClickThenTypeThenClick`'s "expand this
+/// collapsed panel" beat, with NO gap before the click/type that follows,
+/// §9's "watch SageFs evaluate F# live" demo), a `data-testid` CSS selector
+/// to click (if any), the text to type (if any), a SECOND selector to click
+/// right after typing (`SubmitSelector` — the "type here, then click the
+/// [EVAL] button" beat), the selector this step's `Expectation` must
+/// observe (if any), and how long to dwell after that observation lands
+/// (§9's "≥ 1.0s dwell").
 type WireStep =
   { Index: int
     Caption: string
+    PreClickSelector: string option
     ClickSelector: string option
     TypeText: string option
+    SubmitSelector: string option
     ExpectSelector: string option
     DwellMs: int }
 

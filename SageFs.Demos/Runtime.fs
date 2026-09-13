@@ -101,27 +101,59 @@ let private assetPath (fileName: string) : string =
 
 let private testIdSelector (id: DashboardId) : string = sprintf "[data-testid=%s]" (DashboardId.testId id)
 
+/// Resolves any dashboard-reachable `Target` to a CSS/Playwright selector —
+/// `DashboardElement` uses the typed `data-testid` vocabulary; `DashboardCssSelector`
+/// is the documented raw-selector escape hatch (`Domain.fs`'s own doc: used
+/// only when a real element has no `data-testid`, e.g. the eval textarea).
+let private dashboardSelector (target: Target) : string option =
+  match target with
+  | Target.DashboardElement id -> Some(testIdSelector id)
+  | Target.DashboardCssSelector selector -> Some selector
+  | _ -> None
+
 let private wireStepOf (index: int) (step: Step) : Wire.WireStep =
+  let preClickSelector =
+    match step.Action with
+    | Action.ClickThenTypeThenClick(preClickTarget, _, _, _, _) -> dashboardSelector preClickTarget
+    | _ -> None
+
   let clickSelector =
     match step.Action with
-    | Action.Click(Target.DashboardElement id) -> Some(testIdSelector id)
-    | Action.Type(Target.DashboardElement id, _, _) -> Some(testIdSelector id)
+    | Action.Click target -> dashboardSelector target
+    | Action.Type(target, _, _) -> dashboardSelector target
+    | Action.TypeThenClick(typeTarget, _, _, _) -> dashboardSelector typeTarget
+    | Action.ClickThenTypeThenClick(_, typeTarget, _, _, _) -> dashboardSelector typeTarget
     | _ -> None
 
   let typeText =
     match step.Action with
     | Action.Type(_, text, _) -> Some(Text.value text)
+    | Action.TypeThenClick(_, text, _, _) -> Some(Text.value text)
+    | Action.ClickThenTypeThenClick(_, _, text, _, _) -> Some(Text.value text)
+    | _ -> None
+
+  let submitSelector =
+    match step.Action with
+    | Action.TypeThenClick(_, _, _, submitTarget) -> dashboardSelector submitTarget
+    | Action.ClickThenTypeThenClick(_, _, _, _, submitTarget) -> dashboardSelector submitTarget
     | _ -> None
 
   let expectSelector =
     match step.Expect with
     | Expectation.PageShows(id, _) -> Some(testIdSelector id)
+    // Playwright's own CSS extension: `:has-text("...")` is a substring,
+    // whitespace-normalized text match layered onto a plain CSS selector —
+    // exactly what "wait until this element's text contains X" needs,
+    // without inventing a second selector mini-language of our own.
+    | Expectation.PageTextContains(selector, text) -> Some(sprintf "%s:has-text(\"%s\")" selector text)
     | _ -> None
 
   { Wire.Index = index
     Wire.Caption = Caption.value step.Caption
+    Wire.PreClickSelector = preClickSelector
     Wire.ClickSelector = clickSelector
     Wire.TypeText = typeText
+    Wire.SubmitSelector = submitSelector
     Wire.ExpectSelector = expectSelector
     Wire.DwellMs = Dwell.ms step.Dwell }
 
