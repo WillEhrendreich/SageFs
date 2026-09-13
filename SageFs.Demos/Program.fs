@@ -38,8 +38,14 @@ let private notImplemented (name: string) =
   printfn "%s: not implemented" name
   0
 
+let private allScenarios: Domain.Scenario list =
+  [ Scenarios.helloDashboard
+    Scenarios.sessionsDashboard
+    Scenarios.replDashboard
+    Scenarios.ltDashboard ]
+
 let private scenarioById (scenarioId: string) : Domain.Scenario option =
-  [ Scenarios.helloDashboard ] |> List.tryFind (fun s -> Domain.ScenarioId.value s.Id = scenarioId)
+  allScenarios |> List.tryFind (fun s -> Domain.ScenarioId.value s.Id = scenarioId)
 
 /// `record <scenarioId>` — builds the daemon from this worktree's source,
 /// records the cell, and writes the artifacts under `artifacts/demos/<id>/`
@@ -54,7 +60,8 @@ let private runRecord (scenarioIdArg: string option) : int =
 
   match scenarioById scenarioId with
   | None ->
-    eprintfn "sagefs-demos: unknown scenario '%s' (known: hello-dashboard)" scenarioId
+    let known = allScenarios |> List.map (fun s -> Domain.ScenarioId.value s.Id) |> String.concat ", "
+    eprintfn "sagefs-demos: unknown scenario '%s' (known: %s)" scenarioId known
     1
   | Some scenario ->
 
