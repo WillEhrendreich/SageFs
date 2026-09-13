@@ -50,7 +50,7 @@ let tests =
     testProperty "a Click ends in a button-up, whose preceding motion ends at the rect centre"
     <| fun (rawX: int) (rawY: int) (rawW: int) (rawH: int) ->
       let target = mkRect rawX rawY rawW rawH
-      let requests = SageFs.Demos.Input.plan fixtureMapping (Action.Click(Target.WindowCenter ActorId.Dashboard)) target
+      let requests = SageFs.Demos.Input.plan fixtureMapping { X = 0; Y = 0 } (Action.Click(Target.WindowCenter ActorId.Dashboard)) target
       let last = List.last requests
       let motions = requests |> List.choose (function | X11Request.FakeMotion(x, y) -> Some { X = x; Y = y } | _ -> None)
       last = X11Request.FakeButton(Button.Left, Pressed.Up)
@@ -58,7 +58,7 @@ let tests =
 
     testCase "a Click's button-down immediately precedes its button-up" <| fun _ ->
       let target = { X = 100; Y = 100; W = 40; H = 20 }
-      let requests = SageFs.Demos.Input.plan fixtureMapping (Action.Click(Target.WindowCenter ActorId.Dashboard)) target
+      let requests = SageFs.Demos.Input.plan fixtureMapping { X = 0; Y = 0 } (Action.Click(Target.WindowCenter ActorId.Dashboard)) target
       let lastTwo = requests |> List.rev |> List.take 2 |> List.rev
       lastTwo
       |> Expect.equal
@@ -71,7 +71,7 @@ let tests =
       // rule for *typed text*; mixing it into a chord key's own identity
       // would silently add an extra Shift the chord didn't ask for.
       let target = { X = 0; Y = 0; W = 10; H = 10 }
-      let requests = SageFs.Demos.Input.plan fixtureMapping (Action.Chord [ Key.Ctrl; Key.Char 's' ]) target
+      let requests = SageFs.Demos.Input.plan fixtureMapping { X = 0; Y = 0 } (Action.Chord [ Key.Ctrl; Key.Char 's' ]) target
       let pressed =
         requests
         |> List.choose (function
@@ -94,7 +94,7 @@ let tests =
 
     testCase "Chord produces no mouse motion or button events" <| fun _ ->
       let target = { X = 0; Y = 0; W = 10; H = 10 }
-      let requests = SageFs.Demos.Input.plan fixtureMapping (Action.Chord [ Key.Ctrl; Key.S ]) target
+      let requests = SageFs.Demos.Input.plan fixtureMapping { X = 0; Y = 0 } (Action.Chord [ Key.Ctrl; Key.S ]) target
       requests
       |> List.forall (function
         | X11Request.FakeKey _ -> true
@@ -105,7 +105,7 @@ let tests =
       let target = { X = 200; Y = 200; W = 20; H = 20 }
       let text = Text.mk "hi"
       let action = Action.Type(Target.WindowCenter ActorId.VsCode, text, CadenceSeed.ofId "seed")
-      let requests = SageFs.Demos.Input.plan fixtureMapping action target
+      let requests = SageFs.Demos.Input.plan fixtureMapping { X = 0; Y = 0 } action target
       let keyEvents = requests |> List.filter (function X11Request.FakeKey _ -> true | _ -> false)
       // "hi" is two plain ASCII chars, each one keycode, each tapped
       // down-then-up: 4 key events.
@@ -115,14 +115,14 @@ let tests =
 
     testCase "Setup and Await produce no fake input" <| fun _ ->
       let target = { X = 0; Y = 0; W = 10; H = 10 }
-      SageFs.Demos.Input.plan fixtureMapping (Action.Setup ClientCommand.SaveAll) target
+      SageFs.Demos.Input.plan fixtureMapping { X = 0; Y = 0 } (Action.Setup ClientCommand.SaveAll) target
       |> Expect.isEmpty "Setup is API-level, not captured"
-      SageFs.Demos.Input.plan fixtureMapping (Action.Await Signal.appOutputChanged) target
+      SageFs.Demos.Input.plan fixtureMapping { X = 0; Y = 0 } (Action.Await Signal.appOutputChanged) target
       |> Expect.isEmpty "Await only waits for a signal"
 
     testCase "the same Click on the same target plans identically every run (§1, §9)" <| fun _ ->
       let target = { X = 50; Y = 60; W = 30; H = 15 }
-      let a = SageFs.Demos.Input.plan fixtureMapping (Action.Click(Target.WindowCenter ActorId.Dashboard)) target
-      let b = SageFs.Demos.Input.plan fixtureMapping (Action.Click(Target.WindowCenter ActorId.Dashboard)) target
+      let a = SageFs.Demos.Input.plan fixtureMapping { X = 0; Y = 0 } (Action.Click(Target.WindowCenter ActorId.Dashboard)) target
+      let b = SageFs.Demos.Input.plan fixtureMapping { X = 0; Y = 0 } (Action.Click(Target.WindowCenter ActorId.Dashboard)) target
       a |> Expect.equal "deterministic plan for the same target" b
   ]

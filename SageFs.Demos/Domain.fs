@@ -118,6 +118,20 @@ module Sample =
   /// by the live-testing scenarios, fixed per client, so it is excluded here.
   let runnable : Sample list = [ Sample.WebappDatastar; Sample.RaylibGame; Sample.ConsoleTicker ]
 
+  /// The sample's real project directory, relative to the repo root — a
+  /// scenario that wants to show SageFs opening a REAL project (§10: not a
+  /// bare Quick Start temp session, which has nothing to auto-open and
+  /// nothing to eval against the project's own code) resolves this and
+  /// hands it to `Runtime.fs`, the one place with a `repoRoot` to make it
+  /// absolute. Exhaustive over every `Sample` case so a new sample can never
+  /// silently have no real directory to point a session at.
+  let relativePath (sample: Sample) : string =
+    match sample with
+    | Sample.WebappDatastar -> "samples/demos/SageFs.Samples.WebappDatastar"
+    | Sample.RaylibGame -> "samples/demos/SageFs.Samples.RaylibGame"
+    | Sample.ConsoleTicker -> "samples/demos/SageFs.Samples.ConsoleTicker"
+    | Sample.FromCSharp -> "samples/from-csharp/SageFs.Samples.FromCSharp"
+
 [<RequireQualifiedAccess>]
 type LayoutTemplate =
   | EditorLeft
@@ -233,6 +247,19 @@ type Text = private Text of string
 module Text =
   let mk (text: string) : Text = Text text
   let value (Text s) : string = s
+
+  /// A scenario built as a pure, static `Scenario` value has no `repoRoot`
+  /// to make an absolute sample-project path with (only `Runtime.fs`, which
+  /// builds the `Wire.ScenarioPlan`, knows that) — a scenario that needs to
+  /// type one (§10: driving the dashboard's real "open a project" flow
+  /// against a sample under `samples/`, instead of the Quick Start temp
+  /// session that has nothing to auto-open) embeds this token in the typed
+  /// `Text` instead of a literal path; `Runtime.fs`'s `wireStepOf` is the
+  /// one place with a `repoRoot` to substitute it before the text ever
+  /// reaches a real keystroke, so nothing downstream ever sees or types the
+  /// literal token itself.
+  [<Literal>]
+  let RepoRootToken = "{{REPO_ROOT}}"
 
 /// The seed driving `Cadence.keys` for one `Type` action, derived from the
 /// scenario id so typing cadence is identical every run and different per

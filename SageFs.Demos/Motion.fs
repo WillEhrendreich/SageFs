@@ -43,7 +43,15 @@ let private FrameIntervalMs = 20
 let private minimumJerk (t: float) : float =
   10.0 * (t ** 3.0) - 15.0 * (t ** 4.0) + 6.0 * (t ** 5.0)
 
-let private durationForDistance (distance: float) : int =
+/// Public so `Ffmpeg.fs`'s compositing can recompute the SAME real,
+/// distance-based motion duration `Input.fs` actually used to deliver a
+/// click's motion — the fix for the cursor "lagging"/looking inhuman: the
+/// compositor used to spread a click's cursor animation across the WHOLE
+/// recorded step (which can be 90s of warmup-waiting), instead of the ~250–
+/// 650ms a real mouse move actually takes, so the synthetic cursor crawled
+/// for the entire wait and the ripple fired near the very end of it instead
+/// of the instant the click actually happened.
+let durationForDistance (distance: float) : int =
   let fraction = min 1.0 (distance / LongestPlannedDistance)
   let raw = float MinDurationMs + fraction * float (MaxDurationMs - MinDurationMs)
   raw |> max (float MinDurationMs) |> min (float MaxDurationMs) |> int
