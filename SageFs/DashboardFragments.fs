@@ -769,6 +769,138 @@ let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : X
                 ]
               | false -> () ]) ]
 
+// ── Coverage Treemap (WinDirStat/WizTree-style: solution → project → file → symbol) ──
+
+/// Locked color legend: green = pass (a passing test covers it), red = fail
+/// (a failing test touches it), grey = none (the gap — nothing exercises
+/// it), amber = running (in flight, no verdict yet).
+let private coverageStatusColor (status: Features.Treemap.CoverageStatus) =
+  match status with
+  | Features.Treemap.CoverageStatus.Covered -> "var(--fg-green,#27ae60)"
+  | Features.Treemap.CoverageStatus.Failed -> "var(--fg-red,#e74c3c)"
+  | Features.Treemap.CoverageStatus.Running -> "var(--fg-yellow,#f39c12)"
+  | Features.Treemap.CoverageStatus.Uncovered -> "var(--fg-dim,#666)"
+
+let private coverageStatusLabel (status: Features.Treemap.CoverageStatus) =
+  match status with
+  | Features.Treemap.CoverageStatus.Covered -> "pass"
+  | Features.Treemap.CoverageStatus.Failed -> "fail"
+  | Features.Treemap.CoverageStatus.Running -> "running"
+  | Features.Treemap.CoverageStatus.Uncovered -> "none"
+
+/// A single-quoted JS string literal for splicing a node id into a Datastar
+/// expression (`Ds.onEvent`/`Ds.show` bodies are raw JS, not attribute text).
+let private jsStringLiteral (s: string) =
+  "'" + s.Replace("\\", "\\\\").Replace("'", "\\'") + "'"
+
+let private coveragePercent (probeCount: int) (coveredCount: int) =
+  match probeCount with
+  | 0 -> 0.0
+  | n -> float coveredCount / float n * 100.0
+
+let private coverageLegendSwatch (label: string) (color: string) =
+  Elem.span [ Attr.style "display:inline-flex;align-items:center;gap:2px;" ] [
+    Elem.span [ Attr.style (sprintf "display:inline-block;width:8px;height:8px;background:%s;" color) ] []
+    textEnc label
+  ]
+
+/// Render one drill level (root, a project, a file, or a symbol) plus every
+/// descendant level, as sibling `<div>`s gated by the per-session drill
+/// signal — clicking a packed region sets the signal to that region's `Id`,
+/// so switching the visible level is a zero-round-trip client update (the
+/// same "signal-driven, zero-JS filtering" pattern as `renderTestFilterBar`
+/// above). The root level shows by default (`!$signal`) since no drill has
+/// happened yet; every other level shows only on an exact id match — this
+/// is what lets the signal morph-survive with no `Ds.attr'` rebind needed:
+/// `Ds.show` is re-evaluated live from the client-side signal store on every
+/// render, so a server morph can never reset "where am I" client state.
+let rec private renderCoverageLevels
+  (drillSignal: string)
+  (width: float)
+  (height: float)
+  (parentId: string option)
+  (node: Features.Treemap.CoverageTreemapNode)
+  : XmlNode list =
+  let idJs = jsStringLiteral node.Id
+  let showExpr =
+    match parentId with
+    | None -> sprintf "!$%s || $%s === %s" drillSignal drillSignal idJs
+    | Some _ -> sprintf "$%s === %s" drillSignal idJs
+  let backLink =
+    match parentId with
+    | None -> Elem.div [] []
+    | Some pid ->
+      Elem.div
+        [ Attr.style "cursor:pointer;font-size:0.65rem;color:var(--fg-blue);margin-bottom:2px;user-select:none;"
+          Ds.onEvent ("click", sprintf "$%s = %s" drillSignal (jsStringLiteral pid)) ]
+        [ Text.raw "← back" ]
+  let body =
+    match node.Children with
+    | [] ->
+      // Leaf — nothing further to drill into; show its own detail.
+      let pct = coveragePercent node.ProbeCount node.CoveredCount
+      Elem.div [ Attr.style "padding:4px 2px;font-size:0.7rem;" ] [
+        Elem.div
+          [ Attr.style (sprintf "font-weight:bold;color:%s;" (coverageStatusColor node.Status)) ]
+          [ textEnc node.Name ]
+        Elem.div [ Attr.class' "meta" ] [
+          textEnc (sprintf "%s — %d/%d probes (%.0f%%)" (coverageStatusLabel node.Status) node.CoveredCount node.ProbeCount pct)
+        ]
+      ]
+    | children ->
+      let rects =
+        Features.Treemap.CoverageTreemapNode.layoutChildren
+          { Features.Treemap.Rect.X = 0.0; Y = 0.0; W = width; H = height } node
+      Elem.div
+        [ Attr.style (sprintf "position:relative;width:%.0fpx;height:%.0fpx;background:var(--bg-focus,#1a1a1a);overflow:hidden;" width height) ]
+        [ yield! rects |> List.map (fun (child, r) ->
+            let color = coverageStatusColor child.Status
+            let pct = coveragePercent child.ProbeCount child.CoveredCount
+            let title =
+              sprintf "%s — %s (%d/%d probes, %.0f%%)"
+                child.Name (coverageStatusLabel child.Status) child.CoveredCount child.ProbeCount pct
+            let showLabel = r.W >= 26.0 && r.H >= 14.0
+            Elem.div
+              [ Attr.style
+                  (sprintf
+                    "position:absolute;left:%.1fpx;top:%.1fpx;width:%.1fpx;height:%.1fpx;background:%s;opacity:0.85;border:0.5px solid rgba(0,0,0,0.3);overflow:hidden;box-sizing:border-box;cursor:pointer;"
+                    r.X r.Y r.W r.H color)
+                Attr.title (attrEnc title)
+                Ds.onEvent ("click", sprintf "$%s = %s" drillSignal (jsStringLiteral child.Id)) ]
+              [ match showLabel with
+                | true ->
+                  Elem.div
+                    [ Attr.style "font-size:0.5rem;color:#fff;padding:1px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1;" ]
+                    [ textEnc child.Name ]
+                | false -> () ]) ]
+  let levelDiv = Elem.div [ Ds.show showExpr ] [ backLink; body ]
+  let childLevels =
+    node.Children |> List.collect (renderCoverageLevels drillSignal width height (Some node.Id))
+  levelDiv :: childLevels
+
+/// Render the coverage drill-down treemap panel for one session: a locked
+/// color legend plus every drill level (only one visible at a time, per
+/// `renderCoverageLevels`). `sid` scopes the drill signal per session card
+/// so multiple open panels never fight over one signal.
+let renderCoverageTreemap (sid: string) (root: Features.Treemap.CoverageTreemapNode option) : XmlNode =
+  match root with
+  | None -> Elem.div [] []
+  | Some root when root.ProbeCount = 0 -> Elem.div [] []
+  | Some root ->
+    let drillSignal = signalIdent (sprintf "coverageDrill_%s" sid)
+    let legend =
+      Elem.div
+        [ Attr.style "display:flex;gap:6px;align-items:center;font-size:0.6rem;color:var(--fg-dim);margin-bottom:4px;flex-wrap:wrap;" ]
+        [ Elem.span [] [ Text.raw "Legend:" ]
+          coverageLegendSwatch "pass" (coverageStatusColor Features.Treemap.CoverageStatus.Covered)
+          coverageLegendSwatch "fail" (coverageStatusColor Features.Treemap.CoverageStatus.Failed)
+          coverageLegendSwatch "running" (coverageStatusColor Features.Treemap.CoverageStatus.Running)
+          coverageLegendSwatch "none" (coverageStatusColor Features.Treemap.CoverageStatus.Uncovered) ]
+    Elem.div [ Attr.style "overflow-x:auto;" ] [
+      legend
+      Elem.div [] (renderCoverageLevels drillSignal 300.0 160.0 None root)
+    ]
+
 /// Render per-session bound values explorer (collapsible, with values)
 let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array) : XmlNode =
   match bindings.Length with
@@ -1102,6 +1234,21 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       textEnc (sprintf "%d tests · %s" s.TestTreemapEntries.Length durationLabel) ]
                   renderTestFilterBar s.TestTreemapEntries
                   renderTestTreemap s.TestTreemapEntries ]
+            // Collapsible coverage treemap (WinDirStat/WizTree-style drill-down:
+            // solution -> project -> file -> symbol, area = probe count)
+            match s.CoverageTreemap with
+            | None -> ()
+            | Some root when root.ProbeCount = 0 -> ()
+            | Some root ->
+              let pct = coveragePercent root.ProbeCount root.CoveredCount
+              signalDetails
+                (sprintf "coverageTreemapOpen_%s" sid)
+                [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]
+                [ Elem.summary
+                    [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
+                    [ Text.raw "\U0001F5FA "
+                      textEnc (sprintf "coverage map · %.0f%% (%d/%d probes)" pct root.CoveredCount root.ProbeCount) ]
+                  renderCoverageTreemap sid s.CoverageTreemap ]
             // Collapsible bound values explorer
             match s.BindingEntries.Length with
             | 0 -> ()

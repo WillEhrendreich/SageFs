@@ -24,6 +24,7 @@
         <Compile Include="Tutorial.fs" />
         <Compile Include="SageFsConfig.fs" />
         <Compile Include="Timeouts.fs" />
+        <Compile Include="Features\Treemap.fs" />
         <Compile Include="BatchFlusher.fs" />
         <Compile Include="BinaryFormat.fs" />
         <Compile Include="Instrumentation.fs" />

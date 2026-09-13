@@ -1949,6 +1949,105 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
       let entries =
         Features.LiveTesting.LiveTestState.statusEntriesForSession sidStr state
       Features.LiveTesting.TestTreemap.fromStatusEntries entries
+    GetSessionCoverageTreemap = fun sessionId ->
+      let lt = elmRuntime.GetModel().LiveTesting
+      match lt.TestState.Activation with
+      | Features.LiveTesting.LiveTestingActivation.Inactive -> None
+      | _ ->
+      let sidStr = WorkerProtocol.SessionId.value sessionId
+      let maps =
+        match Map.tryFind sidStr lt.InstrumentationMaps with
+        | Some m when m.Length > 0 -> m
+        | _ -> lt.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+      let merged = Features.LiveTesting.InstrumentationMap.merge maps
+      match merged.Slots.Length = 0 with
+      | true -> None
+      | false ->
+      // Which tests belong to THIS session (falls back to "all tests" when
+      // the map is empty, mirroring GetSessionCoverageSummary above).
+      let sessionTestIds =
+        match Map.isEmpty lt.TestState.TestSessionMap with
+        | true -> lt.TestState.TestCoverageBitmaps |> Map.keys |> Set.ofSeq
+        | false ->
+          lt.TestState.TestSessionMap
+          |> Map.toSeq
+          |> Seq.choose (fun (tid, sid) -> if sid = sidStr then Some tid else None)
+          |> Set.ofSeq
+      let compatibleBitmap (tid: Features.LiveTesting.TestId) =
+        Map.tryFind tid lt.TestState.TestCoverageBitmaps
+        |> Option.filter (fun bm -> bm.Count = merged.TotalProbes)
+      let sessionBitmaps = sessionTestIds |> Seq.choose compatibleBitmap |> Seq.toArray
+      match sessionBitmaps.Length = 0 with
+      | true -> None
+      | false ->
+      let combinedHits =
+        sessionBitmaps
+        |> Array.reduce (fun acc bm ->
+          { acc with Bits = Array.init acc.Bits.Length (fun i -> acc.Bits.[i] ||| bm.Bits.[i]) })
+        |> Features.LiveTesting.CoverageBitmap.toBoolArray
+      let entries = Features.LiveTesting.LiveTestState.statusEntriesForSession sidStr lt.TestState
+      let failedTestIds =
+        entries
+        |> Array.choose (fun e ->
+          match e.Status with
+          | Features.LiveTesting.TestRunStatus.Failed _ -> Some e.TestId
+          | _ -> None)
+        |> Set.ofArray
+      let passedTestIds =
+        entries
+        |> Array.choose (fun e ->
+          match e.Status with
+          | Features.LiveTesting.TestRunStatus.Passed _ -> Some e.TestId
+          | _ -> None)
+        |> Set.ofArray
+      // Probes hit by any failing test — these taint their file/symbol red
+      // even where the merged (all-tests) coverage otherwise looks green.
+      let failingSlotIndices =
+        sessionTestIds
+        |> Seq.filter failedTestIds.Contains
+        |> Seq.choose compatibleBitmap
+        |> Seq.collect (fun bm ->
+          seq { for i in 0 .. merged.Slots.Length - 1 do
+                  if Features.LiveTesting.CoverageBitmap.isSet i bm then yield i })
+        |> Set.ofSeq
+      let projectDirs =
+        match SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) with
+        | None -> []
+        | Some info ->
+          info.Projects
+          |> List.map (fun p ->
+            System.IO.Path.GetFileNameWithoutExtension p, System.IO.Path.GetDirectoryName p)
+      let facts =
+        merged.Slots
+        |> Array.indexed
+        |> Array.groupBy (fun (_, sp) -> sp.File)
+        |> Array.map (fun (file, idxSps) ->
+          let probeCount = idxSps.Length
+          let coveredCount = idxSps |> Array.filter (fun (i, _) -> combinedHits.[i]) |> Array.length
+          let hasFailing = idxSps |> Array.exists (fun (i, _) -> failingSlotIndices.Contains i)
+          let projectName = Features.Treemap.CoverageTreemapNode.projectNameForFile projectDirs file
+          let symbols =
+            lt.AnalysisCache.FileSymbols
+            |> Map.tryFind file
+            |> Option.defaultValue []
+            |> List.map (fun sr ->
+              let testIds =
+                lt.DepGraph.SymbolToTests |> Map.tryFind sr.SymbolFullName |> Option.defaultValue [||]
+              ({ SymbolName = sr.SymbolFullName
+                 Line = sr.Line
+                 TestCount = testIds.Length
+                 PassingCount = testIds |> Array.filter passedTestIds.Contains |> Array.length
+                 FailingCount = testIds |> Array.filter failedTestIds.Contains |> Array.length }
+               : Features.Treemap.SymbolCoverageFact))
+          ({ FilePath = file
+             ProjectName = projectName
+             ProbeCount = probeCount
+             CoveredCount = coveredCount
+             HasFailingTest = hasFailing
+             Symbols = symbols }
+           : Features.Treemap.FileCoverageFact))
+        |> Array.toList
+      Some (Features.Treemap.CoverageTreemapNode.build "Solution" facts)
     GetSessionBindings = fun sessionId ->
       match System.Threading.Volatile.Read(&sharedBindingScope.contents) with
       | Some scope ->

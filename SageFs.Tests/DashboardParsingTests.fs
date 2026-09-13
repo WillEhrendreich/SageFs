@@ -356,7 +356,7 @@ let perSessionTestSummaryTests =
           LastActivity = "just now"
           TestSummary = Some summary
           CoverageSummary = None
-          TestTreemapEntries = [||]
+          TestTreemapEntries = [||]; CoverageTreemap = None
           BindingEntries = [||]
           AgentBadges = []
           GuidanceCssClass = ""
@@ -381,7 +381,7 @@ let perSessionTestSummaryTests =
           LastActivity = "just now"
           TestSummary = None
           CoverageSummary = None
-          TestTreemapEntries = [||]
+          TestTreemapEntries = [||]; CoverageTreemap = None
           BindingEntries = [||]
           AgentBadges = []
           GuidanceCssClass = ""
@@ -414,7 +414,7 @@ let perSessionCoverageTests =
           LastActivity = "just now"
           TestSummary = None
           CoverageSummary = Some summary
-          TestTreemapEntries = [||]
+          TestTreemapEntries = [||]; CoverageTreemap = None
           BindingEntries = [||]
           AgentBadges = []
           GuidanceCssClass = ""
@@ -439,7 +439,7 @@ let perSessionCoverageTests =
           LastActivity = "just now"
           TestSummary = None
           CoverageSummary = None
-          TestTreemapEntries = [||]
+          TestTreemapEntries = [||]; CoverageTreemap = None
           BindingEntries = [||]
           AgentBadges = []
           GuidanceCssClass = ""

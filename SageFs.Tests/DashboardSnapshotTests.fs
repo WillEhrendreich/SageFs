@@ -76,7 +76,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         LastActivity = "eval"
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
+        TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         Status = SessionDisplayStatus.Stopped
@@ -88,7 +88,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         LastActivity = ""
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
+        TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
     ]
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
@@ -159,6 +159,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       GetSessionTestSummary = fun _ -> None
       GetSessionCoverageSummary = fun _ -> None
       GetSessionTestTreemap = fun _ -> [||]
+      GetSessionCoverageTreemap = fun _ -> None
       GetSessionBindings = fun _ -> [||]
       GetLiveBindings = fun _ -> None
       GetBindingScopeSnapshot = fun () -> None
@@ -391,7 +392,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         LastActivity = "eval"
         TestSummary = None
         CoverageSummary = None
-        TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
+        TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
     ]
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
@@ -558,13 +559,13 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
       { Id = sessionA; Status = SessionDisplayStatus.Running; StatusMessage = None
         ProjectsText = "(A.fsproj)"; EvalCount = 1
         Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
-        TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
+        TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
       { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
         ProjectsText = "(B.fsproj)"; EvalCount = 1
         Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"
-        TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]
+        TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
     ]
