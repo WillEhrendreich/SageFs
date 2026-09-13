@@ -45,10 +45,23 @@
     <Compile Include="Wire.fs" />
     <Compile Include="XTest.fs" />
     <Compile Include="Sandbox.fs" />
+    <Compile Include="Actors\Actor.fs" />
     <Compile Include="Actors\Dashboard.fs" />
+    <Compile Include="Actors\VsCode.fs" />
+    <Compile Include="Actors\Neovim.fs" />
+    <Compile Include="Actors\App.fs" />
+    <Compile Include="Actors\Agent.fs" />
     <Compile Include="Recorder.fs" />
     <Compile Include="CellAgent.fs" />
     <Compile Include="Scenarios.fs" />
+    <Compile Include="Scenarios.VsCode.fs" />
+    <Compile Include="Scenarios.Neovim.fs" />
+    <Compile Include="Scenarios.Agent.fs" />
+    <Compile Include="Scenarios.All.fs" />
+    <Compile Include="Runtime.VsCode.fs" />
+    <Compile Include="Runtime.Neovim.fs" />
+    <Compile Include="Runtime.App.fs" />
+    <Compile Include="Runtime.Agent.fs" />
     <Compile Include="Runtime.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

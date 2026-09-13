@@ -10,6 +10,7 @@ module SageFs.Demos.Actors.Dashboard
 
 open Microsoft.Playwright
 open SageFs.Demos.Domain
+open SageFs.Demos.Actors.Actor
 
 type Handle =
   { Playwright: IPlaywright
@@ -108,3 +109,49 @@ let close (handle: Handle) : Async<unit> =
     do! handle.Context.CloseAsync() |> Async.AwaitTask
     handle.Playwright.Dispose()
   }
+
+/// Wraps this actor behind the cell-agent's actor-dispatch seam (Island F,
+/// demo-actors-plan.md §1.2/§1.3): the ONLY product change the seam requires
+/// of Dashboard is exposing its existing launch/resolve/observe/close shape
+/// through the shared `LiveActor` record instead of `CellAgent.fs` hard-
+/// calling `Dashboard.*` by name. `ResolveRect`/`Observe` below are moved
+/// here VERBATIM from the pre-seam cell-agent's own private `resolveRect`/
+/// expectation-wait logic (scroll-into-view before a 10s bounding-box read;
+/// a 90s-capped `WaitForSelectorAsync` for expectations, since a real
+/// session warmup can genuinely take longer than a UI-click ever needed to)
+/// — behavior-identical, just reachable through the seam instead of inline
+/// in the cell-agent. `Command` is a no-op: no `WireStep` encodes a client
+/// command yet (Island F adds no new actor logic), so there is nothing for
+/// the dashboard actor to do with one today.
+let toLiveActor (handle: Handle) : LiveActor =
+  let resolveRect (selector: string) : Async<ScreenRect option> =
+    async {
+      try
+        let locator = handle.Page.Locator(selector)
+        do! locator.ScrollIntoViewIfNeededAsync() |> Async.AwaitTask
+        let opts = LocatorBoundingBoxOptions(Timeout = 10000.0f)
+        let! box = locator.BoundingBoxAsync(opts) |> Async.AwaitTask
+
+        return
+          match box with
+          | null -> None
+          | b -> Some { X = int b.X; Y = int b.Y; W = int b.Width; H = int b.Height }
+      with _ ->
+        return None
+    }
+
+  let observeSelector (selector: string) (timeoutMs: float) : Async<bool> =
+    async {
+      try
+        let opts = PageWaitForSelectorOptions(Timeout = float32 timeoutMs)
+        let! _ = handle.Page.WaitForSelectorAsync(selector, opts) |> Async.AwaitTask
+        return true
+      with _ ->
+        return false
+    }
+
+  { Id = ActorId.Dashboard
+    ResolveRect = resolveRect
+    Observe = observeSelector
+    Command = fun _ -> async { return () }
+    Close = fun () -> close handle }

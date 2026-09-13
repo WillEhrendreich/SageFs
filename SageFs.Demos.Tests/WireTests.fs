@@ -22,7 +22,12 @@ let private samplePlan: ScenarioPlan =
           TypeText = None
           SubmitSelector = None
           ExpectSelector = Some "[data-testid=session-card]"
-          DwellMs = 1500 } ] }
+          DwellMs = 1500
+          TargetActor = None } ]
+    Client = "dashboard"
+    VsCode = None
+    Nvim = None
+    App = None }
 
 let private sampleStepLog: StepLog =
   { ScenarioId = "hello-dashboard"
@@ -64,7 +69,8 @@ let tests =
                   TypeText = None
                   SubmitSelector = None
                   ExpectSelector = None
-                  DwellMs = 500 } ] }
+                  DwellMs = 500
+                  TargetActor = None } ] }
 
       awaitOnly |> serializePlan |> deserializePlan |> Expect.equal "round-trips with every optional field None" awaitOnly
 
@@ -79,7 +85,8 @@ let tests =
                   TypeText = Some "[1..10] |> List.sum"
                   SubmitSelector = Some "[data-testid=eval]"
                   ExpectSelector = Some "[data-testid=session-output]:has-text(\"55\")"
-                  DwellMs = 2000 } ] }
+                  DwellMs = 2000
+                  TargetActor = None } ] }
 
       typeThenClick |> serializePlan |> deserializePlan |> Expect.equal "round-trips with SubmitSelector populated" typeThenClick
 
@@ -94,7 +101,8 @@ let tests =
                   TypeText = Some "[1..10] |> List.sum"
                   SubmitSelector = Some "[data-testid=eval]"
                   ExpectSelector = Some "[data-testid=session-output]:has-text(\"55\")"
-                  DwellMs = 2000 } ] }
+                  DwellMs = 2000
+                  TargetActor = None } ] }
 
       clickThenTypeThenClick
       |> serializePlan

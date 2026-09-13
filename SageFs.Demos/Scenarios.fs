@@ -16,7 +16,16 @@
 /// visibly complains "there was nothing to auto open" and an eval like
 /// `[1..10] |> List.sum` proves nothing about the product's actual
 /// capability — loading a real project's code and evaluating against it).
-module SageFs.Demos.Scenarios
+/// Renamed from the plain `SageFs.Demos.Scenarios` to `...Scenarios.Dashboard`
+/// (Island F, demo-actors-plan.md §1.3): F# refuses to compile a real module
+/// named `SageFs.Demos.Scenarios` alongside sibling per-client modules
+/// nested under that same path (`SageFs.Demos.Scenarios.VsCode`, `...All`,
+/// etc. — FS0247, "used as both a namespace and a module"). This is a
+/// module-declaration rename ONLY — not one scenario body moved — exactly
+/// what §1.3 allows ("rename the module content ... do NOT MOVE their
+/// bodies"). `dashboardScenarios` below is still exposed for
+/// `Scenarios.All.fs` to aggregate.
+module SageFs.Demos.Scenarios.Dashboard
 
 open SageFs.Demos.Domain
 
@@ -333,3 +342,9 @@ let ltDashboard: Scenario =
           Dwell = Dwell.long } ]
     Cost = CostClass.console
     Masks = [] }
+
+/// Every scenario filmed through the Dashboard client, kept exactly where it
+/// was — moving these bodies risks colliding with in-flight dashboard work
+/// (demo-actors-plan.md §1.3/§7.5). `Scenarios.All.fs` (Island F) aggregates
+/// this list with each new actor island's own `Scenarios.<X>.scenarios`.
+let dashboardScenarios: Scenario list = [ helloDashboard; sessionsDashboard; replDashboard; ltDashboard ]
