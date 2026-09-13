@@ -1649,13 +1649,139 @@ let run
     let projection, generation = Features.CohortTestProjection.projectSession sessionId state
     projection.PassingTests, projection.FailingTests, projection.StaleTests, generation
 
+  // The real landing performer (item 14c — this is the slice that makes
+  // request_landing actually run git and tests instead of parking forever
+  // in Rebasing/Verifying against `LandingPerformer.stub`). Every field
+  // reads the daemon-held integration binding
+  // (`McpTools.cohortIntegrationRef`, written by the `set_integration_ref`
+  // MCP tool) fresh on every call, so a landing dispatched before
+  // `set_integration_ref` has ever run — or after a restart, since the
+  // binding is process-local, see its own doc comment — fails closed with
+  // an explanatory reason instead of silently doing nothing.
+  let cohortToLiveTestId (Cohort.TestId t) : Features.LiveTesting.TestId =
+    Features.LiveTesting.TestId.TestId t
+
+  let cohortIntegrationNotConfigured () : string list =
+    [ "integration not configured — call set_integration_ref first" ]
+
+  // DISCOVERED GAP in the already-merged `Cohort.decide` (items 14a/14b,
+  // outside this item's edit scope — Cohort.fs may only gain the additive
+  // `SetIntegrationHead` arm): `RebaseCompleted`'s success arm stores the
+  // rebase's OWN result into `LandingState.Verifying`'s `onto` field
+  // (`Verifying(newHead, 0, 0)`, Cohort.fs) so that `TestsCompleted` can
+  // later dispatch `FastForward` at the right target — but
+  // `FastForwardCompleted` then compares that SAME field against
+  // `state.IntegrationHead` to decide `LandingBlocker.HeadMoved` (Property
+  // 11: "a landing verified against H1 never lands when the head is H2 <>
+  // H1"). Those are two different questions sharing one field: for a REAL
+  // rebase, the landing's own new commit is never equal to the (unchanged)
+  // head it was rebased onto, so every genuinely-successful real rebase
+  // would incorrectly report `HeadMoved`. `CohortLandingLoopTests.fs`'s
+  // fake performer (item 14b) never exercised this: its `Rebase` always
+  // echoes `onto` straight back as "the new head", which is exactly why it
+  // never triggers this gap.
+  //
+  // This performer applies the SAME echo, deliberately, so `decide`'s
+  // Property-11 bookkeeping is evaluated correctly ("has IntegrationHead
+  // moved since MY rebase was dispatched" — true Property 11 — rather than
+  // the vacuous "does my new commit equal the old head" it would otherwise
+  // compute) — while still running a REAL `git rebase` for its real effects
+  // (conflict detection, worktree advancement). `FastForward` below never
+  // trusts `decide`'s (necessarily fictional, post-echo) `toSha` argument;
+  // it independently re-reads the integration worktree's REAL current HEAD
+  // via `CohortGit.currentHead` and fast-forwards to THAT — so the git
+  // branch genuinely advances to the real rebased commit regardless of what
+  // decide's own bookkeeping believes it is.
+  let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
+    { Rebase = fun _landingId onto ->
+        async {
+          match McpTools.cohortIntegrationRef.Value with
+          | None -> return Error(cohortIntegrationNotConfigured ())
+          | Some binding ->
+            let! result = Features.CohortGit.rebase binding.WorktreePath onto
+            match result with
+            | Ok _realNewHead -> return Ok onto // see the DISCOVERED GAP comment above
+            | Error files -> return Error files
+        }
+      // v1 conservative (design decision, sagefs-multiagent-vision.md item
+      // 14c): every test discovered in the integration session, never a
+      // diff-narrowed subset — running everything is always correct, if not
+      // maximally fast. A precise, coverage-based affected-set is a later
+      // optimization, not this item. `baseSha`/`headSha` are NOT used to
+      // narrow this — they are also, because of the `Rebase` echo above,
+      // always equal (both are the pre-rebase `onto`), so a `diffNames` call
+      // here would only ever report "nothing changed", which is actively
+      // misleading rather than merely unused; it is deliberately omitted.
+      ComputeAffected = fun _landingId _baseSha _headSha ->
+        async {
+          match McpTools.cohortIntegrationRef.Value with
+          | None -> return []
+          | Some { SessionId = None } -> return []
+          | Some { SessionId = Some sessionId } ->
+            let state = elmRuntime.GetModel().LiveTesting.TestState
+            let entries = Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
+            return entries |> Array.map (fun e -> Features.CohortTestProjection.toCohortTestId e.TestId) |> Array.toList
+        }
+      // Item 14d's documented caveat: `CohortLandingVerify.runTestsInSession`
+      // only produces a trustworthy verdict for the session live-testing
+      // tracks as Primary (`model.LiveTesting`) — `RunTestsRequested` always
+      // mutates that cycle, never `PerSessionLiveTesting`. So the integration
+      // session is made Primary (the same `SessionSwitched` event the
+      // dashboard/editor clients dispatch on a session switch, DaemonMode.fs
+      // elsewhere) immediately before every run this performer makes.
+      RunTests = fun _landingId tests ->
+        async {
+          match McpTools.cohortIntegrationRef.Value with
+          | None -> return tests
+          | Some { SessionId = None } -> return tests
+          | Some { SessionId = Some sessionId } ->
+            elmRuntime.Dispatch(SageFsMsg.Event(TuiEvent.SessionSwitched(None, sessionId)))
+            let! sessionInfo = sessionOps.GetSessionInfo(toSessionId sessionId) |> Async.AwaitTask
+            let observation: Features.Verification.SessionTrust.SessionObservation =
+              { MatchingSessionIds = [ sessionId ]
+                SessionStatus = sessionInfo |> Option.map (fun s -> s.Status)
+                LoadedState = None
+                TypeIdentityDiagnostic = None }
+            let liveTests = tests |> List.map cohortToLiveTestId
+            let! result = Features.CohortLandingVerify.runTestsInSession elmRuntime observation sessionId liveTests
+            match result with
+            | Ok failing -> return failing |> List.map Features.CohortTestProjection.toCohortTestId
+            | Error reason ->
+              // Fail-closed (CohortLandingVerify's own doctrine): a session
+              // that can't be trusted enough to run tests in must never read
+              // as "all passed" — treat every requested test as failing so
+              // the landing blocks with FailingTests rather than landing on
+              // an unverified session.
+              Log.warn "[cohort-landing] RunTests refused for session %s: %s — treating all %d requested test(s) as failing (fail-closed)" sessionId reason tests.Length
+              return tests
+        }
+      // `toSha` from `decide` is NOT trusted here — see the DISCOVERED GAP
+      // comment on `Rebase` above: because `Rebase` echoes `onto` back,
+      // `decide`'s own `toSha` is always the pre-rebase `onto`, not the real
+      // rebased commit. The real target is read fresh from the integration
+      // worktree's actual current HEAD.
+      FastForward = fun _landingId _toShaFromDecide ->
+        async {
+          match McpTools.cohortIntegrationRef.Value with
+          | None -> return Error "integration not configured — call set_integration_ref first"
+          | Some binding ->
+            let! headResult = Features.CohortGit.currentHead binding.WorktreePath
+            match headResult with
+            | Error e -> return Error (sprintf "could not read the integration worktree's real HEAD to fast-forward to: %s" e)
+            | Ok realHead -> return! Features.CohortGit.fastForwardBranch workingDir binding.Branch realHead
+        }
+      Notify = fun who event ->
+        Log.info "[cohort-landing] notify %s: %A" (MemberTable.MemberId.display who) event
+    }
+
   use cohortOwner =
-    Features.CohortOwner.start
+    Features.CohortOwner.startWithPerformer
       (Log.asILogger ())
       (Features.CohortLedgerSqlite.Sqlite.create (System.IO.Path.Combine(DaemonState.SageFsDir, "cohort.ledger.db")))
       (fun () -> System.DateTime.UtcNow)
       Features.CohortOwner.productionEntropy
       getCohortSessionTestOutcomes
+      cohortLandingPerformer
 
   // Create a diagnostics-changed event (aggregated from workers)
   let diagnosticsChanged = Event<Features.DiagnosticsStore.T>()

@@ -135,14 +135,28 @@ let cohortAffordancesTests =
     ]
 
     testList "CohortTool.toToolName" [
-      test "names exactly the 7 cohort MCP tool names — no more, no fewer" {
+      test "names exactly the 8 cohort MCP tool names — no more, no fewer" {
         let expected =
           set [ "join_cohort"; "leave_cohort"; "acquire_claim"; "release_claim"
-                "reassign_claim"; "request_landing"; "get_cohort_status" ]
+                "reassign_claim"; "request_landing"; "get_cohort_status"; "set_integration_ref" ]
         Affordances.CohortTool.all
         |> List.map Affordances.CohortTool.toToolName
         |> Set.ofList
         |> Expect.equal "toToolName's image is exactly the cohort tool-name set the MCP server registers" expected
+      }
+    ]
+
+    testList "set_integration_ref authority (item 14c)" [
+      test "only the Conductor may call set_integration_ref" {
+        [ Authority.Anonymous
+          Authority.Member(alice, JoinableRole.Observer)
+          Authority.Member(alice, JoinableRole.Verifier)
+          Authority.Member(alice, JoinableRole.Implementer) ]
+        |> List.iter (fun authority ->
+          Affordances.checkCohortToolAllowed authority Affordances.CohortTool.SetIntegrationRef
+          |> Expect.isFalse (sprintf "%A may not call set_integration_ref" authority))
+        Affordances.checkCohortToolAllowed (Authority.Conductor alice) Affordances.CohortTool.SetIntegrationRef
+        |> Expect.isTrue "the Conductor may call set_integration_ref"
       }
     ]
   ]

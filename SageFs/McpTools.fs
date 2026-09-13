@@ -1858,3 +1858,27 @@ OUTPUT: Plain-text summary. The v1 read model does not yet include the landing q
         }
         |> withEchoOutcome ctx "get_cohort_status"
 
+    [<McpServerTool>]
+    [<Description("""Configure this cohort's integration branch/worktree — the git ref real landings rebase onto and fast-forward into (item 14c of the multi-agent landing pipeline). CONDUCTOR-ONLY — refused with a "not the cohort conductor" error for anyone else.
+
+Resolves integration_ref (a branch, tag, or commit sha) to a commit in the daemon's own working directory, creates a dedicated integration git worktree on a fresh branch at that commit, binds Cohort's IntegrationHead to it, and starts a daemon-owned FSI session on the worktree so landings can be test-verified.
+
+WHEN TO USE: Once per cohort, before the first request_landing, by whoever is the conductor (the first member to join_cohort). Calling it again re-points the integration worktree/branch at a new ref.
+
+OUTPUT: Confirmation text naming the resolved head sha, worktree path, branch, and session id — or an error naming what failed (an unresolvable ref, a worktree that could not be created, or — non-fatal — an integration session that failed to start).""")>]
+    member _.set_integration_ref(
+        [<Description("Your agent or model name — must be the cohort's current conductor.")>]
+        agentName: string,
+        [<Description("A branch, tag, or commit sha in the daemon's own repo to configure as the integration head.")>]
+        integrationRef: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: set_integration_ref called by {AgentName}, ref={Ref}", agentName, integrationRef)
+        task {
+          let! result = SageFs.McpTools.setIntegrationRef ctx agentName integrationRef
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "set_integration_ref"
+

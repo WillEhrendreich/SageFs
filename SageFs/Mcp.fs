@@ -4672,3 +4672,123 @@ module McpTools =
       | Error e -> return Error e
       | Ok owner -> return Ok (renderCohortFrame (owner.ReadFrame()))
     }
+
+  // ── Integration ref/worktree (item 14c) ───────────────────────────────
+  //
+  // `Cohort.CohortState.IntegrationHead` (the git sha) is the only piece of
+  // this daemon's cohort-integration configuration that lives in the
+  // replayable ledger — see `Cohort.CohortCommand.SetIntegrationHead`'s doc
+  // comment. The WORKTREE PATH, its BRANCH, and the daemon-owned INTEGRATION
+  // SESSION id are held here instead, in a plain daemon-mutable cell: they
+  // are process-local git/session handles, not cohort domain state, and
+  // recomputing them from the ledger alone is impossible anyway (a worktree
+  // is a filesystem side effect, not an event). Documented v1 limitation:
+  // on daemon restart this binding is lost (`cohortIntegrationRef` resets to
+  // `None`) even though `IntegrationHead` itself survives via ledger replay
+  // — a landing effect finds no worktree to run git against until
+  // `set_integration_ref` is called again.
+  type CohortIntegrationBinding = {
+    WorktreePath: string
+    Branch: string
+    /// `None` until the integration session itself is created (below) — the
+    /// git side of this binding (worktree + branch) is independently usable
+    /// (Rebase/FastForward don't need a session) even when the session side
+    /// failed or hasn't run yet.
+    SessionId: string option
+  }
+
+  /// Daemon-lifetime, process-global: v1 supports exactly one implicit
+  /// cohort per daemon (Slice 2), so exactly one integration binding.
+  /// `DaemonMode.fs`'s real `LandingPerformer` reads this directly
+  /// (`McpTools.cohortIntegrationRef`) — see its module doc there.
+  let cohortIntegrationRef : CohortIntegrationBinding option ref = ref None
+
+  /// v1's fixed integration worktree location: one per daemon process,
+  /// beside the daemon's other persisted state.
+  let private integrationWorktreePath () : string =
+    System.IO.Path.Combine(DaemonState.SageFsDir, "cohort-integration")
+
+  /// Discover a worktree's own `.fsproj` files for session creation — the
+  /// same discovery `getAvailableProjects` uses above, applied to the fresh
+  /// integration worktree instead of a session's working directory.
+  let private discoverProjects (dir: string) : string list =
+    try
+      Directory.EnumerateFiles(dir, "*.fsproj", SearchOption.AllDirectories)
+      |> Seq.filter McpAdapter.isProjectFile
+      |> Seq.map (fun p -> Path.GetRelativePath(dir, p))
+      |> Seq.toList
+    with _ -> []
+
+  /// Configure this cohort's integration ref/worktree/branch (item 14c).
+  /// CONDUCTOR-ONLY — enforced twice: the MCP authority gate
+  /// (`Affordances.CohortTool.SetIntegrationRef` is Conductor-only in
+  /// `cohortTools`, so a non-conductor call never reaches this function at
+  /// all) and, redundantly, by `Cohort.decide`'s own `SetIntegrationHead`
+  /// arm (step (d) below).
+  ///
+  /// Steps, in order (design is intentionally sequential, not transactional
+  /// — see the per-step failure handling below):
+  ///  (a) resolve `integrationRef` to a sha in the MAIN repo
+  ///      (`Environment.CurrentDirectory` — the daemon's own working
+  ///      directory, never an arbitrary caller-supplied path);
+  ///  (b) create the integration worktree at a fixed per-daemon path on a
+  ///      fresh branch `sagefs/cohort-<shortsha>` off that sha, removing a
+  ///      stale worktree from a prior call first;
+  ///  (c) store the worktree path + branch in `cohortIntegrationRef`
+  ///      (`SessionId = None` for now);
+  ///  (d) dispatch `SetIntegrationHead` through the cohort owner;
+  ///  (e) create a daemon-owned integration session on the worktree via the
+  ///      normal session-create path, and record its id in
+  ///      `cohortIntegrationRef` too.
+  ///
+  /// (d) and (e) are not required for (a)-(c) to have taken effect: if the
+  /// caller turns out not to be the conductor, (d) fails and this returns
+  /// Error — the git worktree from (b)/(c) is left in place (a redundant,
+  /// harmless side effect the MCP authority gate above is what actually
+  /// prevents in production, since a non-conductor never reaches this
+  /// function). If (e) fails, the git side of the binding (worktree +
+  /// branch + IntegrationHead) is already fully configured and usable for
+  /// Rebase/FastForward — this returns Ok with a note that no integration
+  /// session was created, rather than unwinding git state that is already
+  /// correct.
+  let setIntegrationRef (ctx: McpContext) (agentName: string) (integrationRef: string) : Task<Result<string, SageFsError>> =
+    task {
+      let mainRepoDir = Environment.CurrentDirectory
+      let! shaResult = Features.CohortGit.revParse mainRepoDir integrationRef
+      match shaResult with
+      | Error reason ->
+        return Error (SageFsError.SessionCreationFailed (sprintf "could not resolve '%s' to a commit in %s: %s" integrationRef mainRepoDir reason))
+      | Ok sha ->
+        let worktreePath = integrationWorktreePath ()
+        let! _removed =
+          match Directory.Exists worktreePath with
+          | true -> Features.CohortGit.removeWorktree mainRepoDir worktreePath
+          | false -> async { return Ok () }
+        let branch = sprintf "sagefs/cohort-%s" (sha.Substring(0, min 8 sha.Length))
+        let! addResult = Features.CohortGit.addWorktree mainRepoDir worktreePath branch sha
+        match addResult with
+        | Error reason ->
+          return Error (SageFsError.SessionCreationFailed (sprintf "could not create the integration worktree at %s on branch %s: %s" worktreePath branch reason))
+        | Ok () ->
+          cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; SessionId = None }
+          let who = memberIdFor agentName
+          let! commitResult = commitCohort ctx (Cohort.CohortCommand.SetIntegrationHead(who, sha))
+          match commitResult with
+          | Error e -> return Error e
+          | Ok _ ->
+            let projects = discoverProjects worktreePath
+            let! sessionResult = ctx.SessionOps.CreateSession projects worktreePath WorkflowTypes.SessionWorkflow.Interactive
+            match sessionResult with
+            | Ok sessionId ->
+              cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; SessionId = Some sessionId }
+              return Ok (
+                sprintf
+                  "Integration configured: head=%s worktree=%s branch=%s session=%s"
+                  sha worktreePath branch sessionId)
+            | Error sessionErr ->
+              Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the integration session failed to start: %s" sha worktreePath branch (SageFsError.describeForAgent sessionErr)
+              return Ok (
+                sprintf
+                  "Integration configured: head=%s worktree=%s branch=%s. WARNING: the integration session failed to start (%s) — landings will run with no session to verify tests against until this is retried."
+                  sha worktreePath branch (SageFsError.describeForAgent sessionErr))
+    }
