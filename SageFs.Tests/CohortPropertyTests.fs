@@ -605,6 +605,98 @@ let cohortPropertyTests =
         honestLanded = flakyLanded
     ]
 
+    testList "authority (Phase 1 item 8, §4.2)" [
+
+      testPropertyWithConfig cohortConfig "18: present is Anonymous for a non-member, Conductor for the bound member, Member for every other Present member" <| fun (intents: Intent list) ->
+        let h = run intents
+        let outsider = { Id = 999; Display = "outsider" }
+        let anonymousOk = Authority.present outsider h.State = Authority.Anonymous
+        let conductorOk =
+          match h.State.Conductor with
+          | Some c -> Authority.present c h.State = Authority.Conductor c
+          | None -> true
+        let membersOk =
+          h.State.Members
+          |> Map.toList
+          |> List.forall (fun (m, r) ->
+            match r.Presence with
+            | MemberPresence.Present when Some m <> h.State.Conductor ->
+              Authority.present m h.State = Authority.Member(m, r.Role)
+            | _ -> true)
+        anonymousOk && conductorOk && membersOk
+
+      testPropertyWithConfig cohortConfig "19: ReassignClaim is refused for a non-conductor and succeeds for the conductor" <| fun (scopeIdx: int) ->
+        let conductor = agentOf 0
+        let other = agentOf 1
+        let target = agentOf 2
+        let h0 = initHarness ()
+        let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer)) // first joiner: becomes conductor
+        let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer))
+        let h3 = applyCommand h2 (CohortCommand.Join(target, JoinableRole.Implementer))
+        let h4 = applyCommand h3 (CohortCommand.AcquireClaim(other, scopeOf scopeIdx, "purpose"))
+        match h4.State.Claims |> Map.toList with
+        | [ (cid, _) ] ->
+          let h5 = applyCommand h4 (CohortCommand.Depart other) // orphans the claim
+          match h5.State.Claims.[cid].State with
+          | ClaimState.Orphaned _ ->
+            let refusedForNonConductor =
+              match decide h5.Clock [| 1uy |] h5.State (CohortCommand.ReassignClaim(target, cid, target)) with
+              | Error(CohortError.NotConductor by) -> by = target
+              | _ -> false
+            let succeedsForConductor =
+              match decide h5.Clock [| 2uy |] h5.State (CohortCommand.ReassignClaim(conductor, cid, target)) with
+              | Ok(newState, events, _) ->
+                (match newState.Claims.[cid].State with ClaimState.Held holder -> holder = target | _ -> false)
+                && events |> List.exists (function CohortEvent.ClaimReassigned(c, _, _) -> c = cid | _ -> false)
+              | _ -> false
+            refusedForNonConductor && succeedsForConductor
+          | _ -> false
+        | _ -> false
+
+      test "20: DelegateConductor is refused for a non-conductor and to a non-member, and moves the binding when the conductor delegates to a Present member" {
+        let conductor = agentOf 0
+        let other = agentOf 1
+        let stranger = agentOf 2 // never joins
+        let h0 = initHarness ()
+        let h1 = applyCommand h0 (CohortCommand.Join(conductor, JoinableRole.Implementer))
+        let h2 = applyCommand h1 (CohortCommand.Join(other, JoinableRole.Implementer))
+        let refusedByNonConductor =
+          match decide h2.Clock [| 1uy |] h2.State (CohortCommand.DelegateConductor(other, other)) with
+          | Error(CohortError.NotConductor by) -> by = other
+          | _ -> false
+        let refusedToNonMember =
+          match decide h2.Clock [| 2uy |] h2.State (CohortCommand.DelegateConductor(conductor, stranger)) with
+          | Error(CohortError.MemberNotPresent m) -> m = stranger
+          | _ -> false
+        let delegationOk =
+          match decide h2.Clock [| 3uy |] h2.State (CohortCommand.DelegateConductor(conductor, other)) with
+          | Ok(newState, events, _) ->
+            let bindingMoved = newState.Conductor = Some other
+            let oldIsMember = Authority.present conductor newState = Authority.Member(conductor, JoinableRole.Implementer)
+            let newIsConductor = Authority.present other newState = Authority.Conductor other
+            let eventOk = events |> List.exists (function CohortEvent.ConductorDelegated(f, t) -> f = conductor && t = other | _ -> false)
+            bindingMoved && oldIsMember && newIsConductor && eventOk
+          | _ -> false
+        (refusedByNonConductor && refusedToNonMember && delegationOk)
+        |> Expect.isTrue "non-conductor and non-member delegation refused; conductor delegation to a Present member moves the binding"
+      }
+
+      // Property 4 (§7.3's authority-unforgeability): the generated Intent type has
+      // no DelegateConductor case, so no generated sequence ever issues one — this
+      // proves the Conductor binding is unforgeable by ordinary membership commands:
+      // it is set exactly once (ConductorBound, on the first join) and never again.
+      testPropertyWithConfig cohortConfig "21: without DelegateConductor, ConductorBound fires at most once and Conductor always equals that first joiner" <| fun (intents: Intent list) ->
+        let h = run intents
+        let conductorBoundEvents =
+          h.Steps
+          |> List.collect (fun s -> s.Events)
+          |> List.choose (function CohortEvent.ConductorBound w -> Some w | _ -> None)
+        match conductorBoundEvents with
+        | [] -> h.State.Conductor = None
+        | [ only ] -> h.State.Conductor = Some only
+        | _ -> false
+    ]
+
     testList "read model (10)" [
 
       testPropertyWithConfig cohortConfig "10: project is a function of (ledger head, session generations) alone" <| fun (intents: Intent list) (gens: int64 list) ->
