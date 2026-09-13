@@ -360,6 +360,18 @@ module Cohort =
     | FastForwardCompleted of LandingId * committedSha: string
     | WithdrawLanding of who: 'm * LandingId
     | VetoLanding of by: 'm * LandingId * reason: string
+    /// Conductor action (item 14c): bind `IntegrationHead` to a git sha the
+    /// shell has already resolved and checked out into the daemon's
+    /// integration worktree (`SageFs/Mcp.fs`'s `set_integration_ref`, which
+    /// resolves the ref to a sha with `CohortGit.revParse` BEFORE dispatching
+    /// this command — `decide` never resolves a ref itself, it only records
+    /// the sha it is given). Gated the same way as `ReassignClaim`/
+    /// `DelegateConductor`. This is additive-only: no existing landing arm
+    /// (`RequestLanding`'s `advanceQueue` reads `IntegrationHead` as
+    /// `onto`, `FastForwardCompleted`'s `HeadMoved` check compares against
+    /// it) changes — both already treat `IntegrationHead` as ordinary
+    /// mutable state, whatever last set it.
+    | SetIntegrationHead of by: 'm * head: string
 
   [<RequireQualifiedAccess>]
   type CohortEvent<'m> =
@@ -383,6 +395,8 @@ module Cohort =
     | LandingLanded of LandingId * integrationCommit: string
     | LandingWithdrawn of LandingId
     | LandingVetoed of LandingId * by: 'm * reason: string
+    /// The `IntegrationHead` binding was (re)configured (item 14c).
+    | IntegrationConfigured of head: string
 
   /// What the pure machine asks the shell to DO. `decide` never rebases, never
   /// runs a test, never writes SQLite — it returns these, the shell performs
@@ -796,6 +810,13 @@ module Cohort =
           Ok(advanced,
              CohortEvent.LandingStateChanged(id, withdrawn.State) :: CohortEvent.LandingWithdrawn id :: advEvents,
              advEffects)
+
+    | CohortCommand.SetIntegrationHead(by, head) ->
+      match Authority.present by state with
+      | Authority.Conductor _ ->
+        let newState = { state with IntegrationHead = head }
+        Ok(newState, [ CohortEvent.IntegrationConfigured head ], [])
+      | _ -> Error(CohortError.NotConductor by)
 
     | CohortCommand.VetoLanding(by, id, reason) ->
       match Map.tryFind id state.Landings with

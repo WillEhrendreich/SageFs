@@ -78,7 +78,9 @@ let requiredParamsByTool =
     "acquire_claim", set ["agentName"; "scope"; "purpose"]
     "release_claim", set ["agentName"; "claimId"; "fence"]
     "reassign_claim", set ["agentName"; "claimId"; "toMember"]
-    "request_landing", set ["agentName"; "claims"; "commits"; "statement"] ]
+    "request_landing", set ["agentName"; "claims"; "commits"; "statement"]
+    // Item 14c: both args required — v1 has no optional routing here either.
+    "set_integration_ref", set ["agentName"; "integrationRef"] ]
   |> Map.ofList
 
 [<Tests>]
@@ -215,8 +217,9 @@ let descriptionPropertyTests =
     <| fun _ ->
       // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
       // Slice 2: join_cohort/leave_cohort/acquire_claim/release_claim/
-      // reassign_claim/request_landing/get_cohort_status).
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 48
+      // reassign_claim/request_landing/get_cohort_status) + the 1 item-14c
+      // cohort tool (set_integration_ref).
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 49
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

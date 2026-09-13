@@ -165,6 +165,11 @@ let private gatingDomain : Map<string, ToolGate> =
     "reassign_claim", ToolGate.AlwaysAvailable
     "request_landing", ToolGate.AlwaysAvailable
     "get_cohort_status", ToolGate.AlwaysAvailable
+    // Item 14c: configuring the integration ref/worktree is conductor-only
+    // (enforced by `cohortTools` below) but, like every other cohort tool,
+    // has no per-SESSION-state dependence — it is meaningful before any FSI
+    // session exists.
+    "set_integration_ref", ToolGate.AlwaysAvailable
     // State-gated tools — availability derives from availableTools for the
     // session's current lifecycle state.
     "send_fsharp_code", ToolGate.StateGated
@@ -251,12 +256,16 @@ type CohortTool =
   | ReassignClaim
   | RequestLanding
   | GetStatus
+  /// Item 14c: configure the cohort's integration ref/worktree/branch.
+  /// Conductor-only (`cohortTools` below) — the same treatment as
+  /// `ReassignClaim`.
+  | SetIntegrationRef
 
 module CohortTool =
-  /// The exact MCP tool names the 7 cohort tools are registered under
+  /// The exact MCP tool names the 8 cohort tools are registered under
   /// (`Affordances.fs`'s own `gatingDomain` "Cohort tools v1" entries above —
   /// all `AlwaysAvailable` there at the per-SESSION-state layer; this module
-  /// is the authority-aware refinement layered on top for Slice 3).
+  /// is the authority-aware refinement layered on top for Slice 3/item 14c).
   let toToolName =
     function
     | CohortTool.Join -> "join_cohort"
@@ -266,6 +275,7 @@ module CohortTool =
     | CohortTool.ReassignClaim -> "reassign_claim"
     | CohortTool.RequestLanding -> "request_landing"
     | CohortTool.GetStatus -> "get_cohort_status"
+    | CohortTool.SetIntegrationRef -> "set_integration_ref"
 
   let all: CohortTool list =
     [ CohortTool.Join
@@ -274,7 +284,8 @@ module CohortTool =
       CohortTool.ReleaseClaim
       CohortTool.ReassignClaim
       CohortTool.RequestLanding
-      CohortTool.GetStatus ]
+      CohortTool.GetStatus
+      CohortTool.SetIntegrationRef ]
 
 /// Total over `Cohort.Authority<'m>` (property 9, cohort-integration-plan.md
 /// Slice 3) — the compiler checks the `match` is exhaustive, so no
@@ -287,6 +298,7 @@ module CohortTool =
 ///   Member(_, Verifier)          -> status only
 ///   Member(_, Implementer)       -> status, join, leave, claim/release, request_landing
 ///   Conductor _                  -> every tool, including reassign_claim
+///                                    and set_integration_ref (item 14c)
 ///
 /// `join_cohort` is deliberately NOT threaded into the `Anonymous` arm here
 /// — see `alwaysReachableCohortTools`.

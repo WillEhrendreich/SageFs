@@ -221,7 +221,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 48 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 49 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -230,9 +230,9 @@ let toolRegistrationTests =
            reflection test skipped"
       | Some methods ->
         // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
-        // Slice 2).
+        // Slice 2) + the 1 item-14c cohort tool (set_integration_ref).
         methods.Length
-          |> Expect.equal "MCP tool method count" 48
+          |> Expect.equal "MCP tool method count" 49
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -384,7 +384,7 @@ let stateTransitionSafetyTests =
         | Ok _ ->
           failtestf "bogus tool must be rejected in %A" state)
 
-    testCase "240-combo safety: all MCP tools × all states never throw (reflection)"
+    testCase "245-combo safety: all MCP tools × all states never throw (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -405,10 +405,10 @@ let stateTransitionSafetyTests =
                 "checkToolAvailability threw for (%A, %s): %s"
                 state tool ex.Message))
         // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
-        // Slice 2) = 48.
+        // Slice 2) + the 1 item-14c cohort tool (set_integration_ref) = 49.
         tested
         |> Expect.equal
-          "should test 5 states × 48 tools = 240" 240
+          "should test 5 states × 49 tools = 245" 245
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

@@ -387,6 +387,8 @@
         <Compile Include="CohortGitTests.fs" />
         <Compile Include="CohortLandingVerifyTests.fs" />
         <Compile Include="CohortLandingLoopTests.fs" />
+        <Compile Include="CohortIntegrationHeadTests.fs" />
+        <Compile Include="CohortLandingGitAcceptanceTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
