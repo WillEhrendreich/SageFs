@@ -6,61 +6,33 @@ on:
     branches:
     - master
 
+# The ENTIRE build/test/integration/pack/release-bundle pipeline lives in
+# ci-pipeline.fsx as one typed F# Fun.Build pipeline. GitHub Actions supplies
+# only the runners, the two checkouts, the SDK/Node install, and one invocation
+# per OS leg — it encodes no build logic of its own. The exact same stages run
+# locally: `dotnet fsi ci-pipeline.fsx -- ci linux` etc. (see that file's header).
+#
+# One matrix job builds the solution ONCE per OS in Release and runs every check
+# --no-build off that output; the Linux leg additionally packs and uploads the
+# release bundle. This replaces the old build + integration-host + extensions +
+# benchmarks + release-artifacts jobs, which each started from a clean checkout,
+# re-packed the forked MCP SDK, and rebuilt the whole solution — the "so much
+# re-work" this consolidation removes. Performance is guarded locally now
+# (PerfTests.fs), not by a CI benchmark job.
+
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        platform: [ubuntu-latest, windows-latest]
+        include:
+        - platform: ubuntu-latest
+          leg: linux
+        - platform: windows-latest
+          leg: windows
 
     runs-on: ${{ matrix.platform }}
-
-    steps:
-    - uses: actions/checkout@v5
-
-    - name: Checkout forked MCP SDK
-      uses: actions/checkout@v5
-      with:
-        repository: WillEhrendreich/ModelContextProtocolSdk
-        path: mcp-sdk
-
-    - name: Install Dotnet
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: '10.0.x'
-
-    # PROOF OF CONCEPT — restore/build/test/pack now live in ci-pipeline.fsx as
-    # a typed Fun.Build pipeline (see that file's header). This step IS the
-    # pipeline: `dotnet fsi ci-pipeline.fsx -- ci` runs the identical stages
-    # (restore forked MCP SDK, dotnet build, default Expecto suite, mutation
-    # score gate, dotnet pack) that a contributor runs locally with
-    # `dotnet fsi ci-pipeline.fsx`. Actions supplies only the runner and the
-    # two checkouts above; it no longer encodes any build logic of its own.
-    - name: Run build pipeline
-      shell: bash
-      run: dotnet fsi ci-pipeline.fsx -- ci
-      timeout-minutes: 30
-
-  integration-host:
-    # Every [Integration] suite that can run on a bare runner runs HERE. The
-    # suites are registered structurally (TestInfrastructure.Integration) with
-    # the runner that owns them; --integration-host runs EVERY suite registered
-    # as `Host` — real FSI sessions, real SageFs.Host spawns, Harmony detours,
-    # real daemons on reserved ports with isolated SAGEFS_DATA_DIRs, the HTTP
-    # API against the samples, and (VscodeCommandProofTests.fs) a real VS Code
-    # extension host proving the extension's commands reach the real daemon —
-    # @vscode/test-electron calls vscode.commands.executeCommand directly, no
-    # UI automation, no debug port, so it's a normal Host suite like every
-    # other real-daemon test here (see issue #133 for what replaced the old
-    # CDP-driven journeys). A new host suite joins this job by construction,
-    # not by editing a curated list. Dashboard browser journeys are registered
-    # against their own entry points (--integration-browser/-hr/-lt) and run
-    # in the dashboard-browser-e2e workflow instead.
-    # Windows only for now: on Linux/macOS every session spawn fails because
-    # Args.hostExePath hardcodes SageFs.Host.exe (the apphost there is the
-    # extensionless SageFs.Host) — a product bug to fix before adding a
-    # Linux leg here.
-    runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
     - uses: actions/checkout@v5
@@ -81,113 +53,30 @@ jobs:
       with:
         node-version: 20
 
-    - name: Build forked MCP SDK packages
-      run: |
-        dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-        dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-        dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-
-    - name: Build
-      run: dotnet build -c Release
-
-    # The HTTP API suites create real sessions on these samples (the Falco +
-    # Datastar webapp and the FromCSharp live-testing sample).
-    - name: Build samples for the HTTP API suites
-      run: |
-        dotnet build samples/demos/SageFs.Samples.WebappDatastar/SageFs.Samples.WebappDatastar.fsproj -c Release --nologo
-        dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Release --nologo
-
-    # VscodeCommandProofTests.fs loads the extension directly from source
-    # (extensionDevelopmentPath) — no VSIX packaging or install step needed.
-    # @vscode/test-electron downloads and caches its own VS Code copy; no
-    # portable-download step needed either (that was only ever required for
-    # the retired CDP fixture's --remote-debugging-port launch).
-    - name: Build VS Code extension and its command-proof suite
-      working-directory: sagefs-vscode
-      run: |
-        dotnet tool restore
-        npm ci
-        npm run compile
-        npm run compile:test-electron
-
-    - name: Run every host integration suite
+    # The whole pipeline. The `ci` arg enables the mutation-score gate; the OS
+    # leg selects platform-appropriate stages (Linux: format, mutation, VSIX +
+    # nupkg + release manifest; Windows: samples + real-daemon integration-host).
+    # The `release` arg (Linux, master push only) packs the shippable bundle.
+    - name: Run pipeline
       shell: bash
-      run: |
-        # Exit codes are NOT laundered here: Expecto returns 2 when any test
-        # ERRORED (an exception, e.g. a failed session spawn) — treating 2 as
-        # success would turn every errored integration test green.
-        dotnet SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll --integration-host --summary
-      timeout-minutes: 35
+      env:
+        SOURCE_SHA: ${{ github.sha }}
+        SOURCE_RUN_ID: ${{ github.run_id }}
+        SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: >-
+        dotnet fsi ci-pipeline.fsx -- ci ${{ matrix.leg }}${{ (github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.leg == 'linux') && ' release' || '' }}
 
-  extensions:
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v5
-
-    - name: Checkout forked MCP SDK
-      uses: actions/checkout@v5
-      with:
-        repository: WillEhrendreich/ModelContextProtocolSdk
-        path: mcp-sdk
-
-    - name: Install Dotnet
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: '10.0.x'
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20
-
-    - name: Build forked MCP SDK packages
-      run: |
-        dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-        dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-        dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-
-    - name: Build core
-      run: dotnet build
-
-    - name: Check formatting
-      run: dotnet format --verify-no-changes --verbosity minimal
-
-    - name: Build VS Code extension
-      working-directory: sagefs-vscode
-      run: |
-        dotnet tool restore
-        npm ci
-        npm run compile
-
-    - name: Get VS Code extension version
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-      id: vscode-version
-      working-directory: sagefs-vscode
-      run: |
-        version=$(node -p "require('./package.json').version")
-        echo "version=$version" >> "$GITHUB_OUTPUT"
-
-    - name: Package VS Code extension
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-      working-directory: sagefs-vscode
-      run: |
-        npx @vscode/vsce package -o "../sagefs-vscode-${{ steps.vscode-version.outputs.version }}.vsix"
-
-    - name: Upload VS Code extension artifact
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # Build once, promote — publish.yml (workflow_run on this build's success)
+    # downloads exactly this `release-assets` bundle (nupkg + vsix +
+    # release-manifest.json) and ships it. No separate job rebuilds it.
+    - name: Upload release bundle
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.leg == 'linux'
       uses: actions/upload-artifact@v4
       with:
-        name: release-vscode-vsix
-        path: sagefs-vscode-${{ steps.vscode-version.outputs.version }}.vsix
+        name: release-assets
+        path: release/*
         if-no-files-found: error
         retention-days: 1
-
-  # Performance is guarded locally now, in the normal Expecto suite (PerfTests.fs
-  # / PerfBudget.fs), not by a CI job: the BenchmarkDotNet suite gated releases on
-  # microbenchmark variance for paths no user feels, while never gating the one
-  # hot path that mattered. Perf work is local-first; CI runs the fast scaling
-  # guard as part of the default test run in the `build` job.
 
   # vscode-journeys (HR-VSC-E2E, LT-VSC-E2E) was removed 2026-09-12: it never
   # passed since being wired in. The real bug it caught (executeCommand typing
@@ -200,131 +89,4 @@ jobs:
   # stays in VscodeExtensionTests.fs, runnable on demand via --integration-vsc
   # with VSCODE_PATH set, but no CI job invokes it until #133 is resolved.
   # quality/definition-of-done.json marks HR-VSC-E2E/LT-VSC-E2E "deferred"
-  # (not "verified" — it never was) rather than silently dropping the
-  # obligation.
-
-  release-artifacts:
-    needs: [build, integration-host, extensions]
-    runs-on: windows-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    permissions:
-      actions: read
-      contents: read
-
-    steps:
-    - uses: actions/checkout@v5
-
-    - name: Checkout forked MCP SDK
-      uses: actions/checkout@v5
-      with:
-        repository: WillEhrendreich/ModelContextProtocolSdk
-        path: mcp-sdk
-
-    - name: Install Dotnet
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: '10.0.x'
-
-    - name: Build forked MCP SDK packages
-      run: |
-        dotnet pack mcp-sdk/src/ModelContextProtocol.Core -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-        dotnet pack mcp-sdk/src/ModelContextProtocol -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-        dotnet pack mcp-sdk/src/ModelContextProtocol.AspNetCore -o mcp-sdk-nupkg -c Release -p:NuGetAudit=false
-
-    - name: Get version
-      id: version
-      shell: pwsh
-      run: |
-        $version = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
-        "version=$version" >> $env:GITHUB_OUTPUT
-
-    - name: Verify release version alignment
-      shell: pwsh
-      run: |
-        # WHY — publish reads release-manifest.json (Directory.Build.props version)
-        # to locate sagefs-vscode-<version>.vsix, but the VSIX is named from
-        # sagefs-vscode/package.json. When those drift, publish fails with ENOENT
-        # after a 12-minute build (observed 2026-08: props 0.6.277 vs pkg 0.6.276).
-        # Because — fail here, at the start of packaging, with an actionable message.
-        $propsVersion = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
-        $pkg = Get-Content sagefs-vscode/package.json -Raw | ConvertFrom-Json
-        if ($pkg.version -ne $propsVersion) {
-          throw "Version drift: Directory.Build.props is $propsVersion but sagefs-vscode/package.json is $($pkg.version). Run scripts/pre-commit or bump package.json to $propsVersion."
-        }
-        Write-Host "Versions aligned at $propsVersion"
-
-    - name: Ensure release directory exists
-      run: New-Item -ItemType Directory -Force release | Out-Null
-
-    - name: Pack SageFs
-      run: dotnet pack SageFs -c Release -o release
-
-    - name: Verify tool package installability
-      shell: pwsh
-      run: |
-        # WHY — issue #131: releases 0.6.299..0.6.352 were packed targeting
-        # net11.0 (tools/net11.0/any/), so net10-SDK users got "Settings file
-        # 'DotnetToolSettings.xml' was not found in the package" on install.
-        # Because — fail the release job HERE if the packed tool's TFM is not
-        # the repo's net10 target or the tool settings file is missing, so an
-        # uninstallable tool package can never reach the release artifact.
-        $nupkg = Get-ChildItem release -Filter "SageFs.*.nupkg" | Select-Object -First 1
-        if (-not $nupkg) { throw "No SageFs nupkg found in release/ — pack failed?" }
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($nupkg.FullName)
-        try {
-          $toolDirs = $zip.Entries | ForEach-Object { $_.FullName } |
-            Where-Object { $_ -like 'tools/*/any/DotnetToolSettings.xml' } |
-            ForEach-Object { ($_ -split '/')[1] } | Sort-Object -Unique
-          if ($toolDirs.Count -eq 0) {
-            throw "DotnetToolSettings.xml not found in $($nupkg.Name) — net10 SDK installs will fail (issue #131)."
-          }
-          foreach ($tfm in $toolDirs) {
-            Write-Host "Tool package targets $tfm"
-            if ($tfm -ne 'net10.0') {
-              throw "Tool package targets $tfm, but net10-SDK users cannot install it (issue #131). The repo must pack net10.0."
-            }
-          }
-          Write-Host "OK $($nupkg.Name) is installable on net10 SDKs."
-        } finally {
-          $zip.Dispose()
-        }
-
-    - name: Download VS Code extension artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: release-vscode-vsix
-        path: release
-
-    - name: Write release manifest
-      shell: pwsh
-      env:
-        SOURCE_SHA: ${{ github.sha }}
-        SOURCE_RUN_ID: ${{ github.run_id }}
-        SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
-      run: |
-        $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.nupkg', '.vsix' } | Sort-Object Name
-        if ($files.Count -lt 2) { throw "Expected release files were not staged." }
-        $manifest = @{
-          version = '${{ steps.version.outputs.version }}'
-          sourceSha = $env:SOURCE_SHA
-          sourceRunId = $env:SOURCE_RUN_ID
-          sourceRunAttempt = $env:SOURCE_RUN_ATTEMPT
-          files = @(
-            $files | ForEach-Object {
-              @{
-                name = $_.Name
-                sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-              }
-            }
-          )
-        }
-        $manifest | ConvertTo-Json -Depth 5 | Set-Content release/release-manifest.json
-
-    - name: Upload release bundle
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-assets
-        path: release/*
-        if-no-files-found: error
-        retention-days: 1
+  # (not "verified" — it never was) rather than silently dropping the obligation.

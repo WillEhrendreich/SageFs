@@ -77,3 +77,7 @@ coverage-report/
 /sagefs-roast-2.md
 /sagefs-roast-3.md
 /sagefs-roast-4.md
+
+# Local output of the ci-pipeline.fsx release stages (nupkg + vsix + manifest);
+# on CI it is uploaded as the release-assets artifact, never committed.
+release/
