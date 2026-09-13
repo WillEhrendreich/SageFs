@@ -75,6 +75,35 @@ let errorMessagesTests =
         |> Expect.equal "TypeLoad on first line wins" ErrorCategory.TypeLoad
       }
     ]
+    testList "categorizeByNumber" [
+      test "FS0039 classifies as NameError even when the text wouldn't match" {
+        // A localized/atypical message that the substring rules would miss —
+        // the stable ErrorNumber must win regardless of message text.
+        categorizeByNumber (Some 39) "ce symbole n'est pas défini"
+        |> Expect.equal "FS0039 should be NameError by number alone" ErrorCategory.NameError
+      }
+      test "FS0001 classifies as TypeError even when the text wouldn't match" {
+        categorizeByNumber (Some 1) "ce n'est pas le bon type"
+        |> Expect.equal "FS0001 should be TypeError by number alone" ErrorCategory.TypeError
+      }
+      test "FS0010 classifies as SyntaxError even when the text wouldn't match" {
+        categorizeByNumber (Some 10) "jeton inattendu"
+        |> Expect.equal "FS0010 should be SyntaxError by number alone" ErrorCategory.SyntaxError
+      }
+      test "no error number falls back to text-based categorize" {
+        categorizeByNumber None "The type 'int' does not match the type 'string'"
+        |> Expect.equal "None should fall back to categorize" ErrorCategory.TypeError
+      }
+      test "unmapped error number falls back to text-based categorize" {
+        categorizeByNumber (Some 9999) "The value 'foo' is not defined"
+        |> Expect.equal "unmapped number should fall back to categorize" ErrorCategory.NameError
+      }
+      test "known error number wins even when text disagrees" {
+        // Proves number-first precedence, not just a fallback path.
+        categorizeByNumber (Some 39) "everything looks fine actually"
+        |> Expect.equal "number classification must not require text corroboration" ErrorCategory.NameError
+      }
+    ]
     testList "getSuggestion" [
       test "TypeLoad suggests removing #r" {
         getSuggestion ErrorCategory.TypeLoad
