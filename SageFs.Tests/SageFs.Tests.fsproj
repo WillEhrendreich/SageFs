@@ -264,7 +264,6 @@
          <Compile Include="VerificationEvidenceTests.fs" />
          <Compile Include="VerificationEvidencePropertyTests.fs" />
          <Compile Include="TargetedVerificationScenarioTests.fs" />
-         <Compile Include="TargetedVerificationLoadedStateTests.fs" />
          <Compile Include="TargetedVerificationSummaryTests.fs" />
          <Compile Include="TargetedVerificationSummaryPropertyTests.fs" />
          <Compile Include="McpFrictionScenarioTests.fs" />

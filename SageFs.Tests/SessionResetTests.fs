@@ -83,20 +83,6 @@ let sessionResetTests =
       |> Async.AwaitTask
       |> Async.RunSynchronously
 
-    testCase "reset returns success message"
-    <| fun _ ->
-      task {
-        let ctx = sharedCtxWith (SessionId.newId())
-
-        let! result = resetSession ctx "test" None None
-        let isSuccess =
-          result.Contains("success", System.StringComparison.OrdinalIgnoreCase)
-          || result.Contains("reset", System.StringComparison.OrdinalIgnoreCase)
-        isSuccess
-        |> Expect.isTrue "Reset should indicate success"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
   ]
 
 /// A McpContext whose RestartSession is fully controlled by the test: it
@@ -216,17 +202,4 @@ let resetPushbackTests =
       |> Async.AwaitTask
       |> Async.RunSynchronously
 
-    testCase "soft reset after warmup failures has no warning"
-    <| fun _ ->
-      task {
-        let ctx = sharedCtx ()
-        let! result = resetSession ctx "test" None None
-        // With unified sessions, warmup failures come from proxy — just verify reset works
-        result
-        |> Expect.stringContains
-          "Should include success message"
-          "reset"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
   ]

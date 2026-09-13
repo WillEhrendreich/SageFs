@@ -87,7 +87,6 @@ let stableIdentityEvalTests =
         patched.Diagnostics
         |> Array.filter (fun d -> d.Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error)
         |> Array.map (fun d -> sprintf "%s %s" d.Subcategory d.Message)
-      printfn "private-member patch diagnostics: %A" reported
       reported |> Array.exists (fun m -> m.Contains "secret") |> Expect.isTrue "the error names the private member"
     }
   ]
