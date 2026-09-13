@@ -30,7 +30,7 @@ let private mkSession (id: string) (app: SageFs.AppRun.AppRunState) (projectRole
     TestSummary = None
     CoverageSummary = None
     TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-    ActiveProject = None; ProjectRoles = projectRoles; App = app }
+    ActiveProject = None; ProjectRoles = projectRoles; App = app; WorkerRssBytes = None }
 
 let private mkSnap () : DashboardSnapshot =
   { DashboardSnapshot.Version = "0.0.0"
@@ -49,7 +49,9 @@ let private mkSnap () : DashboardSnapshot =
     FrictionPanel = Elem.div [] []
     ActiveProject = None
     ProjectRoles = []
-    App = AppRun.AppRunState.NotRunning }
+    App = AppRun.AppRunState.NotRunning
+    EvalToPixelP50Ms = None
+    EvalToPixelP99Ms = None }
 
 [<Tests>]
 let dashboardTestIdTests = testList "Dashboard data-testid hooks" [

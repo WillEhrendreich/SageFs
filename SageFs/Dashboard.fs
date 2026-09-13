@@ -52,6 +52,12 @@ open SageFs.Features.FrictionSqlite
 
 module FalcoResponse = Falco.Response
 
+/// p50/p99 of the eval-to-pixel latency chain (vision §3.4, §7.4), read from
+/// the shared tracker for every snapshot build — cheap (a lock + a sort of
+/// at most 256 floats) and rendered in the statusline.
+let evalToPixelPercentiles () : float option * float option =
+  EvalLatencyTrace.percentiles (EvalLatencyTrace.shared.Snapshot())
+
 /// Dashboard CSS — loaded from embedded resource at startup.
 /// Served via GET /dashboard/dashboard.css with proper caching.
 let dashboardCss =
@@ -658,6 +664,7 @@ let buildDashboardSnapshotWithSessions
             | _ -> return Elem.div [ Attr.id DomIds.FrictionPanel ] []
         }
     let! frictionPanel = frictionPanelTask
+    let evalToPixelP50Ms, evalToPixelP99Ms = evalToPixelPercentiles ()
     let snap : DashboardSnapshot = {
               Version = infra.Version
               ConnectionState = DashboardConnectionState.Connected
@@ -687,6 +694,8 @@ let buildDashboardSnapshotWithSessions
               ActiveProject = q.GetSessionActiveProject sessionId
               ProjectRoles = q.GetSessionProjectRoles sessionId
               App = q.GetSessionApp sessionId
+              EvalToPixelP50Ms = evalToPixelP50Ms
+              EvalToPixelP99Ms = evalToPixelP99Ms
             }
     return snap, sessionId, themeName, {| EvalStats = stats; HotReloadState = hrState; WarmupContext = wCtx; FrictionPanel = frictionPanel |}
   }
@@ -760,6 +769,7 @@ let buildNoSessionSnapshotWithSessions
       | None -> None
     // No session in view: the activity across every session's tests.
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity "")
+    let evalToPixelP50Ms, evalToPixelP99Ms = evalToPixelPercentiles ()
     let snap : DashboardSnapshot = {
       Version = infra.Version
       ConnectionState = DashboardConnectionState.Connected
@@ -793,6 +803,8 @@ let buildNoSessionSnapshotWithSessions
       ActiveProject = None
       ProjectRoles = []
       App = AppRun.AppRunState.NotRunning
+      EvalToPixelP50Ms = evalToPixelP50Ms
+      EvalToPixelP99Ms = evalToPixelP99Ms
     }
     return snap
   }
@@ -907,6 +919,8 @@ let createStreamHandler
         | false ->
           lastPushedMain <- mainHtml
           do! ssePatchNode ctx mainNode
+          // Eval-to-pixel latency chain, stage 5/5: the morph reached the wire.
+          EvalLatencyTrace.shared.StampMorphWritten()
           do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | Some sessionId ->
       let cached = tryGetFreshWorkerCache sessionId
@@ -970,6 +984,8 @@ let createStreamHandler
         Log.info "[pushState] sending changed mainHtml.Length=%d sessionId=%s" mainHtml.Length (WorkerProtocol.SessionId.value sessionId)
         lastPushedMain <- mainHtml
         do! ssePatchNode ctx mainNode
+        // Eval-to-pixel latency chain, stage 5/5: the morph reached the wire.
+        EvalLatencyTrace.shared.StampMorphWritten()
     }
 
     try
@@ -983,107 +999,108 @@ let createStreamHandler
       | ex ->
         Log.error "[Dashboard SSE] Initial pushState failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
-      match infra.StateChanged with
-      | Some evt ->
-        let tcs = Threading.Tasks.TaskCompletionSource()
-        use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
-        // Serialize SSE writes via MailboxProcessor — no locks, no mutable state.
-        // Coalesces rapid state changes: drain queued, throttle 100ms, drain again, push once.
-        // Heartbeat: when idle >15s, sends `: keepalive\n\n` SSE comment to prevent
-        // proxy/browser timeouts. Integrated into the actor loop to avoid concurrent writes.
-        let pushAgent = MailboxProcessor<DashboardStreamCommand>.Start((fun inbox ->
-          let rec loop () = async {
-            let! msg = inbox.TryReceive(15_000)
-            match msg with
-            | None ->
-              // Idle timeout — send SSE keepalive comment. The 15s interval
-              // matches the Datastar client's expected heartbeat and stays
-              // well under Kestrel's default keep-alive timeout. The write
-              // is wrapped to swallow connection-closed exceptions so the
-              // loop survives transient client disconnects (Datastar will
-              // reconnect via a new EventSource).
-              try
-                if not ctx.RequestAborted.IsCancellationRequested then
-                  let bytes = System.Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
-                  do! ctx.Response.Body.AsyncWrite(bytes, 0, bytes.Length)
-                  do! ctx.Response.Body.FlushAsync() |> Async.AwaitTask
-              with
-              | :? System.IO.IOException -> ()
-              | :? ObjectDisposedException -> ()
-              | :? OperationCanceledException -> ()
-              | :? System.ArgumentOutOfRangeException -> ()
-              | :? System.InvalidOperationException -> ()
-              | _ -> ()
-              // If the client cancelled, exit the loop. The MailboxProcessor
-              // was started with ctx.RequestAborted so it's also being torn
-              // down, but exiting explicitly lets the handler return cleanly.
-              match ctx.RequestAborted.IsCancellationRequested with
-              | true -> ()
-              | false -> return! loop ()
-            | Some (DashboardStreamCommand.RetargetView sidOpt) ->
-              // Signal-driven session retarget: a dashboard POST changed the
-              // browser's viewing-session signal, so this connection must now
-              // push the newly-selected session (or the picker when None).
-              retargetTo sidOpt
-              try
-                do! pushState () |> Async.AwaitTask
-              with
-              | :? System.IO.IOException -> ()
-              | :? ObjectDisposedException -> ()
-              | :? OperationCanceledException -> ()
-              | :? System.ArgumentOutOfRangeException -> ()
-              | :? System.InvalidOperationException -> ()
-              | ex -> Log.debug "[Dashboard SSE] pushState after retarget failed: %s" ex.Message
-              return! loop ()
-            | Some (DashboardStreamCommand.StateChange change) ->
-              // A burst of state changes renders once: drain, throttle, drain,
-              // push. A retarget that arrives mid-burst is applied, never
-              // dropped — under a steady stream of model changes the mailbox is
-              // almost always mid-burst, and a dropped retarget left the page
-              // re-rendering the old session over the user's switch.
-              let mutable burst = StreamBurst.add StreamBurst.empty (DashboardStreamCommand.StateChange change)
-              while inbox.CurrentQueueLength > 0 do
-                let! drained = inbox.Receive()
-                burst <- StreamBurst.add burst drained
-              do! Async.Sleep 100
-              while inbox.CurrentQueueLength > 0 do
-                let! drained = inbox.Receive()
-                burst <- StreamBurst.add burst drained
-              match burst.Retarget with
-              | BurstRetarget.RetargetTo target -> retargetTo target
-              | BurstRetarget.NoRetarget -> ()
-              if burst.WorkerInvalidated then
-                lastWorkerFetch <- DateTime.MinValue
-              try
-                do! pushState () |> Async.AwaitTask
-              with
-              | :? System.IO.IOException -> ()
-              | :? ObjectDisposedException -> ()
-              | :? OperationCanceledException -> ()
-              | :? System.ArgumentOutOfRangeException -> ()
-              | :? System.InvalidOperationException -> ()
-              | ex -> Log.debug "[Dashboard SSE] pushState failed: %s" ex.Message
-              return! loop ()
-          }
-          loop ()), ctx.RequestAborted)
-        infra.ConnectionChannels.[clientId] <- pushAgent
-        use _sub = evt.Subscribe(fun change ->
-          try pushAgent.Post(DashboardStreamCommand.StateChange change)
-          with :? ObjectDisposedException -> ())
-        // Initial live-bindings subscription — unless the first push already
-        // retargeted (and so subscribed) while reconciling a dead session.
-        match liveBindingsSub.Value with
-        | None -> currentSessionOpt |> Option.iter (subscribeLiveBindings infra clientId liveBindingsSub)
-        | Some _ -> ()
-        do! tcs.Task
-      | None ->
-        // Fallback: poll every second
-        while not ctx.RequestAborted.IsCancellationRequested do
+      let tcs = Threading.Tasks.TaskCompletionSource()
+      use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
+      // Serialize SSE writes via MailboxProcessor — no locks, no mutable state.
+      // Render-on-first-change with natural back-pressure (roast-6 Phase 0
+      // item 1 / vision §3.4, §7.4): NO fixed coalesce delay. A lone state
+      // change is rendered the moment it's dequeued; a burst that arrived
+      // before dequeue is drained and folded into that one render. If MORE
+      // changes queued up while the render was running, the queue is
+      // non-empty the instant pushState returns — drain and render again
+      // immediately instead of waiting for the next mailbox receive. This
+      // still collapses a steady burst into one render per render-duration
+      // (never one render per message), while a single isolated change pays
+      // zero added latency (the old code always slept 100ms first).
+      // Heartbeat: when idle >15s, sends `: keepalive\n\n` SSE comment to prevent
+      // proxy/browser timeouts. Integrated into the actor loop to avoid concurrent writes.
+      let pushAgent = MailboxProcessor<DashboardStreamCommand>.Start((fun inbox ->
+        let renderBurst (seed: StreamBurst) = async {
+          let mutable burst = seed
+          while inbox.CurrentQueueLength > 0 do
+            let! drained = inbox.Receive()
+            burst <- StreamBurst.add burst drained
+          match burst.Retarget with
+          | BurstRetarget.RetargetTo target -> retargetTo target
+          | BurstRetarget.NoRetarget -> ()
+          if burst.WorkerInvalidated then
+            lastWorkerFetch <- DateTime.MinValue
           try
-            do! Threading.Tasks.Task.Delay(Timeouts.sseEventInterval, ctx.RequestAborted)
-            do! pushState ()
+            do! pushState () |> Async.AwaitTask
           with
+          | :? System.IO.IOException -> ()
+          | :? ObjectDisposedException -> ()
           | :? OperationCanceledException -> ()
+          | :? System.ArgumentOutOfRangeException -> ()
+          | :? System.InvalidOperationException -> ()
+          | ex -> Log.debug "[Dashboard SSE] pushState failed: %s" ex.Message
+        }
+        let rec loop () = async {
+          let! msg = inbox.TryReceive(15_000)
+          match msg with
+          | None ->
+            // Idle timeout — send SSE keepalive comment. The 15s interval
+            // matches the Datastar client's expected heartbeat and stays
+            // well under Kestrel's default keep-alive timeout. The write
+            // is wrapped to swallow connection-closed exceptions so the
+            // loop survives transient client disconnects (Datastar will
+            // reconnect via a new EventSource).
+            try
+              if not ctx.RequestAborted.IsCancellationRequested then
+                let bytes = System.Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
+                do! ctx.Response.Body.AsyncWrite(bytes, 0, bytes.Length)
+                do! ctx.Response.Body.FlushAsync() |> Async.AwaitTask
+            with
+            | :? System.IO.IOException -> ()
+            | :? ObjectDisposedException -> ()
+            | :? OperationCanceledException -> ()
+            | :? System.ArgumentOutOfRangeException -> ()
+            | :? System.InvalidOperationException -> ()
+            | _ -> ()
+            // If the client cancelled, exit the loop. The MailboxProcessor
+            // was started with ctx.RequestAborted so it's also being torn
+            // down, but exiting explicitly lets the handler return cleanly.
+            match ctx.RequestAborted.IsCancellationRequested with
+            | true -> ()
+            | false -> return! loop ()
+          | Some (DashboardStreamCommand.RetargetView sidOpt) ->
+            // Signal-driven session retarget: a dashboard POST changed the
+            // browser's viewing-session signal, so this connection must now
+            // push the newly-selected session (or the picker when None).
+            retargetTo sidOpt
+            try
+              do! pushState () |> Async.AwaitTask
+            with
+            | :? System.IO.IOException -> ()
+            | :? ObjectDisposedException -> ()
+            | :? OperationCanceledException -> ()
+            | :? System.ArgumentOutOfRangeException -> ()
+            | :? System.InvalidOperationException -> ()
+            | ex -> Log.debug "[Dashboard SSE] pushState after retarget failed: %s" ex.Message
+            return! loop ()
+          | Some (DashboardStreamCommand.StateChange change) ->
+            // Eval-to-pixel latency chain, stage 4/5 (vision §3.4, §7.4):
+            // the push agent dequeued a state-change notification.
+            EvalLatencyTrace.shared.StampPushReceived()
+            do! renderBurst (StreamBurst.add StreamBurst.empty (DashboardStreamCommand.StateChange change))
+            // Back-pressure: a burst that queued up WHILE the render above
+            // was running must not wait for the next TryReceive — render it
+            // now. Repeats until a render leaves the queue empty.
+            while inbox.CurrentQueueLength > 0 do
+              do! renderBurst StreamBurst.empty
+            return! loop ()
+        }
+        loop ()), ctx.RequestAborted)
+      infra.ConnectionChannels.[clientId] <- pushAgent
+      use _sub = infra.StateChanged.Subscribe(fun change ->
+        try pushAgent.Post(DashboardStreamCommand.StateChange change)
+        with :? ObjectDisposedException -> ())
+      // Initial live-bindings subscription — unless the first push already
+      // retargeted (and so subscribed) while reconciling a dead session.
+      match liveBindingsSub.Value with
+      | None -> currentSessionOpt |> Option.iter (subscribeLiveBindings infra clientId liveBindingsSub)
+      | Some _ -> ()
+      do! tcs.Task
     finally
       // Whichever mode the stream ran in, its live-bindings watch ends with it.
       liveBindingsSub.Value |> Option.iter (fun d -> d.Dispose())
@@ -1856,55 +1873,49 @@ let createApiStateHandler
 
     try
       do! pushJson ()
-      match infra.StateChanged with
-      | Some evt ->
-        let tcs = Threading.Tasks.TaskCompletionSource()
-        use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
-        // Serialize SSE writes via MailboxProcessor — matches Datastar handler pattern.
-        // Coalesces rapid state changes: drain queued, throttle 100ms, drain again, push once.
-        // Heartbeat: when idle >15s, sends `: keepalive\n\n` SSE comment.
-        let pushAgent = MailboxProcessor.Start((fun inbox ->
-          let rec loop () = async {
-            let! msg = inbox.TryReceive(15_000)
-            match msg with
-            | None ->
-              try
-                let bytes = Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
-                do! ctx.Response.Body.AsyncWrite(bytes, 0, bytes.Length)
-                do! ctx.Response.Body.FlushAsync() |> Async.AwaitTask
-              with
-              | :? System.IO.IOException | :? ObjectDisposedException -> ()
-              | :? OperationCanceledException -> ()
-              | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
-              return! loop ()
-            | Some () ->
-              while inbox.CurrentQueueLength > 0 do
-                do! inbox.Receive()
-              do! Async.Sleep 100
-              while inbox.CurrentQueueLength > 0 do
-                do! inbox.Receive()
-              try
-                do! pushJson () |> Async.AwaitTask
-              with
-              | :? System.IO.IOException | :? ObjectDisposedException -> ()
-              | :? OperationCanceledException -> ()
-              | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
-              | ex -> Log.debug "[dashboard] Push error: %s" ex.Message
-              return! loop ()
-          }
-          loop ()), ctx.RequestAborted)
-        use _sub = evt.Subscribe(fun _ ->
-          try pushAgent.Post(())
-          with :? ObjectDisposedException -> ())
-        do! tcs.Task
-      | None ->
-        while not ctx.RequestAborted.IsCancellationRequested do
-          try
-            do! Threading.Tasks.Task.Delay(Timeouts.sseEventInterval, ctx.RequestAborted)
-            do! pushJson ()
-          with
-          | :? OperationCanceledException -> ()
-          | _ -> () // Pipe broken or write error — ignore
+      // Legacy TUI JSON stream (deprecated client, AGENTS.md) — not a Phase 0
+      // target (roast-6 item 1 scopes the Datastar dashboard's push agent
+      // and its fixed-delay/polling deletion). Kept minimally in sync with
+      // `DashboardInfra.StateChanged` becoming non-optional.
+      let tcs = Threading.Tasks.TaskCompletionSource()
+      use _ct = ctx.RequestAborted.Register(fun () -> tcs.TrySetResult() |> ignore)
+      // Serialize SSE writes via MailboxProcessor — matches Datastar handler pattern.
+      // Coalesces rapid state changes: drain queued, throttle 100ms, drain again, push once.
+      // Heartbeat: when idle >15s, sends `: keepalive\n\n` SSE comment.
+      let pushAgent = MailboxProcessor.Start((fun inbox ->
+        let rec loop () = async {
+          let! msg = inbox.TryReceive(15_000)
+          match msg with
+          | None ->
+            try
+              let bytes = Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
+              do! ctx.Response.Body.AsyncWrite(bytes, 0, bytes.Length)
+              do! ctx.Response.Body.FlushAsync() |> Async.AwaitTask
+            with
+            | :? System.IO.IOException | :? ObjectDisposedException -> ()
+            | :? OperationCanceledException -> ()
+            | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
+            return! loop ()
+          | Some () ->
+            while inbox.CurrentQueueLength > 0 do
+              do! inbox.Receive()
+            do! Async.Sleep 100
+            while inbox.CurrentQueueLength > 0 do
+              do! inbox.Receive()
+            try
+              do! pushJson () |> Async.AwaitTask
+            with
+            | :? System.IO.IOException | :? ObjectDisposedException -> ()
+            | :? OperationCanceledException -> ()
+            | :? System.ArgumentOutOfRangeException | :? System.InvalidOperationException -> ()
+            | ex -> Log.debug "[dashboard] Push error: %s" ex.Message
+            return! loop ()
+        }
+        loop ()), ctx.RequestAborted)
+      use _sub = infra.StateChanged.Subscribe(fun _ ->
+        try pushAgent.Post(())
+        with :? ObjectDisposedException -> ())
+      do! tcs.Task
     finally
       SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
       infra.ConnectionTracker |> Option.iter (fun t -> t.Unregister(clientId))

@@ -362,7 +362,8 @@ let perSessionTestSummaryTests =
           GuidanceCssClass = ""
           ActiveProject = None
           ProjectRoles = []
-          App = SageFs.AppRun.AppRunState.NotRunning }
+          App = SageFs.AppRun.AppRunState.NotRunning
+          WorkerRssBytes = None }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -387,7 +388,8 @@ let perSessionTestSummaryTests =
           GuidanceCssClass = ""
           ActiveProject = None
           ProjectRoles = []
-          App = SageFs.AppRun.AppRunState.NotRunning }
+          App = SageFs.AppRun.AppRunState.NotRunning
+          WorkerRssBytes = None }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -420,7 +422,8 @@ let perSessionCoverageTests =
           GuidanceCssClass = ""
           ActiveProject = None
           ProjectRoles = []
-          App = SageFs.AppRun.AppRunState.NotRunning }
+          App = SageFs.AppRun.AppRunState.NotRunning
+          WorkerRssBytes = None }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -445,7 +448,8 @@ let perSessionCoverageTests =
           GuidanceCssClass = ""
           ActiveProject = None
           ProjectRoles = []
-          App = SageFs.AppRun.AppRunState.NotRunning }
+          App = SageFs.AppRun.AppRunState.NotRunning
+          WorkerRssBytes = None }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode

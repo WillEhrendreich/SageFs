@@ -180,6 +180,8 @@ let diagnosticsPanelSnapshotTests =
         ProjectRoles = []
 
         App = SageFs.AppRun.AppRunState.NotRunning
+        EvalToPixelP50Ms = None
+        EvalToPixelP99Ms = None
 
       }
       let html = snap.DiagnosticsPanel |> renderToString
@@ -204,6 +206,8 @@ let diagnosticsPanelSnapshotTests =
         ProjectRoles = []
 
         App = SageFs.AppRun.AppRunState.NotRunning
+        EvalToPixelP50Ms = None
+        EvalToPixelP99Ms = None
 
       }
       let html = renderMainContent snap |> renderToString

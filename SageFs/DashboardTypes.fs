@@ -482,7 +482,24 @@ type ParsedSession = {
   ActiveProject: string option
   ProjectRoles: SageFs.ProjectLoading.ClassifiedProject list
   App: AppRun.AppRunState
+  /// The worker process's resident set size (`Process.WorkingSet64`), read
+  /// live from its pid (vision §3.4 "worker RSS" — the first of the four
+  /// numbers that decide cohort member count). None when the session has no
+  /// live worker pid (starting, faulted, stopped) or the pid's process has
+  /// already exited.
+  WorkerRssBytes: int64 option
 }
+
+/// Best-effort live RSS of a worker process, by pid. Never throws: a pid
+/// that has already exited, or that this user cannot query cross-user, is
+/// `None` rather than a fault — the card must never break on a process that
+/// died between "the daemon recorded this pid" and "the sidebar rendered."
+let tryGetWorkerRssBytes (pid: int) : int64 option =
+  match pid with
+  | 0 -> None
+  | pid ->
+    try Some (Diagnostics.Process.GetProcessById(pid).WorkingSet64)
+    with _ -> None
 
 /// A span of time in the sidebar's words: "just now", "5m", "2h", "3d".
 let spanLabel (span: TimeSpan) =
@@ -542,7 +559,10 @@ let sessionCardOf
     GuidanceCssClass = ""
     ActiveProject = info.ActiveProject
     ProjectRoles = info.ProjectRoles
-    App = info.App }
+    App = info.App
+    WorkerRssBytes =
+      WorkerProtocol.SessionLifecycleStatus.workerPid info.Status
+      |> Option.bind tryGetWorkerRssBytes }
 
 /// Every session the sidebar lists — all but Stopped — in registry order (the
 /// same order the initial page and viewing reconciliation use).
@@ -744,7 +764,12 @@ type DashboardStreamCommand =
 type DashboardInfra = {
   Version: string
   McpPort: int
-  StateChanged: IEvent<SseEvent> option
+  /// The daemon's single push-notification source. Non-optional: roast-6
+  /// Phase 0 item 1 deletes the dashboard's 1s polling fallback (there was
+  /// no scenario where a live daemon lacked this event; only a `None` value
+  /// let dead poll-loop code exist at all) — one push system, not two.
+  /// Tests that don't exercise the SSE stream pass a never-firing event.
+  StateChanged: IEvent<SseEvent>
   ConnectionTracker: ConnectionTracker option
   SessionThemes: Collections.Concurrent.ConcurrentDictionary<string, string>
   GetCompletions: WorkerProtocol.SessionId -> string -> int -> Threading.Tasks.Task<Features.AutoCompletion.CompletionItem list>
@@ -802,6 +827,11 @@ type DashboardSnapshot = {
   ProjectRoles: SageFs.ProjectLoading.ClassifiedProject list
   /// The app the session runs, as the user should see it.
   App: AppRun.AppRunState
+  /// Eval-to-pixel latency chain (vision §3.4, §7.4) — p50/p99 in ms over
+  /// the last 256 completed chains, rendered in the statusline. None until
+  /// at least one eval has completed its full request-to-morph journey.
+  EvalToPixelP50Ms: float option
+  EvalToPixelP99Ms: float option
 }
 
 
