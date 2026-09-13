@@ -1176,6 +1176,15 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             | Active (st, _) ->
               publishSnapshot st Evaluating evalStats
               let sw = System.Diagnostics.Stopwatch.StartNew()
+              // Eval-to-pixel latency chain, stage 1/5 (vision §3.4, §7.4):
+              // starts a new in-flight sample in THIS PROCESS's tracker. This
+              // actor runs inside the FSI worker subprocess, not the daemon
+              // — see EvalLatencyTrace's module doc for why that means this
+              // stamp and the daemon-side ModelChanged/PushReceived/
+              // MorphWritten stamps land in two separate `shared` instances
+              // today, and why ModelChanged starts its own chain rather than
+              // waiting for this one to arrive.
+              EvalLatencyTrace.shared.StampRequested() |> ignore
               emit (Events.EvalRequested {| Code = request.Code; Source = Events.System |})
               let pipeline = pipelineBuildFn (wrapErrorMiddleware :: middleware) (evalFn cts.Token)
               let generation = sessionGeneration.Value
@@ -1210,6 +1219,9 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           return (phase, middleware, evalStats)
         | EvalFinished(result, sw, code, reply, _) ->
           sw.Stop()
+          // Eval-to-pixel latency chain, stage 2/5: the eval actor received
+          // the eval thread's result back on its own mailbox.
+          EvalLatencyTrace.shared.StampFinished()
           currentEvalCts.Value <- None
           currentEvalThread.Value <- None
           match result with

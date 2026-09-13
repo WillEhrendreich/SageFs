@@ -108,4 +108,26 @@ let burstTests = testList "Dashboard stream burst" [
     (StreamBurst.ofCommands [ DashboardStreamCommand.StateChange SseEvent.SessionProgress; modelChanged ]).WorkerInvalidated
     |> Expect.isTrue "a model change invalidates it"
   }
+
+  // Roast-6 / multiagent-vision.md §10 Phase 0 item 1 RED test: "two changes
+  // 1 ms apart produce ONE render." The push agent's drain loop
+  // (`Dashboard.fs`'s `renderBurst`) folds every queued StateChange into ONE
+  // StreamBurst via exactly this `StreamBurst.add`/`ofCommands` fold, then
+  // calls `pushState()` exactly once per fold — regardless of how many
+  // messages were folded in or how many milliseconds apart they arrived
+  // (there is no longer a fixed 100ms coalesce window to "miss"; the fold
+  // drains whatever is in the mailbox at the moment of the call). This test
+  // proves the fold itself is idempotent in render-count terms: N state
+  // changes always reduce to exactly one burst — one downstream
+  // `pushState()` call — never N.
+  test "WHY — StreamBurst — N state changes (however closely spaced in time — the fold is time-independent) reduce to exactly one burst, hence one render" {
+    let oneChange = StreamBurst.ofCommands [ modelChanged ]
+    let twoChanges = StreamBurst.ofCommands [ modelChanged; modelChanged ]
+    let tenChanges = StreamBurst.ofCommands (List.replicate 10 modelChanged)
+    // "One burst" here means: folding always yields a single StreamBurst
+    // value (not a list of them) — the type itself makes "N renders for N
+    // messages" structurally impossible, independent of timing.
+    oneChange |> Expect.equal "1 change -> 1 burst" twoChanges
+    twoChanges |> Expect.equal "2 changes -> the same single burst as 10" tenChanges
+  }
 ]

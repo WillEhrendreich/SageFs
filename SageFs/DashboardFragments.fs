@@ -1069,6 +1069,16 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     textEnc (sprintf "evals: %d" s.EvalCount)
                   ]
                 | false -> ()
+                // Worker RSS (vision §3.4 "worker RSS" — the first of the
+                // four numbers that decide cohort member count). Live from
+                // the worker's own pid; absent while starting/faulted/stopped
+                // or if the pid has already exited (never a fault).
+                match s.WorkerRssBytes with
+                | Some bytes ->
+                  Elem.span [ Attr.class' "meta"; testid "session-rss" ] [
+                    textEnc (sprintf "RSS: %dMB" (bytes / 1024L / 1024L))
+                  ]
+                | None -> ()
                 match s.TestSummary with
                 | Some ts when ts.Total > 0 ->
                   let badge = Features.LiveTesting.TestSummary.toInlineBadge ts
@@ -1613,6 +1623,15 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         Elem.div [ Attr.class' "statusline-stat" ] [
           textEnc (sprintf "%d evals" snap.EvalStats.Count)
         ]
+        // Eval-to-pixel latency p50/p99 (vision §3.4, §7.4; roast-6 Phase 0
+        // item 1) — the whole request-to-morph chain, over the last 256
+        // completed chains. Absent until the first eval has completed it.
+        match snap.EvalToPixelP50Ms, snap.EvalToPixelP99Ms with
+        | Some p50, Some p99 ->
+          Elem.div [ Attr.class' "statusline-stat"; testid "eval-to-pixel-latency" ] [
+            textEnc (sprintf "px p50 %.1fms p99 %.1fms" p50 p99)
+          ]
+        | _ -> ()
         Elem.div [ Attr.class' "statusline-stat-accent" ] [
           textEnc (sprintf "v%s" snap.Version)
         ]

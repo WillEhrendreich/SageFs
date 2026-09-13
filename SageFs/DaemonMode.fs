@@ -1484,6 +1484,12 @@ let createElmRuntime
               Log.info "[elm] output=%d diags=%d | %s"
                 outputCount diagCount latest
             | false -> ()
+            // Eval-to-pixel latency chain, stage 3/5 (vision §3.4, §7.4):
+            // the Elm model changed and is about to notify subscribers
+            // (dashboard push agents, MCP push). Stamped here rather than
+            // inside the thread-pool work item so it reflects when the
+            // change was decided, not when the work item happened to run.
+            EvalLatencyTrace.shared.StampModelChanged()
             System.Threading.ThreadPool.QueueUserWorkItem(fun _ ->
               stateChangedEvent.Trigger (ModelChanged (outputCount, diagCount))) |> ignore
           | false -> ()
@@ -2396,7 +2402,7 @@ let run
   let dashboardInfra : DashboardInfra = {
     Version = version
     McpPort = mcpPort
-    StateChanged = Some stateChangedEvent.Publish
+    StateChanged = stateChangedEvent.Publish
     ConnectionTracker = Some connectionTracker
     SessionThemes = sessionThemes
     GetSessionCount = fun () -> task {

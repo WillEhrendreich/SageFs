@@ -7,6 +7,7 @@ open VerifyExpecto
 open VerifyTests
 open Falco.Markup
 open SageFs
+open SageFs.Server
 open SageFs.Features.LiveTesting
 open SageFs.Server.Dashboard
 open SageFs.Server.DashboardTypes
@@ -77,7 +78,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None }
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         Status = SessionDisplayStatus.Stopped
         StatusMessage = None
@@ -89,7 +90,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None }
     ]
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions" html
@@ -187,7 +188,9 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     {
       Version = "0.0.0"
       McpPort = 37749
-      StateChanged = None
+      // Non-optional (roast-6 Phase 0 item 1): these tests never exercise the
+      // SSE stream, so a never-firing event is a faithful "no push happens" stand-in.
+      StateChanged = (Event<SseEvent>()).Publish
       ConnectionTracker = None
       SessionThemes = System.Collections.Concurrent.ConcurrentDictionary<string, string>()
       GetCompletions = fun _ _ _ -> System.Threading.Tasks.Task.FromResult []
@@ -393,7 +396,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None }
     ]
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html
@@ -539,7 +542,9 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
     ActiveProject = None
     ProjectRoles = []
-    App = SageFs.AppRun.AppRunState.NotRunning }
+    App = SageFs.AppRun.AppRunState.NotRunning
+    EvalToPixelP50Ms = None
+    EvalToPixelP99Ms = None }
 
   test "renderMainContent shows version" {
     let html = renderMainContent (mkSnap "1.2.3") |> renderNode
@@ -561,13 +566,13 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None }
       { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
         ProjectsText = "(B.fsproj)"; EvalCount = 1
         Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None }
     ]
     let snap =
       { mkSnap "0.0.0" with
@@ -1053,7 +1058,9 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning }
+      App = SageFs.AppRun.AppRunState.NotRunning
+      EvalToPixelP50Ms = None
+      EvalToPixelP99Ms = None }
     let html = renderMainContent snap |> renderNode
     let mustHaveIds =
       [ DomIds.Main; DomIds.SessionStatus; DomIds.EvalStats
@@ -1094,7 +1101,9 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning }
+      App = SageFs.AppRun.AppRunState.NotRunning
+      EvalToPixelP50Ms = None
+      EvalToPixelP99Ms = None }
     let html = renderMainContent snap |> renderNode
     (html.StartsWith("<div id=\"main\"")) |> Expect.isTrue "must start with div#main"
   }
@@ -1114,7 +1123,9 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
       BindingsPanel = Elem.div [] []; DaemonHealth = Elem.div [] []; FailureNarrativesPanel = Elem.div [] []; DiagnosticsPanel = Elem.div [] []; FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
       ActiveProject = None
       ProjectRoles = []
-      App = SageFs.AppRun.AppRunState.NotRunning }
+      App = SageFs.AppRun.AppRunState.NotRunning
+      EvalToPixelP50Ms = None
+      EvalToPixelP99Ms = None }
   test "Version appears in rendered output" {
     let html = mkSnap "1.2.3" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
     html |> Expect.stringContains "version should appear" "1.2.3"
