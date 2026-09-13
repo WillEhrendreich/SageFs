@@ -1,6 +1,7 @@
 module SageFs.Tests.DaemonInfoContractTests
 
 open Expecto
+open Expecto.Flip
 open SageFs
 open SageFs.Server.DashboardTypes
 
@@ -17,9 +18,9 @@ let daemonInfoContractTests =
           37749
           3
 
-      Expect.equal contract.Pid 4242 "pid round-trips"
-      Expect.equal contract.DashboardPort 37750 "dashboard port derived from mcp"
-      Expect.equal contract.ApiVersion EndpointContracts.apiVersion "apiVersion matches endpoint contract"
+      contract.Pid |> Expect.equal "pid round-trips" 4242
+      contract.DashboardPort |> Expect.equal "dashboard port derived from mcp" 37750
+      contract.ApiVersion |> Expect.equal "apiVersion matches endpoint contract" EndpointContracts.apiVersion
 
     testCase "create preserves working directory and session count" <| fun () ->
       let contract =
@@ -31,8 +32,8 @@ let daemonInfoContractTests =
           38000
           0
 
-      Expect.equal contract.WorkingDirectory @"C:\repo" "working directory round-trips"
-      Expect.equal contract.SessionCount 0 "session count round-trips"
+      contract.WorkingDirectory |> Expect.equal "working directory round-trips" @"C:\repo"
+      contract.SessionCount |> Expect.equal "session count round-trips" 0
 
     testCase "create derives dashboard port from a custom smoke MCP port" <| fun () ->
       let contract =
@@ -44,6 +45,6 @@ let daemonInfoContractTests =
           37851
           1
 
-      Expect.equal contract.McpPort 37851 "custom mcp port round-trips"
-      Expect.equal contract.DashboardPort 37852 "dashboard port stays offset from custom mcp port"
+      contract.McpPort |> Expect.equal "custom mcp port round-trips" 37851
+      contract.DashboardPort |> Expect.equal "dashboard port stays offset from custom mcp port" 37852
   ]

@@ -2,6 +2,7 @@ module SageFs.Tests.RestartPolicyCircuitBreakerTests
 
 open System
 open Expecto
+open Expecto.Flip
 open SageFs
 
 /// Phase 0 RED: prove the current RestartPolicy lacks the circuit-breaker
@@ -35,10 +36,7 @@ let tests =
         | _ -> failwith "expected Restart"
 
       // Today: 2x (1s -> 2s). Required: 4x (1s -> 4s).
-      Expect.equal
-        (secondDelay.TotalSeconds)
-        (firstDelay.TotalSeconds * 4.0)
-        "startup-crash backoff should be 4x the previous (circuit breaker)"
+      (secondDelay.TotalSeconds) |> Expect.equal "startup-crash backoff should be 4x the previous (circuit breaker)" (firstDelay.TotalSeconds * 4.0)
 
     testCase "startup crash loop gives up after 3 attempts, not 5" <| fun _ ->
       let policy = RestartPolicy.defaultPolicy

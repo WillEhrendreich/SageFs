@@ -2,6 +2,7 @@ module SageFs.Tests.CompExprSimplifierTests
 
 open System
 open Expecto
+open Expecto.Flip
 
 open SageFs
 open SageFs.AppState
@@ -55,15 +56,15 @@ let private passThroughNext : MiddlewareNext =
 let tests =
   testList "comp expr tests" [
     testCase "test let no bang"
-    <| fun _ -> Expect.isFalse (isCompExpr "let a = 10") "let a = 10 - no comp expr"
+    <| fun _ -> (isCompExpr "let a = 10") |> Expect.isFalse "let a = 10 - no comp expr"
     testCase "test let bang"
-    <| fun _ -> Expect.isTrue (isCompExpr "let! a = 10") "let! a = 10 - comp expr"
+    <| fun _ -> (isCompExpr "let! a = 10") |> Expect.isTrue "let! a = 10 - comp expr"
     testCase "test let bang tab"
-    <| fun _ -> Expect.isTrue (isCompExpr "   let! a = 10") "let! a = 10 - comp expr"
+    <| fun _ -> (isCompExpr "   let! a = 10") |> Expect.isTrue "let! a = 10 - comp expr"
     testCase "test let bang multiline"
     <| fun _ ->
       let expr = ofLines [ "let a = 10"; "let! b = 20" ]
-      Expect.isTrue (isCompExpr expr) $"{expr} - comp expr"
+      (isCompExpr expr) |> Expect.isTrue $"{expr} - comp expr"
     testCase "test if bang"
     <| fun _ ->
       let code =
@@ -75,7 +76,7 @@ let tests =
       return 0
     """
 
-      Expect.isTrue (isCompExpr code) "if else with comp expr"
+      (isCompExpr code) |> Expect.isTrue "if else with comp expr"
     testCase "test if bang reverse"
     <| fun _ ->
       let code =
@@ -87,23 +88,23 @@ let tests =
         return 0
       """
 
-      Expect.isTrue (isCompExpr code) "if else with comp expr"
+      (isCompExpr code) |> Expect.isTrue "if else with comp expr"
 
     testCase "test bang rewrite"
     <| fun _ ->
       let code = "let! a = 10"
       let expected = ofLines [ "let a = (10).Run()"; "" ]
-      Expect.equal (rewriteExpr code) expected "let bang rewrite"
+      (rewriteExpr code) |> Expect.equal "let bang rewrite" expected
     testCase "test bang rewrite tab"
     <| fun _ ->
       let code = "    let! a = 10"
       let expected = ofLines [ "let a = (10).Run()"; "" ]
-      Expect.equal (rewriteExpr code) expected "let bang rewrite"
+      (rewriteExpr code) |> Expect.equal "let bang rewrite" expected
     testCase "test bang rewrite multiline"
     <| fun _ ->
       let code = ofLines [ "let a = 10"; ""; ""; "let! b = 20" ]
       let expected = ofLines [ "let a = 10"; ""; "let b = (20).Run()"; "" ]
-      Expect.equal (rewriteExpr code) expected "let bang rewrite"
+      (rewriteExpr code) |> Expect.equal "let bang rewrite" expected
 
     testCase "test bang rewrite multiline expr"
     <| fun _ ->
@@ -119,7 +120,7 @@ let tests =
       let exp =
         ofLines [ "let a = (someComplex |>> someMap |> multiline).Run()"; ""; ""; "" ]
 
-      Expect.equal (rewriteExpr code) exp "let bang rewrite"
+      (rewriteExpr code) |> Expect.equal "let bang rewrite" exp
     testCase "test non let rewrite "
     <| fun _ ->
       let code =
@@ -136,7 +137,7 @@ let tests =
         """let a = (someComplex |>> someMap |> multiline).Run()
 (a).Run()"""
 
-      Expect.equal (rewriteExpr code) exp "let bang rewrite"
+      (rewriteExpr code) |> Expect.equal "let bang rewrite" exp
     testCase "test if else"
     <| fun _ ->
       let code =
@@ -164,7 +165,7 @@ else
     let f = (200).Run()
     do (baba).Run()"""
 
-      Expect.equal (rewriteExpr code) exp "let bang rewrite"
+      (rewriteExpr code) |> Expect.equal "let bang rewrite" exp
   ]
 
 [<Tests>]
@@ -173,18 +174,12 @@ let middlewareGuardTests =
     testCase "null session skips FSI flag lookup" <| fun _ ->
       let request = { Code = "let x = 1"; Args = Map.empty }
       let response, _ = compExprMiddleware passThroughNext (request, makeState ())
-      Expect.equal
-        response.EvaluatedCode
-        request.Code
-        "middleware should pass through unchanged when there is no live session"
+      response.EvaluatedCode |> Expect.equal "middleware should pass through unchanged when there is no live session" request.Code
 
     testCase "explicit simplify flag still works with null session" <| fun _ ->
       let request =
         { Code = "let! a = 10"
           Args = Map.ofList [ "simplifyCompExpression", box true ] }
       let response, _ = compExprMiddleware passThroughNext (request, makeState ())
-      Expect.equal
-        response.EvaluatedCode
-        (rewriteExpr request.Code)
-        "explicit simplify flag should still rewrite the code"
+      response.EvaluatedCode |> Expect.equal "explicit simplify flag should still rewrite the code" (rewriteExpr request.Code)
   ]

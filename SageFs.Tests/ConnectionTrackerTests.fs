@@ -1,6 +1,7 @@
 module SageFs.Tests.ConnectionTrackerTests
 
 open Expecto
+open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
 open SageFs
@@ -12,8 +13,8 @@ let tests = testList "ConnectionTracker" [
     tracker.Register("b1", Browser, "session-1")
     tracker.Register("b2", Browser, "session-1")
     let counts = tracker.GetCounts("session-1")
-    Expect.equal counts.Browsers 2 "two browsers"
-    Expect.equal counts.McpAgents 0 "no mcp")
+    counts.Browsers |> Expect.equal "two browsers" 2
+    counts.McpAgents |> Expect.equal "no mcp" 0)
 
   testCase "register different kinds" (fun () ->
     let tracker = ConnectionTracker()
@@ -21,9 +22,9 @@ let tests = testList "ConnectionTracker" [
     tracker.Register("m1", McpAgent, "session-1")
     tracker.Register("t1", Terminal, "session-1")
     let counts = tracker.GetCounts("session-1")
-    Expect.equal counts.Browsers 1 "one browser"
-    Expect.equal counts.McpAgents 1 "one mcp"
-    Expect.equal counts.Terminals 1 "one terminal")
+    counts.Browsers |> Expect.equal "one browser" 1
+    counts.McpAgents |> Expect.equal "one mcp" 1
+    counts.Terminals |> Expect.equal "one terminal" 1)
 
   testCase "counts per session" (fun () ->
     let tracker = ConnectionTracker()
@@ -31,29 +32,29 @@ let tests = testList "ConnectionTracker" [
     tracker.Register("b2", Browser, "session-2")
     let c1 = tracker.GetCounts("session-1")
     let c2 = tracker.GetCounts("session-2")
-    Expect.equal c1.Browsers 1 "session-1 has 1 browser"
-    Expect.equal c2.Browsers 1 "session-2 has 1 browser")
+    c1.Browsers |> Expect.equal "session-1 has 1 browser" 1
+    c2.Browsers |> Expect.equal "session-2 has 1 browser" 1)
 
   testCase "unregister removes client" (fun () ->
     let tracker = ConnectionTracker()
     tracker.Register("b1", Browser, "session-1")
-    Expect.equal tracker.TotalCount 1 "one client"
+    tracker.TotalCount |> Expect.equal "one client" 1
     tracker.Unregister("b1")
-    Expect.equal tracker.TotalCount 0 "zero after unregister"
+    tracker.TotalCount |> Expect.equal "zero after unregister" 0
     let counts = tracker.GetCounts("session-1")
-    Expect.equal counts.Browsers 0 "no browsers")
+    counts.Browsers |> Expect.equal "no browsers" 0)
 
   testCase "getAll returns all clients" (fun () ->
     let tracker = ConnectionTracker()
     tracker.Register("b1", Browser, "session-1")
     tracker.Register("m1", McpAgent, "session-2")
     let all = tracker.GetAll()
-    Expect.equal all.Length 2 "two total")
+    all.Length |> Expect.equal "two total" 2)
 
   testCase "empty tracker returns zeros" (fun () ->
     let tracker = ConnectionTracker()
     let counts = tracker.GetCounts("nonexistent")
-    Expect.equal counts ConnectionCounts.zero "empty = zero")
+    counts |> Expect.equal "empty = zero" ConnectionCounts.zero)
 
   testCase "getAllCounts sums all sessions" (fun () ->
     let tracker = ConnectionTracker()
@@ -61,15 +62,15 @@ let tests = testList "ConnectionTracker" [
     tracker.Register("m1", McpAgent, "session-2")
     tracker.Register("t1", Terminal, "session-1")
     let counts = tracker.GetAllCounts()
-    Expect.equal counts.Browsers 1 "one browser"
-    Expect.equal counts.McpAgents 1 "one mcp"
-    Expect.equal counts.Terminals 1 "one terminal")
+    counts.Browsers |> Expect.equal "one browser" 1
+    counts.McpAgents |> Expect.equal "one mcp" 1
+    counts.Terminals |> Expect.equal "one terminal" 1)
 
   testCase "ConnectionCounts.zero is identity" (fun () ->
     let zero = ConnectionCounts.zero
-    Expect.equal zero.Browsers 0 "zero browsers"
-    Expect.equal zero.McpAgents 0 "zero mcp"
-    Expect.equal zero.Terminals 0 "zero terminals")
+    zero.Browsers |> Expect.equal "zero browsers" 0
+    zero.McpAgents |> Expect.equal "zero mcp" 0
+    zero.Terminals |> Expect.equal "zero terminals" 0)
 
   testCase "ConnectionCounts.ofClients matches manual count" (fun () ->
     let clients = [
@@ -78,5 +79,5 @@ let tests = testList "ConnectionTracker" [
       { Id = "m1"; Kind = McpAgent; SessionId = Some "s1"; ConnectedAt = System.DateTime.UtcNow }
     ]
     let counts = ConnectionCounts.ofClients clients
-    Expect.equal counts { Browsers = 2; McpAgents = 1; Terminals = 0 } "matches")
+    counts |> Expect.equal "matches" { Browsers = 2; McpAgents = 1; Terminals = 0 })
 ]

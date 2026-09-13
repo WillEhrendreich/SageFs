@@ -1,6 +1,7 @@
 module SageFs.Tests.McpServerE2ETests
 
 open Expecto
+open Expecto.Flip
 open System.Text
 open System.Text.Json
 open System.IO
@@ -25,11 +26,11 @@ let tests =
         Metadata = Map.empty
       }
       let result = McpAdapter.formatEvalResult SessionWorkflow.Interactive testResponse
-      Expect.stringContains result "Result:" "formatEvalResult should work"
+      result |> Expect.stringContains "formatEvalResult should work" "Result:"
       
       // Test formatStatus exists and works
       let status = McpAdapter.formatStatus "test-session" 10 SageFs.SessionState.Ready None
-      Expect.stringContains status "test-session" "formatStatus should work"
+      status |> Expect.stringContains "formatStatus should work" "test-session"
     }
 
     test "formatEvents and parseScriptFile produce expected content" {
@@ -47,7 +48,7 @@ let tests =
         (System.DateTime.UtcNow, "console", "test input")
       ]
       let result = McpAdapter.formatEvents testEvents
-      Expect.stringContains result "console:" "formatEvents should work"
+      result |> Expect.stringContains "formatEvents should work" "console:"
       
       // Test parseScriptFile exists and works
       let tempFile = System.IO.Path.GetTempFileName()
@@ -55,7 +56,7 @@ let tests =
         System.IO.File.WriteAllText(tempFile, "let x = 1;;")
         let result = McpAdapter.parseScriptFile tempFile
         match result with
-        | Ok statements -> Expect.equal statements.Length 1 "Should parse one statement"
+        | Ok statements -> statements.Length |> Expect.equal "Should parse one statement" 1
         | Error _ -> failtest "Should parse successfully"
       finally
         System.IO.File.Delete(tempFile)

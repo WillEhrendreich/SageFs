@@ -2,6 +2,7 @@ module SageFs.Tests.DashboardSnapshotTests
 
 open System
 open Expecto
+open Expecto.Flip
 open VerifyExpecto
 open VerifyTests
 open Falco.Markup
@@ -122,8 +123,8 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
     }
 
     let html = renderDiscoveredProjectsWithConfig (Some dirConfig) discovered |> renderNode
-    Expect.isTrue (html.Contains ".SageFs/config.fsx") "should mention the config path"
-    Expect.isTrue (html.Contains "warmup auto-open disabled") "should mention the warmup auto-open opt-out"
+    (html.Contains ".SageFs/config.fsx") |> Expect.isTrue "should mention the config path"
+    (html.Contains "warmup auto-open disabled") |> Expect.isTrue "should mention the warmup auto-open opt-out"
   }
 
   testTask "renderDiscoveredProjects empty" {
@@ -205,27 +206,27 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
 
   testTask "buildDashboardSnapshot carries rebuilding status into the live testing panel" {
     let! html = panelFor (SageFs.Features.LiveTestActivity.LiveTestActivity.Rebuilding (2, tally 3 0))
-    Expect.stringContains html "Live Testing: ON" "dashboard should show live testing as active"
-    Expect.stringContains html "Rebuilding to re-run 2 tests" "dashboard should tell users that tests are waiting on the build"
+    html |> Expect.stringContains "dashboard should show live testing as active" "Live Testing: ON"
+    html |> Expect.stringContains "dashboard should tell users that tests are waiting on the build" "Rebuilding to re-run 2 tests"
   }
 
   testTask "WHY — a discovery that found nothing says so instead of Discovering forever" {
     let! html = panelFor (SageFs.Features.LiveTestActivity.LiveTestActivity.NoTestsFound [ "Expecto" ])
-    Expect.stringContains html "No tests found (Expecto detected)" "the panel must say discovery finished empty"
-    Expect.isFalse (html.Contains "Discovering") "a finished discovery must not read as still discovering"
+    html |> Expect.stringContains "the panel must say discovery finished empty" "No tests found (Expecto detected)"
+    (html.Contains "Discovering") |> Expect.isFalse "a finished discovery must not read as still discovering"
   }
 
   testTask "WHY — a failed discovery shows its reason because a spinner that never ends explains nothing" {
     let! html = panelFor (SageFs.Features.LiveTestActivity.LiveTestActivity.DiscoveryFailed "could not load Tests.dll")
-    Expect.stringContains html "Could not discover tests: could not load Tests.dll" "the panel must give the reason"
+    html |> Expect.stringContains "the panel must give the reason" "Could not discover tests: could not load Tests.dll"
   }
 
   testTask "WHY — the enable toggle posts through Datastar and shows it is turning on because a silent click reads as broken" {
     let! html = panelFor SageFs.Features.LiveTestActivity.LiveTestActivity.Off
-    Expect.stringContains html "/dashboard/live-testing/enable" "enable must post to the dashboard route"
-    Expect.stringContains html "liveTestingLoading" "enable must bind the in-flight indicator"
-    Expect.stringContains html "Turning on" "enable must say it is turning on while in flight"
-    Expect.isFalse (html.Contains "/api/dispatch") "the toggle must not be a fire-and-forget fetch"
+    html |> Expect.stringContains "enable must post to the dashboard route" "/dashboard/live-testing/enable"
+    html |> Expect.stringContains "enable must bind the in-flight indicator" "liveTestingLoading"
+    html |> Expect.stringContains "enable must say it is turning on while in flight" "Turning on"
+    (html.Contains "/api/dispatch") |> Expect.isFalse "the toggle must not be a fire-and-forget fetch"
   }
 
   testTask "WHY — the live-testing toggle route dispatches the change and pushes because the panel only shows what the model holds" {
@@ -234,14 +235,14 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     let ctx = Microsoft.AspNetCore.Http.DefaultHttpContext()
     ctx.Response.Body <- new IO.MemoryStream()
     do! createLiveTestingToggleHandler dispatched.Add (fun () -> pushes <- pushes + 1) SageFsMsg.EnableLiveTesting ctx
-    Expect.isTrue (dispatched |> Seq.exists (function SageFsMsg.EnableLiveTesting -> true | _ -> false)) "the route dispatches EnableLiveTesting"
-    Expect.equal pushes 1 "the route triggers a dashboard push"
+    (dispatched |> Seq.exists (function SageFsMsg.EnableLiveTesting -> true | _ -> false)) |> Expect.isTrue "the route dispatches EnableLiveTesting"
+    pushes |> Expect.equal "the route triggers a dashboard push" 1
   }
 
   testTask "WHY — the disable toggle posts through Datastar and shows it is turning off" {
     let! html = panelFor (SageFs.Features.LiveTestActivity.LiveTestActivity.Settled (tally 1 0))
-    Expect.stringContains html "/dashboard/live-testing/disable" "disable must post to the dashboard route"
-    Expect.stringContains html "Turning off" "disable must say it is turning off while in flight"
+    html |> Expect.stringContains "disable must post to the dashboard route" "/dashboard/live-testing/disable"
+    html |> Expect.stringContains "disable must say it is turning off while in flight" "Turning off"
   }
 
   // ─── TDD improvement: OFF state must communicate the cost ───────────────────
@@ -254,7 +255,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
   testTask "OFF state hint warns that tests run on every keystroke" {
     let! html = panelFor SageFs.Features.LiveTestActivity.LiveTestActivity.Off
     // The "off" hint must mention the cost: keystrokes drive test re-runs.
-    Expect.stringContains html "keystroke" "OFF hint must mention that tests run on every keystroke"
+    html |> Expect.stringContains "OFF hint must mention that tests run on every keystroke" "keystroke"
   }
 
   // ─── TDD improvement: passed/failed counts must be color-coded ──────────────
@@ -265,8 +266,8 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
   // (--fg-red) so the eyes latch onto the failing count.
   testTask "ON state shows passed count in green and failed count in red" {
     let! html = panelFor (SageFs.Features.LiveTestActivity.LiveTestActivity.Settled (tally 5 2))
-    Expect.stringContains html "--fg-green" "passed count must use green color"
-    Expect.stringContains html "--fg-red" "failed count must use red color"
+    html |> Expect.stringContains "passed count must use green color" "--fg-green"
+    html |> Expect.stringContains "failed count must use red color" "--fg-red"
   }
 
   // ─── Item 4: the worker-data cache must skip the three expensive fetches ──
@@ -296,15 +297,15 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
     // Uncached: all three fetches run.
     let! _, _, _, _ =
       buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" None
-    Expect.equal evalFetches 1 "uncached push fetches eval stats"
-    Expect.equal hrFetches 1 "uncached push fetches hot-reload state"
-    Expect.equal wCtxFetches 1 "uncached push fetches warmup context"
+    evalFetches |> Expect.equal "uncached push fetches eval stats" 1
+    hrFetches |> Expect.equal "uncached push fetches hot-reload state" 1
+    wCtxFetches |> Expect.equal "uncached push fetches warmup context" 1
     // Cached (same session): all three fetches are skipped.
     let! _, _, _, _ =
       buildDashboardSnapshot queries (mkInfra ()) sid (WorkerProtocol.SessionId.newId ()) "" "default" (Some cache)
-    Expect.equal evalFetches 1 "cached push must not re-fetch eval stats"
-    Expect.equal hrFetches 1 "cached push must not re-fetch hot-reload state"
-    Expect.equal wCtxFetches 1 "cached push must not re-fetch warmup context"
+    evalFetches |> Expect.equal "cached push must not re-fetch eval stats" 1
+    hrFetches |> Expect.equal "cached push must not re-fetch hot-reload state" 1
+    wCtxFetches |> Expect.equal "cached push must not re-fetch warmup context" 1
   }
 ]
 
@@ -329,9 +330,9 @@ let hostileEscapingTests = testList "FSI-derived hostile-string escaping" [
       ShadowedBindings = []
     }
     let html = renderBindingsPanel (Some snapshot) |> renderNode
-    Expect.isFalse (html.Contains("<script>alert(1)</script>")) "active-binding fields must not contain raw script"
-    Expect.isFalse (html.Contains("<script>alert(1)</script>")) "hostile payload must be escaped everywhere"
-    Expect.isTrue (html.Contains("&lt;script&gt;")) "encoded payload must appear in the HTML"
+    (html.Contains("<script>alert(1)</script>")) |> Expect.isFalse "active-binding fields must not contain raw script"
+    (html.Contains("<script>alert(1)</script>")) |> Expect.isFalse "hostile payload must be escaped everywhere"
+    (html.Contains("&lt;script&gt;")) |> Expect.isTrue "encoded payload must appear in the HTML"
   }
 
   testTask "renderSessionContextPanel escapes hostile failed-open error message" {
@@ -365,8 +366,8 @@ let hostileEscapingTests = testList "FSI-derived hostile-string escaping" [
       AutoOpenNamespaces = false
     }
     let html = renderSessionContextPanel ctx |> renderNode
-    Expect.isFalse (html.Contains("<script>alert(1)</script>")) "failed-open message must not contain raw script"
-    Expect.isTrue (html.Contains("&lt;script&gt;")) "encoded payload must appear in the HTML"
+    (html.Contains("<script>alert(1)</script>")) |> Expect.isFalse "failed-open message must not contain raw script"
+    (html.Contains("&lt;script&gt;")) |> Expect.isTrue "encoded payload must appear in the HTML"
   }
 ]
 
@@ -434,10 +435,10 @@ let parserTests = testList "parser integration" [
       @"^\[(\d{2}:\d{2}:\d{2})\]\s*\[(\w+)\]\s*(.*)",
       System.Text.RegularExpressions.RegexOptions.Singleline)
     let m = regex.Match("[12:30:45] [result] val x: int = 42")
-    Expect.isTrue m.Success "should match timestamp+kind format"
-    Expect.equal m.Groups.[1].Value "12:30:45" "timestamp"
-    Expect.equal m.Groups.[2].Value "result" "kind"
-    Expect.equal m.Groups.[3].Value "val x: int = 42" "content"
+    m.Success |> Expect.isTrue "should match timestamp+kind format"
+    m.Groups.[1].Value |> Expect.equal "timestamp" "12:30:45"
+    m.Groups.[2].Value |> Expect.equal "kind" "result"
+    m.Groups.[3].Value |> Expect.equal "content" "val x: int = 42"
   }
 
   test "output parser handles kind without timestamp" {
@@ -445,36 +446,36 @@ let parserTests = testList "parser integration" [
       @"^\[(\w+)\]\s*(.*)",
       System.Text.RegularExpressions.RegexOptions.Singleline)
     let m = regex.Match("[error] Something went wrong")
-    Expect.isTrue m.Success "should match kind-only format"
-    Expect.equal m.Groups.[1].Value "error" "kind"
-    Expect.equal m.Groups.[2].Value "Something went wrong" "content"
+    m.Success |> Expect.isTrue "should match kind-only format"
+    m.Groups.[1].Value |> Expect.equal "kind" "error"
+    m.Groups.[2].Value |> Expect.equal "content" "Something went wrong"
   }
 
   test "diag parser extracts severity line col" {
     let regex = System.Text.RegularExpressions.Regex(
       @"^\[(\w+)\]\s*\((\d+),(\d+)\)\s*(.*)")
     let m = regex.Match("[error] (5,10) Type mismatch")
-    Expect.isTrue m.Success "should match diag format"
-    Expect.equal (int m.Groups.[2].Value) 5 "line"
-    Expect.equal (int m.Groups.[3].Value) 10 "col"
-    Expect.equal m.Groups.[4].Value "Type mismatch" "message"
+    m.Success |> Expect.isTrue "should match diag format"
+    (int m.Groups.[2].Value) |> Expect.equal "line" 5
+    (int m.Groups.[3].Value) |> Expect.equal "col" 10
+    m.Groups.[4].Value |> Expect.equal "message" "Type mismatch"
   }
 
   test "diag parser fallback for non-standard format" {
     let regex = System.Text.RegularExpressions.Regex(
       @"^\[(\w+)\]\s*\((\d+),(\d+)\)\s*(.*)")
     let m = regex.Match("Some general error")
-    Expect.isFalse m.Success "should not match non-standard format"
+    m.Success |> Expect.isFalse "should not match non-standard format"
   }
 
   test "session parser extracts id status active" {
     let regex = System.Text.RegularExpressions.Regex(
       @"^(\S+)\s+\[(\w+)\]\s*(\*?)\s*(\([^)]*\))?\s*(evals:\d+)?\s*(.*)")
     let m = regex.Match("session-abc [running] * (Proj.fsproj) evals:5 up:3m")
-    Expect.isTrue m.Success "should match session format"
-    Expect.equal m.Groups.[1].Value "session-abc" "session id"
-    Expect.equal m.Groups.[2].Value "running" "status"
-    Expect.stringContains m.Groups.[3].Value "*" "active marker"
+    m.Success |> Expect.isTrue "should match session format"
+    m.Groups.[1].Value |> Expect.equal "session id" "session-abc"
+    m.Groups.[2].Value |> Expect.equal "status" "running"
+    m.Groups.[3].Value |> Expect.stringContains "active marker" "*"
   }
 ]
 
@@ -492,7 +493,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
 
   test "shell has SageFs title" {
     let html = renderShell "1.2.3" "test-id" "" (Elem.div [] []) |> renderNode
-    Expect.stringContains html "SageFs" "shell has SageFs title"
+    html |> Expect.stringContains "shell has SageFs title" "SageFs"
   }
 
   // A localhost tool must not reach out to third parties: no script, style,
@@ -503,7 +504,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     let externalLoads =
       System.Text.RegularExpressions.Regex.Matches(
         html, @"(?:src|href)\s*=\s*""https?://|url\(\s*['""]?https?://|@import")
-    Expect.equal externalLoads.Count 0 "shell must not load anything from an external origin"
+    externalLoads.Count |> Expect.equal "shell must not load anything from an external origin" 0
   }
 
   test "every @font-face the shell declares is an embedded woff2 served by the daemon" {
@@ -512,15 +513,15 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
       System.Text.RegularExpressions.Regex.Matches(html, @"url\('/dashboard/fonts/([^']+)'\)")
       |> Seq.map (fun m -> m.Groups.[1].Value)
       |> List.ofSeq
-    Expect.equal declared.Length 4 "the four weights the CSS uses (400/500/600/700) are declared"
+    declared.Length |> Expect.equal "the four weights the CSS uses (400/500/600/700) are declared" 4
     for file in declared do
       match Map.tryFind file dashboardFonts with
       | Some bytes ->
-        Expect.equal (System.Text.Encoding.ASCII.GetString(bytes, 0, 4)) "wOF2" (sprintf "%s is a woff2 font" file)
+        (System.Text.Encoding.ASCII.GetString(bytes, 0, 4)) |> Expect.equal (sprintf "%s is a woff2 font" file) "wOF2"
       | None -> failtestf "%s is declared by the shell but not embedded" file
-    Expect.stringContains html "font-display:swap" "faces use font-display: swap so text never blocks on the font"
-    Expect.stringContains html "ui-monospace,monospace" "a full system monospace fallback stack follows the face"
-    Expect.isTrue (dashboardFonts.ContainsKey "JetBrainsMono-OFL.txt") "the SIL OFL license text ships with the font"
+    html |> Expect.stringContains "faces use font-display: swap so text never blocks on the font" "font-display:swap"
+    html |> Expect.stringContains "a full system monospace fallback stack follows the face" "ui-monospace,monospace"
+    (dashboardFonts.ContainsKey "JetBrainsMono-OFL.txt") |> Expect.isTrue "the SIL OFL license text ships with the font"
   }
 
   // Full-page morph: dynamic elements live in renderMainContent, not renderShell.
@@ -541,13 +542,13 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
 
   test "renderMainContent shows version" {
     let html = renderMainContent (mkSnap "1.2.3") |> renderNode
-    Expect.stringContains html "v1.2.3" "main content has version"
+    html |> Expect.stringContains "main content has version" "v1.2.3"
   }
 
   test "WHY — connection monitor script is valid JavaScript because a syntax error can disable dashboard stream diagnostics" {
     let html = connectionMonitorScript () |> renderNode
-    Expect.isFalse (html.Contains(";\n        .catch")) "promise catch must remain chained to then"
-    Expect.stringContains html ".catch(function()" "monitor must handle stream failures"
+    (html.Contains(";\n        .catch")) |> Expect.isFalse "promise catch must remain chained to then"
+    html |> Expect.stringContains "monitor must handle stream failures" ".catch(function()"
   }
 
   test "WHY — selected-session projection — main, selected card, and output share one session identity because separate identities can display another session's output" {
@@ -573,11 +574,11 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
           OutputPanel = renderOutputForSession "0a2b3c4e" [ { Timestamp = None; Kind = ResultLine; Text = "SESSIONB" } ] "No output yet"
           SessionsPanel = renderSessionsForSession "0a2b3c4e" sessions false }
     let html = renderMainContent snap |> renderNode
-    Expect.stringContains html "data-viewing-session-id=\"0a2b3c4e\"" "main must declare the one viewing identity"
-    Expect.stringContains html "data-session-id=\"0a2b3c4e\"" "output must carry the same identity"
-    Expect.stringContains html "aria-current=\"true\"" "selected session card must be explicit in the same morph"
-    Expect.stringContains html "id=\"output-panel\"" "the selected session's output panel must be in the same morph"
-    Expect.isFalse (html.Contains "data-session-id=\"0a2b3c4d\" aria-current=\"true\"") "another session must not be selected"
+    html |> Expect.stringContains "main must declare the one viewing identity" "data-viewing-session-id=\"0a2b3c4e\""
+    html |> Expect.stringContains "output must carry the same identity" "data-session-id=\"0a2b3c4e\""
+    html |> Expect.stringContains "selected session card must be explicit in the same morph" "aria-current=\"true\""
+    html |> Expect.stringContains "the selected session's output panel must be in the same morph" "id=\"output-panel\""
+    (html.Contains "data-session-id=\"0a2b3c4d\" aria-current=\"true\"") |> Expect.isFalse "another session must not be selected"
   }
 
   test "WHY — stream reconnect identity — requested session wins over list order because reconnecting to the first session would desynchronize highlight and output" {
@@ -597,21 +598,21 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         ProjectRoles = []
         App = SageFs.AppRun.AppRunState.NotRunning }
     let resolved = resolveViewingSession (Some "0a2b3c4e") [ info sessionA "A.fsproj"; info sessionB "B.fsproj" ]
-    Expect.equal resolved (Some sessionB) "stream must retain the browser-requested session"
+    resolved |> Expect.equal "stream must retain the browser-requested session" (Some sessionB)
   }
 
   test "evaluate section has textarea with placeholder" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    Expect.stringContains html "eval-input" "has eval-input class"
-    Expect.stringContains html "F# code" "placeholder mentions F#"
+    html |> Expect.stringContains "has eval-input class" "eval-input"
+    html |> Expect.stringContains "placeholder mentions F#" "F# code"
   }
 
   test "WHY — evaluator has no session-bound hidden input because an empty input overwrites the selected-session signal" {
     let mainHtml = renderMainContent (mkSnap "0.0.0") |> renderNode
     let shellHtml = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
-    Expect.stringContains shellHtml "viewing-session-id" "shell must own the selected-session signal"
-    Expect.isFalse (mainHtml.Contains "data-bind:viewing-session-id") "hidden input must not overwrite the selected-session signal"
-    Expect.isFalse (mainHtml.Contains "data-bind:session-id") "no second session identity may exist"
+    shellHtml |> Expect.stringContains "shell must own the selected-session signal" "viewing-session-id"
+    (mainHtml.Contains "data-bind:viewing-session-id") |> Expect.isFalse "hidden input must not overwrite the selected-session signal"
+    (mainHtml.Contains "data-bind:session-id") |> Expect.isFalse "no second session identity may exist"
   }
 
   test "WHY — main snapshot embeds selected output because an action response must atomically deliver its committed evaluation" {
@@ -620,64 +621,64 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
           SessionId = "0a2b3c4e"
           OutputPanel = renderOutputForSession "0a2b3c4e" [ { Timestamp = None; Kind = ResultLine; Text = "val dashboardProbe: int = 8967" } ] "No output" }
     let html = renderMainContent snap |> renderNode
-    Expect.stringContains html "data-viewing-session-id=\"0a2b3c4e\"" "action morph must retain selected identity"
-    Expect.stringContains html "data-session-id=\"0a2b3c4e\"" "action morph output must use selected identity"
-    Expect.stringContains html "8967" "action morph must contain the committed result"
+    html |> Expect.stringContains "action morph must retain selected identity" "data-viewing-session-id=\"0a2b3c4e\""
+    html |> Expect.stringContains "action morph output must use selected identity" "data-session-id=\"0a2b3c4e\""
+    html |> Expect.stringContains "action morph must contain the committed result" "8967"
   }
 
   test "eval button is present" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    Expect.stringContains html "Eval" "has Eval button"
+    html |> Expect.stringContains "has Eval button" "Eval"
   }
 
   test "reset and hard reset buttons are present" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    Expect.stringContains html "[RESET]" "has [RESET] button"
-    Expect.stringContains html "[HARD_RESET]" "has [HARD_RESET] button"
+    html |> Expect.stringContains "has [RESET] button" "[RESET]"
+    html |> Expect.stringContains "has [HARD_RESET] button" "[HARD_RESET]"
   }
 
   test "clear output button in panel header" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    Expect.stringContains html "Clear" "has Clear button"
+    html |> Expect.stringContains "has Clear button" "Clear"
   }
 
   test "create session section has all inputs" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    Expect.stringContains html "Discover" "has Discover button"
-    Expect.stringContains html "fsproj" "has fsproj placeholder"
-    Expect.stringContains html "Create" "has Create Session button"
-    Expect.stringContains html "New Session" "new session section is a collapsible details"
+    html |> Expect.stringContains "has Discover button" "Discover"
+    html |> Expect.stringContains "has fsproj placeholder" "fsproj"
+    html |> Expect.stringContains "has Create Session button" "Create"
+    html |> Expect.stringContains "new session section is a collapsible details" "New Session"
   }
 
   test "server-status banner has no data-show attribute" {
     let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
     let bannerStart = html.IndexOf("id=\"server-status\"")
-    Expect.isTrue (bannerStart > -1) "server-status exists"
+    (bannerStart > -1) |> Expect.isTrue "server-status exists"
     let tagEnd = html.IndexOf(">", bannerStart)
     let tag = html.Substring(bannerStart, tagEnd - bannerStart)
-    Expect.isFalse (tag.Contains("data-show")) "banner must not use data-show"
+    (tag.Contains("data-show")) |> Expect.isFalse "banner must not use data-show"
   }
 
   // ── Minimal mode (Task 1) ──────────────────────────────────────
   test "renderShell has expandedDashboard signal" {
     let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
     // Datastar renders signal names as kebab-case in attributes (expandedDashboard → expanded-dashboard)
-    Expect.stringContains html "expanded-dashboard" "shell has expanded-dashboard signal attribute"
+    html |> Expect.stringContains "shell has expanded-dashboard signal attribute" "expanded-dashboard"
   }
 
   test "renderMainContent has expanded-only sections" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    Expect.stringContains html "expanded-only" "main content has expanded-only class"
+    html |> Expect.stringContains "main content has expanded-only class" "expanded-only"
   }
 
   test "renderMainContent has expand toggle button" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    Expect.stringContains html "expandedDashboard = !$expandedDashboard" "has expand toggle onclick"
+    html |> Expect.stringContains "has expand toggle onclick" "expandedDashboard = !$expandedDashboard"
   }
 
   test "renderMainContent expand toggle button has class expand-toggle-btn" {
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    Expect.stringContains html "expand-toggle-btn" "has expand-toggle-btn CSS class"
+    html |> Expect.stringContains "has expand-toggle-btn CSS class" "expand-toggle-btn"
   }
 
   // ── SSE full-state push on connect (Task 2) ───────────────────
@@ -685,7 +686,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     // createStreamHandler calls pushState() immediately on connect (initial pushState in try/catch).
     // This test verifies the shell wires up the SSE stream that triggers the initial state push.
     let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
-    Expect.stringContains html "/dashboard/stream" "shell connects to SSE stream endpoint for initial push"
+    html |> Expect.stringContains "shell connects to SSE stream endpoint for initial push" "/dashboard/stream"
   }
 ]
 
@@ -696,9 +697,7 @@ let zeroJsBadgeTests = testList "Zero-JS badge" [
     let html = renderShell "1.0.0" "test-id" "" (Elem.div [] []) |> renderNode
     let frameworks = [ "react"; "vue"; "angular"; "svelte"; "jquery"; "alpine" ]
     for fw in frameworks do
-      Expect.isFalse
-        (html.ToLowerInvariant().Contains fw)
-        (sprintf "should not contain %s framework reference" fw)
+      (html.ToLowerInvariant().Contains fw) |> Expect.isFalse (sprintf "should not contain %s framework reference" fw)
   }
 
   test "shell contains only Datastar CDN script as external JS" {
@@ -711,9 +710,7 @@ let zeroJsBadgeTests = testList "Zero-JS badge" [
     match jsSources.Length with
     | 0 -> () // CDN might be inline
     | _ ->
-      Expect.isTrue
-        (jsSources |> List.forall (fun s -> s.Contains "datastar"))
-        (sprintf "all external JS should be Datastar only, found: %A" jsSources)
+      (jsSources |> List.forall (fun s -> s.Contains "datastar")) |> Expect.isTrue (sprintf "all external JS should be Datastar only, found: %A" jsSources)
   }
 
   test "inline scripts are utility-only, not application logic" {
@@ -723,15 +720,13 @@ let zeroJsBadgeTests = testList "Zero-JS badge" [
     let inlineScripts = [ for m in scriptBlocks -> m.Groups.[1].Value ]
     for script in inlineScripts do
       // No state management patterns
-      Expect.isFalse (script.Contains "useState") "no React-style state"
-      Expect.isFalse (script.Contains "createStore") "no Redux-style store"
-      Expect.isFalse (script.Contains "createSignal") "no SolidJS-style signals"
+      (script.Contains "useState") |> Expect.isFalse "no React-style state"
+      (script.Contains "createStore") |> Expect.isFalse "no Redux-style store"
+      (script.Contains "createSignal") |> Expect.isFalse "no SolidJS-style signals"
       // No fetch for data retrieval (fetch for POST commands is OK)
       let fetchCount = script.Split("fetch(").Length - 1
       let postCount = script.Split("'POST'").Length + script.Split("\"POST\"").Length - 2
-      Expect.isTrue
-        (fetchCount <= postCount + 1)
-        "fetch calls should be POST-only (command dispatch), not GET (data retrieval)"
+      (fetchCount <= postCount + 1) |> Expect.isTrue "fetch calls should be POST-only (command dispatch), not GET (data retrieval)"
   }
 
   test "total inline JS payload is under 5KB" {
@@ -741,16 +736,15 @@ let zeroJsBadgeTests = testList "Zero-JS badge" [
     let totalBytes =
       [ for m in scriptBlocks -> m.Groups.[1].Value ]
       |> List.sumBy (fun s -> System.Text.Encoding.UTF8.GetByteCount(s))
-    Expect.isLessThan totalBytes 5120
-      (sprintf "inline JS should be <5KB, was %d bytes" totalBytes)
+    (totalBytes, 5120) |> Expect.isLessThan (sprintf "inline JS should be <5KB, was %d bytes" totalBytes)
   }
 
   test "no application-level JS event handlers in HTML attributes" {
     let html = renderShell "1.0.0" "test-id" "" (Elem.div [] []) |> renderNode
     // onclick/onchange etc. should use Datastar data-on-* attributes, not raw HTML
-    Expect.isFalse (html.Contains " onclick=") "should not use raw onclick (use Ds.onClick)"
-    Expect.isFalse (html.Contains " onchange=") "should not use raw onchange (use Ds.onEvent)"
-    Expect.isFalse (html.Contains " onsubmit=") "should not use raw onsubmit"
+    (html.Contains " onclick=") |> Expect.isFalse "should not use raw onclick (use Ds.onClick)"
+    (html.Contains " onchange=") |> Expect.isFalse "should not use raw onchange (use Ds.onEvent)"
+    (html.Contains " onsubmit=") |> Expect.isFalse "should not use raw onsubmit"
   }
 ]
 
@@ -762,36 +756,28 @@ let railwayVisualizationTests = testList "Railway visualization" [
     test "builds stages with StageSuccess outcomes" {
       let stages = [ ("Parse", 12.0); ("TypeCheck", 45.0); ("Execute", 363.0) ]
       let view = PipelineRailwayView.fromStages stages 420.0
-      Expect.equal view.Stages.Length 3 "should have 3 stages"
-      Expect.equal view.TotalMs 420.0 "total"
-      Expect.isTrue
-        (view.Stages |> List.forall (fun s ->
-          match s.Outcome with StageSuccess -> true | _ -> false))
-        "all stages should be success"
+      view.Stages.Length |> Expect.equal "should have 3 stages" 3
+      view.TotalMs |> Expect.equal "total" 420.0
+      (view.Stages |> List.forall (fun s ->
+          match s.Outcome with StageSuccess -> true | _ -> false)) |> Expect.isTrue "all stages should be success"
     }
 
     test "empty stages list produces empty railway" {
       let view = PipelineRailwayView.fromStages [] 0.0
-      Expect.isEmpty view.Stages "should be empty"
-      Expect.equal view.TotalMs 0.0 "total"
+      view.Stages |> Expect.isEmpty "should be empty"
+      view.TotalMs |> Expect.equal "total" 0.0
     }
 
     test "stage names are preserved" {
       let stages = [ ("Parse", 10.0); ("Execute", 20.0) ]
       let view = PipelineRailwayView.fromStages stages 30.0
-      Expect.equal
-        (view.Stages |> List.map (fun s -> s.Name))
-        [ "Parse"; "Execute" ]
-        "names"
+      (view.Stages |> List.map (fun s -> s.Name)) |> Expect.equal "names" [ "Parse"; "Execute" ]
     }
 
     test "stage durations are preserved" {
       let stages = [ ("Parse", 12.5); ("TypeCheck", 45.7) ]
       let view = PipelineRailwayView.fromStages stages 58.2
-      Expect.equal
-        (view.Stages |> List.map (fun s -> s.DurationMs))
-        [ 12.5; 45.7 ]
-        "durations"
+      (view.Stages |> List.map (fun s -> s.DurationMs)) |> Expect.equal "durations" [ 12.5; 45.7 ]
     }
   ]
 
@@ -802,7 +788,7 @@ let railwayVisualizationTests = testList "Railway visualization" [
       match view.Stages |> List.tryFind (fun s -> s.Name = "Execute") with
       | Some s ->
         match s.Outcome with
-        | StageFailure err -> Expect.equal err "Runtime error" "error msg"
+        | StageFailure err -> err |> Expect.equal "error msg" "Runtime error"
         | StageSuccess -> failtest "Execute should be StageFailure"
       | None -> failtest "Execute stage missing"
     }
@@ -823,64 +809,64 @@ let railwayVisualizationTests = testList "Railway visualization" [
     test "renders success stages with checkmarks" {
       let railway = PipelineRailwayView.fromStages [ ("Parse", 12.0); ("TypeCheck", 45.0); ("Execute", 363.0) ] 420.0
       let html = renderRailway railway |> renderNode
-      Expect.stringContains html "Parse ✓" "should show Parse checkmark"
-      Expect.stringContains html "TypeCheck ✓" "should show TypeCheck checkmark"
-      Expect.stringContains html "Execute ✓" "should show Execute checkmark"
+      html |> Expect.stringContains "should show Parse checkmark" "Parse ✓"
+      html |> Expect.stringContains "should show TypeCheck checkmark" "TypeCheck ✓"
+      html |> Expect.stringContains "should show Execute checkmark" "Execute ✓"
     }
 
     test "renders stage durations in brackets" {
       let railway = PipelineRailwayView.fromStages [ ("Parse", 12.0); ("Execute", 363.0) ] 375.0
       let html = renderRailway railway |> renderNode
-      Expect.stringContains html "[12ms]" "should show Parse duration"
-      Expect.stringContains html "[363ms]" "should show Execute duration"
+      html |> Expect.stringContains "should show Parse duration" "[12ms]"
+      html |> Expect.stringContains "should show Execute duration" "[363ms]"
     }
 
     test "renders arrows between stages" {
       let railway = PipelineRailwayView.fromStages [ ("Parse", 12.0); ("Execute", 363.0) ] 375.0
       let html = renderRailway railway |> renderNode
-      Expect.stringContains html "→" "should have arrow separator"
+      html |> Expect.stringContains "should have arrow separator" "→"
     }
 
     test "renders total duration" {
       let railway = PipelineRailwayView.fromStages [ ("Parse", 12.0) ] 420.0
       let html = renderRailway railway |> renderNode
-      Expect.stringContains html "[420ms total]" "should show total"
+      html |> Expect.stringContains "should show total" "[420ms total]"
     }
 
     test "renders empty pipeline as 'No pipeline stages'" {
       let html = renderRailway PipelineRailwayView.empty |> renderNode
-      Expect.stringContains html "No pipeline stages" "should show empty message"
+      html |> Expect.stringContains "should show empty message" "No pipeline stages"
     }
 
     test "renders failure stage with cross mark" {
       let railway = PipelineRailwayView.fromStagesWithFailure [ ("Parse", 12.0); ("Execute", 0.0) ] 12.0 "Execute" "boom"
       let html = renderRailway railway |> renderNode
-      Expect.stringContains html "Execute ✗" "should show failure cross"
+      html |> Expect.stringContains "should show failure cross" "Execute ✗"
     }
 
     test "success stage has stage-success CSS class" {
       let railway = PipelineRailwayView.fromStages [ ("Parse", 12.0) ] 12.0
       let html = renderRailway railway |> renderNode
-      Expect.stringContains html "stage-success" "should have success class"
+      html |> Expect.stringContains "should have success class" "stage-success"
     }
 
     test "failure stage has stage-failure CSS class" {
       let railway = PipelineRailwayView.fromStagesWithFailure [ ("Parse", 0.0) ] 0.0 "Parse" "err"
       let html = renderRailway railway |> renderNode
-      Expect.stringContains html "stage-failure" "should have failure class"
+      html |> Expect.stringContains "should have failure class" "stage-failure"
     }
 
     test "pipeline-railway CSS class on container" {
       let railway = PipelineRailwayView.fromStages [ ("Parse", 1.0) ] 1.0
       let html = renderRailway railway |> renderNode
-      Expect.stringContains html "pipeline-railway" "should have container class"
+      html |> Expect.stringContains "should have container class" "pipeline-railway"
     }
 
     test "single stage has no arrows" {
       let railway = PipelineRailwayView.fromStages [ ("Parse", 1.0) ] 1.0
       let html = renderRailway railway |> renderNode
       let arrowCount = html.Split("→").Length - 1
-      Expect.equal arrowCount 0 "should have no arrows for single stage"
+      arrowCount |> Expect.equal "should have no arrows for single stage" 0
     }
 
     test "N stages produce N-1 arrows" {
@@ -888,7 +874,7 @@ let railwayVisualizationTests = testList "Railway visualization" [
       let railway = PipelineRailwayView.fromStages stages 10.0
       let html = renderRailway railway |> renderNode
       let arrowCount = html.Split("→").Length - 1
-      Expect.equal arrowCount 3 "should have 3 arrows for 4 stages"
+      arrowCount |> Expect.equal "should have 3 arrows for 4 stages" 3
     }
   ]
 ]
@@ -912,119 +898,109 @@ let testFilterTests = testList "Test filter bar" [
 
   testList "treemapStatusToFilterValue" [
     test "Passed maps to 'passed'" {
-      Expect.equal
-        (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Passed)
-        "passed" "Passed"
+      (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Passed) |> Expect.equal "Passed" "passed"
     }
     test "Failed maps to 'failed'" {
-      Expect.equal
-        (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Failed)
-        "failed" "Failed"
+      (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Failed) |> Expect.equal "Failed" "failed"
     }
     test "Running maps to 'running'" {
-      Expect.equal
-        (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Running)
-        "running" "Running"
+      (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Running) |> Expect.equal "Running" "running"
     }
     test "Skipped maps to 'skipped'" {
-      Expect.equal
-        (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Skipped)
-        "skipped" "Skipped"
+      (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Skipped) |> Expect.equal "Skipped" "skipped"
     }
     test "Other maps to 'other'" {
-      Expect.equal
-        (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Other)
-        "other" "Other"
+      (treemapStatusToFilterValue Features.LiveTesting.TreemapStatus.Other) |> Expect.equal "Other" "other"
     }
   ]
 
   testList "renderTestFilterBar" [
     test "renders filter bar container with test-filter-bar class" {
       let html = renderTestFilterBar sampleTestEntries |> renderNode
-      Expect.stringContains html "test-filter-bar" "should have container class"
+      html |> Expect.stringContains "should have container class" "test-filter-bar"
     }
 
     test "shows passed count" {
       let html = renderTestFilterBar sampleTestEntries |> renderNode
-      Expect.stringContains html "✓ 2" "should show 2 passed"
+      html |> Expect.stringContains "should show 2 passed" "✓ 2"
     }
 
     test "shows failed count" {
       let html = renderTestFilterBar sampleTestEntries |> renderNode
-      Expect.stringContains html "✗ 1" "should show 1 failed"
+      html |> Expect.stringContains "should show 1 failed" "✗ 1"
     }
 
     test "shows running button when running tests exist" {
       let html = renderTestFilterBar sampleTestEntries |> renderNode
-      Expect.stringContains html "⟳ 1" "should show 1 running"
+      html |> Expect.stringContains "should show 1 running" "⟳ 1"
     }
 
     test "shows skipped button when skipped tests exist" {
       let html = renderTestFilterBar sampleTestEntries |> renderNode
-      Expect.stringContains html "⊘ 1" "should show 1 skipped"
+      html |> Expect.stringContains "should show 1 skipped" "⊘ 1"
     }
 
     test "hides running button when no running tests" {
       let entries = sampleTestEntries |> Array.filter (fun e ->
         e.Status <> Features.LiveTesting.TreemapStatus.Running)
       let html = renderTestFilterBar entries |> renderNode
-      Expect.isFalse (html.Contains "⟳") "should not show running button"
+      (html.Contains "⟳") |> Expect.isFalse "should not show running button"
     }
 
     test "hides skipped button when no skipped tests" {
       let entries = sampleTestEntries |> Array.filter (fun e ->
         e.Status <> Features.LiveTesting.TreemapStatus.Skipped)
       let html = renderTestFilterBar entries |> renderNode
-      Expect.isFalse (html.Contains "⊘") "should not show skipped button"
+      (html.Contains "⊘") |> Expect.isFalse "should not show skipped button"
     }
 
     test "filter buttons use Datastar show expression" {
       let html = renderTestFilterBar sampleTestEntries |> renderNode
-      Expect.stringContains html "$testFilter" "should reference testFilter signal"
+      html |> Expect.stringContains "should reference testFilter signal" "$testFilter"
     }
 
     test "click sets testFilter signal to status value" {
       let html = renderTestFilterBar sampleTestEntries |> renderNode
-      Expect.stringContains html "$testFilter = 'passed'" "should set filter to passed"
-      Expect.stringContains html "$testFilter = 'failed'" "should set filter to failed"
+      html |> Expect.stringContains "should set filter to passed" "$testFilter = 'passed'"
+      html |> Expect.stringContains "should set filter to failed" "$testFilter = 'failed'"
     }
 
     test "active button resets filter to all on click" {
       let html = renderTestFilterBar sampleTestEntries |> renderNode
-      Expect.stringContains html "$testFilter = 'all'" "active button should reset to all"
+      html |> Expect.stringContains "active button should reset to all" "$testFilter = 'all'"
     }
 
     test "active button has test-filter-active class" {
       let html = renderTestFilterBar sampleTestEntries |> renderNode
-      Expect.stringContains html "test-filter-active" "should have active class"
+      html |> Expect.stringContains "should have active class" "test-filter-active"
     }
 
     test "renders Filter label" {
       let html = renderTestFilterBar sampleTestEntries |> renderNode
-      Expect.stringContains html "Filter:" "should have Filter label"
+      html |> Expect.stringContains "should have Filter label" "Filter:"
     }
   ]
 
   testList "renderTestTreemap with signal filtering" [
     test "treemap entries have data-show attribute" {
       let html = renderTestTreemap sampleTestEntries |> renderNode
-      Expect.stringContains html "data-show" "should have data-show for filtering"
+      html |> Expect.stringContains "should have data-show for filtering" "data-show"
     }
 
     test "passed entries show when filter is all or passed" {
       let html = renderTestTreemap sampleTestEntries |> renderNode
-      Expect.stringContains html "$testFilter === 'all' || $testFilter === 'passed'" "should show for all or passed"
+      html |> Expect.stringContains "should show for all or passed" "$testFilter === 'all' || $testFilter === 'passed'"
     }
 
     test "failed entries show when filter is all or failed" {
       let html = renderTestTreemap sampleTestEntries |> renderNode
-      Expect.stringContains html "$testFilter === 'all' || $testFilter === 'failed'" "should show for all or failed"
+      html |> Expect.stringContains "should show for all or failed" "$testFilter === 'all' || $testFilter === 'failed'"
     }
   ]
 
   testList "Signals module" [
     test "TestFilter signal name is defined" {
-      Expect.equal Signals.TestFilter "testFilter" "should be testFilter"
+      Signals.TestFilter |> Expect.equal "should be testFilter" "testFilter"
     }
   ]
 ]
@@ -1033,13 +1009,13 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
 
   test "shell initializes SSE stream via data-init" {
     let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
-    Expect.stringContains html "data-init" "must have data-init for SSE"
-    Expect.stringContains html "/dashboard/stream" "must target stream endpoint"
+    html |> Expect.stringContains "must have data-init for SSE" "data-init"
+    html |> Expect.stringContains "must target stream endpoint" "/dashboard/stream"
   }
 
   test "shell loads Datastar CDN script" {
     let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
-    Expect.stringContains html "datastar" "must include datastar CDN"
+    html |> Expect.stringContains "must include datastar CDN" "datastar"
   }
 
   test "all Signals are initialized in shell via data-signals" {
@@ -1050,17 +1026,17 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
         "data-signals:code"; "data-signals:new-session-dir"; "data-signals:manual-projects"
         "data-signals:theme"; "data-signals:cursor-pos"; "data-signals:test-filter" ]
     for attr in expectedSignalAttrs do
-      Expect.stringContains html attr (sprintf "signal attr '%s' must be initialized" attr)
+      html |> Expect.stringContains (sprintf "signal attr '%s' must be initialized" attr) attr
   }
 
   test "main div has correct DOM ID" {
     let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
-    Expect.stringContains html (sprintf "id=\"%s\"" DomIds.Main) "must have main div"
+    html |> Expect.stringContains "must have main div" (sprintf "id=\"%s\"" DomIds.Main)
   }
 
   test "server-status div has correct DOM ID" {
     let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
-    Expect.stringContains html (sprintf "id=\"%s\"" DomIds.ServerStatus) "must have server-status div"
+    html |> Expect.stringContains "must have server-status div" (sprintf "id=\"%s\"" DomIds.ServerStatus)
   }
 
   test "renderMainContent includes key DOM IDs" {
@@ -1082,19 +1058,18 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       [ DomIds.Main; DomIds.SessionStatus; DomIds.EvalStats
         DomIds.EditorArea; DomIds.EvaluateSection; DomIds.EvalTextarea ]
     for domId in mustHaveIds do
-      Expect.stringContains html (sprintf "id=\"%s\"" domId)
-        (sprintf "main content must have id='%s'" domId)
+      html |> Expect.stringContains (sprintf "main content must have id='%s'" domId) (sprintf "id=\"%s\"" domId)
   }
 
   test "SSE format: events end with double newline" {
     let evt = SageFs.SseWriter.formatSseEvent "test" "data"
-    Expect.isTrue (evt.Length > 0) "non-empty"
-    Expect.isTrue (evt.EndsWith("\n\n")) "must end with \\n\\n"
+    (evt.Length > 0) |> Expect.isTrue "non-empty"
+    (evt.EndsWith("\n\n")) |> Expect.isTrue "must end with \\n\\n"
   }
 
   test "SSE format: retry hint is spec-compliant" {
     let retry = SageFs.SseWriter.formatRetryHint 3000
-    Expect.equal retry "retry: 3000\n\n" "retry format"
+    retry |> Expect.equal "retry format" "retry: 3000\n\n"
   }
 
   test "shell has no React/Vue/Angular framework references" {
@@ -1102,7 +1077,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
     let banned = [ "react"; "vue"; "angular"; "svelte"; "htmx"; "alpine" ]
     let lower = html.ToLowerInvariant()
     for framework in banned do
-      Expect.isFalse (lower.Contains(framework)) (sprintf "must not reference %s" framework)
+      (lower.Contains(framework)) |> Expect.isFalse (sprintf "must not reference %s" framework)
   }
 
   test "morph target: renderMainContent wraps in div#main" {
@@ -1120,7 +1095,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
       ProjectRoles = []
       App = SageFs.AppRun.AppRunState.NotRunning }
     let html = renderMainContent snap |> renderNode
-    Expect.isTrue (html.StartsWith("<div id=\"main\""))"must start with div#main"
+    (html.StartsWith("<div id=\"main\"")) |> Expect.isTrue "must start with div#main"
   }
 ]
 
@@ -1141,37 +1116,37 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
       App = SageFs.AppRun.AppRunState.NotRunning }
   test "Version appears in rendered output" {
     let html = mkSnap "1.2.3" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
-    Expect.stringContains html "1.2.3" "version should appear"
+    html |> Expect.stringContains "version should appear" "1.2.3"
   }
 
   test "SessionId appears in rendered output" {
     let html = mkSnap "0.0.0" "my-session-42" "C:\\" "ready" |> renderMainContent |> renderNode
-    Expect.stringContains html "my-session-42" "sessionId should appear"
+    html |> Expect.stringContains "sessionId should appear" "my-session-42"
   }
 
   test "WorkingDir appears in rendered output" {
     let html = mkSnap "0.0.0" "s1" @"C:\MyProject\Src" "ready" |> renderMainContent |> renderNode
-    Expect.stringContains html @"C:\MyProject\Src" "working dir should appear"
+    html |> Expect.stringContains "working dir should appear" @"C:\MyProject\Src"
   }
 
   test "SessionState appears in rendered output" {
     let html = mkSnap "0.0.0" "s1" "C:\\" "faulted" |> renderMainContent |> renderNode
-    Expect.stringContains html "faulted" "session state should appear"
+    html |> Expect.stringContains "session state should appear" "faulted"
   }
 
   test "EvalStats count appears in rendered output" {
     let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
-    Expect.stringContains html "7 evals" "eval count should appear"
+    html |> Expect.stringContains "eval count should appear" "7 evals"
   }
 
   test "EvalStats avg appears in rendered output" {
     let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
-    Expect.stringContains html "42" "avg ms should appear"
+    html |> Expect.stringContains "avg ms should appear" "42"
   }
 
   test "ConnectionLabel appears in rendered output" {
     let html = mkSnap "0.0.0" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
-    Expect.stringContains html "🌐 2" "connection label should appear"
+    html |> Expect.stringContains "connection label should appear" "🌐 2"
   }
 
   test "ThemeName appears in theme picker" {
@@ -1179,14 +1154,14 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
       { (mkSnap "0.0.0" "s1" "C:\\" "ready") with
           ThemePicker = Elem.div [] [ Text.raw "Theme: monokai" ] }
     let html = renderMainContent snap |> renderNode
-    Expect.stringContains html "monokai" "theme name should appear"
+    html |> Expect.stringContains "theme name should appear" "monokai"
   }
 
   test "rendered output always wraps in div#main" {
     let snap = mkSnap "0.0.0" "s1" "C:\\" "ready"
     let html = renderMainContent snap |> renderNode
-    Expect.isTrue (html.StartsWith "<div id=\"main\"") "must start with div#main"
-    Expect.isTrue (html.EndsWith "</div>") "must end with closing div"
+    (html.StartsWith "<div id=\"main\"") |> Expect.isTrue "must start with div#main"
+    (html.EndsWith "</div>") |> Expect.isTrue "must end with closing div"
   }
 ]
 
@@ -1205,8 +1180,8 @@ let bindingsPanelSseTests = testList "SSE bindings panel" [
       |> renderBindingsPanel
       |> renderNode
 
-    Expect.stringContains html "Bindings (1)" "selected session bindings should populate the bindings panel"
-    Expect.stringContains html "answer" "bindings panel should render the selected session binding"
+    html |> Expect.stringContains "selected session bindings should populate the bindings panel" "Bindings (1)"
+    html |> Expect.stringContains "bindings panel should render the selected session binding" "answer"
   }
 ]
 

@@ -1,6 +1,7 @@
 module SageFs.Tests.McpLlmInteropTests
 
 open Expecto
+open Expecto.Flip
 open System
 open System.IO
 open System.Threading.Tasks
@@ -40,10 +41,10 @@ module StartupConfigTests =
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
         }
         
-        Expect.equal config.CommandLineArgs.Length 2 "Should have command line args"
-        Expect.equal config.LoadedProjects.Length 1 "Should have loaded projects"
-        Expect.isTrue config.HotReloadEnabled "Should track hot reload"
-        Expect.isFalse config.AspireDetected "Should track Aspire detection"
+        config.CommandLineArgs.Length |> Expect.equal "Should have command line args" 2
+        config.LoadedProjects.Length |> Expect.equal "Should have loaded projects" 1
+        config.HotReloadEnabled |> Expect.isTrue "Should track hot reload"
+        config.AspireDetected |> Expect.isFalse "Should track Aspire detection"
       
       testCase "StartupConfig should handle empty/default states"
       <| fun _ ->
@@ -57,7 +58,7 @@ module StartupConfigTests =
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
         }
         
-        Expect.equal emptyConfig.LoadedProjects.Length 0 "Should handle no projects"
+        emptyConfig.LoadedProjects.Length |> Expect.equal "Should handle no projects" 0
     ]
 
 // ============================================================================
@@ -77,10 +78,10 @@ module GetStartupInfoTests =
           let! result = getStartupInfo ctx "test" None
           
           // Should include key information from StartupConfig in AppState
-          Expect.isNotNull result "Should return result"
-          Expect.isTrue (result.Length > 0) "Should return non-empty result"
+          result |> Expect.isNotNull "Should return result"
+          (result.Length > 0) |> Expect.isTrue "Should return non-empty result"
           // Verify it mentions startup information
-          Expect.stringContains result "Startup" "Should mention startup"
+          result |> Expect.stringContains "Should mention startup" "Startup"
         }
         |> Async.AwaitTask
         |> Async.RunSynchronously
@@ -93,7 +94,7 @@ module GetStartupInfoTests =
           let! result = getStartupInfo ctx "test" None
           
           // Should always return something, even if no config
-          Expect.isNotNull result "Should return result"
+          result |> Expect.isNotNull "Should return result"
         }
         |> Async.AwaitTask
         |> Async.RunSynchronously
@@ -110,9 +111,9 @@ module GetStartupInfoTests =
           // the JSON carries the session identity, not FSI command-line args.
           use doc = System.Text.Json.JsonDocument.Parse result
           let root = doc.RootElement
-          Expect.equal (root.GetProperty("sessionId").GetString()) ctx.SessionMap.["test"] "Should identify the session"
-          Expect.isTrue (root.TryGetProperty("workingDirectory") |> fst) "Should carry the working directory"
-          Expect.isTrue (root.TryGetProperty("status") |> fst) "Should carry the session status"
+          (root.GetProperty("sessionId").GetString()) |> Expect.equal "Should identify the session" ctx.SessionMap.["test"]
+          (root.TryGetProperty("workingDirectory") |> fst) |> Expect.isTrue "Should carry the working directory"
+          (root.TryGetProperty("status") |> fst) |> Expect.isTrue "Should carry the session status"
         }
         |> Async.AwaitTask
         |> Async.RunSynchronously
@@ -125,8 +126,8 @@ module GetStartupInfoTests =
           let! result = getStartupInfo ctx "test" None
 
           // The per-session startup header an agent uses to orient itself.
-          Expect.stringContains result (sprintf "- Session: %s" ctx.SessionMap.["test"]) "Should name the session"
-          Expect.stringContains result "- Status: " "Should report the session status"
+          result |> Expect.stringContains "Should name the session" (sprintf "- Session: %s" ctx.SessionMap.["test"])
+          result |> Expect.stringContains "Should report the session status" "- Status: "
         }
         |> Async.AwaitTask
         |> Async.RunSynchronously
@@ -149,8 +150,8 @@ module EnhancedStatusTests =
           let! result = getStatus ctx "test" None None
           
           // Should include startup information from AppState
-          Expect.stringContains result "Events:" "Should show events"
-          Expect.stringContains result "Available:" "Should show tools"
+          result |> Expect.stringContains "Should show events" "Events:"
+          result |> Expect.stringContains "Should show tools" "Available:"
         }
         |> Async.AwaitTask
         |> Async.RunSynchronously
@@ -173,23 +174,23 @@ module ProjectDiscoveryTests =
 
       testCase "isSolutionFile matches .sln files"
       <| fun _ ->
-        Expect.isTrue (SageFs.McpAdapter.isSolutionFile "MyApp.sln") "Should match .sln"
+        (SageFs.McpAdapter.isSolutionFile "MyApp.sln") |> Expect.isTrue "Should match .sln"
 
       testCase "isSolutionFile matches .slnx files"
       <| fun _ ->
-        Expect.isTrue (SageFs.McpAdapter.isSolutionFile "MyApp.slnx") "Should match .slnx"
+        (SageFs.McpAdapter.isSolutionFile "MyApp.slnx") |> Expect.isTrue "Should match .slnx"
 
       testCase "isSolutionFile rejects non-solution files"
       <| fun _ ->
-        Expect.isFalse (SageFs.McpAdapter.isSolutionFile "MyApp.fsproj") "Should not match .fsproj"
+        (SageFs.McpAdapter.isSolutionFile "MyApp.fsproj") |> Expect.isFalse "Should not match .fsproj"
 
       testCase "isProjectFile matches .fsproj files"
       <| fun _ ->
-        Expect.isTrue (SageFs.McpAdapter.isProjectFile "MyApp.fsproj") "Should match .fsproj"
+        (SageFs.McpAdapter.isProjectFile "MyApp.fsproj") |> Expect.isTrue "Should match .fsproj"
 
       testCase "isProjectFile rejects non-project files"
       <| fun _ ->
-        Expect.isFalse (SageFs.McpAdapter.isProjectFile "MyApp.sln") "Should not match .sln"
+        (SageFs.McpAdapter.isProjectFile "MyApp.sln") |> Expect.isFalse "Should not match .sln"
 
       testCase "formatAvailableProjects includes .slnx in header"
       <| fun _ ->
@@ -198,14 +199,14 @@ module ProjectDiscoveryTests =
             "/test/dir"
             [| "App.fsproj" |]
             [| "App.slnx" |]
-        Expect.stringContains result ".slnx" "Should mention .slnx in output"
-        Expect.stringContains result "App.slnx" "Should list the .slnx file"
+        result |> Expect.stringContains "Should mention .slnx in output" ".slnx"
+        result |> Expect.stringContains "Should list the .slnx file" "App.slnx"
 
       testCase "formatAvailableProjects shows none when empty"
       <| fun _ ->
         let result =
           SageFs.McpAdapter.formatAvailableProjects "/test/dir" [||] [||]
-        Expect.stringContains result "(none found)" "Should show none for empty"
+        result |> Expect.stringContains "Should show none for empty" "(none found)"
 
       testCase "get_available_projects tool formats discoverable projects for LLMs"
       <| fun _ ->
@@ -224,12 +225,12 @@ module ProjectDiscoveryTests =
 
           let! result = getAvailableProjects ctx "test" None
 
-          Expect.stringContains result "Projects" "Should have projects section"
-          Expect.stringContains result "Solutions" "Should have solutions section"
-          Expect.stringContains result ".fsproj" "Should mention project extension"
-          Expect.stringContains result ".sln" "Should mention solution extension"
-          Expect.stringContains result "create_session" "Should guide users toward explicit session creation"
-          Expect.stringContains result workingDir "Should show working directory"
+          result |> Expect.stringContains "Should have projects section" "Projects"
+          result |> Expect.stringContains "Should have solutions section" "Solutions"
+          result |> Expect.stringContains "Should mention project extension" ".fsproj"
+          result |> Expect.stringContains "Should mention solution extension" ".sln"
+          result |> Expect.stringContains "Should guide users toward explicit session creation" "create_session"
+          result |> Expect.stringContains "Should show working directory" workingDir
         }
         |> Async.AwaitTask
         |> Async.RunSynchronously
@@ -258,9 +259,9 @@ module McpAdapterEnhancementTests =
         
         let output = SageFs.McpAdapter.formatStartupInfo config
         
-        Expect.stringContains output "Test.fsproj" "Should include project"
-        Expect.stringContains output "--mcp-port" "Should include command line args"
-        Expect.stringContains output "Hot Reload" "Should mention hot reload"
+        output |> Expect.stringContains "Should include project" "Test.fsproj"
+        output |> Expect.stringContains "Should include command line args" "--mcp-port"
+        output |> Expect.stringContains "Should mention hot reload" "Hot Reload"
       
       testCase "formatStartupInfoJson should create valid JSON"
       <| fun _ ->
@@ -276,9 +277,9 @@ module McpAdapterEnhancementTests =
         
         let json = SageFs.McpAdapter.formatStartupInfoJson config
         
-        Expect.stringContains json "{" "Should be JSON object"
-        Expect.stringContains json "\"commandLineArgs\"" "Should have field"
-        Expect.stringContains json "\"loadedProjects\"" "Should have field"
+        json |> Expect.stringContains "Should be JSON object" "{"
+        json |> Expect.stringContains "Should have field" "\"commandLineArgs\""
+        json |> Expect.stringContains "Should have field" "\"loadedProjects\""
       
       testCase "formatEnhancedStatus should include startup section"
       <| fun _ ->
@@ -294,24 +295,24 @@ module McpAdapterEnhancementTests =
         
         let output = SageFs.McpAdapter.formatEnhancedStatus "test-session" 5 SageFs.SessionState.Ready None (Some config)
         
-        Expect.stringContains output "Startup Information" "Should have startup section"
-        Expect.isFalse (output.Contains("Usage Tips")) "Should NOT have tips (moved to ServerInstructions)"
+        output |> Expect.stringContains "Should have startup section" "Startup Information"
+        (output.Contains("Usage Tips")) |> Expect.isFalse "Should NOT have tips (moved to ServerInstructions)"
 
       testCase "formatStartupBanner includes version"
       <| fun _ ->
         let banner = SageFs.McpAdapter.formatStartupBanner "0.2.29" (Some 37749)
-        Expect.stringContains banner "0.2.29" "Should include version"
-        Expect.stringContains banner "SageFs" "Should include product name"
+        banner |> Expect.stringContains "Should include version" "0.2.29"
+        banner |> Expect.stringContains "Should include product name" "SageFs"
 
       testCase "formatStartupBanner includes MCP port when provided"
       <| fun _ ->
         let banner = SageFs.McpAdapter.formatStartupBanner "1.0.0" (Some 8080)
-        Expect.stringContains banner "8080" "Should include MCP port"
+        banner |> Expect.stringContains "Should include MCP port" "8080"
 
       testCase "formatStartupBanner omits MCP when no port"
       <| fun _ ->
         let banner = SageFs.McpAdapter.formatStartupBanner "1.0.0" None
-        Expect.isFalse (banner.Contains "MCP") "Should not mention MCP without port"
+        (banner.Contains "MCP") |> Expect.isFalse "Should not mention MCP without port"
     ]
 
 // ============================================================================
@@ -327,9 +328,9 @@ module ShadowCopyTests =
       <| fun _ ->
         let dir = SageFs.ShadowCopy.createShadowDir ()
         try
-          Expect.isTrue (dir.StartsWith(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar))) "Should be under temp"
-          Expect.isTrue (dir.Contains "sagefs-shadow") "Should contain sagefs-shadow"
-          Expect.isTrue (Directory.Exists dir) "Directory should exist"
+          (dir.StartsWith(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar))) |> Expect.isTrue "Should be under temp"
+          (dir.Contains "sagefs-shadow") |> Expect.isTrue "Should contain sagefs-shadow"
+          (Directory.Exists dir) |> Expect.isTrue "Directory should exist"
         finally
           if Directory.Exists dir then Directory.Delete(dir, true)
 
@@ -338,7 +339,7 @@ module ShadowCopyTests =
         let dir1 = SageFs.ShadowCopy.createShadowDir ()
         let dir2 = SageFs.ShadowCopy.createShadowDir ()
         try
-          Expect.notEqual dir1 dir2 "Each call should create a unique directory"
+          dir1 |> Expect.notEqual "Each call should create a unique directory" dir2
         finally
           if Directory.Exists dir1 then Directory.Delete(dir1, true)
           if Directory.Exists dir2 then Directory.Delete(dir2, true)
@@ -352,9 +353,9 @@ module ShadowCopyTests =
         File.WriteAllText(srcDll, "fake-dll-content")
         try
           let newPath = SageFs.ShadowCopy.shadowCopyFile shadowDir srcDll
-          Expect.isTrue (File.Exists newPath) "Shadow copy should exist"
-          Expect.notEqual newPath srcDll "Should be a different path"
-          Expect.equal (File.ReadAllText newPath) "fake-dll-content" "Content should match"
+          (File.Exists newPath) |> Expect.isTrue "Shadow copy should exist"
+          newPath |> Expect.notEqual "Should be a different path" srcDll
+          (File.ReadAllText newPath) |> Expect.equal "Content should match" "fake-dll-content"
         finally
           if Directory.Exists shadowDir then Directory.Delete(shadowDir, true)
           if Directory.Exists srcDir then Directory.Delete(srcDir, true)
@@ -371,7 +372,7 @@ module ShadowCopyTests =
         try
           let newPath = SageFs.ShadowCopy.shadowCopyFile shadowDir srcDll
           let newPdb = Path.ChangeExtension(newPath, ".pdb")
-          Expect.isTrue (File.Exists newPdb) "Shadow PDB should also be copied"
+          (File.Exists newPdb) |> Expect.isTrue "Shadow PDB should also be copied"
         finally
           if Directory.Exists shadowDir then Directory.Delete(shadowDir, true)
           if Directory.Exists srcDir then Directory.Delete(srcDir, true)
@@ -391,9 +392,9 @@ module ShadowCopyTests =
         try
           let new1 = SageFs.ShadowCopy.shadowCopyFile shadowDir dll1
           let new2 = SageFs.ShadowCopy.shadowCopyFile shadowDir dll2
-          Expect.isTrue (File.Exists new1) "First shadow copy should exist"
-          Expect.isTrue (File.Exists new2) "Second shadow copy should exist"
-          Expect.notEqual new1 new2 "Different DLLs should produce different shadow paths"
+          (File.Exists new1) |> Expect.isTrue "First shadow copy should exist"
+          (File.Exists new2) |> Expect.isTrue "Second shadow copy should exist"
+          new1 |> Expect.notEqual "Different DLLs should produce different shadow paths" new2
         finally
           if Directory.Exists shadowDir then Directory.Delete(shadowDir, true)
           if Directory.Exists srcDir then Directory.Delete(srcDir, true)
@@ -403,7 +404,7 @@ module ShadowCopyTests =
         let shadowDir = SageFs.ShadowCopy.createShadowDir ()
         try
           let result = SageFs.ShadowCopy.shadowCopyFile shadowDir "/nonexistent/Foo.dll"
-          Expect.equal result "/nonexistent/Foo.dll" "Should return original if source missing"
+          result |> Expect.equal "Should return original if source missing" "/nonexistent/Foo.dll"
         finally
           if Directory.Exists shadowDir then Directory.Delete(shadowDir, true)
 
@@ -424,8 +425,8 @@ module ShadowCopyTests =
         }
         try
           let result = SageFs.ShadowCopy.shadowCopySolution shadowDir sln
-          Expect.isNonEmpty result.References "Should have references"
-          Expect.equal result.References.[0] fakeDll "References should stay in place (shadowing breaks FSI #load resolution)"
+          result.References |> Expect.isNonEmpty "Should have references"
+          result.References.[0] |> Expect.equal "References should stay in place (shadowing breaks FSI #load resolution)" fakeDll
         finally
           if Directory.Exists shadowDir then Directory.Delete(shadowDir, true)
           if Directory.Exists srcDir then Directory.Delete(srcDir, true)
@@ -449,7 +450,7 @@ module ShadowCopyTests =
           let _result = SageFs.ShadowCopy.shadowCopySolution shadowDir sln
           // Original should still be writable (not locked)
           File.WriteAllText(fakeDll, "updated-content")
-          Expect.equal (File.ReadAllText fakeDll) "updated-content" "Original should be writable"
+          (File.ReadAllText fakeDll) |> Expect.equal "Original should be writable" "updated-content"
         finally
           if Directory.Exists shadowDir then Directory.Delete(shadowDir, true)
           if Directory.Exists srcDir then Directory.Delete(srcDir, true)
@@ -458,14 +459,14 @@ module ShadowCopyTests =
       <| fun _ ->
         let dir = SageFs.ShadowCopy.createShadowDir ()
         File.WriteAllText(Path.Combine(dir, "test.dll"), "data")
-        Expect.isTrue (Directory.Exists dir) "Should exist before cleanup"
+        (Directory.Exists dir) |> Expect.isTrue "Should exist before cleanup"
         SageFs.ShadowCopy.cleanupShadowDir dir
-        Expect.isFalse (Directory.Exists dir) "Should be removed after cleanup"
+        (Directory.Exists dir) |> Expect.isFalse "Should be removed after cleanup"
 
       testCase "cleanupShadowDir is safe on nonexistent dir"
       <| fun _ ->
         SageFs.ShadowCopy.cleanupShadowDir "/nonexistent/path/sagefs-shadow"
-        Expect.isFalse (Directory.Exists "/nonexistent/path/sagefs-shadow") "Should not create the directory"
+        (Directory.Exists "/nonexistent/path/sagefs-shadow") |> Expect.isFalse "Should not create the directory"
     ]
 
 // ============================================================================
@@ -498,22 +499,22 @@ module WarmUpTests =
       testCase "empty input returns empty succeeded and failed"
       <| fun _ ->
         let succeeded, failed = openWithRetry 5 (fun _ -> Ok ()) []
-        Expect.isEmpty succeeded "No succeeded"
-        Expect.isEmpty failed "No failed"
+        succeeded |> Expect.isEmpty "No succeeded"
+        failed |> Expect.isEmpty "No failed"
 
       testCase "all succeed on first pass"
       <| fun _ ->
         let succeeded, failed = openWithRetry 5 (fun _ -> Ok ()) [ "A"; "B"; "C" ]
-        Expect.equal succeeded [ "A"; "B"; "C" ] "All should succeed"
-        Expect.isEmpty failed "None should fail"
+        succeeded |> Expect.equal "All should succeed" [ "A"; "B"; "C" ]
+        failed |> Expect.isEmpty "None should fail"
 
       testCase "all fail permanently"
       <| fun _ ->
         let succeeded, failed =
           openWithRetry 5 (fun n -> Error (sprintf "%s broken" n)) [ "A"; "B" ]
-        Expect.isEmpty succeeded "None should succeed"
-        Expect.equal (failed |> List.map fst) [ "A"; "B" ] "All should fail"
-        Expect.equal (failed |> List.map snd) [ "A broken"; "B broken" ] "Errors preserved"
+        succeeded |> Expect.isEmpty "None should succeed"
+        (failed |> List.map fst) |> Expect.equal "All should fail" [ "A"; "B" ]
+        (failed |> List.map snd) |> Expect.equal "Errors preserved" [ "A broken"; "B broken" ]
 
       testCase "dependency chain resolves in two rounds"
       <| fun _ ->
@@ -521,9 +522,9 @@ module WarmUpTests =
         // then B succeeds on retry.
         let opener = dependencyOpener (Map.ofList [ "B", [ "A" ] ])
         let succeeded, failed = openWithRetry 5 opener [ "B"; "A" ]
-        Expect.contains succeeded "A" "A should succeed"
-        Expect.contains succeeded "B" "B should succeed after retry"
-        Expect.isEmpty failed "No permanent failures"
+        succeeded |> Expect.contains "A should succeed" "A"
+        succeeded |> Expect.contains "B should succeed after retry" "B"
+        failed |> Expect.isEmpty "No permanent failures"
 
       testCase "diamond dependency resolves"
       <| fun _ ->
@@ -535,8 +536,8 @@ module WarmUpTests =
         ]
         let opener = dependencyOpener deps
         let succeeded, failed = openWithRetry 10 opener [ "D"; "C"; "B"; "A" ]
-        Expect.hasLength succeeded 4 "All four should succeed"
-        Expect.isEmpty failed "No failures"
+        succeeded |> Expect.hasLength "All four should succeed" 4
+        failed |> Expect.isEmpty "No failures"
 
       testCase "max rounds stops iteration"
       <| fun _ ->
@@ -544,9 +545,9 @@ module WarmUpTests =
         let deps = Map.ofList [ "B", [ "A" ]; "C", [ "B" ] ]
         let opener = dependencyOpener deps
         let succeeded, failed = openWithRetry 2 opener [ "C"; "B"; "A" ]
-        Expect.contains succeeded "A" "A resolves round 1"
-        Expect.contains succeeded "B" "B resolves round 2"
-        Expect.equal (failed |> List.map fst) [ "C" ] "C still failed after max rounds"
+        succeeded |> Expect.contains "A resolves round 1" "A"
+        succeeded |> Expect.contains "B resolves round 2" "B"
+        (failed |> List.map fst) |> Expect.equal "C still failed after max rounds" [ "C" ]
 
       testCase "convergence: stops when no progress"
       <| fun _ ->
@@ -556,8 +557,8 @@ module WarmUpTests =
           Error (sprintf "%s always fails" name)
         let _succeeded, failed = openWithRetry 10 opener [ "X"; "Y" ]
         // Should stop after 1 round since no progress was made
-        Expect.equal callCount.Value 2 "Should only call opener once per name when no progress"
-        Expect.hasLength failed 2 "Both should fail"
+        callCount.Value |> Expect.equal "Should only call opener once per name when no progress" 2
+        failed |> Expect.hasLength "Both should fail" 2
 
       testCase "partition property: every name in exactly one list"
       <| fun _ ->
@@ -566,8 +567,8 @@ module WarmUpTests =
         let input = [ "A"; "B"; "Z" ]
         let succeeded, failed = openWithRetry 5 opener input
         let allNames = succeeded @ (failed |> List.map fst) |> List.sort
-        Expect.equal allNames (input |> List.sort) "All names accounted for"
-        Expect.hasLength (succeeded @ (failed |> List.map fst)) (List.length input) "No duplicates"
+        allNames |> Expect.equal "All names accounted for" (input |> List.sort)
+        (succeeded @ (failed |> List.map fst)) |> Expect.hasLength "No duplicates" (List.length input)
 
       testCase "mixed: some first pass, some retry, some permanent"
       <| fun _ ->
@@ -575,8 +576,8 @@ module WarmUpTests =
         let deps = Map.ofList [ "B", [ "A" ]; "X", [ "MISSING" ] ]
         let opener = dependencyOpener deps
         let succeeded, failed = openWithRetry 5 opener [ "X"; "B"; "A" ]
-        Expect.equal (succeeded |> List.sort) [ "A"; "B" ] "A and B succeed"
-        Expect.equal (failed |> List.map fst) [ "X" ] "X permanently fails"
+        (succeeded |> List.sort) |> Expect.equal "A and B succeed" [ "A"; "B" ]
+        (failed |> List.map fst) |> Expect.equal "X permanently fails" [ "X" ]
 
       testCase "preserves first-round error, not cascade error"
       <| fun _ ->
@@ -590,25 +591,25 @@ module WarmUpTests =
           elif count = 0 then Error (sprintf "%s: type 'IdentityUser' not found" name)
           else Error (sprintf "%s: error related to earlier error" name)
         let succeeded, failed = openWithRetry 5 opener [ "Bad1"; "Good"; "Bad2" ]
-        Expect.equal succeeded [ "Good" ] "Good should succeed"
-        Expect.hasLength failed 2 "Two should fail"
+        succeeded |> Expect.equal "Good should succeed" [ "Good" ]
+        failed |> Expect.hasLength "Two should fail" 2
         for _name, err in failed do
-          Expect.stringContains err "IdentityUser" "Should preserve first-round error, not cascade"
+          err |> Expect.stringContains "Should preserve first-round error, not cascade" "IdentityUser"
 
       testCase "isBenignOpenError detects RequireQualifiedAccess"
       <| fun _ ->
         let msg = "This declaration opens the module 'Falco.Response', which is marked as 'RequireQualifiedAccess'. Adjust your code to use qualified references."
-        Expect.isTrue (isBenignOpenError msg) "RequireQualifiedAccess should be benign"
+        (isBenignOpenError msg) |> Expect.isTrue "RequireQualifiedAccess should be benign"
 
       testCase "isBenignOpenError returns false for real errors"
       <| fun _ ->
         let msg = "The namespace or module 'Foo' is not defined."
-        Expect.isFalse (isBenignOpenError msg) "Real errors should not be benign"
+        (isBenignOpenError msg) |> Expect.isFalse "Real errors should not be benign"
 
       testCase "isBenignOpenError returns false for missing dependency"
       <| fun _ ->
         let msg = "The type 'IdentityUser' is not defined in 'Microsoft.AspNetCore.Identity'."
-        Expect.isFalse (isBenignOpenError msg) "Missing dependency should not be benign"
+        (isBenignOpenError msg) |> Expect.isFalse "Missing dependency should not be benign"
 
       testCase "RequireQualifiedAccess errors treated as success in opener"
       <| fun _ ->
@@ -622,8 +623,8 @@ module WarmUpTests =
           | Error msg when isBenignOpenError msg -> Ok ()
           | other -> other
         let succeeded, failed = openWithRetry 5 tolerantOpener ["System"; "Response"; "Result"]
-        Expect.equal (List.length succeeded) 3 "All should succeed including RequireQualifiedAccess"
-        Expect.equal (List.length failed) 0 "None should fail"
+        (List.length succeeded) |> Expect.equal "All should succeed including RequireQualifiedAccess" 3
+        (List.length failed) |> Expect.equal "None should fail" 0
     ]
 
   module Properties =

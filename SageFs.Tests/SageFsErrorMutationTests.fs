@@ -3,9 +3,14 @@
 /// Proves the test suite catches mutations in `SageFs.SageFsError` functions.
 /// Focuses on classification functions (`toLogLevel`, `toHttpStatus`, `isClientError`,
 /// `isServerError`, `isGatewayError`, `isInfraError`) and agent-facing output.
+///
+/// Each case asserts EXACT equality against the correct value (not merely
+/// inequality with one hand-picked wrong value) so a mutant that returns any
+/// other wrong value is killed too.
 module SageFsErrorMutationTests
 
 open Expecto
+open Expecto.Flip
 open SageFs
 
 // ── Test Fixtures ──────────────────────────────────────────────────────────
@@ -30,162 +35,116 @@ let sageFsErrorMutationTests = testList "SageFsError mutations" [
 
   // ── toLogLevel ────────────────────────────────────────────────────────────
 
-  testCase "WHY — toLogLevel_DaemonStartFailed_as_Writical — critical errors must not be downgraded" <| fun () ->
-    // Mutant: DaemonStartFailed → Warning instead of Critical
-    let real = SageFsError.toLogLevel daemonStartFailed
-    let mutant = Microsoft.Extensions.Logging.LogLevel.Warning
-    if real = mutant then
-      failwith "Mutation survived — toLogLevel downgraded DaemonStartFailed"
+  testCase "WHY — toLogLevel_DaemonStartFailed_is_Critical — critical errors must not be downgraded" <| fun () ->
+    SageFsError.toLogLevel daemonStartFailed
+    |> Expect.equal "DaemonStartFailed must log at Critical" Microsoft.Extensions.Logging.LogLevel.Critical
 
-  testCase "WHY — toLogLevel_PortInUse_as_Error — port conflicts are critical, not error" <| fun () ->
-    let real = SageFsError.toLogLevel portInUse
-    let mutant = Microsoft.Extensions.Logging.LogLevel.Error
-    if real = mutant then
-      failwith "Mutation survived — toLogLevel downgraded PortInUse"
+  testCase "WHY — toLogLevel_PortInUse_is_Critical — port conflicts are critical" <| fun () ->
+    SageFsError.toLogLevel portInUse
+    |> Expect.equal "PortInUse must log at Critical" Microsoft.Extensions.Logging.LogLevel.Critical
 
-  testCase "WHY — toLogLevel_EvalFailed_as_Warning — eval failures are errors, not warnings" <| fun () ->
-    let real = SageFsError.toLogLevel evalFailed
-    let mutant = Microsoft.Extensions.Logging.LogLevel.Warning
-    if real = mutant then
-      failwith "Mutation survived — toLogLevel downgraded EvalFailed"
+  testCase "WHY — toLogLevel_EvalFailed_is_Error — eval failures are errors, not warnings" <| fun () ->
+    SageFsError.toLogLevel evalFailed
+    |> Expect.equal "EvalFailed must log at Error" Microsoft.Extensions.Logging.LogLevel.Error
 
-  testCase "WHY — toLogLevel_SessionNotFound_as_Error — not-found is informational, not error" <| fun () ->
-    let real = SageFsError.toLogLevel sessionNotFound
-    let mutant = Microsoft.Extensions.Logging.LogLevel.Error
-    if real = mutant then
-      failwith "Mutation survived — toLogLevel upgraded SessionNotFound"
+  testCase "WHY — toLogLevel_SessionNotFound_is_Information — not-found is informational, not error" <| fun () ->
+    SageFsError.toLogLevel sessionNotFound
+    |> Expect.equal "SessionNotFound must log at Information" Microsoft.Extensions.Logging.LogLevel.Information
 
-  testCase "WHY — toLogLevel_RestartLimitExceeded_as_Error — restart limit is critical" <| fun () ->
-    let real = SageFsError.toLogLevel restartLimitExceeded
-    let mutant = Microsoft.Extensions.Logging.LogLevel.Error
-    if real = mutant then
-      failwith "Mutation survived — toLogLevel downgraded RestartLimitExceeded"
+  testCase "WHY — toLogLevel_RestartLimitExceeded_is_Critical — restart limit is critical" <| fun () ->
+    SageFsError.toLogLevel restartLimitExceeded
+    |> Expect.equal "RestartLimitExceeded must log at Critical" Microsoft.Extensions.Logging.LogLevel.Critical
 
   // ── toHttpStatus ──────────────────────────────────────────────────────────
 
-  testCase "WHY — toHttpStatus_SessionNotFound_as_500 — not-found must be 404, not 500" <| fun () ->
-    let real = SageFsError.toHttpStatus sessionNotFound
-    let mutant = 500
-    if real = mutant then
-      failwith "Mutation survived — toHttpStatus changed SessionNotFound to 500"
+  testCase "WHY — toHttpStatus_SessionNotFound_is_404 — not-found must be 404" <| fun () ->
+    SageFsError.toHttpStatus sessionNotFound
+    |> Expect.equal "SessionNotFound must be 404" 404
 
-  testCase "WHY — toHttpStatus_PortInUse_as_500 — port conflict must be 409, not 500" <| fun () ->
-    let real = SageFsError.toHttpStatus portInUse
-    let mutant = 500
-    if real = mutant then
-      failwith "Mutation survived — toHttpStatus changed PortInUse to 500"
+  testCase "WHY — toHttpStatus_PortInUse_is_409 — port conflict must be 409" <| fun () ->
+    SageFsError.toHttpStatus portInUse
+    |> Expect.equal "PortInUse must be 409" 409
 
-  testCase "WHY — toHttpStatus_WorkerTimeout_as_500 — timeout must be 504, not 500" <| fun () ->
-    let real = SageFsError.toHttpStatus workerTimeout
-    let mutant = 500
-    if real = mutant then
-      failwith "Mutation survived — toHttpStatus changed WorkerTimeout to 500"
+  testCase "WHY — toHttpStatus_WorkerTimeout_is_504 — timeout must be 504" <| fun () ->
+    SageFsError.toHttpStatus workerTimeout
+    |> Expect.equal "WorkerTimeout must be 504" 504
 
-  testCase "WHY — toHttpStatus_NoActiveSessions_as_500 — empty sessions must be 404, not 500" <| fun () ->
-    let real = SageFsError.toHttpStatus noActiveSessions
-    let mutant = 500
-    if real = mutant then
-      failwith "Mutation survived — toHttpStatus changed NoActiveSessions to 500"
+  testCase "WHY — toHttpStatus_NoActiveSessions_is_404 — empty sessions must be 404" <| fun () ->
+    SageFsError.toHttpStatus noActiveSessions
+    |> Expect.equal "NoActiveSessions must be 404" 404
 
-  testCase "WHY — toHttpStatus_WorkerSpawnFailed_as_500 — spawn failure is 502, not 500" <| fun () ->
-    let real = SageFsError.toHttpStatus workerSpawnFailed
-    let mutant = 500
-    if real = mutant then
-      failwith "Mutation survived — toHttpStatus changed WorkerSpawnFailed to 500"
+  testCase "WHY — toHttpStatus_WorkerSpawnFailed_is_502 — spawn failure is a bad gateway" <| fun () ->
+    SageFsError.toHttpStatus workerSpawnFailed
+    |> Expect.equal "WorkerSpawnFailed must be 502" 502
 
   // ── isClientError ─────────────────────────────────────────────────────────
 
-  testCase "WHY — isClientError_SessionNotFound_must_be_true — 404s are client errors" <| fun () ->
-    let real = SageFsError.isClientError sessionNotFound
-    let mutant = false
-    if real = mutant then
-      failwith "Mutation survived — isClientError says SessionNotFound is not client error"
+  testCase "WHY — isClientError_SessionNotFound_is_true — 404s are client errors" <| fun () ->
+    SageFsError.isClientError sessionNotFound
+    |> Expect.isTrue "SessionNotFound must be a client error"
 
-  testCase "WHY — isClientError_EvalFailed_must_be_false — 500s are not client errors" <| fun () ->
-    let real = SageFsError.isClientError evalFailed
-    let mutant = true
-    if real = mutant then
-      failwith "Mutation survived — isClientError says EvalFailed is client error"
+  testCase "WHY — isClientError_EvalFailed_is_false — 500s are not client errors" <| fun () ->
+    SageFsError.isClientError evalFailed
+    |> Expect.isFalse "EvalFailed must not be a client error"
 
-  testCase "WHY — isClientError_DaemonNotRunning_must_be_true — daemon down is client-actionable" <| fun () ->
-    let real = SageFsError.isClientError daemonNotRunning
-    let mutant = false
-    if real = mutant then
-      failwith "Mutation survived — isClientError says DaemonNotRunning is not client error"
+  testCase "WHY — isClientError_DaemonNotRunning_is_true — daemon down is client-actionable" <| fun () ->
+    SageFsError.isClientError daemonNotRunning
+    |> Expect.isTrue "DaemonNotRunning must be a client error"
 
   // ── isServerError ─────────────────────────────────────────────────────────
 
-  testCase "WHY — isServerError_EvalFailed_must_be_true — eval failures are server errors" <| fun () ->
-    let real = SageFsError.isServerError evalFailed
-    let mutant = false
-    if real = mutant then
-      failwith "Mutation survived — isServerError says EvalFailed is not server error"
+  testCase "WHY — isServerError_EvalFailed_is_true — eval failures are server errors" <| fun () ->
+    SageFsError.isServerError evalFailed
+    |> Expect.isTrue "EvalFailed must be a server error"
 
-  testCase "WHY — isServerError_SessionNotFound_must_be_false — 404s are not server errors" <| fun () ->
-    let real = SageFsError.isServerError sessionNotFound
-    let mutant = true
-    if real = mutant then
-      failwith "Mutation survived — isServerError says SessionNotFound is server error"
+  testCase "WHY — isServerError_SessionNotFound_is_false — 404s are not server errors" <| fun () ->
+    SageFsError.isServerError sessionNotFound
+    |> Expect.isFalse "SessionNotFound must not be a server error"
 
-  testCase "WHY — isServerError_DaemonStartFailed_must_be_true — daemon crashes are server errors" <| fun () ->
-    let real = SageFsError.isServerError daemonStartFailed
-    let mutant = false
-    if real = mutant then
-      failwith "Mutation survived — isServerError says DaemonStartFailed is not server error"
+  testCase "WHY — isServerError_DaemonStartFailed_is_true — daemon crashes are server errors" <| fun () ->
+    SageFsError.isServerError daemonStartFailed
+    |> Expect.isTrue "DaemonStartFailed must be a server error"
 
   // ── isGatewayError ────────────────────────────────────────────────────────
 
-  testCase "WHY — isGatewayError_WorkerTimeout_must_be_true — timeouts are gateway errors" <| fun () ->
-    let real = SageFsError.isGatewayError workerTimeout
-    let mutant = false
-    if real = mutant then
-      failwith "Mutation survived — isGatewayError says WorkerTimeout is not gateway error"
+  testCase "WHY — isGatewayError_WorkerTimeout_is_true — timeouts are gateway errors" <| fun () ->
+    SageFsError.isGatewayError workerTimeout
+    |> Expect.isTrue "WorkerTimeout must be a gateway error"
 
-  testCase "WHY — isGatewayError_EvalFailed_must_be_false — eval failures are not gateway errors" <| fun () ->
-    let real = SageFsError.isGatewayError evalFailed
-    let mutant = true
-    if real = mutant then
-      failwith "Mutation survived — isGatewayError says EvalFailed is gateway error"
+  testCase "WHY — isGatewayError_EvalFailed_is_false — eval failures are not gateway errors" <| fun () ->
+    SageFsError.isGatewayError evalFailed
+    |> Expect.isFalse "EvalFailed must not be a gateway error"
 
-  testCase "WHY — isGatewayError_WorkerSpawnFailed_must_be_true — spawn failure is gateway error" <| fun () ->
-    let real = SageFsError.isGatewayError workerSpawnFailed
-    let mutant = false
-    if real = mutant then
-      failwith "Mutation survived — isGatewayError says WorkerSpawnFailed is not gateway error"
+  testCase "WHY — isGatewayError_WorkerSpawnFailed_is_true — spawn failure is a gateway error" <| fun () ->
+    SageFsError.isGatewayError workerSpawnFailed
+    |> Expect.isTrue "WorkerSpawnFailed must be a gateway error"
 
   // ── isInfraError ──────────────────────────────────────────────────────────
 
-  testCase "WHY — isInfraError_PortInUse_must_be_true — port conflicts are infra errors" <| fun () ->
-    let real = SageFsError.isInfraError portInUse
-    let mutant = false
-    if real = mutant then
-      failwith "Mutation survived — isInfraError says PortInUse is not infra error"
+  testCase "WHY — isInfraError_PortInUse_is_true — port conflicts are infra errors" <| fun () ->
+    SageFsError.isInfraError portInUse
+    |> Expect.isTrue "PortInUse must be an infra error"
 
-  testCase "WHY — isInfraError_EvalFailed_must_be_false — eval failures are not infra errors" <| fun () ->
-    let real = SageFsError.isInfraError evalFailed
-    let mutant = true
-    if real = mutant then
-      failwith "Mutation survived — isInfraError says EvalFailed is infra error"
+  testCase "WHY — isInfraError_EvalFailed_is_false — eval failures are not infra errors" <| fun () ->
+    SageFsError.isInfraError evalFailed
+    |> Expect.isFalse "EvalFailed must not be an infra error"
 
-  testCase "WHY — isInfraError_RestartLimitExceeded_must_be_true — restart limit is infra error" <| fun () ->
-    let real = SageFsError.isInfraError restartLimitExceeded
-    let mutant = false
-    if real = mutant then
-      failwith "Mutation survived — isInfraError says RestartLimitExceeded is not infra error"
+  testCase "WHY — isInfraError_RestartLimitExceeded_is_true — restart limit is an infra error" <| fun () ->
+    SageFsError.isInfraError restartLimitExceeded
+    |> Expect.isTrue "RestartLimitExceeded must be an infra error"
 
   // ── describeForAgent ──────────────────────────────────────────────────────
 
-  testCase "WHY — describeForAgent_must_include_suggestedAction — agents need next steps" <| fun () ->
-    let real = SageFsError.describeForAgent sessionNotFound
-    let mutant = SageFsError.describe sessionNotFound  // mutant: no suggested action
-    if real = mutant then
-      failwith "Mutation survived — describeForAgent missing suggestedAction"
+  testCase "WHY — describeForAgent_composes_describe_and_suggestedAction — agents need next steps" <| fun () ->
+    let expected = sprintf "%s → Next: %s" (SageFsError.describe sessionNotFound) (SageFsError.suggestedAction sessionNotFound)
+    SageFsError.describeForAgent sessionNotFound
+    |> Expect.equal "describeForAgent must be \"<describe> → Next: <suggestedAction>\"" expected
 
   // ── Mutual exclusion: isClientError and isServerError ──────────────────────
 
-  testCase "WHY — isClientError_and_isServerError_must_not_both_be_true — classification must be consistent" <| fun () ->
+  testCase "WHY — isClientError_and_isServerError_are_mutually_exclusive — classification must be consistent" <| fun () ->
     let allErrors = [sessionNotFound; evalFailed; portInUse; workerTimeout; noActiveSessions; unexpected; daemonNotRunning; daemonStartFailed; restartLimitExceeded]
     let violations = allErrors |> List.filter (fun e -> SageFsError.isClientError e && SageFsError.isServerError e)
-    if violations.Length > 0 then
-      failwithf "Mutation survived — %d errors classified as both client and server" violations.Length
+    violations
+    |> Expect.isEmpty "no error may be classified as both client and server"
 ]

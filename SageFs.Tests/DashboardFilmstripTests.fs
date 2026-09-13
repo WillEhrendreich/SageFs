@@ -2,6 +2,7 @@
 
 open System
 open Expecto
+open Expecto.Flip
 open Falco.Markup
 open SageFs.Server
 open SageFs.Server.DashboardTypes
@@ -22,52 +23,52 @@ let filmstripRenderTests =
 
     test "empty list renders filmstrip-panel id" {
       let html = renderSessionFilmstrip [] |> render
-      Expect.stringContains html DomIds.FilmstripPanel "should have filmstrip-panel id"
+      html |> Expect.stringContains "should have filmstrip-panel id" DomIds.FilmstripPanel
     }
 
     test "empty list renders no content (silent when empty)" {
       let html = renderSessionFilmstrip [] |> render
-      Expect.isFalse (html.Contains("No history")) "should NOT show No history message when empty (progressive disclosure)"
+      (html.Contains("No history")) |> Expect.isFalse "should NOT show No history message when empty (progressive disclosure)"
     }
 
     test "success entry renders success icon" {
       let html = renderSessionFilmstrip [ entry 0 "let x = 1" 42L EvalSuccess ] |> render
-      Expect.stringContains html "✓" "should render success icon"
+      html |> Expect.stringContains "should render success icon" "✓"
     }
 
     test "error entry renders error icon" {
       let html = renderSessionFilmstrip [ entry 0 "bad code" 10L EvalError ] |> render
-      Expect.stringContains html "✗" "should render error icon"
+      html |> Expect.stringContains "should render error icon" "✗"
     }
 
     test "cancelled entry renders cancelled icon" {
       let html = renderSessionFilmstrip [ entry 0 "long op" 5000L EvalCancelled ] |> render
-      Expect.stringContains html "⊘" "should render cancelled icon"
+      html |> Expect.stringContains "should render cancelled icon" "⊘"
     }
 
     test "entry label appears in output" {
       let html = renderSessionFilmstrip [ entry 0 "let answer = 42" 12L EvalSuccess ] |> render
-      Expect.stringContains html "let answer = 42" "should contain entry label"
+      html |> Expect.stringContains "should contain entry label" "let answer = 42"
     }
 
     test "entry duration appears in output" {
       let html = renderSessionFilmstrip [ entry 0 "x" 123L EvalSuccess ] |> render
-      Expect.stringContains html "123" "should show duration"
+      html |> Expect.stringContains "should show duration" "123"
     }
 
     test "fast eval (under 100ms) gets fast CSS class" {
       let html = renderSessionFilmstrip [ entry 0 "x" 50L EvalSuccess ] |> render
-      Expect.stringContains html "eval-fast" "should apply eval-fast class for < 100ms"
+      html |> Expect.stringContains "should apply eval-fast class for < 100ms" "eval-fast"
     }
 
     test "medium eval (100-500ms) gets medium CSS class" {
       let html = renderSessionFilmstrip [ entry 0 "x" 250L EvalSuccess ] |> render
-      Expect.stringContains html "eval-medium" "should apply eval-medium class for 100-500ms"
+      html |> Expect.stringContains "should apply eval-medium class for 100-500ms" "eval-medium"
     }
 
     test "slow eval (over 500ms) gets slow CSS class" {
       let html = renderSessionFilmstrip [ entry 0 "x" 800L EvalSuccess ] |> render
-      Expect.stringContains html "eval-slow" "should apply eval-slow class for > 500ms"
+      html |> Expect.stringContains "should apply eval-slow class for > 500ms" "eval-slow"
     }
 
     test "multiple entries all appear in output" {
@@ -76,14 +77,14 @@ let filmstripRenderTests =
           entry 1 "let b = 2" 20L EvalSuccess
           entry 2 "let c = 3" 30L EvalError ]
       let html = renderSessionFilmstrip entries |> render
-      Expect.stringContains html "let a = 1" "first entry label"
-      Expect.stringContains html "let b = 2" "second entry label"
-      Expect.stringContains html "let c = 3" "third entry label"
+      html |> Expect.stringContains "first entry label" "let a = 1"
+      html |> Expect.stringContains "second entry label" "let b = 2"
+      html |> Expect.stringContains "third entry label" "let c = 3"
     }
 
     test "entry index appears in output" {
       let html = renderSessionFilmstrip [ entry 7 "do stuff" 15L EvalSuccess ] |> render
-      Expect.stringContains html "#7" "should show frame index with # prefix"
+      html |> Expect.stringContains "should show frame index with # prefix" "#7"
     }
 
   ]
@@ -113,7 +114,7 @@ let filmstripSnapshotTests =
 
       }
       let html = snap.FilmstripPanel |> render
-      Expect.isTrue (html.Length > 0) "FilmstripPanel should render non-empty HTML"
+      (html.Length > 0) |> Expect.isTrue "FilmstripPanel should render non-empty HTML"
     }
 
     test "renderMainContent includes filmstrip-panel id" {
@@ -138,7 +139,7 @@ let filmstripSnapshotTests =
 
       }
       let html = renderMainContent snap |> render
-      Expect.stringContains html DomIds.FilmstripPanel "main content should include filmstrip panel"
+      html |> Expect.stringContains "main content should include filmstrip panel" DomIds.FilmstripPanel
     }
 
   ]

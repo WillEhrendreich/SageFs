@@ -1,6 +1,7 @@
 module SageFs.Tests.ScreenTests
 
 open Expecto
+open Expecto.Flip
 open SageFs
 
 [<Tests>]
@@ -9,28 +10,27 @@ let screenTests = testList "Screen" [
   testList "computeLayout" [
     test "returns 2 panes with defaults" {
       let panes, _ = Screen.computeLayout 40 120
-      Expect.equal (List.length panes) 2 "should have 2 panes (Output + Sessions)"
+      (List.length panes) |> Expect.equal "should have 2 panes (Output + Sessions)" 2
     }
 
     test "all default pane ids are present" {
       let panes, _ = Screen.computeLayout 40 120
       let ids = panes |> List.map fst |> Set.ofList
       let expected = Set.ofList [ PaneId.Output; PaneId.Sessions ]
-      Expect.equal ids expected "default pane ids: Output + Sessions"
+      ids |> Expect.equal "default pane ids: Output + Sessions" expected
     }
 
     test "status bar rect is last row" {
       let _, statusRect = Screen.computeLayout 40 120
-      Expect.equal statusRect.Row 39 "status bar on last row"
-      Expect.equal statusRect.Height 1 "status bar is 1 row"
-      Expect.equal statusRect.Width 120 "status bar spans full width"
+      statusRect.Row |> Expect.equal "status bar on last row" 39
+      statusRect.Height |> Expect.equal "status bar is 1 row" 1
+      statusRect.Width |> Expect.equal "status bar spans full width" 120
     }
 
     test "panes don't overlap status bar" {
       let panes, statusRect = Screen.computeLayout 40 120
       for (_, r) in panes do
-        Expect.isLessThanOrEqual (r.Row + r.Height) statusRect.Row
-          (sprintf "pane at row %d height %d overlaps status bar at row %d" r.Row r.Height statusRect.Row)
+        ((r.Row + r.Height), statusRect.Row) |> Expect.isLessThanOrEqual (sprintf "pane at row %d height %d overlaps status bar at row %d" r.Row r.Height statusRect.Row)
     }
   ]
 
@@ -44,7 +44,7 @@ let screenTests = testList "Screen" [
       // Output pane is visible in defaults but has no cursor region
       Screen.draw grid regions PaneId.Output Map.empty " status " " hints " |> ignore
       let text = CellGrid.toText grid
-      Expect.stringContains text "hello world" "output content should appear"
+      text |> Expect.stringContains "output content should appear" "hello world"
     }
 
     test "returns cursor position when focused pane has no region" {
@@ -52,7 +52,7 @@ let screenTests = testList "Screen" [
       // drawWith may return a default cursor position even when no regions
       Screen.draw grid [] PaneId.Output Map.empty " left " " right " |> ignore
       let text = CellGrid.toText grid
-      Expect.isNonEmpty text "grid should have content after draw"
+      text |> Expect.isNonEmpty "grid should have content after draw"
     }
 
     test "grid is not empty after draw" {
@@ -66,53 +66,53 @@ let screenTests = testList "Screen" [
       for r in 0 .. CellGrid.rows grid - 1 do
         for c in 0 .. CellGrid.cols grid - 1 do
           if (CellGrid.get grid r c).Char <> ' ' then nonSpace <- nonSpace + 1
-      Expect.isGreaterThan nonSpace 10 "grid should have drawn content"
+      (nonSpace, 10) |> Expect.isGreaterThan "grid should have drawn content"
     }
   ]
 
   testList "StatusHints" [
     test "build shows quit and focus with default keymap" {
       let result = StatusHints.build KeyMap.defaults PaneId.Output LayoutConfig.defaults.VisiblePanes 0 UiDensity.Normal
-      Expect.stringContains result "quit" "should contain quit hint"
-      Expect.stringContains result "focus" "should contain focus hint"
+      result |> Expect.stringContains "should contain quit hint" "quit"
+      result |> Expect.stringContains "should contain focus hint" "focus"
     }
 
     test "editor pane shows eval hint" {
       let panes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ]
       let result = StatusHints.build KeyMap.defaults PaneId.Editor panes 0 UiDensity.Normal
-      Expect.stringContains result "eval" "should contain eval hint"
+      result |> Expect.stringContains "should contain eval hint" "eval"
     }
 
     test "sessions pane shows new-session hint" {
       let result = StatusHints.build KeyMap.defaults PaneId.Sessions LayoutConfig.defaults.VisiblePanes 0 UiDensity.Normal
-      Expect.stringContains result "new-session" "should contain new-session hint"
+      result |> Expect.stringContains "should contain new-session hint" "new-session"
     }
 
     test "sessions pane shows auto-open-off hint" {
       let result = StatusHints.build KeyMap.defaults PaneId.Sessions LayoutConfig.defaults.VisiblePanes 0 UiDensity.Normal
-      Expect.stringContains result "auto-open-off" "should contain auto-open-off hint"
+      result |> Expect.stringContains "should contain auto-open-off hint" "auto-open-off"
     }
 
     test "output pane shows scroll hint" {
       let result = StatusHints.build KeyMap.defaults PaneId.Output LayoutConfig.defaults.VisiblePanes 0 UiDensity.Normal
-      Expect.stringContains result "scroll" "should contain scroll hint"
+      result |> Expect.stringContains "should contain scroll hint" "scroll"
     }
 
     test "empty keymap returns empty string" {
       let result = StatusHints.build Map.empty PaneId.Editor Set.empty 0 UiDensity.Normal
-      Expect.equal result "" "empty keymap should produce empty hints"
+      result |> Expect.equal "empty keymap should produce empty hints" ""
     }
 
     test "shows show-editor when editor hidden" {
       let panes = Set.ofList [ PaneId.Output; PaneId.Sessions ]
       let result = StatusHints.build KeyMap.defaults PaneId.Output panes 0 UiDensity.Normal
-      Expect.stringContains result "show-editor" "should hint to show editor when hidden"
+      result |> Expect.stringContains "should hint to show editor when hidden" "show-editor"
     }
 
     test "shows hide-editor when editor visible" {
       let panes = Set.ofList [ PaneId.Output; PaneId.Editor; PaneId.Sessions ]
       let result = StatusHints.build KeyMap.defaults PaneId.Output panes 0 UiDensity.Normal
-      Expect.stringContains result "hide-editor" "should hint to hide editor when visible"
+      result |> Expect.stringContains "should hint to hide editor when visible" "hide-editor"
     }
   ]
 
@@ -123,8 +123,8 @@ let screenTests = testList "Screen" [
         """             "bgPanel", "#646464" ]"""
       |]
       let overrides = Theme.parseConfigLines lines
-      Expect.equal (Map.find "fgDefault" overrides) "#C8C8C8" "fgDefault parsed"
-      Expect.equal (Map.find "bgPanel" overrides) "#646464" "bgPanel parsed"
+      (Map.find "fgDefault" overrides) |> Expect.equal "fgDefault parsed" "#C8C8C8"
+      (Map.find "bgPanel" overrides) |> Expect.equal "bgPanel parsed" "#646464"
     }
 
     test "parseConfigLines ignores non-theme lines" {
@@ -133,76 +133,76 @@ let screenTests = testList "Screen" [
         """let theme = [ "bgEditor", "#323232" ]"""
       |]
       let overrides = Theme.parseConfigLines lines
-      Expect.equal overrides.Count 1 "only theme values parsed"
-      Expect.equal (Map.find "bgEditor" overrides) "#323232" "bgEditor parsed"
+      overrides.Count |> Expect.equal "only theme values parsed" 1
+      (Map.find "bgEditor" overrides) |> Expect.equal "bgEditor parsed" "#323232"
     }
 
     test "parseConfigLines returns empty for no theme section" {
       let lines = [| """let projects = [ "test.fsproj" ]""" |]
       let overrides = Theme.parseConfigLines lines
-      Expect.equal overrides.Count 0 "no theme values"
+      overrides.Count |> Expect.equal "no theme values" 0
     }
 
     test "withOverrides applies partial overrides" {
       let overrides = Map.ofList [ "fgDefault", "#C8C8C8"; "bgPanel", "#646464" ]
       let result = Theme.withOverrides overrides Theme.defaults
-      Expect.equal result.FgDefault "#C8C8C8" "fgDefault overridden"
-      Expect.equal result.BgPanel "#646464" "bgPanel overridden"
-      Expect.equal result.FgDim Theme.defaults.FgDim "fgDim unchanged"
+      result.FgDefault |> Expect.equal "fgDefault overridden" "#C8C8C8"
+      result.BgPanel |> Expect.equal "bgPanel overridden" "#646464"
+      result.FgDim |> Expect.equal "fgDim unchanged" Theme.defaults.FgDim
     }
 
     test "withOverrides with empty map returns base unchanged" {
       let result = Theme.withOverrides Map.empty Theme.defaults
-      Expect.equal result Theme.defaults "no overrides = defaults"
+      result |> Expect.equal "no overrides = defaults" Theme.defaults
     }
   ]
 
   testList "LayoutConfig" [
     test "defaults includes Output and Sessions" {
       let cfg = LayoutConfig.defaults
-      Expect.equal cfg.VisiblePanes.Count 2 "defaults should have 2 visible panes"
-      Expect.isTrue (cfg.VisiblePanes.Contains PaneId.Output) "should contain Output"
-      Expect.isTrue (cfg.VisiblePanes.Contains PaneId.Sessions) "should contain Sessions"
-      Expect.isFalse (cfg.VisiblePanes.Contains PaneId.Editor) "Editor hidden by default"
+      cfg.VisiblePanes.Count |> Expect.equal "defaults should have 2 visible panes" 2
+      (cfg.VisiblePanes.Contains PaneId.Output) |> Expect.isTrue "should contain Output"
+      (cfg.VisiblePanes.Contains PaneId.Sessions) |> Expect.isTrue "should contain Sessions"
+      (cfg.VisiblePanes.Contains PaneId.Editor) |> Expect.isFalse "Editor hidden by default"
     }
 
     test "togglePane hides a visible pane" {
       let cfg = LayoutConfig.togglePane PaneId.Sessions LayoutConfig.defaults
-      Expect.isFalse (cfg.VisiblePanes.Contains PaneId.Sessions) "Sessions should be hidden"
-      Expect.equal cfg.VisiblePanes.Count 1 "should have 1 visible pane"
+      (cfg.VisiblePanes.Contains PaneId.Sessions) |> Expect.isFalse "Sessions should be hidden"
+      cfg.VisiblePanes.Count |> Expect.equal "should have 1 visible pane" 1
     }
 
     test "togglePane shows a hidden pane" {
       let cfg = LayoutConfig.togglePane PaneId.Sessions LayoutConfig.defaults
       let cfg2 = LayoutConfig.togglePane PaneId.Sessions cfg
-      Expect.isTrue (cfg2.VisiblePanes.Contains PaneId.Sessions) "Sessions should be visible again"
+      (cfg2.VisiblePanes.Contains PaneId.Sessions) |> Expect.isTrue "Sessions should be visible again"
     }
 
     test "togglePane can show Editor" {
       let cfg = LayoutConfig.togglePane PaneId.Editor LayoutConfig.defaults
-      Expect.isTrue (cfg.VisiblePanes.Contains PaneId.Editor) "Editor should be shown after toggle"
+      (cfg.VisiblePanes.Contains PaneId.Editor) |> Expect.isTrue "Editor should be shown after toggle"
     }
 
     test "focus preset has only Output and Editor" {
       let cfg = LayoutConfig.focus
-      Expect.equal cfg.VisiblePanes (Set.ofList [ PaneId.Output; PaneId.Editor ]) "focus preset panes"
+      cfg.VisiblePanes |> Expect.equal "focus preset panes" (Set.ofList [ PaneId.Output; PaneId.Editor ])
     }
 
     test "minimal preset has only Editor" {
       let cfg = LayoutConfig.minimal
-      Expect.equal cfg.VisiblePanes (Set.singleton PaneId.Editor) "minimal preset panes"
+      cfg.VisiblePanes |> Expect.equal "minimal preset panes" (Set.singleton PaneId.Editor)
     }
 
     test "computeLayoutWith focus preset returns 2 panes" {
       let panes, _ = Screen.computeLayoutWith LayoutConfig.focus 40 120
       let ids = panes |> List.map fst |> Set.ofList
-      Expect.equal ids (Set.ofList [ PaneId.Output; PaneId.Editor ]) "focus layout pane ids"
+      ids |> Expect.equal "focus layout pane ids" (Set.ofList [ PaneId.Output; PaneId.Editor ])
     }
 
     test "computeLayoutWith minimal preset returns 1 pane" {
       let panes, _ = Screen.computeLayoutWith LayoutConfig.minimal 40 120
-      Expect.equal (List.length panes) 1 "minimal layout should have 1 pane"
-      Expect.equal (fst panes.[0]) PaneId.Editor "minimal should show Editor"
+      (List.length panes) |> Expect.equal "minimal layout should have 1 pane" 1
+      (fst panes.[0]) |> Expect.equal "minimal should show Editor" PaneId.Editor
     }
   ]
 ]

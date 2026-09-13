@@ -1,6 +1,7 @@
 module SageFs.Tests.VariantSelectorTests
 
 open Expecto
+open Expecto.Flip
 open SageFs
 
 /// Phase 0 RED: prove there is no version-variant selection today.
@@ -50,10 +51,7 @@ let tests =
 
       match selected with
       | Error msg ->
-        Expect.stringContains
-          msg
-          "no variant"
-          "error should explain no variant exists"
+        msg |> Expect.stringContains "error should explain no variant exists" "no variant"
       | Ok _ -> failtest "unknown version must not silently select a variant"
 
     testCase "conflicting pins across projects refuse pre-eval" <| fun _ ->
@@ -70,9 +68,6 @@ let tests =
 
       match selected with
       | Error msg ->
-        Expect.stringContains
-          msg
-          "conflict"
-          "conflicting pins should name the conflict"
+        msg |> Expect.stringContains "conflicting pins should name the conflict" "conflict"
       | Ok _ -> failtest "conflicting pins must refuse"
   ]

@@ -34,54 +34,46 @@ let sessionManagerBuildPathTests =
 let sessionResetTests =
   testSequenced <| Integration.hostList "Session reset" [
 
-    testCase "eval → reset → value is gone"
-    <| fun _ ->
-      task {
-        let ctx = sharedCtxWith (SessionId.newId())
+    testTask "eval → reset → value is gone" {
+      let ctx = sharedCtxWith (SessionId.newId())
 
-        // Define a value
-        let! defineResult = sendFSharpCode ctx "test" "let resetTestVal = 99;;" OutputFormat.Text None None None None None None
-        defineResult
-        |> Expect.stringContains
-          "Definition should succeed"
-          "val resetTestVal"
+      // Define a value
+      let! defineResult = sendFSharpCode ctx "test" "let resetTestVal = 99;;" OutputFormat.Text None None None None None None
+      defineResult
+      |> Expect.stringContains
+        "Definition should succeed"
+        "val resetTestVal"
 
-        // Reset the session
-        let! resetResult = resetSession ctx "test" None None
-        resetResult
-        |> Expect.stringContains
-          "Reset should report success"
-          "reset"
+      // Reset the session
+      let! resetResult = resetSession ctx "test" None None
+      resetResult
+      |> Expect.stringContains
+        "Reset should report success"
+        "reset"
 
-        // Try to use the value — should fail
-        let! afterReset = sendFSharpCode ctx "test" "resetTestVal;;" OutputFormat.Text None None None None None None
-        afterReset
-        |> Expect.stringContains
-          "Value should not exist after reset"
-          "Error"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+      // Try to use the value — should fail
+      let! afterReset = sendFSharpCode ctx "test" "resetTestVal;;" OutputFormat.Text None None None None None None
+      afterReset
+      |> Expect.stringContains
+        "Value should not exist after reset"
+        "Error"
+    }
 
-    testCase "reset → eval 1+1 succeeds (session works)"
-    <| fun _ ->
-      task {
-        let ctx = sharedCtxWith (SessionId.newId())
+    testTask "reset → eval 1+1 succeeds (session works)" {
+      let ctx = sharedCtxWith (SessionId.newId())
 
-        let! resetResult = resetSession ctx "test" None None
-        resetResult
-        |> Expect.stringContains
-          "Reset should succeed"
-          "reset"
+      let! resetResult = resetSession ctx "test" None None
+      resetResult
+      |> Expect.stringContains
+        "Reset should succeed"
+        "reset"
 
-        let! result = sendFSharpCode ctx "test" "1 + 1;;" OutputFormat.Text None None None None None None
-        result
-        |> Expect.stringContains
-          "Should evaluate after reset"
-          "2"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+      let! result = sendFSharpCode ctx "test" "1 + 1;;" OutputFormat.Text None None None None None None
+      result
+      |> Expect.stringContains
+        "Should evaluate after reset"
+        "2"
+    }
 
   ]
 
@@ -128,78 +120,66 @@ let private mkPushbackCtx (restartResult: Result<string, SageFsError>) =
 let resetPushbackTests =
   Integration.hostList "Reset pushback warnings" [
 
-    testCase "hard reset on healthy session routes through the owner's restart, preserves its outcome message, and includes the definitions-cleared warning"
-    <| fun _ ->
-      task {
-        let sentinel = sprintf "owner-restart-outcome-%O" (System.Guid.NewGuid())
-        let ctx, restartCalls, statusEvents = mkPushbackCtx (Ok sentinel)
+    testTask "hard reset on healthy session routes through the owner's restart, preserves its outcome message, and includes the definitions-cleared warning" {
+      let sentinel = sprintf "owner-restart-outcome-%O" (System.Guid.NewGuid())
+      let ctx, restartCalls, statusEvents = mkPushbackCtx (Ok sentinel)
 
-        let! result = hardResetSession ctx "test" false None None
+      let! result = hardResetSession ctx "test" false None None
 
-        result
-        |> Expect.stringContains
-          "A hard reset without a rebuild clears REPL definitions, so it must warn about that"
-          "⚠️ NOTE:"
+      result
+      |> Expect.stringContains
+        "A hard reset without a rebuild clears REPL definitions, so it must warn about that"
+        "⚠️ NOTE:"
 
-        result
-        |> Expect.stringContains
-          "The owner's own restart-outcome message must be preserved verbatim, not replaced"
-          sentinel
+      result
+      |> Expect.stringContains
+        "The owner's own restart-outcome message must be preserved verbatim, not replaced"
+        sentinel
 
-        restartCalls.Count
-        |> Expect.equal
-          "the session's owner (not an in-process rebuild) is asked to restart the worker process, exactly once"
-          1
-        snd restartCalls.[0]
-        |> Expect.isFalse "rebuild=false must be passed through unchanged"
+      restartCalls.Count
+      |> Expect.equal
+        "the session's owner (not an in-process rebuild) is asked to restart the worker process, exactly once"
+        1
+      snd restartCalls.[0]
+      |> Expect.isFalse "rebuild=false must be passed through unchanged"
 
-        statusEvents |> Seq.toList
-        |> Expect.contains
-          "a successful restart tells Elm the session is Running again"
-          SessionDisplayStatus.Running
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+      statusEvents |> Seq.toList
+      |> Expect.contains
+        "a successful restart tells Elm the session is Running again"
+        SessionDisplayStatus.Running
+    }
 
-    testCase "hard reset failure surfaces the owner's error and never claims success"
-    <| fun _ ->
-      task {
-        let failure = SageFsError.HardResetFailed "worker refused to restart"
-        let ctx, restartCalls, statusEvents = mkPushbackCtx (Error failure)
+    testTask "hard reset failure surfaces the owner's error and never claims success" {
+      let failure = SageFsError.HardResetFailed "worker refused to restart"
+      let ctx, restartCalls, statusEvents = mkPushbackCtx (Error failure)
 
-        let! result = hardResetSession ctx "test" false None None
+      let! result = hardResetSession ctx "test" false None None
 
-        result
-        |> Expect.stringContains
-          "a failed restart must be reported as an error, not silently swallowed"
-          "Error:"
+      result
+      |> Expect.stringContains
+        "a failed restart must be reported as an error, not silently swallowed"
+        "Error:"
 
-        restartCalls.Count
-        |> Expect.equal "the owner's restart is still attempted exactly once" 1
+      restartCalls.Count
+      |> Expect.equal "the owner's restart is still attempted exactly once" 1
 
-        statusEvents |> Seq.toList
-        |> Expect.all
-          "no restart failure may be reported as the session becoming Running"
-          (fun s -> s <> SessionDisplayStatus.Running)
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+      statusEvents |> Seq.toList
+      |> Expect.all
+        "no restart failure may be reported as the session becoming Running"
+        (fun s -> s <> SessionDisplayStatus.Running)
+    }
 
-    testCase "soft reset on healthy session includes warning"
-    <| fun _ ->
-      task {
-        let ctx = sharedCtx ()
-        let! result = resetSession ctx "test" None None
-        result
-        |> Expect.stringContains
-          "Should include pushback warning for healthy session"
-          "⚠️ NOTE:"
-        result
-        |> Expect.stringContains
-          "Should still include success message"
-          "reset"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+    testTask "soft reset on healthy session includes warning" {
+      let ctx = sharedCtx ()
+      let! result = resetSession ctx "test" None None
+      result
+      |> Expect.stringContains
+        "Should include pushback warning for healthy session"
+        "⚠️ NOTE:"
+      result
+      |> Expect.stringContains
+        "Should still include success message"
+        "reset"
+    }
 
   ]
