@@ -101,7 +101,7 @@ let elmDaemonTests =
         // Verify update produces a model and effects list
         let msg =
           SageFsMsg.Event (
-            SageFsEvent.EvalStarted ("s", "code"))
+            TuiEvent.EvalStarted ("s", "code"))
         let model, effects = program.Update msg (SageFsModel.initial())
         model.RecentOutput.GetBuffer("s")
         |> Seq.length
@@ -122,7 +122,7 @@ let elmDaemonTests =
         let model = (SageFsModel.initial())
         let msg =
           SageFsMsg.Event (
-            SageFsEvent.EvalCompleted ("s", "hello", []))
+            TuiEvent.EvalCompleted ("s", "hello", []))
         let newModel, _ = program.Update msg model
 
         newModel.RecentOutput.GetBuffer("s")
@@ -175,7 +175,7 @@ let elmDaemonTests =
           ElmDaemon.start deps onModelChanged (fun _ _ -> ()) System.Threading.CancellationToken.None
 
         runtime.Dispatch (
-          SageFsMsg.Event (SageFsEvent.EvalStarted ("s", "dispatched-code")))
+          SageFsMsg.Event (TuiEvent.EvalStarted ("s", "dispatched-code")))
         let! _ = Tasks.Task.WhenAny(reached.Task, Tasks.Task.Delay 5000)
         reached.Task.IsCompleted
         |> Expect.isTrue "the dispatched message should reach the model"
@@ -207,7 +207,7 @@ let elmDaemonTests =
 
         runtime.Dispatch (
           SageFsMsg.Event (
-            SageFsEvent.EvalCompleted ("s", "result-42", [])))
+            TuiEvent.EvalCompleted ("s", "result-42", [])))
 
         // Give time for dispatch to process
         tracker.WaitForUpdate 500
@@ -287,7 +287,7 @@ let elmDaemonTests =
 
         runtime.Dispatch (
           SageFsMsg.Event (
-            SageFsEvent.EvalCompleted ("s", "result-42", [])))
+            TuiEvent.EvalCompleted ("s", "result-42", [])))
 
         tracker.WaitForUpdate 500
 
@@ -329,7 +329,7 @@ let elmDaemonTests =
             (fun () -> tracker.LatestModel)
             tracker.WaitForUpdate
             (SageFsMsg.Event (
-              SageFsEvent.EvalCompleted ("s", "sync-result", [])))
+              TuiEvent.EvalCompleted ("s", "sync-result", [])))
             1000
 
         result.RecentOutput.GetBuffer("s")

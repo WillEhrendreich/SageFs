@@ -58,7 +58,7 @@
         <Compile Include="Editor.fs" />
         <Compile Include="ElmLoop.fs" />
         <Compile Include="SessionDisplay.fs" />
-        <Compile Include="SageFsEvent.fs" />
+        <Compile Include="TuiEvent.fs" />
         <Compile Include="TestsPane.fs" />
         <Compile Include="SageFsApp.fs" />
         <Compile Include="ElmDaemon.fs" />

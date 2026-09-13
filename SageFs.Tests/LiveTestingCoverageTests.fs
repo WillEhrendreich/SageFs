@@ -830,7 +830,7 @@ let coverageBitmapWiringTests = testList "CoverageBitmap cycle Wiring" [
     let bitmap = CoverageBitmap.ofBoolArray hits
     let model', _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid1; tid2 |], bitmap)))
+        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid1; tid2 |], bitmap)))
         (SageFsModel.initial())
     let bitmaps = model'.LiveTesting.TestState.TestCoverageBitmaps
     Map.count bitmaps
@@ -851,11 +851,11 @@ let coverageBitmapWiringTests = testList "CoverageBitmap cycle Wiring" [
     let bm2 = CoverageBitmap.ofBoolArray [| false; true |]
     let model1, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid1; tid2 |], bm1)))
+        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid1; tid2 |], bm1)))
         (SageFsModel.initial())
     let model2, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid3 |], bm2)))
+        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid3 |], bm2)))
         model1
     let bitmaps = model2.LiveTesting.TestState.TestCoverageBitmaps
     Map.count bitmaps
@@ -870,11 +870,11 @@ let coverageBitmapWiringTests = testList "CoverageBitmap cycle Wiring" [
     let bm2 = CoverageBitmap.ofBoolArray [| false; true; true |]
     let model1, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid |], bm1)))
+        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid |], bm1)))
         (SageFsModel.initial())
     let model2, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid |], bm2)))
+        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid |], bm2)))
         model1
     let bitmaps = model2.LiveTesting.TestState.TestCoverageBitmaps
     Map.count bitmaps
@@ -1299,7 +1299,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
         TotalProbes = 1; TrackerTypeName = "__SageFsCoverage"; HitsFieldName = "Hits" }
     |]
     let model0 = (SageFsModel.initial())
-    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.InstrumentationMapsReady ("s1", maps))) model0
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.InstrumentationMapsReady ("s1", maps))) model0
     model1.LiveTesting.InstrumentationMaps
     |> Map.containsKey "s1"
     |> Expect.isTrue "should have maps for session s1"
@@ -1313,7 +1313,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
     let tid = TestId.TestId "ns.test1"
     let bitmap = CoverageBitmap.ofBoolArray [| true; false; true |]
     let model0 = (SageFsModel.initial())
-    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected ([| tid |], bitmap))) model0
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid |], bitmap))) model0
     model1.LiveTesting.TestState.TestCoverageBitmaps
     |> Map.containsKey tid
     |> Expect.isTrue "should have bitmap for test"

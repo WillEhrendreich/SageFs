@@ -224,7 +224,7 @@ type BufferedTestResultsPayload = {
 [<RequireQualifiedAccess>]
 type SageFsMsg =
   | Editor of EditorAction
-  | Event of SageFsEvent
+  | Event of TuiEvent
   /// Internal only: queue buffering for several streamed TestResultsBatch payloads.
   /// Lets one Elm drain pay one derived-state refresh while preserving every raw result.
   | BufferedTestResults of BufferedTestResultsPayload
@@ -402,17 +402,17 @@ module SageFsMsgQueueCoalescing =
       tryReplaceLast pending (function
         | SageFsMsg.Editor EditorAction.ListSessions -> Replace incoming
         | _ -> Continue)
-    | SageFsMsg.Event (SageFsEvent.SessionsRefreshed _) ->
+    | SageFsMsg.Event (TuiEvent.SessionsRefreshed _) ->
       tryReplaceLast pending (function
-        | SageFsMsg.Event (SageFsEvent.SessionsRefreshed _) -> Replace incoming
+        | SageFsMsg.Event (TuiEvent.SessionsRefreshed _) -> Replace incoming
         | _ -> Continue)
-    | SageFsMsg.Event (SageFsEvent.WarmupContextUpdated _) ->
+    | SageFsMsg.Event (TuiEvent.WarmupContextUpdated _) ->
       tryReplaceLast pending (function
-        | SageFsMsg.Event (SageFsEvent.WarmupContextUpdated _) -> Replace incoming
+        | SageFsMsg.Event (TuiEvent.WarmupContextUpdated _) -> Replace incoming
         | _ -> Continue)
-    | SageFsMsg.Event (SageFsEvent.TestResultsBatch results) ->
+    | SageFsMsg.Event (TuiEvent.TestResultsBatch results) ->
       tryReplaceLast pending (function
-        | SageFsMsg.Event (SageFsEvent.TestResultsBatch existing) ->
+        | SageFsMsg.Event (TuiEvent.TestResultsBatch existing) ->
           match tryCreateBufferedTestResults existing results with
           | Some buffered -> Replace (SageFsMsg.BufferedTestResults buffered)
           | None -> Stop
@@ -420,8 +420,8 @@ module SageFsMsgQueueCoalescing =
           match tryAppendBufferedTestResults buffered results with
           | Some updated -> Replace (SageFsMsg.BufferedTestResults updated)
           | None -> Stop
-        | SageFsMsg.Event (SageFsEvent.TestRunCompleted _)
-        | SageFsMsg.Event (SageFsEvent.TestRunStarted _) ->
+        | SageFsMsg.Event (TuiEvent.TestRunCompleted _)
+        | SageFsMsg.Event (TuiEvent.TestRunStarted _) ->
           Stop
         | _ ->
           Continue)
@@ -433,7 +433,7 @@ module SageFsDispatchReduction =
 
   let private tryExtractBufferedTestResults (msg: SageFsMsg) =
     match msg with
-    | SageFsMsg.Event (SageFsEvent.TestResultsBatch results) ->
+    | SageFsMsg.Event (TuiEvent.TestResultsBatch results) ->
       Some {
         TotalResultCount = results.Length
         Batches = [ results ]
@@ -970,7 +970,7 @@ module SageFsUpdate =
 
     | SageFsMsg.Event event ->
       match event with
-      | SageFsEvent.EvalCompleted (sid, output, diags) ->
+      | TuiEvent.EvalCompleted (sid, output, diags) ->
         let line = {
           Kind = OutputKind.Result
           Text = output
@@ -981,7 +981,7 @@ module SageFsUpdate =
             RecentOutput = SageFsModel.addOutputLine line model.RecentOutput
             Diagnostics = model.Diagnostics |> Map.add sid diags }, []
 
-      | SageFsEvent.EvalFailed (sid, error) ->
+      | TuiEvent.EvalFailed (sid, error) ->
         let line = {
           Kind = OutputKind.Error
           Text = error
@@ -993,7 +993,7 @@ module SageFsUpdate =
             RecentOutput = SageFsModel.addOutputLine line model.RecentOutput
             CreatingSession = match clearCreating with | true -> false | false -> model.CreatingSession }, []
 
-      | SageFsEvent.EvalStarted (sid, code) ->
+      | TuiEvent.EvalStarted (sid, code) ->
         let line = {
           Kind = OutputKind.Info
           Text = code
@@ -1002,7 +1002,7 @@ module SageFsUpdate =
         }
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
-      | SageFsEvent.EvalCancelled sid ->
+      | TuiEvent.EvalCancelled sid ->
         let line = {
           Kind = OutputKind.Info
           Text = "Eval cancelled"
@@ -1011,10 +1011,10 @@ module SageFsUpdate =
         }
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
-      | SageFsEvent.OutputEmitted line ->
+      | TuiEvent.OutputEmitted line ->
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
-      | SageFsEvent.CompletionReady items ->
+      | TuiEvent.CompletionReady items ->
         let menu = {
           Items = items
           SelectedIndex = 0
@@ -1023,10 +1023,10 @@ module SageFsUpdate =
         { model with
             Editor = { model.Editor with CompletionMenu = Some menu } }, []
 
-      | SageFsEvent.DiagnosticsUpdated (sid, diags) ->
+      | TuiEvent.DiagnosticsUpdated (sid, diags) ->
         { model with Diagnostics = model.Diagnostics |> Map.add sid diags }, []
 
-      | SageFsEvent.SessionCreated snap ->
+      | TuiEvent.SessionCreated snap ->
         let isFirst = model.Sessions.ActiveSessionId = ActiveSession.AwaitingSession
         let existing = model.Sessions.Sessions |> List.exists (fun s -> s.Id = snap.Id)
         let sessions =
@@ -1051,7 +1051,7 @@ module SageFsUpdate =
                   | true -> ActiveSession.Viewing snap.Id
                   | false -> model.Sessions.ActiveSessionId } }, watcherEffects
 
-      | SageFsEvent.SessionsRefreshed snaps ->
+      | TuiEvent.SessionsRefreshed snaps ->
         let activeId = model.Sessions.ActiveSessionId
         let merged = snaps
         let activeId' =
@@ -1069,7 +1069,7 @@ module SageFsUpdate =
                   Sessions = merged
                   ActiveSessionId = activeId' } }, []
 
-      | SageFsEvent.SessionStatusChanged (sessionId, status) ->
+      | TuiEvent.SessionStatusChanged (sessionId, status) ->
         let priorSession =
           model.Sessions.Sessions
           |> List.tryFind (fun s -> SessionId.value s.Id = sessionId)
@@ -1109,7 +1109,7 @@ module SageFsUpdate =
                     | true -> { s with Status = status }
                     | false -> s) } }, watcherEffects
 
-      | SageFsEvent.SessionSwitched (fromIdStr, toIdStr) ->
+      | TuiEvent.SessionSwitched (fromIdStr, toIdStr) ->
         match SessionId.validate toIdStr with
         | Error _ -> model, []
         | Ok toId ->
@@ -1122,7 +1122,7 @@ module SageFsUpdate =
               liveTestingSwapped.Sessions with
                 ActiveSessionId = ActiveSession.Viewing toId } }, []
 
-      | SageFsEvent.SessionStopped sessionId ->
+      | TuiEvent.SessionStopped sessionId ->
         model.RecentOutput.Remove(sessionId)
         let stoppedSession =
           model.Sessions.Sessions |> List.tryFind (fun s -> SessionId.value s.Id = sessionId)
@@ -1162,7 +1162,7 @@ module SageFsUpdate =
             PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.remove sessionId
             Diagnostics = model.Diagnostics |> Map.remove sessionId }, watcherEffects
 
-      | SageFsEvent.SessionStale (sessionId, _) ->
+      | TuiEvent.SessionStale (sessionId, _) ->
         { model with
             Sessions = {
               model.Sessions with
@@ -1173,9 +1173,9 @@ module SageFsUpdate =
                     | true -> { s with Status = SessionDisplayStatus.Stale }
                     | false -> s) } }, []
 
-      | SageFsEvent.FileChanged _ -> model, []
+      | TuiEvent.FileChanged _ -> model, []
 
-      | SageFsEvent.FileReloaded (path, _, result) ->
+      | TuiEvent.FileReloaded (path, _, result) ->
         let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map SessionId.value |> Option.defaultValue ""
         let line =
           match result with
@@ -1191,7 +1191,7 @@ module SageFsUpdate =
               SessionId = activeId }
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
-      | SageFsEvent.WarmupProgress(step, total, msg) ->
+      | TuiEvent.WarmupProgress(step, total, msg) ->
         let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map SessionId.value |> Option.defaultValue ""
         let line = {
           Kind = OutputKind.Info
@@ -1200,7 +1200,7 @@ module SageFsUpdate =
           SessionId = activeId }
         { model with RecentOutput = SageFsModel.addOutputLine line model.RecentOutput }, []
 
-      | SageFsEvent.WarmupCompleted (_, failures) ->
+      | TuiEvent.WarmupCompleted (_, failures) ->
         let activeId = ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map SessionId.value |> Option.defaultValue ""
         match failures.IsEmpty with
         | true ->
@@ -1220,7 +1220,7 @@ module SageFsUpdate =
                 SessionId = activeId })
           { model with RecentOutput = SageFsModel.addOutput lines model.RecentOutput }, []
 
-      | SageFsEvent.WarmupContextUpdated ctx ->
+      | TuiEvent.WarmupContextUpdated ctx ->
         // Short-circuit: if warmup context is identical for every Elm-observable
         // hot-path field, skip update and avoid rerender/remap churn.
         match model.SessionContext with
@@ -1251,7 +1251,7 @@ module SageFsUpdate =
               RecentOutput = output }, []
 
       // ── Live testing events ──
-      | SageFsEvent.TestLocationsDetected (_, locations) ->
+      | TuiEvent.TestLocationsDetected (_, locations) ->
         let state = model.LiveTesting.TestState
         let merged =
           match Array.isEmpty state.DiscoveredTests with
@@ -1264,7 +1264,7 @@ module SageFsUpdate =
             { s with SourceLocations = locations; DiscoveredTests = merged })
           { model with LiveTesting = lt }, []
 
-      | SageFsEvent.TestsDiscovered (sessionId, tests) ->
+      | TuiEvent.TestsDiscovered (sessionId, tests) ->
         let state = model.LiveTesting.TestState
         let retainedSessionMap =
           state.TestSessionMap
@@ -1330,10 +1330,10 @@ module SageFsUpdate =
             | false -> []
           { model with LiveTesting = lt; ResolvedSourceLocations = locs }, effects
 
-      | SageFsEvent.TestSourceLocations locations ->
+      | TuiEvent.TestSourceLocations locations ->
         { model with ResolvedSourceLocations = locations }, []
 
-      | SageFsEvent.TestRunStarted (testIds, sessionId) ->
+      | TuiEvent.TestRunStarted (testIds, sessionId) ->
         let model', _ =
           tryUpdateLiveTestingState sessionId (fun cycle ->
             let nextAffected = Set.ofArray testIds
@@ -1349,10 +1349,10 @@ module SageFsUpdate =
             cycle', ()) model
         model', []
 
-      | SageFsEvent.TestResultsBatch results ->
+      | TuiEvent.TestResultsBatch results ->
         applyBufferedTestResults [ results ] model
 
-      | SageFsEvent.TestRunCompleted sessionId ->
+      | TuiEvent.TestRunCompleted sessionId ->
         let model', replayEffects =
           tryUpdateLiveTestingState sessionId (fun cycle ->
             let priorState = cycle.TestState
@@ -1395,19 +1395,19 @@ module SageFsUpdate =
         |> Option.defaultValue []
         |> List.map SageFsEffect.TestCycle
 
-      | SageFsEvent.LiveTestingEnabled ->
+      | TuiEvent.LiveTestingEnabled ->
         let lt =
           refreshStatusesKeepingEntries model.LiveTesting (fun s ->
             { s with Activation = Features.LiveTesting.LiveTestingActivation.Active })
         { model with LiveTesting = lt }, []
 
-      | SageFsEvent.LiveTestingDisabled ->
+      | TuiEvent.LiveTestingDisabled ->
         let lt =
           refreshStatusesKeepingEntries model.LiveTesting (fun s ->
             { s with Activation = Features.LiveTesting.LiveTestingActivation.Inactive })
         { model with LiveTesting = lt }, []
 
-      | SageFsEvent.AffectedTestsComputed testIds ->
+      | TuiEvent.AffectedTestsComputed testIds ->
         let changedIds = Set.ofArray testIds
         let lt =
           refreshStatusesForChangedIds model.LiveTesting changedIds (fun s ->
@@ -1420,7 +1420,7 @@ module SageFsUpdate =
           |> List.map SageFsEffect.TestCycle
         { model with LiveTesting = lt }, effects
 
-      | SageFsEvent.RunTestsRequested tests ->
+      | TuiEvent.RunTestsRequested tests ->
         let testIds = tests |> Array.map (fun t -> t.Id)
         let changedIds = Set.ofArray testIds
         let lt =
@@ -1461,7 +1461,7 @@ module SageFsUpdate =
               |> SageFsEffect.TestCycle)
         { model with LiveTesting = lt }, effects
 
-      | SageFsEvent.CoverageUpdated coverage ->
+      | TuiEvent.CoverageUpdated coverage ->
         let lt = model.LiveTesting
         // Aggregate per file+line: multiple sequence points on same line → single annotation
         let annotations : Features.LiveTesting.CoverageAnnotation array =
@@ -1487,7 +1487,7 @@ module SageFsUpdate =
         { model with
             LiveTesting = { lt with TestState = { lt.TestState with CoverageAnnotations = annotations } } }, []
 
-      | SageFsEvent.CoverageBitmapCollected (testIds, bitmap) ->
+      | TuiEvent.CoverageBitmapCollected (testIds, bitmap) ->
         Instrumentation.coverageBitmapsCollected.Add(1L)
         let lt = model.LiveTesting
         let bitmaps =
@@ -1495,34 +1495,34 @@ module SageFsUpdate =
         { model with
             LiveTesting = { lt with TestState = { lt.TestState with TestCoverageBitmaps = bitmaps } } }, []
 
-      | SageFsEvent.RunPolicyChanged (category, policy) ->
+      | TuiEvent.RunPolicyChanged (category, policy) ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with RunPolicies = Map.add category policy s.RunPolicies })
         { model with LiveTesting = lt }, []
 
-      | SageFsEvent.InstrumentationMapsReady (sessionId, maps) ->
+      | TuiEvent.InstrumentationMapsReady (sessionId, maps) ->
         Instrumentation.coverageMapsReceived.Add(1L)
         let totalProbes = maps |> Array.sumBy (fun m -> m.TotalProbes) |> int64
         Instrumentation.coverageProbesTotal.Add(totalProbes)
         let lt = model.LiveTesting
         { model with LiveTesting = { lt with InstrumentationMaps = Map.add sessionId maps lt.InstrumentationMaps } }, []
 
-      | SageFsEvent.TestDiscoveryFailed (sessionId, reason) ->
+      | TuiEvent.TestDiscoveryFailed (sessionId, reason) ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
           { s with
               SessionDiscovery =
                 Map.add sessionId (Features.LiveTesting.DiscoveryProgress.Failed reason) s.SessionDiscovery })
         { model with LiveTesting = lt }, []
 
-      | SageFsEvent.ProvidersDetected providers ->
+      | TuiEvent.ProvidersDetected providers ->
         let lt = model.LiveTesting
         { model with
             LiveTesting = { lt with TestState = { lt.TestState with DetectedProviders = providers } } }, []
 
-      | SageFsEvent.TestCycleTimingRecorded timing ->
+      | TuiEvent.TestCycleTimingRecorded timing ->
         { model with
             LiveTesting = { model.LiveTesting with LastTiming = Some timing } }, []
 
-      | SageFsEvent.AssemblyLoadFailed errors ->
+      | TuiEvent.AssemblyLoadFailed errors ->
         let lt = recomputeStatuses model.LiveTesting (fun s ->
           { s with AssemblyLoadErrors = errors })
         { model with LiveTesting = lt }, []
@@ -2084,15 +2084,15 @@ module SageFsEffectHandler =
           ErrorNumber = d.ErrorNumber
         })
       SageFsMsg.Event (
-        SageFsEvent.EvalCompleted (SessionId.value sessionId, output, diagnostics))
+        TuiEvent.EvalCompleted (SessionId.value sessionId, output, diagnostics))
     | WorkerResponse.EvalResult (_, Error err, _, _) ->
       SageFsMsg.Event (
-        SageFsEvent.EvalFailed (SessionId.value sessionId, SageFsError.describe err))
+        TuiEvent.EvalFailed (SessionId.value sessionId, SageFsError.describe err))
     | WorkerResponse.EvalCancelled _ ->
-      SageFsMsg.Event (SageFsEvent.EvalCancelled (SessionId.value sessionId))
+      SageFsMsg.Event (TuiEvent.EvalCancelled (SessionId.value sessionId))
     | other ->
       SageFsMsg.Event (
-        SageFsEvent.EvalFailed (
+        TuiEvent.EvalFailed (
           SessionId.value sessionId, sprintf "Unexpected response: %A" other))
 
   let completionResponseToMsg
@@ -2102,9 +2102,9 @@ module SageFsEffectHandler =
       let completionItems =
         items |> List.map (fun label ->
           { Label = label; Kind = "member"; Detail = None })
-      SageFsMsg.Event (SageFsEvent.CompletionReady completionItems)
+      SageFsMsg.Event (TuiEvent.CompletionReady completionItems)
     | _ ->
-      SageFsMsg.Event (SageFsEvent.CompletionReady [])
+      SageFsMsg.Event (TuiEvent.CompletionReady [])
 
   let withSession
     (deps: EffectDeps)
@@ -2119,11 +2119,11 @@ module SageFsEffectHandler =
         | Some proxy -> do! action id proxy
         | None ->
           dispatch (SageFsMsg.Event (
-            SageFsEvent.EvalFailed (
+            TuiEvent.EvalFailed (
               SessionId.value id, sprintf "No proxy for session %s" (SessionId.value id))))
       | Error err ->
         dispatch (SageFsMsg.Event (
-          SageFsEvent.EvalFailed ("", SageFsError.describe err)))
+          TuiEvent.EvalFailed ("", SageFsError.describe err)))
     }
 
   let sessionInfoToSnapshot (info: SessionInfo) : SessionSnapshot =
@@ -2178,7 +2178,7 @@ module SageFsEffectHandler =
         async {
           let! sessions = deps.ListSessions ()
           let snaps = sessions |> List.map sessionInfoToSnapshot
-          dispatch (SageFsMsg.Event (SageFsEvent.SessionsRefreshed snaps))
+          dispatch (SageFsMsg.Event (TuiEvent.SessionsRefreshed snaps))
           // Fetch warmup context for the active Ready session
           match deps.GetWarmupContext with
           | Some getCtx ->
@@ -2189,7 +2189,7 @@ module SageFsEffectHandler =
               let! ctx = getCtx info.Id
               match ctx with
               | Some sessionCtx ->
-                dispatch (SageFsMsg.Event (SageFsEvent.WarmupContextUpdated sessionCtx))
+                dispatch (SageFsMsg.Event (TuiEvent.WarmupContextUpdated sessionCtx))
               | None -> ()
             | None -> ()
           | None -> ()
@@ -2198,7 +2198,7 @@ module SageFsEffectHandler =
       | EditorEffect.RequestSessionSwitch sessionId ->
         async {
           dispatch (SageFsMsg.Event (
-            SageFsEvent.SessionSwitched (None, sessionId)))
+            TuiEvent.SessionSwitched (None, sessionId)))
         }
 
       | EditorEffect.RequestSessionCreate projects ->
@@ -2215,12 +2215,12 @@ module SageFsEffectHandler =
           match result with
           | Ok info ->
             dispatch (SageFsMsg.Event (
-              SageFsEvent.SessionCreated (sessionInfoToSnapshot info)))
+              TuiEvent.SessionCreated (sessionInfoToSnapshot info)))
             dispatch (SageFsMsg.Event (
-              SageFsEvent.SessionSwitched (None, SessionId.value info.Id)))
+              TuiEvent.SessionSwitched (None, SessionId.value info.Id)))
           | Error err ->
             dispatch (SageFsMsg.Event (
-              SageFsEvent.EvalFailed (
+              TuiEvent.EvalFailed (
                 "", sprintf "Create failed: %s" (SageFsError.describe err))))
         }
 
@@ -2229,9 +2229,9 @@ module SageFsEffectHandler =
           let! result = deps.ConfigureWarmupAutoOpen workingDir
           match result with
           | Ok line ->
-            dispatch (SageFsMsg.Event (SageFsEvent.OutputEmitted line))
+            dispatch (SageFsMsg.Event (TuiEvent.OutputEmitted line))
           | Error err ->
-            dispatch (SageFsMsg.Event (SageFsEvent.EvalFailed ("", err)))
+            dispatch (SageFsMsg.Event (TuiEvent.EvalFailed ("", err)))
         }
 
       | EditorEffect.RequestSessionStop sessionIdStr ->
@@ -2243,10 +2243,10 @@ module SageFsEffectHandler =
             match result with
             | Ok () ->
               dispatch (SageFsMsg.Event (
-                SageFsEvent.SessionStopped sessionIdStr))
+                TuiEvent.SessionStopped sessionIdStr))
             | Error err ->
               dispatch (SageFsMsg.Event (
-                SageFsEvent.EvalFailed (
+                TuiEvent.EvalFailed (
                   sessionIdStr,
                   sprintf "Stop failed: %s" (SageFsError.describe err))))
         }
@@ -2257,7 +2257,7 @@ module SageFsEffectHandler =
             let replyId = newReplyId ()
             let! _ = proxy (WorkerMessage.ResetSession replyId)
             dispatch (SageFsMsg.Event (
-              SageFsEvent.SessionStatusChanged (SessionId.value sid, SessionDisplayStatus.Starting)))
+              TuiEvent.SessionStatusChanged (SessionId.value sid, SessionDisplayStatus.Starting)))
           })
 
       | EditorEffect.RequestHardReset ->
@@ -2266,7 +2266,7 @@ module SageFsEffectHandler =
             let replyId = newReplyId ()
             let! _ = proxy (WorkerMessage.HardResetSession (false, replyId))
             dispatch (SageFsMsg.Event (
-              SageFsEvent.SessionStatusChanged (SessionId.value sid, SessionDisplayStatus.Restarting)))
+              TuiEvent.SessionStatusChanged (SessionId.value sid, SessionDisplayStatus.Restarting)))
           })
 
       | EditorEffect.RequestSmartReset ->
@@ -2298,7 +2298,7 @@ module SageFsEffectHandler =
               | SmartReset.Outcome.AllResetsFailed _ ->
                 SessionDisplayStatus.Faulted "all resets failed"
             dispatch (SageFsMsg.Event (
-              SageFsEvent.SessionStatusChanged (SessionId.value sid, status)))
+              TuiEvent.SessionStatusChanged (SessionId.value sid, status)))
           })
 
     | SageFsEffect.TestCycle testCycleEffect ->
@@ -2326,11 +2326,11 @@ module SageFsEffectHandler =
             | SessionManager.TestDiscoveryReport.Discovered (tests, providers) ->
               match List.isEmpty providers with
               | true -> ()
-              | false -> dispatch (SageFsMsg.Event (SageFsEvent.ProvidersDetected providers))
-              dispatch (SageFsMsg.Event (SageFsEvent.TestsDiscovered (SessionId.value sid, tests)))
+              | false -> dispatch (SageFsMsg.Event (TuiEvent.ProvidersDetected providers))
+              dispatch (SageFsMsg.Event (TuiEvent.TestsDiscovered (SessionId.value sid, tests)))
             | SessionManager.TestDiscoveryReport.DiscoveryFailed reason ->
               Utils.Log.warn "[SageFsApp] Initial test discovery failed for %s: %s" (SessionId.value sid) reason
-              dispatch (SageFsMsg.Event (SageFsEvent.TestDiscoveryFailed (SessionId.value sid, reason)))
+              dispatch (SageFsMsg.Event (TuiEvent.TestDiscoveryFailed (SessionId.value sid, reason)))
         | Features.LiveTesting.TestCycleEffect.ParseTreeSitter (content, filePath) ->
           let span = Instrumentation.startSpan Instrumentation.testCycleSource "test_cycle.treesitter.parse" ["file", box filePath]
           let (locations, elapsed) =
@@ -2345,14 +2345,14 @@ module SageFsEffectHandler =
           Instrumentation.treeSitterParseMs.Record(elapsed.TotalMilliseconds)
           Features.LiveTesting.LiveTestingInstrumentation.treeSitterHistogram.Record(elapsed.TotalMilliseconds)
           Instrumentation.succeedSpan span
-          dispatch (SageFsMsg.Event (SageFsEvent.TestLocationsDetected ("", locations)))
+          dispatch (SageFsMsg.Event (TuiEvent.TestLocationsDetected ("", locations)))
           let timing : Features.LiveTesting.TestCycleTiming = {
             Depth = Features.LiveTesting.TestCycleDepth.TreeSitterOnly elapsed
             TotalTests = 0; AffectedTests = 0
             Trigger = Features.LiveTesting.RunTrigger.Keystroke
             Timestamp = System.DateTimeOffset.UtcNow
           }
-          dispatch (SageFsMsg.Event (SageFsEvent.TestCycleTimingRecorded timing))
+          dispatch (SageFsMsg.Event (TuiEvent.TestCycleTimingRecorded timing))
         | Features.LiveTesting.TestCycleEffect.RequestFcsTypeCheck req ->
           let span = Instrumentation.startSpan Instrumentation.testCycleSource "test_cycle.fcs.typecheck" ["file", box req.FilePath]
           let fcsStopwatch = System.Diagnostics.Stopwatch.StartNew()
@@ -2416,7 +2416,7 @@ module SageFsEffectHandler =
                   Trigger = Features.LiveTesting.RunTrigger.Keystroke
                   Timestamp = System.DateTimeOffset.UtcNow
                 }
-                dispatch (SageFsMsg.Event (SageFsEvent.TestCycleTimingRecorded timing))
+                dispatch (SageFsMsg.Event (TuiEvent.TestCycleTimingRecorded timing))
                 Instrumentation.succeedSpan span
               | false -> ()
             })
@@ -2593,7 +2593,7 @@ module SageFsEffectHandler =
           | true -> ()
           | false ->
             let testIds = tests |> Array.map (fun tc -> tc.Id)
-            dispatch (SageFsMsg.Event (SageFsEvent.TestRunStarted (testIds, targetSession)))
+            dispatch (SageFsMsg.Event (TuiEvent.TestRunStarted (testIds, targetSession)))
             let ct = deps.TestCycleCancellation.TestRun.next()
             let hasInstrMaps = not (Array.isEmpty instrumentationMaps)
             let testCycleSpan = Instrumentation.startSpan Instrumentation.testCycleSource "test_cycle.test.execution" ["test.count", box tests.Length; "trigger", box (sprintf "%A" trigger); "coverage.has_maps", box hasInstrMaps; "coverage.probe_count", box (instrumentationMaps |> Array.sumBy (fun m -> m.TotalProbes))]
@@ -2625,7 +2625,7 @@ module SageFsEffectHandler =
                     use resultFlusher =
                       new BatchFlusher<Features.LiveTesting.TestRunResult>(25, 200, fun batch ->
                         Instrumentation.testResultBatchSize.Record(int64 batch.Length)
-                        dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch batch))
+                        dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch batch))
                       )
                     let onResult (result: Features.LiveTesting.TestRunResult) =
                       receivedIds.Add(result.TestId) |> ignore
@@ -2635,9 +2635,9 @@ module SageFsEffectHandler =
                       match mergedMap.TotalProbes > 0 && hits.Length = mergedMap.TotalProbes with
                       | true ->
                         let coverage = Features.LiveTesting.InstrumentationMap.toCoverageState hits mergedMap
-                        dispatch (SageFsMsg.Event (SageFsEvent.CoverageUpdated coverage))
+                        dispatch (SageFsMsg.Event (TuiEvent.CoverageUpdated coverage))
                         let bitmap = Features.LiveTesting.CoverageBitmap.ofBoolArray hits
-                        dispatch (SageFsMsg.Event (SageFsEvent.CoverageBitmapCollected (testIds, bitmap)))
+                        dispatch (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (testIds, bitmap)))
                         match activity <> null with
                         | true ->
                           activity.SetTag("coverage.total_probes", hits.Length) |> ignore
@@ -2660,7 +2660,7 @@ module SageFsEffectHandler =
                     match missing.Length with
                     | 0 -> ()
                     | _ ->
-                      dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch missing))
+                      dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch missing))
                       Utils.Log.warn
                         "[LiveTesting] %d of %d tests never reported: %s"
                         missing.Length tests.Length (Features.LiveTesting.NoResultReason.describe reason)
@@ -2678,7 +2678,7 @@ module SageFsEffectHandler =
                           Timestamp = System.DateTimeOffset.UtcNow
                           Output = None }
                         : Features.LiveTesting.TestRunResult)
-                    dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch notRunResults))
+                    dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch notRunResults))
                 | Error _ ->
                   let notRunResults =
                     tests |> Array.map (fun tc ->
@@ -2688,7 +2688,7 @@ module SageFsEffectHandler =
                         Timestamp = System.DateTimeOffset.UtcNow
                         Output = None }
                       : Features.LiveTesting.TestRunResult)
-                  dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch notRunResults))
+                  dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch notRunResults))
                 match handoff with
                 | RunHandoff.LeavesCompletionToSuccessor ->
                   // Superseded: the replacing run owns this session's run phase,
@@ -2708,7 +2708,7 @@ module SageFsEffectHandler =
                     activity.SetTag("trigger", sprintf "%A" trigger) |> ignore
                     activity.SetTag("duration_ms", sw.Elapsed.TotalMilliseconds) |> ignore
                   | false -> ()
-                  dispatch (SageFsMsg.Event (SageFsEvent.TestRunCompleted targetSession))
+                  dispatch (SageFsMsg.Event (TuiEvent.TestRunCompleted targetSession))
                   let timing : Features.LiveTesting.TestCycleTiming = {
                     Depth = Features.LiveTesting.TestCycleDepth.ThroughExecution(
                               tsElapsed, fcsElapsed, sw.Elapsed)
@@ -2717,7 +2717,7 @@ module SageFsEffectHandler =
                     Trigger = trigger
                     Timestamp = System.DateTimeOffset.UtcNow
                   }
-                  dispatch (SageFsMsg.Event (SageFsEvent.TestCycleTimingRecorded timing))
+                  dispatch (SageFsMsg.Event (TuiEvent.TestCycleTimingRecorded timing))
                   Instrumentation.succeedSpan testCycleSpan
                   Instrumentation.testExecutionActiveCount.Add(-1L)
               with ex ->
@@ -2737,11 +2737,11 @@ module SageFsEffectHandler =
                   Utils.Log.warn
                     "[LiveTesting] Transport failure after all tests reported: %s" ex.Message
                 | _ ->
-                  dispatch (SageFsMsg.Event (SageFsEvent.TestResultsBatch errResults))
+                  dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch errResults))
                   Utils.Log.warn
                     "[LiveTesting] Transport failure — %d of %d tests never reported: %s"
                     errResults.Length tests.Length ex.Message
-                dispatch (SageFsMsg.Event (SageFsEvent.TestRunCompleted targetSession))
+                dispatch (SageFsMsg.Event (TuiEvent.TestRunCompleted targetSession))
                 Instrumentation.testExecutionActiveCount.Add(-1L)
             }, ct)
       }

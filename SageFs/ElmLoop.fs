@@ -49,7 +49,7 @@ module ElmLoop =
     ConcurrentDictionary<struct (System.Type * int * System.Type * int), string>()
 
   /// Label a DU value for diagnostics. Unwraps one level for nested DUs:
-  /// SageFsMsg.Event(SageFsEvent.EvalCompleted _) → "Event.EvalCompleted"
+  /// SageFsMsg.Event(TuiEvent.EvalCompleted _) → "Event.EvalCompleted"
   /// SageFsMsg.CycleTheme → "CycleTheme"
   /// Cached by (Type, outerTag, innerTag) to avoid repeated reflection.
   let msgLabel (msg: obj) : string =

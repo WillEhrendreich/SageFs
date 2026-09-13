@@ -38,7 +38,7 @@ let private mkSession (idStr: string) (workingDir: string) : SessionSnapshot =
 let private withSession (snap: SessionSnapshot) (model: SageFsModel) =
   let model', _ =
     SageFsUpdate.update
-      (SageFsMsg.Event (SageFsEvent.SessionCreated snap))
+      (SageFsMsg.Event (TuiEvent.SessionCreated snap))
       model
   model'
 
@@ -364,7 +364,7 @@ let stream4Tests =
       let sessionId = WorkerProtocol.SessionId.value snap.Id
       let _model', effects =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.SessionStopped sessionId))
+          (SageFsMsg.Event (TuiEvent.SessionStopped sessionId))
           model
 
       // RED: Today SessionStopped clears TestSessionMap entries but
@@ -401,7 +401,7 @@ let stream4Tests =
       let sessionId = WorkerProtocol.SessionId.value snapOld.Id
       let modelAfterStop, stopEffects =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.SessionStopped sessionId))
+          (SageFsMsg.Event (TuiEvent.SessionStopped sessionId))
           model
 
       let snapNew =
@@ -410,7 +410,7 @@ let stream4Tests =
 
       let _modelAfterCreate, createEffects =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.SessionCreated snapNew))
+          (SageFsMsg.Event (TuiEvent.SessionCreated snapNew))
           modelAfterStop
 
       let allEffects = stopEffects @ createEffects
@@ -458,7 +458,7 @@ let stream4Tests =
       let _model', effects =
         SageFsUpdate.update
           (SageFsMsg.Event (
-            SageFsEvent.SessionStatusChanged (
+            TuiEvent.SessionStatusChanged (
               WorkerProtocol.SessionId.value snap.Id,
               SessionDisplayStatus.Running)))
           model
@@ -763,7 +763,7 @@ let stream5Tests =
 
       let model', effects =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestRunStarted ([| tcB.Id |], Some bSid)))
+          (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tcB.Id |], Some bSid)))
           model
 
       model'.LiveTesting.TestState.AffectedTests

@@ -118,7 +118,7 @@ let tests =
             LiveTesting = { (SageFsModel.initial()).LiveTesting with TestState = initial } }
       let model', _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("session-zero", [||])))
+          (SageFsMsg.Event (TuiEvent.TestsDiscovered ("session-zero", [||])))
           model
 
       let state = model'.LiveTesting.TestState
@@ -141,7 +141,7 @@ let tests =
 
       let afterFirst, _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("session-r", [| tc1 |])))
+          (SageFsMsg.Event (TuiEvent.TestsDiscovered ("session-r", [| tc1 |])))
           baseModel
       afterFirst.LiveTesting.TestState.DiscoveryGeneration
       |> Expect.equal "first discovery should bump generation to 1" 1L
@@ -149,7 +149,7 @@ let tests =
       // Re-discover with a renamed test — the old test must be swept.
       let afterSecond, _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("session-r", [| tc2 |])))
+          (SageFsMsg.Event (TuiEvent.TestsDiscovered ("session-r", [| tc2 |])))
           afterFirst
       let state = afterSecond.LiveTesting.TestState
       state.DiscoveryGeneration

@@ -885,7 +885,7 @@ module McpTools =
       prefix workingDir matches
 
   /// Notify the Elm loop of an event (fire-and-forget, no-op if no dispatch).
-  let notifyElm (ctx: McpContext) (event: SageFsEvent) =
+  let notifyElm (ctx: McpContext) (event: TuiEvent) =
     ctx.Dispatch
     |> Option.iter (fun dispatch ->
       dispatch (SageFsMsg.Event event))
@@ -1442,7 +1442,7 @@ module McpTools =
 
   /// Evaluate a single FSI statement, dispatch Elm events, return formatted output.
   let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) : Task<string * EvalExecOutcome> = task {
-    notifyElm ctx (SageFsEvent.EvalStarted (sid, statement))
+    notifyElm ctx (TuiEvent.EvalStarted (sid, statement))
     let workflow = getWorkflowForSession ctx sid
     let! routeResult =
       routeToSession ctx sid
@@ -1463,20 +1463,20 @@ module McpTools =
           | true, _ -> Log.info "Session %s recovered from TypeLoadException (successful eval cleared the diagnostic)" sid
           | false, _ -> ()
           notifyElm ctx (
-            SageFsEvent.EvalCompleted (sid, formatted, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic))
+            TuiEvent.EvalCompleted (sid, formatted, diags |> List.map WorkerProtocol.WorkerDiagnostic.toDiagnostic))
           match metadata |> Map.tryFind "liveTestHookResult" with
           | Some json ->
             try
               let hookResult =
                 WorkerProtocol.Serialization.deserialize<Features.LiveTesting.LiveTestHookResultDto> json
               match List.isEmpty hookResult.DetectedProviders with
-              | false -> notifyElm ctx (SageFsEvent.ProvidersDetected hookResult.DetectedProviders)
+              | false -> notifyElm ctx (TuiEvent.ProvidersDetected hookResult.DetectedProviders)
               | true -> ()
               match Array.isEmpty hookResult.DiscoveredTests with
-              | false -> notifyElm ctx (SageFsEvent.TestsDiscovered (sid, hookResult.DiscoveredTests))
+              | false -> notifyElm ctx (TuiEvent.TestsDiscovered (sid, hookResult.DiscoveredTests))
               | true -> ()
               match Array.isEmpty hookResult.AffectedTestIds with
-              | false -> notifyElm ctx (SageFsEvent.AffectedTestsComputed hookResult.AffectedTestIds)
+              | false -> notifyElm ctx (TuiEvent.AffectedTestsComputed hookResult.AffectedTestIds)
               | true -> ()
             with ex -> Log.warn "Failed to deserialize hook result: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()
@@ -1511,7 +1511,7 @@ module McpTools =
               let errors =
                 WorkerProtocol.Serialization.deserialize<Features.LiveTesting.AssemblyLoadError list> json
               match List.isEmpty errors with
-              | false -> notifyElm ctx (SageFsEvent.AssemblyLoadFailed errors)
+              | false -> notifyElm ctx (TuiEvent.AssemblyLoadFailed errors)
               | true -> ()
             with ex -> Log.warn "Failed to deserialize assembly load errors: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()
@@ -1526,7 +1526,7 @@ module McpTools =
             Log.warn "TypeLoadException detected for session %s — type identity compromised" sid
           | _ -> ()
           notifyElm ctx (
-            SageFsEvent.EvalFailed (sid, errText))
+            TuiEvent.EvalFailed (sid, errText))
           // The eval RAN — it's a compile/runtime failure in the user's code,
           // not an infra failure. Keeps the truthful-200 contract: /exec
           // stays 200 with the error text in `result`.
@@ -1535,12 +1535,12 @@ module McpTools =
           // The worker replied but could not run the eval at all (e.g. still
           // starting up) — this already IS a classified SageFsError, so
           // route it through the algebra instead of flattening it to a bool.
-          notifyElm ctx (SageFsEvent.EvalFailed (sid, SageFsError.describe err))
+          notifyElm ctx (TuiEvent.EvalFailed (sid, SageFsError.describe err))
           (formatted, InfraFailure err)
         | _ -> (formatted, Evaluated false)
       | Error msg ->
         let err = routeErrorMessage msg
-        notifyElm ctx (SageFsEvent.EvalFailed (sid, err))
+        notifyElm ctx (TuiEvent.EvalFailed (sid, err))
         (sprintf "Error: %s" err, InfraFailure (routeErrorToSageFsError sid msg))
   }
 
@@ -1892,7 +1892,7 @@ module McpTools =
       let handle = preservedHandle previousStatus
       do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Starting handle)
       notifyElm ctx (
-        SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
+        TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
       let! routeResult =
         task {
           try
@@ -1910,7 +1910,7 @@ module McpTools =
         compilationStates.TryRemove(sid) |> ignore
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         notifyElm ctx (
-          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+          TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
         // Pushback: resetting a healthy (Ready) session destroys live REPL
         // definitions — say so explicitly. Faulted/Starting sessions have
         // nothing to lose, so no warning.
@@ -1922,7 +1922,7 @@ module McpTools =
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
         do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (SageFsError.describe err)))
         notifyElm ctx (
-          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
+          TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
         return sprintf "Error: %s" (SageFsError.describeForAgent err)
       | Ok other ->
         do! setSnapshotStatus ctx sid previousStatus
@@ -1933,7 +1933,7 @@ module McpTools =
         | true ->
           do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some err))
           notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted err))
+            TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted err))
         | false ->
           do! setSnapshotStatus ctx sid previousStatus
         return sprintf "Error: %s" err
@@ -1952,7 +1952,7 @@ module McpTools =
       let handle = preservedHandle previousStatus
       do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Starting handle)
       notifyElm ctx (
-        SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
+        TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Starting))
       let! routeResult =
         task {
           try
@@ -1970,7 +1970,7 @@ module McpTools =
         compilationStates.TryRemove(sid) |> ignore
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         notifyElm ctx (
-          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+          TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
         let warning =
           match previousStatus with
           | WorkerProtocol.SessionLifecycleStatus.Ready _ -> "⚠️ NOTE: resetting clears all REPL definitions and evaluation history. "
@@ -1979,7 +1979,7 @@ module McpTools =
       | Ok (WorkerProtocol.WorkerResponse.ResetResult(_, Error err)) ->
         do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (SageFsError.describe err)))
         notifyElm ctx (
-          SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
+          TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
         return Error err
       | Ok other ->
         do! setSnapshotStatus ctx sid previousStatus
@@ -1990,7 +1990,7 @@ module McpTools =
         | true ->
           do! setSnapshotStatus ctx sid (WorkerProtocol.SessionLifecycleStatus.Faulted (Some reason))
           notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted reason))
+            TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted reason))
           return Error (SageFsError.WorkerCommunicationFailed (sid, reason))
         | false ->
           do! setSnapshotStatus ctx sid previousStatus
@@ -2035,7 +2035,7 @@ module McpTools =
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         rebuildOutcomes.[sid] <- RebuildOutcome.InProgress DateTime.UtcNow
         notifyElm ctx (
-          SageFsEvent.WarmupProgress (1, 4, "Building project..."))
+          TuiEvent.WarmupProgress (1, 4, "Building project..."))
         // Fire-and-forget: the build runs in the background so the MCP call
         // doesn't time out; get_fsi_status reports progress and the outcome.
         //
@@ -2061,7 +2061,7 @@ module McpTools =
             | RebuildOutcome.FailedNotServing (error, _), _ -> SessionDisplayStatus.Faulted (SageFsError.describe error)
             | _, Some info -> SessionDisplay.displayStatus now info
             | _, None -> SessionDisplayStatus.Faulted "Session is no longer registered"
-          notifyElm ctx (SageFsEvent.SessionStatusChanged (sid, display))
+          notifyElm ctx (TuiEvent.SessionStatusChanged (sid, display))
         } |> ignore
         return "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_fsi_status reports the rebuild's progress and outcome."
       | false ->
@@ -2084,11 +2084,11 @@ module McpTools =
         match result with
         | Ok msg ->
           notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+            TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
           return "⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. " + msg
         | Error err ->
           notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
+            TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
           return sprintf "Error: %s" (SageFsError.describeForAgent err)
     })
 
@@ -2105,7 +2105,7 @@ module McpTools =
         Features.EvalDedup.DedupCache.clearSession evalDedupCache sid
         rebuildOutcomes.[sid] <- RebuildOutcome.InProgress DateTime.UtcNow
         notifyElm ctx (
-          SageFsEvent.WarmupProgress (1, 4, "Building project..."))
+          TuiEvent.WarmupProgress (1, 4, "Building project..."))
         task {
           let! result =
             task {
@@ -2121,7 +2121,7 @@ module McpTools =
             | RebuildOutcome.FailedNotServing (error, _), _ -> SessionDisplayStatus.Faulted (SageFsError.describe error)
             | _, Some info -> SessionDisplay.displayStatus now info
             | _, None -> SessionDisplayStatus.Faulted "Session is no longer registered"
-          notifyElm ctx (SageFsEvent.SessionStatusChanged (sid, display))
+          notifyElm ctx (TuiEvent.SessionStatusChanged (sid, display))
         } |> ignore
         return Ok "Hard reset initiated — building first; the current worker keeps serving until the new build is ready. get_fsi_status reports the rebuild's progress and outcome."
       | false ->
@@ -2136,11 +2136,11 @@ module McpTools =
         match result with
         | Ok msg ->
           notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
+            TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Running))
           return Ok ("⚠️ NOTE: hard reset restarts the session and clears all REPL definitions. " + msg)
         | Error err ->
           notifyElm ctx (
-            SageFsEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
+            TuiEvent.SessionStatusChanged (sid, SessionDisplayStatus.Faulted (SageFsError.describe err)))
           return Error err
     })
 
@@ -2152,7 +2152,7 @@ module McpTools =
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.EvalCancelled true) ->
-          notifyElm ctx (SageFsEvent.EvalCancelled sid)
+          notifyElm ctx (TuiEvent.EvalCancelled sid)
           "Evaluation cancelled."
         | Ok (WorkerProtocol.WorkerResponse.EvalCancelled false) ->
           "No evaluation in progress."
@@ -2173,7 +2173,7 @@ module McpTools =
       return
         match routeResult with
         | Ok (WorkerProtocol.WorkerResponse.EvalCancelled true) ->
-          notifyElm ctx (SageFsEvent.EvalCancelled sid)
+          notifyElm ctx (TuiEvent.EvalCancelled sid)
           Ok "Evaluation cancelled."
         | Ok (WorkerProtocol.WorkerResponse.EvalCancelled false) ->
           Ok "No evaluation in progress."
@@ -2746,7 +2746,7 @@ module McpTools =
       | Some dispatch ->
         match cat, pol with
         | Some c, Some p ->
-          dispatch (SageFsMsg.Event (SageFsEvent.RunPolicyChanged (c, p)))
+          dispatch (SageFsMsg.Event (TuiEvent.RunPolicyChanged (c, p)))
           return sprintf "Set %s policy to %A." category p
         | None, _ -> return sprintf "Unknown category: %s. Valid: unit, integration, browser, benchmark, architecture, property." category
         | _, None -> return sprintf "Unknown policy: %s. Valid: every, save, demand, disabled." policy

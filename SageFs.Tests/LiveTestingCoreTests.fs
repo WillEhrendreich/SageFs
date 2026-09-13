@@ -766,9 +766,9 @@ let serializationRoundtripTests = testList "serialization roundtrip integration"
     let deserialized = SageFs.WorkerProtocol.Serialization.deserialize<LiveTestHookResultDto> json
 
     let m0 = (SageFsModel.initial())
-    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.ProvidersDetected deserialized.DetectedProviders)) m0
-    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("test-session", deserialized.DiscoveredTests))) m1
-    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.AffectedTestsComputed deserialized.AffectedTestIds)) m2
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.ProvidersDetected deserialized.DetectedProviders)) m0
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered ("test-session", deserialized.DiscoveredTests))) m1
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.AffectedTestsComputed deserialized.AffectedTestIds)) m2
 
     let annotations = LiveTesting.annotationsForFile "Mod.fs" m3.LiveTesting.TestState
     annotations.Length

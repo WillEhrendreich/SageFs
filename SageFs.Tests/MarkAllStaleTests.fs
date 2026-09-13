@@ -21,11 +21,11 @@ let markAllStaleTests = testList "MarkAllStale" [
       let model0 = SageFsModel.initial()
       let model1, _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", [| tc1; tc2 |])))
+          (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s", [| tc1; tc2 |])))
           model0
       let model2, _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestResultsBatch [| r1; r2 |]))
+          (SageFsMsg.Event (TuiEvent.TestResultsBatch [| r1; r2 |]))
           model1
       // Act
       let model3, effects =
@@ -57,7 +57,7 @@ let markAllStaleTests = testList "MarkAllStale" [
       let model0 = SageFsModel.initial()
       let model1, _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (SageFsEvent.TestsDiscovered ("s", [| tc1; tc2 |])))
+          (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s", [| tc1; tc2 |])))
           model0
       let model2, _ =
         SageFsUpdate.update SageFsMsg.MarkAllTestsStale model1

@@ -31,10 +31,10 @@ let private genSafeMsg =
     Gen.constant SageFsMsg.DisableLiveTesting
     Gen.constant SageFsMsg.CycleRunPolicy
     Gen.constant SageFsMsg.ToggleCoverage
-    Gen.constant (SageFsMsg.Event (SageFsEvent.SessionStopped fixedSid))
-    Gen.constant (SageFsMsg.Event SageFsEvent.LiveTestingEnabled)
-    Gen.constant (SageFsMsg.Event SageFsEvent.LiveTestingDisabled)
-    Gen.constant (SageFsMsg.Event (SageFsEvent.EvalCancelled fixedSid))
+    Gen.constant (SageFsMsg.Event (TuiEvent.SessionStopped fixedSid))
+    Gen.constant (SageFsMsg.Event TuiEvent.LiveTestingEnabled)
+    Gen.constant (SageFsMsg.Event TuiEvent.LiveTestingDisabled)
+    Gen.constant (SageFsMsg.Event (TuiEvent.EvalCancelled fixedSid))
   ]
 
 /// Fold a message sequence through update, collecting effects.

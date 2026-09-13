@@ -106,12 +106,12 @@ let discoveryProgressTests =
       |> Expect.equal "in progress" (Some DiscoveryProgress.InProgress)
 
     testCase "WHY — TestsDiscovered — a discovery that found nothing is Completed because it is not still looking" <| fun _ ->
-      let model', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestsDiscovered (sid, [||]))) (activeModel ())
+      let model', _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sid, [||]))) (activeModel ())
       model'.LiveTesting.TestState.SessionDiscovery |> Map.tryFind sid
       |> Expect.equal "completed" (Some DiscoveryProgress.Completed)
 
     testCase "WHY — TestDiscoveryFailed — records the reason for that session because a spinner that never ends explains nothing" <| fun _ ->
-      let model', _ = SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestDiscoveryFailed (sid, "could not load Tests.dll"))) (activeModel ())
+      let model', _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestDiscoveryFailed (sid, "could not load Tests.dll"))) (activeModel ())
       model'.LiveTesting.TestState.SessionDiscovery |> Map.tryFind sid
       |> Expect.equal "failed" (Some (DiscoveryProgress.Failed "could not load Tests.dll"))
   ]
@@ -204,14 +204,14 @@ let discoveryReportTests =
     testCase "WHY — handleTestDiscovery — a failed discovery reaches the Elm model because it is otherwise only logged" <| fun _ ->
       dispatchedFor (SessionManager.TestDiscoveryReport.DiscoveryFailed "could not load Tests.dll")
       |> List.exists (function
-        | SageFsMsg.Event (SageFsEvent.TestDiscoveryFailed (s, reason)) -> s = sid && reason = "could not load Tests.dll"
+        | SageFsMsg.Event (TuiEvent.TestDiscoveryFailed (s, reason)) -> s = sid && reason = "could not load Tests.dll"
         | _ -> false)
       |> Expect.isTrue "dispatches TestDiscoveryFailed"
 
     testCase "WHY — handleTestDiscovery — a discovery with zero tests is still dispatched because finding nothing is an answer" <| fun _ ->
       dispatchedFor (SessionManager.TestDiscoveryReport.Discovered ([||], []))
       |> List.exists (function
-        | SageFsMsg.Event (SageFsEvent.TestsDiscovered (s, tests)) -> s = sid && Array.isEmpty tests
+        | SageFsMsg.Event (TuiEvent.TestsDiscovered (s, tests)) -> s = sid && Array.isEmpty tests
         | _ -> false)
       |> Expect.isTrue "dispatches TestsDiscovered with no tests"
   ]

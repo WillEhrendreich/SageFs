@@ -1898,7 +1898,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
           SageFs.McpTools.setActiveSessionId rctx.McpContext "http" sidStr
           match rctx.Dispatch with
           | Some d ->
-            d (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.SessionSwitched (None, sidStr)))
+            d (SageFs.SageFsMsg.Event (SageFs.TuiEvent.SessionSwitched (None, sidStr)))
             d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
           | None -> ()
           do! jsonResponse ctx 200 {| success = true; sessionId = sidStr |}
@@ -2141,7 +2141,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
                     error = sprintf "No discovered tests matched the explicit run filters (%s)." filterSummary
                   |}
               | false ->
-                  dispatch (SageFs.SageFsMsg.Event (SageFs.SageFsEvent.RunTestsRequested tests))
+                  dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.RunTestsRequested tests))
                   do! jsonResponse ctx 200 {|
                     success = true
                     queued = tests.Length

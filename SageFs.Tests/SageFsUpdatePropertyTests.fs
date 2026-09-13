@@ -64,19 +64,19 @@ let private genSessionSnapshot =
 let private genSafeEvent =
   let fixedSid = testSessionId "deadbeef" |> WorkerProtocol.SessionId.value
   Gen.oneof [
-    Gen.constant (SageFsEvent.SessionStopped fixedSid)
-    genOutputLine |> Gen.map SageFsEvent.OutputEmitted
+    Gen.constant (TuiEvent.SessionStopped fixedSid)
+    genOutputLine |> Gen.map TuiEvent.OutputEmitted
     gen {
       let! status = genSessionDisplayStatus
-      return SageFsEvent.SessionStatusChanged(fixedSid, status)
+      return TuiEvent.SessionStatusChanged(fixedSid, status)
     }
     gen {
       let! snaps = Gen.listOfLength 2 genSessionSnapshot
-      return SageFsEvent.SessionsRefreshed snaps
+      return TuiEvent.SessionsRefreshed snaps
     }
-    Gen.constant (SageFsEvent.EvalCancelled fixedSid)
-    Gen.constant (SageFsEvent.LiveTestingEnabled)
-    Gen.constant (SageFsEvent.LiveTestingDisabled)
+    Gen.constant (TuiEvent.EvalCancelled fixedSid)
+    Gen.constant (TuiEvent.LiveTestingEnabled)
+    Gen.constant (TuiEvent.LiveTestingDisabled)
   ]
 
 // ── Property Tests ──
@@ -133,7 +133,7 @@ let sageFsUpdatePropertyTests =
         UpSince = DateTime.UtcNow
         WorkingDirectory = "C:\\code"
       }
-      let event = SageFsEvent.SessionsRefreshed [ snap ]
+      let event = TuiEvent.SessionsRefreshed [ snap ]
       let model = SageFsModel.initial ()
       let once, _ = SageFsUpdate.update (SageFsMsg.Event event) model
       let twice, _ = SageFsUpdate.update (SageFsMsg.Event event) once
@@ -144,14 +144,14 @@ let sageFsUpdatePropertyTests =
     testPropertyWithConfig cfg "SessionsRefreshed with random snapshots is idempotent on session list length" <|
       fun () ->
         let snaps = Gen.sample 3 genSessionSnapshot |> Array.toList
-        let event = SageFsEvent.SessionsRefreshed snaps
+        let event = TuiEvent.SessionsRefreshed snaps
         let model = SageFsModel.initial ()
         let once, _ = SageFsUpdate.update (SageFsMsg.Event event) model
         let twice, _ = SageFsUpdate.update (SageFsMsg.Event event) once
         List.length twice.Sessions.Sessions = List.length once.Sessions.Sessions
 
-    // 4. Update never crashes on any safe SageFsEvent (totality)
-    testPropertyWithConfig cfg "update never throws on any safe SageFsEvent" <|
+    // 4. Update never crashes on any safe TuiEvent (totality)
+    testPropertyWithConfig cfg "update never throws on any safe TuiEvent" <|
       fun () ->
         let event = pick genSafeEvent
         let model = SageFsModel.initial ()
@@ -181,7 +181,7 @@ let sageFsUpdatePropertyTests =
         let model = SageFsModel.initial ()
         let before = model.RecentOutput.ActiveCount(model.Sessions.ActiveSessionId)
         let after, _ =
-          SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.OutputEmitted line)) model
+          SageFsUpdate.update (SageFsMsg.Event (TuiEvent.OutputEmitted line)) model
         let afterCount = after.RecentOutput.ActiveCount(after.Sessions.ActiveSessionId)
         afterCount >= before
 
@@ -197,7 +197,7 @@ let sageFsUpdatePropertyTests =
       let final =
         (model, [ "line1"; "line2"; "line3" ])
         ||> List.fold (fun m text ->
-          SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.OutputEmitted (mkLine text))) m
+          SageFsUpdate.update (SageFsMsg.Event (TuiEvent.OutputEmitted (mkLine text))) m
           |> fst)
       let buf = final.RecentOutput.GetBuffer(sid)
       buf.Count
