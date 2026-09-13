@@ -34,6 +34,27 @@ module ErrorMessages =
     | _ when firstLine.Contains("type") -> ErrorCategory.TypeError
     | _ -> ErrorCategory.Unknown
 
+  /// Classify a compiler diagnostic's stable `FSharpDiagnostic.ErrorNumber`
+  /// (the "39" in "FS0039") into an ErrorCategory. Numbers are locale-proof
+  /// and unambiguous where the message text is not (a translated FSI, or an
+  /// atypical phrasing, defeats `categorize`'s substring matching).
+  ///
+  /// NOTE: as of this writing, no production call site has an `ErrorNumber`
+  /// to pass in — `SageFs.Core/Features/Diagnostics.fs`'s `Diagnostic` and
+  /// `SageFs.Core/WorkerProtocol.fs`'s `WorkerDiagnostic` (the wire type used
+  /// by check_fsharp_code's diagnostics) both drop `FSharpDiagnostic.ErrorNumber`
+  /// when they map from the raw FCS diagnostic, and the eval-failure paths in
+  /// `SageFs/Mcp.fs` classify a flattened exception/error string that never
+  /// carried a number to begin with. This function exists so that plumbing is
+  /// ready the moment a caller can supply the number; see the roast-5 item #10
+  /// report for exactly what would need to change to thread it through.
+  let categorizeByNumber (errorNumber: int option) (errorText: string) : ErrorCategory =
+    match errorNumber with
+    | Some 39 -> ErrorCategory.NameError // FS0039: the value/name is not defined
+    | Some 1 -> ErrorCategory.TypeError // FS0001: type mismatch — the general type-error number
+    | Some 10 -> ErrorCategory.SyntaxError // FS0010: unexpected token/keyword in binding
+    | Some _ | None -> categorize errorText
+
   /// Generate helpful suggestion based on error category.
   let getSuggestion (category: ErrorCategory) =
     match category with
