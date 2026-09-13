@@ -128,7 +128,7 @@ let viBindMiddleware next (request, st) =
         next ({ request with Code = fileContents }, st)
       | false ->
         st.Logger.LogError $"File not found: %s{filePath}"
-        { EvaluationResult = Error (System.IO.FileNotFoundException($"File not found: %s{filePath}")); 
+        { EvaluationResult = Error (SageFs.SageFsErrorException(SageFs.SageFsError.ScriptLoadFailed (sprintf "File not found: %s" filePath)) :> exn);
           Diagnostics = [||]; 
           EvaluatedCode = code; 
           Metadata = Map.empty }, st

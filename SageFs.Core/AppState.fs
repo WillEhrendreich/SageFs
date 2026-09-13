@@ -268,8 +268,16 @@ let wrapErrorMiddleware next (request, st) =
   try
     next (request, st)
   with e ->
+    // Carry a structured, serializable SageFsError through the exception-typed
+    // channel (roast-5 §10) so agents get describe/suggestedAction instead of a
+    // flattened ex.ToString(). Preserve an already-structured inner error rather
+    // than double-wrapping it.
+    let structuredError =
+      match e with
+      | :? SageFsErrorException -> e
+      | _ -> SageFsErrorException(SageFsError.EvalFailed (sprintf "internal error: %s" e.Message)) :> exn
     let errResponse = {
-      EvaluationResult = Error <| new Exception("SageFsInternal error occured", e)
+      EvaluationResult = Error structuredError
       Diagnostics = [||]
       EvaluatedCode = ""
       Metadata = Map.empty
@@ -1155,7 +1163,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           | Some message ->
             currentEvalCts.Value <- None
             let errResponse = {
-              EvaluationResult = Error (InvalidOperationException message)
+              EvaluationResult = Error (SageFsErrorException(SageFsError.EvalFailed message) :> exn)
               Diagnostics = [||]
               EvaluatedCode = request.Code
               Metadata = Map.empty
