@@ -95,6 +95,7 @@
         <Compile Include="DashboardEscapingTests.fs" />
         <Compile Include="SessionCardActionsTests.fs" />
         <Compile Include="DashboardViewingTests.fs" />
+        <Compile Include="DashboardRenderGateTests.fs" />
         <Compile Include="MultiUiConsistencyTests.fs" />
         <Compile Include="TuiGuiSharedTests.fs" />
         <Compile Include="ThemePersistenceTests.fs" />
