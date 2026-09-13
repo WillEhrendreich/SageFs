@@ -8,31 +8,30 @@ on:
 
 # The ENTIRE build/test/integration/pack/release-bundle pipeline lives in
 # ci-pipeline.fsx as one typed F# Fun.Build pipeline. GitHub Actions supplies
-# only the runners, the two checkouts, the SDK/Node install, and one invocation
-# per OS leg — it encodes no build logic of its own. The exact same stages run
-# locally: `dotnet fsi ci-pipeline.fsx -- ci linux` etc. (see that file's header).
+# only the runner, the two checkouts, and the SDK/Node/xvfb install — it encodes
+# no build logic of its own. The exact same stages run locally:
+# `dotnet fsi ci-pipeline.fsx -- ci [release]` (see that file's header).
 #
-# One matrix job builds the solution ONCE per OS in Release and runs every check
-# --no-build off that output; the Linux leg additionally packs and uploads the
-# release bundle. This replaces the old build + integration-host + extensions +
-# benchmarks + release-artifacts jobs, which each started from a clean checkout,
-# re-packed the forked MCP SDK, and rebuilt the whole solution — the "so much
-# re-work" this consolidation removes. Performance is guarded locally now
-# (PerfTests.fs), not by a CI benchmark job.
+# ONE Linux job builds the solution once in Release and runs every check
+# --no-build off that output — format, the unit suite, the mutation-score gate,
+# the real-daemon integration-host suites (incl. the VS Code command-proof), and
+# on a master push the VSIX + nupkg + release manifest. This replaces the old
+# build (x2) + integration-host + extensions + benchmarks + release-artifacts
+# jobs, which each started from a clean checkout, re-packed the forked MCP SDK,
+# and rebuilt the whole solution.
+#
+# The former windows leg is gone: the integration-host suites and the VS Code
+# command-proof were verified green on Linux (Args.resolveHostLaunch launches the
+# FSI host via the dotnet muxer on non-Windows; the proof self-provisions a Linux
+# VS Code under xvfb). A Windows-compatible package still ships from here — the
+# tool is AnyCPU, every per-RID native is committed under runtimes/, and the
+# Windows user gets the FSI host via the dotnet muxer. If a real Windows runtime
+# issue ever surfaces, add a scheduled windows smoke back.
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-        - platform: ubuntu-latest
-          leg: linux
-        - platform: windows-latest
-          leg: windows
-
-    runs-on: ${{ matrix.platform }}
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
     - uses: actions/checkout@v5
@@ -53,10 +52,12 @@ jobs:
       with:
         node-version: 20
 
-    # The whole pipeline. The `ci` arg enables the mutation-score gate; the OS
-    # leg selects platform-appropriate stages (Linux: format, mutation, VSIX +
-    # nupkg + release manifest; Windows: samples + real-daemon integration-host).
-    # The `release` arg (Linux, master push only) packs the shippable bundle.
+    # The VS Code command-proof launches a real VS Code (Electron) headless.
+    - name: Install xvfb
+      run: sudo apt-get update && sudo apt-get install -y xvfb
+
+    # The whole pipeline. `ci` enables the mutation-score gate; `release` (master
+    # push only) packs the shippable bundle.
     - name: Run pipeline
       shell: bash
       env:
@@ -64,13 +65,13 @@ jobs:
         SOURCE_RUN_ID: ${{ github.run_id }}
         SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
       run: >-
-        dotnet fsi ci-pipeline.fsx -- ci ${{ matrix.leg }}${{ (github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.leg == 'linux') && ' release' || '' }}
+        dotnet fsi ci-pipeline.fsx -- ci${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') && ' release' || '' }}
 
     # Build once, promote — publish.yml (workflow_run on this build's success)
     # downloads exactly this `release-assets` bundle (nupkg + vsix +
     # release-manifest.json) and ships it. No separate job rebuilds it.
     - name: Upload release bundle
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.leg == 'linux'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       uses: actions/upload-artifact@v4
       with:
         name: release-assets
@@ -82,11 +83,9 @@ jobs:
   # passed since being wired in. The real bug it caught (executeCommand typing
   # command ids instead of palette titles) is fixed and covered by a fast
   # default-suite contract test (SageFsPaletteCommand contract,
-  # VscodeExtensionTests.fs). The remaining failure — VS Code's own CDP debug
-  # port becoming unreachable shortly after launch — reproduced identically on
-  # two different Windows runner images and was not resolved within a
-  # reasonable investigation budget; see issue #133. The dodJourneys test code
-  # stays in VscodeExtensionTests.fs, runnable on demand via --integration-vsc
-  # with VSCODE_PATH set, but no CI job invokes it until #133 is resolved.
-  # quality/definition-of-done.json marks HR-VSC-E2E/LT-VSC-E2E "deferred"
-  # (not "verified" — it never was) rather than silently dropping the obligation.
+  # VscodeExtensionTests.fs), and the extension-to-daemon wiring is proven by the
+  # VS Code command-proof suite that now runs on Linux under --integration-host.
+  # The remaining CDP-debug-port failure is tracked in issue #133; the dodJourneys
+  # code stays in VscodeExtensionTests.fs, runnable via --integration-vsc with
+  # VSCODE_PATH set. quality/definition-of-done.json marks HR-VSC-E2E/LT-VSC-E2E
+  # "deferred" (not "verified" — it never was) rather than dropping the obligation.

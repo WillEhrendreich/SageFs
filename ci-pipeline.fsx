@@ -2,33 +2,39 @@
 // ci-pipeline.fsx
 //
 // THIS SCRIPT IS THE CI PIPELINE. GitHub Actions (.github/workflows/main.yml)
-// supplies only the runners, the two checkouts, the SDK/Node install, and one
-// invocation per OS; it encodes no build/test/pack logic of its own. The exact
-// same stages run locally and in CI:
+// supplies only the runner, the two checkouts, and the SDK/Node/xvfb install; it
+// encodes no build/test/pack logic of its own. The exact same stages run
+// locally and in CI:
 //
-//   dotnet fsi ci-pipeline.fsx -- linux            # local: the Linux-leg stages
-//   dotnet fsi ci-pipeline.fsx -- ci linux         # + the mutation-score gate
-//   dotnet fsi ci-pipeline.fsx -- ci linux release # + pack the release bundle
-//   dotnet fsi ci-pipeline.fsx -- ci windows       # the Windows-leg stages
+//   dotnet fsi ci-pipeline.fsx             # build, format, unit + integration
+//   dotnet fsi ci-pipeline.fsx -- ci       # + the mutation-score gate
+//   dotnet fsi ci-pipeline.fsx -- ci release # + VSIX + nupkg + release manifest
 //
 // The design goal (the whole reason this replaces a page of YAML): build the
-// solution ONCE per OS in Release, then run every downstream check --no-build
-// off that single output, and PROMOTE the packed artifacts rather than having a
-// separate job rebuild them. No more re-packing the forked MCP SDK five times,
-// no more building the whole solution once per job, no separate integration/
-// extensions/benchmarks/release jobs each starting from a clean checkout.
+// solution ONCE in Release, then run every downstream check --no-build off that
+// single output, and PROMOTE the packed artifacts rather than a separate job
+// rebuilding them. It runs entirely on ONE Linux runner — the real-daemon
+// integration-host suites and the VS Code command-proof were verified green on
+// Linux (Args.resolveHostLaunch launches the FSI host via the dotnet muxer on
+// non-Windows; the proof self-provisions a Linux VS Code under xvfb), so the
+// former windows leg is gone. No more re-packing the forked MCP SDK five times,
+// no more building the solution once per job, no separate build/integration/
+// extensions/benchmarks/release jobs each from a clean checkout.
 //
-// Stage selection (all conditions, so nothing runs where it does not belong):
-//   * unconditional stages run on every leg (restore, build, unit tests).
-//   * whenCmdArg "linux"   — format, mutation gate, vsix package, pack+manifest.
-//   * whenCmdArg "windows" — the samples + real-daemon integration-host suites.
+// Stage selection:
+//   * unconditional — restore, build, format, unit suite, samples, VS Code
+//     extension compile + test-electron host, and the integration-host suites.
 //   * whenCmdArg "ci"      — the mutation-score gate (too slow for the fast local
 //                            loop AGENTS.md asks for).
 //   * whenCmdArg "release" — pack the shippable bundle + write release-manifest.
 //
 // Cross-platform packing is safe: every per-RID tree-sitter native is committed
-// under runtimes/ and the fsproj includes them by Condition="Exists(...)", so a
-// single Linux pack produces a complete cross-platform nupkg.
+// under runtimes/ and the fsproj includes them by Condition="Exists(...)", so
+// the single Linux pack produces a complete cross-platform nupkg. (The Windows
+// user gets the FSI host via the dotnet muxer rather than a native
+// SageFs.Host.exe — the Unix-proven launch path; if a native Windows apphost is
+// ever wanted in the package, cross-publish it with `dotnet publish -r win-x64`,
+// which works from Linux.)
 
 #r "nuget: Fun.Build, 1.2.0"
 
@@ -166,14 +172,11 @@ pipeline "sagefs" {
   }
 
   stage "format" {
-    // OS-independent, so run it once, on the Linux leg only.
-    whenCmdArg "linux"
     run "dotnet format --verify-no-changes --verbosity minimal"
   }
 
   stage "unit tests" {
-    // The default Expecto suite, reusing the Release build. Runs on BOTH legs —
-    // SageFs is cross-platform, so the fast suite is worth exercising on each OS.
+    // The default Expecto suite, reusing the Release build.
     // Expecto exit codes: 0 = passed, 1 = a test FAILED, 2 = a test ERRORED;
     // Fun.Build's default acceptExitCodes = [0], so 1 and 2 both fail the stage.
     timeoutForStep 600
@@ -181,23 +184,21 @@ pipeline "sagefs" {
   }
 
   stage "mutation score gate" {
-    // OS-independent and slow, so Linux leg + CI only.
+    // CI only (a full mutation pass is too slow for the fast local loop).
     whenCmdArg "ci"
-    whenCmdArg "linux"
     timeoutForStep 300
     run $"dotnet {testDll} --mutation-score"
   }
 
   stage "build samples for integration suites" {
     // The HTTP API integration suites create real sessions on these samples.
-    whenCmdArg "windows"
     run "dotnet build samples/demos/SageFs.Samples.WebappDatastar/SageFs.Samples.WebappDatastar.fsproj -c Release --nologo"
     run "dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Release --nologo"
   }
 
   stage "vscode extension compile" {
-    // Needed on both legs: the Windows leg's VscodeCommandProofTests load the
-    // extension from source, and the Linux leg packages it into the VSIX.
+    // Needed by both the VS Code command-proof suite (loads the extension from
+    // source) and the VSIX package step.
     workingDir vscodeDir
     run "dotnet tool restore"
     run "npm ci"
@@ -206,8 +207,7 @@ pipeline "sagefs" {
 
   stage "vscode command-proof host" {
     // @vscode/test-electron harness for the command-proof suite run under
-    // --integration-host on the Windows leg.
-    whenCmdArg "windows"
+    // --integration-host.
     workingDir vscodeDir
     run "npm run compile:test-electron"
   }
@@ -216,8 +216,11 @@ pipeline "sagefs" {
     // Every [Integration] suite registered as Host: real FSI sessions, real
     // SageFs.Host spawns, Harmony detours, real daemons on isolated data dirs,
     // the HTTP API against the samples, and the VS Code command-proof suite.
-    // Windows only for now (Args.hostExePath hardcodes SageFs.Host.exe).
-    whenCmdArg "windows"
+    // Runs on Linux: Args.resolveHostLaunch launches the host via the dotnet
+    // muxer on non-Windows, and the command-proof self-provisions its harness
+    // and a Linux VS Code under xvfb (verified: 128 host tests + the proof all
+    // green on Linux). VS Code Electron needs a display, so the workflow makes
+    // one available via xvfb.
     timeoutForStep 2100
     run $"dotnet {testDll} --integration-host --summary"
   }
@@ -225,7 +228,6 @@ pipeline "sagefs" {
   stage "package vscode extension" {
     // Produce the shippable VSIX straight into release/ (no separate artifact
     // hand-off between jobs).
-    whenCmdArg "linux"
     whenCmdArg "release"
     workingDir vscodeDir
     run (fun ctx ->
@@ -239,8 +241,7 @@ pipeline "sagefs" {
   stage "pack release bundle" {
     // Pack the nupkg, verify it is installable and version-aligned, and write
     // the manifest publish.yml consumes — all straight into release/, uploaded
-    // once by the Linux leg. This is the whole former release-artifacts job.
-    whenCmdArg "linux"
+    // by the one build job. This is the whole former release-artifacts job.
     whenCmdArg "release"
     run (fun _ -> async { verifyVersionAlignment (); return Ok() })
     run (fun _ ->
