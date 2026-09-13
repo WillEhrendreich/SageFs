@@ -1562,6 +1562,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             snap.BindingsPanel
             snap.SessionContextPanel
             snap.FrictionPanel
+            snap.CohortPanel
           ]
           signalDetails
             Signals.NewSessionOpen
@@ -1886,6 +1887,114 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
                  ]
              ]
            ])
+      ]
+  ]
+
+
+// ── Cohort panel (cohort-integration-plan.md Slice 4) ──────────────────────
+// Renders `Cohort.CohortFrame<MemberId>` — the daemon's single implicit
+// cohort, read wait-free via `DashboardInfra.ReadCohortFrame` (D4, no new
+// SSE channel, no mailbox round-trip). Daemon-scoped, so this panel is built
+// identically whether or not a session is currently being viewed.
+
+let private cohortRoleLabel (role: SageFs.Cohort.JoinableRole) : string =
+  match role with
+  | SageFs.Cohort.JoinableRole.Implementer -> "Implementer"
+  | SageFs.Cohort.JoinableRole.Verifier -> "Verifier"
+  | SageFs.Cohort.JoinableRole.Observer -> "Observer"
+
+let private cohortSeatLabel (seat: SageFs.Cohort.SeatState) : string =
+  match seat with
+  | SageFs.Cohort.SeatState.Present -> "present"
+  | SageFs.Cohort.SeatState.Departed since ->
+    sprintf "departed %s" (since.ToLocalTime().ToString("HH:mm:ss"))
+
+let private cohortScopeLabel (scope: SageFs.Cohort.ClaimScope) : string =
+  match scope with
+  | SageFs.Cohort.ClaimScope.File path -> sprintf "file:%s" path
+  | SageFs.Cohort.ClaimScope.Project path -> sprintf "project:%s" path
+
+/// Describes a claim NOT currently `Held` (`ClaimHolderIndex.[i] < 0`) — the
+/// held case is rendered separately from `MemberIds.[ClaimHolderIndex.[i]]`
+/// (§ CohortFrame doc: the holder lives in the index array, never re-derived
+/// from this DU while held).
+let private cohortClaimStateLabel (state: SageFs.Cohort.ClaimState<MemberTable.MemberId>) : string =
+  match state with
+  | SageFs.Cohort.ClaimState.Held holder ->
+    sprintf "held by %s" (MemberTable.MemberId.display holder)
+  | SageFs.Cohort.ClaimState.Orphaned(previousHolder, since) ->
+    sprintf "orphaned — was %s, since %s" (MemberTable.MemberId.display previousHolder) (since.ToLocalTime().ToString("HH:mm:ss"))
+  | SageFs.Cohort.ClaimState.Released(by, at) ->
+    sprintf "released by %s at %s" (MemberTable.MemberId.display by) (at.ToLocalTime().ToString("HH:mm:ss"))
+
+/// Pure render of one cohort frame. `frame`'s arrays are index-aligned
+/// (`CohortFrame` doc, Cohort.fs) — every lookup here is a plain array index,
+/// never a `Map` walk.
+let renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
+  let memberCount = frame.MemberIds.Length
+  let claimCount = frame.ClaimIds.Length
+  signalDetails Signals.CohortPanelOpen [ Attr.id DomIds.CohortPanel; Attr.class' "panel"; Attr.style "margin-top: 0.5rem;" ] [
+    Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
+      Text.raw "👥 "
+      textEnc (sprintf "Cohort — %d member%s" memberCount (if memberCount = 1 then "" else "s"))
+    ]
+    match memberCount with
+    | 0 ->
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem; margin-top: 0.4rem;" ] [
+        Text.raw "No cohort members — agents join via join_cohort."
+      ]
+    | _ ->
+      Elem.div [ Attr.style "margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem;" ] [
+        Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] [
+          textEnc (sprintf "Ledger v%d" (int64 frame.Version))
+        ]
+        Elem.div [] [
+          Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [
+            Text.raw "Members"
+          ]
+          Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.25rem;" ] [
+            for i in 0 .. memberCount - 1 do
+              Elem.li [ Attr.style "display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap; overflow-wrap: anywhere;" ] [
+                textEnc (MemberTable.MemberId.display frame.MemberIds.[i])
+                Elem.span [ Attr.class' "badge"; Attr.style "background: var(--bg-focus); color: var(--fg-dim);" ] [
+                  textEnc (cohortRoleLabel frame.MemberRole.[i])
+                ]
+                Elem.span [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+                  textEnc (cohortSeatLabel frame.MemberSeat.[i])
+                ]
+              ]
+          ]
+        ]
+        match claimCount with
+        | 0 ->
+          Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.75rem;" ] [
+            Text.raw "No claims held."
+          ]
+        | _ ->
+          Elem.div [] [
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [
+              textEnc (sprintf "Claims (%d)" claimCount)
+            ]
+            Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
+              for i in 0 .. claimCount - 1 do
+                let (SageFs.Cohort.ClaimId claimIdStr) = frame.ClaimIds.[i]
+                let holderIdx = frame.ClaimHolderIndex.[i]
+                let holderText =
+                  match holderIdx >= 0 && holderIdx < memberCount with
+                  | true -> sprintf "held by %s" (MemberTable.MemberId.display frame.MemberIds.[holderIdx])
+                  | false -> cohortClaimStateLabel frame.ClaimState.[i]
+                Elem.li [ Attr.style "overflow-wrap: anywhere;" ] [
+                  Elem.div [] [
+                    textEnc claimIdStr
+                    Text.raw " — "
+                    textEnc (cohortScopeLabel frame.ClaimScope.[i])
+                  ]
+                  Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+                    textEnc (sprintf "%s · fence %d" holderText (int64 frame.ClaimFence.[i]))
+                  ]
+                ]
+            ]
+          ]
       ]
   ]
 

@@ -2436,6 +2436,9 @@ let run
     ActivityTracker = Some activityTracker
     LiveBindingsAdaptive = Some liveBindingsAdaptive
     ConnectionChannels = System.Collections.Concurrent.ConcurrentDictionary<string, MailboxProcessor<DashboardStreamCommand>>()
+    // Wait-free (D4): dereferences CohortOwner's published frame pointer
+    // directly — no mailbox round-trip, no IO.
+    ReadCohortFrame = cohortOwner.ReadFrame
     GetCompletions = fun (sessionId: WorkerProtocol.SessionId) (code: string) (cursorPos: int) -> task {
       try
         let! proxy = sessionOps.GetProxy sessionId

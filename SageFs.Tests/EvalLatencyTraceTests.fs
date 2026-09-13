@@ -135,7 +135,7 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
         SessionContextPanel = Elem.div [] []; OutputPanel = Elem.div [] []
         SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
         ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-        BindingsPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
+        BindingsPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []
         ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning
         EvalToPixelP50Ms = Some 3.25
         EvalToPixelP99Ms = Some 18.75 }
@@ -157,7 +157,7 @@ let evalLatencyTraceTests = testList "EvalLatencyTrace" [
         SessionContextPanel = Elem.div [] []; OutputPanel = Elem.div [] []
         SessionsPanel = Elem.div [] []; SessionPicker = Elem.div [] []
         ThemePicker = Elem.div [] []; ThemeVars = Elem.div [] []
-        BindingsPanel = Elem.div [] []; FrictionPanel = Elem.div [] []
+        BindingsPanel = Elem.div [] []; FrictionPanel = Elem.div [] []; CohortPanel = Elem.div [] []
         ActiveProject = None; ProjectRoles = []; App = AppRun.AppRunState.NotRunning
         EvalToPixelP50Ms = None
         EvalToPixelP99Ms = None }

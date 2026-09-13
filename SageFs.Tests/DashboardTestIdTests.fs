@@ -47,6 +47,7 @@ let private mkSnap () : DashboardSnapshot =
     FilmstripPanel = Elem.div [] []; AlarmPanel = Elem.div [] []
     LiveTestingPanel = renderLiveTestingPanel Features.LiveTestActivity.LiveTestActivity.Off
     FrictionPanel = Elem.div [] []
+    CohortPanel = Elem.div [] []
     ActiveProject = None
     ProjectRoles = []
     App = AppRun.AppRunState.NotRunning
