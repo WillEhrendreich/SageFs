@@ -119,6 +119,8 @@
         <Compile Include="SessionOperationsMutationTests.fs" />
         <Compile Include="WorkflowTypesMutationTests.fs" />
         <Compile Include="AffordancesMutationTests.fs" />
+        <Compile Include="BinaryPrimitivesMutationTests.fs" />
+        <Compile Include="TestCachePersistenceMutationTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
         <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
