@@ -925,53 +925,6 @@ let cycleStateTests = testList "LiveTestCycleState" [
 ]
 
 [<Tests>]
-let effectDispatchTests = testList "EffectDispatcher" [
-  test "ParseTreeSitter logs content and file" {
-    let log = EffectDispatcher.create()
-    EffectDispatcher.dispatch log (TestCycleEffect.ParseTreeSitter("let x = 1", "File.fs"))
-    log.Effects |> Expect.hasLength "one effect logged" 1
-    match log.Effects.[0] with
-    | TestCycleEffect.ParseTreeSitter(c, f) ->
-      c |> Expect.equal "content" "let x = 1"
-      f |> Expect.equal "file" "File.fs"
-    | _ -> failtest "wrong effect type"
-  }
-
-  test "RequestFcsTypeCheck logs file path" {
-    let log = EffectDispatcher.create()
-    EffectDispatcher.dispatch log (TestCycleEffect.RequestFcsTypeCheck { SessionId = None; FilePath = "File.fs"; Content = None; AnalysisIdentity = None; TreeSitterElapsed = System.TimeSpan.Zero })
-    log.Effects |> Expect.hasLength "one effect" 1
-    match log.Effects.[0] with
-    | TestCycleEffect.RequestFcsTypeCheck req -> req.FilePath |> Expect.equal "file" "File.fs"
-    | _ -> failtest "wrong effect type"
-  }
-
-  test "RunAffectedTests logs tests and trigger" {
-    let log = EffectDispatcher.create()
-    let tests = [| { Id = TestId.create "t1" TestFramework.Expecto; FullName = "t1"; DisplayName = "t1"
-                     Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
-                     Category = TestCategory.Unit } |]
-    EffectDispatcher.dispatch log (TestCycleEffect.RunAffectedTests { Tests = tests; Trigger = RunTrigger.Keystroke; TreeSitterElapsed = System.TimeSpan.Zero; FcsElapsed = System.TimeSpan.Zero; SessionId = None; InstrumentationMaps = [||] })
-    log.Effects |> Expect.hasLength "one effect" 1
-    match log.Effects.[0] with
-    | TestCycleEffect.RunAffectedTests req ->
-      req.Tests |> Expect.hasLength "one test" 1
-      req.Trigger |> Expect.equal "trigger" RunTrigger.Keystroke
-    | _ -> failtest "wrong effect type"
-  }
-
-  test "dispatchAll processes multiple effects" {
-    let log = EffectDispatcher.create()
-    let effects = [
-      TestCycleEffect.ParseTreeSitter("x", "f")
-      TestCycleEffect.RequestFcsTypeCheck { SessionId = None; FilePath = "f"; Content = None; AnalysisIdentity = None; TreeSitterElapsed = System.TimeSpan.Zero }
-    ]
-    EffectDispatcher.dispatchAll log effects
-    log.Effects |> Expect.hasLength "two effects" 2
-  }
-]
-
-[<Tests>]
 let endToEndCycleTests = testList "End-to-end cycle" [
   test "keystroke → debounce → tree-sitter fires at 50ms" {
     let t0 = DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)

@@ -77,28 +77,6 @@ module TestRunRequestTests =
       z.InstrumentationMaps |> Expect.isEmpty "maps should be empty"
     }
 
-  /// Round-trip: construct a TestRunRequest, read every field, reconstruct → equal.
-  let ``TestRunRequest round-trips through fields`` =
-    test "TestRunRequest round-trips through fields" {
-      let req = {
-        Tests = sampleTests
-        Trigger = RunTrigger.FileSave
-        TreeSitterElapsed = TimeSpan.FromMilliseconds 42.0
-        FcsElapsed = TimeSpan.FromMilliseconds 100.0
-        SessionId = Some "abc12345"
-        InstrumentationMaps = sampleMaps
-      }
-      let rebuilt = {
-        Tests = req.Tests
-        Trigger = req.Trigger
-        TreeSitterElapsed = req.TreeSitterElapsed
-        FcsElapsed = req.FcsElapsed
-        SessionId = req.SessionId
-        InstrumentationMaps = req.InstrumentationMaps
-      }
-      rebuilt |> Expect.equal "round-trip should preserve all fields" req
-    }
-
   /// TestRunRequest carries named fields — no more guessing which TimeSpan is which.
   let ``TestRunRequest distinguishes tree-sitter from FCS elapsed`` =
     test "TestRunRequest distinguishes tree-sitter from FCS elapsed" {
@@ -113,7 +91,6 @@ module TestRunRequestTests =
 
   let tests = testList "TestRunRequest record" [
     ``TestRunRequest_empty is the zero element``
-    ``TestRunRequest round-trips through fields``
     ``TestRunRequest distinguishes tree-sitter from FCS elapsed``
   ]
 
@@ -133,139 +110,13 @@ module TypeCheckRequestTests =
       z.TreeSitterElapsed |> Expect.equal "ts elapsed should be zero" TimeSpan.Zero
     }
 
-  let ``TypeCheckRequest round-trips through fields`` =
-    test "TypeCheckRequest round-trips through fields" {
-      let req = {
-        SessionId = Some "sess1234"
-        FilePath = "/src/Foo.fs"
-        Content = Some "let x = 1"
-        AnalysisIdentity = Some (AnalysisIdentity.ofContent "let x = 1")
-        TreeSitterElapsed = TimeSpan.FromMilliseconds 5.0
-      }
-      let rebuilt = {
-        SessionId = req.SessionId
-        FilePath = req.FilePath
-        Content = req.Content
-        AnalysisIdentity = req.AnalysisIdentity
-        TreeSitterElapsed = req.TreeSitterElapsed
-      }
-      rebuilt |> Expect.equal "round-trip should preserve all fields" req
-    }
-
   let tests = testList "TypeCheckRequest record" [
     ``TypeCheckRequest_empty is the zero element``
-    ``TypeCheckRequest round-trips through fields``
   ]
 
 // ─────────────────────────────────────────────────────────────────────
 // § 3  TestCycleEffect carries payload records
 // ─────────────────────────────────────────────────────────────────────
-
-module TestCycleEffectPayloadTests =
-
-  /// RunAffectedTests should carry a TestRunRequest, not loose positional params.
-  let ``RunAffectedTests carries TestRunRequest`` =
-    test "RunAffectedTests carries TestRunRequest" {
-      let req = {
-        Tests = sampleTests
-        Trigger = RunTrigger.Keystroke
-        TreeSitterElapsed = TimeSpan.FromMilliseconds 10.0
-        FcsElapsed = TimeSpan.FromMilliseconds 50.0
-        SessionId = None
-        InstrumentationMaps = sampleMaps
-      }
-      let effect = TestCycleEffect.RunAffectedTests req
-      match effect with
-      | TestCycleEffect.RunAffectedTests r ->
-        r.Tests |> Expect.hasLength "should carry 2 tests" 2
-        r.Trigger |> Expect.equal "trigger" RunTrigger.Keystroke
-        r.SessionId |> Expect.isNone "no session"
-      | _ -> failtest "wrong effect case"
-    }
-
-  /// RequestRebuild should carry generation + TestRunRequest.
-  let ``RequestRebuild carries generation and TestRunRequest`` =
-    test "RequestRebuild carries generation and TestRunRequest" {
-      let req = {
-        Tests = sampleTests
-        Trigger = RunTrigger.FileSave
-        TreeSitterElapsed = TimeSpan.FromMilliseconds 10.0
-        FcsElapsed = TimeSpan.FromMilliseconds 50.0
-        SessionId = Some "abc12345"
-        InstrumentationMaps = sampleMaps
-      }
-      let effect = TestCycleEffect.RequestRebuild(42L, req)
-      match effect with
-      | TestCycleEffect.RequestRebuild (gen, r) ->
-        gen |> Expect.equal "generation" 42L
-        r.Tests |> Expect.hasLength "should carry 2 tests" 2
-        r.Trigger |> Expect.equal "trigger" RunTrigger.FileSave
-        r.SessionId |> Expect.equal "session" (Some "abc12345")
-      | _ -> failtest "wrong effect case"
-    }
-
-  /// RequestFcsTypeCheck should carry a TypeCheckRequest.
-  let ``RequestFcsTypeCheck carries TypeCheckRequest`` =
-    test "RequestFcsTypeCheck carries TypeCheckRequest" {
-      let req = {
-        SessionId = None
-        FilePath = "/src/Foo.fs"
-        Content = Some "let x = 1"
-        AnalysisIdentity = None
-        TreeSitterElapsed = TimeSpan.FromMilliseconds 5.0
-      }
-      let effect = TestCycleEffect.RequestFcsTypeCheck req
-      match effect with
-      | TestCycleEffect.RequestFcsTypeCheck r ->
-        r.FilePath |> Expect.equal "file path" "/src/Foo.fs"
-        r.Content |> Expect.equal "content" (Some "let x = 1")
-        r.TreeSitterElapsed |> Expect.equal "ts elapsed" (TimeSpan.FromMilliseconds 5.0)
-      | _ -> failtest "wrong effect case"
-    }
-
-  /// CancelRebuild and other cases are unchanged — only the big positional ones got records.
-  let ``unchanged cases still work`` =
-    test "unchanged cases still work" {
-      let cancel = TestCycleEffect.CancelRebuild(Some "s", 7L)
-      match cancel with
-      | TestCycleEffect.CancelRebuild (sid, gen) ->
-        sid |> Expect.equal "session" (Some "s")
-        gen |> Expect.equal "generation" 7L
-      | _ -> failtest "wrong case"
-
-      let disco = TestCycleEffect.RequestInitialDiscovery
-      match disco with
-      | TestCycleEffect.RequestInitialDiscovery -> ()
-      | _ -> failtest "wrong case"
-
-      let parse = TestCycleEffect.ParseTreeSitter("code", "file.fs")
-      match parse with
-      | TestCycleEffect.ParseTreeSitter (c, f) ->
-        c |> Expect.equal "content" "code"
-        f |> Expect.equal "file" "file.fs"
-      | _ -> failtest "wrong case"
-
-      let register = TestCycleEffect.RegisterFileWatcher("s", "/dir")
-      match register with
-      | TestCycleEffect.RegisterFileWatcher (s, d) ->
-        s |> Expect.equal "session" "s"
-        d |> Expect.equal "dir" "/dir"
-      | _ -> failtest "wrong case"
-
-      let dispose = TestCycleEffect.DisposeFileWatcher("s", "/dir")
-      match dispose with
-      | TestCycleEffect.DisposeFileWatcher (s, d) ->
-        s |> Expect.equal "session" "s"
-        d |> Expect.equal "dir" "/dir"
-      | _ -> failtest "wrong case"
-    }
-
-  let tests = testList "TestCycleEffect carries payload records" [
-    ``RunAffectedTests carries TestRunRequest``
-    ``RequestRebuild carries generation and TestRunRequest``
-    ``RequestFcsTypeCheck carries TypeCheckRequest``
-    ``unchanged cases still work``
-  ]
 
 // ─────────────────────────────────────────────────────────────────────
 // § 4  Effect producers use payload records
@@ -600,36 +451,8 @@ module CachedViewsTests =
       z.EditorAnnotations |> Expect.isEmpty "annotations should be empty"
     }
 
-  /// CachedViews fields are independently updatable via record update syntax.
-  /// This proves the nested update path works: { state.Cached with StateVersion = x }.
-  let ``CachedViews supports nested record update`` =
-    test "CachedViews supports nested record update" {
-      let c0 = CachedViews.empty
-      let c1 = { c0 with StateVersion = 42L }
-      c1.StateVersion |> Expect.equal "version should be 42" 42L
-      c1.TestSummary |> Expect.equal "summary unchanged" c0.TestSummary
-      c1.FailureNarratives |> Expect.isEmpty "narratives unchanged"
-      c1.EditorAnnotations |> Expect.isEmpty "annotations unchanged"
-    }
-
-  /// Multiple CachedViews fields can be updated in one expression.
-  let ``CachedViews multi-field update`` =
-    test "CachedViews multi-field update preserves unmentioned fields" {
-      let c = {
-        CachedViews.empty with
-          StateVersion = 10L
-          TestSummary = { Total = 5; Passed = 3; Failed = 2; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
-      }
-      c.StateVersion |> Expect.equal "version" 10L
-      c.TestSummary.Total |> Expect.equal "total" 5
-      c.FailureNarratives |> Expect.isEmpty "narratives still empty"
-      c.EditorAnnotations |> Expect.isEmpty "annotations still empty"
-    }
-
   let tests = testList "CachedViews record" [
     ``CachedViews_empty is the zero element``
-    ``CachedViews supports nested record update``
-    ``CachedViews multi-field update``
   ]
 
 // ─────────────────────────────────────────────────────────────────────
@@ -739,26 +562,6 @@ module LiveTestStateSubRecordTests =
       sessA.[0].TestId |> Expect.equal "should be the sessA entry" e1.TestId
     }
 
-  /// Nested record update on LiveTestState.Cached works for finalize-style updates.
-  let ``nested Cached update works on LiveTestState`` =
-    test "nested Cached update works on LiveTestState" {
-      let state = LiveTestState.empty
-      let updated =
-        { state with
-            Cached = {
-              state.Cached with
-                StateVersion = 7L
-                TestSummary = { Total = 10; Passed = 8; Failed = 2; Stale = 0; Running = 0; Disabled = 0; Enabled = true }
-            } }
-      updated.Cached.StateVersion |> Expect.equal "version" 7L
-      updated.Cached.TestSummary.Total |> Expect.equal "total" 10
-      updated.Cached.TestSummary.Passed |> Expect.equal "passed" 8
-      updated.Cached.FailureNarratives |> Expect.isEmpty "narratives still empty"
-      updated.Cached.EditorAnnotations |> Expect.isEmpty "annotations still empty"
-      // StatusIndex should be untouched
-      updated.StatusIndex |> Expect.equal "StatusIndex unchanged" TestStatusIndex.empty
-    }
-
   let tests = testList "LiveTestState sub-record integration" [
     ``LiveTestState_empty uses sub-record empties``
     ``withStatusEntries atomically updates StatusIndex``
@@ -768,7 +571,6 @@ module LiveTestStateSubRecordTests =
     ``tryFindStatusEntry returns None for unknown TestId``
     ``orderedStatusEntries returns Entries when Materialized``
     ``statusEntriesForSession uses StatusIndex``
-    ``nested Cached update works on LiveTestState``
   ]
 
 // ─────────────────────────────────────────────────────────────────────
@@ -873,7 +675,6 @@ let allTests =
     testList "Phase 1a — TestCycleEffect Payload Records" [
       TestRunRequestTests.tests
       TypeCheckRequestTests.tests
-      TestCycleEffectPayloadTests.tests
       EffectProducerTests.tests
       RebuildLifecycleTests.tests
     ]

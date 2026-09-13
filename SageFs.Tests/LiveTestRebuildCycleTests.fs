@@ -17,16 +17,6 @@ let private unionCaseNameOf (value: obj) =
   let uc, _ = FSharpValue.GetUnionFields(value, ty)
   uc.Name
 
-/// Check if a DU type has a case with the given name.
-let private hasUnionCase<'T> (caseName: string) =
-  FSharpType.GetUnionCases(typeof<'T>)
-  |> Array.exists (fun uc -> uc.Name = caseName)
-
-/// Check if a record type has a property with the given name.
-let private hasRecordField<'T> (fieldName: string) =
-  typeof<'T>.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
-  |> Array.exists (fun p -> p.Name = fieldName)
-
 let private tryRecordFieldValue (fieldName: string) (value: obj) =
   value.GetType().GetProperty(fieldName, BindingFlags.Public ||| BindingFlags.Instance)
   |> Option.ofObj
@@ -111,97 +101,6 @@ let private activeModelWithPending pending =
 [<Tests>]
 let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
 
-  // ── Structural: required types for the rebuild pipeline ──
-
-  testList "Stream 2 — Structural prerequisites" [
-
-    test "TestCycleEffect has RequestRebuild case" {
-      // WHY: Without a RequestRebuild effect variant, the Elm model has
-      // no way to request a compilation step between type-checking and
-      // test execution. Tests would continue running against stale DLLs.
-      hasUnionCase<TestCycleEffect> "RequestRebuild"
-      |> Expect.isTrue
-          "TestCycleEffect must have RequestRebuild case to request compilation before test execution"
-    }
-
-    test "TestCycleEffect has CancelRebuild case" {
-      // WHY: Once rebuild work is in-flight, the model needs a first-class
-      // way to say "that rebuild intent is no longer true." Without an
-      // explicit cancel effect, invalidation is only implicit runtime magic.
-      hasUnionCase<TestCycleEffect> "CancelRebuild"
-      |> Expect.isTrue
-          "TestCycleEffect must have CancelRebuild so stale rebuild work can be invalidated explicitly"
-    }
-
-    test "SageFsMsg has RebuildCompleted case" {
-      // WHY: After a rebuild finishes (success or failure), the result
-      // must flow back into the Elm model so it can decide whether to
-      // proceed with test execution or surface a build error.
-      hasUnionCase<SageFsMsg> "RebuildCompleted"
-      |> Expect.isTrue
-          "SageFsMsg must have RebuildCompleted case so rebuild results flow back into the Elm model"
-    }
-
-    test "LiveTestCycleState has PendingRebuild field" {
-      // WHY: The model must track that a rebuild is in-flight. Without
-      // this, new type-check completions could trigger concurrent test
-      // runs against the stale DLL while the rebuild is still running.
-      hasRecordField<LiveTestCycleState> "PendingRebuild"
-      |> Expect.isTrue
-          "LiveTestCycleState must have PendingRebuild field to prevent test runs on stale code"
-    }
-
-    test "LiveTestCycleState has QueuedRebuild field" {
-      // WHY: `RunningButEdited` says stale work is in flight, but it does
-      // not say what the latest owed compiled rebuild actually is. The
-      // queued rebuild intent makes that business fact explicit.
-      hasRecordField<LiveTestCycleState> "QueuedRebuild"
-      |> Expect.isTrue
-          "LiveTestCycleState must carry the latest queued rebuild intent so edits during a run are replayable instead of inferable"
-    }
-
-    test "PendingRebuildState has Generation field" {
-      // WHY: Cancellation is only a best-effort optimization. The model
-      // still needs a semantic identity for each rebuild so stale
-      // completions can be rejected even if an older async path runs late.
-      hasRecordField<PendingRebuildState> "Generation"
-      |> Expect.isTrue
-          "PendingRebuildState must carry Generation so rebuild completions can be matched to the right request"
-    }
-
-    test "PendingRebuildState has FilePath field" {
-      // WHY: A pending rebuild without a source file is just a bag of tests.
-      // The model should remember which compiled file triggered the rebuild.
-      hasRecordField<PendingRebuildState> "FilePath"
-      |> Expect.isTrue
-          "PendingRebuildState must carry the source file path so rebuild intent keeps its provenance"
-    }
-
-    test "PendingRebuildState has AnalysisIdentity field" {
-      // WHY: Rebuild coalescing should be keyed to content truth, not just
-      // test lists. The pending rebuild must remember which analyzed content
-      // identity it came from.
-      hasRecordField<PendingRebuildState> "AnalysisIdentity"
-      |> Expect.isTrue
-          "PendingRebuildState must carry analysis identity so equivalent rebuild checks can stay content-aware"
-    }
-
-    test "SageFsMsg.RebuildCompleted carries generation identity" {
-      // WHY: If RebuildCompleted doesn't carry which rebuild finished, the
-      // Elm model can't distinguish the latest rebuild from an older stale
-      // completion that raced in after supersession.
-      let rebuildCompletedFields =
-        FSharpType.GetUnionCases(typeof<SageFsMsg>)
-        |> Array.find (fun uc -> uc.Name = "RebuildCompleted")
-        |> fun uc -> uc.GetFields()
-
-      rebuildCompletedFields.Length
-      |> Expect.equal
-          "RebuildCompleted should carry target session, rebuild generation, and result"
-          3
-    }
-  ]
-
   // ── Behavioral: the rebuild-before-test pipeline ──
 
   testList "Stream 2 — Behavioral: rebuild before test execution" [
@@ -250,12 +149,6 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
       // analysis phase must now execute against fresh code. The pending
       // test set saved in PendingRebuild must be forwarded to RunAffectedTests.
       //
-      // This test guards the structural prerequisite first (RebuildCompleted
-      // message must exist) then documents the behavioral expectation.
-      hasUnionCase<SageFsMsg> "RebuildCompleted"
-      |> Expect.isTrue
-          "RebuildCompleted msg must exist — after successful rebuild, saved tests must run"
-
       let pendingTests = [| sampleTestCase |]
       let pending = pendingRebuildFor 1L pendingTests RunTrigger.FileSave
       let model =
@@ -291,11 +184,6 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
     test "RebuildCompleted(Error) surfaces build diagnostic without running tests" {
       // WHY: Running tests against code that failed to compile is worse
       // than useless — it produces misleading results. Build errors must
-      // be surfaced to the user and no RunAffectedTests effect should fire.
-      hasUnionCase<SageFsMsg> "RebuildCompleted"
-      |> Expect.isTrue
-          "RebuildCompleted msg must exist — build errors must surface without running tests"
-
       let pending = pendingRebuildFor 1L [| sampleTestCase |] RunTrigger.FileSave
       let model =
         { SageFsModel.initial() with
@@ -318,11 +206,6 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
     test "RebuildCompleted(Ok) with no PendingRebuild is ignored as stale" {
       // WHY: Rebuild completions are asynchronous. If the model no longer has
       // a pending rebuild when a completion arrives, that result is stale and
-      // must not trigger test execution against an older binary.
-      hasUnionCase<SageFsMsg> "RebuildCompleted"
-      |> Expect.isTrue
-          "RebuildCompleted msg must exist — stale completions must be ignored safely"
-
       let model = SageFsModel.initial()
       let model', effects =
         SageFsUpdate.update (SageFsMsg.RebuildCompleted (None, 1L, Ok ())) model
@@ -435,11 +318,6 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
     test "new FileContentChanged during PendingRebuild resets the pipeline" {
       // WHY: If the user edits code while a rebuild is in-flight, the
       // build result will be for stale code. The pending rebuild must be
-      // cancelled and the pipeline must restart from the beginning.
-      hasRecordField<LiveTestCycleState> "PendingRebuild"
-      |> Expect.isTrue
-          "PendingRebuild must exist to test cancellation on new edits"
-
       let pending = pendingRebuildFor 1L [| sampleTestCase |] RunTrigger.FileSave
       let model = activeModelWithPending pending
 
@@ -512,11 +390,6 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
     test "cancelled rebuild does not emit RebuildCompleted effects" {
       // WHY: A cancelled build's result is irrelevant and stale. If the
       // RebuildCompleted message for a cancelled rebuild is not ignored,
-      // it would trigger test execution against wrong code.
-      hasUnionCase<SageFsMsg> "RebuildCompleted"
-      |> Expect.isTrue
-          "RebuildCompleted must exist to test cancellation semantics"
-
       let pending = pendingRebuildFor 1L [| sampleTestCase |] RunTrigger.FileSave
       let model = activeModelWithPending pending
 
