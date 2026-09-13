@@ -5,7 +5,9 @@
 /// over covering tests to partition into status counts and renders a badge.
 ///
 /// These tests build minimal LiveTestState + TestDependencyGraph fixtures
-/// and verify that real output differs from mutated output.
+/// and assert the FULL resulting `CoverageView` record against the exact
+/// expected value (not merely inequality with one hand-picked wrong field),
+/// so a mutant that changes any field to any other wrong value is killed.
 module CoverageViewProjectMutationTests
 
 open Expecto
@@ -92,114 +94,84 @@ let depGraph = TestDependencyGraph.empty
 
 let coverageViewProjectMutationTests = testList "CoverageView.project mutations" [
 
-  // ── Absent handling ──────────────────────────────────────────────────────
+  // ── Absent handling — full record, since no covering tests is a distinct branch ──
 
-  testCase "WHY — project_empty_coverage_must_be_Absent — no covering tests means Absent health" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults [||] depGraph stateWithPass "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with Health = CoverageViewState.Passing }  // wrong: should be Absent
-    if real.Health = mutant.Health then
-      failwithf "Mutation survived — empty coverage should give Absent, got %A" real.Health
+  testCase "WHY — project_empty_coverage_is_fully_Absent — no covering tests means the whole Absent shape" <| fun () ->
+    let expected : CoverageView =
+      { Symbol = "Module.x"; FilePath = "Prod.fs"; DefinitionLine = 10
+        TotalCount = 0; Overflow = Overflow.Within; InlineBadgeText = ""
+        Health = CoverageViewState.Absent }
+    CoverageView.project CoverageViewMode.defaults [||] depGraph stateWithPass "Prod.fs" 10 "Module.x"
+    |> Expect.equal "empty coverage must produce the exact Absent CoverageView" expected
 
-  testCase "WHY — project_empty_coverage_zero_total — no covering tests means TotalCount=0" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults [||] depGraph stateWithPass "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with TotalCount = 1 }  // wrong: should be 0
-    if real.TotalCount = mutant.TotalCount then
-      failwithf "Mutation survived — empty coverage should give TotalCount=0, got %d" real.TotalCount
+  // ── All-passing — full record ────────────────────────────────────────────
 
-  testCase "WHY — project_empty_coverage_empty_badge — no covering tests means empty badge text" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults [||] depGraph stateWithPass "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with InlineBadgeText = "✓ 0" }  // wrong: should be ""
-    if real.InlineBadgeText = mutant.InlineBadgeText then
-      failwithf "Mutation survived — empty coverage should give empty badge, got '%s'" real.InlineBadgeText
+  testCase "WHY — project_all_passing_produces_exact_record — Passing health with a single ✓ badge" <| fun () ->
+    let expected : CoverageView =
+      { Symbol = "Module.x"; FilePath = "Prod.fs"; DefinitionLine = 10
+        TotalCount = 3; Overflow = Overflow.Within; InlineBadgeText = "✓ 3"
+        Health = CoverageViewState.Passing }
+    CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithPass "Prod.fs" 10 "Module.x"
+    |> Expect.equal "3 passing tests must produce the exact Passing CoverageView" expected
 
-  // ── TotalCount ───────────────────────────────────────────────────────────
+  // ── Any failing — full record ────────────────────────────────────────────
 
-  testCase "WHY — project_total_count_must_equal_coveringIds — TotalCount must match input array length" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithPass "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with TotalCount = 999 }  // wrong
-    if real.TotalCount = mutant.TotalCount then
-      failwithf "Mutation survived — TotalCount should be %d, got %d" coveringIds.Length real.TotalCount
+  testCase "WHY — project_any_failing_produces_exact_record — Failing health with pass+fail badges in order" <| fun () ->
+    let expected : CoverageView =
+      { Symbol = "Module.x"; FilePath = "Prod.fs"; DefinitionLine = 10
+        TotalCount = 3; Overflow = Overflow.Within; InlineBadgeText = "✓ 2 ✗ 1"
+        Health = CoverageViewState.Failing }
+    CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithFail "Prod.fs" 10 "Module.x"
+    |> Expect.equal "1 failing + 2 passing must produce the exact Failing CoverageView" expected
 
-  // ── Health state for passing ─────────────────────────────────────────────
+  // ── Skipped — full record ────────────────────────────────────────────────
 
-  testCase "WHY — project_all_passing_must_be_Passing — all results passed means Passing health" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithPass "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with Health = CoverageViewState.Failing }  // wrong
-    if real.Health = mutant.Health then
-      failwithf "Mutation survived — all passing should give Passing, got %A" real.Health
+  testCase "WHY — project_skipped_produces_exact_record — Skipped health with pass+skip badges" <| fun () ->
+    let expected : CoverageView =
+      { Symbol = "Module.x"; FilePath = "Prod.fs"; DefinitionLine = 10
+        TotalCount = 3; Overflow = Overflow.Within; InlineBadgeText = "✓ 2 ⊘ 1"
+        Health = CoverageViewState.Skipped }
+    CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithSkip "Prod.fs" 10 "Module.x"
+    |> Expect.equal "1 skipped + 2 passing must produce the exact Skipped CoverageView" expected
 
-  // ── Health state for failing ─────────────────────────────────────────────
+  // ── NotRun = stale — full record ─────────────────────────────────────────
 
-  testCase "WHY — project_any_failing_must_be_Failing — any failure makes Failing health" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithFail "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with Health = CoverageViewState.Passing }  // wrong
-    if real.Health = mutant.Health then
-      failwithf "Mutation survived — any failure should give Failing, got %A" real.Health
+  testCase "WHY — project_notRun_produces_exact_record — NotRun counts as Stale with pass+stale badges" <| fun () ->
+    let expected : CoverageView =
+      { Symbol = "Module.x"; FilePath = "Prod.fs"; DefinitionLine = 10
+        TotalCount = 3; Overflow = Overflow.Within; InlineBadgeText = "✓ 2 ~ 1"
+        Health = CoverageViewState.Stale }
+    CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithNotRun "Prod.fs" 10 "Module.x"
+    |> Expect.equal "1 NotRun + 2 passing must produce the exact Stale CoverageView" expected
 
-  // ── Health state for skipped ─────────────────────────────────────────────
+  // ── Missing result = stale — full record ─────────────────────────────────
 
-  testCase "WHY — project_skipped_counted — Skipped results count as Skipped health" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithSkip "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with Health = CoverageViewState.Passing }  // wrong: skip should make Skipped
-    if real.Health = mutant.Health then
-      failwithf "Mutation survived — skipped should give Skipped, got %A" real.Health
+  testCase "WHY — project_missing_result_produces_exact_record — a covering id with no result is Stale for all three" <| fun () ->
+    let expected : CoverageView =
+      { Symbol = "Module.x"; FilePath = "Prod.fs"; DefinitionLine = 10
+        TotalCount = 3; Overflow = Overflow.Within; InlineBadgeText = "~ 3"
+        Health = CoverageViewState.Stale }
+    CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithMissing "Prod.fs" 10 "Module.x"
+    |> Expect.equal "3 covering ids with no LastResults entry must produce the exact Stale CoverageView" expected
 
-  // ── NotRun = stale ───────────────────────────────────────────────────────
+  // ── Symbol/FilePath/Line preservation — full record ──────────────────────
 
-  testCase "WHY — project_notRun_counted_as_stale — NotRun result counts as Stale health" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithNotRun "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with Health = CoverageViewState.Passing }  // wrong: NotRun → Stale
-    if real.Health = mutant.Health then
-      failwithf "Mutation survived — NotRun should give Stale, got %A" real.Health
+  testCase "WHY — project_preserves_symbol_file_and_line — the caller's identity fields pass through untouched" <| fun () ->
+    let expected : CoverageView =
+      { Symbol = "MyModule.myFunc"; FilePath = "MyFile.fs"; DefinitionLine = 42
+        TotalCount = 3; Overflow = Overflow.Within; InlineBadgeText = "✓ 3"
+        Health = CoverageViewState.Passing }
+    CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithPass "MyFile.fs" 42 "MyModule.myFunc"
+    |> Expect.equal "Symbol, FilePath and DefinitionLine must be exactly what the caller passed in" expected
 
-  // ── Missing result = stale ───────────────────────────────────────────────
+  // ── Overflow — full record ────────────────────────────────────────────────
 
-  testCase "WHY — project_missing_result_counted_as_stale — result not in map counts as Stale" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithMissing "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with Health = CoverageViewState.Passing }  // wrong: missing → Stale
-    if real.Health = mutant.Health then
-      failwithf "Mutation survived — missing result should give Stale, got %A" real.Health
-
-  // ── InlineBadgeText ──────────────────────────────────────────────────────
-
-  testCase "WHY — project_badge_includes_pass_count — InlineBadgeText shows pass count" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithPass "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with InlineBadgeText = "" }  // wrong: should include badge
-    if real.InlineBadgeText = mutant.InlineBadgeText then
-      failwithf "Mutation survived — all-pass should show badge, got '%s'" real.InlineBadgeText
-
-  testCase "WHY — project_badge_includes_fail_count — InlineBadgeText shows fail count when any fail" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithFail "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with InlineBadgeText = real.InlineBadgeText.Replace("✗", "") }  // wrong: should show fail
-    if real.InlineBadgeText = mutant.InlineBadgeText then
-      failwithf "Mutation survived — badge should include fail marker, got '%s'" real.InlineBadgeText
-
-  // ── Symbol/FilePath/Line preservation ────────────────────────────────────
-
-  testCase "WHY — project_preserves_symbol — Symbol field must match input" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithPass "Prod.fs" 42 "MyModule.myFunc"
-    let mutant : CoverageView = { real with Symbol = "wrong" }  // wrong
-    if real.Symbol = mutant.Symbol then
-      failwithf "Mutation survived — Symbol should be 'MyModule.myFunc', got '%s'" real.Symbol
-
-  testCase "WHY — project_preserves_file — FilePath field must match input" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithPass "MyFile.fs" 42 "MyModule.myFunc"
-    let mutant : CoverageView = { real with FilePath = "wrong.fs" }  // wrong
-    if real.FilePath = mutant.FilePath then
-      failwithf "Mutation survived — FilePath should be 'MyFile.fs', got '%s'" real.FilePath
-
-  testCase "WHY — project_preserves_line — DefinitionLine field must match input" <| fun () ->
-    let real = CoverageView.project CoverageViewMode.defaults coveringIds depGraph stateWithPass "MyFile.fs" 42 "MyModule.myFunc"
-    let mutant : CoverageView = { real with DefinitionLine = 0 }  // wrong
-    if real.DefinitionLine = mutant.DefinitionLine then
-      failwithf "Mutation survived — DefinitionLine should be 42, got %d" real.DefinitionLine
-
-  // ── Overflow ─────────────────────────────────────────────────────────────
-
-  testCase "WHY — project_overflow_computed — Overflow reflects InlineCollapseAt mode" <| fun () ->
+  testCase "WHY — project_overflow_computed_from_mode — Overflow reflects InlineCollapseAt mode" <| fun () ->
     let mode = { InlineCollapseAt = 2 }
-    let real = CoverageView.project mode coveringIds depGraph stateWithPass "Prod.fs" 10 "Module.x"
-    let mutant : CoverageView = { real with Overflow = Overflow.Within }  // wrong: 3 tests > threshold 2
-    if real.Overflow = mutant.Overflow then
-      failwithf "Mutation survived — 3 tests with InlineCollapseAt=2 should overflow, got %A" real.Overflow
+    let expected : CoverageView =
+      { Symbol = "Module.x"; FilePath = "Prod.fs"; DefinitionLine = 10
+        TotalCount = 3; Overflow = Overflow.Overflow 1; InlineBadgeText = "✓ 3"
+        Health = CoverageViewState.Passing }
+    CoverageView.project mode coveringIds depGraph stateWithPass "Prod.fs" 10 "Module.x"
+    |> Expect.equal "3 tests with InlineCollapseAt=2 must overflow by exactly 1" expected
 ]

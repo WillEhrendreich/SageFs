@@ -18,6 +18,7 @@
 module HotReloadStateMutationTests
 
 open Expecto
+open Expecto.Flip
 open MutationTestingFramework
 open SageFs.HotReloadState
 
@@ -84,55 +85,39 @@ let watchAllUnion = {
 //   - assertion false for mutant output → mutant violates property → caught!
 
 let hotReloadMutationTests = testList "HotReloadState mutations" [
-  // normalize: must lowercase or path lookups break
-  testCase "WHY — normalize_no_lowercase — normalize must lowercase or path lookups break" <| fun () ->
-    let mutantResult = "C:\\Src\\Foo.fs".Replace('\\', '/')
-    let realResult = normalize "C:\\Src\\Foo.fs"
-    if mutantResult = realResult then
-      failwith "Mutation NOT caught — mutant still normalizes correctly"
+  // normalize: must lowercase AND replace backslashes — exact output
+  testCase "WHY — normalize_no_lowercase — normalize must slash-and-lowercase the path exactly" <| fun () ->
+    normalize "C:\\Src\\Foo.fs"
+    |> Expect.equal "normalize must replace backslashes and lowercase" "c:/src/foo.fs"
 
   // isWatched: must return true only for watched paths
-  // Pattern: if real and mutant give the SAME result, mutation survived
-  testCase "WHY — isWatched_always_true — isWatched must not lie about unwatched paths" <| fun () ->
-    let isWatchedMutant = fun _path _state -> true
-    let realResult = isWatched "src/nope.fs" testState
-    let mutantResult = isWatchedMutant "src/nope.fs" testState
-    if realResult = mutantResult then
-      failwith "Mutation survived — real and mutant both give same result for unwatched path"
+  testCase "WHY — isWatched_always_true — isWatched must be false for an unwatched path" <| fun () ->
+    isWatched "src/nope.fs" testState
+    |> Expect.isFalse "an unwatched path must report isWatched = false"
 
-  testCase "WHY — isWatched_always_false — isWatched must not lie about watched paths" <| fun () ->
-    let isWatchedMutant = fun _path _state -> false
-    let realResult = isWatched "src/foo.fs" testState
-    let mutantResult = isWatchedMutant "src/foo.fs" testState
-    if realResult = mutantResult then
-      failwith "Mutation survived — real and mutant both give same result for watched path"
+  testCase "WHY — isWatched_always_false — isWatched must be true for a watched path" <| fun () ->
+    isWatched "src/foo.fs" testState
+    |> Expect.isTrue "a watched path must report isWatched = true"
 
   // toggle: must flip the state
-  // Pattern: if toggle(mutant) and toggle(real) give the same result, mutation survived
-  testCase "WHY — toggle_always_add — toggle must remove when path is watched" <| fun () ->
-    let toggleMutant = watch
-    let mutantState = toggleMutant "src/foo.fs" testState
+  testCase "WHY — toggle_always_add — toggle must remove a currently-watched path" <| fun () ->
     let realState = toggle "src/foo.fs" testState
-    if isWatched "src/foo.fs" mutantState = isWatched "src/foo.fs" realState then
-      failwith "Mutation survived — toggle mutant and real give same result"
+    isWatched "src/foo.fs" realState
+    |> Expect.isFalse "toggling a watched path must unwatch it"
 
-  testCase "WHY — toggle_always_remove — toggle must add when path is unwatched" <| fun () ->
-    let toggleMutant = unwatch
-    let mutantState = toggleMutant "src/new.fs" testState
+  testCase "WHY — toggle_always_remove — toggle must add a currently-unwatched path" <| fun () ->
     let realState = toggle "src/new.fs" testState
-    if isWatched "src/new.fs" mutantState = isWatched "src/new.fs" realState then
-      failwith "Mutation survived — toggle mutant and real give same result"
+    isWatched "src/new.fs" realState
+    |> Expect.isTrue "toggling an unwatched path must watch it"
 
   // unwatchAll: must clear all
-  testCase "WHY — unwatchAll_noop — unwatchAll must clear all watched paths" <| fun () ->
-    let newState = testState  // mutant: returns state unchanged
-    if watchedCount newState = watchedCount (unwatchAll testState) then
-      failwith "Mutation NOT caught — unwatchAll didn't clear paths"
+  testCase "WHY — unwatchAll_noop — unwatchAll must clear every watched path" <| fun () ->
+    watchedCount (unwatchAll testState)
+    |> Expect.equal "unwatchAll must leave zero watched paths" 0
 
   // watchAll: must replace, not accumulate
-  testCase "WHY — watchAll_union — watchAll must replace, not accumulate" <| fun () ->
-    let mutantResult = watchMany ["src/a.fs"; "src/b.fs"] testState
+  testCase "WHY — watchAll_union — watchAll must replace the watched set, not union into it" <| fun () ->
     let realResult = watchAll ["src/a.fs"; "src/b.fs"] testState
-    if isWatched "src/foo.fs" mutantResult = isWatched "src/foo.fs" realResult then
-      failwith "Mutation NOT caught — watchAll didn't replace old paths"
+    (isWatched "src/foo.fs" realResult, isWatched "src/a.fs" realResult, watchedCount realResult)
+    |> Expect.equal "watchAll must drop the prior watched set and contain only the new paths" (false, true, 2)
 ]
