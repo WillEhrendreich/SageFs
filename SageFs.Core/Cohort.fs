@@ -251,7 +251,13 @@ module Cohort =
   type LandingState<'m> =
     | Queued
     | Rebasing of onto: string
-    | Verifying of onto: string * affectedTests: int * running: int
+    /// `base` is the IntegrationHead this landing was rebased ONTO — the value
+    /// the land-time HeadMoved guard compares against the current IntegrationHead
+    /// (Property 11). `rebasedHead` is the NEW commit the rebase produced — the
+    /// FastForward target. These are two distinct shas for any real rebase;
+    /// conflating them (an earlier bug) made every real landing misfire as
+    /// HeadMoved because the new commit never equals the head it sits on top of.
+    | Verifying of baseHead: string * rebasedHead: string * affectedTests: int * running: int
     | Blocked of LandingBlocker<'m> * NextAction
     | Landed of integrationCommit: string
     | Withdrawn
@@ -689,7 +695,7 @@ module Cohort =
           | LandingState.Rebasing onto ->
             match result with
             | Ok newHead ->
-              let verifying = { req with State = LandingState.Verifying(newHead, 0, 0) }
+              let verifying = { req with State = LandingState.Verifying(onto, newHead, 0, 0) }
               let newState = { state with Landings = Map.add id verifying state.Landings }
               Ok(newState, [ CohortEvent.LandingStateChanged(id, verifying.State) ], [ CohortEffect.ComputeAffected(id, onto, newHead) ])
             | Error conflictFiles ->
@@ -706,9 +712,9 @@ module Cohort =
         | Error e -> Error e
         | Ok () ->
           match req.State with
-          | LandingState.Verifying(onto, _, _) ->
+          | LandingState.Verifying(base', rebasedHead, _, _) ->
             let n = List.length tests
-            let verifying = { req with State = LandingState.Verifying(onto, n, n) }
+            let verifying = { req with State = LandingState.Verifying(base', rebasedHead, n, n) }
             let newState = { state with Landings = Map.add id verifying state.Landings }
             Ok(newState, [ CohortEvent.LandingStateChanged(id, verifying.State) ], [ CohortEffect.RunTests(id, tests) ])
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
@@ -721,12 +727,12 @@ module Cohort =
         | Error e -> Error e
         | Ok () ->
           match req.State with
-          | LandingState.Verifying(onto, affected, _) ->
+          | LandingState.Verifying(base', rebasedHead, affected, _) ->
             match failing with
             | [] ->
-              let verifying = { req with State = LandingState.Verifying(onto, affected, 0) }
+              let verifying = { req with State = LandingState.Verifying(base', rebasedHead, affected, 0) }
               let newState = { state with Landings = Map.add id verifying state.Landings }
-              Ok(newState, [], [ CohortEffect.FastForward(id, onto) ])
+              Ok(newState, [], [ CohortEffect.FastForward(id, rebasedHead) ])
             | fails ->
               let blocked = { req with State = LandingState.Blocked(LandingBlocker.FailingTests fails, NextAction.FixTests fails) }
               let newState = { state with Landings = Map.add id blocked state.Landings }
@@ -741,11 +747,14 @@ module Cohort =
         | Error e -> Error e
         | Ok () ->
           match req.State with
-          | LandingState.Verifying(onto, _, _) ->
+          | LandingState.Verifying(base', _rebasedHead, _, _) ->
             // Property 11: a landing verified against H1 never lands when the
             // head is H2 <> H1 — checked at land time, not queue time (§5.4, §7.2).
-            if onto <> state.IntegrationHead then
-              let blocked = { req with State = LandingState.Blocked(LandingBlocker.HeadMoved(onto, state.IntegrationHead), NextAction.RebaseAndResubmit) }
+            // Compares the BASE it rebased onto against the current head — NOT
+            // the rebased head (which is always a fresh commit and never equals
+            // the base, which would misfire HeadMoved on every real landing).
+            if base' <> state.IntegrationHead then
+              let blocked = { req with State = LandingState.Blocked(LandingBlocker.HeadMoved(base', state.IntegrationHead), NextAction.RebaseAndResubmit) }
               let newState = { state with Landings = Map.add id blocked state.Landings }
               Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State) ], [])
             else

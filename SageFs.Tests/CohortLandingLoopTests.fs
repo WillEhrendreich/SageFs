@@ -59,19 +59,20 @@ let private frozenAtRebasePerformer : CohortOwner.LandingPerformer<MemberId> = {
   Notify = fun _ _ -> ()
 }
 
-/// A performer that always succeeds: `Rebase` echoes the requested `onto`
-/// back as the "new head" (a trivial, no-op rebase — there is nothing to
-/// resolve against real git here, only the loop's wiring), so
-/// `Verifying.onto` always equals `IntegrationHead` at land time (Cohort.fs's
-/// Property 11 "head moved" check), letting every landing reach `Landed`
-/// without a real git repo. `affectedTests`/`failingTests`/`fastForwardSha`
-/// are injected so each test controls exactly what gets verified/returned.
+/// A performer that always succeeds. `Rebase` returns a DISTINCT new head
+/// (`onto + "-rebased"`), NOT an echo of `onto` — a real rebase always
+/// produces a fresh commit that differs from the base it sits on. This is the
+/// regression guard for the HeadMoved bug: `decide` must compare the landing's
+/// BASE (what it rebased onto) — not its rebased head — against IntegrationHead
+/// at land time, so a landing whose head hasn't moved still reaches `Landed`.
+/// An earlier echo here masked the bug entirely. `affectedTests`/`failingTests`/
+/// `fastForwardSha` are injected so each test controls what gets verified.
 let private happyPathPerformer
   (affectedTests: TestId list)
   (failingTests: TestId list)
   (fastForwardShaOf: string -> string)
   : CohortOwner.LandingPerformer<MemberId> =
-  { Rebase = fun _ onto -> async { return Ok onto }
+  { Rebase = fun _ onto -> async { return Ok(onto + "-rebased") }
     ComputeAffected = fun _ _ _ -> async { return affectedTests }
     RunTests = fun _ _ -> async { return failingTests }
     FastForward = fun _ toSha -> async { return Ok(fastForwardShaOf toSha) }
@@ -138,11 +139,11 @@ let cohortLandingLoopTests =
           | _ -> false)
 
       match (landingOf owner landingId).State with
-      | LandingState.Landed sha -> sha |> Expect.equal "the landed commit is the fast-forward performer's result" (nullSha + "-committed")
+      | LandingState.Landed sha -> sha |> Expect.equal "the landed commit is the fast-forward of the REAL rebased head (onto -> onto-rebased -> onto-rebased-committed)" (nullSha + "-rebased-committed")
       | other -> failtestf "expected Landed, got %A" other
 
       owner.ReadCohortState().IntegrationHead
-      |> Expect.equal "IntegrationHead moved to the landed commit" (nullSha + "-committed")
+      |> Expect.equal "IntegrationHead moved to the landed commit" (nullSha + "-rebased-committed")
 
       owner.ReadCohortState().Queue
       |> Expect.equal "the landed landing is popped off the queue" []

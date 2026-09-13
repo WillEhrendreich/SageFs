@@ -38,21 +38,14 @@
 ///     matching `CohortGit.rebase`'s documented contract, "rebases the
 ///     checked-out branch in repoDir".
 ///
-/// DISCOVERED GAP this test's performer works around (see `gitBackedPerformer`
-/// below and `DaemonMode.fs`'s matching production performer for the full
-/// explanation): `Cohort.decide`'s `FastForwardCompleted` handler compares
-/// `LandingState.Verifying`'s `onto` field — which `RebaseCompleted` sets to
-/// the REBASE'S OWN result — against `state.IntegrationHead` to detect
-/// `LandingBlocker.HeadMoved`. For a real rebase (whose result is never
-/// equal to the unchanged head it was based on) this always misfires. This
-/// is a pre-existing defect in the already-merged `Cohort.fs` (items
-/// 14a/14b) that item 14c is not permitted to fix (Cohort.fs may only gain
-/// the additive `SetIntegrationHead` arm) — it is compensated for entirely
-/// within the performer instead: `Rebase`'s success payload echoes `onto`
-/// back (so decide's bookkeeping is evaluated correctly), and `FastForward`
-/// independently re-reads the integration worktree's REAL current HEAD via
-/// `CohortGit.currentHead` rather than trusting decide's (necessarily
-/// fictional, post-echo) `toSha` argument.
+/// The performer here is honest: `Rebase` returns the REAL rebased head and
+/// `FastForward` targets decide's `toSha`. `Cohort.decide`'s
+/// `LandingState.Verifying` carries `base` and `rebasedHead` separately, so
+/// its land-time HeadMoved guard compares the BASE (what the landing rebased
+/// onto) against `IntegrationHead` — not the rebased head, which is always a
+/// fresh commit and would misfire HeadMoved on every real landing. (An
+/// earlier version conflated the two, worked around in the performer; the
+/// root cause is now fixed in the state machine.)
 module SageFs.Tests.CohortLandingGitAcceptanceTests
 
 open System
@@ -156,18 +149,12 @@ let private gitBackedPerformer (integrationWorktree: string) (mainRepo: string) 
       async {
         let! result = CohortGit.rebase integrationWorktree onto
         match result with
-        | Ok _realNewHead -> return Ok onto // see this file's header: DISCOVERED GAP
+        | Ok realNewHead -> return Ok realNewHead
         | Error files -> return Error files
       }
     ComputeAffected = fun _ _ _ -> async { return [] }
     RunTests = fun _ _ -> async { return [] }
-    FastForward = fun _ _toShaFromDecide ->
-      async {
-        let! headResult = CohortGit.currentHead integrationWorktree
-        match headResult with
-        | Error e -> return Error (sprintf "could not read the integration worktree's real HEAD to fast-forward to: %s" e)
-        | Ok realHead -> return! CohortGit.fastForwardBranch mainRepo branch realHead
-      }
+    FastForward = fun _ toSha -> async { return! CohortGit.fastForwardBranch mainRepo branch toSha }
     Notify = fun _ _ -> () }
 
 /// Polls (via `Flush` + a short async sleep, never `Thread.Sleep`) until

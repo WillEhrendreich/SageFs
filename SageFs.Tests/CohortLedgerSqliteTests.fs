@@ -106,7 +106,7 @@ let private genLandingState : Gen<LandingState<MemberId>> =
   Gen.oneof [
     Gen.constant LandingState.Queued
     Gen.map LandingState.Rebasing (Gen.elements [ "onto-a"; "onto-b" ])
-    Gen.map3 (fun onto n r -> LandingState.Verifying(onto, n, r)) (Gen.elements [ "onto-a"; "onto-b" ]) (Gen.choose (0, 5)) (Gen.choose (0, 5))
+    Gen.map4 (fun base' head n r -> LandingState.Verifying(base', head, n, r)) (Gen.elements [ "onto-a"; "onto-b" ]) (Gen.elements [ "head-a"; "head-b" ]) (Gen.choose (0, 5)) (Gen.choose (0, 5))
     (gen {
       let! blocker =
         Gen.oneof [

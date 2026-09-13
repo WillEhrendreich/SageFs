@@ -517,7 +517,7 @@ let cohortPropertyTests =
           let claim = { Id = ClaimId "c-0"; Fence = 1L<Measures.fence>; Scope = ClaimScope.File "X.fs"; Purpose = purpose; Since = epoch; State = ClaimState.Held requester }
           let req =
             { Id = LandingId "l-0"; Requester = requester; Claims = [ (claim.Id, claim.Fence) ]; Commits = [ "c1" ]
-              BaseAtQueue = h1'; Statement = statement; State = LandingState.Verifying(h1', 1, 0) }
+              BaseAtQueue = h1'; Statement = statement; State = LandingState.Verifying(h1', "rebased-" + h1', 1, 0) }
           let state =
             { CohortState.empty () with
                 IntegrationHead = h2'
