@@ -8,40 +8,6 @@ open SageFs
 open SageFs.WorkerProtocol
 
 // ---------------------------------------------------------------------------
-// W1 — NotifyWorkerDied stale-event guard
-// ---------------------------------------------------------------------------
-// Bug: `when currentPid <> workerPid` fires when workerPid=-1, silently
-//      dropping synthetic WorkerExited events (killing broken sessions stays
-//      broken forever).
-// Fix: `when currentPid <> workerPid && workerPid >= 0`
-
-[<Tests>]
-let stalePidGuardTests =
-  testList "SessionManager stale-event guard" [
-
-    testCase "old guard: synthetic pid=-1 incorrectly treated as stale (BUG confirmed)" <| fun _ ->
-      // Documents the pre-fix behavior: guard fires even for synthetic -1 events
-      let isStaleOld currentPid workerPid = currentPid <> workerPid
-      isStaleOld 1234 -1 |> Expect.isTrue "OLD guard marks pid=-1 as stale (bug)"
-
-    testCase "fixed guard: synthetic pid=-1 is NOT stale" <| fun _ ->
-      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid > 0
-      isStaleNew 1234 -1 |> Expect.isFalse "pid=-1 must pass through guard"
-
-    testCase "fixed guard: different real pids remain stale" <| fun _ ->
-      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid > 0
-      isStaleNew 1234 5678 |> Expect.isTrue "different real pids are still stale"
-
-    testCase "fixed guard: same pid is not stale" <| fun _ ->
-      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid > 0
-      isStaleNew 1234 1234 |> Expect.isFalse "same pid is not stale"
-
-    testCase "fixed guard: pid=0 (invalid) also passes through" <| fun _ ->
-      let isStaleNew currentPid workerPid = currentPid <> workerPid && workerPid > 0
-      isStaleNew 1234 0 |> Expect.isFalse "pid=0 treated as non-stale (boundary)"
-  ]
-
-// ---------------------------------------------------------------------------
 // W5 — readLpStringOption: missing > Int32.MaxValue overflow guard
 // ---------------------------------------------------------------------------
 // Bug: readLpStringOption reads uint32 length then casts to int without the

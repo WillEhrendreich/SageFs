@@ -54,9 +54,6 @@ let retryPolicyTests =
         delay |> Expect.equal "should return exact base delay with no jitter" 1<ms>
       }
     ]
-    testList "isVersionConflict" [
-      // isVersionConflict removed — predicate is now caller-supplied
-    ]
     testList "decide" [
       test "retryable predicate returns RetryAfter when attempts remain" {
         let ex = exn "transient error"

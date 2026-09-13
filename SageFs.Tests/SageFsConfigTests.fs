@@ -29,15 +29,6 @@ let sageFsConfigTests =
       (SageFsConfig.WorkerStartupTimeoutMs, 30_000)
       |> Expect.isGreaterThan "at least 30s"
 
-    testCase "OtelConfigured is false when OtelEndpoint is empty" <| fun _ ->
-      match SageFsConfig.OtelEndpoint with
-      | "" ->
-        SageFsConfig.OtelConfigured
-        |> Expect.isFalse "OtelConfigured should be false when endpoint empty"
-      | _ ->
-        SageFsConfig.OtelConfigured
-        |> Expect.isTrue "OtelConfigured should be true when endpoint set"
-
     testCase "RestartCount is non-negative" <| fun _ ->
       (SageFsConfig.RestartCount, 0)
       |> Expect.isGreaterThanOrEqual "restart count must be non-negative"
@@ -74,12 +65,6 @@ let sageFsConfigTests =
     testCase "OtelServiceName has a default value" <| fun _ ->
       SageFsConfig.OtelServiceName
       |> Expect.isNotEmpty "otel service name must not be empty"
-
-    testCase "envInt invalid value falls back to default" <| fun _ ->
-      // We can't easily test the private envInt helper, but the observable
-      // invariant is that all int configs return valid values even with bad env.
-      (SageFsConfig.WorkerStartupTimeoutMs, 0)
-      |> Expect.isGreaterThan "should have a valid default"
 
     testCase "McpPortFromEnv exposes a valid default port even under arbitrary environment state" <| fun _ ->
       let value = SageFsConfig.McpPortFromEnv

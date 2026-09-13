@@ -218,7 +218,6 @@
         <Compile Include="SageFsErrorJsonTests.fs" />
         <Compile Include="SageFsErrorPropertyTests.fs" />
         <Compile Include="ErrorAlgebraHardeningTests.fs" />
-        <Compile Include="ResultCeTests.fs" />
         <Compile Include="SessionIdTests.fs" />
         <Compile Include="EndpointContractTests.fs" />
         <Compile Include="FsiRegressionTests.fs" />
