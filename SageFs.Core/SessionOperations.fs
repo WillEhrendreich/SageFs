@@ -80,6 +80,19 @@ module SessionOperations =
       | true -> OccupantRole.Worker
       | false -> OccupantRole.Observer
 
+    /// Classify by the BOUND connection kind (SageFs.MemberTable.MemberId),
+    /// not by a self-declared string a caller could pick to spoof a role.
+    /// A browser tab observes; an MCP or minted connection acts. Prefer this
+    /// over `classify` wherever a `MemberId` is already in hand — a `Minted`
+    /// identity still falls back to the name-prefix heuristic since a Minted
+    /// id IS a caller-supplied name by definition (unbound callers, mostly
+    /// direct in-process calls and tests).
+    let ofMemberId (id: SageFs.MemberTable.MemberId) =
+      match id with
+      | SageFs.MemberTable.MemberId.Browser _ -> OccupantRole.Observer
+      | SageFs.MemberTable.MemberId.Mcp _ -> OccupantRole.Worker
+      | SageFs.MemberTable.MemberId.Minted name -> classify name
+
     let label = function OccupantRole.Worker -> "worker" | OccupantRole.Observer -> "observer"
 
   type SessionOccupancy = {
@@ -89,6 +102,12 @@ module SessionOperations =
 
   module SessionOccupancy =
     /// Compute occupancy for a session by reverse-looking up the session map.
+    /// SUPERSEDED for MCP's own occupancy views (Mcp.fs's listSessions/
+    /// getStatus): they now read AgentActivityTracker instead, because it is
+    /// the ONE store shared with the dashboard — a raw agent-name-keyed
+    /// ConcurrentDictionary has no notion of a browser tab (see
+    /// Mcp.fs's occupantsForSession). Left in place — still correct, still
+    /// tested — for any caller that only has a bare name→session map.
     let forSession (sessionMap: System.Collections.Concurrent.ConcurrentDictionary<string, string>) (sessionId: string) =
       sessionMap
       |> Seq.filter (fun kv -> kv.Value = sessionId)
@@ -114,7 +133,11 @@ module SessionOperations =
           | true -> ()
           match observers.IsEmpty with
           | false ->
-            sprintf "%d observer(s)" observers.Length
+            // Named, not just counted (sagefs-multiagent-vision.md §4.1): a
+            // dashboard tab is a Browser observer, and "1 observer(s)" with
+            // no name hid exactly who that was.
+            let names = observers |> List.map (fun o -> o.AgentName) |> String.concat ", "
+            sprintf "%d observer(s): %s" observers.Length names
           | true -> ()
         ]
         parts |> String.concat " | "
@@ -307,12 +330,21 @@ module SessionOperations =
       match occupancy with
       | Some occs -> sprintf "  Occupancy: %s" (SessionOccupancy.format occs)
       | None -> ""
-    sprintf "%s  %s  %s  %s  %s\n  Started: %s  Last active: %s  Projects: %s%s"
+    // Worktree-aware routing (sagefs-multiagent-vision.md §3.2): a session
+    // rooted inside a git worktree shows its own branch, so an agent can
+    // tell "the session at .claude/worktrees/agent-x" from "the main
+    // checkout" without guessing from the path alone.
+    let checkoutLabel =
+      match Checkout.classify info.WorkingDirectory with
+      | Checkout.Checkout.Worktree(_, branch) -> sprintf "  Worktree branch: %s" branch
+      | Checkout.Checkout.MainCheckout _ | Checkout.Checkout.NotAGitCheckout -> ""
+    sprintf "%s  %s  %s  %s  %s\n  Started: %s  Last active: %s  Projects: %s%s%s"
       (SessionId.value info.Id) name info.WorkingDirectory (SessionLifecycleStatus.label info.Status) pid
       (info.CreatedAt.ToString("yyyy-MM-dd HH:mm"))
       lastActive
       projects
       occLabel
+      checkoutLabel
 
   /// Format a list of sessions for display, with optional per-session occupancy.
   let formatSessionList (now: DateTime) (occupancyMap: Map<string, SessionOccupancy list> option) (sessions: SessionInfo list) : string =

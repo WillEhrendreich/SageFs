@@ -298,11 +298,11 @@ let occupancyTests = testList "SessionOccupancy" [
     |> Expect.equal "unoccupied" "unoccupied"
   }
 
-  test "format shows workers and observers" {
+  test "format shows workers and observers, both named" {
     [ { AgentName = "mcp"; Role = OccupantRole.Worker }
       { AgentName = "tui"; Role = OccupantRole.Observer } ]
     |> SessionOccupancy.format
-    |> Expect.equal "workers and observers" "1 worker(s): mcp | 1 observer(s)"
+    |> Expect.equal "workers and observers" "1 worker(s): mcp | 1 observer(s): tui"
   }
 ]
 

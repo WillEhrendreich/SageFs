@@ -297,6 +297,68 @@ module WorkingDirDeepMatching =
       let sessions = [ mkInfo (testSessionId "aa000001") "" ]
       sessionsMatchingWorkingDirDeep sessions @"C:\Code\Repos\SageFs\tests"
       |> Expect.isEmpty "empty base dir must not act as root-of-everything"
+
+    // ── Checkout-boundary RED tests (sagefs-multiagent-vision.md §3.2,
+    // Phase 0 item 3): a nested git worktree is a ROUTING BOUNDARY —
+    // ancestor matching must stop at it, not silently route a worktree
+    // agent's request into the main checkout's session.
+
+    testCase "WHY — a request from a git worktree nested under a session's root does NOT match that session"
+    <| fun _ ->
+      let sessions = [ mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs" ]
+      let hasMarker (dir: string) =
+        dir = @"C:\Code\Repos\SageFs\.claude\worktrees\agent-x"
+      sessionsMatchingWorkingDirDeepWith hasMarker sessions @"C:\Code\Repos\SageFs\.claude\worktrees\agent-x\SageFs"
+      |> Expect.isEmpty "a nested worktree must not resolve into the main checkout's session"
+
+    testCase "WHY — a plain subdirectory with no checkout marker between root and target still matches"
+    <| fun _ ->
+      let sessions = [ mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs" ]
+      sessionsMatchingWorkingDirDeepWith (fun _ -> false) sessions @"C:\Code\Repos\SageFs\SageFs.Tests"
+      |> List.map (fun s -> s.Id)
+      |> Expect.equal "no marker anywhere means the ancestor match still applies" [ testSessionId "aa000001" ]
+
+    testCase "WHY — the session's OWN root marker does not count as a boundary"
+    <| fun _ ->
+      let sessions = [ mkInfo (testSessionId "aa000001") @"C:\Code\Repos\SageFs" ]
+      let hasMarker (dir: string) = dir = @"C:\Code\Repos\SageFs"
+      sessionsMatchingWorkingDirDeepWith hasMarker sessions @"C:\Code\Repos\SageFs\SageFs.Tests"
+      |> List.map (fun s -> s.Id)
+      |> Expect.equal "a session's repository root is where its files live" [ testSessionId "aa000001" ]
+
+    testCase "WHY — findGitRoot from inside a REAL git worktree returns the worktree root, not the main checkout"
+    <| fun _ ->
+      // End-to-end proof against the real Checkout.hasCheckoutMarker (real
+      // disk), mirroring this repo's own on-disk worktree layout: a plain
+      // ".git" DIRECTORY at the main root, a ".git" FILE inside the worktree.
+      let tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.IO.Path.GetRandomFileName())
+      let mainGit = System.IO.Path.Combine(tmp, ".git")
+      let worktreeRoot = System.IO.Path.Combine(tmp, "wt")
+      let worktreeSrc = System.IO.Path.Combine(worktreeRoot, "src")
+      System.IO.Directory.CreateDirectory(mainGit) |> ignore
+      System.IO.Directory.CreateDirectory(worktreeSrc) |> ignore
+      System.IO.File.WriteAllText(System.IO.Path.Combine(worktreeRoot, ".git"), sprintf "gitdir: %s" (System.IO.Path.Combine(mainGit, "worktrees", "wt")))
+      try
+        WorkerProtocol.SessionInfo.findGitRoot worktreeSrc
+        |> Expect.equal "must return the WORKTREE root, not the main checkout further up" (Some worktreeRoot)
+      finally
+        System.IO.Directory.Delete(tmp, true)
+
+    testCase "WHY — sessionsMatchingWorkingDirDeep, against the real filesystem, excludes a worktree nested in a REAL session root"
+    <| fun _ ->
+      let tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.IO.Path.GetRandomFileName())
+      let repoRoot = System.IO.Path.Combine(tmp, "repo")
+      let worktreeRoot = System.IO.Path.Combine(repoRoot, ".claude", "worktrees", "agent-x")
+      let worktreeSrc = System.IO.Path.Combine(worktreeRoot, "SageFs")
+      System.IO.Directory.CreateDirectory(System.IO.Path.Combine(repoRoot, ".git")) |> ignore
+      System.IO.Directory.CreateDirectory(worktreeSrc) |> ignore
+      System.IO.File.WriteAllText(System.IO.Path.Combine(worktreeRoot, ".git"), "gitdir: /elsewhere/.git/worktrees/agent-x")
+      try
+        let sessions = [ mkInfo (testSessionId "aa000001") repoRoot ]
+        sessionsMatchingWorkingDirDeep sessions worktreeSrc
+        |> Expect.isEmpty "a request from inside the real nested worktree must not resolve to the main checkout's session"
+      finally
+        System.IO.Directory.Delete(tmp, true)
   ]
 
 module WorkingDirRoutingPriority =
@@ -1202,6 +1264,97 @@ module SessionMapEviction =
     }
   ]
 
+/// RED tests for sagefs-multiagent-vision.md §4.1 / §10 Phase 0 item 4:
+/// "identity is bound to the connection, not declared." Before this fix,
+/// SessionMap/ActivityTracker were keyed by the tool call's self-declared
+/// `agentName` string, so two MCP connections that both called themselves
+/// "mcp" collided into ONE presence, and either could clear/evict the
+/// other's routing just by matching its name. `memberIdFor` binds the key
+/// to `currentTransportSessionId` (the ambient AsyncLocal
+/// McpServer.createServerCaptureFilter sets from the real connection's
+/// `IMcpServer.SessionId`) instead, falling back to the plain name only when
+/// no connection is bound (these tests simulate exactly that binding).
+module IdentityBinding =
+
+  /// Run `f` with the ambient transport connection bound to `connId`,
+  /// restoring the ambient value afterwards so tests never leak into each
+  /// other on a reused thread.
+  let withConnection (connId: string) (f: unit -> 'a) : 'a =
+    let previous = currentTransportSessionId.Value
+    currentTransportSessionId.Value <- Some connId
+    try f ()
+    finally currentTransportSessionId.Value <- previous
+
+  let tests = testList "Identity is bound to the connection" [
+
+    test "WHY — two connections both naming themselves \"mcp\" are TWO members, not one" {
+      let ctx = SessionMapEviction.mkCtx []
+      withConnection "conn-A" (fun () -> setActiveSessionId ctx "mcp" "aaaaaaaa")
+      withConnection "conn-B" (fun () -> setActiveSessionId ctx "mcp" "bbbbbbbb")
+      ctx.SessionMap.Count
+      |> Expect.equal "two distinct connection-bound entries, despite the identical self-declared name" 2
+      withConnection "conn-A" (fun () -> activeSessionId ctx "mcp")
+      |> Expect.equal "conn-A keeps its own session" "aaaaaaaa"
+      withConnection "conn-B" (fun () -> activeSessionId ctx "mcp")
+      |> Expect.equal "conn-B keeps its own session" "bbbbbbbb"
+    }
+
+    test "WHY — a caller cannot evict another connection's presence by naming itself the same" {
+      let ctx = SessionMapEviction.mkCtx []
+      withConnection "conn-A" (fun () -> setActiveSessionId ctx "mcp" "aaaaaaaa")
+      // conn-B declares the SAME name "mcp" and clears ITS OWN active session —
+      // this must never reach conn-A's entry.
+      withConnection "conn-B" (fun () -> setActiveSessionId ctx "mcp" "")
+      withConnection "conn-A" (fun () -> activeSessionId ctx "mcp")
+      |> Expect.equal "conn-A's session survives conn-B's same-named clear" "aaaaaaaa"
+    }
+
+    test "WHY — an unbound caller (no ambient connection) resolves to its plain name, unchanged" {
+      // Direct in-process calls (the shape of nearly every other test in this
+      // suite) must see EXACTLY the pre-fix behavior: no ambient connection
+      // means the resolved key IS the plain agent name.
+      let ctx = SessionMapEviction.mkCtx []
+      currentTransportSessionId.Value <- None
+      setActiveSessionId ctx "claude" "5a6e0001"
+      ctx.SessionMap.ContainsKey "claude"
+      |> Expect.isTrue "unbound calls key by the plain name, exactly as before"
+    }
+
+    testTask "WHY — the dashboard tab appears as a Browser member in list_sessions occupancy" {
+      let sid = "5a6e0001"
+      let live = [ SessionMapEviction.mkInfo (testSessionId sid) @"C:\Code\Repos\SageFs" ]
+      let ctx = SessionMapEviction.mkCtx live
+      let now = System.DateTime.UtcNow
+      // Simulates Dashboard.fs's createStreamHandler registering a connected
+      // tab into the SAME ActivityTracker instance MCP occupancy reads.
+      AgentActivityTracker.recordToolCall
+        ctx.ActivityTracker (MemberTable.MemberId.display (MemberTable.MemberId.Browser "tab-1"))
+        sid None None now
+      let occupants = occupantsForSession ctx sid
+      occupants
+      |> List.exists (fun o -> o.Role = SessionOperations.OccupantRole.Observer && o.AgentName.StartsWith "browser:")
+      |> Expect.isTrue "a dashboard tab shows up as an Observer occupant"
+      let! listing = listSessions ctx
+      listing
+      |> Expect.stringContains "list_sessions occupancy mentions the browser tab" "browser:tab-1"
+    }
+
+    test "WHY — a Browser member and an Mcp member with the same display cannot collide" {
+      let ctx = SessionMapEviction.mkCtx []
+      let now = System.DateTime.UtcNow
+      // A dashboard tab and an MCP connection could both be labeled "mcp" by
+      // coincidence (agentName is caller-controlled prose); MemberId.display
+      // must still keep them apart.
+      AgentActivityTracker.recordToolCall
+        ctx.ActivityTracker (MemberTable.MemberId.display (MemberTable.MemberId.Browser "mcp")) "aaaaaaaa" None None now
+      AgentActivityTracker.recordToolCall
+        ctx.ActivityTracker (MemberTable.MemberId.display (MemberTable.MemberId.Mcp "mcp")) "bbbbbbbb" None None now
+      AgentActivityTracker.getAllPresences ctx.ActivityTracker None
+      |> List.length
+      |> Expect.equal "Browser and Mcp members with the same raw id are distinct" 2
+    }
+  ]
+
 [<Tests>]
 let sessionIsolationTests = testList "Session Isolation" [
   McpSessionIsolation.tests
@@ -1210,4 +1363,5 @@ let sessionIsolationTests = testList "Session Isolation" [
   ResetIsolation.tests
   LiveTestStateIsolation.tests
   SessionMapEviction.tests
+  IdentityBinding.tests
 ]

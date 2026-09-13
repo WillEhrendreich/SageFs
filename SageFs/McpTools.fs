@@ -944,6 +944,8 @@ AFTER CREATION:
 - Use the returned session ID with switch_session to route subsequent tool calls to the new session.
 - Use stop_session when finished to free the worker process.
 
+WORKTREES: a session's working directory is checkout-aware. If working_directory sits inside a git worktree (e.g. `.claude/worktrees/agent-x`), the session is bound to THAT worktree, not to the main checkout, and list_sessions/the dashboard show its branch. A request from inside a worktree never silently routes into the main checkout's session — create a session for the worktree instead of assuming one exists.
+
 projects: Comma-separated list of absolute or relative .fsproj file paths.""")>]
     member _.create_session(
         [<Description("Comma-separated list of .fsproj files to load")>] projects: string,

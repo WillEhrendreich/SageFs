@@ -830,6 +830,16 @@ let createStreamHandler
     let mutable currentSessionOpt = defaultViewingSession
     let currentSessionStr = currentSessionOpt |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
     infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionStr))
+    // A dashboard tab is a member too (sagefs-multiagent-vision.md §4.1):
+    // record it in the SAME ActivityTracker instance MCP occupancy reads
+    // (DaemonMode.fs threads one shared Tracker into both McpContext and
+    // DashboardInfra), keyed by MemberId.Browser so it can never collide
+    // with — or be evicted by — an MCP connection's identity.
+    infra.ActivityTracker
+    |> Option.iter (fun tracker ->
+      AgentActivityTracker.recordToolCall
+        tracker (MemberTable.MemberId.display (MemberTable.MemberId.Browser clientId))
+        currentSessionStr None None DateTime.UtcNow)
     let mutable lastSessionId = currentSessionOpt |> Option.defaultValue (WorkerProtocol.SessionId.newId ())
     let mutable lastWorkingDir = ""
     let mutable lastThemeName = defaultThemeName
@@ -1089,6 +1099,9 @@ let createStreamHandler
       liveBindingsSub.Value |> Option.iter (fun d -> d.Dispose())
       SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
       infra.ConnectionTracker |> Option.iter (fun t -> t.Unregister(clientId))
+      infra.ActivityTracker
+      |> Option.iter (fun tracker ->
+        AgentActivityTracker.forget tracker (MemberTable.MemberId.display (MemberTable.MemberId.Browser clientId)))
       infra.ConnectionChannels.TryRemove(clientId) |> ignore
   }
 
