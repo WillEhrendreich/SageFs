@@ -40,6 +40,25 @@ module JupyterDaemonBridge =
     | true, v when v.ValueKind = JsonValueKind.String -> Some (v.GetString())
     | _ -> None
 
+  /// Pull the RAW (undescribed) `reason` out of a `SessionNotRoutable`
+  /// error's `errorDetails.fields` when present. `structuredErrorBody`
+  /// (McpServer.fs) puts `SageFsError.describe err` in the flat `error`
+  /// field — already prefixed with "Session not reachable: " — while
+  /// `errorDetails.fields` carries the DU's own raw field values
+  /// (`SageFsError.toJson`). Preferring the raw reason means wrapping it
+  /// back into `SessionNotRoutable` here doesn't double the prefix when
+  /// `SageFsError.describe` runs on it again for the Jupyter error output.
+  let private tryGetSessionNotRoutableReason (root: JsonElement) =
+    match root.TryGetProperty("errorDetails") with
+    | true, details ->
+      match details.TryGetProperty("case") with
+      | true, caseEl when caseEl.GetString() = "SessionNotRoutable" ->
+        match details.TryGetProperty("fields") with
+        | true, fields -> tryGetString "reason" fields
+        | false, _ -> None
+      | _ -> None
+    | false, _ -> None
+
   /// Decode one `/exec` response. Pure — no I/O — so every branch of the
   /// daemon's real wire contract is provable from a literal JSON string:
   /// see McpServer.fs's `mapExecutionRoutes` (success body, `{success,
@@ -59,27 +78,33 @@ module JupyterDaemonBridge =
         Evaluated (success, result)
       | false ->
         let message =
-          tryGetString "error" root
+          tryGetSessionNotRoutableReason root
+          |> Option.orElseWith (fun () -> tryGetString "error" root)
           |> Option.defaultValue (sprintf "daemon returned HTTP %d" statusCode)
         InfraError (SageFsError.SessionNotRoutable message)
     with ex ->
       InfraError (SageFsError.JsonParseError ("/exec response", ex.Message))
 
-  /// The ONLY `SessionNotRoutable` reason where creating a session is the
-  /// right call is the daemon's true "nothing exists yet" message
-  /// (Mcp.fs's `resolveSessionId`, the final `Gone "No active session. Use
-  /// create_session to create one first."` branch). Every other reason —
-  /// warming up, unroutable, faulted, ambiguous — carries its own explicit
-  /// "Do NOT create a new/duplicate session" guidance baked into the same
-  /// string (Mcp.fs's `formatSessionResolution`). There is no structured
-  /// signal for this over the wire today: `SageFsError.toJson`'s `case` is
-  /// `SessionNotRoutable` for all of them alike, so matching the literal
-  /// daemon message is the only signal this bridge has — intentionally
-  /// narrow rather than a broad "mentions a session" check, so a warming-up
-  /// or faulted session is never mistaken for "create a new one".
+  /// The daemon suggests `create_session` in exactly two `SessionNotRoutable`
+  /// shapes (Mcp.fs's `resolveSessionId`/`formatSessionResolution`): "No
+  /// active session. Use create_session to create one first." (zero
+  /// sessions anywhere, no working directory given) and "No sessions match
+  /// workingDirectory '...'. ... Use create_session with that directory,
+  /// or switch_session ..." (zero sessions match the directory this bridge
+  /// always sends) — the second is what a bare daemon actually returns,
+  /// since this bridge always sends `working_directory`. Every OTHER
+  /// `SessionNotRoutable` reason — warming up, unroutable, faulted,
+  /// ambiguous — carries its own explicit "Do NOT create a new/duplicate
+  /// session" guidance baked into the same string, so excluding those
+  /// takes priority: a warming-up or faulted session must never be mistaken
+  /// for "create a new one". There is no structured signal for this
+  /// distinction over the wire today (`SageFsError.toJson`'s `case` is
+  /// `SessionNotRoutable` for all of them alike) — matching the literal
+  /// daemon message is the only signal this bridge has.
   let private isNoSessionAtAll (err: SageFsError) =
     match err with
-    | SageFsError.SessionNotRoutable reason -> reason.Contains("No active session.")
+    | SageFsError.SessionNotRoutable reason ->
+      reason.Contains("Use create_session") && not (reason.Contains("Do NOT create"))
     | _ -> false
 
   /// The real `PostJson` — a thin HTTP POST against one route on the

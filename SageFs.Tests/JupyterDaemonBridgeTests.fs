@@ -108,6 +108,34 @@ let makeSessionProxyTests =
       | other -> failtestf "expected EvalResult Ok after auto-create, got %A" other
     }
 
+    testAsync "WHY — the real daemon's shape when working_directory matches nothing (zero sessions at all) is 'No sessions match workingDirectory ... Use create_session', not 'No active session.' — both must trigger auto-create" {
+      let mutable execCalls = 0
+      let mutable createCalls = 0
+      let execPost : PostJson =
+        fun _body ->
+          async {
+            execCalls <- execCalls + 1
+            match execCalls with
+            | 1 ->
+              // The daemon's real structuredErrorBody shape: `error` is the
+              // already-described display string (SageFsError.describe),
+              // `errorDetails.fields.reason` is the RAW undecorated reason —
+              // this bridge must read the raw one so it doesn't end up
+              // double-describing ("Session not reachable: Session not
+              // reachable: ...") when it re-wraps the error for Jupyter.
+              return Ok (404, """{"success":false,"error":"Session not reachable: No sessions match workingDirectory '/kernel/cwd'. Running sessions: (none running). Use create_session with that directory, or switch_session to an existing matching session.","errorDetails":{"case":"SessionNotRoutable","fields":{"reason":"No sessions match workingDirectory '/kernel/cwd'. Running sessions: (none running). Use create_session with that directory, or switch_session to an existing matching session."}}}""")
+            | _ -> return Ok (200, """{"success":true,"result":"val it: int = 2"}""")
+          }
+      let createPost : PostJson = fun _ -> async { createCalls <- createCalls + 1; return Ok (200, """{"success":true,"message":"a1b2c3d4"}""") }
+      let proxy = makeSessionProxy execPost createPost "/kernel/cwd"
+      let! response = proxy (WorkerProtocol.WorkerMessage.EvalCode("1 + 1", replyId))
+      createCalls |> Expect.equal "a session was created for the unmatched working directory" 1
+      match response with
+      | WorkerProtocol.WorkerResponse.EvalResult(_, Ok result, _, _) ->
+        result |> Expect.equal "the retried eval's real result" "val it: int = 2"
+      | other -> failtestf "expected EvalResult Ok after auto-create, got %A" other
+    }
+
     testAsync "WHY — a session that is merely warming up must NOT be treated as 'create one': the daemon's own guidance says not to" {
       let mutable createCalls = 0
       let execPost = fakePost (Ok (404, """{"success":false,"error":"Session 'abc123' is still warming up (Starting). Do NOT create a new session — it will compete for resources and make warmup slower.","errorDetails":{"case":"SessionNotRoutable"}}"""))
