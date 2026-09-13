@@ -460,7 +460,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
         | WorkerMessage.TypeCheckWithSymbols (code, filePath, rid) ->
             observedCode <- Some code
             filePath |> Expect.equal "should typecheck the requested file" tempFile
-            WorkerResponse.TypeCheckWithSymbolsResult(rid, false, [], [])
+            WorkerResponse.TypeCheckWithSymbolsResult(rid, [], [])
         | _ ->
             WorkerResponse.WorkerError (SageFsError.Unexpected (exn "unexpected worker message")))
 

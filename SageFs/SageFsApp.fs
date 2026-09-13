@@ -2393,7 +2393,9 @@ module SageFsEffectHandler =
                     Features.LiveTesting.FcsTypeCheckResult.Cancelled req.FilePath
                   | Choice1Of2 resp ->
                   match resp with
-                  | WorkerResponse.TypeCheckWithSymbolsResult(_rid, hasErrors, diags, symRefs) ->
+                  | WorkerResponse.TypeCheckWithSymbolsResult(_rid, diags, symRefs) ->
+                    let hasErrors =
+                      diags |> List.exists (fun d -> d.Severity = DiagnosticSeverity.Error)
                     match hasErrors with
                     | true ->
                       let errors =

@@ -290,7 +290,7 @@ let workerProtocolTests =
 
       testCase "TypeCheckWithSymbolsResult empty round-trips"
       <| fun _ ->
-        let resp = WorkerResponse.TypeCheckWithSymbolsResult("r-tc2", false, [], [])
+        let resp = WorkerResponse.TypeCheckWithSymbolsResult("r-tc2", [], [])
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp
 
@@ -304,7 +304,7 @@ let workerProtocolTests =
         }
         let sym1 = { WorkerSymbolRef.SymbolFullName = "MyModule.add"; IsFromDefinition = false; FilePath = "MyModule.fs"; Line = 10 }
         let sym2 = { WorkerSymbolRef.SymbolFullName = "MyModule.validate"; IsFromDefinition = true; FilePath = "MyModule.fs"; Line = 20 }
-        let resp = WorkerResponse.TypeCheckWithSymbolsResult("r-tc3", true, [diag], [sym1; sym2])
+        let resp = WorkerResponse.TypeCheckWithSymbolsResult("r-tc3", [diag], [sym1; sym2])
         let _, result = roundTrip<WorkerResponse> resp
         result |> Expect.equal "should round-trip" resp
 

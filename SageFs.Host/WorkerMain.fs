@@ -218,7 +218,7 @@ let handleMessage
         |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.Check
       let workerDiags = result.Diagnostics |> Array.map toWorkerDiagnostic |> Array.toList
       let workerSymRefs = result.SymbolRefs |> List.map WorkerProtocol.WorkerSymbolRef.fromDomain
-      return WorkerResponse.TypeCheckWithSymbolsResult(replyId, result.HasErrors, workerDiags, workerSymRefs)
+      return WorkerResponse.TypeCheckWithSymbolsResult(replyId, workerDiags, workerSymRefs)
 
     | WorkerMessage.GetCompletions(code, cursorPos, replyId) ->
       let word = ""

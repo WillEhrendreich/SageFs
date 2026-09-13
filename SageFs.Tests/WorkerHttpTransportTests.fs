@@ -92,7 +92,7 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
   | WorkerMessage.CheckCode(_, rid) ->
     return WorkerResponse.CheckResult(rid, [])
   | WorkerMessage.TypeCheckWithSymbols(_, _, rid) ->
-    return WorkerResponse.TypeCheckWithSymbolsResult(rid, false, [], [])
+    return WorkerResponse.TypeCheckWithSymbolsResult(rid, [], [])
   | WorkerMessage.GetCompletions(_, _, rid) ->
     return WorkerResponse.CompletionResult(rid, ["System"; "String"])
   | WorkerMessage.CancelEval ->

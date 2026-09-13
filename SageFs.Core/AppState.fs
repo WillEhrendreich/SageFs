@@ -1058,7 +1058,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             reply.Reply res
             return snapshot
           | _ ->
-            reply.Reply { Diagnostics.TypeCheckWithSymbolsResult.Diagnostics = [||]; HasErrors = false; SymbolRefs = [] }
+            reply.Reply { Diagnostics.TypeCheckWithSymbolsResult.Diagnostics = [||]; SymbolRefs = [] }
             return snapshot
         | QueryGetBoundValue(name, reply) ->
           match snapshot.Phase with

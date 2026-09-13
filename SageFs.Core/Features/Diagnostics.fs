@@ -69,7 +69,6 @@ let getDiagnostics (fsiSession: Shell.FsiEvaluationSession) text =
 /// Result of type-check with symbol extraction for the live testing cycle.
 type TypeCheckWithSymbolsResult = {
   Diagnostics: Diagnostic array
-  HasErrors: bool
   SymbolRefs: SymbolReference list
 }
 
@@ -115,4 +114,4 @@ let getTypeCheckWithSymbols
     match hasErrors with
     | true -> []
     | false -> extractSymbolReferences filePath typed
-  { Diagnostics = diagnostics; HasErrors = hasErrors; SymbolRefs = symbolRefs }
+  { Diagnostics = diagnostics; SymbolRefs = symbolRefs }
