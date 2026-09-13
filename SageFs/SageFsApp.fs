@@ -71,7 +71,7 @@ module WarmupBanner =
 /// Converts TestRunResult[] into OutputLine list for the session output pane.
 /// Shows per-test name, pass/fail status, duration, and failure messages.
 module TestOutputFormatter =
-  let private formatDuration (ts: TimeSpan) =
+  let formatDuration (ts: TimeSpan) =
     match ts.TotalMilliseconds < 1000.0 with
     | true -> sprintf "%dms" (int ts.TotalMilliseconds)
     | false -> sprintf "%.1fs" ts.TotalSeconds
@@ -120,62 +120,99 @@ module TestOutputFormatter =
   let toOutputLines (results: TestRunResult array) : OutputLine list =
     results |> Array.toList |> List.collect resultLines
 
-  let summaryLine (results: TestRunResult array) : OutputLine =
-    let passed = results |> Array.filter (fun r -> match r.Result with TestResult.Passed _ -> true | _ -> false) |> Array.length
-    let failed = results |> Array.filter (fun r -> match r.Result with TestResult.Failed _ -> true | _ -> false) |> Array.length
-    let skipped = results |> Array.filter (fun r -> match r.Result with TestResult.Skipped _ -> true | _ -> false) |> Array.length
-    let totalDuration =
-      results |> Array.sumBy (fun r ->
-        match r.Result with
-        | TestResult.Passed d -> d.TotalMilliseconds
-        | TestResult.Failed (_, d) -> d.TotalMilliseconds
-        | _ -> 0.0)
-    let neverReported =
-      results
-      |> Array.choose (fun r ->
-        match r.Result with
-        | TestResult.NoResult reason -> Some reason
-        | TestResult.Passed _ | TestResult.Failed _ | TestResult.Skipped _ | TestResult.NotRun -> None)
+
+/// Running aggregate of a live-test run's outcomes. Its ONLY consumer is the
+/// run-complete summary line, so it keeps O(1) counts instead of retaining every
+/// TestRunResult (each carrying a potentially large Output string). Memory use is
+/// therefore constant regardless of how many results stream in OR whether the
+/// run's completion event ever fires — the old `TestRunResult array list` grew
+/// without bound whenever completion never drained it (the live-testing
+/// discovery-completion gap), which is how the daemon reached ~16 GB. The
+/// authoritative per-test results already live in LiveTesting.TestState (keyed by
+/// TestId, bounded by test count); this aggregate never needed to double-store
+/// them — it only ever counted them.
+type PendingRunSummary = {
+  Passed: int
+  Failed: int
+  Skipped: int
+  /// Total results observed this run — the "N of M never reported" denominator.
+  Total: int
+  TotalDurationMs: float
+  /// Count of results that ended without reporting (NoResult).
+  NeverReportedCount: int
+  /// Distinct never-reported reasons for the summary text, capped so a run that
+  /// produces many distinct TransportFailed messages cannot grow this unbounded.
+  NeverReportedReasons: Features.LiveTesting.NoResultReason list
+}
+
+module PendingRunSummary =
+  /// Max distinct never-reported reasons retained for the summary display.
+  let private maxReasons = 16
+
+  let empty : PendingRunSummary =
+    { Passed = 0; Failed = 0; Skipped = 0; Total = 0
+      TotalDurationMs = 0.0; NeverReportedCount = 0; NeverReportedReasons = [] }
+
+  let private addResult (agg: PendingRunSummary) (r: Features.LiveTesting.TestRunResult) : PendingRunSummary =
+    let agg = { agg with Total = agg.Total + 1 }
+    match r.Result with
+    | Features.LiveTesting.TestResult.Passed d ->
+      { agg with Passed = agg.Passed + 1; TotalDurationMs = agg.TotalDurationMs + d.TotalMilliseconds }
+    | Features.LiveTesting.TestResult.Failed (_, d) ->
+      { agg with Failed = agg.Failed + 1; TotalDurationMs = agg.TotalDurationMs + d.TotalMilliseconds }
+    | Features.LiveTesting.TestResult.Skipped _ ->
+      { agg with Skipped = agg.Skipped + 1 }
+    | Features.LiveTesting.TestResult.NoResult reason ->
+      let reasons =
+        match List.contains reason agg.NeverReportedReasons
+              || List.length agg.NeverReportedReasons >= maxReasons with
+        | true -> agg.NeverReportedReasons
+        | false -> agg.NeverReportedReasons @ [ reason ]
+      { agg with
+          NeverReportedCount = agg.NeverReportedCount + 1
+          NeverReportedReasons = reasons }
+    | Features.LiveTesting.TestResult.NotRun -> agg
+
+  /// Fold one streamed batch of results into the aggregate — O(batch), no retention.
+  let addBatch (batch: Features.LiveTesting.TestRunResult array) (agg: PendingRunSummary) : PendingRunSummary =
+    Array.fold addResult agg batch
+
+  /// Fold several streamed batches, skipping empties (matches the old buffer's filter).
+  let addBatches (batches: Features.LiveTesting.TestRunResult array list) (agg: PendingRunSummary) : PendingRunSummary =
+    batches
+    |> List.fold
+      (fun acc batch ->
+        match Array.isEmpty batch with
+        | true -> acc
+        | false -> addBatch batch acc)
+      agg
+
+  /// Total results observed this run (the count the old buffer's `count` returned).
+  let count (agg: PendingRunSummary) : int = agg.Total
+
+  /// Render the run-complete summary line from the aggregate — byte-identical text
+  /// to the old array-based summaryLine, computed from O(1) counts.
+  let toOutputLine (agg: PendingRunSummary) : OutputLine =
     let incomplete =
-      match neverReported with
-      | [||] -> ""
-      | reasons ->
+      match agg.NeverReportedCount with
+      | 0 -> ""
+      | n ->
         sprintf ", %d of %d never reported — %s"
-          reasons.Length
-          results.Length
-          (reasons |> Array.distinct |> Array.map NoResultReason.describe |> String.concat "; ")
+          n
+          agg.Total
+          (agg.NeverReportedReasons
+           |> List.map Features.LiveTesting.NoResultReason.describe
+           |> String.concat "; ")
     let kind =
-      match failed, neverReported.Length with
+      match agg.Failed, agg.NeverReportedCount with
       | 0, 0 -> OutputKind.Info
       | _ -> OutputKind.Error
     { Kind = kind
-      Text = sprintf "🧪 Test run complete: %d passed, %d failed, %d skipped%s (%s)" passed failed skipped incomplete (formatDuration (TimeSpan.FromMilliseconds totalDuration))
+      Text =
+        sprintf "🧪 Test run complete: %d passed, %d failed, %d skipped%s (%s)"
+          agg.Passed agg.Failed agg.Skipped incomplete
+          (TestOutputFormatter.formatDuration (TimeSpan.FromMilliseconds agg.TotalDurationMs))
       Timestamp = DateTime.UtcNow; SessionId = "" }
-
-module PendingTestResultBuffer =
-  let empty : Features.LiveTesting.TestRunResult array list = []
-
-  let appendBatches
-    (incoming: Features.LiveTesting.TestRunResult array list)
-    (existing: Features.LiveTesting.TestRunResult array list)
-    =
-    incoming
-    |> List.fold (fun acc batch ->
-      match Array.isEmpty batch with
-      | true -> acc
-      | false -> batch :: acc)
-         existing
-
-  let count (batches: Features.LiveTesting.TestRunResult array list) =
-    batches |> List.sumBy Array.length
-
-  let toArray (batches: Features.LiveTesting.TestRunResult array list) =
-    let flattened = Array.zeroCreate<Features.LiveTesting.TestRunResult> (count batches)
-    let mutable offset = 0
-    for batch in batches do
-      Array.Copy(batch, 0, flattened, offset, batch.Length)
-      offset <- offset + batch.Length
-    flattened
 
 /// The unified message type for the SageFs Elm loop.
 /// All state changes flow through here — user actions and system events.
@@ -228,7 +265,7 @@ type SageFsModel = {
   LiveTesting: Features.LiveTesting.LiveTestCycleState
   /// Accumulates streamed result batches for the summary on TestRunCompleted
   /// without flattening every batch on the hot path.
-  PendingTestResults: Features.LiveTesting.TestRunResult array list
+  PendingRunSummary: PendingRunSummary
   /// Latest resolved test source locations — populated after each discovery pass.
   ResolvedSourceLocations: Features.LiveTesting.TestSourceLocation list
   /// Pending workflow suggestion from project detection — cleared on dismiss or accept.
@@ -266,7 +303,7 @@ module SageFsModel =
     ThemeName = "Kanagawa"
     SessionContext = None
     LiveTesting = Features.LiveTesting.LiveTestCycleState.empty
-    PendingTestResults = PendingTestResultBuffer.empty
+    PendingRunSummary = PendingRunSummary.empty
     ResolvedSourceLocations = []
     PendingSuggestion = None
     PerSessionLiveTesting = Map.empty
@@ -821,7 +858,7 @@ module SageFsUpdate =
         | false -> LiveTestingStatusRefresh.PatchChangedEntries changedEntries
       let lt, timings = finalizeLiveTestingState refresh model.LiveTesting mergedWithHistory
       let pendingResults =
-        PendingTestResultBuffer.appendBatches nonEmptyBatches model.PendingTestResults
+        PendingRunSummary.addBatches nonEmptyBatches model.PendingRunSummary
       applySw.Stop()
       Instrumentation.liveTestingBufferedApplyMs.Record(applySw.Elapsed.TotalMilliseconds)
       match timings with
@@ -838,7 +875,7 @@ module SageFsUpdate =
       | _ -> ()
       { model with
           LiveTesting = lt
-          PendingTestResults = pendingResults }, []
+          PendingRunSummary = pendingResults }, []
 
   let update (msg: SageFsMsg) (model: SageFsModel) : SageFsModel * SageFsEffect list =
     match msg with
@@ -1349,11 +1386,10 @@ module SageFsUpdate =
               Features.LiveTesting.LiveTestCycleState.promoteQueuedRebuild sessionId cycle'
             cycle'', replayEffects) model
         let summary =
-          model'.PendingTestResults
-          |> PendingTestResultBuffer.toArray
-          |> TestOutputFormatter.summaryLine
+          model'.PendingRunSummary
+          |> PendingRunSummary.toOutputLine
         { model' with
-            PendingTestResults = PendingTestResultBuffer.empty
+            PendingRunSummary = PendingRunSummary.empty
             RecentOutput = SageFsModel.addOutputLine summary model'.RecentOutput },
         replayEffects
         |> Option.defaultValue []

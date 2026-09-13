@@ -873,8 +873,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       SageFsUpdate.update (SageFsMsg.Event (SageFsEvent.TestResultsBatch results)) model
     updated.RecentOutput.ActiveCount(updated.Sessions.ActiveSessionId)
     |> Expect.equal "streaming batches should not spam the visible output pane" 0
-    updated.PendingTestResults
-    |> PendingTestResultBuffer.count
+    updated.PendingRunSummary
+    |> PendingRunSummary.count
     |> Expect.equal "results should still accumulate for the completion summary" 2
     updated.LiveTesting.TestState.LastResults
     |> Map.count
@@ -916,8 +916,8 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     summary.[0].Text
     |> Expect.equal "summary should reflect every prior batch in the run"
          "🧪 Test run complete: 1 passed, 1 failed, 1 skipped (15ms)"
-    completed.PendingTestResults
-    |> PendingTestResultBuffer.count
+    completed.PendingRunSummary
+    |> PendingRunSummary.count
     |> Expect.equal "completion should clear the pending result accumulator" 0
     effects |> Expect.isEmpty "run completion only updates model state"
 
@@ -1519,11 +1519,9 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
     updated.LiveTesting.TestState.Cached.StateVersion
     |> Expect.equal "buffering multiple streamed batches into one refresh unit should only bump the cached live-testing state once" (baseModel.LiveTesting.TestState.Cached.StateVersion + 1L)
-    updated.PendingTestResults
-    |> PendingTestResultBuffer.toArray
-    |> Array.map (fun result -> TestId.value result.TestId)
-    |> Expect.equal "every result fact should still accumulate for the eventual completion summary"
-         [| "test.buffered.b"; "test.buffered.a" |]
+    updated.PendingRunSummary
+    |> PendingRunSummary.count
+    |> Expect.equal "both buffered results should be counted for the eventual completion summary" 2
     Features.LiveTesting.LiveTestState.statusEntriesForSession "" updated.LiveTesting.TestState
     |> Array.map (fun entry -> TestId.value entry.TestId, entry.Status)
     |> Map.ofArray

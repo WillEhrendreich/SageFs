@@ -1674,7 +1674,9 @@ let runEndTests = testList "SageFsEffectHandler — every requested test ends te
         RunEndHarness.requested
         (Set.ofList [ RunEndHarness.passedA.TestId ])
     let line =
-      TestOutputFormatter.summaryLine (Array.append [| RunEndHarness.passedA |] missing)
+      PendingRunSummary.empty
+      |> PendingRunSummary.addBatch (Array.append [| RunEndHarness.passedA |] missing)
+      |> PendingRunSummary.toOutputLine
     line.Text |> Expect.stringContains "counts the unreported tests against the run" "2 of 3 never reported"
     line.Text |> Expect.stringContains "says why" "the worker went silent for 30s"
     line.Kind |> Expect.equal "an incomplete run is not reported as a clean one" OutputKind.Error
