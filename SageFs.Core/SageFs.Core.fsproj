@@ -16,6 +16,7 @@
         <Compile Include="WorkflowTypes.fs" />
         <Compile Include="Args.fs" />
         <Compile Include="Measures.fs" />
+        <Compile Include="Cohort.fs" />
         <Compile Include="RingBuffer.fs" />
         <Compile Include="SseReplayBuffer.fs" />
         <Compile Include="ModelSnapshot.fs" />
