@@ -1291,7 +1291,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               currentEvalThread.Value <- None
             | None -> ()
             match phase with
-            | Active (st, _) when not (isNull (box st.Session)) ->
+            | Active (st, _) ->
               (st.Session :> System.IDisposable).Dispose()
             | _ -> ()
             let softResetCts = new CancellationTokenSource(Timeouts.softResetCancellation)
@@ -1417,7 +1417,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             | None -> ()
 
             match phase with
-            | Active (st, _) when not (isNull (box st.Session)) ->
+            | Active (st, _) ->
               let disposeTask = System.Threading.Tasks.Task.Run(fun () ->
                 (st.Session :> System.IDisposable).Dispose())
               let timeoutTask = System.Threading.Tasks.Task.Delay(Timeouts.sessionDispose)
