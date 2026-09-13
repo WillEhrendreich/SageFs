@@ -52,9 +52,10 @@ let tests =
 
     testCase "actorPrologue is empty — Actors.Neovim.launch owns the whole kitty+nvim spawn itself, exactly like the Dashboard actor's Chromium launch (Island F's own precedent)" <| fun _ -> actorPrologue |> Expect.isEmpty "no shell-level prologue needed"
 
-    testCase "nvimConfig carries the resolved commit through, never the plugin repo's currently-checked-out branch" <| fun _ ->
-      let cfg = nvimConfig "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    testCase "nvimConfig carries the resolved commit AND the pinned checkout's own path through, never the plugin repo's currently-checked-out branch" <| fun _ ->
+      let cfg = nvimConfig "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" "/tmp/sagefs-demos-plugin-scratch-example"
       cfg.PluginCommit |> Expect.equal "resolved sha, verbatim" (Some "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+      cfg.PluginRuntimePath |> Expect.equal "the pinned checkout's own scratch path, verbatim" (Some "/tmp/sagefs-demos-plugin-scratch-example")
 
     testCase "resolvePinnedPlugin resolves 'master' to the SAME sha as a direct `git rev-parse master` — and never touches the live working tree's own checked-out branch" <| fun _ ->
       if not (pluginRepoAvailable ()) then

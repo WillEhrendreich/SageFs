@@ -44,6 +44,19 @@ let private killQuietly (proc: Process) : unit =
   with _ ->
     ()
 
+/// Xlib's DEFAULT error handler does not just print an `XErrorEvent` — for
+/// most error types it calls `exit()` on the WHOLE PROCESS (confirmed
+/// directly: an `XSetInputFocus` `BadMatch` — the target window not yet
+/// fully viewable at the exact moment focus was requested, a real, expected
+/// timing race, never a genuine bug in the request itself — killed the
+/// entire cell-agent mid-recording with no StepLog ever written). Mirrors
+/// `Actors/App.fs`'s own identical fix for the identical class of problem:
+/// installing a handler that returns instead of aborting turns a transient,
+/// recoverable X protocol timing race into an ordinary failed call (a
+/// non-zero return this module already treats as "try again"/"give up
+/// gracefully"), never a process-ending abort.
+type private XErrorHandler = delegate of nativeint * nativeint -> int
+
 /// Minimal Xlib bindings, private to this actor. See the module doc above
 /// for why these live here instead of `XTest.fs`.
 module private Xlib =
@@ -83,6 +96,27 @@ module private Xlib =
 
   [<DllImport("libX11.so.6")>]
   extern int XSync(nativeint display, bool discard)
+
+  [<DllImport("libX11.so.6")>]
+  extern int XSetInputFocus(nativeint display, nativeint w, int revertTo, nativeint time)
+
+  [<DllImport("libX11.so.6")>]
+  extern int XRaiseWindow(nativeint display, nativeint w)
+
+  [<DllImport("libX11.so.6")>]
+  extern nativeint XSetErrorHandler(XErrorHandler handler)
+
+/// Kept alive for the whole process — see `Actors/App.fs`'s identical
+/// pattern/doc for why a delegate passed to native code must not be
+/// eligible for GC.
+let mutable private errorHandler: XErrorHandler = Unchecked.defaultof<_>
+
+/// Installs the non-aborting error handler exactly once per process
+/// (idempotent — a second `XSetErrorHandler` call is harmless).
+let private installErrorHandler =
+  lazy
+    (errorHandler <- XErrorHandler(fun _ _ -> 0)
+     Xlib.XSetErrorHandler errorHandler |> ignore)
 
 let private childrenOf (display: nativeint) (w: nativeint) : nativeint list =
   let mutable root = 0n
@@ -343,6 +377,18 @@ let launch
   (openFilePath: string option)
   (mcpPort: int)
   (dashboardPort: int)
+  // The REAL project directory nvim should treat as its own `getcwd()` —
+  // distinct from `workDir` above (a private scratch dir for THIS actor's
+  // own generated init.lua/socket, never the project). Without this, kitty
+  // (and the nvim it execs) inherit the cell-agent .NET process's own
+  // ambient working directory, so a plugin command that globs from
+  // `vim.fn.getcwd()` (`sagefs.nvim`'s own `discover_and_create`) silently
+  // scans the WRONG tree — confirmed directly against a real recording: a
+  // still frame showed nvim's cwd resolved to the whole repo checkout (32
+  // `.fsproj` files listed), not the one real sample project this scenario
+  // opened. `None` preserves the exact pre-fix behavior (ambient cwd) for
+  // any caller that genuinely has no project directory to anchor to.
+  (projectDir: string option)
   : Async<Handle> =
   async {
     if not (File.Exists kittyPath) then
@@ -382,6 +428,7 @@ let launch
     let kittyArgs = [ "--title"; marker; nvimPath ] @ nvimArgs
 
     let psi = ProcessStartInfo(kittyPath, UseShellExecute = false)
+    projectDir |> Option.iter (fun dir -> psi.WorkingDirectory <- dir)
 
     for a in kittyArgs do
       psi.ArgumentList.Add a
@@ -408,9 +455,29 @@ let launch
       return failwith message
     | Ok(xdisplay, windowId) ->
 
+    installErrorHandler.Force()
     Xlib.XMoveResizeWindow(xdisplay, windowId, rect.X, rect.Y, uint32 rect.W, uint32 rect.H) |> ignore
     Xlib.XSync(xdisplay, false) |> ignore
     do! Async.Sleep 300 // let kitty reflow its grid after the forced resize before measuring it.
+
+    // With NO window manager on this cell's Xvfb (module doc above), nothing
+    // ever calls `XSetInputFocus` on kitty's own window the way a real WM's
+    // click-to-focus policy would — confirmed directly against a real
+    // recording: every subsequent XTEST-delivered keystroke silently went
+    // nowhere (the buffer stayed byte-for-byte unchanged, cursor pinned at
+    // 1,1), because X11 keyboard events are delivered to whichever window
+    // currently holds the input focus, and Xvfb's own default focus (the
+    // root window) is never automatically handed to a newly mapped client
+    // without a WM to do it. Done AFTER the resize settles (the window must
+    // be viewable, not just mapped, or `XSetInputFocus` itself raises
+    // `BadMatch` — a real, expected timing race the installed error handler
+    // above now survives instead of aborting the whole process on).
+    // `RevertToParent` (2) means focus falls back to this window's parent
+    // (the root) if it is ever destroyed — the same safe default a WM would
+    // pick.
+    Xlib.XRaiseWindow(xdisplay, windowId) |> ignore
+    Xlib.XSetInputFocus(xdisplay, windowId, 2, 0n) |> ignore
+    Xlib.XSync(xdisplay, false) |> ignore
 
     let nvimEnv = [ "DISPLAY", displayName ]
     let! ready = pollNvimReady nvimPath nvimSocket nvimEnv 15000
@@ -562,6 +629,15 @@ let observe (handle: Handle) (selector: string) (timeoutMs: float) : Async<bool>
       | "session-ready" ->
         match! remoteExpr handle "luaeval(\"require('sagefs').active_session ~= nil\")" with
         | Ok result -> return isTruthy result
+        | Error _ -> return false
+      // `Expectation.EditorSaved` (seam-integration threading, `Runtime.fs`'s
+      // `expectationWire`): a real `:w` flips the buffer's own `&modified`
+      // option to 0 the instant it lands — genuine proof of a save through
+      // the SAME RPC channel every other observation here uses, never a
+      // guess that the typed `:w<CR>` "must have worked."
+      | "saved" ->
+        match! remoteExpr handle "&modified" with
+        | Ok result -> return result.Trim() = "0"
         | Error _ -> return false
       | _ -> return false
     }

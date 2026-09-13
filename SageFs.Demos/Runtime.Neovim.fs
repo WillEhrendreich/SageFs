@@ -148,7 +148,12 @@ let actorBinds (pluginScratchDir: string) : (string * string) list = [ pluginScr
 /// health-check/cell-agent handoff `Runtime.fs`'s `innerScript` already does.
 let actorPrologue: string list = []
 
-/// Fills `Wire.NvimConfig` (Island F's placeholder record) with the
-/// resolved, pinned commit SHA (`resolvePinnedPlugin`'s first result) —
-/// roast I12: a resolved commit, never a floating ref.
-let nvimConfig (pluginCommitSha: string) : Wire.NvimConfig = { PluginCommit = Some pluginCommitSha }
+/// Fills `Wire.NvimConfig` with the resolved, pinned commit SHA
+/// (`resolvePinnedPlugin`'s first result — roast I12: a resolved commit,
+/// never a floating ref) AND that same call's own scratch directory (seam
+/// integration: the cell-agent's `Actors.Neovim.launch` needs the actual
+/// bound path, generated fresh per run, so it cannot be hardcoded the way
+/// VS Code's fixed cell-mount constants are).
+let nvimConfig (pluginCommitSha: string) (pluginRuntimePath: string) : Wire.NvimConfig =
+  { PluginCommit = Some pluginCommitSha
+    PluginRuntimePath = Some pluginRuntimePath }

@@ -118,7 +118,7 @@ let private withLiveActor (f: Handle -> unit) : unit =
 
   try
     let handle =
-      launch kittyPath nvimPath None (Display xvfb.Display) { X = 0; Y = 0; W = 1280; H = 720 } workDir None 47749 47750
+      launch kittyPath nvimPath None (Display xvfb.Display) { X = 0; Y = 0; W = 1280; H = 720 } workDir None 47749 47750 None
       |> Async.RunSynchronously
 
     try
