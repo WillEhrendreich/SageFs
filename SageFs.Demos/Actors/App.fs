@@ -481,14 +481,47 @@ let close (handle: Handle) : Async<unit> =
       Native.XCloseDisplay handle.Display |> ignore
   }
 
+/// A real, live presence poll — "is the app's window/URL discoverable yet"
+/// — through the SAME `resolveRect` a caller would use to place/observe it,
+/// never a guess that a daemon run-app call "must have worked" by now. Used
+/// by the wire's `"app-running"` selector (seam-integration threading:
+/// `Runtime.fs`'s `expectationWire` maps `Expectation.AppState
+/// AppRunStateCase.Running` here) — genuinely polls until this actor itself
+/// can resolve a rect, or the timeout elapses.
+let private pollRunning (handle: Handle) (timeoutMs: float) : Async<bool> =
+  let deadline = Diagnostics.Stopwatch.StartNew()
+
+  let rec loop () =
+    async {
+      match! resolveRect handle "" with
+      | Some _ -> return true
+      | None ->
+        if deadline.Elapsed.TotalMilliseconds > timeoutMs then
+          return false
+        else
+          do! Async.Sleep 250
+          return! loop ()
+    }
+
+  loop ()
+
 /// Wraps this actor behind the cell-agent's actor-dispatch seam (Island F,
 /// demo-actors-plan.md §1.2). `Command` is a no-op: the App co-actor is
 /// never the target of a `ClientCommand` (it does not open files or run
 /// itself — the primary actor does that), mirroring `Actors/Dashboard.fs`'s
-/// own no-op `Command` today.
+/// own no-op `Command` today. `Observe` branches on the wire selector: a
+/// presence poll for `"app-running"`, the existing real content-diff for
+/// everything else (`"app-output-changed"` and any future region-diff
+/// selector this actor gains) — never a fabricated pass either way.
 let toLiveActor (handle: Handle) : LiveActor =
+  let observeSelector (selector: string) (timeoutMs: float) : Async<bool> =
+    if selector = "app-running" then
+      pollRunning handle timeoutMs
+    else
+      observe handle selector timeoutMs
+
   { Id = ActorId.App
     ResolveRect = resolveRect handle
-    Observe = observe handle
+    Observe = observeSelector
     Command = fun _ -> async { return () }
     Close = fun () -> close handle }

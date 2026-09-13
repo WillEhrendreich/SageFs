@@ -23,11 +23,17 @@ let private samplePlan: ScenarioPlan =
           SubmitSelector = None
           ExpectSelector = Some "[data-testid=session-card]"
           DwellMs = 1500
-          TargetActor = None } ]
+          TargetActor = None
+          ChordKeys = None
+          SetupCommand = None
+          ObserveActor = None } ]
     Client = "dashboard"
     VsCode = None
     Nvim = None
-    App = None }
+    App = None
+    ActorRects = []
+    WorkspaceDir = None
+    NvimOpenFilePath = None }
 
 let private sampleStepLog: StepLog =
   { ScenarioId = "hello-dashboard"
@@ -70,7 +76,10 @@ let tests =
                   SubmitSelector = None
                   ExpectSelector = None
                   DwellMs = 500
-                  TargetActor = None } ] }
+                  TargetActor = None
+                  ChordKeys = None
+                  SetupCommand = None
+                  ObserveActor = None } ] }
 
       awaitOnly |> serializePlan |> deserializePlan |> Expect.equal "round-trips with every optional field None" awaitOnly
 
@@ -86,7 +95,10 @@ let tests =
                   SubmitSelector = Some "[data-testid=eval]"
                   ExpectSelector = Some "[data-testid=session-output]:has-text(\"55\")"
                   DwellMs = 2000
-                  TargetActor = None } ] }
+                  TargetActor = None
+                  ChordKeys = None
+                  SetupCommand = None
+                  ObserveActor = None } ] }
 
       typeThenClick |> serializePlan |> deserializePlan |> Expect.equal "round-trips with SubmitSelector populated" typeThenClick
 
@@ -102,7 +114,10 @@ let tests =
                   SubmitSelector = Some "[data-testid=eval]"
                   ExpectSelector = Some "[data-testid=session-output]:has-text(\"55\")"
                   DwellMs = 2000
-                  TargetActor = None } ] }
+                  TargetActor = None
+                  ChordKeys = None
+                  SetupCommand = None
+                  ObserveActor = None } ] }
 
       clickThenTypeThenClick
       |> serializePlan

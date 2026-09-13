@@ -164,24 +164,148 @@ let private dashboardSelector (target: Target) : string option =
   | Target.DashboardCssSelector selector -> Some selector
   | _ -> None
 
+/// The wire token for a `Domain.ActorId` — the same closed vocabulary
+/// `clientToken`/`Wire.ScenarioPlan.Client` already use, extended to every
+/// actor (including the App co-actor and `WindowCenter`'s own carried id).
+let private actorIdToken (actorId: ActorId) : string =
+  match actorId with
+  | ActorId.Dashboard -> "dashboard"
+  | ActorId.VsCode -> "vscode"
+  | ActorId.Neovim -> "neovim"
+  | ActorId.App -> "app"
+  | ActorId.Agent -> "agent"
+
+/// A VS Code target resolved through the extension host's own
+/// `sagefs.debug.rectFor` vocabulary (`DebugRects.RectTarget.parse` in
+/// `sagefs-vscode/src/DebugRects.fs`: `"caret"|"editor"|"statusBar"|
+/// "view:<id>"`, roast H5 — never CDP/DOM). `EditorPosition`'s own
+/// line/column cannot be reached exactly through this coarse, ext-host-only
+/// API (`Actors/VsCode.fs`'s own documented compromise), so it resolves to
+/// the editor's whole content rect rather than a fabricated per-character
+/// pixel — a real click still lands inside the real, live-measured editor
+/// pane, never a guess at a target this actor cannot honor.
+/// `Target.PaletteItem` has no wire mapping yet: opening the command palette
+/// and running a NAMED command needs a real `executeCommand` channel
+/// `Actors/VsCode.fs`'s `Command` does not implement today (it is a
+/// documented no-op, mirroring Dashboard's own) — honest `None`, never a
+/// guessed click target, exactly `dashboardSelector`'s own `_ -> None`
+/// doctrine.
+let private vsCodeTargetSelector (target: Target) : string option =
+  match target with
+  | Target.EditorPosition _ -> Some "editor"
+  | Target.WindowCenter ActorId.VsCode -> Some "editor"
+  | _ -> None
+
+/// A Neovim target resolved through `Actors/Neovim.fs`'s own selector
+/// vocabulary (`resolveRect`'s `"window-center"|"commandline"|"statusline"|
+/// "caret"|"position:<line>:<col>"`) — `EditorPosition`'s line/column DOES
+/// reach exactly here (unlike VS Code above), because Neovim's own
+/// `screenpos()` genuinely resolves a live pixel for a real buffer
+/// position, not a coarse window-manager-level guess.
+let private neovimTargetSelector (target: Target) : string option =
+  match target with
+  | Target.NvimCommandLine -> Some "commandline"
+  | Target.WindowCenter ActorId.Neovim -> Some "window-center"
+  | Target.EditorPosition(_, line, column) -> Some(sprintf "position:%d:%d" line column)
+  | _ -> None
+
+/// Resolves `target` to a wire selector string through whichever live
+/// actor `client` is filmed through — the "single extra call site"
+/// `Scenarios.VsCode.fs`'s own doc names as the remaining integration gap.
+/// Dashboard-reachable targets (`DashboardElement`/`DashboardCssSelector`)
+/// resolve identically regardless of `client`, since an editor scenario's
+/// narrator pane is a real, live Dashboard actor too (see `expectationWire`
+/// below) — only the CLICK side is actually client-specific.
+let private targetSelector (client: Client) (target: Target) : string option =
+  match dashboardSelector target with
+  | Some selector -> Some selector
+  | None ->
+    match client with
+    | Client.VsCode -> vsCodeTargetSelector target
+    | Client.Neovim -> neovimTargetSelector target
+    | Client.Dashboard
+    | Client.Agent -> None
+
 /// Substitutes `Text.RepoRootToken` for the real, absolute repo root — the
 /// one runtime fact a pure `Scenario` value can never carry itself (§10).
 /// Idempotent no-op on any text that doesn't contain the token.
 let private resolveRepoRootToken (repoRoot: string) (text: string) : string =
   text.Replace(Text.RepoRootToken, repoRoot)
 
-let private wireStepOf (repoRoot: string) (index: int) (step: Step) : Wire.WireStep =
+/// Which live actor OBSERVES a step's `Expectation`, and the wire token that
+/// actor's own `Observe` understands — distinct from the CLICK-side actor
+/// because a step's input and its proof-of-effect can come from two
+/// different live actors in the same cell (module doc on
+/// `Wire.WireStep.ObserveActor`). `Client.Dashboard`/`Client.Agent` keep the
+/// exact pre-seam behavior (`None` ⇒ default to `TargetActor`) — this
+/// function only ever routes VS Code/Neovim-client expectations elsewhere,
+/// never touching the two clients that already worked.
+let private expectationWire (client: Client) (expect: Expectation) : string option * string option =
+  let dashboardText (selector: string) (text: string) =
+    // Playwright's own CSS extension: `:has-text("...")` is a substring,
+    // whitespace-normalized text match layered onto a plain CSS selector —
+    // exactly what "wait until this element's text contains X" needs,
+    // without inventing a second selector mini-language of our own.
+    sprintf "%s:has-text(\"%s\")" selector text
+
+  match expect with
+  | Expectation.PageShows(id, _) ->
+    let selector = Some(testIdSelector id)
+
+    match client with
+    | Client.Dashboard
+    | Client.Agent -> selector, None
+    | Client.VsCode
+    | Client.Neovim -> selector, Some "dashboard"
+  | Expectation.PageTextContains(selector, text) ->
+    let wire = Some(dashboardText selector text)
+
+    match client with
+    | Client.Dashboard
+    | Client.Agent -> wire, None
+    // The daemon's session/eval/live-testing state is one shared source of
+    // truth regardless of which client drove the input — an editor-driven
+    // step's dashboard-shaped expectation is genuinely, honestly provable
+    // through the SAME shared Dashboard narrator pane `EditorFull`/
+    // `EditorLeft` always places alongside the editor (never fabricated:
+    // the pane is a real, live Chromium window this file also now launches
+    // for these clients — see `assembleActors`' co-launch below).
+    | Client.VsCode
+    | Client.Neovim -> wire, Some "dashboard"
+  | Expectation.NvimBufferContains text -> Some(sprintf "buffer-contains:%s" (Text.value text)), Some "neovim"
+  | Expectation.AppOutputChanged _ -> Some "app-output-changed", Some "app"
+  // "is the app's window/URL discoverable yet" — a real, live presence
+  // check through the SAME App co-actor that later observes
+  // `AppOutputChanged` (`Actors/App.fs`'s own `resolveRect`), never a guess
+  // that the daemon's run-app call "must have worked."
+  | Expectation.AppState AppRunStateCase.Running -> Some "app-running", Some "app"
+  | Expectation.AppState _ -> None, None
+  | Expectation.EditorSaved _ ->
+    match client with
+    // Neovim's own `&modified` flips to 0 the instant a real `:w` lands —
+    // genuine proof of a save, through the SAME actor that typed it.
+    | Client.Neovim -> Some "saved", Some "neovim"
+    // VS Code has no wired save-observation channel yet (no ext-host
+    // status this actor's `Observe` reads today) — honest gap, not faked.
+    | Client.VsCode
+    | Client.Dashboard
+    | Client.Agent -> None, None
+  | Expectation.TestOutcome _ -> None, None
+
+let private wireStepOf (repoRoot: string) (client: Client) (index: int) (step: Step) : Wire.WireStep =
+  let selectorFor = targetSelector client
+
   let preClickSelector =
     match step.Action with
-    | Action.ClickThenTypeThenClick(preClickTarget, _, _, _, _) -> dashboardSelector preClickTarget
+    | Action.ClickThenTypeThenClick(preClickTarget, _, _, _, _) -> selectorFor preClickTarget
     | _ -> None
 
   let clickSelector =
     match step.Action with
-    | Action.Click target -> dashboardSelector target
-    | Action.Type(target, _, _) -> dashboardSelector target
-    | Action.TypeThenClick(typeTarget, _, _, _) -> dashboardSelector typeTarget
-    | Action.ClickThenTypeThenClick(_, typeTarget, _, _, _) -> dashboardSelector typeTarget
+    | Action.Click target -> selectorFor target
+    | Action.Type(target, _, _) -> selectorFor target
+    | Action.TypeThenClick(typeTarget, _, _, _) -> selectorFor typeTarget
+    | Action.ClickThenTypeThenClick(_, typeTarget, _, _, _) -> selectorFor typeTarget
     | _ -> None
 
   let typeText =
@@ -194,19 +318,29 @@ let private wireStepOf (repoRoot: string) (index: int) (step: Step) : Wire.WireS
 
   let submitSelector =
     match step.Action with
-    | Action.TypeThenClick(_, _, _, submitTarget) -> dashboardSelector submitTarget
-    | Action.ClickThenTypeThenClick(_, _, _, _, submitTarget) -> dashboardSelector submitTarget
+    | Action.TypeThenClick(_, _, _, submitTarget) -> selectorFor submitTarget
+    | Action.ClickThenTypeThenClick(_, _, _, _, submitTarget) -> selectorFor submitTarget
     | _ -> None
 
-  let expectSelector =
-    match step.Expect with
-    | Expectation.PageShows(id, _) -> Some(testIdSelector id)
-    // Playwright's own CSS extension: `:has-text("...")` is a substring,
-    // whitespace-normalized text match layered onto a plain CSS selector —
-    // exactly what "wait until this element's text contains X" needs,
-    // without inventing a second selector mini-language of our own.
-    | Expectation.PageTextContains(selector, text) -> Some(sprintf "%s:has-text(\"%s\")" selector text)
+  let chordKeys =
+    match step.Action with
+    | Action.Chord keys -> Some(keys |> List.map Key.toToken)
     | _ -> None
+
+  // `Action.Setup`'s wire image: the opaque token `Actors.<X>.command`
+  // already accepts. `OpenFile`'s path is resolved to a real, absolute,
+  // `{{REPO_ROOT}}`-substituted path HERE (the one place with a `repoRoot`)
+  // — never a literal the cell has to interpret further.
+  let setupCommand =
+    match step.Action with
+    | Action.Setup(ClientCommand.OpenFile file) ->
+      Some(sprintf "open-file:%s" (IO.Path.Combine(repoRoot, Sample.relativePath file.Sample, file.RelativePath)))
+    | Action.Setup ClientCommand.RunApp -> Some "run-app"
+    | Action.Setup ClientCommand.StopApp -> Some "stop-app"
+    | Action.Setup ClientCommand.SaveAll -> Some "save-all"
+    | _ -> None
+
+  let expectSelector, observeActor = expectationWire client step.Expect
 
   { Wire.Index = index
     Wire.Caption = Caption.value step.Caption
@@ -216,10 +350,14 @@ let private wireStepOf (repoRoot: string) (index: int) (step: Step) : Wire.WireS
     Wire.SubmitSelector = submitSelector
     Wire.ExpectSelector = expectSelector
     Wire.DwellMs = Dwell.ms step.Dwell
-    // No joint (multi-actor) scenario exists yet (Island F builds no actor
-    // logic) — every step inherits the plan's own `Client`, exactly like
-    // before the seam existed.
-    Wire.TargetActor = None }
+    // A joint (multi-actor) scenario's own per-step actor override lands
+    // here once one is genuinely needed; every step built by this function
+    // today drives the SAME actor its own `Scenario.Client` names, so `None`
+    // (⇒ default to the plan's own `Client`) is still correct.
+    Wire.TargetActor = None
+    Wire.ChordKeys = chordKeys
+    Wire.SetupCommand = setupCommand
+    Wire.ObserveActor = observeActor }
 
 /// The wire token for a `Domain.Client` (Island F, demo-actors-plan.md
 /// §1.2) — the one place the rich `Client` DU is flattened to the primitive
@@ -245,20 +383,94 @@ let private McpPort = 47749
 [<Literal>]
 let private DashboardPort = 47750
 
-let private wirePlanOf (repoRoot: string) (scenario: Scenario) : Wire.ScenarioPlan =
+/// Every actor's placed rect for `scenario.Layout`, flattened to the wire's
+/// primitive `WireRect` — the seam integration's own missing piece
+/// (`assembleActors`/`CellAgent.fs` previously hardcoded a single
+/// full-screen Dashboard rect because nothing on the wire ever said
+/// otherwise).
+let private wireRectsOf (scenario: Scenario) : Wire.WireRect list =
+  Layout.rects scenario.Layout { Width = 1280; Height = 720 }
+  |> Map.toList
+  |> List.map (fun (actorId, rect) ->
+    { Wire.ActorToken = actorIdToken actorId
+      Wire.X = rect.X
+      Wire.Y = rect.Y
+      Wire.W = rect.W
+      Wire.H = rect.H })
+
+/// The `Target` a step's own `Action` moves toward, if any (mirrors
+/// `Storyboard.fs`'s own identically-named private helper — kept separate
+/// rather than shared, since that module is a never-touch seam core for a
+/// different island and this one has its own reason to exist: resolving
+/// which real file Neovim should open, not sketching a cursor path).
+let private actionTargetOf (action: Action) : Target option =
+  match action with
+  | Action.Click target -> Some target
+  | Action.Type(target, _, _) -> Some target
+  | Action.Typo(target, _, _) -> Some target
+  | Action.TypeThenClick(typeTarget, _, _, _) -> Some typeTarget
+  | Action.ClickThenTypeThenClick(_, typeTarget, _, _, _) -> Some typeTarget
+  | Action.Chord _
+  | Action.Setup _
+  | Action.Await _ -> None
+
+/// The real, absolute file Neovim should open on launch (`Wire.ScenarioPlan.
+/// NvimOpenFilePath`'s own doc: a bare directory argument opens `netrw`, not
+/// an editable buffer — confirmed directly against a real recording). Prefers
+/// the scenario's own first `Target.EditorPosition`-named file (exact, and
+/// genuinely what the scenario's later steps expect to be open); falls back
+/// to a real, existing `Program.fs` in the workspace (every runnable/
+/// live-testing sample this tool drives has one) when the scenario names no
+/// file at all (e.g. `replNeovim`, which types straight into "whatever
+/// buffer is open"); `None` only if neither exists.
+let private nvimOpenFileOf (repoRoot: string) (scenario: Scenario) : string option =
+  let namedFile =
+    scenario.Steps
+    |> List.tryPick (fun step ->
+      actionTargetOf step.Action
+      |> Option.bind (function
+        | Target.EditorPosition(file, _, _) -> Some(IO.Path.Combine(repoRoot, Sample.relativePath file.Sample, file.RelativePath))
+        | _ -> None))
+
+  match namedFile with
+  | Some _ -> namedFile
+  | None ->
+    let defaultProgram = IO.Path.Combine(repoRoot, Sample.relativePath scenario.Sample, "Program.fs")
+    if IO.File.Exists defaultProgram then Some defaultProgram else None
+
+let private wirePlanOf
+  (repoRoot: string)
+  (vsCodeConfig: Wire.VsCodeConfig option)
+  (nvimConfig: Wire.NvimConfig option)
+  (appConfig: Wire.AppConfig option)
+  (scenario: Scenario)
+  : Wire.ScenarioPlan =
   { Wire.ScenarioId = ScenarioId.value scenario.Id
     Wire.ChromePath = "/chrome-bin/chrome"
     Wire.PageUrl = sprintf "http://127.0.0.1:%d/dashboard" DashboardPort
     Wire.UserDataDir = "/home/demo/chrome-profile"
     Wire.OutDir = "/out"
-    Wire.Steps = scenario.Steps |> List.mapi (wireStepOf repoRoot)
+    Wire.Steps = scenario.Steps |> List.mapi (wireStepOf repoRoot scenario.Client)
     Wire.Client = clientToken scenario.Client
-    // Every scenario today is Dashboard-only (Island F builds no actor
-    // logic) — each actor island fills its own config once its Runtime.<X>
-    // extension needs it.
-    Wire.VsCode = None
-    Wire.Nvim = None
-    Wire.App = None }
+    Wire.VsCode = vsCodeConfig
+    Wire.Nvim = nvimConfig
+    Wire.App = appConfig
+    Wire.ActorRects = wireRectsOf scenario
+    // Only the editor clients open a real project this way (Dashboard drives
+    // its own "Open Directory" picker; Agent finds the repo itself inside
+    // the cell, `Actors/Agent.fs`'s `RepoRoot.find`).
+    Wire.WorkspaceDir =
+      match scenario.Client with
+      | Client.VsCode
+      | Client.Neovim -> Some(IO.Path.Combine(repoRoot, Sample.relativePath scenario.Sample))
+      | Client.Dashboard
+      | Client.Agent -> None
+    Wire.NvimOpenFilePath =
+      match scenario.Client with
+      | Client.Neovim -> nvimOpenFileOf repoRoot scenario
+      | Client.VsCode
+      | Client.Dashboard
+      | Client.Agent -> None }
 
 // ---------------------------------------------------------------------------
 // The cell: exact bwrap shape + inner script (§4.12's proven recipe).
@@ -367,7 +579,14 @@ let private cellSpec
     RwBinds = [ hostOutDir, "/out" ]
     Env =
       [ "HOME", "/home/demo"
-        "PATH", "/usr/bin:/dotnet-root"
+        // `/xdotool-bin` is harmless in `PATH` even for a scenario that
+        // never binds anything there (a missing directory is simply skipped
+        // during lookup) — only the VS Code actor's extension host actually
+        // shells out to `xdotool` (`sagefs-vscode/src/Extension.fs`'s
+        // `resolveOwnWindowRect`, roast H5's window-manager-level geometry
+        // query), and VS Code inherits this SAME cell `PATH`
+        // (`Actors/VsCode.fs`'s `launch`).
+        "PATH", "/usr/bin:/dotnet-root:/xdotool-bin"
         // Explicit, not derived from $HOME (which is the private, empty
         // /home/demo above) — any restore/design-time-build path that
         // recomputes the global-packages location fresh, instead of only
@@ -382,6 +601,136 @@ let private cellSpec
         "LIBGL_ALWAYS_SOFTWARE", "1"
         "__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/50_mesa.json" ]
     InnerCommand = [ "/bin/sh"; "-c"; innerScript actorPrologue ] }
+
+// ---------------------------------------------------------------------------
+// Per-actor cell binds/prologue/wire-config resolution (seam integration):
+// the ONE call site that actually invokes each `Runtime.<X>.fs` extension
+// module's own resolvers and turns their results into the `cellSpec`
+// extension-point arguments plus the `Wire.ScenarioPlan` config fields —
+// exactly the wiring `Runtime.VsCode.fs`/`Runtime.Neovim.fs`'s own doc
+// comments flag as "not this island's own file to edit."
+// ---------------------------------------------------------------------------
+
+let private findOnPath (exeName: string) : string option =
+  match Environment.GetEnvironmentVariable "PATH" with
+  | null -> None
+  | path ->
+    path.Split(Path.PathSeparator)
+    |> Array.tryPick (fun dir ->
+      try
+        if File.Exists(Path.Combine(dir, exeName)) then Some dir else None
+      with _ ->
+        None)
+
+/// Resolves the directory `xdotool` (+ its `libxdo.so.4`, if not system-
+/// installed) lives in — the VS Code actor's window-geometry dependency
+/// (`Actors/VsCode.fs`'s own module doc: "the demo cell must include
+/// xdotool"). `SAGEFS_XDOTOOL_DIR` is the escape hatch for a self-built,
+/// non-system binary (this box had no `xdotool` package and no passwordless
+/// sudo to install one — a self-contained build with `-Wl,-rpath=$ORIGIN`
+/// resolves its own `libxdo.so.4` from the same directory, so pointing this
+/// var at that directory is enough); otherwise a real `xdotool` already on
+/// `PATH` is used directly. Fails loud — never a silently rect-less VS Code
+/// scenario.
+let private resolveXdotoolDir () : Result<string, string> =
+  match Environment.GetEnvironmentVariable "SAGEFS_XDOTOOL_DIR" with
+  | dir when not (String.IsNullOrWhiteSpace dir) && File.Exists(Path.Combine(dir, "xdotool")) -> Ok dir
+  | _ ->
+    match findOnPath "xdotool" with
+    | Some dir -> Ok dir
+    | None ->
+      Error(
+        "xdotool not found — install it (pacman -S xdotool / apt install xdotool), or build it and set "
+        + "SAGEFS_XDOTOOL_DIR to a directory containing an `xdotool` binary (plus libxdo.so.4 alongside it "
+        + "if not system-installed) — the VS Code actor's sagefs.debug.rectFor window-geometry query needs it "
+        + "(roast H5: real OS window geometry, never CDP)."
+      )
+
+/// Resolves every cell bind/prologue/`Wire` config `scenario.Client` (and
+/// `scenario.App`, for a joint hot-reload scenario) needs, beyond the fixed
+/// set `cellSpec` always includes. Fails loud with an actionable message the
+/// moment a genuinely-needed dependency is missing — never a silently
+/// incomplete cell that would leave an actor's window absent from the
+/// recording (§2's "never a silent green no-op" doctrine, applied at the
+/// integration seam itself, not just inside each actor).
+let private resolveActorExtras
+  (repoRoot: string)
+  (scenario: Scenario)
+  : Async<Result<(string * string) list * string list * Wire.VsCodeConfig option * Wire.NvimConfig option * Wire.AppConfig option, string>> =
+  async {
+    let appConfig =
+      match scenario.App with
+      | AppKind.NoApp -> None
+      | kind -> Some(Runtime.App.appConfigOf kind)
+
+    let appBinds = Runtime.App.actorBinds scenario.App
+    let appPrologue = Runtime.App.actorPrologue scenario.App
+
+    match scenario.Client with
+    | Client.Dashboard
+    | Client.Agent -> return Ok(appBinds, appPrologue, None, None, appConfig)
+    | Client.VsCode ->
+      match Runtime.VsCode.resolveCodeBin repoRoot with
+      | Error e -> return Error e
+      | Ok codeBin ->
+
+      let extDevPath = Runtime.VsCode.extensionDevPath repoRoot
+
+      if not (File.Exists(Path.Combine(extDevPath, "dist", "Extension.js"))) then
+        return
+          Error(
+            sprintf
+              "sagefs-vscode extension is not built: no %s — run `npm install && npm run compile` under sagefs-vscode/ first (never a silent skip of the VS Code scenarios)."
+              (Path.Combine(extDevPath, "dist", "Extension.js"))
+          )
+      else
+
+      match resolveXdotoolDir () with
+      | Error e -> return Error e
+      | Ok xdotoolDir ->
+
+      // `cellBinds` wants the whole VS Code build DIRECTORY (Electron needs
+      // its bundled resources next to the binary, not just the executable
+      // itself) — `resolveCodeBin` resolves the "code" binary's own full
+      // path, so this is its containing directory, never the binary path
+      // itself (confirmed directly: passing the binary path here produced
+      // a cell-visible `/vscode-bin/code` that did not exist, because the
+      // bind mounted the executable's PARENT one level too shallow).
+      let codeBinDir = Path.GetDirectoryName codeBin
+      let vsCodeBinds = Runtime.VsCode.cellBinds codeBinDir extDevPath @ [ xdotoolDir, "/xdotool-bin" ]
+      let vsCodeConfig = Runtime.VsCode.config "/vscode-ext"
+      // No bash-level prologue: `Actors/VsCode.fs`'s `launch` owns spawning
+      // VS Code itself, exactly like the Dashboard actor owns spawning
+      // Chromium (that module's own doc) — nothing to splice into
+      // `innerScript` ahead of the cell-agent.
+      return Ok(appBinds @ vsCodeBinds, appPrologue, Some vsCodeConfig, None, appConfig)
+    | Client.Neovim ->
+      match Runtime.Neovim.resolveKitty (), Runtime.Neovim.resolveNvim () with
+      | Error e, _
+      | _, Error e -> return Error e
+      | Ok _, Ok _ ->
+
+      let pluginRepoDir = Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, "Work", "sagefs.nvim")
+
+      if not (Directory.Exists(Path.Combine(pluginRepoDir, ".git"))) then
+        return
+          Error(
+            sprintf
+              "no sagefs.nvim checkout at %s — clone WillEhrendreich/sagefs.nvim there to record a Neovim scenario."
+              pluginRepoDir
+          )
+      else
+
+      let scratchDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-demos-nvim-plugin-%s" (Guid.NewGuid().ToString "N"))
+
+      match! Runtime.Neovim.resolvePinnedPlugin pluginRepoDir scratchDir "master" with
+      | Error e -> return Error e
+      | Ok(sha, pluginDir) ->
+
+      let nvimBinds = Runtime.Neovim.actorBinds pluginDir
+      let nvimConfig = Runtime.Neovim.nvimConfig sha pluginDir
+      return Ok(appBinds @ nvimBinds, appPrologue @ Runtime.Neovim.actorPrologue, None, Some nvimConfig, appConfig)
+  }
 
 let private ffmpeg (args: string list) : Async<int * string> =
   async {
@@ -571,11 +920,17 @@ let record (repoRoot: string) (scenario: Scenario) : Async<Result<Wire.StepLog *
 
     Directory.CreateDirectory cellOutDir |> ignore
 
-    // Island F contributes no actor of its own — `[]`/`[]` reproduces the
-    // exact pre-seam cell (demo-actors-plan.md §1.2). An actor island fills
-    // these from its own `Runtime.<X>.fs` once it needs cell-level presence.
-    let spec = cellSpec sagefsBin demosBin dotnetRoot chromeDir cellOutDir repoRoot (nugetPackagesDir ()) [] []
-    let planJson = Wire.serializePlan (wirePlanOf repoRoot scenario)
+    // Seam integration: resolve this scenario's OWN actor binds/prologue/
+    // wire configs (dashboard/agent need none — `[] [] None None appConfig`
+    // reproduces the exact pre-seam cell for them; VS Code/Neovim genuinely
+    // need real, resolved dependencies, and fail loud here rather than
+    // producing a silently incomplete cell).
+    match! resolveActorExtras repoRoot scenario with
+    | Error e -> return Error e
+    | Ok(actorBinds, actorPrologue, vsCodeConfig, nvimConfig, appConfig) ->
+
+    let spec = cellSpec sagefsBin demosBin dotnetRoot chromeDir cellOutDir repoRoot (nugetPackagesDir ()) actorBinds actorPrologue
+    let planJson = Wire.serializePlan (wirePlanOf repoRoot vsCodeConfig nvimConfig appConfig scenario)
     let! exitCode, stdout, stderr = Sandbox.run spec planJson
 
     let stepLogLine =

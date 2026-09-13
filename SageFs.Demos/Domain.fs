@@ -513,6 +513,48 @@ module Key =
   let S = Key.Char 'S'
   let P = Key.Char 'P'
 
+  /// The wire token for a `Key` (seam-integration threading, demo-actors-
+  /// plan.md §3: `Action.Chord` needs to cross the `Wire.WireStep` boundary
+  /// the same way every other `Action` case already does). Exhaustive and
+  /// round-trippable through `ofToken` — a closed vocabulary, never a raw
+  /// stringly-typed literal at a call site.
+  let toToken (key: Key) : string =
+    match key with
+    | Key.Ctrl -> "Ctrl"
+    | Key.Shift -> "Shift"
+    | Key.Alt -> "Alt"
+    | Key.Return -> "Return"
+    | Key.Escape -> "Escape"
+    | Key.Tab -> "Tab"
+    | Key.Left -> "Left"
+    | Key.Right -> "Right"
+    | Key.Up -> "Up"
+    | Key.Down -> "Down"
+    | Key.Backspace -> "Backspace"
+    | Key.F n -> sprintf "F%d" n
+    | Key.Char c -> sprintf "Char:%c" c
+
+  /// The inverse of `toToken` — `None` for anything not actually produced by
+  /// `toToken`, never a guessed key (mirrors `Keymap.resolve`'s own "drop
+  /// rather than silently produce the wrong thing" doctrine).
+  let ofToken (token: string) : Key option =
+    match token with
+    | "Ctrl" -> Some Key.Ctrl
+    | "Shift" -> Some Key.Shift
+    | "Alt" -> Some Key.Alt
+    | "Return" -> Some Key.Return
+    | "Escape" -> Some Key.Escape
+    | "Tab" -> Some Key.Tab
+    | "Left" -> Some Key.Left
+    | "Right" -> Some Key.Right
+    | "Up" -> Some Key.Up
+    | "Down" -> Some Key.Down
+    | "Backspace" -> Some Key.Backspace
+    | t when t.Length > 1 && t.[0] = 'F' && t.Substring(1) |> Seq.forall System.Char.IsDigit ->
+      Some(Key.F(int (t.Substring 1)))
+    | t when t.StartsWith "Char:" && t.Length = 6 -> Some(Key.Char t.[5])
+    | _ -> None
+
 [<RequireQualifiedAccess>]
 type Action =
   | Click of Target
