@@ -293,6 +293,43 @@ let observe (handle: Handle) (daemonBaseUrl: string) (selector: string) (timeout
 
   poll ()
 
+/// Runs a non-input client command. The only token this actor understands
+/// today is `"create-session-api:<absolute-working-dir>"`
+/// (`Domain.fs`'s `ClientCommand.CreateSession`, `Runtime.fs`'s wire
+/// mapping): the extension's own session-creation paths are ALL
+/// interactive (`createSessionCmd`'s quick-pick, and the auto-discover
+/// flow's `Window.showInformationMessage` confirm dialog,
+/// `sagefs-vscode/src/Extension.fs`) — synthetic input has no reliable way
+/// to answer either, the exact same picker problem class the Neovim
+/// actor's pinned-commit fix solves on ITS side. Rather than fake a click
+/// on a dialog that may not even be visible yet, this calls the cell
+/// daemon's own `/api/sessions/create` HTTP API directly — the same real
+/// endpoint the extension itself would call, just invoked over the actor's
+/// existing HTTP channel instead of through the (missing) non-interactive
+/// UI command. Posting BEFORE the extension's own 2-second auto-discover
+/// delay fires means `Client.listSessions` already sees a session, so that
+/// flow's own `[||] -> prompt` branch never triggers — no dialog ever
+/// appears to race. `projects = []` (never a project literal): the daemon
+/// auto-discovers the lone `.fsproj` in `workingDirectory`, exactly
+/// `hello-dashboard`'s own real-project doctrine (`Scenarios.fs`).
+let command (handle: Handle) (daemonBaseUrl: string) (token: string) : Async<unit> =
+  async {
+    if token.StartsWith "create-session-api:" then
+      let workingDir = token.Substring "create-session-api:".Length
+      let payload = JsonSerializer.Serialize {| projects = ([||]: string[]); workingDirectory = workingDir |}
+      use content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json")
+
+      try
+        let! resp = handle.Http.PostAsync(sprintf "%s/api/sessions/create" daemonBaseUrl, content) |> Async.AwaitTask
+        resp.Dispose()
+      with _ ->
+        // A real, honest failure here surfaces the same way every other
+        // missing/failed observation does — through the step's own
+        // `Expect` never resolving, never a swallowed exception pretending
+        // the session exists.
+        ()
+  }
+
 /// Terminates the VS Code process tree and disposes the control-channel
 /// client. `killTree = true` so the electron zygote/gpu/renderer/extension-
 /// host children this actor's own spike observed (confirmed via `ps aux`
@@ -310,11 +347,13 @@ let close (handle: Handle) : Async<unit> =
 
 /// Wraps this actor behind the cell-agent's actor-dispatch seam (Island F,
 /// demo-actors-plan.md §1.2) — the same shape `Actors/Dashboard.fs`'s
-/// `toLiveActor` exposes. `Command` is a documented no-op for the same
-/// reason Dashboard's is: no `WireStep` encodes a client command yet.
+/// `toLiveActor` exposes. `Command` is genuinely implemented (see its own
+/// doc above) — the only token it knows is `"create-session-api:..."`;
+/// everything else is still a no-op, exactly `Dashboard.fs`'s own doctrine
+/// for an unrecognized command.
 let toLiveActor (handle: Handle) (daemonBaseUrl: string) : LiveActor =
   { Id = ActorId.VsCode
     ResolveRect = resolveRect handle
     Observe = observe handle daemonBaseUrl
-    Command = fun _ -> async { return () }
+    Command = command handle daemonBaseUrl
     Close = fun () -> close handle }

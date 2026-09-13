@@ -44,10 +44,15 @@ let tests =
       ltNeovim.Id |> ScenarioId.value |> Expect.equal "matches the plan's own worked id" "lt-neovim"
       ltNeovim.Sample |> Expect.equal "the real Expecto test project, not a runnable hot-reload sample" Sample.FromCSharp
 
+      // Observes through the shared Dashboard narrator pane (`Expectation.
+      // PageTextContains`), not `NvimBufferContains` — the live-testing
+      // panel's "✓" text is daemon/dashboard state, never written into
+      // nvim's own buffer/extmarks (`Scenarios.Neovim.fs`'s own top doc).
       match ltNeovim.Steps |> List.last with
-      | { Action = Action.Await sig_; Expect = Expectation.NvimBufferContains text } ->
+      | { Action = Action.Await sig_; Expect = Expectation.PageTextContains(selector, text) } ->
         sig_ |> Expect.equal "waits for the real test-run-completed signal, not a click" Signal.testRunCompleted
-        Text.value text |> Expect.equal "checks for the real pass checkmark" "✓"
+        selector |> Expect.equal "observes the live-testing panel, the real source of this text" "#live-testing-panel"
+        text |> Expect.equal "checks for the real pass checkmark" "✓"
       | other -> failtestf "expected the last step to Await testRunCompleted / expect a checkmark, got %A" other
 
     testCase "the three hot-reload scenarios derive the plan's own ids and each keeps the client's own AppKind" <| fun _ ->

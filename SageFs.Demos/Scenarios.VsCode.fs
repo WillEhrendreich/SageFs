@@ -3,45 +3,41 @@
 /// `Scenarios.All.fs` already references `scenarios` below (Island F left
 /// it an empty list) — this island fills it in.
 ///
-/// INTEGRATION NOTE (read before wiring `record` against these): every
-/// `Scenario` below is real, valid `Domain.Scenario` data — captions,
-/// samples, dwell times, the exact target/action/expectation vocabulary
-/// `Domain.fs` already defines — but `Runtime.fs`'s private `wireStepOf`
-/// (a never-touch seam core for this island, demo-actors-plan.md §7's
-/// table) only knows how to flatten `Target.DashboardElement`/
-/// `DashboardCssSelector` into a `Wire.WireStep`'s click/type selectors
-/// today; `Target.EditorPosition`/`PaletteItem`/`WindowCenter` (this
-/// file's own VS Code actions) fall through its `_ -> None` case, so those
-/// steps' `ClickSelector`/`TypeText` come out empty until `wireStepOf`
-/// gains a VS Code-shaped sibling to `dashboardSelector` — exactly the
-/// "single extra call site" integration gap flagged to the main thread
-/// (this island's `Actors/VsCode.fs`/`Runtime.VsCode.fs` are ready to be
-/// that sibling's targets). The `Expect` side is a different story: every
-/// step below observes through the SAME dashboard narrator selectors
+/// INTEGRATION STATUS (read before wiring `record` against these):
+/// `Runtime.fs`'s `vsCodeTargetSelector` now flattens `Target.
+/// EditorPosition`/`WindowCenter ActorId.VsCode` for real (routed through
+/// the extension host's `sagefs.debug.rectFor` — `Actors/VsCode.fs`), so
+/// every `Type`/`Chord` step below drives a genuine click/type. The ONE
+/// remaining gap is `Target.PaletteItem`: no `executeCommand` channel exists
+/// yet (`Actors/VsCode.fs` has none), so that one click never lands — noted
+/// inline on `ltVsCode`'s own step, never faked. `Expect` was always fine:
+/// every step observes through the SAME shared dashboard narrator selectors
 /// `Scenarios.fs`'s own dashboard scenarios use (`EditorFull`'s layout
-/// places a Dashboard pane specifically as a narrator alongside the
-/// editor, demo-actors-plan.md §2.1) — since the daemon's session state is
-/// shared across every client, an eval/toggle driven from VS Code shows up
-/// in the SAME dashboard view a Dashboard-client scenario would read, so
-/// `wireStepOf`'s EXISTING `dashboardSelector`/`PageTextContains` handling
-/// already flattens these `Expect` fields correctly today, with zero
-/// changes needed. This is why the "spike" honestly proved the
-/// launch+control-channel (`Actors/VsCode.fs`'s module doc) but not a full
-/// `record lt-vscode` run — the click/type half of the pipe needs that one
-/// remaining `wireStepOf` case.
+/// places a Dashboard pane specifically as a narrator alongside the editor,
+/// demo-actors-plan.md §2.1) — the daemon's session state is shared across
+/// every client, so an eval/toggle driven from VS Code shows up in the SAME
+/// dashboard view a Dashboard-client scenario would read.
 module SageFs.Demos.Scenarios.VsCode
 
 open SageFs.Demos.Domain
 
-/// Mirrors `Scenarios.fs`'s own private narrator selectors verbatim (the
-/// SAME real `DashboardFragments.fs` DOM contract — a still frame at a
-/// timeout has already confirmed `body:has-text("Ready")` resolves even
-/// when a narrower selector doesn't, per that file's own note) —
-/// redeclared here rather than referenced across the module boundary
-/// (`Scenarios.Dashboard`'s `let private` bindings are not exported), the
-/// same way `CellAgent.fs` redeclares the cell's fixed `:99` display
-/// rather than importing a shared literal.
-let private sessionStatusSelector = "body"
+/// The daemon's own session-status badge, scoped to the ACTUAL element
+/// rather than the whole `body` (`Scenarios.fs`'s own dashboard scenarios
+/// use `body:has-text("Ready")`, justified there for a DIFFERENT reason —
+/// that file's own note). An unscoped `body`-wide check false-positives for
+/// an editor client the instant the dashboard's SSE connection comes up:
+/// the cmdline area renders the idle label `"SageFs -- ready"`
+/// (`DashboardTypes.fs`'s `cmdlineLabel`) whenever `ConnectionState =
+/// Connected`, regardless of whether the SESSION itself has reached Ready —
+/// `body:has-text("Ready")` (case-insensitive substring) matches that text
+/// immediately, long before warmup finishes, which is exactly the false
+/// positive this scenario was flagged for. `#session-status .status` scopes
+/// to the ONE element whose text is genuinely `SessionState.label` — a real,
+/// snapshot-verified selector (`SageFs.Tests/snapshots/
+/// DashboardSnapshotTests.dashboard_sessionStatus_ready.verified.html`:
+/// `<div id="session-status"><span class="status status-ready">Ready</span>
+/// ...`), never a guess.
+let private sessionStatusSelector = "#session-status .status"
 
 let private outputPanelSelector = "[data-testid=session-output]"
 
@@ -71,23 +67,45 @@ let ltVsCode: Scenario =
     Sample = Sample.FromCSharp
     Layout = LayoutTemplate.EditorFull
     Steps =
-      [ { Caption = Caption.mk "1/4 · A real test project is open in the editor"
+      [ // The extension's own auto-discover-and-create flow is interactive
+        // (`Window.showInformationMessage` "Create Session?" confirm
+        // dialog, `Extension.fs`) — synthetic input has no reliable way to
+        // answer it, so this creates the session directly through the cell
+        // daemon's own API instead, before that flow's 2-second delay even
+        // fires (`Actors/VsCode.fs`'s `command` doc).
+        { Caption = Caption.mk "1/5 · Create a session for the real test project"
+          Action = Action.Setup(ClientCommand.CreateSession Sample.FromCSharp)
+          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned")
+          Dwell = Dwell.short }
+        { Caption = Caption.mk "2/5 · A real test project is open in the editor"
           Action = Action.Setup(ClientCommand.OpenFile { Sample = Sample.FromCSharp; RelativePath = "Hello.fs" })
           Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned")
           Dwell = Dwell.short }
-        { Caption = Caption.mk "2/4 · It warms up and goes green"
+        { Caption = Caption.mk "3/5 · It warms up and goes green"
           Action = Action.Await Signal.SessionReady
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
           Dwell = Dwell.medium }
-        { Caption = Caption.mk "3/4 · Turn live testing on from the editor"
+        { Caption = Caption.mk "4/5 · Turn live testing on from the editor"
           // Command Palette (Ctrl+Shift+P) → "SageFs: Enable Live Testing" —
           // `ShowCommands` is the generic palette-open target every named
           // command reaches without needing its own `VsCodeCommand` case
           // (Domain.fs's closed vocabulary intentionally keeps this small).
+          // NOTE (honest gap, not chased here): `Runtime.fs`'s
+          // `vsCodeTargetSelector` has no case for `Target.PaletteItem` yet
+          // (this file's own top-of-file INTEGRATION NOTE) — a real palette
+          // command execution needs a `executeCommand` channel
+          // `Actors/VsCode.fs` does not implement today, so this click does
+          // not yet land. Left wired and honest, never faked with a click
+          // that doesn't happen.
           Action = Action.Click(Target.PaletteItem VsCodeCommand.ShowCommands)
           Expect = Expectation.PageTextContains(liveTestingPanelSelector, "Live Testing: ON")
           Dwell = Dwell.medium }
-        { Caption = Caption.mk "4/4 · SageFs runs the real tests — they pass"
+        // NOT YET PASSING (a second, independent blocker on top of the note
+        // above): identical to `lt-dashboard`/`lt-neovim`'s own documented
+        // blocker — `SageFs.Core`'s live-testing discovery-completion event
+        // never fires for a project opened this way, out of a demo island's
+        // scope per `AGENTS.md`. Left wired, never faked.
+        { Caption = Caption.mk "5/5 · SageFs runs the real tests — they pass"
           Action = Action.Await Signal.TestRunCompleted
           Expect = Expectation.PageTextContains(liveTestingPanelSelector, "✓")
           Dwell = Dwell.long } ]
@@ -111,15 +129,22 @@ let replVsCode: Scenario =
     Sample = Sample.WebappDatastar
     Layout = LayoutTemplate.EditorFull
     Steps =
-      [ { Caption = Caption.mk "1/3 · It warms up and goes green"
+      [ // Same non-interactive create as `ltVsCode`'s own step 1 — see
+        // `Actors/VsCode.fs`'s `command` doc for why this bypasses the
+        // extension's own interactive confirm-dialog flow entirely.
+        { Caption = Caption.mk "1/4 · Create a session for the real project"
+          Action = Action.Setup(ClientCommand.CreateSession Sample.WebappDatastar)
+          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned")
+          Dwell = Dwell.short }
+        { Caption = Caption.mk "2/4 · It warms up and goes green"
           Action = Action.Await Signal.SessionReady
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
           Dwell = Dwell.medium }
-        { Caption = Caption.mk "2/3 · Type a plain expression into the editor"
+        { Caption = Caption.mk "3/4 · Type a plain expression into the editor"
           Action = Action.Type(Target.EditorPosition(file, 1, 0), Text.mk "List.sum [ 1 .. 10 ]", CadenceSeed.ofId "repl-vscode-eval-1")
           Expect = Expectation.EditorSaved file
           Dwell = Dwell.short }
-        { Caption = Caption.mk "3/3 · Press the eval chord and watch the result"
+        { Caption = Caption.mk "4/4 · Press the eval chord and watch the result"
           Action = Action.Chord [ Key.Alt; Key.Return ]
           // The daemon's session state is shared: an eval submitted from
           // VS Code lands in the SAME session the dashboard narrator pane
@@ -131,15 +156,15 @@ let replVsCode: Scenario =
 
 /// The three `hr-dashboard-vscode-*` hot-reload scenarios (§6's matrix,
 /// two of them heroes: `-web` and `-console`) — JOINT with the App
-/// co-actor (demo-actors-plan.md §2.3), which this island does not own.
-/// Each edits a real, already-documented hot-reload knob in the sample's
-/// own source (the roast's own citations: `starMinSpeed`/`starMaxSpeed`
-/// for Raylib, "the message knob" for Console) at a real `EditorPosition`,
-/// saves with the real `Ctrl+S` chord (`Key` module's own worked example:
-/// "Ctrl+S; Ctrl+Shift+P"), and awaits the daemon's real
-/// `AppOutputChanged` signal — the App actor's window is what visibly
-/// proves it, which is why these three cannot genuinely RECORD until the
-/// App island lands (§4's build order: "App — next, unblocks 9 of 18").
+/// co-actor, now genuinely wired (`Actors/App.fs`/`Runtime.App.fs`,
+/// `CellAgent.fs`'s lazy launch right after a real `"run-app"` dispatch).
+/// Each creates a real session, runs the app, edits a real,
+/// already-documented hot-reload knob in the sample's own source (the
+/// roast's own citations: `starMinSpeed`/`starMaxSpeed` for Raylib, "the
+/// message knob" for Console) at a real `EditorPosition`, saves with the
+/// real `Ctrl+S` chord (`Key` module's own worked example: "Ctrl+S;
+/// Ctrl+Shift+P"), and awaits the daemon's real `AppOutputChanged` signal
+/// through the App actor's own real window.
 let private hotReloadVsCode (appKind: AppKind) (sample: Sample) (relativePath: string) (line: int) (knobText: string) (region: Region) : Scenario =
   let file = { Sample = sample; RelativePath = relativePath }
 
@@ -150,15 +175,29 @@ let private hotReloadVsCode (appKind: AppKind) (sample: Sample) (relativePath: s
     Sample = sample
     Layout = LayoutTemplate.EditorLeft
     Steps =
-      [ { Caption = Caption.mk "1/3 · The session and the app are both running"
+      [ // Same non-interactive create every VS Code scenario now uses — see
+        // `Actors/VsCode.fs`'s `command` doc.
+        { Caption = Caption.mk "1/5 · Create a session for the real project"
+          Action = Action.Setup(ClientCommand.CreateSession sample)
+          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned")
+          Dwell = Dwell.short }
+        { Caption = Caption.mk "2/5 · The session warms up and goes green"
           Action = Action.Await Signal.SessionReady
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
           Dwell = Dwell.medium }
-        { Caption = Caption.mk "2/3 · Change a real knob in the editor"
+        // Without this step the App co-actor never launches (`CellAgent.fs`'s
+        // lazy launch fires only right after a real "run-app" dispatch) —
+        // the original 3-step shape here was missing it entirely, which
+        // would have left step 5's `AppOutputChanged` observing nothing.
+        { Caption = Caption.mk "3/5 · Run the app"
+          Action = Action.Setup ClientCommand.RunApp
+          Expect = Expectation.AppState AppRunStateCase.Running
+          Dwell = Dwell.medium }
+        { Caption = Caption.mk "4/5 · Change a real knob in the editor"
           Action = Action.Type(Target.EditorPosition(file, line, 0), Text.mk knobText, CadenceSeed.ofId (sprintf "hr-vscode-%s-knob" relativePath))
           Expect = Expectation.EditorSaved file
           Dwell = Dwell.short }
-        { Caption = Caption.mk "3/3 · Save it — the running app updates live"
+        { Caption = Caption.mk "5/5 · Save it — the running app updates live"
           Action = Action.Chord [ Key.Ctrl; Key.S ]
           Expect = Expectation.AppOutputChanged region
           Dwell = Dwell.long } ]
