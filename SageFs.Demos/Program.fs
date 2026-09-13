@@ -38,11 +38,11 @@ let private notImplemented (name: string) =
   printfn "%s: not implemented" name
   0
 
-let private allScenarios: Domain.Scenario list =
-  [ Scenarios.helloDashboard
-    Scenarios.sessionsDashboard
-    Scenarios.replDashboard
-    Scenarios.ltDashboard ]
+/// The full scenario registry (Island F, demo-actors-plan.md §1.3): every
+/// client's scenarios, aggregated once in `Scenarios.All.fs`. After Island F,
+/// no actor island ever edits this file again — each fills its own
+/// `Scenarios.<X>.scenarios` stub instead.
+let private allScenarios: Domain.Scenario list = Scenarios.All.all
 
 let private scenarioById (scenarioId: string) : Domain.Scenario option =
   allScenarios |> List.tryFind (fun s -> Domain.ScenarioId.value s.Id = scenarioId)
@@ -65,7 +65,7 @@ let private runRecord (scenarioIdArg: string option) : int =
     1
   | Some scenario ->
 
-  match Runtime.findRepoRoot AppContext.BaseDirectory with
+  match Runtime.Core.findRepoRoot AppContext.BaseDirectory with
   | None ->
     eprintfn "sagefs-demos: could not find the repo root (no SageFs.slnx above %s)" AppContext.BaseDirectory
     1
@@ -73,7 +73,7 @@ let private runRecord (scenarioIdArg: string option) : int =
 
   printfn "sagefs-demos: recording '%s' from %s ..." scenarioId repoRoot
 
-  match Runtime.record repoRoot scenario |> Async.RunSynchronously with
+  match Runtime.Core.record repoRoot scenario |> Async.RunSynchronously with
   | Error message ->
     eprintfn "sagefs-demos: record failed:\n%s" message
     1

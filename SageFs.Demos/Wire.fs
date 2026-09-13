@@ -32,7 +32,35 @@ type WireStep =
     TypeText: string option
     SubmitSelector: string option
     ExpectSelector: string option
-    DwellMs: int }
+    DwellMs: int
+    /// Which actor drives this step — `"dashboard"|"vscode"|"neovim"|"app"|
+    /// "agent"` (Island F, demo-actors-plan.md §1.2). `None` defaults to the
+    /// plan's own `Client`; a joint scenario (e.g. an editor's hot-reload
+    /// demo stepping between the editor and the App co-actor) sets this per
+    /// step once the editor/App islands land. Every plan built before Island
+    /// F has every step `None`, so this is purely additive.
+    TargetActor: string option }
+
+/// Placeholder per-actor configs (Island F, demo-actors-plan.md §1.2): each
+/// actor island fills/extends only its own field. Deliberately minimal —
+/// Island F builds no actor logic, only the seam these config records plug
+/// into (`Runtime.<X>.fs` will read them to shape that actor's cell binds
+/// and launch prologue).
+type VsCodeConfig =
+  { /// The built `sagefs-vscode` extension directory to load via
+    /// `--extensionDevelopmentPath` (§2.1). Filled by the VsCode island.
+    ExtensionDevPath: string option }
+
+type NvimConfig =
+  { /// The resolved, pinned sagefs.nvim commit SHA bound into the cell
+    /// (§2.2 — roast I12: a resolved commit, never a floating ref). Filled
+    /// by the Neovim island.
+    PluginCommit: string option }
+
+type AppConfig =
+  { /// Which `AppKind` (`"web"|"raylib"|"console"`) the App co-actor should
+    /// launch (§2.3). Filled by the App island.
+    Kind: string option }
 
 /// The JSON the runner sends a cell-agent over the one stdio pipe (§4.1).
 type ScenarioPlan =
@@ -41,7 +69,17 @@ type ScenarioPlan =
     PageUrl: string
     UserDataDir: string
     OutDir: string
-    Steps: WireStep list }
+    Steps: WireStep list
+    /// Which actor this scenario is filmed through — `"dashboard"|"vscode"|
+    /// "neovim"|"agent"` (Island F, demo-actors-plan.md §1.2). `Runtime.fs`
+    /// always fills this from `Domain.Scenario.Client`, so it is never
+    /// actually absent on the wire; kept a plain `string`, not a DU, because
+    /// this module is deliberately primitive-typed (see the module doc
+    /// above) — the cell-agent maps it back to `ActorId` itself.
+    Client: string
+    VsCode: VsCodeConfig option
+    Nvim: NvimConfig option
+    App: AppConfig option }
 
 /// One step's result, as the cell-agent streams back (§4.1, §4.5). `Segment`
 /// is the path as the CELL sees it (under `/out`) — `Runtime.fs` rewrites it

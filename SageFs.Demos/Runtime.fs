@@ -7,12 +7,25 @@
 /// `Wire.StepLog` line back off its stdout, and then runs the pure
 /// `Compose`/`Ffmpeg` planners over the segments the cell wrote to the shared
 /// `/out` bind mount (§4.1's data plane) to actually produce the artifacts.
-module SageFs.Demos.Runtime
+///
+/// Renamed from the plain `SageFs.Demos.Runtime` to `...Runtime.Core` (Island
+/// F, demo-actors-plan.md §1.2): F# refuses to compile a real module named
+/// `SageFs.Demos.Runtime` alongside sibling per-actor extension modules
+/// nested under that same path (`SageFs.Demos.Runtime.VsCode`, `...Neovim`,
+/// etc. — FS0247, "used as both a namespace and a module"). A module-
+/// declaration rename only — every function body below is unchanged.
+module SageFs.Demos.Runtime.Core
 
 open System
 open System.Diagnostics
 open System.IO
 open SageFs.Demos.Domain
+// Renaming this file's own module one level deeper (`...Runtime.Core`, see
+// above) moved it out of the `SageFs.Demos` namespace its sibling modules
+// (`Wire`, `Sandbox`, `Compose`, `Ffmpeg`, `Layout`, ...) live in, so their
+// short names (`Wire.ScenarioPlan`, `Sandbox.CellSpec`, ...) need this
+// explicit open where they used to resolve implicitly same-namespace.
+open SageFs.Demos
 
 // ---------------------------------------------------------------------------
 // Small process-spawning helpers. Every one of these is the thin, injected,
@@ -202,7 +215,20 @@ let private wireStepOf (repoRoot: string) (index: int) (step: Step) : Wire.WireS
     Wire.TypeText = typeText
     Wire.SubmitSelector = submitSelector
     Wire.ExpectSelector = expectSelector
-    Wire.DwellMs = Dwell.ms step.Dwell }
+    Wire.DwellMs = Dwell.ms step.Dwell
+    // No joint (multi-actor) scenario exists yet (Island F builds no actor
+    // logic) — every step inherits the plan's own `Client`, exactly like
+    // before the seam existed.
+    Wire.TargetActor = None }
+
+/// The wire token for a `Domain.Client` (Island F, demo-actors-plan.md
+/// §1.2) — the one place the rich `Client` DU is flattened to the primitive
+/// string `Wire.ScenarioPlan.Client` carries across the sandbox wall.
+let private clientToken (client: Client) : string =
+  match client with
+  | Client.Dashboard -> "dashboard"
+  | Client.VsCode -> "vscode"
+  | Client.Neovim -> "neovim"
 
 /// The fixed ports every cell uses (§4.1: "the same fixed ports" — legal
 /// because each cell has a private network namespace, so nothing collides).
@@ -218,7 +244,14 @@ let private wirePlanOf (repoRoot: string) (scenario: Scenario) : Wire.ScenarioPl
     Wire.PageUrl = sprintf "http://127.0.0.1:%d/dashboard" DashboardPort
     Wire.UserDataDir = "/home/demo/chrome-profile"
     Wire.OutDir = "/out"
-    Wire.Steps = scenario.Steps |> List.mapi (wireStepOf repoRoot) }
+    Wire.Steps = scenario.Steps |> List.mapi (wireStepOf repoRoot)
+    Wire.Client = clientToken scenario.Client
+    // Every scenario today is Dashboard-only (Island F builds no actor
+    // logic) — each actor island fills its own config once its Runtime.<X>
+    // extension needs it.
+    Wire.VsCode = None
+    Wire.Nvim = None
+    Wire.App = None }
 
 // ---------------------------------------------------------------------------
 // The cell: exact bwrap shape + inner script (§4.12's proven recipe).
@@ -230,10 +263,17 @@ let private wirePlanOf (repoRoot: string) (scenario: Scenario) : Wire.ScenarioPl
 /// directory still has to exist), the daemon on isolated ports/data dir with
 /// a health poll before anything is recorded, and the cell-agent as the
 /// LAST, foreground command so it inherits the piped `ScenarioPlan` on
-/// stdin — the exact control-plane mechanism §4.1 describes. Triple-quoted
-/// so every `$`/`\` below is literal bash, not an F# escape.
-let private innerScript: string =
-  """
+/// stdin — the exact control-plane mechanism §4.1 describes. `actorPrologue`
+/// is Island F's extension point (demo-actors-plan.md §1.2): each actor
+/// island splices ITS OWN launch fragment (start VS Code / kitty+nvim / a
+/// second window) here, right after the daemon is confirmed healthy and
+/// before the cell-agent is exec'd — never by editing this function again.
+/// Island F contributes no fragment of its own, so `actorPrologue = []`
+/// reproduces the exact pre-seam script byte-for-line. Triple-quoted so
+/// every `$`/`\` below is literal bash, not an F# escape.
+let private innerScript (actorPrologue: string list) : string =
+  sprintf
+    """
 set -euo pipefail
 export HOME=/home/demo
 mkdir -p /home/demo /home/demo/chrome-profile /home/demo/.sagefs
@@ -264,6 +304,8 @@ if [ "$DAEMON_UP" != "1" ]; then
   exit 1
 fi
 
+%s
+
 set +e
 /dotnet-root/dotnet /demos-bin/SageFs.Demos.dll cell-agent
 CELLAGENT_EXIT=$?
@@ -277,6 +319,7 @@ for i in $(seq 1 20); do kill -0 "$XVFB_PID" 2>/dev/null || break; sleep 0.1; do
 kill -KILL "$XVFB_PID" 2>/dev/null || true
 exit "$CELLAGENT_EXIT"
 """
+    (actorPrologue |> String.concat "\n")
 
 /// §10: a scenario that opens a REAL project (`Text.RepoRootToken`) needs
 /// the repo — and the shared NuGet package cache its pre-built `obj/` refers
@@ -297,6 +340,12 @@ let private cellSpec
   (hostOutDir: string)
   (repoRoot: string)
   (nugetPackagesDir: string)
+  // Island F's extension points (demo-actors-plan.md §1.2): each actor
+  // island appends ONLY its own RO binds and its own innerScript prologue
+  // line(s) here, never editing this function's core again. Both are `[]`
+  // until an actor island fills them, reproducing the exact pre-seam cell.
+  (actorBinds: (string * string) list)
+  (actorPrologue: string list)
   : Sandbox.CellSpec =
   { RoBinds =
       [ "/etc/fonts", "/etc/fonts"
@@ -307,6 +356,7 @@ let private cellSpec
         dotnetRoot, "/dotnet-root"
         repoRoot, repoRoot
         nugetPackagesDir, nugetPackagesDir ]
+      @ actorBinds
     RwBinds = [ hostOutDir, "/out" ]
     Env =
       [ "HOME", "/home/demo"
@@ -324,7 +374,7 @@ let private cellSpec
         // minimal /dev).
         "LIBGL_ALWAYS_SOFTWARE", "1"
         "__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/50_mesa.json" ]
-    InnerCommand = [ "/bin/sh"; "-c"; innerScript ] }
+    InnerCommand = [ "/bin/sh"; "-c"; innerScript actorPrologue ] }
 
 let private ffmpeg (args: string list) : Async<int * string> =
   async {
@@ -514,7 +564,10 @@ let record (repoRoot: string) (scenario: Scenario) : Async<Result<Wire.StepLog *
 
     Directory.CreateDirectory cellOutDir |> ignore
 
-    let spec = cellSpec sagefsBin demosBin dotnetRoot chromeDir cellOutDir repoRoot (nugetPackagesDir ())
+    // Island F contributes no actor of its own — `[]`/`[]` reproduces the
+    // exact pre-seam cell (demo-actors-plan.md §1.2). An actor island fills
+    // these from its own `Runtime.<X>.fs` once it needs cell-level presence.
+    let spec = cellSpec sagefsBin demosBin dotnetRoot chromeDir cellOutDir repoRoot (nugetPackagesDir ()) [] []
     let planJson = Wire.serializePlan (wirePlanOf repoRoot scenario)
     let! exitCode, stdout, stderr = Sandbox.run spec planJson
 

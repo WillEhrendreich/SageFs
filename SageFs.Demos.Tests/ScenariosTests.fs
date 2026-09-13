@@ -20,7 +20,7 @@ module SageFs.Demos.Tests.ScenariosTests
 open Expecto
 open Expecto.Flip
 open SageFs.Demos.Domain
-open SageFs.Demos.Scenarios
+open SageFs.Demos.Scenarios.Dashboard
 open SageFs.Demos.Layout
 
 [<Tests>]
