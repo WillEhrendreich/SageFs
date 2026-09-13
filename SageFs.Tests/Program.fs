@@ -43,6 +43,9 @@ let main argv =
         SessionLifecycleMutationTests.sessionLifecycleMutationTests
         CoverageViewMutationTests.coverageViewMutationTests
         CoverageViewProjectMutationTests.coverageViewProjectMutationTests
+        RestartPolicyBoundaryMutationTests.restartPolicyBoundaryMutationTests
+        WatchdogMutationTests.watchdogMutationTests
+        VariantSelectorMutationTests.variantSelectorMutationTests
       ]
     // Honest mutation accounting: each mutant is one test case that PASSES only
     // when the mutant is killed (real <> mutant). Deriving the score from the
