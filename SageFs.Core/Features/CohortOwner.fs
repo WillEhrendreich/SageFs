@@ -25,16 +25,77 @@ open SageFs.Features.CohortLedger
 /// `'m` is bound to `MemberTable.MemberId` here (D2) — the post-merge stitch
 /// Phase 1 item 7 deliberately left open for this shell.
 ///
-/// Landing effects (`Rebase`/`ComputeAffected`/`RunTests`/`FastForward`) are
-/// returned to the caller as data, per D5 — this actor never performs them.
-/// A later slice wires a performer that runs them and posts the typed
-/// completion commands (`RebaseCompleted` etc.) back to this owner, the same
-/// `RebuildCompleted` pattern `SessionManager.fs:79-82` already uses.
+/// Landing effects (`Rebase`/`ComputeAffected`/`RunTests`/`FastForward`/
+/// `Notify`) are returned by `decide` as data, per D5 — `decide` itself never
+/// performs them. Item 14b closes the loop this doc comment used to describe
+/// as future work: `handle` now dispatches every effect to an injected
+/// `LandingPerformer`, off the mailbox, and posts the typed completion
+/// command (`RebaseCompleted` etc.) back to THIS owner once the performer's
+/// `Async` resolves — the same `RebuildCompleted` pattern
+/// `SessionManager.fs:79-82,911-915` already uses (`Async.Start` off the
+/// loop; the mailbox is the only place a completion is ever applied, so
+/// completions are serialized in arrival order exactly like every other
+/// command).
 module CohortOwner =
 
   type internal Command =
     | Apply of CohortCommand<MemberId> * reply: (Result<CohortEvent<MemberId> list * CohortEffect<MemberId> list, CohortError<MemberId>> -> unit)
     | Flush of AsyncReplyChannel<unit>
+
+  /// The injectable seam for actually PERFORMING a landing effect (item 14b
+  /// of sagefs-multiagent-vision.md). `decide` (Cohort.fs) never runs git,
+  /// never runs a test — it returns `CohortEffect<'m>` values as data; this
+  /// record is how the shell performs them. Every field's argument shape
+  /// mirrors what the matching `CohortEffect` case actually carries
+  /// (`LandingId`/`ClaimId` unwrapped to their raw `string`, since that's
+  /// what a real performer — e.g. the git-backed one in
+  /// `SageFs/CohortGit.fs`, item 14a — naturally works with): the loop
+  /// unwraps `LandingId` before calling in and re-wraps it when posting the
+  /// completion back.
+  ///  - `Rebase landingId onto` → `Ok newHeadSha` or `Error conflictFiles`,
+  ///    exactly `CohortCommand.RebaseCompleted`'s payload shape.
+  ///  - `ComputeAffected landingId baseSha headSha` → the `TestId`s a
+  ///    diff between those two shas affects.
+  ///  - `RunTests landingId tests` → the FAILING subset (empty = all
+  ///    passed), exactly `TestsCompleted`'s payload.
+  ///  - `FastForward landingId toSha` → `Ok committedSha` or `Error reason`.
+  ///    `decide` has no failure-completion command for this effect (see
+  ///    `dispatchLandingEffects`'s `FastForward` case) — an `Error` here is
+  ///    logged and the landing is left exactly where it was (`Verifying`),
+  ///    which is the honest, documented gap until a later item adds a
+  ///    `FastForwardFailed` command to `Cohort.fs`.
+  ///  - `Notify who event` is fire-and-forget: `decide` defines
+  ///    `CohortEffect.Notify` but no `decide` case constructs one yet (grep
+  ///    confirms zero call sites in Cohort.fs today), so this field exists
+  ///    for forward compatibility and is exercised by no production path
+  ///    yet.
+  type LandingPerformer<'m> = {
+    Rebase: string -> string -> Async<Result<string, string list>>
+    ComputeAffected: string -> string -> string -> Async<TestId list>
+    RunTests: string -> TestId list -> Async<TestId list>
+    FastForward: string -> string -> Async<Result<string, string>>
+    Notify: 'm -> CohortEvent<'m> -> unit
+  }
+
+  module LandingPerformer =
+    /// Performs nothing and completes nothing — the exact behavior `handle`
+    /// had before item 14b: a `CohortEffect` is returned as data and NOTHING
+    /// ever resolves it, so a landing that reaches `Rebasing`/`Verifying`
+    /// simply stays there. Implemented with a `TaskCompletionSource` that is
+    /// never completed (never a timer, never a blocked thread — just a
+    /// continuation parked on an unresolved `Task`), so dispatching an
+    /// effect against `stub` is observably identical to never having
+    /// dispatched it at all. This is `start`'s default (unchanged public
+    /// signature, so every existing caller — including `DaemonMode.fs` — is
+    /// unaffected by this item); `startWithPerformer` is the new entry point
+    /// a later slice (14c) uses to inject the real `CohortGit`-backed
+    /// performer.
+    let stub<'m> : LandingPerformer<'m> =
+      { Rebase = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<string, string list>>().Task)
+        ComputeAffected = fun _ _ _ -> Async.AwaitTask(TaskCompletionSource<TestId list>().Task)
+        RunTests = fun _ _ -> Async.AwaitTask(TaskCompletionSource<TestId list>().Task)
+        FastForward = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<string, string>>().Task)
+        Notify = fun _ _ -> () }
 
   type internal OwnerState = {
     Cohort: CohortState<MemberId>
@@ -93,6 +154,90 @@ module CohortOwner =
     try reply result
     with ex -> logger.LogWarning(sprintf "[cohort-owner] Commit callback threw: %s" ex.Message)
 
+  /// Posts an effect-completion command back onto THIS owner's own mailbox
+  /// (`post` is `inbox.Post`, wired in by `start`/`startWithPerformer`) — the
+  /// exact `RebuildCompleted` shape `SessionManager.fs:79-82` uses. `decide`
+  /// (Cohort.fs) already refuses a completion that is not at the front of
+  /// the queue, or whose `onto` no longer matches `IntegrationHead`
+  /// (`requireAtFrontOfQueue`, the `HeadMoved` check in
+  /// `FastForwardCompleted`) — so a completion that arrives late (e.g. the
+  /// old worker of a superseded landing) is rejected as a normal `Error`
+  /// here, not a crash: log it and move on, per item 14b's guidance that no
+  /// extra fencing is needed beyond what `decide` already enforces.
+  let private postCompletion (logger: Utils.ILogger) (post: Command -> unit) (cmd: CohortCommand<MemberId>) : unit =
+    post (
+      Command.Apply(
+        cmd,
+        function
+        | Ok _ -> ()
+        | Error err ->
+          logger.LogInfo(sprintf "[cohort-owner] landing completion %A refused (stale or out-of-order): %A" cmd err)
+      )
+    )
+
+  /// Performs every effect `decide` returned, OFF the mailbox: each effect
+  /// gets its own `Async.Start`'d worker that calls the matching
+  /// `LandingPerformer` function and posts the typed completion command back
+  /// via `postCompletion` once it resolves. The mailbox never awaits git or
+  /// a test run inline — only `postCompletion`'s re-entry into `Command.Apply`
+  /// touches the single writer, so concurrent effects from concurrent
+  /// landings (there are none in v1's strictly-serial queue, but a withdraw
+  /// racing a rebase is exactly this shape) are still serialized in
+  /// arrival order by the mailbox itself.
+  let private dispatchLandingEffects
+    (logger: Utils.ILogger)
+    (performer: LandingPerformer<MemberId>)
+    (post: Command -> unit)
+    (effects: CohortEffect<MemberId> list)
+    : unit =
+    let complete = postCompletion logger post
+    for effect in effects do
+      match effect with
+      | CohortEffect.Rebase(LandingId id, onto) ->
+        Async.Start(
+          async {
+            let! result = performer.Rebase id onto
+            complete (CohortCommand.RebaseCompleted(LandingId id, result))
+          }
+        )
+      | CohortEffect.ComputeAffected(LandingId id, baseSha, headSha) ->
+        Async.Start(
+          async {
+            let! tests = performer.ComputeAffected id baseSha headSha
+            complete (CohortCommand.AffectedComputed(LandingId id, tests))
+          }
+        )
+      | CohortEffect.RunTests(LandingId id, tests) ->
+        Async.Start(
+          async {
+            let! failing = performer.RunTests id tests
+            complete (CohortCommand.TestsCompleted(LandingId id, failing))
+          }
+        )
+      | CohortEffect.FastForward(LandingId id, toSha) ->
+        Async.Start(
+          async {
+            let! result = performer.FastForward id toSha
+            match result with
+            | Ok committedSha -> complete (CohortCommand.FastForwardCompleted(LandingId id, committedSha))
+            | Error reason ->
+              // `Cohort.decide` has no failure-completion command for
+              // `FastForward` (unlike `Rebase`, whose `Error` drives a
+              // `RebaseConflict` `Blocked` transition) — a fast-forward
+              // infra failure (the branch moved concurrently, a bad ref)
+              // has no path back into the state machine today. Documented,
+              // honest gap: log it and leave the landing exactly where it
+              // is (`Verifying`), rather than inventing an undocumented
+              // command `decide` was never given a case for.
+              logger.LogWarning(
+                sprintf "[cohort-owner] FastForward for landing %s failed with no completion path in Cohort.decide: %s" id reason
+              )
+          }
+        )
+      | CohortEffect.Notify(who, event) ->
+        try performer.Notify who event
+        with ex -> logger.LogWarning(sprintf "[cohort-owner] Notify performer threw: %s" ex.Message)
+
   let internal handle
     (logger: Utils.ILogger)
     (ledger: LedgerPort<MemberId>)
@@ -100,6 +245,9 @@ module CohortOwner =
     (entropy: unit -> byte[])
     (getSessionTestOutcomes: string -> SessionTestOutcomes)
     (publish: CohortFrame<MemberId> -> unit)
+    (publishState: CohortState<MemberId> -> unit)
+    (performer: LandingPerformer<MemberId>)
+    (post: Command -> unit)
     (owner: OwnerState)
     (command: Command)
     : Async<OwnerState> =
@@ -113,7 +261,17 @@ module CohortOwner =
           let seq = owner.NextSeq
           ledger.Append { Seq = seq; Clock = now; Entropy = bytes; Command = cmd; Events = events }
           publish (frameOf getSessionTestOutcomes { Seq = seq; State = newState })
+          // `CohortFrame` (Cohort.fs's `project`) does not carry
+          // `Landings`/`Queue`/`IntegrationHead` — it projects only
+          // members/claims/the test matrix. Landing progress therefore has
+          // no read model yet; `publishState` is CohortOwner-local
+          // observability (mirrors `publish`'s wait-free discipline) so a
+          // caller — today, only this item's tests — can watch a landing
+          // actually advance. It is NOT a second source of truth: it is
+          // always `newState`, the exact value the ledger just recorded.
+          publishState newState
           notify logger reply (Ok(events, effects))
+          dispatchLandingEffects logger performer post effects
           return { Cohort = newState; NextSeq = seq + 1L<ledgerSeq> }
         | Error err ->
           notify logger reply (Error err)
@@ -124,7 +282,13 @@ module CohortOwner =
     }
 
   /// A running owner for one cohort.
-  type Handle internal (mailbox: MailboxProcessor<Command>, readFrame: unit -> CohortFrame<MemberId>) =
+  type Handle
+    internal
+    (
+      mailbox: MailboxProcessor<Command>,
+      readFrame: unit -> CohortFrame<MemberId>,
+      readCohortState: unit -> CohortState<MemberId>
+    ) =
     /// Apply a command; completes once it is on the ledger (or refused).
     member _.Commit(cmd: CohortCommand<MemberId>) : Task<Result<CohortEvent<MemberId> list * CohortEffect<MemberId> list, CohortError<MemberId>>> =
       mailbox.PostAndAsyncReply(fun ch -> Command.Apply(cmd, ch.Reply)) |> Async.StartAsTask
@@ -137,6 +301,15 @@ module CohortOwner =
     /// The cohort's current read model. Wait-free (D4): dereferences the
     /// published frame pointer directly and never posts to the mailbox.
     member _.ReadFrame() : CohortFrame<MemberId> = readFrame ()
+
+    /// The raw `CohortState` — `Landings`/`Queue`/`IntegrationHead`, none of
+    /// which `CohortFrame` (Cohort.fs's `project`) currently projects.
+    /// Wait-free, same discipline as `ReadFrame`. Exists so a landing's
+    /// actual progress (item 14b — the effect-dispatch loop this Handle now
+    /// drives) is observable without a mailbox round-trip; today's only
+    /// consumer is this item's own tests, but any future landing-status UI
+    /// reads from here rather than reaching into the mailbox.
+    member _.ReadCohortState() : CohortState<MemberId> = readCohortState ()
 
     /// Completes once every command queued before it has been applied.
     member _.Flush() : Task =
@@ -167,12 +340,18 @@ module CohortOwner =
   /// Startup state is `Cohort.replay (ledger.ReadAll())`: the ledger is the
   /// only source of truth, so restarting the owner over the same ledger
   /// reconstructs an identical `CohortState`/`CohortFrame`.
-  let start
+  ///
+  /// `step` (hence `handle`) is built INSIDE the `MailboxProcessor.Start`
+  /// lambda, not before it, because `handle` needs `inbox.Post` itself as
+  /// its completion-posting callback (item 14b) — `inbox` only exists once
+  /// the mailbox's own body is running.
+  let private startCore
     (logger: Utils.ILogger)
     (ledger: LedgerPort<MemberId>)
     (clock: unit -> DateTime)
     (entropy: unit -> byte[])
     (getSessionTestOutcomes: string -> SessionTestOutcomes)
+    (performer: LandingPerformer<MemberId>)
     : Handle =
     let entries = ledger.ReadAll ()
     let head = replayHead entries
@@ -183,13 +362,61 @@ module CohortOwner =
     let frameRef = ref (frameOf getSessionTestOutcomes head)
     let publish (frame: CohortFrame<MemberId>) =
       Interlocked.Exchange(frameRef, frame) |> ignore
-    let step = ResilientActor.wrapLoop logger "cohort-owner" (handle logger ledger clock entropy getSessionTestOutcomes publish)
+    let stateRef = ref head.State
+    let publishState (state: CohortState<MemberId>) =
+      Interlocked.Exchange(stateRef, state) |> ignore
     let mailbox =
       MailboxProcessor.Start(fun inbox ->
+        let step =
+          ResilientActor.wrapLoop logger "cohort-owner"
+            (handle logger ledger clock entropy getSessionTestOutcomes publish publishState performer inbox.Post)
         let rec loop owner = async {
           let! command = inbox.Receive()
           let! next = step owner command
           return! loop next
         }
         loop { Cohort = head.State; NextSeq = initialNextSeq })
-    new Handle(mailbox, fun () -> frameRef.Value)
+    new Handle(mailbox, (fun () -> frameRef.Value), (fun () -> stateRef.Value))
+
+  /// Start the owner for one cohort's ledger. `clock`/`entropy` are injected
+  /// (production defaults: `DateTime.UtcNow` and `productionEntropy`) so
+  /// tests can drive `decide` with deterministic values — this shell is
+  /// where real time and randomness enter; the pure core never reads them.
+  /// `getSessionTestOutcomes` is the item-13c seam (completing item 13a's,
+  /// which had no session->member mapping to read from): the shell's own
+  /// per-session test-outcome lookup, called once per session-bound member
+  /// on every frame this owner publishes (`frameOf`). Tests that don't care
+  /// about the matrix pass `fun _ -> ([], [], [], 0L)`, matching Slice 1's
+  /// original hardcoded (empty-matrix) behavior.
+  ///
+  /// Unchanged signature (item 14b): landing effects are dispatched against
+  /// `LandingPerformer.stub`, which performs nothing and completes nothing
+  /// — identical, observably, to `decide`'s effects going unperformed
+  /// altogether, exactly as before this item. Every existing caller
+  /// (`DaemonMode.fs`, `CohortOwnerTests.fs`) is unaffected. Use
+  /// `startWithPerformer` to inject a performer that actually runs landing
+  /// effects (the real `CohortGit`-backed one is a later slice's wiring).
+  let start
+    (logger: Utils.ILogger)
+    (ledger: LedgerPort<MemberId>)
+    (clock: unit -> DateTime)
+    (entropy: unit -> byte[])
+    (getSessionTestOutcomes: string -> SessionTestOutcomes)
+    : Handle =
+    startCore logger ledger clock entropy getSessionTestOutcomes LandingPerformer.stub
+
+  /// Same as `start`, plus an injected `LandingPerformer` that actually runs
+  /// landing effects — this is the keystone item 14b adds: without a real
+  /// performer, a landing decide moves into `Rebasing`/`Verifying` and never
+  /// progresses past it. Tests drive the whole landing state machine
+  /// end-to-end with a deterministic FAKE performer (no real git/sessions);
+  /// a later slice passes the real `CohortGit`-backed one from `DaemonMode.fs`.
+  let startWithPerformer
+    (logger: Utils.ILogger)
+    (ledger: LedgerPort<MemberId>)
+    (clock: unit -> DateTime)
+    (entropy: unit -> byte[])
+    (getSessionTestOutcomes: string -> SessionTestOutcomes)
+    (performer: LandingPerformer<MemberId>)
+    : Handle =
+    startCore logger ledger clock entropy getSessionTestOutcomes performer
