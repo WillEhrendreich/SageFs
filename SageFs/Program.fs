@@ -363,40 +363,43 @@ let main args =
         eprintfn "Invalid connection file: %s" msg
         1
       | Ok connInfo ->
-        printfn "SageFs Jupyter kernel starting (transport=%s, ip=%s)" connInfo.Transport connInfo.Ip
-        printfn "  Shell:   %d" connInfo.ShellPort
-        printfn "  IOPub:   %d" connInfo.IoPubPort
-        printfn "  Stdin:   %d" connInfo.StdinPort
-        printfn "  Control: %d" connInfo.ControlPort
-        printfn "  HB:      %d" connInfo.HbPort
+        let mcpPort = parseMcpPort args
+        match DaemonState.readOnPort mcpPort with
+        | None ->
+          eprintfn "SageFs daemon is not running on port %d." mcpPort
+          eprintfn "Start it first with 'sagefs' (or 'sagefs --mcp-port %d' if you passed a custom port), then reconnect the Jupyter kernel." mcpPort
+          1
+        | Some _ ->
+          printfn "SageFs Jupyter kernel starting (transport=%s, ip=%s)" connInfo.Transport connInfo.Ip
+          printfn "  Shell:   %d" connInfo.ShellPort
+          printfn "  IOPub:   %d" connInfo.IoPubPort
+          printfn "  Stdin:   %d" connInfo.StdinPort
+          printfn "  Control: %d" connInfo.ControlPort
+          printfn "  HB:      %d" connInfo.HbPort
+          printfn "  Daemon:  http://localhost:%d (working directory %s)" mcpPort Environment.CurrentDirectory
 
-        // Create FSI bridge handlers from a local SessionProxy
-        let exec, complete, isComplete =
-          let proxy : WorkerProtocol.SessionProxy = fun msg ->
-            async {
-              match msg with
-              | WorkerProtocol.WorkerMessage.EvalCode (code, replyId) ->
-                return WorkerProtocol.WorkerResponse.EvalResult (
-                  replyId,
-                  Ok (sprintf "val it: string = \"%s\"" code),
-                  [],
-                  Map.empty)
-              | _ ->
-                return WorkerProtocol.WorkerResponse.EvalResult (
-                  "",
-                  Error (SageFsError.EvalFailed "Not connected to daemon"),
-                  [],
-                  Map.empty)
-            }
-          JupyterKernel.FsiBridge.fromProxy proxy
+          // Route EvalCode to the running daemon over the same /exec
+          // contract every editor integration already uses
+          // (McpServer.fs's mapExecutionRoutes). See JupyterDaemonBridge
+          // for session selection and the no-daemon/no-session error paths.
+          let httpClient =
+            new System.Net.Http.HttpClient(
+              BaseAddress = Uri(sprintf "http://localhost:%d" mcpPort),
+              Timeout = Timeouts.workerHttpRequest)
+          let proxy =
+            JupyterDaemonBridge.makeSessionProxy
+              (JupyterDaemonBridge.httpPostJson httpClient "/exec")
+              (JupyterDaemonBridge.httpPostJson httpClient "/api/sessions/create")
+              Environment.CurrentDirectory
+          let exec, complete, isComplete = JupyterKernel.FsiBridge.fromProxy proxy
 
-        use cts = new System.Threading.CancellationTokenSource()
-        Console.CancelKeyPress.Add(fun e ->
-          e.Cancel <- true
-          cts.Cancel())
-        printfn "Kernel running. Press Ctrl+C to stop."
-        JupyterTransport.run connInfo exec complete isComplete cts.Token
-        0
+          use cts = new System.Threading.CancellationTokenSource()
+          Console.CancelKeyPress.Add(fun e ->
+            e.Cancel <- true
+            cts.Cancel())
+          printfn "Kernel running. Press Ctrl+C to stop."
+          JupyterTransport.run connInfo exec complete isComplete cts.Token
+          0
 
   | Daemon _ ->
     let mcpPort = parseMcpPort args

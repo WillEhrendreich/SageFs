@@ -322,6 +322,34 @@ module JupyterKernel =
           "SageFs Documentation", "https://github.com/WillEhrendreich/SageFs"
         ] }
 
+    /// Serialize a `KernelInfoReply` to the wire's real snake_case
+    /// kernel_info_reply body — NOT the `"{}"` that
+    /// `WireProtocol.serializeContent` produces for the (parameterless)
+    /// `KernelInfoRequest` case, which is what Router.route was sending
+    /// back as the reply. jupyter_client's `wait_for_ready` reads
+    /// `protocol_version` straight off this body; a bare `{}` kills the
+    /// handshake before any client can send an `execute_request` at all.
+    let serializeKernelInfoReply (reply: KernelInfoReply) : string =
+      let obj = {|
+        protocol_version = reply.ProtocolVersion
+        implementation = reply.Implementation
+        implementation_version = reply.ImplementationVersion
+        language_info = {|
+          name = reply.LanguageInfo.Name
+          version = reply.LanguageInfo.Version
+          mimetype = reply.LanguageInfo.MimeType
+          file_extension = reply.LanguageInfo.FileExtension
+          pygments_lexer = reply.LanguageInfo.PygmentsLexer
+          codemirror_mode = reply.LanguageInfo.CodemirrorMode
+          nbconvert_exporter = reply.LanguageInfo.NbconvertExporter
+        |}
+        banner = reply.Banner
+        help_links =
+          reply.HelpLinks
+          |> List.map (fun (text, url) -> {| text = text; url = url |})
+      |}
+      JsonSerializer.Serialize(obj)
+
     let handleExecuteRequest
       (handler: ExecuteHandler)
       (executionCount: int)
@@ -330,8 +358,11 @@ module JupyterKernel =
       async {
         let! result = handler request.Code request.Silent
         match result with
-        | Ok _output ->
-          return ExecuteReplyOk {| ExecutionCount = executionCount; Payload = Map.empty |}
+        | Ok output ->
+          return ExecuteReplyOk {|
+            ExecutionCount = executionCount
+            Payload = Map.ofList [ output.MimeType, output.Output ]
+          |}
         | Error err ->
           return ExecuteReplyError {|
             ExecutionCount = executionCount
@@ -407,9 +438,9 @@ module JupyterKernel =
       async {
         match msg.Content with
         | MessageContent.KernelInfoRequest ->
-          let _reply = Protocol.kernelInfoReply ()
+          let reply = Protocol.kernelInfoReply ()
           return {
-            Reply = MessageContent.Raw (WireProtocol.serializeContent MessageContent.KernelInfoRequest)
+            Reply = MessageContent.Raw (Protocol.serializeKernelInfoReply reply)
             IOPub = [ StatusMessage KernelStatus.Busy; StatusMessage KernelStatus.Idle ]
             NewState = state
           }
@@ -421,7 +452,7 @@ module JupyterKernel =
             [ StatusMessage KernelStatus.Busy ] @
             (match result with
              | ExecuteReplyOk r ->
-               [ ExecuteResultMessage (r.ExecutionCount, Map.ofList ["text/plain", "ok"]) ]
+               [ ExecuteResultMessage (r.ExecutionCount, r.Payload) ]
              | ExecuteReplyError r ->
                [ ErrorOutput (r.Ename, r.Evalue, r.Traceback) ]) @
             [ StatusMessage KernelStatus.Idle ]
