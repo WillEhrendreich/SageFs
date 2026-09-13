@@ -20,7 +20,10 @@
     <Compile Include="SandboxTests.fs" />
     <Compile Include="WireTests.fs" />
     <Compile Include="ScenariosTests.fs" />
+    <Compile Include="ScenariosNeovimTests.fs" />
+    <Compile Include="RuntimeNeovimTests.fs" />
     <Compile Include="CellAgentTests.fs" />
+    <Compile Include="NeovimActorTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
