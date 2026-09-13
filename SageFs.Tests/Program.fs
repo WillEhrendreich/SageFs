@@ -200,6 +200,12 @@ let main argv =
         Impl.testFromThisAssembly ()
         |> Option.defaultValue (testList "empty" [])
         |> SageFs.Tests.TestInfrastructure.Integration.excludeRegistered
+        // Exclude [Benchmark]-tagged wall-clock perf tests from the fast default
+        // suite — their p95/latency budgets flake under load (roast-5 §12). They
+        // run on demand via --all/--benchmark, not on every default run.
+        |> Test.filter
+          defaultConfig.joinWith.asString
+          (fun z -> not ((defaultConfig.joinWith.format z).Contains "[Benchmark]"))
       // Fail closed: an "[Integration]"-tagged test that bypassed the registry
       // would silently join the fast default run.
       match SageFs.Tests.TestInfrastructure.Integration.unregisteredTagged tests with
