@@ -116,6 +116,9 @@
         <Compile Include="RestartPolicyBoundaryMutationTests.fs" />
         <Compile Include="WatchdogMutationTests.fs" />
         <Compile Include="VariantSelectorMutationTests.fs" />
+        <Compile Include="SessionOperationsMutationTests.fs" />
+        <Compile Include="WorkflowTypesMutationTests.fs" />
+        <Compile Include="AffordancesMutationTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
         <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
