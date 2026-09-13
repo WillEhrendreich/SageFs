@@ -1573,6 +1573,17 @@ let run
   // The single owner of daemon.sagefm: every manifest write in this daemon goes through it.
   use manifestOwner = Features.ManifestOwner.start (Log.asILogger ()) DaemonState.SageFsDir
 
+  // The single owner of this daemon's implicit cohort (cohort-integration-plan.md
+  // Slice 2, D1/D2/D4/D5): holds the live CohortState, appends every applied
+  // command to a SQLite ledger, and publishes the projected CohortFrame
+  // wait-free for reads (Claims v1 MCP tools, McpTools.fs).
+  use cohortOwner =
+    Features.CohortOwner.start
+      (Log.asILogger ())
+      (Features.CohortLedgerSqlite.Sqlite.create (System.IO.Path.Combine(DaemonState.SageFsDir, "cohort.ledger.db")))
+      (fun () -> System.DateTime.UtcNow)
+      Features.CohortOwner.productionEntropy
+
   use cts = infra.Cts
 
   // Ownership rule 2 (§3.1): an externally-spawned daemon with --owner-pid
@@ -1726,6 +1737,7 @@ let run
       ActivityTracker = activityTracker
       LiveSnapshotSink = Some (fun sid snap ->
         SageFs.Features.LiveBindingsAdaptive.update liveBindingsAdaptive sid snap)
+      CohortOwner = Some cohortOwner
     } cts.Token
 
   let liveTestTickMs = 25

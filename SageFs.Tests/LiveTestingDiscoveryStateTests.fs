@@ -28,7 +28,8 @@ let private mkCtxWithState (state: LiveTestState) : McpContext =
     GetWarmupContext = None
     GetFeatureState = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
-    LiveSnapshotSink = None }
+    LiveSnapshotSink = None
+    CohortOwner = None }
 
 let private jsonBoolField (fieldName: string) (root: JsonElement) =
   root.GetProperty(fieldName).GetBoolean()

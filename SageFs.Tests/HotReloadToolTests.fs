@@ -64,6 +64,7 @@ let private mkTools
     GetFeatureState = None
     ActivityTracker = AgentActivityTracker.create ()
     LiveSnapshotSink = None
+    CohortOwner = None
   }
   SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
 

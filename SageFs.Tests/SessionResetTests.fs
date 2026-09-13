@@ -113,7 +113,8 @@ let private mkPushbackCtx (restartResult: Result<string, SageFsError>) =
       GetWarmupContext = None
       GetFeatureState = None
       ActivityTracker = AgentActivityTracker.create()
-      LiveSnapshotSink = None }
+      LiveSnapshotSink = None
+      CohortOwner = None }
   ctx, restartCalls, statusEvents
 
 [<Tests>]

@@ -32,7 +32,8 @@ let private isolatedCtx (sessionId: SageFs.WorkerProtocol.SessionId) =
     GetWarmupContext = None
     GetFeatureState = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
-    LiveSnapshotSink = None } : McpContext
+    LiveSnapshotSink = None
+    CohortOwner = None } : McpContext
 
 /// Unique ID per test invocation — prevents type name collisions
 /// when --multiemit- puts all types in one assembly across re-runs.

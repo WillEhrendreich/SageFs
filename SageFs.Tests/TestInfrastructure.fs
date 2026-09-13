@@ -328,7 +328,8 @@ let sharedCtx () =
     GetWarmupContext = None
     GetFeatureState = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
-    LiveSnapshotSink = None } : McpContext
+    LiveSnapshotSink = None
+    CohortOwner = None } : McpContext
 
 /// Create a McpContext with a custom session ID backed by the global shared actor
 let sharedCtxWith (sessionId: SageFs.WorkerProtocol.SessionId) =
@@ -347,4 +348,5 @@ let sharedCtxWith (sessionId: SageFs.WorkerProtocol.SessionId) =
     GetWarmupContext = None
     GetFeatureState = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
-    LiveSnapshotSink = None } : McpContext
+    LiveSnapshotSink = None
+    CohortOwner = None } : McpContext

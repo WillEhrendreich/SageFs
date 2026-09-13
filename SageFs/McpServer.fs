@@ -626,6 +626,9 @@ type McpServerConfig = {
   ActivityTracker: SageFs.AgentActivityTracker.Tracker
   /// Receives the live bound-value snapshot after each successful eval.
   LiveSnapshotSink: (string -> SageFs.Features.LiveValueTree.LiveValueSnapshot -> unit) option
+  /// The single per-daemon cohort owner (cohort-integration-plan.md Slice 2).
+  /// `None` when the caller wires no cohort support (most existing tests).
+  CohortOwner: SageFs.Features.CohortOwner.Handle option
 }
 
 // Create shared MCP context (private — called only by startMcpServer)
@@ -633,7 +636,7 @@ let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> op
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; ActivityTracker = cfg.ActivityTracker; LiveSnapshotSink = cfg.LiveSnapshotSink }
+  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; ActivityTracker = cfg.ActivityTracker; LiveSnapshotSink = cfg.LiveSnapshotSink; CohortOwner = cfg.CohortOwner }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 

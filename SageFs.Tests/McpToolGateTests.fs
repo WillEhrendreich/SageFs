@@ -243,6 +243,7 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     GetFeatureState = None
     ActivityTracker = AgentActivityTracker.create ()
     LiveSnapshotSink = None
+    CohortOwner = None
   }
   ctx, workingDir
 
