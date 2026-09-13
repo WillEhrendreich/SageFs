@@ -372,6 +372,7 @@
         <Compile Include="FrictionClassificationTests.fs" />
         <Compile Include="PendingRunSummaryTests.fs" />
         <Compile Include="ErrorNumberClassificationTests.fs" />
+        <Compile Include="CohortPropertyTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
