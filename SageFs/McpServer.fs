@@ -144,6 +144,12 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
     McpRequestHandler<CallToolRequestParams, CallToolResult>(fun ctx ct ->
       let wasEmpty = tracker.Count = 0
       tracker.Register(ctx.Server)
+      // Bind this call's identity to its CONNECTION (sagefs-multiagent-
+      // vision.md §4.1), not to the tool's self-declared agentName argument.
+      // AsyncLocal, set once per call before the tool body runs — flows
+      // through the await chain below exactly like Activity.Current already
+      // does in this codebase. See SageFs.McpTools.memberIdFor.
+      SageFs.McpTools.currentTransportSessionId.Value <- Some ctx.Server.SessionId
       match wasEmpty && System.Threading.Interlocked.CompareExchange(&logged, 1, 0) = 0 with
       | true ->
         let logger =

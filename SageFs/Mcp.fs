@@ -691,9 +691,42 @@ module McpTools =
     LiveSnapshotSink: (string -> Features.LiveValueTree.LiveValueSnapshot -> unit) option
   }
 
+  /// The MCP transport's per-connection identity, bound by the request
+  /// filter (McpServer.createServerCaptureFilter) before a tool body runs —
+  /// never by the tool's self-declared `agentName` argument. AsyncLocal, not
+  /// a parameter: it flows through the same await chain Activity.Current
+  /// already rides in this codebase (Instrumentation.fs), so the ~40 MCP
+  /// tool method signatures (whose only caller-supplied "identity" is
+  /// agentName) never need touching to close the identity-spoofing gap.
+  /// None outside any bound connection (direct in-process calls, and every
+  /// Expecto unit test that calls these functions directly rather than
+  /// through the ASP.NET Core / MCP SDK pipeline) — see `memberIdFor`.
+  let currentTransportSessionId = new System.Threading.AsyncLocal<string option>()
+
+  /// Resolve the BOUND identity for a self-declared agent name
+  /// (sagefs-multiagent-vision.md §4.1: "identity is bound to the
+  /// connection, not declared"). When a real MCP connection is bound, the
+  /// ambient transport session id wins — a caller can never spoof or evict
+  /// another connection's presence just by choosing the same agentName,
+  /// because the key is the connection, not the name. With no bound
+  /// connection (tests, direct calls), falls back to a Minted identity keyed
+  /// on the name itself, whose resolved key renders IDENTICAL to the plain
+  /// name (MemberTable.MemberId.display) — every existing name-keyed test
+  /// and call site keeps working unchanged.
+  let memberIdFor (agentName: string) : MemberTable.MemberId =
+    match currentTransportSessionId.Value with
+    | Some tsid when not (String.IsNullOrWhiteSpace tsid) -> MemberTable.MemberId.Mcp tsid
+    | _ -> MemberTable.MemberId.Minted agentName
+
+  /// The resolved routing/presence key for a self-declared agent name — see
+  /// `memberIdFor`. This is what SessionMap and ActivityTracker are keyed by,
+  /// NOT the raw agentName.
+  let resolvedKey (agentName: string) : string =
+    MemberTable.MemberId.display (memberIdFor agentName)
+
   /// Get the active session ID for a specific agent/client.
   let activeSessionId (ctx: McpContext) (agent: string) =
-    match ctx.SessionMap.TryGetValue(agent) with
+    match ctx.SessionMap.TryGetValue(resolvedKey agent) with
     | true, sid -> sid
     | _ -> ""
 
@@ -702,9 +735,10 @@ module McpTools =
   /// empty-string entry — the old unconditional write left the key present,
   /// so dead-session references accumulated in the map forever.
   let setActiveSessionId (ctx: McpContext) (agent: string) (sid: string) =
+    let key = resolvedKey agent
     match sid with
-    | "" -> ctx.SessionMap.TryRemove(agent) |> ignore
-    | _ -> ctx.SessionMap.[agent] <- sid
+    | "" -> ctx.SessionMap.TryRemove(key) |> ignore
+    | _ -> ctx.SessionMap.[key] <- sid
 
   /// Remove every agent→session entry that points at the given session id.
   /// Called when a session is stopped or purged so references to a dead
@@ -740,6 +774,10 @@ module McpTools =
     (liveSessionIds: Set<string> option)
     (exemptAgent: string option)
     (now: DateTime) =
+    // exemptAgent arrives as a caller-declared name; SessionMap/ActivityTracker
+    // are keyed by the resolved (connection-bound) key — resolve once so the
+    // comparison below compares like with like.
+    let exemptKey = exemptAgent |> Option.map resolvedKey
     ctx.SessionMap
     |> Seq.iter (fun kv ->
       let targetDead =
@@ -747,12 +785,23 @@ module McpTools =
         | Some live -> not (live.Contains kv.Value)
         | None -> false
       let agentStale =
-        exemptAgent <> Some kv.Key
+        exemptKey <> Some kv.Key
         && (match AgentActivityTracker.getPresence ctx.ActivityTracker kv.Key with
             | Some presence -> SessionOperations.AgentPresence.isStale now staleAgentTimeout presence
             | None -> false)
       if targetDead || agentStale then
         ctx.SessionMap.TryRemove(kv.Key) |> ignore)
+
+  /// Occupancy for one session, read from ActivityTracker — the ONE store
+  /// shared with the dashboard (DaemonMode.fs threads the same Tracker
+  /// instance into both McpContext.ActivityTracker and
+  /// DashboardInfra.ActivityTracker) — never from SessionMap, which is
+  /// MCP-routing-only and has no notion of a browser tab. A dashboard tab
+  /// viewing a session therefore appears here as a Browser member exactly
+  /// like an MCP agent does.
+  let occupantsForSession (ctx: McpContext) (sessionId: string) : SessionOperations.SessionOccupancy list =
+    AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sessionId) staleAgentTimeout DateTime.UtcNow
+    |> List.map (fun p -> ({ AgentName = p.AgentName; Role = p.Role } : SessionOperations.SessionOccupancy))
 
   /// Per-session compilation context state (evaluated modules, file cache).
   let compilationStates =
@@ -828,6 +877,36 @@ module McpTools =
     sessions
     |> List.filter (fun s -> normalizePath s.WorkingDirectory = target)
 
+  /// Parent segment of a path, tolerant of either separator style (tests and
+  /// some callers use Windows-style paths regardless of host OS).
+  let private parentSegment (path: string) : string option =
+    match path.LastIndexOfAny([| '\\'; '/' |]) with
+    | i when i > 0 -> Some(path.Substring(0, i))
+    | _ -> None
+
+  /// Pure: true when some directory between `root` (exclusive) and `target`
+  /// (inclusive) carries its OWN checkout marker — `target` sits inside a
+  /// NESTED checkout (a git worktree under `root`, e.g.
+  /// `.claude/worktrees/agent-x`), so it is a routing boundary, not part of
+  /// `root`'s session even though the path is textually nested under it.
+  /// `hasCheckoutMarker` is injected so this stays pure/testable without disk
+  /// I/O — mirrors SageFs.FileWatcher.isInNestedCheckout's semantics
+  /// (root's own marker never counts) but is kept independent since Mcp.fs
+  /// does not depend on FileWatcher.
+  let crossesCheckoutBoundaryWith (hasCheckoutMarker: string -> bool) (root: string) (target: string) : bool =
+    let rootNorm = normalizePath root
+    let rec walk (dirOpt: string option) =
+      match dirOpt with
+      | None -> false
+      | Some dir ->
+        match String.Equals(normalizePath dir, rootNorm, StringComparison.OrdinalIgnoreCase) with
+        | true -> false
+        | false ->
+          match hasCheckoutMarker dir with
+          | true -> true
+          | false -> walk (parentSegment dir)
+    walk (Some target)
+
   /// WHY — agents call tools with the directory they are WORKING IN, which is
   /// often a subdirectory of the registered session root (e.g. repo\tests while
   /// the session is rooted at repo). Exact-only matching turned that into
@@ -836,7 +915,14 @@ module McpTools =
   /// (friction report 2026-08). Because — matching falls back to sessions whose
   /// registered directory is a path-boundary ancestor of the requested one, so a
   /// request from inside a session's tree routes to that session instead of vanishing.
-  let sessionsMatchingWorkingDirDeep (sessions: WorkerProtocol.SessionInfo list) (workingDir: string) =
+  /// EXCEPT across a checkout boundary (sagefs-multiagent-vision.md §3.2,
+  /// Phase 0 item 3): a request from `.claude/worktrees/x` under a session
+  /// rooted at the main checkout must NOT silently route to that session —
+  /// the worktree is a DIFFERENT checkout even though the path is nested.
+  let sessionsMatchingWorkingDirDeepWith
+    (hasCheckoutMarker: string -> bool)
+    (sessions: WorkerProtocol.SessionInfo list)
+    (workingDir: string) =
     let target = normalizePath workingDir
     match sessionsMatchingWorkingDir sessions workingDir with
     | [] ->
@@ -846,8 +932,13 @@ module McpTools =
       sessions
       |> List.filter (fun s ->
         let baseDir = normalizePath s.WorkingDirectory
-        not (String.IsNullOrWhiteSpace baseDir) && isPathAncestorOf baseDir target)
+        not (String.IsNullOrWhiteSpace baseDir)
+        && isPathAncestorOf baseDir target
+        && not (crossesCheckoutBoundaryWith hasCheckoutMarker baseDir target))
     | matched -> matched
+
+  let sessionsMatchingWorkingDirDeep (sessions: WorkerProtocol.SessionInfo list) (workingDir: string) =
+    sessionsMatchingWorkingDirDeepWith Checkout.hasCheckoutMarker sessions workingDir
 
   /// Honest failure: when working-directory routing finds nothing, say what DOES
   /// exist so the agent can reconcile the disagreement without a second tool call.
@@ -1605,8 +1696,9 @@ module McpTools =
           Instrumentation.fsiStatements.Add(int64 statements.Length)
           let span = Instrumentation.startSpan Instrumentation.mcpSource "fsi.eval"
                        ["fsi.agent.name", box agentName; "fsi.statement.count", box statements.Length; "fsi.session.id", box sid]
-          // Record agent activity for multi-agent coordination
-          AgentActivityTracker.recordToolCall ctx.ActivityTracker agentName sid filePath intent DateTime.UtcNow
+          // Record agent activity for multi-agent coordination — keyed by the
+          // BOUND connection, not the self-declared agentName (memberIdFor).
+          AgentActivityTracker.recordToolCall ctx.ActivityTracker (resolvedKey agentName) sid filePath intent DateTime.UtcNow
 
           let mutable allOutputs = []
           let mutable outcome = Evaluated false
@@ -1631,7 +1723,7 @@ module McpTools =
             match filePath with
             | Some fp ->
               let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
-              let advisories = SessionOperations.FileOverlapAdvisory.compute agentName [fp] presences
+              let advisories = SessionOperations.FileOverlapAdvisory.compute (resolvedKey agentName) [fp] presences
               SessionOperations.CoordinationEnrichment.enrichEvalWithAdvisories advisories finalOutput
             | None -> finalOutput
           return (enrichedOutput, outcome)
@@ -1723,15 +1815,15 @@ module McpTools =
           // session stays routable. The caller itself is exempt — its
           // presence is refreshed by the recordToolCall below.
           pruneSessionMap ctx None (Some agent) DateTime.UtcNow
-          let occupants = SessionOperations.SessionOccupancy.forSession ctx.SessionMap sid
-          let guidance = SessionOperations.SessionGuidance.compute occupants snapshot.Status
+          let occupants = occupantsForSession ctx sid
           let presences = AgentActivityTracker.getActivePresences ctx.ActivityTracker (Some sid) (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
+          let guidance = SessionOperations.SessionGuidance.compute occupants snapshot.Status
           let enriched =
             baseStatus
             |> SessionOperations.CoordinationEnrichment.enrichStatusWithGuidance guidance
             |> SessionOperations.CoordinationEnrichment.enrichStatusWithPresences DateTime.UtcNow presences
           // Also record this status check as agent activity
-          AgentActivityTracker.recordToolCall ctx.ActivityTracker agent sid None None DateTime.UtcNow
+          AgentActivityTracker.recordToolCall ctx.ActivityTracker (resolvedKey agent) sid None None DateTime.UtcNow
           let rebuildLine =
             match rebuildOutcomes.TryGetValue sid with
             | true, outcome -> "\n" + RebuildOutcome.describe DateTime.UtcNow outcome
@@ -2412,7 +2504,8 @@ module McpTools =
       let occupancyMap =
         sessions
         |> List.map (fun s ->
-          WorkerProtocol.SessionId.value s.Id, SessionOperations.SessionOccupancy.forSession ctx.SessionMap (WorkerProtocol.SessionId.value s.Id))
+          let sid = WorkerProtocol.SessionId.value s.Id
+          sid, occupantsForSession ctx sid)
         |> Map.ofList
       return SessionOperations.formatSessionList System.DateTime.UtcNow (Some occupancyMap) sessions
     }

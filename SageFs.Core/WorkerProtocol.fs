@@ -362,17 +362,31 @@ module WorkerProtocol =
 
   /// Utilities for deriving display-friendly paths from session metadata.
   module SessionInfo =
-    /// Walk up from dir looking for .git directory.
+    /// Walk up from `startDir` looking for the checkout root — a directory
+    /// carrying a checkout marker (`.git`, directory OR file — a worktree's
+    /// `.git` is a file). Delegates to `Checkout.classify`/`Checkout.root`;
+    /// kept as its own function (same name/signature as before) because
+    /// every existing caller resolves a plain `string option` root and does
+    /// not need the fuller `Checkout` classification (worktree branch, "not
+    /// a git checkout" vs "no marker found") — see `SessionInfo.checkout`
+    /// below for that. FIXED: this used to check `Directory.Exists ".git"`
+    /// only, so from inside a git worktree it walked past the worktree's
+    /// `.git` FILE straight to the main checkout's `.git` DIRECTORY further
+    /// up and returned the WRONG (main checkout's) root — see
+    /// sagefs-multiagent-vision.md §1.6 #2.
     let findGitRoot (startDir: string) : string option =
-      let rec walk (dir: string) =
-        match Directory.Exists(Path.Combine(dir, ".git")) with
-        | true -> Some dir
-        | false ->
-          let parent = Path.GetDirectoryName dir
-          match isNull parent || parent = dir with
-          | true -> None
-          | false -> walk parent
-      walk startDir
+      Checkout.root (Checkout.classify startDir)
+
+    /// The checkout a session's working directory sits in — a MAIN checkout,
+    /// a git WORKTREE (with its own branch), or no git checkout at all.
+    /// Computed on demand from `WorkingDirectory` rather than stored on
+    /// `SessionInfo`: `SessionInfo` is constructed as a full record literal
+    /// at ~50 call sites across the daemon and test suite, and `Checkout`
+    /// classification is a few cheap filesystem stats, so storing it would
+    /// only risk staleness for zero benefit over computing it where needed
+    /// (routing, list_sessions, the sidebar).
+    let checkout (info: SessionInfo) : Checkout.Checkout =
+      Checkout.classify info.WorkingDirectory
 
     /// Walk up from workingDir to find the nearest directory containing .sln or .slnx.
     /// Skips directories that do not exist (graceful for tests and missing paths).

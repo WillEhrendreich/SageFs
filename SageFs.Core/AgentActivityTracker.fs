@@ -93,6 +93,14 @@ module AgentActivityTracker =
         })
     ) |> ignore
 
+  /// Forget one member outright (its key — see SageFs.MemberTable.MemberId.display
+  /// for how MCP/dashboard callers derive it — not a display name). Used on a
+  /// graceful disconnect (e.g. a dashboard tab's SSE stream closing) where the
+  /// presence should disappear immediately rather than wait out the staleness
+  /// window `cleanup` enforces.
+  let forget (tracker: Tracker) (key: string) : unit =
+    tracker.Agents.TryRemove(key) |> ignore
+
   /// Get an agent's current presence as an immutable snapshot.
   /// Returns None if the agent has never been seen.
   let getPresence (tracker: Tracker) (agentName: string) : AgentPresence option =

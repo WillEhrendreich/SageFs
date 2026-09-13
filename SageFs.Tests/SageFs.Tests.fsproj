@@ -55,6 +55,9 @@
         <Compile Include="McpToolGateTests.fs" />
         <Compile Include="WorkerMainTests.fs" />
         <Compile Include="WorkerProtocolTests.fs" />
+        <Compile Include="CheckoutTests.fs" />
+        <Compile Include="MemberTableTests.fs" />
+        <Compile Include="CrossCheckoutOverlapTests.fs" />
         <Compile Include="AppRunTests.fs" />
         <Compile Include="ReloadPlanningTests.fs" />
         <Compile Include="LiveTestActivityTests.fs" />
