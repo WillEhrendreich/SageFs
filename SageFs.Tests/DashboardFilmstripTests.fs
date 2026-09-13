@@ -106,6 +106,7 @@ let filmstripSnapshotTests =
         ThemeVars = Elem.div [] []; BindingsPanel = Elem.div [] []
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
         FrictionPanel = Elem.div [] []
+        CohortPanel = Elem.div [] []
         ActiveProject = None
 
         ProjectRoles = []
@@ -133,6 +134,7 @@ let filmstripSnapshotTests =
         ThemeVars = Elem.div [] []; BindingsPanel = Elem.div [] []
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
         FrictionPanel = Elem.div [] []
+        CohortPanel = Elem.div [] []
         ActiveProject = None
 
         ProjectRoles = []

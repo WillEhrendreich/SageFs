@@ -53,6 +53,7 @@ module DomIds =
   let [<Literal>] DaemonHealth = "daemon-health"
   let [<Literal>] FailureNarratives = "failure-narratives"
   let [<Literal>] AlarmBanner = "alarm-banner"
+  let [<Literal>] CohortPanel = "cohort-panel"
 
 /// Datastar signal names — shared between Ds.signal init and Ds.bind/Ds.show refs.
 [<RequireQualifiedAccess>]
@@ -103,6 +104,7 @@ module Signals =
   let [<Literal>] SessionContextTimingOpen = "sessionContextTimingOpen"
   let [<Literal>] SessionContextFilesOpen = "sessionContextFilesOpen"
   let [<Literal>] ShadowedBindingsOpen = "shadowedBindingsOpen"
+  let [<Literal>] CohortPanelOpen = "cohortPanelOpen"
   let [<Literal>] FrictionEndpoint = "frictionEndpoint"
   let [<Literal>] FrictionToken = "frictionToken"
   let [<Literal>] FrictionEdits = "frictionEdits"
@@ -788,6 +790,13 @@ type DashboardInfra = {
   /// handlers retarget the owning stream when the viewing-session signal
   /// changes (signal-driven session selection; no URL query parameter).
   ConnectionChannels: Collections.Concurrent.ConcurrentDictionary<string, MailboxProcessor<DashboardStreamCommand>>
+  /// Wait-free read of the daemon's single implicit cohort frame
+  /// (cohort-integration-plan.md Slice 4, D4) — dereferences
+  /// `CohortOwner.Handle.ReadFrame`'s published pointer directly, no
+  /// mailbox round-trip, no IO. The cohort is daemon-scoped, not
+  /// session-scoped, so this is called on every render regardless of
+  /// which (or whether any) session is being viewed.
+  ReadCohortFrame: unit -> Cohort.CohortFrame<MemberTable.MemberId>
 }
 
 /// Complete snapshot of all dashboard state needed for a single full-page render.
@@ -821,6 +830,10 @@ type DashboardSnapshot = {
   ThemeVars: XmlNode
   BindingsPanel: XmlNode
   FrictionPanel: XmlNode
+  /// The daemon's implicit cohort — members, claims, ledger version
+  /// (cohort-integration-plan.md Slice 4). Daemon-scoped: rendered
+  /// identically regardless of which session (if any) is being viewed.
+  CohortPanel: XmlNode
   /// Active project selection for "Run App" feature.
   ActiveProject: string option
   /// Classification of all projects in the session.

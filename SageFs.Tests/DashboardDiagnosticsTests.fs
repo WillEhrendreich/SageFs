@@ -175,6 +175,7 @@ let diagnosticsPanelSnapshotTests =
         ThemeVars = Elem.div [] []; BindingsPanel = Elem.div [] []
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
         FrictionPanel = Elem.div [] []
+        CohortPanel = Elem.div [] []
         ActiveProject = None
 
         ProjectRoles = []
@@ -201,6 +202,7 @@ let diagnosticsPanelSnapshotTests =
         ThemeVars = Elem.div [] []; BindingsPanel = Elem.div [] []
         AlarmPanel = Elem.div [] []; LiveTestingPanel = Elem.div [] []
         FrictionPanel = Elem.div [] []
+        CohortPanel = Elem.div [] []
         ActiveProject = None
 
         ProjectRoles = []

@@ -382,6 +382,7 @@
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="CohortAffordancesTests.fs" />
+        <Compile Include="CohortPanelTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
