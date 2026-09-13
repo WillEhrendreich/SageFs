@@ -231,6 +231,31 @@ let accessTests =
       |> Expect.equal "wording" "answer uses secret, which is not public, so it cannot be patched in place"
   ]
 
+[<Tests>]
+let hiddenViaMembersTests =
+  let unionSource =
+    "module Demo.Shapes\n\ntype internal Shape =\n  | Circle of radius: float\n  | Square of side: float\n\nlet describe () =\n  Circle 1.0\n"
+  let recordSource =
+    "module Demo.Config\n\ntype internal Config = { Timeout: int }\n\nlet build () =\n  { Timeout = 5 }\n"
+  let commentSource =
+    "module Demo.Comment\n\nlet private secret () = 41\n\nlet answer () =\n  // secret is mentioned only here, never called\n  \"the word secret in a string\"\n  99\n"
+  testList "ReloadPlanning access — case, field and prose uses" [
+    testCase "WHY — ReloadPlanning.planReload — a patch that constructs a hidden type's union case restarts because the case never spells the type's own name" <| fun _ ->
+      planReload (declsOf unionSource) (declsOf (replace "Circle 1.0" "Circle 2.0" unionSource))
+      |> restartChanges
+      |> Expect.equal "describe uses Shape via its case" [ ReloadChange.UsesNonPublicMember ("describe", "Shape") ]
+
+    testCase "WHY — ReloadPlanning.planReload — a patch that builds a hidden record type's literal restarts because the literal never spells the type's own name" <| fun _ ->
+      planReload (declsOf recordSource) (declsOf (replace "{ Timeout = 5 }" "{ Timeout = 6 }" recordSource))
+      |> restartChanges
+      |> Expect.equal "build uses Config via its field" [ ReloadChange.UsesNonPublicMember ("build", "Config") ]
+
+    testCase "WHY — ReloadPlanning.planReload — a hidden name that appears only in a comment or string literal is patched because prose is not a reference" <| fun _ ->
+      planReload (declsOf commentSource) (declsOf (replace "99" "100" commentSource))
+      |> patchedNames
+      |> Expect.equal "answer" [ "answer" ]
+  ]
+
 // ── Planner laws over generated declaration sets ──
 
 let private namePool = [ "alpha"; "beta"; "gamma"; "delta"; "epsilon"; "zeta"; "eta"; "theta" ]
