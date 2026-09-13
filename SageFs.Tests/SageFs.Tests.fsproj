@@ -378,6 +378,8 @@
         <Compile Include="CohortPropertyTests.fs" />
         <Compile Include="EvalLatencyTraceTests.fs" />
         <Compile Include="SessionManagerBuildSemaphoreTests.fs" />
+        <Compile Include="CohortOwnerTests.fs" />
+        <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
