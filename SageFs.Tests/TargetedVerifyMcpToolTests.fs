@@ -63,7 +63,8 @@ let private mkCtx (sessionInfo: SessionInfo) (sessionContext: SessionContext opt
     GetWarmupContext = None
     GetFeatureState = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
-    LiveSnapshotSink = None }
+    LiveSnapshotSink = None
+    CohortOwner = None }
 
 [<Tests>]
 let tests =

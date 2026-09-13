@@ -63,7 +63,8 @@ module McpSessionIsolation =
         GetWarmupContext = None
         GetFeatureState = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
-        LiveSnapshotSink = None } : McpContext
+        LiveSnapshotSink = None
+        CohortOwner = None } : McpContext
     ctx, dispatched
 
   /// Call switchSession and return result, ignoring event store errors.
@@ -157,7 +158,8 @@ module McpSessionIsolation =
           GetWarmupContext = None
           GetFeatureState = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
-          LiveSnapshotSink = None } : McpContext
+          LiveSnapshotSink = None
+          CohortOwner = None } : McpContext
 
       let! result = switchSession ctx "test" "ffff0001"
 
@@ -403,7 +405,7 @@ module WorkingDirRoutingPriority =
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
       GetFeatureState = None; ActivityTracker = SageFs.AgentActivityTracker.create()
-      LiveSnapshotSink = None }
+      LiveSnapshotSink = None; CohortOwner = None }
 
   let tests = testSequenced <| testList "workingDirectory routing priority" [
     testTask "workingDirectory should override cached session" {
@@ -584,7 +586,8 @@ module ResetIsolation =
         GetWarmupContext = None
         GetFeatureState = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
-        LiveSnapshotSink = None } : McpContext
+        LiveSnapshotSink = None
+        CohortOwner = None } : McpContext
     ctx, restartLog, routedSessions
 
   let mkStatusSyncCtx () =
@@ -677,7 +680,8 @@ module ResetIsolation =
         GetWarmupContext = None
         GetFeatureState = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
-        LiveSnapshotSink = None } : McpContext
+        LiveSnapshotSink = None
+        CohortOwner = None } : McpContext
     ctx, sidStr, resetStarted, allowResetFinish
 
   let tests = Integration.hostList "Reset isolation" [
@@ -753,7 +757,8 @@ module ResetIsolation =
           GetWarmupContext = None
           GetFeatureState = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
-          LiveSnapshotSink = None } : McpContext
+          LiveSnapshotSink = None
+          CohortOwner = None } : McpContext
 
       let hardResetTask = hardResetSession ctx "agent1" true (Some "aaa00001") None
       let! completed = Task.WhenAny(hardResetTask, Task.Delay(1000))
@@ -915,7 +920,8 @@ module ResetIsolation =
           GetWarmupContext = None
           GetFeatureState = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
-          LiveSnapshotSink = None } : McpContext
+          LiveSnapshotSink = None
+          CohortOwner = None } : McpContext
 
       // The background rebuild reports its outcome as one final status event.
       let ctx =
@@ -1002,7 +1008,8 @@ module ResetIsolation =
           GetWarmupContext = None
           GetFeatureState = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
-          LiveSnapshotSink = None } : McpContext
+          LiveSnapshotSink = None
+          CohortOwner = None } : McpContext
 
       // The background rebuild reports its outcome as one final status event.
       let ctx =
@@ -1188,7 +1195,8 @@ module SessionMapEviction =
       GetWarmupContext = None
       GetFeatureState = None
       ActivityTracker = SageFs.AgentActivityTracker.create()
-      LiveSnapshotSink = None } : McpContext
+      LiveSnapshotSink = None
+      CohortOwner = None } : McpContext
 
   let mkInfo id workDir : WorkerProtocol.SessionInfo =
     { Id = id; Name = None; Projects = []

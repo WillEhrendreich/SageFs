@@ -1683,3 +1683,169 @@ WORKFLOW: Call before run_app to see what can run.""")>]
         logger.LogDebug("MCP-TOOL: list_runnable_projects called")
         listRunnableProjects ctx |> withEcho ctx "list_runnable_projects"
 
+    // ── Cohort tools v1 (cohort-integration-plan.md Slice 2, item 9) ──────
+    //
+    // One implicit cohort per daemon. Every tool resolves the caller's
+    // identity from the BOUND MCP connection (memberIdFor agentName), never
+    // from a self-declared argument — see Mcp.fs's memberIdFor doc. No
+    // affordance gating yet (that is Slice 3): these tools are always listed.
+
+    [<McpServerTool>]
+    [<Description("""Join this daemon's cohort — the shared multi-agent coordination session that tracks who else is working here, file/project claims, and landing requests.
+
+v1 has no separate "create cohort" step: the FIRST agent to join an empty cohort automatically becomes its conductor (the only member who can reassign an orphaned claim or delegate conductor to someone else).
+
+WHEN TO USE: Once per agent, before acquiring claims or requesting a landing, when multiple agents/sub-agents may be touching this repo concurrently.
+
+OUTPUT: Confirmation text, noting whether you became the conductor.""")>]
+    member _.join_cohort(
+        [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Identifies you in cohort membership and claim ownership.")>]
+        agentName: string,
+        [<Description("Your role: 'Implementer', 'Verifier', or 'Observer'.")>]
+        role: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: join_cohort called by {AgentName}, role={Role}", agentName, role)
+        task {
+          let! result = SageFs.McpTools.joinCohort ctx agentName role
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "join_cohort"
+
+    [<McpServerTool>]
+    [<Description("""Leave this daemon's cohort. Every claim you still hold is orphaned (not released to anyone — the conductor must reassign it or it stays orphaned).
+
+WHEN TO USE: When you are done working in this daemon for this session.
+
+OUTPUT: Confirmation text.""")>]
+    member _.leave_cohort(
+        [<Description("Your agent or model name — must match the name you joined with.")>]
+        agentName: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: leave_cohort called by {AgentName}", agentName)
+        task {
+          let! result = SageFs.McpTools.leaveCohort ctx agentName
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "leave_cohort"
+
+    [<McpServerTool>]
+    [<Description("""Acquire an exclusive claim over a file or project directory, so other cohort members know it is yours to edit right now.
+
+Claims are exclusive within their scope: a File claim conflicts with any other Held claim over the same path or an overlapping Project claim; a Project claim conflicts with any Held claim on or under its directory.
+
+WHEN TO USE: Before editing a file/project another cohort member might also touch. Present the returned fence when you later release or land it — presenting a stale fence is refused.
+
+OUTPUT: Confirmation text with the new claim id and fence, or a conflict error naming the current holder.""")>]
+    member _.acquire_claim(
+        [<Description("Your agent or model name — must match the name you joined with.")>]
+        agentName: string,
+        [<Description("The scope to claim: 'file:<repo-relative-path>' or 'project:<repo-relative-.fsproj-path>'.")>]
+        scope: string,
+        [<Description("One-line reason for the claim (max 200 chars, no newlines) — shown to other cohort members.")>]
+        purpose: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: acquire_claim called by {AgentName}, scope={Scope}", agentName, scope)
+        task {
+          let! result = SageFs.McpTools.acquireClaim ctx agentName scope purpose
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "acquire_claim"
+
+    [<McpServerTool>]
+    [<Description("""Release a claim you hold, freeing its scope for others.
+
+The presented fence must match the claim's current fence exactly (from acquire_claim's or get_cohort_status's output) — a stale fence is refused, and only the current holder may release.
+
+OUTPUT: Confirmation text, or an error naming why the release was refused.""")>]
+    member _.release_claim(
+        [<Description("Your agent or model name — must match the name you joined with.")>]
+        agentName: string,
+        [<Description("The claim id to release (from acquire_claim's output or get_cohort_status).")>]
+        claimId: string,
+        [<Description("The claim's current fence (from acquire_claim's output or get_cohort_status) — a stale value is refused.")>]
+        fence: int64
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: release_claim called by {AgentName}, claim={ClaimId}", agentName, claimId)
+        task {
+          let! result = SageFs.McpTools.releaseClaim ctx agentName claimId fence
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "release_claim"
+
+    [<McpServerTool>]
+    [<Description("""Reassign an ORPHANED claim (its holder departed without releasing it) to another present cohort member. CONDUCTOR-ONLY — refused with a "not the cohort conductor" error for anyone else.
+
+WHEN TO USE: You are the conductor, a claim shows as Orphaned in get_cohort_status, and someone needs to take it over.
+
+OUTPUT: Confirmation text, or an error (not conductor / claim not orphaned / target not present / scope conflict).""")>]
+    member _.reassign_claim(
+        [<Description("Your agent or model name — must be the cohort's current conductor.")>]
+        agentName: string,
+        [<Description("The orphaned claim's id (from get_cohort_status).")>]
+        claimId: string,
+        [<Description("The recipient's display name exactly as get_cohort_status prints it (e.g. 'mcp:...' or a plain agent name).")>]
+        toMember: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: reassign_claim called by {AgentName}, claim={ClaimId}, to={ToMember}", agentName, claimId, toMember)
+        task {
+          let! result = SageFs.McpTools.reassignClaim ctx agentName claimId toMember
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "reassign_claim"
+
+    [<McpServerTool>]
+    [<Description("""Queue a landing request: propose that your commits be rebased onto the integration head, verified, and fast-forwarded in. v1 landings are strictly serial (one FIFO queue) — this only queues the request; rebase/verify/land themselves are a later slice's wiring and are not yet performed.
+
+OUTPUT: Confirmation text with the new landing id, or a validation error (invalid statement, unknown/stale claim).""")>]
+    member _.request_landing(
+        [<Description("Your agent or model name — must match the name you joined with.")>]
+        agentName: string,
+        [<Description("Comma-separated 'claimId:fence' pairs backing this landing (from acquire_claim's output). Empty string if none.")>]
+        claims: string,
+        [<Description("Comma-separated commit SHAs this landing would bring in.")>]
+        commits: string,
+        [<Description("Why this landing should happen (max 1000 chars) — becomes the merge/squash message body.")>]
+        statement: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: request_landing called by {AgentName}", agentName)
+        task {
+          let! result = SageFs.McpTools.requestLanding ctx agentName claims commits statement
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "request_landing"
+
+    [<McpServerTool>]
+    [<Description("""Read this daemon's cohort: members and roles/presence, claims and their holders/fences, and the ledger head/conductor. Wait-free — reads a published snapshot, never waits on other cohort activity.
+
+WHEN TO USE: Before acquiring a claim (check for conflicts), to see who else is in the cohort, or to find a claim/landing id to act on.
+
+OUTPUT: Plain-text summary. The v1 read model does not yet include the landing queue's contents (Cohort.fs's CohortFrame is trimmed to members/claims/test data) — landing state is reported at request_landing time only.""")>]
+    member _.get_cohort_status() : Task<string> =
+        logger.LogDebug("MCP-TOOL: get_cohort_status called")
+        task {
+          let! result = SageFs.McpTools.getCohortStatus ctx
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "get_cohort_status"
+

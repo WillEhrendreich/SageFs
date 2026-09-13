@@ -69,7 +69,16 @@ let requiredParamsByTool =
     "plan_ripple", set ["changed_cells"]
     "preview_what_if", set ["binding_name"; "new_code"]
     "manage_scratch_pad", set ["action"]
-    "suggest_repair", set ["test_name"] ]
+    "suggest_repair", set ["test_name"]
+    // Claims v1 cohort tools (cohort-integration-plan.md Slice 2) — every
+    // arg is required (v1 has no optional working_directory/session_id
+    // routing; cohort membership is daemon-scoped, not session-scoped).
+    "join_cohort", set ["agentName"; "role"]
+    "leave_cohort", set ["agentName"]
+    "acquire_claim", set ["agentName"; "scope"; "purpose"]
+    "release_claim", set ["agentName"; "claimId"; "fence"]
+    "reassign_claim", set ["agentName"; "claimId"; "toMember"]
+    "request_landing", set ["agentName"; "claims"; "commits"; "statement"] ]
   |> Map.ofList
 
 [<Tests>]
@@ -204,7 +213,10 @@ let descriptionPropertyTests =
 
     testCase "reduced MCP surface keeps the tool count surgical"
     <| fun _ ->
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 41
+      // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
+      // Slice 2: join_cohort/leave_cohort/acquire_claim/release_claim/
+      // reassign_claim/request_landing/get_cohort_status).
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 48
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

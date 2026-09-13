@@ -152,6 +152,19 @@ let private gatingDomain : Map<string, ToolGate> =
     // Stateless code analysis — no session required (decomposes the passed
     // pipeline expression directly).
     "decompose_pipeline", ToolGate.AlwaysAvailable
+    // Cohort tools v1 (cohort-integration-plan.md Slice 2): membership,
+    // claims, and landings belong to the daemon's single implicit cohort, not
+    // to any one FSI session's lifecycle — they are meaningful (and must be
+    // callable) whether or not a session yet exists. Cohort-phase/authority-
+    // aware gating (a member vs. the conductor) is Slice 3's `cohortTools`,
+    // not this per-session-state model.
+    "join_cohort", ToolGate.AlwaysAvailable
+    "leave_cohort", ToolGate.AlwaysAvailable
+    "acquire_claim", ToolGate.AlwaysAvailable
+    "release_claim", ToolGate.AlwaysAvailable
+    "reassign_claim", ToolGate.AlwaysAvailable
+    "request_landing", ToolGate.AlwaysAvailable
+    "get_cohort_status", ToolGate.AlwaysAvailable
     // State-gated tools — availability derives from availableTools for the
     // session's current lifecycle state.
     "send_fsharp_code", ToolGate.StateGated

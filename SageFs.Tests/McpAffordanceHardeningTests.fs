@@ -221,7 +221,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 41 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 48 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -229,8 +229,10 @@ let toolRegistrationTests =
           "SageFsTools type not found in loaded assemblies; \
            reflection test skipped"
       | Some methods ->
+        // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
+        // Slice 2).
         methods.Length
-          |> Expect.equal "MCP tool method count" 41
+          |> Expect.equal "MCP tool method count" 48
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -382,7 +384,7 @@ let stateTransitionSafetyTests =
         | Ok _ ->
           failtestf "bogus tool must be rejected in %A" state)
 
-    testCase "205-combo safety: all MCP tools × all states never throw (reflection)"
+    testCase "240-combo safety: all MCP tools × all states never throw (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -402,9 +404,11 @@ let stateTransitionSafetyTests =
               failtestf
                 "checkToolAvailability threw for (%A, %s): %s"
                 state tool ex.Message))
+        // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
+        // Slice 2) = 48.
         tested
         |> Expect.equal
-          "should test 5 states × 41 tools = 205" 205
+          "should test 5 states × 48 tools = 240" 240
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

@@ -32,7 +32,8 @@ let private mkCtxWithStore (store: FrictionStore option) : McpTools.McpContext =
     GetWarmupContext = None
     GetFeatureState = None
     ActivityTracker = AgentActivityTracker.create()
-    LiveSnapshotSink = None }
+    LiveSnapshotSink = None
+    CohortOwner = None }
 
 [<Tests>]
 let frictionCaptureDurabilityTests =

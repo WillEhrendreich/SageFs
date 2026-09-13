@@ -689,6 +689,11 @@ module McpTools =
     /// Receives the live bound-value snapshot after each successful eval
     /// (daemon wires this to the adaptive live-bindings store; None in tests).
     LiveSnapshotSink: (string -> Features.LiveValueTree.LiveValueSnapshot -> unit) option
+    /// The single per-daemon cohort owner (cohort-integration-plan.md Slice 2,
+    /// item 9). `None` when no cohort owner was wired (most existing unit
+    /// tests, which predate cohort support and never construct one) — cohort
+    /// tools report a structured error rather than throwing in that case.
+    CohortOwner: Features.CohortOwner.Handle option
   }
 
   /// The MCP transport's per-connection identity, bound by the request
@@ -4283,3 +4288,283 @@ module McpTools =
              Projects = projects |}
         return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
     })
+
+  // ── Cohort tools (cohort-integration-plan.md Slice 2, item 9) ────────────
+  //
+  // Claims v1: one implicit cohort per daemon (D2 — 'm bound to MemberId
+  // here, at the shell, never inside Cohort.fs). Every tool resolves the
+  // caller with `memberIdFor agentName` (never a self-declared member
+  // argument) and dispatches exactly one `CohortCommand` through
+  // `ctx.CohortOwner.Commit`. `CohortError` crosses into the product error
+  // algebra HERE, via `cohortErrorToSageFsError` — the one boundary roast §10
+  // asks for — mapped onto the closest existing `SageFsError` case (Cohort.fs
+  // is additive-only in this slice; no new SageFsError case was added).
+
+  /// Exhaustive, compiler-checked mapping from `Cohort.CohortError<MemberId>`
+  /// onto the nearest existing `SageFsError` case. None of these are a
+  /// semantically perfect fit — SageFsError has no cohort-specific cases yet
+  /// — so the detail always travels in a `reason`/message field rather than
+  /// being silently dropped, and the identifier (member/claim/landing) is
+  /// folded into that same string when the chosen case has no id slot for it.
+  let cohortErrorToSageFsError (err: Cohort.CohortError<MemberTable.MemberId>) : SageFsError =
+    let mid = MemberTable.MemberId.display
+    match err with
+    | Cohort.CohortError.DuplicateJoin who ->
+      SageFsError.DuplicateSession(mid who, "cohort")
+    | Cohort.CohortError.MemberNotPresent who ->
+      SageFsError.SessionNotFound(mid who)
+    | Cohort.CohortError.ClaimConflict(scope, holder) ->
+      SageFsError.SessionNotRoutable(sprintf "claim scope %A is already held by %s" scope (mid holder))
+    | Cohort.CohortError.NotClaimHolder(Cohort.ClaimId cid, requester) ->
+      SageFsError.SessionSwitchFailed(cid, sprintf "%s does not hold this claim" (mid requester))
+    | Cohort.CohortError.UnknownClaim(Cohort.ClaimId cid) ->
+      SageFsError.SessionNotFound cid
+    | Cohort.CohortError.ClaimNotOrphaned(Cohort.ClaimId cid) ->
+      SageFsError.SessionNotRoutable(sprintf "claim %s is not orphaned" cid)
+    | Cohort.CohortError.DuplicateClaimId(Cohort.ClaimId cid) ->
+      SageFsError.DuplicateSession(cid, "cohort-claim")
+    | Cohort.CohortError.StaleClaimFence(Cohort.ClaimId cid, presented, current) ->
+      SageFsError.SessionSwitchFailed(cid, sprintf "presented fence %d is stale; current fence is %d" (int64 presented) (int64 current))
+    | Cohort.CohortError.InvalidPurpose reason ->
+      SageFsError.CheckFailed(sprintf "invalid claim purpose: %s" reason)
+    | Cohort.CohortError.InvalidStatement reason ->
+      SageFsError.CheckFailed(sprintf "invalid landing statement: %s" reason)
+    | Cohort.CohortError.UnknownLanding(Cohort.LandingId lid) ->
+      SageFsError.SessionNotFound lid
+    | Cohort.CohortError.DuplicateLandingId(Cohort.LandingId lid) ->
+      SageFsError.DuplicateSession(lid, "cohort-landing")
+    | Cohort.CohortError.NotLandingRequester(Cohort.LandingId lid, who) ->
+      SageFsError.SessionSwitchFailed(lid, sprintf "%s did not request this landing" (mid who))
+    | Cohort.CohortError.LandingNotAtFrontOfQueue(Cohort.LandingId lid) ->
+      SageFsError.SessionNotRoutable(sprintf "landing %s is not at the front of the queue" lid)
+    | Cohort.CohortError.LandingNotInExpectedState(Cohort.LandingId lid, expected) ->
+      SageFsError.SessionNotRoutable(sprintf "landing %s is not %s" lid expected)
+    | Cohort.CohortError.NotConductor who ->
+      SageFsError.SessionSwitchFailed(mid who, "not the cohort conductor")
+
+  /// `ctx.CohortOwner` is `None` only when nothing wired a cohort owner
+  /// (tests that predate Slice 2) — every production McpContext (DaemonMode.fs)
+  /// always supplies one.
+  let private requireCohortOwner (ctx: McpContext) : Result<Features.CohortOwner.Handle, SageFsError> =
+    match ctx.CohortOwner with
+    | Some owner -> Ok owner
+    | None -> Error (SageFsError.SessionCreationFailed "no cohort owner is configured for this daemon")
+
+  /// Best-effort last-known conductor for `get_cohort_status`'s display.
+  /// `Cohort.CohortFrame` (Cohort.fs's read model) does NOT carry the
+  /// `Conductor` binding — it is trimmed to what `decide`'s state and test
+  /// outcomes can produce (see Cohort.fs's module-level scope note) — so
+  /// there is no way to read it from `owner.ReadFrame()` without touching
+  /// Cohort.fs, which this slice must not do. Tracked here instead, from the
+  /// `ConductorBound`/`ConductorDelegated` events every cohort commit in this
+  /// module observes. Process-lifetime only: it resets to `None` across a
+  /// daemon restart until the next cohort command re-establishes it — v1's
+  /// single known limitation of this workaround, noted in the Slice 2 report.
+  let private lastKnownConductor : MemberTable.MemberId option ref = ref None
+
+  let private observeConductorEvents (events: Cohort.CohortEvent<MemberTable.MemberId> list) =
+    for e in events do
+      match e with
+      | Cohort.CohortEvent.ConductorBound who -> lastKnownConductor.Value <- Some who
+      | Cohort.CohortEvent.ConductorDelegated(_, toMember) -> lastKnownConductor.Value <- Some toMember
+      | _ -> ()
+
+  /// Dispatch one `CohortCommand` through the owner, mapping any refusal to
+  /// `SageFsError` at this boundary (roast §10) and updating the best-effort
+  /// conductor tracker on success.
+  let private commitCohort (ctx: McpContext) (cmd: Cohort.CohortCommand<MemberTable.MemberId>)
+      : Task<Result<Cohort.CohortEvent<MemberTable.MemberId> list * Cohort.CohortEffect<MemberTable.MemberId> list, SageFsError>> =
+    task {
+      match requireCohortOwner ctx with
+      | Error e -> return Error e
+      | Ok owner ->
+        let! result = owner.Commit cmd
+        match result with
+        | Ok(events, effects) ->
+          observeConductorEvents events
+          return Ok(events, effects)
+        | Error err -> return Error (cohortErrorToSageFsError err)
+    }
+
+  let private parseJoinableRole (raw: string) : Result<Cohort.JoinableRole, SageFsError> =
+    match (if isNull raw then "" else raw.Trim().ToLowerInvariant()) with
+    | "implementer" -> Ok Cohort.JoinableRole.Implementer
+    | "verifier" -> Ok Cohort.JoinableRole.Verifier
+    | "observer" -> Ok Cohort.JoinableRole.Observer
+    | other -> Error (SageFsError.SessionCreationFailed (sprintf "unknown cohort role '%s' — expected Implementer, Verifier, or Observer" other))
+
+  /// v1's scope wire format: "file:<repo-relative-path>" or
+  /// "project:<repo-relative-.fsproj-path>" — matches `Cohort.ClaimScope`'s
+  /// two v1 cases (Module/Symbol/Contract are Phase 3, not constructible yet).
+  let private parseClaimScope (raw: string) : Result<Cohort.ClaimScope, SageFsError> =
+    let raw = if isNull raw then "" else raw.Trim()
+    match raw.IndexOf ':' with
+    | -1 -> Error (SageFsError.SessionCreationFailed (sprintf "claim scope '%s' must be 'file:<path>' or 'project:<path>'" raw))
+    | i ->
+      let kind = raw.Substring(0, i).Trim().ToLowerInvariant()
+      let path = raw.Substring(i + 1).Trim()
+      if path = "" then Error (SageFsError.SessionCreationFailed "claim scope path is empty")
+      else
+        match kind with
+        | "file" -> Ok (Cohort.ClaimScope.File path)
+        | "project" -> Ok (Cohort.ClaimScope.Project path)
+        | other -> Error (SageFsError.SessionCreationFailed (sprintf "unknown claim scope kind '%s' — expected 'file' or 'project'" other))
+
+  /// Resolve a landing's presented "claimId:fence" pairs (comma-separated —
+  /// v1 has no structured multi-value MCP argument type worth adding for this
+  /// small surface, see the Slice 2 report's deviation note).
+  let private parseClaimFenceList (raw: string) : Result<(Cohort.ClaimId * int64<Measures.fence>) list, SageFsError> =
+    let raw = if isNull raw then "" else raw.Trim()
+    if raw = "" then Ok []
+    else
+      raw.Split(',')
+      |> Array.toList
+      |> List.map (fun pair ->
+        match pair.Trim().Split(':') with
+        | [| cid; fenceStr |] when cid.Trim() <> "" ->
+          match Int64.TryParse(fenceStr.Trim()) with
+          | true, f -> Ok (Cohort.ClaimId (cid.Trim()), LanguagePrimitives.Int64WithMeasure<Measures.fence> f)
+          | false, _ -> Error (SageFsError.SessionCreationFailed (sprintf "claim fence '%s' is not an integer in '%s'" fenceStr pair))
+        | _ -> Error (SageFsError.SessionCreationFailed (sprintf "expected 'claimId:fence', got '%s'" pair)))
+      |> List.fold (fun acc item ->
+        match acc, item with
+        | Error e, _ -> Error e
+        | Ok _, Error e -> Error e
+        | Ok xs, Ok x -> Ok (xs @ [ x ]))
+        (Ok [])
+
+  /// Resolve a target member named by its OWN display string (as
+  /// `get_cohort_status` prints it) back to a `MemberId` — used only for
+  /// naming the RECIPIENT of a conductor-only action (`reassign_claim`),
+  /// never for the acting caller's own identity (that is always
+  /// `memberIdFor agentName`, never a self-declared argument). Looked up
+  /// against the live frame first so a real bound connection (Mcp/Browser) is
+  /// named exactly as presented; falls back to `Minted` so direct/unbound
+  /// callers (most tests) can still name each other by plain agent name.
+  let private resolveMemberByDisplay (ctx: McpContext) (display: string) : MemberTable.MemberId =
+    match ctx.CohortOwner with
+    | None -> MemberTable.MemberId.Minted display
+    | Some owner ->
+      owner.ReadFrame().MemberIds
+      |> Array.tryFind (fun m -> MemberTable.MemberId.display m = display)
+      |> Option.defaultValue (MemberTable.MemberId.Minted display)
+
+  let private renderCohortFrame (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
+    let sb = System.Text.StringBuilder()
+    let conductorText =
+      match lastKnownConductor.Value with
+      | Some who -> MemberTable.MemberId.display who
+      | None -> "(unknown — no cohort command observed by this process yet)"
+    sb.AppendLine(sprintf "Cohort ledger head: v%d" (int64 frame.Version)) |> ignore
+    sb.AppendLine(sprintf "Conductor: %s" conductorText) |> ignore
+    sb.AppendLine(sprintf "Members (%d):" frame.MemberIds.Length) |> ignore
+    for i in 0 .. frame.MemberIds.Length - 1 do
+      let seat =
+        match frame.MemberSeat.[i] with
+        | Cohort.SeatState.Present -> "present"
+        | Cohort.SeatState.Departed since -> sprintf "departed %s" (since.ToString "u")
+      sb.AppendLine(sprintf "  - %s [%A] %s" (MemberTable.MemberId.display frame.MemberIds.[i]) frame.MemberRole.[i] seat) |> ignore
+    sb.AppendLine(sprintf "Claims (%d):" frame.ClaimIds.Length) |> ignore
+    for i in 0 .. frame.ClaimIds.Length - 1 do
+      let (Cohort.ClaimId cid) = frame.ClaimIds.[i]
+      let holder =
+        if frame.ClaimHolderIndex.[i] >= 0 then MemberTable.MemberId.display frame.MemberIds.[frame.ClaimHolderIndex.[i]]
+        else "(none)"
+      sb.AppendLine(sprintf "  - %s %A held-by=%s fence=%d state=%A" cid frame.ClaimScope.[i] holder (int64 frame.ClaimFence.[i]) frame.ClaimState.[i]) |> ignore
+    sb.AppendLine("Landing queue: not yet in the v1 read model (Cohort.fs's CohortFrame is trimmed to members/claims/test bitplanes; see its module doc).") |> ignore
+    sb.ToString()
+
+  /// Join the implicit per-daemon cohort as `role` (Implementer/Verifier/
+  /// Observer). v1 has no separate `create_cohort` command — the first
+  /// member to join an empty cohort becomes its conductor automatically
+  /// (`Cohort.decide`'s own semantics for `Join`), so this tool doubles as
+  /// create_cohort for the first caller.
+  let joinCohort (ctx: McpContext) (agentName: string) (role: string) : Task<Result<string, SageFsError>> =
+    task {
+      match parseJoinableRole role with
+      | Error e -> return Error e
+      | Ok r ->
+        let who = memberIdFor agentName
+        let! result = commitCohort ctx (Cohort.CohortCommand.Join(who, r))
+        return
+          result
+          |> Result.map (fun (events, _) ->
+            let becameConductor = events |> List.exists (function Cohort.CohortEvent.ConductorBound _ -> true | _ -> false)
+            sprintf "Joined cohort as %s (%s).%s" (MemberTable.MemberId.display who) (string r) (if becameConductor then " You are the conductor (first to join)." else ""))
+    }
+
+  let leaveCohort (ctx: McpContext) (agentName: string) : Task<Result<string, SageFsError>> =
+    task {
+      let who = memberIdFor agentName
+      let! result = commitCohort ctx (Cohort.CohortCommand.Depart who)
+      return result |> Result.map (fun _ -> sprintf "%s left the cohort." (MemberTable.MemberId.display who))
+    }
+
+  let acquireClaim (ctx: McpContext) (agentName: string) (scope: string) (purpose: string) : Task<Result<string, SageFsError>> =
+    task {
+      match parseClaimScope scope with
+      | Error e -> return Error e
+      | Ok claimScope ->
+        let who = memberIdFor agentName
+        let! result = commitCohort ctx (Cohort.CohortCommand.AcquireClaim(who, claimScope, purpose))
+        return
+          result
+          |> Result.bind (fun (events, _) ->
+            match events |> List.tryPick (function Cohort.CohortEvent.ClaimAcquired(cid, _, _, fence) -> Some(cid, fence) | _ -> None) with
+            | Some(Cohort.ClaimId cid, fence) -> Ok (sprintf "Acquired claim %s over %s (fence=%d)." cid scope (int64 fence))
+            | None -> Error (SageFsError.Unexpected (exn "acquire_claim committed with no ClaimAcquired event")))
+    }
+
+  let releaseClaim (ctx: McpContext) (agentName: string) (claimId: string) (fence: int64) : Task<Result<string, SageFsError>> =
+    task {
+      let who = memberIdFor agentName
+      let fenceMeasure = LanguagePrimitives.Int64WithMeasure<Measures.fence> fence
+      let! result = commitCohort ctx (Cohort.CohortCommand.ReleaseClaim(who, Cohort.ClaimId claimId, fenceMeasure))
+      return result |> Result.map (fun _ -> sprintf "Released claim %s." claimId)
+    }
+
+  /// Conductor-only (`Cohort.decide` gates `ReassignClaim` on
+  /// `Authority.present by state = Authority.Conductor _`, refusing
+  /// `NotConductor` otherwise — surfaced here via `cohortErrorToSageFsError`).
+  /// `toMember` names the recipient by ITS OWN display string, resolved via
+  /// `resolveMemberByDisplay` — never trusted as the caller's own identity.
+  let reassignClaim (ctx: McpContext) (agentName: string) (claimId: string) (toMember: string) : Task<Result<string, SageFsError>> =
+    task {
+      let by = memberIdFor agentName
+      let target = resolveMemberByDisplay ctx toMember
+      let! result = commitCohort ctx (Cohort.CohortCommand.ReassignClaim(by, Cohort.ClaimId claimId, target))
+      return result |> Result.map (fun _ -> sprintf "Reassigned claim %s to %s." claimId (MemberTable.MemberId.display target))
+    }
+
+  /// `claims` is "claimId:fence,claimId:fence,..." (empty string = no
+  /// backing claims); `commits` is a comma-separated list of shas. See
+  /// `parseClaimFenceList`'s doc for why v1 uses this flat wire format
+  /// instead of a structured argument type.
+  let requestLanding (ctx: McpContext) (agentName: string) (claims: string) (commits: string) (statement: string) : Task<Result<string, SageFsError>> =
+    task {
+      match parseClaimFenceList claims with
+      | Error e -> return Error e
+      | Ok claimList ->
+        let commitList =
+          (if isNull commits then "" else commits).Split(',')
+          |> Array.map (fun s -> s.Trim())
+          |> Array.filter (fun s -> s <> "")
+          |> Array.toList
+        let requester = memberIdFor agentName
+        let! result = commitCohort ctx (Cohort.CohortCommand.RequestLanding(requester, claimList, commitList, statement))
+        return
+          result
+          |> Result.bind (fun (events, _) ->
+            match events |> List.tryPick (function Cohort.CohortEvent.LandingQueued(lid, _) -> Some lid | _ -> None) with
+            | Some(Cohort.LandingId lid) -> Ok (sprintf "Landing %s queued." lid)
+            | None -> Error (SageFsError.Unexpected (exn "request_landing committed with no LandingQueued event")))
+    }
+
+  /// Read-only: dereferences the owner's published frame pointer directly
+  /// (D4) — no mailbox round-trip.
+  let getCohortStatus (ctx: McpContext) : Task<Result<string, SageFsError>> =
+    task {
+      match requireCohortOwner ctx with
+      | Error e -> return Error e
+      | Ok owner -> return Ok (renderCohortFrame (owner.ReadFrame()))
+    }

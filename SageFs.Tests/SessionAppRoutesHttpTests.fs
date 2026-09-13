@@ -141,7 +141,8 @@ let private startTestServer (ops: SessionManagementOps) = task {
       SharedBindingScope = ref None
       SharedFeatureState = None
       ActivityTracker = SageFs.AgentActivityTracker.create ()
-      LiveSnapshotSink = None }
+      LiveSnapshotSink = None
+      CohortOwner = None }
 
   let mcpContext : McpContext =
     { FrictionStore = None
@@ -156,7 +157,8 @@ let private startTestServer (ops: SessionManagementOps) = task {
       GetWarmupContext = None
       GetFeatureState = None
       ActivityTracker = config.ActivityTracker
-      LiveSnapshotSink = None }
+      LiveSnapshotSink = None
+      CohortOwner = None }
 
   let sseContext : SageFs.Server.McpServer.SseContext =
     { GetElmModel = None
