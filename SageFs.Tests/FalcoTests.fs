@@ -109,9 +109,7 @@ let testHttpGetWithRetry (url: string) (maxRetries: int) (delayMs: int) =
 let tests =
   testSequenced <| Integration.hostList "Falco web application tests" [
 
-    testCase "create and start basic Falco web app"
-    <| fun _ ->
-      task {
+    testTask "create and start basic Falco web app" {
         printfn "Starting test: create and start basic Falco web app"
         let actor = sharedActor.Value
         let port = getRandomPort ()
@@ -165,20 +163,16 @@ printfn "Web app started on port {port}"
         let! result = testHttpGetWithRetry $"http://localhost:{port}/" 10 200
 
         match result with
-        | Ok content ->
+        | Ok (content: string) ->
           printfn "Response received: %s" (content.Substring(0, min 200 content.Length))
           content |> Expect.stringContains "Should contain initial greeting" "Hello from SageFs!"
           content |> Expect.stringContains "Should contain initial text" "This is the initial page."
         | Error msg -> failtestf "Failed to get response: %s" msg
 
         printfn "Test completed successfully"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+    }
 
-    testCase "hot reload Falco markup"
-    <| fun _ ->
-      task {
+    testTask "hot reload Falco markup" {
         printfn "Starting test: hot reload Falco markup"
         let actor = sharedActor.Value
         let port = getRandomPort ()
@@ -228,7 +222,7 @@ printfn "Initial app started on port {port}"
         let! result1 = testHttpGetWithRetry $"http://localhost:{port}/" 10 200
 
         match result1 with
-        | Ok content ->
+        | Ok (content: string) ->
           printfn "Initial response: %s" (content.Substring(0, min 200 content.Length))
           content |> Expect.stringContains "Should have original content" "Original Content"
         | Error msg -> failtestf "Failed initial request: %s" msg
@@ -262,7 +256,7 @@ printfn "Handler updated"
         let! result2 = testHttpGetWithRetry $"http://localhost:{port}/" 10 200
 
         match result2 with
-        | Ok content ->
+        | Ok (content: string) ->
           printfn "Updated response: %s" (content.Substring(0, min 300 content.Length))
           content |> Expect.stringContains "Should have updated heading" "Updated Content!"
           content |> Expect.stringContains "Should have updated text" "hot reloaded successfully"
@@ -271,8 +265,6 @@ printfn "Handler updated"
         | Error msg -> failtestf "Failed updated request: %s" msg
 
         printfn "Hot reload test completed successfully"
-      }
-      |> Async.AwaitTask
-      |> Async.RunSynchronously
+    }
   ]
 
