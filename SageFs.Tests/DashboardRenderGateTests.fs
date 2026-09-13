@@ -40,6 +40,7 @@ let private mkQueries (getAllSessionsCount: int ref) (sessions: WorkerProtocol.S
     GetSessionTestSummary = fun _ -> None
     GetSessionCoverageSummary = fun _ -> None
     GetSessionTestTreemap = fun _ -> [||]
+    GetSessionCoverageTreemap = fun _ -> None
     GetSessionBindings = fun _ -> [||]
     GetLiveBindings = fun _ -> None
     GetBindingScopeSnapshot = fun () -> None

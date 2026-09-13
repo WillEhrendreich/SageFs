@@ -29,7 +29,7 @@ let private mkSession (id: string) (app: SageFs.AppRun.AppRunState) (projectRole
     LastActivity = "eval"
     TestSummary = None
     CoverageSummary = None
-    TestTreemapEntries = [||]; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
+    TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
     ActiveProject = None; ProjectRoles = projectRoles; App = app }
 
 let private mkSnap () : DashboardSnapshot =

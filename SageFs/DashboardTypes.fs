@@ -473,6 +473,9 @@ type ParsedSession = {
   TestSummary: Features.LiveTesting.TestSummary option
   CoverageSummary: Features.LiveTesting.CoverageSummary option
   TestTreemapEntries: Features.LiveTesting.TestTreemapEntry array
+  /// Solution -> project -> file -> symbol coverage hierarchy for the
+  /// drill-down treemap panel. None until coverage data exists.
+  CoverageTreemap: Features.Treemap.CoverageTreemapNode option
   BindingEntries: Features.BindingExplorer.BindingInfo array
   AgentBadges: AgentBadge list
   GuidanceCssClass: string
@@ -533,6 +536,7 @@ let sessionCardOf
     TestSummary = None
     CoverageSummary = None
     TestTreemapEntries = [||]
+    CoverageTreemap = None
     BindingEntries = [||]
     AgentBadges = []
     GuidanceCssClass = ""
@@ -647,6 +651,10 @@ type DashboardQueries = {
   GetSessionTestSummary: WorkerProtocol.SessionId -> Features.LiveTesting.TestSummary option
   GetSessionCoverageSummary: WorkerProtocol.SessionId -> Features.LiveTesting.CoverageSummary option
   GetSessionTestTreemap: WorkerProtocol.SessionId -> Features.LiveTesting.TestTreemapEntry array
+  /// The solution -> project -> file -> symbol coverage hierarchy for a
+  /// session's WizTree-style treemap panel. None until the session has both
+  /// instrumentation maps and at least one collected coverage bitmap.
+  GetSessionCoverageTreemap: WorkerProtocol.SessionId -> Features.Treemap.CoverageTreemapNode option
   GetSessionBindings: WorkerProtocol.SessionId -> Features.BindingExplorer.BindingInfo array
   /// Live reflection-walked binding tree for a session (debugger watch window),
   /// from the adaptive store. None until the first eval snapshot arrives.

@@ -305,6 +305,7 @@ let buildSessionCardsFrom (q: DashboardQueries) (sessions: WorkerProtocol.Sessio
         TestSummary = q.GetSessionTestSummary card.Id
         CoverageSummary = q.GetSessionCoverageSummary card.Id
         TestTreemapEntries = q.GetSessionTestTreemap card.Id
+        CoverageTreemap = q.GetSessionCoverageTreemap card.Id
         BindingEntries = q.GetSessionBindings card.Id
         AgentBadges = q.GetSessionAgentBadges card.Id
         GuidanceCssClass = q.GetSessionGuidanceCss card.Id })
