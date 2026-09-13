@@ -13,12 +13,15 @@ open SageFs.Demos.Domain
 [<Literal>]
 let private ClickHoldMs = 60
 
-/// TODO(shape): `Input.plan`'s signature (§5) carries no "where is the
-/// cursor right now" — threading the previous step's end position through a
-/// scenario is a cell-agent/session concern for Wave 2. Until then, every
-/// planned motion starts from this fixed assumed rest position, so the
-/// layer is exercised and callable end to end.
-let private restPosition: Point = { X = 0; Y = 0 }
+/// The assumed cursor position before a scenario's very first hop, or after
+/// a client (re)launch — nothing has moved the synthetic cursor yet, so the
+/// top-left corner is as good an "unknown" as any. Every OTHER hop starts
+/// from wherever the previous one actually ended (`plan`/`clickFrom`'s own
+/// `start` parameter, threaded by the cell-agent) — §9's fix for a cursor
+/// that visibly TELEPORTED back to this corner between a step's own
+/// pre-click and primary hops instead of continuing on, which read as
+/// inhuman on camera.
+let restPosition: Point = { X = 0; Y = 0 }
 
 /// A small, non-cryptographic, process-stable combine — deliberately not
 /// `HashCode.Combine`/`string.GetHashCode`, both of which are randomized per
@@ -45,20 +48,13 @@ let private rectCentre (rect: ScreenRect) : Point =
 let private motionRequests (start: Point) (finish: Point) (seed: Seed) : X11Request list =
   Motion.path start finish seed |> List.map (fun frame -> X11Request.FakeMotion(frame.At.X, frame.At.Y))
 
-/// Move to `target`'s centre, then press and release the left button
-/// (§4.3: "Click target = Motion.path to rect centre then FakeButton
-/// down/up (60 ms hold)").
-let private clickRequests (target: ScreenRect) : X11Request list =
-  let centre = rectCentre target
-  let seed = seedFromRect target
-  motionRequests restPosition centre seed
-  @ [ X11Request.FakeButton(Button.Left, Pressed.Down); X11Request.FakeButton(Button.Left, Pressed.Up) ]
-
-/// Like `clickRequests`, but starting the motion from an explicit prior
-/// cursor position instead of the fixed rest position — used by the
-/// cell-agent to chain a second click after a `TypeThenClick` step's typing
-/// (e.g. click the `[EVAL]` button right after typing the expression) so
-/// the cursor moves on continuously instead of resetting to the rest point.
+/// Move from `start` to `target`'s centre, then press and release the left
+/// button (§4.3: "Click target = Motion.path to rect centre then FakeButton
+/// down/up (60 ms hold)"). The cell-agent chains hops continuously through
+/// this — a pre-click, a primary click/type, and a submit click within one
+/// step all start from wherever the PREVIOUS hop actually ended, `restPosition`
+/// only for a step's very first hop — so the synthetic cursor never
+/// teleports back to a corner mid-step (§9).
 let clickFrom (start: Point) (target: ScreenRect) : X11Request list =
   let centre = rectCentre target
   let seed = seedFromRect target
@@ -93,34 +89,39 @@ let private typingRequests (mapping: KeyboardMapping) (text: Text) (seed: Seed) 
 let private chordRequests (mapping: KeyboardMapping) (keys: Key list) : X11Request list =
   keys |> List.collect (Keymap.resolve mapping) |> pressHoldingRequests
 
-/// The X11 requests that perform `action` at `target` (a click moves the
-/// cursor there and presses/releases the button with a 60 ms hold; typing
-/// clicks the position, then delivers `Cadence.keys`) — resolved against
-/// `mapping`, the LIVE keyboard mapping the cell-agent fetched from its own
-/// X display (`XTest.keyboardMapping`) right after opening it; every
-/// character this function types is only ever as correct as `mapping`
-/// actually is (§9: a fictitious identity mapping here is what corrupted
-/// typed text in a real recording — see `KeyboardMapping`'s own doc).
-let plan (mapping: KeyboardMapping) (action: Action) (target: ScreenRect) : X11Request list =
+/// The X11 requests that perform `action` at `target`, with its own initial
+/// motion starting from `start` — never a hard-coded rest position, so the
+/// cell-agent can chain this hop continuously from wherever a preceding
+/// pre-click hop actually ended (§9: a cursor that jumps back to a fixed
+/// corner between two hops of the SAME step reads as obviously synthetic).
+/// A click moves the cursor there and presses/releases the button with a 60
+/// ms hold; typing clicks the position, then delivers `Cadence.keys` —
+/// resolved against `mapping`, the LIVE keyboard mapping the cell-agent
+/// fetched from its own X display (`XTest.keyboardMapping`) right after
+/// opening it; every character this function types is only ever as correct
+/// as `mapping` actually is (§9: a fictitious identity mapping here is what
+/// corrupted typed text in a real recording — see `KeyboardMapping`'s own
+/// doc).
+let plan (mapping: KeyboardMapping) (start: Point) (action: Action) (target: ScreenRect) : X11Request list =
   match action with
-  | Action.Click _ -> clickRequests target
-  | Action.Type(_, text, cadenceSeed) -> clickRequests target @ typingRequests mapping text (seedOfCadenceSeed cadenceSeed)
+  | Action.Click _ -> clickFrom start target
+  | Action.Type(_, text, cadenceSeed) -> clickFrom start target @ typingRequests mapping text (seedOfCadenceSeed cadenceSeed)
   // The chained submit click is delivered separately by the cell-agent via
   // `clickFrom` (it targets a SECOND rect this function is never given —
   // `plan` resolves against exactly one `ScreenRect`, §5); this case covers
   // only the typing half, identically to `Type` above.
-  | Action.TypeThenClick(_, text, cadenceSeed, _) -> clickRequests target @ typingRequests mapping text (seedOfCadenceSeed cadenceSeed)
+  | Action.TypeThenClick(_, text, cadenceSeed, _) -> clickFrom start target @ typingRequests mapping text (seedOfCadenceSeed cadenceSeed)
   // Same as `TypeThenClick`: this function plans for exactly ONE resolved
   // rect (`target`), so it covers only the click+type half; the cell-agent
   // delivers the pre-click and submit-click hops separately via
   // `clickFrom`, against their OWN resolved rects this function never sees.
-  | Action.ClickThenTypeThenClick(_, _, text, cadenceSeed, _) -> clickRequests target @ typingRequests mapping text (seedOfCadenceSeed cadenceSeed)
+  | Action.ClickThenTypeThenClick(_, _, text, cadenceSeed, _) -> clickFrom start target @ typingRequests mapping text (seedOfCadenceSeed cadenceSeed)
   | Action.Chord keys -> chordRequests mapping keys
   | Action.Typo(_, wrong, right) ->
     let wrongText = Text.value wrong
     let seed = seedOfCadenceSeed (CadenceSeed.ofId wrongText)
     let backspaces = [ for _ in 1 .. wrongText.Length -> keyTapRequests mapping Key.Backspace ] |> List.collect id
-    clickRequests target @ typingRequests mapping wrong seed @ backspaces @ typingRequests mapping right seed
+    clickFrom start target @ typingRequests mapping wrong seed @ backspaces @ typingRequests mapping right seed
   // Neither of these drives fake input: `Setup` is an API-level action
   // performed through a client's own command surface (§5: "not captured"),
   // and `Await` only waits for a `Signal` — nothing to inject.

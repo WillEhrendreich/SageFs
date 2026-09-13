@@ -12,6 +12,7 @@
 module SageFs.Demos.Ffmpeg
 
 open SageFs.Demos.Domain
+open SageFs.Demos.Motion
 
 // ---------------------------------------------------------------------------
 // Fixed layout constants for the operations `render` builds (§9). The canvas
@@ -238,15 +239,16 @@ let private ifLadder (samples: (float * int) list) (finalValue: int) : string =
   List.foldBack (fun (threshold, value) acc -> sprintf "if(lt(t,%s),%d,%s)" (formatFactor threshold) value acc) samples (string finalValue)
 
 /// Builds the `x`/`y` position expressions for the WHOLE cursor path in one
-/// step: `points` held in sequence, each for an equal share of `durationSec`
-/// (§4.1's `PointerPath` carries no per-sample timestamp, so even spacing
-/// across the step's own recorded `[Started,Ended]` window is the honest
-/// reading of the data actually available — unchanged from the original
-/// per-hold design, just now expressed as one pair of formulas instead of N
-/// separately-gated filters).
-let private cursorMotionExprs (points: Point list) (durationSec: float) : string * string =
+/// step: `points` held in sequence, each for an equal share of
+/// `motionDurationSec` — the REAL, short, distance-based time a human mouse
+/// move actually takes (`Motion.durationForDistance`, the caller's job to
+/// compute), never the step's own full recorded `[Started,Ended]` window
+/// (§9's fix: spreading the ladder across a step that can include a 90s
+/// warmup wait made the cursor visibly crawl for the whole wait instead of
+/// arriving in well under a second like a real click).
+let private cursorMotionExprs (points: Point list) (motionDurationSec: float) : string * string =
   let n = points.Length
-  let holdEndSec i = durationSec * float (i + 1) / float n
+  let holdEndSec i = motionDurationSec * float (i + 1) / float n
 
   let samples =
     points
@@ -261,28 +263,64 @@ let private cursorMotionExprs (points: Point list) (durationSec: float) : string
 /// The instant the cursor motion ladder (`cursorMotionExprs`, above) starts
 /// showing its FINAL point — i.e. when the synthetic cursor visually
 /// arrives at the click target. Computed from the exact same per-hold
-/// spacing `cursorMotionExprs` itself uses (`durationSec * (n-1) / n`), so
-/// ripple-onset and cursor-arrival can never drift apart. §9's click
+/// spacing `cursorMotionExprs` itself uses (`motionDurationSec * (n-1) / n`),
+/// so ripple-onset and cursor-arrival can never drift apart. §9's click
 /// ripple must begin exactly here, never earlier — keying it to when the
 /// step's `Expectation` was separately OBSERVED (a daemon/DOM poll with its
-/// own latency, unrelated to the cursor's own drawn position) was the bug:
-/// that timestamp is not tied to the motion ladder at all and can land
-/// before the cursor has visually finished moving.
-let private cursorArrivalSec (points: Point list) (durationSec: float) : float =
+/// own latency, unrelated to the cursor's own drawn position) was the bug
+/// the first time around; keying it to the step's WHOLE duration instead of
+/// the real, short motion duration was the second (§9 round 4): both let
+/// the ripple land seconds (or, for a long warmup wait, MINUTES) after the
+/// cursor had already visually stopped.
+let private cursorArrivalSec (points: Point list) (motionDurationSec: float) : float =
   let n = points.Length
-  if n <= 1 then 0.0 else durationSec * float (n - 1) / float n
+  if n <= 1 then 0.0 else motionDurationSec * float (n - 1) / float n
+
+/// The real, short, human-scale duration a mouse actually takes to travel
+/// this step's WHOLE pointer path — `Motion.durationForDistance` applied to
+/// the straight-line distance from the path's first point to its last, the
+/// exact same distance-to-duration rule `Motion.path` itself used to decide
+/// how long the REAL XTest motion should take. A step's `PointerPath` can
+/// concatenate more than one hop (a pre-click, the primary click, a chained
+/// submit click, §9), but `Motion.durationForDistance` saturates at 650ms
+/// for any distance beyond 800px regardless — so even a multi-hop path
+/// spanning most of the screen composites to at most 650ms of visible
+/// motion, never the WHOLE step's recorded duration. Clamped to the step's
+/// own `visibleDurationSec` as a last-resort safety net (a step's segment
+/// can never be shorter than the motion computed from it, but nothing else
+/// guarantees that relationship structurally).
+let private motionDurationSecOf (points: Point list) (visibleDurationSec: float) : float =
+  match points with
+  | [] | [ _ ] -> 0.0
+  | _ ->
+    let first = List.head points
+    let last = List.last points
+    let dx = float (last.X - first.X)
+    let dy = float (last.Y - first.Y)
+    let distance = sqrt (dx * dx + dy * dy)
+    min visibleDurationSec (float (Motion.durationForDistance distance) / 1000.0)
 
 /// The single `Overlay` compositing the pre-rendered cursor image
 /// (`cursorPad`, an ffmpeg `-i cursor.png -loop 1` input Runtime.fs appends)
-/// onto `inPad` across the WHOLE step, positioned by `cursorMotionExprs`
-/// (§4.6). One filter for the whole path, not one per sample — see
-/// `ifLadder`'s doc for why that matters.
-let private cursorMotion (cursorPad: Pad) (points: Point list) (durationSec: float) (inPad: Pad) (outPad: Pad) : FilterGraph =
-  let xExpr, yExpr = cursorMotionExprs points durationSec
+/// onto `inPad`. The cursor stays VISIBLE for the whole step
+/// (`visibleDurationSec`, the enable window — a real mouse doesn't vanish
+/// after a click) but only MOVES for `motionDurationSec` (real, short,
+/// distance-based — §9), holding at its final position for the rest of the
+/// step once it arrives. One filter for the whole path, not one per sample
+/// — see `ifLadder`'s doc for why that matters.
+let private cursorMotion
+  (cursorPad: Pad)
+  (points: Point list)
+  (motionDurationSec: float)
+  (visibleDurationSec: float)
+  (inPad: Pad)
+  (outPad: Pad)
+  : FilterGraph =
+  let xExpr, yExpr = cursorMotionExprs points motionDurationSec
 
   FilterGraph.Labeled(
     [ inPad; cursorPad ],
-    FilterGraph.Overlay(Extent.Expr xExpr, Extent.Expr yExpr, Some(sprintf "between(t,0,%s)" (formatFactor durationSec))),
+    FilterGraph.Overlay(Extent.Expr xExpr, Extent.Expr yExpr, Some(sprintf "between(t,0,%s)" (formatFactor visibleDurationSec))),
     [ outPad ]
   )
 
@@ -387,10 +425,11 @@ let private contentNodes
     let captionNode = FilterGraph.Labeled([ startPad ], FilterGraph.Chain(captionBand style index total caption @ stepDots style index total), [ captionedPad ])
 
     let durationSec = float (max 1 (timing.EndedMs - timing.StartedMs)) / 1000.0
+    let motionDurationSec = motionDurationSecOf points durationSec
     let motionPad = freshLabel "motion"
-    let motionNode = cursorMotion cursorPad points durationSec captionedPad motionPad
+    let motionNode = cursorMotion cursorPad points motionDurationSec durationSec captionedPad motionPad
 
-    let rippleStartSec = cursorArrivalSec points durationSec
+    let rippleStartSec = cursorArrivalSec points motionDurationSec
 
     let ripple = rippleNodes ripplePad index rippleStartSec (List.last points) motionPad endPad
 

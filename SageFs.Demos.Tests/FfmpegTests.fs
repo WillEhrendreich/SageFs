@@ -320,15 +320,22 @@ let tests =
         leaves |> List.filter isDrawTextStyled |> List.length
         |> Expect.equal "two styled texts per step: the counter and the caption" (samplePlan.Segments.Length * 2)
 
-      testCase "render's ripple begins exactly when the cursor motion ladder reaches its LAST point — never earlier (§9)" <| fun _ ->
-        // 3 points over a 3s step: the cursor ladder shows the final point
-        // starting at durationSec*(n-1)/n = 3*2/3 = 2.0s (§9's "ripple
-        // begins when the cursor arrives"). ObservedAtMs is set to 200ms —
-        // deliberately much EARLIER than arrival — to prove the ripple is
-        // no longer keyed to the (separately-polled) observation timestamp,
-        // which was the bug: a ripple that could fire before the cursor
-        // visually finished moving.
-        let points = [ { X = 0; Y = 0 }; { X = 100; Y = 100 }; { X = 251; Y = 317 } ]
+      testCase "render's ripple begins exactly when the cursor motion ladder reaches its LAST point — never earlier, and never dragged out across the WHOLE step (§9 round 4)" <| fun _ ->
+        // A 500px move (a 300/400/500 triangle) over a step that's recorded
+        // as lasting 3s total (e.g. it includes a long post-click await):
+        // the REAL, human-scale motion duration is `Motion.durationForDistance
+        // 500 = 250 + (500/800)*400 = 500ms` — never the step's own 3s
+        // recorded window (§9 round 4's fix: the ladder used to spread
+        // across the WHOLE step, so a click at the very start of a 90s
+        // warmup-wait step made the cursor visibly crawl for 90 seconds).
+        // With 2 points, the ladder shows its final point starting at
+        // motionDurationSec*(n-1)/n = 0.5*1/2 = 0.25s — well within the
+        // first second of a 3s step, not two-thirds of the way through it.
+        // ObservedAtMs is set to 200ms — deliberately different from BOTH
+        // 0.25s and the step's own 3s — to prove the ripple is keyed to
+        // neither the separately-polled observation timestamp nor the raw
+        // step duration, only to the real motion.
+        let points = [ { X = 0; Y = 0 }; { X = 300; Y = 400 } ]
         let plan =
           { samplePlan with
               Segments = [ "/out/step-00.mkv" ]
@@ -345,7 +352,33 @@ let tests =
         with
         | None -> failtest "expected the ripple's overlay enable expression"
         | Some enable ->
-          enable |> Expect.equal "ripple window is [arrival, arrival+0.25], i.e. [2, 2.25] — not the early 0.2s observation" "between(t,2,2.25)"
+          enable |> Expect.equal "ripple window is [arrival, arrival+0.25] = [0.25, 0.5] — real motion time, not the step's own 3s duration nor the 0.2s observation" "between(t,0.25,0.5)"
+
+      testCase "render's cursor overlay stays VISIBLE for the whole step but only MOVES for the real, short motion duration (§9 round 4)" <| fun _ ->
+        // Same shape as the ripple-timing test above: a 500px move (500ms of
+        // real motion, per `Motion.durationForDistance`) inside a step
+        // recorded as lasting 3s. The cursor's own `Overlay` enable window
+        // must stay `between(t,0,3)` (visible for the WHOLE step — a real
+        // mouse doesn't vanish after clicking) even though the ladder that
+        // POSITIONS it only interpolates across the first 0.5s.
+        let points = [ { X = 0; Y = 0 }; { X = 300; Y = 400 } ]
+        let plan =
+          { samplePlan with
+              Segments = [ "/out/step-00.mkv" ]
+              Captions = [ Caption.mk "1/1 · Click" ]
+              PointerPaths = [ points ]
+              Timings = [ timing 0 3000 200 ]
+              Magnifier = None }
+        let nodes = render plan |> allNodes
+        match
+          nodes
+          |> List.tryPick (function
+            | FilterGraph.Labeled(_, FilterGraph.Overlay(Extent.Expr xExpr, _, Some enable), _) when not (xExpr.Contains "overlay_w") -> Some enable
+            | _ -> None)
+        with
+        | None -> failtest "expected the cursor's own overlay enable expression"
+        | Some enable ->
+          enable |> Expect.equal "cursor stays visible for the WHOLE 3s step, not just its 0.5s of real motion" "between(t,0,3)"
 
       testCase "render overlays the cursor image + ripple image only for the step with a non-empty pointer path" <| fun _ ->
         let nodes = render stepContentPlan |> allNodes

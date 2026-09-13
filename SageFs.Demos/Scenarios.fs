@@ -1,17 +1,41 @@
 /// The Phase-1 smoke scenario (demo-gif-plan.md §10 Phase 1): dashboard only
-/// — start a session, watch it warm up to Ready, then evaluate a real F#
-/// expression and watch the result land. Built the same way the worked hero
-/// example in §6.1 is: a plain F# value, no strings for closed sets, each
-/// step a caption/action/expectation/dwell.
+/// — open a REAL sample project (not a bare Quick Start temp session, which
+/// has nothing to auto-open and nothing to eval against), watch it warm up
+/// to Ready with the project's own source files/assemblies visibly scanned,
+/// then evaluate an expression that reads the project's OWN mutable state
+/// and watch the result land. Built the same way the worked hero example in
+/// §6.1 is: a plain F# value, no strings for closed sets, each step a
+/// caption/action/expectation/dwell.
 ///
-/// This is deliberately a real "watch SageFs evaluate F# live" demo, not
-/// just "a session card appears": the session-card testid fires while the
-/// session is still `WarmingUp`, so a scenario that stopped there recorded
-/// nothing interesting — §2's fix threads the story through to an actual
-/// eval result on screen.
+/// This is deliberately a real "watch SageFs open and evaluate a real
+/// project live" demo, not just "a session card appears" (the session-card
+/// testid fires while the session is still `WarmingUp`, so a scenario that
+/// stopped there recorded nothing interesting — §2's fix) and not just
+/// "evaluate arithmetic on a session with nothing loaded" (§10's fix: Quick
+/// Start creates a bare temp session with zero source files, so warmup
+/// visibly complains "there was nothing to auto open" and an eval like
+/// `[1..10] |> List.sum` proves nothing about the product's actual
+/// capability — loading a real project's code and evaluating against it).
 module SageFs.Demos.Scenarios
 
 open SageFs.Demos.Domain
+
+/// The sample this scenario opens as a REAL project — resolved to an
+/// absolute path by `Runtime.fs` (the one place with a `repoRoot`) via
+/// `Text.RepoRootToken`, never a literal path baked in here (§10).
+let private sample = Sample.WebappDatastar
+
+/// The "Open Directory" picker card's plain `<input>` (no `data-testid`,
+/// bound via Datastar's `data-bind:newSessionDir` — `DashboardFragments.fs`)
+/// — the ONLY text input on the "Start a Session" picker page, so this
+/// unqualified class selector has no ambiguity to resolve.
+let private newSessionDirSelector = ".picker-form input"
+
+/// The "Open Directory" card's own "Create" button (`Ds.post
+/// "/dashboard/session/create"`) — no `data-testid`, so `:has-text` (a
+/// Playwright CSS extension, not a new testid added to the daemon's own
+/// dashboard) picks it out from the "Discover" button next to it.
+let private createSessionButtonSelector = ".picker-form button:has-text(\"Create\")"
 
 /// The eval textarea has no `data-testid` (a plain `id="eval-textarea"`) —
 /// `Target.DashboardCssSelector` is the documented, deliberate escape hatch
@@ -54,20 +78,40 @@ let helloDashboard: Scenario =
     Capability = Capability.Sessions
     Client = Client.Dashboard
     App = AppKind.NoApp
-    Sample = Sample.WebappDatastar
+    Sample = sample
     Layout = LayoutTemplate.DashboardOnly
     Steps =
-      [ { Caption = Caption.mk "1/3 · Start a session"
-          Action = Action.Click(Target.DashboardElement DashboardId.QuickStart)
-          Expect = Expectation.PageShows(DashboardId.SessionCard, Text.mk "")
+      // §10: type the sample project's real, absolute directory into the
+      // "Open Directory" picker card, then click "Create" — the daemon
+      // auto-discovers the lone .fsproj in that directory with no
+      // ManualProjects signal needed (`resolveSessionProjects`,
+      // `DashboardTypes.fs`). Not Quick Start: a Quick Start session has NO
+      // project, so warmup has nothing to open (visibly logging "Auto-open
+      // was enabled but no source files were found") and nothing real to
+      // eval against.
+      [ { Caption = Caption.mk "1/3 · Open a real F# project"
+          Action =
+            Action.TypeThenClick(
+              Target.DashboardCssSelector newSessionDirSelector,
+              Text.mk (sprintf "%s/%s" Text.RepoRootToken (Sample.relativePath sample)),
+              CadenceSeed.ofId "hello-dashboard-open-project",
+              Target.DashboardCssSelector createSessionButtonSelector
+            )
+          // A real, non-empty project's warmup actually scans its source
+          // files — "Scanned 1 source files" (`AppState.fs`'s own literal
+          // wording) is a genuine, structural proof the project loaded
+          // (never fires for a bare Quick Start session, which scans 0),
+          // not just "a session card appeared" (§2's already-fixed
+          // nothingburger: that testid fires during `WarmingUp` too).
+          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 1 source files")
           Dwell = Dwell.short }
-        // Creating a session (Quick Start) does NOT switch the dashboard's
-        // main panel to that session's own view — it stays on the "Start a
-        // Session" picker until a session card is actually CLICKED
-        // (confirmed directly against a real recording: a still frame taken
-        // well after the tabline read "[Ready]" still showed the picker,
-        // with no eval box on screen at all). Clicking the card here
-        // navigates into the session's own view, which step 3 needs.
+        // Creating a session does NOT switch the dashboard's main panel to
+        // that session's own view — it stays on the "Start a Session"
+        // picker until a session card is actually CLICKED (confirmed
+        // directly against a real recording: a still frame taken well after
+        // the tabline read "[Ready]" still showed the picker, with no eval
+        // box on screen at all). Clicking the card here navigates into the
+        // session's own view, which step 3 needs.
         { Caption = Caption.mk "2/3 · It warms up and goes green"
           Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
@@ -82,17 +126,32 @@ let helloDashboard: Scenario =
         // `ClickThenTypeThenClick` folds "expand the accordion", "type the
         // expression", and "click Eval" into ONE step with NO step boundary
         // between the expand and the type — the only gap a re-render could
-        // land in and undo the expand.
-        { Caption = Caption.mk "3/3 · Evaluate F# — instant result"
+        // land in and undo the expand. The expression itself reads the
+        // sample project's OWN mutable state
+        // (`SageFs.Samples.WebappDatastar.Program.todos`) — proof the
+        // assemblies genuinely loaded, not arithmetic that would work
+        // identically on an empty session. Fully qualified, not bare
+        // `todos`: confirmed directly against a real recording that
+        // warmup's auto-open only opens REFERENCED PACKAGE namespaces
+        // (Falco/Falco.Routing/Falco.Markup/Falco.Datastar/
+        // Microsoft.AspNetCore.Builder, all real, all genuinely opened) —
+        // never the current PROJECT's OWN compiled module, so a bare
+        // `todos` faulted the eval ("not defined").
+        { Caption = Caption.mk "3/3 · Eval your own code — instant result"
           Action =
             Action.ClickThenTypeThenClick(
               Target.DashboardCssSelector evaluateAccordionSelector,
               Target.DashboardCssSelector evalTextareaSelector,
-              Text.mk "[1..10] |> List.sum",
+              Text.mk "SageFs.Samples.WebappDatastar.Program.todos.Length",
               CadenceSeed.ofId "hello-dashboard-eval",
               Target.DashboardElement DashboardId.Eval
             )
-          Expect = Expectation.PageTextContains(outputPanelSelector, "55")
+          // "int = 3" (not a bare "3") — deliberately specific: the output
+          // panel already prints "[3/4] Scanned assemblies..." during
+          // warmup, so a bare "3" would trivially, falsely pass before the
+          // eval ever ran. "int = 3" only ever appears in FSI's own
+          // "val it: int = 3" result line.
+          Expect = Expectation.PageTextContains(outputPanelSelector, "int = 3")
           Dwell = Dwell.long } ]
     Cost = CostClass.web
     Masks = [] }

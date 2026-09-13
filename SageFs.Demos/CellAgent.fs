@@ -35,6 +35,17 @@ let private pointerPathOf (requests: X11Request list) : int[] list =
     | X11Request.FakeMotion(x, y) -> Some [| x; y |]
     | _ -> None)
 
+/// Where a hop's OWN motion should start from: the previous hop's last
+/// delivered point, continuing the cursor on from there, or `Input.restPosition`
+/// if there was no previous hop — never a hard-coded corner mid-step (§9: a
+/// cursor that teleports back to a fixed point between a step's own hops
+/// reads as obviously synthetic, not human-driven).
+let private lastPointOr (fallback: Point) (path: int[] list) : Point =
+  path
+  |> List.tryLast
+  |> Option.map (fun xy -> { X = xy.[0]; Y = xy.[1] })
+  |> Option.defaultValue fallback
+
 /// Resolves `selector`'s live bounding box through the Dashboard actor
 /// (never a guessed coordinate) — shared by the primary click/type target
 /// and the `SubmitSelector` chained click. `BoundingBoxAsync` auto-waits up
@@ -96,7 +107,7 @@ let private runStep
     let preClickPointerPath =
       match preClickRectOpt with
       | Some rect ->
-        let requests = Input.clickFrom { X = 0; Y = 0 } rect
+        let requests = Input.clickFrom Input.restPosition rect
         XTest.deliver live requests
         pointerPathOf requests
       | None -> []
@@ -111,7 +122,10 @@ let private runStep
     let primaryPointerPath =
       match rectOpt, actionOf step with
       | Some rect, Some action ->
-        let requests = Input.plan mapping action rect
+        // Continue on from wherever the pre-click hop (if any) actually
+        // ended — never reset to the corner mid-step (§9).
+        let start = lastPointOr Input.restPosition preClickPointerPath
+        let requests = Input.plan mapping start action rect
         XTest.deliver live requests
         preClickPointerPath @ pointerPathOf requests
       | _ -> preClickPointerPath
@@ -141,12 +155,7 @@ let private runStep
     let submitPointerPath =
       match submitRectOpt with
       | Some rect ->
-        let startPoint =
-          primaryPointerPath
-          |> List.tryLast
-          |> Option.map (fun xy -> { X = xy.[0]; Y = xy.[1] })
-          |> Option.defaultValue { X = 0; Y = 0 }
-
+        let startPoint = lastPointOr Input.restPosition primaryPointerPath
         let requests = Input.clickFrom startPoint rect
         XTest.deliver live requests
         pointerPathOf requests

@@ -64,6 +64,46 @@ let buildDaemonFromSource (repoRoot: string) : Async<Result<string, string>> =
       return Error(sprintf "dotnet build SageFs.fsproj failed (exit %d):\n%s\n%s" code stdout stderr)
   }
 
+/// Builds `sample`'s real project on the HOST, exactly like
+/// `buildDaemonFromSource` builds the daemon — a scenario that opens a REAL
+/// project inside the cell (§10, `Scenarios.fs`'s `Text.RepoRootToken` path)
+/// needs that project's `obj`/`bin` ALREADY populated before the cell ever
+/// runs, because the cell has no network (`Sandbox.fs`'s `--unshare-net`):
+/// SageFs's own project loader refuses to build/restore anything itself —
+/// it reads already-built outputs and reports "Build the project (dotnet
+/// build) before starting a session" otherwise
+/// (`SageFs.Core/ProjectLoading.fs`) — so failing to pre-build here would
+/// surface as a faulted session inside the recording, not a clean error
+/// here. Empirically confirmed offline-safe on this machine: with every
+/// package this project needs already resolved into the shared NuGet
+/// global-packages cache (`resolveNugetPackagesDir`, RO-bound into the cell
+/// alongside the repo at its OWN absolute path so the resulting
+/// `obj/project.assets.json`'s baked-in absolute paths keep resolving once
+/// the cell starts), `dotnet build` needs no network round-trip at all.
+let buildSampleFromSource (repoRoot: string) (sampleRelativeDir: string) : Async<Result<unit, string>> =
+  async {
+    let projectDir = Path.Combine(repoRoot, sampleRelativeDir)
+    let! code, stdout, stderr = runCaptured "dotnet" [ "build"; projectDir; "-c"; "Release" ] (Some projectDir)
+
+    if code = 0 then
+      return Ok()
+    else
+      return Error(sprintf "dotnet build %s failed (exit %d):\n%s\n%s" sampleRelativeDir code stdout stderr)
+  }
+
+/// The shared NuGet global-packages folder — `NUGET_PACKAGES` if the host
+/// has it set, otherwise NuGet's own documented default
+/// (`~/.nuget/packages`). A pre-built sample project's `obj/project.assets.json`
+/// bakes in ABSOLUTE paths into this folder for every restored package; the
+/// cell needs it RO-bound at this SAME absolute path (never remapped) for
+/// those paths to keep resolving once the sandbox's own `HOME` is
+/// overridden to a private, empty `/home/demo` (§10).
+let private nugetPackagesDir () : string =
+  match Environment.GetEnvironmentVariable "NUGET_PACKAGES" with
+  | null
+  | "" -> Path.Combine(Environment.GetFolderPath Environment.SpecialFolder.UserProfile, ".nuget", "packages")
+  | dir -> dir
+
 /// The `dotnet` muxer's own directory (`DOTNET_ROOT`), resolved the same way
 /// the spike's stage4 script did (`dirname "$(readlink -f "$(command -v
 /// dotnet)")"`) so the cell can RO-bind exactly the runtime already installed
@@ -111,7 +151,13 @@ let private dashboardSelector (target: Target) : string option =
   | Target.DashboardCssSelector selector -> Some selector
   | _ -> None
 
-let private wireStepOf (index: int) (step: Step) : Wire.WireStep =
+/// Substitutes `Text.RepoRootToken` for the real, absolute repo root — the
+/// one runtime fact a pure `Scenario` value can never carry itself (§10).
+/// Idempotent no-op on any text that doesn't contain the token.
+let private resolveRepoRootToken (repoRoot: string) (text: string) : string =
+  text.Replace(Text.RepoRootToken, repoRoot)
+
+let private wireStepOf (repoRoot: string) (index: int) (step: Step) : Wire.WireStep =
   let preClickSelector =
     match step.Action with
     | Action.ClickThenTypeThenClick(preClickTarget, _, _, _, _) -> dashboardSelector preClickTarget
@@ -131,6 +177,7 @@ let private wireStepOf (index: int) (step: Step) : Wire.WireStep =
     | Action.TypeThenClick(_, text, _, _) -> Some(Text.value text)
     | Action.ClickThenTypeThenClick(_, _, text, _, _) -> Some(Text.value text)
     | _ -> None
+    |> Option.map (resolveRepoRootToken repoRoot)
 
   let submitSelector =
     match step.Action with
@@ -165,13 +212,13 @@ let private McpPort = 47749
 [<Literal>]
 let private DashboardPort = 47750
 
-let private wirePlanOf (scenario: Scenario) : Wire.ScenarioPlan =
+let private wirePlanOf (repoRoot: string) (scenario: Scenario) : Wire.ScenarioPlan =
   { Wire.ScenarioId = ScenarioId.value scenario.Id
     Wire.ChromePath = "/chrome-bin/chrome"
     Wire.PageUrl = sprintf "http://127.0.0.1:%d/dashboard" DashboardPort
     Wire.UserDataDir = "/home/demo/chrome-profile"
     Wire.OutDir = "/out"
-    Wire.Steps = scenario.Steps |> List.mapi wireStepOf }
+    Wire.Steps = scenario.Steps |> List.mapi (wireStepOf repoRoot) }
 
 // ---------------------------------------------------------------------------
 // The cell: exact bwrap shape + inner script (§4.12's proven recipe).
@@ -231,18 +278,46 @@ kill -KILL "$XVFB_PID" 2>/dev/null || true
 exit "$CELLAGENT_EXIT"
 """
 
-let private cellSpec (sagefsBin: string) (demosBin: string) (dotnetRoot: string) (chromeDir: string) (hostOutDir: string) : Sandbox.CellSpec =
+/// §10: a scenario that opens a REAL project (`Text.RepoRootToken`) needs
+/// the repo — and the shared NuGet package cache its pre-built `obj/` refers
+/// to by absolute path — actually reachable inside the cell, at the SAME
+/// absolute paths they have on the host (a bind mount does not rewrite the
+/// bytes of any file it exposes: `obj/project.assets.json`'s own baked-in
+/// absolute paths would point at nothing if the repo were remapped to a
+/// different mount point). `/dotnet-root` is also added to `PATH` (was
+/// `/usr/bin` only) so SageFs's own project-cracking (`Ionide.ProjInfo`,
+/// which DOES shell out to `dotnet msbuild` for a design-time build) can
+/// find a `dotnet` to run, the same one this cell already RO-binds to
+/// launch the daemon itself.
+let private cellSpec
+  (sagefsBin: string)
+  (demosBin: string)
+  (dotnetRoot: string)
+  (chromeDir: string)
+  (hostOutDir: string)
+  (repoRoot: string)
+  (nugetPackagesDir: string)
+  : Sandbox.CellSpec =
   { RoBinds =
       [ "/etc/fonts", "/etc/fonts"
         "/etc/ssl", "/etc/ssl"
         chromeDir, "/chrome-bin"
         demosBin, "/demos-bin"
         sagefsBin, "/sagefs-bin"
-        dotnetRoot, "/dotnet-root" ]
+        dotnetRoot, "/dotnet-root"
+        repoRoot, repoRoot
+        nugetPackagesDir, nugetPackagesDir ]
     RwBinds = [ hostOutDir, "/out" ]
     Env =
       [ "HOME", "/home/demo"
-        "PATH", "/usr/bin"
+        "PATH", "/usr/bin:/dotnet-root"
+        // Explicit, not derived from $HOME (which is the private, empty
+        // /home/demo above) — any restore/design-time-build path that
+        // recomputes the global-packages location fresh, instead of only
+        // trusting a pre-built project's cached `obj/project.assets.json`,
+        // must still land on the SAME populated folder this cell RO-binds
+        // (§10).
+        "NUGET_PACKAGES", nugetPackagesDir
         // §4.12: forced software Mesa — Xvfb segfaults under bwrap on this
         // NVIDIA box without it (glvnd otherwise picks the NVIDIA EGL vendor
         // JSON, which crashes probing for a GBM device inside the sandbox's
@@ -411,6 +486,14 @@ let record (repoRoot: string) (scenario: Scenario) : Async<Result<Wire.StepLog *
     | Error e -> return Error e
     | Ok sagefsBin ->
 
+    // §10: a scenario referencing `Sample.relativePath` (a real project,
+    // never a bare Quick Start temp session) needs that project already
+    // built on the HOST before the cell — which has no network — ever
+    // starts, or SageFs's own project loader refuses it outright.
+    match! buildSampleFromSource repoRoot (Sample.relativePath scenario.Sample) with
+    | Error e -> return Error e
+    | Ok() ->
+
     match! resolveDotnetRoot () with
     | Error e -> return Error e
     | Ok dotnetRoot ->
@@ -431,8 +514,8 @@ let record (repoRoot: string) (scenario: Scenario) : Async<Result<Wire.StepLog *
 
     Directory.CreateDirectory cellOutDir |> ignore
 
-    let spec = cellSpec sagefsBin demosBin dotnetRoot chromeDir cellOutDir
-    let planJson = Wire.serializePlan (wirePlanOf scenario)
+    let spec = cellSpec sagefsBin demosBin dotnetRoot chromeDir cellOutDir repoRoot (nugetPackagesDir ())
+    let planJson = Wire.serializePlan (wirePlanOf repoRoot scenario)
     let! exitCode, stdout, stderr = Sandbox.run spec planJson
 
     let stepLogLine =
