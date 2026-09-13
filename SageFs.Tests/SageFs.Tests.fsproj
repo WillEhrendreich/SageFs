@@ -123,6 +123,7 @@
         <Compile Include="TestCachePersistenceMutationTests.fs" />
         <Compile Include="EvalStoreMutationTests.fs" />
         <Compile Include="SessionDisplayMutationTests.fs" />
+        <Compile Include="ReloadPlanningDecisionMutationTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
         <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
