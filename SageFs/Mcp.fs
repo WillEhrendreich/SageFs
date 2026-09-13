@@ -4301,46 +4301,84 @@ module McpTools =
   // is additive-only in this slice; no new SageFsError case was added).
 
   /// Exhaustive, compiler-checked mapping from `Cohort.CohortError<MemberId>`
-  /// onto the nearest existing `SageFsError` case. None of these are a
-  /// semantically perfect fit — SageFsError has no cohort-specific cases yet
-  /// — so the detail always travels in a `reason`/message field rather than
-  /// being silently dropped, and the identifier (member/claim/landing) is
-  /// folded into that same string when the chosen case has no id slot for it.
+  /// onto `SageFsError.CohortActionFailed(reason, suggestion)` — the one
+  /// boundary (roast §10) where the pure module's error algebra crosses into
+  /// the product's. Each case builds an accurate `reason` (what went wrong,
+  /// naming the member/claim/landing) and an actionable `suggestion` (the next
+  /// step), so an agent reading the error gets cohort-specific guidance rather
+  /// than the mismatched session/worker advice a reused case would attach.
   let cohortErrorToSageFsError (err: Cohort.CohortError<MemberTable.MemberId>) : SageFsError =
     let mid = MemberTable.MemberId.display
+    let scopeStr (scope: Cohort.ClaimScope) =
+      match scope with
+      | Cohort.ClaimScope.File f -> sprintf "file:%s" f
+      | Cohort.ClaimScope.Project p -> sprintf "project:%s" p
+    let failed reason suggestion = SageFsError.CohortActionFailed(reason, suggestion)
     match err with
     | Cohort.CohortError.DuplicateJoin who ->
-      SageFsError.DuplicateSession(mid who, "cohort")
+      failed
+        (sprintf "%s is already a member of this cohort." (mid who))
+        "Run get_cohort_status to see your current role; there is no need to join again."
     | Cohort.CohortError.MemberNotPresent who ->
-      SageFsError.SessionNotFound(mid who)
+      failed
+        (sprintf "%s is not a present member of this cohort." (mid who))
+        "Run join_cohort before acting in the cohort."
     | Cohort.CohortError.ClaimConflict(scope, holder) ->
-      SageFsError.SessionNotRoutable(sprintf "claim scope %A is already held by %s" scope (mid holder))
+      failed
+        (sprintf "The scope %s is already claimed by %s." (scopeStr scope) (mid holder))
+        "Coordinate with the current holder, or acquire a different, non-overlapping scope."
     | Cohort.CohortError.NotClaimHolder(Cohort.ClaimId cid, requester) ->
-      SageFsError.SessionSwitchFailed(cid, sprintf "%s does not hold this claim" (mid requester))
+      failed
+        (sprintf "%s does not hold claim %s." (mid requester) cid)
+        "Acquire it with acquire_claim, or ask the current holder to release it."
     | Cohort.CohortError.UnknownClaim(Cohort.ClaimId cid) ->
-      SageFsError.SessionNotFound cid
+      failed
+        (sprintf "No claim %s exists in this cohort." cid)
+        "Run get_cohort_status to list the current claims and their ids."
     | Cohort.CohortError.ClaimNotOrphaned(Cohort.ClaimId cid) ->
-      SageFsError.SessionNotRoutable(sprintf "claim %s is not orphaned" cid)
+      failed
+        (sprintf "Claim %s is not orphaned, so it cannot be reassigned." cid)
+        "Only a claim whose holder has departed can be reassigned; check get_cohort_status."
     | Cohort.CohortError.DuplicateClaimId(Cohort.ClaimId cid) ->
-      SageFsError.DuplicateSession(cid, "cohort-claim")
+      failed
+        (sprintf "A claim with id %s already exists." cid)
+        "Retry the acquire; claim ids are minted per acquire_claim."
     | Cohort.CohortError.StaleClaimFence(Cohort.ClaimId cid, presented, current) ->
-      SageFsError.SessionSwitchFailed(cid, sprintf "presented fence %d is stale; current fence is %d" (int64 presented) (int64 current))
+      failed
+        (sprintf "Your fence for claim %s is stale — you presented %d but the current fence is %d." cid (int64 presented) (int64 current))
+        "Re-read get_cohort_status and retry with the claim's current fence."
     | Cohort.CohortError.InvalidPurpose reason ->
-      SageFsError.CheckFailed(sprintf "invalid claim purpose: %s" reason)
+      failed
+        (sprintf "The claim purpose is invalid: %s" reason)
+        "Provide a non-empty purpose describing why you are claiming the scope."
     | Cohort.CohortError.InvalidStatement reason ->
-      SageFsError.CheckFailed(sprintf "invalid landing statement: %s" reason)
+      failed
+        (sprintf "The landing statement is invalid: %s" reason)
+        "Provide a non-empty statement describing what this landing changes."
     | Cohort.CohortError.UnknownLanding(Cohort.LandingId lid) ->
-      SageFsError.SessionNotFound lid
+      failed
+        (sprintf "No landing %s exists in this cohort." lid)
+        "Run get_cohort_status to list the current landings."
     | Cohort.CohortError.DuplicateLandingId(Cohort.LandingId lid) ->
-      SageFsError.DuplicateSession(lid, "cohort-landing")
+      failed
+        (sprintf "A landing with id %s already exists." lid)
+        "Retry the request; landing ids are minted per request_landing."
     | Cohort.CohortError.NotLandingRequester(Cohort.LandingId lid, who) ->
-      SageFsError.SessionSwitchFailed(lid, sprintf "%s did not request this landing" (mid who))
+      failed
+        (sprintf "%s did not request landing %s." (mid who) lid)
+        "Only the landing's requester can act on it; check get_cohort_status."
     | Cohort.CohortError.LandingNotAtFrontOfQueue(Cohort.LandingId lid) ->
-      SageFsError.SessionNotRoutable(sprintf "landing %s is not at the front of the queue" lid)
+      failed
+        (sprintf "Landing %s is not at the front of the landing queue." lid)
+        "Landings are strictly serial; wait until the earlier landings ahead of it complete."
     | Cohort.CohortError.LandingNotInExpectedState(Cohort.LandingId lid, expected) ->
-      SageFsError.SessionNotRoutable(sprintf "landing %s is not %s" lid expected)
+      failed
+        (sprintf "Landing %s is not in the expected state (%s)." lid expected)
+        "Run get_cohort_status to see the landing's current state before acting on it."
     | Cohort.CohortError.NotConductor who ->
-      SageFsError.SessionSwitchFailed(mid who, "not the cohort conductor")
+      failed
+        (sprintf "This is a conductor-only action, and %s is not the cohort conductor." (mid who))
+        "Ask the cohort conductor to perform it, or have the conductor delegate the role to you."
 
   /// `ctx.CohortOwner` is `None` only when nothing wired a cohort owner
   /// (tests that predate Slice 2) — every production McpContext (DaemonMode.fs)

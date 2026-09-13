@@ -72,6 +72,11 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   | SageFs.SageFsError.PortInUse _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.SseConnectionError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
   | SageFs.SageFsError.JsonParseError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
+  // A cohort command the caller wasn't permitted to run given the current
+  // cohort state/authority (not the claim holder, not the conductor, scope
+  // already claimed, stale fence): the request was invalid for the state, not
+  // an internal failure.
+  | SageFs.SageFsError.CohortActionFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   // An exception the algebra had no specific case for. OperationFailed (not
   // the old fallback's InvalidRequest — the caller's request was not
   // necessarily invalid) is the honest "something broke" bucket.

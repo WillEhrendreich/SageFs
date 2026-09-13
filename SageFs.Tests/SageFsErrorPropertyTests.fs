@@ -130,6 +130,11 @@ let private genSageFsError =
       let! reason = genNonEmptyString
       return SageFsError.JsonParseError(ctx, reason)
     }
+    gen {
+      let! reason = genNonEmptyString
+      let! suggestion = genNonEmptyString
+      return SageFsError.CohortActionFailed(reason, suggestion)
+    }
     Gen.constant (SageFsError.Unexpected(Exception "test"))
   ]
 
@@ -274,12 +279,12 @@ let sageFsErrorPropertyTests =
           1)
 
     // 9. DU completeness guard — detect new cases
-    testCase "SageFsError DU has exactly 35 cases" <| fun _ ->
+    testCase "SageFsError DU has exactly 36 cases" <| fun _ ->
       allDuCaseInfos
       |> Array.length
       |> Expect.equal
         "SageFsError case count changed — update generators and property tests"
-        35
+        36
 
     // 10. Unexpected wraps exception message
     testPropertyWithConfig propConfig "Unexpected description contains exception message" <|

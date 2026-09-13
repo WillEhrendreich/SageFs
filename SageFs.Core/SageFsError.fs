@@ -125,6 +125,14 @@ type SageFsError =
   | PortInUse of port: int
   | SseConnectionError of reason: string
   | JsonParseError of context: string * reason: string
+  // ── Cohort coordination (multi-agent vision) ──
+  /// A cohort command was refused by the pure `Cohort.decide` core — the one
+  /// boundary that maps `Cohort.CohortError` into this algebra. `reason` and
+  /// `suggestion` are built per `CohortError` case at the MCP boundary
+  /// (`Mcp.fs`'s `cohortErrorToSageFsError`), where the caller's `MemberId`
+  /// display is available, so the agent gets an accurate what + actionable next
+  /// step instead of a mismatched session/worker error's advice.
+  | CohortActionFailed of reason: string * suggestion: string
   | Unexpected of exn
 
 module SageFsError =
@@ -200,6 +208,7 @@ module SageFsError =
       sprintf "SSE connection failed: %s" reason
     | SageFsError.JsonParseError(context, reason) ->
       sprintf "JSON parse error in %s: %s" context reason
+    | SageFsError.CohortActionFailed(reason, _) -> reason
     | SageFsError.Unexpected exn ->
       sprintf "Unexpected error: %s" exn.Message
 
@@ -243,6 +252,7 @@ module SageFsError =
     | SageFsError.NoActiveSessions -> LogLevel.Information
     | SageFsError.AmbiguousSessions _ -> LogLevel.Information
     | SageFsError.DaemonNotRunning -> LogLevel.Information
+    | SageFsError.CohortActionFailed _ -> LogLevel.Information
 
   let toHttpStatus = function
     // 404 Not Found
@@ -254,6 +264,10 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _ -> 400
     | SageFsError.JsonParseError _ -> 400
     | SageFsError.ToolNotAvailable _ -> 400
+    // A cohort command invalid for the current cohort state/authority (not the
+    // holder, not the conductor, scope already claimed, stale fence). 400 not
+    // 409: 409 is reserved here for infrastructure conflicts (isInfraError).
+    | SageFsError.CohortActionFailed _ -> 400
     // 409 Conflict
     | SageFsError.PortInUse _ -> 409
     | SageFsError.RestartLimitExceeded _ -> 409
@@ -296,6 +310,7 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _ -> true
     | SageFsError.JsonParseError _ -> true
     | SageFsError.ToolNotAvailable _ -> true
+    | SageFsError.CohortActionFailed _ -> true
     | SageFsError.AppRunFailed _
     | SageFsError.DuplicateSession _
     | SageFsError.SessionCreationFailed _
@@ -346,6 +361,7 @@ module SageFsError =
     | SageFsError.DaemonStartFailed _ -> true
     | SageFsError.AppRunFailed _ -> true
     | SageFsError.Unexpected _ -> true
+    | SageFsError.CohortActionFailed _
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
     | SageFsError.SessionNotRoutable _
@@ -371,6 +387,7 @@ module SageFsError =
     | SageFsError.WorkerHttpError _ -> true
     | SageFsError.PipeClosed -> true
     | SageFsError.SseConnectionError _ -> true
+    | SageFsError.CohortActionFailed _
     | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
@@ -406,6 +423,7 @@ module SageFsError =
     | SageFsError.PortInUse _ -> true
     | SageFsError.RestartLimitExceeded _ -> true
     | SageFsError.DuplicateSession _ -> true
+    | SageFsError.CohortActionFailed _
     | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
     | SageFsError.SessionNotFound _
@@ -475,6 +493,7 @@ module SageFsError =
     | SageFsError.PortInUse _ -> "Stop the other process or use --mcp-port"
     | SageFsError.SseConnectionError _ -> "Check daemon is running and retry"
     | SageFsError.JsonParseError _ -> "Check request payload format"
+    | SageFsError.CohortActionFailed(_, suggestion) -> suggestion
     | SageFsError.Unexpected _ -> "Check the SageFs log for details"
 
   /// Agent-facing error description: compose describe + suggestedAction.

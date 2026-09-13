@@ -238,7 +238,7 @@ let cohortMcpToolsTests =
 
         let! releaseResult = releaseClaim other "bystander" claimId 1L
         releaseResult
-        |> Expect.stringContains "a non-holder's release must be refused" "does not hold this claim"
+        |> Expect.stringContains "a non-holder's release must be refused" "does not hold claim"
       })
     }
 
