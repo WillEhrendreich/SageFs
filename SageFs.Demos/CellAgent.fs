@@ -51,7 +51,17 @@ let private assembleActors (plan: ScenarioPlan) : Async<Result<Map<ActorId, Live
     | "dashboard" ->
       let! handle = Dashboard.launch plan.ChromePath plan.UserDataDir { X = 0; Y = 0; W = 1280; H = 720 } plan.PageUrl
       return Ok(Map.ofList [ ActorId.Dashboard, Dashboard.toLiveActor handle ])
-    | other -> return Error(sprintf "cell-agent: unsupported Client '%s' (only 'dashboard' is implemented — Island F builds the seam only)" other)
+    // Agent island (demo-actors-plan.md §2.4) — one new match arm, exactly
+    // the extension this function's own doc comment invites ("Actor islands
+    // extend this one match arm by arm; they never touch anything else
+    // here"). No `plan.PageUrl` (that field stays dashboard-shaped, per
+    // `Runtime.fs`'s `wirePlanOf`): the Agent actor writes and opens its own
+    // `file://` viz page inside the cell and calls the daemon's own
+    // already-bound MCP port directly.
+    | "agent" ->
+      let! handle = Agent.launch plan.ChromePath plan.UserDataDir { X = 0; Y = 0; W = 1280; H = 720 }
+      return Ok(Map.ofList [ ActorId.Agent, Agent.toLiveActor handle ])
+    | other -> return Error(sprintf "cell-agent: unsupported Client '%s' (only 'dashboard'/'agent' are implemented)" other)
   }
 
 /// Reconstructs the `Action` kind (Click vs Type) `Input.plan` needs from a

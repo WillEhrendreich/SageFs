@@ -229,6 +229,13 @@ let private clientToken (client: Client) : string =
   | Client.Dashboard -> "dashboard"
   | Client.VsCode -> "vscode"
   | Client.Neovim -> "neovim"
+  // Agent island (demo-actors-plan.md §2.4): the ONLY change this island
+  // makes to this function — one new match arm, exactly the shape every
+  // other actor's own arm already takes. The Agent actor needs no
+  // per-client PageUrl/actorBinds from this file (it opens a `file://` page
+  // it writes into the cell itself and calls the daemon's already-bound MCP
+  // port directly — see `Actors/Agent.fs`), so nothing else here changes.
+  | Client.Agent -> "agent"
 
 /// The fixed ports every cell uses (§4.1: "the same fixed ports" — legal
 /// because each cell has a private network namespace, so nothing collides).

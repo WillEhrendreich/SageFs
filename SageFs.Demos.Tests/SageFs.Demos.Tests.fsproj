@@ -26,6 +26,7 @@
     <Compile Include="AppActorTests.fs" />
     <Compile Include="VsCodeActorTests.fs" />
     <Compile Include="NeovimActorTests.fs" />
+    <Compile Include="AgentTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 
