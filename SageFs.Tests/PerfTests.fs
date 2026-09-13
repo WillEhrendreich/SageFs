@@ -43,29 +43,30 @@ let perfTests =
   testList "Perf budgets (local)" [
     // Guards the roast's #1 performance finding: recordEval used to rebuild the
     // whole binding scope on every eval — regex per binding, per retained cell —
-    // an O(n^2) hot path on the "sub-500ms feedback on every save" promise. It is
-    // now incremental: the scope and dependency graph are deferred behind `lazy`
-    // (forced only on the throttled push path) and the timeline is updated in
-    // place, so recordEval no longer re-scans history.
+    // an O(n^2) hot path on the "sub-500ms feedback on every save" promise. Two
+    // fixes made it flat: the scope and dependency graph are deferred behind
+    // `lazy` (forced only on the throttled push path) with the timeline updated in
+    // place, and the history is a contiguous chunked ring (EvalStore) instead of a
+    // persistent Map, so the live object graph the GC scans is O(history/256)
+    // chunks, not O(history) tree nodes.
     //
     // The guard is a machine-independent scaling RATIO, never a wall-clock budget,
     // so it can run in the normal suite without flaking on a slow or loaded runner
-    // (see PerfBudget for why min-of-N + GC normalization). Steady-state cost for
-    // a 10x larger history measures a stable ~5x — sub-linear, and that ~5x is GC
-    // pressure from the larger retained history (each entry holds full code+result
-    // strings), not algorithmic work. The regression this catches is the O(n^2)
-    // rescan returning: at 10k history a single recordEval would re-scan 10k cells
-    // and the ratio would explode to ~100x+. The 15x ceiling sits far above the
-    // ~5x baseline (portability margin for differing GC configs) and far below the
-    // ~100x a real regression produces.
+    // (see PerfBudget for why min-of-N + GC normalization). Steady-state cost for a
+    // 10x larger history now measures a stable ~1.1x — essentially flat. (Before
+    // the ring buffer it was ~5x, pure GC-scan pressure from the persistent-Map
+    // node graph.) The regression this catches is either fix coming undone: a
+    // revert to the Map shows ~5x, an O(n) rescan ~10x, the O(n^2) rescan ~100x.
+    // The 8x ceiling sits well above the ~1.1x baseline (portability margin for
+    // differing GC configs) and catches an O(n)-or-worse regression decisively.
     testCase "recordEval steady-state cost stays sub-linear as history grows (guards the per-eval O(n^2) regression)"
     <| fun _ ->
       let small = buildAtCap 1000
       let large = buildAtCap 10000
       let ratio = PerfBudget.scalingRatio 15 (steadyBatch small) (steadyBatch large)
-      ratio < 15.0
+      ratio < 8.0
       |> Expect.isTrue (
         sprintf
-          "recordEval scaled %.1fx for 10x history; >15x means the per-eval O(n^2) scope rescan is back (baseline is ~5x)"
+          "recordEval scaled %.1fx for 10x history; >8x means the per-eval scope rescan is back (baseline is ~1.1x with the ring buffer)"
           ratio)
   ]
