@@ -366,6 +366,7 @@
         <Compile Include="DashboardBrowserRunner.fs" />
         <Compile Include="VscodeCommandProofTests.fs" />
         <Compile Include="CoverageTreemapTests.fs" />
+        <Compile Include="FrictionClassificationTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

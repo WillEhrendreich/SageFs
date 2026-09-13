@@ -1229,6 +1229,46 @@ module McpTools =
       | other -> return Error (SageFsError.SessionNotRoutable (formatSessionResolution other))
     }
 
+  /// Classify a session-routing outcome into a `SageFsError` for FRICTION
+  /// telemetry — never by scanning `formatSessionResolution`'s rendered
+  /// guidance text. Each non-Routable `SessionResolution` case is matched by
+  /// its own constructor tag; `Gone`'s ambiguous-vs-missing split (the two
+  /// conditions `formatWorkingDirectoryAmbiguity` and the plain "no sessions
+  /// match" message both collapse into `Gone` upstream) is resolved the same
+  /// structural way `resolveSessionId` itself resolves it — by re-checking
+  /// the session registry for how many sessions actually match — not by
+  /// re-parsing the `Gone` message. This is purely additive: it calls only
+  /// read-only registry lookups and never touches `resolveSessionId`,
+  /// `SessionNotRoutable`, or any of the `*Result` functions the HTTP
+  /// surface (McpServer.fs) already depends on, so their behavior is
+  /// unchanged. Used only by the MCP tool surface's friction recorder.
+  let sessionRoutingError
+      (ctx: McpContext) (sessionId: string option) (workingDirectory: string option)
+      (resolution: SessionResolution)
+      : Task<SageFsError option> =
+    task {
+      match resolution with
+      | Routable _ -> return None
+      | WarmingUp (sid, status) ->
+        return Some (SageFsError.SessionNotRoutable (sprintf "session '%s' is warming up (%s)" sid (WorkerProtocol.SessionLifecycleStatus.label status)))
+      | Unroutable (sid, status) ->
+        return Some (SageFsError.SessionNotRoutable (sprintf "session '%s' is not yet routable (%s)" sid (WorkerProtocol.SessionLifecycleStatus.label status)))
+      | FaultedSession sid ->
+        return Some (SageFsError.WorkerCommunicationFailed (sid, "session is faulted"))
+      | Gone _ ->
+        match sessionId with
+        | Some sid -> return Some (SageFsError.SessionNotFound sid)
+        | None ->
+          match workingDirectory with
+          | Some wd when not (System.String.IsNullOrWhiteSpace wd) ->
+            let! sessions = ctx.SessionOps.GetAllSessions()
+            match sessionsMatchingWorkingDirDeep sessions wd with
+            | _ :: _ :: _ as matches ->
+              return Some (SageFsError.AmbiguousSessions (matches |> List.map (fun s -> WorkerProtocol.SessionId.value s.Id)))
+            | _ -> return Some SageFsError.NoActiveSessions
+          | _ -> return Some SageFsError.NoActiveSessions
+    }
+
   let setSnapshotStatus (ctx: McpContext) (sid: string) (status: WorkerProtocol.SessionLifecycleStatus) =
     ctx.SessionOps.UpdateSessionStatus (toSessionId sid) status
 
@@ -3172,6 +3212,90 @@ module McpTools =
           None
       return Features.Verification.TargetedVerification.summarize report
     })
+
+  /// Same computation as `targetedVerify`, returning the IDENTICAL display
+  /// text, but also reporting whether the loaded definition was confirmed
+  /// stale as a real `SageFsError` — friction telemetry classifies
+  /// `LoadedStateStale` from that typed value directly instead of grepping
+  /// the summarized report for the word "stale". Duplicated rather than
+  /// factored through `targetedVerify` so the latter's tested text (asserted
+  /// verbatim by TargetedVerifyMcpToolTests.fs) is never at risk of drifting.
+  let targetedVerifyResult
+    (ctx: McpContext)
+    (agent: string)
+    (workingDirectory: string option)
+    (behavior: string)
+    (exactGuard: string option)
+    : Task<string * SageFsError option> =
+    task {
+      let! resolution = resolveSessionId ctx agent None workingDirectory
+      match resolution with
+      | Routable sid ->
+        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+        let status = info |> Option.map (fun session -> session.Status)
+        let loadedState,
+            sessionLoadedState =
+          match ctx.GetElmModel |> Option.map (fun getModel -> (getModel ()).SessionContext) |> Option.flatten with
+          | Some sessionCtx ->
+            let statuses =
+              match sessionCtx.SessionId = sid with
+              | true -> sessionCtx.FileStatuses
+              | false -> []
+            match statuses |> List.tryFind (fun file -> file.Readiness = FileReadiness.Stale) with
+            | Some stale ->
+              let lastLoaded = stale.LastLoadedAt |> Option.map string |> Option.defaultValue "unknown-loaded-version"
+              let state = Features.Verification.LoadedDefinitionState.ConfirmedStale (stale.Path, lastLoaded)
+              state, Some state
+            | None ->
+              let artifact =
+                statuses
+                |> List.filter (fun file -> file.Readiness = FileReadiness.Loaded)
+                |> List.map (fun file -> file.Path)
+                |> function
+                   | [] -> behavior
+                   | files -> String.concat ", " files
+              let state = Features.Verification.LoadedDefinitionState.ConfirmedCurrent artifact
+              state, Some state
+          | None ->
+            let state = Features.Verification.LoadedDefinitionState.UnknownLoadState "warmup file status unavailable"
+            state, None
+        let exactGuardRef =
+          exactGuard
+          |> Option.bind (fun raw ->
+            match Features.Verification.ExactTestRef.create raw with
+            | Ok exact -> Some exact
+            | Error _ -> None)
+        let sessionObservation : Features.Verification.SessionTrust.SessionObservation =
+          { MatchingSessionIds = [ sid ]
+            SessionStatus = status
+            LoadedState = sessionLoadedState
+            TypeIdentityDiagnostic =
+              match typeIdentityDiagnostics.TryGetValue(sid) with
+              | true, diag -> Some diag
+              | _ -> None }
+        let request : Features.Verification.TargetedVerificationRequest =
+          { Intent =
+              Features.Verification.VerificationIntent.VerifyChangedBehavior (behavior, Features.Verification.RegressionRisk.SharedContract)
+            NamedGuard = exactGuardRef
+            SessionObservation = sessionObservation
+            LoadedState = loadedState }
+        let report =
+          Features.Verification.TargetedVerification.createReport
+            request
+            None
+            None
+        let summary = Features.Verification.TargetedVerification.summarize report
+        let blocker =
+          match loadedState with
+          | Features.Verification.LoadedDefinitionState.ConfirmedStale (path, lastLoaded) ->
+            Some (SageFsError.HotReloadStateError (sid, sprintf "loaded definition of '%s' is stale (last loaded %s)" path lastLoaded))
+          | _ -> None
+        return summary, blocker
+      | other ->
+        let msg = formatSessionResolution other
+        let! blocker = sessionRoutingError ctx None workingDirectory other
+        return sprintf "Error: %s" msg, blocker
+    }
 
   // ── Feature Analysis MCP Tools (P15–P19) ─────────────────────
 
