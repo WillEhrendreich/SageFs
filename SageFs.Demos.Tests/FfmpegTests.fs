@@ -121,12 +121,29 @@ let tests =
         |> toCommandString
         |> Expect.equal "drawbox filter, # rewritten to 0x for ffmpeg" "drawbox=x=0:y=664:w=1280:h=56:color=0x1f1f28:t=fill"
 
-      testCase "DrawText escapes ffmpeg-special characters" <| fun _ ->
-        FilterGraph.DrawText("3/4 : it's, done\\", 24, 692)
+      testCase "DrawText leaves colon/comma/backslash literal inside the quoted text (ffmpeg's own quoting rule: everything inside single quotes is literal)" <| fun _ ->
+        FilterGraph.DrawText("3/4 : it, done\\", 24, 692)
         |> toCommandString
         |> Expect.equal
-          "colon, single quote, comma and backslash all escaped"
-          "drawtext=text='3/4 \\: it\\'s\\, done\\\\':x=24:y=692"
+          "colon, comma and backslash pass through unescaped once inside single quotes"
+          "drawtext=text='3/4 : it, done\\':x=24:y=692"
+
+      // A single quote CANNOT be represented inside single-quoting at all
+      // (ffmpeg-utils(1)); the correct escape closes the quote, splices in a
+      // backslash-escaped quote (recognized outside quoting), and reopens
+      // quoting: `'it'\''s'` renders `it's`. A prior version of this escaper
+      // instead emitted a bare `\'` — inside single quotes that is a LITERAL
+      // backslash immediately followed by the quote that CLOSES the string,
+      // truncating the caption and corrupting the rest of the filtergraph —
+      // confirmed directly: a real caption containing "project's" broke a
+      // real `-filter_complex` invocation end-to-end ("No option name near
+      // ...").
+      testCase "DrawText escapes a literal single quote with ffmpeg's close-escape-reopen trick, not a bare backslash" <| fun _ ->
+        FilterGraph.DrawText("it's done", 24, 692)
+        |> toCommandString
+        |> Expect.equal
+          "close quote, backslash-escaped quote, reopen quote"
+          "drawtext=text='it'\\''s done':x=24:y=692"
 
       testCase "Crop" <| fun _ ->
         FilterGraph.Crop { X = 0; Y = 0; W = 704; H = 720 }

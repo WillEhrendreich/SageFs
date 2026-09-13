@@ -342,6 +342,11 @@ type DashboardId =
   | Clear
   | WatchAll
   | UnwatchAll
+  /// The live-testing panel's ON/OFF toggle button — a real `data-testid`
+  /// already in the dashboard's markup (`DashboardFragments.fs`'s
+  /// `renderLiveTestingPanel`, `testid "live-testing-toggle"`), not one added
+  /// for this tool.
+  | LiveTestingToggle
 
 module DashboardId =
   let runApp = DashboardId.RunApp
@@ -354,6 +359,7 @@ module DashboardId =
   let clear = DashboardId.Clear
   let watchAll = DashboardId.WatchAll
   let unwatchAll = DashboardId.UnwatchAll
+  let liveTestingToggle = DashboardId.LiveTestingToggle
 
   /// The exhaustive DU → `data-testid` mapping (§4.3, G4) — the one place a
   /// dashboard button name and its DOM contract can drift apart.
@@ -369,6 +375,7 @@ module DashboardId =
     | DashboardId.Clear -> "clear"
     | DashboardId.WatchAll -> "watch-all"
     | DashboardId.UnwatchAll -> "unwatch-all"
+    | DashboardId.LiveTestingToggle -> "live-testing-toggle"
 
 /// A VS Code command id a demo invokes via `executeCommand` (§4.4) — never a
 /// bare string at a call site.

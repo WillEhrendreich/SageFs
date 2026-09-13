@@ -61,8 +61,21 @@ let private lastPointOr (fallback: Point) (path: int[] list) : Point =
 let private resolveRect (dashboard: Dashboard.Handle) (selector: string) : Async<ScreenRect option> =
   async {
     try
+      let locator = dashboard.Page.Locator(selector)
+      // A real target can live below the fold of a scrollable panel (e.g.
+      // the sidebar's Live Testing toggle, under Sessions/Hot Reload) —
+      // confirmed directly against a real recording: `BoundingBoxAsync`
+      // still returns a box for an off-screen element (page coordinates, not
+      // clamped to the viewport), so a synthetic XTest click at that
+      // coordinate lands on whatever (if anything) is actually painted
+      // there instead of the real target. Scrolling it into view first is
+      // exactly what a real person does before clicking something they
+      // can't yet see, and it's a genuine Playwright/DOM action — the click
+      // itself remains a real XTest event delivered afterwards.
+      do! locator.ScrollIntoViewIfNeededAsync() |> Async.AwaitTask
+
       let opts = Microsoft.Playwright.LocatorBoundingBoxOptions(Timeout = 10000.0f)
-      let! box = dashboard.Page.Locator(selector).BoundingBoxAsync(opts) |> Async.AwaitTask
+      let! box = locator.BoundingBoxAsync(opts) |> Async.AwaitTask
 
       return
         match box with

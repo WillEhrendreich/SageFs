@@ -113,16 +113,24 @@ let private colorArg (alpha: float option) (color: string) : string =
   | Some a -> sprintf "%s@%s" hex (formatFactor a)
   | None -> hex
 
-/// `drawtext`'s `text=` argument is single-quoted; ffmpeg's filter-graph
-/// parser treats backslash, colon, single-quote and comma as special even
-/// inside that quoting, so all four must be backslash-escaped or a caption
-/// containing one of them silently breaks the surrounding filter chain.
+/// `drawtext`'s `text=` argument is single-quoted. Per ffmpeg's own
+/// filtergraph quoting rules (ffmpeg-utils(1) "Quoting and escaping"),
+/// EVERY character inside a single-quoted value is taken literally —
+/// including backslash, colon and comma — with exactly one exception: a
+/// literal single quote cannot be written inside the quoting at all, because
+/// there is no in-quote escape for it. The documented workaround is to close
+/// the quoted section, splice in a backslash-escaped quote (which IS
+/// recognized outside quoting), and reopen quoting: `'it'\''s'` renders
+/// `it's`. A prior version of this function backslash-escaped `\`/`:`/`'`/`,`
+/// as if they needed it inside the quotes; for `'` that produced `\'`, which
+/// ffmpeg reads as a literal backslash immediately followed by the quote
+/// THAT CLOSES the string — silently truncating every caption at its first
+/// apostrophe and corrupting the rest of the filtergraph (confirmed directly:
+/// a caption containing "project's" broke `-filter_complex` parsing
+/// end-to-end, "No option name near ..."). Colon/comma/backslash need no
+/// escaping at all once actually inside single quotes.
 let private escapeDrawText (text: string) : string =
-  text
-    .Replace("\\", "\\\\")
-    .Replace(":", "\\:")
-    .Replace("'", "\\'")
-    .Replace(",", "\\,")
+  text.Replace("'", "'\\''")
 
 /// A fixed pixel value renders bare; an expression is single-quoted (ffmpeg's
 /// filter-option parser splits an option string on unescaped `:`/`,` even

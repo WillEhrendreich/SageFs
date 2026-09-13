@@ -73,6 +73,12 @@ let private outputPanelSelector = "[data-testid=session-output]"
 /// match failure — the precise CSS selector below has no such ambiguity.)
 let private evaluateAccordionSelector = "#evaluate-section summary"
 
+/// The live-testing panel's own container (`DashboardTypes.fs`'s
+/// `DomIds.LiveTestingPanel = "live-testing-panel"`, a real `id` already in
+/// the dashboard's markup) — scoped so "ON"/"✓" checks read THIS panel, not
+/// some other part of the page.
+let private liveTestingPanelSelector = "#live-testing-panel"
+
 let helloDashboard: Scenario =
   { Id = ScenarioId.ofRaw "hello-dashboard"
     Capability = Capability.Sessions
@@ -154,4 +160,176 @@ let helloDashboard: Scenario =
           Expect = Expectation.PageTextContains(outputPanelSelector, "int = 3")
           Dwell = Dwell.long } ]
     Cost = CostClass.web
+    Masks = [] }
+
+/// The dashboard's own RESET button (`DashboardFragments.fs`'s `testid
+/// "reset"`) — re-warms the SAME session from scratch, reusing the shared
+/// steps below.
+let private resetButtonSelector = "[data-testid=reset]"
+
+/// `sessions-dashboard` (§6's matrix: `Sessions.dashboard`) — a proper
+/// matrix-derived scenario distinct from the throwaway `hello-dashboard`
+/// smoke test (§6.1's own note: "never one of the matrix values"). Reuses
+/// the exact proven open-project/reach-Ready mechanics, then demonstrates
+/// the Sessions capability itself — resetting a live session and watching it
+/// warm back up to Ready — rather than repeating hello-dashboard's eval beat.
+let sessionsDashboard: Scenario =
+  { Id = ScenarioId.derive Capability.Sessions Client.Dashboard AppKind.NoApp
+    Capability = Capability.Sessions
+    Client = Client.Dashboard
+    App = AppKind.NoApp
+    Sample = sample
+    Layout = LayoutTemplate.DashboardOnly
+    Steps =
+      [ { Caption = Caption.mk "1/3 · Open a real F# project"
+          Action =
+            Action.TypeThenClick(
+              Target.DashboardCssSelector newSessionDirSelector,
+              Text.mk (sprintf "%s/%s" Text.RepoRootToken (Sample.relativePath sample)),
+              CadenceSeed.ofId "sessions-dashboard-open-project",
+              Target.DashboardCssSelector createSessionButtonSelector
+            )
+          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 1 source files")
+          Dwell = Dwell.short }
+        { Caption = Caption.mk "2/3 · The session warms up and goes green"
+          Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
+          Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
+          Dwell = Dwell.medium }
+        // §9's own Sessions story: a live session can be reset from scratch
+        // right from the dashboard. Confirmed directly against a real
+        // recording: RESET is a soft reset (clears eval history/state on the
+        // SAME warm FSI process, not a fresh cold warm-up), and the
+        // dashboard's own literal confirmation text is "Reset: Session reset
+        // successfully" — not a repeat of the "[4/4] Warm-up complete" line,
+        // which never reappears for a soft reset.
+        // Confirmed directly against a real recording: the confirmation line
+        // does NOT land inside `[data-testid=session-output]` (reset replaces
+        // that panel's whole subtree, clearing scrollback) — it shows up in
+        // the statusline instead. `body` (already proven for the "Ready"
+        // check above) catches it wherever it actually renders.
+        { Caption = Caption.mk "3/3 · Reset the session"
+          Action = Action.Click(Target.DashboardCssSelector resetButtonSelector)
+          Expect = Expectation.PageTextContains(sessionStatusSelector, "Session reset successfully")
+          Dwell = Dwell.long } ]
+    Cost = CostClass.web
+    Masks = [] }
+
+/// `repl-dashboard` (§6's matrix: `Repl.scenario Client.Dashboard`) — shows
+/// the REPL capability as genuine back-and-forth: two separate evaluations
+/// against the SAME live session, one reading the project's own state (proof
+/// assemblies are really loaded, exactly hello-dashboard's own reasoning)
+/// and one general expression — an agent/human iterating at a live prompt,
+/// not a single one-shot eval.
+let replDashboard: Scenario =
+  { Id = ScenarioId.derive Capability.Repl Client.Dashboard AppKind.NoApp
+    Capability = Capability.Repl
+    Client = Client.Dashboard
+    App = AppKind.NoApp
+    Sample = sample
+    Layout = LayoutTemplate.DashboardOnly
+    Steps =
+      [ { Caption = Caption.mk "1/4 · Open a real F# project"
+          Action =
+            Action.TypeThenClick(
+              Target.DashboardCssSelector newSessionDirSelector,
+              Text.mk (sprintf "%s/%s" Text.RepoRootToken (Sample.relativePath sample)),
+              CadenceSeed.ofId "repl-dashboard-open-project",
+              Target.DashboardCssSelector createSessionButtonSelector
+            )
+          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned 1 source files")
+          Dwell = Dwell.short }
+        { Caption = Caption.mk "2/4 · It warms up and goes green"
+          Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
+          Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
+          Dwell = Dwell.medium }
+        { Caption = Caption.mk "3/4 · Evaluate a plain expression"
+          Action =
+            Action.ClickThenTypeThenClick(
+              Target.DashboardCssSelector evaluateAccordionSelector,
+              Target.DashboardCssSelector evalTextareaSelector,
+              Text.mk "List.sum [ 1 .. 10 ]",
+              CadenceSeed.ofId "repl-dashboard-eval-1",
+              Target.DashboardElement DashboardId.Eval
+            )
+          Expect = Expectation.PageTextContains(outputPanelSelector, "int = 55")
+          Dwell = Dwell.medium }
+        // Same live session, second eval — the REPL keeps state (a real
+        // `it`-style prompt), so this reads the PROJECT's own mutable state
+        // right after a totally unrelated expression, proving the session
+        // never restarted between the two evals.
+        { Caption = Caption.mk "4/4 · Evaluate the project's own state"
+          Action =
+            Action.ClickThenTypeThenClick(
+              Target.DashboardCssSelector evaluateAccordionSelector,
+              Target.DashboardCssSelector evalTextareaSelector,
+              Text.mk "SageFs.Samples.WebappDatastar.Program.todos.Length",
+              CadenceSeed.ofId "repl-dashboard-eval-2",
+              Target.DashboardElement DashboardId.Eval
+            )
+          Expect = Expectation.PageTextContains(outputPanelSelector, "int = 3")
+          Dwell = Dwell.long } ]
+    Cost = CostClass.web
+    Masks = [] }
+
+/// `lt-dashboard` (§6's matrix: `LiveTesting.scenario Client.Dashboard
+/// Sample.FromCSharp`) — opens the real `SageFs.Samples.FromCSharp` project
+/// (a genuine Expecto test suite, `Hello.fs`'s ten real, currently-passing
+/// tests), turns live testing ON via the dashboard's own
+/// `data-testid=live-testing-toggle` (`DashboardFragments.fs`'s
+/// `renderLiveTestingPanel`), and watches the panel's own header move from
+/// "OFF" to "ON" and then show a real passed count — SageFs discovering and
+/// running the project's actual tests, not a canned status string.
+///
+/// NOT YET PASSING (recorded but NOT published to the gallery — the job's own
+/// "don't fake it" rule): steps 1-3 pass genuinely (real project opens, warms
+/// up with Expecto/Expecto.Flip opened, live testing flips to "ON", and
+/// `SageFsApp.fs`'s `EnableLiveTesting` handler does dispatch
+/// `RequestInitialDiscovery` + `RegisterFileWatcher`), but step 4 — waiting
+/// for a passed-test checkmark in `#live-testing-panel` — times out at 90s on
+/// every attempt (reproduced twice). The cell's own `daemon.log` shows
+/// "Registered file watcher" but NO discovery-related log line ever appears,
+/// so discovery is requested but never observably completes for a project
+/// opened directly through the dashboard's "Open Directory" picker (as
+/// opposed to a project SageFs already knows as "runnable"). Root-causing
+/// this further means reading `LiveTestingExecutors`/`SageFsApp`'s discovery
+/// effect handlers in `SageFs.Core`/`SageFs`, which is real product logic
+/// beyond this demo tool's own scope (`AGENTS.md`: don't touch product code
+/// beyond what a scenario needs) — left here, still wired to `record
+/// lt-dashboard` for whoever picks this up, with the concrete evidence above
+/// instead of a workaround that would silently pass without a checkmark ever
+/// appearing.
+let ltDashboard: Scenario =
+  { Id = ScenarioId.derive Capability.LiveTesting Client.Dashboard AppKind.NoApp
+    Capability = Capability.LiveTesting
+    Client = Client.Dashboard
+    App = AppKind.NoApp
+    Sample = Sample.FromCSharp
+    Layout = LayoutTemplate.DashboardOnly
+    Steps =
+      [ { Caption = Caption.mk "1/4 · Open a real test project"
+          Action =
+            Action.TypeThenClick(
+              Target.DashboardCssSelector newSessionDirSelector,
+              Text.mk (sprintf "%s/%s" Text.RepoRootToken (Sample.relativePath Sample.FromCSharp)),
+              CadenceSeed.ofId "lt-dashboard-open-project",
+              Target.DashboardCssSelector createSessionButtonSelector
+            )
+          Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned")
+          Dwell = Dwell.short }
+        { Caption = Caption.mk "2/4 · It warms up and goes green"
+          Action = Action.Click(Target.DashboardElement DashboardId.SessionCard)
+          Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
+          Dwell = Dwell.medium }
+        { Caption = Caption.mk "3/4 · Turn live testing on"
+          Action = Action.Click(Target.DashboardElement DashboardId.LiveTestingToggle)
+          Expect = Expectation.PageTextContains(liveTestingPanelSelector, "Live Testing: ON")
+          Dwell = Dwell.medium }
+        // No click — just watch the same live session actually discover and
+        // run the project's real Expecto tests (§9's "Await" pattern: a step
+        // with no click/type action still waits out its own expectation).
+        { Caption = Caption.mk "4/4 · SageFs runs the real tests — they pass"
+          Action = Action.Await Signal.testRunCompleted
+          Expect = Expectation.PageTextContains(liveTestingPanelSelector, "✓")
+          Dwell = Dwell.long } ]
+    Cost = CostClass.console
     Masks = [] }
