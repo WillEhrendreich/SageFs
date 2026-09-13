@@ -291,6 +291,7 @@
          <Compile Include="TargetedVerifyMcpToolTests.fs" />
          <Compile Include="McpTargetedVerificationToolTests.fs" />
          <Compile Include="JupyterKernelTests.fs" />
+         <Compile Include="JupyterDaemonBridgeTests.fs" />
         <Compile Include="TracingMiddlewareTests.fs" />
         <Compile Include="ResultExTests.fs" />
         <Compile Include="RenderInstrumentationTests.fs" />
