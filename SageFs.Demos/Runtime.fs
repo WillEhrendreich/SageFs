@@ -338,6 +338,20 @@ let private wireStepOf (repoRoot: string) (client: Client) (index: int) (step: S
     | Action.Setup ClientCommand.RunApp -> Some "run-app"
     | Action.Setup ClientCommand.StopApp -> Some "stop-app"
     | Action.Setup ClientCommand.SaveAll -> Some "save-all"
+    // `ClientCommand.CreateSession`'s wire image (see its own doc on
+    // `Domain.fs`): Neovim resolves to its pinned plugin's own
+    // non-interactive command, given the RELATIVE `.fsproj` name (nvim's
+    // cwd is already `plan.WorkspaceDir` — the sample's own project
+    // directory, `CellAgent.fs`'s `Neovim.launch` call); every other client
+    // has no such non-interactive editor command, so it resolves to a
+    // direct daemon `/api/sessions/create` call instead, given the real,
+    // absolute project directory (`Actors/VsCode.fs`'s `command`).
+    | Action.Setup(ClientCommand.CreateSession sample) ->
+      match client with
+      | Client.Neovim -> Some(sprintf "create-session:%s" (Sample.projectFileName sample))
+      | Client.VsCode
+      | Client.Dashboard
+      | Client.Agent -> Some(sprintf "create-session-api:%s" (IO.Path.Combine(repoRoot, Sample.relativePath sample)))
     | _ -> None
 
   let expectSelector, observeActor = expectationWire client step.Expect
@@ -723,7 +737,11 @@ let private resolveActorExtras
 
       let scratchDir = Path.Combine(Path.GetTempPath(), sprintf "sagefs-demos-nvim-plugin-%s" (Guid.NewGuid().ToString "N"))
 
-      match! Runtime.Neovim.resolvePinnedPlugin pluginRepoDir scratchDir "master" with
+      // Pinned to the sagefs.nvim commit that adds a non-interactive
+      // `:SageFsCreateSession <project>` (skips the `vim.ui.select` project
+      // picker synthetic keystrokes cannot answer) — never the floating
+      // `"master"` ref (roast I12: a resolved commit, not a moving branch).
+      match! Runtime.Neovim.resolvePinnedPlugin pluginRepoDir scratchDir "90bc3f41" with
       | Error e -> return Error e
       | Ok(sha, pluginDir) ->
 

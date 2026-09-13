@@ -146,6 +146,20 @@ module Sample =
     | Sample.ConsoleTicker -> "samples/demos/SageFs.Samples.ConsoleTicker"
     | Sample.FromCSharp -> "samples/from-csharp/SageFs.Samples.FromCSharp"
 
+  /// The sample project's own `.fsproj` file name — every real sample
+  /// directory names its lone `.fsproj` identically to its own containing
+  /// directory (confirmed directly: `find samples -name '*.fsproj'` — e.g.
+  /// `samples/demos/SageFs.Samples.WebappDatastar/
+  /// SageFs.Samples.WebappDatastar.fsproj`), so this is DERIVED from
+  /// `relativePath`'s own last segment rather than a second literal per case
+  /// that could silently drift from the first. Used to build the argument
+  /// `sagefs.nvim`'s non-interactive `:SageFsCreateSession <project>`
+  /// (commit 90bc3f41) wants — a path RELATIVE to nvim's own `getcwd()`,
+  /// which `Runtime.fs`'s Neovim wiring sets to this exact sample directory
+  /// (`CellAgent.fs`'s `Neovim.launch ... plan.WorkspaceDir`).
+  let projectFileName (sample: Sample) : string =
+    (relativePath sample).Split('/') |> Array.last |> sprintf "%s.fsproj"
+
 [<RequireQualifiedAccess>]
 type LayoutTemplate =
   | EditorLeft
@@ -461,6 +475,15 @@ type ClientCommand =
   | RunApp
   | StopApp
   | SaveAll
+  /// Creates a real session for `sample`, non-interactively — no editor
+  /// picker/confirm-dialog synthetic input has to answer. `Runtime.fs`
+  /// resolves this differently per client: Neovim's own pinned plugin
+  /// (commit 90bc3f41) gained `:SageFsCreateSession <project>` for exactly
+  /// this; VS Code's extension has no equivalent non-interactive command
+  /// (its own auto-discover flow pops an interactive
+  /// `showInformationMessage` confirm dialog), so that arm goes straight to
+  /// the cell daemon's own `/api/sessions/create` HTTP API instead.
+  | CreateSession of Sample
 
 // ---------------------------------------------------------------------------
 // Targets, actions, expectations, steps, scenarios (§5, §6.1).

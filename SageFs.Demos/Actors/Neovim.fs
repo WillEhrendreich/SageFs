@@ -665,7 +665,12 @@ let command (handle: Handle) (token: string) : Async<unit> =
     | "run-app" -> do! run "SageFsRunApp"
     | "stop-app" -> do! run "SageFsStopApp"
     | "save-all" -> do! run "wall"
-    | "create-session" -> do! run "SageFsCreateSession"
+    // The pinned plugin commit (90bc3f41, `Runtime.Neovim.fs`) accepts an
+    // optional project argument to `:SageFsCreateSession` that skips the
+    // interactive `vim.ui.select` picker — always pass one here (never the
+    // bare command) so this command never blocks on synthetic input a
+    // scripted actor cannot answer.
+    | t when t.StartsWith "create-session:" -> do! run (sprintf "SageFsCreateSession %s" (t.Substring "create-session:".Length))
     | "eval-line" -> do! run "SageFsEvalLine"
     | t when t.StartsWith "open-file:" -> do! run (sprintf "edit %s" (t.Substring "open-file:".Length))
     | _ -> ()
