@@ -194,15 +194,17 @@ let private assembleActors (plan: ScenarioPlan) : Async<Result<Map<ActorId, Live
       let vsCodeActor = VsCode.toLiveActor handle DaemonBaseUrl
       let! dashboardHandle = Dashboard.launch plan.ChromePath plan.UserDataDir (rectFor plan "dashboard") plan.PageUrl
       let dashboardActor = Dashboard.toLiveActor dashboardHandle
-
-      match! appActorsOf plan with
-      | Error message -> return Error message
-      | Ok appActors ->
-        return
-          Ok(
-            Map.ofList [ ActorId.VsCode, vsCodeActor; ActorId.Dashboard, dashboardActor ]
-            |> fun m -> mergeActors m appActors
-          )
+      // The App co-actor is deliberately NOT launched here: it "finds,
+      // places, and observes" a window the session's own run-app call
+      // produces, and at actor-ASSEMBLY time no session/app has been
+      // started yet (a scenario's own `Setup(RunApp)` step, which the run
+      // loop below launches App right after, hasn't run). Launching it
+      // eagerly here made every joint hot-reload scenario fail loud before
+      // its very first real step ever ran (confirmed directly against a
+      // real recording: `App(Raylib): no new X11 window appeared within
+      // 30000ms` at "actor assembly", 0 of the scenario's own steps
+      // attempted) — see `run`'s own lazy-launch handling.
+      return Ok(Map.ofList [ ActorId.VsCode, vsCodeActor; ActorId.Dashboard, dashboardActor ])
     | "neovim" ->
       match plan.Nvim with
       | None -> return Error "cell-agent: Client 'neovim' requires plan.Nvim (Runtime.fs's wirePlanOf/resolveActorExtras must supply it)"
@@ -236,15 +238,10 @@ let private assembleActors (plan: ScenarioPlan) : Async<Result<Map<ActorId, Live
       let neovimActor = Neovim.toLiveActor neovimHandle
       let! dashboardHandle = Dashboard.launch plan.ChromePath plan.UserDataDir (rectFor plan "dashboard") plan.PageUrl
       let dashboardActor = Dashboard.toLiveActor dashboardHandle
-
-      match! appActorsOf plan with
-      | Error message -> return Error message
-      | Ok appActors ->
-        return
-          Ok(
-            Map.ofList [ ActorId.Neovim, neovimActor; ActorId.Dashboard, dashboardActor ]
-            |> fun m -> mergeActors m appActors
-          )
+      // App co-actor: NOT launched eagerly here — see the identical doc on
+      // the "vscode" arm above; `run`'s own lazy-launch handling brings it
+      // in once a real `Setup(RunApp)` step has actually run.
+      return Ok(Map.ofList [ ActorId.Neovim, neovimActor; ActorId.Dashboard, dashboardActor ])
     | other -> return Error(sprintf "cell-agent: unsupported Client '%s' (only 'dashboard'/'agent'/'vscode'/'neovim' are implemented)" other)
   }
 
@@ -290,18 +287,17 @@ let private lastPointOr (fallback: Point) (path: int[] list) : Point =
 let private runStep
   (live: XTest.LiveDisplay)
   (mapping: KeyboardMapping)
-  (actors: Map<ActorId, LiveActor>)
+  (actorsRef: Map<ActorId, LiveActor> ref)
   (targetActor: ActorId)
   (observeActor: ActorId)
-  (outDir: string)
+  (plan: ScenarioPlan)
   (sw: Diagnostics.Stopwatch)
   (step: WireStep)
   : Async<WireStepResult> =
   async {
-    let actor = actors.[targetActor]
-    let observer = actors.[observeActor]
+    let actor = actorsRef.Value.[targetActor]
     let startedMs = sw.ElapsedMilliseconds
-    let segmentPath = IO.Path.Combine(outDir, sprintf "step-%02d.mkv" step.Index)
+    let segmentPath = IO.Path.Combine(plan.OutDir, sprintf "step-%02d.mkv" step.Index)
     let recording = Recorder.start CellDisplay segmentPath
 
     // `Action.Setup`'s wire image (seam-integration threading): a real,
@@ -312,6 +308,26 @@ let private runStep
     match step.SetupCommand with
     | Some command -> do! actor.Command command
     | None -> ()
+
+    // The App co-actor is deliberately launched HERE, lazily, right after a
+    // real `"run-app"` command has actually been dispatched to the daemon —
+    // never eagerly at initial actor assembly (`assembleActors`'s own doc:
+    // launching it upfront made every joint hot-reload scenario fail loud
+    // before its first real step ever ran, because the window/URL it polls
+    // for genuinely does not exist until run-app has actually happened).
+    // Idempotent: only launches once (`not (... .ContainsKey ActorId.App)`),
+    // so a scenario with multiple steps naming "run-app" never double-launches.
+    if step.SetupCommand = Some "run-app" && not (actorsRef.Value.ContainsKey ActorId.App) then
+      match! appActorsOf plan with
+      | Error message ->
+        // A real, honest failure to report on THIS step (never silently
+        // swallowed) — the step's own observation below will then find no
+        // App actor for `Observe` and fail the same way a missing selector
+        // does, but the message here is the actionable one.
+        eprintfn "cell-agent: App co-actor failed to launch after run-app: %s" message
+      | Ok appActors -> actorsRef.Value <- mergeActors actorsRef.Value appActors
+
+    let observer = actorsRef.Value |> Map.tryFind observeActor |> Option.defaultValue actor
 
     // `Action.Chord`'s wire image: delivered directly via XTest — no rect to
     // resolve (a chord acts on whatever window already has focus, exactly
@@ -501,13 +517,19 @@ let run () : Async<int> =
         Wire.serializeStepLog log |> Console.Out.WriteLine
         Console.Out.Flush()
         return 1
-      | Ok actors ->
+      | Ok initialActors ->
 
+      // A mutable cell, not a plain map: the App co-actor is added to it
+      // mid-run, lazily, the first time a step's own `Setup(RunApp)`
+      // actually dispatches (`runStep`'s own doc) — every step before that
+      // point, and every scenario with no App pane at all, sees exactly the
+      // same fixed map `assembleActors` built.
+      let actorsRef = ref initialActors
       let mutable results = []
 
       for step in plan.Steps |> List.sortBy (fun s -> s.Index) do
         let requestedActor = step.TargetActor |> Option.defaultValue plan.Client
-        let targetActorId = requestedActor |> actorIdOfString |> Option.filter actors.ContainsKey
+        let targetActorId = requestedActor |> actorIdOfString |> Option.filter actorsRef.Value.ContainsKey
 
         match targetActorId with
         | None ->
@@ -527,14 +549,18 @@ let run () : Async<int> =
           // actor proves this step's expectation, distinct from the actor
           // that drove its input — defaults to the SAME actor when absent
           // (every plan built before this field existed, and every
-          // Dashboard/Agent step today), so this is purely additive.
+          // Dashboard/Agent step today), so this is purely additive. NOT
+          // filtered by "is it live yet" here: the App co-actor's own
+          // observing step is often the SAME step that lazily launches it
+          // inside `runStep` — `runStep`'s own `Map.tryFind` (falling back
+          // to the target actor) is what actually tolerates "not live yet".
           let requestedObserver = step.ObserveActor |> Option.defaultValue requestedActor
-          let observeActorId = requestedObserver |> actorIdOfString |> Option.filter actors.ContainsKey |> Option.defaultValue actorId
+          let observeActorId = requestedObserver |> actorIdOfString |> Option.defaultValue actorId
 
-          let! result = runStep live mapping actors actorId observeActorId plan.OutDir sw step
+          let! result = runStep live mapping actorsRef actorId observeActorId plan sw step
           results <- results @ [ result ]
 
-      for actor in actors |> Map.toList |> List.map snd do
+      for actor in actorsRef.Value |> Map.toList |> List.map snd do
         do! actor.Close()
 
       XTest.closeDisplay live
