@@ -69,28 +69,60 @@ let args (spec: CellSpec) : string list =
 /// (§4.11), and `--die-with-parent` plus the private pid namespace guarantee
 /// that if the .NET `Process` object here is ever killed from outside, the
 /// whole cell's process tree is reaped with it.
+///
+/// The whole bwrap lifecycle runs on ONE DEDICATED, long-lived `Thread` —
+/// not `async`/`Task` continuations, which the .NET ThreadPool is free to
+/// resume on a DIFFERENT worker thread each time, and are themselves free to
+/// exit and be recycled once idle. `--die-with-parent` is implemented via
+/// Linux's `PR_SET_PDEATHSIG`, whose "parent" is the SPECIFIC THREAD that
+/// forked the child, not the parent process as a whole (a well-documented
+/// Linux `prctl` gotcha) — so if the thread-pool thread that happened to
+/// call `proc.Start()` gets recycled while bwrap is still running (routine
+/// under heavy ThreadPool churn, and this tool's own daemon-build step
+/// upstream already forces at least one prior thread hop via `Async.AwaitTask`),
+/// bwrap receives an unearned SIGKILL mid-recording — with no coredump (it's
+/// a real SIGKILL, not a crash) and no OOM log anywhere (confirmed absent
+/// from `coredumpctl`/`journalctl` while diagnosing this exact failure: a
+/// long recording — waiting for real session warmup, not just a quick UI
+/// click — died this way on every single attempt on a busy box, while an
+/// otherwise-identical SHORT recording never did). Blocking THIS thread on
+/// `proc.WaitForExit()` for bwrap's entire lifetime is what keeps the
+/// PDEATHSIG relationship intact regardless of ThreadPool pressure or how
+/// long the recording runs.
 let run (spec: CellSpec) (stdinPayload: string) : Async<int * string * string> =
   async {
-    let psi =
-      ProcessStartInfo(
-        "bwrap",
-        RedirectStandardInput = true,
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false
-      )
+    let tcs = System.Threading.Tasks.TaskCompletionSource<int * string * string>()
 
-    for a in args spec do
-      psi.ArgumentList.Add a
+    let work () =
+      try
+        let psi =
+          ProcessStartInfo(
+            "bwrap",
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+          )
 
-    use proc = new Process(StartInfo = psi)
-    proc.Start() |> ignore
-    let stdoutTask = proc.StandardOutput.ReadToEndAsync()
-    let stderrTask = proc.StandardError.ReadToEndAsync()
-    do! proc.StandardInput.WriteLineAsync(stdinPayload: string) |> Async.AwaitTask
-    proc.StandardInput.Close()
-    do! proc.WaitForExitAsync() |> Async.AwaitTask
-    let! stdout = stdoutTask |> Async.AwaitTask
-    let! stderr = stderrTask |> Async.AwaitTask
-    return proc.ExitCode, stdout, stderr
+        for a in args spec do
+          psi.ArgumentList.Add a
+
+        use proc = new Process(StartInfo = psi)
+        proc.Start() |> ignore
+        // Drain stdout/stderr on their own tasks so neither pipe's buffer
+        // can fill and deadlock the child while this thread blocks below.
+        let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+        let stderrTask = proc.StandardError.ReadToEndAsync()
+        proc.StandardInput.WriteLine(stdinPayload: string)
+        proc.StandardInput.Close()
+        proc.WaitForExit() // blocks THIS thread — see module doc above
+        let stdout = stdoutTask.GetAwaiter().GetResult()
+        let stderr = stderrTask.GetAwaiter().GetResult()
+        tcs.SetResult(proc.ExitCode, stdout, stderr)
+      with ex ->
+        tcs.SetException ex
+
+    let thread = System.Threading.Thread(System.Threading.ThreadStart(work), IsBackground = true, Name = "sagefs-demos-bwrap")
+    thread.Start()
+    return! tcs.Task |> Async.AwaitTask
   }

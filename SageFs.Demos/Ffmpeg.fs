@@ -84,6 +84,10 @@ let private RippleToSize = 28
 [<Literal>]
 let private RippleDurationSec = 0.25
 
+/// §9: "final frame held 2.0s before the loop restarts."
+[<Literal>]
+let private FinalHoldSec = 2.0
+
 // ---------------------------------------------------------------------------
 // toCommandString — the one place a FilterGraph becomes an ffmpeg filter
 // string. Every case below is a fixed, hand-verified ffmpeg filter syntax;
@@ -208,6 +212,7 @@ let rec toCommandString (graph: FilterGraph) : string =
   | FilterGraph.Split outputs -> sprintf "split=%d" outputs
   | FilterGraph.ScaleTimed (width, height) ->
     sprintf "scale=w=%s:h=%s:eval=frame" (extentString width) (extentString height)
+  | FilterGraph.Tpad stopDurationSec -> sprintf "tpad=stop_mode=clone:stop_duration=%s" (formatFactor stopDurationSec)
   | FilterGraph.Labeled (inputs, filter, outputs) ->
     let ins = inputs |> List.map bracket |> String.concat ""
     let outs = outputs |> List.map bracket |> String.concat ""
@@ -252,6 +257,20 @@ let private cursorMotionExprs (points: Point list) (durationSec: float) : string
   let xLadder = ifLadder (samples |> List.map (fun (t, p) -> t, p.X - CursorHotspotX)) (lastPoint.X - CursorHotspotX)
   let yLadder = ifLadder (samples |> List.map (fun (t, p) -> t, p.Y - CursorHotspotY)) (lastPoint.Y - CursorHotspotY)
   xLadder, yLadder
+
+/// The instant the cursor motion ladder (`cursorMotionExprs`, above) starts
+/// showing its FINAL point — i.e. when the synthetic cursor visually
+/// arrives at the click target. Computed from the exact same per-hold
+/// spacing `cursorMotionExprs` itself uses (`durationSec * (n-1) / n`), so
+/// ripple-onset and cursor-arrival can never drift apart. §9's click
+/// ripple must begin exactly here, never earlier — keying it to when the
+/// step's `Expectation` was separately OBSERVED (a daemon/DOM poll with its
+/// own latency, unrelated to the cursor's own drawn position) was the bug:
+/// that timestamp is not tied to the motion ladder at all and can land
+/// before the cursor has visually finished moving.
+let private cursorArrivalSec (points: Point list) (durationSec: float) : float =
+  let n = points.Length
+  if n <= 1 then 0.0 else durationSec * float (n - 1) / float n
 
 /// The single `Overlay` compositing the pre-rendered cursor image
 /// (`cursorPad`, an ffmpeg `-i cursor.png -loop 1` input Runtime.fs appends)
@@ -371,8 +390,7 @@ let private contentNodes
     let motionPad = freshLabel "motion"
     let motionNode = cursorMotion cursorPad points durationSec captionedPad motionPad
 
-    let rippleStartSec =
-      max 0.0 (min (durationSec - RippleDurationSec) (float (timing.ObservedAtMs - timing.StartedMs) / 1000.0))
+    let rippleStartSec = cursorArrivalSec points durationSec
 
     let ripple = rippleNodes ripplePad index rippleStartSec (List.last points) motionPad endPad
 
@@ -477,8 +495,12 @@ let render (plan: ComposePlan) : FilterGraph =
 
   let concatNode = FilterGraph.Labeled(stepPads, FilterGraph.Concat total, [ Pad.Named "base" ])
   let decimateNode = FilterGraph.Labeled([ Pad.Named "base" ], FilterGraph.Chain [ FilterGraph.MpDecimate; FilterGraph.SetPts 1.0 ], [ Pad.Named "vd" ])
-  let splitNode = FilterGraph.Labeled([ Pad.Named "vd" ], FilterGraph.Split 3, [ Pad.Named "v1"; Pad.Named "v2"; Pad.Named "vmp4" ])
+  // §9: "final frame held 2.0s before the loop restarts" — clone the last
+  // frame for FinalHoldSec more seconds so the GIF's own infinite loop
+  // doesn't snap straight back to frame 0.
+  let tpadNode = FilterGraph.Labeled([ Pad.Named "vd" ], FilterGraph.Tpad FinalHoldSec, [ Pad.Named "vheld" ])
+  let splitNode = FilterGraph.Labeled([ Pad.Named "vheld" ], FilterGraph.Split 3, [ Pad.Named "v1"; Pad.Named "v2"; Pad.Named "vmp4" ])
   let paletteGenNode = FilterGraph.Labeled([ Pad.Named "v2" ], FilterGraph.PaletteGen "diff", [ Pad.Named "pal" ])
   let paletteUseNode = FilterGraph.Labeled([ Pad.Named "v1"; Pad.Named "pal" ], FilterGraph.PaletteUse "sierra2_4a", [ Pad.Named "outv" ])
 
-  FilterGraph.Complex(stepNodes @ [ concatNode; decimateNode; splitNode; paletteGenNode; paletteUseNode ])
+  FilterGraph.Complex(stepNodes @ [ concatNode; decimateNode; tpadNode; splitNode; paletteGenNode; paletteUseNode ])

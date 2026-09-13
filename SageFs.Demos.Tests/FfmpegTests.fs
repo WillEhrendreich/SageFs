@@ -205,6 +205,9 @@ let tests =
       testCase "Split renders its output count" <| fun _ ->
         FilterGraph.Split 2 |> toCommandString |> Expect.equal "split filter" "split=2"
 
+      testCase "Tpad clones the last frame for the given duration (§9 final-frame hold)" <| fun _ ->
+        FilterGraph.Tpad 2.0 |> toCommandString |> Expect.equal "tpad filter" "tpad=stop_mode=clone:stop_duration=2"
+
       testCase "Labeled brackets its input and output pads around the rendered filter" <| fun _ ->
         FilterGraph.Labeled([ Pad.Input 0; Pad.Input 1 ], FilterGraph.Concat 2, [ Pad.Named "base" ])
         |> toCommandString
@@ -274,13 +277,14 @@ let tests =
 
       testCase "render's palette stage is a real two-pass split/palettegen/paletteuse, ending at pad 'outv', with a 3rd tap for the .mp4 (§4.6, §9)" <| fun _ ->
         let nodes = render samplePlan |> allNodes
-        // The palette-stage split is identified by its own input pad ('vd',
-        // the post-decimate pad every step feeds into via concat), not just
-        // "any Split" — a magnified plan's per-step nodes contain their OWN
-        // (also arity-2) split for the picture-in-picture, so searching by
-        // filter shape alone would under-specify which split this is about.
-        match nodes |> List.tryPick (function FilterGraph.Labeled([ Pad.Named "vd" ], f, outs) -> Some(f, outs) | _ -> None) with
-        | None -> failtest "expected a Labeled node reading pad 'vd' — the palette-stage split"
+        // The palette-stage split is identified by its own input pad
+        // ('vheld', the post-decimate-AND-held pad every step feeds into via
+        // concat -> decimate -> tpad), not just "any Split" — a magnified
+        // plan's per-step nodes contain their OWN (also arity-2) split for
+        // the picture-in-picture, so searching by filter shape alone would
+        // under-specify which split this is about.
+        match nodes |> List.tryPick (function FilterGraph.Labeled([ Pad.Named "vheld" ], f, outs) -> Some(f, outs) | _ -> None) with
+        | None -> failtest "expected a Labeled node reading pad 'vheld' — the palette-stage split"
         | Some(filter, outs) ->
           // A single ffmpeg pad has exactly one consumer, so a THIRD branch
           // is required purely to give the .mp4 output its own tap without
@@ -296,17 +300,52 @@ let tests =
           ins.Length |> Expect.equal "paletteuse takes the video AND the palette (two inputs)" 2
           outs |> Expect.equal "paletteuse produces the GIF-ready pad" [ Pad.Named "outv" ]
 
-      testCase "render's decimate node produces pad 'vd' — what a constant-rate .mp4 output maps instead of the palette pad" <| fun _ ->
+      testCase "render's decimate node produces pad 'vd' — what the final-hold tpad reads next" <| fun _ ->
         let nodes = render samplePlan |> allNodes
         match tryFindLabeled containsMpDecimate nodes with
         | None -> failtest "expected a Labeled node whose Chain contains MpDecimate"
         | Some(_, _, outs) -> outs |> Expect.equal "decimate/retime output pad" [ Pad.Named "vd" ]
+
+      testCase "render clones the last frame for 2.0s (§9: 'final frame held 2.0s before the loop restarts') between decimate and the palette split" <| fun _ ->
+        let nodes = render samplePlan |> allNodes
+        match nodes |> List.tryPick (function FilterGraph.Labeled([ Pad.Named "vd" ], FilterGraph.Tpad seconds, outs) -> Some(seconds, outs) | _ -> None) with
+        | None -> failtest "expected a Labeled Tpad node reading pad 'vd'"
+        | Some(seconds, outs) ->
+          seconds |> Expect.equal "holds the final frame for 2.0s" 2.0
+          outs |> Expect.equal "feeds the palette-stage split as 'vheld'" [ Pad.Named "vheld" ]
 
       testCase "render includes a caption-band box, a counter, and the caption text for every step" <| fun _ ->
         let leaves = render samplePlan |> allLeaves
         leaves |> List.filter isCaptionBandBox |> List.length |> Expect.equal "one translucent caption band per step" samplePlan.Segments.Length
         leaves |> List.filter isDrawTextStyled |> List.length
         |> Expect.equal "two styled texts per step: the counter and the caption" (samplePlan.Segments.Length * 2)
+
+      testCase "render's ripple begins exactly when the cursor motion ladder reaches its LAST point — never earlier (§9)" <| fun _ ->
+        // 3 points over a 3s step: the cursor ladder shows the final point
+        // starting at durationSec*(n-1)/n = 3*2/3 = 2.0s (§9's "ripple
+        // begins when the cursor arrives"). ObservedAtMs is set to 200ms —
+        // deliberately much EARLIER than arrival — to prove the ripple is
+        // no longer keyed to the (separately-polled) observation timestamp,
+        // which was the bug: a ripple that could fire before the cursor
+        // visually finished moving.
+        let points = [ { X = 0; Y = 0 }; { X = 100; Y = 100 }; { X = 251; Y = 317 } ]
+        let plan =
+          { samplePlan with
+              Segments = [ "/out/step-00.mkv" ]
+              Captions = [ Caption.mk "1/1 · Click" ]
+              PointerPaths = [ points ]
+              Timings = [ timing 0 3000 200 ]
+              Magnifier = None }
+        let nodes = render plan |> allNodes
+        match
+          nodes
+          |> List.tryPick (function
+            | FilterGraph.Labeled(_, FilterGraph.Overlay(Extent.Expr xExpr, _, Some enable), _) when xExpr.Contains "overlay_w" -> Some enable
+            | _ -> None)
+        with
+        | None -> failtest "expected the ripple's overlay enable expression"
+        | Some enable ->
+          enable |> Expect.equal "ripple window is [arrival, arrival+0.25], i.e. [2, 2.25] — not the early 0.2s observation" "between(t,2,2.25)"
 
       testCase "render overlays the cursor image + ripple image only for the step with a non-empty pointer path" <| fun _ ->
         let nodes = render stepContentPlan |> allNodes

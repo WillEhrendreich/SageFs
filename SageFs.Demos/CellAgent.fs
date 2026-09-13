@@ -35,12 +35,42 @@ let private pointerPathOf (requests: X11Request list) : int[] list =
     | X11Request.FakeMotion(x, y) -> Some [| x; y |]
     | _ -> None)
 
+/// Resolves `selector`'s live bounding box through the Dashboard actor
+/// (never a guessed coordinate) — shared by the primary click/type target
+/// and the `SubmitSelector` chained click. `BoundingBoxAsync` auto-waits up
+/// to Playwright's own default action timeout (30s) and THROWS on timeout
+/// rather than returning null (unlike the plain "does this exist" check
+/// `WaitForSelectorAsync` gets elsewhere in this file) — bounded explicitly
+/// here and wrapped in `try/with` so a missing/slow selector reports as
+/// "target missing" (a `Failed` step, still a clean `StepLog`) instead of
+/// an unhandled exception unwinding out of the whole cell-agent (§4.11: a
+/// step's own resolution failure is real signal, never something to let
+/// crash the process that still needs to write its StepLog for every OTHER
+/// step).
+let private resolveRect (dashboard: Dashboard.Handle) (selector: string) : Async<ScreenRect option> =
+  async {
+    try
+      let opts = Microsoft.Playwright.LocatorBoundingBoxOptions(Timeout = 10000.0f)
+      let! box = dashboard.Page.Locator(selector).BoundingBoxAsync(opts) |> Async.AwaitTask
+
+      return
+        match box with
+        | null -> None
+        | b -> Some { X = int b.X; Y = int b.Y; W = int b.Width; H = int b.Height }
+    with _ ->
+      return None
+  }
+
 /// Runs one already-resolved `WireStep` end to end: resolve the click
-/// target's live `ScreenRect` through the Dashboard actor (never a guessed
-/// coordinate), deliver the input plan via XTest, observe the expectation,
-/// and report — recording brackets exactly this step's active window (§4.5).
+/// target's live `ScreenRect` through the Dashboard actor, deliver the input
+/// plan via XTest — chaining a SECOND click at `SubmitSelector` (if any)
+/// starting from wherever the primary action's motion ended, so the cursor
+/// moves on continuously instead of resetting (§9's "type the expression,
+/// then click [EVAL]" demo step) — observe the expectation, and report;
+/// recording brackets exactly this step's active window (§4.5).
 let private runStep
   (live: XTest.LiveDisplay)
+  (mapping: KeyboardMapping)
   (dashboard: Dashboard.Handle)
   (outDir: string)
   (sw: Diagnostics.Stopwatch)
@@ -51,28 +81,79 @@ let private runStep
     let segmentPath = IO.Path.Combine(outDir, sprintf "step-%02d.mkv" step.Index)
     let recording = Recorder.start CellDisplay segmentPath
 
+    // `PreClickSelector` (§9's "expand this collapsed panel, then type into
+    // it — same step, no gap"): resolved and clicked FIRST, deliberately
+    // with NO settle delay before the primary click that follows — the
+    // whole point of folding this into one step is to close the window a
+    // server-driven re-render could otherwise reopen the panel in.
+    let! preClickRectOpt =
+      match step.PreClickSelector with
+      | None -> async { return None }
+      | Some selector -> resolveRect dashboard selector
+
+    let preClickMissing = step.PreClickSelector.IsSome && preClickRectOpt.IsNone
+
+    let preClickPointerPath =
+      match preClickRectOpt with
+      | Some rect ->
+        let requests = Input.clickFrom { X = 0; Y = 0 } rect
+        XTest.deliver live requests
+        pointerPathOf requests
+      | None -> []
+
     let! rectOpt =
       match step.ClickSelector with
       | None -> async { return None }
-      | Some selector ->
-        async {
-          let! box = dashboard.Page.Locator(selector).BoundingBoxAsync() |> Async.AwaitTask
+      | Some selector -> resolveRect dashboard selector
 
-          return
-            match box with
-            | null -> None
-            | b -> Some { X = int b.X; Y = int b.Y; W = int b.Width; H = int b.Height }
-        }
+    let primaryMissing = step.ClickSelector.IsSome && rectOpt.IsNone
 
-    let targetMissing = step.ClickSelector.IsSome && rectOpt.IsNone
-
-    let pointerPath =
+    let primaryPointerPath =
       match rectOpt, actionOf step with
       | Some rect, Some action ->
-        let requests = Input.plan action rect
+        let requests = Input.plan mapping action rect
+        XTest.deliver live requests
+        preClickPointerPath @ pointerPathOf requests
+      | _ -> preClickPointerPath
+
+    // A real user's next click always lands after their FIRST click's own
+    // on-screen effect (a navigation, an SSE-pushed re-render) has actually
+    // shown up — deliver-then-immediately-resolve the next target does not,
+    // and was confirmed directly against real recordings to race a session
+    // card's click against the dashboard's own SSE-driven navigation: the
+    // click was delivered, but `SubmitSelector` resolution (or the FOLLOWING
+    // step's OWN primary resolution) sometimes ran before the session view
+    // had actually mounted, so "#evaluate-section summary"/the eval textarea
+    // intermittently reported "not found" even though the selector itself is
+    // correct. Settling briefly after EVERY delivered click — not just
+    // before a chained `SubmitSelector` — closes the same race for the next
+    // STEP's own primary click too.
+    if not (List.isEmpty primaryPointerPath) then
+      do! Async.Sleep 500
+
+    let! submitRectOpt =
+      match step.SubmitSelector with
+      | None -> async { return None }
+      | Some selector -> resolveRect dashboard selector
+
+    let submitMissing = step.SubmitSelector.IsSome && submitRectOpt.IsNone
+
+    let submitPointerPath =
+      match submitRectOpt with
+      | Some rect ->
+        let startPoint =
+          primaryPointerPath
+          |> List.tryLast
+          |> Option.map (fun xy -> { X = xy.[0]; Y = xy.[1] })
+          |> Option.defaultValue { X = 0; Y = 0 }
+
+        let requests = Input.clickFrom startPoint rect
         XTest.deliver live requests
         pointerPathOf requests
-      | _ -> []
+      | None -> []
+
+    let pointerPath = primaryPointerPath @ submitPointerPath
+    let targetMissing = preClickMissing || primaryMissing || submitMissing
 
     let! observed =
       match step.ExpectSelector with
@@ -80,7 +161,17 @@ let private runStep
       | Some selector ->
         async {
           try
-            let opts = Microsoft.Playwright.PageWaitForSelectorOptions(Timeout = 8000.0f)
+            // 90s, not 8s: a real session warmup (FSI cold start inside a
+            // fresh tmpfs cell with no warm disk cache) can genuinely take
+            // longer than a UI-click expectation ever needed to, especially
+            // under CPU contention — confirmed directly: a still frame from
+            // a 45s-timeout run showed the tabline had ALREADY reached
+            // "[Ready]" (readiness genuinely happens, the selector is
+            // right), just not comfortably inside a 45s ceiling on a busy
+            // box. §9's "Await session Ready" step needs a ceiling sized for
+            // the real transition, not one sized for "did a button click
+            // register".
+            let opts = Microsoft.Playwright.PageWaitForSelectorOptions(Timeout = 90000.0f)
             let! _ = dashboard.Page.WaitForSelectorAsync(selector, opts) |> Async.AwaitTask
             return true
           with _ ->
@@ -97,8 +188,12 @@ let private runStep
     let outcome = not targetMissing && observed
 
     let message =
-      if targetMissing then
+      if preClickMissing then
+        sprintf "pre-click target '%s' not found (no bounding box)" (step.PreClickSelector |> Option.defaultValue "")
+      elif primaryMissing then
         sprintf "click target '%s' not found (no bounding box)" (step.ClickSelector |> Option.defaultValue "")
+      elif submitMissing then
+        sprintf "submit target '%s' not found (no bounding box)" (step.SubmitSelector |> Option.defaultValue "")
       else
         match step.ExpectSelector with
         | Some sel when observed -> sprintf "'%s' appeared" sel
@@ -138,12 +233,18 @@ let run () : Async<int> =
       Console.Out.Flush()
       return 1
     | Some live ->
+      // Fetched ONCE, live, from this cell's own Xvfb display — never the
+      // fictitious "keysym == keycode" placeholder `Input.fs` used to carry
+      // internally (§9's root cause for corrupted typed text: raw ASCII
+      // codepoints delivered as literal X11 keycodes land on whatever
+      // physical key the real layout happens to put at that number).
+      let mapping = XTest.keyboardMapping live
       let! dashboard = Dashboard.launch plan.ChromePath plan.UserDataDir { X = 0; Y = 0; W = 1280; H = 720 } plan.PageUrl
 
       let mutable results = []
 
       for step in plan.Steps |> List.sortBy (fun s -> s.Index) do
-        let! result = runStep live dashboard plan.OutDir sw step
+        let! result = runStep live mapping dashboard plan.OutDir sw step
         results <- results @ [ result ]
 
       do! Dashboard.close dashboard

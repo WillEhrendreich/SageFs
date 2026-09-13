@@ -17,8 +17,10 @@ let private samplePlan: ScenarioPlan =
     Steps =
       [ { Index = 0
           Caption = "1/1 · Press Quick Start"
+          PreClickSelector = None
           ClickSelector = Some "[data-testid=quick-start]"
           TypeText = None
+          SubmitSelector = None
           ExpectSelector = Some "[data-testid=session-card]"
           DwellMs = 1500 } ] }
 
@@ -54,7 +56,48 @@ let tests =
     testCase "a ScenarioPlan step with no click/type/expect (an Await step) still round-trips" <| fun _ ->
       let awaitOnly =
         { samplePlan with
-            Steps = [ { Index = 0; Caption = "wait"; ClickSelector = None; TypeText = None; ExpectSelector = None; DwellMs = 500 } ] }
+            Steps =
+              [ { Index = 0
+                  Caption = "wait"
+                  PreClickSelector = None
+                  ClickSelector = None
+                  TypeText = None
+                  SubmitSelector = None
+                  ExpectSelector = None
+                  DwellMs = 500 } ] }
 
       awaitOnly |> serializePlan |> deserializePlan |> Expect.equal "round-trips with every optional field None" awaitOnly
+
+    testCase "a TypeThenClick step's SubmitSelector round-trips (the chained 'type, then click Eval' beat, §9)" <| fun _ ->
+      let typeThenClick =
+        { samplePlan with
+            Steps =
+              [ { Index = 0
+                  Caption = "3/3 · Evaluate F#"
+                  PreClickSelector = None
+                  ClickSelector = Some "#eval-textarea"
+                  TypeText = Some "[1..10] |> List.sum"
+                  SubmitSelector = Some "[data-testid=eval]"
+                  ExpectSelector = Some "[data-testid=session-output]:has-text(\"55\")"
+                  DwellMs = 2000 } ] }
+
+      typeThenClick |> serializePlan |> deserializePlan |> Expect.equal "round-trips with SubmitSelector populated" typeThenClick
+
+    testCase "a ClickThenTypeThenClick step's PreClickSelector round-trips (the 'expand the collapsed accordion, then type, then click Eval' beat, §9)" <| fun _ ->
+      let clickThenTypeThenClick =
+        { samplePlan with
+            Steps =
+              [ { Index = 0
+                  Caption = "3/3 · Evaluate F#"
+                  PreClickSelector = Some "#evaluate-section summary"
+                  ClickSelector = Some "#eval-textarea"
+                  TypeText = Some "[1..10] |> List.sum"
+                  SubmitSelector = Some "[data-testid=eval]"
+                  ExpectSelector = Some "[data-testid=session-output]:has-text(\"55\")"
+                  DwellMs = 2000 } ] }
+
+      clickThenTypeThenClick
+      |> serializePlan
+      |> deserializePlan
+      |> Expect.equal "round-trips with PreClickSelector populated" clickThenTypeThenClick
   ]

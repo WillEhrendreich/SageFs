@@ -20,19 +20,6 @@ let private ClickHoldMs = 60
 /// layer is exercised and callable end to end.
 let private restPosition: Point = { X = 0; Y = 0 }
 
-/// TODO(shape): `Input.plan` has no live `KeyboardMapping` parameter either
-/// (§5) — the cell-agent threads the mapping it fetched from its own X
-/// display in Wave 2. Until then, key resolution here uses an identity
-/// mapping (keysym == keycode) covering the keysyms `Keymap.keysymsFor` can
-/// produce, so this layer is exercised and callable end to end; `Keymap`
-/// itself never hard-codes this — only this placeholder default does.
-let private identityMapping: KeyboardMapping =
-  let named =
-    [ 0xff0d; 0xff1b; 0xff09; 0xff08; 0xff51; 0xff52; 0xff53; 0xff54; 0xffe1; 0xffe3; 0xffe9 ]
-    @ [ for n in 0..34 -> 0xffbe + n ]
-  let ascii = [ 0..255 ]
-  { KeysymToKeycode = (named @ ascii) |> List.distinct |> List.map (fun ks -> ks, ks) |> Map.ofList }
-
 /// A small, non-cryptographic, process-stable combine — deliberately not
 /// `HashCode.Combine`/`string.GetHashCode`, both of which are randomized per
 /// process in modern .NET and would break "identical every run" (§1, §9).
@@ -67,36 +54,73 @@ let private clickRequests (target: ScreenRect) : X11Request list =
   motionRequests restPosition centre seed
   @ [ X11Request.FakeButton(Button.Left, Pressed.Down); X11Request.FakeButton(Button.Left, Pressed.Up) ]
 
-let private keyTapRequests (key: Key) : X11Request list =
-  Keymap.resolve identityMapping key
-  |> List.collect (fun kc -> [ X11Request.FakeKey(kc, Pressed.Down); X11Request.FakeKey(kc, Pressed.Up) ])
+/// Like `clickRequests`, but starting the motion from an explicit prior
+/// cursor position instead of the fixed rest position — used by the
+/// cell-agent to chain a second click after a `TypeThenClick` step's typing
+/// (e.g. click the `[EVAL]` button right after typing the expression) so
+/// the cursor moves on continuously instead of resetting to the rest point.
+let clickFrom (start: Point) (target: ScreenRect) : X11Request list =
+  let centre = rectCentre target
+  let seed = seedFromRect target
+  motionRequests start centre seed
+  @ [ X11Request.FakeButton(Button.Left, Pressed.Down); X11Request.FakeButton(Button.Left, Pressed.Up) ]
 
-let private typingRequests (text: Text) (seed: Seed) : X11Request list =
-  Cadence.keys text seed |> List.collect (fun (key, _delay) -> keyTapRequests key)
+/// Presses every keycode down in the given order, then releases them in
+/// reverse — a modifier (e.g. Shift, resolved ahead of its base key by
+/// `Keymap.resolve`) stays HELD across every key that follows it, exactly
+/// what producing a shifted character or a chord requires. Shared by single
+/// characters and multi-key chords alike: a single keysym needing Shift
+/// (`Keymap.resolve`'s `[shift; base]`) IS a two-key chord, and the old
+/// per-keycode "down immediately followed by up" shape here (fixed by this
+/// change) released Shift before the base key was even pressed — one of
+/// §9's two eval-text-corruption bugs (the other was the fictitious
+/// `identityMapping` this function's `mapping` parameter replaces).
+let private pressHoldingRequests (keycodes: KeyCode list) : X11Request list =
+  let downs = keycodes |> List.map (fun kc -> X11Request.FakeKey(kc, Pressed.Down))
+  let ups = keycodes |> List.rev |> List.map (fun kc -> X11Request.FakeKey(kc, Pressed.Up))
+  downs @ ups
+
+let private keyTapRequests (mapping: KeyboardMapping) (key: Key) : X11Request list =
+  Keymap.resolve mapping key |> pressHoldingRequests
+
+let private typingRequests (mapping: KeyboardMapping) (text: Text) (seed: Seed) : X11Request list =
+  Cadence.keys text seed |> List.collect (fun (key, _delay) -> keyTapRequests mapping key)
 
 /// A chord/shortcut: every key pressed down in the given order (so earlier
 /// keys — the modifiers — are already held by the time the last one goes
 /// down), then released in reverse order (§4.3: "chords ... expand to
 /// ordered press/release sequences").
-let private chordRequests (keys: Key list) : X11Request list =
-  let keycodes = keys |> List.collect (Keymap.resolve identityMapping)
-  let downs = keycodes |> List.map (fun kc -> X11Request.FakeKey(kc, Pressed.Down))
-  let ups = keycodes |> List.rev |> List.map (fun kc -> X11Request.FakeKey(kc, Pressed.Up))
-  downs @ ups
+let private chordRequests (mapping: KeyboardMapping) (keys: Key list) : X11Request list =
+  keys |> List.collect (Keymap.resolve mapping) |> pressHoldingRequests
 
 /// The X11 requests that perform `action` at `target` (a click moves the
 /// cursor there and presses/releases the button with a 60 ms hold; typing
-/// clicks the position, then delivers `Cadence.keys`).
-let plan (action: Action) (target: ScreenRect) : X11Request list =
+/// clicks the position, then delivers `Cadence.keys`) — resolved against
+/// `mapping`, the LIVE keyboard mapping the cell-agent fetched from its own
+/// X display (`XTest.keyboardMapping`) right after opening it; every
+/// character this function types is only ever as correct as `mapping`
+/// actually is (§9: a fictitious identity mapping here is what corrupted
+/// typed text in a real recording — see `KeyboardMapping`'s own doc).
+let plan (mapping: KeyboardMapping) (action: Action) (target: ScreenRect) : X11Request list =
   match action with
   | Action.Click _ -> clickRequests target
-  | Action.Type(_, text, cadenceSeed) -> clickRequests target @ typingRequests text (seedOfCadenceSeed cadenceSeed)
-  | Action.Chord keys -> chordRequests keys
+  | Action.Type(_, text, cadenceSeed) -> clickRequests target @ typingRequests mapping text (seedOfCadenceSeed cadenceSeed)
+  // The chained submit click is delivered separately by the cell-agent via
+  // `clickFrom` (it targets a SECOND rect this function is never given —
+  // `plan` resolves against exactly one `ScreenRect`, §5); this case covers
+  // only the typing half, identically to `Type` above.
+  | Action.TypeThenClick(_, text, cadenceSeed, _) -> clickRequests target @ typingRequests mapping text (seedOfCadenceSeed cadenceSeed)
+  // Same as `TypeThenClick`: this function plans for exactly ONE resolved
+  // rect (`target`), so it covers only the click+type half; the cell-agent
+  // delivers the pre-click and submit-click hops separately via
+  // `clickFrom`, against their OWN resolved rects this function never sees.
+  | Action.ClickThenTypeThenClick(_, _, text, cadenceSeed, _) -> clickRequests target @ typingRequests mapping text (seedOfCadenceSeed cadenceSeed)
+  | Action.Chord keys -> chordRequests mapping keys
   | Action.Typo(_, wrong, right) ->
     let wrongText = Text.value wrong
     let seed = seedOfCadenceSeed (CadenceSeed.ofId wrongText)
-    let backspaces = [ for _ in 1 .. wrongText.Length -> keyTapRequests Key.Backspace ] |> List.collect id
-    clickRequests target @ typingRequests wrong seed @ backspaces @ typingRequests right seed
+    let backspaces = [ for _ in 1 .. wrongText.Length -> keyTapRequests mapping Key.Backspace ] |> List.collect id
+    clickRequests target @ typingRequests mapping wrong seed @ backspaces @ typingRequests mapping right seed
   // Neither of these drives fake input: `Setup` is an API-level action
   // performed through a client's own command surface (§5: "not captured"),
   // and `Await` only waits for a `Signal` — nothing to inject.

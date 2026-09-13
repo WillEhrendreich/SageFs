@@ -44,6 +44,16 @@ module private Native =
   [<DllImport("libXtst.so.6")>]
   extern int XTestFakeKeyEvent(nativeint display, uint32 keycode, [<MarshalAs(UnmanagedType.Bool)>] bool isPress, int delay)
 
+  [<DllImport("libX11.so.6")>]
+  extern int XDisplayKeycodes(nativeint display, int& min_keycodes_return, int& max_keycodes_return)
+
+  // `KeyCode` is Xlib's own `unsigned char` typedef — a raw byte, not `int`.
+  [<DllImport("libX11.so.6")>]
+  extern nativeint XGetKeyboardMapping(nativeint display, byte first_keycode, int keycode_count, int& keysyms_per_keycode_return)
+
+  [<DllImport("libX11.so.6")>]
+  extern int XFree(nativeint data)
+
 /// A live connection to a cell's own Xvfb display, plus the default screen
 /// index XTEST events are delivered against. Private constructor: the only
 /// way to get one is `openDisplay` actually succeeding — an unchecked/null
@@ -63,6 +73,64 @@ let openDisplay (display: Display) : LiveDisplay option =
 let closeDisplay (live: LiveDisplay) : unit =
   let (LiveDisplay(handle, _)) = live
   Native.XCloseDisplay(handle) |> ignore
+
+/// Fetches `live`'s REAL keysym→keycode table via `XGetKeyboardMapping` —
+/// the fix for §9's root cause: a fictitious placeholder ("keysym ==
+/// keycode") was used in its place, sending raw ASCII codepoints as literal
+/// X11 keycodes and corrupting every non-trivial typed character against a
+/// real display. `XGetKeyboardMapping` returns, for every keycode in
+/// `[minKeycode..maxKeycode]`, an ordered list of `keysymsPerKeycode`
+/// keysyms — one per shift "level" (index 0 = unshifted, index 1 = shifted;
+/// higher levels, e.g. AltGr, are out of scope for the plain US-style Latin
+/// typing this tool ever does). Level 0 keysyms populate `KeysymToKeycode`
+/// unconditionally; a DIFFERENT level-1 keysym populates it too AND is
+/// recorded in `ShiftedKeysyms` — the one piece of information
+/// `Keymap.resolve` needs to decide whether to hold Shift, replacing the
+/// old `Char.IsUpper`-only guess that could never see shifted punctuation.
+/// The first keycode seen for a given keysym wins on a clash (some layouts
+/// map a keysym to more than one physical key); `XFree`s the server-owned
+/// buffer before returning, per Xlib's own contract for `XGetKeyboardMapping`.
+let keyboardMapping (live: LiveDisplay) : KeyboardMapping =
+  let (LiveDisplay(handle, _)) = live
+  let mutable minKeycode = 0
+  let mutable maxKeycode = 0
+  Native.XDisplayKeycodes(handle, &minKeycode, &maxKeycode) |> ignore
+  let keycodeCount = maxKeycode - minKeycode + 1
+  let mutable keysymsPerKeycode = 0
+  let buffer = Native.XGetKeyboardMapping(handle, byte minKeycode, keycodeCount, &keysymsPerKeycode)
+
+  try
+    let keysymAt (keycodeIndex: int) (level: int) : int option =
+      if level >= keysymsPerKeycode then
+        None
+      else
+        let offset = (keycodeIndex * keysymsPerKeycode + level) * IntPtr.Size
+        let value = Marshal.ReadIntPtr(buffer, offset).ToInt64()
+        if value = 0L then None else Some(int value)
+
+    let mutable keysymToKeycode = Map.empty
+    let mutable shiftedKeysyms = Set.empty
+
+    for i in 0 .. keycodeCount - 1 do
+      let keycode = minKeycode + i
+      let unshifted = keysymAt i 0
+
+      match unshifted with
+      | Some ks when not (keysymToKeycode |> Map.containsKey ks) -> keysymToKeycode <- keysymToKeycode |> Map.add ks keycode
+      | _ -> ()
+
+      match keysymAt i 1 with
+      | Some ks when Some ks <> unshifted ->
+        if not (keysymToKeycode |> Map.containsKey ks) then
+          keysymToKeycode <- keysymToKeycode |> Map.add ks keycode
+
+        shiftedKeysyms <- shiftedKeysyms |> Set.add ks
+      | _ -> ()
+
+    { KeysymToKeycode = keysymToKeycode
+      ShiftedKeysyms = shiftedKeysyms }
+  finally
+    Native.XFree(buffer) |> ignore
 
 let private buttonNumber (button: Button) : uint32 =
   match button with
