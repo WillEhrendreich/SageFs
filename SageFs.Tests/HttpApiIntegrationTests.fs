@@ -109,6 +109,18 @@ let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = t
   for arg in args do
     psi.ArgumentList.Add(arg)
 
+  // Ownership rule 3 (multi-agent vision §3.1/§3.3): this daemon is owned
+  // by the test runner process — if the test process dies (crash, kill),
+  // the spawned daemon's own OwnerMonitor watchdog exits it instead of
+  // leaking. --ttl is belt-and-braces on top of the owner watchdog.
+  let self = Process.GetCurrentProcess()
+  psi.ArgumentList.Add("--owner-pid")
+  psi.ArgumentList.Add(string self.Id)
+  psi.ArgumentList.Add("--owner-start")
+  psi.ArgumentList.Add(string (self.StartTime.ToUniversalTime().Ticks))
+  psi.ArgumentList.Add("--ttl")
+  psi.ArgumentList.Add("10m")
+
   // Isolate this daemon's persisted state so it never resumes (or pollutes)
   // sessions from the real ~/.SageFs or from earlier test runs.
   let dataDir = Path.Combine(Path.GetTempPath(), "sagefs-test", Guid.NewGuid().ToString("N"))

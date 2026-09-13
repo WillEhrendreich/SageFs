@@ -522,6 +522,7 @@ export SAGEFS_DATA_DIR=/home/demo/.sagefs
 export SAGEFS_BIND_HOST=127.0.0.1
 export DOTNET_ROOT=/dotnet-root
 /dotnet-root/dotnet /sagefs-bin/SageFs.dll --mcp-port 47749 --no-watch --no-resume \
+  --owner-pid $$ --ttl 5m \
   </dev/null >/out/daemon.log 2>&1 &
 DAEMON_PID=$!
 

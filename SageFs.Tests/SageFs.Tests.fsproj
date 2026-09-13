@@ -220,6 +220,8 @@
         <Compile Include="SessionTeardownPersistenceTests.fs" />
         <Compile Include="ManifestOwnerTests.fs" />
         <Compile Include="ParentMonitorTests.fs" />
+        <Compile Include="OwnerMonitorTests.fs" />
+        <Compile Include="DaemonOwnershipTests.fs" />
         <Compile Include="LiveValueTreeReference.fs" />
         <Compile Include="LiveValueTreeTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />

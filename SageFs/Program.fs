@@ -86,6 +86,7 @@ type CliCommand =
   | Stop
   | Status
   | Check
+  | Sweep of kill: bool
   | DeprecatedClient of name: string
   | Daemon of args: string array
   | Jupyter of connectionFile: string
@@ -99,6 +100,7 @@ module CliCommand =
     | _ when args.Length > 0 && args.[0] = "stop" -> Stop
     | _ when args.Length > 0 && args.[0] = "status" -> Status
     | _ when args.Length > 0 && args.[0] = "check" -> Check
+    | _ when args.Length > 0 && args.[0] = "sweep" -> Sweep (hasFlag "--kill")
     | _ when args.Length > 0 && args.[0] = "tui" -> DeprecatedClient "tui"
     | _ when args.Length > 0 && args.[0] = "gui" -> DeprecatedClient "gui"
     | _ when hasFlag "--jupyter" ->
@@ -107,6 +109,22 @@ module CliCommand =
       | true -> Jupyter args.[idx + 1]
       | false -> ShowHelp
     | _ -> Daemon args
+
+/// Ownership rule 2 (multi-agent vision §3.1/§10 item 2): resolve
+/// `--owner-pid`/`--owner-start`/`--ttl` off the raw args, applying the
+/// nested-checkout default (a daemon started inside another checkout, with
+/// neither flag, defaults to a 30-minute TTL rather than running forever
+/// unowned) and logging loudly when that default kicks in.
+let resolveOwnership (args: string array) (cwd: string) : DaemonOwnership.EffectiveOwnership =
+  let parsed = DaemonOwnership.OwnershipArgs.parse (Array.toList args)
+  let nested = DaemonOwnership.isNestedCheckout SageFs.FileWatcher.hasCheckoutMarker cwd
+  let effective = DaemonOwnership.applyNestedCheckoutDefault nested parsed
+  match effective.DefaultedTtl with
+  | true ->
+    eprintfn "sagefs: started inside a nested checkout (%s) with no --owner-pid or --ttl — defaulting to --ttl %s so it self-terminates if abandoned"
+      cwd (string DaemonOwnership.defaultTtlForNestedCheckout)
+  | false -> ()
+  effective
 
 /// Run daemon mode (default behavior).
 let runDaemon (args: string array) =
@@ -119,6 +137,7 @@ let runDaemon (args: string array) =
   | Ok bindHost ->
   let mcpPort = parseMcpPort args
   let flags = Args.DaemonFlags.parse (Array.toList args)
+  let ownership = resolveOwnership args Environment.CurrentDirectory
   let isSupervised = args |> Array.exists (fun a -> a = "--supervised")
   match isSupervised with
   | true ->
@@ -138,8 +157,63 @@ let runDaemon (args: string array) =
     |> _.GetAwaiter() |> _.GetResult()
     0
   | false ->
-    DaemonMode.run bindHost mcpPort flags
+    DaemonMode.run bindHost mcpPort flags ownership
     |> _.GetAwaiter() |> _.GetResult()
+    0
+
+/// `sagefs sweep [--kill]` — reap daemons whose recorded owner is gone.
+/// Read-only by default (report only); `--kill` also terminates the
+/// process and removes its stale daemon-info/registry entry. Never matches
+/// by process name or PPID — only by the owner (pid, startTime) recorded
+/// in the daemon's own info file.
+let sweepCommand (kill: bool) =
+  let isOwnerAlive (pid: int) (startTicks: int64 option) =
+    OwnerMonitor.isAlive OwnerMonitor.getProcessById { Pid = pid; StartTimeTicks = startTicks }
+  let realDir = DaemonOwnership.realHomeSageFsDir ()
+  let results = DaemonOwnership.sweep isOwnerAlive realDir
+  match results with
+  | [] ->
+    printfn "sweep: no known daemons under %s" realDir
+    0
+  | _ ->
+    let mutable reaped = 0
+    for (registryPath, info, verdict) in results do
+      match verdict with
+      | DaemonOwnership.SweepVerdict.Leave reason ->
+        printfn "sweep: leave  pid=%d (%s)" info.Pid reason
+      | DaemonOwnership.SweepVerdict.Reap reason ->
+        reaped <- reaped + 1
+        match kill with
+        | false ->
+          printfn "sweep: reapable pid=%d (%s) — re-run with --kill to reap it" info.Pid reason
+        | true ->
+          let killOutcome =
+            try
+              let proc = System.Diagnostics.Process.GetProcessById(info.Pid)
+              match proc.HasExited with
+              | true -> "already exited"
+              | false ->
+                proc.Kill()
+                "killed"
+            with ex -> sprintf "could not kill: %s" ex.Message
+          DaemonOwnership.DaemonInfoFile.delete info.DataDir
+          try
+            match String.Equals(Path.GetFullPath info.DataDir, Path.GetFullPath realDir, StringComparison.OrdinalIgnoreCase) with
+            | true -> ()
+            | false -> DaemonOwnership.unregisterSpawned realDir info.Pid
+          with _ -> ()
+          // The registry entry might be the primary daemon-info.json itself
+          // (already handled by `delete info.DataDir` above) or a spawned
+          // registration file — remove whichever path this verdict came from.
+          try
+            match File.Exists registryPath with
+            | true -> File.Delete registryPath
+            | false -> ()
+          with _ -> ()
+          printfn "sweep: reaped pid=%d (%s, %s)" info.Pid reason killOutcome
+    match kill, reaped with
+    | false, 0 -> printfn "sweep: nothing reapable"
+    | _ -> ()
     0
 
 type DaemonLaunchDecision =
@@ -254,6 +328,7 @@ let main args =
     printfn "       SageFs --jupyter <conn.json>    Run as Jupyter kernel"
     printfn "       SageFs stop                     Stop running daemon"
     printfn "       SageFs status                   Show daemon info"
+    printfn "       SageFs sweep [--kill]           Reap daemons whose owner process is gone"
     printfn ""
     printfn "Options:"
     printfn "  --version, -v          Show version information"
@@ -264,6 +339,12 @@ let main args =
     printfn "  --no-watch             Disable file watching — no automatic #load on changes"
     printfn "  --no-resume            Skip restoring previous sessions on daemon startup"
     printfn "  --prune                Mark all stale sessions as stopped and exit"
+    printfn "  --owner-pid PID        Exit when the process at PID exits (fenced by --owner-start"
+    printfn "                         when given). For daemons an agent, test, or demo spawns."
+    printfn "  --owner-start TICKS    UTC ticks of the owner's own start time, pairs with"
+    printfn "                         --owner-pid to close the pid-reuse race."
+    printfn "  --ttl DURATION         Self-terminate after DURATION (e.g. 30m, 1h, 90s) with no"
+    printfn "                         live sessions and no MCP/SSE clients."
     printfn ""
     printfn "Environment Variables:"
     printfn "  SageFs_MCP_PORT           Override MCP server port (same as --mcp-port)"
@@ -346,6 +427,9 @@ let main args =
     match failures with
     | 0 -> 0
     | _ -> 1
+
+  | Sweep kill ->
+    sweepCommand kill
 
   | DeprecatedClient name ->
     eprintfn "%s" (deprecatedClientMessage name)

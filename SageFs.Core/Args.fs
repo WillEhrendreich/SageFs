@@ -52,6 +52,11 @@ type WorkerConfig = {
   /// PID of the daemon that spawned this worker (None when run standalone,
   /// e.g. tests or manual worker invocation).
   DaemonPid: int option
+  /// UTC ticks of the daemon's own `Process.StartTime` at the moment it
+  /// spawned this worker. Paired with `DaemonPid` as an `OwnerMonitor.Owner`
+  /// fence so a recycled daemon pid (heavy spawn churn) can never be
+  /// mistaken for the same daemon and keep a worker alive forever.
+  DaemonStartTicks: int64 option
 }
   with
     /// Backward-compatible accessor.
@@ -67,6 +72,10 @@ module WorkerConfig =
   /// so they can exit when the daemon is killed hard (Task Manager, taskkill /F,
   /// crash) instead of becoming orphans (issue #126).
   let daemonPidEnvVar = "SAGEFS_DAEMON_PID"
+  /// UTC ticks of the daemon's own start time, recorded alongside
+  /// `daemonPidEnvVar` so the worker's parent-death watchdog can fence on
+  /// (pid, startTime) instead of pid alone — see `SageFs.OwnerMonitor`.
+  let daemonStartTicksEnvVar = "SAGEFS_DAEMON_START_TICKS"
 
   /// Pure core — reads config via an injected env reader.
   let fromEnvironmentWith
@@ -101,6 +110,13 @@ module WorkerConfig =
         match Int32.TryParse(s) with
         | true, pid when pid > 0 -> Some pid
         | _ -> None
+    let daemonStartTicks =
+      match getEnv daemonStartTicksEnvVar with
+      | null | "" -> None
+      | s ->
+        match Int64.TryParse(s) with
+        | true, ticks -> Some ticks
+        | _ -> None
     { SessionId = sessionId
       HttpPort = httpPort
       Projects = projects
@@ -109,7 +125,8 @@ module WorkerConfig =
       NoWatch = noWatch
       AutoOpenNamespaces = autoOpenNamespaces
       Workflow = WorkflowTypes.SessionWorkflow.fromHotReloadBool hotReloadEnabled
-      DaemonPid = daemonPid }
+      DaemonPid = daemonPid
+      DaemonStartTicks = daemonStartTicks }
 
   /// Impure shell — reads from real environment.
   let fromEnvironment sessionId httpPort =
@@ -155,6 +172,7 @@ let buildWorkerSpawnConfig
   let envVars = [
     WorkerConfig.envVar, (projects |> String.concat ";")
     WorkerConfig.daemonPidEnvVar, string Environment.ProcessId
+    WorkerConfig.daemonStartTicksEnvVar, string (System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks)
     if isBare then WorkerConfig.bareEnvVar, "1"
     if noWatch then WorkerConfig.noWatchEnvVar, "1"
     if not autoOpenNamespaces then WorkerConfig.autoOpenNamespacesEnvVar, "0"

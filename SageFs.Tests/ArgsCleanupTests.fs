@@ -132,6 +132,7 @@ let projectLoadConfigTests =
         Projects = ["MyApp.fsproj"; "Solution.sln"; "Other.slnx"; "Lib.fsproj"]
         Workflow = SessionWorkflow.Interactive
         DaemonPid = None
+        DaemonStartTicks = None
       }
       let plc = ProjectLoadConfig.fromWorkerConfig wc
       plc.Solutions
@@ -145,6 +146,7 @@ let projectLoadConfigTests =
         WorkingDir = "/tmp"; Projects = []
         Workflow = SessionWorkflow.Interactive
         DaemonPid = None
+        DaemonStartTicks = None
       }
       let plc = ProjectLoadConfig.fromWorkerConfig wc
       plc.Projects |> Expect.isEmpty "no projects"

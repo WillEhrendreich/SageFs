@@ -1520,7 +1520,19 @@ let dispatchOutputAndWait
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
 /// Every session is a worker sub-process managed by SessionManager.
-let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args.DaemonFlags) = task {
+///
+/// `ownership` (multi-agent vision §3.1, §10 item 2) is this daemon's own
+/// ownership: an `--owner-pid` watchdog that exits this daemon when its
+/// owner process is gone, and/or a `--ttl` that self-terminates it once
+/// idle — closing the "34 orphaned daemons" seam (S1) for daemons an
+/// agent, test, or demo runner spawns directly (not via a supervised
+/// worker, which already has `ParentMonitor`/`OwnerMonitor`).
+let run
+  (bindHost: SageFs.SageFsConfig.LoopbackHost)
+  (mcpPort: int)
+  (flags: Args.DaemonFlags)
+  (ownership: DaemonOwnership.EffectiveOwnership)
+  = task {
   let startupSw = System.Diagnostics.Stopwatch.StartNew()
   let daemonStartTime = System.DateTimeOffset.UtcNow
   let startupSpan =
@@ -1556,6 +1568,19 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
   use manifestOwner = Features.ManifestOwner.start (Log.asILogger ()) DaemonState.SageFsDir
 
   use cts = infra.Cts
+
+  // Ownership rule 2 (§3.1): an externally-spawned daemon with --owner-pid
+  // exits when that process is gone — fenced on (pid, startTime) when
+  // --owner-start was also given, so a recycled pid can never keep this
+  // daemon alive forever. Same mechanism as the worker watchdog, one layer up.
+  match ownership.OwnerPid with
+  | Some ownerPid ->
+    let owner : OwnerMonitor.Owner = { Pid = ownerPid; StartTimeTicks = ownership.OwnerStartTicks }
+    log.LogInformation("Daemon monitoring owner PID {OwnerPid} (fenced={Fenced})", ownerPid, Option.isSome ownership.OwnerStartTicks)
+    Async.Start(
+      OwnerMonitor.run OwnerMonitor.getProcessById owner cts (fun msg -> log.LogWarning("{Message}", msg)),
+      cts.Token)
+  | None -> ()
   // Test discovery callback — set after elmRuntime is created
   let mutable onTestDiscoveryCallback : (WorkerProtocol.SessionId -> SessionManager.TestDiscoveryReport -> unit) =
     fun _ _ -> ()
@@ -1858,6 +1883,52 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
   // Start dashboard web server on MCP port + 1
   let dashboardPort = mcpPort + 1
   let connectionTracker = ConnectionTracker()
+
+  // TTL idle-check (ownership rule 2, §3.1): when this daemon carries a
+  // --ttl (explicit, or the nested-checkout default), self-terminate once
+  // there are no live sessions and no MCP/SSE clients for at least that
+  // long. "Clients" is approximated from what the daemon already tracks —
+  // connected dashboard tabs (ConnectionTracker) and recent MCP tool
+  // activity (AgentActivityTracker) — rather than a new connection count.
+  // One-shot timer, same reschedule-after-completion idiom as the other
+  // periodic checks above.
+  let mutable ttlLastActiveAt = DateTime.UtcNow
+  let mutable ttlTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  let ttlTimer : System.Threading.Timer option =
+    match ownership.Ttl with
+    | None -> None
+    | Some ttl ->
+      let ttlCheckIntervalMs =
+        max 1_000 (min 30_000 (int (ttl.TotalMilliseconds / 4.0)))
+      let ttlCallback _ =
+        try
+          try
+            let now = DateTime.UtcNow
+            let hasLiveSessions =
+              SessionManager.QuerySnapshot.allSessions (readSnapshot()) |> List.isEmpty |> not
+            let hasClients =
+              connectionTracker.GetAllCounts().Browsers > 0
+              || not (AgentActivityTracker.getActivePresences activityTracker None ttl now |> List.isEmpty)
+            match hasLiveSessions || hasClients with
+            | true -> ttlLastActiveAt <- now
+            | false -> ()
+            match DaemonOwnership.shouldSelfTerminate now ttl ttlLastActiveAt hasLiveSessions hasClients with
+            | true ->
+              log.LogWarning("Daemon idle for --ttl {Ttl} with no live sessions and no clients — self-terminating", ttl)
+              try cts.Cancel() with :? ObjectDisposedException -> ()
+            | false -> ()
+          with ex ->
+            log.LogWarning("TTL idle-check callback threw unexpectedly: {Error}", ex.Message)
+        finally
+          if not (isNull ttlTimerRef) then
+            try ttlTimerRef.Change(ttlCheckIntervalMs, System.Threading.Timeout.Infinite) |> ignore
+            with :? System.ObjectDisposedException -> ()
+      let t =
+        new System.Threading.Timer(
+          System.Threading.TimerCallback(ttlCallback),
+          null, ttlCheckIntervalMs, System.Threading.Timeout.Infinite)
+      ttlTimerRef <- t
+      Some t
 
   // Dashboard status helpers — partially applied module-level functions
   let getSessionState = getSessionStateFromSnapshot readSnapshot
@@ -2439,6 +2510,30 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
   log.LogInformation("SSE events: http://localhost:{Port}/events", mcpPort)
   log.LogInformation("Health: http://localhost:{Port}/health", mcpPort)
 
+  // Ownership rules 2 & 3 (§3.1): write a daemon-info file into this
+  // daemon's own data dir — what `sagefs sweep` reads when the HTTP
+  // /api/daemon-info side is wedged — and, when this daemon's data dir
+  // isn't the real ~/.SageFs (an isolated SAGEFS_DATA_DIR, e.g. a test or
+  // an agent's throwaway daemon), ALSO register a copy under the real
+  // ~/.SageFs/spawned/ so sweep can find it without scanning the
+  // filesystem for arbitrary data dirs.
+  let daemonInfoFile : DaemonOwnership.DaemonInfoFile =
+    { Pid = Environment.ProcessId
+      StartTime = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()
+      OwnerPid = ownership.OwnerPid
+      OwnerStart = ownership.OwnerStartTicks
+      McpPort = mcpPort
+      DashboardPort = dashboardPort
+      DataDir = DaemonState.SageFsDir }
+  try
+    DaemonOwnership.DaemonInfoFile.write DaemonState.SageFsDir daemonInfoFile
+    let realDir = DaemonOwnership.realHomeSageFsDir ()
+    match String.Equals(System.IO.Path.GetFullPath DaemonState.SageFsDir, System.IO.Path.GetFullPath realDir, StringComparison.OrdinalIgnoreCase) with
+    | true -> ()
+    | false -> DaemonOwnership.registerSpawned realDir daemonInfoFile
+  with ex ->
+    log.LogWarning("Could not write daemon-info file: {Error}", ex.Message)
+
   // Cleanup orphaned .tmp files from interrupted writes
   // (.sagefs per-session replay files no longer exist — only the .sagetc test cache)
   let stcOrphans = Features.TestCacheFile.cleanupOrphanedTmpFiles DaemonState.SageFsDir
@@ -2524,7 +2619,20 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
   with :? System.ObjectDisposedException -> ()
   try watcherSyncTimer.Dispose()
   with :? System.ObjectDisposedException -> ()
+  match ttlTimer with
+  | Some t ->
+    try t.Dispose()
+    with :? System.ObjectDisposedException -> ()
+  | None -> ()
   (liveTestWatcherManager :> System.IDisposable).Dispose()
+  // Ownership rule 3 (§3.1): a daemon that shut down gracefully is no
+  // longer a sweep target — remove its own daemon-info file and, if it was
+  // registered externally, its spawned/ registry entry.
+  try
+    DaemonOwnership.DaemonInfoFile.delete DaemonState.SageFsDir
+    DaemonOwnership.unregisterSpawned (DaemonOwnership.realHomeSageFsDir ()) Environment.ProcessId
+  with ex ->
+    log.LogWarning("Could not clean up daemon-info file: {Error}", ex.Message)
   try
     do! performGracefulShutdown log readSnapshot elmRuntime.GetModel sessionManager manifestOwner
   with ex ->
