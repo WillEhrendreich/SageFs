@@ -354,6 +354,7 @@
         <Compile Include="IntegrationRegistryTests.fs" />
         <Compile Include="DashboardBrowserRunner.fs" />
         <Compile Include="VscodeCommandProofTests.fs" />
+        <Compile Include="FrictionClassificationTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

@@ -21,60 +21,88 @@ let ok = function
   | Ok value -> value
   | Error err -> failwith err
 
-let classifyFrictionOutcome (result: string) =
-  let oi = System.StringComparison.OrdinalIgnoreCase
-  match result.StartsWith("Blocked:") || result.StartsWith("Error:") with
-  | true when result.Contains("exact", oi) && result.Contains("match", oi) ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.ExactTestNotFound
-  | true when result.Contains("TypeLoadException", oi) || result.Contains("type identity", oi) ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.TypeIdentityCompromised
-  | true when result.Contains("session", oi) && result.Contains("warm", oi) ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming
-  | true when result.Contains("Multiple sessions match", oi) ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionAmbiguous
-  | true when result.Contains("No sessions match", oi)
-          || result.Contains("No active session", oi)
-          || result.Contains("not found", oi)
-          || result.Contains("no longer running", oi) ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionMissing
-  | true when result.Contains("output", oi) && result.Contains("large", oi) ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.OutputTooLarge
-  | true when result.Contains("stale", oi) || result.Contains("out of date", oi) ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.LoadedStateStale
-  | true when result.Contains("affordance", oi) || result.Contains("not available", oi) && result.Contains("tool", oi) ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.AffordanceMismatch
-  | true when result.Contains("transport", oi)
-          || result.Contains("pipe closed", oi)
-          || result.Contains("worker process", oi) && result.Contains("crash", oi) ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
-  | true when result.Contains("failed", oi)
-          || result.Contains("Reset failed", oi)
-          || result.Contains("Hard reset failed", oi)
-          || result.Contains("Build failed", oi) ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
-  | true ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
-  | false ->
-    SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.CompletedCleanly
+/// Exhaustive, compiler-checked mapping from the `SageFsError` algebra to a
+/// friction `BlockerKind`. This REPLACES `classifyFrictionOutcome`'s
+/// substring matching (which scanned a tool's rendered "Blocked:"/"Error:"
+/// text for keywords like "warm", "Multiple sessions match", "stale" — with
+/// a real precedence bug: `Contains("affordance") || (Contains("not
+/// available") && Contains("tool"))` let "not available" alone win the
+/// `&&` before the `tool` check would have narrowed it). A tool's own typed
+/// result (a `SageFsError` case, or `None` for success) is classified
+/// directly here — no text is parsed, and the compiler refuses this module
+/// to build if a new `SageFsError` case is added without a matching arm.
+let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes.BlockerKind = function
+  | SageFs.SageFsError.ToolNotAvailable _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.AffordanceMismatch
+  | SageFs.SageFsError.SessionNotFound _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionMissing
+  | SageFs.SageFsError.NoActiveSessions -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionMissing
+  | SageFs.SageFsError.AmbiguousSessions _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionAmbiguous
+  | SageFs.SageFsError.SessionCreationFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.DuplicateSession _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
+  | SageFs.SageFsError.SessionStopFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.SessionSwitchFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  // SessionNotRoutable is the generic "not ready right now" case used while
+  // a session is starting/restarting/mid-transition — SessionWarming is its
+  // most common and most actionable meaning (see sessionRoutingError, which
+  // constructs it specifically for the WarmingUp/Unroutable resolutions).
+  | SageFs.SageFsError.SessionNotRoutable _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming
+  | SageFs.SageFsError.WorkerCommunicationFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
+  | SageFs.SageFsError.WorkerSpawnFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.WorkerTimeout _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
+  | SageFs.SageFsError.WorkerHttpError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
+  | SageFs.SageFsError.PipeClosed -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
+  | SageFs.SageFsError.EvalFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.ResetFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.HardResetFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.BuildFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.ScriptLoadFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.CheckFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.CompletionFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.CancelFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.EvalSupersededByReset -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.WarmupOpenFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming
+  | SageFs.SageFsError.WarmupContextFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionWarming
+  | SageFs.SageFsError.HotReloadFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  // A confirmed-stale loaded definition (targeted_verify) is reported as
+  // HotReloadStateError — see targetedVerifyResult in Mcp.fs.
+  | SageFs.SageFsError.HotReloadStateError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.LoadedStateStale
+  | SageFs.SageFsError.AppRunFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.RestartLimitExceeded _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.DaemonStartFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.DaemonNotRunning -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.PortInUse _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
+  | SageFs.SageFsError.SseConnectionError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
+  | SageFs.SageFsError.JsonParseError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
+  // An exception the algebra had no specific case for. OperationFailed (not
+  // the old fallback's InvalidRequest — the caller's request was not
+  // necessarily invalid) is the honest "something broke" bucket.
+  | SageFs.SageFsError.Unexpected _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
 
-let recordToolResult (ctx: McpContext) (toolName: string) (result: string) (elapsedMs: int) =
+/// Build the friction outcome directly from a tool's own typed result —
+/// `Ok` is a clean completion, `Error err` is classified via `blockerKindOf`.
+/// Never re-parses display text.
+let frictionOutcomeOf (outcome: Result<string, SageFs.SageFsError>) : SageFs.Features.FrictionTelemetryTypes.FrictionOutcome =
+  match outcome with
+  | Ok _ -> SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.CompletedCleanly
+  | Error err -> SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker (blockerKindOf err)
+
+let recordToolResult (ctx: McpContext) (toolName: string) (outcome: Result<string, SageFs.SageFsError>) (elapsedMs: int) =
   let event : SageFs.Features.FrictionTelemetryTypes.FrictionEvent =
     { SageFs.Features.FrictionTelemetryTypes.FrictionEvent.OccurredAtUtc = System.DateTimeOffset.UtcNow
       Session = SageFs.Features.FrictionTelemetryTypes.SessionRef.create "mcp" |> ok
       Tool = SageFs.Features.FrictionTelemetryTypes.ToolName.create toolName |> ok
       Intent = SageFs.Features.FrictionTelemetryTypes.IntentKind.ExploreCode
-      Outcome = classifyFrictionOutcome result
+      Outcome = frictionOutcomeOf outcome
       Duration = SageFs.Features.FrictionTelemetryTypes.DurationMs.create elapsedMs |> ok
       FollowUp = SageFs.Features.FrictionTelemetryTypes.FollowUp.NoFollowUpYet
       ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused
       SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current () }
   match ctx.FrictionStore with
-  | Some store -> 
+  | Some store ->
     task {
       let! _ = SageFs.Features.McpFrictionRecorder.Recorder.appendEventDirect store event
       return ()
     }
-  | None -> 
+  | None ->
     task { return () }  // FrictionStore is required — no fallback
 
 let feedbackKindText = function
@@ -190,7 +218,12 @@ let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<strin
       let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
       Log.info ">> %s" toolName
       Log.debug "%s" normalized
-      let! _ = recordToolResult ctx toolName result (int sw.Elapsed.TotalMilliseconds)
+      // The tool body only handed back display text here — no structured
+      // outcome — so a body that reached this line without throwing is
+      // recorded as a clean completion. Tools that can fail without
+      // throwing (session routing, reset/cancel/verify, ...) go through
+      // withEchoOutcome instead, which carries the real SageFsError.
+      let! _ = recordToolResult ctx toolName (Ok result) (int sw.Elapsed.TotalMilliseconds)
       SageFs.Instrumentation.succeedSpan span
       return result
     with ex ->
@@ -198,12 +231,10 @@ let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<strin
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
       auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
       SageFs.Instrumentation.failSpan span ex.Message
-      // Route the recorded friction text through the SageFsError algebra
-      // instead of the bare exception message: an unclassified exception
-      // becomes Unexpected, still described+actioned uniformly with every
-      // other structured error. The "Error:" prefix is preserved —
-      // classifyFrictionOutcome branches on it.
-      let! _ = recordToolResult ctx toolName (sprintf "Error: %s" (SageFs.SageFsError.describeForAgent (SageFs.SageFsError.Unexpected ex))) (int sw.Elapsed.TotalMilliseconds)
+      // The exception itself IS the SageFsError case — record it directly
+      // instead of formatting it to text and having classifyFrictionOutcome
+      // re-parse the formatted string back out.
+      let! _ = recordToolResult ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) (int sw.Elapsed.TotalMilliseconds)
       return raise ex
   }
 
@@ -222,16 +253,78 @@ let withEchoNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string>)
       Log.info ">> %s" toolName
       Log.debug "%s" normalized
       SageFs.Instrumentation.succeedSpan span
-      let! _ = recordToolResult ctx toolName result (int sw.Elapsed.TotalMilliseconds)
+      let! _ = recordToolResult ctx toolName (Ok result) (int sw.Elapsed.TotalMilliseconds)
       return result
     with ex ->
       sw.Stop()
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
       auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
       SageFs.Instrumentation.failSpan span ex.Message
-      // See withEcho above — route through the algebra, keep the "Error:"
-      // prefix classifyFrictionOutcome branches on.
-      let! _ = recordToolResult ctx toolName (sprintf "Error: %s" (SageFs.SageFsError.describeForAgent (SageFs.SageFsError.Unexpected ex))) (int sw.Elapsed.TotalMilliseconds)
+      // See withEcho above — the exception IS the typed case.
+      let! _ = recordToolResult ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) (int sw.Elapsed.TotalMilliseconds)
+      return raise ex
+  }
+
+/// Like `withEcho`, but for a tool body that ALSO reports a structured
+/// `SageFsError` when it did not complete cleanly — independent of the
+/// display text, which is returned to the agent EXACTLY as the tool body
+/// produced it (the "genuinely still surfaces a human string" case: the
+/// presentation is unchanged, only the internal friction classification
+/// stops re-parsing that string). `None` means the tool completed cleanly.
+let withEchoOutcome (ctx: McpContext) (toolName: string) (t: Task<string * SageFs.SageFsError option>) : Task<string> =
+  task {
+    SageFs.Instrumentation.mcpToolInvocations.Add(1L)
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
+                 ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
+    try
+      let! result, blocker = t
+      sw.Stop()
+      SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
+      let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
+      Log.info ">> %s" toolName
+      Log.debug "%s" normalized
+      let outcome = match blocker with Some err -> Error err | None -> Ok result
+      let! _ = recordToolResult ctx toolName outcome (int sw.Elapsed.TotalMilliseconds)
+      SageFs.Instrumentation.succeedSpan span
+      return result
+    with ex ->
+      sw.Stop()
+      SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
+      SageFs.Instrumentation.failSpan span ex.Message
+      let! _ = recordToolResult ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) (int sw.Elapsed.TotalMilliseconds)
+      return raise ex
+  }
+
+/// `withEchoOutcome` sibling matching `withEchoNoAwaitRecord`'s statement
+/// order (succeedSpan before the friction record await) for the one caller
+/// (hard_reset_fsi_session, rebuild=true) that used that ordering.
+let withEchoOutcomeNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string * SageFs.SageFsError option>) : Task<string> =
+  task {
+    SageFs.Instrumentation.mcpToolInvocations.Add(1L)
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+    let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
+                 ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
+    try
+      let! result, blocker = t
+      sw.Stop()
+      SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
+      let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
+      Log.info ">> %s" toolName
+      Log.debug "%s" normalized
+      SageFs.Instrumentation.succeedSpan span
+      let outcome = match blocker with Some err -> Error err | None -> Ok result
+      let! _ = recordToolResult ctx toolName outcome (int sw.Elapsed.TotalMilliseconds)
+      return result
+    with ex ->
+      sw.Stop()
+      SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
+      SageFs.Instrumentation.failSpan span ex.Message
+      let! _ = recordToolResult ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) (int sw.Elapsed.TotalMilliseconds)
       return raise ex
   }
 
@@ -322,7 +415,14 @@ PATH:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: load_fsharp_script called: {FilePath}", filePath)
-        loadFSharpScript ctx agentName filePath None wd |> withEcho ctx "load_fsharp_script"
+        task {
+          let! result = loadFSharpScriptResult ctx agentName filePath None wd
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "load_fsharp_script"
     
     [<McpServerTool>]
     [<Description("""Get recent FSI events including evaluations, errors, and script loads. Returns the most recent N events (default 10) with timestamps and sources.
@@ -380,6 +480,11 @@ IMPORTANT:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: get_fsi_status called: workingDir={Dir}", working_directory)
+        // get_fsi_status deliberately reports a missing/warming/faulted
+        // session as informational JSON, not an error (see its own "This
+        // prevents SessionMissing friction on the most-called tool" comment)
+        // — so it keeps plain withEcho rather than classifying that as a
+        // blocker, which would undo that deliberate choice.
         getStatus ctx "mcp" None wd |> withEcho ctx "get_fsi_status"
 
     [<Description("""Get detailed startup information: loaded projects, enabled features, and command-line arguments. Use to understand what capabilities are available in the current session.
@@ -451,7 +556,14 @@ This is a SOFT reset — DLL locks are retained. Use hard_reset_fsi_session only
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: reset_fsi_session called")
-        resetSession ctx "mcp" None wd |> withEcho ctx "reset_fsi_session"
+        task {
+          let! result = resetSessionResult ctx "mcp" None wd
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "reset_fsi_session"
 
     [<McpServerTool>]
     [<Description("""Hard reset: dispose the FSI session, release DLL locks via shadow-copy refresh,
@@ -493,10 +605,17 @@ The full pack/reinstall cycle is only needed when SageFs's own source code chang
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let doRebuild = rebuild
         logger.LogDebug("MCP-TOOL: hard_reset_fsi_session called, rebuild={Rebuild}", doRebuild)
-        let execute = hardResetSession ctx "mcp" doRebuild None wd
+        let execute =
+          task {
+            let! result = hardResetSessionResult ctx "mcp" doRebuild None wd
+            return
+              match result with
+              | Ok text -> text, None
+              | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+          }
         match doRebuild with
-        | true -> execute |> withEchoNoAwaitRecord ctx "hard_reset_fsi_session"
-        | false -> execute |> withEcho ctx "hard_reset_fsi_session"
+        | true -> execute |> withEchoOutcomeNoAwaitRecord ctx "hard_reset_fsi_session"
+        | false -> execute |> withEchoOutcome ctx "hard_reset_fsi_session"
 
     [<McpServerTool>]
     [<Description("""Check F# code for errors without executing it. Returns diagnostics (errors, warnings) from the F# compiler.
@@ -522,7 +641,20 @@ WHEN NOT TO USE:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: check_fsharp_code called")
-        checkFSharpCode ctx "mcp" code None wd |> withEcho ctx "check_fsharp_code"
+        task {
+          let! text = checkFSharpCode ctx "mcp" code None wd
+          // checkFSharpCode's own routing failure is plain "Error: <text>"
+          // with no structured case behind it — resolve the session again
+          // (read-only registry lookups; no side effect on the eval path)
+          // to classify a genuine session-routing blocker (warming up,
+          // multiple sessions, missing) from the SAME typed resolution
+          // resolveSessionId already computes, instead of leaving it
+          // unclassified or re-parsing the "Error: ..." text.
+          let! resolution = resolveSessionId ctx "mcp" None wd
+          let! blocker = sessionRoutingError ctx None wd resolution
+          return text, blocker
+        }
+        |> withEchoOutcome ctx "check_fsharp_code"
 
     [<McpServerTool>]
     [<Description("""Cancel a running evaluation. Use when an eval is stuck or taking too long. Returns whether a cancellation was performed.
@@ -544,7 +676,14 @@ BEHAVIOR:
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: cancel_eval called")
-        cancelEval ctx "mcp" wd |> withEcho ctx "cancel_eval"
+        task {
+          let! result = cancelEvalResult ctx "mcp" wd
+          return
+            match result with
+            | Ok text -> text, None
+            | Error err -> sprintf "Error: %s" (SageFs.SageFsError.describeForAgent err), Some err
+        }
+        |> withEchoOutcome ctx "cancel_eval"
 
     [<McpServerTool>]
     [<Description("""Enable hot reload (browser auto-refresh) for this session.
@@ -927,7 +1066,7 @@ TRUST MODEL:
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let guard = match System.String.IsNullOrWhiteSpace exact_guard with | true -> None | false -> Some exact_guard
         logger.LogDebug("MCP-TOOL: targeted_verify called, behavior={Behavior}, exact_guard={ExactGuard}", behavior, exact_guard)
-        targetedVerify ctx "mcp" wd behavior guard |> withEcho ctx "targeted_verify"
+        targetedVerifyResult ctx "mcp" wd behavior guard |> withEchoOutcome ctx "targeted_verify"
 
     [<McpServerTool>]
     [<Description("""Get a compact local summary of MCP friction recorded by SageFs.
