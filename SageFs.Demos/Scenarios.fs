@@ -279,6 +279,25 @@ let replDashboard: Scenario =
 /// `renderLiveTestingPanel`), and watches the panel's own header move from
 /// "OFF" to "ON" and then show a real passed count — SageFs discovering and
 /// running the project's actual tests, not a canned status string.
+///
+/// NOT YET PASSING (recorded but NOT published to the gallery — the job's own
+/// "don't fake it" rule): steps 1-3 pass genuinely (real project opens, warms
+/// up with Expecto/Expecto.Flip opened, live testing flips to "ON", and
+/// `SageFsApp.fs`'s `EnableLiveTesting` handler does dispatch
+/// `RequestInitialDiscovery` + `RegisterFileWatcher`), but step 4 — waiting
+/// for a passed-test checkmark in `#live-testing-panel` — times out at 90s on
+/// every attempt (reproduced twice). The cell's own `daemon.log` shows
+/// "Registered file watcher" but NO discovery-related log line ever appears,
+/// so discovery is requested but never observably completes for a project
+/// opened directly through the dashboard's "Open Directory" picker (as
+/// opposed to a project SageFs already knows as "runnable"). Root-causing
+/// this further means reading `LiveTestingExecutors`/`SageFsApp`'s discovery
+/// effect handlers in `SageFs.Core`/`SageFs`, which is real product logic
+/// beyond this demo tool's own scope (`AGENTS.md`: don't touch product code
+/// beyond what a scenario needs) — left here, still wired to `record
+/// lt-dashboard` for whoever picks this up, with the concrete evidence above
+/// instead of a workaround that would silently pass without a checkmark ever
+/// appearing.
 let ltDashboard: Scenario =
   { Id = ScenarioId.derive Capability.LiveTesting Client.Dashboard AppKind.NoApp
     Capability = Capability.LiveTesting
