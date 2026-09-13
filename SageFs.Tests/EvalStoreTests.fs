@@ -148,44 +148,83 @@ let evalStoreTests =
       }
     ]
 
+    // Shared body for both property tests below: every public read of a
+    // built store must agree with a from-scratch rebuild over exactly the
+    // retained cells, whatever the cap and however many chunks that cap
+    // spans internally.
+    let checkAgreesWithRebuild (cap: int, steps: (string * string) list) =
+      let store = buildAt cap steps
+      let retained = retainedIndexed cap steps
+      let kept = List.length retained
+
+      // Counting invariants.
+      store.NextId |> Expect.equal "NextId equals the number of records made" steps.Length
+      EvalStore.count store |> Expect.equal "count is min(cap, records made)" kept
+      EvalStore.oldestId store |> Expect.equal "oldestId is NextId - count" (store.NextId - kept)
+
+      // Ordering: newestFirst/chronological/newest all agree with the plain
+      // retained-window rebuild, in the right direction.
+      let expectedAscendingIds = retained |> List.map (fun (id, _, _) -> id)
+      EvalStore.chronological store |> List.map (fun e -> e.CellIndex)
+      |> Expect.equal "chronological is the retained window, oldest first" expectedAscendingIds
+      EvalStore.newestFirst store |> List.map (fun e -> e.CellIndex)
+      |> Expect.equal "newestFirst is the retained window, newest first" (List.rev expectedAscendingIds)
+      EvalStore.newest kept store |> List.map (fun e -> e.CellIndex)
+      |> Expect.equal "newest(count) is the same as newestFirst" (List.rev expectedAscendingIds)
+
+      // KnownBindings remembers the newest-ever producer of every bound name,
+      // including names bound by cells that have since been evicted.
+      store.KnownBindings |> Expect.equal "newest producer of every name ever bound, retained or not" (expectedKnownBindings steps)
+
+      // The two materializations agree with a from-scratch rebuild over
+      // exactly the retained cells.
+      let retainedTriples = retained |> List.map (fun (id, code, result) -> id, code, result)
+      let expectedScope = oracleScope retainedTriples
+      let actualScope = EvalStore.materializeScope store
+      actualScope.Bindings |> Expect.equal "scope bindings match a rebuild" expectedScope.Bindings
+      actualScope.ActiveBindings |> Expect.equal "active bindings match a rebuild" expectedScope.ActiveBindings
+      actualScope.ShadowedBindings |> Expect.equal "shadowed bindings match a rebuild" expectedScope.ShadowedBindings
+
+      let expectedGraph = oracleGraph store.KnownBindings retainedTriples
+      let actualGraph = EvalStore.materializeGraph store
+      actualGraph.Cells |> Expect.equal "graph cells match a rebuild" expectedGraph.Cells
+      actualGraph.Edges |> Expect.equal "graph edges match a rebuild" expectedGraph.Edges
+      store
+
     testPropertyWithConfig
       { FsCheckConfig.defaultConfig with maxTest = 300 }
-      "random record sequences under any cap: count/oldestId/NextId, newest*/chronological, KnownBindings, and materializeScope/materializeGraph all agree with a from-scratch rebuild" <|
+      "random record sequences under a SMALL cap (never spans more than one internal chunk): count/oldestId/NextId, newest*/chronological, KnownBindings, and materializeScope/materializeGraph all agree with a from-scratch rebuild" <|
       Prop.forAll (Arb.fromGen (Gen.zip (Gen.choose (1, 8)) (Gen.listOf genStep))) (fun (cap, steps) ->
-        let store = buildAt cap steps
-        let retained = retainedIndexed cap steps
-        let kept = List.length retained
+        checkAgreesWithRebuild (cap, steps) |> ignore)
 
-        // Counting invariants.
-        store.NextId |> Expect.equal "NextId equals the number of records made" steps.Length
-        EvalStore.count store |> Expect.equal "count is min(cap, records made)" kept
-        EvalStore.oldestId store |> Expect.equal "oldestId is NextId - count" (store.NextId - kept)
-
-        // Ordering: newestFirst/chronological/newest all agree with the plain
-        // retained-window rebuild, in the right direction.
-        let expectedAscendingIds = retained |> List.map (fun (id, _, _) -> id)
-        EvalStore.chronological store |> List.map (fun e -> e.CellIndex)
-        |> Expect.equal "chronological is the retained window, oldest first" expectedAscendingIds
-        EvalStore.newestFirst store |> List.map (fun e -> e.CellIndex)
-        |> Expect.equal "newestFirst is the retained window, newest first" (List.rev expectedAscendingIds)
-        EvalStore.newest kept store |> List.map (fun e -> e.CellIndex)
-        |> Expect.equal "newest(count) is the same as newestFirst" (List.rev expectedAscendingIds)
-
-        // KnownBindings remembers the newest-ever producer of every bound name,
-        // including names bound by cells that have since been evicted.
-        store.KnownBindings |> Expect.equal "newest producer of every name ever bound, retained or not" (expectedKnownBindings steps)
-
-        // The two materializations agree with an from-scratch rebuild over
-        // exactly the retained cells.
-        let retainedTriples = retained |> List.map (fun (id, code, result) -> id, code, result)
-        let expectedScope = oracleScope retainedTriples
-        let actualScope = EvalStore.materializeScope store
-        actualScope.Bindings |> Expect.equal "scope bindings match a rebuild" expectedScope.Bindings
-        actualScope.ActiveBindings |> Expect.equal "active bindings match a rebuild" expectedScope.ActiveBindings
-        actualScope.ShadowedBindings |> Expect.equal "shadowed bindings match a rebuild" expectedScope.ShadowedBindings
-
-        let expectedGraph = oracleGraph store.KnownBindings retainedTriples
-        let actualGraph = EvalStore.materializeGraph store
-        actualGraph.Cells |> Expect.equal "graph cells match a rebuild" expectedGraph.Cells
-        actualGraph.Edges |> Expect.equal "graph edges match a rebuild" expectedGraph.Edges)
+    // The property above never exercises more than one internal chunk (the
+    // chunk size is 256 cells; caps 1-8 never approach it) — it would pass
+    // just as well if chunking, fresh-chunk creation, and multi-chunk
+    // eviction were all broken. This property drives caps and step counts
+    // well past 256 so appendCell must start new chunks and dropStaleChunks
+    // must drop whole chunks, and still checks every read against the same
+    // from-scratch rebuild.
+    testPropertyWithConfig
+      { FsCheckConfig.defaultConfig with maxTest = 60 }
+      "random record sequences that span MULTIPLE 256-cell chunks: the same reads still agree with a from-scratch rebuild" <|
+      // Chunk size mirrors EvalStore's private ChunkCapacity (256): the cap
+      // is always comfortably above it, and the sanity guard below fires
+      // once enough cells have been recorded to force a second chunk,
+      // independent of cap.
+      Prop.forAll
+        (Arb.fromGen (
+          Gen.choose (300, 600)
+          |> Gen.bind (fun cap ->
+            Gen.choose (0, cap * 3 + 10)
+            |> Gen.bind (fun stepCount -> Gen.listOfLength stepCount genStep)
+            |> Gen.map (fun steps -> cap, steps))))
+        (fun (cap, steps) ->
+          let store = checkAgreesWithRebuild (cap, steps)
+          // Sanity on the property itself: recording past 256 cells really
+          // did require more than one chunk — otherwise this test would be
+          // exercising the same single-chunk path as the property above and
+          // the header comment would be a lie.
+          match steps.Length > 256 with
+          | true -> store.Chunks.Length > 1 |> Expect.isTrue "recording past 256 cells needs more than one chunk"
+          | false -> ())
   ]
