@@ -12,50 +12,39 @@ open SageFs.WarmUp
 /// When the daemon is killed hard (Task Manager, taskkill /F, crash, OS
 /// shutdown), no Shutdown message ever arrives — without this, worker
 /// processes become orphans that outlive the daemon (issue #126).
-/// Pure decision logic, separated for testability.
+///
+/// The pid-and-start-time-fenced decision core now lives in Core
+/// (`SageFs.OwnerMonitor`) so any owned process — worker, Run App child,
+/// `dotnet build`, or an externally-spawned daemon — can share it. This
+/// module is a thin, name-compatible wrapper kept for existing callers and
+/// tests that only ever had a bare pid (no fence, i.e. pid-reuse is NOT
+/// closed for these entry points — see the real worker usage below, which
+/// builds a fenced `OwnerMonitor.Owner` directly and does not go through
+/// this wrapper).
 module ParentMonitor =
-  /// Decide whether the given daemon PID is still alive.
-  /// A PID that no longer exists (or was never valid) means the daemon is gone.
-  /// Any lookup failure is treated as "dead" — fail-closed so a worker can
-  /// never be orphaned by a monitor error.
+  /// Decide whether the given daemon PID is still alive (pid-only, no
+  /// start-time fence — see `SageFs.OwnerMonitor.isAlive` for the fenced
+  /// version used by the real watchdog below).
   let isDaemonAlive (getProcessById: int -> System.Diagnostics.Process option) (daemonPid: int) : bool =
-    try
-      match getProcessById daemonPid with
-      | None -> false
-      | Some p -> not p.HasExited
-    with _ -> false
+    SageFs.OwnerMonitor.isAlive getProcessById (SageFs.OwnerMonitor.Owner.ofPid daemonPid)
 
   /// Poll interval between daemon liveness checks.
-  let pollIntervalMs = 2000
+  let pollIntervalMs = SageFs.OwnerMonitor.pollIntervalMs
 
-  /// Run the monitor loop. Cancels the provided CTS when the daemon dies,
-  /// which unwinds the worker's main wait (tcs in WorkerMain.run) and shuts
-  /// down the HTTP server, file watcher, and actor.
+  /// Run the monitor loop (pid-only fence). Cancels the provided CTS when
+  /// the daemon dies, which unwinds the worker's main wait (tcs in
+  /// WorkerMain.run) and shuts down the HTTP server, file watcher, and actor.
   let run
     (getProcessById: int -> System.Diagnostics.Process option)
     (daemonPid: int)
     (cts: CancellationTokenSource)
     (log: string -> unit)
     : Async<unit> =
-    async {
-      let mutable daemonGone = false
-      while not daemonGone && not cts.IsCancellationRequested do
-        do! Async.Sleep pollIntervalMs
-        match isDaemonAlive getProcessById daemonPid with
-        | true -> ()
-        | false ->
-          log (sprintf "Daemon (PID %d) no longer alive — worker exiting to avoid orphan" daemonPid)
-          daemonGone <- true
-          try cts.Cancel() with :? ObjectDisposedException -> ()
-    }
+    SageFs.OwnerMonitor.run getProcessById (SageFs.OwnerMonitor.Owner.ofPid daemonPid) cts log
 
   /// Real process lookup for production use.
   let getProcessById (pid: int) : System.Diagnostics.Process option =
-    try
-      Some (System.Diagnostics.Process.GetProcessById(pid))
-    with
-    | :? ArgumentException -> None   // no such process — daemon gone
-    | :? InvalidOperationException -> None  // process already exited
+    SageFs.OwnerMonitor.getProcessById pid
 
 /// Convert internal Diagnostic to WorkerDiagnostic for transport.
 let toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiagnostic =
@@ -818,9 +807,15 @@ let run (sessionId: string) (port: int) = async {
   // an orphan (issue #126).
   match workerConfig.DaemonPid with
   | Some daemonPid ->
-    Log.info "Worker %s monitoring daemon PID %d (parent-death watchdog)" sessionId daemonPid
+    // Fenced on (pid, startTime) whenever the daemon told us its own start
+    // time (SAGEFS_DAEMON_START_TICKS) — closing the pid-reuse race where a
+    // recycled daemon pid would otherwise keep this worker alive forever.
+    let owner : SageFs.OwnerMonitor.Owner =
+      { Pid = daemonPid; StartTimeTicks = workerConfig.DaemonStartTicks }
+    Log.info "Worker %s monitoring daemon PID %d (parent-death watchdog, fenced=%b)"
+      sessionId daemonPid (Option.isSome workerConfig.DaemonStartTicks)
     Async.Start(
-      ParentMonitor.run ParentMonitor.getProcessById daemonPid cts (fun msg ->
+      SageFs.OwnerMonitor.run SageFs.OwnerMonitor.getProcessById owner cts (fun msg ->
         Log.warn "%s" msg))
   | None ->
     Log.debug "Worker %s has no daemon PID — parent-death watchdog disabled" sessionId

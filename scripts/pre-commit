@@ -1,6 +1,15 @@
 #!/bin/sh
 # Auto-increment patch version in Directory.Build.props on every commit.
 # Also syncs version into sagefs-vscode/package.json.
+#
+# Cohort members (SAGEFS_COHORT_MEMBER=1) skip the bump: every parallel
+# worktree member bumping the same Directory.Build.props on every commit is
+# a guaranteed merge collision (multi-agent vision §2 seam S5, §10 item 6).
+# Only the landing/integration step should own the version bump.
+if [ -n "$SAGEFS_COHORT_MEMBER" ]; then
+  echo "pre-commit: SAGEFS_COHORT_MEMBER set, skipping version bump"
+  exit 0
+fi
 
 PROPS="Directory.Build.props"
 

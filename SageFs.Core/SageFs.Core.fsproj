@@ -15,6 +15,7 @@
     <ItemGroup>
         <Compile Include="WorkflowTypes.fs" />
         <Compile Include="Args.fs" />
+        <Compile Include="OwnerMonitor.fs" />
         <Compile Include="Measures.fs" />
         <Compile Include="RingBuffer.fs" />
         <Compile Include="SseReplayBuffer.fs" />
@@ -132,6 +133,7 @@
         <Compile Include="HttpOriginGuard.fs" />
         <Compile Include="DevReload.fs" />
         <Compile Include="FileWatcher.fs" />
+        <Compile Include="DaemonOwnership.fs" />
         <Compile Include="LiveTestWatcherStaleGuard.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="Middleware\FsiCompatibility.fs" />
