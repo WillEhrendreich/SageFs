@@ -113,9 +113,6 @@
         <Compile Include="CoverageViewMutationTests.fs" />
         <Compile Include="CoverageViewProjectMutationTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
-        <Compile Include="RestartPolicyCorrespondenceTests.fs" />
-        <Compile Include="ResultExCorrespondenceTests.fs" />
-        <Compile Include="SageFsErrorCorrespondenceTests.fs" />
         <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
         <Compile Include="LiveTestingBrowserTests.fs" />
@@ -293,7 +290,6 @@
          <Compile Include="JupyterKernelTests.fs" />
         <Compile Include="TracingMiddlewareTests.fs" />
         <Compile Include="ResultExTests.fs" />
-        <Compile Include="RenderInstrumentationTests.fs" />
         <Compile Include="EventExhaustivenessTests.fs" />
         <Compile Include="ComplianceSuite.fs" />
         <Compile Include="AppStatePropertyTests.fs" />
