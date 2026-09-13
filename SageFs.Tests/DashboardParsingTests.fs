@@ -1,6 +1,7 @@
 module SageFs.Tests.DashboardParsingTests
 
 open Expecto
+open Expecto.Flip
 open Falco.Markup
 open SageFs
 open SageFs.Features.BindingExplorer
@@ -61,61 +62,61 @@ module DashboardParsing =
 let tests = testList "Dashboard parsing" [
   testCase "output: parses timestamped result line" (fun () ->
     let result = DashboardParsing.parseOutputLines "[14:30:05] [result] val x: int = 42"
-    Expect.equal result [(Some "14:30:05", "Result", "val x: int = 42")] "extract timestamp, kind, text")
+    result |> Expect.equal "extract timestamp, kind, text" [(Some "14:30:05", "Result", "val x: int = 42")])
 
   testCase "output: parses result line without timestamp" (fun () ->
     let result = DashboardParsing.parseOutputLines "[result] val x: int = 42"
-    Expect.equal result [(None, "Result", "val x: int = 42")] "fallback without timestamp")
+    result |> Expect.equal "fallback without timestamp" [(None, "Result", "val x: int = 42")])
 
   testCase "output: parses timestamped error line" (fun () ->
     let result = DashboardParsing.parseOutputLines "[09:15:00] [error] Something went wrong"
-    Expect.equal result [(Some "09:15:00", "Error", "Something went wrong")] "extract error kind with timestamp")
+    result |> Expect.equal "extract error kind with timestamp" [(Some "09:15:00", "Error", "Something went wrong")])
 
   testCase "output: parses info line" (fun () ->
     let result = DashboardParsing.parseOutputLines "[12:00:00] [info] Loading..."
-    Expect.equal result [(Some "12:00:00", "Info", "Loading...")] "extract info kind")
+    result |> Expect.equal "extract info kind" [(Some "12:00:00", "Info", "Loading...")])
 
   testCase "output: parses system line" (fun () ->
     let result = DashboardParsing.parseOutputLines "[08:00:00] [system] let x = 1"
-    Expect.equal result [(Some "08:00:00", "System", "let x = 1")] "extract system kind")
+    result |> Expect.equal "extract system kind" [(Some "08:00:00", "System", "let x = 1")])
 
   testCase "output: non-prefixed line defaults to Result" (fun () ->
     let result = DashboardParsing.parseOutputLines "plain text"
-    Expect.equal result [(None, "Result", "plain text")] "fallback to Result")
+    result |> Expect.equal "fallback to Result" [(None, "Result", "plain text")])
 
   testCase "output: skips empty lines" (fun () ->
     let lines = DashboardParsing.parseOutputLines "[14:30:05] [result] a\n\n[14:30:06] [error] b"
-    Expect.equal lines.Length 2 "should skip empty lines")
+    lines.Length |> Expect.equal "should skip empty lines" 2)
 
   testCase "output: multiple timestamped lines" (fun () ->
     let result = DashboardParsing.parseOutputLines "[14:30:05] [result] a\n[14:30:06] [error] b\n[14:30:07] [info] c"
-    Expect.equal result.Length 3 "should have 3 lines"
+    result.Length |> Expect.equal "should have 3 lines" 3
     let (ts1, k1, _) = result.[0]
-    Expect.equal (ts1, k1) (Some "14:30:05", "Result") "first line"
+    (ts1, k1) |> Expect.equal "first line" (Some "14:30:05", "Result")
     let (ts2, k2, _) = result.[1]
-    Expect.equal (ts2, k2) (Some "14:30:06", "Error") "second line"
+    (ts2, k2) |> Expect.equal "second line" (Some "14:30:06", "Error")
     let (ts3, k3, _) = result.[2]
-    Expect.equal (ts3, k3) (Some "14:30:07", "Info") "third line")
+    (ts3, k3) |> Expect.equal "third line" (Some "14:30:07", "Info"))
 
   testCase "diag: extracts line and col from error" (fun () ->
     let result = DashboardParsing.parseDiagLines "[error] (5,12) Type not defined"
-    Expect.equal result [("Error", "Type not defined", 5, 12)] "extract severity, msg, line, col")
+    result |> Expect.equal "extract severity, msg, line, col" [("Error", "Type not defined", 5, 12)])
 
   testCase "diag: extracts line and col from warning" (fun () ->
     let result = DashboardParsing.parseDiagLines "[warning] (1,0) Value unused"
-    Expect.equal result [("Warning", "Value unused", 1, 0)] "parse warning")
+    result |> Expect.equal "parse warning" [("Warning", "Value unused", 1, 0)])
 
   testCase "diag: multiple diagnostics" (fun () ->
     let result = DashboardParsing.parseDiagLines "[error] (5,12) Bad\n[warning] (10,3) Suspicious"
-    Expect.equal result.Length 2 "should have 2 diagnostics"
+    result.Length |> Expect.equal "should have 2 diagnostics" 2
     let (s1, _, l1, c1) = result.[0]
-    Expect.equal (s1, l1, c1) ("Error", 5, 12) "first diagnostic"
+    (s1, l1, c1) |> Expect.equal "first diagnostic" ("Error", 5, 12)
     let (s2, _, l2, c2) = result.[1]
-    Expect.equal (s2, l2, c2) ("Warning", 10, 3) "second diagnostic")
+    (s2, l2, c2) |> Expect.equal "second diagnostic" ("Warning", 10, 3))
 
   testCase "diag: fallback for non-standard format" (fun () ->
     let result = DashboardParsing.parseDiagLines "some random diagnostic"
-    Expect.equal result [("Warning", "some random diagnostic", 0, 0)] "fallback to Warning 0,0")
+    result |> Expect.equal "fallback to Warning 0,0" [("Warning", "some random diagnostic", 0, 0)])
 
 ]
 
@@ -140,31 +141,31 @@ let sidebarCardTests =
   testList "Sidebar cards from typed state" [
     testCase "WHY — sessionCardOf — a project list containing ')' keeps its card, because the TUI regex silently dropped such sessions from the sidebar" (fun () ->
       let c = SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [ "/w/Weird (v2).fsproj" ])
-      Expect.equal c.ProjectsText "(Weird (v2))" "the project name survives intact")
+      c.ProjectsText |> Expect.equal "the project name survives intact" "(Weird (v2))")
 
     testCase "Ready and Evaluating sessions are running" (fun () ->
-      Expect.equal (SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])).Status SessionDisplayStatus.Running "Ready = running"
-      Expect.equal (SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Evaluating [])).Status SessionDisplayStatus.Running "Evaluating = running")
+      (SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])).Status |> Expect.equal "Ready = running" SessionDisplayStatus.Running
+      (SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Evaluating [])).Status |> Expect.equal "Evaluating = running" SessionDisplayStatus.Running)
 
     testCase "WHY — sessionCardOf — a faulted session shows as faulted with its reason, because the regex fallback showed errored sessions as running" (fun () ->
       let faulted = { info "0a2b3c4d" WorkerProtocol.SessionStatus.Faulted [] with Status = WorkerProtocol.SessionLifecycleStatus.Faulted (Some "warmup timed out") }
       let c = SidebarCards.card faulted
-      Expect.equal c.Status (SessionDisplayStatus.Faulted "warmup timed out") "Faulted = faulted"
-      Expect.equal c.StatusMessage (Some "warmup timed out") "the reason is shown")
+      c.Status |> Expect.equal "Faulted = faulted" (SessionDisplayStatus.Faulted "warmup timed out")
+      c.StatusMessage |> Expect.equal "the reason is shown" (Some "warmup timed out"))
 
     testCase "WHY — sessionCardOf — a running session can never show a stale fault reason, because Ready structurally carries no fault reason at all" (fun () ->
       let recovered = info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
-      Expect.isNone (SidebarCards.card recovered).StatusMessage "no message on a running card")
+      (SidebarCards.card recovered).StatusMessage |> Expect.isNone "no message on a running card")
 
     testCase "a starting session shows its warmup progress" (fun () ->
       let c = sessionCardOf SidebarCards.now (Some "[3/10] open System") 0 (info "0a2b3c4d" WorkerProtocol.SessionStatus.Starting [])
-      Expect.equal c.Status SessionDisplayStatus.Starting "Starting = starting"
-      Expect.equal c.StatusMessage (Some "[3/10] open System") "warmup progress is the message")
+      c.Status |> Expect.equal "Starting = starting" SessionDisplayStatus.Starting
+      c.StatusMessage |> Expect.equal "warmup progress is the message" (Some "[3/10] open System"))
 
     testCase "uptime and last activity use the sidebar's words" (fun () ->
       let c = SidebarCards.card (info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
-      Expect.equal c.Uptime "5m" "up five minutes"
-      Expect.equal c.LastActivity "3m ago" "last active three minutes ago")
+      c.Uptime |> Expect.equal "up five minutes" "5m"
+      c.LastActivity |> Expect.equal "last active three minutes ago" "3m ago")
   ]
 
 /// Tests for error formatting in eval handler (Bug #6)
@@ -189,25 +190,25 @@ let errorFormattingTests =
     testCase "strips FsiCompilationException name" (fun () ->
       let input = "Error: Evaluation failed: FSharp.Compiler.Interactive.Shell+FsiCompilationException: The value 'x' is not defined"
       let display, css = ErrorFormatting.formatEvalResult input
-      Expect.isFalse (display.Contains("FsiCompilationException")) "should strip exception name"
-      Expect.stringContains display "⚠" "should have warning prefix"
-      Expect.equal css "output-line output-error" "error CSS class")
+      (display.Contains("FsiCompilationException")) |> Expect.isFalse "should strip exception name"
+      display |> Expect.stringContains "should have warning prefix" "⚠"
+      css |> Expect.equal "error CSS class" "output-line output-error")
 
     testCase "clean error gets warning prefix" (fun () ->
       let input = "Evaluation failed: syntax error"
       let display, _ = ErrorFormatting.formatEvalResult input
-      Expect.equal display "⚠ syntax error" "replaces prefix with warning emoji")
+      display |> Expect.equal "replaces prefix with warning emoji" "⚠ syntax error")
 
     testCase "success result unchanged" (fun () ->
       let input = "val it: int = 42"
       let display, css = ErrorFormatting.formatEvalResult input
-      Expect.equal display input "result text unchanged"
-      Expect.equal css "output-line output-result" "success CSS class")
+      display |> Expect.equal "result text unchanged" input
+      css |> Expect.equal "success CSS class" "output-line output-result")
 
     testCase "Error: prefix detected" (fun () ->
       let input = "Error: something went wrong"
       let _, css = ErrorFormatting.formatEvalResult input
-      Expect.equal css "output-line output-error" "Error: triggers error styling")
+      css |> Expect.equal "Error: triggers error styling" "output-line output-error")
   ]
 
 /// Tests for output content-hash dedup (Bug #5)
@@ -234,28 +235,28 @@ let outputDedupTests =
     testCase "first push includes output (lastHash=0)" (fun () ->
       let regions = [mkRegion "output" "hello"; mkRegion "sessions" "s1"]
       let filtered, hash = filter 0 regions
-      Expect.equal filtered.Length 2 "all regions included on first push"
-      Expect.notEqual hash 0 "hash is non-zero")
+      filtered.Length |> Expect.equal "all regions included on first push" 2
+      hash |> Expect.notEqual "hash is non-zero" 0)
 
     testCase "identical content filtered out" (fun () ->
       let regions = [mkRegion "output" "hello"; mkRegion "sessions" "s1"]
       let _, hash1 = filter 0 regions
       let filtered, _ = filter hash1 regions
-      Expect.equal filtered.Length 1 "output region filtered"
-      Expect.equal (List.head filtered).Id "sessions" "only non-output remains")
+      filtered.Length |> Expect.equal "output region filtered" 1
+      (List.head filtered).Id |> Expect.equal "only non-output remains" "sessions")
 
     testCase "changed content included" (fun () ->
       let regions1 = [mkRegion "output" "hello"]
       let _, hash1 = filter 0 regions1
       let regions2 = [mkRegion "output" "world"]
       let filtered, _ = filter hash1 regions2
-      Expect.equal filtered.Length 1 "new output included")
+      filtered.Length |> Expect.equal "new output included" 1)
 
     testCase "no output region passes through" (fun () ->
       let regions = [mkRegion "sessions" "s1"]
       let filtered, hash = filter 0 regions
-      Expect.equal filtered.Length 1 "all regions pass"
-      Expect.equal hash 0 "hash stays 0")
+      filtered.Length |> Expect.equal "all regions pass" 1
+      hash |> Expect.equal "hash stays 0" 0)
   ]
 
 /// Tests for connection count display formatting (Bug #11)
@@ -275,25 +276,25 @@ let connectionCountTests =
   testList "Connection count display (Bug #11)" [
     testCase "shows icon breakdown when counts available" (fun () ->
       let label = fmt 3 (mk 1 1 1)
-      Expect.stringContains label "🌐 1" "shows browser icon"
-      Expect.stringContains label "🤖 1" "shows MCP icon"
-      Expect.stringContains label "💻 1" "shows terminal icon")
+      label |> Expect.stringContains "shows browser icon" "🌐 1"
+      label |> Expect.stringContains "shows MCP icon" "🤖 1"
+      label |> Expect.stringContains "shows terminal icon" "💻 1")
 
     testCase "hides zero-count kinds" (fun () ->
       let label = fmt 2 (mk 2 0 0)
-      Expect.stringContains label "🌐 2" "shows browsers"
-      Expect.isFalse (label.Contains("🤖")) "no MCP icon"
-      Expect.isFalse (label.Contains("💻")) "no terminal icon")
+      label |> Expect.stringContains "shows browsers" "🌐 2"
+      (label.Contains("🤖")) |> Expect.isFalse "no MCP icon"
+      (label.Contains("💻")) |> Expect.isFalse "no terminal icon")
 
     testCase "shows total when all counts zero" (fun () ->
       let label = fmt 0 (mk 0 0 0)
-      Expect.equal label "0 connected" "fallback to total")
+      label |> Expect.equal "fallback to total" "0 connected")
 
     testCase "consistent format regardless of input" (fun () ->
       let counts = mk 1 1 0
       let label1 = fmt 2 counts
       let label2 = fmt 2 counts
-      Expect.equal label1 label2 "deterministic output")
+      label1 |> Expect.equal "deterministic output" label2)
   ]
 
 // ─── Stopped session filtering ───────────────────────────────────────────────
@@ -309,19 +310,19 @@ let stoppedSessionFilterTests =
           [ info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
             info "0a2b3c4e" WorkerProtocol.SessionStatus.Stopped []
             info "0a2b3c4f" WorkerProtocol.SessionStatus.Starting [] ]
-      Expect.equal (ids cards) [ "0a2b3c4d"; "0a2b3c4f" ] "stopped hidden, order kept")
+      (ids cards) |> Expect.equal "stopped hidden, order kept" [ "0a2b3c4d"; "0a2b3c4f" ])
 
     testCase "faulted sessions stay visible so the user can restart them" (fun () ->
       let cards =
         liveSessionCards SidebarCards.now (fun _ -> None) Map.empty
           [ info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
             info "0a2b3c4e" WorkerProtocol.SessionStatus.Faulted [] ]
-      Expect.equal (ids cards) [ "0a2b3c4d"; "0a2b3c4e" ] "faulted session stays visible")
+      (ids cards) |> Expect.equal "faulted session stays visible" [ "0a2b3c4d"; "0a2b3c4e" ])
 
     testCase "each card carries its session's eval count" (fun () ->
       let a = info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
       let cards = liveSessionCards SidebarCards.now (fun _ -> None) (Map.ofList [ a.Id, 7 ]) [ a ]
-      Expect.equal (cards |> List.map _.EvalCount) [ 7 ] "eval count from the typed registry")
+      (cards |> List.map _.EvalCount) |> Expect.equal "eval count from the typed registry" [ 7 ])
   ]
 
 [<Tests>]
@@ -329,16 +330,16 @@ let perSessionTestSummaryTests =
   let newCard () = SidebarCards.card (SidebarCards.info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready [])
   testList "Per-session test summary" [
     testCase "cards have TestSummary = None until enriched" (fun () ->
-      Expect.isNone (newCard ()).TestSummary "cards start with no test summary")
+      (newCard ()).TestSummary |> Expect.isNone "cards start with no test summary")
 
     testCase "TestSummary can be injected via record update" (fun () ->
       let summary =
         { SageFs.Features.LiveTesting.TestSummary.empty with
             Total = 42; Passed = 40; Failed = 2 }
       let enriched = { newCard () with TestSummary = Some summary }
-      Expect.isSome enriched.TestSummary "should have summary"
-      Expect.equal enriched.TestSummary.Value.Total 42 "total 42"
-      Expect.equal enriched.TestSummary.Value.Failed 2 "failed 2")
+      enriched.TestSummary |> Expect.isSome "should have summary"
+      enriched.TestSummary.Value.Total |> Expect.equal "total 42" 42
+      enriched.TestSummary.Value.Failed |> Expect.equal "failed 2" 2)
 
     testCase "inline badge renders in session HTML when TestSummary present" (fun () ->
       let summary =
@@ -365,8 +366,8 @@ let perSessionTestSummaryTests =
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
-      Expect.isTrue (html.Contains("✓8")) "should contain passed badge"
-      Expect.isTrue (html.Contains("✗2")) "should contain failed badge")
+      (html.Contains("✓8")) |> Expect.isTrue "should contain passed badge"
+      (html.Contains("✗2")) |> Expect.isTrue "should contain failed badge")
 
     testCase "no badge when TestSummary is None" (fun () ->
       let session : ParsedSession =
@@ -390,8 +391,8 @@ let perSessionTestSummaryTests =
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
-      Expect.isFalse (html.Contains("✓")) "no pass badge when no tests"
-      Expect.isFalse (html.Contains("✗")) "no fail badge when no tests")
+      (html.Contains("✓")) |> Expect.isFalse "no pass badge when no tests"
+      (html.Contains("✗")) |> Expect.isFalse "no fail badge when no tests")
   ]
 
 [<Tests>]
@@ -423,8 +424,8 @@ let perSessionCoverageTests =
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
-      Expect.isTrue (html.Contains("linear-gradient")) "should render gradient"
-      Expect.isTrue (html.Contains("75%")) "should show percentage")
+      (html.Contains("linear-gradient")) |> Expect.isTrue "should render gradient"
+      (html.Contains("75%")) |> Expect.isTrue "should show percentage")
 
     testCase "no coverage strip when CoverageSummary is None" (fun () ->
       let session : ParsedSession =
@@ -448,7 +449,7 @@ let perSessionCoverageTests =
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
-      Expect.isFalse (html.Contains("linear-gradient")) "no gradient without coverage")
+      (html.Contains("linear-gradient")) |> Expect.isFalse "no gradient without coverage")
   ]
 
 [<Tests>]
@@ -456,9 +457,9 @@ let bindingsPanelTests =
   testList "Bindings panel rendering" [
     testCase "empty panel when no snapshot" (fun () ->
       let html = renderBindingsPanel None |> renderNode
-      Expect.isTrue (html.Contains("bindings-panel")) "has panel id"
-      Expect.isTrue (html.Contains("Bindings (0)")) "shows zero count"
-      Expect.isTrue (html.Contains("No bindings yet")) "shows placeholder")
+      (html.Contains("bindings-panel")) |> Expect.isTrue "has panel id"
+      (html.Contains("Bindings (0)")) |> Expect.isTrue "shows zero count"
+      (html.Contains("No bindings yet")) |> Expect.isTrue "shows placeholder")
 
     testCase "active bindings render name and type" (fun () ->
       let scope : SageFs.Features.BindingExplorer.BindingScopeSnapshot = {
@@ -473,11 +474,11 @@ let bindingsPanelTests =
         ShadowedBindings = []
       }
       let html = renderBindingsPanel (Some scope) |> renderNode
-      Expect.isTrue (html.Contains("Bindings (2)")) "shows count of 2"
-      Expect.isTrue (html.Contains("x")) "has binding name x"
-      Expect.isTrue (html.Contains("int")) "has type sig int"
-      Expect.isTrue (html.Contains("greet")) "has binding name greet"
-      Expect.isTrue (html.Contains("string -&gt; string") || html.Contains("string -> string")) "has function type sig")
+      (html.Contains("Bindings (2)")) |> Expect.isTrue "shows count of 2"
+      (html.Contains("x")) |> Expect.isTrue "has binding name x"
+      (html.Contains("int")) |> Expect.isTrue "has type sig int"
+      (html.Contains("greet")) |> Expect.isTrue "has binding name greet"
+      (html.Contains("string -&gt; string") || html.Contains("string -> string")) |> Expect.isTrue "has function type sig")
 
     testCase "shadowed bindings render in collapsed section" (fun () ->
       let scope : SageFs.Features.BindingExplorer.BindingScopeSnapshot = {
@@ -492,8 +493,8 @@ let bindingsPanelTests =
           [ { Name = "x"; TypeSig = "int"; CellIndex = 0; ShadowedBy = [2]; ReferencedIn = []; Value = None } ]
       }
       let html = renderBindingsPanel (Some scope) |> renderNode
-      Expect.isTrue (html.Contains("Bindings (1)")) "shows active count 1"
-      Expect.isTrue (html.Contains("1 shadowed")) "mentions shadowed count")
+      (html.Contains("Bindings (1)")) |> Expect.isTrue "shows active count 1"
+      (html.Contains("1 shadowed")) |> Expect.isTrue "mentions shadowed count")
 
     testCase "reference count shown when binding is referenced" (fun () ->
       let scope : SageFs.Features.BindingExplorer.BindingScopeSnapshot = {
@@ -506,7 +507,7 @@ let bindingsPanelTests =
         ShadowedBindings = []
       }
       let html = renderBindingsPanel (Some scope) |> renderNode
-      Expect.isTrue (html.Contains("→2")) "shows reference count arrow")
+      (html.Contains("→2")) |> Expect.isTrue "shows reference count arrow")
   ]
 
 [<Tests>]
@@ -521,29 +522,29 @@ let bindingsValueDisplayTests =
       let b = mkBinding "x" "int" 0 (Some "42")
       let scope = mkScope [b]
       let html = renderBindingsPanel (Some scope) |> renderNode
-      Expect.isTrue (html.Contains("value-display")) "has value-display class"
-      Expect.isTrue (html.Contains("= 42")) "shows the value")
+      (html.Contains("value-display")) |> Expect.isTrue "has value-display class"
+      (html.Contains("= 42")) |> Expect.isTrue "shows the value")
 
     testCase "no value element when None" (fun () ->
       let b = mkBinding "y" "string" 0 None
       let scope = mkScope [b]
       let html = renderBindingsPanel (Some scope) |> renderNode
-      Expect.isFalse (html.Contains("value-display")) "no value-display class when value is None")
+      (html.Contains("value-display")) |> Expect.isFalse "no value-display class when value is None")
 
     testCase "string value shown with quotes" (fun () ->
       let b = mkBinding "name" "string" 0 (Some "\"hello\"")
       let scope = mkScope [b]
       let html = renderBindingsPanel (Some scope) |> renderNode
-      Expect.isTrue (html.Contains("value-display")) "has value-display"
-      Expect.isTrue (html.Contains("= &quot;hello&quot;") || html.Contains("= \"hello\"")) "shows quoted string value")
+      (html.Contains("value-display")) |> Expect.isTrue "has value-display"
+      (html.Contains("= &quot;hello&quot;") || html.Contains("= \"hello\"")) |> Expect.isTrue "shows quoted string value")
 
     testCase "long value is truncated via CSS" (fun () ->
       let longVal = String.replicate 50 "abc"
       let b = mkBinding "data" "string" 0 (Some longVal)
       let scope = mkScope [b]
       let html = renderBindingsPanel (Some scope) |> renderNode
-      Expect.isTrue (html.Contains("text-overflow: ellipsis")) "has CSS truncation"
-      Expect.isTrue (html.Contains("max-width: 20em")) "has max-width constraint")
+      (html.Contains("text-overflow: ellipsis")) |> Expect.isTrue "has CSS truncation"
+      (html.Contains("max-width: 20em")) |> Expect.isTrue "has max-width constraint")
   ]
 
 [<Tests>]
@@ -551,105 +552,105 @@ let dashboardActualParsingTests = testList "Dashboard actual parsing" [
   testList "parseOutputLines" [
     testCase "timestamp + kind line" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseOutputLines "[12:34:56] [result] val x = 42"
-      Expect.equal result.Length 1 "one line"
-      Expect.equal result.[0].Timestamp (Some "12:34:56") "timestamp"
-      Expect.equal result.[0].Kind ResultLine "kind"
-      Expect.equal result.[0].Text "val x = 42" "text")
+      result.Length |> Expect.equal "one line" 1
+      result.[0].Timestamp |> Expect.equal "timestamp" (Some "12:34:56")
+      result.[0].Kind |> Expect.equal "kind" ResultLine
+      result.[0].Text |> Expect.equal "text" "val x = 42")
     testCase "kind-only line" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseOutputLines "[error] Something went wrong"
-      Expect.equal result.[0].Timestamp None "no timestamp"
-      Expect.equal result.[0].Kind ErrorLine "kind"
-      Expect.equal result.[0].Text "Something went wrong" "text")
+      result.[0].Timestamp |> Expect.equal "no timestamp" None
+      result.[0].Kind |> Expect.equal "kind" ErrorLine
+      result.[0].Text |> Expect.equal "text" "Something went wrong")
     testCase "plain text falls back to ResultLine" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseOutputLines "just some output"
-      Expect.equal result.[0].Kind ResultLine "fallback kind")
+      result.[0].Kind |> Expect.equal "fallback kind" ResultLine)
     testCase "empty input returns empty list" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseOutputLines ""
-      Expect.isEmpty result "empty input")
+      result |> Expect.isEmpty "empty input")
     testCase "multiple lines parsed" (fun () ->
       let input = "[12:00:00] [result] line1\n[error] line2\nplain line3"
       let result = SageFs.Server.DashboardTypes.parseOutputLines input
-      Expect.equal result.Length 3 "three lines"
-      Expect.equal result.[0].Kind ResultLine "first"
-      Expect.equal result.[1].Kind ErrorLine "second"
-      Expect.equal result.[2].Kind ResultLine "third")
+      result.Length |> Expect.equal "three lines" 3
+      result.[0].Kind |> Expect.equal "first" ResultLine
+      result.[1].Kind |> Expect.equal "second" ErrorLine
+      result.[2].Kind |> Expect.equal "third" ResultLine)
     testCase "info line kind" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseOutputLines "[info] Loading..."
-      Expect.equal result.[0].Kind InfoLine "info")
+      result.[0].Kind |> Expect.equal "info" InfoLine)
     testCase "system line kind" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseOutputLines "[system] Startup"
-      Expect.equal result.[0].Kind SystemLine "system")
+      result.[0].Kind |> Expect.equal "system" SystemLine)
   ]
 
   testList "parseDiagLines" [
     testCase "standard diagnostic format" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseDiagLines "[error] (10,5) Something is wrong"
-      Expect.equal result.Length 1 "one diag"
-      Expect.equal result.[0].Severity DiagError "error"
-      Expect.equal result.[0].Line 10 "line"
-      Expect.equal result.[0].Col 5 "col"
-      Expect.equal result.[0].Message "Something is wrong" "msg")
+      result.Length |> Expect.equal "one diag" 1
+      result.[0].Severity |> Expect.equal "error" DiagError
+      result.[0].Line |> Expect.equal "line" 10
+      result.[0].Col |> Expect.equal "col" 5
+      result.[0].Message |> Expect.equal "msg" "Something is wrong")
     testCase "warning diagnostic" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseDiagLines "[warning] (3,1) Unused variable"
-      Expect.equal result.[0].Severity DiagWarning "warning")
+      result.[0].Severity |> Expect.equal "warning" DiagWarning)
     testCase "unstructured line with [error] falls back to DiagError" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseDiagLines "Some text with [error] in it"
-      Expect.equal result.[0].Severity DiagError "error fallback"
-      Expect.equal result.[0].Line 0 "line 0")
+      result.[0].Severity |> Expect.equal "error fallback" DiagError
+      result.[0].Line |> Expect.equal "line 0" 0)
     testCase "unstructured line without error falls back to DiagWarning" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseDiagLines "Some random diagnostic text"
-      Expect.equal result.[0].Severity DiagWarning "warning fallback")
+      result.[0].Severity |> Expect.equal "warning fallback" DiagWarning)
     testCase "empty input returns empty list" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseDiagLines ""
-      Expect.isEmpty result "empty")
+      result |> Expect.isEmpty "empty")
     testCase "multiple diagnostics" (fun () ->
       let result = SageFs.Server.DashboardTypes.parseDiagLines "[error] (1,1) first\n[warning] (2,2) second"
-      Expect.equal result.Length 2 "two diags"
-      Expect.equal result.[0].Severity DiagError "first error"
-      Expect.equal result.[1].Severity DiagWarning "second warning")
+      result.Length |> Expect.equal "two diags" 2
+      result.[0].Severity |> Expect.equal "first error" DiagError
+      result.[1].Severity |> Expect.equal "second warning" DiagWarning)
   ]
 ]
 
 [<Tests>]
 let captureToCssClassTests = testList "captureToCssClass" [
   testCase "keyword" (fun () ->
-    Expect.equal (captureToCssClass "keyword") "syn-keyword" "keyword")
+    (captureToCssClass "keyword") |> Expect.equal "keyword" "syn-keyword")
   testCase "keyword.control prefix" (fun () ->
-    Expect.equal (captureToCssClass "keyword.control") "syn-keyword" "prefix")
+    (captureToCssClass "keyword.control") |> Expect.equal "prefix" "syn-keyword")
   testCase "string" (fun () ->
-    Expect.equal (captureToCssClass "string") "syn-string" "string")
+    (captureToCssClass "string") |> Expect.equal "string" "syn-string")
   testCase "string.special prefix" (fun () ->
-    Expect.equal (captureToCssClass "string.special") "syn-string" "prefix")
+    (captureToCssClass "string.special") |> Expect.equal "prefix" "syn-string")
   testCase "comment" (fun () ->
-    Expect.equal (captureToCssClass "comment") "syn-comment" "comment")
+    (captureToCssClass "comment") |> Expect.equal "comment" "syn-comment")
   testCase "number" (fun () ->
-    Expect.equal (captureToCssClass "number") "syn-number" "number")
+    (captureToCssClass "number") |> Expect.equal "number" "syn-number")
   testCase "operator" (fun () ->
-    Expect.equal (captureToCssClass "operator") "syn-operator" "operator")
+    (captureToCssClass "operator") |> Expect.equal "operator" "syn-operator")
   testCase "type" (fun () ->
-    Expect.equal (captureToCssClass "type") "syn-type" "type")
+    (captureToCssClass "type") |> Expect.equal "type" "syn-type")
   testCase "type.builtin prefix" (fun () ->
-    Expect.equal (captureToCssClass "type.builtin") "syn-type" "prefix")
+    (captureToCssClass "type.builtin") |> Expect.equal "prefix" "syn-type")
   testCase "function" (fun () ->
-    Expect.equal (captureToCssClass "function") "syn-function" "function")
+    (captureToCssClass "function") |> Expect.equal "function" "syn-function")
   testCase "variable" (fun () ->
-    Expect.equal (captureToCssClass "variable") "syn-variable" "variable")
+    (captureToCssClass "variable") |> Expect.equal "variable" "syn-variable")
   testCase "punctuation" (fun () ->
-    Expect.equal (captureToCssClass "punctuation") "syn-punctuation" "punctuation")
+    (captureToCssClass "punctuation") |> Expect.equal "punctuation" "syn-punctuation")
   testCase "constant" (fun () ->
-    Expect.equal (captureToCssClass "constant") "syn-constant" "constant")
+    (captureToCssClass "constant") |> Expect.equal "constant" "syn-constant")
   testCase "module" (fun () ->
-    Expect.equal (captureToCssClass "module") "syn-module" "module")
+    (captureToCssClass "module") |> Expect.equal "module" "syn-module")
   testCase "attribute" (fun () ->
-    Expect.equal (captureToCssClass "attribute") "syn-attribute" "attribute")
+    (captureToCssClass "attribute") |> Expect.equal "attribute" "syn-attribute")
   testCase "property" (fun () ->
-    Expect.equal (captureToCssClass "property") "syn-property" "property")
+    (captureToCssClass "property") |> Expect.equal "property" "syn-property")
   testCase "boolean maps to syn-constant" (fun () ->
-    Expect.equal (captureToCssClass "boolean") "syn-constant" "boolean→constant")
+    (captureToCssClass "boolean") |> Expect.equal "boolean→constant" "syn-constant")
   testCase "unknown returns empty" (fun () ->
-    Expect.equal (captureToCssClass "whatever") "" "unknown")
+    (captureToCssClass "whatever") |> Expect.equal "unknown" "")
   testCase "empty returns empty" (fun () ->
-    Expect.equal (captureToCssClass "") "" "empty")
+    (captureToCssClass "") |> Expect.equal "empty" "")
 ]
 
 [<Tests>]

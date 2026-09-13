@@ -3,6 +3,7 @@ module SageFs.Tests.ManualProjectParseTests
 open System
 open System.IO
 open Expecto
+open Expecto.Flip
 open SageFs
 open SageFs.ProjectLoading
 
@@ -47,9 +48,9 @@ let tests =
         File.WriteAllText(Path.Combine(dir, "B.fs"), "module B\nlet y = 2\n")
         File.WriteAllText(Path.Combine(dir, "App.fsproj"), simpleFsproj)
         let options = ManualProjectParse.parseFsproj quietLogger (Path.Combine(dir, "App.fsproj"))
-        Expect.equal options.Length 1 "should produce one FSharpProjectOptions"
+        options.Length |> Expect.equal "should produce one FSharpProjectOptions" 1
         let srcFiles = options.[0].SourceFiles |> Array.map Path.GetFileName |> Set.ofArray
-        Expect.equal srcFiles (Set.ofList [ "A.fs"; "B.fs" ]) "should find both source files"
+        srcFiles |> Expect.equal "should find both source files" (Set.ofList [ "A.fs"; "B.fs" ])
       finally
         Directory.Delete(dir, true))
 
@@ -62,15 +63,15 @@ let tests =
         File.WriteAllText(Path.Combine(dir, "Main.fs"), "module Main\n")
         File.WriteAllText(Path.Combine(dir, "App.fsproj"), refFsproj)
         let options = ManualProjectParse.parseFsproj quietLogger (Path.Combine(dir, "App.fsproj"))
-        Expect.equal options.Length 1 "should produce one FSharpProjectOptions"
+        options.Length |> Expect.equal "should produce one FSharpProjectOptions" 1
         let srcFiles = options.[0].SourceFiles |> Array.map Path.GetFileName |> Set.ofArray
-        Expect.equal srcFiles (Set.ofList [ "Main.fs"; "Lib.fs" ]) "should include referenced project's sources"
+        srcFiles |> Expect.equal "should include referenced project's sources" (Set.ofList [ "Main.fs"; "Lib.fs" ])
       finally
         Directory.Delete(dir, true))
 
     testCase "missing fsproj returns empty" (fun () ->
       let options = ManualProjectParse.parseFsproj quietLogger "Z:\\does-not-exist\\Missing.fsproj"
-      Expect.isEmpty options "missing project should yield no options")
+      options |> Expect.isEmpty "missing project should yield no options")
 
     testCase "bin reference collection dedupes same-named DLLs across TFM dirs, keeping the newest" (fun () ->
       // Regression: a project bin holding orphaned same-named DLLs in multiple
@@ -102,8 +103,8 @@ let tests =
 
         let refs = ManualProjectParse.collectBinReferences quietLogger [ Path.Combine(dir, "App.fsproj") ]
         let coreRefs = refs |> List.filter (fun r -> Path.GetFileName r = "SageFs.Core.dll")
-        Expect.hasLength coreRefs 1 "exactly one SageFs.Core.dll reference after dedup"
-        Expect.equal coreRefs.Head fresh "the fresh (newest) copy must win over the stale orphan"
+        coreRefs |> Expect.hasLength "exactly one SageFs.Core.dll reference after dedup" 1
+        coreRefs.Head |> Expect.equal "the fresh (newest) copy must win over the stale orphan" fresh
       finally
         Directory.Delete(dir, true))
   ]

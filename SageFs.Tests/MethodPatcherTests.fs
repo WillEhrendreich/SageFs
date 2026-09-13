@@ -1,6 +1,7 @@
 module SageFs.Tests.MethodPatcherTests
 
 open Expecto
+open Expecto.Flip
 open System.Reflection
 open System
 open System.Runtime.InteropServices
@@ -32,14 +33,14 @@ let tests =
       let t = typeof<TestMethods>
       let replacement = t.GetMethod("ReplacementMethod")
       let toPatch = t.GetMethod("MethodToPatch")
-      Expect.equal replacement.ReturnType toPatch.ReturnType "return type equal"
+      replacement.ReturnType |> Expect.equal "return type equal" toPatch.ReturnType
       
     testCase "before patch"
     <| fun _ ->
       TestMethods.CallCount <- 0
       let result = TestMethods.MethodToTest ""
-      Expect.isTrue (result.Contains "shiny") "is old method"
-      Expect.equal TestMethods.CallCount 2 "should call method twice"
+      (result.Contains "shiny") |> Expect.isTrue "is old method"
+      TestMethods.CallCount |> Expect.equal "should call method twice" 2
       
     testCase "after patch using Harmony"
     <| fun _ ->
@@ -53,5 +54,5 @@ let tests =
       | :? InvalidProgramException as ex ->
         skiptest (sprintf "Harmony rejected this F# helper shape on %s: %s" RuntimeInformation.FrameworkDescription ex.Message)
       TestMethods.MethodToPatch "test" |> ignore
-      Expect.isTrue TestMethods.IsPatched "prefix patch should have been called"
+      TestMethods.IsPatched |> Expect.isTrue "prefix patch should have been called"
   ]

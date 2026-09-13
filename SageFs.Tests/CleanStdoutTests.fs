@@ -1,6 +1,7 @@
 module SageFs.Tests.CleanStdoutTests
 
 open Expecto
+open Expecto.Flip
 open SageFs.AppState
 
 let cleanStdoutTests =
@@ -8,61 +9,61 @@ let cleanStdoutTests =
     testCase "strips ANSI escape sequences" <| fun _ ->
       let input = "\x1b[32mGreen text\x1b[0m normal"
       let result = cleanStdout input
-      Expect.equal result "Green text normal" "should strip ANSI colors"
+      result |> Expect.equal "should strip ANSI colors" "Green text normal"
 
     testCase "strips timestamp prefix" <| fun _ ->
       let input = "[15:30:02 INF] Test passed"
       let result = cleanStdout input
-      Expect.equal result "Test passed" "should strip [HH:mm:ss LVL] prefix"
+      result |> Expect.equal "should strip [HH:mm:ss LVL] prefix" "Test passed"
 
     testCase "strips Expecto suffix" <| fun _ ->
       let input = "Test passed  <Expecto>"
       let result = cleanStdout input
-      Expect.equal result "Test passed" "should strip <Expecto> suffix"
+      result |> Expect.equal "should strip <Expecto> suffix" "Test passed"
 
     testCase "removes Expecto Running lines" <| fun _ ->
       let input = "Expecto Running...\nreal output"
       let result = cleanStdout input
-      Expect.equal result "real output" "should remove Expecto Running lines"
+      result |> Expect.equal "should remove Expecto Running lines" "real output"
 
     testCase "removes progress bar lines" <| fun _ ->
       let input = "3/10 |===      |\nreal output"
       let result = cleanStdout input
-      Expect.equal result "real output" "should remove progress bar lines"
+      result |> Expect.equal "should remove progress bar lines" "real output"
 
     testCase "removes blank lines" <| fun _ ->
       let input = "line1\n\n\n  \nline2"
       let result = cleanStdout input
-      Expect.equal result "line1\nline2" "should remove blank/whitespace-only lines"
+      result |> Expect.equal "should remove blank/whitespace-only lines" "line1\nline2"
 
     testCase "reformats Expecto summary" <| fun _ ->
       let input = "EXPECTO! 5 tests run in 00:00:00.123 for MyTests \u2013 3 passed, 1 ignored, 1 failed, 0 errored. Failure!"
       let result = cleanStdout input
-      Expect.stringContains result "MyTests: 5 tests" "should reformat summary"
-      Expect.stringContains result "3 passed" "should include passed count"
+      result |> Expect.stringContains "should reformat summary" "MyTests: 5 tests"
+      result |> Expect.stringContains "should include passed count" "3 passed"
 
     testCase "handles combined ANSI + timestamp + suffix" <| fun _ ->
       let input = "\x1b[32m[15:30:02 INF] Test passed  <Expecto>\x1b[0m"
       let result = cleanStdout input
-      Expect.equal result "Test passed" "should handle all transformations together"
+      result |> Expect.equal "should handle all transformations together" "Test passed"
 
     testCase "converts cursor-reset to newline" <| fun _ ->
       let input = "line1\x1b[10Dline2"
       let result = cleanStdout input
-      Expect.equal result "line1\nline2" "cursor-reset should become newline"
+      result |> Expect.equal "cursor-reset should become newline" "line1\nline2"
 
     testCase "handles empty input" <| fun _ ->
       let result = cleanStdout ""
-      Expect.equal result "" "empty input should return empty"
+      result |> Expect.equal "empty input should return empty" ""
 
     testCase "handles whitespace-only input" <| fun _ ->
       let result = cleanStdout "   \n   \n   "
-      Expect.equal result "" "whitespace-only should return empty"
+      result |> Expect.equal "whitespace-only should return empty" ""
 
     testCase "preserves normal output unchanged" <| fun _ ->
       let input = "val x: int = 42"
       let result = cleanStdout input
-      Expect.equal result "val x: int = 42" "normal output should pass through"
+      result |> Expect.equal "normal output should pass through" "val x: int = 42"
 
     testCase "cleanStdout processes 500 lines in under 1000µs" <| fun _ ->
       let bigInput =
@@ -78,5 +79,5 @@ let cleanStdoutTests =
       sw.Stop()
       let usPerOp = float sw.Elapsed.TotalMicroseconds / float iters
       printfn "cleanStdout: %.1f µs/op (%d iterations)" usPerOp iters
-      Expect.isLessThan usPerOp 1000.0 "cleanStdout should be under 1000µs for 500 lines"
+      (usPerOp, 1000.0) |> Expect.isLessThan "cleanStdout should be under 1000µs for 500 lines"
   ]

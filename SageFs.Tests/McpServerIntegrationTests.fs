@@ -1,6 +1,7 @@
 module SageFs.Tests.McpServerIntegrationTests
 
 open Expecto
+open Expecto.Flip
 open System
 open System.Threading
 open SageFs
@@ -39,7 +40,7 @@ let tests =
         let! result = sendFSharpCode ctx "test-agent" "let x = 42"OutputFormat.Text None None None None None None
 
         printfn "Result: %s" result
-        Expect.stringContains result "val x" "Should execute successfully"
+        result |> Expect.stringContains "Should execute successfully" "val x"
 
         printfn "sendFSharpCode tool test passed"
       }
@@ -53,7 +54,7 @@ let tests =
         let ctx = agentCtx ()
 
         let! result = sendFSharpCode ctx "claude" "let aiValue = 100" OutputFormat.Text None None None None None None
-        Expect.stringContains result "val aiValue" "Should still execute successfully"
+        result |> Expect.stringContains "Should still execute successfully" "val aiValue"
 
         printfn "Non-event-tracking test passed"
       }
@@ -72,7 +73,7 @@ let tests =
         let! result = getRecentEvents ctx "test" 5 None
 
         printfn "Events result: %s" result
-        Expect.equal result "Recent events: none recorded" "Should return stub response when event tracking is removed"
+        result |> Expect.equal "Should return stub response when event tracking is removed" "Recent events: none recorded"
 
         printfn "getRecentEvents tool test passed"
       }
@@ -88,9 +89,9 @@ let tests =
         let! result = getStatus ctx "test" None None
 
         printfn "Status: %s" result
-        Expect.stringContains result (sprintf "Session: %s" ctx.SessionMap.["test"]) "Should show session ID"
-        Expect.stringContains result "send_fsharp_code" "Should list available tools"
-        Expect.stringContains result "Events: 0" "Should report zero tracked events"
+        result |> Expect.stringContains "Should show session ID" (sprintf "Session: %s" ctx.SessionMap.["test"])
+        result |> Expect.stringContains "Should list available tools" "send_fsharp_code"
+        result |> Expect.stringContains "Should report zero tracked events" "Events: 0"
 
         printfn "getStatus tool test passed"
       }
@@ -117,8 +118,8 @@ let tests =
           // The worker #loads the script as one unit and returns FSI's own
           // load output (the per-statement "Success: N statements" summary went
           // away with the worker-only session architecture).
-          Expect.stringContains result "val scriptVar1" "Should define scriptVar1"
-          Expect.stringContains result "val scriptVar2" "Should define scriptVar2"
+          result |> Expect.stringContains "Should define scriptVar1" "val scriptVar1"
+          result |> Expect.stringContains "Should define scriptVar2" "val scriptVar2"
 
           // Verify the variables are usable. #load binds them in the script's
           // own module (FSI names it after the file — the "module FSI_NNNN.X"
@@ -141,7 +142,7 @@ let tests =
           match checkResult.EvaluationResult with
           | Ok res ->
             printfn "Check result: %s" res
-            Expect.stringContains res "30" "Should compute sum correctly"
+            res |> Expect.stringContains "Should compute sum correctly" "30"
           | Error ex -> failtestf "Failed to use loaded variables: %s" ex.Message
 
           printfn "loadFSharpScript tool test passed"
@@ -162,11 +163,11 @@ let tests =
 
         // Agent 1 defines something
         let! result1 = sendFSharpCode ctx "agent1" "let sharedData = [1; 2; 3]" OutputFormat.Text None None None None None None
-        Expect.stringContains result1 "val sharedData" "Agent 1 should succeed"
+        result1 |> Expect.stringContains "Agent 1 should succeed" "val sharedData"
 
         // Agent 2 uses it
         let! result2 = sendFSharpCode ctx "agent2" "List.sum sharedData" OutputFormat.Text None None None None None None
-        Expect.stringContains result2 "6" "Agent 2 should use Agent 1's data"
+        result2 |> Expect.stringContains "Agent 2 should use Agent 1's data" "6"
 
         printfn "Multi-agent collaboration test passed"
       }
@@ -189,7 +190,7 @@ let tests =
 
         // MCP tool uses console user's value
         let! result = sendFSharpCode ctx "ai-helper" "userValue * 2" OutputFormat.Text None None None None None None
-        Expect.stringContains result "84" "MCP should use console value"
+        result |> Expect.stringContains "MCP should use console value" "84"
 
         printfn "Console+MCP collaboration test passed"
       }
@@ -205,7 +206,7 @@ let tests =
         let! result = sendFSharpCode ctx "test-agent" "let x = invalid syntax" OutputFormat.Text None None None None None None
 
         printfn "Error result: %s" result
-        Expect.stringContains result "Error:" "Should return error message"
+        result |> Expect.stringContains "Should return error message" "Error:"
 
         printfn "Compilation error test passed"
       }
@@ -221,7 +222,7 @@ let tests =
         let! result = sendFSharpCode ctx "test-agent" "1 / 0" OutputFormat.Text None None None None None None
 
         printfn "Runtime error result: %s" result
-        Expect.isNotEmpty result "Should return some result or error output"
+        result |> Expect.isNotEmpty "Should return some result or error output"
 
         printfn "Runtime error test passed"
       }
@@ -237,7 +238,7 @@ let tests =
         let! result = loadFSharpScript ctx "test-agent" "C:\\nonexistent\\file.fsx"None None
 
         printfn "Non-existent file result: %s" result
-        Expect.stringContains result "Error" "Should return error for non-existent file"
+        result |> Expect.stringContains "Should return error for non-existent file" "Error"
 
         printfn "Non-existent file test passed"
       }
@@ -264,8 +265,8 @@ let tests =
           let! result = loadFSharpScript ctx "test-agent" fsiFile None None
 
           printfn "Failing script result: %s" result
-          Expect.isTrue (result.StartsWith "Error:") "Should report the load as an error"
-          Expect.stringContains result "Script load failed" "Should say the script load failed"
+          (result.StartsWith "Error:") |> Expect.isTrue "Should report the load as an error"
+          result |> Expect.stringContains "Should say the script load failed" "Script load failed"
 
           printfn "Failing script test passed"
         finally
@@ -286,10 +287,10 @@ let tests =
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
-        Expect.isTrue (root.GetProperty("success").GetBoolean()) "should report success"
+        (root.GetProperty("success").GetBoolean()) |> Expect.isTrue "should report success"
         // Tool responses never echo the submitted code back (the agent already
         // has it); the evaluated binding is in `result`.
-        Expect.stringContains (root.GetProperty("result").GetString()) "jsonTestVal" "should include the evaluated binding"
+        (root.GetProperty("result").GetString()) |> Expect.stringContains "should include the evaluated binding" "jsonTestVal"
       }
       |> Async.AwaitTask
       |> Async.RunSynchronously
@@ -303,8 +304,8 @@ let tests =
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
-        Expect.isFalse (root.GetProperty("success").GetBoolean()) "should report failure"
-        Expect.isNonEmpty (root.GetProperty("error").GetString()) "should have error message"
+        (root.GetProperty("success").GetBoolean()) |> Expect.isFalse "should report failure"
+        (root.GetProperty("error").GetString()) |> Expect.isNonEmpty "should have error message"
       }
       |> Async.AwaitTask
       |> Async.RunSynchronously
@@ -318,8 +319,8 @@ let tests =
 
         let doc = System.Text.Json.JsonDocument.Parse(result)
         let root = doc.RootElement
-        Expect.equal root.ValueKind System.Text.Json.JsonValueKind.Array "should be a JSON array"
-        Expect.equal (root.GetArrayLength()) 2 "should have 2 results"
+        root.ValueKind |> Expect.equal "should be a JSON array" System.Text.Json.JsonValueKind.Array
+        (root.GetArrayLength()) |> Expect.equal "should have 2 results" 2
       }
       |> Async.AwaitTask
       |> Async.RunSynchronously

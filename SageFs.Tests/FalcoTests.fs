@@ -1,6 +1,7 @@
 module SageFs.Tests.FalcoTests
 
 open Expecto
+open Expecto.Flip
 open System
 open System.Net.Http
 open System.Threading
@@ -166,8 +167,8 @@ printfn "Web app started on port {port}"
         match result with
         | Ok content ->
           printfn "Response received: %s" (content.Substring(0, min 200 content.Length))
-          Expect.stringContains content "Hello from SageFs!" "Should contain initial greeting"
-          Expect.stringContains content "This is the initial page." "Should contain initial text"
+          content |> Expect.stringContains "Should contain initial greeting" "Hello from SageFs!"
+          content |> Expect.stringContains "Should contain initial text" "This is the initial page."
         | Error msg -> failtestf "Failed to get response: %s" msg
 
         printfn "Test completed successfully"
@@ -229,7 +230,7 @@ printfn "Initial app started on port {port}"
         match result1 with
         | Ok content ->
           printfn "Initial response: %s" (content.Substring(0, min 200 content.Length))
-          Expect.stringContains content "Original Content" "Should have original content"
+          content |> Expect.stringContains "Should have original content" "Original Content"
         | Error msg -> failtestf "Failed initial request: %s" msg
 
         // Update the markup
@@ -263,10 +264,10 @@ printfn "Handler updated"
         match result2 with
         | Ok content ->
           printfn "Updated response: %s" (content.Substring(0, min 300 content.Length))
-          Expect.stringContains content "Updated Content!" "Should have updated heading"
-          Expect.stringContains content "hot reloaded successfully" "Should have updated text"
-          Expect.stringContains content "SageFs rocks!" "Should have new strong text"
-          Expect.isFalse (content.Contains "Original Content") "Should not have original content"
+          content |> Expect.stringContains "Should have updated heading" "Updated Content!"
+          content |> Expect.stringContains "Should have updated text" "hot reloaded successfully"
+          content |> Expect.stringContains "Should have new strong text" "SageFs rocks!"
+          (content.Contains "Original Content") |> Expect.isFalse "Should not have original content"
         | Error msg -> failtestf "Failed updated request: %s" msg
 
         printfn "Hot reload test completed successfully"

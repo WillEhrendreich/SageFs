@@ -1,6 +1,7 @@
 module SageFs.Tests.VscLiveTestStateTests
 
 open Expecto
+open Expecto.Flip
 open SageFs.Vscode.LiveTestingTypes
 
 let private mkTestId (s: string) = VscTestId.create s
@@ -22,12 +23,12 @@ let private mkResult id outcome =
 let tests = testList "VscLiveTestState contract tests" [
   testCase "empty state produces zero summary" (fun () ->
     let s = VscLiveTestState.summary VscLiveTestState.empty
-    Expect.equal s.Total 0 "total 0"
-    Expect.equal s.Passed 0 "passed 0"
-    Expect.equal s.Failed 0 "failed 0"
-    Expect.equal s.Running 0 "running 0"
-    Expect.equal s.Stale 0 "stale 0"
-    Expect.equal s.Disabled 0 "disabled 0")
+    s.Total |> Expect.equal "total 0" 0
+    s.Passed |> Expect.equal "passed 0" 0
+    s.Failed |> Expect.equal "failed 0" 0
+    s.Running |> Expect.equal "running 0" 0
+    s.Stale |> Expect.equal "stale 0" 0
+    s.Disabled |> Expect.equal "disabled 0" 0)
 
   testCase "partial discovery adds tests without sweeping existing ones" (fun () ->
     let prior =
@@ -37,9 +38,9 @@ let tests = testList "VscLiveTestState contract tests" [
       VscLiveTestState.update
         (VscLiveTestEvent.TestsDiscovered ([| mkInfo "B" |], false, 0L))
         prior
-    Expect.isTrue (next.Tests |> Map.containsKey (mkTestId "A")) "partial batch must not sweep A"
-    Expect.isTrue (next.Tests |> Map.containsKey (mkTestId "B")) "partial batch must add B"
-    Expect.equal changes [ VscStateChange.TestsAdded [| mkInfo "B" |] ] "only TestsAdded is emitted")
+    (next.Tests |> Map.containsKey (mkTestId "A")) |> Expect.isTrue "partial batch must not sweep A"
+    (next.Tests |> Map.containsKey (mkTestId "B")) |> Expect.isTrue "partial batch must add B"
+    changes |> Expect.equal "only TestsAdded is emitted" [ VscStateChange.TestsAdded [| mkInfo "B" |] ])
 ]
 
 /// Rediscovery sweep (Phase 6): a COMPLETE discovery from a NEWER generation
@@ -61,16 +62,14 @@ let sweepTests = testList "VscLiveTestState rediscovery sweep" [
         (VscLiveTestEvent.TestsDiscovered ([| mkInfo "A" |], true, 1L))
         prior
 
-    Expect.isTrue (next.Tests |> Map.containsKey (mkTestId "A")) "A should survive the sweep"
-    Expect.isFalse (next.Tests |> Map.containsKey (mkTestId "B")) "B (absent from the new discovery) must be swept"
-    Expect.isFalse (next.Results |> Map.containsKey (mkTestId "B")) "B's stale result must be swept with it"
-    Expect.equal next.DiscoveryGeneration 1L "state should record the applied generation"
-    Expect.isTrue
-      (changes
+    (next.Tests |> Map.containsKey (mkTestId "A")) |> Expect.isTrue "A should survive the sweep"
+    (next.Tests |> Map.containsKey (mkTestId "B")) |> Expect.isFalse "B (absent from the new discovery) must be swept"
+    (next.Results |> Map.containsKey (mkTestId "B")) |> Expect.isFalse "B's stale result must be swept with it"
+    next.DiscoveryGeneration |> Expect.equal "state should record the applied generation" 1L
+    (changes
        |> List.exists (function
          | VscStateChange.TestsRemoved removed -> removed = [| mkTestId "B" |]
-         | _ -> false))
-      "the sweep should emit TestsRemoved so the TestController drops the stale item")
+         | _ -> false)) |> Expect.isTrue "the sweep should emit TestsRemoved so the TestController drops the stale item")
 
   testCase "partial discovery (streaming) keeps merge semantics and never sweeps" (fun () ->
     let prior =
@@ -81,8 +80,8 @@ let sweepTests = testList "VscLiveTestState rediscovery sweep" [
       VscLiveTestState.update
         (VscLiveTestEvent.TestsDiscovered ([| mkInfo "B" |], false, 1L))
         prior
-    Expect.isTrue (next.Tests |> Map.containsKey (mkTestId "A")) "partial batch must not sweep A"
-    Expect.isTrue (next.Tests |> Map.containsKey (mkTestId "B")) "partial batch must add B")
+    (next.Tests |> Map.containsKey (mkTestId "A")) |> Expect.isTrue "partial batch must not sweep A"
+    (next.Tests |> Map.containsKey (mkTestId "B")) |> Expect.isTrue "partial batch must add B")
 
   testCase "same-generation complete discovery does not sweep (idempotent refresh)" (fun () ->
     let prior =
@@ -93,5 +92,5 @@ let sweepTests = testList "VscLiveTestState rediscovery sweep" [
       VscLiveTestState.update
         (VscLiveTestEvent.TestsDiscovered ([| mkInfo "A" |], true, 1L))
         prior
-    Expect.isTrue (next.Tests |> Map.containsKey (mkTestId "B")) "a same-generation refresh must not sweep (the server already applied it)")
+    (next.Tests |> Map.containsKey (mkTestId "B")) |> Expect.isTrue "a same-generation refresh must not sweep (the server already applied it)")
 ]

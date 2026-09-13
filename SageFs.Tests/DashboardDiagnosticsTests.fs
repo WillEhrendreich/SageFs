@@ -2,6 +2,7 @@
 
 open System
 open Expecto
+open Expecto.Flip
 open Falco.Markup
 open SageFs
 open SageFs.Features
@@ -33,44 +34,44 @@ let fromFeatureDiagTests =
     test "Error severity maps to DiagError" {
       let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Error "type mismatch" 5 3
       let result = Diagnostic.fromFeatureDiag d
-      Expect.equal result.Severity DiagError "error severity should map to DiagError"
+      result.Severity |> Expect.equal "error severity should map to DiagError" DiagError
     }
 
     test "Warning severity maps to DiagWarning" {
       let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Warning "unused value" 2 1
       let result = Diagnostic.fromFeatureDiag d
-      Expect.equal result.Severity DiagWarning "warning severity should map to DiagWarning"
+      result.Severity |> Expect.equal "warning severity should map to DiagWarning" DiagWarning
     }
 
     test "Hidden severity maps to DiagWarning" {
       let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Hidden "hidden" 1 0
       let result = Diagnostic.fromFeatureDiag d
-      Expect.equal result.Severity DiagWarning "hidden severity should fall back to DiagWarning"
+      result.Severity |> Expect.equal "hidden severity should fall back to DiagWarning" DiagWarning
     }
 
     test "Info severity maps to DiagWarning" {
       let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Info "note" 1 0
       let result = Diagnostic.fromFeatureDiag d
-      Expect.equal result.Severity DiagWarning "info severity should fall back to DiagWarning"
+      result.Severity |> Expect.equal "info severity should fall back to DiagWarning" DiagWarning
     }
 
     test "Message is preserved" {
       let msg = "The value 'foo' is not defined"
       let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Error msg 1 0
       let result = Diagnostic.fromFeatureDiag d
-      Expect.equal result.Message msg "message should round-trip"
+      result.Message |> Expect.equal "message should round-trip" msg
     }
 
     test "StartLine maps to Line" {
       let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Error "err" 42 0
       let result = Diagnostic.fromFeatureDiag d
-      Expect.equal result.Line 42 "StartLine should map to Line"
+      result.Line |> Expect.equal "StartLine should map to Line" 42
     }
 
     test "StartColumn maps to Col" {
       let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Error "err" 1 17
       let result = Diagnostic.fromFeatureDiag d
-      Expect.equal result.Col 17 "StartColumn should map to Col"
+      result.Col |> Expect.equal "StartColumn should map to Col" 17
     }
 
   ]
@@ -81,54 +82,54 @@ let renderCurrentDiagnosticsTests =
 
     test "empty list renders diagnostics-panel id" {
       let html = renderCurrentDiagnostics [] |> renderToString
-      Expect.stringContains html DomIds.DiagnosticsPanel "should have diagnostics-panel id"
+      html |> Expect.stringContains "should have diagnostics-panel id" DomIds.DiagnosticsPanel
     }
 
     test "empty list renders no content (silent when empty)" {
       let html = renderCurrentDiagnostics [] |> renderToString
-      Expect.isFalse (html.Contains("No diagnostics")) "should NOT show no-diagnostics message when empty (progressive disclosure)"
+      (html.Contains("No diagnostics")) |> Expect.isFalse "should NOT show no-diagnostics message when empty (progressive disclosure)"
     }
 
     test "error diagnostic renders error CSS class" {
       let diags = [ { Severity = DiagError; Message = "type error"; Line = 3; Col = 5 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      Expect.stringContains html "diag-error" "should apply error CSS class"
+      html |> Expect.stringContains "should apply error CSS class" "diag-error"
     }
 
     test "warning diagnostic renders warning CSS class" {
       let diags = [ { Severity = DiagWarning; Message = "warning here"; Line = 1; Col = 1 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      Expect.stringContains html "diag-warning" "should apply warning CSS class"
+      html |> Expect.stringContains "should apply warning CSS class" "diag-warning"
     }
 
     test "error renders error icon" {
       let diags = [ { Severity = DiagError; Message = "err"; Line = 1; Col = 1 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      Expect.stringContains html "🔴" "should show error icon"
+      html |> Expect.stringContains "should show error icon" "🔴"
     }
 
     test "warning renders warning icon" {
       let diags = [ { Severity = DiagWarning; Message = "warn"; Line = 1; Col = 1 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      Expect.stringContains html "⚠️" "should show warning icon"
+      html |> Expect.stringContains "should show warning icon" "⚠️"
     }
 
     test "renders location for diagnostic with line and col" {
       let diags = [ { Severity = DiagError; Message = "err"; Line = 10; Col = 3 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      Expect.stringContains html "L10:3" "should render line:col location"
+      html |> Expect.stringContains "should render line:col location" "L10:3"
     }
 
     test "does not render location span when line and col are zero" {
       let diags = [ { Severity = DiagError; Message = "err"; Line = 0; Col = 0 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      Expect.isFalse (html.Contains "L0:0") "should not render zero location"
+      (html.Contains "L0:0") |> Expect.isFalse "should not render zero location"
     }
 
     test "renders message text in output" {
       let diags = [ { Severity = DiagError; Message = "FS0001: type mismatch"; Line = 5; Col = 2 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      Expect.stringContains html "FS0001: type mismatch" "should contain message"
+      html |> Expect.stringContains "should contain message" "FS0001: type mismatch"
     }
 
     test "renders count badge for multiple diagnostics" {
@@ -137,7 +138,7 @@ let renderCurrentDiagnosticsTests =
           { Severity = DiagError; Message = "e2"; Line = 2; Col = 1 }
           { Severity = DiagWarning; Message = "w1"; Line = 3; Col = 1 } ]
       let html = renderCurrentDiagnostics diags |> renderToString
-      Expect.stringContains html "3" "should show count badge"
+      html |> Expect.stringContains "should show count badge" "3"
     }
 
     test "diagnostics wrapped in collapsible details element" {
@@ -145,13 +146,13 @@ let renderCurrentDiagnosticsTests =
       let html = renderCurrentDiagnostics diags |> renderToString
       // Not "<details>" — the accordion's open state is a Datastar signal
       // (signalDetails), so the tag carries "open"/"data-on-toggle" attributes.
-      Expect.stringContains html "<details" "should wrap diagnostics in <details> for collapse"
-      Expect.stringContains html "<summary" "should have summary element with count badge"
+      html |> Expect.stringContains "should wrap diagnostics in <details> for collapse" "<details"
+      html |> Expect.stringContains "should have summary element with count badge" "<summary"
     }
 
     test "empty diagnostics have no details element" {
       let html = renderCurrentDiagnostics [] |> renderToString
-      Expect.isFalse (html.Contains "<details") "empty diagnostics should not render collapsible wrapper"
+      (html.Contains "<details") |> Expect.isFalse "empty diagnostics should not render collapsible wrapper"
     }
 
   ]
@@ -181,7 +182,7 @@ let diagnosticsPanelSnapshotTests =
 
       }
       let html = snap.DiagnosticsPanel |> renderToString
-      Expect.isTrue (html.Length > 0) "DiagnosticsPanel should render non-empty HTML"
+      (html.Length > 0) |> Expect.isTrue "DiagnosticsPanel should render non-empty HTML"
     }
 
     test "renderMainContent includes diagnostics-panel id" {
@@ -205,7 +206,7 @@ let diagnosticsPanelSnapshotTests =
 
       }
       let html = renderMainContent snap |> renderToString
-      Expect.stringContains html DomIds.DiagnosticsPanel "main content should include diagnostics panel"
+      html |> Expect.stringContains "main content should include diagnostics panel" DomIds.DiagnosticsPanel
     }
 
   ]

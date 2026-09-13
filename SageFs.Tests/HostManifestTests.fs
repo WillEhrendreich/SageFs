@@ -1,6 +1,7 @@
 module SageFs.Tests.HostManifestTests
 
 open Expecto
+open Expecto.Flip
 open SageFs
 open System.IO
 
@@ -47,9 +48,7 @@ let tests =
             Directory.GetFiles(hostDir, "Falco*.dll")
             |> Array.toList
 
-      Expect.isEmpty
-        falcoDlls
-        (sprintf "host dir must not contain dashboard deps, but found: %A" falcoDlls)
+      falcoDlls |> Expect.isEmpty (sprintf "host dir must not contain dashboard deps, but found: %A" falcoDlls)
 
     testCase "host dir must not contain OpenTelemetry assemblies" <| fun _ ->
       let otelDlls =
@@ -60,16 +59,12 @@ let tests =
             Directory.GetFiles(hostDir, "OpenTelemetry*.dll")
             |> Array.toList
 
-      Expect.isEmpty
-        otelDlls
-        (sprintf "host dir must not contain OpenTelemetry deps, but found: %A" otelDlls)
+      otelDlls |> Expect.isEmpty (sprintf "host dir must not contain OpenTelemetry deps, but found: %A" otelDlls)
 
     testCase "host-manifest.json exists and verifies the host dir" <| fun _ ->
       let manifestPath = Path.Combine(hostDir, HostManifest.manifestFileName)
 
-      Expect.isTrue
-        (File.Exists manifestPath)
-        (sprintf "host-manifest.json must exist in the host dir (%s)" hostDir)
+      (File.Exists manifestPath) |> Expect.isTrue (sprintf "host-manifest.json must exist in the host dir (%s)" hostDir)
 
       match HostManifest.check hostDir with
       | Ok () -> ()
@@ -87,7 +82,7 @@ let tests =
         match HostManifest.check tmp with
         | Ok () -> failtest "unexpected file must fail the check"
         | Error msg ->
-          Expect.stringContains msg "sneaky.dll" "error should name the offending file"
+          msg |> Expect.stringContains "error should name the offending file" "sneaky.dll"
       finally
         try Directory.Delete(tmp, true) with _ -> ()
   ]

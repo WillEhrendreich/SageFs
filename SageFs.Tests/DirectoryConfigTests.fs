@@ -3,6 +3,7 @@ module SageFs.Tests.DirectoryConfigTests
 open System
 open System.IO
 open Expecto
+open Expecto.Flip
 open SageFs
 
 /// Helper to evaluate config and unwrap the Ok result.
@@ -15,31 +16,31 @@ let evalOk content =
 let evaluateTests = testSequenced <| testList "DirectoryConfig.evaluate" [
   testCase "loads solution strategy" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with Load = Solution "MyApp.sln" }"""
-    Expect.equal config.Load (Solution "MyApp.sln") "should parse solution")
+    config.Load |> Expect.equal "should parse solution" (Solution "MyApp.sln"))
 
   testCase "loads projects strategy" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with Load = Projects ["Lib.fsproj"; "Tests.fsproj"] }"""
-    Expect.equal config.Load (Projects ["Lib.fsproj"; "Tests.fsproj"]) "should parse projects")
+    config.Load |> Expect.equal "should parse projects" (Projects ["Lib.fsproj"; "Tests.fsproj"]))
 
   testCase "loads NoLoad strategy" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with Load = NoLoad }"""
-    Expect.equal config.Load NoLoad "should parse NoLoad")
+    config.Load |> Expect.equal "should parse NoLoad" NoLoad)
 
   testCase "loads AutoDetect strategy" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with Load = AutoDetect }"""
-    Expect.equal config.Load AutoDetect "should parse AutoDetect")
+    config.Load |> Expect.equal "should parse AutoDetect" AutoDetect)
 
   testCase "loads initScript" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with InitScript = Some "setup.fsx" }"""
-    Expect.equal config.InitScript (Some "setup.fsx") "should parse initScript")
+    config.InitScript |> Expect.equal "should parse initScript" (Some "setup.fsx"))
 
   testCase "loads defaultArgs" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with DefaultArgs = ["--no-warn:1182"; "--bare"] }"""
-    Expect.equal config.DefaultArgs ["--no-warn:1182"; "--bare"] "should parse defaultArgs")
+    config.DefaultArgs |> Expect.equal "should parse defaultArgs" ["--no-warn:1182"; "--bare"])
 
   testCase "loads autoOpenNamespaces override" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with AutoOpenNamespaces = false }"""
-    Expect.equal config.AutoOpenNamespaces false "should parse AutoOpenNamespaces")
+    config.AutoOpenNamespaces |> Expect.equal "should parse AutoOpenNamespaces" false)
 
   testCase "opt-out template evaluates (single-line, no offside error)" (fun () ->
     // Regression: the template used to be a multi-line record update starting
@@ -47,7 +48,7 @@ let evaluateTests = testSequenced <| testList "DirectoryConfig.evaluate" [
     // started at position (1:3)" — so the disable button wrote a config that
     // could never load, silently keeping auto-open ON.
     let config = evalOk DirectoryConfig.autoOpenNamespacesOptOutTemplate
-    Expect.equal config.AutoOpenNamespaces false "template should disable auto-open")
+    config.AutoOpenNamespaces |> Expect.equal "template should disable auto-open" false)
 
   testCase "loads full config" (fun () ->
     let config = evalOk """
@@ -55,28 +56,28 @@ let evaluateTests = testSequenced <| testList "DirectoryConfig.evaluate" [
     Load = Solution "BigApp.slnx"
     InitScript = Some "bootstrap.fsx"
     DefaultArgs = ["--no-watch"] }"""
-    Expect.equal config.Load (Solution "BigApp.slnx") "load strategy"
-    Expect.equal config.InitScript (Some "bootstrap.fsx") "initScript"
-    Expect.equal config.DefaultArgs ["--no-watch"] "defaultArgs")
+    config.Load |> Expect.equal "load strategy" (Solution "BigApp.slnx")
+    config.InitScript |> Expect.equal "initScript" (Some "bootstrap.fsx")
+    config.DefaultArgs |> Expect.equal "defaultArgs" ["--no-watch"])
 
   testCase "empty expression returns defaults" (fun () ->
     let config = evalOk "DirectoryConfig.empty"
-    Expect.equal config DirectoryConfig.empty "should return empty defaults"
-    Expect.equal config.AutoOpenNamespaces true "AutoOpenNamespaces defaults to true"
-    Expect.equal config.IsRoot false "IsRoot defaults to false"
-    Expect.equal config.SessionName None "SessionName defaults to None")
+    config |> Expect.equal "should return empty defaults" DirectoryConfig.empty
+    config.AutoOpenNamespaces |> Expect.equal "AutoOpenNamespaces defaults to true" true
+    config.IsRoot |> Expect.equal "IsRoot defaults to false" false
+    config.SessionName |> Expect.equal "SessionName defaults to None" None)
 
   testCase "loads isRoot override" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with IsRoot = true }"""
-    Expect.equal config.IsRoot true "should parse IsRoot")
+    config.IsRoot |> Expect.equal "should parse IsRoot" true)
 
   testCase "loads sessionName" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with SessionName = Some "my-service" }"""
-    Expect.equal config.SessionName (Some "my-service") "should parse SessionName")
+    config.SessionName |> Expect.equal "should parse SessionName" (Some "my-service"))
 
   testCase "invalid expression returns Error" (fun () ->
     let result = DirectoryConfig.evaluate "this is not valid F#"
-    Expect.isError result "should return error for invalid expression")
+    result |> Expect.isError "should return error for invalid expression")
 ]
 
 [<Tests>]
@@ -86,7 +87,7 @@ let loadTests = testSequenced <| testList "DirectoryConfig.load" [
     Directory.CreateDirectory(tempDir) |> ignore
     try
       let result = DirectoryConfig.load tempDir
-      Expect.isNone result "no config file"
+      result |> Expect.isNone "no config file"
     finally
       Directory.Delete(tempDir, true))
 
@@ -99,8 +100,8 @@ let loadTests = testSequenced <| testList "DirectoryConfig.load" [
       """{ DirectoryConfig.empty with Load = Projects ["Test.fsproj"] }""")
     try
       let result = DirectoryConfig.load tempDir
-      Expect.isSome result "should find config"
-      Expect.equal result.Value.Load (Projects ["Test.fsproj"]) "load strategy"
+      result |> Expect.isSome "should find config"
+      result.Value.Load |> Expect.equal "load strategy" (Projects ["Test.fsproj"])
     finally
       Directory.Delete(tempDir, true))
 
@@ -113,15 +114,15 @@ let loadTests = testSequenced <| testList "DirectoryConfig.load" [
       "this is garbage")
     try
       let result = DirectoryConfig.load tempDir
-      Expect.isSome result "should still return Some"
-      Expect.equal result.Value DirectoryConfig.empty "should fall back to defaults"
+      result |> Expect.isSome "should still return Some"
+      result.Value |> Expect.equal "should fall back to defaults" DirectoryConfig.empty
     finally
       Directory.Delete(tempDir, true))
 
   testCase "configPath constructs correct path" (fun () ->
     let path = DirectoryConfig.configPath @"C:\Code\MyProject"
-    Expect.stringContains path ".SageFs" "contains .SageFs"
-    Expect.stringContains path "config.fsx" "contains config.fsx")
+    path |> Expect.stringContains "contains .SageFs" ".SageFs"
+    path |> Expect.stringContains "contains config.fsx" "config.fsx")
 ]
 
 [<Tests>]
@@ -133,9 +134,9 @@ let ensureAutoOpenOptOutTests = testSequenced <| testList "DirectoryConfig.ensur
       let result = DirectoryConfig.ensureAutoOpenNamespacesOptOut tempDir
       match result with
       | Ok (AutoOpenNamespacesOptOutResult.Created path) ->
-        Expect.equal path (DirectoryConfig.configPath tempDir) "should create config at expected path"
-        Expect.isTrue (File.Exists path) "config file should exist"
-        Expect.stringContains (File.ReadAllText path) "AutoOpenNamespaces = false" "config should disable auto-open"
+        path |> Expect.equal "should create config at expected path" (DirectoryConfig.configPath tempDir)
+        (File.Exists path) |> Expect.isTrue "config file should exist"
+        (File.ReadAllText path) |> Expect.stringContains "config should disable auto-open" "AutoOpenNamespaces = false"
       | other ->
         failtestf "expected Created, got %A" other
     finally
@@ -151,7 +152,7 @@ let ensureAutoOpenOptOutTests = testSequenced <| testList "DirectoryConfig.ensur
       let result = DirectoryConfig.ensureAutoOpenNamespacesOptOut tempDir
       match result with
       | Ok (AutoOpenNamespacesOptOutResult.AlreadyDisabled actualPath) ->
-        Expect.equal actualPath path "should report existing config path"
+        actualPath |> Expect.equal "should report existing config path" path
       | other ->
         failtestf "expected AlreadyDisabled, got %A" other
     finally
@@ -168,8 +169,8 @@ let ensureAutoOpenOptOutTests = testSequenced <| testList "DirectoryConfig.ensur
       let result = DirectoryConfig.ensureAutoOpenNamespacesOptOut tempDir
       match result with
       | Ok (AutoOpenNamespacesOptOutResult.RequiresManualEdit actualPath) ->
-        Expect.equal actualPath path "should report existing config path"
-        Expect.equal (File.ReadAllText path) original "should not overwrite existing config"
+        actualPath |> Expect.equal "should report existing config path" path
+        (File.ReadAllText path) |> Expect.equal "should not overwrite existing config" original
       | other ->
         failtestf "expected RequiresManualEdit, got %A" other
     finally

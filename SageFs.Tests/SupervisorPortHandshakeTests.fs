@@ -1,6 +1,7 @@
 module SageFs.Tests.SupervisorPortHandshakeTests
 
 open Expecto
+open Expecto.Flip
 open SageFs
 
 /// Phase 0 RED: prove there is no verified port handshake today.
@@ -28,10 +29,7 @@ let tests =
 
       match result with
       | Error msg ->
-        Expect.stringContains
-          msg
-          "loopback"
-          "non-loopback host must be rejected as not loopback"
+        msg |> Expect.stringContains "non-loopback host must be rejected as not loopback" "loopback"
       | Ok _ -> failtest "non-loopback host URL must not be accepted"
 
     testCase "valid loopback port is accepted as ready" <| fun _ ->
@@ -44,10 +42,7 @@ let tests =
 
       match result with
       | Ok url ->
-        Expect.equal
-          url
-          "http://127.0.0.1:54321"
-          "valid loopback URL should be returned as ready"
+        url |> Expect.equal "valid loopback URL should be returned as ready" "http://127.0.0.1:54321"
       | Error msg -> failtestf "valid loopback URL rejected: %s" msg
 
     testCase "host exiting before printing the port surfaces WorkerSpawnFailed" <| fun _ ->
@@ -59,10 +54,7 @@ let tests =
 
       match outcome with
       | Error (SageFs.SageFsError.WorkerSpawnFailed reason) ->
-        Expect.stringContains
-          reason
-          "before reporting ready"
-          "reason should explain the host died before ready"
+        reason |> Expect.stringContains "reason should explain the host died before ready" "before reporting ready"
       | Error e -> failtestf "expected WorkerSpawnFailed, got %A" e
       | Ok () -> failtest "host-exited-before-ready must be an error, not success"
   ]
