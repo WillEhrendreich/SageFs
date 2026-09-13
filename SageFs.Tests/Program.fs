@@ -52,6 +52,7 @@ let main argv =
         BinaryPrimitivesMutationTests.binaryPrimitivesMutationTests
         TestCachePersistenceMutationTests.testCachePersistenceMutationTests
         EvalStoreMutationTests.evalStoreMutationTests
+        SessionDisplayMutationTests.sessionDisplayMutationTests
       ]
     // Honest mutation accounting: each mutant is one test case that PASSES only
     // when the mutant is killed (real <> mutant). Deriving the score from the
