@@ -293,30 +293,40 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
 /// Every session the sidebar lists, in registry order, as typed cards (never
 /// re-parsed from the TUI's text) with the per-session enrichments each card
 /// renders: tests, coverage, bindings, agent presence.
+///
+/// Takes the session list as a parameter (rather than fetching it) so a
+/// caller that already has a fresh list — the SSE push loop fetches one
+/// every tick to reconcile the viewed session — never pays for a second,
+/// redundant `GetAllSessions` read building the sidebar cards.
+let buildSessionCardsFrom (q: DashboardQueries) (sessions: WorkerProtocol.SessionInfo list) : ParsedSession list =
+  liveSessionCards DateTime.UtcNow q.GetStatusMsg (q.GetSessionEvalCounts ()) sessions
+  |> List.map (fun card ->
+    { card with
+        TestSummary = q.GetSessionTestSummary card.Id
+        CoverageSummary = q.GetSessionCoverageSummary card.Id
+        TestTreemapEntries = q.GetSessionTestTreemap card.Id
+        BindingEntries = q.GetSessionBindings card.Id
+        AgentBadges = q.GetSessionAgentBadges card.Id
+        GuidanceCssClass = q.GetSessionGuidanceCss card.Id })
+
+/// Standalone entry point for callers that do not already have a fresh
+/// session list in hand — fetches once, then delegates to `buildSessionCardsFrom`.
 let buildSessionCards (q: DashboardQueries) : System.Threading.Tasks.Task<ParsedSession list> =
   task {
     let! sessions = q.GetAllSessions ()
-    return
-      liveSessionCards DateTime.UtcNow q.GetStatusMsg (q.GetSessionEvalCounts ()) sessions
-      |> List.map (fun card ->
-        { card with
-            TestSummary = q.GetSessionTestSummary card.Id
-            CoverageSummary = q.GetSessionCoverageSummary card.Id
-            TestTreemapEntries = q.GetSessionTestTreemap card.Id
-            BindingEntries = q.GetSessionBindings card.Id
-            AgentBadges = q.GetSessionAgentBadges card.Id
-            GuidanceCssClass = q.GetSessionGuidanceCss card.Id })
+    return buildSessionCardsFrom q sessions
   }
 
-let private buildOutputPanels
+let private buildOutputPanelsFrom
   (q: DashboardQueries)
+  (sessions: WorkerProtocol.SessionInfo list)
   (sessionId: WorkerProtocol.SessionId)
   (sessionState: string)
   (warmupProgress: string)
   : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode> =
   task {
     let! previous = q.GetPreviousSessions ()
-    let! cards = buildSessionCards q
+    let cards = buildSessionCardsFrom q sessions
     let creating = q.IsCreatingSession ()
     let sessionsPanel = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) cards creating
     let sessionPicker =
@@ -498,7 +508,12 @@ let private subscribeLiveBindings
 /// round-trips), and the render-diff guard means reusing a cache can never
 /// SEND stale HTML — it only makes unchanged ticks cheaper. When None, all
 /// three are fetched fresh (the initial GET render and cold pushes).
-let buildDashboardSnapshot
+///
+/// `sessions` is likewise a parameter rather than an internal fetch: the SSE
+/// push loop already fetches the session list once per tick (to reconcile
+/// the viewed session before rendering) and must not pay for a second
+/// `GetAllSessions` read just to build the sidebar cards.
+let buildDashboardSnapshotWithSessions
   (q: DashboardQueries)
   (infra: DashboardInfra)
   (currentSessionId: WorkerProtocol.SessionId)
@@ -506,6 +521,7 @@ let buildDashboardSnapshot
   (lastWorkingDir: string)
   (lastThemeName: string)
   (cachedWorkerData: DashboardWorkerCache option)
+  (sessions: WorkerProtocol.SessionInfo list)
   : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
   task {
     let sessionId = currentSessionId
@@ -599,7 +615,7 @@ let buildDashboardSnapshot
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
     let warmupProgress = q.GetWarmupProgress sessionId
-    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanels q sessionId stateStr warmupProgress
+    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanelsFrom q sessions sessionId stateStr warmupProgress
     // Friction review panel — local store only. Built server-side so the
     // client never assembles raw telemetry. The read is synchronous SQLite;
     // an SSE stream reuses its last-built panel within the worker-data TTL
@@ -659,6 +675,23 @@ let buildDashboardSnapshot
     return snap, sessionId, themeName, {| EvalStats = stats; HotReloadState = hrState; WarmupContext = wCtx; FrictionPanel = frictionPanel |}
   }
 
+/// Standalone entry point for callers that do not already have a fresh
+/// session list in hand (e.g. tests, one-off callers) — fetches once, then
+/// delegates to `buildDashboardSnapshotWithSessions`.
+let buildDashboardSnapshot
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  (currentSessionId: WorkerProtocol.SessionId)
+  (lastSessionId: WorkerProtocol.SessionId)
+  (lastWorkingDir: string)
+  (lastThemeName: string)
+  (cachedWorkerData: DashboardWorkerCache option)
+  : System.Threading.Tasks.Task<DashboardSnapshot * WorkerProtocol.SessionId * string * {| EvalStats: SageFs.Affordances.EvalStats; HotReloadState: {| files: {| path: string; watched: bool |} list; watchedCount: int |} option; WarmupContext: WarmupContext option; FrictionPanel: XmlNode |}> =
+  task {
+    let! sessions = q.GetAllSessions ()
+    return! buildDashboardSnapshotWithSessions q infra currentSessionId lastSessionId lastWorkingDir lastThemeName cachedWorkerData sessions
+  }
+
 /// Build the full-shell dashboard snapshot for the "no session in play" state:
 /// the complete dashboard chrome (header, daemon health, sidebar Sessions panel,
 /// New Session panel, statusline) renders ALWAYS — only the main-area content
@@ -670,17 +703,23 @@ let buildDashboardSnapshot
 /// bare picker fragment — an empty #main outside this shell is what caused the
 /// 0.6.460 blank screen (PatchElementsNoTargetsFound), and a bare-picker page
 /// is what hid the Sessions sidebar in 0.6.470.
-let buildNoSessionSnapshot
+///
+/// `sessions` is a parameter rather than an internal fetch for the same
+/// reason as `buildDashboardSnapshotWithSessions`: the SSE push loop already
+/// fetched a fresh list this tick to reconcile the viewed session, and must
+/// not pay for a second `GetAllSessions` read to build the sidebar cards.
+let buildNoSessionSnapshotWithSessions
   (q: DashboardQueries)
   (infra: DashboardInfra)
+  (sessions: WorkerProtocol.SessionInfo list)
   : System.Threading.Tasks.Task<DashboardSnapshot> =
   task {
     let! previous = q.GetPreviousSessions ()
     // The sidebar MUST list the live sessions (so a session created while
     // viewing the picker is clickable without a page reload), mirroring the
-    // enrichment buildOutputPanels applies to the session view's sidebar.
+    // enrichment buildOutputPanelsFrom applies to the session view's sidebar.
     // The same typed cards the session view lists (Stopped filtered out).
-    let! liveRows = buildSessionCards q
+    let liveRows = buildSessionCardsFrom q sessions
     let daemonHealth = q.GetDaemonHealth()
     let daemonHealthPanel =
       match daemonHealth with
@@ -740,6 +779,18 @@ let buildNoSessionSnapshot
       App = AppRun.AppRunState.NotRunning
     }
     return snap
+  }
+
+/// Standalone entry point for callers that do not already have a fresh
+/// session list in hand — fetches once, then delegates to
+/// `buildNoSessionSnapshotWithSessions`.
+let buildNoSessionSnapshot
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  : System.Threading.Tasks.Task<DashboardSnapshot> =
+  task {
+    let! sessions = q.GetAllSessions ()
+    return! buildNoSessionSnapshotWithSessions q infra sessions
   }
 
 /// Create the SSE stream handler that pushes Elm state to the browser.
@@ -828,7 +879,9 @@ let createStreamHandler
         // main area (only when it actually changed). This mirrors the initial
         // GET render: the sidebar Sessions panel and chrome stay visible, and
         // the no-change guard compares like-for-like full-shell HTML.
-        let! snap = buildNoSessionSnapshot q infra
+        // liveSessions was already fetched above for reconciliation — reuse
+        // it here instead of paying for a second GetAllSessions read.
+        let! snap = buildNoSessionSnapshotWithSessions q infra liveSessions
         // Render once: the node built here is reused for the patch below
         // instead of calling renderMainContent a second time.
         let mainNode = renderMainContent snap
@@ -841,8 +894,10 @@ let createStreamHandler
           do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | Some sessionId ->
       let cached = tryGetFreshWorkerCache sessionId
+      // liveSessions was already fetched above for reconciliation — reuse it
+      // here instead of paying for a second GetAllSessions read.
       let! snap, newSessionId, newThemeName, rawWorkerData =
-        buildDashboardSnapshot q infra sessionId lastSessionId lastWorkingDir lastThemeName cached
+        buildDashboardSnapshotWithSessions q infra sessionId lastSessionId lastWorkingDir lastThemeName cached liveSessions
       match cached with
       | None ->
         // This push performed the expensive fetches — record them so the next
