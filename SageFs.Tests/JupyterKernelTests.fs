@@ -206,6 +206,19 @@ let jupyterKernelTests =
           reply.ExecutionCount |> Expect.equal "count" 1
         | ExecuteReplyError _ -> failtest "expected Ok"
       }
+
+      testAsync "WHY — the real eval output must reach the reply payload, because a Jupyter user needs to SEE the value, not a fixed placeholder" {
+        let handler : ExecuteHandler = fun _code _silent ->
+          async { return Ok { Output = "val it: int = 2"; MimeType = "text/plain" } }
+        let request = { Code = "1 + 1"; Silent = false; StoreHistory = true; AllowStdin = false }
+        let! result = Protocol.handleExecuteRequest handler 1 request
+        match result with
+        | ExecuteReplyOk reply ->
+          reply.Payload
+          |> Map.tryFind "text/plain"
+          |> Expect.equal "the real result text, not a fixed placeholder" (Some "val it: int = 2")
+        | ExecuteReplyError _ -> failtest "expected Ok"
+      }
       testAsync "failed eval produces Error reply" {
         let handler : ExecuteHandler = fun _code _silent ->
           async { return Error { Ename = "CompileError"; Evalue = "FS0001"; Traceback = ["line 1: type mismatch"] } }
@@ -493,6 +506,20 @@ let jupyterKernelTests =
     ]
 
     testList "Router" [
+      testAsync "WHY — KernelInfoRequest's reply must carry the real kernel_info_reply body, because jupyter_client's wait_for_ready reads protocol_version from it and a bare '{}' kills the handshake before any code can ever be evaluated" {
+        let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = ""; MimeType = "text/plain" } }
+        let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
+        let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
+        let msg = mkKernelInfoRequest ()
+        let! result = Router.route exec comp isComp KernelState.initial msg
+        let replyJson =
+          match result.Reply with
+          | MessageContent.Raw json -> json
+          | other -> failtestf "expected Raw reply, got %A" other
+        replyJson |> Expect.stringContains "carries protocol_version" "\"protocol_version\":\"5.3\""
+        replyJson |> Expect.stringContains "carries language_info.name" "\"name\":\"fsharp\""
+      }
+
       testAsync "KernelInfoRequest route produces IOPub status messages" {
         let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = ""; MimeType = "text/plain" } }
         let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
@@ -518,6 +545,23 @@ let jupyterKernelTests =
         result.IOPub |> List.last |> Expect.equal "idle" (IOPubMessage.StatusMessage KernelStatus.Idle)
         result.NewState.ExecutionCount |> Expect.equal "count = 1" 1
         result.NewState.Status |> Expect.equal "back to idle" KernelStatus.Idle
+      }
+
+      testAsync "WHY — Router.route's ExecuteResultMessage must carry the real eval output, because a hardcoded 'ok' would show a wrong value for every successful eval regardless of what the daemon actually returned" {
+        let exec : ExecuteHandler = fun _ _ -> async { return Ok { Output = "val it: int = 2"; MimeType = "text/plain" } }
+        let comp : CompleteHandler = fun _ _ -> async { return { Matches = []; CursorStart = 0; CursorEnd = 0; Status = "ok" } }
+        let isComp : IsCompleteHandler = fun _ -> async { return CompleteStatus.Complete }
+        let msg = mkExecRequest "1 + 1"
+        let! result = Router.route exec comp isComp KernelState.initial msg
+        let executeResult =
+          result.IOPub
+          |> List.tryPick (function
+            | IOPubMessage.ExecuteResultMessage (_, data) -> Some data
+            | _ -> None)
+        match executeResult with
+        | Some data ->
+          data |> Map.tryFind "text/plain" |> Expect.equal "the real eval output" (Some "val it: int = 2")
+        | None -> failtest "expected an ExecuteResultMessage in IOPub"
       }
 
       testAsync "failed ExecuteRequest produces ErrorOutput IOPub" {
