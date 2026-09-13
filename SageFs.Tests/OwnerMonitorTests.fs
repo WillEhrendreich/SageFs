@@ -59,6 +59,63 @@ let isAliveTests = testList "OwnerMonitor.isAlive" [
     let owner = { Pid = self.Id; StartTimeTicks = Some staleStartTicks }
     isAlive (fun _ -> Some self) owner
     |> Expect.isFalse "a live process whose start time doesn't match the fence is a DIFFERENT process (pid reuse) and must be treated as dead"
+
+  // REGRESSION (CI integration-host daemon self-terminated "Owner no longer
+  // alive" on a live owner): a process's self-read of Process.StartTime and
+  // another process's cross-process read of it via /proc differ by sub-second
+  // jitter on Linux (observed ~1661 ticks / 166µs between a parent's self-read
+  // and a child's GetProcessById read of the parent). An EXACT-equality fence
+  // therefore declares a live owner dead. The fence must tolerate sub-second
+  // jitter while still catching pid reuse (a genuinely different process
+  // started seconds-to-hours later).
+  testCase "sub-second start-time jitter keeps a live owner alive (cross-process /proc read)" <| fun _ ->
+    let self = Process.GetCurrentProcess()
+    // The fence was recorded by the owner's self-read; the monitor reads the
+    // live process's start slightly differently — simulate that skew.
+    let jitteredFence = startTimeTicksOf self + 1661L
+    let owner = { Pid = self.Id; StartTimeTicks = Some jitteredFence }
+    isAlive (fun _ -> Some self) owner
+    |> Expect.isTrue "sub-second (166µs) skew between a self-recorded fence and the monitor's cross-process read is the SAME owner, not pid reuse"
+]
+
+[<Tests>]
+let fenceTests = testList "OwnerMonitor.fenceMatches" [
+
+  testCase "exact match is the same owner" <| fun _ ->
+    fenceMatches 1_000_000_000L 1_000_000_000L
+    |> Expect.isTrue "identical start ticks are the same process"
+
+  testCase "observed cross-process jitter (166µs) is the same owner" <| fun _ ->
+    fenceMatches 1_000_000_000L (1_000_000_000L + 1661L)
+    |> Expect.isTrue "the exact skew observed on Linux must be tolerated"
+
+  testCase "skew just under the tolerance is the same owner" <| fun _ ->
+    fenceMatches 1_000_000_000L (1_000_000_000L + startTimeToleranceTicks - 1L)
+    |> Expect.isTrue "within tolerance is the same process"
+
+  testCase "skew exactly at the tolerance is the same owner" <| fun _ ->
+    fenceMatches 1_000_000_000L (1_000_000_000L + startTimeToleranceTicks)
+    |> Expect.isTrue "the tolerance bound is inclusive"
+
+  testCase "negative skew within tolerance is the same owner" <| fun _ ->
+    fenceMatches 1_000_000_000L (1_000_000_000L - 1661L)
+    |> Expect.isTrue "skew is symmetric — the monitor may read earlier OR later than the fence"
+
+  testCase "skew beyond the tolerance is pid reuse (a different process)" <| fun _ ->
+    fenceMatches 1_000_000_000L (1_000_000_000L + startTimeToleranceTicks + 1L)
+    |> Expect.isFalse "just past the tolerance is a different process"
+
+  testCase "a day apart is unambiguously pid reuse" <| fun _ ->
+    fenceMatches 1_000_000_000L (1_000_000_000L + TimeSpan.FromDays(1.0).Ticks)
+    |> Expect.isFalse "a process started a day later that reused the pid must read as dead"
+
+  testCase "tolerance is far below any real pid-reuse gap and far above read jitter" <| fun _ ->
+    // Sub-jiffy jitter is ~microseconds; a reused pid on Linux (sequential
+    // allocation up to pid_max) is seconds-to-hours later. The tolerance sits
+    // safely between: generous vs jitter, negligible vs reuse.
+    (startTimeToleranceTicks > TimeSpan.FromMilliseconds(10.0).Ticks
+     && startTimeToleranceTicks < TimeSpan.FromMinutes(1.0).Ticks)
+    |> Expect.isTrue "tolerance must exceed OS read jitter yet stay well under any realistic reuse gap"
 ]
 
 [<Tests>]

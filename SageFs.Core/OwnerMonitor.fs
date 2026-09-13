@@ -30,6 +30,31 @@ module Owner =
 let startTimeTicksOf (p: Process) : int64 =
   p.StartTime.ToUniversalTime().Ticks
 
+/// Tolerance for the start-time fence comparison. `Process.StartTime` is NOT
+/// bit-stable across the read paths that record vs. check the fence: a
+/// process's own self-read (`GetCurrentProcess().StartTime`, used by a
+/// spawner to record the fence) and another process's cross-process read of
+/// it via `/proc` (`GetProcessById(pid).StartTime`, used by the watchdog)
+/// differ by sub-second jitter on Linux — observed ~1661 ticks (166µs)
+/// between a parent's self-read and a child's read of the parent, and
+/// btime-rounding across read paths can push this toward ~1s. An EXACT
+/// comparison therefore declared a live owner dead, self-terminating a
+/// daemon that was still owned (CI integration-host regression). The fence's
+/// only job is pid-reuse detection: a recycled pid belongs to a DIFFERENT
+/// process started seconds-to-hours later (Linux allocates pids sequentially
+/// up to pid_max, so reuse takes far longer than seconds under any load), so
+/// a 2s tolerance sits orders of magnitude above the read jitter and orders
+/// of magnitude below any realistic reuse gap — it can never mask reuse.
+let startTimeToleranceTicks : int64 = TimeSpan.FromSeconds(2.0).Ticks
+
+/// Whether a live process's observed start-time ticks match a recorded fence,
+/// within `startTimeToleranceTicks`. Pure and directly testable (a real
+/// `Process.StartTime` cannot be set, so the decision is extracted from
+/// `isAlive`). `expected` is the fenced value; `actual` is the monitor's
+/// current read.
+let fenceMatches (expected: int64) (actual: int64) : bool =
+  abs (actual - expected) <= startTimeToleranceTicks
+
 /// Real process lookup for production use.
 let getProcessById (pid: int) : Process option =
   try
@@ -53,7 +78,7 @@ let isAlive (getProcessById: int -> Process option) (owner: Owner) : bool =
     | Some p ->
       match owner.StartTimeTicks with
       | None -> true
-      | Some expected -> startTimeTicksOf p = expected
+      | Some expected -> fenceMatches expected (startTimeTicksOf p)
   with _ -> false
 
 /// Poll interval between owner liveness checks.
