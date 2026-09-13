@@ -85,9 +85,23 @@ type Client =
   | Dashboard
   | VsCode
   | Neovim
+  /// The Agent/MCP actor's own on-screen viz page (demo-actors-plan.md
+  /// §2.4) — added here (the plan's own §0 overview text only lists three,
+  /// written before this island's analysis) because `Scenario.Client` is a
+  /// required field and `agent-mcp` is not filmed through any editor: it has
+  /// no ClickThenTypeThenClick, no DOM, only a real MCP transcript. Additive
+  /// only — no existing case changed.
+  | Agent
 
 module Client =
-  /// Every editor/client surface a scenario can be filmed through.
+  /// Every editor client a HOT-RELOAD scenario can be filmed through (§6's
+  /// "3 clients × 3 runnable samples = 9 hot-reload scenarios" comprehension
+  /// — `DomainTests.fs` pins this exact count). Deliberately excludes
+  /// `Client.Agent`: the Agent/MCP actor authors no hot-reload scenarios at
+  /// all (demo-actors-plan.md §2.4 lists exactly one scenario, `agent-mcp`,
+  /// outside the hot-reload matrix entirely) — including it here would
+  /// silently inflate that matrix to 12 pairs with 3 non-existent
+  /// "hr-*-agent-*" scenarios this actor never builds.
   let all : Client list = [ Client.Dashboard; Client.VsCode; Client.Neovim ]
 
 [<RequireQualifiedAccess>]
@@ -169,6 +183,7 @@ module ScenarioId =
     | Client.Dashboard -> "dashboard"
     | Client.VsCode -> "vscode"
     | Client.Neovim -> "neovim"
+    | Client.Agent -> "agent"
 
   let private appToken (appKind: AppKind) =
     match appKind with

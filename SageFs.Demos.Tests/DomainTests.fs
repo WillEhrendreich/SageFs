@@ -87,7 +87,14 @@ let tests =
       result |> Expect.equal "truncated caption is the first 70 chars of the input" (tooLong.Substring(0, 70))
 
     testCase "the §6 matrix comprehension shape type-checks over Client.all × Sample.runnable" <| fun _ ->
-      Client.all |> Expect.equal "three clients" [ Client.Dashboard; Client.VsCode; Client.Neovim ]
+      // Agent island (demo-actors-plan.md §2.4) added a new `Client.Agent`
+      // DU case (`Scenario.Client` is a required field, and `agent-mcp` is
+      // filmed through no editor at all) but deliberately did NOT add it to
+      // `Client.all` — that list drives the hot-reload comprehension below,
+      // and the Agent actor authors no hot-reload scenarios (demo-actors-
+      // plan.md §2.4 lists exactly one scenario, outside the 9-scenario
+      // hot-reload matrix). `Client.all` stays exactly the three editors.
+      Client.all |> Expect.equal "three hot-reload-eligible clients" [ Client.Dashboard; Client.VsCode; Client.Neovim ]
       Sample.runnable
       |> Expect.equal
         "three runnable samples (FromCSharp is live-testing-only)"

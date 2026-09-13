@@ -21,6 +21,7 @@ let private clientActorId (client: Client) : ActorId =
   | Client.Dashboard -> ActorId.Dashboard
   | Client.VsCode -> ActorId.VsCode
   | Client.Neovim -> ActorId.Neovim
+  | Client.Agent -> ActorId.Agent
 
 /// Which actor's placed rect a `Target` resolves against, at storyboard time
 /// — an approximation of the real per-element resolution an actor performs
