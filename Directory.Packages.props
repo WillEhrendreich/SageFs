@@ -4,14 +4,38 @@
     <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Verified against nuget.org 2026-09-12: Expecto 11.0.0/11.1.0 are now
+         stable, so this alpha is stale and should be re-verified/upgraded.
+         Originally pinned to the 11.x line for its Expecto.FsCheck 3.x support
+         (stable "10.2.3-fscheck3" existed too, but SageFs.Tests/Program.fs
+         depends on Expecto-11-era API surface — e.g. the args-list-first
+         Tests.runTestsWithCLIArgs signature used at SageFs.Tests/Program.fs:69,
+         121, 190, 206). TODO: reconfirm against stable 11.1.0 and drop the
+         prerelease pin. -->
     <PackageVersion Include="Expecto" Version="11.0.0-alpha8" />
     <PackageVersion Include="Expecto.FsCheck" Version="11.0.0-alpha8" />
     <PackageVersion Include="Expecto.Hopac" Version="11.0.0-alpha8" />
     <PackageVersion Include="Falco" Version="5.2.0" />
     <PackageVersion Include="Falco.Datastar" Version="1.3.0" />
     <PackageVersion Include="Falco.Markup" Version="1.4.0" />
+    <!-- Only prerelease ever published for the 8.x line (nuget.org tops out at
+         8.0.0-beta-003 as of 2026-09-12; there is no stable Fantomas.Core 8.0.0).
+         SageFs.Core hosts Fantomas.FCS parsing directly (CompilationContext.fs,
+         Features/ReloadPlanning.fs) and VariantSelector.fs pins exactly two
+         host preprocessing variants users' projects may target — "Fantomas6"
+         and "Fantomas8" (SageFs.Core/VariantSelector.fs:36-37) — so this pin
+         is the newest variant's only available build, not a convenience
+         choice. -->
     <PackageVersion Include="Fantomas.Core" Version="8.0.0-alpha-002" />
     <PackageVersion Include="FsCheck" Version="3.3.2" />
+    <!-- Paired with the FSharp.Core preview7 pin further down (~:86) as the
+         same F# 11 compiler-generation milestone, required for the F#
+         nullness analysis (CheckNulls) this repo enables solution-wide (see
+         Directory.Build.props: "requires the newer FCS/SDK"). No stable
+         43.13.101 has shipped yet (nuget.org: latest stable is 43.12.401;
+         43.13.101 exists only as preview7/rc1 builds) — a newer
+         43.13.101-rc1.26425.128 is now available and should be considered at
+         the next FCS/FSharp.Core upgrade. -->
     <PackageVersion Include="FSharp.Compiler.Service" Version="43.13.101-preview7.26381.103" />
     <PackageVersion Include="FSharp.Data.Adaptive" Version="1.2.26" />
     <PackageVersion Include="FSharp.SystemTextJson" Version="1.4.36" />
@@ -25,6 +49,24 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.1" />
     <PackageVersion Include="Mono.Cecil" Version="0.11.6" />
     <PackageVersion Include="Microsoft.NET.StringTools" Version="18.0.2" />
+    <!-- Intended to resolve from the local "mcp-sdk-fork" nuget.config source
+         (WillEhrendreich/ModelContextProtocolSdk, packed by ci-pipeline.fsx's
+         "restore mcp sdk fork" stage), which carries an unmerged SSE fix not
+         in the upstream C# SDK: idle-session tracking + a circuit breaker in
+         SseHandler, closing an unbounded-session-accumulation bug that the
+         stock SDK's SseHandler has (StreamableHttpHandler already had this
+         via IdleTrackingBackgroundService; SseHandler didn't) — see the
+         fork's "fix(sse): add idle tracking and circuit breaker to
+         SseHandler" commit. VERIFIED 2026-09-12: this pin is currently STALE
+         — the fork's own Directory.Build.props packs as
+         ModelContextProtocol.Core 0.9.0-preview.3, not 1.0.0-rc.1, so a
+         restore does not necessarily consume the fork's fix at this pinned
+         version; 1.0.0-rc.1 is also a real version of the *official* upstream
+         package (confirmed via the nuget.org flat-container index), which has
+         since shipped stable through 2.2.0. TODO: either re-pin to match
+         whatever version the fork currently packs, or (since the official SDK
+         is stable now) confirm whether upstream has absorbed an equivalent
+         SSE fix and drop the fork entirely. -->
     <PackageVersion Include="ModelContextProtocol" Version="1.0.0-rc.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.0.0-rc.1" />
     <PackageVersion Include="OpenTelemetry" Version="1.18.0" />
@@ -36,8 +78,26 @@
     <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.18.0" />
     <PackageVersion Include="Serilog" Version="4.1.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="8.0.0" />
+    <!-- Only prerelease track ever published for the 9.x line: the package's
+         last numbered stable release was 3.0.1 (as "-dev" prereleases); it
+         then jumped straight to unreleased "9.0.0-dev-*" CI builds whose
+         dependency closure targets Microsoft.Extensions.* 9.0.0 (confirmed
+         via the nuget.org nuspec), matching this repo's
+         Microsoft.Extensions.Hosting 9.0.1 pin (~:48) and its `AddFile` call
+         at SageFs/McpServer.fs:1205. No stable release compatible with
+         Microsoft.Extensions.* 9.x exists to fall back to. -->
     <PackageVersion Include="Serilog.Extensions.Logging.File" Version="9.0.0-dev-02303" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <!-- TODO: justify or downgrade — verified 2026-09-12 that NO project in
+         this repo has a `<PackageReference Include="StreamJsonRpc" />` (grep
+         across every .fsproj/.csproj is empty); the only mention is
+         SageFs.Tests/ArchitectureTests.fs:311,387 asserting the daemon/host
+         assemblies must NOT reference it, which reads as a leftover guard
+         from when the now-deprecated sagefs-vs Visual Studio extension used
+         it for JSON-RPC transport. This pin appears to be dead weight with no
+         current consumer; stable releases (2.25.x+) exist if it is ever
+         needed again. Consider removing this PackageVersion entirely rather
+         than justifying its prerelease. -->
     <PackageVersion Include="StreamJsonRpc" Version="2.23.32-alpha" />
     <PackageVersion Include="System.Configuration.ConfigurationManager" Version="10.0.3" />
     <PackageVersion Include="TreeSitter.DotNet" Version="1.3.0" />
@@ -59,6 +119,14 @@
     <PackageVersion Include="Fable.Promise" Version="3.2.0" />
     <PackageVersion Include="Fable.Node" Version="1.2.0" />
     <PackageVersion Include="Fable.Browser.Dom" Version="2.16.0" />
+    <!-- Paired with the FSharp.Compiler.Service preview7 pin above (~:39) —
+         both ship from the dotnet/fsharp release train and need to stay on
+         the same F# 11 generation for consistent nullness-analysis (CheckNulls)
+         behavior (Directory.Build.props: "requires the newer FCS/SDK").
+         Verified 2026-09-12 on nuget.org: a stable "11.0.100" exists, but no
+         stable "11.0.101" has shipped yet (only preview4/5/7 and now
+         rc1.26425.128 builds do) — this pin trades the older stable patch for
+         the newer preview needed to match FCS's date-stamped preview7 build. -->
     <PackageVersion Include="FSharp.Core" Version="11.0.101-preview7.26359.118" />
     <PackageVersion Include="Microsoft.VisualStudio.Extensibility.Sdk" Version="17.14.40608" />
     <PackageVersion Include="Microsoft.VisualStudio.Extensibility.Build" Version="17.14.40608" />
