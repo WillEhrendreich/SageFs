@@ -18,12 +18,13 @@ open SageFs
 
 /// All SSE events the daemon can emit on /events.
 /// Composed from SseWriter.allSseEventTypes (19 formatters)
-/// + the session event type (SessionEvents.sessionEventType)
-/// + the state event type (DaemonStateChange.sseEventType).
+/// + the unified SseEvent vocabulary's two channel names (roast-5 §1
+/// merged the former SessionEvents.sessionEventType and
+/// DaemonStateChange.sseEventType into one classifier).
 let allDaemonSseEvents : string list =
   SseWriter.allSseEventTypes
-  @ [ SessionEvents.sessionEventType
-      SageFs.Server.DaemonStateChange.sseEventType ]
+  @ [ SageFs.Server.SseEvent.sseEventTypeSession
+      SageFs.Server.SseEvent.sseEventTypeState ]
 
 // ── VS Code handled set ──────────────────────────────────────────────────────
 // Must be kept in sync with sagefs-vscode/src/LiveTestingListener.fs processEvent match arms.

@@ -409,17 +409,32 @@ let reconcileViewing
 /// stats, hot-reload state, warmup context), so the push must re-fetch them
 /// instead of reusing the TTL cache — reusing it across a real change would
 /// render identical HTML and wrongly suppress the morph.
-let invalidatesWorkerData (change: DaemonStateChange) =
+let invalidatesWorkerData (change: SseEvent) =
   match change with
-  | DaemonStateChange.ModelChanged _
-  | DaemonStateChange.HotReloadChanged _
-  | DaemonStateChange.FileReloaded _
-  | DaemonStateChange.WarmupProgress _
-  | DaemonStateChange.SessionReady _
-  | DaemonStateChange.SessionSwitched _
-  | DaemonStateChange.SessionFaulted _ -> true
-  | DaemonStateChange.SessionProgress
-  | DaemonStateChange.SystemAlarm _ -> false
+  | SseEvent.ModelChanged _
+  | SseEvent.HotReloadChanged _
+  | SseEvent.FileReloaded _
+  | SseEvent.WarmupProgress _
+  | SseEvent.SessionReady _
+  | SseEvent.SessionSwitched _
+  | SseEvent.SessionFaulted _ -> true
+  | SseEvent.SessionProgress
+  | SseEvent.SystemAlarm _ -> false
+  // The dashboard's own stateChangedEvent stream only ever carries "state"
+  // channel cases (DaemonMode.fs triggers exactly the nine cases above) —
+  // the "session" channel cases below are pushed on a separate broadcast
+  // (McpServer's SessionEventBroadcast) and never reach this match today.
+  // Kept exhaustive rather than a wildcard so a future rewire that DID
+  // route one of these through this stream is forced to decide, here,
+  // whether it invalidates the worker-fetched panels.
+  | SseEvent.WarmupContextSnapshot _
+  | SseEvent.HotReloadSnapshot _
+  | SseEvent.HotReloadFileToggled _
+  | SseEvent.SessionActivated _
+  | SseEvent.SessionCreated _
+  | SseEvent.SessionStopped _
+  | SseEvent.WorkflowSwitching _
+  | SseEvent.WorkflowSwitched _ -> false
 
 /// Whether a coalesced burst of stream commands asked this connection to view
 /// another session.

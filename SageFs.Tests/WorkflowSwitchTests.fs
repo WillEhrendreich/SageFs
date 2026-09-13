@@ -253,9 +253,9 @@ let workflowSseEventTests =
         // WHY: Editors parse these events by type field.
         // Wrong discriminator = 4 editor plugins break silently.
         let evt =
-          SageFs.SessionEvents.WorkflowSwitching("sid-1", "REPL", "Live")
+          SageFs.Server.SseEvent.WorkflowSwitching("sid-1", "REPL", "Live")
         let json =
-          SageFs.SessionEvents.serializeSessionEvent evt
+          SageFs.Server.SseEvent.toJson evt
 
         json
         |> Expect.stringContains
@@ -278,10 +278,10 @@ let workflowSseEventTests =
         // WHY: Editors render capability info from these events.
         // Missing fields = broken status bar.
         let evt =
-          SageFs.SessionEvents.WorkflowSwitched(
+          SageFs.Server.SseEvent.WorkflowSwitched(
             "sid-2", "Live", "ExpressionOnly", true)
         let json =
-          SageFs.SessionEvents.serializeSessionEvent evt
+          SageFs.Server.SseEvent.toJson evt
 
         json
         |> Expect.stringContains
@@ -301,10 +301,10 @@ let workflowSseEventTests =
         fun () ->
           let sid = "test-session-42"
           let evt =
-            SageFs.SessionEvents.WorkflowSwitched(
+            SageFs.Server.SseEvent.WorkflowSwitched(
               sid, "REPL", "Full", false)
           let json =
-            SageFs.SessionEvents.serializeSessionEvent evt
+            SageFs.Server.SseEvent.toJson evt
           json.Contains sid
     ]
   ]

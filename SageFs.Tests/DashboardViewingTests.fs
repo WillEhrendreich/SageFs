@@ -67,7 +67,7 @@ let tests = testList "Dashboard viewing reconcile" [
 
 let private sidN i = (ready i).Id
 
-let private modelChanged = DashboardStreamCommand.StateChange (DaemonStateChange.ModelChanged (1, 0))
+let private modelChanged = DashboardStreamCommand.StateChange (SseEvent.ModelChanged (1, 0))
 
 [<Tests>]
 let burstTests = testList "Dashboard stream burst" [
@@ -103,9 +103,9 @@ let burstTests = testList "Dashboard stream burst" [
       (StreamBurst.ofCommands commands).Retarget = expected
 
   test "WHY — StreamBurst — only worker-affecting changes invalidate the worker cache, because a progress tick must not force worker HTTP round-trips" {
-    (StreamBurst.ofCommands [ DashboardStreamCommand.StateChange DaemonStateChange.SessionProgress ]).WorkerInvalidated
+    (StreamBurst.ofCommands [ DashboardStreamCommand.StateChange SseEvent.SessionProgress ]).WorkerInvalidated
     |> Expect.isFalse "progress alone keeps the cache"
-    (StreamBurst.ofCommands [ DashboardStreamCommand.StateChange DaemonStateChange.SessionProgress; modelChanged ]).WorkerInvalidated
+    (StreamBurst.ofCommands [ DashboardStreamCommand.StateChange SseEvent.SessionProgress; modelChanged ]).WorkerInvalidated
     |> Expect.isTrue "a model change invalidates it"
   }
 ]

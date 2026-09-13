@@ -109,7 +109,7 @@ type DaemonInfra = {
   FrictionStore: SageFs.Features.FrictionSqlite.FrictionStore option
   DaemonStreamId: string
   Cts: CancellationTokenSource
-  StateChangedEvent: Event<DaemonStateChange>
+  StateChangedEvent: Event<SseEvent>
   /// Timeout for agent-facing worker fetches (MCP tools, SSE).
   McpFetchTimeoutSec: float
   /// Timeout for user-facing worker fetches (dashboard).
@@ -177,7 +177,7 @@ let createDaemonInfrastructure () : DaemonInfra =
     FrictionStore = frictionStore
     DaemonStreamId = "daemon-sessions"
     Cts = new CancellationTokenSource()
-    StateChangedEvent = Event<DaemonStateChange>()
+    StateChangedEvent = Event<SseEvent>()
     McpFetchTimeoutSec = 5.0
     DashboardFetchTimeoutSec = 0.5
   }
@@ -538,7 +538,7 @@ let getEvalStatsFromWorker
 let createHotReloadProxyEndpoints
   (getWorkerBaseUrl: WorkerProtocol.SessionId -> string option)
   (httpClient: Net.Http.HttpClient)
-  (stateChangedEvent: Event<DaemonStateChange>)
+  (stateChangedEvent: Event<SseEvent>)
   : HttpEndpoint list =
   let proxyToWorker (sidStr: string) (workerPath: string) (httpCall: string -> Threading.Tasks.Task<string * int * bool>) (ctx: HttpContext) = task {
     match WorkerProtocol.SessionId.validate sidStr with
@@ -1355,7 +1355,7 @@ let createElmRuntime
   (sessionManager: MailboxProcessor<SessionManager.SessionCommand>)
   (readSnapshot: unit -> SessionManager.QuerySnapshot)
   (httpClient: System.Net.Http.HttpClient)
-  (stateChangedEvent: Event<DaemonStateChange>)
+  (stateChangedEvent: Event<SseEvent>)
   (watcherManagerRef: LiveTestWatcherManager option ref)
   (onModel: SageFsModel -> unit)
   (ct: System.Threading.CancellationToken) =
@@ -1500,7 +1500,7 @@ let createElmRuntime
 /// its long-lived SSE stream still sees the previous output snapshot.
 let dispatchOutputAndWait
   (elmRuntime: ElmRuntime<SageFsModel, SageFsMsg, RenderRegion>)
-  (stateChanged: IEvent<DaemonStateChange>)
+  (stateChanged: IEvent<SseEvent>)
   (sessionId: string)
   (message: SageFsMsg)
   = task {
@@ -1650,7 +1650,7 @@ let run (bindHost: SageFs.SageFsConfig.LoopbackHost) (mcpPort: int) (flags: Args
   let _bindingScopeSubscription =
     stateChangedEvent.Publish.Subscribe(fun change ->
       match change with
-      | DaemonStateChange.ModelChanged (outputCount, _) when outputCount <> lastBindingOutputCount.Value ->
+      | SseEvent.ModelChanged (outputCount, _) when outputCount <> lastBindingOutputCount.Value ->
         lastBindingOutputCount.Value <- outputCount
         let model = elmRuntime.GetModel()
         // Use GetActiveBuffer (not GetBuffer) to handle AwaitingSession → staging buffer case.

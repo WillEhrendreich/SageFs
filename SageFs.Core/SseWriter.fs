@@ -461,8 +461,10 @@ let formatDiagnosisReadyEvent (opts: JsonSerializerOptions) (sessionId: string o
 
 /// Authoritative list of all SSE event type names emitted by SseWriter formatters.
 /// Every event type emitted by the daemon that originates from SseWriter must appear here.
-/// The `"state"` event (DaemonStateChange) and `"session"` event (SessionEvents) are
-/// tracked separately in DaemonStateChange.sseEventType and SessionEvents.sessionEventType.
+/// The `"state"` and `"session"` events are the two channels of the unified
+/// SageFs.Server.SseEvent vocabulary (roast-5 §1) — one DU, one serializer,
+/// classified by SseEvent.channel; their channel names are
+/// SseEvent.sseEventTypeState / SseEvent.sseEventTypeSession.
 let allSseEventTypes : string list = [
   "warmup_progress"
   "test_summary"
