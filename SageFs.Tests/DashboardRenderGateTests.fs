@@ -78,7 +78,8 @@ let private mkInfra () : DashboardInfra =
     ConnectionChannels = System.Collections.Concurrent.ConcurrentDictionary<string, MailboxProcessor<DashboardStreamCommand>>()
     ActivityTracker = None
     LiveBindingsAdaptive = None
-    ReadCohortFrame = fun () -> SageFs.Cohort.project (SageFs.Cohort.replayHead []) [||] }
+    ReadCohortFrame = fun () -> SageFs.Cohort.project (SageFs.Cohort.replayHead []) [||]
+    ReadCohortLedger = fun () -> [] }
 
 [<Tests>]
 let tests = testList "Dashboard render gate — no redundant GetAllSessions per push" [

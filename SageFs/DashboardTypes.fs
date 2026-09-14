@@ -56,6 +56,7 @@ module DomIds =
   let [<Literal>] CohortPanel = "cohort-panel"
   let [<Literal>] CohortMatrix = "cohort-matrix"
   let [<Literal>] CohortTerritory = "cohort-territory"
+  let [<Literal>] CohortLanes = "cohort-lanes"
 
 /// Datastar signal names — shared between Ds.signal init and Ds.bind/Ds.show refs.
 [<RequireQualifiedAccess>]
@@ -114,6 +115,11 @@ module Signals =
   /// document", applied to the territory SVG the same way the matrix's
   /// character grid applies to its PNG) — collapsed by default.
   let [<Literal>] CohortTerritoryTextOpen = "cohortTerritoryTextOpen"
+  let [<Literal>] CohortLanesPanelOpen = "cohortLanesPanelOpen"
+  /// The lane view's text-legend fallback (§6.5 "a picture is not a
+  /// document"), same convention as `CohortTerritoryTextOpen` — collapsed by
+  /// default.
+  let [<Literal>] CohortLanesTextOpen = "cohortLanesTextOpen"
   let [<Literal>] FrictionEndpoint = "frictionEndpoint"
   let [<Literal>] FrictionToken = "frictionToken"
   let [<Literal>] FrictionEdits = "frictionEdits"
@@ -806,6 +812,16 @@ type DashboardInfra = {
   /// session-scoped, so this is called on every render regardless of
   /// which (or whether any) session is being viewed.
   ReadCohortFrame: unit -> Cohort.CohortFrame<MemberTable.MemberId>
+  /// Every recorded cohort ledger entry, in `Seq` order (§6.5's lane view —
+  /// `CohortLanes.project`'s input). `CohortFrame` carries no timing data at
+  /// all (see `CohortLanes.fs`'s module doc), so the lane view reads the
+  /// ledger directly rather than the frame. Not wait-free like
+  /// `ReadCohortFrame` — it is a full ledger read (SQLite in production,
+  /// `Features.CohortLedgerSqlite.Sqlite.create`'s `ReadAll`) — but the
+  /// ledger for one daemon-scoped cohort is small (§5.1's v1 scope), so a
+  /// full read per dashboard push is cheap the same way the friction
+  /// panel's per-push SQLite read already is.
+  ReadCohortLedger: unit -> Cohort.LedgerEntry<MemberTable.MemberId> list
 }
 
 /// Complete snapshot of all dashboard state needed for a single full-page render.

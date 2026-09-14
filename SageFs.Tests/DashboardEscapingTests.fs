@@ -198,6 +198,12 @@ let private trustedSinks = [
            palette/stroke constant. Pinned here, not inlined as textEnc, because the value is \
            live <svg> markup that must render as an element, not escaped text — see \
            CohortTerritoryTests.fs's hostile-payload property for the behavioral proof." }
+  { File = "DashboardFragments.fs"; Prefix = " lanesSvg"; Count = 1
+    Why = "lane-view SVG (CohortLanes.toSvg, §6.5's span flames): every runtime string it \
+           interpolates (a lane's member label, a span's Label) is passed through its own \
+           private escapeXml before reaching the template, the same discipline as the \
+           territory map's toSvg — see CohortLanesTests.fs's XSS-shaped-label tests for the \
+           behavioral proof." }
 ]
 
 let private rawSinks (file: string) =

@@ -201,6 +201,7 @@ let liveTestingVisibilityTests = testList "live testing visibility" [
       ActivityTracker = None
       LiveBindingsAdaptive = None
       ReadCohortFrame = fun () -> SageFs.Cohort.project (SageFs.Cohort.replayHead []) [||]
+      ReadCohortLedger = fun () -> []
     }
 
   let panelFor (activity: SageFs.Features.LiveTestActivity.LiveTestActivity) = task {

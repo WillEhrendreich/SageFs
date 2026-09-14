@@ -729,8 +729,14 @@ let buildDashboardSnapshotWithSessions
     let! frictionPanel = frictionPanelTask
     let evalToPixelP50Ms, evalToPixelP99Ms = evalToPixelPercentiles ()
     // Wait-free (D4): dereferences the published frame pointer, no IO, no
-    // mailbox round-trip — cheap enough to call on every push.
-    let cohortPanel = renderCohortPanel (infra.ReadCohortFrame ())
+    // mailbox round-trip — cheap enough to call on every push. The lane
+    // view (§6.5) is rendered as a sibling, not folded into
+    // renderCohortPanel itself — see renderCohortLanesPanel's doc comment.
+    let cohortPanel =
+      Elem.div [] [
+        renderCohortPanel (infra.ReadCohortFrame ())
+        renderCohortLanesPanel (infra.ReadCohortLedger ())
+      ]
     let snap : DashboardSnapshot = {
               Version = infra.Version
               ConnectionState = DashboardConnectionState.Connected
@@ -869,7 +875,11 @@ let buildNoSessionSnapshotWithSessions
       FrictionPanel = Elem.div [ Attr.id DomIds.FrictionPanel ] []
       // Daemon-scoped, not session-scoped (D4): rendered identically whether
       // or not a session is in view, same as every other no-session panel here.
-      CohortPanel = renderCohortPanel (infra.ReadCohortFrame ())
+      CohortPanel =
+        Elem.div [] [
+          renderCohortPanel (infra.ReadCohortFrame ())
+          renderCohortLanesPanel (infra.ReadCohortLedger ())
+        ]
       ActiveProject = None
       ProjectRoles = []
       App = AppRun.AppRunState.NotRunning

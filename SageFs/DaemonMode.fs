@@ -1848,10 +1848,19 @@ let run
         Log.info "[cohort-landing] notify %s: %A" (MemberTable.MemberId.display who) event
     }
 
+  // Bound to a name (not inlined into startWithPerformer's call) so the
+  // dashboard's lane view (§6.5) can read the same ledger back via
+  // `ReadAll` — `CohortOwner.Handle` publishes only the projected
+  // `CohortFrame` (`ReadFrame`), which carries no timing data at all (see
+  // `Features/CohortLanes.fs`'s module doc), so the lane view reads this
+  // port directly instead.
+  let cohortLedgerPort =
+    Features.CohortLedgerSqlite.Sqlite.create (System.IO.Path.Combine(DaemonState.SageFsDir, "cohort.ledger.db"))
+
   use cohortOwner =
     Features.CohortOwner.startWithPerformer
       (Log.asILogger ())
-      (Features.CohortLedgerSqlite.Sqlite.create (System.IO.Path.Combine(DaemonState.SageFsDir, "cohort.ledger.db")))
+      cohortLedgerPort
       (fun () -> System.DateTime.UtcNow)
       Features.CohortOwner.productionEntropy
       getCohortSessionTestOutcomes
@@ -2656,6 +2665,7 @@ let run
     // Wait-free (D4): dereferences CohortOwner's published frame pointer
     // directly — no mailbox round-trip, no IO.
     ReadCohortFrame = cohortOwner.ReadFrame
+    ReadCohortLedger = cohortLedgerPort.ReadAll
     GetCompletions = fun (sessionId: WorkerProtocol.SessionId) (code: string) (cursorPos: int) -> task {
       try
         let! proxy = sessionOps.GetProxy sessionId

@@ -2099,6 +2099,70 @@ and private renderCohortTerritory (frame: SageFs.Cohort.CohortFrame<MemberTable.
       ]
     ]
 
+let private cohortSpanOutcomeLabel (outcome: Features.CohortLanes.SpanOutcome) : string =
+  match outcome with
+  | Features.CohortLanes.SpanOutcome.Open -> "open"
+  | Features.CohortLanes.SpanOutcome.Succeeded -> "succeeded"
+  | Features.CohortLanes.SpanOutcome.Failed -> "failed"
+
+let private cohortLaneLabel (member_: MemberTable.MemberId option) : string =
+  match member_ with
+  | Some m -> MemberTable.MemberId.display m
+  | None -> "Integration"
+
+/// §6.5 "the lane view from `LaneEvents` with span flames from
+/// `CohortFrame.Spans`" (Phase 2 item 16), scoped to what the shipped core
+/// actually carries — see `CohortLanes.fs`'s module doc for why this reads
+/// the ledger (`DashboardInfra.ReadCohortLedger`) rather than a
+/// `CohortFrame.Spans` field that does not exist yet.
+///
+/// Deliberately a STANDALONE panel, not folded into `renderCohortPanel`'s
+/// own `<details>`: `renderCohortPanel : CohortFrame<MemberId> -> XmlNode`
+/// is called directly (one argument, a bare frame) by
+/// `CohortPanelTests.fs`/`CohortTerritoryPanelTests.fs` — two files that
+/// explicitly stay out of each other's way (see `CohortTerritoryPanelTests.fs`'s
+/// own module doc) because another agent may be mid-edit on one of them.
+/// Widening `renderCohortPanel`'s signature to also take the ledger would
+/// force a mechanical edit into both, on every call site, for no reason a
+/// merge should have to resolve. `Dashboard.fs` instead composes this
+/// panel's output as a sibling of `renderCohortPanel`'s, so neither that
+/// function's signature nor its existing test call sites change at all.
+///
+/// Deterministic (`CohortLanes.toSvg`), same `SnapshotRenderGuard`
+/// composition as the matrix/territory islands. A ledger with no claim or
+/// landing activity on any lane renders nothing, matching this panel
+/// family's other empty-state conventions.
+let renderCohortLanesPanel (ledgerEntries: SageFs.Cohort.LedgerEntry<MemberTable.MemberId> list) : XmlNode =
+  let model = Features.CohortLanes.project ledgerEntries
+  let hasActivity = model.Lanes |> List.exists (fun lane -> not lane.Spans.IsEmpty)
+  match hasActivity with
+  | false -> Elem.div [] []
+  | true ->
+    let laneCount = model.Lanes.Length
+    let rowHeight = 16.0
+    let lanesSvg = Features.CohortLanes.toSvg cohortLaneLabel 320.0 rowHeight model
+    let legend =
+      model.Lanes
+      |> List.collect (fun lane ->
+        lane.Spans
+        |> List.map (fun s -> sprintf "%s — %s (%s)" (cohortLaneLabel lane.Member) s.Label (cohortSpanOutcomeLabel s.Outcome)))
+      |> String.concat "\n"
+    signalDetails Signals.CohortLanesPanelOpen [ Attr.id DomIds.CohortLanes; Attr.class' "panel"; Attr.style "margin-top: 0.4rem;" ] [
+      Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
+        Text.raw "🔥 "
+        textEnc (sprintf "Lanes — %d lane%s" laneCount (if laneCount = 1 then "" else "s"))
+      ]
+      Elem.div [ Attr.style "max-width: 420px; margin-top: 0.4rem;" ] [ Text.raw lanesSvg ]
+      signalDetails Signals.CohortLanesTextOpen [ Attr.style "margin-top: 0.3rem;" ] [
+        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.7rem; color: var(--fg-dim); user-select: none;" ] [
+          Text.raw "Text fallback"
+        ]
+        Elem.pre [ Attr.style "font-size: 0.68rem; line-height: 1.3; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre-wrap;" ] [
+          textEnc legend
+        ]
+      ]
+    ]
+
 
 module private LiveTestActivityView =
   type Activity = Features.LiveTestActivity.LiveTestActivity
