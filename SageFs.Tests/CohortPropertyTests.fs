@@ -15,6 +15,7 @@ open FsCheck
 open FsCheck.FSharp
 open SageFs
 open SageFs.Cohort
+open SageFs.MemberTable
 open SageFs.Tests.SharedGenerators
 
 // ── A concrete member identity for these tests only ───────────────────────
@@ -716,16 +717,43 @@ let cohortPropertyTests =
 
     testList "corpus replay (17)" [
       test "every recorded cohort ledger in SageFs.Tests/cohorts replays to its recorded events" {
+        // §7.3 #17: "initially over an empty directory." Phase 1 item 18a
+        // (sagefs-multiagent-vision.md §5.2) landed the export mechanism this
+        // comment used to defer — `SageFs.Features.CohortLedgerExport` — plus
+        // the repo's first checked-in ledger, `cohorts/basic.ledger.jsonl`.
+        // This is no longer the vacuous empty-corpus baseline: every
+        // `*.ledger.jsonl` file found here is parsed and REPLAYED command by
+        // command, and each step's freshly-produced events must equal the
+        // events that were recorded alongside that command — proving a
+        // checked-in ledger stays replayable across code changes, not merely
+        // that its final state happens to match.
         let corpusDir = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "cohorts")
         System.IO.Directory.CreateDirectory corpusDir |> ignore
         let files = System.IO.Directory.GetFiles(corpusDir, "*.ledger.jsonl")
-        // §7.3 #17: "initially over an empty directory." No recorded cohort has
-        // been exported yet (that export mechanism is a later phase item), so
-        // this is vacuously true today and starts failing the moment a real
-        // ledger drifts from what current `decide` replays to.
+
+        files.Length > 0
+        |> Expect.isTrue "at least one recorded ledger corpus file is checked in (item 18a's fixture)"
+
         files
-        |> Array.length
-        |> Expect.equal "no recorded ledgers yet — this is the empty-corpus baseline, not a stub" 0
+        |> Array.iter (fun file ->
+          let jsonl = System.IO.File.ReadAllText file
+          match SageFs.Features.CohortLedgerExport.fromJsonl jsonl with
+          | Error e -> failtestf "%s failed to parse: %s" file e
+          | Ok(entries: LedgerEntry<MemberId> list) ->
+            entries
+            |> List.fold
+              (fun state (entry: LedgerEntry<MemberId>) ->
+                match decide entry.Clock entry.Entropy state entry.Command with
+                | Ok(newState, events, _effects) ->
+                  events
+                  |> Expect.equal
+                    (sprintf "%s seq %d replays to its recorded events" file (int64 entry.Seq))
+                    entry.Events
+                  newState
+                | Error e ->
+                  failtestf "%s seq %d: recorded command no longer applies cleanly: %A" file (int64 entry.Seq) e)
+              (CohortState.empty ())
+            |> ignore)
       }
     ]
 

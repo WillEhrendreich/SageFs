@@ -390,6 +390,7 @@
         <Compile Include="CohortLandingLoopTests.fs" />
         <Compile Include="CohortIntegrationHeadTests.fs" />
         <Compile Include="CohortLandingGitAcceptanceTests.fs" />
+        <Compile Include="CohortLedgerExportTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
