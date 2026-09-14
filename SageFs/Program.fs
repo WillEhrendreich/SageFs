@@ -90,6 +90,7 @@ type CliCommand =
   | DeprecatedClient of name: string
   | Daemon of args: string array
   | Jupyter of connectionFile: string
+  | Play of ledgerPath: string
 
 module CliCommand =
   let parse (args: string array) =
@@ -101,6 +102,8 @@ module CliCommand =
     | _ when args.Length > 0 && args.[0] = "status" -> Status
     | _ when args.Length > 0 && args.[0] = "check" -> Check
     | _ when args.Length > 0 && args.[0] = "sweep" -> Sweep (hasFlag "--kill")
+    | _ when args.Length > 0 && args.[0] = "play" && args.Length > 1 -> Play args.[1]
+    | _ when args.Length > 0 && args.[0] = "play" -> ShowHelp
     | _ when args.Length > 0 && args.[0] = "tui" -> DeprecatedClient "tui"
     | _ when args.Length > 0 && args.[0] = "gui" -> DeprecatedClient "gui"
     | _ when hasFlag "--jupyter" ->
@@ -329,6 +332,7 @@ let main args =
     printfn "       SageFs stop                     Stop running daemon"
     printfn "       SageFs status                   Show daemon info"
     printfn "       SageFs sweep [--kill]           Reap daemons whose owner process is gone"
+    printfn "       SageFs play <ledger.jsonl>      Replay a portable cohort ledger file offline"
     printfn ""
     printfn "Options:"
     printfn "  --version, -v          Show version information"
@@ -430,6 +434,15 @@ let main args =
 
   | Sweep kill ->
     sweepCommand kill
+
+  | Play ledgerPath ->
+    match CohortPlay.runPlay ledgerPath with
+    | Ok summary ->
+      printfn "%s" summary
+      0
+    | Error message ->
+      eprintfn "sagefs play: %s" message
+      1
 
   | DeprecatedClient name ->
     eprintfn "%s" (deprecatedClientMessage name)
