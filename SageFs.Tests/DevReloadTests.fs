@@ -771,7 +771,17 @@ let e2eSignalPathTests = testSequenced <| testList "DevReload E2E signal path" [
 // FileWatcher resilience tests (priority #8)
 // ============================================================================
 
-let fileWatcherResilienceTests = testList "FileWatcher resilience" [
+// testSequenced: these spin up real FileSystemWatchers (each a live inotify
+// listener), so they run one-at-a-time within this list, as every sibling list
+// here already does. That does NOT stop the full suite from running many other
+// watcher-based tests in parallel — enough concurrent watchers to overflow an
+// inotify event buffer. When that happens the product correctly synthesises an
+// overflow-recovery SoftReset (a "__overflow_recovery__.fsproj" change) instead
+// of the dropped real event, so the "mix of valid and invalid" case below
+// asserts the reported change came from the *watched directory*, not that a
+// specific file event survived. (That over-strict filename assertion was the
+// one recurring "errored" test in full-suite runs.)
+let fileWatcherResilienceTests = testSequenced <| testList "FileWatcher resilience" [
   test "start with non-existent directory skips it silently" {
     let config : FileWatcher.WatchConfig = {
       Directories = [ @"C:\__nonexistent_dir_sagefs_test_12345__" ]
@@ -804,12 +814,23 @@ let fileWatcherResilienceTests = testList "FileWatcher resilience" [
         reported.Task.IsCompleted
         |> Expect.isTrue "a .fs file written in the valid directory should be reported"
         let! (path: string) = reported.Task
-        Path.GetFileName path
-        |> Expect.equal "the reported change is the file written in the valid directory" "Probe.fs"
+        // Assert the change came from the VALID watched directory, not a
+        // specific filename: the invalid dir never gets a watcher, so nothing
+        // can ever be reported from it, while the valid dir reports either the
+        // real tempDir/Probe.fs event or — if the suite's many concurrent
+        // watchers overflow this one's inotify buffer — the product's legitimate
+        // tempDir/__overflow_recovery__.fsproj SoftReset. Both prove the
+        // contract; asserting the exact filename made the test brittle to the
+        // overflow-recovery path.
+        Path.GetFullPath(Path.GetDirectoryName path)
+        |> Expect.equal "the reported change came from the valid (watched) directory" (Path.GetFullPath tempDir)
       finally
         watcher.Dispose()
     finally
-      Directory.Delete(tempDir, true)
+      // Best-effort teardown: a cleanup throw must never ERROR the test over a
+      // detail unrelated to what it asserts (the dir is a GUID under TEMP and
+      // the OS reaps it regardless).
+      try Directory.Delete(tempDir, true) with _ -> ()
   }
 
   test "start with empty directory list returns valid disposable" {
