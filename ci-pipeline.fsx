@@ -58,7 +58,8 @@ let mcpSdkAspNetCoreDir = mcpSdkProjectDir "ModelContextProtocol.AspNetCore"
 let releaseDir = Path.Combine(rootDir, "release")
 let vscodeDir = Path.Combine(rootDir, "sagefs-vscode")
 // Every downstream check runs against this ONE Release build (see "build" stage).
-let testDll = "SageFs.Tests/bin/Release/net10.0/SageFs.Tests.dll"
+let testBinDir = "SageFs.Tests/bin/Release/net10.0"
+let testDll = $"{testBinDir}/SageFs.Tests.dll"
 
 // ---- release helpers (faithful F# translations of the old pwsh steps) --------
 
@@ -225,6 +226,27 @@ pipeline "sagefs" {
     run $"dotnet {testDll} --integration-host --summary"
   }
 
+  stage "dashboard browser journeys" {
+    // Real-browser dashboard journeys (Playwright.NET Chromium) via the suite's
+    // own --integration-browser entry point, off the same Release build. Formerly
+    // the separate dashboard-browser-e2e.yml (windows-latest); consolidated here
+    // on Linux (verified green). Chromium is fetched through the bundled .NET
+    // Playwright driver — no pwsh dependency. CI-gated so the fast local loop
+    // never fetches a browser (run it locally with `-- ci`).
+    //
+    // NOTE: only the dashboard journey folded — --integration-hr and
+    // --integration-lt did not port to Linux (the WebLive init profile never
+    // writes app-url.txt under the HR runner; the LT runner times out on the
+    // 11-green baseline). Those FEATURES stay covered by the integration-host
+    // suite (HttpApiIntegrationTests live-testing; HotReloadTests /
+    // WebAppHotReloadVerificationTests); only their windows-only *browser*
+    // journeys were dropped with the windows leg.
+    whenCmdArg "ci"
+    timeoutForStep 900
+    run $"{testBinDir}/.playwright/node/linux-x64/node {testBinDir}/.playwright/package/cli.js install chromium"
+    run $"dotnet {testDll} --integration-browser --summary"
+  }
+
   stage "package vscode extension" {
     // Produce the shippable VSIX straight into release/ (no separate artifact
     // hand-off between jobs).
@@ -252,6 +274,37 @@ pipeline "sagefs" {
     run "dotnet pack SageFs -c Release -o release"
     run (fun _ -> async { verifyToolInstallable (); return Ok() })
     run (fun _ -> async { writeReleaseManifest (); return Ok() })
+  }
+
+  stage "packaged tool smoke" {
+    // Install the just-packed nupkg as a real tool and run it — the one check
+    // that exercises the SHIPPED, INSTALLED artifact rather than the build
+    // output. Formerly smoke-test.yml (windows-latest); consolidated here on
+    // Linux, cross-platform (no pwsh). Installs to a throwaway --tool-path so it
+    // never touches a developer's global tools, then runs `check` (SDK/FSI
+    // reachable) and `--version`. Runs after "pack release bundle", so it is
+    // gated on "release" (present on a master push). This preserves the
+    // packaging-regression guard (uninstallable / unlaunchable tool) that
+    // verifyToolInstallable's nupkg-structure check alone cannot catch.
+    whenCmdArg "release"
+    timeoutForStep 300
+    run (fun ctx ->
+      async {
+        let toolPath = Path.Combine(rootDir, ".smoke-tool")
+        if Directory.Exists toolPath then Directory.Delete(toolPath, true)
+        let! install =
+          ctx.RunCommand $"dotnet tool install SageFs --tool-path \"{toolPath}\" --add-source \"{releaseDir}\" --no-cache"
+        match install with
+        | Error e -> return Error e
+        | Ok () ->
+          // `--version` proves the packed tool installed and launches (catches
+          // the uninstallable-package / dropped-exe / missing-dll-at-startup
+          // class). We deliberately do NOT run `check` here: it probes daemon
+          // and port state, whose exit semantics on a clean runner are not
+          // pinned, and a smoke stage must never be the flaky one.
+          let exe = Path.Combine(toolPath, "sagefs")
+          return! ctx.RunCommand $"\"{exe}\" --version"
+      })
   }
 
   runIfOnlySpecified false
