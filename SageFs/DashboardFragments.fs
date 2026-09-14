@@ -2021,6 +2021,7 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
             ]
           ]
         renderCohortMatrix frame
+        renderCohortTerritory frame
       ]
   ]
 
@@ -2054,6 +2055,46 @@ and private renderCohortMatrix (frame: SageFs.Cohort.CohortFrame<MemberTable.Mem
         ]
         Elem.pre [ Attr.style "font-size: 0.62rem; line-height: 1.15; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre;" ] [
           textEnc charGrid
+        ]
+      ]
+    ]
+
+/// §6.5 "Territory map" (Phase 2 item 16), scoped to what `CohortFrame`
+/// actually carries — see `CohortTerritory`'s module doc (`Features/CohortTerritory.fs`)
+/// for why this is claims-as-territory rather than the vision's full
+/// compile-list-with-coverage-health map (that data isn't on `CohortFrame`
+/// yet). Rendered as an inline SVG via `Text.raw`, the same no-served-route,
+/// no-new-stream pattern `renderCohortMatrix` uses for its PNG data URI —
+/// deterministic (`CohortTerritory.toSvg`) so it composes with the same
+/// `SnapshotRenderGuard` the matrix relies on. A frame with no Held/Orphaned
+/// claims anywhere renders nothing, matching this panel's other empty-state
+/// conventions (zero members, zero claims, zero test outcomes).
+and private renderCohortTerritory (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
+  let tiles = Features.CohortTerritory.ofFrame frame
+  match tiles with
+  | [] -> Elem.div [] []
+  | _ ->
+    let svg = Features.CohortTerritory.toSvg 320.0 200.0 tiles
+    let legend =
+      tiles
+      |> List.map (fun t ->
+        let holderText =
+          match t.HolderIndex >= 0 && t.HolderIndex < frame.MemberIds.Length with
+          | true -> MemberTable.MemberId.display frame.MemberIds.[t.HolderIndex]
+          | false -> "unclaimed"
+        sprintf "%s — %s" t.Label holderText)
+      |> String.concat "\n"
+    Elem.div [ Attr.id DomIds.CohortTerritory; Attr.style "margin-top: 0.4rem;" ] [
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [
+        textEnc (sprintf "Territory map (%d claimed path%s)" tiles.Length (if tiles.Length = 1 then "" else "s"))
+      ]
+      Elem.div [ Attr.style "max-width: 420px;" ] [ Text.raw svg ]
+      signalDetails Signals.CohortTerritoryTextOpen [ Attr.style "margin-top: 0.3rem;" ] [
+        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.7rem; color: var(--fg-dim); user-select: none;" ] [
+          Text.raw "Text fallback"
+        ]
+        Elem.pre [ Attr.style "font-size: 0.68rem; line-height: 1.3; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre-wrap;" ] [
+          textEnc legend
         ]
       ]
     ]

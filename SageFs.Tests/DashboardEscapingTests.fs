@@ -191,6 +191,13 @@ let private trustedSinks = [
     Why = "theme CSS variables built from ThemePresets" }
   { File = "DashboardFragments.fs"; Prefix = " (htmlEscape s)"; Count = 1
     Why = "textEnc — the single escaped-text constructor" }
+  { File = "DashboardFragments.fs"; Prefix = " svg"; Count = 1
+    Why = "territory-map SVG (CohortTerritory.toSvg): every runtime string it interpolates \
+           (a claim's Label) is passed through its own private escapeXml before reaching the \
+           template; every other interpolated field is a program-controlled float or a fixed \
+           palette/stroke constant. Pinned here, not inlined as textEnc, because the value is \
+           live <svg> markup that must render as an element, not escaped text — see \
+           CohortTerritoryTests.fs's hostile-payload property for the behavioral proof." }
 ]
 
 let private rawSinks (file: string) =

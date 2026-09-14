@@ -383,6 +383,7 @@
         <Compile Include="SessionManagerBuildSemaphoreTests.fs" />
         <Compile Include="CohortTestProjectionTests.fs" />
         <Compile Include="CohortMatrixRenderTests.fs" />
+        <Compile Include="CohortTerritoryTests.fs" />
         <Compile Include="CohortOwnerTests.fs" />
         <Compile Include="CohortSseEventsTests.fs" />
         <Compile Include="McpResourcesTests.fs" />
@@ -390,6 +391,7 @@
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="CohortAffordancesTests.fs" />
         <Compile Include="CohortPanelTests.fs" />
+        <Compile Include="CohortTerritoryPanelTests.fs" />
         <Compile Include="CohortGitTests.fs" />
         <Compile Include="CohortLandingVerifyTests.fs" />
         <Compile Include="CohortLandingLoopTests.fs" />
