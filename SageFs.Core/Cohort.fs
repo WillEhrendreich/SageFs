@@ -929,6 +929,12 @@ module Cohort =
     | Members = 1
     | Claims = 2
     | Matrix = 4
+    /// The landing queue/state region (item added alongside `Landings`/
+    /// `IntegrationHead` on `CohortFrame` — closes the gap the live
+    /// multi-agent dogfood surfaced: `get_cohort_status`/`cohort://status`
+    /// had no way to show landing progress at all, see `CohortFrame.Landings`'
+    /// doc comment).
+    | Landings = 8
 
   [<RequireQualifiedAccess>]
   type SeatState =
@@ -974,6 +980,41 @@ module Cohort =
     Pass: bool[][]
     Fail: bool[][]
     Stale: bool[][]
+    /// ADDITIVE (dogfood gap closure — see the module-level scope note's
+    /// history: `CohortDogfoodIntegrationTests.fs` proved live that
+    /// `get_cohort_status`/`cohort://status` had NO landing-state field at
+    /// all, forcing agents to infer a land indirectly from a claim
+    /// auto-releasing). The `CohortState.IntegrationHead` binding this
+    /// cohort's landings rebase onto and fast-forward into — sourced
+    /// verbatim from `CohortState.IntegrationHead` (`Cohort.fs`, the
+    /// `CohortState` record above), never re-derived.
+    IntegrationHead: string
+    /// One row per `CohortState.Landings` entry, sorted by `LandingId` —
+    /// same deterministic-order discipline as `ClaimIds`/`ClaimScope` above
+    /// (property 10: frame identity is `(Version, SessionGens)`, so column
+    /// order must be a pure function of state, never map-enumeration order).
+    LandingIds: LandingId[]
+    /// Index into `MemberIds`; -1 when the requester is not a current member
+    /// (departed-and-purged, or a replay edge case) — never a nullable
+    /// requester field, same discipline as `ClaimHolderIndex`.
+    LandingRequesterIndex: int[]
+    LandingStatement: Statement[]
+    /// `LandingRequest.Commits` flattened from `string list` to `string[]`
+    /// per row — flat and index-aligned, never a `Map` walk in a renderer.
+    LandingCommits: string[][]
+    /// The landing's full `LandingState<'m>` — carries Queued/Rebasing/
+    /// Verifying(progress)/Blocked(blocker,nextAction)/Landed(sha)/Withdrawn
+    /// verbatim, the same "store the real sub-DU" discipline `ClaimState`
+    /// already uses on this frame, rather than flattening to a status string
+    /// and losing the blocker/next-action detail a renderer needs.
+    LandingState: LandingState<'m>[]
+    /// This landing's 0-based position in `CohortState.Queue`, or -1 when it
+    /// is not currently queued (Landed/Withdrawn, or a state a corrupt
+    /// ledger could produce). Position 0 is the only landing that may be
+    /// `Rebasing`/`Verifying` (`Cohort.fs`'s own FIFO invariant) — carried
+    /// here so a renderer can show "next in line" without re-deriving it
+    /// from `CohortState.Queue` (which the frame does not otherwise expose).
+    LandingQueuePosition: int[]
   }
 
   /// Pure. Identity of a frame is `(Version, SessionGens)` (property 10): the
@@ -1020,6 +1061,21 @@ module Cohort =
       | false, _ -> -1
 
     let claims = head.State.Claims |> Map.toArray
+
+    // ── Landings (additive — dogfood gap closure) ──────────────────────────
+    // Sorted by LandingId for the same deterministic-order reason ClaimIds
+    // is sorted (Map.toArray on a comparison-keyed Map is already key-order,
+    // so this is `Map.toArray`'s natural order — spelled out via `Array.sortBy`
+    // to make the ordering contract explicit rather than incidental).
+    let landings =
+      head.State.Landings
+      |> Map.toArray
+      |> Array.sortBy (fun (LandingId lid, _) -> lid)
+    let queuePosition =
+      let positions = Dictionary<LandingId, int>(head.State.Queue.Length)
+      head.State.Queue
+      |> List.iteri (fun i lid -> if not (positions.ContainsKey lid) then positions.[lid] <- i)
+      landings |> Array.map (fun (lid, _) -> match positions.TryGetValue lid with true, i -> i | false, _ -> -1)
 
     // ── One combined pass over every reported test outcome ─────────────────
     // Each occurrence costs exactly one dictionary probe (assign-or-look-up a
@@ -1073,7 +1129,7 @@ module Cohort =
     {
       Version = head.Seq
       SessionGens = snapshots |> Array.map (fun s -> s.Generation)
-      Dirty = FrameRegions.Members ||| FrameRegions.Claims ||| FrameRegions.Matrix
+      Dirty = FrameRegions.Members ||| FrameRegions.Claims ||| FrameRegions.Matrix ||| FrameRegions.Landings
       Conductor = head.State.Conductor
       MemberIds = memberIds
       MemberRole = members |> Array.map (fun (_, r) -> r.Role)
@@ -1097,4 +1153,11 @@ module Cohort =
       Pass = rowsFrom passHits
       Fail = rowsFrom failHits
       Stale = rowsFrom staleHits
+      IntegrationHead = head.State.IntegrationHead
+      LandingIds = landings |> Array.map fst
+      LandingRequesterIndex = landings |> Array.map (fun (_, l) -> memberIndexOf l.Requester)
+      LandingStatement = landings |> Array.map (fun (_, l) -> l.Statement)
+      LandingCommits = landings |> Array.map (fun (_, l) -> l.Commits |> List.toArray)
+      LandingState = landings |> Array.map (fun (_, l) -> l.State)
+      LandingQueuePosition = queuePosition
     }

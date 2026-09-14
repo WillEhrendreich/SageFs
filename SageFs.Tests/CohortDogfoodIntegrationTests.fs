@@ -45,22 +45,26 @@
 ///    landing) is not exercised by this file either. That remains a real,
 ///    separate gap: nothing in this repo's test suite yet proves a landing
 ///    blocked by a REAL failing test discovered through live testing.
-///  - `get_cohort_status`/the `cohort://status` MCP resource do NOT surface
-///    landing state or `IntegrationHead` at all — confirmed straight from
-///    the tool's own doc comment (`McpTools.fs`'s `get_cohort_status`
-///    description: "the v1 read model does not yet include the landing
-///    queue's contents ... landing state is reported at request_landing
-///    time only") and from `renderCohortFrame`'s hard-coded line
-///    (`Mcp.fs:4550`: "Landing queue: not yet in the v1 read model"). This
-///    test does NOT pretend otherwise. The one MCP-observable signal a
-///    landing actually happened is a SIDE EFFECT of landing, not a direct
-///    field: `Cohort.decide`'s `FastForwardCompleted` handler auto-releases
-///    every backing claim on a successful land (`Cohort.fs:788-798`), which
-///    IS visible in `get_cohort_status`'s Claims section as
-///    `state=Released`. This test polls THAT as its MCP-only proof of
-///    landing completion, and separately polls the real git ref (the same
-///    "independent oracle" discipline `CohortLandingGitAcceptanceTests.fs`
-///    uses) as ground truth.
+///  - UPDATE (gap closed): `get_cohort_status`/the `cohort://status` MCP
+///    resource used to NOT surface landing state or `IntegrationHead` at
+///    all (`renderCohortFrame`'s hard-coded line, formerly `Mcp.fs:4550`:
+///    "Landing queue: not yet in the v1 read model") — this test's own
+///    assertions were the honest proof of that gap. `Cohort.CohortFrame`
+///    (`Cohort.fs`) now carries `IntegrationHead` plus one row per landing
+///    (id/requester/statement/commits/state/queue position), populated by
+///    `Cohort.project` straight from `CohortState.Landings`/`Queue`/
+///    `IntegrationHead`, and both `renderCohortFrame` (`Mcp.fs`) and
+///    `cohortFrameJson` (`SseWriter.fs`, the `cohort://status` payload) now
+///    render it — see this test's `Landings (` / `state=Landed` assertions
+///    below, which replace the old "not yet in the v1 read model" checks.
+///    Still stale, out of this fix's file-ownership scope: `request_landing`'s
+///    own `[<Description>]` on `get_cohort_status` (`McpTools.fs`) still says
+///    the v1 read model has no landing queue — that string was not touched
+///    here (another change owns `McpTools.fs`). The claim-auto-release
+///    side-effect proof (`Cohort.decide`'s `FastForwardCompleted` handler,
+///    `Cohort.fs:788-798`, visible as `state=Released` in the Claims
+///    section) is kept below as an independent, still-true corroborating
+///    signal — not because it is the only signal any more.
 ///  - Also stale, discovered while writing this test: `request_landing`'s
 ///    own `[<Description>]` (`McpTools.fs:1862`) still says "rebase/verify/
 ///    land themselves are a later slice's wiring and are not yet performed"
@@ -420,8 +424,16 @@ let tests =
           let! statusAfterAliceLanding = getCohortStatus alice
           statusAfterAliceLanding
           |> Expect.stringContains "alice's claim shows released after landing" (sprintf "%s " aliceClaimId)
+          // The gap this test used to document is closed: get_cohort_status
+          // now surfaces the landing directly (Cohort.fs's CohortFrame gained
+          // Landings/IntegrationHead fields, sourced from the same
+          // CohortState.Landings this landing's FastForwardCompleted
+          // transition already wrote to) instead of the old hard-coded
+          // "not yet in the v1 read model" line.
           statusAfterAliceLanding
-          |> Expect.stringContains "get_cohort_status is honest that it carries no direct landing-state field" "Landing queue: not yet in the v1 read model"
+          |> Expect.stringContains "get_cohort_status now surfaces the landed landing directly" "Landings (1):"
+          statusAfterAliceLanding
+          |> Expect.stringContains "the landed landing shows its terminal Landed state, not the old placeholder line" "state=Landed"
 
           // ── Member B's real commit, landed SECOND — only now, after A
           // genuinely landed, is it safe to switch the ONE shared
@@ -452,6 +464,8 @@ let tests =
           finalStatus |> Expect.stringContains "both members remain present after landing" "Members (2):"
           finalStatus
           |> Expect.stringContains "bob's claim shows released after landing" (sprintf "%s " bobClaimId)
+          finalStatus
+          |> Expect.stringContains "both landings are now visible in the read model, not just inferred from claim release" "Landings (2):"
 
           // ── Teardown: kill the daemon this test owns, then confirm zero leftovers ──
           killDaemon proc

@@ -18,12 +18,14 @@
 /// never drift from what every consumer actually observes.
 ///
 /// States/snapshots here are built DIRECTLY (never through `decide`/`replay`),
-/// because `project` only ever reads `Members`/`Claims`/`Conductor` off the
-/// state — generating them straight lets the property probe shapes `decide`
-/// itself would never construct (a claim held by a member who isn't present
-/// in `Members`, overlapping test outcomes across Pass/Fail/Stale for the same
-/// session, an empty test pool) that `project` still has to render without
-/// throwing or diverging from the oracle.
+/// because `project` only ever reads `Members`/`Claims`/`Conductor`/
+/// `Landings`/`Queue`/`IntegrationHead` off the state — generating them
+/// straight lets the property probe shapes `decide` itself would never
+/// construct (a claim held by a member who isn't present in `Members`,
+/// overlapping test outcomes across Pass/Fail/Stale for the same session, an
+/// empty test pool, a landing whose requester isn't a current member) that
+/// `project` still has to render without throwing or diverging from the
+/// oracle.
 module SageFs.Tests.CohortProjectEquivalenceTests
 
 open System
@@ -43,12 +45,30 @@ module private Reference =
   /// Verbatim copy of `Cohort.project` as it existed before the perf
   /// optimization — do not "fix" this to match a future `Cohort.project`;
   /// its entire job is to stay the pre-optimization behavior.
+  ///
+  /// The landing/`IntegrationHead` projection (added alongside
+  /// `CohortFrame.Landings` to close the dogfood-surfaced gap) was NEVER
+  /// part of the perf-optimized bitmap rewrite this oracle guards — there is
+  /// no "pre-optimization" landing behavior to freeze. It is duplicated here
+  /// verbatim (same code as `Cohort.project`, not re-derived) so the property
+  /// below stays a real equivalence proof over the WHOLE frame, including the
+  /// new fields, rather than silently going blind to them.
   let project (head: LedgerHead<'m>) (snapshots: SessionSnapshot<'m>[]) : CohortFrame<'m> =
     let members = head.State.Members |> Map.toArray
     let memberIds = members |> Array.map fst
     let memberIndexOf who = memberIds |> Array.tryFindIndex ((=) who) |> Option.defaultValue -1
 
     let claims = head.State.Claims |> Map.toArray
+
+    let landings =
+      head.State.Landings
+      |> Map.toArray
+      |> Array.sortBy (fun (LandingId lid, _) -> lid)
+    let queuePosition =
+      let positions = Dictionary<LandingId, int>(head.State.Queue.Length)
+      head.State.Queue
+      |> List.iteri (fun i lid -> if not (positions.ContainsKey lid) then positions.[lid] <- i)
+      landings |> Array.map (fun (lid, _) -> match positions.TryGetValue lid with true, i -> i | false, _ -> -1)
 
     let testIds =
       snapshots
@@ -65,7 +85,7 @@ module private Reference =
     {
       Version = head.Seq
       SessionGens = snapshots |> Array.map (fun s -> s.Generation)
-      Dirty = FrameRegions.Members ||| FrameRegions.Claims ||| FrameRegions.Matrix
+      Dirty = FrameRegions.Members ||| FrameRegions.Claims ||| FrameRegions.Matrix ||| FrameRegions.Landings
       Conductor = head.State.Conductor
       MemberIds = memberIds
       MemberRole = members |> Array.map (fun (_, r) -> r.Role)
@@ -89,6 +109,13 @@ module private Reference =
       Pass = bitmapFor (fun s -> s.PassingTests)
       Fail = bitmapFor (fun s -> s.FailingTests)
       Stale = bitmapFor (fun s -> s.StaleTests)
+      IntegrationHead = head.State.IntegrationHead
+      LandingIds = landings |> Array.map fst
+      LandingRequesterIndex = landings |> Array.map (fun (_, l) -> memberIndexOf l.Requester)
+      LandingStatement = landings |> Array.map (fun (_, l) -> l.Statement)
+      LandingCommits = landings |> Array.map (fun (_, l) -> l.Commits |> List.toArray)
+      LandingState = landings |> Array.map (fun (_, l) -> l.State)
+      LandingQueuePosition = queuePosition
     }
 
 // ── Generators — `'m = int`, built directly (never via `decide`) ──────────
@@ -160,12 +187,133 @@ let private genClaims =
 
 let private genConductor = Gen.oneof [ Gen.constant None; Gen.choose (1, 12) |> Gen.map Some ]
 
+let private genIntegrationHead = Gen.elements [ nullSha; "sha-onto"; "sha-rebased"; "sha-other" ]
+
+/// A small, overlap-heavy test-id pool — the same names deliberately recur
+/// across Pass/Fail/Stale and across sessions, exercising `Array.distinct`'s
+/// dedup and "a test appears in more than one category for the same session"
+/// (which both the oracle's `Set.ofList` and the dictionary-indexed rewrite
+/// must resolve identically: the bit simply ends up set in both bitplanes).
+/// Shared with the landing generators below (`FailingTests`) so a generated
+/// `LandingBlocker.FailingTests` can reference the same ids a session
+/// snapshot might report as failing.
+let private testPool = [| "t1"; "t2"; "t3"; "t4"; "t5" |] |> Array.map TestId
+
+// ── Landing generators (exercises the ADDITIVE Landings/IntegrationHead
+//    projection — never part of the frozen pre-optimization oracle, so this
+//    is the only place that shape gets test coverage in this file) ────────
+
+let private genLandingBlocker =
+  gen {
+    let! kind = Gen.choose (0, 4)
+    match kind with
+    | 0 ->
+      let! files = Gen.listOf (Gen.elements [ "a.fs"; "b.fs" ])
+      return LandingBlocker.RebaseConflict files
+    | 1 ->
+      let! tests = Gen.listOf (Gen.elements testPool)
+      return LandingBlocker.FailingTests tests
+    | 2 ->
+      let! n = Gen.choose (0, 20)
+      return LandingBlocker.StaleClaimFence(ClaimId(sprintf "c-%d" n))
+    | 3 -> return LandingBlocker.HeadMoved("sha-a", "sha-b")
+    | _ ->
+      let! who = Gen.choose (1, 12)
+      return LandingBlocker.VetoedBy(who, "reason")
+  }
+
+let private genNextAction =
+  Gen.elements [
+    NextAction.RebaseAndResubmit
+    NextAction.AwaitConductor
+    NextAction.FixTests [ TestId "t1" ]
+    NextAction.Withdraw
+  ]
+
+let private genLandingState =
+  gen {
+    let! kind = Gen.choose (0, 5)
+    match kind with
+    | 0 -> return LandingState.Queued
+    | 1 -> return LandingState.Rebasing "sha-onto"
+    | 2 ->
+      let! affected = Gen.choose (0, 10)
+      let! running = Gen.choose (0, 10)
+      return LandingState.Verifying("sha-base", "sha-rebased", affected, running)
+    | 3 ->
+      let! blocker = genLandingBlocker
+      let! nextAction = genNextAction
+      return LandingState.Blocked(blocker, nextAction)
+    | 4 -> return LandingState.Landed "sha-landed"
+    | _ -> return LandingState.Withdrawn
+  }
+
+let private genStatement =
+  match Statement.tryCreate "land this please" with
+  | Ok s -> Gen.constant s
+  | Error e -> failwithf "test bug: %s" e
+
+let private genLandingClaimRef =
+  gen {
+    let! n = Gen.choose (0, 20)
+    let! fenceN = Gen.choose (0, 1000)
+    return ClaimId(sprintf "c-%d" n), int64 fenceN * 1L<fence>
+  }
+
+let private genLandingRequest : Gen<LandingId * LandingRequest<int>> =
+  gen {
+    let! idNum = Gen.choose (0, 20)
+    let! requester = Gen.choose (1, 12)
+    let! claimRefs = Gen.listOf genLandingClaimRef
+    let! commits = Gen.listOf (Gen.elements [ "sha-c1"; "sha-c2"; "sha-c3" ])
+    let! statement = genStatement
+    let! state = genLandingState
+    let lid = LandingId(sprintf "l-%d" idNum)
+    return
+      lid,
+      { Id = lid
+        Requester = requester
+        Claims = claimRefs
+        Commits = commits
+        BaseAtQueue = "sha-base-at-queue"
+        Statement = statement
+        State = state }
+  }
+
+let private genLandings : Gen<Map<LandingId, LandingRequest<int>>> =
+  gen {
+    let! entries = Gen.listOf genLandingRequest
+    return entries |> List.distinctBy fst |> Map.ofList
+  }
+
+/// A queue that is a (possibly partial, possibly reordered) permutation of
+/// the generated landings' ids — including ids repeated is impossible
+/// (`Array.distinct`), and the queue may be shorter than the full landing
+/// set (the FIFO discipline `advanceQueue` maintains never requires every
+/// landing to be queued — Landed/Withdrawn ones are popped).
+let private genQueueFor (landingIds: LandingId[]) : Gen<LandingId list> =
+  gen {
+    let! shuffled = Gen.shuffle landingIds
+    let! takeN = Gen.choose (0, landingIds.Length)
+    return shuffled |> Array.toList |> List.truncate takeN
+  }
+
 let private genState =
   gen {
     let! members = genMembers
     let! claims = genClaims
     let! conductor = genConductor
-    return { CohortState.empty () with Members = members; Claims = claims; Conductor = conductor }
+    let! integrationHead = genIntegrationHead
+    let! landings = genLandings
+    let! queue = genQueueFor (landings |> Map.toArray |> Array.map fst)
+    return
+      { CohortState.empty () with
+          Members = members
+          Claims = claims
+          Conductor = conductor
+          IntegrationHead = integrationHead
+          Landings = landings
+          Queue = queue }
   }
 
 let private genLedgerSeq = Gen.choose (0, 100_000) |> Gen.map (fun n -> int64 n * 1L<ledgerSeq>)
@@ -176,13 +324,6 @@ let private genHead : Gen<LedgerHead<int>> =
     let! sq = genLedgerSeq
     return { Seq = sq; State = state }
   }
-
-/// A small, overlap-heavy test-id pool — the same names deliberately recur
-/// across Pass/Fail/Stale and across sessions, exercising `Array.distinct`'s
-/// dedup and "a test appears in more than one category for the same session"
-/// (which both the oracle's `Set.ofList` and the dictionary-indexed rewrite
-/// must resolve identically: the bit simply ends up set in both bitplanes).
-let private testPool = [| "t1"; "t2"; "t3"; "t4"; "t5" |] |> Array.map TestId
 
 let private genTestIdList = Gen.listOf (Gen.elements testPool)
 
@@ -211,6 +352,20 @@ type private ProjectGenerators =
 
 let private config = { propConfig with arbitrary = [ typeof<ProjectGenerators> ] }
 
+/// Regression guard for the additive Landings/IntegrationHead projection
+/// (dogfood gap closure): adding landing state to a `CohortState` must never
+/// change any of the pre-existing frame fields. Compares `project` over the
+/// generated (possibly landing-bearing) head against `project` over the same
+/// head with `Landings`/`Queue` stripped back to empty — every field except
+/// the landing/IntegrationHead ones must agree. (`IntegrationHead` is
+/// deliberately excluded from this comparison: it is real `CohortState`
+/// data, generated independently of `Landings`/`Queue` by `genIntegrationHead`,
+/// so it is expected — and correct — to differ from the empty-landings
+/// baseline exactly when the generator picked two different values, not a
+/// hidden interaction with landings.)
+let private stripLandings (head: LedgerHead<'m>) : LedgerHead<'m> =
+  { head with State = { head.State with Landings = Map.empty; Queue = [] } }
+
 [<Tests>]
 let cohortProjectEquivalenceTests =
   testList "Cohort.project output-identical proof" [
@@ -226,4 +381,34 @@ let cohortProjectEquivalenceTests =
              PassingTests = [ TestId "dup" ]; FailingTests = [ TestId "dup" ]; StaleTests = [] } |]
       Cohort.project head snapshots
       |> Expect.equal "should match the frozen oracle byte-for-byte" (Reference.project head snapshots)
+
+    testPropertyWithConfig config "adding landings never changes the pre-existing (non-landing) frame fields" <|
+      fun (head: LedgerHead<int>) (snapshots: SessionSnapshot<int>[]) ->
+        let withLandings = Cohort.project head snapshots
+        let withoutLandings = Cohort.project (stripLandings head) snapshots
+        withLandings.Version = withoutLandings.Version
+        && withLandings.SessionGens = withoutLandings.SessionGens
+        && withLandings.Conductor = withoutLandings.Conductor
+        && withLandings.MemberIds = withoutLandings.MemberIds
+        && withLandings.MemberRole = withoutLandings.MemberRole
+        && withLandings.MemberSeat = withoutLandings.MemberSeat
+        && withLandings.ClaimIds = withoutLandings.ClaimIds
+        && withLandings.ClaimScope = withoutLandings.ClaimScope
+        && withLandings.ClaimHolderIndex = withoutLandings.ClaimHolderIndex
+        && withLandings.ClaimFence = withoutLandings.ClaimFence
+        && withLandings.ClaimState = withoutLandings.ClaimState
+        && withLandings.TestIds = withoutLandings.TestIds
+        && withLandings.Pass = withoutLandings.Pass
+        && withLandings.Fail = withoutLandings.Fail
+        && withLandings.Stale = withoutLandings.Stale
+
+    testCase "empty landings/queue project to empty landing columns, stably" <| fun _ ->
+      let state = { CohortState.empty () with Members = Map.ofList [ 1, { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None } ] }
+      let head = { Seq = 0L<ledgerSeq>; State = state }
+      let frame = Cohort.project head [||]
+      frame.LandingIds |> Expect.isEmpty "no landings means an empty LandingIds column"
+      frame.LandingRequesterIndex |> Expect.isEmpty "no landings means an empty requester-index column"
+      frame.LandingState |> Expect.isEmpty "no landings means an empty state column"
+      frame.LandingQueuePosition |> Expect.isEmpty "no landings means an empty queue-position column"
+      frame.IntegrationHead |> Expect.equal "an empty state's IntegrationHead is the null sha sentinel" Cohort.nullSha
   ]

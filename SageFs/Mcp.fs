@@ -4547,7 +4547,32 @@ module McpTools =
         if frame.ClaimHolderIndex.[i] >= 0 then MemberTable.MemberId.display frame.MemberIds.[frame.ClaimHolderIndex.[i]]
         else "(none)"
       sb.AppendLine(sprintf "  - %s %A held-by=%s fence=%d state=%A" cid frame.ClaimScope.[i] holder (int64 frame.ClaimFence.[i]) frame.ClaimState.[i]) |> ignore
-    sb.AppendLine("Landing queue: not yet in the v1 read model (Cohort.fs's CohortFrame is trimmed to members/claims/test bitplanes; see its module doc).") |> ignore
+    sb.AppendLine(sprintf "Integration head: %s" frame.IntegrationHead) |> ignore
+    if frame.LandingIds.Length = 0 then
+      sb.AppendLine("Landings: (none)") |> ignore
+    else
+      sb.AppendLine(sprintf "Landings (%d):" frame.LandingIds.Length) |> ignore
+      for i in 0 .. frame.LandingIds.Length - 1 do
+        let (Cohort.LandingId lid) = frame.LandingIds.[i]
+        let requester =
+          if frame.LandingRequesterIndex.[i] >= 0 then MemberTable.MemberId.display frame.MemberIds.[frame.LandingRequesterIndex.[i]]
+          else "(unknown member)"
+        let queuePos =
+          match frame.LandingQueuePosition.[i] with
+          | -1 -> "not queued"
+          | 0 -> "front of queue"
+          | p -> sprintf "position %d in queue" p
+        let commits = String.concat "," frame.LandingCommits.[i]
+        sb.AppendLine(
+          sprintf
+            "  - %s requester=%s state=%A %s statement=\"%s\" commits=[%s]"
+            lid
+            requester
+            frame.LandingState.[i]
+            queuePos
+            (Cohort.Statement.value frame.LandingStatement.[i])
+            commits
+        ) |> ignore
     sb.ToString()
 
   /// Resolve the caller's SESSION (checkout) for `join_cohort` (item 13c of

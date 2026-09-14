@@ -40,7 +40,14 @@ let private frameOf
     TestIds = [||]
     Pass = [||]
     Fail = [||]
-    Stale = [||] }
+    Stale = [||]
+    IntegrationHead = Cohort.nullSha
+    LandingIds = [||]
+    LandingRequesterIndex = [||]
+    LandingStatement = [||]
+    LandingCommits = [||]
+    LandingState = [||]
+    LandingQueuePosition = [||] }
 
 [<Tests>]
 let cohortAffordancesTests =

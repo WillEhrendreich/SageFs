@@ -515,9 +515,12 @@ let private landingStateKind (state: Cohort.LandingState<MemberTable.MemberId>) 
 
 /// Format the daemon's single per-daemon `CohortFrame` (Cohort.fs's `project`)
 /// as an SSE event string: members (id/role/seat/conductor), claims
-/// (id/scope/holder/fence/state), and the flat, index-aligned test matrix
+/// (id/scope/holder/fence/state), the flat, index-aligned test matrix
 /// (Tests + one Pass/Fail/Stale row per session, `Rows.[i]` aligned with
-/// `frame.SessionGens.[i]`). Version-gate at the call site (compare
+/// `frame.SessionGens.[i]`), and — additive — `IntegrationHead` plus one row
+/// per landing (id/requester/statement/commits/state/queue position/
+/// blocker/next-action) so a `cohort://status` reader can see landing
+/// progress without a separate channel. Version-gate at the call site (compare
 /// `frame.Version` to the last one sent, like `coverage_view`'s generation
 /// gate) — this formatter itself always formats whatever frame it is given.
 /// Pure JSON projection of a `CohortFrame` — the same read model shared by
@@ -555,12 +558,40 @@ let cohortFrameJson (opts: JsonSerializerOptions) (frame: Cohort.CohortFrame<Mem
          Pass = frame.Pass.[i]
          Fail = frame.Fail.[i]
          Stale = frame.Stale.[i] |})
+  // Additive — closes the dogfood-surfaced gap (`CohortDogfoodIntegrationTests.fs`:
+  // "get_cohort_status/the cohort://status MCP resource do NOT surface landing
+  // state or IntegrationHead at all"). Reuses the SAME per-case wire shapes
+  // `formatLandingChangedEvent` already uses for a single landing
+  // (`landingStateKind`/`landingBlockerToWire`/`nextActionToWire`), so
+  // `landing_changed` and the landing rows here never drift into two
+  // different wire shapes for the same domain concept.
+  let landings =
+    Array.init frame.LandingIds.Length (fun i ->
+      let (Cohort.LandingId lid) = frame.LandingIds.[i]
+      let requester =
+        match frame.LandingRequesterIndex.[i] with
+        | -1 -> None
+        | idx -> Some (displayMember frame.MemberIds.[idx])
+      let blocker, nextAction =
+        match frame.LandingState.[i] with
+        | Cohort.LandingState.Blocked (b, na) -> Some (landingBlockerToWire b), Some (nextActionToWire na)
+        | _ -> None, None
+      {| Id = lid
+         Requester = requester
+         Statement = Cohort.Statement.value frame.LandingStatement.[i]
+         Commits = frame.LandingCommits.[i]
+         State = landingStateKind frame.LandingState.[i]
+         QueuePosition = frame.LandingQueuePosition.[i]
+         Blocker = blocker
+         NextAction = nextAction |})
   let payload =
     {| Version = frame.Version
        Members = members
        Claims = claims
        Tests = tests
-       Rows = rows |}
+       Rows = rows
+       IntegrationHead = frame.IntegrationHead
+       Landings = landings |}
   JsonSerializer.Serialize(payload, opts)
 
 let formatCohortMatrixEvent (opts: JsonSerializerOptions) (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =

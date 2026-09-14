@@ -1887,7 +1887,7 @@ OUTPUT: Confirmation text with the new landing id, or a validation error (invali
 
 WHEN TO USE: Before acquiring a claim (check for conflicts), to see who else is in the cohort, or to find a claim/landing id to act on.
 
-OUTPUT: Plain-text summary. The v1 read model does not yet include the landing queue's contents (Cohort.fs's CohortFrame is trimmed to members/claims/test data) — landing state is reported at request_landing time only.""")>]
+OUTPUT: Plain-text summary of members, claims, the test matrix, AND the landing queue — each landing's id, requester, state (Queued/Rebasing/Verifying/Blocked/Landed/Withdrawn), queue position, and the current integration head. The same landing state is on the cohort://status MCP resource, so you can subscribe instead of polling.""")>]
     member _.get_cohort_status() : Task<string> =
         logger.LogDebug("MCP-TOOL: get_cohort_status called")
         task {

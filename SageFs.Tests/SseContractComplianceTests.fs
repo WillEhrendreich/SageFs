@@ -185,9 +185,12 @@ module private CohortTestData =
   let mkClaim () : SageFs.Cohort.Claim<SageFs.MemberTable.MemberId> =
     (joinAndClaim ()).Claims |> Map.toList |> List.exactlyOne |> snd
 
-  /// One landing, driven to `Blocked(FailingTests, FixTests)` so the
-  /// blocker/next-action wire shape round-trips too.
-  let mkBlockedLanding () : SageFs.Cohort.LandingRequest<SageFs.MemberTable.MemberId> =
+  /// alice's claim, presented as a landing and driven to
+  /// `Blocked(FailingTests, FixTests)` — shared by `mkBlockedLanding` (the
+  /// `LandingRequest` for `landing_changed`'s test) and `mkFrame` (the whole
+  /// `CohortFrame` for `cohort_matrix`'s test), so both prove the blocker/
+  /// next-action wire shape round-trips from the SAME underlying state.
+  let private stateWithBlockedLanding () : SageFs.Cohort.CohortState<SageFs.MemberTable.MemberId> * SageFs.Cohort.LandingId =
     let state0 = joinAndClaim ()
     let claimId, claim = state0.Claims |> Map.toList |> List.exactlyOne
     let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.RequestLanding(alice, [ claimId, claim.Fence ], [ "abc123" ], "land it"))
@@ -195,11 +198,19 @@ module private CohortTestData =
     let state2 = applyOk state1 (SageFs.Cohort.CohortCommand.RebaseCompleted(landingId, Ok "def456"))
     let state3 = applyOk state2 (SageFs.Cohort.CohortCommand.AffectedComputed(landingId, [ SageFs.Cohort.TestId "t1" ]))
     let state4 = applyOk state3 (SageFs.Cohort.CohortCommand.TestsCompleted(landingId, [ SageFs.Cohort.TestId "t1" ]))
-    state4.Landings |> Map.find landingId
+    state4, landingId
 
-  /// A one-member, one-claim, two-test frame.
+  /// One landing, driven to `Blocked(FailingTests, FixTests)` so the
+  /// blocker/next-action wire shape round-trips too.
+  let mkBlockedLanding () : SageFs.Cohort.LandingRequest<SageFs.MemberTable.MemberId> =
+    let state, landingId = stateWithBlockedLanding ()
+    state.Landings |> Map.find landingId
+
+  /// A one-member, one-claim, two-test frame carrying one Blocked landing
+  /// (dogfood gap closure: `cohort_matrix`'s landing row is proven non-empty,
+  /// not merely present-but-vacant).
   let mkFrame () : SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId> =
-    let state = joinAndClaim ()
+    let state, _ = stateWithBlockedLanding ()
     let head : SageFs.Cohort.LedgerHead<SageFs.MemberTable.MemberId> = { Seq = 3L<SageFs.Measures.ledgerSeq>; State = state }
     let snapshot : SageFs.Cohort.SessionSnapshot<SageFs.MemberTable.MemberId> =
       { Member = Some alice
@@ -404,7 +415,24 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
       formatCohortMatrixEvent jsonOpts (CohortTestData.mkFrame ())
       |> extractDataPayload
       |> assertJsonProperties "cohort_matrix"
-        [ "version"; "members"; "claims"; "tests"; "rows" ]
+        // "integrationHead"/"landings" (dogfood gap closure — CohortFrame's
+        // additive Landings/IntegrationHead projection): CohortTestData.mkFrame's
+        // fixture carries the blocked landing `mkBlockedLanding` builds, so this
+        // also proves the payload isn't just present but non-empty for a real
+        // in-flight landing.
+        [ "version"; "members"; "claims"; "tests"; "rows"; "integrationHead"; "landings" ]
+
+    testCase "Cohort cohort_matrix landing row exposes id/requester/state/blocker/nextAction" <| fun () ->
+      let payload =
+        formatCohortMatrixEvent jsonOpts (CohortTestData.mkFrame ())
+        |> extractDataPayload
+      use doc = JsonDocument.Parse(payload)
+      let landings = doc.RootElement.GetProperty("landings")
+      (landings.GetArrayLength(), 0) |> Expect.isGreaterThan "the fixture's landing must appear as a row"
+      let row = landings.[0]
+      for prop in [ "id"; "requester"; "statement"; "commits"; "state"; "queuePosition"; "blocker"; "nextAction" ] do
+        row |> hasJsonProperty prop
+        |> Expect.isTrue (sprintf "cohort_matrix landing row should have property '%s'" prop)
 
     testCase "Cohort claim_changed has expected properties" <| fun () ->
       formatClaimChangedEvent jsonOpts "acquired" (CohortTestData.mkClaim ())
