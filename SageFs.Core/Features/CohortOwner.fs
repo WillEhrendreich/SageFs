@@ -59,11 +59,13 @@ module CohortOwner =
   ///  - `RunTests landingId tests` → the FAILING subset (empty = all
   ///    passed), exactly `TestsCompleted`'s payload.
   ///  - `FastForward landingId toSha` → `Ok committedSha` or `Error reason`.
-  ///    `decide` has no failure-completion command for this effect (see
-  ///    `dispatchLandingEffects`'s `FastForward` case) — an `Error` here is
-  ///    logged and the landing is left exactly where it was (`Verifying`),
-  ///    which is the honest, documented gap until a later item adds a
-  ///    `FastForwardFailed` command to `Cohort.fs`.
+  ///    `Ok` drives `CohortCommand.FastForwardCompleted`; `Error` drives
+  ///    `CohortCommand.FastForwardFailed` (roast-6 #7b), which re-enters
+  ///    `Cohort.decide` and moves the landing out of `Verifying` — either
+  ///    `Blocked(HeadMoved ...)` when the integration head genuinely moved
+  ///    concurrently, or back to `Rebasing` (a fresh `Rebase` effect) to
+  ///    retry the pipeline when it has not. The landing is never left
+  ///    stranded in `Verifying`.
   ///  - `Notify who event` is fire-and-forget: `decide` defines
   ///    `CohortEffect.Notify` but no `decide` case constructs one yet (grep
   ///    confirms zero call sites in Cohort.fs today), so this field exists
@@ -221,17 +223,18 @@ module CohortOwner =
             match result with
             | Ok committedSha -> complete (CohortCommand.FastForwardCompleted(LandingId id, committedSha))
             | Error reason ->
-              // `Cohort.decide` has no failure-completion command for
-              // `FastForward` (unlike `Rebase`, whose `Error` drives a
-              // `RebaseConflict` `Blocked` transition) — a fast-forward
-              // infra failure (the branch moved concurrently, a bad ref)
-              // has no path back into the state machine today. Documented,
-              // honest gap: log it and leave the landing exactly where it
-              // is (`Verifying`), rather than inventing an undocumented
-              // command `decide` was never given a case for.
+              // Roast-6 #7b closed the gap this comment used to describe:
+              // `Cohort.decide` now has a real completion command for a
+              // FastForward infra failure (`FastForwardFailed`), which
+              // re-enters the state machine — reapplying the same
+              // Property-11 HeadMoved guard `FastForwardCompleted` uses, or
+              // (when the head has not moved) retrying the whole
+              // rebase -> verify -> fast-forward pipeline from `Rebasing`.
+              // The landing is never left stranded in `Verifying` again.
               logger.LogWarning(
-                sprintf "[cohort-owner] FastForward for landing %s failed with no completion path in Cohort.decide: %s" id reason
+                sprintf "[cohort-owner] FastForward for landing %s failed: %s — re-entering Cohort.decide via FastForwardFailed" id reason
               )
+              complete (CohortCommand.FastForwardFailed(LandingId id, reason))
           }
         )
       | CohortEffect.Notify(who, event) ->
@@ -446,3 +449,82 @@ module CohortOwner =
     (performer: LandingPerformer<MemberId>)
     : Handle =
     startCore logger ledger clock entropy getSessionTestOutcomes performer
+
+  /// Roast-6 #7a: the daemon-held content-addressed test-result cache for
+  /// landing verification (§5.4) used to be a bare `ref`, read-modify-written
+  /// from the `RunTests` performer in `DaemonMode.fs`. That was safe only
+  /// because v1's landing queue is strictly serial (`Cohort.fs`'s `Queue`
+  /// doc comment: only `Queue.Head` may be `Rebasing`/`Verifying`), so at
+  /// most one `RunTests` call is ever in flight — correctness rested on that
+  /// invariant holding forever, not on anything structural. This module
+  /// gives the cache a single owner (the same `MailboxProcessor`
+  /// single-writer discipline `SessionManager`/`ManifestOwner` already use)
+  /// so a `RunTests` performer talks to it via `Verify` — a message, not a
+  /// shared mutable cell — and correctness no longer depends on the queue
+  /// staying serial.
+  module LandingCacheOwner =
+    open SageFs.Features.LiveTesting
+
+    type internal Command =
+      | Verify of
+          inputHashOf: (TestId -> string option) *
+          sessionId: string *
+          tests: TestId list *
+          runMisses: (TestId list -> Async<Result<TestId list, string>>) *
+          reply: AsyncReplyChannel<Result<TestId list, string>>
+
+    /// A running owner for one daemon's landing-verification cache.
+    type Handle internal (mailbox: MailboxProcessor<Command>) =
+      /// Cache-aware verification (`LandingCache.verify`), run through the
+      /// single owner instead of a shared `ref`. Queues behind any
+      /// in-flight `Verify` exactly like every other single-mailbox owner
+      /// in this codebase — the ordering guarantee the old `ref` only had
+      /// by accident, this has by construction.
+      member _.Verify
+        (inputHashOf: TestId -> string option)
+        (sessionId: string)
+        (tests: TestId list)
+        (runMisses: TestId list -> Async<Result<TestId list, string>>)
+        : Task<Result<TestId list, string>> =
+        mailbox.PostAndAsyncReply(fun reply -> Command.Verify(inputHashOf, sessionId, tests, runMisses, reply))
+        |> Async.StartAsTask
+
+      interface IDisposable with
+        member _.Dispose() = (mailbox :> IDisposable).Dispose()
+
+      interface IAsyncDisposable with
+        member _.DisposeAsync() =
+          (mailbox :> IDisposable).Dispose()
+          ValueTask.CompletedTask
+
+    /// Start a fresh, empty landing-cache owner. The cache is in-memory
+    /// only — unchanged durability from the `ref` it replaces: losing it on
+    /// a daemon restart just means the next landing re-verifies from
+    /// scratch, exactly as before.
+    let start (logger: Utils.ILogger) : Handle =
+      let handle (cache: TestResultCache) (command: Command) : Async<TestResultCache> =
+        async {
+          match command with
+          | Command.Verify(inputHashOf, sessionId, tests, runMisses, reply) ->
+            // Every exception path still replies exactly once — a failed
+            // `runMisses` must never leave the caller's
+            // `PostAndAsyncReply` hanging, and must never poison this
+            // owner's own cache with a half-applied result.
+            try
+              let! newCache, result = LandingCache.verify cache inputHashOf sessionId tests runMisses
+              reply.Reply result
+              return newCache
+            with ex ->
+              reply.Reply(Error(sprintf "landing cache verify threw: %s" ex.Message))
+              return cache
+        }
+      let mailbox =
+        MailboxProcessor<Command>.Start(fun inbox ->
+          let step = ResilientActor.wrapLoop logger "landing-cache-owner" handle
+          let rec loop cache = async {
+            let! command = inbox.Receive()
+            let! next = step cache command
+            return! loop next
+          }
+          loop TestResultCache.empty)
+      new Handle(mailbox)

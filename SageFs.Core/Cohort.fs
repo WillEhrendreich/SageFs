@@ -364,6 +364,16 @@ module Cohort =
     | AffectedComputed of LandingId * TestId list
     | TestsCompleted of LandingId * failing: TestId list
     | FastForwardCompleted of LandingId * committedSha: string
+    /// The FastForward EFFECT itself failed — an infra error (the branch
+    /// moved concurrently under a raw git command, a transient I/O error,
+    /// a bad ref), as opposed to `FastForwardCompleted`'s `HeadMoved` guard,
+    /// which is `decide`'s OWN check of a fast-forward that nominally
+    /// succeeded. Before this case existed the performer could only log the
+    /// failure (`CohortOwner.dispatchLandingEffects`'s `FastForward` arm) —
+    /// nothing ever re-entered `decide`, so the landing was permanently
+    /// stranded in `Verifying` (roast-6 #7b). See the `decide` case below for
+    /// the transition this now drives.
+    | FastForwardFailed of LandingId * reason: string
     | WithdrawLanding of who: 'm * LandingId
     | VetoLanding of by: 'm * LandingId * reason: string
     /// Conductor action (item 14c): bind `IntegrationHead` to a git sha the
@@ -800,6 +810,40 @@ module Cohort =
                    (CohortEvent.LandingStateChanged(id, landed.State) :: CohortEvent.LandingLanded(id, committedSha) :: List.rev releaseEventsRev)
                    @ advEvents,
                    advEffects)
+          | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
+
+    | CohortCommand.FastForwardFailed(id, _reason) ->
+      match Map.tryFind id state.Landings with
+      | None -> Error(CohortError.UnknownLanding id)
+      | Some req ->
+        match requireAtFrontOfQueue state id with
+        | Error e -> Error e
+        | Ok () ->
+          match req.State with
+          | LandingState.Verifying(base', _rebasedHead, _, _) ->
+            // A FastForward infra failure has no merge-conflict or
+            // failing-test payload of its own — closing roast-6 #7b means
+            // this must not be a dead end, but it also must not silently
+            // relabel a real head-move as something else. So: apply
+            // `FastForwardCompleted`'s OWN Property-11 guard first (same
+            // base'-vs-IntegrationHead comparison, same Blocked(HeadMoved)
+            // outcome) — a landing whose head genuinely moved concurrently
+            // gets the real diagnosis and the requester's existing
+            // RebaseAndResubmit recovery path. Only when the head has NOT
+            // moved does this treat the failure as transient infra: the
+            // landing re-enters `Rebasing` against the SAME base and
+            // `decide` emits a fresh `Rebase` effect, so the
+            // rebase -> verify -> fast-forward pipeline retries end-to-end
+            // instead of leaving the landing stuck in `Verifying` forever.
+            match base' <> state.IntegrationHead with
+            | true ->
+              let blocked = { req with State = LandingState.Blocked(LandingBlocker.HeadMoved(base', state.IntegrationHead), NextAction.RebaseAndResubmit) }
+              let newState = { state with Landings = Map.add id blocked state.Landings }
+              Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State) ], [])
+            | false ->
+              let rebasing = { req with State = LandingState.Rebasing base' }
+              let newState = { state with Landings = Map.add id rebasing state.Landings }
+              Ok(newState, [ CohortEvent.LandingStateChanged(id, rebasing.State) ], [ CohortEffect.Rebase(id, base') ])
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
     | CohortCommand.WithdrawLanding(who, id) ->

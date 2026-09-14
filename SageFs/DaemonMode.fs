@@ -1699,12 +1699,15 @@ let run
   // guard compares the BASE against IntegrationHead (Property 11) while
   // FastForward targets the rebased head — no echo/re-read workaround needed.
   // Daemon-held content-addressed test-result cache for landing verification
-  // (§5.4). Accessed only from the RunTests performer below, which the
-  // CohortOwner runs serially through its single landing queue — so a plain ref
-  // is safe (no concurrent landings). A test is cached only when its coverage
-  // gives a trustworthy InputHash (see the RunTests wiring); a same-input test
-  // on a later landing is then skipped instead of re-run.
-  let cohortLandingCache = ref (Features.LiveTesting.TestResultCache.empty)
+  // (§5.4), owned by `Features.CohortOwner.LandingCacheOwner` (roast-6 #7a) —
+  // a single mailbox, not a shared `ref` read-modify-written by the RunTests
+  // performer below. The old `ref` was safe only because v1's landing queue
+  // is strictly serial (CohortOwner runs one landing's effects at a time);
+  // this makes that correctness structural instead of resting on the
+  // invariant holding forever. A test is cached only when its coverage gives
+  // a trustworthy InputHash (see the RunTests wiring); a same-input test on
+  // a later landing is then skipped instead of re-run.
+  use cohortLandingCacheOwner = Features.CohortOwner.LandingCacheOwner.start (Log.asILogger ())
 
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
     { Rebase = fun _landingId onto ->
@@ -1816,9 +1819,11 @@ let run
                 | _ -> None
             let runMisses toRun =
               Features.CohortLandingVerify.runTestsInSession elmRuntime observation sessionId toRun
-            let! newCache, result =
-              Features.LiveTesting.LandingCache.verify cohortLandingCache.Value inputHashOf sessionId liveTests runMisses
-            cohortLandingCache.Value <- newCache
+            // Talks to the single owner via a message (roast-6 #7a) — never
+            // a shared ref read-modify-written from this performer.
+            let! result =
+              cohortLandingCacheOwner.Verify inputHashOf sessionId liveTests runMisses
+              |> Async.AwaitTask
             match result with
             | Ok failing -> return failing |> List.map Features.CohortTestProjection.toCohortTestId
             | Error reason ->

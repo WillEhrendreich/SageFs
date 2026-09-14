@@ -240,6 +240,29 @@ module SessionManager =
       return WorkerResponse.WorkerError (SageFsError.WorkerSpawnFailed "Session is still starting up")
     }
 
+  /// Real health probe: one `GetStatus` round-trip over the worker's own
+  /// proxy, hard-timed out via `Async.StartChild`'s timeout overload. Any
+  /// answer at all — regardless of the worker's self-reported status — means
+  /// the worker is alive and responsive; only a timeout or a transport
+  /// exception counts as `Missed` (fail-closed, per `WorkerHealthProbe`'s own
+  /// doctrine). Not a `SessionManagerRuntime` field — like
+  /// `OwnerMonitor.getProcessById`, the injection seam tests actually use is
+  /// one level down, in `WorkerHealthProbe.run`'s own `probe` parameter; this
+  /// is production's real implementation of it, called directly where the
+  /// probe loop is started so `SessionManagerRuntime`'s shape (and every
+  /// existing literal construction of it, several outside this file) stays
+  /// unchanged.
+  let probeWorkerHealthOnce (timeoutMs: int) (proxy: SessionProxy) : Async<WorkerHealthProbe.ProbeOutcome> =
+    async {
+      try
+        let rid = Guid.NewGuid().ToString("N")
+        let! child = Async.StartChild(proxy (WorkerMessage.GetStatus rid), timeoutMs)
+        let! _resp = child
+        return WorkerHealthProbe.ProbeOutcome.Healthy
+      with _ ->
+        return WorkerHealthProbe.ProbeOutcome.Missed
+    }
+
   let private hasValidReadyProxy (proxy: SessionProxy) =
     not (isNull (box proxy))
 
@@ -1466,6 +1489,43 @@ module SessionManager =
                   Info = { session.Info with Status = SessionLifecycleStatus.Ready handle; ProjectRoles = roles } }
             let newState = ManagerState.addSession id updated state
             onSessionProgressChanged ()
+            // Roast-6 #3: start the per-worker health-probe loop now that the
+            // worker is confirmed Ready (session.Proxy is installed and
+            // answering). `shouldContinue` reads the wait-free published
+            // snapshot — the same CQRS discipline every other read in this
+            // module uses, never the mailbox — so the loop notices for
+            // itself once this pid stops being the session's current worker
+            // (a normal restart, hard reset, or stop) and simply exits: it
+            // never restarts a worker it no longer owns.
+            let probeProxy = session.Proxy
+            let probeShouldContinue () =
+              match Map.tryFind id snapshotRef.Value.Sessions with
+              | Some info -> SessionLifecycleStatus.workerPid info.Status = Some workerPid
+              | None -> false
+            let onHealthRestart () =
+              match probeShouldContinue () with
+              | false -> ()
+              | true ->
+                Log.warn "[SessionManager] Worker pid %d for session %s missed %d consecutive health checks — restarting" workerPid (SessionId.value id) WorkerHealthProbe.defaultThreshold
+                killWorkerPids [ workerPid ]
+                // Mirrors NotifyWorkerDied (DaemonMode.fs): posting pid=-1
+                // always falls into WorkerExited's "handle as real exit"
+                // branch regardless of the session's CURRENT recorded pid,
+                // and poisons Status to Restarting(Some -1) — so the
+                // worker's own genuine Process.Exited event (which
+                // killWorkerPids above will trigger, carrying the REAL pid)
+                // is then recognized as stale by the pid-mismatch guard and
+                // ignored, closing the same double-restart race
+                // NotifyWorkerDied already closes.
+                inbox.Post(SessionCommand.WorkerExited(id, -1, -1))
+            Async.Start(
+              WorkerHealthProbe.run
+                (fun () -> probeWorkerHealthOnce WorkerHealthProbe.defaultProbeTimeoutMs probeProxy)
+                WorkerHealthProbe.defaultThreshold
+                WorkerHealthProbe.defaultProbeIntervalMs
+                probeShouldContinue
+                onHealthRestart,
+              ct)
             return newState
           | None ->
             Log.warn "[SessionManager] Ignoring Ready from worker pid %d for session %s: it is no longer the session's worker" workerPid (SessionId.value id)

@@ -73,6 +73,7 @@
         <Compile Include="MultiAgentCoordinationTests.fs" />
         <Compile Include="AgentActivityTrackerTests.fs" />
         <Compile Include="RestartPolicyTests.fs" />
+        <Compile Include="WorkerHealthProbeTests.fs" />
         <Compile Include="ResilientActorTests.fs" />
         <Compile Include="WatchdogTests.fs" />
         <Compile Include="FileWatcherTests.fs" />
@@ -389,6 +390,8 @@
         <Compile Include="CohortGitTests.fs" />
         <Compile Include="CohortLandingVerifyTests.fs" />
         <Compile Include="CohortLandingLoopTests.fs" />
+        <Compile Include="CohortFastForwardFailedTests.fs" />
+        <Compile Include="CohortLandingCacheOwnerTests.fs" />
         <Compile Include="CohortIntegrationHeadTests.fs" />
         <Compile Include="CohortLandingGitAcceptanceTests.fs" />
         <Compile Include="CohortLedgerExportTests.fs" />
