@@ -38,6 +38,7 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   | SageFs.SageFsError.AmbiguousSessions _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.SessionAmbiguous
   | SageFs.SageFsError.SessionCreationFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.DuplicateSession _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
+  | SageFs.SageFsError.UnsafeSessionPath _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   | SageFs.SageFsError.SessionStopFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.SessionSwitchFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   // SessionNotRoutable is the generic "not ready right now" case used while
@@ -271,36 +272,60 @@ let withEchoNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string>)
   }
 
 /// Like `withEcho`, but for a tool body that ALSO reports a structured
-/// `SageFsError` when it did not complete cleanly — independent of the
-/// display text, which is returned to the agent EXACTLY as the tool body
-/// produced it (the "genuinely still surfaces a human string" case: the
-/// presentation is unchanged, only the internal friction classification
-/// stops re-parsing that string). `None` means the tool completed cleanly.
+/// `SageFsError` when it did not complete cleanly. Friction is still
+/// classified from the real typed error (never re-parsed from display
+/// text). Unlike the prior behavior, a `Some err` blocker is no longer
+/// returned to the MCP client as ordinary success text — it is raised as a
+/// `SageFsErrorException` so the server's CallToolFilter (McpServer.fs's
+/// `buildErrorResult`) turns it into a structured `IsError=true` result
+/// carrying the algebra's case/message/suggestedAction (sagefs-roast.md
+/// Finding #2: an agent previously could not even reliably detect this kind
+/// of failure, let alone act on a stable case token). `None` means the tool
+/// completed cleanly and its text is returned as-is.
 let withEchoOutcome (ctx: McpContext) (toolName: string) (t: Task<string * SageFs.SageFsError option>) : Task<string> =
   task {
     SageFs.Instrumentation.mcpToolInvocations.Add(1L)
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
                  ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
-    try
-      let! result, blocker = t
-      sw.Stop()
-      SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
-      let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
-      Log.info ">> %s" toolName
-      Log.debug "%s" normalized
-      let outcome = match blocker with Some err -> Error err | None -> Ok result
-      let! _ = recordToolResult ctx toolName outcome (int sw.Elapsed.TotalMilliseconds)
-      SageFs.Instrumentation.succeedSpan span
-      return result
-    with ex ->
+    // Awaiting `t` itself throwing (a genuinely unexpected exception) is
+    // handled separately from the tool reporting a classified `blocker` —
+    // the classified-failure `raise` below must NOT be caught by this same
+    // function's own unexpected-exception handling, or it would be
+    // re-recorded as SageFsError.Unexpected and double-counted.
+    let! awaited =
+      task {
+        try
+          let! result, blocker = t
+          return Ok(result, blocker)
+        with ex -> return Error ex
+      }
+    match awaited with
+    | Error ex ->
       sw.Stop()
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
       auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
       SageFs.Instrumentation.failSpan span ex.Message
       let! _ = recordToolResult ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) (int sw.Elapsed.TotalMilliseconds)
       return raise ex
+    | Ok(result, blocker) ->
+      sw.Stop()
+      let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
+      Log.info ">> %s" toolName
+      Log.debug "%s" normalized
+      let outcome = match blocker with Some err -> Error err | None -> Ok result
+      let! _ = recordToolResult ctx toolName outcome (int sw.Elapsed.TotalMilliseconds)
+      match blocker with
+      | None ->
+        SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+        auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
+        SageFs.Instrumentation.succeedSpan span
+        return result
+      | Some err ->
+        SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+        auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
+        SageFs.Instrumentation.failSpan span (SageFs.SageFsError.describe err)
+        return raise (SageFs.SageFsErrorException(err))
   }
 
 /// `withEchoOutcome` sibling matching `withEchoNoAwaitRecord`'s statement
@@ -312,25 +337,41 @@ let withEchoOutcomeNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<s
     let sw = System.Diagnostics.Stopwatch.StartNew()
     let span = SageFs.Instrumentation.startSpanWithKind SageFs.Instrumentation.mcpSource "mcp.tool.invoke" System.Diagnostics.ActivityKind.Server
                  ["mcp.tool.name", box toolName; "rpc.system", box "mcp"; "rpc.service", box "sagefs"; "rpc.method", box toolName]
-    try
-      let! result, blocker = t
-      sw.Stop()
-      SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
-      auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
-      let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
-      Log.info ">> %s" toolName
-      Log.debug "%s" normalized
-      SageFs.Instrumentation.succeedSpan span
-      let outcome = match blocker with Some err -> Error err | None -> Ok result
-      let! _ = recordToolResult ctx toolName outcome (int sw.Elapsed.TotalMilliseconds)
-      return result
-    with ex ->
+    // See withEchoOutcome above — the classified-failure `raise` below must
+    // not be caught by this function's own unexpected-exception handling.
+    let! awaited =
+      task {
+        try
+          let! result, blocker = t
+          return Ok(result, blocker)
+        with ex -> return Error ex
+      }
+    match awaited with
+    | Error ex ->
       sw.Stop()
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
       auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
       SageFs.Instrumentation.failSpan span ex.Message
       let! _ = recordToolResult ctx toolName (Error (SageFs.SageFsError.Unexpected ex)) (int sw.Elapsed.TotalMilliseconds)
       return raise ex
+    | Ok(result, blocker) ->
+      sw.Stop()
+      match blocker with
+      | None ->
+        SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+        auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
+        let normalized = result.Replace("\r\n", "\n").Replace("\n", "\r\n")
+        Log.info ">> %s" toolName
+        Log.debug "%s" normalized
+        SageFs.Instrumentation.succeedSpan span
+        let! _ = recordToolResult ctx toolName (Ok result) (int sw.Elapsed.TotalMilliseconds)
+        return result
+      | Some err ->
+        SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
+        auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
+        SageFs.Instrumentation.failSpan span (SageFs.SageFsError.describe err)
+        let! _ = recordToolResult ctx toolName (Error err) (int sw.Elapsed.TotalMilliseconds)
+        return raise (SageFs.SageFsErrorException(err))
   }
 
 type SageFsTools(ctx: McpContext, logger: ILogger<SageFsTools>) =

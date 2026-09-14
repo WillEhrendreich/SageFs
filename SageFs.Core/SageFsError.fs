@@ -80,6 +80,15 @@ type SageFsError =
   | AmbiguousSessions of sessionDescriptions: string list
   | SessionCreationFailed of reason: string
   | DuplicateSession of existingSessionId: string * workingDirectory: string
+  /// A session-create request's `workingDirectory` or a `projects` entry
+  /// failed path-safety validation — missing/non-existent directory, a UNC
+  /// path, or a project path that canonicalizes to somewhere outside
+  /// `workingDirectory`. `path` is the exact offending value so the caller
+  /// can see precisely what was refused (see McpServer.fs's
+  /// `validateSessionCreateRequest`, mirroring the containment discipline
+  /// `DashboardTypes.resolveSessionProjects` already applies on the
+  /// dashboard's own session-create path — sagefs-roast.md Finding #13).
+  | UnsafeSessionPath of path: string * reason: string
   | SessionStopFailed of sessionId: string * reason: string
   | SessionSwitchFailed of sessionId: string * reason: string
   /// The target session could not be routed to at all — gone, still warming
@@ -150,6 +159,8 @@ module SageFsError =
       sprintf "Failed to create session: %s. Check the project path exists and contains a valid .fsproj." reason
     | SageFsError.DuplicateSession(existingId, dir) ->
       sprintf "A session for this project already exists (session %s, working directory %s). Use switch_session to select it instead of creating a duplicate." existingId dir
+    | SageFsError.UnsafeSessionPath(path, reason) ->
+      sprintf "Refused session path '%s': %s" path reason
     | SageFsError.SessionStopFailed(id, reason) ->
       sprintf "Failed to stop session '%s': %s" id reason
     | SageFsError.SessionSwitchFailed(id, reason) ->
@@ -225,6 +236,7 @@ module SageFsError =
     | SageFsError.PipeClosed -> LogLevel.Error
     | SageFsError.SessionCreationFailed _ -> LogLevel.Error
     | SageFsError.DuplicateSession _ -> LogLevel.Information
+    | SageFsError.UnsafeSessionPath _ -> LogLevel.Warning
     | SageFsError.EvalFailed _ -> LogLevel.Error
     | SageFsError.ResetFailed _ -> LogLevel.Error
     | SageFsError.HardResetFailed _ -> LogLevel.Error
@@ -264,6 +276,7 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _ -> 400
     | SageFsError.JsonParseError _ -> 400
     | SageFsError.ToolNotAvailable _ -> 400
+    | SageFsError.UnsafeSessionPath _ -> 400
     // A cohort command invalid for the current cohort state/authority (not the
     // holder, not the conductor, scope already claimed, stale fence). 400 not
     // 409: 409 is reserved here for infrastructure conflicts (isInfraError).
@@ -310,6 +323,7 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _ -> true
     | SageFsError.JsonParseError _ -> true
     | SageFsError.ToolNotAvailable _ -> true
+    | SageFsError.UnsafeSessionPath _ -> true
     | SageFsError.CohortActionFailed _ -> true
     | SageFsError.AppRunFailed _
     | SageFsError.DuplicateSession _
@@ -363,6 +377,7 @@ module SageFsError =
     | SageFsError.Unexpected _ -> true
     | SageFsError.CohortActionFailed _
     | SageFsError.ToolNotAvailable _
+    | SageFsError.UnsafeSessionPath _
     | SageFsError.SessionNotFound _
     | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
@@ -390,6 +405,7 @@ module SageFsError =
     | SageFsError.CohortActionFailed _
     | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
+    | SageFsError.UnsafeSessionPath _
     | SageFsError.SessionNotFound _
     | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
@@ -426,6 +442,7 @@ module SageFsError =
     | SageFsError.CohortActionFailed _
     | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
+    | SageFsError.UnsafeSessionPath _
     | SageFsError.SessionNotFound _
     | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
@@ -465,6 +482,7 @@ module SageFsError =
     | SageFsError.AmbiguousSessions _ -> "Specify a sessionId explicitly"
     | SageFsError.SessionCreationFailed _ -> "Check the project path and run 'dotnet build'"
     | SageFsError.DuplicateSession _ -> "Run switch_session to select the existing session"
+    | SageFsError.UnsafeSessionPath _ -> "Use an existing directory and keep project paths inside it — no UNC paths or '..' escapes"
     | SageFsError.SessionStopFailed _ -> "Try hard_reset_fsi_session"
     | SageFsError.SessionSwitchFailed _ -> "Run list_sessions to check available sessions"
     | SageFsError.SessionNotRoutable _ -> "Run get_fsi_status or list_sessions to check session state"

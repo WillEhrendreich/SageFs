@@ -135,6 +135,29 @@ let recordToolFailure (ctx: McpContext) (tracker: McpServerTracker) (ex: exn) =
   // not for friction reporting. Friction lives in the durable SQLite store
   // and is queryable via the dashboard.
 
+/// Build a structured MCP `tools/call` error result from a `SageFsError`:
+/// sets `IsError = true` (per the protocol doc on `CallToolResult.IsError`,
+/// tool-level failures belong here, not as a thrown `JsonRpcError`), keeps a
+/// human-readable text block (agents AND humans read tool output), and
+/// carries the algebra's `case`/`message`/`suggestedAction` in the
+/// protocol's own `StructuredContent` field so an agent can branch on `case`
+/// instead of string-parsing prose.
+///
+/// Before this helper, the normal tool-body failure path
+/// (`sprintf "Error: %s" (describeForAgent err)`, McpTools.fs) returned that
+/// text as an ordinary, non-`IsError` SUCCESS result — an agent could not
+/// even reliably detect the failure, let alone act on a stable case token
+/// (sagefs-roast.md Finding #2). Pure given a `SageFsError` — no IO, no
+/// session/context dependency — so it is unit-tested directly.
+let structuredToolErrorResult (err: SageFsError) : CallToolResult =
+  let result = CallToolResult()
+  result.IsError <- Nullable true
+  result.Content.Add(TextContentBlock(Text = SageFsError.describeForAgent err))
+  let json = JsonSerializer.Serialize(SageFsError.toJson err)
+  use doc = JsonDocument.Parse(json)
+  result.StructuredContent <- Nullable(doc.RootElement.Clone())
+  result
+
 /// CallToolFilter that captures the McpServer and appends accumulated events
 /// to tool responses. This ensures the LLM sees events even if the client
 /// doesn't surface MCP notifications directly.
@@ -184,6 +207,32 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
           ctx.Services.GetService(typeof<ILoggerFactory>)
           |> Option.ofObj
           |> Option.map (fun f -> (f :?> ILoggerFactory).CreateLogger("SageFs.McpServer.Filter"))
+        // The SDK awaits the tool body's Task, so a raised exception normally
+        // reaches here unwrapped — but unwrap a TargetInvocationException
+        // defensively anyway (reflection-invoked parameter binding can still
+        // produce one), mirroring the message-formatting match below.
+        let rec unwrapped (e: exn) =
+          match e with
+          | :? System.Reflection.TargetInvocationException as tie when not (isNull tie.InnerException) ->
+            unwrapped tie.InnerException
+          | _ -> e
+        match unwrapped ex with
+        | :? SageFsErrorException as sfEx ->
+          // The tool body already classified this failure as a typed
+          // SageFsError (see McpTools.fs's withEchoOutcome) and already
+          // recorded it in the friction store with the right BlockerKind —
+          // log it with the algebra's own level/case token (Finding #2b: a
+          // failure should be greppable by case, not just prose) and DO NOT
+          // call recordToolFailure again, which would duplicate the friction
+          // event with a worse, text-sniffed classification.
+          let err = sfEx.Error
+          let caseToken = (SageFsError.toJson err).case
+          match logger with
+          | Some l ->
+            l.Log(SageFsError.toLogLevel err, ex, "MCP tool call failed [{Case}]: {Message}", caseToken, SageFsError.describe err)
+          | None -> ()
+          structuredToolErrorResult err
+        | _ ->
         match logger with
         | Some l -> l.LogError(ex, "MCP tool call threw; returning error result to client")
         | None -> ()
@@ -1997,6 +2046,68 @@ let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
     } :> Task
   ) |> ignore
 
+/// Canonicalize a path the same way `/load-script`'s own `resolveRealPath`
+/// does (`Path.GetFullPath` + `ResolveLinkTarget(returnFinalTarget=true)`),
+/// so a symlink cannot be used to make a contained-looking path resolve
+/// somewhere else at eval time.
+let private resolveRealSessionPath (p: string) : string =
+  let full = System.IO.Path.GetFullPath p
+  let fsi : System.IO.FileSystemInfo =
+    match System.IO.Directory.Exists(full) with
+    | true -> System.IO.DirectoryInfo(full) :> System.IO.FileSystemInfo
+    | false -> System.IO.FileInfo(full) :> System.IO.FileSystemInfo
+  match fsi.ResolveLinkTarget(returnFinalTarget = true) with
+  | null -> full
+  | resolved -> resolved.FullName
+
+let private isUncPath (p: string) =
+  not (System.String.IsNullOrWhiteSpace p)
+  && (p.StartsWith(@"\\") || p.StartsWith("//"))
+
+/// Validate a `/api/sessions/create` request's `workingDirectory`/`projects`
+/// with the SAME canonicalization + containment discipline
+/// `DashboardTypes.resolveSessionProjects` already applies on the
+/// dashboard's own `/dashboard/session/create` path (and `/load-script`'s
+/// `resolveRealPath`/`isContained` above apply to a loaded file): the
+/// working directory must exist, must not be a UNC path, and every project
+/// path must canonicalize to somewhere inside it.
+///
+/// Before this helper, `/api/sessions/create` fed `workingDirectory` and
+/// `projects` straight into `SessionOps.CreateSession` with no validation at
+/// all — any local process, or (absent the Origin/Host checks fixed
+/// separately) any web page reaching this port, could root a session at an
+/// arbitrary path (sagefs-roast.md Finding #13). Unlike
+/// `resolveSessionProjects` (which silently filters escaping projects out
+/// of the list), this REJECTS the whole request on the first unsafe path —
+/// a request that named an unsafe path should get a clear refusal, never a
+/// session quietly created somewhere else. Pure — no IO beyond path/
+/// filesystem probes — so it is unit-tested directly.
+let validateSessionCreateRequest (workingDir: string) (projects: string list) : Result<unit, SageFsError> =
+  match System.String.IsNullOrWhiteSpace workingDir with
+  | true -> Error (SageFsError.UnsafeSessionPath(workingDir, "workingDirectory is required"))
+  | false ->
+  match isUncPath workingDir with
+  | true -> Error (SageFsError.UnsafeSessionPath(workingDir, "UNC paths are not allowed"))
+  | false ->
+  match System.IO.Directory.Exists workingDir with
+  | false -> Error (SageFsError.UnsafeSessionPath(workingDir, "directory does not exist"))
+  | true ->
+  let canonicalDir = resolveRealSessionPath workingDir
+  let isContained (p: string) =
+    not (isUncPath p)
+    && (let full =
+          match System.IO.Path.IsPathRooted p with
+          | true -> p
+          | false -> System.IO.Path.Combine(workingDir, p)
+        let canonical = resolveRealSessionPath full
+        canonical.StartsWith(
+          canonicalDir + string System.IO.Path.DirectorySeparatorChar,
+          System.StringComparison.OrdinalIgnoreCase)
+        || canonical.Equals(canonicalDir, System.StringComparison.OrdinalIgnoreCase))
+  match projects |> List.tryFind (isContained >> not) with
+  | Some escaping -> Error (SageFsError.UnsafeSessionPath(escaping, "project path escapes the session working directory"))
+  | None -> Ok ()
+
 let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/api/sessions", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
@@ -2121,6 +2232,15 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
           | "WebLive" | "Live" -> SageFs.WorkflowTypes.SessionWorkflow.WebLive SageFs.WorkflowTypes.BrowserRefreshConfig.defaults
           | _ -> SageFs.WorkflowTypes.SessionWorkflow.Interactive
         | false -> SageFs.WorkflowTypes.SessionWorkflow.Interactive
+      // Finding #13: unlike the dashboard's own session-create path
+      // (DashboardTypes.resolveSessionProjects), this route previously fed
+      // workingDirectory/projects straight into CreateSession with no path
+      // safety check at all. Reject a bad request before ever touching
+      // SessionOps.
+      match validateSessionCreateRequest workingDir projects with
+      | Error err ->
+        do! jsonResponse ctx (SageFsError.toHttpStatus err) (structuredErrorBody err)
+      | Ok () ->
       let! result = rctx.Config.SessionOps.CreateSession projects workingDir workflow
       match result with
       | Ok msg ->
