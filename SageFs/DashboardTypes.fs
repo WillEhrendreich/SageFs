@@ -54,6 +54,7 @@ module DomIds =
   let [<Literal>] FailureNarratives = "failure-narratives"
   let [<Literal>] AlarmBanner = "alarm-banner"
   let [<Literal>] CohortPanel = "cohort-panel"
+  let [<Literal>] CohortMatrix = "cohort-matrix"
 
 /// Datastar signal names — shared between Ds.signal init and Ds.bind/Ds.show refs.
 [<RequireQualifiedAccess>]
@@ -105,6 +106,9 @@ module Signals =
   let [<Literal>] SessionContextFilesOpen = "sessionContextFilesOpen"
   let [<Literal>] ShadowedBindingsOpen = "shadowedBindingsOpen"
   let [<Literal>] CohortPanelOpen = "cohortPanelOpen"
+  /// The cohort matrix's character-grid fallback (§6.5 "an image is not a
+  /// document") — collapsed by default; the PNG picture is the primary view.
+  let [<Literal>] CohortMatrixTextOpen = "cohortMatrixTextOpen"
   let [<Literal>] FrictionEndpoint = "frictionEndpoint"
   let [<Literal>] FrictionToken = "frictionToken"
   let [<Literal>] FrictionEdits = "frictionEdits"

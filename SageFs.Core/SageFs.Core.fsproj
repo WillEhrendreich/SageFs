@@ -68,6 +68,7 @@
         <Compile Include="Features\CohortLedger.fs" />
         <Compile Include="Features\CohortOwner.fs" />
         <Compile Include="Features\CohortTestProjection.fs" />
+        <Compile Include="Features\CohortMatrixRender.fs" />
         <Compile Include="Features\EvalDedup.fs" />
         <Compile Include="Features\EvalDiff.fs" />
         <Compile Include="Features\IdentifierScan.fs" />

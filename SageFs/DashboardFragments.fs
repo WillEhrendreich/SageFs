@@ -1955,7 +1955,7 @@ let private cohortClaimStateLabel (state: SageFs.Cohort.ClaimState<MemberTable.M
 /// Pure render of one cohort frame. `frame`'s arrays are index-aligned
 /// (`CohortFrame` doc, Cohort.fs) — every lookup here is a plain array index,
 /// never a `Map` walk.
-let renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
+let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
   let memberCount = frame.MemberIds.Length
   let claimCount = frame.ClaimIds.Length
   signalDetails Signals.CohortPanelOpen [ Attr.id DomIds.CohortPanel; Attr.class' "panel"; Attr.style "margin-top: 0.5rem;" ] [
@@ -2020,8 +2020,43 @@ let renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) :
                 ]
             ]
           ]
+        renderCohortMatrix frame
       ]
   ]
+
+/// §6.5 "Matrix view — a picture, with a text fallback": the cohort test
+/// matrix rendered from the frame's own bitplanes
+/// (`CohortMatrixRender.toPng`/`toCharGrid`), inlined as a `data:image/png`
+/// `<img>` per §6.5 (no served route, no extra HTTP round trip) with the
+/// fixed-pitch character grid behind a toggle as the accessible fallback.
+/// `frame.TestIds.Length = 0` (no test outcomes projected onto any session
+/// yet) renders nothing, matching the empty-state convention the rest of
+/// this panel already uses for zero members/zero claims.
+and private renderCohortMatrix (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
+  match frame.TestIds.Length with
+  | 0 -> Elem.div [] []
+  | testCount ->
+    let rowCount = frame.Pass.Length
+    let dataUri = Features.CohortMatrixRender.toPngDataUri frame.Pass frame.Fail frame.Stale
+    let charGrid = Features.CohortMatrixRender.toCharGrid frame.Pass frame.Fail frame.Stale
+    Elem.div [ Attr.id DomIds.CohortMatrix; Attr.style "margin-top: 0.2rem;" ] [
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [
+        textEnc (sprintf "Test matrix (%d tests x %d row%s)" testCount rowCount (if rowCount = 1 then "" else "s"))
+      ]
+      Elem.create "img" [
+        Attr.create "src" dataUri
+        Attr.create "alt" "Cohort test matrix — pass green, fail red, stale amber, not-run grey"
+        Attr.style "image-rendering: pixelated; width: 100%; max-width: 420px; display: block; border: 1px solid var(--border, #444);"
+      ] []
+      signalDetails Signals.CohortMatrixTextOpen [ Attr.style "margin-top: 0.3rem;" ] [
+        Elem.summary [ Attr.style "cursor: pointer; font-size: 0.7rem; color: var(--fg-dim); user-select: none;" ] [
+          Text.raw "Text fallback"
+        ]
+        Elem.pre [ Attr.style "font-size: 0.62rem; line-height: 1.15; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre;" ] [
+          textEnc charGrid
+        ]
+      ]
+    ]
 
 
 module private LiveTestActivityView =

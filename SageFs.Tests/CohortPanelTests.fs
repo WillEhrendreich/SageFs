@@ -24,8 +24,11 @@ let private bob = MemberId.Minted "bob"
 
 /// Folds `decide` over a fixed command list starting from an empty state —
 /// no owner, no ledger, no IO — then projects the resulting `LedgerHead`
-/// into a `CohortFrame` exactly as `CohortOwner.frameOf` does.
-let private frameAfter (commands: CohortCommand<MemberId> list) : CohortFrame<MemberId> =
+/// into a `CohortFrame` exactly as `CohortOwner.frameOf` does. `snapshots`
+/// is `project`'s other input — the per-session Pass/Fail/Stale test
+/// outcomes that become the frame's matrix bitplanes (§5.7); `frameAfter`
+/// passes none, for tests that don't care about the matrix.
+let private frameAfterWith (commands: CohortCommand<MemberId> list) (snapshots: SessionSnapshot<MemberId>[]) : CohortFrame<MemberId> =
   let finalState, seq =
     commands
     |> List.fold
@@ -34,7 +37,10 @@ let private frameAfter (commands: CohortCommand<MemberId> list) : CohortFrame<Me
         | Ok(newState, _, _) -> newState, seq + 1L<ledgerSeq>
         | Error err -> failwithf "unexpected refusal building test frame: %A" err)
       (CohortState.empty (), 0L<ledgerSeq>)
-  project { Seq = (if seq = 0L<ledgerSeq> then 0L<ledgerSeq> else seq - 1L<ledgerSeq>); State = finalState } [||]
+  project { Seq = (if seq = 0L<ledgerSeq> then 0L<ledgerSeq> else seq - 1L<ledgerSeq>); State = finalState } snapshots
+
+let private frameAfter (commands: CohortCommand<MemberId> list) : CohortFrame<MemberId> =
+  frameAfterWith commands [||]
 
 let private emptyFrame : CohortFrame<MemberId> =
   project (replayHead []) [||]
@@ -103,4 +109,29 @@ let cohortPanelTests =
       let html = renderMainContent snap |> render
       html |> Expect.stringContains "renderMainContent carries the cohort-panel dom id" "cohort-panel"
       html |> Expect.stringContains "renderMainContent carries the joined member's id" (MemberId.display alice)
+
+    // §6.5 "Matrix view — a picture, with a text fallback" (Phase 2 item 16).
+    testCase "WHY — a frame with projected test outcomes renders the matrix picture and its text fallback" <| fun _ ->
+      let snapshots =
+        [| { Member = None; SessionId = "integration"; Generation = 1L
+             PassingTests = [ Cohort.TestId "t1" ]; FailingTests = [ Cohort.TestId "t2" ]; StaleTests = [] }
+           { Member = Some alice; SessionId = "sess-alice"; Generation = 1L
+             PassingTests = [ Cohort.TestId "t1" ]; FailingTests = []; StaleTests = [ Cohort.TestId "t2" ] } |]
+      let frame = frameAfterWith [ CohortCommand.Join(alice, JoinableRole.Implementer, None) ] snapshots
+      frame.TestIds.Length |> Expect.equal "two distinct tests were projected" 2
+      let html = renderCohortPanel frame |> render
+      html |> Expect.stringContains "carries the cohort-matrix dom id" "cohort-matrix"
+      html |> Expect.stringContains "embeds the matrix as an inline PNG data URI, no served route" "data:image/png;base64,"
+      html |> Expect.stringContains "labels the text fallback" "Text fallback"
+      html
+      |> Expect.stringContains
+        "the visible text fallback is exactly CohortMatrixRender.toCharGrid's own output"
+        (Features.CohortMatrixRender.toCharGrid frame.Pass frame.Fail frame.Stale)
+
+    testCase "WHY — a frame with zero projected test outcomes renders no matrix section at all" <| fun _ ->
+      let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
+      frame.TestIds.Length |> Expect.equal "no snapshots were projected" 0
+      let html = renderCohortPanel frame |> render
+      (html.Contains "cohort-matrix") |> Expect.isFalse "no matrix dom id when there are no test outcomes to show"
+      (html.Contains "data:image/png") |> Expect.isFalse "no PNG data URI when there are no test outcomes to show"
   ]
