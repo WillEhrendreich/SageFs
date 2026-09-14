@@ -739,6 +739,27 @@ let workerEvalJsonTests =
       JsonDocument.Parse(json) |> ignore
       json |> Expect.stringContains "contains escaped quote" "\\\""
 
+    testCase "formatWorkerEvalResult TEXT includes the (line,col) span for a positioned diagnostic (dogfood F4)"
+    <| fun _ ->
+      let diag : WorkerProtocol.WorkerDiagnostic =
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Error
+          Message = "type mismatch"; StartLine = 3; StartColumn = 7; EndLine = 3; EndColumn = 9
+          ErrorNumber = 1 }
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "ok", [diag], Map.empty)
+      let text = McpTools.formatWorkerEvalResult WorkflowTypes.SessionWorkflow.Interactive resp
+      text |> Expect.stringContains "the diagnostic text carries the span so an agent can edit surgically" "(3,7)"
+
+    testCase "formatWorkerEvalResult TEXT omits a spurious span for an unpositioned diagnostic (dogfood F4)"
+    <| fun _ ->
+      let diag : WorkerProtocol.WorkerDiagnostic =
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Error
+          Message = "no position"; StartLine = 0; StartColumn = 0; EndLine = 0; EndColumn = 0
+          ErrorNumber = 0 }
+      let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "ok", [diag], Map.empty)
+      let text = McpTools.formatWorkerEvalResult WorkflowTypes.SessionWorkflow.Interactive resp
+      text |> Expect.stringContains "still shows the message" "no position"
+      text.Contains "(0,0)" |> Expect.isFalse "no spurious (0,0) span for an unpositioned diagnostic"
+
     testList "escapeJson property" [
       testProperty "escaped output roundtrips through JSON" <| fun (s: string) ->
         match isNull s with

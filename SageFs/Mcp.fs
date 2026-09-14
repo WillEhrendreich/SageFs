@@ -1621,8 +1621,14 @@ module McpTools =
         | false ->
           diags
           |> List.map (fun d ->
-            sprintf "  [%s] %s"
-              (Features.Diagnostics.DiagnosticSeverity.label d.Severity) d.Message)
+            // Include the (line,col) span so an agent can make a surgical edit
+            // instead of re-reading the whole snippet (dogfood finding F4 — the
+            // text path dropped the span check_fsharp_code already shows). Omit
+            // it only when there is no real position (StartLine 0).
+            let sev = Features.Diagnostics.DiagnosticSeverity.label d.Severity
+            match d.StartLine with
+            | line when line > 0 -> sprintf "  [%s] (%d,%d) %s" sev line d.StartColumn d.Message
+            | _ -> sprintf "  [%s] %s" sev d.Message)
           |> String.concat "\n"
           |> sprintf "\nDiagnostics:\n%s"
       match result with
