@@ -1698,6 +1698,14 @@ let run
   // carries `base` and `rebasedHead` separately, so its land-time HeadMoved
   // guard compares the BASE against IntegrationHead (Property 11) while
   // FastForward targets the rebased head — no echo/re-read workaround needed.
+  // Daemon-held content-addressed test-result cache for landing verification
+  // (§5.4). Accessed only from the RunTests performer below, which the
+  // CohortOwner runs serially through its single landing queue — so a plain ref
+  // is safe (no concurrent landings). A test is cached only when its coverage
+  // gives a trustworthy InputHash (see the RunTests wiring); a same-input test
+  // on a later landing is then skipped instead of re-run.
+  let cohortLandingCache = ref (Features.LiveTesting.TestResultCache.empty)
+
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
     { Rebase = fun _landingId onto ->
         async {
@@ -1747,7 +1755,35 @@ let run
                 LoadedState = None
                 TypeIdentityDiagnostic = None }
             let liveTests = tests |> List.map cohortToLiveTestId
-            let! result = Features.CohortLandingVerify.runTestsInSession elmRuntime observation sessionId liveTests
+            // Content-addressed cache lookup (§5.4). Compute each test's
+            // InputHash from the integration session's OWN coverage: the merged
+            // instrumentation map + the test's coverage bitmap. A test is
+            // trustworthy-hashable only when it has a bitmap whose size matches
+            // the current instrumentation (a stale/absent bitmap → None → the
+            // test always runs and is never cached, so a source change can never
+            // be masked by a stale skip). LandingCache.verify then runs only the
+            // cache misses (+ untrusted tests) and records the trustworthy ones.
+            let lt = SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())
+            let maps =
+              match Map.tryFind sessionId lt.InstrumentationMaps with
+              | Some m when m.Length > 0 -> m
+              | _ -> lt.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+            let merged = Features.LiveTesting.InstrumentationMap.merge maps
+            let fileReader (path: string) =
+              try Some(System.IO.File.ReadAllText path) with _ -> None
+            let inputHashOf (tid: Features.LiveTesting.TestId) : string option =
+              match merged.Slots.Length with
+              | 0 -> None
+              | _ ->
+                match Map.tryFind tid lt.TestState.TestCoverageBitmaps with
+                | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
+                  Some(Features.LiveTesting.InputHashCoverage.ofCoverage fileReader merged bm)
+                | _ -> None
+            let runMisses toRun =
+              Features.CohortLandingVerify.runTestsInSession elmRuntime observation sessionId toRun
+            let! newCache, result =
+              Features.LiveTesting.LandingCache.verify cohortLandingCache.Value inputHashOf sessionId liveTests runMisses
+            cohortLandingCache.Value <- newCache
             match result with
             | Ok failing -> return failing |> List.map Features.CohortTestProjection.toCohortTestId
             | Error reason ->
