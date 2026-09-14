@@ -247,6 +247,18 @@ module Cohort =
     | StaleClaimFence of ClaimId
     | HeadMoved of from: string * to': string
     | VetoedBy of 'm * reason: string
+    /// The verifier could NOT reach a verdict — not "tests failed", but "we
+    /// couldn't run them" (e.g. the integration session was still warming up
+    /// after the rebase-triggered rebuild, or was otherwise untrustworthy).
+    /// Kept structurally distinct from `FailingTests` on purpose: an
+    /// inconclusive verification is a transient, environmental condition, not
+    /// a statement that the landing's code is broken. Conflating the two — the
+    /// old behaviour, which reported every "couldn't verify" as "all tests
+    /// failing" — collapsed an inconclusive result into a definitive failure
+    /// (and permanently jammed the serial queue, since a `FailingTests` head is
+    /// never popped). Distinguishing them lets `decide` treat this case as
+    /// retryable-by-resubmission and un-jam the queue instead.
+    | Inconclusive of reason: string
 
   [<RequireQualifiedAccess>]
   type LandingState<'m> =
@@ -364,6 +376,15 @@ module Cohort =
     | RebaseCompleted of LandingId * Result<string, string list>
     | AffectedComputed of LandingId * TestId list
     | TestsCompleted of LandingId * failing: TestId list
+    /// The verifier could not produce a verdict at all — distinct from
+    /// `TestsCompleted` with a non-empty failing list. The performer emits this
+    /// (instead of reporting every requested test as "failing") when it cannot
+    /// trust the integration session enough to run — e.g. the rebase-triggered
+    /// rebuild left the session warming up, or a bounded settle wait elapsed.
+    /// Fail-closed is preserved (the landing still does NOT fast-forward), but
+    /// `decide` records it as `Blocked(Inconclusive ...)` and un-jams the queue
+    /// rather than treating a transient as a permanent test failure.
+    | VerificationInconclusive of LandingId * reason: string
     | FastForwardCompleted of LandingId * committedSha: string
     /// The FastForward EFFECT itself failed — an infra error (the branch
     /// moved concurrently under a raw git command, a transient I/O error,
@@ -748,6 +769,28 @@ module Cohort =
               let blocked = { req with State = LandingState.Blocked(LandingBlocker.FailingTests fails, NextAction.FixTests fails) }
               let newState = { state with Landings = Map.add id blocked state.Landings }
               Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State) ], [])
+          | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
+
+    | CohortCommand.VerificationInconclusive(id, reason) ->
+      match Map.tryFind id state.Landings with
+      | None -> Error(CohortError.UnknownLanding id)
+      | Some req ->
+        match requireAtFrontOfQueue state id with
+        | Error e -> Error e
+        | Ok () ->
+          match req.State with
+          | LandingState.Verifying _ ->
+            // Distinct from `TestsCompleted`'s `FailingTests`: an inconclusive
+            // verification is transient/environmental, so it does NOT permanently
+            // jam the serial queue. Pop it (as `WithdrawLanding` does) and
+            // advance the next queued landing; the requester resubmits when the
+            // integration session is healthy again (`RebaseAndResubmit`). The
+            // landing still does not fast-forward — fail-closed is preserved.
+            let blocked = { req with State = LandingState.Blocked(LandingBlocker.Inconclusive reason, NextAction.RebaseAndResubmit) }
+            let poppedQueue = state.Queue |> List.filter (fun x -> x <> id)
+            let stateAfter = { state with Landings = Map.add id blocked state.Landings; Queue = poppedQueue }
+            let advanced, advEvents, advEffects = advanceQueue stateAfter
+            Ok(advanced, CohortEvent.LandingStateChanged(id, blocked.State) :: advEvents, advEffects)
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
     | CohortCommand.FastForwardCompleted(id, committedSha) ->

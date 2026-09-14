@@ -152,8 +152,8 @@ let private gitBackedPerformer (integrationWorktree: string) (mainRepo: string) 
         | Ok realNewHead -> return Ok realNewHead
         | Error files -> return Error files
       }
-    ComputeAffected = fun _ _ _ -> async { return [] }
-    RunTests = fun _ _ -> async { return [] }
+    ComputeAffected = fun _ _ _ -> async { return Ok [] }
+    RunTests = fun _ _ -> async { return Ok [] }
     FastForward = fun _ toSha -> async { return! CohortGit.fastForwardBranch mainRepo branch toSha }
     Notify = fun _ _ -> () }
 

@@ -496,6 +496,8 @@ let private landingBlockerToWire (blocker: Cohort.LandingBlocker<MemberTable.Mem
     {| Kind = "head_moved"; Files = []; Tests = []; ClaimId = ""; From = from; To = to'; By = ""; Reason = "" |}
   | Cohort.LandingBlocker.VetoedBy (by, reason) ->
     {| Kind = "vetoed_by"; Files = []; Tests = []; ClaimId = ""; From = ""; To = ""; By = displayMember by; Reason = reason |}
+  | Cohort.LandingBlocker.Inconclusive reason ->
+    {| Kind = "inconclusive"; Files = []; Tests = []; ClaimId = ""; From = ""; To = ""; By = ""; Reason = reason |}
 
 let private nextActionToWire (action: Cohort.NextAction) =
   match action with

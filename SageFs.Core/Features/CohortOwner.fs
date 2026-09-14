@@ -73,8 +73,20 @@ module CohortOwner =
   ///    yet.
   type LandingPerformer<'m> = {
     Rebase: string -> string -> Async<Result<string, string list>>
-    ComputeAffected: string -> string -> string -> Async<TestId list>
-    RunTests: string -> TestId list -> Async<TestId list>
+    /// `Ok tests` = the affected set was computed against a trustworthy,
+    /// settled integration session. `Error reason` = the session could not be
+    /// read reliably (e.g. still rebuilding after the rebase), so the affected
+    /// set is unknowable right now. Returning `Ok []` in that case would be
+    /// fail-OPEN — an empty affected set lands with nothing verified — so the
+    /// dispatcher maps `Error` to `VerificationInconclusive` instead.
+    ComputeAffected: string -> string -> string -> Async<Result<TestId list, string>>
+    /// `Ok failing` = the run reached a verdict; `failing` is the subset of the
+    /// requested tests that did NOT pass (empty = all passed). `Error reason` =
+    /// the run could NOT reach a verdict (the session couldn't be trusted enough
+    /// to run — e.g. still warming up after the rebase rebuild). The dispatcher
+    /// maps `Ok` to `TestsCompleted` and `Error` to `VerificationInconclusive`,
+    /// so a "couldn't verify" is never silently reported as "everything failed".
+    RunTests: string -> TestId list -> Async<Result<TestId list, string>>
     FastForward: string -> string -> Async<Result<string, string>>
     Notify: 'm -> CohortEvent<'m> -> unit
   }
@@ -94,8 +106,8 @@ module CohortOwner =
     /// performer.
     let stub<'m> : LandingPerformer<'m> =
       { Rebase = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<string, string list>>().Task)
-        ComputeAffected = fun _ _ _ -> Async.AwaitTask(TaskCompletionSource<TestId list>().Task)
-        RunTests = fun _ _ -> Async.AwaitTask(TaskCompletionSource<TestId list>().Task)
+        ComputeAffected = fun _ _ _ -> Async.AwaitTask(TaskCompletionSource<Result<TestId list, string>>().Task)
+        RunTests = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<TestId list, string>>().Task)
         FastForward = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<string, string>>().Task)
         Notify = fun _ _ -> () }
 
@@ -205,15 +217,36 @@ module CohortOwner =
       | CohortEffect.ComputeAffected(LandingId id, baseSha, headSha) ->
         Async.Start(
           async {
-            let! tests = performer.ComputeAffected id baseSha headSha
-            complete (CohortCommand.AffectedComputed(LandingId id, tests))
+            match! performer.ComputeAffected id baseSha headSha with
+            | Ok tests ->
+              complete (CohortCommand.AffectedComputed(LandingId id, tests))
+            | Error reason ->
+              // The affected set could not be computed against a trustworthy
+              // session. Never fall through to `AffectedComputed []` (which would
+              // land the change with nothing verified) — report it as
+              // inconclusive so `decide` un-jams the queue for a resubmission.
+              logger.LogWarning(
+                sprintf "[cohort-owner] ComputeAffected for landing %s could not read a trustworthy session: %s — re-entering Cohort.decide via VerificationInconclusive" id reason
+              )
+              complete (CohortCommand.VerificationInconclusive(LandingId id, reason))
           }
         )
       | CohortEffect.RunTests(LandingId id, tests) ->
         Async.Start(
           async {
-            let! failing = performer.RunTests id tests
-            complete (CohortCommand.TestsCompleted(LandingId id, failing))
+            match! performer.RunTests id tests with
+            | Ok failing ->
+              complete (CohortCommand.TestsCompleted(LandingId id, failing))
+            | Error reason ->
+              // The verifier could not reach a verdict (e.g. the integration
+              // session was still warming up after the rebase rebuild). Report
+              // it as INCONCLUSIVE — never as "all tests failed" — so `decide`
+              // records `Blocked(Inconclusive)` and un-jams the queue instead of
+              // permanently stranding it behind a false test failure.
+              logger.LogWarning(
+                sprintf "[cohort-owner] RunTests for landing %s could not verify: %s — re-entering Cohort.decide via VerificationInconclusive" id reason
+              )
+              complete (CohortCommand.VerificationInconclusive(LandingId id, reason))
           }
         )
       | CohortEffect.FastForward(LandingId id, toSha) ->

@@ -1709,6 +1709,52 @@ let run
   // a later landing is then skipped instead of re-run.
   use cohortLandingCacheOwner = Features.CohortOwner.LandingCacheOwner.start (Log.asILogger ())
 
+  // (Gap 3) A rebase rewrites the integration worktree's files, so the session's
+  // own file watcher fires a rebuild and the session re-enters warmup. Reading
+  // its discovery (ComputeAffected) or running tests in it (RunTests) DURING
+  // that rebuild is wrong both ways: at best `SessionTrust.classify` returns
+  // `WarmingUp` and the run is refused; at worst discovery is transiently empty
+  // and a real change looks like it affects no tests (a fail-OPEN land). So both
+  // performer steps wait here for the session to settle into a trustworthy
+  // (Ready) state before they read it. Bounded: on timeout the caller signals
+  // `VerificationInconclusive` — never a false pass, never a permanent queue jam.
+  // Runs on the effect worker (Async.Start'd off the CohortOwner mailbox), so a
+  // long wait here never blocks the single writer.
+  let integrationSettleTimeout = System.TimeSpan.FromSeconds 120.0
+  let awaitIntegrationSessionTrusted (sessionId: string) : Async<Result<Features.Verification.SessionTrust.SessionObservation, string>> =
+    let deadline = System.DateTime.UtcNow + integrationSettleTimeout
+    let observe () =
+      async {
+        let! sessionInfo = sessionOps.GetSessionInfo(toSessionId sessionId) |> Async.AwaitTask
+        return
+          ({ MatchingSessionIds = [ sessionId ]
+             SessionStatus = sessionInfo |> Option.map (fun s -> s.Status)
+             LoadedState = None
+             TypeIdentityDiagnostic = None } : Features.Verification.SessionTrust.SessionObservation)
+      }
+    // Require the session to read Trusted TWICE across a short window before
+    // proceeding: the rebase's file write and the watcher's rebuild trigger race
+    // each other, so a single Trusted read could be the pre-rebuild session that
+    // is about to go WarmingUp. A second confirmation ~500ms later crosses that
+    // debounce; any WarmingUp in between resets the confirmation.
+    let rec loop (confirmations: int) =
+      async {
+        let! obs = observe ()
+        match Features.Verification.SessionTrust.classify obs with
+        | Features.Verification.SessionTrust.Trusted _ ->
+          if confirmations >= 1 then return Ok obs
+          else
+            do! Async.Sleep 500
+            return! loop (confirmations + 1)
+        | other ->
+          if System.DateTime.UtcNow > deadline then
+            return Error (sprintf "integration session '%s' never settled to a trustworthy state within %.0fs (last: %A)" sessionId integrationSettleTimeout.TotalSeconds other)
+          else
+            do! Async.Sleep 300
+            return! loop 0
+      }
+    loop 0
+
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
     { Rebase = fun _landingId onto ->
         async {
@@ -1730,9 +1776,17 @@ let run
       ComputeAffected = fun _landingId baseSha headSha ->
         async {
           match McpTools.cohortIntegrationRef.Value with
-          | None -> return []
-          | Some { SessionId = None } -> return []
+          | None -> return Error "integration not configured — call set_integration_ref first"
+          | Some { SessionId = None } -> return Error "integration session not started"
           | Some ({ SessionId = Some sessionId } as binding) ->
+            // (Gap 3) Settle first: the rebase that just ran retriggered the
+            // session's rebuild, and reading discovery mid-rebuild can see it
+            // transiently empty — which would compute an EMPTY affected set and
+            // land the change with nothing verified (fail-open). Wait for the
+            // session to become trustworthy, then read.
+            match! awaitIntegrationSessionTrusted sessionId with
+            | Error reason -> return Error reason
+            | Ok _settledObservation ->
             let cycle = SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())
             let state = cycle.TestState
             let allTests =
@@ -1763,7 +1817,7 @@ let run
                       Some(Features.LiveTesting.InputHashCoverage.coveredFiles merged bm)
                     | _ -> None
                 Features.LiveTesting.AffectedTests.affected changedFiles coveredFilesOf allTests
-            return narrowed |> List.map Features.CohortTestProjection.toCohortTestId
+            return Ok (narrowed |> List.map Features.CohortTestProjection.toCohortTestId)
         }
       // Item 14d's documented caveat: `CohortLandingVerify.runTestsInSession`
       // only produces a trustworthy verdict for the session live-testing
@@ -1775,16 +1829,18 @@ let run
       RunTests = fun _landingId tests ->
         async {
           match McpTools.cohortIntegrationRef.Value with
-          | None -> return tests
-          | Some { SessionId = None } -> return tests
+          | None -> return Error "integration not configured — call set_integration_ref first"
+          | Some { SessionId = None } -> return Error "integration session not started"
           | Some ({ SessionId = Some sessionId } as binding) ->
             elmRuntime.Dispatch(SageFsMsg.Event(TuiEvent.SessionSwitched(None, sessionId)))
-            let! sessionInfo = sessionOps.GetSessionInfo(toSessionId sessionId) |> Async.AwaitTask
-            let observation: Features.Verification.SessionTrust.SessionObservation =
-              { MatchingSessionIds = [ sessionId ]
-                SessionStatus = sessionInfo |> Option.map (fun s -> s.Status)
-                LoadedState = None
-                TypeIdentityDiagnostic = None }
+            // (Gap 3) Settle first, then verify against the SETTLED observation.
+            // Verifying while the rebase-triggered rebuild is still in flight is
+            // exactly what made a good landing block on "session still warming
+            // up" — now it waits for Ready, and if it never settles the run is
+            // reported inconclusive (below) instead of as a false test failure.
+            match! awaitIntegrationSessionTrusted sessionId with
+            | Error reason -> return Error reason
+            | Ok observation ->
             let liveTests = tests |> List.map cohortToLiveTestId
             // Content-addressed cache lookup (§5.4). Compute each test's
             // InputHash from the integration session's OWN coverage: the merged
@@ -1825,15 +1881,17 @@ let run
               cohortLandingCacheOwner.Verify inputHashOf sessionId liveTests runMisses
               |> Async.AwaitTask
             match result with
-            | Ok failing -> return failing |> List.map Features.CohortTestProjection.toCohortTestId
+            | Ok failing -> return Ok (failing |> List.map Features.CohortTestProjection.toCohortTestId)
             | Error reason ->
-              // Fail-closed (CohortLandingVerify's own doctrine): a session
-              // that can't be trusted enough to run tests in must never read
-              // as "all passed" — treat every requested test as failing so
-              // the landing blocks with FailingTests rather than landing on
-              // an unverified session.
-              Log.warn "[cohort-landing] RunTests refused for session %s: %s — treating all %d requested test(s) as failing (fail-closed)" sessionId reason tests.Length
-              return tests
+              // Fail-closed AND honest (Clef mode-shift, roast-7 §7): a session
+              // that can't be trusted enough to run tests in must never read as
+              // "all passed" — but it must ALSO not read as "all failed". Report
+              // it as INCONCLUSIVE so `Cohort.decide` records
+              // `Blocked(Inconclusive)` and un-jams the queue, rather than
+              // permanently stranding the landing behind a fabricated test
+              // failure. The landing still does not fast-forward — safe either way.
+              Log.warn "[cohort-landing] RunTests could not verify session %s: %s — reporting inconclusive (fail-closed, never a false pass)" sessionId reason
+              return Error reason
         }
       // `toSha` is `decide`'s FastForward target = the landing's `rebasedHead`
       // (the real commit `Rebase` returned, now that `Verifying` carries base

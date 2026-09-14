@@ -153,6 +153,7 @@ let private blockerLabel = function
   | LandingBlocker.StaleClaimFence(ClaimId cid) -> sprintf "Stale claim fence on %s" cid
   | LandingBlocker.HeadMoved(from_, to_) -> sprintf "Head moved from %s to %s" from_ to_
   | LandingBlocker.VetoedBy(by, reason) -> sprintf "Vetoed by %s: %s" (MemberId.display by) reason
+  | LandingBlocker.Inconclusive reason -> sprintf "Verification inconclusive: %s" reason
 
 let private landingStateLabel = function
   | LandingState.Queued -> "Queued"

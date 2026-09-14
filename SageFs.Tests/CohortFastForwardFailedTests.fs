@@ -168,8 +168,8 @@ let cohortFastForwardFailedOwnerTests =
       let mutable fastForwardCalls = 0
       let performer : CohortOwner.LandingPerformer<MemberId> = {
         Rebase = fun _ onto -> async { return Ok(onto + "-rebased") }
-        ComputeAffected = fun _ _ _ -> async { return [ TestId "t1" ] }
-        RunTests = fun _ _ -> async { return [] }
+        ComputeAffected = fun _ _ _ -> async { return Ok [ TestId "t1" ] }
+        RunTests = fun _ _ -> async { return Ok [] }
         FastForward = fun _ toSha ->
           async {
             fastForwardCalls <- fastForwardCalls + 1

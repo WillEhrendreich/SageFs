@@ -73,8 +73,8 @@ let private happyPathPerformer
   (fastForwardShaOf: string -> string)
   : CohortOwner.LandingPerformer<MemberId> =
   { Rebase = fun _ onto -> async { return Ok(onto + "-rebased") }
-    ComputeAffected = fun _ _ _ -> async { return affectedTests }
-    RunTests = fun _ _ -> async { return failingTests }
+    ComputeAffected = fun _ _ _ -> async { return Ok affectedTests }
+    RunTests = fun _ _ -> async { return Ok failingTests }
     FastForward = fun _ toSha -> async { return Ok(fastForwardShaOf toSha) }
     Notify = fun _ _ -> () }
 
@@ -190,6 +190,41 @@ let cohortLandingLoopTests =
         fails |> Expect.equal "the blocker names the failing test" failing
         fixTests |> Expect.equal "the next action names the same failing test" failing
       | other -> failtestf "expected Blocked(FailingTests, FixTests), got %A" other
+    }
+
+    testTask "WHY — an INCONCLUSIVE verification (couldn't run the tests, NOT a real failure) blocks with Inconclusive, is popped from the queue, and lets the next landing advance — it never permanently jams the queue the way FailingTests does (Gap 3, roast-7 mode-shift)" {
+      let ledger = InMemory.create<MemberId> ()
+      // Rebase and ComputeAffected succeed; the verifier cannot reach a verdict
+      // (e.g. the integration session is still warming up after the rebase
+      // rebuild). This is `Error`, distinct from `Ok failingTests`.
+      let performer =
+        { happyPathPerformer [ TestId "t1" ] [] (fun toSha -> toSha + "-committed") with
+            RunTests = fun _ _ -> async { return Error "integration session still warming up" } }
+      use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None))
+      let! landingA = requestLanding owner alice "A" |> Async.AwaitTask
+      let! landingB = requestLanding owner bob "B" |> Async.AwaitTask
+
+      // A cannot verify -> Blocked(Inconclusive) and is popped; B then ADVANCES
+      // (proving the queue un-jammed) and hits the same inconclusive. If an
+      // inconclusive jammed the queue the way FailingTests does, B would stay
+      // Queued forever and this would time out.
+      do!
+        waitUntil owner (defaultDeadline ())
+          (fun () -> sprintf "A=%A B=%A" (landingOf owner landingA).State (landingOf owner landingB).State)
+          (fun () ->
+            match (landingOf owner landingA).State, (landingOf owner landingB).State with
+            | LandingState.Blocked(LandingBlocker.Inconclusive _, _), LandingState.Blocked(LandingBlocker.Inconclusive _, _) -> true
+            | _ -> false)
+
+      match (landingOf owner landingA).State with
+      | LandingState.Blocked(LandingBlocker.Inconclusive reason, NextAction.RebaseAndResubmit) ->
+        reason |> Expect.stringContains "the blocker carries the verifier's own reason, not a fabricated test failure" "warming up"
+      | other -> failtestf "expected Blocked(Inconclusive, RebaseAndResubmit), got %A" other
+
+      owner.ReadCohortState().Queue
+      |> Expect.equal "an inconclusive landing is popped (it never jams the serial queue); B advanced past it and was popped too" []
     }
 
     testTask "WHY — a second queued landing does not start rebasing while the first is still in flight (item 14b, strict FIFO)" {
