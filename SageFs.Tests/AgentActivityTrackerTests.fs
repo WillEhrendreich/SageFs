@@ -254,6 +254,71 @@ let propertyTests = testList "AgentActivityTracker properties" [
         | _ -> false)
 ]
 
+// ── recordMemberActivity: role from the bound MemberId, not a ─────
+// ── re-parsed string (sagefs-multiagent-vision.md §4.1 / §10 ──────
+// ── Phase 0 item 4: "OccupantRole.classify by name prefix ─────────
+// ── deleted" from the bound-connection path). ─────────────────────
+
+let memberActivityTests = testList "AgentActivityTracker — recordMemberActivity (MemberId-bound)" [
+
+  testCase "WHY — an Mcp-bound member is Worker regardless of what string is inside the connection id" <| fun _ ->
+    // Naively re-classifying the connection id's own text ("observer-42" does
+    // not start with "mcp"/"agent-") would wrongly derive Observer. Role must
+    // come from the MemberId CASE (SageFs.MemberTable.MemberId.Mcp), never
+    // from string-sniffing whatever happens to be inside it.
+    let tracker = AgentActivityTracker.create()
+    AgentActivityTracker.recordMemberActivity tracker (MemberTable.MemberId.Mcp "observer-42") "sess-1" None None now
+    let p = (AgentActivityTracker.getPresence tracker (MemberTable.MemberId.display (MemberTable.MemberId.Mcp "observer-42"))).Value
+    p.Role |> Expect.equal "Mcp connections are always Worker" OccupantRole.Worker
+
+  testCase "WHY — a Browser-bound member is Observer regardless of what string is inside the client id" <| fun _ ->
+    let tracker = AgentActivityTracker.create()
+    AgentActivityTracker.recordMemberActivity tracker (MemberTable.MemberId.Browser "mcp-lookalike") "sess-1" None None now
+    let p = (AgentActivityTracker.getPresence tracker (MemberTable.MemberId.display (MemberTable.MemberId.Browser "mcp-lookalike"))).Value
+    p.Role |> Expect.equal "Browser tabs are always Observer, even if the client id looks like an mcp name" OccupantRole.Observer
+
+  testCase "WHY — a Minted (unbound) member still falls back to the name-prefix heuristic" <| fun _ ->
+    // The heuristic survives ONLY for genuinely unbound callers (no real
+    // connection to classify by) — this is unchanged, documented behavior.
+    let tracker = AgentActivityTracker.create()
+    AgentActivityTracker.recordMemberActivity tracker (MemberTable.MemberId.Minted "mcp-claude") "sess-1" None None now
+    let p = (AgentActivityTracker.getPresence tracker "mcp-claude").Value
+    p.Role |> Expect.equal "Minted \"mcp-claude\" still classifies as Worker via the prefix heuristic" OccupantRole.Worker
+
+  testCase "recordMemberActivity keys the presence table identically to MemberId.display" <| fun _ ->
+    let tracker = AgentActivityTracker.create()
+    AgentActivityTracker.recordMemberActivity tracker (MemberTable.MemberId.Mcp "conn-A") "sess-1" (Some "Main.fs") None now
+    AgentActivityTracker.getPresence tracker "mcp:conn-A"
+    |> Option.isSome
+    |> Expect.isTrue "keyed by MemberId.display, same routing key space as recordToolCall/SessionMap"
+
+  testCase "recordMemberActivity and recordToolCall accumulate into the SAME underlying table for a Minted id" <| fun _ ->
+    // recordToolCall(agentName) is behavior-preserved as recordMemberActivity(Minted agentName) —
+    // both entry points collapse onto one shared implementation/table.
+    let tracker = AgentActivityTracker.create()
+    AgentActivityTracker.recordToolCall tracker "claude" "sess-1" (Some "A.fs") None now
+    AgentActivityTracker.recordMemberActivity tracker (MemberTable.MemberId.Minted "claude") "sess-1" (Some "B.fs") None (now + TimeSpan.FromSeconds 1.0)
+    let p = (AgentActivityTracker.getPresence tracker "claude").Value
+    p.EvalCount |> Expect.equal "both calls landed on the same presence entry" 2
+    p.RecentFiles |> Set.ofList
+    |> Expect.equal "files from both call styles accumulate together" (Set.ofList [ "A.fs"; "B.fs" ])
+
+  testPropertyWithConfig propConfig
+    "Role is always OccupantRole.ofMemberId of the id passed in — never re-derived from the resolved key string"
+    <| fun () ->
+      let genMemberId =
+        Gen.oneof [
+          Gen.map MemberTable.MemberId.Browser (Gen.elements [ "tab-1"; "mcp"; "agent-x"; "" ])
+          Gen.map MemberTable.MemberId.Mcp (Gen.elements [ "conn-A"; "observer"; "tui"; "" ])
+          Gen.map MemberTable.MemberId.Minted (Gen.elements [ "claude"; "mcp-x"; "tui"; "dashboard" ])
+        ]
+      Prop.forAll (Arb.fromGen genMemberId) (fun id ->
+        let tracker = AgentActivityTracker.create()
+        AgentActivityTracker.recordMemberActivity tracker id "sess-1" None None now
+        let p = (AgentActivityTracker.getPresence tracker (MemberTable.MemberId.display id)).Value
+        p.Role = OccupantRole.ofMemberId id)
+]
+
 // ── Thread safety tests ──────────────────────────────────────────
 
 let threadSafetyTests = testList "AgentActivityTracker — thread safety" [
@@ -299,6 +364,7 @@ let allTests = testList "Agent activity tracker" [
   intentTests
   getAllPresencesTests
   cleanupTests
+  memberActivityTests
   propertyTests
   threadSafetyTests
 ]

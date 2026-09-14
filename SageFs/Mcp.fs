@@ -1755,7 +1755,10 @@ module McpTools =
                        ["fsi.agent.name", box agentName; "fsi.statement.count", box statements.Length; "fsi.session.id", box sid]
           // Record agent activity for multi-agent coordination — keyed by the
           // BOUND connection, not the self-declared agentName (memberIdFor).
-          AgentActivityTracker.recordToolCall ctx.ActivityTracker (resolvedKey agentName) sid filePath intent DateTime.UtcNow
+          // recordMemberActivity (not recordToolCall) so Role is derived from
+          // the MemberId case itself, never by re-classifying the resolved
+          // key's text (Phase 0 item 4 of sagefs-multiagent-vision.md §10).
+          AgentActivityTracker.recordMemberActivity ctx.ActivityTracker (memberIdFor agentName) sid filePath intent DateTime.UtcNow
 
           let mutable allOutputs = []
           let mutable outcome = Evaluated false
@@ -1879,8 +1882,9 @@ module McpTools =
             baseStatus
             |> SessionOperations.CoordinationEnrichment.enrichStatusWithGuidance guidance
             |> SessionOperations.CoordinationEnrichment.enrichStatusWithPresences DateTime.UtcNow presences
-          // Also record this status check as agent activity
-          AgentActivityTracker.recordToolCall ctx.ActivityTracker (resolvedKey agent) sid None None DateTime.UtcNow
+          // Also record this status check as agent activity — recordMemberActivity
+          // so Role comes from the bound MemberId case, not a re-parsed string.
+          AgentActivityTracker.recordMemberActivity ctx.ActivityTracker (memberIdFor agent) sid None None DateTime.UtcNow
           let rebuildLine =
             match rebuildOutcomes.TryGetValue sid with
             | true, outcome -> "\n" + RebuildOutcome.describe DateTime.UtcNow outcome

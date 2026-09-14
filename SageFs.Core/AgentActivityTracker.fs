@@ -40,20 +40,24 @@ module AgentActivityTracker =
   let create () : Tracker =
     Tracker(ConcurrentDictionary<string, AgentSnapshot>(StringComparer.Ordinal))
 
-  /// Record a tool call from an agent.
-  /// Updates LastToolCall, accumulates file path, increments eval count.
-  /// Intent is updated only when a non-None value is provided.
-  let recordToolCall
+  /// Shared implementation behind both `recordToolCall` (legacy, string-keyed
+  /// — Role derived by re-classifying the key text) and `recordMemberActivity`
+  /// (MemberTable.MemberId-keyed — Role derived from the connection kind
+  /// itself). One table, one merge algorithm; the two public entry points
+  /// differ ONLY in how `key`/`role` are computed, per
+  /// sagefs-multiagent-vision.md §4.1 / §10 Phase 0 item 4 ("SessionMap, the
+  /// name-keyed AgentActivityTracker ... collapse into one table").
+  let private recordActivity
     (tracker: Tracker)
-    (agentName: string)
+    (key: string)
+    (role: OccupantRole)
     (sessionId: string)
     (filePath: string option)
     (intent: string option)
     (now: DateTime)
     : unit =
-    let role = OccupantRole.classify agentName
     tracker.Agents.AddOrUpdate(
-      agentName,
+      key,
       // Factory: first time we see this agent
       (fun _key ->
         let files =
@@ -61,7 +65,7 @@ module AgentActivityTracker =
           | Some f -> [f]
           | None -> []
         {
-          AgentName = agentName
+          AgentName = key
           Role = role
           SessionId = sessionId
           LastToolCall = now
@@ -92,6 +96,46 @@ module AgentActivityTracker =
             EvalCount = existing.EvalCount + 1
         })
     ) |> ignore
+
+  /// Record a tool call from an agent, keyed by its caller-supplied name.
+  /// Role is derived by re-classifying that name's text (`OccupantRole.classify`).
+  /// PRESERVED for existing callers (the dashboard's browser-tab presence,
+  /// and every test written against this signature) — behavior-identical to
+  /// before `recordMemberActivity` existed, since for any string `s`,
+  /// `OccupantRole.ofMemberId (MemberId.Minted s) = OccupantRole.classify s`
+  /// and `MemberId.display (MemberId.Minted s) = s` (SageFs.MemberTable).
+  /// Prefer `recordMemberActivity` wherever a real `MemberTable.MemberId` is
+  /// already in hand (SageFs/Mcp.fs's bound MCP calls) — it derives Role from
+  /// the connection kind itself, never from re-parsed string text.
+  let recordToolCall
+    (tracker: Tracker)
+    (agentName: string)
+    (sessionId: string)
+    (filePath: string option)
+    (intent: string option)
+    (now: DateTime)
+    : unit =
+    recordActivity tracker agentName (OccupantRole.classify agentName) sessionId filePath intent now
+
+  /// Record a tool call from a BOUND member identity
+  /// (sagefs-multiagent-vision.md §4.1: "identity is bound to the
+  /// connection, not declared"). Keys the SAME shared table as `recordToolCall`
+  /// (`MemberTable.MemberId.display id`) but computes Role from the `MemberId`
+  /// CASE itself (`OccupantRole.ofMemberId`) — never by re-classifying
+  /// whatever text happens to be inside the id. This is what closes
+  /// "OccupantRole.classify by name prefix deleted" for the bound-connection
+  /// path: an `Mcp`/`Browser` member's role can never silently misclassify
+  /// due to a coincidental prefix match, because it is not derived from a
+  /// string at all.
+  let recordMemberActivity
+    (tracker: Tracker)
+    (id: MemberTable.MemberId)
+    (sessionId: string)
+    (filePath: string option)
+    (intent: string option)
+    (now: DateTime)
+    : unit =
+    recordActivity tracker (MemberTable.MemberId.display id) (OccupantRole.ofMemberId id) sessionId filePath intent now
 
   /// Forget one member outright (its key — see SageFs.MemberTable.MemberId.display
   /// for how MCP/dashboard callers derive it — not a display name). Used on a
