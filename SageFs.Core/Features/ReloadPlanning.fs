@@ -39,6 +39,14 @@ type FileDecls = {
   ModulePath: string list
   Opens: string list
   Decls: SourceDecl list
+  /// The exact source `extractDecls` parsed this from — `None` only for a
+  /// `FileDecls` a test built directly without going through `extractDecls`.
+  /// Kept so `planReload` can type-check the real file with FCS
+  /// (`GetAllUsesOfAllSymbolsInFile`, the same technique `Diagnostics.fs`
+  /// uses) for exact symbol identity instead of identifier-name matching —
+  /// every `SourceDecl`'s StartLine/EndLine already describe positions
+  /// within this same text.
+  RawSource: string option
 }
 
 [<RequireQualifiedAccess>]
@@ -222,7 +230,7 @@ let extractDecls (source: string) : Result<FileDecls, string> =
           | SynModuleOrNamespaceKind.AnonModule -> []
           | _ -> ids |> List.map _.idText
         let opens, found = declsOf lines decls
-        Ok { ModulePath = modulePath; Opens = opens; Decls = found }
+        Ok { ModulePath = modulePath; Opens = opens; Decls = found; RawSource = Some source }
       | _ -> Error "the file declares several namespaces or modules at the top level"
     | None, ParsedInput.SigFile _ -> Error "signature files are not reloaded"
   with ex -> Error (sprintf "the file could not be parsed: %s" ex.Message)
@@ -395,6 +403,106 @@ let private targetNamesOf (decl: SourceDecl) : string list =
   | DeclKind.TypeDecl -> decl.Name :: innerNamesOf decl
   | _ -> [ decl.Name ]
 
+/// The identifier-set fallback: a patch "uses" a hidden declaration when one of
+/// the hidden declaration's own names (its name, or — for a type — a case/field
+/// name) appears as a bare identifier anywhere in the patch's text. This can
+/// only ever be MORE eager to restart than exact symbol resolution — a name
+/// that merely collides with a hidden declaration (a shadowing parameter, a
+/// same-named local) still counts as "uses" here — which is exactly why it is
+/// safe as a fallback: it never looks more permissive than the exact check.
+let private unreachableViaIdentifiers (patches: SourceDecl list) (hidden: SourceDecl list) : ReloadChange list =
+  let hiddenTargets = hidden |> List.map (fun h -> h, targetNamesOf h |> List.filter isIdentifier |> Set.ofList)
+  patches
+  |> List.choose (fun f ->
+    let used = identifiersOf f.Text
+    hiddenTargets
+    |> List.tryFind (fun (h, names) -> h.Name <> f.Name && names |> Set.exists (fun n -> Set.contains n used))
+    |> Option.map (fun (h, _) -> ReloadChange.UsesNonPublicMember (f.Name, h.Name)))
+
+/// One FSharpChecker, reused across every reload decision in the process: it
+/// caches compiler internals (default reference sets, etc.) and is documented
+/// as safe under concurrent, repeated use, so there is no reason to pay its
+/// construction cost per save.
+let private checker = lazy FSharp.Compiler.CodeAnalysis.FSharpChecker.Create()
+
+/// A counter folded into the synthetic file name/version of every check, so
+/// FSharpChecker's own internal (fileName, version) result cache can never
+/// serve a stale answer for a changed body under a reused name.
+let private checkCounter = ref 0
+
+/// Type-checks `source` — a real file's exact text, standalone (no project,
+/// no `#load`ed dependencies) — and returns every symbol use FCS found in it,
+/// the same `GetAllUsesOfAllSymbolsInFile` technique `Diagnostics.fs` already
+/// uses for the live-testing dependency graph. Errors (including "the file
+/// depends on something outside itself that a standalone check can't see" —
+/// the common case for a real app file with NuGet/ASP.NET references) are
+/// reported, never silently swallowed into an empty result: an incomplete
+/// symbol table must never be mistaken for "nothing references the hidden
+/// declaration."
+let private symbolUsesOf (source: string) : Result<FSharp.Compiler.CodeAnalysis.FSharpSymbolUse list, string> =
+  try
+    let n = System.Threading.Interlocked.Increment checkCounter
+    let fileName = sprintf "reload-planning-check-%d.fs" n
+    let sourceText = FSharp.Compiler.Text.SourceText.ofString source
+    let projOptions, _ =
+      checker.Value.GetProjectOptionsFromScript(fileName, sourceText, assumeDotNetFramework = false)
+      |> fun a -> Async.RunSynchronously(a, timeout = 10_000)
+    let parseResults, answer =
+      checker.Value.ParseAndCheckFileInProject(fileName, n, sourceText, projOptions)
+      |> fun a -> Async.RunSynchronously(a, timeout = 10_000)
+    match answer with
+    | FSharp.Compiler.CodeAnalysis.FSharpCheckFileAnswer.Aborted ->
+      Error "the standalone type check was aborted"
+    | FSharp.Compiler.CodeAnalysis.FSharpCheckFileAnswer.Succeeded checkResults ->
+      let isError (d: FSharp.Compiler.Diagnostics.FSharpDiagnostic) =
+        d.Severity = FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error
+      match Array.append parseResults.Diagnostics checkResults.Diagnostics |> Array.exists isError with
+      | true -> Error "the file does not type-check standalone; symbol resolution may be incomplete"
+      | false -> Ok (checkResults.GetAllUsesOfAllSymbolsInFile() |> Seq.toList)
+  with ex -> Error ex.Message
+
+/// Exact reachability via the compiler's own symbol table, not identifier-name
+/// matching: a patch only "uses" a hidden declaration when some use inside the
+/// patch's own source lines resolves to a symbol whose *declaration* lies
+/// inside that hidden declaration's own source lines. Resolution — not a name
+/// list — is what decides it, so a local binding that merely shares a hidden
+/// declaration's name (a shadowing parameter, a same-named local) is never
+/// mistaken for a reference to it, and a use that only reaches a hidden type
+/// through a union case or record field (never spelling the type's own name)
+/// still resolves, because the compiler resolved the reference.
+let private unreachableViaSymbols (source: string) (patches: SourceDecl list) (hidden: SourceDecl list) : Result<ReloadChange list, string> =
+  symbolUsesOf source
+  |> Result.map (fun uses ->
+    let within (d: SourceDecl) (line: int) = line >= d.StartLine && line <= d.EndLine
+    let declarationLine (su: FSharp.Compiler.CodeAnalysis.FSharpSymbolUse) =
+      match su.IsFromDefinition with
+      | true -> None
+      | false -> su.Symbol.DeclarationLocation |> Option.map (fun r -> r.StartLine)
+    patches
+    |> List.choose (fun f ->
+      uses
+      |> Seq.filter (fun su -> within f su.Range.StartLine)
+      |> Seq.choose declarationLine
+      |> Seq.tryPick (fun declLine -> hidden |> List.tryFind (fun h -> h.Name <> f.Name && within h declLine))
+      |> Option.map (fun h -> ReloadChange.UsesNonPublicMember (f.Name, h.Name))))
+
+/// Prefers the exact FCS-symbol check on the real file text; falls back to the
+/// identifier-set heuristic — never to "reachable" — when there is no real
+/// source to check (a `FileDecls` a test built directly) or the standalone
+/// check could not run cleanly. The fallback can only ever add restarts the
+/// exact check would not have reported, never remove one it would have.
+let private unreachableOf (current: FileDecls) (patches: SourceDecl list) (hidden: SourceDecl list) : ReloadChange list =
+  match hidden, patches with
+  | [], _
+  | _, [] -> []
+  | _ ->
+    match current.RawSource with
+    | Some source ->
+      match unreachableViaSymbols source patches hidden with
+      | Ok found -> found
+      | Error _ -> unreachableViaIdentifiers patches hidden
+    | None -> unreachableViaIdentifiers patches hidden
+
 /// Types, values and startup code are compared with the source the running app
 /// was built from; a function may be patched only if its header is unchanged.
 let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
@@ -414,22 +522,14 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
   let hidden =
     current.Decls
     |> List.filter (fun d -> d.Access <> DeclAccess.Public && not (patchedNames.Contains d.Name) && isIdentifier d.Name)
-  let hiddenTargets = hidden |> List.map (fun h -> h, targetNamesOf h |> List.filter isIdentifier |> Set.ofList)
-  let unreachable =
-    outcomes
-    |> List.choose (function
-      | DeclOutcome.Patch f ->
-        let used = identifiersOf f.Text
-        hiddenTargets
-        |> List.tryFind (fun (h, names) -> h.Name <> f.Name && names |> Set.exists (fun n -> Set.contains n used))
-        |> Option.map (fun (h, _) -> ReloadChange.UsesNonPublicMember (f.Name, h.Name))
-      | _ -> None)
+  let patches = outcomes |> List.choose (function DeclOutcome.Patch f -> Some f | _ -> None)
+  let unreachable = unreachableOf current patches hidden
   let restarts =
     (outcomes |> List.choose (function DeclOutcome.Restart c -> Some c | _ -> None)) @ removed @ unreachable
     |> List.distinct
   match restarts with
   | first :: rest -> ReloadPlan.RestartRequired (first, rest)
-  | [] -> ReloadPlan.PatchFunctions (outcomes |> List.choose (function DeclOutcome.Patch d -> Some d | _ -> None))
+  | [] -> ReloadPlan.PatchFunctions patches
 
 [<RequireQualifiedAccess>]
 type PatchOutcome =

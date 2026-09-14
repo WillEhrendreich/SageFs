@@ -256,6 +256,28 @@ let hiddenViaMembersTests =
       |> Expect.equal "answer" [ "answer" ]
   ]
 
+[<Tests>]
+let exactSymbolResolutionTests =
+  testList "ReloadPlanning access — exact FCS symbol resolution, not name matching" [
+    testCase "WHY — ReloadPlanning.planReload — a function parameter that shadows a private module value does not force a restart because the patch never touches the private value" <| fun _ ->
+      let source = "module Demo.Shadow\n\nlet private timeout = 30\n\nlet describe (timeout: int) =\n  sprintf \"waiting %d\" timeout\n"
+      planReload (declsOf source) (declsOf (replace "\"waiting %d\"" "\"wait %d\"" source))
+      |> patchedNames
+      |> Expect.equal "describe patches — its own parameter shadows the private value, it never references it" [ "describe" ]
+
+    testCase "WHY — ReloadPlanning.planReload — a local let that shadows a private module value does not force a restart because the patch never touches the private value" <| fun _ ->
+      let source = "module Demo.Shadow2\n\nlet private secret = 41\n\nlet answer () =\n  let secret = 99\n  secret + 1\n"
+      planReload (declsOf source) (declsOf (replace "secret + 1" "secret + 2" source))
+      |> patchedNames
+      |> Expect.equal "answer patches — its own local `secret` shadows the private value, it never references it" [ "answer" ]
+
+    testCase "WHY — ReloadPlanning.planReload — a genuine reference to a private module value still restarts because exact resolution is not weaker than the identifier heuristic" <| fun _ ->
+      let source = "module Demo.Shadow3\n\nlet private secret = 41\n\nlet answer () =\n  secret + 1\n"
+      planReload (declsOf source) (declsOf (replace "secret + 1" "secret + 2" source))
+      |> restartChanges
+      |> Expect.equal "answer genuinely uses the private secret" [ ReloadChange.UsesNonPublicMember ("answer", "secret") ]
+  ]
+
 // ── Planner laws over generated declaration sets ──
 
 let private namePool = [ "alpha"; "beta"; "gamma"; "delta"; "epsilon"; "zeta"; "eta"; "theta" ]
@@ -302,7 +324,11 @@ let private genDeclNamed (name: string) =
     return mkDecl name kind access body
   }
 
-let private fileOf (decls: SourceDecl list) = { ModulePath = [ "Demo"; "App" ]; Opens = [ "System" ]; Decls = decls }
+// RawSource = None: these files are synthetic SourceDecl lists built directly,
+// not parsed by extractDecls, so there is no real text for the FCS-exact path
+// to check — planReload falls back to the identifier-set heuristic for them,
+// which is exactly what these generated-declaration-set laws exercise.
+let private fileOf (decls: SourceDecl list) = { ModulePath = [ "Demo"; "App" ]; Opens = [ "System" ]; Decls = decls; RawSource = None }
 
 /// Every declaration has its own name.
 let private genUniqueFile =

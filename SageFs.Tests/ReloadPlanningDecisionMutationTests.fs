@@ -107,23 +107,23 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
   // ── confirmPatch ──────────────────────────────────────────────────────────
 
   testCase "WHY — confirmPatch_existing_function_detoured_is_Applied" <| fun () ->
-    let before = { ModulePath = []; Opens = []; Decls = [ mkDecl "f" DeclKind.FunctionDecl ] }
+    let before = { ModulePath = []; Opens = []; Decls = [ mkDecl "f" DeclKind.FunctionDecl ]; RawSource = None }
     confirmPatch before [ mkDecl "f" DeclKind.FunctionDecl ] [ "M.f" ]
     |> Expect.equal "a function that existed before AND was detoured must be Applied" PatchOutcome.Applied
 
   testCase "WHY — confirmPatch_existing_function_not_detoured_needs_restart — Harmony silently failing to detour must not be reported as success" <| fun () ->
-    let before = { ModulePath = []; Opens = []; Decls = [ mkDecl "f" DeclKind.FunctionDecl ] }
+    let before = { ModulePath = []; Opens = []; Decls = [ mkDecl "f" DeclKind.FunctionDecl ]; RawSource = None }
     confirmPatch before [ mkDecl "f" DeclKind.FunctionDecl ] []
     |> Expect.equal "a function that existed before but was NOT detoured must report RestartNeeded, naming it SignatureChanged"
       (PatchOutcome.RestartNeeded (ReloadChange.SignatureChanged "f", []))
 
   testCase "WHY — confirmPatch_brand_new_function_is_Applied_without_requiring_detour — a function that never existed has nothing to detour onto" <| fun () ->
-    let before = { ModulePath = []; Opens = []; Decls = [] }
+    let before = { ModulePath = []; Opens = []; Decls = []; RawSource = None }
     confirmPatch before [ mkDecl "brandNew" DeclKind.FunctionDecl ] []
     |> Expect.equal "a brand-new patched function must be Applied even with an empty detour list (it didn't need detouring)" PatchOutcome.Applied
 
   testCase "WHY — confirmPatch_matches_detour_by_exact_name_or_dotted_suffix" <| fun () ->
-    let before = { ModulePath = []; Opens = []; Decls = [ mkDecl "f" DeclKind.FunctionDecl ] }
+    let before = { ModulePath = []; Opens = []; Decls = [ mkDecl "f" DeclKind.FunctionDecl ]; RawSource = None }
     confirmPatch before [ mkDecl "f" DeclKind.FunctionDecl ] [ "Some.Nested.Module.f" ]
     |> Expect.equal "a dotted detour name ending in \".f\" must count as detouring f" PatchOutcome.Applied
 
