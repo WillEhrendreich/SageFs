@@ -90,4 +90,54 @@ let tests =
 
       allowRestartFinish.TrySetResult(()) |> ignore
     }
+
+    // roast-7 §2/§16 item 2: send_fsharp_code used to flatten every result
+    // to a `sprintf "Result: %s"` / `"Error: %s"` string even though
+    // structured data (diagnostics with spans, a classified SageFsError)
+    // already existed and was thrown away. These exercise the ACTUAL tool
+    // member (not just the pure formatter — see McpAdapterTests.fs for
+    // that) so the wiring itself is proven, not just the formatting logic.
+    testTask "send_fsharp_code returns structuredContent with success=true on a clean eval" {
+      let ctx = sharedCtx ()
+      let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
+
+      let! (result: ModelContextProtocol.Protocol.CallToolResult) =
+        tools.send_fsharp_code("test", "let structuredTestValue = 99", "", "", "", 0, "")
+
+      (result.IsError.HasValue && result.IsError.Value)
+      |> Expect.isFalse "a clean eval must not be flagged IsError"
+      result.StructuredContent.HasValue
+      |> Expect.isTrue "structured content must be attached"
+      let root = result.StructuredContent.Value
+      root.GetProperty("success").GetBoolean() |> Expect.isTrue "success flag"
+      root.GetProperty("result").GetString()
+      |> Expect.stringContains "result text should be present" "structuredTestValue"
+      root.GetProperty("diagnostics").GetArrayLength() >= 0
+      |> Expect.isTrue "diagnostics array must be present (possibly empty)"
+      // The text block is unchanged from before this change — nothing that
+      // reads plain text should break.
+      let textBlock =
+        result.Content
+        |> Seq.tryPick (fun c -> match c with :? ModelContextProtocol.Protocol.TextContentBlock as t -> Some t.Text | _ -> None)
+      textBlock |> Expect.isSome "a human-readable text block must still be present"
+    }
+
+    testTask "send_fsharp_code returns structuredContent with the SageFsError algebra and IsError=true on a compile failure" {
+      let ctx = sharedCtx ()
+      let tools = SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
+
+      let! (result: ModelContextProtocol.Protocol.CallToolResult) =
+        tools.send_fsharp_code("test", "let thisDoesNotCompile : int = \"not an int\"", "", "", "", 0, "")
+
+      (result.IsError.HasValue && result.IsError.Value)
+      |> Expect.isTrue "a compile failure must be flagged IsError"
+      result.StructuredContent.HasValue
+      |> Expect.isTrue "structured content must be attached on failure too"
+      let root = result.StructuredContent.Value
+      // Same shape as every other tool's structured error (SageFsError.toJson):
+      // case/message/suggestedAction — not a flattened {success,error} string.
+      root.TryGetProperty("case") |> fst |> Expect.isTrue "must carry a case token"
+      root.TryGetProperty("message") |> fst |> Expect.isTrue "must carry a message"
+      root.TryGetProperty("suggestedAction") |> fst |> Expect.isTrue "must carry a suggestedAction"
+    }
   ]

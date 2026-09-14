@@ -633,16 +633,23 @@ Available: %s%s
 - Working Directory: %s
 - MCP Port: %d""" sessionId eventCount (SessionState.label state) projectsStr tools statsSection info.WorkingDirectory mcpPort
 
+  /// Diagnostics as JSON array *items* (no enclosing brackets — callers
+  /// interpolate into their own `"diagnostics":[%s]` field), spans included
+  /// (`StartLine/StartColumn/EndLine/EndColumn`). Factored out once so
+  /// `formatWorkerEvalResultJson` and `formatEvalStructuredSuccess` (the
+  /// structured `send_fsharp_code` path, roast-7 §2) can never drift apart.
+  let diagnosticsToJson (diags: WorkerProtocol.WorkerDiagnostic list) : string =
+    diags
+    |> List.map (fun (d: WorkerProtocol.WorkerDiagnostic) ->
+      sprintf """{"severity":"%s","message":"%s","startLine":%d,"startColumn":%d,"endLine":%d,"endColumn":%d}"""
+        (Features.Diagnostics.DiagnosticSeverity.label d.Severity)
+        (escapeJson d.Message) d.StartLine d.StartColumn d.EndLine d.EndColumn)
+    |> String.concat ","
+
   let formatWorkerEvalResultJson (response: WorkerProtocol.WorkerResponse) : string =
     match response with
     | WorkerProtocol.WorkerResponse.EvalResult(_, result, diags, _) ->
-      let diagsJson =
-        diags
-        |> List.map (fun (d: WorkerProtocol.WorkerDiagnostic) ->
-          sprintf """{"severity":"%s","message":"%s","startLine":%d,"startColumn":%d,"endLine":%d,"endColumn":%d}"""
-            (Features.Diagnostics.DiagnosticSeverity.label d.Severity)
-            (escapeJson d.Message) d.StartLine d.StartColumn d.EndLine d.EndColumn)
-        |> String.concat ","
+      let diagsJson = diagnosticsToJson diags
       match result with
       | Ok output ->
         sprintf """{"success":true,"result":"%s","diagnostics":[%s]}"""
@@ -656,6 +663,65 @@ Available: %s%s
     | other ->
       sprintf """{"success":false,"error":"%s","diagnostics":[]}"""
         (escapeJson (sprintf "Unexpected response: %A" other))
+
+  /// Structured success payload for `send_fsharp_code` (roast-7 §2/§16 item
+  /// 2): `{success, result, diagnostics[with spans]}`, the same shape
+  /// `formatWorkerEvalResultJson`'s success branch already produces — kept
+  /// as its own named function because the failure side (below) is
+  /// deliberately NOT the same shape (it carries the full `SageFsError`
+  /// algebra, not a flattened message).
+  let formatEvalStructuredSuccess (result: string) (diags: WorkerProtocol.WorkerDiagnostic list) : string =
+    sprintf """{"success":true,"result":"%s","diagnostics":[%s]}"""
+      (escapeJson result) (diagnosticsToJson diags)
+
+  /// Structured failure payload for `send_fsharp_code`: the full
+  /// `SageFsError.toJson` triple (`case`/`message`/`suggestedAction`) —
+  /// the same shape `McpServer.structuredToolErrorResult` already emits for
+  /// every other tool that raises `SageFsErrorException`. `send_fsharp_code`
+  /// was the one production call site that flattened this to a plain
+  /// string instead (roast-7 §2, sagefs-roast.md Finding #2).
+  let formatEvalStructuredError (err: SageFsError) : string =
+    JsonSerializer.Serialize(SageFsError.toJson err)
+
+  /// Outbound size cap for MCP tool text results (roast-7 §13/§16 item 13).
+  /// The only enforced limit before this was INBOUND — 4 MiB on the request
+  /// body (McpServer.maxRequestBodyBytes). A verbose eval result had no
+  /// ceiling before landing in an agent's context window. 256 KiB is
+  /// generous for a legitimate eval reply (large printed tables, full
+  /// stack traces) while bounding runaway output (an accidental print loop,
+  /// a megabyte-sized dump) before it eats the whole context budget.
+  [<Literal>]
+  let MaxOutboundResultBytes = 262_144
+
+  /// Truncate `text` to at most `maxBytes` UTF-8 bytes, appending a marker
+  /// naming how many bytes were cut. Never silently drops data without
+  /// saying so (a bare cut would look like SageFs is just producing short
+  /// output). A partial multi-byte sequence at the cut point decodes to the
+  /// Unicode replacement character rather than throwing — acceptable at a
+  /// boundary that only exists to protect an agent's context window.
+  let truncateForOutbound (maxBytes: int) (text: string) : string =
+    let totalBytes = System.Text.Encoding.UTF8.GetByteCount(text)
+    match totalBytes <= maxBytes with
+    | true -> text
+    | false ->
+      let marker = sprintf "…[truncated %d bytes]" (totalBytes - maxBytes)
+      let markerBytes = System.Text.Encoding.UTF8.GetByteCount(marker)
+      let budget = max 0 (maxBytes - markerBytes)
+      let allBytes = System.Text.Encoding.UTF8.GetBytes(text)
+      let cut = min budget allBytes.Length
+      let kept = System.Text.Encoding.UTF8.GetString(allBytes, 0, cut)
+      kept + marker
+
+  /// A compact, single-line preview of `text` for event-log summaries:
+  /// newlines collapsed to spaces, truncated to `maxChars` with an
+  /// ellipsis. Distinct from `truncateForOutbound` (byte-budgeted, for a
+  /// whole tool reply) — this is char-budgeted, for one line of many in a
+  /// list.
+  let previewLine (maxChars: int) (text: string) : string =
+    let collapsed = text.Replace("\r\n", " ").Replace("\n", " ").Trim()
+    match collapsed.Length <= maxChars with
+    | true -> collapsed
+    | false -> collapsed.Substring(0, maxChars) + "…"
 
 /// MCP tool implementations — all tools route through SessionManager.
 /// There is no "local embedded session" — every session is a worker.
@@ -1589,7 +1655,13 @@ module McpTools =
       | Evaluated f1, Evaluated f2 -> Evaluated (f1 || f2)
 
   /// Evaluate a single FSI statement, dispatch Elm events, return formatted output.
-  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) : Task<string * EvalExecOutcome> = task {
+  /// Returns (formatted text, outcome, diagnostics with spans, the
+  /// classified `SageFsError` when this statement failed). The last two
+  /// elements exist so `evalFSharpCodeWithOutcome` can hand `send_fsharp_code`
+  /// structured content instead of re-parsing `formatted` (roast-7 §2) —
+  /// every branch below already has `diags`/`err` in hand from the same
+  /// match that built `formatted`, so this costs nothing new to compute.
+  let private evalSingleStatement (ctx: McpContext) (sid: string) (format: OutputFormat) (lineOffset: int) (colOffset: int) (statement: string) : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option> = task {
     notifyElm ctx (TuiEvent.EvalStarted (sid, statement))
     let workflow = getWorkflowForSession ctx sid
     let! routeResult =
@@ -1664,8 +1736,8 @@ module McpTools =
             with ex -> Log.warn "Failed to deserialize assembly load errors: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()
           // Success — the typed Ok outcome, not string sniffing, decides truth.
-          (formatted, Evaluated false)
-        | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, _, _) ->
+          (formatted, Evaluated false, diags, None)
+        | WorkerProtocol.WorkerResponse.EvalResult(_, Error err, diags, _) ->
           let errText = SageFsError.describe err
           // Track TypeLoadException so targeted_verify can flag the session as compromised.
           match ErrorMessages.categorize errText with
@@ -1678,32 +1750,35 @@ module McpTools =
           // The eval RAN — it's a compile/runtime failure in the user's code,
           // not an infra failure. Keeps the truthful-200 contract: /exec
           // stays 200 with the error text in `result`.
-          (formatted, Evaluated true)
+          (formatted, Evaluated true, diags, Some err)
         | WorkerProtocol.WorkerResponse.WorkerError err ->
           // The worker replied but could not run the eval at all (e.g. still
           // starting up) — this already IS a classified SageFsError, so
           // route it through the algebra instead of flattening it to a bool.
           notifyElm ctx (TuiEvent.EvalFailed (sid, SageFsError.describe err))
-          (formatted, InfraFailure err)
-        | _ -> (formatted, Evaluated false)
+          (formatted, InfraFailure err, [], Some err)
+        | _ -> (formatted, Evaluated false, [], None)
       | Error msg ->
-        let err = routeErrorMessage msg
-        notifyElm ctx (TuiEvent.EvalFailed (sid, err))
-        (sprintf "Error: %s" err, InfraFailure (routeErrorToSageFsError sid msg))
+        let err = routeErrorToSageFsError sid msg
+        notifyElm ctx (TuiEvent.EvalFailed (sid, routeErrorMessage msg))
+        (sprintf "Error: %s" (routeErrorMessage msg), InfraFailure err, [], Some err)
   }
 
-  /// Evaluate F# code. Returns (formatted output, outcome) — `Evaluated
-  /// failed` when the code ran (a compile/runtime failure still counts as
-  /// ran: /exec keeps its truthful-200 contract), `InfraFailure err` when it
-  /// never ran because the session/worker was unreachable. The distinction
-  /// comes from the typed worker outcome, never string sniffing. Most
-  /// callers use `sendFSharpCode` (string-only view).
+  /// Evaluate F# code. Returns (formatted output, outcome, diagnostics with
+  /// spans, the last classified `SageFsError` if any statement failed) —
+  /// `Evaluated failed` when the code ran (a compile/runtime failure still
+  /// counts as ran: /exec keeps its truthful-200 contract), `InfraFailure
+  /// err` when it never ran because the session/worker was unreachable. The
+  /// distinction comes from the typed worker outcome, never string
+  /// sniffing. The last two elements let `send_fsharp_code` return
+  /// structured content (roast-7 §2) without re-deriving it from `output`.
+  /// Most callers use `sendFSharpCode` (string-only view).
   let evalFSharpCodeWithOutcome
       (ctx: McpContext) (agentName: string) (code: string) (format: OutputFormat)
       (sessionId: string option) (workingDirectory: string option)
       (filePath: string option) (evalMode: string option) (blockStartLine: int option)
       (intent: string option)
-      : Task<string * EvalExecOutcome> =
+      : Task<string * EvalExecOutcome * WorkerProtocol.WorkerDiagnostic list * SageFsError option> =
     task {
       let! resolution = resolveSessionId ctx agentName sessionId workingDirectory
       match resolution with
@@ -1715,7 +1790,7 @@ module McpTools =
           | Some cached ->
             Log.debug "Eval dedup hit for session %s (code hash %08x)" sid (code.GetHashCode())
             Instrumentation.fsiEvals.Add(1L)
-            return (cached, Evaluated false)
+            return (cached, Evaluated false, [], None)
           | None ->
 
           let state =
@@ -1762,10 +1837,16 @@ module McpTools =
 
           let mutable allOutputs = []
           let mutable outcome = Evaluated false
+          let mutable allDiags : WorkerProtocol.WorkerDiagnostic list = []
+          let mutable lastError : SageFsError option = None
           for statement in statements do
-            let! output, stmtOutcome = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset statement
+            let! output, stmtOutcome, diags, errOpt = evalSingleStatement ctx sid format preprocessed.LineOffset preprocessed.ColumnOffset statement
             allOutputs <- output :: allOutputs
             outcome <- EvalExecOutcome.combine outcome stmtOutcome
+            allDiags <- allDiags @ diags
+            match errOpt with
+            | Some _ -> lastError <- errOpt
+            | None -> ()
 
           let finalOutput =
             match format with
@@ -1786,10 +1867,11 @@ module McpTools =
               let advisories = SessionOperations.FileOverlapAdvisory.compute (resolvedKey agentName) [fp] presences
               SessionOperations.CoordinationEnrichment.enrichEvalWithAdvisories advisories finalOutput
             | None -> finalOutput
-          return (enrichedOutput, outcome)
+          return (enrichedOutput, outcome, allDiags, lastError)
         }
       | other ->
-        return (sprintf "Error: %s" (formatSessionResolution other), InfraFailure (SageFsError.SessionNotRoutable (formatSessionResolution other)))
+        let err = SageFsError.SessionNotRoutable (formatSessionResolution other)
+        return (sprintf "Error: %s" (formatSessionResolution other), InfraFailure err, [], Some err)
     }
 
   /// String-only view of evalFSharpCodeWithOutcome — keeps existing callers.
@@ -1800,13 +1882,53 @@ module McpTools =
       (intent: string option)
       : Task<string> =
     task {
-      let! output, _ = evalFSharpCodeWithOutcome ctx agentName code format sessionId workingDirectory filePath evalMode blockStartLine intent
+      let! output, _, _, _ = evalFSharpCodeWithOutcome ctx agentName code format sessionId workingDirectory filePath evalMode blockStartLine intent
       return output
     }
 
+  /// Real recent-eval history for the resolved session (roast-7 §3a/§16
+  /// item 3) — this used to be hardcoded to "Recent events: none recorded"
+  /// regardless of what actually happened, even though `send_fsharp_code`'s
+  /// own tool description tells agents to call this "if the return value is
+  /// ambiguous". Reads the same `FeaturePushState.EvalHistory` the
+  /// dashboard filmstrip and `plan_ripple`/`impact_forecast` already read
+  /// (`Features.FeatureHooks.recentEvals`) — never a hardcoded string.
+  ///
+  /// KNOWN GAP (documented rather than silently papered over): the daemon's
+  /// `/exec` HTTP bridge (McpServer.fs, used by the CLI-integrated client)
+  /// records every eval into this history; the pure-MCP `send_fsharp_code`
+  /// path (this file) does not yet write to it — see McpContext.GetFeatureState,
+  /// a read-only getter with no matching setter reachable from here.
+  /// Widening that write path needs a new McpContext field, which would
+  /// touch every one of the ~14 test files that construct McpContext record
+  /// literals outside this change's owned-file list, so it is left for a
+  /// dedicated follow-up. This function is honest about the result either
+  /// way: real events when they exist, a plain "no events yet" when they do
+  /// not — never a lie.
   let getRecentEvents (ctx: McpContext) (agent: string) (count: int) (workingDirectory: string option) : Task<string> =
-    withSessionWd ctx agent workingDirectory (fun sid -> task {
-      return "Recent events: none recorded"
+    withSessionWd ctx agent workingDirectory (fun _sid -> task {
+      match ctx.GetFeatureState with
+      | None ->
+        return "Feature state not available — no active session."
+      | Some getState ->
+        let state = getState ()
+        match Features.FeatureHooks.recentEvals count state with
+        | [] ->
+          return "No FSI events recorded yet for this session."
+        | events ->
+          let lines =
+            events
+            |> List.map (fun (e: Features.FeatureHooks.EvalHistoryEntry) ->
+              let kind =
+                match e.Result.StartsWith("Error:", StringComparison.Ordinal) with
+                | true -> "Error"
+                | false -> "Eval"
+              sprintf "[%s] #%d (%dms) %s: %s -> %s"
+                (e.Timestamp.ToString("HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture))
+                e.CellIndex e.DurationMs kind
+                (McpAdapter.previewLine 120 e.Code)
+                (McpAdapter.previewLine 200 e.Result))
+          return sprintf "Recent events (%d, oldest first):\n%s" events.Length (String.concat "\n" lines)
     })
 
   let getStatus (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =

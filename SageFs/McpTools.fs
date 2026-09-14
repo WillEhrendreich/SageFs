@@ -231,7 +231,9 @@ let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<strin
       // withEchoOutcome instead, which carries the real SageFsError.
       let! _ = recordToolResult ctx toolName (Ok result) (int sw.Elapsed.TotalMilliseconds)
       SageFs.Instrumentation.succeedSpan span
-      return result
+      // Outbound size cap (roast-7 §13): friction/audit recording above kept
+      // the full text; only what actually reaches the agent is bounded.
+      return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
     with ex ->
       sw.Stop()
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
@@ -260,7 +262,7 @@ let withEchoNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<string>)
       Log.debug "%s" normalized
       SageFs.Instrumentation.succeedSpan span
       let! _ = recordToolResult ctx toolName (Ok result) (int sw.Elapsed.TotalMilliseconds)
-      return result
+      return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
     with ex ->
       sw.Stop()
       SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
@@ -320,7 +322,7 @@ let withEchoOutcome (ctx: McpContext) (toolName: string) (t: Task<string * SageF
         SageFs.Instrumentation.mcpToolSuccesses.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
         auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Success)
         SageFs.Instrumentation.succeedSpan span
-        return result
+        return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
       | Some err ->
         SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
         auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
@@ -365,7 +367,7 @@ let withEchoOutcomeNoAwaitRecord (ctx: McpContext) (toolName: string) (t: Task<s
         Log.debug "%s" normalized
         SageFs.Instrumentation.succeedSpan span
         let! _ = recordToolResult ctx toolName (Ok result) (int sw.Elapsed.TotalMilliseconds)
-        return result
+        return SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes result
       | Some err ->
         SageFs.Instrumentation.mcpToolFailures.Add(1L, System.Collections.Generic.KeyValuePair("mcp.tool.name", box toolName))
         auditTracker.Record(toolName, sw.Elapsed.TotalMilliseconds, SageFs.McpToolAudit.Failure)
@@ -425,7 +427,7 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         [<Description("Optional description of what this code is for (e.g. 'refactoring warmup pipeline', 'writing property tests'). Shown in the dashboard so humans and other agents can see what you're working on. Preserved across calls until overwritten by a new non-empty value.")>]
         [<Optional; DefaultParameterValue("")>]
         intent: string
-    ) : Task<string> =
+    ) : Task<ModelContextProtocol.Protocol.CallToolResult> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         let fp = match System.String.IsNullOrWhiteSpace file_path with | true -> None | false -> Some file_path
         let em = match System.String.IsNullOrWhiteSpace eval_mode with | true -> None | false -> Some eval_mode
@@ -433,8 +435,41 @@ WORKFLOW: Use this tool instead of dotnet build or dotnet run. SageFs IS your co
         let intentOpt = match System.String.IsNullOrWhiteSpace intent with | true -> None | false -> Some intent
         logger.LogDebug("MCP-TOOL: send_fsharp_code called by {AgentName}: {Code}", agentName, code)
         SageFs.Instrumentation.mcpToolInvocations.Add(1L)
-        sendFSharpCode ctx agentName code OutputFormat.Text None wd fp em bsl intentOpt
-    
+        // Structured result (roast-7 §2/§16 item 2): the tool used to return
+        // a flattened `sprintf "Result: %s"` / `"Error: %s"` string even
+        // though `evalFSharpCodeWithOutcome` already computes typed
+        // diagnostics (with spans) and a classified `SageFsError`. The text
+        // block below is UNCHANGED from before this change — nothing that
+        // reads plain text breaks — `structuredContent` is additive.
+        task {
+          let! text, _outcome, diags, errOpt =
+            evalFSharpCodeWithOutcome ctx agentName code OutputFormat.Text None wd fp em bsl intentOpt
+          // Outbound size cap (roast-7 §13) applies to the text agents
+          // actually read; the same bounded text feeds the JSON `result`
+          // field so the two never disagree about what was returned.
+          let boundedText = SageFs.McpAdapter.truncateForOutbound SageFs.McpAdapter.MaxOutboundResultBytes text
+          let result = ModelContextProtocol.Protocol.CallToolResult()
+          result.Content.Add(ModelContextProtocol.Protocol.TextContentBlock(Text = boundedText))
+          let structuredJson =
+            match errOpt with
+            | Some err ->
+              // Same shape every other tool already emits via
+              // McpServer.structuredToolErrorResult: case/message/
+              // suggestedAction, IsError=true — not a flattened string.
+              result.IsError <- System.Nullable true
+              SageFs.McpAdapter.formatEvalStructuredError err
+            | None ->
+              SageFs.McpAdapter.formatEvalStructuredSuccess boundedText diags
+          try
+            use doc = System.Text.Json.JsonDocument.Parse(structuredJson)
+            result.StructuredContent <- System.Nullable(doc.RootElement.Clone())
+          with ex ->
+            // Never let a structured-content build problem take down a tool
+            // call whose text block already carries the full story.
+            logger.LogWarning(ex, "send_fsharp_code: could not attach structuredContent; text result still returned")
+          return result
+        }
+
     [<Description("""Load and execute an F# script file (.fsx). The file is parsed into individual statements and each statement is sent to the FSI session separately, so partial progress is preserved if one statement fails.
 
 WHEN TO USE vs send_fsharp_code:
@@ -471,14 +506,14 @@ PATH:
         |> withEchoOutcome ctx "load_fsharp_script"
     
     [<McpServerTool>]
-    [<Description("""Get recent FSI events including evaluations, errors, and script loads. Returns the most recent N events (default 10) with timestamps and sources.
+    [<Description("""Get recent FSI evaluation history for this session: the last N submitted code snippets with their outcomes. Returns the most recent N evals (default 10) with timestamps and durations.
 
 WHEN TO USE:
-- After an unexpected error to understand what just happened and in what order.
-- To audit which code was evaluated and by which agent (MCP, editor plugin, etc.).
+- After an unexpected or ambiguous result to see what actually happened and in what order.
+- To audit which code was recently evaluated in this session.
 - As a lightweight alternative to get_fsi_status when you only want the recent activity log.
 
-OUTPUT FORMAT: Each event shows timestamp, event type (Eval, Error, Load, Reset), source agent name, and a brief description. Events are newest-last.""")>]
+OUTPUT FORMAT: Each entry shows a timestamp, cell index, duration, whether it succeeded or errored, and a truncated preview of the code and result. Entries are ordered oldest-first (the newest is last). If nothing has been recorded yet, says so plainly instead of a made-up entry.""")>]
     member _.get_recent_fsi_events(
         [<Description("Number of recent events to return (default 10)")>]
         [<Optional; DefaultParameterValue(10)>]

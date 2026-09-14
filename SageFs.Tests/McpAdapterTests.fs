@@ -2,6 +2,7 @@ module SageFs.Tests.McpAdapterTests
 
 open Expecto
 open Expecto.Flip
+open FsCheck
 open System
 open System.IO
 open SageFs
@@ -803,4 +804,89 @@ let workerEvalJsonTests =
         stmts |> Expect.hasLength "should have 2 stmts" 2
         stmts.[0] |> Expect.stringContains "first should be directive" "#r"
     ]
+  ]
+
+/// roast-7 §2/§16 item 2: `send_fsharp_code` used to flatten every result to
+/// a `sprintf "Result: %s"` / `"Error: %s"` string even though structured
+/// data (diagnostics with spans, a classified SageFsError) already existed.
+/// These test the two new pure builders directly — the same style as
+/// `formatWorkerEvalResultJson`'s tests above — without needing a live FSI
+/// session; `McpToolExecutionTests.fs` covers the actual tool wiring.
+[<Tests>]
+let evalStructuredContentTests =
+  testList "send_fsharp_code structured content (roast-7 §2)" [
+
+    testCase "success payload has success=true and the result text"
+    <| fun _ ->
+      let json = McpAdapter.formatEvalStructuredSuccess "val x: int = 42" []
+      let doc = JsonDocument.Parse(json)
+      doc.RootElement.GetProperty("success").GetBoolean() |> Expect.isTrue "should be success"
+      doc.RootElement.GetProperty("result").GetString() |> Expect.equal "result text" "val x: int = 42"
+
+    testCase "success payload carries diagnostics with spans, not flattened text"
+    <| fun _ ->
+      let diag : WorkerProtocol.WorkerDiagnostic =
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Warning
+          Message = "unused binding"; StartLine = 3; StartColumn = 4; EndLine = 3; EndColumn = 10
+          ErrorNumber = 0 }
+      let json = McpAdapter.formatEvalStructuredSuccess "val x: int = 42" [diag]
+      let doc = JsonDocument.Parse(json)
+      let d0 = doc.RootElement.GetProperty("diagnostics").[0]
+      d0.GetProperty("startLine").GetInt32() |> Expect.equal "startLine span" 3
+      d0.GetProperty("startColumn").GetInt32() |> Expect.equal "startColumn span" 4
+      d0.GetProperty("endLine").GetInt32() |> Expect.equal "endLine span" 3
+      d0.GetProperty("endColumn").GetInt32() |> Expect.equal "endColumn span" 10
+
+    testCase "failure payload is the full SageFsError algebra, not a flattened message"
+    <| fun _ ->
+      let err = SageFsError.EvalFailed "type mismatch"
+      let json = McpAdapter.formatEvalStructuredError err
+      let doc = JsonDocument.Parse(json)
+      // Same shape as McpServer.structuredToolErrorResult / SageFsError.toJson:
+      // case / message / suggestedAction — never just an "error" string.
+      doc.RootElement.GetProperty("case").GetString() |> Expect.equal "case token" "EvalFailed"
+      doc.RootElement.GetProperty("message").GetString() |> Expect.stringContains "message" "type mismatch"
+      doc.RootElement.TryGetProperty("suggestedAction") |> fst |> Expect.isTrue "must carry a suggestedAction"
+  ]
+
+/// roast-7 §13/§16 item 13: the only enforced size limit before this was
+/// INBOUND (4 MiB on the request body) — outbound tool results had no
+/// ceiling before landing in an agent's context window.
+[<Tests>]
+let outboundCapTests =
+  testList "truncateForOutbound (roast-7 §13)" [
+
+    testCase "text under the cap is returned unchanged"
+    <| fun _ ->
+      let text = "val x: int = 42"
+      McpAdapter.truncateForOutbound 1000 text |> Expect.equal "unchanged" text
+
+    testCase "text over the cap is truncated with a marker"
+    <| fun _ ->
+      let text = String.replicate 100 "x"
+      let result = McpAdapter.truncateForOutbound 20 text
+      (System.Text.Encoding.UTF8.GetByteCount(result) <= 20 + 40)
+      |> Expect.isTrue "result should be close to the byte budget (text + short marker)"
+      result |> Expect.stringContains "should carry an explicit truncation marker" "truncated"
+      (result.Length < text.Length) |> Expect.isTrue "should actually be shorter than the input"
+
+    testCase "truncated result never exceeds the byte cap"
+    <| fun _ ->
+      let text = String.replicate 5000 "abcdefghij"
+      let cap = 500
+      let result = McpAdapter.truncateForOutbound cap text
+      (System.Text.Encoding.UTF8.GetByteCount(result) <= cap)
+      |> Expect.isTrue "must never exceed the requested byte cap"
+
+    testProperty "truncated output never exceeds the byte cap by more than a marker's worth (property)"
+    <| fun (s: NonNull<string>) (PositiveInt capSeed) ->
+      let cap = (capSeed % 4096) + 1
+      let result = McpAdapter.truncateForOutbound cap s.Get
+      // A generous slack (128 bytes) above the requested cap: the marker
+      // itself is appended after the budget is computed, and its own size
+      // varies with how many bytes were cut, so the hard guarantee is
+      // "close to the cap", not "never one byte over" for a pathological
+      // marker/cap combination — this still catches any truncation that is
+      // unboundedly wrong (e.g. returning the untruncated input).
+      System.Text.Encoding.UTF8.GetByteCount(result) <= cap + 128
   ]

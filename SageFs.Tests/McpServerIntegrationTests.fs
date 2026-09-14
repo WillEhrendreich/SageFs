@@ -53,8 +53,15 @@ let tests =
         printfn "Non-event-tracking test passed"
       }
 
-    testTask "getRecentEvents tool returns formatted events" {
-        printfn "Testing getRecentEvents tool..."
+    testTask "getRecentEvents tool reports honestly when no feature state is wired" {
+        // roast-7 §3a: this used to be a hardcoded stub returning
+        // "Recent events: none recorded" REGARDLESS of what actually
+        // happened — including when events genuinely were recorded (see the
+        // "returns real recorded events" test below). This context has no
+        // GetFeatureState getter wired (matches `agentCtx`/`sharedCtxWith`),
+        // so the honest answer here is "no feature state", not a lie about
+        // events.
+        printfn "Testing getRecentEvents tool (no feature state wired)..."
         let ctx = agentCtx ()
 
         let! _ = sendFSharpCode ctx "agent1" "let a = 1" OutputFormat.Text None None None None None None
@@ -63,7 +70,48 @@ let tests =
         let! result = getRecentEvents ctx "test" 5 None
 
         printfn "Events result: %s" result
-        result |> Expect.equal "Should return stub response when event tracking is removed" "Recent events: none recorded"
+        result |> Expect.stringContains "should explain feature state is unavailable" "Feature state not available"
+        Expect.isFalse "must not be the old hardcoded stub wording" (result = "Recent events: none recorded")
+
+        printfn "getRecentEvents tool test passed"
+      }
+
+    testTask "getRecentEvents tool returns real recorded events, not a stub" {
+        // roast-7 §3a/§16 item 3: send_fsharp_code's own tool description
+        // tells agents to call get_recent_fsi_events "if the return value is
+        // ambiguous" — it must actually reflect what was evaluated. Wires a
+        // real FeaturePushState (the same EvalHistory the dashboard
+        // filmstrip and plan_ripple/impact_forecast already read) to prove
+        // the tool surfaces real data instead of a hardcoded string.
+        printfn "Testing getRecentEvents tool (real feature state wired)..."
+        let ctx = agentCtx ()
+        let state =
+          Features.FeatureHooks.FeaturePushState.empty
+          |> Features.FeatureHooks.recordEval "let a = 1" "val a: int = 1" 5L
+          |> Features.FeatureHooks.recordEval "let b = 2" "val b: int = 2" 7L
+        let ctxWithState = { ctx with GetFeatureState = Some (fun () -> state) }
+
+        let! result = getRecentEvents ctxWithState "test" 5 None
+
+        printfn "Events result: %s" result
+        result |> Expect.stringContains "should include the first eval's code" "let a = 1"
+        result |> Expect.stringContains "should include the second eval's code" "let b = 2"
+        result |> Expect.stringContains "should include a duration" "ms)"
+        Expect.isFalse "must not be the old hardcoded stub" (result = "Recent events: none recorded")
+
+        printfn "getRecentEvents tool test passed"
+      }
+
+    testTask "getRecentEvents tool says so honestly when history is genuinely empty" {
+        printfn "Testing getRecentEvents tool (real but empty feature state)..."
+        let ctx = agentCtx ()
+        let ctxWithEmptyState = { ctx with GetFeatureState = Some (fun () -> Features.FeatureHooks.FeaturePushState.empty) }
+
+        let! result = getRecentEvents ctxWithEmptyState "test" 5 None
+
+        printfn "Events result: %s" result
+        result |> Expect.stringContains "should say no events recorded" "No FSI events recorded"
+        Expect.isFalse "must not be the old hardcoded stub wording used as if honest" (result = "Recent events: none recorded")
 
         printfn "getRecentEvents tool test passed"
       }
