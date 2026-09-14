@@ -309,6 +309,30 @@ let private runStep
     | Some command -> do! actor.Command command
     | None -> ()
 
+    // An editor client (VS Code/Neovim) creates its session directly
+    // through the daemon API/plugin command (`Runtime.fs`'s
+    // `create-session*`/`create-session:*` wire tokens) — no click ever
+    // reaches the Dashboard narrator pane `assembleActors` co-launches
+    // alongside it. The product's own doctrine is that creating a session
+    // never switches the dashboard's main panel away from the "Start a
+    // Session" picker — only clicking a session card does
+    // (`Scenarios.fs`'s `helloDashboard` step 2 comment, and every
+    // Dashboard-client scenario drives that click as a real step of its
+    // own). Left unhandled, the narrator sits on the picker forever and
+    // `#session-output`/`#session-status` never render for an editor
+    // scenario. Mirroring that click here — automatically, right after a
+    // real create-session command, through the narrator's OWN `Command`
+    // (`Actors/Dashboard.fs`'s `"select-session"`) rather than XTest —
+    // means the scenario author never has to add a click step of their
+    // own for a pane that is only ever an observation window, never the
+    // on-camera actor. Guarded to editor clients only: a Dashboard-client
+    // scenario's own `targetActor` IS `ActorId.Dashboard`, and it already
+    // drives its own real, filmed session-card click as a step.
+    if targetActor <> ActorId.Dashboard && (step.SetupCommand |> Option.exists (fun c -> c.StartsWith "create-session")) then
+      match actorsRef.Value |> Map.tryFind ActorId.Dashboard with
+      | Some dashboardActor -> do! dashboardActor.Command "select-session"
+      | None -> ()
+
     // The App co-actor is deliberately launched HERE, lazily, right after a
     // real `"run-app"` command has actually been dispatched to the daemon —
     // never eagerly at initial actor assembly (`assembleActors`'s own doc:

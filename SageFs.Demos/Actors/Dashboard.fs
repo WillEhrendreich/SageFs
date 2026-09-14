@@ -104,6 +104,42 @@ let observe (handle: Handle) (expectation: Expectation) (timeoutMs: float) : Asy
     | _ -> return false
   }
 
+/// Runs a non-input client command. The only token this actor understands
+/// today is `"select-session"` (`CellAgent.fs`'s `runStep`, right after an
+/// editor client's own real `create-session*` command succeeds): the
+/// product's OWN doctrine is that creating a session never switches the
+/// dashboard's main panel away from the "Start a Session" picker — only
+/// CLICKING a session card does (`Scenarios.fs`'s `helloDashboard` step 2
+/// comment, and its own dashboard-client scenarios all drive that click as
+/// a real filmed step). An editor client's session is created through the
+/// daemon API/plugin command directly — no click ever reaches this
+/// narrator pane — so without this, the pane sits on the picker forever
+/// and `#session-output`/`#session-status` never render for it. This waits
+/// for the newly-created session's own sidebar card to appear (the daemon
+/// pushes it over SSE the moment `/api/sessions/create` returns, well
+/// before warmup finishes) and clicks it — the SAME real click a Dashboard-
+/// client scenario's own `Action.Click(Target.DashboardElement
+/// DashboardId.SessionCard)` step performs, just dispatched by this actor
+/// itself instead of through XTest, since the narrator is an observation
+/// pane, not the on-camera actor a scenario is filming input for.
+let command (handle: Handle) (token: string) : Async<unit> =
+  async {
+    if token = "select-session" then
+      try
+        let card = handle.Page.Locator(testIdSelector DashboardId.SessionCard).First
+        let waitOpts = LocatorWaitForOptions(Timeout = 30000.0f)
+        do! card.WaitForAsync(waitOpts) |> Async.AwaitTask
+        do! card.ClickAsync() |> Async.AwaitTask
+      with _ ->
+        // A real, honest failure here surfaces the same way every other
+        // missing/failed observation does — through the step's own
+        // `Expect` never resolving on `#session-output`/`#session-status`,
+        // never a swallowed exception pretending the narrator caught up.
+        ()
+    else
+      ()
+  }
+
 let close (handle: Handle) : Async<unit> =
   async {
     do! handle.Context.CloseAsync() |> Async.AwaitTask
@@ -120,9 +156,11 @@ let close (handle: Handle) : Async<unit> =
 /// a 90s-capped `WaitForSelectorAsync` for expectations, since a real
 /// session warmup can genuinely take longer than a UI-click ever needed to)
 /// — behavior-identical, just reachable through the seam instead of inline
-/// in the cell-agent. `Command` is a no-op: no `WireStep` encodes a client
-/// command yet (Island F adds no new actor logic), so there is nothing for
-/// the dashboard actor to do with one today.
+/// in the cell-agent. `Command` runs this module's own `command` above —
+/// the ONE token it understands is `"select-session"`, dispatched by
+/// `CellAgent.fs`'s `runStep` right after an editor client's real
+/// create-session command succeeds, so the narrator pane always ends up
+/// looking at the session that client just created.
 let toLiveActor (handle: Handle) : LiveActor =
   let resolveRect (selector: string) : Async<ScreenRect option> =
     async {
@@ -153,5 +191,5 @@ let toLiveActor (handle: Handle) : LiveActor =
   { Id = ActorId.Dashboard
     ResolveRect = resolveRect
     Observe = observeSelector
-    Command = fun _ -> async { return () }
+    Command = command handle
     Close = fun () -> close handle }
