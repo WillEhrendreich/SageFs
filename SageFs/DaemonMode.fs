@@ -2127,35 +2127,11 @@ let run
   let mutable activityCleanupTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
   let activityCleanupCallback _ =
     try
-      let now = DateTime.UtcNow
-      let outcome = AgentActivityTracker.cleanup activityTracker (TimeSpan.FromMinutes 5.0) now
+      let outcome = AgentActivityTracker.cleanup activityTracker (TimeSpan.FromMinutes 5.0) DateTime.UtcNow
       match outcome with
       | SessionOperations.OccupancyCleanupOutcome.EvictedStale agents ->
         log.LogInformation("Agent cleanup: evicted stale agents: {Agents}", String.concat ", " agents)
       | _ -> ()
-      // (roast-7 §5) Connection-based seat/claim reclamation: a cohort member
-      // whose connection is gone (no longer an active presence in the daemon's
-      // ONE liveness model, the activity tracker — identity is connection-bound)
-      // has its claims released by posting `Depart`. This is what makes a
-      // departed member's claims actually get orphaned on a live daemon; before
-      // this, only an explicit `leave_cohort` released them, so a dropped
-      // connection leaked its claims forever. Pure decision in
-      // `Cohort.membersToReap`; only members genuinely gone get a `Depart`
-      // (no per-call `RenewLease` ledger writes — see `Cohort.leaseWindow`'s note
-      // on the superseded time-lease). Window is tied to the tracker's own
-      // presence retention (the 5-min cleanup above just ran), so cohort liveness
-      // and daemon presence stay one model.
-      let livePresenceDisplays =
-        AgentActivityTracker.getActivePresences activityTracker None (TimeSpan.FromMinutes 5.0) now
-        |> List.map (fun p -> p.AgentName)
-        |> Set.ofList
-      let isLive (m: MemberTable.MemberId) = livePresenceDisplays.Contains(MemberTable.MemberId.display m)
-      let toReap = Cohort.membersToReap (cohortOwner.ReadCohortState()) isLive
-      for who in toReap do
-        log.LogInformation(
-          "[cohort-reaper] member {Member} is no longer an active presence — departing it (releasing its claims)",
-          MemberTable.MemberId.display who)
-        cohortOwner.Post(Cohort.CohortCommand.Depart who, ignore)
     finally
       if not (isNull activityCleanupTimerRef) then
         try activityCleanupTimerRef.Change(60_000, System.Threading.Timeout.Infinite) |> ignore
