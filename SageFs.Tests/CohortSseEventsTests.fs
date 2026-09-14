@@ -1,7 +1,12 @@
 module SageFs.Tests.CohortSseEventsTests
 
 /// Round-trip coverage for item 15a's three cohort SSE wire rows
-/// (`cohort_matrix` / `claim_changed` / `landing_changed`, SseWriter.fs).
+/// (`cohort_matrix` / `claim_changed` / `landing_changed`, SseWriter.fs) plus
+/// the claim early-warning row (`save_observed`, multi-agent vision §5.1):
+/// the `formatSaveObservedEvent` wire round-trip, the pure
+/// `McpServer.saveObservedRow` event→row mapping, and the pure
+/// `DaemonMode.resolveSaveObserver` save→session→member resolver — all unit
+/// tested here rather than through a full daemon spawn.
 /// Mirrors SseContractComplianceTests.fs's "JSON shape contracts" style —
 /// format, parse the JSON back, assert VALUES (not just property presence).
 /// Fully qualifies every `SageFs.Cohort`/`SageFs.MemberTable` reference:
@@ -23,6 +28,7 @@ let private jsonOpts =
 let private clock = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
 let private noEntropy : byte[] = [||]
 let private alice = SageFs.MemberTable.MemberId.Minted "alice"
+let private bob = SageFs.MemberTable.MemberId.Minted "bob"
 
 let private applyOk state cmd =
   match SageFs.Cohort.decide clock noEntropy state cmd with
@@ -34,7 +40,40 @@ let private joinAndClaim () =
   |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1"))
   |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Foo.fs", "testing"))
 
+/// `joinAndClaim` plus a second member (`bob`, bound to `"sess-2"`) who
+/// holds no claim of his own — the saver whose `ObserveSave` should land
+/// inside alice's claim.
+let private joinTwoAndClaim () =
+  joinAndClaim ()
+  |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(bob, SageFs.Cohort.JoinableRole.Implementer, Some "sess-2"))
+
 let private getProp (name: string) (el: JsonElement) = el.GetProperty(name)
+
+/// Minimal `WorkerProtocol.SessionInfo` for `resolveSaveObserver` tests —
+/// only `Id`/`WorkingDirectory` matter to that resolver; every other field
+/// is a harmless placeholder, mirroring DashboardParsingTests.fs's
+/// `SidebarCards.info` builder.
+let private mkSessionInfo (id: SageFs.WorkerProtocol.SessionId) (workingDirectory: string) : SageFs.WorkerProtocol.SessionInfo =
+  { Id = id
+    Name = None
+    Projects = []
+    WorkingDirectory = workingDirectory
+    SolutionRoot = None
+    CreatedAt = clock
+    LastActivity = clock
+    Status = SageFs.WorkerProtocol.SessionLifecycleStatus.Stopped
+    Workflow = SageFs.WorkflowTypes.SessionWorkflow.Interactive
+    ActiveProject = None
+    ProjectRoles = []
+    App = SageFs.AppRun.AppRunState.NotRunning }
+
+/// A `MemberRecord` for `alice`, bound to `sid` — the `resolveSaveObserver`
+/// tests' cohort membership fixture.
+let private mkAliceMember (sid: SageFs.WorkerProtocol.SessionId) : SageFs.Cohort.MemberRecord =
+  { Role = SageFs.Cohort.JoinableRole.Implementer
+    Presence = SageFs.Cohort.MemberPresence.Present
+    LastRenewal = clock
+    Session = Some(SageFs.WorkerProtocol.SessionId.value sid) }
 
 // ── Tests ──
 
@@ -170,4 +209,68 @@ let cohortSseEventsTests = testList "Cohort SSE events (item 15a)" [
     doc.RootElement.GetProperty("members").GetArrayLength() |> Expect.equal "no members yet" 0
     doc.RootElement.GetProperty("claims").GetArrayLength() |> Expect.equal "no claims yet" 0
     doc.RootElement.GetProperty("rows").GetArrayLength() |> Expect.equal "no session rows yet" 0
+
+  // ── save_observed (claim early-warning, multi-agent vision §5.1) ──
+
+  testCase "save_observed round-trips claimId/observer/holder/scope/path" <| fun () ->
+    let state0 = joinTwoAndClaim ()
+    let claimId, claim = state0.Claims |> Map.toList |> List.exactlyOne
+    let (SageFs.Cohort.ClaimId expectedClaimId) = claimId
+    let events =
+      match SageFs.Cohort.decide clock noEntropy state0 (SageFs.Cohort.CohortCommand.ObserveSave(bob, "src/Foo.fs")) with
+      | Ok(_, evs, _) -> evs
+      | Error e -> failwithf "unexpected cohort decide error: %A" e
+    events
+    |> Expect.equal "bob saving into alice's claim should produce exactly one violation"
+      [ SageFs.Cohort.CohortEvent.ClaimViolationObserved(claimId, bob, alice, "src/Foo.fs") ]
+    let payload =
+      SageFs.SseWriter.formatSaveObservedEvent jsonOpts claim bob alice "src/Foo.fs"
+      |> fun sse -> sse.Split('\n') |> Array.choose (fun l -> if l.StartsWith("data: ") then Some (l.Substring 6) else None) |> String.concat "\n"
+    use doc = JsonDocument.Parse(payload)
+    let root = doc.RootElement
+    root |> getProp "claimId" |> fun p -> p.GetString() |> Expect.equal "claimId should be the violated claim's id" expectedClaimId
+    root |> getProp "observer" |> fun p -> p.GetString() |> Expect.equal "observer should be the saving member, displayed verbatim (Minted)" "bob"
+    root |> getProp "holder" |> fun p -> p.GetString() |> Expect.equal "holder should be the claim's holder" "alice"
+    let scope = root |> getProp "scope"
+    scope |> getProp "kind" |> fun p -> p.GetString() |> Expect.equal "scope kind should be file" "file"
+    scope |> getProp "path" |> fun p -> p.GetString() |> Expect.equal "scope path should be the claimed file" "src/Foo.fs"
+    root |> getProp "path" |> fun p -> p.GetString() |> Expect.equal "path should be the saved path" "src/Foo.fs"
+
+  testCase "save_observed mapping (McpServer.saveObservedRow) resolves the current claim by the event's claimId" <| fun () ->
+    let state0 = joinTwoAndClaim ()
+    let claimId, _ = state0.Claims |> Map.toList |> List.exactlyOne
+    let ev = SageFs.Cohort.CohortEvent.ClaimViolationObserved(claimId, bob, alice, "src/Foo.fs")
+    match SageFs.Server.McpServer.saveObservedRow state0 ev with
+    | Some(claim, observer, holder, path) ->
+      claim.Id |> Expect.equal "should resolve the claim the event names" claimId
+      observer |> Expect.equal "observer should pass through from the event" bob
+      holder |> Expect.equal "holder should pass through from the event" alice
+      path |> Expect.equal "path should pass through from the event" "src/Foo.fs"
+    | None -> failwith "expected Some for a ClaimViolationObserved whose claim exists in state"
+
+  testCase "save_observed mapping ignores every non-violation cohort event" <| fun () ->
+    let state0 = joinAndClaim ()
+    let claimId, claim = state0.Claims |> Map.toList |> List.exactlyOne
+    SageFs.Server.McpServer.saveObservedRow state0 (SageFs.Cohort.CohortEvent.ClaimAcquired(claimId, claim.Scope, alice, claim.Fence))
+    |> Expect.isNone "a ClaimAcquired event should never produce a save_observed row"
+
+  testCase "resolveSaveObserver (DaemonMode) maps a save to the cohort member bound to the saving session" <| fun () ->
+    let sid = SageFs.WorkerProtocol.SessionId.newId ()
+    let sessions = [ mkSessionInfo sid "/repo/checkout" ]
+    let members = Map.ofList [ alice, mkAliceMember sid ]
+    SageFs.Server.DaemonMode.resolveSaveObserver sessions members sid "/repo/checkout/src/Foo.fs"
+    |> Expect.equal "should resolve alice + the repo-relative path" (Some(alice, "src/Foo.fs"))
+
+  testCase "resolveSaveObserver (DaemonMode) is None for a session bound to no cohort member" <| fun () ->
+    let sid = SageFs.WorkerProtocol.SessionId.newId ()
+    let sessions = [ mkSessionInfo sid "/repo/checkout" ]
+    SageFs.Server.DaemonMode.resolveSaveObserver sessions Map.empty sid "/repo/checkout/src/Foo.fs"
+    |> Expect.isNone "a solo/non-cohort session's save must not be attributed to any member"
+
+  testCase "resolveSaveObserver (DaemonMode) is None when the path falls outside the session's working directory" <| fun () ->
+    let sid = SageFs.WorkerProtocol.SessionId.newId ()
+    let sessions = [ mkSessionInfo sid "/repo/checkout" ]
+    let members = Map.ofList [ alice, mkAliceMember sid ]
+    SageFs.Server.DaemonMode.resolveSaveObserver sessions members sid "/somewhere/else/Foo.fs"
+    |> Expect.isNone "a path outside the session's working directory has no repo-relative form"
 ]

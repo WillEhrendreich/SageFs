@@ -601,6 +601,30 @@ let formatLandingChangedEvent (opts: JsonSerializerOptions) (landing: Cohort.Lan
   let json = JsonSerializer.Serialize(payload, opts)
   formatSseEvent "landing_changed" json
 
+/// Format a claim early-warning (multi-agent vision §5.1: a cohort member's
+/// watcher observed a save landing inside a DIFFERENT member's held claim —
+/// advisory, never blocking, `Cohort.decide`'s `ObserveSave` case never
+/// refuses). `claim` is the CURRENT `Cohort.Claim` — read from
+/// `CohortOwner.Handle.ReadCohortState()` by the `ClaimViolationObserved`
+/// event's `ClaimId` — because that event doesn't carry `Scope` either,
+/// same reasoning as `formatClaimChangedEvent`/`formatLandingChangedEvent`.
+/// `observer`/`holder`/`path` come straight off the event itself.
+let formatSaveObservedEvent
+  (opts: JsonSerializerOptions)
+  (claim: Cohort.Claim<MemberTable.MemberId>)
+  (observer: MemberTable.MemberId)
+  (holder: MemberTable.MemberId)
+  (path: string) : string =
+  let (Cohort.ClaimId cid) = claim.Id
+  let payload =
+    {| ClaimId = cid
+       Observer = displayMember observer
+       Holder = displayMember holder
+       Scope = claimScopeToWire claim.Scope
+       Path = path |}
+  let json = JsonSerializer.Serialize(payload, opts)
+  formatSseEvent "save_observed" json
+
 // ── Authoritative SSE event type registry ──────────────────────────────────────────
 
 /// Authoritative list of all SSE event type names emitted by SseWriter formatters.
@@ -632,4 +656,5 @@ let allSseEventTypes : string list = [
   "cohort_matrix"
   "claim_changed"
   "landing_changed"
+  "save_observed"
 ]
