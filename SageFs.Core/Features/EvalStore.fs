@@ -50,6 +50,18 @@ type EvalHistoryEntry = {
   Timestamp: DateTimeOffset
 }
 
+/// Approximate live-object bytes one retained entry contributes: `Code` and
+/// `Result` are the only fields on a `StoredCell` whose size is unbounded —
+/// an eval that prints megabytes of output is exactly the case the byte
+/// budget below exists to bound, independent of how many OTHER small cells
+/// are also retained. UTF-16 strings cost 2 bytes/char; this deliberately
+/// ignores per-string object overhead (~24-26 bytes) and the small,
+/// bounded-per-cell ScopeBindings/Words/FreeIdentifiers, which are dwarfed
+/// by a large Result string in exactly the pathological case this exists
+/// for.
+let entryByteCost (entry: EvalHistoryEntry) : int64 =
+  (int64 entry.Code.Length + int64 entry.Result.Length) * 2L
+
 /// How many cells the history retains (at least one).
 type HistoryCap = private HistoryCap of int
 
@@ -66,6 +78,31 @@ module HistoryCap =
     | false -> Error (sprintf "The eval history must retain at least 1 cell; %d was requested." cells)
 
   let cells (HistoryCap n) = n
+
+/// How many bytes of retained Code+Result text the history may hold (at
+/// least one byte) — bounds retention independent of cell COUNT, so a
+/// handful of huge results evict sooner than ten thousand tiny ones.
+type ByteBudget = private ByteBudget of int64
+
+module ByteBudget =
+  /// 64 MiB. A standard-cap (10,000-cell) history of ordinary `let`/`val`
+  /// cells — tens to low hundreds of bytes of Code+Result each — totals
+  /// well under 4 MB (measured directly in
+  /// EvalStoreByteBudgetTests.``steady state: a full standard-cap history of
+  /// ordinary cells is well under the default byte budget``). 64 MiB leaves
+  /// comfortable headroom for normal use while still bounding runaway
+  /// growth from a handful of megabyte-sized printed results.
+  [<Literal>]
+  let StandardBytes = 67_108_864L
+
+  let standard = ByteBudget StandardBytes
+
+  let tryCreate (bytes: int64) : Result<ByteBudget, string> =
+    match bytes >= 1L with
+    | true -> Ok (ByteBudget bytes)
+    | false -> Error (sprintf "The eval history byte budget must be at least 1 byte; %d was requested." bytes)
+
+  let bytes (ByteBudget b) = b
 
 /// One retained cell, analysed once when it was recorded.
 type StoredCell = {
@@ -100,12 +137,19 @@ type Chunk = {
 
 type Store = {
   Cap: HistoryCap
+  /// Byte budget on the retained cells' Code+Result text — enforced
+  /// alongside `Cap`, never in place of it.
+  ByteBudget: ByteBudget
   /// The id the next recorded cell gets. Never decreases.
   NextId: int
   /// Logical count of retained cells: exactly the ids `[NextId - Count,
   /// NextId)`. May be smaller than the total cells still physically present
   /// in `Chunks` — see the module doc on lingering eviction.
   Count: int
+  /// Sum of `entryByteCost` over exactly the logically retained cells.
+  /// Maintained incrementally on record/evict — never recomputed by
+  /// scanning history.
+  RetainedBytes: int64
   /// Oldest-to-newest chunks of retained (and briefly, just-evicted) cells.
   /// Not part of the public contract — treat as an implementation detail of
   /// this module; use `count`/`newest`/`chronological`/`materializeScope`/
@@ -121,16 +165,27 @@ type Store = {
   UnusualKnownNames: Set<string>
 }
 
-let empty (cap: HistoryCap) : Store =
+/// A store with a custom byte budget alongside its cell-count cap. Tests
+/// use this to exercise the byte-eviction path with small budgets; `empty`
+/// (below) is the production entry point and always applies the standard
+/// 64 MiB budget.
+let emptyWithByteBudget (cap: HistoryCap) (byteBudget: ByteBudget) : Store =
   { Cap = cap
+    ByteBudget = byteBudget
     NextId = 0
     Count = 0
+    RetainedBytes = 0L
     Chunks = [||]
     CellsByWord = Map.empty
     KnownBindings = Map.empty
     UnusualKnownNames = Set.empty }
 
+let empty (cap: HistoryCap) : Store = emptyWithByteBudget cap ByteBudget.standard
+
 let count (store: Store) = store.Count
+
+/// Sum of `entryByteCost` over the logically retained cells.
+let retainedBytes (store: Store) = store.RetainedBytes
 
 /// Id of the oldest retained cell (equals `NextId` when nothing is retained).
 let oldestId (store: Store) = store.NextId - store.Count
@@ -222,18 +277,33 @@ let private evictOldest (store: Store) : Store =
     let newOldest = oldest + 1
     { store with
         Count = store.Count - 1
+        RetainedBytes = store.RetainedBytes - entryByteCost cell.Entry
         Chunks = dropStaleChunks newOldest store.Chunks
         CellsByWord = removeFromIndex oldest cell.Words store.CellsByWord }
   | None -> store
 
+/// Evict oldest-first until BOTH the count cap and the byte budget are
+/// satisfied — never below one retained cell, so a single cell larger than
+/// the byte budget on its own is still retained rather than leaving the
+/// history empty. Usually evicts at most one cell per `record` (the cap can
+/// only be exceeded by exactly one); a byte budget crossed by a single
+/// large cell can evict several smaller ones in one call.
+let rec private evictWhileOverBudget (store: Store) : Store =
+  match store.Count > 1
+        && (store.Count > HistoryCap.cells store.Cap
+            || store.RetainedBytes > ByteBudget.bytes store.ByteBudget) with
+  | true -> evictWhileOverBudget (evictOldest store)
+  | false -> store
+
 /// Record one eval. Costs O(size of the new cell), bounded independent of
-/// history size, at every history size including at and beyond the cap,
-/// where the oldest cell is evicted.
+/// history size, at every history size including at and beyond the cap or
+/// the byte budget, where the oldest cell(s) are evicted.
 let record (code: string) (result: string) (durationMs: int64) (timestamp: DateTimeOffset) (store: Store) : Store =
   let id = store.NextId
   let produces = CellDependencyGraph.producedNames result
+  let entry = { CellIndex = id; Code = code; Result = result; DurationMs = durationMs; Timestamp = timestamp }
   let cell = {
-    Entry = { CellIndex = id; Code = code; Result = result; DurationMs = durationMs; Timestamp = timestamp }
+    Entry = entry
     ScopeBindings = BindingExplorer.parseBindings result
     Produces = produces
     Words = IdentifierScan.boundaryWords code
@@ -243,6 +313,7 @@ let record (code: string) (result: string) (durationMs: int64) (timestamp: DateT
     { store with
         NextId = id + 1
         Count = store.Count + 1
+        RetainedBytes = store.RetainedBytes + entryByteCost entry
         Chunks = appendCell cell store.Chunks
         CellsByWord = addToIndex id cell.Words store.CellsByWord
         KnownBindings = produces |> List.fold (fun known name -> Map.add name id known) store.KnownBindings
@@ -252,9 +323,7 @@ let record (code: string) (result: string) (durationMs: int64) (timestamp: DateT
             match IdentifierScan.isFreeIdentifierToken name with
             | true -> names
             | false -> Set.add name names) store.UnusualKnownNames }
-  match recorded.Count > HistoryCap.cells store.Cap with
-  | true -> evictOldest recorded
-  | false -> recorded
+  evictWhileOverBudget recorded
 
 /// The `n` most recent entries, newest first. O(n).
 let newest (n: int) (store: Store) : EvalHistoryEntry list =

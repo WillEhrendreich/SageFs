@@ -105,6 +105,97 @@ let evalStoreTests =
       }
     ]
 
+    testList "ByteBudget (roast-6 #8 — retained history is count-bounded but not byte-bounded)" [
+      test "WHY — a budget below one byte is refused with a reason, mirroring HistoryCap.tryCreate" {
+        EvalStore.ByteBudget.tryCreate 0L
+        |> Result.mapError (fun reason -> reason.Contains "at least 1 byte")
+        |> Expect.equal "zero bytes is not a budget" (Error true)
+      }
+
+      test "WHY — the standard byte budget is 64 MiB, the documented retention budget" {
+        EvalStore.ByteBudget.bytes EvalStore.ByteBudget.standard
+        |> Expect.equal "64 MiB standard budget" (64L * 1024L * 1024L)
+      }
+
+      test "WHY — entryByteCost is 2 bytes per UTF-16 char of Code+Result, the only unbounded StoredCell fields" {
+        let entry : EvalStore.EvalHistoryEntry =
+          { CellIndex = 0; Code = "let x = 1"; Result = "val x: int = 1"; DurationMs = 1L; Timestamp = ts }
+        EvalStore.entryByteCost entry
+        |> Expect.equal "(9 + 15) chars * 2 bytes/char" (int64 (entry.Code.Length + entry.Result.Length) * 2L)
+      }
+
+      // ── the roast's own characterization: bytes grow unbounded under the
+      // count cap alone, because a count cap says nothing about entry size ──
+
+      test "WHY — count_cap_alone_lets_bytes_grow_unbounded — many large entries all stay retained under a generous count cap with NO byte budget applied, because the count cap has no notion of size" {
+        let bigResult = String('x', 100_000) // ~200KB per entry as UTF-16
+        let store =
+          [ 1 .. 50 ]
+          |> List.fold (fun st i -> EvalStore.record (sprintf "let v%d = 1" i) bigResult 1L ts st)
+               (EvalStore.emptyWithByteBudget (capOf 10_000) (EvalStore.ByteBudget.standard))
+        // 50 * 200KB = ~10MB retained bytes for entries that individually
+        // dwarf a "tiny cell" — none were evicted because count (50) is
+        // nowhere near the 10,000 cap. This is the growth the byte budget
+        // exists to bound once it's small enough to matter; the test below
+        // pins that the SAME construction, under a tight budget, evicts.
+        EvalStore.count store |> Expect.equal "count cap alone retained every cell" 50
+      }
+
+      test "WHY — byteBudget_evicts_oldest_large_entries_even_though_count_cap_not_reached — a tight byte budget must evict well before the count cap, oldest first" {
+        let bigResult = String('x', 100_000) // ~200KB per entry as UTF-16
+        let tightBudget =
+          match EvalStore.ByteBudget.tryCreate (300_000L) with // room for exactly one ~200KB entry, never two
+          | Ok b -> b
+          | Error msg -> failtest msg
+        let store =
+          [ 0 .. 9 ]
+          |> List.fold (fun st i -> EvalStore.record (sprintf "let v%d = 1" i) bigResult 1L ts st)
+               (EvalStore.emptyWithByteBudget (capOf 10_000) tightBudget)
+        // The count cap (10,000) never fires; only the byte budget does.
+        (EvalStore.count store < 10)
+        |> Expect.isTrue "a 300KB budget must not retain all 10 ~200KB entries"
+        EvalStore.retainedBytes store <= EvalStore.ByteBudget.bytes tightBudget
+        |> Expect.isTrue "retained bytes must fit the budget once more than one cell has been recorded"
+        EvalStore.oldestId store |> Expect.equal "eviction drops the OLDEST cells first, same as count-based eviction" 9
+
+      }
+
+      test "WHY — byteBudget_never_evicts_the_last_cell — a single cell larger than the whole budget is still retained, never leaving the history empty" {
+        let hugeResult = String('x', 1_000_000)
+        let tinyBudget =
+          match EvalStore.ByteBudget.tryCreate 10L with
+          | Ok b -> b
+          | Error msg -> failtest msg
+        let store =
+          EvalStore.emptyWithByteBudget (capOf 10) tinyBudget
+          |> EvalStore.record "let x = 1" hugeResult 1L ts
+        EvalStore.count store |> Expect.equal "the just-recorded cell is retained despite exceeding the budget alone" 1
+      }
+
+      test "WHY — byteBudget_respects_both_bounds_together — the count cap still applies when bytes are small, and the byte budget still applies when count is small" {
+        let store =
+          [ 0 .. 4 ]
+          |> List.fold (fun st i -> EvalStore.record (sprintf "let v%d = 1" i) "ok" 1L ts st)
+               (EvalStore.emptyWithByteBudget (capOf 3) EvalStore.ByteBudget.standard)
+        EvalStore.count store |> Expect.equal "the count cap (3) bounds tiny entries just as before" 3
+      }
+
+      test "WHY — steady state: a full standard-cap history of ordinary cells is well under the default byte budget — the benchmark that justifies StandardBytes" {
+        let ordinaryCode i = sprintf "let v%d = %d + someHelper x y" i i
+        let ordinaryResult i = sprintf "val v%d: int = %d" i i
+        let store =
+          [ 0 .. EvalStore.HistoryCap.StandardCells - 1 ]
+          |> List.fold (fun st i -> EvalStore.record (ordinaryCode i) (ordinaryResult i) 1L ts st)
+               (EvalStore.empty EvalStore.HistoryCap.standard)
+        EvalStore.count store |> Expect.equal "the full standard cap is retained" EvalStore.HistoryCap.StandardCells
+        (EvalStore.retainedBytes store < 4L * 1024L * 1024L)
+        |> Expect.isTrue
+          (sprintf
+            "a full 10,000-cell history of ordinary cells measured %d bytes — comfortably under 4MB, which is why the 64MiB default budget never fires for normal use"
+            (EvalStore.retainedBytes store))
+      }
+    ]
+
     testList "record / eviction (example-based)" [
       test "WHY — recording below the cap never evicts, because eviction only ever removes the OLDEST cell once retention exceeds the cap" {
         let store = buildAt 10 [ for i in 0 .. 4 -> sprintf "let v%d = %d" i i, sprintf "val v%d: int = %d" i i ]
