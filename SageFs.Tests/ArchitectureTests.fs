@@ -581,3 +581,384 @@ let architectureTests =
               caseName)
     ]
   ]
+
+// ---------------------------------------------------------------------------
+// Actor wait-for graph acyclicity (roast-7 §2) — the formal-verification
+// beachhead.
+//
+// Deadlock = a cycle in the actor wait-for relation: actor A issues a
+// BLOCKING request to actor B and suspends → edge A→B. A cycle where every
+// participant is blocked is a deadlock. `ResilientActor.wrapLoop` cannot
+// catch this — it only catches exceptions a loop throws, and a deadlocked
+// loop throws nothing; it just never returns from the blocking call.
+//
+// HARD CONSTRAINT this test honors: the edges are EXTRACTED by scanning the
+// real source every run — a hand-declared "who waits on whom" adjacency list
+// is exactly the drifting model this effort exists to replace. The only
+// hand-declared knowledge below is `receiverToNode`, a small identifier→node
+// map (e.g. "sessionManager" is the local name bound to the SessionManager
+// mailbox) — never an edge. Every edge comes from a regex match against a
+// real blocking call-site in the actual tree, with its file:line recorded so
+// a failure can name the cycle.
+// ---------------------------------------------------------------------------
+
+/// The graph algebra: build {nodes, edges(with source locations)}, then a
+/// plain Kahn's-algorithm topological sort — v1 uses no external solver.
+/// Separate from `ActorWaitForExtraction` so the RED-phase fixture tests can
+/// prove the checker itself catches a cycle before any real source is ever
+/// scanned.
+module private WaitForGraph =
+
+  type Edge = {
+    From: string
+    To: string
+    File: string
+    Line: int
+    Snippet: string
+  }
+
+  type Graph = {
+    Nodes: Set<string>
+    Edges: Edge list
+  }
+
+  let mkEdge (fromNode: string) (toNode: string) (file: string) (line: int) (snippet: string) : Edge =
+    { From = fromNode; To = toNode; File = file; Line = line; Snippet = snippet }
+
+  /// Kahn's algorithm: repeatedly remove a zero-indegree node. `Ok order` =
+  /// every node was eventually removable, so the graph is acyclic. `Error
+  /// stuck` = the nodes still remaining once no zero-indegree node is left —
+  /// every one of them has an unresolved incoming edge, i.e. participates in
+  /// some cycle. Deterministic (`Set.minElement`) so a failure is
+  /// reproducible, not order-dependent.
+  let topoSort (graph: Graph) : Result<string list, Set<string>> =
+    let outgoing =
+      graph.Edges
+      |> List.groupBy (fun e -> e.From)
+      |> Map.ofList
+    let initialIndegree =
+      graph.Nodes
+      |> Set.toList
+      |> List.map (fun n -> n, (graph.Edges |> List.filter (fun e -> e.To = n) |> List.length))
+      |> Map.ofList
+    let rec loop (remaining: Set<string>) (indegree: Map<string, int>) (order: string list) =
+      let ready = remaining |> Set.filter (fun n -> Map.find n indegree = 0)
+      match Set.isEmpty remaining with
+      | true -> Ok(List.rev order)
+      | false ->
+        match Set.isEmpty ready with
+        | true -> Error remaining
+        | false ->
+          let picked = Set.minElement ready
+          let remaining' = Set.remove picked remaining
+          let indegree' =
+            outgoing
+            |> Map.tryFind picked
+            |> Option.defaultValue []
+            |> List.fold
+              (fun acc (e: Edge) ->
+                match Set.contains e.To remaining' with
+                | true -> Map.add e.To (Map.find e.To acc - 1) acc
+                | false -> acc)
+              indegree
+          loop remaining' indegree' (picked :: order)
+    loop graph.Nodes initialIndegree []
+
+  /// DFS back-edge search — only invoked to build a human-readable cycle
+  /// path once `topoSort` has already proven a cycle exists. Not exhaustive
+  /// (it stops at the first cycle found), which is all a build-failure
+  /// message needs.
+  let findCycle (graph: Graph) : Edge list option =
+    let outgoing =
+      graph.Edges
+      |> List.groupBy (fun e -> e.From)
+      |> Map.ofList
+    let settled = System.Collections.Generic.HashSet<string>()
+    let rec visit (node: string) (pathNodes: string list) (pathEdges: Edge list) : Edge list option =
+      match List.tryFindIndex ((=) node) pathNodes with
+      | Some idx -> Some(pathEdges |> List.skip idx)
+      | None ->
+        match settled.Contains node with
+        | true -> None
+        | false ->
+          settled.Add node |> ignore
+          outgoing
+          |> Map.tryFind node
+          |> Option.defaultValue []
+          |> List.tryPick (fun edge -> visit edge.To (pathNodes @ [ node ]) (pathEdges @ [ edge ]))
+    graph.Nodes |> Set.toList |> List.tryPick (fun n -> visit n [] [])
+
+  let isAcyclic (graph: Graph) : bool =
+    graph |> topoSort |> Result.isOk
+
+  let describeCycle (edges: Edge list) : string =
+    edges
+    |> List.map (fun e -> sprintf "%s.%s:%d → %s" e.From e.File e.Line e.To)
+    |> String.concat "\n    "
+
+/// Extracts the REAL wait-for graph by scanning production source text.
+/// Nodes are actor mailbox owners confirmed against the tree (see the doc
+/// comments on each `ScanRegion` below); edges are found, never declared, by
+/// matching known blocking-call shapes inside each actor's own
+/// message-handling code.
+module private ActorWaitForExtraction =
+  open WaitForGraph
+
+  /// Receiver-identity map (allowed to be hand-declared): the local
+  /// identifier a blocking call is issued THROUGH → the actor node it
+  /// targets. This is not "who waits on whom" — it is just naming, exactly
+  /// like `productionFsFiles`'s file-path filter above naming which
+  /// directories are production code. The edges themselves (which lines
+  /// actually call through these identifiers) are found by regex, below.
+  let receiverToNode =
+    Map.ofList [
+      "sessionManager", "SessionManager" // SessionManager.fs's own mailbox handle
+      "cohortLandingCacheOwner", "LandingCacheOwner" // CohortOwner.fs's LandingCacheOwner.Handle
+      "manifestOwner", "ManifestOwner" // ManifestOwner.fs's Handle
+    ]
+
+  /// One actor's own message-handling source, as a (file, start-marker,
+  /// end-marker) slice of REAL source text. This is architecture knowledge
+  /// (which function defines an actor's own mailbox loop), not an edge — no
+  /// call-site or target is named here. `None` markers mean "whole file."
+  /// Confirmed against the tree at authoring time (2026-09):
+  ///  - SessionManager: SessionManager.fs is the whole supervisor module —
+  ///    its mailbox loop plus every `Async.Start`'d helper it spawns and
+  ///    feeds back into itself via `inbox.Post`.
+  ///  - ElmLoop: `ElmDaemon.fs` builds the `EffectDeps` record ElmLoop's
+  ///    own `ExecuteEffect` calls into (ElmLoop.fs:253); `DaemonMode.fs`'s
+  ///    `createElmRuntime` builds the SAME `EffectDeps` for the daemon,
+  ///    with its own additional overrides — both are ElmLoop's own effect
+  ///    code, never the mailbox's caller.
+  ///  - CohortOwner: `CohortOwner.fs` up to (not including) the nested
+  ///    `LandingCacheOwner` module is `decide`/`handle`/the effect
+  ///    dispatcher; `DaemonMode.fs`'s `cohortLandingPerformer` binding is
+  ///    the `LandingPerformer` CohortOwner's own effect dispatcher invokes
+  ///    (`dispatchLandingEffects`, CohortOwner.fs:234-251) to perform a
+  ///    `RunTests` effect — off the mailbox thread via `Async.Start`, but
+  ///    still CohortOwner's own effect-completion work: a hang here means
+  ///    that landing's own effect never posts its completion command back.
+  ///  - LandingCacheOwner: the nested `LandingCacheOwner` module in
+  ///    `CohortOwner.fs` (from its own `module LandingCacheOwner =` to end
+  ///    of file) — a single-writer mailbox exactly like `ManifestOwner`.
+  ///  - QueryActor / EvalActor / RouterActor: the three
+  ///    `MailboxProcessor.Start` bindings inside `AppState.fs`'s session
+  ///    actor constructor, confirmed present at authoring time.
+  ///  - ManifestOwner: `ManifestOwner.fs` is the whole module.
+  type ScanRegion = {
+    Node: string
+    File: string
+    StartContains: string option
+    EndContains: string option
+  }
+
+  let scanRegions : ScanRegion list = [
+    { Node = "SessionManager"; File = "SageFs.Core/SessionManager.fs"; StartContains = None; EndContains = None }
+
+    { Node = "ElmLoop"; File = "SageFs/ElmDaemon.fs"; StartContains = None; EndContains = None }
+    { Node = "ElmLoop"
+      File = "SageFs/DaemonMode.fs"
+      StartContains = Some "let createElmRuntime"
+      EndContains = Some "let dispatchOutputAndWait" }
+
+    { Node = "CohortOwner"
+      File = "SageFs.Core/Features/CohortOwner.fs"
+      StartContains = None
+      EndContains = Some "module LandingCacheOwner =" }
+    { Node = "CohortOwner"
+      File = "SageFs/DaemonMode.fs"
+      StartContains = Some "let cohortLandingPerformer"
+      EndContains = Some "let cohortLedgerPort" }
+
+    { Node = "LandingCacheOwner"
+      File = "SageFs.Core/Features/CohortOwner.fs"
+      StartContains = Some "module LandingCacheOwner ="
+      EndContains = None }
+
+    { Node = "QueryActor"
+      File = "SageFs.Core/AppState.fs"
+      StartContains = Some "let queryActor = MailboxProcessor<QueryCommand>.Start"
+      EndContains = Some "let evalActor = MailboxProcessor<EvalCommand>.Start" }
+    { Node = "EvalActor"
+      File = "SageFs.Core/AppState.fs"
+      StartContains = Some "let evalActor = MailboxProcessor<EvalCommand>.Start"
+      EndContains = Some "let actor = MailboxProcessor.Start" }
+    { Node = "RouterActor"
+      File = "SageFs.Core/AppState.fs"
+      StartContains = Some "let actor = MailboxProcessor.Start"
+      EndContains = Some "let getSessionState () =" }
+
+    { Node = "ManifestOwner"; File = "SageFs.Core/Features/ManifestOwner.fs"; StartContains = None; EndContains = None }
+  ]
+
+  /// Blocking-call shapes recognized today (roast-7 §2's brief). Each is a
+  /// real construct that suspends the caller until the target actor's
+  /// mailbox replies:
+  ///  1. `<receiver>.PostAndReply(` / `.PostAndAsyncReply(` — a direct
+  ///     mailbox round-trip.
+  ///  2. `<receiver>.<OwnerMethod>` where `<OwnerMethod>` is one of a
+  ///     single-writer `Handle`'s own round-tripping members (`Verify`,
+  ///     `Commit`, `Read`, `Flush`, `QuarantineCorrupt` — confirmed against
+  ///     `ManifestOwner.fs`'s and `CohortOwner.fs`'s `Handle` types).
+  ///  3. `proxy (WorkerMessage. ...)` — an awaited call across the
+  ///     daemon↔worker HTTP port (`WorkerProtocol.SessionProxy`).
+  let private receiverAlternation =
+    receiverToNode |> Map.toList |> List.map (fst >> Text.RegularExpressions.Regex.Escape) |> String.concat "|"
+
+  let private ownerMethodNames = [ "Verify"; "Commit"; "Read"; "Flush"; "QuarantineCorrupt" ]
+
+  let private postAndReplyPattern =
+    Text.RegularExpressions.Regex(sprintf @"\b(%s)\.(PostAndAsyncReply|PostAndReply)\s*\(" receiverAlternation)
+
+  let private ownerMethodPattern =
+    Text.RegularExpressions.Regex(
+      sprintf @"\b(%s)\.(%s)\b" receiverAlternation (ownerMethodNames |> String.concat "|"))
+
+  let private workerCallPattern =
+    Text.RegularExpressions.Regex(@"\bproxy\s*\(\s*WorkerMessage\.")
+
+  /// The (1-indexed line number, text) pairs inside `region`'s slice of its
+  /// file — the marker lines are included (a call could in principle share
+  /// the start-marker's own line), everything after the end-marker is not.
+  let private regionLines (repoRoot: string) (region: ScanRegion) : (int * string) list =
+    let path = System.IO.Path.Combine(repoRoot, region.File)
+    match System.IO.File.Exists path with
+    | false -> []
+    | true ->
+      let lines = System.IO.File.ReadAllLines path
+      let startIdx =
+        match region.StartContains with
+        | None -> 0
+        | Some marker ->
+          lines |> Array.tryFindIndex (fun l -> l.Contains marker) |> Option.defaultValue 0
+      let endIdx =
+        match region.EndContains with
+        | None -> lines.Length
+        | Some marker ->
+          lines.[startIdx + 1 ..]
+          |> Array.tryFindIndex (fun l -> l.Contains marker)
+          |> Option.map (fun i -> startIdx + 1 + i)
+          |> Option.defaultValue lines.Length
+      [ for i in startIdx .. endIdx - 1 -> (i + 1, lines.[i]) ]
+
+  /// Every edge a single source line matches, resolving the receiver
+  /// through `receiverToNode` — never a hand-picked target.
+  let private edgesInLine (region: ScanRegion) (lineNo: int) (line: string) : WaitForGraph.Edge list =
+    [ if postAndReplyPattern.IsMatch line then
+        let receiver = postAndReplyPattern.Match(line).Groups.[1].Value
+        match Map.tryFind receiver receiverToNode with
+        | Some target -> yield WaitForGraph.mkEdge region.Node target region.File lineNo (line.Trim())
+        | None -> ()
+      if ownerMethodPattern.IsMatch line then
+        let receiver = ownerMethodPattern.Match(line).Groups.[1].Value
+        match Map.tryFind receiver receiverToNode with
+        | Some target -> yield WaitForGraph.mkEdge region.Node target region.File lineNo (line.Trim())
+        | None -> ()
+      if workerCallPattern.IsMatch line then
+        yield WaitForGraph.mkEdge region.Node "Worker" region.File lineNo (line.Trim()) ]
+
+  let extract (repoRoot: string) : WaitForGraph.Graph =
+    let edges =
+      scanRegions
+      |> List.collect (fun region ->
+        regionLines repoRoot region
+        |> List.collect (fun (lineNo, line) -> edgesInLine region lineNo line))
+    let declaredNodes = scanRegions |> List.map (fun r -> r.Node) |> Set.ofList
+    let mentionedNodes = edges |> List.collect (fun e -> [ e.From; e.To ]) |> Set.ofList
+    { Nodes = Set.union declaredNodes mentionedNodes
+      Edges = edges }
+
+[<Tests>]
+let waitForGraphTests =
+  testList "WaitForGraph" [
+
+    testList "checker proof (RED phase — a fixture, not the real source)" [
+
+      let cyclicFixture : WaitForGraph.Graph =
+        { Nodes = Set.ofList [ "A"; "B"; "C" ]
+          Edges =
+            [ WaitForGraph.mkEdge "A" "B" "Fixture.fs" 1 "A blocks on B"
+              WaitForGraph.mkEdge "B" "C" "Fixture.fs" 2 "B blocks on C"
+              WaitForGraph.mkEdge "C" "A" "Fixture.fs" 3 "C blocks on A" ] }
+
+      let acyclicFixture : WaitForGraph.Graph =
+        { Nodes = Set.ofList [ "A"; "B"; "C" ]
+          Edges =
+            [ WaitForGraph.mkEdge "A" "B" "Fixture.fs" 1 "A blocks on B"
+              WaitForGraph.mkEdge "B" "C" "Fixture.fs" 2 "B blocks on C" ] }
+
+      testCase "a deliberate 3-cycle (A→B→C→A) is flagged, not silently accepted"
+      <| fun _ ->
+        cyclicFixture
+        |> WaitForGraph.isAcyclic
+        |> Expect.isFalse "A→B→C→A is a deadlock cycle — the checker must flag it"
+        let cycle = WaitForGraph.findCycle cyclicFixture
+        cycle
+        |> Option.isSome
+        |> Expect.isTrue "findCycle must actually report the participating edges, not just fail silently"
+        cycle
+        |> Option.get
+        |> List.length
+        |> Expect.equal "the reported cycle should name all 3 participating edges" 3
+
+      testCase "an acyclic graph (A→B→C, no back-edge) passes"
+      <| fun _ ->
+        acyclicFixture
+        |> WaitForGraph.isAcyclic
+        |> Expect.isTrue "A→B→C with no back-edge is not a deadlock — the checker must not false-positive"
+        acyclicFixture
+        |> WaitForGraph.findCycle
+        |> Expect.isNone "no cycle exists, so findCycle must report none"
+    ]
+
+    testList "extraction anti-vacuity (mirrors the Cohort wiring guards above)" [
+
+      testCase "the extractor finds at least one actor node — a scan/path-resolution bug must not pass vacuously"
+      <| fun _ ->
+        let graph = ActorWaitForExtraction.extract repoRoot
+        graph.Nodes
+        |> Set.isEmpty
+        |> Expect.isFalse
+          "extraction found zero actor nodes — source scanning is broken (wrong repoRoot / renamed files), not proof the architecture has no actors"
+
+      testCase "the extractor finds at least one blocking call-site — a scan bug must not pass vacuously as 'acyclic'"
+      <| fun _ ->
+        let graph = ActorWaitForExtraction.extract repoRoot
+        graph.Edges
+        |> List.isEmpty
+        |> Expect.isFalse
+          "extraction found zero edges — an empty graph is trivially 'acyclic', which is exactly the silent-degrade failure mode this guard exists to catch"
+
+      testCase "the extractor finds the known-real CohortOwner -> LandingCacheOwner .Verify edge"
+      <| fun _ ->
+        // Confirmed by reading the code: DaemonMode.fs's `cohortLandingPerformer`
+        // (CohortOwner's own RunTests effect performer) calls
+        // `cohortLandingCacheOwner.Verify inputHashOf sessionId liveTests runMisses`
+        // and awaits it — CohortOwner.fs's `LandingCacheOwner.Handle.Verify` is a
+        // `mailbox.PostAndAsyncReply` round-trip. A scanner that cannot find THIS
+        // specific, hand-verified edge has regressed, independent of whatever
+        // else it does or doesn't find.
+        let graph = ActorWaitForExtraction.extract repoRoot
+        graph.Edges
+        |> List.exists (fun e ->
+          e.From = "CohortOwner"
+          && e.To = "LandingCacheOwner"
+          && e.File = "SageFs/DaemonMode.fs"
+          && e.Snippet.Contains "cohortLandingCacheOwner.Verify")
+        |> Expect.isTrue
+          "the cohortLandingCacheOwner.Verify call in DaemonMode.fs's cohortLandingPerformer must be extracted as a CohortOwner -> LandingCacheOwner edge"
+    ]
+
+    testCase "the real actor wait-for graph, extracted from the current tree, is acyclic"
+    <| fun _ ->
+      let graph = ActorWaitForExtraction.extract repoRoot
+      match WaitForGraph.topoSort graph with
+      | Ok _ -> ()
+      | Error _ ->
+        let cycle = WaitForGraph.findCycle graph |> Option.defaultValue []
+        failwith (
+          sprintf
+            "DEADLOCK: the actor wait-for graph has a cycle — every actor on this path blocks waiting for the next, forever:\n    %s"
+            (WaitForGraph.describeCycle cycle)
+        )
+  ]
