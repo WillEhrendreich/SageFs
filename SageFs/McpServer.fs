@@ -1106,8 +1106,9 @@ let wireModelChangeHandlers
             | false -> SageFs.Features.LiveTesting.ResultFreshness.Fresh
           let payload =
             let completion =
-              let sessionDiscoveredCount =
-                lt.TestSessionMap |> Map.filter (fun _ sid -> sid = activeId) |> Map.count
+              // `lt` (Primary) belongs wholly to `activeId` now — see
+              // `SageFsModel.cycleForSession` — so every discovered test is its own.
+              let sessionDiscoveredCount = lt.DiscoveredTests.Length
               SageFs.Features.LiveTesting.TestResultsBatchPayload.deriveCompletion
                 freshness sessionDiscoveredCount sessionEntries.Length
             SageFs.Features.LiveTesting.TestResultsBatchPayload.create

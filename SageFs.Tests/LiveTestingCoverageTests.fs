@@ -976,7 +976,7 @@ let coverageSelectionTests = testList "Coverage-based test selection" [
           Activation = LiveTestingActivation.Active
           DiscoveredTests = [| tc1; tc2 |]
           TestCoverageBitmaps = Map.ofList [ tid2, bm ]
-          TestSessionMap = Map.ofList [ tid1, "s"; tid2, "s" ] }
+          SessionDiscovery = Map.ofList [ "s", DiscoveryProgress.Completed ] }
     let instrMaps = Map.ofList [ "s", maps ]
     match TestCycleEffects.afterTypeCheck ["Module.add"] "Module.fs" RunTrigger.Keystroke graph state None instrMaps with
     | [ TestCycleEffect.RunAffectedTests req ] ->
@@ -1336,7 +1336,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
             Category = TestCategory.Unit }
         |]
         TestCoverageBitmaps = Map.ofList [ tid, bitmap ]
-        TestSessionMap = Map.ofList [ tid, "s1" ]
+        SessionDiscovery = Map.ofList [ "s1", DiscoveryProgress.Completed ]
         RunPhases = Map.ofList [ "s1", TestRunPhase.Idle ]
     }
     let instrumentationMaps = Map.ofList [ "s1", [| imap |] ]
@@ -1371,7 +1371,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
             Category = TestCategory.Unit }
         |]
         TestCoverageBitmaps = Map.empty
-        TestSessionMap = Map.ofList [ tid, "s1" ]
+        SessionDiscovery = Map.ofList [ "s1", DiscoveryProgress.Completed ]
         RunPhases = Map.ofList [ "s1", TestRunPhase.Idle ]
     }
     let instrumentationMaps = Map.ofList [ "s1", [| imap |] ]

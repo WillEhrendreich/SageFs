@@ -166,7 +166,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
           Output = None }
       let model', _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (TuiEvent.TestResultsBatch [| r |])) m
+          (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some "s", [| r |]))) m
       TestRunPhase.isAnyRunning model'.LiveTesting.TestState.RunPhases
       |> Expect.isTrue "should still be running (streaming — TestRunCompleted clears phase)"
       Map.containsKey tid model'.LiveTesting.TestState.LastResults
@@ -1214,7 +1214,11 @@ let sessionScopedIsolationTests = testList "session-scoped isolation" [
       | other -> failwithf "Expected NotRun, got %A" other
   }
 
-  test "statusEntriesForSession filters by session" {
+  test "statusEntriesForSession returns every entry — the state itself is already session-scoped" {
+    // Session isolation now comes from routing (two sessions never share a
+    // `LiveTestState` — see `SageFsModel.cycleForSession`), not from filtering
+    // within one shared state, so this function is a passthrough regardless
+    // of which sessionId string is passed.
     let state =
       { LiveTestState.empty with
           StatusIndex = TestStatusIndex.fromEntries [|
@@ -1222,14 +1226,9 @@ let sessionScopedIsolationTests = testList "session-scoped isolation" [
               Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.Expecto
               Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
               Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
-            { TestId = TestId.TestId "t2"; DisplayName = "session-b test"; FullName = "session-b test"
-              Origin = TestOrigin.ReflectionOnly; Framework = TestFramework.XUnit
-              Category = TestCategory.Unit; CurrentPolicy = RunPolicy.OnEveryChange
-              Status = TestRunStatus.Detected; PreviousStatus = TestRunStatus.Detected }
-          |]
-          TestSessionMap = Map.ofList [ TestId.TestId "t1", "session-a"; TestId.TestId "t2", "session-b" ] }
+          |] }
     let filtered = LiveTestState.statusEntriesForSession "session-a" state
-    filtered.Length |> Expect.equal "should have 1 entry for session-a" 1
+    filtered.Length |> Expect.equal "should have the one entry this (session-scoped) state carries" 1
     filtered.[0].DisplayName |> Expect.equal "should be session-a test" "session-a test"
   }
 
@@ -1494,7 +1493,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let model0 = (SageFsModel.initial())
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered ("test-session", tests))) { model0 with LiveTesting = { model0.LiveTesting with TestState = { model0.LiveTesting.TestState with Activation = LiveTestingActivation.Active } } }
     let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid1; tid2 |], Some "test-session"))) m1
-    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch results)) m2
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some "test-session", results))) m2
 
     let annotations = LiveTesting.annotationsForFile "editor" m3.LiveTesting.TestState
     annotations |> Array.length |> Expect.equal "should have 2 annotations" 2

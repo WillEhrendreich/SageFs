@@ -608,7 +608,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
               { activeStateWith [| sampleTestCase |] with
                   RunPhases = Map.ofList [ "test-session", Running generation ]
                   LastGeneration = generation
-                  TestSessionMap = Map.ofList [ sampleTestCase.Id, "test-session" ] }
+                  SessionDiscovery = Map.ofList [ "test-session", DiscoveryProgress.Completed ] }
             ActiveFile = Some "Foo.fs"
             LatestContent = Some content
             LatestAnalysisIdentity = Some identity
@@ -661,7 +661,7 @@ let rebuildCycleTests = testList "LiveTesting Rebuild Cycle" [
               { activeStateWith [| sampleTestCase |] with
                   RunPhases = Map.ofList [ "test-session", Running generation ]
                   LastGeneration = generation
-                  TestSessionMap = Map.ofList [ sampleTestCase.Id, "test-session" ] }
+                  SessionDiscovery = Map.ofList [ "test-session", DiscoveryProgress.Completed ] }
             ActiveFile = Some "Foo.fs"
             LatestContent = Some content1
             LatestAnalysisIdentity = Some identity1

@@ -55,7 +55,7 @@ let tests =
             Activation = LiveTestingActivation.Active
             DiscoveredTests = [| symbolTest; coverageTest |]
             TestCoverageBitmaps = Map.ofList [ coverageTest.Id, CoverageBitmap.ofBoolArray [| true |] ]
-            TestSessionMap = Map.ofList [ symbolTest.Id, "s"; coverageTest.Id, "s" ] }
+            SessionDiscovery = Map.ofList [ "s", DiscoveryProgress.Completed ] }
       let graph = exactGraph [ "Module.add", [| symbolTest.Id |] ]
       let maps =
         [| { Slots = [| { File = "Module.fs"; Line = 1; Column = 0; EndLine = 1; EndColumn = 10; BranchId = 0 } |]

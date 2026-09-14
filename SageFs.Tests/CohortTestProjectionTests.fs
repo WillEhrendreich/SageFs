@@ -118,17 +118,18 @@ let cohortTestProjectionTests =
     ]
 
     testList "projectSession" [
-      test "filters to the given session before classifying, via statusEntriesForSession" {
+      test "classifies every entry in the (already session-scoped) state via statusEntriesForSession" {
+        // Callers hand `projectSession` a state already scoped to one session
+        // (`SageFsModel.cycleForSession`, DaemonMode.fs's
+        // `getCohortSessionTestOutcomes`) — no filtering happens here any more.
         let entryA = mkEntry "testA" (TestRunStatus.Passed TimeSpan.Zero)
-        let entryB = mkEntry "testB" (TestRunStatus.Failed(TestFailure.AssertionFailed "x", TimeSpan.Zero))
         let state =
           { LiveTestState.empty with
-              StatusIndex = TestStatusIndex.fromEntries [| entryA; entryB |]
-              TestSessionMap = Map.ofList [ TestId.TestId "testA", "session-A"; TestId.TestId "testB", "session-B" ]
+              StatusIndex = TestStatusIndex.fromEntries [| entryA |]
               DiscoveryGeneration = 4L }
         let projection, generation = CohortTestProjection.projectSession "session-A" state
-        projection.PassingTests |> Expect.equal "session-A sees only its own passing test" [ Cohort.TestId "testA" ]
-        projection.FailingTests |> Expect.equal "session-B's failing test does not leak into session-A" []
+        projection.PassingTests |> Expect.equal "session-A's own passing test is projected" [ Cohort.TestId "testA" ]
+        projection.FailingTests |> Expect.equal "no failing tests in this session's own state" []
         generation |> Expect.equal "the generation is the session-independent state generation" 4L
       }
     ]

@@ -1528,7 +1528,7 @@ module RunEndHarness =
         messages
         |> Seq.collect (fun m ->
           match m with
-          | SageFsMsg.Event (TuiEvent.TestResultsBatch batch) -> Seq.ofArray batch
+          | SageFsMsg.Event (TuiEvent.TestResultsBatch (_, batch)) -> Seq.ofArray batch
           | _ -> Seq.empty)
         |> Seq.toArray
       let completion () =

@@ -687,7 +687,6 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
         DiscoveredTests = [| tc1 |]
         Activation = LiveTestingActivation.Active
         RunPhases = Map.ofList [ "test-session", TestRunPhase.Running gen ]
-        TestSessionMap = Map.ofList [ tc1.Id, "test-session" ]
     }
     let graph = {
       TestDependencyGraph.empty with
@@ -707,7 +706,6 @@ let TestCycleEffectsTests = testList "TestCycleEffects" [
         DiscoveredTests = [| tc1 |]
         Activation = LiveTestingActivation.Active
         RunPhases = Map.ofList [ "test-session", TestRunPhase.RunningButEdited gen ]
-        TestSessionMap = Map.ofList [ tc1.Id, "test-session" ]
     }
     let graph = {
       TestDependencyGraph.empty with
@@ -1489,7 +1487,7 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
       Timestamp = System.DateTimeOffset.UtcNow
       Output = None
     }
-    let model4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch [| result |])) model3
+    let model4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some sessionIdStr, [| result |]))) model3
     model4.LiveTesting.TestState.LastResults |> Map.tryFind tid |> Expect.isSome "should have result for test"
 
     let model5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sessionIdStr))) model4
@@ -1511,6 +1509,13 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
   }
 
   test "multi-session test isolation" {
+    // Two sessions never share a `LiveTestState` any more (see
+    // `SageFsModel.cycleForSession`): whichever session is ACTIVE owns
+    // `model.LiveTesting` (Primary); switching away demotes it, cycle intact,
+    // into `PerSessionLiveTesting`. This dispatches real `SessionSwitched`
+    // events (as the daemon does whenever a viewer moves between sessions) so
+    // the isolation is exercised the way it actually happens, not just via
+    // the routing helper's bootstrap fallback for a never-switched-to session.
     let tid1 = TestId.TestId "test.in.session1"
     let tid2 = TestId.TestId "test.in.session2"
     let tc1 = { TestCase.Id = tid1; FullName = "test.in.session1"; DisplayName = "t1"; Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
@@ -1524,15 +1529,38 @@ let e2eCycleFlowTests = testList "E2E cycle Flow" [
     let snap2 = { SessionSnapshot.Id = s2; Name = Some "S2"; Projects = ["B.fsproj"]; Status = SessionDisplayStatus.Running; LastActivity = System.DateTime.UtcNow; EvalCount = 0; UpSince = System.DateTime.UtcNow; WorkingDirectory = "C:\\B" }
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap1)) m0
     let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated snap2)) m1
-    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (s1Str, [| tc1 |]))) m2
-    let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (s2Str, [| tc2 |]))) m3
-    m4.LiveTesting.TestState.TestSessionMap |> Map.find tid1 |> Expect.equal "t1 in s1" s1Str
-    m4.LiveTesting.TestState.TestSessionMap |> Map.find tid2 |> Expect.equal "t2 in s2" s2Str
+    let m2a, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, s1Str))) m2
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (s1Str, [| tc1 |]))) m2a
 
-    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid1 |], Some s1Str))) m4
+    let m3a, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid1 |], Some s1Str))) m3
     let r1 = { TestRunResult.TestId = tid1; TestName = "t1"; Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 10.0); Timestamp = System.DateTimeOffset.UtcNow; Output = None }
-    let m6, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch [| r1 |])) m5
-    let s2Status = m6.LiveTesting.TestState.StatusIndex.Entries |> Array.tryFind (fun e -> e.TestId = tid2)
+    let m3b, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some s1Str, [| r1 |]))) m3a
+    let m3c, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some s1Str))) m3b
+
+    // Switch to s2 — s1's cycle (with its Passed result) is parked intact.
+    let m4a, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some s1Str, s2Str))) m3c
+    let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (s2Str, [| tc2 |]))) m4a
+
+    (SageFsModel.cycleForSession s1Str m4).TestState.DiscoveredTests
+    |> Array.exists (fun tc -> tc.Id = tid1)
+    |> Expect.isTrue "s1's own (parked) cycle should still carry its test after switching away"
+    (SageFsModel.cycleForSession s1Str m4).TestState.DiscoveredTests
+    |> Array.exists (fun tc -> tc.Id = tid2)
+    |> Expect.isFalse "s2's test must not leak into s1's parked cycle"
+    (SageFsModel.cycleForSession s2Str m4).TestState.DiscoveredTests
+    |> Array.exists (fun tc -> tc.Id = tid1)
+    |> Expect.isFalse "s1's test must not leak into s2's (now Primary) cycle"
+
+    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| tid2 |], Some s2Str))) m4
+    let r2 = { TestRunResult.TestId = tid2; TestName = "t2"; Result = TestResult.Failed (TestFailure.AssertionFailed "boom", System.TimeSpan.FromMilliseconds 5.0); Timestamp = System.DateTimeOffset.UtcNow; Output = None }
+    let m6, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some s2Str, [| r2 |]))) m5
+
+    let s1Status = (SageFsModel.cycleForSession s1Str m6).TestState.LastResults |> Map.tryFind tid1
+    match s1Status with
+    | Some { Result = TestResult.Passed _ } -> ()
+    | other -> failwithf "s1's earlier Passed result should survive s2's run untouched, got %A" other
+
+    let s2Status = (SageFsModel.cycleForSession s2Str m6).TestState.StatusIndex.Entries |> Array.tryFind (fun e -> e.TestId = tid2)
     match s2Status with
     | Some entry -> match entry.Status with | TestRunStatus.Passed _ -> failwith "s2's test should NOT be Passed" | _ -> ()
     | None -> ()

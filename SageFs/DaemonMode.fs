@@ -1674,7 +1674,7 @@ let run
   // `GetSessionTestSummary` below filters it
   // (`LiveTestState.statusEntriesForSession`).
   let getCohortSessionTestOutcomes (sessionId: string) : Features.CohortOwner.SessionTestOutcomes =
-    let state = elmRuntime.GetModel().LiveTesting.TestState
+    let state = (SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())).TestState
     let projection, generation = Features.CohortTestProjection.projectSession sessionId state
     projection.PassingTests, projection.FailingTests, projection.StaleTests, generation
 
@@ -1722,7 +1722,7 @@ let run
           | None -> return []
           | Some { SessionId = None } -> return []
           | Some { SessionId = Some sessionId } ->
-            let state = elmRuntime.GetModel().LiveTesting.TestState
+            let state = (SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())).TestState
             let entries = Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
             return entries |> Array.map (fun e -> Features.CohortTestProjection.toCohortTestId e.TestId) |> Array.toList
         }
@@ -2149,12 +2149,12 @@ let run
       | Some progress -> progress
       | None -> ""
     GetSessionTestSummary = fun sessionId ->
-      let model = elmRuntime.GetModel()
-      let state = model.LiveTesting.TestState
+      let sidStr = WorkerProtocol.SessionId.value sessionId
+      let lt = SageFsModel.cycleForSession sidStr (elmRuntime.GetModel())
+      let state = lt.TestState
       match state.Activation with
       | Features.LiveTesting.LiveTestingActivation.Inactive -> None
       | _ ->
-      let sidStr = WorkerProtocol.SessionId.value sessionId
       let entries =
         Features.LiveTesting.LiveTestState.statusEntriesForSession sidStr state
       match entries.Length with
@@ -2164,47 +2164,35 @@ let run
           state.Activation (entries |> Array.map (fun e -> e.Status))
         |> Some
     GetSessionCoverageSummary = fun sessionId ->
-      let model = elmRuntime.GetModel()
-      let state = model.LiveTesting.TestState
+      let sidStr = WorkerProtocol.SessionId.value sessionId
+      let lt = SageFsModel.cycleForSession sidStr (elmRuntime.GetModel())
+      let state = lt.TestState
       match state.Activation with
       | Features.LiveTesting.LiveTestingActivation.Inactive -> None
       | _ ->
-      let sidStr = WorkerProtocol.SessionId.value sessionId
-      let sessionTestIds =
-        if Map.isEmpty state.TestSessionMap then state.TestCoverageBitmaps |> Map.keys |> Set.ofSeq
-        else
-          state.TestSessionMap
-          |> Map.toSeq
-          |> Seq.choose (fun (tid, sid) ->
-            match sid = sidStr with
-            | true -> Some tid
-            | false -> None)
-          |> Set.ofSeq
-      let bitmaps =
-        sessionTestIds
-        |> Seq.choose (fun tid -> Map.tryFind tid state.TestCoverageBitmaps)
-        |> Seq.toArray
+      // `state` belongs wholly to this session (see `SageFsModel.cycleForSession`).
+      let bitmaps = state.TestCoverageBitmaps |> Map.values |> Seq.toArray
       match bitmaps.Length with
       | 0 -> None
       | _ ->
         Features.LiveTesting.CoverageSummary.fromBitmaps 16 (bitmaps |> Seq.ofArray)
         |> Some
     GetSessionTestTreemap = fun sessionId ->
-      let model = elmRuntime.GetModel()
-      let state = model.LiveTesting.TestState
+      let sidStr = WorkerProtocol.SessionId.value sessionId
+      let lt = SageFsModel.cycleForSession sidStr (elmRuntime.GetModel())
+      let state = lt.TestState
       match state.Activation with
       | Features.LiveTesting.LiveTestingActivation.Inactive -> [||]
       | _ ->
-      let sidStr = WorkerProtocol.SessionId.value sessionId
       let entries =
         Features.LiveTesting.LiveTestState.statusEntriesForSession sidStr state
       Features.LiveTesting.TestTreemap.fromStatusEntries entries
     GetSessionCoverageTreemap = fun sessionId ->
-      let lt = elmRuntime.GetModel().LiveTesting
+      let sidStr = WorkerProtocol.SessionId.value sessionId
+      let lt = SageFsModel.cycleForSession sidStr (elmRuntime.GetModel())
       match lt.TestState.Activation with
       | Features.LiveTesting.LiveTestingActivation.Inactive -> None
       | _ ->
-      let sidStr = WorkerProtocol.SessionId.value sessionId
       let maps =
         match Map.tryFind sidStr lt.InstrumentationMaps with
         | Some m when m.Length > 0 -> m
@@ -2213,16 +2201,8 @@ let run
       match merged.Slots.Length = 0 with
       | true -> None
       | false ->
-      // Which tests belong to THIS session (falls back to "all tests" when
-      // the map is empty, mirroring GetSessionCoverageSummary above).
-      let sessionTestIds =
-        match Map.isEmpty lt.TestState.TestSessionMap with
-        | true -> lt.TestState.TestCoverageBitmaps |> Map.keys |> Set.ofSeq
-        | false ->
-          lt.TestState.TestSessionMap
-          |> Map.toSeq
-          |> Seq.choose (fun (tid, sid) -> if sid = sidStr then Some tid else None)
-          |> Set.ofSeq
+      // `lt.TestState` belongs wholly to this session (see `SageFsModel.cycleForSession`).
+      let sessionTestIds = lt.TestState.TestCoverageBitmaps |> Map.keys |> Set.ofSeq
       let compatibleBitmap (tid: Features.LiveTesting.TestId) =
         Map.tryFind tid lt.TestState.TestCoverageBitmaps
         |> Option.filter (fun bm -> bm.Count = merged.TotalProbes)

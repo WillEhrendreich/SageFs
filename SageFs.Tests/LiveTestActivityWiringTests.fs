@@ -118,8 +118,11 @@ let discoveryProgressTests =
 
 [<Tests>]
 let activityInputTests =
+  // Each session gets its own `LiveTestCycleState` now (routed by
+  // `SageFsModel.cycleForSession` — two sessions never share one
+  // `LiveTestState`), so this cycle carries only `sid`'s own test.
   let mine = mkTestCase "Math.Tests.adds" TestFramework.Expecto TestCategory.Unit
-  let theirs = mkTestCase "Other.Tests.fails" TestFramework.Expecto TestCategory.Unit
+  let another = mkTestCase "Math.Tests.subtracts" TestFramework.Expecto TestCategory.Unit
   let expecto = ProviderDescription.AttributeBased { Name = TestFramework.Expecto; TestAttributes = []; AssemblyMarker = "Expecto" }
   let cycle =
     { LiveTestCycleState.empty with
@@ -127,13 +130,12 @@ let activityInputTests =
         TestState =
           { LiveTestState.empty with
               Activation = LiveTestingActivation.Active
-              DiscoveredTests = [| mine; theirs |]
-              TestSessionMap = Map.ofList [ mine.Id, sid; theirs.Id, otherSid ]
-              StatusIndex = TestStatusIndex.fromEntries [| entry mine passed; entry theirs failed |]
+              DiscoveredTests = [| mine |]
+              StatusIndex = TestStatusIndex.fromEntries [| entry mine passed |]
               DetectedProviders = [ expecto ]
               SessionDiscovery = Map.ofList [ sid, DiscoveryProgress.Completed ] } }
   testList "LiveTestActivity activity input" [
-    testCase "WHY — activityInput — takes only this session's tests with its own discovery and compile state because each session's card describes that session" <| fun _ ->
+    testCase "WHY — activityInput — takes this session's own tests with its own discovery and compile state because each session's card describes that session" <| fun _ ->
       LiveTestActivity.activityInput sid cycle
       |> Expect.equal "this session's input"
         { Activation = LiveTestingActivation.Active
@@ -148,7 +150,7 @@ let activityInputTests =
       |> Expect.equal "not requested" DiscoveryProgress.NotRequested
 
     testCase "WHY — activityInput — this session's pending rebuild counts its waiting tests because they are about to re-run" <| fun _ ->
-      let rebuilding = { cycle with PendingRebuild = Some { pendingRebuild 7L with Tests = [| mine; theirs |] } }
+      let rebuilding = { cycle with PendingRebuild = Some { pendingRebuild 7L with Tests = [| mine; another |] } }
       (LiveTestActivity.activityInput sid rebuilding).Rebuild
       |> Expect.equal "rebuilding two" (RebuildProgress.Rebuilding 2)
 
@@ -158,13 +160,17 @@ let activityInputTests =
       |> Expect.equal "not rebuilding" RebuildProgress.NotRebuilding
 
     testCase "WHY — liveTestActivityFor — a background session's block comes from its own cycle because each session builds separately" <| fun _ ->
+      // Each session's cycle now carries its OWN complete TestState — tests,
+      // discovery and activation included, not just Compile/PendingRebuild
+      // borrowed while everything else came from Primary (the old, item-13b
+      // bug this fixes: `PerSessionLiveTesting` used to hold only
+      // compile/debounce state, never outcomes).
       let model = activeModel ()
       let withTest =
         { model with
-            LiveTesting =
-              { cycle with Compile = CompileBlock.NoCompileErrors }
+            LiveTesting = { LiveTestCycleState.empty with Compile = CompileBlock.NoCompileErrors }
             PerSessionLiveTesting =
-              Map.ofList [ sid, { LiveTestCycleState.empty with Compile = CompileBlock.RebuildFailed "error FS0001: x" } ] }
+              Map.ofList [ sid, { cycle with Compile = CompileBlock.RebuildFailed "error FS0001: x" } ] }
       SageFsModel.liveTestActivityFor sid withTest
       |> Expect.equal "blocked by its own rebuild" (LiveTestActivity.BlockedByFailedRebuild ("error FS0001: x", { TestTally.empty with Passed = 1 }))
   ]

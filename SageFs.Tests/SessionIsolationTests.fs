@@ -1069,6 +1069,16 @@ module ResetIsolation =
 
 /// Pure unit tests for LiveTestState.statusEntriesForSession — no daemon, no FSI, no I/O.
 /// These define the session-isolation contract at the state layer.
+///
+/// Session isolation moved layers: it used to be `TestSessionMap` filtering
+/// WITHIN one shared `LiveTestState` (a `Map<TestId, string>` — which,
+/// keyed only by TestId, could hold at most ONE session's attribution per
+/// TestId, so two sessions whose TestIds collide — e.g. two checkouts of one
+/// repo — had one overwrite the other's entry: last-discovery-wins). Now
+/// every session gets its OWN `LiveTestState` (routed per session by
+/// `SageFsModel.cycleForSession` — see `SessionCycleIsolation` below for the
+/// real end-to-end proof), so `statusEntriesForSession` no longer filters at
+/// all: the state handed to it already belongs wholly to one session.
 module LiveTestStateIsolation =
   open SageFs.Features.LiveTesting
 
@@ -1083,81 +1093,174 @@ module LiveTestStateIsolation =
       Status = TestRunStatus.Passed System.TimeSpan.Zero
       PreviousStatus = TestRunStatus.Detected }
 
-  let private mkState (entries: TestStatusEntry array) (sessionMap: Map<TestId, string>) =
+  let private mkState (entries: TestStatusEntry array) =
     { LiveTestState.empty with
-        StatusIndex = TestStatusIndex.fromEntries entries
-        TestSessionMap = sessionMap }
+        StatusIndex = TestStatusIndex.fromEntries entries }
 
   let tests = testList "LiveTestState session result isolation" [
 
-    test "session-A tests are NOT visible to session-B" {
+    test "statusEntriesForSession returns every entry in a session-scoped state, regardless of the sessionId argument" {
       let entryA = mkEntry "testA"
-      let entryB = mkEntry "testB"
-      let state =
-        mkState
-          [| entryA; entryB |]
-          (Map.ofList [ TestId.TestId "testA", "session-A"
-                        TestId.TestId "testB", "session-B" ])
-      let visibleToB = LiveTestState.statusEntriesForSession "session-B" state
-      visibleToB |> Array.map (fun e -> e.DisplayName)
-      |> Expect.equal "session-B sees only testB" [| "testB" |]
+      let state = mkState [| entryA |]
+      [ "session-A"; "session-B"; "" ]
+      |> List.iter (fun sid ->
+        LiveTestState.statusEntriesForSession sid state
+        |> Array.map (fun e -> e.DisplayName)
+        |> Expect.equal (sprintf "sessionId=%s should not change what a session-scoped state returns" sid) [| "testA" |])
     }
 
-    test "session-B tests are NOT visible to session-A" {
-      let entryA = mkEntry "testA"
-      let entryB = mkEntry "testB"
-      let state =
-        mkState
-          [| entryA; entryB |]
-          (Map.ofList [ TestId.TestId "testA", "session-A"
-                        TestId.TestId "testB", "session-B" ])
-      let visibleToA = LiveTestState.statusEntriesForSession "session-A" state
-      visibleToA |> Array.map (fun e -> e.DisplayName)
-      |> Expect.equal "session-A sees only testA" [| "testA" |]
-    }
-
-    test "unattributed tests do NOT leak when a session map exists" {
-      // Tests with NO entry in TestSessionMap must NOT bleed into another session's view.
-      // (This was the bug: | None -> true caused unattributed tests to appear everywhere.)
-      let attributed = mkEntry "attributed"
-      let unattributed = mkEntry "ghost"
-      let state =
-        mkState
-          [| attributed; unattributed |]
-          (Map.ofList [ TestId.TestId "attributed", "session-A" ])
-      let visibleToA = LiveTestState.statusEntriesForSession "session-A" state
-      visibleToA |> Array.map (fun e -> e.DisplayName)
-      |> Expect.equal "ghost test must not appear in session-A" [| "attributed" |]
-    }
-
-    test "empty sessionId returns ALL entries (bare-session backward compat)" {
-      let e1 = mkEntry "t1"
-      let e2 = mkEntry "t2"
-      let state =
-        mkState [| e1; e2 |] (Map.ofList [ TestId.TestId "t1", "s1"; TestId.TestId "t2", "s2" ])
-      let all = LiveTestState.statusEntriesForSession "" state
-      all.Length
-      |> Expect.equal "empty sessionId returns all entries" 2
-    }
-
-    test "empty TestSessionMap returns ALL entries (single-session backward compat)" {
-      let e1 = mkEntry "t1"
-      let e2 = mkEntry "t2"
-      let state = mkState [| e1; e2 |] Map.empty
-      let all = LiveTestState.statusEntriesForSession "any-session" state
-      all.Length
-      |> Expect.equal "empty TestSessionMap returns all entries" 2
-    }
-
-    test "session-C sees zero tests when it has none" {
-      let e1 = mkEntry "t1"
-      let state =
-        mkState [| e1 |] (Map.ofList [ TestId.TestId "t1", "session-A" ])
-      let visibleToC = LiveTestState.statusEntriesForSession "session-C" state
-      visibleToC.Length
-      |> Expect.equal "session-C sees no tests" 0
+    test "an empty state returns zero entries for any sessionId" {
+      let state = mkState [||]
+      LiveTestState.statusEntriesForSession "any-session" state
+      |> Array.length
+      |> Expect.equal "no entries means no entries, regardless of which session asked" 0
     }
   ]
+
+/// End-to-end proof that two sessions' live-testing cycles are genuinely
+/// independent — the real fix for item 13b: two sessions whose TestIds
+/// COLLIDE (identical `fullName|framework`, e.g. two checkouts of one repo)
+/// keep separate pass/fail outcomes because they never share a
+/// `LiveTestState` to begin with. Exercises the same `SessionSwitched`
+/// promote/demote mechanism the daemon uses when a viewer moves between
+/// sessions — this is where the old `TestSessionMap` (last-writer-wins)
+/// bug actually bit.
+module SessionCycleIsolation =
+  open SageFs.Features.LiveTesting
+
+  let private mkSnap (id: WorkerProtocol.SessionId) (dir: string) : SessionSnapshot =
+    { Id = id; Name = None; Projects = [ dir + "/Project.fsproj" ]
+      Status = SessionDisplayStatus.Running
+      LastActivity = System.DateTime.UtcNow
+      EvalCount = 0
+      UpSince = System.DateTime.UtcNow
+      WorkingDirectory = dir }
+
+  let tests = testList "SessionCycleIsolation" [ test "two sessions on two checkouts of the same repo (colliding TestIds) keep independent pass/fail outcomes" {
+    // Identical fullName|framework — the exact TestId-collision scenario a
+    // cohort's worktrees produce (two checkouts of one repository).
+    let collidingId = TestId.create "MyModule.tests" TestFramework.Expecto
+    let tc =
+      { TestCase.Id = collidingId; FullName = "MyModule.tests"; DisplayName = "tests"
+        Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
+        Category = TestCategory.Unit }
+
+    let sidA = WorkerProtocol.SessionId.newId ()
+    let sidB = WorkerProtocol.SessionId.newId ()
+    let sidAStr = WorkerProtocol.SessionId.value sidA
+    let sidBStr = WorkerProtocol.SessionId.value sidB
+
+    let m0 = SageFsModel.initial ()
+    let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidA "/repo/worktree-a"))) m0
+    let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidB "/repo/worktree-b"))) m1
+
+    // Session A: becomes active, discovers, runs, PASSES.
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, sidAStr))) m2
+    let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sidAStr, [| tc |]))) m3
+    let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| collidingId |], Some sidAStr))) m4
+    let passResult =
+      { TestRunResult.TestId = collidingId; TestName = "tests"
+        Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 3.0)
+        Timestamp = System.DateTimeOffset.UtcNow; Output = None }
+    let m6, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some sidAStr, [| passResult |]))) m5
+    let m7, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sidAStr))) m6
+
+    // Session B: becomes active (A is parked), discovers the SAME TestId,
+    // runs, FAILS.
+    let m8, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some sidAStr, sidBStr))) m7
+    let m9, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sidBStr, [| tc |]))) m8
+    let m10, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| collidingId |], Some sidBStr))) m9
+    let failResult =
+      { TestRunResult.TestId = collidingId; TestName = "tests"
+        Result = TestResult.Failed (TestFailure.AssertionFailed "diverged", System.TimeSpan.FromMilliseconds 4.0)
+        Timestamp = System.DateTimeOffset.UtcNow; Output = None }
+    let m11, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some sidBStr, [| failResult |]))) m10
+    let final, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sidBStr))) m11
+
+    // Session A's view is untouched by session B's later discovery/run of
+    // the SAME TestId — the whole point of item 13b.
+    let aState = (SageFsModel.cycleForSession sidAStr final).TestState
+    aState.LastResults
+    |> Map.tryFind collidingId
+    |> function
+       | Some { Result = TestResult.Passed _ } -> ()
+       | other -> failwithf "session A's Passed result should survive session B's colliding run, got %A" other
+
+    let bState = (SageFsModel.cycleForSession sidBStr final).TestState
+    bState.LastResults
+    |> Map.tryFind collidingId
+    |> function
+       | Some { Result = TestResult.Failed _ } -> ()
+       | other -> failwithf "session B should see its own Failed result, got %A" other
+  };
+
+    test "a BACKGROUND session's own discovery+results never touch the ACTIVE session's cycle, even for a colliding TestId" {
+      // The literal bug this item fixes: session A stays Primary/active the
+      // WHOLE time (a human is viewing it, or it was simply created first) —
+      // session B never becomes Primary — yet B's own worker keeps
+      // discovering and running its tests in the background. Before this
+      // fix, TestsDiscovered/TestResultsBatch always wrote into
+      // `model.LiveTesting` unconditionally, so B's events corrupted A's
+      // Primary cycle regardless of which session was "active". This is the
+      // scenario `TestSessionMap` (single-valued per TestId) could not
+      // survive for colliding TestIds.
+      let collidingId = TestId.create "MyModule.tests" TestFramework.Expecto
+      let tc =
+        { TestCase.Id = collidingId; FullName = "MyModule.tests"; DisplayName = "tests"
+          Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
+          Category = TestCategory.Unit }
+      let sidA = WorkerProtocol.SessionId.newId ()
+      let sidB = WorkerProtocol.SessionId.newId ()
+      let sidAStr = WorkerProtocol.SessionId.value sidA
+      let sidBStr = WorkerProtocol.SessionId.value sidB
+
+      let m0 = SageFsModel.initial ()
+      let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidA "/repo/worktree-a"))) m0
+      let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidB "/repo/worktree-b"))) m1
+      // Seed B into PerSessionLiveTesting by briefly switching to it, then
+      // back to A — mirroring how a cohort session typically gets a moment
+      // of focus (creation/join) before settling into the background while
+      // another session stays viewed.
+      let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, sidBStr))) m2
+      let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some sidBStr, sidAStr))) m3
+
+      // A is now Primary/active. A discovers, runs, PASSES — all while active.
+      let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sidAStr, [| tc |]))) m4
+      let m6, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| collidingId |], Some sidAStr))) m5
+      let passResult =
+        { TestRunResult.TestId = collidingId; TestName = "tests"
+          Result = TestResult.Passed (System.TimeSpan.FromMilliseconds 3.0)
+          Timestamp = System.DateTimeOffset.UtcNow; Output = None }
+      let m7, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some sidAStr, [| passResult |]))) m6
+      let m8, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sidAStr))) m7
+
+      // A is STILL Primary/active here — no SessionSwitched to B. B's own
+      // worker discovers and runs the SAME (colliding) TestId anyway, and
+      // FAILS.
+      let m9, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sidBStr, [| tc |]))) m8
+      let m10, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunStarted ([| collidingId |], Some sidBStr))) m9
+      let failResult =
+        { TestRunResult.TestId = collidingId; TestName = "tests"
+          Result = TestResult.Failed (TestFailure.AssertionFailed "diverged", System.TimeSpan.FromMilliseconds 4.0)
+          Timestamp = System.DateTimeOffset.UtcNow; Output = None }
+      let m11, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some sidBStr, [| failResult |]))) m10
+      let final, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some sidBStr))) m11
+
+      // A (still Primary throughout) must be completely unaffected by B's
+      // background discovery/run of the colliding TestId.
+      final.LiveTesting.TestState.LastResults
+      |> Map.tryFind collidingId
+      |> function
+         | Some { Result = TestResult.Passed _ } -> ()
+         | other -> failwithf "the ACTIVE session's Primary cycle must be untouched by a background session's colliding run, got %A" other
+
+      let bState = (SageFsModel.cycleForSession sidBStr final).TestState
+      bState.LastResults
+      |> Map.tryFind collidingId
+      |> function
+         | Some { Result = TestResult.Failed _ } -> ()
+         | other -> failwithf "session B should see its own Failed result in its own (background) cycle, got %A" other
+    } ]
 
 /// SessionMap (agent→session) eviction contract. The map previously had no
 /// TryRemove anywhere: setActiveSessionId was the only write, empty-string
@@ -1370,6 +1473,7 @@ let sessionIsolationTests = testList "Session Isolation" [
   WorkingDirRoutingPriority.tests
   ResetIsolation.tests
   LiveTestStateIsolation.tests
+  SessionCycleIsolation.tests
   SessionMapEviction.tests
   IdentityBinding.tests
 ]

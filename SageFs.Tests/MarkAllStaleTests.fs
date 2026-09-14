@@ -25,7 +25,7 @@ let markAllStaleTests = testList "MarkAllStale" [
           model0
       let model2, _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (TuiEvent.TestResultsBatch [| r1; r2 |]))
+          (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some "s", [| r1; r2 |])))
           model1
       // Act
       let model3, effects =

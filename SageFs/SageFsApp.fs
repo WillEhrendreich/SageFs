@@ -217,6 +217,11 @@ module PendingRunSummary =
 /// The unified message type for the SageFs Elm loop.
 /// All state changes flow through here — user actions and system events.
 type BufferedTestResultsPayload = {
+  /// The session every batch below belongs to — batches from a different
+  /// session are never absorbed into the same payload (see
+  /// `SageFsMsgQueueCoalescing`/`SageFsDispatchReduction`), so this is a
+  /// single value, not a per-batch one.
+  SessionId: string option
   TotalResultCount: int
   Batches: Features.LiveTesting.TestRunResult array list
 }
@@ -309,14 +314,63 @@ module SageFsModel =
     PerSessionLiveTesting = Map.empty
   }
 
-  /// The one live-testing state for a session, as every surface shows it. Tests,
-  /// discovery and activation live on the primary cycle; the build block and the
-  /// pending rebuild come from the session's own cycle when it has one.
+  /// Where a given session's live-testing cycle lives: `Primary` (`LiveTesting`)
+  /// when it's the currently-active session, its own slot in
+  /// `PerSessionLiveTesting` (`Background`) otherwise. The single source of
+  /// truth for this resolution — both the write side (`SageFsUpdate`'s
+  /// `tryUpdateLiveTestingState`) and every read side (dashboard/cohort
+  /// per-session queries) go through it, so a session's tests/discovery/results
+  /// always land in, and are always read from, the same cycle.
+  [<RequireQualifiedAccess>]
+  type LiveTestingTarget =
+    | Primary
+    | Background of string
+
+  let tryResolveLiveTestingTarget
+    (targetSession: string option)
+    (model: SageFsModel)
+    : LiveTestingTarget option =
+    let activeSessionId =
+      ActiveSession.sessionId model.Sessions.ActiveSessionId |> Option.map SessionId.value
+    let primaryCycleOwnsSession sid =
+      let cycle = model.LiveTesting
+      cycle.TestState.RunPhases |> Map.containsKey sid
+      || (cycle.TestState.SessionDiscovery |> Map.containsKey sid)
+      || (cycle.PendingRebuild |> Option.exists (fun pending -> pending.SessionId = Some sid))
+      || (cycle.QueuedRebuild |> Option.exists (fun queued -> queued.SessionId = Some sid))
+    match targetSession with
+    | Some sid when activeSessionId = Some sid ->
+      Some LiveTestingTarget.Primary
+    | Some sid ->
+      match model.PerSessionLiveTesting |> Map.containsKey sid with
+      | true -> Some (LiveTestingTarget.Background sid)
+      | false ->
+          match activeSessionId with
+          | None when primaryCycleOwnsSession sid -> Some LiveTestingTarget.Primary
+          | None when model.PerSessionLiveTesting.IsEmpty -> Some LiveTestingTarget.Primary
+          | _ -> None
+    | None ->
+      Some LiveTestingTarget.Primary
+
+  let cycleFor (target: LiveTestingTarget) (model: SageFsModel) : Features.LiveTesting.LiveTestCycleState =
+    match target with
+    | LiveTestingTarget.Primary -> model.LiveTesting
+    | LiveTestingTarget.Background sid -> model.PerSessionLiveTesting |> Map.find sid
+
+  /// The `LiveTestCycleState` that belongs to `sessionId`, for reads (dashboard
+  /// per-session summaries, cohort outcome queries, SSE activity). Falls back to
+  /// an EMPTY cycle — never Primary — when the session can't be resolved, so
+  /// querying an unrelated/unknown session can never leak another session's data.
+  let cycleForSession (sessionId: string) (model: SageFsModel) : Features.LiveTesting.LiveTestCycleState =
+    match tryResolveLiveTestingTarget (Some sessionId) model with
+    | Some target -> cycleFor target model
+    | None -> Features.LiveTesting.LiveTestCycleState.empty
+
+  /// The one live-testing state for a session, as every surface shows it —
+  /// tests, discovery, activation, compile block and pending rebuild all come
+  /// from that session's own cycle now (see `cycleForSession`).
   let liveTestActivityFor (sessionId: string) (model: SageFsModel) : Features.LiveTestActivity.LiveTestActivity =
-    let cycle =
-      match Map.tryFind sessionId model.PerSessionLiveTesting with
-      | Some own -> { model.LiveTesting with Compile = own.Compile; PendingRebuild = own.PendingRebuild }
-      | None -> model.LiveTesting
+    let cycle = cycleForSession sessionId model
     Features.LiveTestActivity.LiveTestActivity.activityInput sessionId cycle
     |> Features.LiveTestActivity.LiveTestActivity.decide
 
@@ -362,6 +416,7 @@ module SageFsMsgQueueCoalescing =
     loop (pending.Count - 1)
 
   let private tryCreateBufferedTestResults
+    (sessionId: string option)
     (existing: Features.LiveTesting.TestRunResult array)
     (incoming: Features.LiveTesting.TestRunResult array)
     =
@@ -369,6 +424,7 @@ module SageFsMsgQueueCoalescing =
     match total <= MaxBufferedTestResultCount with
     | true ->
       Some {
+        SessionId = sessionId
         TotalResultCount = total
         Batches = [ existing; incoming ]
       }
@@ -383,8 +439,9 @@ module SageFsMsgQueueCoalescing =
     match total <= MaxBufferedTestResultCount with
     | true ->
       Some {
-        TotalResultCount = total
-        Batches = buffered.Batches @ [ incoming ]
+        buffered with
+          TotalResultCount = total
+          Batches = buffered.Batches @ [ incoming ]
       }
     | false ->
       None
@@ -410,16 +467,21 @@ module SageFsMsgQueueCoalescing =
       tryReplaceLast pending (function
         | SageFsMsg.Event (TuiEvent.WarmupContextUpdated _) -> Replace incoming
         | _ -> Continue)
-    | SageFsMsg.Event (TuiEvent.TestResultsBatch results) ->
+    | SageFsMsg.Event (TuiEvent.TestResultsBatch (sessionId, results)) ->
       tryReplaceLast pending (function
-        | SageFsMsg.Event (TuiEvent.TestResultsBatch existing) ->
-          match tryCreateBufferedTestResults existing results with
+        // Never absorb across sessions — each session's results merge into
+        // its own cycle (SageFsUpdate), so a batch belonging to a different
+        // session must stay a separate message.
+        | SageFsMsg.Event (TuiEvent.TestResultsBatch (existingSid, existing)) when existingSid = sessionId ->
+          match tryCreateBufferedTestResults sessionId existing results with
           | Some buffered -> Replace (SageFsMsg.BufferedTestResults buffered)
           | None -> Stop
-        | SageFsMsg.BufferedTestResults buffered ->
+        | SageFsMsg.BufferedTestResults buffered when buffered.SessionId = sessionId ->
           match tryAppendBufferedTestResults buffered results with
           | Some updated -> Replace (SageFsMsg.BufferedTestResults updated)
           | None -> Stop
+        | SageFsMsg.Event (TuiEvent.TestResultsBatch _)
+        | SageFsMsg.BufferedTestResults _
         | SageFsMsg.Event (TuiEvent.TestRunCompleted _)
         | SageFsMsg.Event (TuiEvent.TestRunStarted _) ->
           Stop
@@ -433,8 +495,9 @@ module SageFsDispatchReduction =
 
   let private tryExtractBufferedTestResults (msg: SageFsMsg) =
     match msg with
-    | SageFsMsg.Event (TuiEvent.TestResultsBatch results) ->
+    | SageFsMsg.Event (TuiEvent.TestResultsBatch (sessionId, results)) ->
       Some {
+        SessionId = sessionId
         TotalResultCount = results.Length
         Batches = [ results ]
       }
@@ -447,15 +510,21 @@ module SageFsDispatchReduction =
     (buffered: BufferedTestResultsPayload)
     (incoming: BufferedTestResultsPayload)
     =
-    let total = buffered.TotalResultCount + incoming.TotalResultCount
-    match total <= MaxDispatchBufferedTestResultCount with
+    // Never merge batches across sessions — each carries its own SessionId,
+    // and results must land in their owning session's cycle (SageFsUpdate).
+    match buffered.SessionId = incoming.SessionId with
+    | false -> None
     | true ->
-      Some {
-        TotalResultCount = total
-        Batches = buffered.Batches @ incoming.Batches
-      }
-    | false ->
-      None
+      let total = buffered.TotalResultCount + incoming.TotalResultCount
+      match total <= MaxDispatchBufferedTestResultCount with
+      | true ->
+        Some {
+          buffered with
+            TotalResultCount = total
+            Batches = buffered.Batches @ incoming.Batches
+        }
+      | false ->
+        None
 
   let reduceDispatchBatch (batch: SageFsMsg array) : SageFsMsg array =
     let reduced = ResizeArray<SageFsMsg>()
@@ -703,52 +772,19 @@ module SageFsUpdate =
     ActiveSession.sessionId model.Sessions.ActiveSessionId
     |> Option.map SessionId.value
 
-  type private LiveTestingTarget =
-    | Primary
-    | Background of string
-
-  let private tryResolveLiveTestingTarget
-    (targetSession: string option)
-    (model: SageFsModel)
-    =
-    let activeSessionId = activeLiveTestingSessionId model
-    let primaryCycleOwnsSession sid =
-      let cycle = model.LiveTesting
-      cycle.TestState.RunPhases |> Map.containsKey sid
-      || (cycle.TestState.TestSessionMap |> Map.exists (fun _ mappedSid -> mappedSid = sid))
-      || (cycle.PendingRebuild |> Option.exists (fun pending -> pending.SessionId = Some sid))
-      || (cycle.QueuedRebuild |> Option.exists (fun queued -> queued.SessionId = Some sid))
-    match targetSession with
-    | Some sid when activeSessionId = Some sid ->
-      Some Primary
-    | Some sid ->
-      match model.PerSessionLiveTesting |> Map.containsKey sid with
-      | true -> Some (Background sid)
-      | false ->
-          match activeSessionId with
-          | None when primaryCycleOwnsSession sid -> Some Primary
-          | None when model.PerSessionLiveTesting.IsEmpty -> Some Primary
-          | _ -> None
-    | None ->
-      Some Primary
-
-  let private getLiveTestingState
-    (target: LiveTestingTarget)
-    (model: SageFsModel)
-    =
-    match target with
-    | Primary -> model.LiveTesting
-    | Background sid -> model.PerSessionLiveTesting |> Map.find sid
+  // Resolution of "which cycle does this session own" is shared with the read
+  // side (`SageFsModel.tryResolveLiveTestingTarget`/`cycleForSession`) — one
+  // source of truth for where a session's live-testing state lives.
 
   let private setLiveTestingState
-    (target: LiveTestingTarget)
+    (target: SageFsModel.LiveTestingTarget)
     (cycle: Features.LiveTesting.LiveTestCycleState)
     (model: SageFsModel)
     =
     match target with
-    | Primary ->
+    | SageFsModel.LiveTestingTarget.Primary ->
       { model with LiveTesting = cycle }
-    | Background sid ->
+    | SageFsModel.LiveTestingTarget.Background sid ->
       { model with
           PerSessionLiveTesting =
             model.PerSessionLiveTesting
@@ -759,9 +795,9 @@ module SageFsUpdate =
     (updateCycle: Features.LiveTesting.LiveTestCycleState -> Features.LiveTesting.LiveTestCycleState * 'result)
     (model: SageFsModel)
     =
-    match tryResolveLiveTestingTarget targetSession model with
+    match SageFsModel.tryResolveLiveTestingTarget targetSession model with
     | Some target ->
-      let current = getLiveTestingState target model
+      let current = SageFsModel.cycleFor target model
       let cycle', result = updateCycle current
       setLiveTestingState target cycle' model, Some result
     | None ->
@@ -826,6 +862,7 @@ module SageFsUpdate =
           PerSessionLiveTesting = parkedBackground }
 
   let private applyBufferedTestResults
+    (sessionId: string option)
     (batches: Features.LiveTesting.TestRunResult array list)
     (model: SageFsModel)
     =
@@ -837,45 +874,51 @@ module SageFsUpdate =
     | _ ->
       let applySw = System.Diagnostics.Stopwatch.StartNew()
       let mergeSw = System.Diagnostics.Stopwatch.StartNew()
-      let merged, changedEntries =
-        Features.LiveTesting.LiveTesting.mergeBufferedResultsWithUpdatedStatusEntriesAndChangedEntries
-          model.LiveTesting.TestState
-          nonEmptyBatches
+      // Merge into the TARGET session's own cycle — never the shared primary
+      // unconditionally — so two sessions' results (even for colliding TestIds
+      // across two checkouts of one repo) can never clobber each other.
+      let model', outcome =
+        tryUpdateLiveTestingState sessionId (fun cycle ->
+          let merged, changedEntries =
+            Features.LiveTesting.LiveTesting.mergeBufferedResultsWithUpdatedStatusEntriesAndChangedEntries
+              cycle.TestState
+              nonEmptyBatches
+          let updatedHistory =
+            nonEmptyBatches
+            |> List.collect Array.toList
+            |> List.fold
+              (fun hist result ->
+                Features.LiveTesting.FlakyDetection.recordResult result.TestId result.Result hist)
+              merged.FlakyHistory
+          let mergedWithHistory = { merged with FlakyHistory = updatedHistory }
+          let refresh =
+            match Array.isEmpty changedEntries with
+            | true -> LiveTestingStatusRefresh.KeepExisting
+            | false -> LiveTestingStatusRefresh.PatchChangedEntries changedEntries
+          let cycle', timings = finalizeLiveTestingState refresh cycle mergedWithHistory
+          cycle', (timings, changedEntries)) model
       mergeSw.Stop()
       Instrumentation.liveTestingBufferedMergeMs.Record(mergeSw.Elapsed.TotalMilliseconds)
-      // Update flaky history with new results
-      let updatedHistory =
-        nonEmptyBatches
-        |> List.collect Array.toList
-        |> List.fold
-          (fun hist result ->
-            Features.LiveTesting.FlakyDetection.recordResult result.TestId result.Result hist)
-          merged.FlakyHistory
-      let mergedWithHistory = { merged with FlakyHistory = updatedHistory }
-      let refresh =
-        match Array.isEmpty changedEntries with
-        | true -> LiveTestingStatusRefresh.KeepExisting
-        | false -> LiveTestingStatusRefresh.PatchChangedEntries changedEntries
-      let lt, timings = finalizeLiveTestingState refresh model.LiveTesting mergedWithHistory
       let pendingResults =
         PendingRunSummary.addBatches nonEmptyBatches model.PendingRunSummary
       applySw.Stop()
       Instrumentation.liveTestingBufferedApplyMs.Record(applySw.Elapsed.TotalMilliseconds)
-      match timings with
-      | Some phaseTimings when applySw.Elapsed.TotalMilliseconds >= 100.0 ->
-        Utils.Log.warn
-          "[LiveTesting] Slow buffered apply: total=%.1fms merge=%.1fms summary=%.1fms narratives=%.1fms annotations=%.1fms batches=%d changed=%d"
-          applySw.Elapsed.TotalMilliseconds
-          mergeSw.Elapsed.TotalMilliseconds
-          phaseTimings.SummaryMs
-          phaseTimings.NarrativesMs
-          phaseTimings.AnnotationsMs
-          nonEmptyBatches.Length
-          changedEntries.Length
-      | _ -> ()
-      { model with
-          LiveTesting = lt
-          PendingRunSummary = pendingResults }, []
+      match outcome with
+      | None -> model, []
+      | Some (timings, changedEntries) ->
+        match timings with
+        | Some phaseTimings when applySw.Elapsed.TotalMilliseconds >= 100.0 ->
+          Utils.Log.warn
+            "[LiveTesting] Slow buffered apply: total=%.1fms merge=%.1fms summary=%.1fms narratives=%.1fms annotations=%.1fms batches=%d changed=%d"
+            applySw.Elapsed.TotalMilliseconds
+            mergeSw.Elapsed.TotalMilliseconds
+            phaseTimings.SummaryMs
+            phaseTimings.NarrativesMs
+            phaseTimings.AnnotationsMs
+            nonEmptyBatches.Length
+            changedEntries.Length
+        | _ -> ()
+        { model' with PendingRunSummary = pendingResults }, []
 
   let update (msg: SageFsMsg) (model: SageFsModel) : SageFsModel * SageFsEffect list =
     match msg with
@@ -966,7 +1009,7 @@ module SageFsUpdate =
         effects |> List.map SageFsEffect.Editor
 
     | SageFsMsg.BufferedTestResults buffered ->
-      applyBufferedTestResults buffered.Batches model
+      applyBufferedTestResults buffered.SessionId buffered.Batches model
 
     | SageFsMsg.Event event ->
       match event with
@@ -1141,12 +1184,6 @@ module SageFsUpdate =
             |> Option.map (fun s -> ActiveSession.Viewing s.Id)
             |> Option.defaultValue ActiveSession.AwaitingSession
           | false -> model.Sessions.ActiveSessionId
-        let clearedMap =
-          model.LiveTesting.TestState.TestSessionMap
-          |> Map.filter (fun _ sid -> sid <> sessionId)
-        let lt =
-          { model.LiveTesting with
-              TestState = { model.LiveTesting.TestState with TestSessionMap = clearedMap } }
         let watcherEffects =
           match stoppedSession with
           | Some s ->
@@ -1158,7 +1195,11 @@ module SageFsUpdate =
               model.Sessions with
                 Sessions = remaining
                 ActiveSessionId = newActive }
-            LiveTesting = lt
+            // Background cycles are owned per-session, so removing the map entry
+            // fully discards the stopped session's tests. When the stopped session
+            // instead owned `model.LiveTesting` (Primary), its stale cycle is left
+            // as-is — it is superseded the moment another session's own routing
+            // (`tryResolveLiveTestingTarget`) claims Primary next, same as before.
             PerSessionLiveTesting = model.PerSessionLiveTesting |> Map.remove sessionId
             Diagnostics = model.Diagnostics |> Map.remove sessionId }, watcherEffects
 
@@ -1265,70 +1306,77 @@ module SageFsUpdate =
           { model with LiveTesting = lt }, []
 
       | TuiEvent.TestsDiscovered (sessionId, tests) ->
-        let state = model.LiveTesting.TestState
-        let retainedSessionMap =
-          state.TestSessionMap
-          |> Map.filter (fun _ sid -> sid <> sessionId)
-        let retainedDiscovered =
-          state.DiscoveredTests
-          |> Array.filter (fun tc ->
-            match Map.tryFind tc.Id state.TestSessionMap with
-            | Some sid -> sid <> sessionId
-            | None -> true)
-        let disc = Features.LiveTesting.LiveTesting.mergeDiscoveredTests retainedDiscovered tests
-        let withSourceMap =
-          match Array.isEmpty state.SourceLocations with
-          | true ->
-            // No tree-sitter yet — map tests to files using module name → file name heuristic
-            let sourceFiles =
-              match model.SessionContext with
-              | Some ctx -> ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
-              | None -> [||]
-            Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles disc
-          | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations state.SourceLocations disc
-        let newSessionMap =
-          tests |> Array.fold (fun m tc -> Map.add tc.Id sessionId m) retainedSessionMap
-        let sessionDiscovery =
-          Map.add sessionId Features.LiveTesting.DiscoveryProgress.Completed state.SessionDiscovery
-        let locs =
-          let emptyGraph : Features.CellDependencyGraph.CellGraph = { Cells = Map.empty; Edges = [] }
-          Features.TestSourceResolver.resolveTestLocations emptyGraph (Array.toList tests)
-        // Zero-test discovery defect: completing discovery with zero tests must
-        // be observable. When discovery has NEVER completed (LastDiscoveryTime
-        // still MinValue), stamping it now is a meaningful change even if the
-        // test lists are both empty — it flips the derived discovery state from
-        // Discovering to ReadyZeroTests. Without this, a zero-test discovery
-        // against an empty state short-circuits and no client can ever learn
-        // that discovery finished.
-        let firstCompletion = state.LastDiscoveryTime = System.DateTimeOffset.MinValue
-        let meaningfulChange =
-          state.DiscoveredTests <> withSourceMap
-          || state.TestSessionMap <> newSessionMap
-          || state.SessionDiscovery <> sessionDiscovery
-          || model.ResolvedSourceLocations <> locs
-          || (firstCompletion && state.Activation = Features.LiveTesting.LiveTestingActivation.Active)
-        match meaningfulChange with
-        | false -> model, []
-        | true ->
-          let lt = recomputeStatuses model.LiveTesting (fun s ->
-            { s with
-                DiscoveredTests = withSourceMap
-                TestSessionMap = newSessionMap
-                LastDiscoveryTime = System.DateTimeOffset.UtcNow
-                DiscoveryGeneration = s.DiscoveryGeneration + 1L
-                SessionDiscovery = sessionDiscovery })
-          let effects =
-            match lt.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
-                  && not (Array.isEmpty tests) with
+        // Discovery is routed to THIS session's own cycle (Primary when it's the
+        // active session, its own Background cycle otherwise — see
+        // `tryUpdateLiveTestingState`/`tryResolveLiveTestingTarget`). Two sessions
+        // never share a `LiveTestState` any more, so two checkouts of the same repo
+        // producing identical `TestId`s can no longer clobber each other's
+        // attribution (the bug `TestSessionMap` used to paper over).
+        let model', outcome =
+          tryUpdateLiveTestingState (Some sessionId) (fun cycle ->
+            let state = cycle.TestState
+            // This cycle belongs wholly to `sessionId` (see above), so a fresh
+            // discovery pass WHOLESALE REPLACES its prior discovered tests —
+            // matching the old TestSessionMap-era code's net effect (which
+            // dropped every entry attributed to `sessionId` before merging in
+            // the new ones). `mergeDiscoveredTests` itself only unions by
+            // TestId and never expires anything, so passing `[||]` as
+            // "existing" is what makes a renamed/removed test actually
+            // disappear instead of accumulating forever.
+            let disc = Features.LiveTesting.LiveTesting.mergeDiscoveredTests [||] tests
+            let withSourceMap =
+              match Array.isEmpty state.SourceLocations with
+              | true ->
+                // No tree-sitter yet — map tests to files using module name → file name heuristic
+                let sourceFiles =
+                  match model.SessionContext with
+                  | Some ctx -> ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
+                  | None -> [||]
+                Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles disc
+              | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations state.SourceLocations disc
+            let sessionDiscovery =
+              Map.add sessionId Features.LiveTesting.DiscoveryProgress.Completed state.SessionDiscovery
+            let locs =
+              let emptyGraph : Features.CellDependencyGraph.CellGraph = { Cells = Map.empty; Edges = [] }
+              Features.TestSourceResolver.resolveTestLocations emptyGraph (Array.toList tests)
+            // Zero-test discovery defect: completing discovery with zero tests must
+            // be observable. When discovery has NEVER completed (LastDiscoveryTime
+            // still MinValue), stamping it now is a meaningful change even if the
+            // test lists are both empty — it flips the derived discovery state from
+            // Discovering to ReadyZeroTests. Without this, a zero-test discovery
+            // against an empty state short-circuits and no client can ever learn
+            // that discovery finished.
+            let firstCompletion = state.LastDiscoveryTime = System.DateTimeOffset.MinValue
+            let meaningfulChange =
+              state.DiscoveredTests <> withSourceMap
+              || state.SessionDiscovery <> sessionDiscovery
+              || model.ResolvedSourceLocations <> locs
+              || (firstCompletion && state.Activation = Features.LiveTesting.LiveTestingActivation.Active)
+            match meaningfulChange with
+            | false -> cycle, None
             | true ->
-              // Only trigger execution for the INCOMING session's tests, not all discovered.
-              // Other sessions' tests belong to different workers and would return NotRun.
-              let incomingIds = tests |> Array.map (fun tc -> tc.Id)
-              Features.LiveTesting.LiveTestCycleState.triggerExecutionForAffected
-                incomingIds Features.LiveTesting.RunTrigger.FileSave (Some sessionId) lt
-              |> List.map SageFsEffect.TestCycle
-            | false -> []
-          { model with LiveTesting = lt; ResolvedSourceLocations = locs }, effects
+              let cycle' = recomputeStatuses cycle (fun s ->
+                { s with
+                    DiscoveredTests = withSourceMap
+                    LastDiscoveryTime = System.DateTimeOffset.UtcNow
+                    DiscoveryGeneration = s.DiscoveryGeneration + 1L
+                    SessionDiscovery = sessionDiscovery })
+              let effects =
+                match cycle'.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active
+                      && not (Array.isEmpty tests) with
+                | true ->
+                  // Only trigger execution for the INCOMING session's tests, not all discovered.
+                  // Other sessions' tests belong to different workers and would return NotRun.
+                  let incomingIds = tests |> Array.map (fun tc -> tc.Id)
+                  Features.LiveTesting.LiveTestCycleState.triggerExecutionForAffected
+                    incomingIds Features.LiveTesting.RunTrigger.FileSave (Some sessionId) cycle'
+                  |> List.map SageFsEffect.TestCycle
+                | false -> []
+              cycle', Some (effects, locs)) model
+        match outcome with
+        | Some (Some (effects, locs)) -> { model' with ResolvedSourceLocations = locs }, effects
+        | Some None -> model, []
+        | None -> model, []
 
       | TuiEvent.TestSourceLocations locations ->
         { model with ResolvedSourceLocations = locations }, []
@@ -1349,8 +1397,8 @@ module SageFsUpdate =
             cycle', ()) model
         model', []
 
-      | TuiEvent.TestResultsBatch results ->
-        applyBufferedTestResults [ results ] model
+      | TuiEvent.TestResultsBatch (sessionId, results) ->
+        applyBufferedTestResults sessionId [ results ] model
 
       | TuiEvent.TestRunCompleted sessionId ->
         let model', replayEffects =
@@ -1412,8 +1460,8 @@ module SageFsUpdate =
         let lt =
           refreshStatusesForChangedIds model.LiveTesting changedIds (fun s ->
             { s with AffectedTests = changedIds })
-        let targetSession =
-          testIds |> Array.tryPick (fun tid -> Map.tryFind tid lt.TestState.TestSessionMap)
+        // Primary belongs wholly to one session (see `LiveTestState.ownerSessionId`).
+        let targetSession = Features.LiveTesting.LiveTestState.ownerSessionId lt.TestState
         let effects =
           Features.LiveTesting.LiveTestCycleState.triggerExecutionForAffected
             testIds Features.LiveTesting.RunTrigger.FileSave targetSession lt
@@ -1423,42 +1471,35 @@ module SageFsUpdate =
       | TuiEvent.RunTestsRequested tests ->
         let testIds = tests |> Array.map (fun t -> t.Id)
         let changedIds = Set.ofArray testIds
+        // Primary belongs wholly to one session (see `LiveTestState.ownerSessionId`);
+        // compute it up front from the state BEFORE this run's phase update — the
+        // owner doesn't change just because a run started.
+        let targetSession = Features.LiveTesting.LiveTestState.ownerSessionId model.LiveTesting.TestState
         let lt =
           refreshStatusesForChangedIds model.LiveTesting changedIds (fun s ->
             let phase, gen = TestRunPhase.startRun s.LastGeneration
-            let sessionIds =
-              testIds
-              |> Array.choose (fun tid -> Map.tryFind tid s.TestSessionMap)
-              |> Array.distinct
             let phases =
-              sessionIds |> Array.fold (fun m sid -> Map.add sid phase m) s.RunPhases
+              match targetSession with
+              | Some sid -> s.RunPhases |> Map.add sid phase
+              | None -> s.RunPhases
             { s with LastGeneration = gen; AffectedTests = changedIds; RunPhases = phases })
         let effects =
           match Array.isEmpty tests with
           | true -> []
           | false ->
-            let sessionMap = lt.TestState.TestSessionMap
-            tests
-            |> Array.groupBy (fun tc ->
-              match Map.tryFind tc.Id sessionMap with
-              | Some sid -> sid
-              | None -> "")
-            |> Array.toList
-            |> List.map (fun (sid, groupTests) ->
-              let targetSession = match System.String.IsNullOrEmpty sid with | true -> None | false -> Some sid
-              let sessionMaps =
-                match targetSession |> Option.bind (fun s -> Map.tryFind s lt.InstrumentationMaps) with
-                | Some maps -> maps
-                | None -> lt.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-              Features.LiveTesting.TestCycleEffect.RunAffectedTests {
-                Tests = groupTests
+            let sessionMaps =
+              match targetSession |> Option.bind (fun s -> Map.tryFind s lt.InstrumentationMaps) with
+              | Some maps -> maps
+              | None -> lt.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+            [ Features.LiveTesting.TestCycleEffect.RunAffectedTests {
+                Tests = tests
                 Trigger = Features.LiveTesting.RunTrigger.ExplicitRun
                 TreeSitterElapsed = System.TimeSpan.Zero
                 FcsElapsed = System.TimeSpan.Zero
                 SessionId = targetSession
                 InstrumentationMaps = sessionMaps
               }
-              |> SageFsEffect.TestCycle)
+              |> SageFsEffect.TestCycle ]
         { model with LiveTesting = lt }, effects
 
       | TuiEvent.CoverageUpdated coverage ->
@@ -1560,19 +1601,12 @@ module SageFsUpdate =
           match Array.isEmpty lt.TestState.DiscoveredTests with
           | true -> [SageFsEffect.TestCycle Features.LiveTesting.TestCycleEffect.RequestInitialDiscovery]
           | false ->
-            let sessionMap = lt.TestState.TestSessionMap
-            lt.TestState.DiscoveredTests
-            |> Array.groupBy (fun tc ->
-              match Map.tryFind tc.Id sessionMap with
-              | Some sid -> sid
-              | None -> "")
-            |> Array.toList
-            |> List.collect (fun (sid, groupTests) ->
-              let targetSession = match System.String.IsNullOrEmpty sid with | true -> None | false -> Some sid
-              let groupIds = groupTests |> Array.map (fun tc -> tc.Id)
-              Features.LiveTesting.LiveTestCycleState.triggerExecutionForAffected
-                groupIds Features.LiveTesting.RunTrigger.ExplicitRun targetSession lt
-              |> List.map SageFsEffect.TestCycle)
+            // Primary belongs wholly to one session (see `LiveTestState.ownerSessionId`).
+            let targetSession = Features.LiveTesting.LiveTestState.ownerSessionId lt.TestState
+            let allIds = lt.TestState.DiscoveredTests |> Array.map (fun tc -> tc.Id)
+            Features.LiveTesting.LiveTestCycleState.triggerExecutionForAffected
+              allIds Features.LiveTesting.RunTrigger.ExplicitRun targetSession lt
+            |> List.map SageFsEffect.TestCycle
         let watcherEffects =
           model.Sessions.Sessions
           |> List.choose (fun session ->
@@ -2625,7 +2659,7 @@ module SageFsEffectHandler =
                     use resultFlusher =
                       new BatchFlusher<Features.LiveTesting.TestRunResult>(25, 200, fun batch ->
                         Instrumentation.testResultBatchSize.Record(int64 batch.Length)
-                        dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch batch))
+                        dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch (targetSession, batch)))
                       )
                     let onResult (result: Features.LiveTesting.TestRunResult) =
                       receivedIds.Add(result.TestId) |> ignore
@@ -2660,7 +2694,7 @@ module SageFsEffectHandler =
                     match missing.Length with
                     | 0 -> ()
                     | _ ->
-                      dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch missing))
+                      dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch (targetSession, missing)))
                       Utils.Log.warn
                         "[LiveTesting] %d of %d tests never reported: %s"
                         missing.Length tests.Length (Features.LiveTesting.NoResultReason.describe reason)
@@ -2678,7 +2712,7 @@ module SageFsEffectHandler =
                           Timestamp = System.DateTimeOffset.UtcNow
                           Output = None }
                         : Features.LiveTesting.TestRunResult)
-                    dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch notRunResults))
+                    dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch (targetSession, notRunResults)))
                 | Error _ ->
                   let notRunResults =
                     tests |> Array.map (fun tc ->
@@ -2688,7 +2722,7 @@ module SageFsEffectHandler =
                         Timestamp = System.DateTimeOffset.UtcNow
                         Output = None }
                       : Features.LiveTesting.TestRunResult)
-                  dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch notRunResults))
+                  dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch (targetSession, notRunResults)))
                 match handoff with
                 | RunHandoff.LeavesCompletionToSuccessor ->
                   // Superseded: the replacing run owns this session's run phase,
@@ -2737,7 +2771,7 @@ module SageFsEffectHandler =
                   Utils.Log.warn
                     "[LiveTesting] Transport failure after all tests reported: %s" ex.Message
                 | _ ->
-                  dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch errResults))
+                  dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch (targetSession, errResults)))
                   Utils.Log.warn
                     "[LiveTesting] Transport failure — %d of %d tests never reported: %s"
                     errResults.Length tests.Length ex.Message

@@ -93,10 +93,7 @@ let private mkFakeRuntime
 /// attributed to as `Running` that generation.
 let private startRunReducer (tests: TestCase array) (state: LiveTestState) : LiveTestState =
   let gen = RunGeneration.next state.LastGeneration
-  let sessionIds =
-    tests
-    |> Array.choose (fun tc -> Map.tryFind tc.Id state.TestSessionMap)
-    |> Array.distinct
+  let sessionIds = LiveTestState.ownerSessionId state |> Option.toArray
   let phases = sessionIds |> Array.fold (fun m sid -> Map.add sid (TestRunPhase.Running gen) m) state.RunPhases
   { state with LastGeneration = gen; RunPhases = phases }
 
@@ -108,10 +105,7 @@ let private completeRunReducer
   (tests: TestCase array)
   (state: LiveTestState)
   : LiveTestState =
-  let sessionIds =
-    tests
-    |> Array.choose (fun tc -> Map.tryFind tc.Id state.TestSessionMap)
-    |> Array.distinct
+  let sessionIds = LiveTestState.ownerSessionId state |> Option.toArray
   let phases = sessionIds |> Array.fold (fun m sid -> Map.add sid TestRunPhase.Idle m) state.RunPhases
   let lastResults =
     results
@@ -230,7 +224,7 @@ let tests =
         let initial =
           { LiveTestState.empty with
               DiscoveredTests = [| tc1 |]
-              TestSessionMap = Map.ofList [ tc1.Id, "sess1" ] }
+              SessionDiscovery = Map.ofList [ "sess1", DiscoveryProgress.Completed ] }
         let runtime, dispatchCount = mkFakeRuntime initial (fun _apply tests state -> startRunReducer tests state)
         let! result = runTestsInSession runtime missingObservation "sess1" [ tc1.Id ]
         match result with
@@ -245,7 +239,7 @@ let tests =
         let initial =
           { LiveTestState.empty with
               DiscoveredTests = [| tc1 |]
-              TestSessionMap = Map.ofList [ tc1.Id, "sess1" ] }
+              SessionDiscovery = Map.ofList [ "sess1", DiscoveryProgress.Completed ] }
         let runtime, dispatchCount = mkFakeRuntime initial (fun _apply tests state -> startRunReducer tests state)
         let! result = runTestsInSession runtime (warmingUpObservation "sess1") "sess1" [ tc1.Id ]
         match result with
@@ -269,7 +263,7 @@ let tests =
         let initial =
           { LiveTestState.empty with
               DiscoveredTests = [| tc1 |]
-              TestSessionMap = Map.ofList [ tc1.Id, "otherSession" ] }
+              SessionDiscovery = Map.ofList [ "otherSession", DiscoveryProgress.Completed ] }
         let runtime, dispatchCount = mkFakeRuntime initial (fun _apply tests state -> startRunReducer tests state)
         let! result = runTestsInSession runtime (trustedObservation "sess1") "sess1" [ tc1.Id ]
         match result with
@@ -287,7 +281,7 @@ let tests =
         let initial =
           { LiveTestState.empty with
               DiscoveredTests = [| tc1; tc2 |]
-              TestSessionMap = Map.ofList [ tc1.Id, "sess1"; tc2.Id, "sess1" ] }
+              SessionDiscovery = Map.ofList [ "sess1", DiscoveryProgress.Completed ] }
         // `onRunTestsRequested` plays the daemon's reducer: it starts the run
         // synchronously (bumping the generation, marking sess1 Running) and
         // schedules a background fiber that, shortly after, applies the

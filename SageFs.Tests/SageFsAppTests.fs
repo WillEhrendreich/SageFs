@@ -871,7 +871,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       mkPassedRunResult "test.batch.b" "test.batch.b" 7.0
     |]
     let updated, effects =
-      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch results)) model
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (None, results))) model
     updated.RecentOutput.ActiveCount(updated.Sessions.ActiveSessionId)
     |> Expect.equal "streaming batches should not spam the visible output pane" 0
     updated.PendingRunSummary
@@ -904,9 +904,9 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       mkSkippedRunResult "test.summary.skip" "test.summary.skip" "quarantined"
     |]
     let model1, _ =
-      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch batch1)) model0
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch1))) model0
     let model2, _ =
-      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch batch2)) model1
+      SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch2))) model1
     let completed, effects =
       SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestRunCompleted (Some "s"))) model2
     completed.RecentOutput.ActiveCount(completed.Sessions.ActiveSessionId)
@@ -953,7 +953,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
                     DiscoveredTests = discovered
                     RunPhases = Map.ofList [ sid, RunningButEdited generation ]
                     LastGeneration = generation
-                    TestSessionMap = Map.ofList [ discovered.[0].Id, sid ] }
+                    SessionDiscovery = Map.ofList [ sid, DiscoveryProgress.Completed ] }
               ActiveFile = Some "Replay.fs"
               LatestContent = Some content
               LatestAnalysisIdentity = Some identity
@@ -1028,7 +1028,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
                 DiscoveredTests = backgroundTests
                 RunPhases = Map.ofList [ backgroundSid, RunningButEdited generation ]
                 LastGeneration = generation
-                TestSessionMap = Map.ofList [ backgroundTests.[0].Id, backgroundSid ] }
+                SessionDiscovery = Map.ofList [ backgroundSid, DiscoveryProgress.Completed ] }
           ActiveFile = Some "Background.fs"
           LatestContent = Some content
           LatestAnalysisIdentity = Some identity
@@ -1289,6 +1289,10 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.isEmpty "duplicate discovery should not retrigger execution"
 
   testCase "same-session rediscovery replaces prior session-scoped tests when identity changes" <| fun _ ->
+    // s-1 and s-2 each get their own cycle now (see `SageFsModel.cycleForSession`)
+    // — a real `SessionSwitched` establishes that separation the way the
+    // daemon actually does, rather than relying on the routing helper's
+    // bootstrap fallback for two sessions that never became active.
     let sessionOneOriginal =
       mkLiveTestCase
         "test.rediscovery.original"
@@ -1305,35 +1309,59 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         "SageFs.Tests.OtherModule.tests/keep"
         "keep"
 
+    // SessionSwitched validates its toId as a real SessionId (8 hex chars),
+    // so these must be generated ids, not the bare "s-1"/"s-2" placeholders
+    // TestsDiscovered's unchecked `sessionId: string` would tolerate.
+    let s1 = WorkerProtocol.SessionId.value (WorkerProtocol.SessionId.newId ())
+    let s2 = WorkerProtocol.SessionId.value (WorkerProtocol.SessionId.newId ())
+
+    let m0, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (TuiEvent.SessionSwitched (None, s1)))
+        (SageFsModel.initial())
+
     let model1, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-1", [| sessionOneOriginal |])))
-        (SageFsModel.initial())
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered (s1, [| sessionOneOriginal |])))
+        m0
+
+    let m1a, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (TuiEvent.SessionSwitched (Some s1, s2)))
+        model1
 
     let model2, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-2", [| otherSession |])))
-        model1
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered (s2, [| otherSession |])))
+        m1a
+
+    let m2a, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (TuiEvent.SessionSwitched (Some s2, s1)))
+        model2
 
     let model3, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.TestsDiscovered ("s-1", [| sessionOneUpdated |])))
-        model2
+        (SageFsMsg.Event (TuiEvent.TestsDiscovered (s1, [| sessionOneUpdated |])))
+        m2a
 
-    model3.LiveTesting.TestState.DiscoveredTests
-    |> Expect.hasLength "rediscovery should keep one test for each session" 2
+    let s1Tests = (SageFsModel.cycleForSession s1 model3).TestState.DiscoveredTests
+    let s2Tests = (SageFsModel.cycleForSession s2 model3).TestState.DiscoveredTests
 
-    model3.LiveTesting.TestState.DiscoveredTests
+    s1Tests
+    |> Expect.hasLength "s-1's rediscovery should keep exactly its own one (updated) test" 1
+    s1Tests
     |> Array.exists (fun tc -> tc.Id = sessionOneUpdated.Id)
     |> Expect.isTrue "rediscovery should keep the updated test identity for the session"
-
-    model3.LiveTesting.TestState.DiscoveredTests
+    s1Tests
     |> Array.exists (fun tc -> tc.Id = sessionOneOriginal.Id)
     |> Expect.isFalse "rediscovery should drop the superseded test identity for the same session"
 
-    model3.LiveTesting.TestState.TestSessionMap
-    |> Map.tryFind sessionOneOriginal.Id
-    |> Expect.isNone "superseded test identity should be removed from the session map"
+    s2Tests
+    |> Expect.hasLength "s-2's own test must be untouched by s-1's rediscovery" 1
+    s2Tests
+    |> Array.exists (fun tc -> tc.Id = otherSession.Id)
+    |> Expect.isTrue "s-2's test should still be there, unaffected by s-1's rediscovery"
 
   testCase "duplicate TestLocationsDetected preserves model identity when source truth is unchanged" <| fun _ ->
     let discovered =
@@ -1370,12 +1398,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       mkPassedRunResult "test.queue.d" "test.queue.d" 2.0
     |]
     let pending = ResizeArray<SageFsMsg>()
-    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch batch1))
+    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch1)))
 
     let absorbed =
       SageFsMsgQueueCoalescing.tryAbsorbPending
         pending
-        (SageFsMsg.Event (TuiEvent.TestResultsBatch batch2))
+        (SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch2)))
 
     absorbed
     |> Expect.isTrue "result batches from the same pending run should merge so redraw work collapses without dropping any tests"
@@ -1400,13 +1428,13 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       mkPassedRunResult "test.queue.boundary.b" "test.queue.boundary.b" 6.0
     |]
     let pending = ResizeArray<SageFsMsg>()
-    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch batch1))
+    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch1)))
     pending.Add(SageFsMsg.Event (TuiEvent.TestRunCompleted (Some "s-queue")))
 
     let absorbed =
       SageFsMsgQueueCoalescing.tryAbsorbPending
         pending
-        (SageFsMsg.Event (TuiEvent.TestResultsBatch batch2))
+        (SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch2)))
 
     absorbed
     |> Expect.isFalse "a completion marker closes the pending run segment, so later batches must stay separate"
@@ -1423,9 +1451,9 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         let name = sprintf "test.queue.medium.b.%d" i
         mkPassedRunResult name name 1.0)
     let pending = ResizeArray<SageFsMsg>()
-    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch batch1))
+    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch1)))
 
-    let incoming = SageFsMsg.Event (TuiEvent.TestResultsBatch batch2)
+    let incoming = SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch2))
     let absorbed =
       SageFsMsgQueueCoalescing.tryAbsorbPending pending incoming
 
@@ -1460,9 +1488,9 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         let name = sprintf "test.queue.large.b.%d" i
         mkPassedRunResult name name 1.0)
     let pending = ResizeArray<SageFsMsg>()
-    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch batch1))
+    pending.Add(SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch1)))
 
-    let incoming = SageFsMsg.Event (TuiEvent.TestResultsBatch batch2)
+    let incoming = SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch2))
     let absorbed =
       SageFsMsgQueueCoalescing.tryAbsorbPending pending incoming
 
@@ -1478,7 +1506,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let allNames =
       pending
       |> Seq.collect (function
-        | SageFsMsg.Event (TuiEvent.TestResultsBatch batch) -> batch |> Seq.map (fun result -> result.TestName)
+        | SageFsMsg.Event (TuiEvent.TestResultsBatch (_, batch)) -> batch |> Seq.map (fun result -> result.TestName)
         | _ -> Seq.empty)
       |> Seq.toArray
 
@@ -1513,6 +1541,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let updated, effects =
       SageFsUpdate.update
         (SageFsMsg.BufferedTestResults {
+          SessionId = Some "s"
           TotalResultCount = batch1.Length + batch2.Length
           Batches = [ batch1; batch2 ]
         })
@@ -1625,11 +1654,11 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let batch4 = [| mkPassedRunResult "test.reduce.d" "test.reduce.d" 1.0 |]
     let reduced =
       [|
-        SageFsMsg.Event (TuiEvent.TestResultsBatch batch1)
-        SageFsMsg.BufferedTestResults { TotalResultCount = batch2.Length; Batches = [ batch2 ] }
-        SageFsMsg.BufferedTestResults { TotalResultCount = batch3.Length; Batches = [ batch3 ] }
+        SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch1))
+        SageFsMsg.BufferedTestResults { SessionId = None; TotalResultCount = batch2.Length; Batches = [ batch2 ] }
+        SageFsMsg.BufferedTestResults { SessionId = None; TotalResultCount = batch3.Length; Batches = [ batch3 ] }
         SageFsMsg.Editor EditorAction.ListSessions
-        SageFsMsg.Event (TuiEvent.TestResultsBatch batch4)
+        SageFsMsg.Event (TuiEvent.TestResultsBatch (None, batch4))
       |]
       |> SageFsDispatchReduction.reduceDispatchBatch
 

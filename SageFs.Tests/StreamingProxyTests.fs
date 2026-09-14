@@ -45,7 +45,7 @@ let private uiStatuses (phase: TestRunPhase) (tests: TestCase array) (results: T
   let state =
     { LiveTestState.empty with
         DiscoveredTests = tests
-        TestSessionMap = tests |> Array.map (fun t -> t.Id, sid) |> Map.ofArray
+        SessionDiscovery = Map.ofList [ sid, DiscoveryProgress.Completed ]
         AffectedTests =
           match phase with
           | TestRunPhase.Idle -> Set.empty

@@ -1478,8 +1478,6 @@ type LiveTestState = {
   DetectedProviders: ProviderDescription list
   AssemblyLoadErrors: AssemblyLoadError list
   FlakyHistory: Map<TestId, ResultWindow>
-  /// Maps each TestId to the session that discovered it, enabling per-session execution routing.
-  TestSessionMap: Map<TestId, string>
   /// Per-test packed coverage bitmaps from IL probe hits, keyed by TestId.
   /// All tests in the same batch share the same bitmap (conservative: any test might have hit any probe).
   TestCoverageBitmaps: Map<TestId, CoverageBitmap>
@@ -1589,7 +1587,6 @@ module LiveTestState =
     DetectedProviders = []
     AssemblyLoadErrors = []
     FlakyHistory = Map.empty
-    TestSessionMap = Map.empty
     TestCoverageBitmaps = Map.empty
     Cached = CachedViews.empty
     LastDiscoveryTime = System.DateTimeOffset.MinValue
@@ -1618,20 +1615,23 @@ module LiveTestState =
         state.DiscoveredTests
         |> Array.choose (fun test -> Map.tryFind test.Id index)
 
-  /// Filter StatusEntries to only include tests belonging to the given session.
-  /// When sessionId is empty or no session map entries exist, returns all entries (backwards compat).
-  /// When sessionId is provided and TestSessionMap is populated, tests with no session attribution
-  /// are excluded (not leaked) — they belong to an untracked path and should not bleed across sessions.
-  let statusEntriesForSession (sessionId: string) (state: LiveTestState) : TestStatusEntry array =
-    let entries = orderedStatusEntries state
-    match System.String.IsNullOrEmpty sessionId || Map.isEmpty state.TestSessionMap with
-    | true -> entries
-    | false ->
-      entries
-      |> Array.filter (fun e ->
-        match Map.tryFind e.TestId state.TestSessionMap with
-        | Some sid -> sid = sessionId
-        | None -> false)
+  /// The session this cycle's `LiveTestState` belongs to, derived from
+  /// `SessionDiscovery` (populated exclusively by that session's own
+  /// `TestsDiscovered` merge — see `SageFsApp.fs`'s `TestsDiscovered`
+  /// handler, which always routes into the target session's own cycle).
+  /// A correctly-routed cycle carries exactly one key here; an empty or
+  /// not-yet-attributed cycle returns `None`.
+  let ownerSessionId (state: LiveTestState) : string option =
+    state.SessionDiscovery |> Map.toList |> List.tryHead |> Option.map fst
+
+  /// Every session now owns its own `LiveTestState` (routed by
+  /// `SageFsApp.fs`'s per-session cycle resolution — see
+  /// `SageFsModel.cycleForSession`), so a state handed to this function
+  /// already belongs wholly to one session: there is nothing left to
+  /// filter. `sessionId` is kept for source compatibility with existing
+  /// callers (some of which still pass "" for "give me everything").
+  let statusEntriesForSession (_sessionId: string) (state: LiveTestState) : TestStatusEntry array =
+    orderedStatusEntries state
 
   let withStatusEntries (entries: TestStatusEntry array) (state: LiveTestState) : LiveTestState =
     { state with StatusIndex = TestStatusIndex.fromEntries entries }
@@ -2344,8 +2344,9 @@ module LiveTesting =
         | None -> None
       match Set.contains testId state.AffectedTests with
       | true ->
-        let testSession = Map.tryFind testId state.TestSessionMap
-        let sessionRunning = TestRunPhase.isSessionRunning testSession state.RunPhases
+        // `state` belongs wholly to one session (see `LiveTestState.ownerSessionId`),
+        // so "is the owning session running" is just "is anything in this cycle running."
+        let sessionRunning = TestRunPhase.isAnyRunning state.RunPhases
         match sessionRunning with
         | true ->
           resultStatus |> Option.defaultValue TestRunStatus.Running
@@ -3564,37 +3565,31 @@ module TestCycleEffects =
         | false ->
           let tsElapsed = TestCycleTiming.accumulatedTsElapsed lastTiming
           let fcsElapsed = TestCycleTiming.accumulatedFcsElapsed lastTiming
-          // Group affected tests by session, emit one effect per session
+          // `state` belongs wholly to one session (see `LiveTestState.ownerSessionId`),
+          // so every affected test in `filtered` targets that one session — no grouping needed.
+          let targetSession = LiveTestState.ownerSessionId state
           let effects =
-            filtered
-            |> Array.groupBy (fun tc ->
-              match Map.tryFind tc.Id state.TestSessionMap with
-              | Some sid -> sid
-              | None -> "")
-            |> Array.toList
-            |> List.choose (fun (sid, groupTests) ->
-              let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
-              match TestRunPhase.isSessionRunning targetSession state.RunPhases with
-              | true -> None
-              | false ->
-                let sessionMaps =
-                  match targetSession |> Option.bind (fun s -> Map.tryFind s instrumentationMaps) with
-                  | Some maps -> maps
-                  | None -> instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-                let isCompiled =
-                  changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
-                  && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
-                let req = {
-                  Tests = groupTests
-                  Trigger = trigger
-                  TreeSitterElapsed = tsElapsed
-                  FcsElapsed = fcsElapsed
-                  SessionId = targetSession
-                  InstrumentationMaps = sessionMaps
-                }
-                match isCompiled && trigger <> RunTrigger.Keystroke with
-                | true -> Some (TestCycleEffect.RequestRebuild(0L, req))
-                | false -> Some (TestCycleEffect.RunAffectedTests req))
+            match TestRunPhase.isSessionRunning targetSession state.RunPhases with
+            | true -> []
+            | false ->
+              let sessionMaps =
+                match targetSession |> Option.bind (fun s -> Map.tryFind s instrumentationMaps) with
+                | Some maps -> maps
+                | None -> instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+              let isCompiled =
+                changedFilePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
+                && not (changedFilePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
+              let req = {
+                Tests = filtered
+                Trigger = trigger
+                TreeSitterElapsed = tsElapsed
+                FcsElapsed = fcsElapsed
+                SessionId = targetSession
+                InstrumentationMaps = sessionMaps
+              }
+              match isCompiled && trigger <> RunTrigger.Keystroke with
+              | true -> [ TestCycleEffect.RequestRebuild(0L, req) ]
+              | false -> [ TestCycleEffect.RunAffectedTests req ]
           { Decision = Some decision
             Effects = effects }
 
@@ -3634,29 +3629,23 @@ module TestCycleEffects =
       | false ->
         let tsElapsed = TestCycleTiming.accumulatedTsElapsed lastTiming
         let fcsElapsed = TestCycleTiming.accumulatedFcsElapsed lastTiming
-        filtered
-        |> Array.groupBy (fun tc ->
-          match Map.tryFind tc.Id state.TestSessionMap with
-          | Some sid -> sid
-          | None -> "")
-        |> Array.toList
-        |> List.choose (fun (sid, groupTests) ->
-          let targetSession = if System.String.IsNullOrEmpty sid then None else Some sid
-          match TestRunPhase.isSessionRunning targetSession state.RunPhases with
-          | true -> None
-          | false ->
-            let sessionMaps =
-              match targetSession |> Option.bind (fun s -> Map.tryFind s instrumentationMaps) with
-              | Some maps -> maps
-              | None -> instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-            Some (TestCycleEffect.RequestRebuild(0L, {
-              Tests = groupTests
+        // `state` belongs wholly to one session (see `LiveTestState.ownerSessionId`).
+        let targetSession = LiveTestState.ownerSessionId state
+        match TestRunPhase.isSessionRunning targetSession state.RunPhases with
+        | true -> []
+        | false ->
+          let sessionMaps =
+            match targetSession |> Option.bind (fun s -> Map.tryFind s instrumentationMaps) with
+            | Some maps -> maps
+            | None -> instrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+          [ TestCycleEffect.RequestRebuild(0L, {
+              Tests = filtered
               Trigger = trigger
               TreeSitterElapsed = tsElapsed
               FcsElapsed = fcsElapsed
               SessionId = targetSession
               InstrumentationMaps = sessionMaps
-            })))
+            }) ]
 
 /// Adaptive debounce configuration.
 type AdaptiveDebounceConfig = {
@@ -4578,6 +4567,11 @@ module FileAnnotations =
     (state: LiveTestState)
     =
     let entries = LiveTestState.orderedStatusEntries state
+    // `state` belongs wholly to one session (see `LiveTestState.ownerSessionId`).
+    let owningPhase =
+      match LiveTestState.ownerSessionId state with
+      | Some sid -> state.RunPhases |> Map.tryFind sid |> Option.defaultValue Idle
+      | None -> if TestRunPhase.isAnyRunning state.RunPhases then RunningButEdited RunGeneration.zero else Idle
     let fileEntries =
       entries
       |> Array.choose (fun e ->
@@ -4598,14 +4592,7 @@ module FileAnnotations =
           TestId = worst.TestId
           DisplayName = worst.DisplayName
           Status = worst.Status
-          Freshness =
-            let testSession = Map.tryFind worst.TestId state.TestSessionMap
-            let phase =
-              match testSession with
-              | Some sid -> state.RunPhases |> Map.tryFind sid |> Option.defaultValue Idle
-              | None -> if TestRunPhase.isAnyRunning state.RunPhases then RunningButEdited RunGeneration.zero else Idle
-            AnnotationFreshness.fromPhaseAndResult
-              phase worst.Status })
+          Freshness = AnnotationFreshness.fromPhaseAndResult owningPhase worst.Status })
       |> Array.sortBy (fun a -> a.Line)
     let codeLenses =
       fileEntries
@@ -5081,7 +5068,6 @@ type SessionInvariantViolation = {
   Message: string
   RunPhaseKeys: Set<string>
   InstrumentationMapKeys: Set<string>
-  TestSessionMapKeys: Set<string>
 }
 
 module SessionInvariant =
@@ -5090,7 +5076,6 @@ module SessionInvariant =
   let validate (state: LiveTestState) (instrMaps: Map<string, InstrumentationMap array>) : SessionInvariantViolation option =
     let runPhaseKeys = state.RunPhases |> Map.keys |> Set.ofSeq
     let instrMapKeys = instrMaps |> Map.keys |> Set.ofSeq
-    let sessionMapKeys = state.TestSessionMap |> Map.keys |> Set.ofSeq |> Set.map (fun (TestId.TestId tid) -> tid)
     match Set.isEmpty runPhaseKeys || Set.isEmpty instrMapKeys with
     | true -> None
     | false ->
@@ -5100,6 +5085,5 @@ module SessionInvariant =
           Message = sprintf "Session key mismatch: RunPhases has %A, InstrumentationMaps has %A" runPhaseKeys instrMapKeys
           RunPhaseKeys = runPhaseKeys
           InstrumentationMapKeys = instrMapKeys
-          TestSessionMapKeys = sessionMapKeys
         }
       | false -> None

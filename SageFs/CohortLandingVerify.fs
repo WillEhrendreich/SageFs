@@ -133,14 +133,13 @@ let runTestsInSession
     let testState = elmRuntime.GetModel().LiveTesting.TestState
 
     // Fail closed on a caller/routing mismatch instead of silently running
-    // a different session's tests (or a subset of them): every requested
-    // test must already be attributed to `sessionId` by discovery.
+    // a different session's tests (or a subset of them): Primary now belongs
+    // wholly to one session (`LiveTestState.ownerSessionId`), so either every
+    // requested test is attributed to `sessionId` or none of them are.
     let notAttributedToSession =
-      tests
-      |> List.filter (fun testId ->
-        match Map.tryFind testId testState.TestSessionMap with
-        | Some mappedSessionId -> mappedSessionId <> sessionId
-        | None -> true)
+      match LiveTestState.ownerSessionId testState = Some sessionId with
+      | true -> []
+      | false -> tests
 
     match notAttributedToSession with
     | _ :: _ ->

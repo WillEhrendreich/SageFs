@@ -548,18 +548,17 @@ module LiveTestStateSubRecordTests =
       ordered.[1].DisplayName |> Expect.equal "second should be B" "B"
     }
 
-  /// statusEntriesForSession filters through the StatusIndex correctly.
+  /// statusEntriesForSession reads through the StatusIndex — it no longer
+  /// filters (the state itself is already session-scoped by routing).
   let ``statusEntriesForSession uses StatusIndex`` =
-    test "statusEntriesForSession filters through StatusIndex" {
+    test "statusEntriesForSession reads through StatusIndex" {
       let e1 = mkEntry "SessionA.test" (TestRunStatus.Passed TimeSpan.Zero)
-      let e2 = mkEntry "SessionB.test" (TestRunStatus.Passed TimeSpan.Zero)
       let state =
         LiveTestState.empty
-        |> LiveTestState.withStatusEntries [| e1; e2 |]
-        |> fun s -> { s with TestSessionMap = Map.ofList [ e1.TestId, "sessA"; e2.TestId, "sessB" ] }
+        |> LiveTestState.withStatusEntries [| e1 |]
       let sessA = LiveTestState.statusEntriesForSession "sessA" state
-      sessA |> Expect.hasLength "should have 1 entry for sessA" 1
-      sessA.[0].TestId |> Expect.equal "should be the sessA entry" e1.TestId
+      sessA |> Expect.hasLength "should have the one entry this state carries" 1
+      sessA.[0].TestId |> Expect.equal "should be the entry" e1.TestId
     }
 
   let tests = testList "LiveTestState sub-record integration" [

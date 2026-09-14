@@ -749,7 +749,7 @@ let stream5Tests =
                       { LiveTestState.empty with
                           Activation = LiveTestingActivation.Active
                           DiscoveredTests = [| tcA |]
-                          TestSessionMap = Map.ofList [ tcA.Id, aSid ] } }
+                          SessionDiscovery = Map.ofList [ aSid, DiscoveryProgress.Completed ] } }
               PerSessionLiveTesting =
                 Map.ofList [
                   bSid,
@@ -758,7 +758,7 @@ let stream5Tests =
                         { LiveTestState.empty with
                             Activation = LiveTestingActivation.Active
                             DiscoveredTests = [| tcB |]
-                            TestSessionMap = Map.ofList [ tcB.Id, bSid ] } }
+                            SessionDiscovery = Map.ofList [ bSid, DiscoveryProgress.Completed ] } }
                 ] }
 
       let model', effects =
@@ -835,7 +835,7 @@ let stream5Tests =
                         { LiveTestState.empty with
                             Activation = LiveTestingActivation.Active
                             DiscoveredTests = [| tcB |]
-                            TestSessionMap = Map.ofList [ tcB.Id, bSid ] } }
+                            SessionDiscovery = Map.ofList [ bSid, DiscoveryProgress.Completed ] } }
                 ] }
 
       let msg =
