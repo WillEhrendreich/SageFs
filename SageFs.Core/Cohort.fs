@@ -338,10 +338,15 @@ module Cohort =
     let present (who: 'm) (state: CohortState<'m>) : Authority<'m> =
       match state.Conductor with
       | Some c when c = who -> Authority.Conductor who
+      // default policy: every other Conductor value (unbound, or bound to
+      // someone else) falls through to an ordinary membership lookup —
+      // `state.Conductor` is a single binding, not a case set that grows, so
+      // there is nothing here for a future case to silently absorb.
       | _ ->
         match Map.tryFind who state.Members with
         | Some { Presence = MemberPresence.Present; Role = role } -> Authority.Member(who, role)
-        | _ -> Authority.Anonymous
+        | Some { Presence = MemberPresence.Departed _ } -> Authority.Anonymous
+        | None -> Authority.Anonymous
 
   // ── Commands, events, effects (§7.1: effects are data) ────────────────────
 
@@ -485,7 +490,8 @@ module Cohort =
   let private isPresent (state: CohortState<'m>) (who: 'm) =
     match Map.tryFind who state.Members with
     | Some { Presence = MemberPresence.Present } -> true
-    | _ -> false
+    | Some { Presence = MemberPresence.Departed _ } -> false
+    | None -> false
 
   /// Every `Held` claim of `who` becomes `Orphaned`, each with its own fence bump
   /// (property 3: fence is strictly increasing per claim id, not shared).
@@ -500,7 +506,9 @@ module Cohort =
         let updated = { claim with Fence = fence; State = ClaimState.Orphaned(holder, now) }
         claims <- Map.add cid updated claims
         events.Add(CohortEvent.ClaimOrphaned(cid, holder, fence))
-      | _ -> ()
+      | ClaimState.Held _ -> ()
+      | ClaimState.Orphaned _ -> ()
+      | ClaimState.Released _ -> ()
     { state with Claims = claims; NextFence = fence }, List.ofSeq events
 
   let private departMember (who: 'm) (now: DateTime) (state: CohortState<'m>) : CohortState<'m> * CohortEvent<'m> list =
@@ -524,7 +532,9 @@ module Cohort =
           match c.State with
           | ClaimState.Held holder when holder = requester ->
             if presentedFence <> c.Fence then Error(CohortError.StaleClaimFence(cid, presentedFence, c.Fence)) else Ok ()
-          | _ -> Error(CohortError.NotClaimHolder(cid, requester)))
+          | ClaimState.Held _
+          | ClaimState.Orphaned _
+          | ClaimState.Released _ -> Error(CohortError.NotClaimHolder(cid, requester)))
       (Ok ())
 
   /// If the new front of the queue is `Queued`, kick off its rebase. No-op
@@ -538,6 +548,11 @@ module Cohort =
         let rebasing = { req with State = LandingState.Rebasing onto }
         let newState = { state with Landings = Map.add next rebasing state.Landings }
         newState, [ CohortEvent.LandingStateChanged(next, rebasing.State) ], [ CohortEffect.Rebase(next, onto) ]
+      // default policy: a front-of-queue landing that is missing (should not
+      // happen) or already past Queued (Rebasing/Verifying/Blocked/Landed/
+      // Withdrawn) needs no fresh Rebase effect — a no-op for every
+      // LandingState other than Queued, by construction, whatever the DU
+      // ever grows to.
       | _ -> state, [], []
     | [] -> state, [], []
 
@@ -557,7 +572,10 @@ module Cohort =
     | CohortCommand.Join(who, role, session) ->
       match Map.tryFind who state.Members with
       | Some { Presence = MemberPresence.Present } -> Error(CohortError.DuplicateJoin who)
-      | _ ->
+      // a Departed member may rejoin exactly like a brand-new member — both
+      // fall through to the same binding below.
+      | Some { Presence = MemberPresence.Departed _ }
+      | None ->
         let record = { Role = role; Presence = MemberPresence.Present; LastRenewal = clock; Session = session }
         let newState = { state with Members = Map.add who record state.Members }
         match state.Conductor with
@@ -581,7 +599,8 @@ module Cohort =
       | Some ({ Presence = MemberPresence.Present } as record) ->
         let newState = { state with Members = Map.add who { record with LastRenewal = clock } state.Members }
         Ok(newState, [ CohortEvent.LeaseRenewed who ], [])
-      | _ -> Error(CohortError.MemberNotPresent who)
+      | Some { Presence = MemberPresence.Departed _ }
+      | None -> Error(CohortError.MemberNotPresent who)
 
     | CohortCommand.Tick ->
       let expired =
@@ -610,7 +629,9 @@ module Cohort =
             |> List.tryPick (fun (_, c) ->
               match c.State with
               | ClaimState.Held holder when ClaimScope.overlaps c.Scope scope -> Some holder
-              | _ -> None)
+              | ClaimState.Held _
+              | ClaimState.Orphaned _
+              | ClaimState.Released _ -> None)
           match conflict with
           | Some holder -> Error(CohortError.ClaimConflict(scope, holder))
           | None ->
@@ -637,7 +658,9 @@ module Cohort =
           let updated = { claim with Fence = fence; State = ClaimState.Released(who, clock) }
           let newState = { state with NextFence = fence; Claims = Map.add claimId updated state.Claims }
           Ok(newState, [ CohortEvent.ClaimReleased(claimId, who, fence) ], [])
-        | _ -> Error(CohortError.NotClaimHolder(claimId, who))
+        | ClaimState.Held _
+        | ClaimState.Orphaned _
+        | ClaimState.Released _ -> Error(CohortError.NotClaimHolder(claimId, who))
 
     | CohortCommand.ReassignClaim(by, claimId, toMember) ->
       match Authority.present by state with
@@ -658,7 +681,9 @@ module Cohort =
                 |> List.tryPick (fun (otherId, c) ->
                   match c.State with
                   | ClaimState.Held holder when otherId <> claimId && ClaimScope.overlaps c.Scope claim.Scope -> Some holder
-                  | _ -> None)
+                  | ClaimState.Held _
+                  | ClaimState.Orphaned _
+                  | ClaimState.Released _ -> None)
               match conflict with
               | Some holder -> Error(CohortError.ClaimConflict(claim.Scope, holder))
               | None ->
@@ -666,7 +691,10 @@ module Cohort =
                 let updated = { claim with Fence = fence; State = ClaimState.Held toMember }
                 let newState = { state with NextFence = fence; Claims = Map.add claimId updated state.Claims }
                 Ok(newState, [ CohortEvent.ClaimReassigned(claimId, toMember, fence) ], [])
-          | _ -> Error(CohortError.ClaimNotOrphaned claimId)
+          | ClaimState.Held _
+          | ClaimState.Released _ -> Error(CohortError.ClaimNotOrphaned claimId)
+      // default policy: only a bound Conductor may reassign a claim — every
+      // other Authority (Member, Anonymous) is refused.
       | _ -> Error(CohortError.NotConductor by)
 
     | CohortCommand.DelegateConductor(by, toMember) ->
@@ -676,6 +704,8 @@ module Cohort =
         else
           let newState = { state with Conductor = Some toMember }
           Ok(newState, [ CohortEvent.ConductorDelegated(by, toMember) ], [])
+      // default policy: only a bound Conductor may delegate — every other
+      // Authority (Member, Anonymous) is refused.
       | _ -> Error(CohortError.NotConductor by)
 
     | CohortCommand.ObserveSave(who, path) ->
@@ -685,7 +715,9 @@ module Cohort =
         |> List.tryPick (fun (cid, c) ->
           match c.State with
           | ClaimState.Held holder when holder <> who && ClaimScope.overlaps c.Scope (ClaimScope.File path) -> Some(cid, holder)
-          | _ -> None)
+          | ClaimState.Held _
+          | ClaimState.Orphaned _
+          | ClaimState.Released _ -> None)
       match violating with
       | Some(cid, holder) -> Ok(state, [ CohortEvent.ClaimViolationObserved(cid, who, holder, path) ], [])
       | None -> Ok(state, [], [])
@@ -734,6 +766,9 @@ module Cohort =
               let blocked = { req with State = LandingState.Blocked(LandingBlocker.RebaseConflict conflictFiles, NextAction.RebaseAndResubmit) }
               let newState = { state with Landings = Map.add id blocked state.Landings }
               Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State) ], [])
+          // default policy: RebaseCompleted only advances a landing that is
+          // actually Rebasing — every other LandingState is refused as
+          // out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Rebasing"))
 
     | CohortCommand.AffectedComputed(id, tests) ->
@@ -749,6 +784,9 @@ module Cohort =
             let verifying = { req with State = LandingState.Verifying(base', rebasedHead, n, n) }
             let newState = { state with Landings = Map.add id verifying state.Landings }
             Ok(newState, [ CohortEvent.LandingStateChanged(id, verifying.State) ], [ CohortEffect.RunTests(id, tests) ])
+          // default policy: AffectedComputed only advances a landing that is
+          // actually Verifying — every other LandingState is refused as
+          // out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
     | CohortCommand.TestsCompleted(id, failing) ->
@@ -769,6 +807,9 @@ module Cohort =
               let blocked = { req with State = LandingState.Blocked(LandingBlocker.FailingTests fails, NextAction.FixTests fails) }
               let newState = { state with Landings = Map.add id blocked state.Landings }
               Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State) ], [])
+          // default policy: TestsCompleted only advances a landing that is
+          // actually Verifying — every other LandingState is refused as
+          // out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
     | CohortCommand.VerificationInconclusive(id, reason) ->
@@ -791,6 +832,9 @@ module Cohort =
             let stateAfter = { state with Landings = Map.add id blocked state.Landings; Queue = poppedQueue }
             let advanced, advEvents, advEffects = advanceQueue stateAfter
             Ok(advanced, CohortEvent.LandingStateChanged(id, blocked.State) :: advEvents, advEffects)
+          // default policy: VerificationInconclusive only advances a landing
+          // that is actually Verifying — every other LandingState is refused
+          // as out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
     | CohortCommand.FastForwardCompleted(id, committedSha) ->
@@ -819,7 +863,8 @@ module Cohort =
                 | Some c ->
                   (match c.State with
                    | ClaimState.Held h -> h = req.Requester
-                   | _ -> false)
+                   | ClaimState.Orphaned _
+                   | ClaimState.Released _ -> false)
                   && c.Fence = presentedFence
                 | None -> false
               match req.Claims |> List.tryFind (claimHeldOk >> not) with
@@ -854,6 +899,9 @@ module Cohort =
                    (CohortEvent.LandingStateChanged(id, landed.State) :: CohortEvent.LandingLanded(id, committedSha) :: List.rev releaseEventsRev)
                    @ advEvents,
                    advEffects)
+          // default policy: FastForwardCompleted only advances a landing
+          // that is actually Verifying — every other LandingState is refused
+          // as out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
     | CohortCommand.FastForwardFailed(id, _reason) ->
@@ -888,6 +936,10 @@ module Cohort =
               let rebasing = { req with State = LandingState.Rebasing base' }
               let newState = { state with Landings = Map.add id rebasing state.Landings }
               Ok(newState, [ CohortEvent.LandingStateChanged(id, rebasing.State) ], [ CohortEffect.Rebase(id, base') ])
+          // default policy: FastForwardFailed only re-enters the rebase loop
+          // for a landing that is actually Verifying — every other
+          // LandingState is refused as out-of-order, by construction, for
+          // any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
     | CohortCommand.WithdrawLanding(who, id) ->
@@ -898,6 +950,10 @@ module Cohort =
         match req.State with
         | LandingState.Landed _
         | LandingState.Withdrawn -> Error(CohortError.LandingNotInExpectedState(id, "non-terminal"))
+        // default policy: any non-terminal LandingState (Queued/Rebasing/
+        // Verifying/Blocked, and any future case) is withdrawable — the two
+        // terminal states are enumerated above as the exclusions, so this is
+        // the safe direction to default a new LandingState case into.
         | _ ->
           let wasAtFront = state.Queue |> List.tryHead = Some id
           let withdrawn = { req with State = LandingState.Withdrawn }
@@ -913,6 +969,9 @@ module Cohort =
       | Authority.Conductor _ ->
         let newState = { state with IntegrationHead = head }
         Ok(newState, [ CohortEvent.IntegrationConfigured head ], [])
+      // default policy: only a bound Conductor may (re)configure the
+      // integration head — every other Authority (Member, Anonymous) is
+      // refused.
       | _ -> Error(CohortError.NotConductor by)
 
     | CohortCommand.VetoLanding(by, id, reason) ->
@@ -922,6 +981,10 @@ module Cohort =
         match req.State with
         | LandingState.Landed _
         | LandingState.Withdrawn -> Error(CohortError.LandingNotInExpectedState(id, "non-terminal"))
+        // default policy: any non-terminal LandingState (Queued/Rebasing/
+        // Verifying/Blocked, and any future case) can be vetoed — the two
+        // terminal states are enumerated above as the exclusions, so this is
+        // the safe direction to default a new LandingState case into.
         | _ ->
           let blocked = { req with State = LandingState.Blocked(LandingBlocker.VetoedBy(by, reason), NextAction.AwaitConductor) }
           let newState = { state with Landings = Map.add id blocked state.Landings }
@@ -1189,7 +1252,8 @@ module Cohort =
         |> Array.map (fun (_, c) ->
           match c.State with
           | ClaimState.Held holder -> memberIndexOf holder
-          | _ -> -1)
+          | ClaimState.Orphaned _
+          | ClaimState.Released _ -> -1)
       ClaimFence = claims |> Array.map (fun (_, c) -> c.Fence)
       ClaimState = claims |> Array.map (fun (_, c) -> c.State)
       TestIds = testIds

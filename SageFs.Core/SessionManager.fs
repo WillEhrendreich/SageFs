@@ -683,6 +683,9 @@ module SessionManager =
     (onWarmupProgress: SessionId -> string -> unit)
     (onSessionFaulted: SessionId -> string -> unit) =
     let snapshotRef = ref QuerySnapshot.empty
+    // default policy: this predicate is defined as "true iff Restarting" — every
+    // other SessionLifecycleStatus (present or future) is false by that same
+    // definition, so there is nothing here for a new case to silently absorb.
     let isRestarting = function SessionLifecycleStatus.Restarting _ -> true | _ -> false
     /// Spawn a cold replacement worker for a session whose old worker was
     /// already stopped. Used by the plain rebuild=false restart (inline) and by
@@ -1162,7 +1165,16 @@ module SessionManager =
                               |> Option.defaultValue "The worker failed during warmup. → Check the daemon log, then hard-reset the session with rebuild=true."
                             inbox.Post(SessionCommand.WorkerReportedFaulted(id, workerPid, reason))
                             done' <- true
-                          | _ -> ()
+                          // still warming up — keep polling.
+                          | SessionStatus.Starting
+                          | SessionStatus.Evaluating
+                          | SessionStatus.Building _
+                          | SessionStatus.Restarting -> ()
+                        // default policy: this poll only cares about a StatusResult
+                        // reply to its own GetStatus request; WorkerResponse is an
+                        // 18-case wire DU shared by every request/response pair in
+                        // the protocol, and any other reply here is simply not what
+                        // was asked for, whatever future cases it grows.
                         | _ -> ()
                       with ex ->
                           Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)\n%s" (SessionId.value id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
@@ -1189,6 +1201,9 @@ module SessionManager =
                     match resp with
                     | WorkerResponse.InstrumentationMapsResult(_, maps) when not (Array.isEmpty maps) ->
                       onInstrumentationMaps id maps
+                    // default policy: an empty maps array, or any WorkerResponse
+                    // other than InstrumentationMapsResult, has nothing to publish
+                    // — WorkerResponse is the same 18-case wire DU as above.
                     | _ -> ()
                   with ex ->
                     Instrumentation.elmloopErrors.Add(1L, System.Collections.Generic.KeyValuePair("phase", "instrumentation_maps" :> obj))
@@ -1452,6 +1467,11 @@ module SessionManager =
               | SessionLifecycleStatus.Faulted None ->
                 let existing = SessionLifecycleStatus.faultReason session.Info.Status
                 SessionLifecycleStatus.Faulted (existing |> Option.orElse (Some "Session warmup timed out — worker did not reach Ready state."))
+              // default policy: every SessionLifecycleStatus other than
+              // `Faulted None` is used verbatim — the only special case this
+              // command handles is "faulted with no reason given"; any other
+              // status (present or future) is a plain pass-through by
+              // definition, never a decision that needs re-review.
               | _ -> newStatus
             let updated =
               { session with Info = { session.Info with Status = resolvedStatus } }
@@ -1561,6 +1581,13 @@ module SessionManager =
             match outcome with
             | AppRun.StepOutcome.Applied ->
               // The project that last ran is the one Run picks next time.
+              // default policy: ActiveProject only moves when the app is
+              // actually Running — AppRunState is a 9-case DU (NotRunning/
+              // Starting/Exited/Crashed/CouldNotStart/RestartRequired/
+              // BuildFailed/LostTrack besides Running) and every one of them
+              // means "nothing new is running," so keeping the existing
+              // ActiveProject is the correct default for any of them,
+              // present or future.
               let activeProject =
                 match next with
                 | AppRun.AppRunState.Running app -> Some app.Project
@@ -1667,7 +1694,25 @@ module SessionManager =
             tryReply reply (AppRun.StepOutcome.Stale current)
           | SessionCommand.EndAppRun(_, _, _, _, reply) ->
             tryReply reply AppRun.RunEnd.NotCurrent
-          | _ -> ()
+          // Every command below carries no reply channel to guard EXCEPT
+          // SwitchWorkflow — which does (AsyncReplyChannel<Result<string,
+          // SageFsError>>) and is NOT guarded here. That is a real gap
+          // (roast-7 follow-up, not fixed by this pass): an exception while
+          // processing SwitchWorkflow leaves its caller's channel unanswered
+          // and the caller hangs forever, unlike every other reply-carrying
+          // command above. Left as behaviour-identical to the previous
+          // wildcard — flagged explicitly so it cannot be missed again.
+          | SessionCommand.TouchSession _
+          | SessionCommand.WorkerExited _
+          | SessionCommand.WorkerReady _
+          | SessionCommand.WorkerTestDiscovery _
+          | SessionCommand.WorkerSpawnFailed _
+          | SessionCommand.ScheduleRestart _
+          | SessionCommand.WorkerWarmupProgress _
+          | SessionCommand.UpdateSessionStatus _
+          | SessionCommand.WorkerReportedReady _
+          | SessionCommand.WorkerReportedFaulted _
+          | SessionCommand.SwitchWorkflow _ -> ()
           return state
       }
       async {
