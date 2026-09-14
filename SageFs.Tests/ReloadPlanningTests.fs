@@ -276,6 +276,19 @@ let exactSymbolResolutionTests =
       planReload (declsOf source) (declsOf (replace "secret + 1" "secret + 2" source))
       |> restartChanges
       |> Expect.equal "answer genuinely uses the private secret" [ ReloadChange.UsesNonPublicMember ("answer", "secret") ]
+
+    testCase "WHY — ReloadPlanning.planReload — when the file cannot be type-checked standalone (an unresolvable open, the common case for a real app with NuGet/ASP.NET references), a name that only shadows a private value still forces a restart because an incomplete symbol table must never be trusted to say \"unused\"" <| fun _ ->
+      // `open Unresolvable.Namespace.Does.Not.Exist` parses fine (Fantomas only
+      // checks syntax) but fails FCS's standalone type-check with FS0039 — so
+      // `symbolUsesOf` returns Error and `unreachableOf` must fall back to the
+      // identifier-set heuristic, which is fail-closed toward restart.
+      let source =
+        "module Demo.Shadow4\n\nopen Unresolvable.Namespace.Does.Not.Exist\n\nlet private secret = 41\n\nlet describe (secret: int) =\n  sprintf \"got %d\" secret\n"
+      planReload (declsOf source) (declsOf (replace "\"got %d\"" "\"have %d\"" source))
+      |> restartChanges
+      |> Expect.equal
+        "fallback flags describe as using secret by name — even though it only shadows the private value — because the exact check could not run"
+        [ ReloadChange.UsesNonPublicMember ("describe", "secret") ]
   ]
 
 // ── Planner laws over generated declaration sets ──
