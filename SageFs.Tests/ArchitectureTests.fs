@@ -56,6 +56,84 @@ let private isDocAttribute (attr: Attribute) =
   | name when name.Contains "Doc" -> true
   | _ -> false
 
+// ---------------------------------------------------------------------------
+// Cohort command/effect wiring — dead-limb detection (roast-7 §5/§6, item 6)
+// ---------------------------------------------------------------------------
+//
+// `CohortCommand<'m>` and `CohortEffect<'m>` (SageFs.Core/Cohort.fs) are
+// interpreted EXHAUSTIVELY by `decide` and by `CohortOwner`'s effect
+// dispatcher — but exhaustive interpretation says nothing about whether any
+// PRODUCTION code path ever CONSTRUCTS a given case. A case that only tests
+// construct (or that `decide` only pattern-matches and never emits as an
+// effect) is a dead limb: it compiles, it is "handled," and it does nothing
+// for a real user or agent. This scans SageFs/ and SageFs.Core/ source
+// (excluding SageFs.Tests and any worktree) for a real construction site —
+// an occurrence of `CohortCommand.<Case>` / `CohortEffect.<Case>` that is
+// NOT itself the pattern-match arm that interprets the case and NOT inside a
+// comment — for every case reflection finds on the type today. A case with
+// no such site must be named on the allow-list below, with a reason;
+// forgetting the allow-list entry fails the build instead of waiting for the
+// next roast to notice.
+
+let private repoRoot =
+  System.IO.Path.GetFullPath(System.IO.Path.Combine(__SOURCE_DIRECTORY__, ".."))
+
+/// Every `.fs` file under SageFs/ and SageFs.Core/ — the two production
+/// projects — excluding the test project, build output, and any worktree.
+let private productionFsFiles () =
+  [ "SageFs"; "SageFs.Core" ]
+  |> List.collect (fun projectDir ->
+    let dir = System.IO.Path.Combine(repoRoot, projectDir)
+    if System.IO.Directory.Exists dir then
+      System.IO.Directory.GetFiles(dir, "*.fs", System.IO.SearchOption.AllDirectories)
+      |> Array.toList
+    else
+      [])
+  |> List.filter (fun path ->
+    // Filter on the path RELATIVE to repoRoot, not the absolute path — this
+    // worktree's own checkout root commonly sits under
+    // `.claude/worktrees/<agent>/`, so testing the absolute path against
+    // "/worktrees/" would exclude every file in the current checkout too.
+    let relative =
+      System.IO.Path.GetRelativePath(repoRoot, path).Replace(System.IO.Path.DirectorySeparatorChar, '/')
+    not (relative.StartsWith "SageFs.Tests/")
+    && not (relative.Contains "/obj/")
+    && not (relative.Contains "/bin/")
+    && not (relative.Contains "/worktrees/"))
+
+/// True when `line` is the pattern-match ARM that interprets `needle`
+/// (`| needle ... ->`), never a value construction of it.
+let private isMatchArmFor (needle: string) (line: string) =
+  let trimmed = line.TrimStart()
+  trimmed.StartsWith("|")
+  && not (trimmed.StartsWith("|>"))
+  && trimmed.Substring(1).TrimStart().StartsWith(needle)
+
+let private isCommentLine (line: string) =
+  line.TrimStart().StartsWith("//")
+
+/// A real construction site: `qualifiedNeedle` appears in `line` as a whole
+/// identifier (word-boundary after the case name, so `FastForward` does not
+/// false-match inside `FastForwardCompleted`), the line is not a `///`/`//`
+/// comment, and the line is not itself the match arm that interprets the
+/// case.
+let private isConstructionSite (qualifiedNeedle: string) (line: string) =
+  not (isCommentLine line)
+  && Text.RegularExpressions.Regex.IsMatch(line, Text.RegularExpressions.Regex.Escape qualifiedNeedle + @"\b")
+  && not (isMatchArmFor qualifiedNeedle line)
+
+/// Does any production `.fs` file construct `TypeName.CaseName` (optionally
+/// module-qualified as `Cohort.TypeName.CaseName`) outside a comment and
+/// outside the arm that pattern-matches it?
+let private hasProductionConstructionSite (typeName: string) (caseName: string) (files: string list) =
+  let unqualified = typeName + "." + caseName
+  let qualified = "Cohort." + unqualified
+  files
+  |> List.exists (fun path ->
+    System.IO.File.ReadAllLines path
+    |> Array.exists (fun line ->
+      isConstructionSite unqualified line || isConstructionSite qualified line))
+
 [<Tests>]
 let architectureTests =
   testList "Architecture" [
@@ -405,5 +483,101 @@ let architectureTests =
           found expected
           |> Expect.isTrue
             (sprintf "Core must still define %s (seam test must not pass vacuously)" expected)
+    ]
+
+    testList "Cohort command/effect wiring (roast-7 §5/§6 — dead-limb detection)" [
+
+      // Cases with no production construction site today. Each entry names
+      // the reason — remove the entry the moment a real construction site
+      // lands, or the "allow-list rot" test below will fail.
+      let cohortCommandAllowList =
+        Map.ofList [
+          "RenewLease",
+          "no production poster for member-liveness renewal exists yet — \
+           `decide` only pattern-matches it (SageFs.Core/Cohort.fs); nothing \
+           in the shell renews a lease on a member's behalf"
+          "Tick",
+          "the lease reaper — the shell never posts a periodic Tick, so \
+           silent-member detection via `Clock - LastRenewal >= leaseWindow` \
+           is unreachable in production (roast-7 §5)"
+          "DelegateConductor",
+          "constructed only by SageFs.Tests today; no MCP tool or dashboard \
+           action delegates the conductor role yet (roast-7 §5)"
+          "WithdrawLanding",
+          "constructed only by SageFs.Tests today; no MCP tool or dashboard \
+           action withdraws a queued landing yet (roast-7 §5)"
+          "VetoLanding",
+          "constructed only by SageFs.Tests today; no MCP tool or dashboard \
+           action vetoes a queued landing yet (roast-7 §5)"
+        ]
+
+      let cohortEffectAllowList =
+        Map.ofList [
+          "Notify",
+          "`decide` defines CohortEffect.Notify but no `decide` arm ever \
+           constructs one — fire-and-forget member notification is not \
+           implemented (roast-7 §5; CohortOwner.fs's own doc comment says \
+           as much)"
+        ]
+
+      testCase "every CohortCommand case has a production construction site or is on the allow-list"
+      <| fun _ ->
+        let files = productionFsFiles ()
+        files
+        |> List.isEmpty
+        |> Expect.isFalse
+          "source scan must actually find SageFs/SageFs.Core .fs files — path resolution is broken"
+        let cases =
+          FSharp.Reflection.FSharpType.GetUnionCases(typeof<Cohort.CohortCommand<string>>)
+        (cases.Length, 0)
+        |> Expect.isGreaterThan
+          "CohortCommand must expose at least one case (guards against a rename making this test vacuous)"
+        for case in cases do
+          if not (Map.containsKey case.Name cohortCommandAllowList) then
+            hasProductionConstructionSite "CohortCommand" case.Name files
+            |> Expect.isTrue
+              (sprintf
+                "CohortCommand.%s has no production construction site in SageFs/SageFs.Core and is not on the allow-list — wire it up (post it from the shell) or add a documented allow-list entry explaining why it is still unimplemented"
+                case.Name)
+
+      testCase "every CohortEffect case has a production construction site or is on the allow-list"
+      <| fun _ ->
+        let files = productionFsFiles ()
+        files
+        |> List.isEmpty
+        |> Expect.isFalse
+          "source scan must actually find SageFs/SageFs.Core .fs files — path resolution is broken"
+        let cases =
+          FSharp.Reflection.FSharpType.GetUnionCases(typeof<Cohort.CohortEffect<string>>)
+        (cases.Length, 0)
+        |> Expect.isGreaterThan
+          "CohortEffect must expose at least one case (guards against a rename making this test vacuous)"
+        for case in cases do
+          if not (Map.containsKey case.Name cohortEffectAllowList) then
+            hasProductionConstructionSite "CohortEffect" case.Name files
+            |> Expect.isTrue
+              (sprintf
+                "CohortEffect.%s has no production construction site in SageFs/SageFs.Core and is not on the allow-list — wire it up (have `decide` emit it) or add a documented allow-list entry explaining why it is still unimplemented"
+                case.Name)
+
+      testCase "the Cohort wiring allow-list only names cases that genuinely have no construction site"
+      <| fun _ ->
+        // The other direction of rot: once a previously-unimplemented case
+        // gets wired up, its allow-list entry becomes a stale lie unless
+        // someone removes it. The two tests above skip allow-listed cases
+        // entirely, so this is the only test that would catch that drift.
+        let files = productionFsFiles ()
+        for caseName in Map.toList cohortCommandAllowList |> List.map fst do
+          hasProductionConstructionSite "CohortCommand" caseName files
+          |> Expect.isFalse
+            (sprintf
+              "CohortCommand.%s now HAS a production construction site — remove it from the allow-list in ArchitectureTests.fs"
+              caseName)
+        for caseName in Map.toList cohortEffectAllowList |> List.map fst do
+          hasProductionConstructionSite "CohortEffect" caseName files
+          |> Expect.isFalse
+            (sprintf
+              "CohortEffect.%s now HAS a production construction site — remove it from the allow-list in ArchitectureTests.fs"
+              caseName)
     ]
   ]
