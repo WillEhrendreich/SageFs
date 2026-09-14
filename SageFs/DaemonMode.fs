@@ -1067,6 +1067,35 @@ type LiveTestWatcherManager
       dirSessions.Clear()
       sharedDebounceTimer.Dispose()
 
+/// Cohort claim early-warning (multi-agent vision §5.1): resolve which
+/// cohort member (if any) should receive an `ObserveSave` advisory for a
+/// file the watcher just saw saved inside `sessionId`'s working directory,
+/// plus the path made repo-relative to that session's checkout root — the
+/// same "overlap is path arithmetic" rule Phase 0's
+/// `CrossCheckoutOverlap.repoRelative` already applies for the cross-checkout
+/// advisory. Pure: no IO, no mailbox post — the caller (the watcher's
+/// `onFileReloaded` callback) decides what to do with the result and must
+/// never block on it. `None` when `sessionId` has no matching `SessionInfo`
+/// (shouldn't happen — the caller already routed via `sessionsForPath`) or
+/// when that session isn't bound to any cohort member (`MemberRecord.Session`
+/// only ever matches when `join_cohort` recorded this session) — a solo,
+/// non-cohort save is unchanged behavior either way.
+let resolveSaveObserver
+  (sessions: WorkerProtocol.SessionInfo list)
+  (members: Map<MemberTable.MemberId, Cohort.MemberRecord>)
+  (sessionId: WorkerProtocol.SessionId)
+  (path: string)
+  : (MemberTable.MemberId * string) option =
+  let sidStr = WorkerProtocol.SessionId.value sessionId
+  sessions
+  |> List.tryFind (fun s -> WorkerProtocol.SessionId.value s.Id = sidStr)
+  |> Option.bind (fun s -> CrossCheckoutOverlap.repoRelative s.WorkingDirectory path)
+  |> Option.bind (fun relPath ->
+    members
+    |> Map.toList
+    |> List.tryFind (fun (_, record) -> record.Session = Some sidStr)
+    |> Option.map (fun (m, _) -> m, relPath))
+
 /// Get previous sessions: active from CQRS snapshot + historical from binary manifest.
 let getPreviousSessions
   (manifestOwner: Features.ManifestOwner.Handle)
@@ -1972,7 +2001,24 @@ let run
   let liveTestWatcherManager =
     new LiveTestWatcherManager(
       elmRuntime.Dispatch,
-      (fun sessionId path -> stateChangedEvent.Trigger (FileReloaded (sessionId, path))),
+      (fun sessionId path ->
+        stateChangedEvent.Trigger (FileReloaded (sessionId, path))
+        // Cohort claim early-warning (multi-agent vision §5.1): a save inside
+        // another cohort member's claimed scope is advisory, never blocking
+        // (`Cohort.decide`'s `ObserveSave` never refuses) — so this is a
+        // fire-and-forget `Post`, never awaited, and never on the hot watcher
+        // path for a solo/non-cohort session (`resolveSaveObserver` returns
+        // `None` immediately for those).
+        match
+          resolveSaveObserver
+            (SessionManager.QuerySnapshot.allSessions (readSnapshot ()))
+            (cohortOwner.ReadCohortState().Members)
+            sessionId
+            path
+        with
+        | Some(observer, relPath) ->
+          cohortOwner.Post(Cohort.CohortCommand.ObserveSave(observer, relPath), ignore)
+        | None -> ()),
       Some workingDir)
   watcherManagerRef := Some liveTestWatcherManager
   // Seed with any existing session directories (fallback dir handled by the

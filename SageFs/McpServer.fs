@@ -911,9 +911,28 @@ let private claimChangeKind (ev: SageFs.Cohort.CohortEvent<SageFs.MemberTable.Me
   | SageFs.Cohort.CohortEvent.ClaimReassigned(cid, _, _) -> Some(cid, "reassigned")
   | _ -> None
 
+/// Claim early-warning (multi-agent vision §5.1): given the cohort state
+/// AFTER a `ClaimViolationObserved` was applied, look up the current claim by
+/// the id the event carries (the event itself has no `Scope`, same reasoning
+/// as `claimChangeKind`) so `formatSaveObservedEvent` can report it.
+/// `None` for any other event case, or if the claim id has since vanished
+/// from state (shouldn't happen — `decide` only ever names a claim id that
+/// exists in the state it was applied against). Pure and unit-testable on
+/// its own — no mailbox, no SSE broadcast — so the event→row mapping can be
+/// verified without spinning up a daemon.
+let saveObservedRow
+  (state: SageFs.Cohort.CohortState<SageFs.MemberTable.MemberId>)
+  (ev: SageFs.Cohort.CohortEvent<SageFs.MemberTable.MemberId>) =
+  match ev with
+  | SageFs.Cohort.CohortEvent.ClaimViolationObserved(claimId, observer, holder, path) ->
+    match Map.tryFind claimId state.Claims with
+    | Some claim -> Some(claim, observer, holder, path)
+    | None -> None
+  | _ -> None
+
 /// Subscribe to `CohortOwner.Handle.Events` and push `claim_changed`/
-/// `landing_changed` for the events one applied command produced, plus
-/// `cohort_matrix` once per frame-version change. Wait-free: every push
+/// `landing_changed`/`save_observed` for the events one applied command
+/// produced, plus `cohort_matrix` once per frame-version change. Wait-free: every push
 /// reads `ReadCohortState()`/`ReadFrame()`, never posts back to the
 /// mailbox — mirrors `wireSessionEventSubscription`'s discipline for
 /// session-level events. `lastMatrixVersion` closes over one SSE-server
@@ -943,6 +962,12 @@ let wireCohortEventSubscription
             | Some landing ->
               ctx.SessionEventBroadcast.Trigger(
                 SageFs.SseWriter.formatLandingChangedEvent ctx.SseJsonOpts landing)
+            | None -> ()
+          | SageFs.Cohort.CohortEvent.ClaimViolationObserved _ ->
+            match saveObservedRow state ev with
+            | Some(claim, observer, holder, path) ->
+              ctx.SessionEventBroadcast.Trigger(
+                SageFs.SseWriter.formatSaveObservedEvent ctx.SseJsonOpts claim observer holder path)
             | None -> ()
           | _ -> ()
       let frame = cohortOwner.ReadFrame()

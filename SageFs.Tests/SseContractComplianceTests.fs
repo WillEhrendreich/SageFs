@@ -210,6 +210,15 @@ module private CohortTestData =
         StaleTests = [] }
     SageFs.Cohort.project head [| snapshot |]
 
+  /// A second member (`bob`) whose save into alice's `Held` claim produces
+  /// the `ClaimViolationObserved` `save_observed` reports on.
+  let mkSaveObservation () : SageFs.Cohort.Claim<SageFs.MemberTable.MemberId> * SageFs.MemberTable.MemberId * SageFs.MemberTable.MemberId * string =
+    let bob = SageFs.MemberTable.MemberId.Minted "bob"
+    let state0 = joinAndClaim ()
+    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.Join(bob, SageFs.Cohort.JoinableRole.Implementer, Some "sess-2"))
+    let claim = state1.Claims |> Map.toList |> List.exactlyOne |> snd
+    claim, bob, alice, "src/Foo.fs"
+
 // ── Tests ──
 
 [<Tests>]
@@ -218,9 +227,9 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
   // ── Group 1: Registry exhaustiveness ──
 
   testList "registry exhaustiveness" [
-    testCase "allSseEventTypes has exactly 22 items" <| fun () ->
+    testCase "allSseEventTypes has exactly 23 items" <| fun () ->
       allSseEventTypes |> List.length
-      |> Expect.equal "should have exactly 22 event types" 22
+      |> Expect.equal "should have exactly 23 event types" 23
 
     testCase "allSseEventTypes has no duplicates" <| fun () ->
       let distinct = allSseEventTypes |> List.distinct
@@ -239,7 +248,7 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
           m.Name.Substring("format".Length, m.Name.Length - "format".Length - "Event".Length)
           |> toSnakeCase)
       (formatMethods |> Array.length, 0)
-      |> Expect.isGreaterThan "should find at least 22 format functions"
+      |> Expect.isGreaterThan "should find at least 23 format functions"
       for derivedName in formatMethods do
         allSseEventTypes |> List.contains derivedName
         |> Expect.isTrue (sprintf "'%s' derived from formatter should exist in registry" derivedName)
@@ -422,6 +431,13 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
       let nextAction = doc.RootElement.GetProperty("nextAction")
       nextAction |> hasJsonProperty "kind"
       |> Expect.isTrue "nextAction should expose kind"
+
+    testCase "Cohort save_observed has expected properties" <| fun () ->
+      let claim, observer, holder, path = CohortTestData.mkSaveObservation ()
+      formatSaveObservedEvent jsonOpts claim observer holder path
+      |> extractDataPayload
+      |> assertJsonProperties "save_observed"
+        [ "claimId"; "observer"; "holder"; "scope"; "path" ]
   ]
 
   // ── Group 3: Event type name conventions ──
