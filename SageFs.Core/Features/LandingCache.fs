@@ -73,3 +73,66 @@ module LandingCache =
         let key = TestRunKey.create testId sessionId (inputHashOf testId)
         TestResultCache.insert key result acc)
       cache
+
+  /// Cache-aware verification (§5.4: "verification is a cache lookup"). The
+  /// orchestration a landing verifier runs on the tests it must check:
+  ///
+  ///   * `inputHashOf` returns `Some hash` ONLY for a test whose input
+  ///     signature is TRUSTWORTHY (it has real coverage). `None` means "no
+  ///     trustworthy signature" — such a test is ALWAYS run and NEVER cached,
+  ///     so a source change can never be masked by a stale skip. This is the
+  ///     correctness guard: an empty/absent coverage bitmap hashes the same
+  ///     regardless of the code, so trusting it would let a changed test be
+  ///     wrongly skipped.
+  ///   * Tests with a trustworthy hash that already have a cache entry are
+  ///     skipped; the rest (misses + untrusted) are handed to `runMisses`.
+  ///   * `runMisses` returns the FAILING subset of what it ran, or `Error` when
+  ///     the run itself could not be trusted (e.g. an untrustworthy session).
+  ///     On `Error`, NOTHING is cached and the error propagates — a landing must
+  ///     never cache or pass on an unverified run.
+  ///   * On success, only the trustworthy-hashed tests that actually ran are
+  ///     recorded (never the untrusted ones), and the failing set returned is
+  ///     the cached failures plus the freshly-run failures.
+  ///
+  /// Returns the updated cache and the combined verdict. Pure except for the
+  /// injected `runMisses`; the synthesized cache entries carry a zero duration
+  /// (the cache's only consumer is pass/non-pass via `failingOfCached`).
+  let verify
+    (cache: TestResultCache)
+    (inputHashOf: TestId -> string option)
+    (sessionId: string)
+    (tests: TestId list)
+    (runMisses: TestId list -> Async<Result<TestId list, string>>)
+    : Async<TestResultCache * Result<TestId list, string>> =
+    async {
+      let hashed, untrusted = tests |> List.partition (fun t -> (inputHashOf t).IsSome)
+      let hashOf t =
+        match inputHashOf t with
+        | Some h -> h
+        | None -> failwith "verify: hashOf called on an untrusted test"  // unreachable: `hashed` only
+      let part = partition cache hashOf sessionId hashed
+      // Misses (trustworthy but not cached) AND every untrusted test both run.
+      let toRun = part.MustRun @ untrusted
+      let! runResult = runMisses toRun
+      match runResult with
+      | Error e -> return (cache, Error e)
+      | Ok runFailing ->
+        let failingSet = Set.ofList runFailing
+        let now = System.DateTimeOffset.UtcNow
+        let synth (testId: TestId) : TestRunResult =
+          let result =
+            match failingSet.Contains testId with
+            | true -> TestResult.Failed(TestFailure.AssertionFailed "failed in a prior cached run", System.TimeSpan.Zero)
+            | false -> TestResult.Passed System.TimeSpan.Zero
+          { TestId = testId
+            TestName = TestId.value testId
+            Result = result
+            Timestamp = now
+            Output = None }
+        // Record ONLY the trustworthy-hashed tests we actually ran — never the
+        // untrusted ones (they have no stable key to cache under).
+        let recordPairs = part.MustRun |> List.map (fun t -> (t, synth t))
+        let cache' = record cache hashOf sessionId recordPairs
+        let combinedFailing = failingOfCached part.Cached @ runFailing
+        return (cache', Ok combinedFailing)
+    }
