@@ -1859,7 +1859,7 @@ OUTPUT: Confirmation text, or an error (not conductor / claim not orphaned / tar
         |> withEchoOutcome ctx "reassign_claim"
 
     [<McpServerTool>]
-    [<Description("""Queue a landing request: propose that your commits be rebased onto the integration head, verified, and fast-forwarded in. v1 landings are strictly serial (one FIFO queue) — this only queues the request; rebase/verify/land themselves are a later slice's wiring and are not yet performed.
+    [<Description("""Queue a landing request: your commits are rebased onto the integration head, verified (affected tests, served from the content-addressed cache when inputs are unchanged), and fast-forwarded in. v1 landings are strictly serial (one FIFO queue): the daemon's landing performer processes them in order through real git rebase/fast-forward — so this queues the request AND the pipeline runs it; watch its progress via get_cohort_status / the cohort://status resource.
 
 OUTPUT: Confirmation text with the new landing id, or a validation error (invalid statement, unknown/stale claim).""")>]
     member _.request_landing(
