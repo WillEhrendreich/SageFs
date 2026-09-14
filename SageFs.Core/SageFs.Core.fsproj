@@ -47,6 +47,7 @@
         <Compile Include="Features\LiveTestingTypes.fs" />
         <Compile Include="Features\TestRunKey.fs" />
         <Compile Include="Features\InputHashCoverage.fs" />
+        <Compile Include="Features\LandingCache.fs" />
         <Compile Include="Features\LiveTestActivity.fs" />
         <Compile Include="Features\TestCachePersistence.fs" />
         <Compile Include="Features\CoverageInstrumenter.fs" />
