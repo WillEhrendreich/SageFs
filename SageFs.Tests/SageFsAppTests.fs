@@ -2061,6 +2061,29 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       | _ -> false)
     |> Expect.isTrue "should contain RunAffectedTests effect"
 
+  // WHY — the live-testing baseline never ran on enable because
+  // RequestInitialDiscovery resolved the worker proxy once and dropped the
+  // session if its URL wasn't registered yet (a just-opened session's URL lags
+  // Ready). resolveWithBackoff retries that lookup; without it the lt-* demos
+  // and the --integration-lt journey hang waiting for "N✓" that never comes.
+  testTask "resolveWithBackoff retries a not-yet-registered proxy and returns it once available" {
+    let mutable calls = 0
+    let resolve () =
+      calls <- calls + 1
+      if calls >= 3 then Some "proxy" else None
+    let! result = SageFsEffectHandler.resolveWithBackoff resolve |> Async.StartAsTask
+    result |> Expect.equal "should resolve once the proxy registers, not drop the session" (Some "proxy")
+    calls |> Expect.equal "should have retried until the proxy was available" 3
+  }
+
+  testTask "resolveWithBackoff gives up with None after bounded retries when the proxy never registers" {
+    let mutable calls = 0
+    let resolve () : string option = calls <- calls + 1; None
+    let! result = SageFsEffectHandler.resolveWithBackoff resolve |> Async.StartAsTask
+    result |> Expect.isNone "should give up (bounded) rather than hang forever"
+    calls |> Expect.equal "should try the initial call plus exactly 4 retries" 5
+  }
+
   testCase "EnableLiveTesting with no tests emits an initial discovery request" <| fun _ ->
     let sessionId = testSessionId "aa000001"
     let session : SessionSnapshot =

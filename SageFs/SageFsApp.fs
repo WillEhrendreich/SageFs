@@ -2099,6 +2099,27 @@ module SageFsEffectHandler =
   let newReplyId () =
     Guid.NewGuid().ToString("N").[..7]
 
+  /// Resolve a value that may not be ready yet, retrying with short backoff
+  /// (50/100/200/400ms; ~750ms total over 4 retries). A worker's HTTP base-URL
+  /// is registered a beat AFTER its session goes Ready, so a just-opened
+  /// session's proxy can be None for the first few hundred ms. This is the same
+  /// race `RunAffectedTests` already handles inline; `RequestInitialDiscovery`
+  /// did not, so it silently dropped such sessions — no discovery, no baseline
+  /// run, and the live-testing panel never reached "N✓" (the lt-* demos and the
+  /// --integration-lt journey both hung on exactly this).
+  let resolveWithBackoff (resolve: unit -> 'a option) : Async<'a option> =
+    async {
+      let mutable value = resolve ()
+      let mutable retries = 0
+      let mutable delay = 50
+      while value.IsNone && retries < 4 do
+        retries <- retries + 1
+        do! Async.Sleep delay
+        delay <- delay * 2
+        value <- resolve ()
+      return value
+    }
+
   let evalResponseToMsg
     (sessionId: SessionId)
     (response: WorkerResponse) : SageFsMsg =
@@ -2340,12 +2361,22 @@ module SageFsEffectHandler =
         match testCycleEffect with
         | Features.LiveTesting.TestCycleEffect.RequestInitialDiscovery ->
           let! sessions = deps.ListSessions ()
-          let discoveryTargets =
+          // Resolve each session's proxy with backoff: a session opened moments
+          // before live testing is enabled has no registered worker URL yet, and
+          // a one-shot lookup here used to drop it — killing discovery and the
+          // baseline run (see resolveWithBackoff). Retry so discovery still fires.
+          let! discoveryTargets =
             sessions
-            |> List.choose (fun session ->
-              match deps.GetProxy session.Id with
-              | Some proxy -> Some (session.Id, proxy)
-              | None -> None)
+            |> List.map (fun session ->
+              async {
+                match! resolveWithBackoff (fun () -> deps.GetProxy session.Id) with
+                | Some proxy -> return Some (session.Id, proxy)
+                | None ->
+                  Utils.Log.warn "[SageFsApp] Initial test discovery: no worker proxy for %s after retries" (SessionId.value session.Id)
+                  return None
+              })
+            |> Async.Sequential
+          let discoveryTargets = discoveryTargets |> Array.choose id
           for sid, proxy in discoveryTargets do
             let replyId = newReplyId ()
             let! report =
