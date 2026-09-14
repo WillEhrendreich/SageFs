@@ -1,6 +1,17 @@
 > 🔬 *Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.*
 
-**Status**: ✅ COMPLETE — 177 theorems, 11 Lean files, 0 `sorry`, Lean 4.30.0-rc2.
+> ⚠️ **STALE / HISTORICAL REFERENCE — NOT AN ACTIVE GATE (2026-09-14).** This Lean
+> tree was last substantively touched 2026-05-11; its CI job was deleted
+> 2026-09-13; there is no Lean toolchain on the dev/CI machines, so nothing here
+> has been checked against current `HEAD`, and its correspondence to the F# is a
+> hand-maintained table (`CORRESPONDENCE.md`) that no compiler verifies. The
+> figures below are also stale (the tree has since grown to ~302 theorems / 16
+> modules). The go-forward formal-verification strategy is real-code-first —
+> FsCheck properties, illegal-states-unrepresentable types, a statically-extracted
+> actor wait-for-graph acyclicity check, and metamorphic/equivalence tests — per
+> `../formal-verification-options.md`. This tree is retained as reference only.
+
+**Status** (as of 2026-05-06, STALE): 177 theorems, 11 Lean files, 0 `sorry`, Lean 4.30.0-rc2.
 
 ---
 
@@ -324,7 +335,11 @@ timeline
 
 - **Prover**: Lean 4 (version 4.30.0-rc2)
 - **Libraries**: Lean 4 stdlib only (no Mathlib — CI network constraints prevent download)
-- **CI**: `lean-ci.yml` active — triggers on `formal-verification/lean/**` changes
+- **CI**: NONE. `lean-ci.yml` was removed 2026-09-13 (`03cb0c1b`); no Fun.Build
+  stage builds these proofs, and there is no Lean toolchain on the dev/CI
+  machines. These proofs are NOT gated and have NOT been checked against current
+  `HEAD` — treat them as historical reference, not a live guarantee (see the
+  banner at the top of this file and `../formal-verification-options.md`).
 - **Build system**: Lake
 - **Correspondence tests**: `formal-verification/tests/ringbuffer/run.fsx` — 50 tests passing
 

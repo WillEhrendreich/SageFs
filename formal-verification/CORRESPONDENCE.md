@@ -2,6 +2,13 @@
 
 > 🔬 Lean Squad — automated formal verification for `WillEhrendreich/SageFs`.
 
+> ⚠️ **HAND-MAINTAINED, DRIFT-PRONE, NOT MECHANICALLY CHECKED (2026-09-14).** This
+> table is a manual mapping pinned to commit `bb95c100` (2026-05-11); no test or
+> compiler verifies that these F# symbols still exist or still have the shape the
+> Lean model assumes, and the F# has moved for months underneath it. It is
+> reference material, not a guarantee. See the banner in `REPORT.md` and the
+> go-forward strategy in `../formal-verification-options.md` (real-code-first FV).
+
 This document maps each Lean 4 definition in `formal-verification/lean/FVSquad/` to
 its corresponding F# source, explains what the Lean model captures, and details every
 known divergence so that the validity of the associated proofs can be assessed honestly.
