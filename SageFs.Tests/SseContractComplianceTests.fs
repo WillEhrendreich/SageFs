@@ -159,6 +159,57 @@ let private mkDiagnosticReport () : DiagnosticReport =
     Severity = DiagnosticSeverity.Warning
     Summary = "1 failure" }
 
+// ── Cohort test data factories (item 15a) ──
+// Fully-qualified throughout: `SageFs.Cohort.TestId` would otherwise collide
+// with `Features.LiveTesting.TestId`, already opened unqualified above.
+
+module private CohortTestData =
+  let private clock = DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+  let private noEntropy : byte[] = [||]
+  let private alice = SageFs.MemberTable.MemberId.Minted "alice"
+
+  // `Result.Error` (not the bare `Error` pattern) because
+  // `Features.EvalTimeline.EvalStatus` — opened unqualified above — also
+  // declares a nullary `Error` case that would otherwise shadow it here.
+  let private applyOk state cmd =
+    match SageFs.Cohort.decide clock noEntropy state cmd with
+    | Ok(s, _, _) -> s
+    | Result.Error e -> failwithf "unexpected cohort decide error: %A" e
+
+  let private joinAndClaim () =
+    SageFs.Cohort.CohortState.empty ()
+    |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.Join(alice, SageFs.Cohort.JoinableRole.Implementer, Some "sess-1"))
+    |> fun s -> applyOk s (SageFs.Cohort.CohortCommand.AcquireClaim(alice, SageFs.Cohort.ClaimScope.File "src/Foo.fs", "testing"))
+
+  /// One `Held` claim by `alice` over `src/Foo.fs`.
+  let mkClaim () : SageFs.Cohort.Claim<SageFs.MemberTable.MemberId> =
+    (joinAndClaim ()).Claims |> Map.toList |> List.exactlyOne |> snd
+
+  /// One landing, driven to `Blocked(FailingTests, FixTests)` so the
+  /// blocker/next-action wire shape round-trips too.
+  let mkBlockedLanding () : SageFs.Cohort.LandingRequest<SageFs.MemberTable.MemberId> =
+    let state0 = joinAndClaim ()
+    let claimId, claim = state0.Claims |> Map.toList |> List.exactlyOne
+    let state1 = applyOk state0 (SageFs.Cohort.CohortCommand.RequestLanding(alice, [ claimId, claim.Fence ], [ "abc123" ], "land it"))
+    let landingId = state1.Landings |> Map.toList |> List.exactlyOne |> fst
+    let state2 = applyOk state1 (SageFs.Cohort.CohortCommand.RebaseCompleted(landingId, Ok "def456"))
+    let state3 = applyOk state2 (SageFs.Cohort.CohortCommand.AffectedComputed(landingId, [ SageFs.Cohort.TestId "t1" ]))
+    let state4 = applyOk state3 (SageFs.Cohort.CohortCommand.TestsCompleted(landingId, [ SageFs.Cohort.TestId "t1" ]))
+    state4.Landings |> Map.find landingId
+
+  /// A one-member, one-claim, two-test frame.
+  let mkFrame () : SageFs.Cohort.CohortFrame<SageFs.MemberTable.MemberId> =
+    let state = joinAndClaim ()
+    let head : SageFs.Cohort.LedgerHead<SageFs.MemberTable.MemberId> = { Seq = 3L<SageFs.Measures.ledgerSeq>; State = state }
+    let snapshot : SageFs.Cohort.SessionSnapshot<SageFs.MemberTable.MemberId> =
+      { Member = Some alice
+        SessionId = "sess-1"
+        Generation = 2L
+        PassingTests = [ SageFs.Cohort.TestId "t1" ]
+        FailingTests = [ SageFs.Cohort.TestId "t2" ]
+        StaleTests = [] }
+    SageFs.Cohort.project head [| snapshot |]
+
 // ── Tests ──
 
 [<Tests>]
@@ -167,9 +218,9 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
   // ── Group 1: Registry exhaustiveness ──
 
   testList "registry exhaustiveness" [
-    testCase "allSseEventTypes has exactly 19 items" <| fun () ->
+    testCase "allSseEventTypes has exactly 22 items" <| fun () ->
       allSseEventTypes |> List.length
-      |> Expect.equal "should have exactly 19 event types" 19
+      |> Expect.equal "should have exactly 22 event types" 22
 
     testCase "allSseEventTypes has no duplicates" <| fun () ->
       let distinct = allSseEventTypes |> List.distinct
@@ -188,7 +239,7 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
           m.Name.Substring("format".Length, m.Name.Length - "format".Length - "Event".Length)
           |> toSnakeCase)
       (formatMethods |> Array.length, 0)
-      |> Expect.isGreaterThan "should find at least 19 format functions"
+      |> Expect.isGreaterThan "should find at least 22 format functions"
       for derivedName in formatMethods do
         allSseEventTypes |> List.contains derivedName
         |> Expect.isTrue (sprintf "'%s' derived from formatter should exist in registry" derivedName)
@@ -339,6 +390,38 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
       |> assertJsonProperties "diagnosis_ready"
         [ "severity"; "failureCount"; "affectedCells"; "suggestionCount"
           "topSuggestions"; "failures"; "performance"; "summary" ]
+
+    testCase "Cohort cohort_matrix has expected properties" <| fun () ->
+      formatCohortMatrixEvent jsonOpts (CohortTestData.mkFrame ())
+      |> extractDataPayload
+      |> assertJsonProperties "cohort_matrix"
+        [ "version"; "members"; "claims"; "tests"; "rows" ]
+
+    testCase "Cohort claim_changed has expected properties" <| fun () ->
+      formatClaimChangedEvent jsonOpts "acquired" (CohortTestData.mkClaim ())
+      |> extractDataPayload
+      |> assertJsonProperties "claim_changed"
+        [ "claimId"; "scope"; "holder"; "fence"; "kind" ]
+
+    testCase "Cohort landing_changed has expected properties" <| fun () ->
+      formatLandingChangedEvent jsonOpts (CohortTestData.mkBlockedLanding ())
+      |> extractDataPayload
+      |> assertJsonProperties "landing_changed"
+        [ "landingId"; "requester"; "state"; "blocker"; "nextAction" ]
+
+    testCase "Cohort landing_changed exposes blocker/nextAction detail when Blocked" <| fun () ->
+      let payload =
+        formatLandingChangedEvent jsonOpts (CohortTestData.mkBlockedLanding ())
+        |> extractDataPayload
+      use doc = JsonDocument.Parse(payload)
+      doc.RootElement.GetProperty("state").GetString()
+      |> Expect.equal "landing should be blocked" "blocked"
+      let blocker = doc.RootElement.GetProperty("blocker")
+      blocker |> hasJsonProperty "kind"
+      |> Expect.isTrue "blocker should expose kind"
+      let nextAction = doc.RootElement.GetProperty("nextAction")
+      nextAction |> hasJsonProperty "kind"
+      |> Expect.isTrue "nextAction should expose kind"
   ]
 
   // ── Group 3: Event type name conventions ──

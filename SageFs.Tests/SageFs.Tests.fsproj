@@ -380,6 +380,7 @@
         <Compile Include="SessionManagerBuildSemaphoreTests.fs" />
         <Compile Include="CohortTestProjectionTests.fs" />
         <Compile Include="CohortOwnerTests.fs" />
+        <Compile Include="CohortSseEventsTests.fs" />
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="CohortAffordancesTests.fs" />

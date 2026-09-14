@@ -167,7 +167,8 @@ let private startTestServer (ops: SessionManagementOps) = task {
       SseJsonOpts = JsonSerializerOptions()
       TestEventBroadcast = Event<string>()
       SessionEventBroadcast = Event<string>()
-      ServerTracker = SageFs.Server.McpServer.McpServerTracker() }
+      ServerTracker = SageFs.Server.McpServer.McpServerTracker()
+      CohortOwner = None }
 
   let rctx : SageFs.Server.McpServer.RouteContext =
     { Config = config
