@@ -1724,15 +1724,43 @@ let run
       // rebase base vs rebased head), so a precise coverage-based affected-set
       // via `CohortGit.diffNames baseSha headSha` is a viable later
       // optimization — deferred, not this item.
-      ComputeAffected = fun _landingId _baseSha _headSha ->
+      ComputeAffected = fun _landingId baseSha headSha ->
         async {
           match McpTools.cohortIntegrationRef.Value with
           | None -> return []
           | Some { SessionId = None } -> return []
-          | Some { SessionId = Some sessionId } ->
-            let state = (SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())).TestState
-            let entries = Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
-            return entries |> Array.map (fun e -> Features.CohortTestProjection.toCohortTestId e.TestId) |> Array.toList
+          | Some ({ SessionId = Some sessionId } as binding) ->
+            let cycle = SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())
+            let state = cycle.TestState
+            let allTests =
+              Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
+              |> Array.map (fun e -> e.TestId)
+              |> Array.toList
+            // v2 (§5.4): narrow to the tests the base..head diff can actually
+            // affect (a test's coverage bitmap intersecting the changed files),
+            // instead of the whole suite. ANY failure to compute the diff, and
+            // any test whose coverage is absent/stale, falls back to running it
+            // — running everything is always correct, an unsafe narrow is not.
+            let! diff = Features.CohortGit.diffNames binding.WorktreePath baseSha headSha
+            let narrowed =
+              match diff with
+              | Error _ -> allTests
+              | Ok changedFiles ->
+                let maps =
+                  match Map.tryFind sessionId cycle.InstrumentationMaps with
+                  | Some m when m.Length > 0 -> m
+                  | _ -> cycle.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+                let merged = Features.LiveTesting.InstrumentationMap.merge maps
+                let coveredFilesOf (tid: Features.LiveTesting.TestId) : string list option =
+                  match merged.Slots.Length with
+                  | 0 -> None
+                  | _ ->
+                    match Map.tryFind tid state.TestCoverageBitmaps with
+                    | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
+                      Some(Features.LiveTesting.InputHashCoverage.coveredFiles merged bm)
+                    | _ -> None
+                Features.LiveTesting.AffectedTests.affected changedFiles coveredFilesOf allTests
+            return narrowed |> List.map Features.CohortTestProjection.toCohortTestId
         }
       // Item 14d's documented caveat: `CohortLandingVerify.runTestsInSession`
       // only produces a trustworthy verdict for the session live-testing
