@@ -469,6 +469,69 @@ module StreamBurst =
   let ofCommands (commands: DashboardStreamCommand list) =
     commands |> List.fold add empty
 
+/// Per-connection render-skip guard (roast-6 Finding #10). The no-change
+/// suppression above (`lastPushedMain`) already stops an unchanged tick from
+/// SENDING a morph, but it decides that only AFTER paying for the expensive
+/// part: `renderMainContent snap |> renderNode` composes the whole page's
+/// XmlNode tree and serializes it to an HTML string on every single tick,
+/// even when nothing this connection would show actually changed. Building
+/// the DashboardSnapshot itself is comparatively cheap (the worker-fetched
+/// panels are already TTL-cached above) — the render+string-materialization
+/// step is the cost this guard exists to skip.
+///
+/// A monotonic version tracks the content this connection last rendered.
+/// Equal `'Snapshot` values — literally the same data `renderMainContent`
+/// would otherwise re-walk — are Skip: `renderMainContent`/`renderNode`
+/// never run for that tick, and no HTML string is ever materialized. Any
+/// genuine difference (including the very first tick, which has nothing to
+/// compare against) is Render, with the version bumped by exactly one.
+[<RequireQualifiedAccess>]
+module SnapshotRenderGuard =
+  /// Monotonic version tag for the content a connection last rendered.
+  /// Starts at 0 and only ever increases — bumped exactly once per tick
+  /// whose snapshot content actually differs from what was last rendered.
+  /// The case is private (mirroring WorkerProtocol.SessionId): a case named
+  /// the same as its type is ambiguous to qualify from outside this module
+  /// (`X.SnapshotVersion.next` can resolve to the constructor, not the
+  /// companion module), so callers go through `initial`/`next` and compare
+  /// versions with plain `=`/`>=` — never by unwrapping the int64.
+  type SnapshotVersion = private SnapshotVersion of int64
+
+  module SnapshotVersion =
+    let initial = SnapshotVersion 0L
+    let next (SnapshotVersion v) = SnapshotVersion (v + 1L)
+
+  /// One connection's render memory: the last snapshot it actually rendered,
+  /// and the version that content was assigned. `LastRendered = None` means
+  /// this connection has never rendered — so the first tick always renders.
+  type RenderMemory<'Snapshot> = {
+    LastRendered: 'Snapshot option
+    Version: SnapshotVersion
+  }
+
+  module RenderMemory =
+    let initial<'Snapshot> : RenderMemory<'Snapshot> =
+      { LastRendered = None; Version = SnapshotVersion.initial }
+
+  [<RequireQualifiedAccess>]
+  type Decision<'Snapshot> =
+    /// Content changed (or this is the first tick) — render, send, and
+    /// remember this as the connection's new RenderMemory.
+    | Render of RenderMemory<'Snapshot>
+    /// Content is identical to what this connection already rendered —
+    /// skip renderMainContent/renderNode/send entirely for this tick.
+    | Skip
+
+  /// Pure decision — never touches renderMainContent/renderNode/IO. Equal
+  /// `'Snapshot` values (F#'s structural equality, over the exact data the
+  /// renderer would otherwise walk) are Skip; anything else is Render with
+  /// the version bumped by exactly one past what this connection last saw.
+  let decide (memory: RenderMemory<'Snapshot>) (candidate: 'Snapshot) : Decision<'Snapshot> =
+    match memory.LastRendered with
+    | Some last when last = candidate -> Decision.Skip
+    | _ ->
+      Decision.Render { LastRendered = Some candidate; Version = SnapshotVersion.next memory.Version }
+
 /// Read the page client id from a signals JSON body; empty when absent.
 let private clientIdFromSignals (doc: System.Text.Json.JsonDocument) =
   match doc.RootElement.TryGetProperty(Signals.ClientId) with
@@ -867,6 +930,13 @@ let createStreamHandler
     // but the SSE morph only fires when the rendered HTML differs — a poll tick
     // with nothing changed sends zero payload bytes instead of a full fat morph.
     let mutable lastPushedMain = ""
+    // Render-skip guard (roast-6 Finding #10): renderMainContent/renderNode
+    // are the expensive part of a tick — a snapshot structurally identical
+    // to the one this connection last rendered never reaches them at all.
+    // See SnapshotRenderGuard above for why this is safe alongside the
+    // byte-compare (`lastPushedMain`) guard, which stays as a cheap,
+    // independent safety net right before the send.
+    let mutable renderMemory : SnapshotRenderGuard.RenderMemory<DashboardSnapshot> = SnapshotRenderGuard.RenderMemory.initial
     // Worker-data cache: the three worker HTTP fetches (eval stats, hot-reload
     // state, warmup context) are the dominant per-push cost. In poll mode
     // (StateChanged = None) pushState fires every second; reusing the last
@@ -927,18 +997,22 @@ let createStreamHandler
         // liveSessions was already fetched above for reconciliation — reuse
         // it here instead of paying for a second GetAllSessions read.
         let! snap = buildNoSessionSnapshotWithSessions q infra liveSessions
-        // Render once: the node built here is reused for the patch below
-        // instead of calling renderMainContent a second time.
-        let mainNode = renderMainContent snap
-        let mainHtml = renderNode mainNode
-        match mainHtml = lastPushedMain with
-        | true -> () // no-change tick — nothing to send
-        | false ->
-          lastPushedMain <- mainHtml
-          do! ssePatchNode ctx mainNode
-          // Eval-to-pixel latency chain, stage 5/5: the morph reached the wire.
-          EvalLatencyTrace.shared.StampMorphWritten()
-          do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
+        match SnapshotRenderGuard.decide renderMemory snap with
+        | SnapshotRenderGuard.Decision.Skip -> () // unchanged tick — renderMainContent/renderNode never run
+        | SnapshotRenderGuard.Decision.Render newMemory ->
+          renderMemory <- newMemory
+          // Render once: the node built here is reused for the patch below
+          // instead of calling renderMainContent a second time.
+          let mainNode = renderMainContent snap
+          let mainHtml = renderNode mainNode
+          match mainHtml = lastPushedMain with
+          | true -> () // no-change tick — nothing to send
+          | false ->
+            lastPushedMain <- mainHtml
+            do! ssePatchNode ctx mainNode
+            // Eval-to-pixel latency chain, stage 5/5: the morph reached the wire.
+            EvalLatencyTrace.shared.StampMorphWritten()
+            do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | Some sessionId ->
       let cached = tryGetFreshWorkerCache sessionId
       // liveSessions was already fetched above for reconciliation — reuse it
@@ -988,21 +1062,28 @@ let createStreamHandler
       // canonical id back so the picker/sidebar highlight never disagrees.
       if sessionChanged then
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
-      // Render once, morph only on change: identical snapshots (timer poll
-      // ticks with no state movement) send zero payload bytes. The node
-      // built here is reused for the patch below instead of calling
-      // renderMainContent a second time.
-      let mainNode = renderMainContent snap
-      let mainHtml = renderNode mainNode
-      match mainHtml = lastPushedMain with
-      | true -> () // no-change tick — nothing to send
-      | false ->
-        // DIAGNOSTIC: log when SSE stream sends a changed snapshot
-        Log.info "[pushState] sending changed mainHtml.Length=%d sessionId=%s" mainHtml.Length (WorkerProtocol.SessionId.value sessionId)
-        lastPushedMain <- mainHtml
-        do! ssePatchNode ctx mainNode
-        // Eval-to-pixel latency chain, stage 5/5: the morph reached the wire.
-        EvalLatencyTrace.shared.StampMorphWritten()
+      // Render only when the snapshot actually changed for THIS connection
+      // (SnapshotRenderGuard): renderMainContent/renderNode never run for a
+      // tick whose content is identical to what was last rendered here.
+      match SnapshotRenderGuard.decide renderMemory snap with
+      | SnapshotRenderGuard.Decision.Skip -> () // unchanged tick — renderMainContent/renderNode never run
+      | SnapshotRenderGuard.Decision.Render newMemory ->
+        renderMemory <- newMemory
+        // Render once, morph only on change: identical snapshots (timer poll
+        // ticks with no state movement) send zero payload bytes. The node
+        // built here is reused for the patch below instead of calling
+        // renderMainContent a second time.
+        let mainNode = renderMainContent snap
+        let mainHtml = renderNode mainNode
+        match mainHtml = lastPushedMain with
+        | true -> () // no-change tick — nothing to send
+        | false ->
+          // DIAGNOSTIC: log when SSE stream sends a changed snapshot
+          Log.info "[pushState] sending changed mainHtml.Length=%d sessionId=%s" mainHtml.Length (WorkerProtocol.SessionId.value sessionId)
+          lastPushedMain <- mainHtml
+          do! ssePatchNode ctx mainNode
+          // Eval-to-pixel latency chain, stage 5/5: the morph reached the wire.
+          EvalLatencyTrace.shared.StampMorphWritten()
     }
 
     try
