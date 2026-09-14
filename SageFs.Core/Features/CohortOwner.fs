@@ -246,6 +246,7 @@ module CohortOwner =
     (getSessionTestOutcomes: string -> SessionTestOutcomes)
     (publish: CohortFrame<MemberId> -> unit)
     (publishState: CohortState<MemberId> -> unit)
+    (publishEvents: CohortEvent<MemberId> list -> unit)
     (performer: LandingPerformer<MemberId>)
     (post: Command -> unit)
     (owner: OwnerState)
@@ -270,6 +271,14 @@ module CohortOwner =
           // actually advance. It is NOT a second source of truth: it is
           // always `newState`, the exact value the ledger just recorded.
           publishState newState
+          // Item 15a: fire the events this command produced AFTER the frame
+          // and state are published, so a subscriber (McpServer's SSE
+          // wiring) that reacts to an event by calling `ReadCohortState()`/
+          // `ReadFrame()` always observes the state the event describes,
+          // never the one before it.
+          match events with
+          | [] -> ()
+          | _ -> publishEvents events
           notify logger reply (Ok(events, effects))
           dispatchLandingEffects logger performer post effects
           return { Cohort = newState; NextSeq = seq + 1L<ledgerSeq> }
@@ -287,7 +296,8 @@ module CohortOwner =
     (
       mailbox: MailboxProcessor<Command>,
       readFrame: unit -> CohortFrame<MemberId>,
-      readCohortState: unit -> CohortState<MemberId>
+      readCohortState: unit -> CohortState<MemberId>,
+      events: IEvent<CohortEvent<MemberId> list>
     ) =
     /// Apply a command; completes once it is on the ledger (or refused).
     member _.Commit(cmd: CohortCommand<MemberId>) : Task<Result<CohortEvent<MemberId> list * CohortEffect<MemberId> list, CohortError<MemberId>>> =
@@ -310,6 +320,16 @@ module CohortOwner =
     /// consumer is this item's own tests, but any future landing-status UI
     /// reads from here rather than reaching into the mailbox.
     member _.ReadCohortState() : CohortState<MemberId> = readCohortState ()
+
+    /// Fires once per successfully-applied command, carrying every
+    /// `CohortEvent` that command produced (item 15a — the seam McpServer's
+    /// SSE wiring subscribes to for `claim_changed`/`landing_changed`).
+    /// Never fires for a refused command (`decide` returned `Error`) or for
+    /// a command whose `events` list is empty (`Tick` with nothing expired,
+    /// `ObserveSave` with no violation). By the time a subscriber observes
+    /// this, `ReadFrame()`/`ReadCohortState()` already reflect the state the
+    /// events describe (`handle` publishes both before firing this).
+    member _.Events : IEvent<CohortEvent<MemberId> list> = events
 
     /// Completes once every command queued before it has been applied.
     member _.Flush() : Task =
@@ -365,18 +385,24 @@ module CohortOwner =
     let stateRef = ref head.State
     let publishState (state: CohortState<MemberId>) =
       Interlocked.Exchange(stateRef, state) |> ignore
+    // Item 15a: a plain .NET event, not a wait-free published ref — unlike
+    // `publish`/`publishState` this is a genuine push (SSE subscribers react
+    // to it), so ordinary `Event<'T>.Trigger` (synchronous fan-out to
+    // `Add`-ed handlers, called from the mailbox loop) is the right shape;
+    // there is nothing to dereference wait-free here.
+    let cohortEvents = Event<CohortEvent<MemberId> list>()
     let mailbox =
       MailboxProcessor.Start(fun inbox ->
         let step =
           ResilientActor.wrapLoop logger "cohort-owner"
-            (handle logger ledger clock entropy getSessionTestOutcomes publish publishState performer inbox.Post)
+            (handle logger ledger clock entropy getSessionTestOutcomes publish publishState cohortEvents.Trigger performer inbox.Post)
         let rec loop owner = async {
           let! command = inbox.Receive()
           let! next = step owner command
           return! loop next
         }
         loop { Cohort = head.State; NextSeq = initialNextSeq })
-    new Handle(mailbox, (fun () -> frameRef.Value), (fun () -> stateRef.Value))
+    new Handle(mailbox, (fun () -> frameRef.Value), (fun () -> stateRef.Value), cohortEvents.Publish)
 
   /// Start the owner for one cohort's ledger. `clock`/`entropy` are injected
   /// (production defaults: `DateTime.UtcNow` and `productionEntropy`) so

@@ -17,7 +17,8 @@ open SageFs
 // ── Authoritative daemon event list ─────────────────────────────────────────
 
 /// All SSE events the daemon can emit on /events.
-/// Composed from SseWriter.allSseEventTypes (19 formatters)
+/// Composed from SseWriter.allSseEventTypes (22 formatters — item 15a added
+/// cohort_matrix/claim_changed/landing_changed)
 /// + the unified SseEvent vocabulary's two channel names (roast-5 §1
 /// merged the former SessionEvents.sessionEventType and
 /// DaemonStateChange.sseEventType into one classifier).
@@ -58,6 +59,12 @@ let vscodeHandledEvents : Set<string> =
     "diagnosis_ready"
     "live_bindings"
     "coverage_view"
+    // Item 15a: multi-agent cohort coordination rows. Handlers land in a
+    // follow-up item (15b) — listed here now so this test's parity contract
+    // is honest about what the daemon emits from the moment it starts.
+    "cohort_matrix"
+    "claim_changed"
+    "landing_changed"
   ]
 
 // ── Neovim EVENT_MAP key set ─────────────────────────────────────────────────
@@ -111,6 +118,11 @@ let neovimHandledEvents : Set<string> =
     "diagnosis_ready"
     "live_bindings"
     "coverage_view"
+    // Item 15a: multi-agent cohort coordination rows (see the matching
+    // comment in vscodeHandledEvents above — handlers land in 15b/15c).
+    "cohort_matrix"
+    "claim_changed"
+    "landing_changed"
   ]
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -118,14 +130,14 @@ let neovimHandledEvents : Set<string> =
 [<Tests>]
 let sseParityTests = testList "SSE Parity" [
 
-  test "allDaemonSseEvents contains 21 entries (19 SseWriter + session + state)" {
+  test "allDaemonSseEvents contains 24 entries (22 SseWriter + session + state)" {
     allDaemonSseEvents
-    |> Expect.hasLength "should have 21 daemon SSE event types" 21
+    |> Expect.hasLength "should have 24 daemon SSE event types" 24
   }
 
-  test "SseWriter.allSseEventTypes contains exactly 19 formatter event types" {
+  test "SseWriter.allSseEventTypes contains exactly 22 formatter event types" {
     SseWriter.allSseEventTypes
-    |> Expect.hasLength "SseWriter exposes 19 event type names" 19
+    |> Expect.hasLength "SseWriter exposes 22 event type names" 22
   }
 
   test "no duplicate entries in allDaemonSseEvents" {
@@ -178,6 +190,6 @@ let sseParityTests = testList "SSE Parity" [
     allDaemonSseEvents.Length
     |> Expect.equal
          "if this fails, you added a daemon SSE event - update vscodeHandledEvents, neovimHandledEvents, and this test"
-         21
+         24
   }
 ]

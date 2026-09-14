@@ -457,6 +457,150 @@ let formatDiagnosisReadyEvent (opts: JsonSerializerOptions) (sessionId: string o
   let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "diagnosis_ready" json
 
+// ── Cohort SSE events (item 15a: cohort_matrix / claim_changed / landing_changed) ──
+// Multi-agent cohort coordination (sagefs-multiagent-vision.md). Unlike every
+// formatter above, these three rows are NOT session-scoped — one cohort spans
+// every session/agent connected to this daemon — so they carry no SessionId.
+// `Features.CohortOwner` (SageFs.Core/Features/CohortOwner.fs) is the single
+// per-daemon owner; `SageFs/McpServer.fs` subscribes to its `Events` stream
+// and reads its published `CohortFrame`/`CohortState` to build these payloads.
+
+let private displayMember (m: MemberTable.MemberId) = MemberTable.MemberId.display m
+
+let private claimScopeToWire (scope: Cohort.ClaimScope) =
+  match scope with
+  | Cohort.ClaimScope.File p -> {| Kind = "file"; Path = p |}
+  | Cohort.ClaimScope.Project p -> {| Kind = "project"; Path = p |}
+
+/// Uniform shape across Held/Orphaned/Released so `Array.map` produces one
+/// anonymous-record type — F# gives each distinct field set its own
+/// structural type, so the match arms must agree on fields.
+let private claimStateToWire (state: Cohort.ClaimState<MemberTable.MemberId>) =
+  match state with
+  | Cohort.ClaimState.Held holder -> {| Kind = "held"; Holder = displayMember holder; Since = None |}
+  | Cohort.ClaimState.Orphaned (prev, since) -> {| Kind = "orphaned"; Holder = displayMember prev; Since = Some since |}
+  | Cohort.ClaimState.Released (by, at) -> {| Kind = "released"; Holder = displayMember by; Since = Some at |}
+
+/// Uniform shape across every `LandingBlocker` case, for the same reason as
+/// `claimStateToWire` — fields not meaningful for a given case are left at
+/// their zero value ("" / []) rather than becoming a per-case record type.
+let private landingBlockerToWire (blocker: Cohort.LandingBlocker<MemberTable.MemberId>) =
+  match blocker with
+  | Cohort.LandingBlocker.RebaseConflict files ->
+    {| Kind = "rebase_conflict"; Files = files; Tests = []; ClaimId = ""; From = ""; To = ""; By = ""; Reason = "" |}
+  | Cohort.LandingBlocker.FailingTests tests ->
+    {| Kind = "failing_tests"; Files = []; Tests = tests |> List.map (fun (Cohort.TestId t) -> t); ClaimId = ""; From = ""; To = ""; By = ""; Reason = "" |}
+  | Cohort.LandingBlocker.StaleClaimFence (Cohort.ClaimId cid) ->
+    {| Kind = "stale_claim_fence"; Files = []; Tests = []; ClaimId = cid; From = ""; To = ""; By = ""; Reason = "" |}
+  | Cohort.LandingBlocker.HeadMoved (from, to') ->
+    {| Kind = "head_moved"; Files = []; Tests = []; ClaimId = ""; From = from; To = to'; By = ""; Reason = "" |}
+  | Cohort.LandingBlocker.VetoedBy (by, reason) ->
+    {| Kind = "vetoed_by"; Files = []; Tests = []; ClaimId = ""; From = ""; To = ""; By = displayMember by; Reason = reason |}
+
+let private nextActionToWire (action: Cohort.NextAction) =
+  match action with
+  | Cohort.NextAction.RebaseAndResubmit -> {| Kind = "rebase_and_resubmit"; Tests = [] |}
+  | Cohort.NextAction.AwaitConductor -> {| Kind = "await_conductor"; Tests = [] |}
+  | Cohort.NextAction.FixTests tests -> {| Kind = "fix_tests"; Tests = tests |> List.map (fun (Cohort.TestId t) -> t) |}
+  | Cohort.NextAction.Withdraw -> {| Kind = "withdraw"; Tests = [] |}
+
+let private landingStateKind (state: Cohort.LandingState<MemberTable.MemberId>) =
+  match state with
+  | Cohort.LandingState.Queued -> "queued"
+  | Cohort.LandingState.Rebasing _ -> "rebasing"
+  | Cohort.LandingState.Verifying _ -> "verifying"
+  | Cohort.LandingState.Blocked _ -> "blocked"
+  | Cohort.LandingState.Landed _ -> "landed"
+  | Cohort.LandingState.Withdrawn -> "withdrawn"
+
+/// Format the daemon's single per-daemon `CohortFrame` (Cohort.fs's `project`)
+/// as an SSE event string: members (id/role/seat/conductor), claims
+/// (id/scope/holder/fence/state), and the flat, index-aligned test matrix
+/// (Tests + one Pass/Fail/Stale row per session, `Rows.[i]` aligned with
+/// `frame.SessionGens.[i]`). Version-gate at the call site (compare
+/// `frame.Version` to the last one sent, like `coverage_view`'s generation
+/// gate) — this formatter itself always formats whatever frame it is given.
+let formatCohortMatrixEvent (opts: JsonSerializerOptions) (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
+  let members =
+    Array.init frame.MemberIds.Length (fun i ->
+      {| Id = displayMember frame.MemberIds.[i]
+         Role = sprintf "%A" frame.MemberRole.[i]
+         Seat =
+           match frame.MemberSeat.[i] with
+           | Cohort.SeatState.Present -> "present"
+           | Cohort.SeatState.Departed _ -> "departed"
+         Conductor = frame.Conductor = Some frame.MemberIds.[i] |})
+  let claims =
+    Array.init frame.ClaimIds.Length (fun i ->
+      let (Cohort.ClaimId cid) = frame.ClaimIds.[i]
+      let holder =
+        match frame.ClaimHolderIndex.[i] with
+        | -1 -> None
+        | idx -> Some (displayMember frame.MemberIds.[idx])
+      {| Id = cid
+         Scope = claimScopeToWire frame.ClaimScope.[i]
+         Holder = holder
+         Fence = frame.ClaimFence.[i]
+         State = claimStateToWire frame.ClaimState.[i] |})
+  let tests = frame.TestIds |> Array.map (fun (Cohort.TestId t) -> t)
+  let rows =
+    Array.init frame.SessionGens.Length (fun i ->
+      {| Generation = frame.SessionGens.[i]
+         Pass = frame.Pass.[i]
+         Fail = frame.Fail.[i]
+         Stale = frame.Stale.[i] |})
+  let payload =
+    {| Version = frame.Version
+       Members = members
+       Claims = claims
+       Tests = tests
+       Rows = rows |}
+  let json = JsonSerializer.Serialize(payload, opts)
+  formatSseEvent "cohort_matrix" json
+
+/// Format a single claim change (from a `ClaimAcquired`/`ClaimReleased`/
+/// `ClaimOrphaned`/`ClaimReassigned` `Cohort.CohortEvent`) as an SSE event
+/// string. `claim` is the CURRENT `Cohort.Claim` — read from
+/// `CohortOwner.Handle.ReadCohortState()` after the triggering event was
+/// applied — because the event DUs themselves don't all carry `Scope`
+/// (`ClaimReleased`/`ClaimOrphaned`/`ClaimReassigned` don't), so the caller
+/// looks the claim up by id instead of projecting the event's own fields.
+/// `kind` names which event fired: "acquired" | "released" | "orphaned" | "reassigned".
+let formatClaimChangedEvent (opts: JsonSerializerOptions) (kind: string) (claim: Cohort.Claim<MemberTable.MemberId>) : string =
+  let (Cohort.ClaimId cid) = claim.Id
+  let holder =
+    match claim.State with
+    | Cohort.ClaimState.Held h -> Some (displayMember h)
+    | _ -> None
+  let payload =
+    {| ClaimId = cid
+       Scope = claimScopeToWire claim.Scope
+       Holder = holder
+       Fence = claim.Fence
+       Kind = kind |}
+  let json = JsonSerializer.Serialize(payload, opts)
+  formatSseEvent "claim_changed" json
+
+/// Format a single landing state change (from a `LandingStateChanged`
+/// `Cohort.CohortEvent`) as an SSE event string. `landing` is the CURRENT
+/// `Cohort.LandingRequest` — read from `ReadCohortState()` after the
+/// triggering event was applied, same reasoning as `formatClaimChangedEvent`.
+/// `Blocker`/`NextAction` are populated only when `State = "blocked"`.
+let formatLandingChangedEvent (opts: JsonSerializerOptions) (landing: Cohort.LandingRequest<MemberTable.MemberId>) : string =
+  let (Cohort.LandingId lid) = landing.Id
+  let blocker, nextAction =
+    match landing.State with
+    | Cohort.LandingState.Blocked (b, na) -> Some (landingBlockerToWire b), Some (nextActionToWire na)
+    | _ -> None, None
+  let payload =
+    {| LandingId = lid
+       Requester = displayMember landing.Requester
+       State = landingStateKind landing.State
+       Blocker = blocker
+       NextAction = nextAction |}
+  let json = JsonSerializer.Serialize(payload, opts)
+  formatSseEvent "landing_changed" json
+
 // ── Authoritative SSE event type registry ──────────────────────────────────────────
 
 /// Authoritative list of all SSE event type names emitted by SseWriter formatters.
@@ -485,4 +629,7 @@ let allSseEventTypes : string list = [
   "domain_model"
   "diagnosis_ready"
   "coverage_view"
+  "cohort_matrix"
+  "claim_changed"
+  "landing_changed"
 ]

@@ -1,6 +1,6 @@
 # 📡 SSE Events Reference
 
-All connected editors receive events via the main SSE stream (`/events`). Events carry a `SessionId` field for multi-session isolation. The daemon emits **19 event types** across three sources.
+All connected editors receive events via the main SSE stream (`/events`). Events carry a `SessionId` field for multi-session isolation — except the three Cohort rows below, which describe one per-daemon cohort spanning every session and carry no `SessionId`. The daemon emits **22 event types** across three sources.
 
 ## Connection
 
@@ -13,9 +13,14 @@ The daemon sends a `retry:` hint at connection time so clients auto-reconnect.
 
 ---
 
-## SseWriter Events (17)
+## SseWriter Events (20)
 
-These are the core daemon events emitted on the `/events` stream.
+These are the core daemon events emitted on the `/events` stream. (Pre-existing
+gap, not introduced here: `live_bindings` and `coverage_view` are also
+`SseWriter` formatters — see `SageFs.Core/SseWriter.fs`'s `allSseEventTypes`
+— but were missing from this table before item 15a; the real per-source count
+is 22, not 20. Left for a dedicated docs pass rather than folded silently into
+this item's diff.)
 
 ### Warmup
 
@@ -58,6 +63,20 @@ These are the core daemon events emitted on the `/events` stream.
 | `cell_dependencies` | `Nodes[]` (Id, Produces, Consumes), `Edges[]` (From, To) | Dependency graph of code cells. |
 | `domain_model` | `Transitions[]` (FromState, ToState, FunctionName, IsErrorBranch, Health) | Annotated DU state machine with health status per transition. |
 | `diagnosis_ready` | `Severity`, `FailureCount`, `AffectedCells`, `SuggestionCount`, `TopSuggestions[]`, `Failures[]`, `Performance`, `Summary` | Auto-diagnosis report with causal analysis and suggested fixes. |
+
+### Multi-Agent Cohort (item 15a)
+
+One cohort spans every session/agent connected to the daemon, so — unlike
+every event above — these three rows carry no `SessionId`. Backed by
+`SageFs.Core/Features/CohortOwner.fs`; pushed live from its `Events` stream
+and replayed to a newly-connected client on `/events`. Editor handlers land
+in follow-up items 15b (VS Code) / 15c (Neovim).
+
+| Event | Payload | Description |
+|:---|:---|:---|
+| `cohort_matrix` | `Version`, `Members[]` (id, role, seat, conductor), `Claims[]` (id, scope, holder, fence, state), `Tests[]`, `Rows[]` (generation, pass[], fail[], stale[]) | The full projected `CohortFrame`: every member, every claim, and the test matrix bitplanes. Version-gated like `coverage_view` — an unchanged frame emits nothing. |
+| `claim_changed` | `ClaimId`, `Scope`, `Holder` (nullable), `Fence`, `Kind` (acquired\|released\|orphaned\|reassigned) | One claim's state changed. `Holder` is the current holder or null (Orphaned/Released). |
+| `landing_changed` | `LandingId`, `Requester`, `State` (queued\|rebasing\|verifying\|blocked\|landed\|withdrawn), `Blocker`, `NextAction` | One landing's state changed. `Blocker`/`NextAction` are populated only when `State = "blocked"`. |
 
 ---
 
@@ -107,8 +126,8 @@ A single `state` event carries variant-specific fields.
 
 | Category | Count | Events |
 |:---|:---|:---|
-| SseWriter | 17 | warmup_progress, eval_started, eval_heartbeat, eval_result, eval_diff, eval_timeline, bindings_snapshot, binding_scope_map, test_summary, test_results_batch, test_trace, test_source_locations, file_annotations, failure_narratives, cell_dependencies, domain_model, diagnosis_ready |
+| SseWriter | 20 (see the pre-existing-gap note above — the real count is 22) | warmup_progress, eval_started, eval_heartbeat, eval_result, eval_diff, eval_timeline, bindings_snapshot, binding_scope_map, test_summary, test_results_batch, test_trace, test_source_locations, file_annotations, failure_narratives, cell_dependencies, domain_model, diagnosis_ready, cohort_matrix, claim_changed, landing_changed |
 | Session | 1 (8 subtypes) | session |
 | Daemon state | 1 (8 variants) | state |
 | Diagnostics | 1 (separate endpoint) | diagnostics |
-| **Total** | **20** | |
+| **Total** | **23** | |

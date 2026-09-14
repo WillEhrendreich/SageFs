@@ -651,6 +651,10 @@ type SseContext = {
   TestEventBroadcast: Event<string>
   SessionEventBroadcast: Event<string>
   ServerTracker: McpServerTracker
+  /// The single per-daemon cohort owner (item 15a). `None` when the caller
+  /// wires no cohort support — the cohort_matrix/claim_changed/
+  /// landing_changed rows are simply never replayed or pushed.
+  CohortOwner: SageFs.Features.CohortOwner.Handle option
 }
 
 module SseContext =
@@ -767,6 +771,27 @@ let replayCachedTestState (ctx: SseContext) (body: System.IO.Stream) =
       Log.error "[SSE] replay error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
   })
 
+/// Replay the current cohort matrix to a newly-connected client (item 15a).
+/// Wait-free: reads `CohortOwner.Handle.ReadFrame()` directly, same
+/// discipline the dashboard's `renderCohortPanel` already uses. Sends
+/// nothing when no cohort owner is wired, or the cohort has never had a
+/// command applied to it (`Version = 0L<ledgerSeq>` on an empty ledger is
+/// still a real, if empty, frame — replay it too, so a late client sees
+/// "no members yet" rather than nothing).
+let replayCohortMatrix (ctx: SseContext) (body: System.IO.Stream) =
+  match ctx.CohortOwner with
+  | Some cohortOwner ->
+    task {
+      try
+        let frame = cohortOwner.ReadFrame()
+        do! SageFs.SseWriter.formatCohortMatrixEvent ctx.SseJsonOpts frame
+            |> writeSseFrame body
+      with
+      | :? System.IO.IOException | :? ObjectDisposedException -> ()
+      | ex -> Log.error "[SSE] Cohort matrix replay error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+    }
+  | None -> task { () }
+
 // ── Session event subscription: push HotReload/SessionReady via SSE ──
 
 /// Subscribe to SseEvent events and push session-level SSE events
@@ -871,6 +896,65 @@ let wireSessionEventSubscription
       | SseEvent.WorkflowSwitching _
       | SseEvent.WorkflowSwitched _ -> ()) |> ignore
   | _ -> ()
+
+// ── Cohort event subscription: push claim_changed/landing_changed/cohort_matrix via SSE ──
+
+/// Which `Cohort.CohortEvent` cases drive a `claim_changed` push, paired
+/// with the wire "kind" string `formatClaimChangedEvent` expects. Every
+/// other event case is either a `LandingStateChanged` (handled separately,
+/// below) or has no cohort-matrix/claim/landing row to push.
+let private claimChangeKind (ev: SageFs.Cohort.CohortEvent<SageFs.MemberTable.MemberId>) =
+  match ev with
+  | SageFs.Cohort.CohortEvent.ClaimAcquired(cid, _, _, _) -> Some(cid, "acquired")
+  | SageFs.Cohort.CohortEvent.ClaimReleased(cid, _, _) -> Some(cid, "released")
+  | SageFs.Cohort.CohortEvent.ClaimOrphaned(cid, _, _) -> Some(cid, "orphaned")
+  | SageFs.Cohort.CohortEvent.ClaimReassigned(cid, _, _) -> Some(cid, "reassigned")
+  | _ -> None
+
+/// Subscribe to `CohortOwner.Handle.Events` and push `claim_changed`/
+/// `landing_changed` for the events one applied command produced, plus
+/// `cohort_matrix` once per frame-version change. Wait-free: every push
+/// reads `ReadCohortState()`/`ReadFrame()`, never posts back to the
+/// mailbox — mirrors `wireSessionEventSubscription`'s discipline for
+/// session-level events. `lastMatrixVersion` closes over one SSE-server
+/// lifetime (there is exactly one cohort per daemon), so a byte-identical
+/// frame published twice in a row (there is no such path today — every
+/// `Events` fire pairs 1:1 with a version-incrementing `publish` — but the
+/// guard is cheap insurance against a future double-fire) emits nothing.
+let wireCohortEventSubscription
+  (cohortOwner: SageFs.Features.CohortOwner.Handle)
+  (ctx: SseContext) : IDisposable =
+  let lastMatrixVersion = ref -1L
+  cohortOwner.Events.Subscribe(fun events ->
+    try
+      let state = cohortOwner.ReadCohortState()
+      for ev in events do
+        match claimChangeKind ev with
+        | Some(claimId, kind) ->
+          match Map.tryFind claimId state.Claims with
+          | Some claim ->
+            ctx.SessionEventBroadcast.Trigger(
+              SageFs.SseWriter.formatClaimChangedEvent ctx.SseJsonOpts kind claim)
+          | None -> ()
+        | None ->
+          match ev with
+          | SageFs.Cohort.CohortEvent.LandingStateChanged(landingId, _) ->
+            match Map.tryFind landingId state.Landings with
+            | Some landing ->
+              ctx.SessionEventBroadcast.Trigger(
+                SageFs.SseWriter.formatLandingChangedEvent ctx.SseJsonOpts landing)
+            | None -> ()
+          | _ -> ()
+      let frame = cohortOwner.ReadFrame()
+      let version = int64 frame.Version
+      match version <> lastMatrixVersion.Value with
+      | true ->
+        lastMatrixVersion.Value <- version
+        ctx.SessionEventBroadcast.Trigger(
+          SageFs.SseWriter.formatCohortMatrixEvent ctx.SseJsonOpts frame)
+      | false -> ()
+    with ex ->
+      Log.error "[SSE] Cohort event push error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue ""))
 
 // ── Model change handlers: state change → SSE + MCP notifications ──
 
@@ -1745,6 +1829,7 @@ let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
       | Some evt ->
         do! replaySessionSnapshot rctx.SseContext ctx.Response.Body
         do! replayCachedTestState rctx.SseContext ctx.Response.Body
+        do! replayCohortMatrix rctx.SseContext ctx.Response.Body
         match rctx.FsiBindings.Value.Count, SseContext.activeSessionId rctx.SseContext with
         | count, Some sid when count > 0 ->
           let frame =
@@ -2385,6 +2470,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
         TestEventBroadcast = testEventBroadcast
         SessionEventBroadcast = sessionEventBroadcast
         ServerTracker = serverTracker
+        CohortOwner = cfg.CohortOwner
       }
       let rctx: RouteContext = {
         Config = cfg
@@ -2401,6 +2487,9 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       match cfg.StateChanged with
       | Some evt -> wireSessionEventSubscription evt sseCtx
       | None -> ()
+
+      let _cohortEventSub =
+        cfg.CohortOwner |> Option.map (fun cohortOwner -> wireCohortEventSubscription cohortOwner sseCtx)
 
       mapExecutionRoutes app rctx
       mapHealthRoutes app rctx
