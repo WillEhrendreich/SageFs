@@ -1157,18 +1157,116 @@ h2 {
 ::-webkit-scrollbar-corner { background: var(--bg-default); }
 
 /* ── Responsive ───────────────────────────────────────────────── */
+/* Desktop (above 768px) is untouched above this point — everything
+   below only changes behavior at narrow widths via media queries.
+
+   Below 768px the shell restacks into a genuine single column instead
+   of squeezing the fixed 320px sidebar against the main content pane:
+   main content (output + eval) flows first and takes the full row
+   width, the sidebar becomes a full-width block that follows it — not
+   a squeezed side column, and not a hidden/position:fixed overlay
+   that hides the session list from view. */
 
 @media (max-width: 768px) {
+  .app-layout {
+    /* Was a fixed-width side-by-side flex row (main-area | sidebar);
+       stack the two as full-width blocks instead. #main still clips
+       vertically to the space between the fixed header/statusline/
+       cmdline bars, so app-layout owns the one scroll region for the
+       stacked content — no nested scrollers fighting each other. */
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .main-area {
+    /* No longer sharing width with a fixed sidebar column. Give it a
+       floor so the output/eval area isn't crushed toward zero height
+       when the (now full-width, below it) sidebar content is tall. */
+    flex: 1 1 auto;
+    min-height: 320px;
+  }
+
   .sidebar {
-    position: fixed;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    z-index: 10;
+    /* Full-width block stacked below main content — this *is* the
+       restack. Never position:fixed, never narrower than the row, so
+       the session list stays visible and reachable, not hidden. */
+    width: 100%;
+    max-width: 100%;
+    flex-shrink: 0;
+    border-left: none;
+    border-top: 1px solid var(--border-normal);
+    /* Bounded so the sidebar can't consume the whole viewport on a
+       phone; it scrolls internally within this budget (sidebar-inner
+       already has its own overflow-y:auto) while main content above
+       keeps the majority of the space. */
+    max-height: 50vh;
 
     &.collapsed {
-      width: 0;
+      /* Width is already 100% here, so "collapsed" means collapsing
+         height down to just the header row, not width to a sliver. */
+      width: 100%;
+      min-width: 0;
+      max-height: 36px;
     }
+  }
+
+  .sidebar-inner {
+    /* Drop the desktop 320px floor — at phone width the sidebar is
+       exactly as wide as the row (minus its own padding), never
+       wider than the screen. */
+    min-width: 0;
+  }
+
+  .resize-handle {
+    /* The col-resize drag handle only makes sense when main-area and
+       sidebar share a row; there's nothing to drag between stacked
+       full-width blocks. */
+    display: none;
+  }
+
+  .eval-area {
+    /* eval-area has no horizontal padding at desktop width (its
+       children carry their own); give it a side gutter here so the
+       eval textarea/buttons aren't flush against the screen edge. */
+    padding: 0 0.75rem;
+  }
+
+  #output-panel {
+    /* Pairs with .output-line's own 0.5rem side padding to keep a
+       real gutter (~16px total) between transcript text and the
+       screen edge instead of running edge-to-edge. */
+    padding: 0.25rem 0.5rem;
+  }
+}
+
+/* Phone-width safety net: the fixed header/statusline/cmdline bars
+   lay out their segments in a single non-wrapping row (by design, to
+   match the vim-statusline aesthetic). At ~400px a full segment set
+   can exceed the viewport width; without a contained overflow these
+   fixed, edge-to-edge bars would bleed past the screen edge instead
+   of the page ever showing a horizontal scrollbar (body already sets
+   overflow:hidden). Give each bar its own scroll region so overflow
+   is contained and reachable, and never bleeds off-screen or forces
+   the page itself to scroll horizontally. */
+@media (max-width: 480px) {
+  .app-header,
+  .statusline {
+    overflow-x: auto;
+  }
+
+  .cmdline {
+    padding: 0 1rem;
+  }
+
+  .cmdline-text {
+    /* A long in-progress eval line stays on one row and truncates
+       instead of pushing the fixed-height cmdline bar wider than the
+       screen. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
 }
 
