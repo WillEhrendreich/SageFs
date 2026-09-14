@@ -285,7 +285,7 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       Elem.style [] [ Text.raw fontFaceCss ]
     ]
     Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true" ] [
-      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.Connected, "true"); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false"); Ds.signal (Signals.BindingsPanelOpen, "true"); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, "false"); Ds.signal (Signals.AlarmBannerOpen, "false"); Ds.signal (Signals.FailureNarrativesOpen, "false"); Ds.signal (Signals.FilmstripOpen, "false"); Ds.signal (Signals.DiagnosticsOpen, "false"); Ds.signal (Signals.EvaluateSectionOpen, "false"); Ds.signal (Signals.NewSessionOpen, "false"); Ds.signal (Signals.HotReloadFilesOpen, "false"); Ds.signal (Signals.FrictionPanelOpen, "false"); Ds.signal (Signals.FrictionHistoryOpen, "false"); Ds.signal (Signals.SessionContextOpen, "false"); Ds.signal (Signals.SessionContextAssembliesOpen, "false"); Ds.signal (Signals.SessionContextNamespacesOpen, "false"); Ds.signal (Signals.SessionContextFailedOpensOpen, "true"); Ds.signal (Signals.SessionContextTimingOpen, "false"); Ds.signal (Signals.SessionContextFilesOpen, "false"); Ds.signal (Signals.ShadowedBindingsOpen, "false"); Ds.signal (Signals.CohortPanelOpen, "false"); Ds.signal (Signals.CohortMatrixTextOpen, "false"); Ds.signal (Signals.CohortTerritoryTextOpen, "false") ] []
+      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, "false"); Ds.signal (Signals.SidebarOpen, "true"); Ds.signal (Signals.Connected, "true"); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, "false"); Ds.signal (Signals.BindingsPanelOpen, "true"); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, "false"); Ds.signal (Signals.AlarmBannerOpen, "false"); Ds.signal (Signals.FailureNarrativesOpen, "false"); Ds.signal (Signals.FilmstripOpen, "false"); Ds.signal (Signals.DiagnosticsOpen, "false"); Ds.signal (Signals.EvaluateSectionOpen, "false"); Ds.signal (Signals.NewSessionOpen, "false"); Ds.signal (Signals.HotReloadFilesOpen, "false"); Ds.signal (Signals.FrictionPanelOpen, "false"); Ds.signal (Signals.FrictionHistoryOpen, "false"); Ds.signal (Signals.SessionContextOpen, "false"); Ds.signal (Signals.SessionContextAssembliesOpen, "false"); Ds.signal (Signals.SessionContextNamespacesOpen, "false"); Ds.signal (Signals.SessionContextFailedOpensOpen, "true"); Ds.signal (Signals.SessionContextTimingOpen, "false"); Ds.signal (Signals.SessionContextFilesOpen, "false"); Ds.signal (Signals.ShadowedBindingsOpen, "false"); Ds.signal (Signals.CohortPanelOpen, "false"); Ds.signal (Signals.CohortMatrixTextOpen, "false"); Ds.signal (Signals.CohortTerritoryTextOpen, "false"); Ds.signal (Signals.CohortViewingSeq, "") ] []
       Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
       ]
@@ -451,14 +451,25 @@ type BurstRetarget =
   /// View this session (None = the picker) — the last retarget in the burst.
   | RetargetTo of WorkerProtocol.SessionId option
 
+/// Whether a coalesced burst of stream commands asked this connection to
+/// change its cohort time-scrubber target (§6.5, Phase 2 item 16) — the
+/// `BurstRetarget` pattern applied to `SetCohortViewingSeq`.
+[<RequireQualifiedAccess>]
+type BurstCohortViewingSeq =
+  | NoChange
+  /// Set the viewed seq to this (the last such command in the burst) —
+  /// `None` moves this tab back to live.
+  | SetTo of int64<SageFs.Measures.ledgerSeq> option
+
 /// One push's worth of coalesced stream commands. A burst of state changes is
 /// rendered once, but a retarget arriving inside the burst is never dropped:
 /// the browser has already moved its viewing-session signal, and a lost
 /// retarget leaves the stream re-rendering the old session over the switch.
-type StreamBurst = { Retarget: BurstRetarget; WorkerInvalidated: bool }
+/// Same reasoning applies to a cohort-scrub retarget arriving mid-burst.
+type StreamBurst = { Retarget: BurstRetarget; WorkerInvalidated: bool; CohortViewingSeq: BurstCohortViewingSeq }
 
 module StreamBurst =
-  let empty = { Retarget = BurstRetarget.NoRetarget; WorkerInvalidated = false }
+  let empty = { Retarget = BurstRetarget.NoRetarget; WorkerInvalidated = false; CohortViewingSeq = BurstCohortViewingSeq.NoChange }
 
   let add (burst: StreamBurst) (command: DashboardStreamCommand) =
     match command with
@@ -466,6 +477,8 @@ module StreamBurst =
       { burst with Retarget = BurstRetarget.RetargetTo target }
     | DashboardStreamCommand.StateChange change ->
       { burst with WorkerInvalidated = burst.WorkerInvalidated || invalidatesWorkerData change }
+    | DashboardStreamCommand.SetCohortViewingSeq seqOpt ->
+      { burst with CohortViewingSeq = BurstCohortViewingSeq.SetTo seqOpt }
 
   let ofCommands (commands: DashboardStreamCommand list) =
     commands |> List.fold add empty
@@ -582,6 +595,51 @@ let private subscribeLiveBindings
             try ch.Post(DashboardStreamCommand.StateChange (ModelChanged (0, 0)))
             with :? ObjectDisposedException -> ()
           | _ -> ())))
+
+/// The time-scrubber's push-gate wiring (§6.5, Phase 2 item 16): overrides
+/// an already-built `DashboardSnapshot`'s `CohortPanel` with the scrubbed
+/// view when THIS connection is not live, using
+/// `Features.CohortScrubber.resolveViewedFrame` (the pure gate — see its
+/// own doc comment for why a set viewing seq can never resolve back to the
+/// live frame). Applied post-hoc to the snapshot rather than by widening
+/// `buildDashboardSnapshotWithSessions`/`buildNoSessionSnapshotWithSessions`'s
+/// signatures: those functions build the daemon's SHARED state and have no
+/// notion of "this one connection" — only the SSE stream loop does.
+///
+/// Composing this BEFORE `SnapshotRenderGuard.decide` (both call sites, in
+/// `pushState`) is what makes scrubbing pin the view: `frameAtSeq` replays
+/// a FIXED prefix of an append-only ledger, so its output — and therefore
+/// this override's output — never changes from tick to tick while the
+/// viewed seq stays the same, even though `pushState` reruns every push.
+/// The rest of the page (output, sessions, friction, …) still updates live
+/// for this tab; only the cohort section is pinned, in keeping with the
+/// single-fat-morph doctrine (`Dashboard.fs`'s header comment) — no new SSE
+/// channel, no per-panel fragment renderer.
+///
+/// The lanes panel is truncated with the SAME `ledgerThroughSeq` clamp
+/// `frameAtSeq` uses internally, so the lane view (which reads the ledger
+/// directly, not the frame — see `renderCohortLanesPanel`'s doc comment)
+/// agrees with the matrix/territory view about what "as of this seq" means.
+let private applyCohortViewing
+  (infra: DashboardInfra)
+  (viewingSeq: int64<SageFs.Measures.ledgerSeq> option)
+  (snap: DashboardSnapshot)
+  : DashboardSnapshot =
+  let ledger = infra.ReadCohortLedger ()
+  let latest = Features.CohortScrubber.latestSeq ledger
+  let scrubControl = renderCohortScrubControl viewingSeq latest
+  match Features.CohortScrubber.resolveViewedFrame ledger [||] (infra.ReadCohortFrame ()) viewingSeq with
+  | Features.CohortScrubber.ViewedFrame.Live _ ->
+    { snap with CohortPanel = Elem.div [] [ scrubControl; snap.CohortPanel ] }
+  | Features.CohortScrubber.ViewedFrame.Scrubbed(frame, seq) ->
+    let prefixLedger = Features.CohortScrubber.ledgerThroughSeq ledger seq
+    { snap with
+        CohortPanel =
+          Elem.div [] [
+            scrubControl
+            renderCohortPanel frame
+            renderCohortLanesPanel prefixLedger
+          ] }
 
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
@@ -921,6 +979,13 @@ let createStreamHandler
     let defaultViewingSession =
       sessions |> List.tryHead |> Option.map (fun s -> s.Id)
     let mutable currentSessionOpt = defaultViewingSession
+    // The time-scrubber's per-tab `Viewing` (§6.5, Phase 2 item 16): `None`
+    // (the default) means this tab renders the live cohort frame; `Some seq`
+    // means it has scrubbed to that past ledger seq. Independent of session
+    // retargeting — the cohort is daemon-scoped, not session-scoped (D4), so
+    // switching the viewed SESSION never resets a scrub, and scrubbing never
+    // affects any other connection's `currentCohortViewingSeq`.
+    let mutable currentCohortViewingSeq : int64<SageFs.Measures.ledgerSeq> option = None
     let currentSessionStr = currentSessionOpt |> Option.map WorkerProtocol.SessionId.value |> Option.defaultValue ""
     infra.ConnectionTracker |> Option.iter (fun t -> t.Register(clientId, Browser, currentSessionStr))
     // A dashboard tab is a member too (sagefs-multiagent-vision.md §4.1):
@@ -1007,7 +1072,8 @@ let createStreamHandler
         // the no-change guard compares like-for-like full-shell HTML.
         // liveSessions was already fetched above for reconciliation — reuse
         // it here instead of paying for a second GetAllSessions read.
-        let! snap = buildNoSessionSnapshotWithSessions q infra liveSessions
+        let! snapRaw = buildNoSessionSnapshotWithSessions q infra liveSessions
+        let snap = applyCohortViewing infra currentCohortViewingSeq snapRaw
         match SnapshotRenderGuard.decide renderMemory snap with
         | SnapshotRenderGuard.Decision.Skip -> () // unchanged tick — renderMainContent/renderNode never run
         | SnapshotRenderGuard.Decision.Render newMemory ->
@@ -1028,8 +1094,9 @@ let createStreamHandler
       let cached = tryGetFreshWorkerCache sessionId
       // liveSessions was already fetched above for reconciliation — reuse it
       // here instead of paying for a second GetAllSessions read.
-      let! snap, newSessionId, newThemeName, rawWorkerData =
+      let! snapRaw, newSessionId, newThemeName, rawWorkerData =
         buildDashboardSnapshotWithSessions q infra sessionId lastSessionId lastWorkingDir lastThemeName cached liveSessions
+      let snap = applyCohortViewing infra currentCohortViewingSeq snapRaw
       match cached with
       | None ->
         // This push performed the expensive fetches — record them so the next
@@ -1132,6 +1199,9 @@ let createStreamHandler
           match burst.Retarget with
           | BurstRetarget.RetargetTo target -> retargetTo target
           | BurstRetarget.NoRetarget -> ()
+          match burst.CohortViewingSeq with
+          | BurstCohortViewingSeq.SetTo seqOpt -> currentCohortViewingSeq <- seqOpt
+          | BurstCohortViewingSeq.NoChange -> ()
           if burst.WorkerInvalidated then
             lastWorkerFetch <- DateTime.MinValue
           try
@@ -1186,6 +1256,22 @@ let createStreamHandler
             | :? System.ArgumentOutOfRangeException -> ()
             | :? System.InvalidOperationException -> ()
             | ex -> Log.debug "[Dashboard SSE] pushState after retarget failed: %s" ex.Message
+            return! loop ()
+          | Some (DashboardStreamCommand.SetCohortViewingSeq seqOpt) ->
+            // Signal-driven cohort scrub retarget (§6.5, Phase 2 item 16):
+            // this connection's OWN viewed seq changed. Only this
+            // connection's next `pushState` is affected — every other tab's
+            // mailbox never sees this message at all.
+            currentCohortViewingSeq <- seqOpt
+            try
+              do! pushState () |> Async.AwaitTask
+            with
+            | :? System.IO.IOException -> ()
+            | :? ObjectDisposedException -> ()
+            | :? OperationCanceledException -> ()
+            | :? System.ArgumentOutOfRangeException -> ()
+            | :? System.InvalidOperationException -> ()
+            | ex -> Log.debug "[Dashboard SSE] pushState after cohort scrub failed: %s" ex.Message
             return! loop ()
           | Some (DashboardStreamCommand.StateChange change) ->
             // Eval-to-pixel latency chain, stage 4/5 (vision §3.4, §7.4):
@@ -2111,6 +2197,38 @@ let createInspectSearchHandler (q: DashboardQueries) (infra: DashboardInfra) : H
     return! FalcoResponse.ofHtml (renderSearchPage query results) ctx
   }
 
+/// The time-scrubber's POST (§6.5, Phase 2 item 16): move THIS tab's cohort
+/// view to a past ledger seq, or back to live. Per-connection, the same
+/// signal-driven retarget `retargetStream`/`RetargetView` use for session
+/// selection — posts `SetCohortViewingSeq` onto the client's OWN SSE
+/// channel (`infra.ConnectionChannels`), so scrubbing one tab can only ever
+/// reach that tab's `currentCohortViewingSeq` (see
+/// `DashboardStreamCommand.SetCohortViewingSeq`'s doc comment). The actual
+/// re-render happens on the persistent stream connection (the mailbox
+/// loop's `SetCohortViewingSeq` arm), not on this POST's own response —
+/// same division of labor as every other retarget handler in this file.
+let createCohortScrubHandler (infra: DashboardInfra) : HttpHandler =
+  fun ctx -> task {
+    try
+      use! doc = readSignalsJsonSized ctx
+      let channelClientId = clientIdFromSignals doc
+      let raw = getSignalString doc Signals.CohortViewingSeq "cohort-viewing-seq"
+      let seqOpt = Features.CohortScrubber.tryParseSeq raw
+      match channelClientId with
+      | "" -> ()
+      | id ->
+        match infra.ConnectionChannels.TryGetValue id with
+        | true, ch ->
+          try ch.Post(DashboardStreamCommand.SetCohortViewingSeq seqOpt)
+          with :? ObjectDisposedException -> ()
+        | _ -> ()
+      Response.sseStartResponse ctx |> ignore
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
 /// Create all dashboard routes.
 let createEndpoints
   (q: DashboardQueries)
@@ -2312,6 +2430,7 @@ let createEndpoints
     // TUI client API
     yield get "/api/state" (createApiStateHandler q infra)
     yield post "/api/dispatch" (createApiDispatchHandler a.Dispatch)
+    yield post "/dashboard/cohort/scrub" (createCohortScrubHandler infra)
     yield post "/dashboard/live-testing/enable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.EnableLiveTesting)
     yield post "/dashboard/live-testing/disable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.DisableLiveTesting)
     yield post "/dashboard/session/create" (createCreateSessionHandler infra a.CreateSession a.SwitchSession)

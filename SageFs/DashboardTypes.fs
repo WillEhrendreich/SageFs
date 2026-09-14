@@ -6,6 +6,7 @@ open System
 open System.IO
 open System.Text.RegularExpressions
 open SageFs
+open SageFs.Measures
 open SageFs.Utils
 open SageFs.Affordances
 open SageFs.ProjectLoading
@@ -57,6 +58,7 @@ module DomIds =
   let [<Literal>] CohortMatrix = "cohort-matrix"
   let [<Literal>] CohortTerritory = "cohort-territory"
   let [<Literal>] CohortLanes = "cohort-lanes"
+  let [<Literal>] CohortScrubber = "cohort-scrubber"
 
 /// Datastar signal names — shared between Ds.signal init and Ds.bind/Ds.show refs.
 [<RequireQualifiedAccess>]
@@ -120,6 +122,12 @@ module Signals =
   /// document"), same convention as `CohortTerritoryTextOpen` — collapsed by
   /// default.
   let [<Literal>] CohortLanesTextOpen = "cohortLanesTextOpen"
+  /// The time-scrubber's viewed ledger seq (§6.5, Phase 2 item 16) — "" (the
+  /// default) means this tab is live; a numeric string means this tab has
+  /// scrubbed to that past seq. Per-tab, like `ViewingSessionId`: two tabs
+  /// scrubbing to different seqs (or one live, one scrubbed) never interfere
+  /// with each other — see `DashboardStreamCommand.SetCohortViewingSeq`.
+  let [<Literal>] CohortViewingSeq = "cohortViewingSeq"
   let [<Literal>] FrictionEndpoint = "frictionEndpoint"
   let [<Literal>] FrictionToken = "frictionToken"
   let [<Literal>] FrictionEdits = "frictionEdits"
@@ -776,6 +784,14 @@ type DashboardActions = {
 type DashboardStreamCommand =
   | StateChange of SseEvent
   | RetargetView of WorkerProtocol.SessionId option
+  /// The time-scrubber's per-tab retarget (§6.5, Phase 2 item 16), the
+  /// `RetargetView` pattern applied to the cohort panel: `None` means this
+  /// tab is live again, `Some seq` means it has scrubbed to that past
+  /// ledger seq. The connection that owns this channel is the ONLY one
+  /// affected — this is what makes scrubbing one tab never touch another
+  /// tab's live push (`Dashboard.fs`'s stream loop stores it in a
+  /// per-connection mutable, exactly like `currentSessionOpt`).
+  | SetCohortViewingSeq of int64<ledgerSeq> option
 
 /// Infrastructure dependencies — event sources, tracking, themes.
 type DashboardInfra = {

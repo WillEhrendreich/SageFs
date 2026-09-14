@@ -8,6 +8,7 @@ open Falco.Datastar
 open StarFederation.Datastar.FSharp
 open Microsoft.AspNetCore.Http
 open SageFs
+open SageFs.Measures
 open SageFs.WarmUp
 open SageFs.Affordances
 open SageFs.Server.DashboardTypes
@@ -2160,6 +2161,62 @@ let renderCohortLanesPanel (ledgerEntries: SageFs.Cohort.LedgerEntry<MemberTable
         Elem.pre [ Attr.style "font-size: 0.68rem; line-height: 1.3; overflow-x: auto; margin: 0.3rem 0 0 0; white-space: pre-wrap;" ] [
           textEnc legend
         ]
+      ]
+    ]
+
+/// §6.5's time-scrubber (Phase 2 item 16): "the scrubber over a CohortFrame
+/// SnapshotRing with per-tab Viewing and `f` = `fork_cohort` at the viewed
+/// seq". See `CohortScrubber.fs`'s module doc for why no `SnapshotRing`/
+/// `fork_cohort` needed building — scrubbing replays a shorter ledger
+/// prefix through the SAME `Cohort.project` the live view uses, and
+/// forking is honestly left unbuilt (`Cohort.fs` has no fork
+/// command/event). `viewingSeq = None` renders the LIVE affordance (drag
+/// the slider back from `latest` to start scrubbing); `Some seq` renders
+/// the VIEWING affordance plus a "back to live" button. `latestSeq = None`
+/// (an empty ledger — nothing has happened yet) renders nothing, matching
+/// this panel family's other empty-state conventions.
+///
+/// The range input's `change` event reads the slider's value directly off
+/// `event.target` (the same `var t=event.target.value; @post(...)` idiom
+/// `renderThemePicker`'s onchange handler uses) and posts it as
+/// `Signals.CohortViewingSeq` — Datastar's `@post` sends the WHOLE current
+/// signal store alongside it, so `Dashboard.fs`'s handler still reads
+/// `Signals.ClientId` off the same request body without this control
+/// needing to know about client ids at all.
+let renderCohortScrubControl (viewingSeq: int64<ledgerSeq> option) (latestSeq: int64<ledgerSeq> option) : XmlNode =
+  match latestSeq with
+  | None -> Elem.div [] []
+  | Some latest ->
+    let latestInt = int64 latest
+    let currentInt = viewingSeq |> Option.map int64 |> Option.defaultValue latestInt
+    let scrubEndpoint = "/dashboard/cohort/scrub"
+    Elem.div [ Attr.id DomIds.CohortScrubber; Attr.style "margin-top: 0.3rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border, #444); display: flex; flex-direction: column; gap: 0.3rem;" ] [
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;" ] [
+        Text.raw "🕐 "
+        match viewingSeq with
+        | None -> Elem.span [ Attr.style "color: var(--fg-green, #27ae60);" ] [ textEnc (sprintf "LIVE · v%d" latestInt) ]
+        | Some v -> Elem.span [ Attr.style "color: var(--fg-amber, orange);" ] [ textEnc (sprintf "Viewing v%d of v%d" (int64 v) latestInt) ]
+        Elem.create "input" [
+          Attr.create "type" "range"
+          Attr.create "min" "0"
+          Attr.create "max" (string latestInt)
+          Attr.create "value" (string currentInt)
+          Attr.style "flex: 1 1 100px; min-width: 60px;"
+          Ds.onEvent ("change", sprintf "var v=event.target.value; @post('%s', {%s: v})" scrubEndpoint Signals.CohortViewingSeq)
+        ] []
+        match viewingSeq with
+        | Some _ ->
+          Elem.button [
+            Attr.class' "session-btn"
+            Attr.create "title" "Back to live"
+            Ds.onEvent ("click", sprintf "@post('%s', {%s: ''})" scrubEndpoint Signals.CohortViewingSeq)
+          ] [ Text.raw "⏭" ]
+        | None -> Elem.div [] []
+        Elem.button [
+          Attr.create "disabled" "disabled"
+          Attr.create "title" "Forking a cohort from a scrubbed seq is not supported yet — Cohort.fs has no fork command/event to send (see CohortScrubber.fs's module doc)."
+          Attr.style "font-size: 0.68rem; opacity: 0.5; cursor: not-allowed;"
+        ] [ Text.raw "⑂ fork (not yet supported)" ]
       ]
     ]
 
