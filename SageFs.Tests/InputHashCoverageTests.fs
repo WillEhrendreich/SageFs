@@ -39,6 +39,12 @@ let private contents =
 
 let private reader (map: Map<string, string>) (file: string) : string option = Map.tryFind file map
 
+/// Fixed toolchain fingerprint for the coverage-content tests below — they
+/// exercise the SOURCE-content dimension of the hash; the toolchain dimension
+/// has its own test list (toolchainFingerprintTests).
+let private ofCov (readFile: string -> string option) (map: InstrumentationMap) (bitmap: CoverageBitmap) : string =
+  InputHashCoverage.ofCoverage "fixed-test-toolchain" readFile map bitmap
+
 [<Tests>]
 let coveredFilesTests =
   testList "InputHashCoverage.coveredFiles" [
@@ -88,34 +94,34 @@ let ofCoverageTests =
     test "identical map, bitmap and reader produce an identical hash (determinism)" {
       let readA = reader contents
       let readB = reader contents
-      InputHashCoverage.ofCoverage readA threeFileMap aAndBBitmap
-      |> Expect.equal "same inputs, same hash" (InputHashCoverage.ofCoverage readB threeFileMap aAndBBitmap)
+      ofCov readA threeFileMap aAndBBitmap
+      |> Expect.equal "same inputs, same hash" (ofCov readB threeFileMap aAndBBitmap)
     }
 
     test "changing a COVERED file's content changes the hash" {
-      let baseline = InputHashCoverage.ofCoverage (reader contents) threeFileMap aAndBBitmap
+      let baseline = ofCov (reader contents) threeFileMap aAndBBitmap
       let changed = contents |> Map.add "A.fs" "let a = 999"
-      InputHashCoverage.ofCoverage (reader changed) threeFileMap aAndBBitmap
+      ofCov (reader changed) threeFileMap aAndBBitmap
       |> Expect.notEqual "A.fs is covered; its content is part of the hash" baseline
     }
 
     test "changing a NON-covered file's content does not change the hash" {
-      let baseline = InputHashCoverage.ofCoverage (reader contents) threeFileMap aAndBBitmap
+      let baseline = ofCov (reader contents) threeFileMap aAndBBitmap
       let changed = contents |> Map.add "C.fs" "let c = 999"
-      InputHashCoverage.ofCoverage (reader changed) threeFileMap aAndBBitmap
+      ofCov (reader changed) threeFileMap aAndBBitmap
       |> Expect.equal "C.fs is not covered by this bitmap; its content must not affect the hash" baseline
     }
 
     test "a covered file the reader cannot read (deletion) hashes differently than when it is readable" {
-      let readable = InputHashCoverage.ofCoverage (reader contents) threeFileMap aAndBBitmap
+      let readable = ofCov (reader contents) threeFileMap aAndBBitmap
       let deleted = contents |> Map.remove "A.fs"
-      InputHashCoverage.ofCoverage (reader deleted) threeFileMap aAndBBitmap
+      ofCov (reader deleted) threeFileMap aAndBBitmap
       |> Expect.notEqual "the missing sentinel must bite, not silently vanish from the hash" readable
     }
 
     test "an empty covered set (empty bitmap) produces a stable, non-throwing hash" {
-      let h1 = InputHashCoverage.ofCoverage (reader contents) threeFileMap emptyBitmap
-      let h2 = InputHashCoverage.ofCoverage (reader contents) threeFileMap emptyBitmap
+      let h1 = ofCov (reader contents) threeFileMap emptyBitmap
+      let h2 = ofCov (reader contents) threeFileMap emptyBitmap
       h1 |> Expect.equal "stable across calls" h2
       h1.Length |> Expect.equal "still a well-formed 16 hex-char InputHash" 16
     }
@@ -132,9 +138,44 @@ let ofCoverageTests =
       let singleBitmap = CoverageBitmap.ofBoolArray [| true |]
       let onlyA : CoverageBitmap = CoverageBitmap.ofBoolArray [| true; false; false; false |]
 
-      let hashA = InputHashCoverage.ofCoverage (reader (Map.ofList [ "A.fs", "let x = 1" ])) threeFileMap onlyA
-      let hashZ = InputHashCoverage.ofCoverage (reader (Map.ofList [ "Z.fs", "let x = 1" ])) singleFileMap singleBitmap
+      let hashA = ofCov (reader (Map.ofList [ "A.fs", "let x = 1" ])) threeFileMap onlyA
+      let hashZ = ofCov (reader (Map.ofList [ "Z.fs", "let x = 1" ])) singleFileMap singleBitmap
 
       hashA |> Expect.notEqual "same content, different covered path — must not collide" hashZ
+    }
+  ]
+
+[<Tests>]
+let toolchainFingerprintTests =
+  testList "InputHashCoverage toolchain fingerprint (roast-6 #1)" [
+
+    test "a toolchain change is ALWAYS a cache miss — same coverage, different fingerprint, different hash" {
+      let h1 = InputHashCoverage.ofCoverage "toolchain-v1" (reader contents) threeFileMap aAndBBitmap
+      let h2 = InputHashCoverage.ofCoverage "toolchain-v2" (reader contents) threeFileMap aAndBBitmap
+      h1 |> Expect.notEqual "a different toolchain fingerprint must change the InputHash even with byte-identical coverage" h2
+    }
+
+    test "same toolchain + same coverage is deterministic" {
+      let h1 = InputHashCoverage.ofCoverage "toolchain-v1" (reader contents) threeFileMap aAndBBitmap
+      let h2 = InputHashCoverage.ofCoverage "toolchain-v1" (reader contents) threeFileMap aAndBBitmap
+      h1 |> Expect.equal "identical toolchain + coverage → identical hash" h2
+    }
+
+    test "toolchainFingerprint shifts when Directory.Packages.props content changes (a dependency bump)" {
+      let rd (v: string) (p: string) =
+        if p.EndsWith "Directory.Packages.props" then Some v
+        elif p.EndsWith "Directory.Build.props" then Some "<build/>"
+        else None
+      InputHashCoverage.toolchainFingerprint (rd "<v1/>") "/repo"
+      |> Expect.notEqual "a packages.props change must shift the toolchain fingerprint" (InputHashCoverage.toolchainFingerprint (rd "<v2/>") "/repo")
+    }
+
+    test "toolchainFingerprint is stable for identical props" {
+      let rd (p: string) =
+        if p.EndsWith "Directory.Packages.props" then Some "<v1/>"
+        elif p.EndsWith "Directory.Build.props" then Some "<build/>"
+        else None
+      InputHashCoverage.toolchainFingerprint rd "/repo"
+      |> Expect.equal "identical props → identical fingerprint" (InputHashCoverage.toolchainFingerprint rd "/repo")
     }
   ]

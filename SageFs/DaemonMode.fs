@@ -1774,7 +1774,7 @@ let run
           match McpTools.cohortIntegrationRef.Value with
           | None -> return tests
           | Some { SessionId = None } -> return tests
-          | Some { SessionId = Some sessionId } ->
+          | Some ({ SessionId = Some sessionId } as binding) ->
             elmRuntime.Dispatch(SageFsMsg.Event(TuiEvent.SessionSwitched(None, sessionId)))
             let! sessionInfo = sessionOps.GetSessionInfo(toSessionId sessionId) |> Async.AwaitTask
             let observation: Features.Verification.SessionTrust.SessionObservation =
@@ -1799,13 +1799,20 @@ let run
             let merged = Features.LiveTesting.InstrumentationMap.merge maps
             let fileReader (path: string) =
               try Some(System.IO.File.ReadAllText path) with _ -> None
+            // Fold the build/toolchain fingerprint into every test's InputHash
+            // (roast-6 #1): an SDK / dependency / config change with no source
+            // edit must still be a cache MISS, or a landing could serve a stale
+            // "verified" result. Computed once from the integration worktree's
+            // props + the loaded FSharp.Core + the running runtime.
+            let toolchain =
+              Features.LiveTesting.InputHashCoverage.toolchainFingerprint fileReader binding.WorktreePath
             let inputHashOf (tid: Features.LiveTesting.TestId) : string option =
               match merged.Slots.Length with
               | 0 -> None
               | _ ->
                 match Map.tryFind tid lt.TestState.TestCoverageBitmaps with
                 | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
-                  Some(Features.LiveTesting.InputHashCoverage.ofCoverage fileReader merged bm)
+                  Some(Features.LiveTesting.InputHashCoverage.ofCoverage toolchain fileReader merged bm)
                 | _ -> None
             let runMisses toRun =
               Features.CohortLandingVerify.runTestsInSession elmRuntime observation sessionId toRun

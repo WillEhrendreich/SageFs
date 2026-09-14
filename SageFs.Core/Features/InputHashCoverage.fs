@@ -36,30 +36,60 @@ module InputHashCoverage =
   [<Literal>]
   let private missingSentinel = " <missing>"
 
-  /// A test's `InputHash`, computed from the real content of every source
-  /// file its `bitmap` says it exercises (§5.3). For each covered file, in
-  /// sorted order, feeds BOTH the file's path and its content (or
-  /// `missingSentinel` when `readFile` returns `None`) into
-  /// `InputHash.compute` — the path guards against two different covered
-  /// file sets colliding just because their contents happen to match, and
-  /// `InputHash.compute` already length-prefixes every element, so a
-  /// path/content pair can never be split ambiguously across entries. An
-  /// empty covered set still produces a stable hash (of the empty
-  /// sequence), rather than throwing.
+  /// A stable fingerprint of the BUILD/TOOLCHAIN identity — the pinned
+  /// dependency versions (`Directory.Packages.props`), the build
+  /// config/TFM/`DefineConstants` (`Directory.Build.props`), the loaded
+  /// `FSharp.Core` version, and the running .NET runtime. Folded into every
+  /// test's `InputHash` (see `ofCoverage`) so that ANY toolchain change — an
+  /// SDK bump, a dependency version change, a config/constant change — is
+  /// structurally a cache MISS even when zero source files were edited.
+  /// Without it a landing could serve a stale "verified" result after a
+  /// compiler/dependency change: the covered source is byte-identical, so its
+  /// content hash is unchanged, yet the compiled/executed behaviour differs
+  /// (roast-6 #1 — a bounded false-green).
+  ///
+  /// Pure: `readFile` is injected (a props file that can't be read folds in as
+  /// `"absent"`, so its appearance/disappearance also shifts the fingerprint).
+  let toolchainFingerprint (readFile: string -> string option) (repoRoot: string) : string =
+    let propsFingerprint (name: string) =
+      match readFile (System.IO.Path.Combine(repoRoot, name)) with
+      | Some content -> InputHash.ofContent content
+      | None -> "absent"
+
+    InputHash.compute
+      [ "packages"; propsFingerprint "Directory.Packages.props"
+        "build"; propsFingerprint "Directory.Build.props"
+        "fsharpcore"; string (typeof<int list>.Assembly.GetName().Version)
+        "runtime"; System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription ]
+
+  /// A test's `InputHash`, computed from the `toolchain` fingerprint PLUS the
+  /// real content of every source file its `bitmap` says it exercises (§5.3).
+  /// The `toolchain` fingerprint (see `toolchainFingerprint`) leads the hashed
+  /// sequence so a compiler/dependency/config change invalidates every cached
+  /// result even when the covered source is byte-identical. For each covered
+  /// file, in sorted order, feeds BOTH the file's path and its content (or
+  /// `missingSentinel` when `readFile` returns `None`) into `InputHash.compute`
+  /// — the path guards against two different covered file sets colliding just
+  /// because their contents happen to match, and `InputHash.compute` already
+  /// length-prefixes every element, so a path/content pair can never be split
+  /// ambiguously across entries. An empty covered set still produces a stable
+  /// hash (of just the toolchain fingerprint), rather than throwing.
   ///
   /// Pure: `readFile` is injected so the caller decides how (and whether)
   /// to touch disk — this function performs no IO itself.
   let ofCoverage
+    (toolchain: string)
     (readFile: string -> string option)
     (map: InstrumentationMap)
     (bitmap: CoverageBitmap)
     : string =
-    coveredFiles map bitmap
-    |> List.collect (fun file ->
-      let content =
-        match readFile file with
-        | Some c -> c
-        | None -> missingSentinel
+    "toolchain" :: toolchain
+    :: (coveredFiles map bitmap
+        |> List.collect (fun file ->
+          let content =
+            match readFile file with
+            | Some c -> c
+            | None -> missingSentinel
 
-      [ file; content ])
+          [ file; content ]))
     |> InputHash.compute
