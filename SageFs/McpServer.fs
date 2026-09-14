@@ -2052,13 +2052,24 @@ let mapStatusRoutes (app: WebApplication) (rctx: RouteContext) =
 /// somewhere else at eval time.
 let private resolveRealSessionPath (p: string) : string =
   let full = System.IO.Path.GetFullPath p
-  let fsi : System.IO.FileSystemInfo =
-    match System.IO.Directory.Exists(full) with
-    | true -> System.IO.DirectoryInfo(full) :> System.IO.FileSystemInfo
-    | false -> System.IO.FileInfo(full) :> System.IO.FileSystemInfo
-  match fsi.ResolveLinkTarget(returnFinalTarget = true) with
-  | null -> full
-  | resolved -> resolved.FullName
+  // Only resolve a symlink target when something actually exists at the path.
+  // A project path frequently does NOT exist as a file at Combine(workingDir,
+  // name) — the daemon resolves/locates projects itself — and calling
+  // ResolveLinkTarget on a non-existent path throws DirectoryNotFoundException,
+  // which the create handler does not catch (→ a spurious 500 instead of a
+  // clean containment decision). The canonical `full` path is the right value
+  // to containment-check against when there is no link to follow, so a missing
+  // path still canonicalizes and an escaping one is still rejected as 400.
+  let fsiOpt : System.IO.FileSystemInfo option =
+    if System.IO.Directory.Exists full then Some (System.IO.DirectoryInfo(full) :> System.IO.FileSystemInfo)
+    elif System.IO.File.Exists full then Some (System.IO.FileInfo(full) :> System.IO.FileSystemInfo)
+    else None
+  match fsiOpt with
+  | None -> full
+  | Some fsi ->
+    match fsi.ResolveLinkTarget(returnFinalTarget = true) with
+    | null -> full
+    | resolved -> resolved.FullName
 
 let private isUncPath (p: string) =
   not (System.String.IsNullOrWhiteSpace p)

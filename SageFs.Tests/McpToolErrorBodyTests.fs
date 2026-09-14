@@ -152,6 +152,19 @@ module ValidateSessionCreateRequestTests =
           validateSessionCreateRequest dir [ "App.fsproj" ]
           |> Expect.isOk "a project path inside the working directory should be valid")
       }
+
+      test "accepts a contained project path that does not exist on disk (no throw)" {
+        // The daemon resolves/locates projects itself, so a project NAME need
+        // not exist at Combine(workingDir, name). The containment gate must
+        // canonicalize such a path and accept it (it is inside workingDir) —
+        // NOT throw. Regression guard: resolveRealSessionPath used to call
+        // ResolveLinkTarget on the non-existent path, throwing
+        // DirectoryNotFoundException, which surfaced as a spurious HTTP 500 from
+        // /api/sessions/create (integration-host buffer-changed test).
+        withTempDir (fun dir ->
+          validateSessionCreateRequest dir [ "DoesNotExist.fsproj" ]
+          |> Expect.isOk "a contained-but-missing project path must validate, not throw")
+      }
     ]
 
 module WithEchoOutcomeRaisesStructuredErrorTests =
