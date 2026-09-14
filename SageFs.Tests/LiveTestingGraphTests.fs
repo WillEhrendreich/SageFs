@@ -1716,6 +1716,75 @@ let findAffectedTestsFixTests =
     }
   ]
 
+// ── findAffectedTests qualified-name-boundary regression tests (roast-7 §4) ──
+// The old implementation matched via raw String.Contains, which is over-broad
+// in both directions: `tc.FullName.Contains updated` selects a test whenever a
+// SHORT updated symbol happens to appear anywhere inside the test's full name
+// (e.g. "Run" inside "TestRunner"), and `updated.Contains (tc.FullName.Split('.').[0])`
+// selects a test whenever its leading segment happens to appear anywhere inside
+// an unrelated updated symbol's name (e.g. "Session" inside "UserSessionHelper").
+// These tests pin down whole-segment matching: an unrelated symbol that merely
+// contains a test's identifier as a raw substring must NOT select that test,
+// while a genuinely related change (exact name, dotted prefix, or dotted
+// suffix) still does — proven by including one real match alongside the
+// unrelated one so the conservative "match nothing → run everything" fallback
+// cannot mask the precision defect.
+[<Tests>]
+let findAffectedTestsQualifiedNameBoundaryTests =
+  let mkTC id name fw =
+    { Id = TestId.create name fw; FullName = name
+      DisplayName = name.Split('.').[name.Split('.').Length - 1]
+      Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = fw
+      Category = TestCategory.Unit }
+  testList "findAffectedTests qualified-name boundaries" [
+    test "an unrelated symbol merely containing a test's leading segment as a substring does not select it" {
+      let unrelated = mkTC "t1" "Session.test_login" TestFramework.Expecto
+      let related = mkTC "t2" "MyModule.Tests.test_add" TestFramework.Expecto
+      let affected =
+        LiveTestingHook.findAffectedTests
+          [| unrelated; related |]
+          ["UserSessionHelper.validate"; "MyModule.Tests.test_add"]
+      affected |> Array.contains related.Id
+      |> Expect.isTrue "the genuinely-changed test is selected"
+      affected |> Array.contains unrelated.Id
+      |> Expect.isFalse "a symbol that merely CONTAINS the test's module name as a raw substring must not select it"
+    }
+    test "a short updated symbol merely contained inside a test's full name does not select it" {
+      let unrelated = mkTC "t1" "MyModule.TestRunner.test_x" TestFramework.Expecto
+      let related = mkTC "t2" "MyModule.Tests.test_add" TestFramework.Expecto
+      let affected =
+        LiveTestingHook.findAffectedTests
+          [| unrelated; related |]
+          ["Run"; "MyModule.Tests.test_add"]
+      affected |> Array.contains related.Id
+      |> Expect.isTrue "the genuinely-changed test is selected"
+      affected |> Array.contains unrelated.Id
+      |> Expect.isFalse "a short updated symbol that is merely a raw substring of the test's full name must not select it"
+    }
+    test "exact qualified-name match selects the test" {
+      let tests = [| mkTC "t1" "MyModule.Tests.test_add" TestFramework.Expecto |]
+      LiveTestingHook.findAffectedTests tests ["MyModule.Tests.test_add"]
+      |> Array.length
+      |> Expect.equal "exact full-name match" 1
+    }
+    test "a changed leaf symbol (dotted suffix of the test's qualified name) selects the test" {
+      let tests = [| mkTC "t1" "MyModule.Tests.test_add" TestFramework.Expecto |]
+      LiveTestingHook.findAffectedTests tests ["Tests.test_add"]
+      |> Array.length
+      |> Expect.equal "dotted suffix match" 1
+    }
+    test "a changed module (dotted prefix of the test's qualified name) selects every test beneath it" {
+      let tests = [|
+        mkTC "t1" "MyModule.Tests.test_add" TestFramework.Expecto
+        mkTC "t2" "MyModule.Tests.test_sub" TestFramework.Expecto
+        mkTC "t3" "Other.Tests.test_mul" TestFramework.XUnit
+      |]
+      LiveTestingHook.findAffectedTests tests ["MyModule.Tests"]
+      |> Array.length
+      |> Expect.equal "both tests under the changed module are selected" 2
+    }
+  ]
+
 [<Tests>]
 let findAllTestIdsTests =
   let mkTC id name fw =

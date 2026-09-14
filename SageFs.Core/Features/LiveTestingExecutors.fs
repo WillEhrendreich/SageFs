@@ -982,11 +982,85 @@ module LiveTestingHook =
   let findAllTestIds (discoveredTests: TestCase array) : TestId array =
     discoveredTests |> Array.map (fun t -> t.Id)
 
+  /// Split a dotted qualified name into its non-empty segments, e.g.
+  /// "MyModule.Tests.test_add" -> ["MyModule"; "Tests"; "test_add"].
+  let private qualifiedSegments (qualifiedName: string) : string list =
+    qualifiedName.Split('.')
+    |> Array.filter (fun s -> s <> "")
+    |> Array.toList
+
+  /// The declaring container of a qualified name — every segment except the
+  /// last (leaf member) one, e.g. "MyModule.Tests.test_add" -> ["MyModule"; "Tests"].
+  let private container (segs: string list) : string list =
+    match segs with
+    | [] -> []
+    | _ -> segs |> List.take (segs.Length - 1)
+
+  /// True when `updatedSymbol` and `testFullName` name the same symbol
+  /// identity on whole dot-segment boundaries — never on raw substring
+  /// containment. Matches when:
+  ///  - the two qualified names are identical, or
+  ///  - `updatedSymbol` is a dotted SUFFIX of the test's qualified name
+  ///    (a changed leaf method/type, e.g. "Tests.test_add" or "test_add",
+  ///    affects the test declared under it), or
+  ///  - `updatedSymbol` is a dotted PREFIX of the test's qualified name
+  ///    (a changed module/class, e.g. "MyModule.Tests", affects every test
+  ///    beneath it), or
+  ///  - the test's qualified name is a dotted PREFIX of `updatedSymbol`
+  ///    (a changed symbol nested inside the test itself, e.g. a local
+  ///    helper closure, affects that exact test), or
+  ///  - both names share the same non-empty declaring CONTAINER (module/type)
+  ///    — e.g. "MyModule.helper" and "MyModule.test1" are siblings under
+  ///    "MyModule" — so a change to any member of a module affects the tests
+  ///    declared in that same module.
+  /// Segment-boundary anchoring is the point: "Session" no longer matches
+  /// inside "SessionManager", and "Run" no longer matches inside
+  /// "TestRunner" — the previous `String.Contains` heuristic matched both.
+  let private qualifiedNameMatches (testFullName: string) (updatedSymbol: string) : bool =
+    let testSegs = qualifiedSegments testFullName
+    let updatedSegs = qualifiedSegments updatedSymbol
+    match testSegs, updatedSegs with
+    | [], _ | _, [] -> false
+    | _ ->
+      testFullName = updatedSymbol
+      || (updatedSegs.Length <= testSegs.Length
+          && (testSegs |> List.skip (testSegs.Length - updatedSegs.Length)) = updatedSegs)
+      || (updatedSegs.Length <= testSegs.Length
+          && (testSegs |> List.truncate updatedSegs.Length) = updatedSegs)
+      || (testSegs.Length <= updatedSegs.Length
+          && (updatedSegs |> List.truncate testSegs.Length) = testSegs)
+      || (let testContainer = container testSegs
+          not (List.isEmpty testContainer) && testContainer = container updatedSegs)
+
   /// Find which discovered tests are affected by updated method names.
-  /// Simple name matching — FCS-based matching comes in Phase 4.
+  ///
+  /// Matches on whole dotted-qualified-name segments (see
+  /// `qualifiedNameMatches`) — never on raw `String.Contains`, which
+  /// previously let an unrelated symbol that merely CONTAINED a test's
+  /// module name as a substring (or vice versa) select tests sharing no
+  /// real relationship (roast-7 §4).
+  ///
+  /// HONEST GAP: `updatedMethodNames` today carries Harmony's reflected
+  /// `Method.FullName` values from the hot-reload middleware
+  /// (SageFs.Core/Middleware/HotReloading.fs, `handleNewAsmFromRepl`, the
+  /// sole production caller via `afterReload` below) — dotted-qualified
+  /// reflection names, NOT the compiler's own symbol-use table. The richer
+  /// input roast-7 §4 points at — the FCS `WorkerSymbolRef`/`SymbolReference`
+  /// data already produced by `GetAllUsesOfAllSymbolsInFile`
+  /// (SageFs.Core/Features/Diagnostics.fs:88, SageFs.Core/WorkerProtocol.fs:289)
+  /// and already consumed by the separate `TestDependencyGraph`
+  /// exact-symbol-map machinery (SageFs.Core/Features/LiveTestingTypes.fs:3712+,
+  /// `TestDependencyGraph.findAffected`) — is not threaded to this call site.
+  /// Wiring that would mean changing `HotReloading.fs`'s call into
+  /// `afterReload` to pass real FCS symbol-use data (or routing affected-set
+  /// selection through `TestDependencyGraph.findAffected` instead of this
+  /// function), which is outside this change's owned files. This function is
+  /// qualified-name-correct for whatever symbol names it is given today; it
+  /// does not fabricate a connection to data that isn't actually wired.
+  ///
   /// Empty updatedMethodNames means nothing changed — returns empty.
-  /// Conservative fallback: when methods changed but none match by name,
-  /// run ALL discovered tests rather than silently skipping them.
+  /// Conservative fallback: when methods changed but none match by
+  /// qualified name, run ALL discovered tests rather than silently skipping them.
   let findAffectedTests
     (discoveredTests: TestCase array)
     (updatedMethodNames: string list)
@@ -998,9 +1072,7 @@ module LiveTestingHook =
         discoveredTests
         |> Array.filter (fun tc ->
           updatedMethodNames
-          |> List.exists (fun updated ->
-            tc.FullName.Contains updated
-            || updated.Contains (tc.FullName.Split('.').[0])))
+          |> List.exists (qualifiedNameMatches tc.FullName))
         |> Array.map (fun t -> t.Id)
       match Array.isEmpty matched with
       | true ->
