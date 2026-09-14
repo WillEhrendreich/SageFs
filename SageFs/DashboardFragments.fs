@@ -1692,18 +1692,36 @@ let resolveThemePush
     | _ -> None
 
 /// Render the hot-reload panel with a file list grouped by directory.
+///
+/// Every control here is wired through the Datastar `Ds.post`/`Ds.onClick`
+/// action builders — never a hand-rolled `onclick` + `fetch()` string (the
+/// "some random xml nonsense" the maintainer explicitly banned). A shared
+/// per-control-class `Ds.indicator` signal drives immediate ⏳ feedback,
+/// mirroring `Signals.ActionLoading` (the eval-actions row's single
+/// in-flight signal). The `/api/sessions/{sid}/hotreload/*` endpoints and
+/// their JSON body shapes (`{}`, `{"path":...}`, `{"directory":...}`) are
+/// unchanged: the per-item value is staged into a plain signal named after
+/// the exact field the worker reads (`path`/`directory`) immediately
+/// before `@post` fires, so `@post` still ships it — Datastar's actions
+/// always send the current signals store as the request body.
 let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: bool |} list) (watchedCount: int) =
   let total = List.length files
-  // The onclick handlers carry project file paths. Serialize them as JSON
-  // (a JSON string is a valid JS string literal and escapes quotes), then
-  // attribute-encode the whole handler: a quote in a path can break out of
-  // neither the JS string nor the HTML attribute.
-  let jsonObject1 (key: string) (value: string) =
-    System.Text.Json.JsonSerializer.Serialize(dict [ key, value ])
-  let hotReloadPost (action: string) (body: string) =
-    attrEnc (
-      sprintf "fetch('/api/sessions/%s/hotreload/%s',{method:'POST',headers:{'Content-Type':'application/json'},body:%s})"
-        (Uri.EscapeDataString sessionId) action (System.Text.Json.JsonSerializer.Serialize body))
+  let hotReloadWatchAllLoading = "hotReloadWatchAllLoading"
+  let hotReloadUnwatchAllLoading = "hotReloadUnwatchAllLoading"
+  let hotReloadDirLoading = "hotReloadDirLoading"
+  let hotReloadFileLoading = "hotReloadFileLoading"
+  let hotReloadEndpoint (action: string) =
+    sprintf "/api/sessions/%s/hotreload/%s" (Uri.EscapeDataString sessionId) action
+  // `assign` stages a value into the signal the worker's JSON body reader
+  // expects (e.g. `$path = '...'; `), or "" for the no-body bulk actions.
+  // The whole expression is attribute-encoded: a `"` in a path must break
+  // out of neither the JS string (jsStringLiteral) nor the HTML attribute.
+  let hotReloadClick (assign: string) (action: string) =
+    attrEnc (assign + Ds.post (hotReloadEndpoint action))
+  let indicatorAttrs (signal: string) =
+    [ Ds.indicator signal; Ds.attr' ("disabled", sprintf "$%s" signal) ]
+  let loadingSpan (signal: string) =
+    Elem.span [ Ds.show (sprintf "$%s" signal) ] [ Text.raw "⏳ " ]
   let grouped =
     files
     |> List.groupBy (fun f ->
@@ -1723,15 +1741,17 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
     ]
     Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
       Elem.button
-        [ Attr.class' "eval-btn"
-          Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
-          Attr.create "onclick" (hotReloadPost "watch-all" "{}") ]
-        [ Text.raw "Watch All" ]
+        ([ Attr.class' "eval-btn"
+           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;" ]
+         @ indicatorAttrs hotReloadWatchAllLoading
+         @ [ Ds.onClick (hotReloadClick "" "watch-all") ])
+        [ loadingSpan hotReloadWatchAllLoading; Text.raw "Watch All" ]
       Elem.button
-        [ Attr.class' "eval-btn"
-          Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
-          Attr.create "onclick" (hotReloadPost "unwatch-all" "{}") ]
-        [ Text.raw "Unwatch All" ]
+        ([ Attr.class' "eval-btn"
+           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;" ]
+         @ indicatorAttrs hotReloadUnwatchAllLoading
+         @ [ Ds.onClick (hotReloadClick "" "unwatch-all") ])
+        [ loadingSpan hotReloadUnwatchAllLoading; Text.raw "Unwatch All" ]
     ]
     signalDetails Signals.HotReloadFilesOpen [] [
       Elem.summary [ Attr.style "cursor: pointer; font-size: 0.75rem; color: var(--fg-dim); user-select: none;" ] [
@@ -1749,12 +1769,14 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
           let dirIcon = match allWatched, dirWatchedCount > 0 with | true, _ -> "●" | false, true -> "◐" | false, false -> "○"
           let dirColor = match allWatched || dirWatchedCount > 0 with | true -> "var(--fg-blue, #7aa2f7)" | false -> "var(--fg-dim, #565f89)"
           let dirAction = match allWatched with | true -> "unwatch-directory" | false -> "watch-directory"
-          let dirKey = "directory"
+          let dirClick = hotReloadClick (sprintf "$directory = %s; " (jsStringLiteral dir)) dirAction
           [
             Elem.div
               [ Attr.style "font-weight: 600; margin-top: 4px; opacity: 0.8; font-size: 0.7rem; cursor: pointer; display: flex; align-items: center; gap: 4px;"
-                Attr.create "onclick" (hotReloadPost dirAction (jsonObject1 dirKey dir)) ]
-              [ Elem.span [ Attr.style (sprintf "color: %s;" dirColor) ] [ textEnc dirIcon ]
+                Ds.indicator hotReloadDirLoading
+                Ds.onClick dirClick ]
+              [ loadingSpan hotReloadDirLoading
+                Elem.span [ Attr.style (sprintf "color: %s;" dirColor); Ds.show (sprintf "!$%s" hotReloadDirLoading) ] [ textEnc dirIcon ]
                 Text.raw "📁 "
                 textEnc (sprintf "%s (%d/%d)" dirLabel dirWatchedCount (List.length dirFiles)) ]
             yield! dirFiles |> List.map (fun f ->
@@ -1765,10 +1787,13 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
                 | idx -> n.[idx + 1..]
               let icon = match f.watched with | true -> "●" | false -> "○"
               let color = match f.watched with | true -> "var(--fg-blue, #7aa2f7)" | false -> "var(--fg-dim, #565f89)"
+              let fileClick = hotReloadClick (sprintf "$path = %s; " (jsStringLiteral f.path)) "toggle"
               Elem.div
                 [ Attr.style "cursor: pointer; padding: 1px 4px; display: flex; align-items: center; gap: 4px;"
-                  Attr.create "onclick" (hotReloadPost "toggle" (jsonObject1 "path" f.path)) ]
-                [ Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.8rem;" color) ] [ textEnc icon ]
+                  Ds.indicator hotReloadFileLoading
+                  Ds.onClick fileClick ]
+                [ loadingSpan hotReloadFileLoading
+                  Elem.span [ Attr.style (sprintf "color: %s; font-size: 0.8rem;" color); Ds.show (sprintf "!$%s" hotReloadFileLoading) ] [ textEnc icon ]
                   Elem.span [ Attr.style (match f.watched with | true -> "opacity: 1" | false -> "opacity: 0.6") ] [ textEnc fileName ] ]
             )
           ])

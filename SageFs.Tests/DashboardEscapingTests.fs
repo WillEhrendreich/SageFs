@@ -108,6 +108,61 @@ let dashboardEscapingRenderTests =
            (htmlEscape h)
   ]
 
+// ─── Hot-reload controls: Datastar wiring, not raw onclick/fetch ─────
+// roast-6 #9: Watch All / Unwatch All / per-directory / per-file toggles
+// used to be `Attr.create "onclick" (...fetch...)` — no Ds.indicator
+// feedback, response dropped, bypassing Datastar entirely. These pin the
+// Ds.onClick/Ds.indicator wiring and, since the toggle rows carry runtime
+// file paths and directories, that the same hostile-payload strings stay
+// inert in the new `data-on:click` attribute.
+
+[<Tests>]
+let dashboardEscapingHotReloadTests =
+  testList "Dashboard escaping.hotreload" [
+
+    testCase "renderHotReloadPanel wires every control through Datastar, never raw onclick" <| fun _ ->
+      let html =
+        renderHotReloadPanel "abcd1234"
+          [ {| path = "src/A.fs"; watched = true |}; {| path = "src/Sub/B.fs"; watched = false |} ] 1
+        |> renderNode
+      html.Contains(" onclick=", StringComparison.Ordinal)
+      |> Expect.isFalse "hot-reload controls must not use raw onclick (use Ds.onClick)"
+      html.Contains("data-on:click=", StringComparison.Ordinal)
+      |> Expect.isTrue "hot-reload controls must carry Datastar data-on:click"
+      html.Contains("data-indicator:", StringComparison.Ordinal)
+      |> Expect.isTrue "hot-reload controls must carry a Ds.indicator loading signal"
+
+    testCase "renderHotReloadPanel posts to the unchanged hotreload endpoints and bodies" <| fun _ ->
+      let html =
+        renderHotReloadPanel "abcd1234"
+          [ {| path = "src/A.fs"; watched = true |}; {| path = "src/Sub/B.fs"; watched = false |} ] 1
+        |> renderNode
+      html
+      |> Expect.stringContains "watch-all endpoint unchanged" (htmlEscape "@post('/api/sessions/abcd1234/hotreload/watch-all')")
+      html
+      |> Expect.stringContains "unwatch-all endpoint unchanged" (htmlEscape "@post('/api/sessions/abcd1234/hotreload/unwatch-all')")
+      html
+      |> Expect.stringContains "toggle endpoint unchanged" (htmlEscape "@post('/api/sessions/abcd1234/hotreload/toggle')")
+      html
+      |> Expect.stringContains "watch-directory endpoint unchanged" (htmlEscape "@post('/api/sessions/abcd1234/hotreload/watch-directory')")
+      html
+      |> Expect.stringContains "per-file toggle still stages the path field the worker parses"
+           (htmlEscape "$path = 'src/A.fs';")
+      html
+      |> Expect.stringContains "per-directory toggle still stages the directory field the worker parses"
+           (htmlEscape "$directory = 'src/Sub/';")
+
+    testProperty "renderHotReloadPanel never emits a hostile file path raw" <| fun (prefix: string) (pick: int) ->
+      let h = hostile prefix pick
+      renderHotReloadPanel "abcd1234" [ {| path = h; watched = false |} ] 0 |> renderNode
+      |> expectInert "renderHotReloadPanel (file path)"
+
+    testProperty "renderHotReloadPanel never emits a hostile directory raw" <| fun (prefix: string) (pick: int) ->
+      let h = hostile prefix pick
+      renderHotReloadPanel "abcd1234" [ {| path = h + "/File.fs"; watched = false |} ] 0 |> renderNode
+      |> expectInert "renderHotReloadPanel (directory)"
+  ]
+
 // ─── Structural guard ───────────────────────────────────────────────
 // Every `Text.raw` in the dashboard renderers must take a plain string
 // literal. Anything computed at runtime goes through `textEnc`. The only
