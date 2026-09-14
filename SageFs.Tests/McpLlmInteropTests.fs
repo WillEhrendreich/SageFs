@@ -199,13 +199,14 @@ module ProjectDiscoveryTests =
             "/test/dir"
             [| "App.fsproj" |]
             [| "App.slnx" |]
+            0
         result |> Expect.stringContains "Should mention .slnx in output" ".slnx"
         result |> Expect.stringContains "Should list the .slnx file" "App.slnx"
 
       testCase "formatAvailableProjects shows none when empty"
       <| fun _ ->
         let result =
-          SageFs.McpAdapter.formatAvailableProjects "/test/dir" [||] [||]
+          SageFs.McpAdapter.formatAvailableProjects "/test/dir" [||] [||] 0
         result |> Expect.stringContains "Should show none for empty" "(none found)"
 
       testCase "get_available_projects tool formats discoverable projects for LLMs"

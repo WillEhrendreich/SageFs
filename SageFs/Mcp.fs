@@ -22,16 +22,45 @@ module McpAdapter =
   let isProjectFile (path: string) =
     path.EndsWith(".fsproj", System.StringComparison.Ordinal)
 
-  let formatAvailableProjects (workingDir: string) (projects: string array) (solutions: string array) =
+  /// Directory-name segments never worth surfacing as "available projects":
+  /// build output, VCS/tooling metadata, restored packages, and — the one that
+  /// actually bit us while dogfooding — the per-agent worktrees under
+  /// `.claude/worktrees`, each a full repo checkout that multiplies every
+  /// `.fsproj`. A recursive scan that does not prune these returned 1,600+ paths
+  /// and overflowed the calling agent's context.
+  let projectNoiseSegments : Set<string> =
+    Set.ofList [ "bin"; "obj"; ".git"; ".claude"; ".vs"; ".idea"; "node_modules"; "packages"; ".fable"; ".fake"; ".worktrees" ]
+
+  /// True if any path segment is build/worktree/tooling noise.
+  let isNoiseProjectPath (path: string) : bool =
+    path.Split([| '/'; '\\' |]) |> Array.exists projectNoiseSegments.Contains
+
+  /// Bound the available-projects list for an agent's context window: drop noise
+  /// paths, sort deterministically, and cap. Returns the shown paths plus the
+  /// TOTAL real project count (post-noise-filter) so the caller can honestly say
+  /// "showing X of N" instead of dumping everything. Pure and testable.
+  let selectProjectsForDisplay (cap: int) (relativePaths: string seq) : string[] * int =
+    let real =
+      relativePaths
+      |> Seq.filter (isNoiseProjectPath >> not)
+      |> Seq.sort
+      |> Seq.toArray
+    (real |> Array.truncate (max 0 cap)), real.Length
+
+  let formatAvailableProjects (workingDir: string) (projects: string array) (solutions: string array) (moreCount: int) =
     let projectList =
       match Array.isEmpty projects with
       | true -> "  (none found)"
       | false -> projects |> Array.map (sprintf "  - %s") |> String.concat "\n"
+    let moreNote =
+      match moreCount with
+      | n when n > 0 -> sprintf "\n  …and %d more (pass working_directory to narrow the search)" n
+      | _ -> ""
     let solutionList =
       match Array.isEmpty solutions with
       | true -> "  (none found)"
       | false -> solutions |> Array.map (sprintf "  - %s") |> String.concat "\n"
-    sprintf "Available Projects/Solutions in %s:\n\n📦 F# Projects (.fsproj):\n%s\n\n📂 Solutions (.sln/.slnx):\n%s\n\n💡 Start the daemon with: SageFs\n💡 Then create a session for ProjectName.fsproj or SolutionName.slnx via create_session\n💡 Sessions can also be created from connected editors or the dashboard" workingDir projectList solutionList
+    sprintf "Available Projects/Solutions in %s:\n\n📦 F# Projects (.fsproj):\n%s%s\n\n📂 Solutions (.sln/.slnx):\n%s\n\n💡 Start the daemon with: SageFs\n💡 Then create a session for ProjectName.fsproj or SolutionName.slnx via create_session\n💡 Sessions can also be created from connected editors or the dashboard" workingDir projectList moreNote solutionList
 
   let formatStartupBanner (version: string) (mcpPort: int option) =
     match mcpPort with
@@ -1946,7 +1975,7 @@ module McpTools =
             {| state = "NoSession"
                message =
                  match sessionCount with
-                 | 0 -> "No sessions exist. Use create_session to load a project, or get_available_projects to discover .fsproj files."
+                 | 0 -> "No sessions exist. Create one with create_session (args are snake_case): working_directory=<dir> projects=[\"<path>.fsproj\"] to load a project, or projects=[] for a bare scratch REPL (pure F#, no project). Use get_available_projects to discover .fsproj files (pass working_directory to narrow a large tree)."
                  | _ -> sprintf "%d session(s) exist but none matched the working directory. Use list_sessions to see them, or switch_session to select one." sessionCount
                available = availableTools |})
       | WarmingUp (sid, status) | Unroutable (sid, status) ->
@@ -2085,6 +2114,28 @@ module McpTools =
         return """{"status": "initializing", "message": "Session is still warming up. This typically takes 15-30s. Use get_recent_fsi_events to monitor warmup progress. Do NOT sleep-poll or create a new session."}"""
     })
 
+  /// Recursively find `.fsproj` under `root`, PRUNING noise directories
+  /// (`McpAdapter.projectNoiseSegments`) so the walk never descends into build
+  /// output or the per-agent worktrees under `.claude/worktrees` — each a full
+  /// checkout that otherwise multiplies every project into a 1,600-path firehose
+  /// (dogfood finding, 2026-09-14). Per-directory IO errors are swallowed so one
+  /// unreadable subtree can't fail the whole discovery.
+  let rec private walkProjectFiles (root: string) : string seq =
+    seq {
+      let files = try Directory.EnumerateFiles(root, "*.fsproj") |> Seq.toArray with _ -> [||]
+      yield! files
+      let subdirs = try Directory.EnumerateDirectories root |> Seq.toArray with _ -> [||]
+      for d in subdirs do
+        let name = Path.GetFileName(d.TrimEnd('/', '\\'))
+        if not (McpAdapter.projectNoiseSegments.Contains name) then
+          yield! walkProjectFiles d
+    }
+
+  /// How many projects to surface to an agent before summarizing the rest — a
+  /// list-style result must fit an agent's context (dogfood finding: the old
+  /// unbounded result overflowed it even under the 256 KiB tool-output cap).
+  let availableProjectsDisplayCap = 40
+
   let getAvailableProjects (ctx: McpContext) (_agent: string) (workingDirectory: string option) : Task<string> =
     task {
       // Resolve working directory without requiring a session.
@@ -2100,15 +2151,15 @@ module McpTools =
           | _ -> return Environment.CurrentDirectory
       }
 
-      let projects =
+      let shownProjects, totalProjects =
         try
-          Directory.EnumerateFiles(workingDir, "*.fsproj", SearchOption.AllDirectories)
+          walkProjectFiles workingDir
           |> Seq.filter McpAdapter.isProjectFile
           |> Seq.map (fun p -> Path.GetRelativePath(workingDir, p))
-          |> Seq.toArray
+          |> McpAdapter.selectProjectsForDisplay availableProjectsDisplayCap
         with
         | :? System.OperationCanceledException -> reraise()
-        | _ -> [||]
+        | _ -> [||], 0
 
       let solutions =
         try
@@ -2120,7 +2171,7 @@ module McpTools =
         | :? System.OperationCanceledException -> reraise()
         | _ -> [||]
 
-      return McpAdapter.formatAvailableProjects workingDir projects solutions
+      return McpAdapter.formatAvailableProjects workingDir shownProjects solutions (totalProjects - shownProjects.Length)
     }
 
   let loadFSharpScript (ctx: McpContext) (agentName: string) (filePath: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =

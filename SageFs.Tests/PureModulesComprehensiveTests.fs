@@ -1919,19 +1919,50 @@ let mcpAdapterPureTests = testList "McpAdapter pure" [
   ]
   testList "formatAvailableProjects" [
     test "lists projects and solutions" {
-      let result = McpAdapter.formatAvailableProjects "C:\\test" [|"a.fsproj"|] [|"b.sln"|]
+      let result = McpAdapter.formatAvailableProjects "C:\\test" [|"a.fsproj"|] [|"b.sln"|] 0
       result |> Expect.stringContains "has project" "a.fsproj"
       result |> Expect.stringContains "has solution" "b.sln"
       result |> Expect.stringContains "has dir" "C:\\test"
     }
     test "empty arrays show none found" {
-      let result = McpAdapter.formatAvailableProjects "C:\\test" [||] [||]
+      let result = McpAdapter.formatAvailableProjects "C:\\test" [||] [||] 0
       result |> Expect.stringContains "no projects" "(none found)"
     }
     test "multiple projects listed" {
-      let result = McpAdapter.formatAvailableProjects "C:\\test" [|"a.fsproj";"b.fsproj"|] [||]
+      let result = McpAdapter.formatAvailableProjects "C:\\test" [|"a.fsproj";"b.fsproj"|] [||] 0
       result |> Expect.stringContains "has a" "a.fsproj"
       result |> Expect.stringContains "has b" "b.fsproj"
+    }
+    test "moreCount surfaces a truncation note" {
+      let result = McpAdapter.formatAvailableProjects "C:\\test" [|"a.fsproj"|] [||] 17
+      result |> Expect.stringContains "notes the hidden count" "17 more"
+    }
+  ]
+  // Dogfood finding F1: an unbounded, unpruned recursive scan returned 1,600+
+  // paths and overflowed the agent's context. These pin the noise-pruning + cap.
+  testList "selectProjectsForDisplay / isNoiseProjectPath (dogfood F1)" [
+    test "isNoiseProjectPath flags build/worktree/tooling segments" {
+      McpAdapter.isNoiseProjectPath ".claude/worktrees/agent-x/SageFs/A.fsproj" |> Expect.isTrue "worktree checkout is noise"
+      McpAdapter.isNoiseProjectPath "SageFs/bin/Release/net10.0/A.fsproj" |> Expect.isTrue "bin output is noise"
+      McpAdapter.isNoiseProjectPath "obj/A.fsproj" |> Expect.isTrue "obj output is noise"
+      McpAdapter.isNoiseProjectPath "SageFs.Core/A.fsproj" |> Expect.isFalse "a real source project is not noise"
+    }
+    test "selectProjectsForDisplay drops noise, sorts, and caps; total counts real projects" {
+      let raw =
+        [ "SageFs.Core/A.fsproj"
+          ".claude/worktrees/w1/SageFs.Core/A.fsproj"   // noise (worktree dup)
+          "SageFs/bin/Debug/net10.0/A.fsproj"           // noise (bin)
+          "SageFs/B.fsproj"
+          "Samples/C.fsproj" ]
+      let shown, total = McpAdapter.selectProjectsForDisplay 2 raw
+      total |> Expect.equal "3 real projects after noise-filter" 3
+      shown.Length |> Expect.equal "capped to 2" 2
+      shown |> Expect.equal "sorted, noise-free, first 2" [| "SageFs.Core/A.fsproj"; "SageFs/B.fsproj" |]
+    }
+    test "a cap larger than the set shows everything with zero hidden" {
+      let shown, total = McpAdapter.selectProjectsForDisplay 100 [ "a.fsproj"; "b.fsproj" ]
+      total |> Expect.equal "total" 2
+      (total - shown.Length) |> Expect.equal "nothing hidden" 0
     }
   ]
   testList "formatDiagnosticsResultJson" [
