@@ -1,6 +1,7 @@
 namespace SageFs
 
 open System
+open System.Collections.Generic
 open SageFs.Measures
 
 /// The pure cohort core (sagefs-multiagent-vision.md §5.1, §5.2, §5.4, §5.7, §7.1, §7.3;
@@ -980,24 +981,94 @@ module Cohort =
   /// frame — `Map.toArray`/`Array.sortBy` give every array a deterministic order,
   /// so two calls with equal inputs are structurally equal, not merely
   /// equivalent.
+  ///
+  /// Data-oriented rewrite (sagefs-multiagent-vision.md §3.4/§7.4 perf budget):
+  /// the original implementation built a fresh immutable, balanced-tree
+  /// `Set<TestId>` per session per bitplane (`Set.ofList` — O(n log n) with an
+  /// allocation on every tree rebalance) and then queried it once per test
+  /// column — 33 tree builds+queries per call at 11 sessions × 3 bitplanes,
+  /// measured at p50≈77ms/p99≈84ms against a <1ms p99 budget
+  /// (CohortPerfBudgetTests.fs).
+  ///
+  /// This version hashes every reported test-id string AT MOST ONCE (a first
+  /// profiling pass — before this rewrite the "shared `Dictionary`" version
+  /// still hashed each of the ~77,000 reported outcomes TWICE: once to
+  /// discover the distinct set, once more in `TryGetValue` while writing
+  /// bits — split ~3.0ms/~3.6ms of a ~9ms call in `dotnet fsi` phase timing).
+  /// A single pass assigns each newly-seen `TestId` a FIRST-SEEN integer
+  /// column index (one dictionary probe per occurrence — unavoidable, this is
+  /// the dedup) and records each hit as that plain `int` in a per-(session,
+  /// bitplane) buffer — no second string hash. Only once the distinct set is
+  /// complete do we sort it into the frame's canonical column order and
+  /// derive an `int[] -> int[]` PERMUTATION (first-seen index -> final sorted
+  /// column, one dictionary probe per DISTINCT id, not per occurrence). The
+  /// second pass turns the recorded hits into the final `bool[]` rows via
+  /// that permutation — plain integer array indexing, never a string hash.
+  /// Same `CohortFrame` shape, same sorted-column order (`Array.sortInPlaceBy`
+  /// on the identical key selector `Array.sortBy` used) — proven
+  /// output-identical against the pre-optimization implementation by
+  /// `CohortProjectEquivalenceTests.fs`'s property test.
   let project (head: LedgerHead<'m>) (snapshots: SessionSnapshot<'m>[]) : CohortFrame<'m> =
     let members = head.State.Members |> Map.toArray
     let memberIds = members |> Array.map fst
-    let memberIndexOf who = memberIds |> Array.tryFindIndex ((=) who) |> Option.defaultValue -1
+    let memberIndex = Dictionary<'m, int>(memberIds.Length)
+    for i in 0 .. memberIds.Length - 1 do
+      memberIndex.[memberIds.[i]] <- i
+    let memberIndexOf who =
+      match memberIndex.TryGetValue who with
+      | true, i -> i
+      | false, _ -> -1
 
     let claims = head.State.Claims |> Map.toArray
 
-    let testIds =
-      snapshots
-      |> Array.collect (fun s -> (s.PassingTests @ s.FailingTests @ s.StaleTests) |> List.toArray)
-      |> Array.distinct
-      |> Array.sortBy (fun (TestId t) -> t)
+    // ── One combined pass over every reported test outcome ─────────────────
+    // Each occurrence costs exactly one dictionary probe (assign-or-look-up a
+    // first-seen column index) — never a second one later. The FINAL (sorted)
+    // column position is not yet known here, so each hit is recorded as a
+    // first-seen index into a per-(session, bitplane) `ResizeArray<int>` —
+    // a compact, contiguous int buffer, not a re-hashed string. (A variant
+    // that pre-sized these via an up-front `List.length` pass measured no
+    // better — sometimes worse — than this simpler grow-as-you-go version;
+    // the extra list traversal cost as much as the reallocations it saved.)
+    let n = snapshots.Length
+    let firstSeenIndex = Dictionary<TestId, int>()
+    let firstSeenIds = ResizeArray<TestId>()
+    let indexOf (t: TestId) =
+      match firstSeenIndex.TryGetValue t with
+      | true, i -> i
+      | false, _ ->
+        let i = firstSeenIds.Count
+        firstSeenIndex.[t] <- i
+        firstSeenIds.Add t
+        i
+    let passHits = Array.init n (fun _ -> ResizeArray<int>())
+    let failHits = Array.init n (fun _ -> ResizeArray<int>())
+    let staleHits = Array.init n (fun _ -> ResizeArray<int>())
+    for si in 0 .. n - 1 do
+      let s = snapshots.[si]
+      for t in s.PassingTests do passHits.[si].Add(indexOf t)
+      for t in s.FailingTests do failHits.[si].Add(indexOf t)
+      for t in s.StaleTests do staleHits.[si].Add(indexOf t)
 
-    let bitmapFor (pick: SessionSnapshot<'m> -> TestId list) =
-      snapshots
-      |> Array.map (fun s ->
-        let set = pick s |> Set.ofList
-        testIds |> Array.map set.Contains)
+    // Sort the discovered ids into the frame's canonical column order, then
+    // derive the first-seen -> final-column permutation — one dictionary
+    // probe per DISTINCT id (into the same `firstSeenIndex` built above),
+    // not per occurrence.
+    let testIds = firstSeenIds.ToArray()
+    Array.sortInPlaceBy (fun (TestId t) -> t) testIds
+    let permute = Array.zeroCreate<int> testIds.Length
+    for finalIdx in 0 .. testIds.Length - 1 do
+      permute.[firstSeenIndex.[testIds.[finalIdx]]] <- finalIdx
+
+    // Materialize each bitplane's rows from the recorded hits — plain integer
+    // indexing through `permute`, never a string hash.
+    let rowsFrom (hits: ResizeArray<int>[]) =
+      hits
+      |> Array.map (fun h ->
+        let row = Array.zeroCreate<bool> testIds.Length
+        for fsIdx in h do
+          row.[permute.[fsIdx]] <- true
+        row)
 
     {
       Version = head.Seq
@@ -1023,7 +1094,7 @@ module Cohort =
       ClaimFence = claims |> Array.map (fun (_, c) -> c.Fence)
       ClaimState = claims |> Array.map (fun (_, c) -> c.State)
       TestIds = testIds
-      Pass = bitmapFor (fun s -> s.PassingTests)
-      Fail = bitmapFor (fun s -> s.FailingTests)
-      Stale = bitmapFor (fun s -> s.StaleTests)
+      Pass = rowsFrom passHits
+      Fail = rowsFrom failHits
+      Stale = rowsFrom staleHits
     }

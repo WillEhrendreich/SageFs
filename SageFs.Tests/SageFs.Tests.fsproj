@@ -403,6 +403,7 @@
         <Compile Include="CohortLedgerExportTests.fs" />
         <Compile Include="CohortPlayTests.fs" />
         <Compile Include="CohortPerfBudgetTests.fs" />
+        <Compile Include="CohortProjectEquivalenceTests.fs" />
         <Compile Include="InputHashCoverageTests.fs" />
         <Compile Include="LandingCacheTests.fs" />
         <Compile Include="AffectedTestsTests.fs" />

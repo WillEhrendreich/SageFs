@@ -198,24 +198,54 @@ let private idealClaimProbeMsP99 = 0.010 // 10 µs
 ///     linear scan over 10 held claims, Cohort.fs:659-669). A 4x margin
 ///     (40µs) keeps the gate real without flaking under a loaded CI runner.
 ///     MET.
-///   - decide+project: p50=79.9ms, p99=101.5ms — ~80-100x OVER the 1ms ideal.
-///     This is a real, measured finding, not noise: the full 2,500-call
-///     warmup+sample loop took the entire 3m23s wall time the first run
-///     logged, confirming a consistent per-call cost rather than a one-off
-///     spike. Code inspection (not yet profiler-confirmed) points at
-///     `project`'s `bitmapFor` (Cohort.fs, the three `Array.map (fun s -> ...
-///     Set.ofList ... )` closures inside `project`): it builds an immutable
-///     F# `Set<TestId>` per session per bitmap via `Set.ofList` — O(n log n)
-///     with an allocation on every tree-rebalance step — 33 times (11
-///     sessions × 3 bitplanes) per call, over up to ~6,650-element lists.
-///     `LiveTestingTypes.fs`'s own `CoverageBitmap` SIMD-array discipline
-///     (cited in §5.3 as the pattern to reuse) is the likely fix; a
-///     `HashSet<TestId>` per bitmap would already remove the tree-rebalance
-///     allocations. NOT MET — flagged as a Phase 1/2 optimization target
-///     (§7.4: "if the stopwatch says otherwise, the frame is the first place
-///     to look"), not silently hidden and not hard-failing CI. A 5x margin
-///     (5ms) is asserted so this test starts passing automatically, with no
-///     edit, once `project` is fixed to land anywhere near budget.
+///   - decide+project: ORIGINALLY p50=79.9ms, p99=101.5ms — ~80-100x OVER the
+///     1ms ideal. Root cause (confirmed, not just inspected): `project`'s
+///     `bitmapFor` built a fresh immutable `Set<TestId>` per session per
+///     bitplane via `Set.ofList` — O(n log n) with an allocation on every
+///     tree-rebalance step, 33 times (11 sessions × 3 bitplanes) per call,
+///     over up to ~6,650-element lists — then queried it once per test
+///     column via balanced-tree lookups.
+///
+///     FIXED (this session, perf task): `project` (`Cohort.fs`) now does a
+///     SINGLE pass over every reported test outcome, hashing each `TestId`
+///     AT MOST ONCE (assign-or-look-up a first-seen `Dictionary<TestId,int>`
+///     column index, recording each hit as a plain `int` in a per-session
+///     `ResizeArray<int>`), then derives a first-seen→sorted-column
+///     permutation with one probe per DISTINCT id, and materializes the
+///     final `bool[]` rows via that permutation — plain integer indexing,
+///     never a second string hash. Proven output-identical against a frozen
+///     copy of the original implementation by
+///     `CohortProjectEquivalenceTests.fs`'s FsCheck property (plus an
+///     explicit same-session-multiple-categories example).
+///
+///     RE-MEASURED after the fix: p50≈5.0-5.1ms, p99≈5.8-6.3ms across
+///     several runs — a ~14-16x improvement (77-84ms → 5-6ms), down from
+///     ~80-100x over the 1ms ideal to ~5-6x over it. STILL NOT MET against
+///     even this 5x/5ms CI-safe margin (narrowly: measured p99 exceeds it by
+///     roughly 15-25%), so this stays `skiptest`, not a hard assertion —
+///     never loosen the gate to make a still-short number look green.
+///
+///     Profiled floor (isolated `dotnet fsi` phase timing, proportions only —
+///     fsi is not JIT-tiered like the Release benchmark): of the remaining
+///     cost, the single dedup/index-assignment pass over all ~77,000 reported
+///     outcomes (10 members × 7,000 tests × ~1.1 categories) dominates at
+///     roughly 2/3, with the sort-into-canonical-order-plus-permutation-build
+///     pass (7,000 elements) most of the rest; materializing the final
+///     `bool[]` rows from the recorded hits is now negligible (≈2-3% of the
+///     total) — the permutation trick fully solved that half of the original
+///     problem. The residual floor is the O(total reported outcomes) cost of
+///     hashing/comparing `TestId`-wrapped STRINGS at all, which is now
+///     structural to `TestId`'s own representation (Cohort.fs's own scope
+///     note: "`TestId` local, minimal — §5.3's TestRunKey/InputHash overhaul
+///     is a separate item") rather than an algorithmic mistake inside
+///     `project` — reaching the 1ms ideal likely needs test identity to
+///     become (or be accompanied by) a pre-assigned dense integer id upstream
+///     of `project`, not a further rewrite of this function. Flagged as a
+///     Phase 2+ optimization target for whichever item owns that overhaul,
+///     not silently hidden and not hard-failing CI. The 5x/5ms margin over
+///     the 1ms ideal is kept exactly as originally documented — unchanged —
+///     so this test starts passing automatically, with no edit, once that
+///     next layer of work lands.
 let private ciSafeDecideProjectMsP99 = 5.000
 let private ciSafeClaimProbeMsP99 = 0.040 // 40 µs
 
@@ -246,7 +276,7 @@ let private assertOrFlagGap (label: string) (idealMs: float) (ciSafeMs: float) (
 
 [<Tests>]
 let cohortPerfBudgetTests =
-  testList "TEMP-VERIFY Cohort perf budgets (sagefs-multiagent-vision.md §3.4, §7.4)" [
+  testList "Cohort perf budgets (sagefs-multiagent-vision.md §3.4, §7.4)" [
 
     testCase "decide + project: ten members, 7,000 tests" <| fun _ ->
       assertOrFlagGap "decide+project (10 members, 7000 tests)" idealDecideProjectMsP99 ciSafeDecideProjectMsP99 decideProjectSamples.Value
