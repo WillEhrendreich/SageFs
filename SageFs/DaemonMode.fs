@@ -1862,9 +1862,15 @@ let run
             // (roast-6 #1): an SDK / dependency / config change with no source
             // edit must still be a cache MISS, or a landing could serve a stale
             // "verified" result. Computed once from the integration worktree's
-            // props + the loaded FSharp.Core + the running runtime.
+            // props + the loaded FSharp.Core + the running runtime, PLUS (roast-7
+            // §7) the daemon's OWN semantics version, so a change to how SageFs
+            // itself discovers/selects/runs/interprets tests invalidates the
+            // cache too — not just a change to the user project's toolchain.
             let toolchain =
-              Features.LiveTesting.InputHashCoverage.toolchainFingerprint fileReader binding.WorktreePath
+              Features.LiveTesting.InputHashCoverage.toolchainFingerprint
+                (Features.LiveTesting.InputHashCoverage.sagefsSemanticsVersion ())
+                fileReader
+                binding.WorktreePath
             let inputHashOf (tid: Features.LiveTesting.TestId) : string option =
               match merged.Slots.Length with
               | 0 -> None

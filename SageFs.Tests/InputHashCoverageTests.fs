@@ -166,8 +166,8 @@ let toolchainFingerprintTests =
         if p.EndsWith "Directory.Packages.props" then Some v
         elif p.EndsWith "Directory.Build.props" then Some "<build/>"
         else None
-      InputHashCoverage.toolchainFingerprint (rd "<v1/>") "/repo"
-      |> Expect.notEqual "a packages.props change must shift the toolchain fingerprint" (InputHashCoverage.toolchainFingerprint (rd "<v2/>") "/repo")
+      InputHashCoverage.toolchainFingerprint "sfs-v1" (rd "<v1/>") "/repo"
+      |> Expect.notEqual "a packages.props change must shift the toolchain fingerprint" (InputHashCoverage.toolchainFingerprint "sfs-v1" (rd "<v2/>") "/repo")
     }
 
     test "toolchainFingerprint is stable for identical props" {
@@ -175,7 +175,19 @@ let toolchainFingerprintTests =
         if p.EndsWith "Directory.Packages.props" then Some "<v1/>"
         elif p.EndsWith "Directory.Build.props" then Some "<build/>"
         else None
-      InputHashCoverage.toolchainFingerprint rd "/repo"
-      |> Expect.equal "identical props → identical fingerprint" (InputHashCoverage.toolchainFingerprint rd "/repo")
+      InputHashCoverage.toolchainFingerprint "sfs-v1" rd "/repo"
+      |> Expect.equal "identical props → identical fingerprint" (InputHashCoverage.toolchainFingerprint "sfs-v1" rd "/repo")
+    }
+
+    test "toolchainFingerprint shifts when the SageFs semantics version changes (a daemon upgrade — roast-7 §7)" {
+      let rd (p: string) =
+        if p.EndsWith "Directory.Packages.props" then Some "<v1/>"
+        elif p.EndsWith "Directory.Build.props" then Some "<build/>"
+        else None
+      // Same user-project toolchain, DIFFERENT daemon semantics version: the
+      // fingerprint MUST change, or a daemon whose affected-set/runner semantics
+      // changed would serve a stale "verified" result.
+      InputHashCoverage.toolchainFingerprint "sfs-v1" rd "/repo"
+      |> Expect.notEqual "a SageFs semantics-version change must shift the toolchain fingerprint even when the user toolchain is byte-identical" (InputHashCoverage.toolchainFingerprint "sfs-v2" rd "/repo")
     }
   ]

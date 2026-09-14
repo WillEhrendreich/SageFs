@@ -50,14 +50,32 @@ module InputHashCoverage =
   ///
   /// Pure: `readFile` is injected (a props file that can't be read folds in as
   /// `"absent"`, so its appearance/disappearance also shifts the fingerprint).
-  let toolchainFingerprint (readFile: string -> string option) (repoRoot: string) : string =
+  /// A stable token for the SageFs daemon's OWN test-verification semantics —
+  /// how it discovers, selects (affected-set), runs, and interprets the
+  /// pass/fail of a test. It leads the toolchain fingerprint so that a change to
+  /// the daemon itself invalidates every cached landing result, even when the
+  /// user project's deps and covered source are byte-identical. Roast-7 §7: the
+  /// old key captured the user project's toolchain (Directory.Packages.props →
+  /// Expecto version, FSharp.Core, runtime) but NOT the daemon that decides what
+  /// a "pass" means — so a daemon upgrade that changed the affected-set
+  /// algorithm (e.g. roast-7 §4) or the runner's outcome mapping would serve a
+  /// stale "verified" result. Derived from SageFs.Core's own assembly version
+  /// (auto-bumped per release by the version hook) so it advances automatically
+  /// with every daemon build — conservative (a version bump that did not change
+  /// semantics still invalidates), which is the correct trade for a cache whose
+  /// wrong answer is "landed an unverified change".
+  let sagefsSemanticsVersion () : string =
+    string (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version)
+
+  let toolchainFingerprint (sagefsSemantics: string) (readFile: string -> string option) (repoRoot: string) : string =
     let propsFingerprint (name: string) =
       match readFile (System.IO.Path.Combine(repoRoot, name)) with
       | Some content -> InputHash.ofContent content
       | None -> "absent"
 
     InputHash.compute
-      [ "packages"; propsFingerprint "Directory.Packages.props"
+      [ "sagefs"; sagefsSemantics
+        "packages"; propsFingerprint "Directory.Packages.props"
         "build"; propsFingerprint "Directory.Build.props"
         "fsharpcore"; string (typeof<int list>.Assembly.GetName().Version)
         "runtime"; System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription ]
