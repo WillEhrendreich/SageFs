@@ -147,10 +147,15 @@ let resilienceTests = testList "detour resilience" [
       failwithf "detourMethod should not propagate: %s" ex.Message
 ]
 
+// prefixPatchIntegrationTests applies real Harmony patches (process-global
+// IL rewrites via Harmony.Patch) — sequenced so this file's tests never
+// overlap with each other, or with any other test running in the default
+// parallel pool, the way InstrumentationTests is sequenced for its own
+// process-global ActivitySource state.
 [<Tests>]
 let allTests =
-  testList "DevReloadCanary" [
+  testSequenced (testList "DevReloadCanary" [
     canaryUnitTests
     prefixPatchIntegrationTests
     resilienceTests
-  ]
+  ])

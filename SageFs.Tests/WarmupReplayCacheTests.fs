@@ -21,6 +21,23 @@ let private withTempDir run =
     if Directory.Exists dir then
       Directory.Delete(dir, true)
 
+// Async counterpart of withTempDir — cleanup runs only after the returned
+// async completes (F#'s async try/finally awaits the body before running
+// the finally block), so it is safe to use with a `run` that itself awaits.
+let private withTempDirAsync (run: string -> Async<'a>) : Async<'a> =
+  async {
+    let dir =
+      Path.Combine(Path.GetTempPath(), $"sagefs-warmup-replay-{Guid.NewGuid():N}")
+
+    Directory.CreateDirectory(dir) |> ignore
+
+    try
+      return! run dir
+    finally
+      if Directory.Exists dir then
+        Directory.Delete(dir, true)
+  }
+
 let private writeFile (dir: string) (relativePath: string) (contents: string) =
   let path = Path.Combine(dir, relativePath)
   let parent = Path.GetDirectoryName path
@@ -325,107 +342,118 @@ let warmupReplayCacheTests =
         json.Contains("\"durationMs\"")
         |> Expect.isFalse "replay cache should not persist per-open timings"
 
-    testCase "resolveWarmupReplayPlan uses a valid cache hit without rediscovering" <| fun _ ->
-      withTempDir <| fun dir ->
-        let cachePath = Path.Combine(dir, "warmup-replay-cache.json")
-        let startupFile = writeFile dir "startup.fsx" "printfn \"start\""
-        let sourceFile = writeFile dir "Domain.fs" "open System"
-        let assemblyFile = writeFile dir "MyApp.dll" "assembly-v1"
+    testAsync "resolveWarmupReplayPlan uses a valid cache hit without rediscovering" {
+      let! (discoverCalls: ResizeArray<string>), resolved =
+        withTempDirAsync (fun dir -> async {
+          let cachePath = Path.Combine(dir, "warmup-replay-cache.json")
+          let startupFile = writeFile dir "startup.fsx" "printfn \"start\""
+          let sourceFile = writeFile dir "Domain.fs" "open System"
+          let assemblyFile = writeFile dir "MyApp.dll" "assembly-v1"
 
-        let fingerprint =
-          buildFingerprint
-            true
-            [| "fsi"; "--multiemit-" |]
-            [ startupFile ]
-            [ sourceFile ]
-            [ assemblyFile ]
-            [ ]
+          let fingerprint =
+            buildFingerprint
+              true
+              [| "fsi"; "--multiemit-" |]
+              [ startupFile ]
+              [ sourceFile ]
+              [ assemblyFile ]
+              [ ]
 
-        let cachedPlan =
-          makePlan
-            fingerprint
-            1
-            [ sampleAssembly assemblyFile ]
-            [ "System", OpenableKind.Namespace ]
+          let cachedPlan =
+            makePlan
+              fingerprint
+              1
+              [ sampleAssembly assemblyFile ]
+              [ "System", OpenableKind.Namespace ]
 
-        save cachePath cachedPlan
+          save cachePath cachedPlan
 
-        let discoverCalls = ResizeArray<string>()
+          let discoverCalls = ResizeArray<string>()
 
-        let resolved =
-          resolveWarmupReplayPlan
-            TestInfrastructure.quietLogger
-            (Some cachePath)
-            fingerprint
-            (fun () ->
-              discoverCalls.Add("discover")
-              async.Return (makePlan fingerprint 9 [] [ "Should.Not.Run", OpenableKind.Namespace ]))
-          |> Async.RunSynchronously
+          let! resolved =
+            resolveWarmupReplayPlan
+              TestInfrastructure.quietLogger
+              (Some cachePath)
+              fingerprint
+              (fun () ->
+                discoverCalls.Add("discover")
+                async.Return (makePlan fingerprint 9 [] [ "Should.Not.Run", OpenableKind.Namespace ]))
 
-        discoverCalls
-        |> Seq.toList
-        |> Expect.isEmpty "valid cache hits should skip rediscovery"
+          return discoverCalls, resolved
+        })
 
-        namePairs resolved
-        |> Expect.equal "cache hits should replay the cached open order" [ "System", OpenableKind.Namespace ]
+      discoverCalls
+      |> Seq.toList
+      |> Expect.isEmpty "valid cache hits should skip rediscovery"
 
-    testCase "resolveWarmupReplayPlan rediscovers and refreshes stale plans" <| fun _ ->
-      withTempDir <| fun dir ->
-        let cachePath = Path.Combine(dir, "warmup-replay-cache.json")
-        let startupFile = writeFile dir "startup.fsx" "printfn \"start\""
-        let sourceFile = writeFile dir "Domain.fs" "open System"
-        let assemblyFile = writeFile dir "MyApp.dll" "assembly-v1"
+      namePairs resolved
+      |> Expect.equal "cache hits should replay the cached open order" [ "System", OpenableKind.Namespace ]
+    }
 
-        let staleFingerprint =
-          buildFingerprint
-            true
-            [| "fsi"; "--multiemit-" |]
-            [ startupFile ]
-            [ sourceFile ]
-            [ assemblyFile ]
-            [ ]
+    testAsync "resolveWarmupReplayPlan rediscovers and refreshes stale plans" {
+      let! (discoverCallCount: int), resolved, cacheReplaced =
+        withTempDirAsync (fun dir -> async {
+          let cachePath = Path.Combine(dir, "warmup-replay-cache.json")
+          let startupFile = writeFile dir "startup.fsx" "printfn \"start\""
+          let sourceFile = writeFile dir "Domain.fs" "open System"
+          let assemblyFile = writeFile dir "MyApp.dll" "assembly-v1"
 
-        makePlan staleFingerprint 1 [ sampleAssembly assemblyFile ] [ "System", OpenableKind.Namespace ]
-        |> save cachePath
+          let staleFingerprint =
+            buildFingerprint
+              true
+              [| "fsi"; "--multiemit-" |]
+              [ startupFile ]
+              [ sourceFile ]
+              [ assemblyFile ]
+              [ ]
 
-        overwriteFile sourceFile "open System.IO"
+          makePlan staleFingerprint 1 [ sampleAssembly assemblyFile ] [ "System", OpenableKind.Namespace ]
+          |> save cachePath
 
-        let freshFingerprint =
-          buildFingerprint
-            true
-            [| "fsi"; "--multiemit-" |]
-            [ startupFile ]
-            [ sourceFile ]
-            [ assemblyFile ]
-            [ ]
+          overwriteFile sourceFile "open System.IO"
 
-        let discoverCalls = ResizeArray<string>()
+          let freshFingerprint =
+            buildFingerprint
+              true
+              [| "fsi"; "--multiemit-" |]
+              [ startupFile ]
+              [ sourceFile ]
+              [ assemblyFile ]
+              [ ]
 
-        let discoveredPlan =
-          makePlan
-            freshFingerprint
-            1
-            [ sampleAssembly assemblyFile ]
-            [ "System.IO", OpenableKind.Namespace; "MyApp.Utils", OpenableKind.Module ]
+          let discoverCalls = ResizeArray<string>()
 
-        let resolved =
-          resolveWarmupReplayPlan
-            TestInfrastructure.quietLogger
-            (Some cachePath)
-            freshFingerprint
-            (fun () ->
-              discoverCalls.Add("discover")
-              async.Return discoveredPlan)
-          |> Async.RunSynchronously
+          let discoveredPlan =
+            makePlan
+              freshFingerprint
+              1
+              [ sampleAssembly assemblyFile ]
+              [ "System.IO", OpenableKind.Namespace; "MyApp.Utils", OpenableKind.Module ]
 
-        discoverCalls.Count
-        |> Expect.equal "stale cache entries should trigger rediscovery once" 1
+          let! resolved =
+            resolveWarmupReplayPlan
+              TestInfrastructure.quietLogger
+              (Some cachePath)
+              freshFingerprint
+              (fun () ->
+                discoverCalls.Add("discover")
+                async.Return discoveredPlan)
 
-        namePairs resolved
-        |> Expect.equal "rediscovery should return the fresh replay plan" [ "System.IO", OpenableKind.Namespace; "MyApp.Utils", OpenableKind.Module ]
+          let cacheReplaced =
+            (tryLoadValidPlan cachePath freshFingerprint).IsSome
 
-        tryLoadValidPlan cachePath freshFingerprint
-        |> Expect.isSome "stale cache entries should be replaced with the fresh replay plan"
+          return discoverCalls.Count, resolved, cacheReplaced
+        })
+
+      discoverCallCount
+      |> Expect.equal "stale cache entries should trigger rediscovery once" 1
+
+      namePairs resolved
+      |> Expect.equal "rediscovery should return the fresh replay plan" [ "System.IO", OpenableKind.Namespace; "MyApp.Utils", OpenableKind.Module ]
+
+      cacheReplaced
+      |> Expect.isTrue "stale cache entries should be replaced with the fresh replay plan"
+    }
 
     testCase "discovery warnings survive save/load round-trip" <| fun _ ->
       withTempDir <| fun dir ->

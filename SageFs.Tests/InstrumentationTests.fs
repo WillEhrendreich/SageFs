@@ -90,23 +90,26 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     capturedTagKeys |> Expect.contains "has duration_ms" "duration_ms"
   }
 
-  test "tracedAsync returns correct value" {
-    Instrumentation.tracedAsync
-      Instrumentation.testCycleSource "test.async" []
-      (fun () -> async { return 99 })
-    |> Async.RunSynchronously
-    |> Expect.equal "return value" 99
+  testAsync "tracedAsync returns correct value" {
+    let! result =
+      Instrumentation.tracedAsync
+        Instrumentation.testCycleSource "test.async" []
+        (fun () -> async { return 99 })
+    result |> Expect.equal "return value" 99
   }
 
-  test "tracedAsync preserves exceptions" {
-    Expect.throwsT<System.InvalidOperationException>
-      "should rethrow"
-      (fun () ->
-        Instrumentation.tracedAsync
-          Instrumentation.testCycleSource "test.fail" []
-          (fun () -> async { return raise (System.InvalidOperationException "boom") })
-        |> Async.RunSynchronously
-        |> ignore)
+  testAsync "tracedAsync preserves exceptions" {
+    let! threw =
+      async {
+        try
+          let! _ =
+            Instrumentation.tracedAsync
+              Instrumentation.testCycleSource "test.fail" []
+              (fun () -> async { return raise (System.InvalidOperationException "boom") })
+          return false
+        with :? System.InvalidOperationException -> return true
+      }
+    threw |> Expect.isTrue "should rethrow"
   }
 
   // Span helper tests
@@ -169,7 +172,7 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
     msgTag.Value.Value |> Expect.equal "error.message value" ("something went wrong" :> obj)
   }
 
-  test "tracedAsync emits activity with tags to listener" {
+  testAsync "tracedAsync emits activity with tags to listener" {
     let mutable capturedTagKeys : string list = []
     let mutable capturedName = ""
     let listener = new ActivityListener()
@@ -180,12 +183,12 @@ let instrumentationTests = testSequenced (testList "Instrumentation" [
       capturedTagKeys <- [ for t in a.TagObjects -> t.Key ]
     ActivitySource.AddActivityListener(listener)
 
-    Instrumentation.tracedAsync
-      Instrumentation.testCycleSource
-      "cycle.run"
-      [("trigger", box "file_change")]
-      (fun () -> async { return 42 })
-    |> Async.RunSynchronously |> ignore
+    let! _ =
+      Instrumentation.tracedAsync
+        Instrumentation.testCycleSource
+        "cycle.run"
+        [("trigger", box "file_change")]
+        (fun () -> async { return 42 })
 
     listener.Dispose()
 
