@@ -574,6 +574,17 @@ let private cellSpec
   (hostOutDir: string)
   (repoRoot: string)
   (nugetPackagesDir: string)
+  // The scenario's sample project directory (under `repoRoot`). It is RW-bound
+  // ON TOP of the read-only `repoRoot` bind so SageFs's project loader
+  // (Ionide.ProjInfo) can run its offline design-time MSBuild build, which
+  // WRITES intermediates into the project's `obj/` (e.g.
+  // `obj/<Config>/<TFM>/*.CoreCompileInputs.cache`). With `repoRoot` read-only
+  // that write fails (`MSB3491: Read-only file system`), Ionide silently returns
+  // zero projects, and the session warms up with "0 assemblies" — so live
+  // testing discovers no tests and every `lt`/`hr`/editor scenario's test-run
+  // step times out. Only the sample being recorded is writable; the rest of the
+  // repo stays read-only.
+  (sampleDir: string)
   // Island F's extension points (demo-actors-plan.md §1.2): each actor
   // island appends ONLY its own RO binds and its own innerScript prologue
   // line(s) here, never editing this function's core again. Both are `[]`
@@ -591,7 +602,7 @@ let private cellSpec
         repoRoot, repoRoot
         nugetPackagesDir, nugetPackagesDir ]
       @ actorBinds
-    RwBinds = [ hostOutDir, "/out" ]
+    RwBinds = [ hostOutDir, "/out"; sampleDir, sampleDir ]
     Env =
       [ "HOME", "/home/demo"
         // `/xdotool-bin` is harmless in `PATH` even for a scenario that
@@ -601,7 +612,17 @@ let private cellSpec
         // `resolveOwnWindowRect`, roast H5's window-manager-level geometry
         // query), and VS Code inherits this SAME cell `PATH`
         // (`Actors/VsCode.fs`'s `launch`).
-        "PATH", "/usr/bin:/dotnet-root:/xdotool-bin"
+        //
+        // `/dotnet-root` MUST come before `/usr/bin`: the host's `/usr/bin/dotnet`
+        // is a symlink to the SYSTEM dotnet (`/usr/share/dotnet`), which is NOT
+        // bound into the cell — so if `/usr/bin` wins, `dotnet` resolves to a
+        // muxer whose SDK directory does not exist in the sandbox and every
+        // MSBuild/Ionide design-time build fails with "No .NET SDKs were found".
+        // The mounted SDK lives under `/dotnet-root` (host `DOTNET_ROOT`), so it
+        // must be found first. (The daemon itself is launched via an absolute
+        // `/dotnet-root/dotnet`, but Ionide.ProjInfo resolves `dotnet` through
+        // PATH when it shells out for the design-time build.)
+        "PATH", "/dotnet-root:/usr/bin:/xdotool-bin"
         // Explicit, not derived from $HOME (which is the private, empty
         // /home/demo above) — any restore/design-time-build path that
         // recomputes the global-packages location fresh, instead of only
@@ -948,7 +969,8 @@ let record (repoRoot: string) (scenario: Scenario) : Async<Result<Wire.StepLog *
     | Error e -> return Error e
     | Ok(actorBinds, actorPrologue, vsCodeConfig, nvimConfig, appConfig) ->
 
-    let spec = cellSpec sagefsBin demosBin dotnetRoot chromeDir cellOutDir repoRoot (nugetPackagesDir ()) actorBinds actorPrologue
+    let sampleDir = Path.Combine(repoRoot, Sample.relativePath scenario.Sample)
+    let spec = cellSpec sagefsBin demosBin dotnetRoot chromeDir cellOutDir repoRoot (nugetPackagesDir ()) sampleDir actorBinds actorPrologue
     let planJson = Wire.serializePlan (wirePlanOf repoRoot vsCodeConfig nvimConfig appConfig scenario)
     let! exitCode, stdout, stderr = Sandbox.run spec planJson
 
