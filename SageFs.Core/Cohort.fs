@@ -316,6 +316,29 @@ module Cohort =
   /// this via generated `DateTime` deltas, never a shortened constant.
   let leaseWindow = TimeSpan.FromMinutes 30.0
 
+  /// Which currently-Present members should be reaped — departed, releasing
+  /// their claims — because they are no longer live. `isLive` is the caller's
+  /// liveness oracle: in production, "does the daemon's activity tracker still
+  /// see this member as an active presence?" (identity is connection-bound —
+  /// `MemberId` — so a dropped/idle connection is a real "gone", not a
+  /// self-declared state). Pure and generic: the impure shell supplies `isLive`
+  /// and posts a `Depart` for each returned member.
+  ///
+  /// This is the connection-based seat/claim reclamation the product actually
+  /// uses (roast-7 §5). It deliberately ties cohort liveness to the daemon's ONE
+  /// presence model rather than the `Tick`/`RenewLease`/`leaseWindow` time-lease
+  /// (which remains an unimplemented alternative — see `leaseWindow`): no
+  /// per-call `RenewLease` ledger writes, and a `Depart` is appended only when a
+  /// member has actually gone. Only `Present` members are candidates, so a
+  /// re-run against an already-`Departed` member never double-departs.
+  let membersToReap (state: CohortState<'m>) (isLive: 'm -> bool) : 'm list =
+    state.Members
+    |> Map.toList
+    |> List.choose (fun (who, r) ->
+      match r.Presence with
+      | MemberPresence.Present when not (isLive who) -> Some who
+      | _ -> None)
+
   module CohortState =
     let empty () : CohortState<'m> = {
       NextFence = 0L<fence>

@@ -812,3 +812,40 @@ let cohortPropertyTests =
         && Set.contains Affordances.CohortTool.GetStatus (Affordances.cohortTools authority)
     ]
   ]
+
+// ── roast-7 §5: the connection-based reaper's pure decision ────────────────
+[<Tests>]
+let membersToReapTests =
+  let present : MemberRecord =
+    { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None }
+  let departed : MemberRecord =
+    { Role = JoinableRole.Implementer; Presence = MemberPresence.Departed epoch; LastRenewal = epoch; Session = None }
+  let stateWith (members: (Agent * MemberRecord) list) : CohortState<Agent> =
+    { CohortState.empty () with Members = Map.ofList members }
+  let a1 = { Id = 1; Display = "agent-1" }
+  let a2 = { Id = 2; Display = "agent-2" }
+
+  testList "Cohort.membersToReap (roast-7 §5 connection-based reaper)" [
+
+    testCase "a Present member that is NOT live is reaped; a live one is kept" <| fun () ->
+      let state = stateWith [ a1, present; a2, present ]
+      let live = Set.ofList [ a1 ] // a2's connection is gone
+      membersToReap state (fun m -> live.Contains m)
+      |> Expect.equal "only the non-live Present member is reaped" [ a2 ]
+
+    testCase "every Present member live => nothing reaped" <| fun () ->
+      stateWith [ a1, present; a2, present ]
+      |> fun s -> membersToReap s (fun _ -> true)
+      |> Expect.isEmpty "no live member is ever reaped"
+
+    testCase "an already-Departed member is never a reap candidate (no double-depart)" <| fun () ->
+      // Not live AND already Departed: must NOT be returned — posting Depart
+      // again would be a redundant ledger write for a member already gone.
+      stateWith [ a1, departed ]
+      |> fun s -> membersToReap s (fun _ -> false)
+      |> Expect.isEmpty "a Departed member is excluded even when not live"
+
+    testCase "empty cohort reaps nothing" <| fun () ->
+      membersToReap (CohortState.empty ()) (fun _ -> false)
+      |> Expect.isEmpty "no members, nothing to reap"
+  ]
