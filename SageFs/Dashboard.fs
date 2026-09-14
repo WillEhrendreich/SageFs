@@ -48,6 +48,7 @@ open SageFs.Affordances
 open SageFs.Utils
 open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
+open SageFs.Server.CohortInspector
 open SageFs.Features.FrictionSqlite
 
 module FalcoResponse = Falco.Response
@@ -2074,6 +2075,42 @@ let createLiveTestingToggleHandler
     Response.sseStartResponse ctx |> ignore
   }
 
+/// Phase 2 item 16 of sagefs-multiagent-vision.md (§6.5 "the inspector") —
+/// `GET /dashboard/inspect/<kind>/<id>`. A standalone request/response page
+/// (never a fragment on the dashboard's SSE stream, see `CohortInspector`'s
+/// module doc): fetches the same three read models `renderCohortLanesPanel`/
+/// `renderCohortTerritory` already read (`infra.ReadCohortFrame`,
+/// `infra.ReadCohortLedger`, `q.GetAllSessions`), then hands them to the
+/// pure `CohortInspector.inspectRaw` projection. An unrecognized kind or a
+/// missing id is a clean 404 page, never a 500.
+let createInspectHandler (q: DashboardQueries) (infra: DashboardInfra) (kindRaw: string, idRaw: string) : HttpHandler =
+  fun ctx -> task {
+    let! sessions = q.GetAllSessions ()
+    let frame = infra.ReadCohortFrame ()
+    let ledger = infra.ReadCohortLedger ()
+    let model = inspectRaw kindRaw idRaw frame ledger sessions
+    match model with
+    | InspectorModel.NotFound _ -> ctx.Response.StatusCode <- 404
+    | InspectorModel.Found _ -> ()
+    return! FalcoResponse.ofHtml (renderInspectorPage model) ctx
+  }
+
+/// `GET /dashboard/inspect` — the inspector's entity search (§6.5's "`/`
+/// opens an entity search"). `?q=` is optional; an absent/blank query
+/// renders the search box with no results rather than the whole cohort.
+let createInspectSearchHandler (q: DashboardQueries) (infra: DashboardInfra) : HttpHandler =
+  fun ctx -> task {
+    let query =
+      match ctx.Request.Query.TryGetValue "q" with
+      | true, v -> v.ToString()
+      | false, _ -> ""
+    let! sessions = q.GetAllSessions ()
+    let frame = infra.ReadCohortFrame ()
+    let ledger = infra.ReadCohortLedger ()
+    let results = search query frame ledger sessions
+    return! FalcoResponse.ofHtml (renderSearchPage query results) ctx
+  }
+
 /// Create all dashboard routes.
 let createEndpoints
   (q: DashboardQueries)
@@ -2145,6 +2182,15 @@ let createEndpoints
     yield mapGet "/dashboard/stream/{clientId}"
       (fun (r: RequestData) -> r.GetString("clientId", ""))
       (fun clientId -> createStreamHandler q infra clientId)
+    // The cockpit inspector (§6.5) — a standalone GET detail page + search,
+    // not a fragment on the SSE stream. Two-segment route reads via
+    // `routeValue` (not Falco's numeric-sniffing route-value parser — see
+    // `routeValue`'s own doc comment) so an id that looks numeric (a test
+    // named "1", say) round-trips as the literal string it is.
+    yield mapGetRaw "/dashboard/inspect/{kind}/{id}"
+      (fun ctx -> routeValue "kind" ctx, routeValue "id" ctx)
+      (createInspectHandler q infra)
+    yield get "/dashboard/inspect" (createInspectSearchHandler q infra)
     yield post "/dashboard/eval" (createEvalHandler q infra a.EvalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)
     yield post "/dashboard/completions" (createCompletionsHandler infra.GetCompletions)

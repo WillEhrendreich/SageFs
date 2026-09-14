@@ -393,6 +393,7 @@
         <Compile Include="CohortAffordancesTests.fs" />
         <Compile Include="CohortPanelTests.fs" />
         <Compile Include="CohortTerritoryPanelTests.fs" />
+        <Compile Include="CohortInspectorTests.fs" />
         <Compile Include="CohortGitTests.fs" />
         <Compile Include="CohortLandingVerifyTests.fs" />
         <Compile Include="CohortLandingLoopTests.fs" />
