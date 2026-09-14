@@ -1,6 +1,7 @@
 namespace SageFs
 
 open System
+open System.Text.Json
 open SageFs.WorkerProtocol
 
 /// Pure, deterministic session routing and error types.
@@ -357,3 +358,49 @@ module SessionOperations =
         formatSessionInfo now occ info)
       |> String.concat "\n\n"
       |> sprintf "%d active session(s):\n\n%s" sessions.Length
+
+  /// Pure JSON projection of the session list — the read model for the
+  /// `sessions://list` MCP resource (item 12, sagefs-multiagent-vision.md
+  /// §5.6: "one read model, no new channel" — the exact `SessionInfo list`
+  /// `list_sessions`/`formatSessionList` already reports, serialized as JSON
+  /// instead of prose). No IO, no worker round-trips: unlike `/api/sessions`
+  /// (McpServer.fs), this never calls into a worker proxy for live eval
+  /// stats — it is the same cheap, in-memory-only shape `list_sessions`
+  /// itself uses. Occupancy is deliberately omitted: it is a caller-side
+  /// enrichment over `McpContext.SessionMap` (per-agent routing state), not
+  /// part of `SessionInfo`, and keeping this function pure means it cannot
+  /// read that mutable map.
+  let sessionsToJson (opts: JsonSerializerOptions) (sessions: SessionInfo list) : string =
+    let rows =
+      sessions
+      |> List.map (fun info ->
+        let worktreeBranch =
+          match Checkout.classify info.WorkingDirectory with
+          | Checkout.Checkout.Worktree(_, branch) -> Some branch
+          | Checkout.Checkout.MainCheckout _ | Checkout.Checkout.NotAGitCheckout -> None
+        {| Id = SessionId.value info.Id
+           Name = SessionInfo.displayName info
+           WorkingDirectory = info.WorkingDirectory
+           Status = SessionLifecycleStatus.label info.Status
+           Workflow = WorkflowTypes.SessionWorkflow.label info.Workflow
+           Projects = info.Projects
+           CreatedAt = info.CreatedAt
+           LastActivity = info.LastActivity
+           WorktreeBranch = worktreeBranch |})
+    JsonSerializer.Serialize({| Sessions = rows |}, opts)
+
+  /// A cheap, deterministic "version" of the session list — the
+  /// `sessions://list` MCP resource's `McpResourceGate` key (item 12,
+  /// §5.6): two calls with the same set of sessions in the same
+  /// lifecycle-status produce the same string, so an unrelated model change
+  /// (McpServer.fs's `wireSessionsResourceSubscription` rides the existing
+  /// `ModelChanged` signal, which fires for output/diagnostics/bindings too,
+  /// not just session changes) notifies nothing. Sorted by id so member
+  /// order never matters. Intentionally coarse — id + status label is
+  /// enough to catch "a session was created/stopped/faulted"; it is not a
+  /// substitute for `sessionsToJson`'s full content.
+  let sessionsListVersion (sessions: SessionInfo list) : string =
+    sessions
+    |> List.map (fun info -> sprintf "%s:%s" (SessionId.value info.Id) (SessionLifecycleStatus.label info.Status))
+    |> List.sort
+    |> String.concat ";"

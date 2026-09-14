@@ -520,7 +520,13 @@ let private landingStateKind (state: Cohort.LandingState<MemberTable.MemberId>) 
 /// `frame.SessionGens.[i]`). Version-gate at the call site (compare
 /// `frame.Version` to the last one sent, like `coverage_view`'s generation
 /// gate) — this formatter itself always formats whatever frame it is given.
-let formatCohortMatrixEvent (opts: JsonSerializerOptions) (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
+/// Pure JSON projection of a `CohortFrame` — the same read model shared by
+/// the `cohort_matrix` SSE event (below) and the `cohort://status` MCP
+/// resource (McpResources.fs, sagefs-multiagent-vision.md item 12 / §5.6:
+/// "one read model, no new channel"). Extracted from `formatCohortMatrixEvent`
+/// so every wire surface that needs the cohort frame serializes the exact
+/// same payload shape instead of hand-rolling its own.
+let cohortFrameJson (opts: JsonSerializerOptions) (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
   let members =
     Array.init frame.MemberIds.Length (fun i ->
       {| Id = displayMember frame.MemberIds.[i]
@@ -555,8 +561,10 @@ let formatCohortMatrixEvent (opts: JsonSerializerOptions) (frame: Cohort.CohortF
        Claims = claims
        Tests = tests
        Rows = rows |}
-  let json = JsonSerializer.Serialize(payload, opts)
-  formatSseEvent "cohort_matrix" json
+  JsonSerializer.Serialize(payload, opts)
+
+let formatCohortMatrixEvent (opts: JsonSerializerOptions) (frame: Cohort.CohortFrame<MemberTable.MemberId>) : string =
+  formatSseEvent "cohort_matrix" (cohortFrameJson opts frame)
 
 /// Format a single claim change (from a `ClaimAcquired`/`ClaimReleased`/
 /// `ClaimOrphaned`/`ClaimReassigned` `Cohort.CohortEvent`) as an SSE event

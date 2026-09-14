@@ -384,6 +384,7 @@
         <Compile Include="CohortTestProjectionTests.fs" />
         <Compile Include="CohortOwnerTests.fs" />
         <Compile Include="CohortSseEventsTests.fs" />
+        <Compile Include="McpResourcesTests.fs" />
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="CohortAffordancesTests.fs" />

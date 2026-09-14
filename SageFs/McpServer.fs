@@ -36,12 +36,75 @@ open SageFs.Features.LiveTesting
 type McpServerTracker() =
   let servers = ConcurrentDictionary<string, McpServer>()
   let accumulator = EventAccumulator()
+  /// Per-connection `resources/subscribe` state (item 12,
+  /// sagefs-multiagent-vision.md §5.6/§10): sessionId -> the set of resource
+  /// URIs that connection has subscribed to. A connection with no entry (or
+  /// an empty set) is subscribed to nothing.
+  let resourceSubscriptions = ConcurrentDictionary<string, ConcurrentDictionary<string, byte>>()
 
   member _.Register(server: McpServer) =
     servers.[server.SessionId] <- server
 
   member _.Remove(sessionId: string) =
     servers.TryRemove(sessionId) |> ignore
+    resourceSubscriptions.TryRemove(sessionId) |> ignore
+
+  /// Record that `sessionId` wants `notifications/resources/updated` for
+  /// `uri` (the server's `resources/subscribe` handler, McpServer.fs's
+  /// `configureMcpProtocol`).
+  member _.Subscribe(sessionId: string, uri: string) =
+    let uris = resourceSubscriptions.GetOrAdd(sessionId, fun _ -> ConcurrentDictionary<string, byte>())
+    uris.[uri] <- 0uy
+
+  /// Idempotent — unsubscribing a URI that was never subscribed (or an
+  /// unknown sessionId) is a no-op, per the protocol's own unsubscribe
+  /// contract (`UnsubscribeRequestParams` doc).
+  member _.Unsubscribe(sessionId: string, uri: string) =
+    match resourceSubscriptions.TryGetValue(sessionId) with
+    | true, uris -> uris.TryRemove(uri) |> ignore
+    | false, _ -> ()
+
+  /// Broadcast `notifications/resources/updated` for `uri` to every
+  /// connected MCP client that subscribed to it. Mirrors `NotifyLogAsync`'s
+  /// fan-out/timeout/dead-connection-pruning discipline exactly (500ms
+  /// per-send timeout, a dead connection is dropped from both `servers` and
+  /// `resourceSubscriptions`), scoped down to only the sessions that
+  /// actually subscribed to this URI — a client that never called
+  /// `resources/subscribe` for `uri` never receives this notification.
+  member _.NotifyResourceUpdatedAsync(uri: string) =
+    task {
+      let subscribed =
+        resourceSubscriptions
+        |> Seq.choose (fun kvp ->
+          match kvp.Value.ContainsKey(uri), servers.TryGetValue(kvp.Key) with
+          | true, (true, server) -> Some(kvp.Key, server)
+          | _ -> None)
+        |> Seq.toArray
+      match subscribed.Length with
+      | 0 -> return ()
+      | _ ->
+        let! results =
+          subscribed
+          |> Array.map (fun (key, server) -> task {
+            use cts = new System.Threading.CancellationTokenSource(500)
+            try
+              let payload = ResourceUpdatedNotificationParams(Uri = uri)
+              do! server.SendNotificationAsync(
+                NotificationMethods.ResourceUpdatedNotification, payload,
+                cancellationToken = cts.Token)
+              return None
+            with
+            | :? System.IO.IOException | :? ObjectDisposedException -> return Some key
+            | :? System.OperationCanceledException -> return Some key
+            | ex ->
+              Log.error "[MCP] NotifyResourceUpdated error for %s (%s): %s\n%s" key uri ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+              return Some key
+          })
+          |> System.Threading.Tasks.Task.WhenAll
+        for deadId in results |> Array.choose id do
+          servers.TryRemove(deadId) |> ignore
+          resourceSubscriptions.TryRemove(deadId) |> ignore
+    }
 
   /// Broadcast a structured logging notification to all connected MCP clients.
   /// Sends to all clients in parallel with a 500ms per-send timeout.
@@ -992,7 +1055,7 @@ let saveObservedRow
 let wireCohortEventSubscription
   (cohortOwner: SageFs.Features.CohortOwner.Handle)
   (ctx: SseContext) : IDisposable =
-  let lastMatrixVersion = ref -1L
+  let matrixGate = ref SageFs.McpResourceGate.initial<int64>
   cohortOwner.Events.Subscribe(fun events ->
     try
       let state = cohortOwner.ReadCohortState()
@@ -1021,14 +1084,64 @@ let wireCohortEventSubscription
           | _ -> ()
       let frame = cohortOwner.ReadFrame()
       let version = int64 frame.Version
-      match version <> lastMatrixVersion.Value with
+      // The same `McpResourceGate` no-change guard now drives BOTH the
+      // existing `cohort_matrix` SSE push and the `cohort://status` MCP
+      // resource's `notifications/resources/updated` push (item 12, §5.6:
+      // "one read model, no new channel") — one version-gate decision, two
+      // wire surfaces reacting to it, never a second poll on the frame.
+      let shouldPush, newGate = SageFs.McpResourceGate.observe version matrixGate.Value
+      match shouldPush with
       | true ->
-        lastMatrixVersion.Value <- version
+        matrixGate.Value <- newGate
         ctx.SessionEventBroadcast.Trigger(
           SageFs.SseWriter.formatCohortMatrixEvent ctx.SseJsonOpts frame)
+        ctx.ServerTracker.NotifyResourceUpdatedAsync(SageFs.Server.McpResources.CohortStatusUri) |> ignore
       | false -> ()
     with ex ->
       Log.error "[SSE] Cohort event push error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue ""))
+
+// ── sessions://list resource subscription (item 12) ──
+
+/// Subscribe to the EXISTING `ModelChanged` signal (`stateChanged` — the
+/// same stream `wireSessionEventSubscription`/`wireModelChangeHandlers`
+/// already consume; DaemonMode.fs only triggers it on a genuine Elm model
+/// diff, `SseDedupKey.fromModel`, never a blind timer) and push
+/// `notifications/resources/updated` for `sessions://list` to subscribed
+/// MCP clients whenever the session list itself actually changed (item 12,
+/// sagefs-multiagent-vision.md §5.6: "one read model, no new channel" — no
+/// new timer, no second stream). `ModelChanged` fires for many reasons
+/// unrelated to the session list (output, diagnostics, bindings), so this
+/// adds its own `McpResourceGate`, keyed on
+/// `SessionOperations.sessionsListVersion`, so an unrelated model change —
+/// or a genuinely unchanged session list — notifies nothing.
+let wireSessionsResourceSubscription
+  (stateChanged: IEvent<SseEvent>)
+  (ctx: SseContext)
+  (getAllSessions: unit -> Task<SageFs.WorkerProtocol.SessionInfo list>) : IDisposable =
+  let gate = ref SageFs.McpResourceGate.initial<string>
+  stateChanged.Subscribe(fun change ->
+    match change with
+    | SseEvent.ModelChanged _ ->
+      task {
+        try
+          let! sessions = getAllSessions ()
+          let version = SageFs.SessionOperations.sessionsListVersion sessions
+          let shouldNotify, newGate = SageFs.McpResourceGate.observe version gate.Value
+          match shouldNotify with
+          | true ->
+            gate.Value <- newGate
+            do! ctx.ServerTracker.NotifyResourceUpdatedAsync(SageFs.Server.McpResources.SessionsListUri)
+          | false -> ()
+        with
+        | :? System.IO.IOException | :? ObjectDisposedException -> ()
+        | ex -> Log.error "[MCP] sessions://list resource push error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+      }
+      |> fun t -> t.ContinueWith(fun (t: Threading.Tasks.Task) ->
+        match t.IsFaulted with
+        | true -> Log.error "[MCP] sessions://list resource push fault: %s" t.Exception.InnerException.Message
+        | false -> ())
+      |> ignore
+    | _ -> ())
 
 // ── Model change handlers: state change → SSE + MCP notifications ──
 
@@ -1439,6 +1552,9 @@ let configureMcpProtocol (builder: WebApplicationBuilder) (mcpContext: McpContex
     let logger = serviceProvider.GetRequiredService<ILogger<SageFs.Server.McpTools.SageFsTools>>()
     new SageFs.Server.McpTools.SageFsTools(mcpContext, logger)
   ) |> ignore
+  builder.Services.AddSingleton<SageFs.Server.McpResources.SageFsResources>(fun _serviceProvider ->
+    SageFs.Server.McpResources.SageFsResources(mcpContext)
+  ) |> ignore
   builder.Services.AddSingleton<McpServerTracker>(serverTracker) |> ignore
   builder.Services
     .AddMcpServer(fun options ->
@@ -1464,6 +1580,30 @@ let configureMcpProtocol (builder: WebApplicationBuilder) (mcpContext: McpContex
       opts.MaxIdleSessionCount <- 1000
     )
     .WithTools<SageFs.Server.McpTools.SageFsTools>()
+    // Item 12 (sagefs-multiagent-vision.md §5.6/§10): cohort/session state
+    // as MCP resources with subscribe. `WithResources<T>` reflects the
+    // `[<McpServerResource>]`-attributed members of `SageFsResources` into
+    // `resources/list`/`resources/read` automatically (mirrors `WithTools`);
+    // the subscribe/unsubscribe handlers below are what the SDK does NOT
+    // synthesize for DI-registered resources (confirmed against
+    // ModelContextProtocol.Core's `McpServerImpl.ConfigureResources`: a
+    // `TODO: Implement subscribe/unsubscribe logic for resource ... `
+    // collections marks `WithResources` alone as list/read-only) — this
+    // server tracks subscriptions itself (`McpServerTracker`) and pushes
+    // `notifications/resources/updated` by riding the EXISTING
+    // `CohortOwner.Events`/model-change signals (`wireCohortEventSubscription`,
+    // below), never a new poll or a second stream.
+    .WithResources<SageFs.Server.McpResources.SageFsResources>()
+    .WithSubscribeToResourcesHandler(fun (rc: RequestContext<SubscribeRequestParams>) (_ct: CancellationToken) ->
+      match Option.ofObj rc.Server.SessionId, Option.ofObj rc.Params with
+      | Some sessionId, Some p -> serverTracker.Subscribe(sessionId, p.Uri)
+      | _ -> ()
+      ValueTask<EmptyResult>(EmptyResult()))
+    .WithUnsubscribeFromResourcesHandler(fun (rc: RequestContext<UnsubscribeRequestParams>) (_ct: CancellationToken) ->
+      match Option.ofObj rc.Server.SessionId, Option.ofObj rc.Params with
+      | Some sessionId, Some p -> serverTracker.Unsubscribe(sessionId, p.Uri)
+      | _ -> ()
+      ValueTask<EmptyResult>(EmptyResult()))
     .WithRequestFilters(fun filters ->
       filters.AddCallToolFilter(createServerCaptureFilter mcpContext serverTracker) |> ignore
     )
@@ -2647,6 +2787,9 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
 
       let _cohortEventSub =
         cfg.CohortOwner |> Option.map (fun cohortOwner -> wireCohortEventSubscription cohortOwner sseCtx)
+
+      let _sessionsResourceSub =
+        cfg.StateChanged |> Option.map (fun evt -> wireSessionsResourceSubscription evt sseCtx cfg.SessionOps.GetAllSessions)
 
       mapExecutionRoutes app rctx
       mapHealthRoutes app rctx
