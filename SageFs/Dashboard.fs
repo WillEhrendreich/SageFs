@@ -712,7 +712,8 @@ let buildDashboardSnapshotWithSessions
       let pairs = q.GetFailureNarratives()
       renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
     let diagnosticsPanel = renderCurrentDiagnostics (q.GetCurrentDiagnostics())
-    let filmstripPanel = renderSessionFilmstrip (q.GetFilmstripEntries())
+    // Filmstrip panel removed from the UI (pushed the UI down for low-value
+    // per-eval history); don't spend the per-push GetFilmstripEntries work.
     let themeName =
       match resolveThemePush infra.SessionThemes sid workingDir lastSid lastWorkingDir lastThemeName with
       | Some name -> name
@@ -821,7 +822,7 @@ let buildDashboardSnapshotWithSessions
               DaemonHealth = daemonHealthPanel
               FailureNarrativesPanel = failureNarrativesPanel
               DiagnosticsPanel = diagnosticsPanel
-              FilmstripPanel = filmstripPanel
+              FilmstripPanel = Elem.div [] []
               ThemeName = themeName
               ConnectionLabel = connectionLabel
               HotReloadPanel = hrPanel
@@ -898,7 +899,8 @@ let buildNoSessionSnapshotWithSessions
       let pairs = q.GetFailureNarratives()
       renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
     let diagnosticsPanel = renderCurrentDiagnostics (q.GetCurrentDiagnostics())
-    let filmstripPanel = renderSessionFilmstrip (q.GetFilmstripEntries())
+    // Filmstrip panel removed from the UI (pushed the UI down for low-value
+    // per-eval history); don't spend the per-push GetFilmstripEntries work.
     let connectionLabel =
       match infra.ConnectionTracker with
       | Some tracker ->
@@ -927,7 +929,7 @@ let buildNoSessionSnapshotWithSessions
       DaemonHealth = daemonHealthPanel
       FailureNarrativesPanel = failureNarrativesPanel
       DiagnosticsPanel = diagnosticsPanel
-      FilmstripPanel = filmstripPanel
+      FilmstripPanel = Elem.div [] []
       ThemeName = defaultThemeName
       ConnectionLabel = connectionLabel
       HotReloadPanel = renderHotReloadEmpty

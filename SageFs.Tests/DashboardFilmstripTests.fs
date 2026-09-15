@@ -120,7 +120,7 @@ let filmstripSnapshotTests =
       (html.Length > 0) |> Expect.isTrue "FilmstripPanel should render non-empty HTML"
     }
 
-    test "renderMainContent includes filmstrip-panel id" {
+    test "renderMainContent no longer includes the filmstrip panel" {
       let snap : DashboardSnapshot = {
         Version = "0.6.50"; SessionState = "ready"; SessionId = "test-id"; WorkingDir = @"C:\Code"
         WarmupProgress = ""; WorkflowLabel = "REPL"; ThemeName = "default"; ConnectionLabel = None; ConnectionState = DashboardConnectionState.Connected
@@ -144,8 +144,13 @@ let filmstripSnapshotTests =
         EvalToPixelP99Ms = None
 
       }
+      // The eval filmstrip was removed from the main content — it pushed the
+      // whole UI down to show low-value per-eval history that the top eval-stats
+      // and the Output panel already cover. renderSessionFilmstrip still exists
+      // (tested above), but renderMainContent no longer places it.
       let html = renderMainContent snap |> render
-      html |> Expect.stringContains "main content should include filmstrip panel" DomIds.FilmstripPanel
+      html.Contains DomIds.FilmstripPanel
+      |> Expect.isFalse "main content must NOT include the removed filmstrip panel"
     }
 
   ]

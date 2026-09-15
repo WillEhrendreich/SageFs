@@ -1471,12 +1471,14 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         ]
       | _ -> ()
     ]
-    // Expanded-only panels: alarm, failure narratives, diagnostics, filmstrip
+    // Expanded-only panels: alarm, failure narratives, diagnostics.
+    // The eval filmstrip ("N evals" per-cell history) was removed — it pushed
+    // the whole UI down to show raw eval code+timing that the top eval-stats
+    // and the Output panel already cover, and cost an O(n) rev per SSE push.
     Elem.div [ Attr.class' "expanded-only" ] [
       snap.AlarmPanel
       snap.FailureNarrativesPanel
       snap.DiagnosticsPanel
-      snap.FilmstripPanel
     ]
     // Main app layout: output+eval on left, sidebar on right
     Elem.div [ Attr.class' "app-layout" ] [
