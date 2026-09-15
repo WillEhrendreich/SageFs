@@ -58,6 +58,16 @@ module HostCoreAdoption =
   /// uses when it references project DLLs into FSI. Excludes the host's own
   /// output (`/host/`) and reference-assembly folders (`/ref/`) — neither
   /// is ever a session project's real build.
+  /// The distinct directories that own the given project files — the roots
+  /// whose `bin` trees hold their built SageFs.Core, if any. Unreadable
+  /// paths are dropped rather than throwing.
+  let projectDirsOf (projects: string list) : string list =
+    projects
+    |> List.choose (fun p ->
+      try Some(Path.GetDirectoryName(Path.GetFullPath p))
+      with _ -> None)
+    |> List.distinct
+
   let findCandidates (projectDirs: string list) : string list =
     let dllFileName = assemblyName + ".dll"
     projectDirs
@@ -132,14 +142,27 @@ module HostCoreAdoption =
       | false -> ()
     with _ -> ()
 
+  /// The outcome of resolving where a worker should launch from: the
+  /// directory to pass to `Args.resolveHostLaunch`, an optional cleanup
+  /// action the caller must run once the spawned process exits, and — when a
+  /// session project's own SageFs.Core was adopted — the identity
+  /// `(assemblyVersion, originalBuildWriteTimeUtc)` of that adopted build.
+  /// `AdoptedCore` is the ground truth for the self-host staleness signal:
+  /// it is exactly what the worker loaded, captured before the process
+  /// existed, so a later rebuild on disk can be compared against it.
+  type LaunchPlan = {
+    LaunchRoot: string
+    Cleanup: (unit -> unit) option
+    AdoptedCore: (string * DateTime) option
+  }
+
   /// The full decision for one worker spawn: given the shared daemon-base
   /// directory (the same one `Args.resolveHostLaunch` would otherwise use
   /// directly), the session's id and project paths, and the running
-  /// daemon's own SageFs.Core version — returns the directory to pass to
-  /// `Args.resolveHostLaunch` (the shared one, unchanged, when no project
-  /// ships its own SageFs.Core; a fresh private root when one does) plus an
-  /// optional cleanup action the caller must run once the spawned process
-  /// exits.
+  /// daemon's own SageFs.Core version — returns a `LaunchPlan` whose
+  /// `LaunchRoot` is the shared directory unchanged when no project ships its
+  /// own SageFs.Core, or a fresh private root (with a `Cleanup` and an
+  /// `AdoptedCore` identity) when one does.
   ///
   /// Fail-closed: a candidate that cannot be inspected (unreadable, not a
   /// valid assembly) is an `Error`, never silently treated as absent.
@@ -148,15 +171,10 @@ module HostCoreAdoption =
     (sessionId: string)
     (projects: string list)
     (hostVersion: Version)
-    : Result<string * (unit -> unit) option, string> =
-    let projectDirs =
-      projects
-      |> List.choose (fun p ->
-        try Some(Path.GetDirectoryName(Path.GetFullPath p))
-        with _ -> None)
-      |> List.distinct
+    : Result<LaunchPlan, string> =
+    let projectDirs = projectDirsOf projects
     match findCandidates projectDirs with
-    | [] -> Ok(sharedDaemonBaseDir, None)
+    | [] -> Ok { LaunchRoot = sharedDaemonBaseDir; Cleanup = None; AdoptedCore = None }
     | best :: _ ->
       try
         let candidateVersion = AssemblyName.GetAssemblyName(best).Version
@@ -169,7 +187,8 @@ module HostCoreAdoption =
               Path.GetTempPath(),
               sprintf "sagefs-host-adopt-%s-%s" sessionId (Guid.NewGuid().ToString("N").[..7]))
           materialize sharedHostDir privateRoot path
-          Ok(privateRoot, Some(fun () -> cleanup privateRoot))
+          let adopted = (candidateVersion.ToString(), File.GetLastWriteTimeUtc path)
+          Ok { LaunchRoot = privateRoot; Cleanup = Some(fun () -> cleanup privateRoot); AdoptedCore = Some adopted }
       with ex ->
         Error(sprintf "Could not verify the session project's SageFs.Core build at %s: %s" best ex.Message)
 
@@ -213,3 +232,31 @@ module HostCoreAdoption =
       match versionDiffers || newerOnDisk with
       | true -> SelfHostFreshness.Stale(loadedVersion, newestVersion)
       | false -> SelfHostFreshness.Current
+
+  /// The newest SageFs.Core build currently on disk for these projects, as
+  /// `(assemblyVersion, fileWriteTimeUtc)` — the "newest" side to feed
+  /// `selfHostFreshness` at status time. `None` when no project ships its own
+  /// SageFs.Core (the common non-self-hosting case) or nothing is readable.
+  /// Fail-safe: any inspection error yields `None`, never throws — a status
+  /// call must stay total.
+  let newestCandidateIdentity (projects: string list) : (string * DateTime) option =
+    match findCandidates (projectDirsOf projects) with
+    | [] -> None
+    | best :: _ ->
+      try Some(AssemblyName.GetAssemblyName(best).Version.ToString(), File.GetLastWriteTimeUtc best)
+      with _ -> None
+
+  /// The one-line, actionable affordance to surface for a self-host session's
+  /// freshness — `None` unless the loaded build is genuinely `Stale`, so
+  /// normal (non-self-hosting or up-to-date) sessions show nothing. The
+  /// message names both the loaded and the newer on-disk build and the exact
+  /// remediation (`hard_reset_fsi_session rebuild=true`).
+  let formatFreshnessAffordance (freshness: SelfHostFreshness) : string option =
+    match freshness with
+    | SelfHostFreshness.Current -> None
+    | SelfHostFreshness.Indeterminate _ -> None
+    | SelfHostFreshness.Stale(loaded, newest) ->
+      Some(
+        sprintf
+          "⚠ Self-host staleness: this session loaded SageFs.Core %s, but a newer build (%s) is on disk. Run hard_reset_fsi_session with rebuild=true to reload the current build."
+          loaded newest)

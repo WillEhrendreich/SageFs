@@ -2121,7 +2121,21 @@ module McpTools =
             match rebuildOutcomes.TryGetValue sid with
             | true, outcome -> "\n" + RebuildOutcome.describe DateTime.UtcNow outcome
             | false, _ -> ""
-          return enriched + rebuildLine
+          // Self-host staleness (F5b): only sessions that adopted their own
+          // SageFs.Core build carry an AdoptedCore identity, so the on-disk
+          // scan runs ONLY for those (rare) sessions — never on the common
+          // non-self-hosting get_fsi_status polling path.
+          let! adoptedCore = ctx.SessionOps.GetAdoptedCore (toSessionId sid)
+          let selfHostLine =
+            match adoptedCore, info with
+            | Some _, Some sessionInfo ->
+              let newest = SageFs.HostCoreAdoption.newestCandidateIdentity sessionInfo.Projects
+              SageFs.HostCoreAdoption.selfHostFreshness adoptedCore newest
+              |> SageFs.HostCoreAdoption.formatFreshnessAffordance
+              |> Option.map (fun line -> "\n" + line)
+              |> Option.defaultValue ""
+            | _ -> ""
+          return enriched + rebuildLine + selfHostLine
         | Ok other ->
           return sprintf "Unexpected response: %A" other
         | Error (RestartInProgress msg) ->

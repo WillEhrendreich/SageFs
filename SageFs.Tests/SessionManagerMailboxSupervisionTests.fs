@@ -38,7 +38,7 @@ let private mkRuntime
         StartWorkerProcess =
           fun _ _ _ _ _ _ ->
             startCalls <- startCalls + 1
-            startWorker startCalls
+            startWorker startCalls |> Result.map (fun p -> ({ Process = p; AdoptedCore = None } : SessionManager.SpawnedWorker))
         AwaitWorkerPort = fun _ _ _ _ -> ()
         StopWorker = fun _ -> stopWorker ()
         RunBuildAsync = fun _ _ -> runBuild ()

@@ -75,6 +75,7 @@ let managerStateTests =
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = SageFs.RestartPolicy.emptyState
         AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
+        AdoptedCore = None
 
         ProjectRoles = []
 
@@ -116,6 +117,7 @@ let managerStateTests =
         Workflow = WorkflowTypes.SessionWorkflow.Interactive
         RestartState = SageFs.RestartPolicy.emptyState
         AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
+        AdoptedCore = None
 
         ProjectRoles = []
 
@@ -157,7 +159,8 @@ let managerStateTests =
           Workflow = WorkflowTypes.SessionWorkflow.Interactive
           RestartState = SageFs.RestartPolicy.emptyState
           AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
-          ProjectRoles = [] }
+          ProjectRoles = []
+          AdoptedCore = None }
 
       let sidA = testSessionId "aa000011"
       let sidB = testSessionId "bb000011"

@@ -118,6 +118,7 @@ let private fakeOps (info: SessionInfo) : SessionManagementOps =
       EndAppRun = fun _ generation runId final -> Task.FromResult(change (AppSlot.endRun generation runId final))
       GetProxy = fun _ -> Task.FromResult(Some worker)
       SwitchWorkflow = fun _ _ -> Task.FromResult(Ok "restarting")
+      GetAdoptedCore = fun _ -> Task.FromResult(None)
       AwaitReady = fun _ _ -> Task.FromResult(Ok ()) }
 
 /// Stand up only mapSessionRoutes on a bare Kestrel host bound to an

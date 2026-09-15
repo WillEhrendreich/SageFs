@@ -136,9 +136,10 @@ let tests =
         Directory.CreateDirectory projectDir |> ignore
 
         match HostCoreAdoption.resolveLaunchRoot sharedRoot "deadbeef" [ Path.Combine(projectDir, "P.fsproj") ] (System.Version(1, 0, 0)) with
-        | Ok (launchRoot, cleanupOpt) ->
-          launchRoot |> Expect.equal "unchanged shared root" sharedRoot
-          cleanupOpt |> Expect.isNone "no private dir was created, so nothing to clean up"
+        | Ok plan ->
+          plan.LaunchRoot |> Expect.equal "unchanged shared root" sharedRoot
+          plan.Cleanup |> Expect.isNone "no private dir was created, so nothing to clean up"
+          plan.AdoptedCore |> Expect.isNone "no self-host adoption, so no adopted-core identity"
         | Error reason -> failtestf "expected Ok, got Error %s" reason)
 
     testCase "resolveLaunchRoot adopts a same-version candidate into a fresh private root" <| fun _ ->

@@ -56,7 +56,8 @@ let mkHangingSession (proc: Process) =
     Workflow = WorkflowTypes.SessionWorkflow.Interactive
     RestartState = RestartPolicy.emptyState
     AppGeneration = SageFs.AppRun.AppSlot.initial.Generation
-    ProjectRoles = [] }
+    ProjectRoles = []
+    AdoptedCore = None }
 
 [<Tests>]
 let shutdownLifecycleTests =

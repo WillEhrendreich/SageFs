@@ -1,6 +1,7 @@
 module SageFs.Tests.HostCoreAdoptionStalenessTests
 
 open System
+open System.IO
 open Expecto
 open Expecto.Flip
 open SageFs
@@ -62,4 +63,34 @@ let tests =
       match HostCoreAdoption.selfHostFreshness None None with
       | HostCoreAdoption.SelfHostFreshness.Indeterminate _ -> ()
       | other -> failwithf "expected Indeterminate, got %A" other
+
+    // formatFreshnessAffordance: the surfaced, actionable one-liner. Silent
+    // unless genuinely Stale, so normal sessions never see a nag.
+
+    testCase "WHY — HostCoreAdoption.formatFreshnessAffordance — Current yields no line because an up-to-date session must show nothing" <| fun _ ->
+      HostCoreAdoption.formatFreshnessAffordance HostCoreAdoption.SelfHostFreshness.Current
+      |> Expect.isNone "Current surfaces no affordance"
+
+    testCase "WHY — HostCoreAdoption.formatFreshnessAffordance — Indeterminate yields no line because a non-self-hosting session must not be nagged" <| fun _ ->
+      HostCoreAdoption.formatFreshnessAffordance (HostCoreAdoption.SelfHostFreshness.Indeterminate "no build loaded")
+      |> Expect.isNone "Indeterminate surfaces no affordance"
+
+    testCase "WHY — HostCoreAdoption.formatFreshnessAffordance — Stale yields a line naming both builds and the exact remediation because the agent must know what to run" <| fun _ ->
+      match HostCoreAdoption.formatFreshnessAffordance (HostCoreAdoption.SelfHostFreshness.Stale("0.6.500", "0.6.501")) with
+      | Some line ->
+        line |> Expect.stringContains "names the loaded build" "0.6.500"
+        line |> Expect.stringContains "names the newer on-disk build" "0.6.501"
+        line |> Expect.stringContains "gives the exact remediation" "hard_reset_fsi_session"
+        line |> Expect.stringContains "spells out the rebuild flag" "rebuild=true"
+      | None -> failwith "expected a Stale affordance line, got None"
+
+    testCase "WHY — HostCoreAdoption.newestCandidateIdentity — no self-host candidate on disk is None because a project that does not ship SageFs.Core has nothing to compare" <| fun _ ->
+      // A directory with no SageFs.Core.dll under bin — a normal project.
+      let tmp = Path.Combine(Path.GetTempPath(), "sagefs-newest-none-" + Guid.NewGuid().ToString("N").[..7])
+      Directory.CreateDirectory(Path.Combine(tmp, "bin")) |> ignore
+      try
+        HostCoreAdoption.newestCandidateIdentity [ Path.Combine(tmp, "Some.fsproj") ]
+        |> Expect.isNone "no SageFs.Core on disk yields None"
+      finally
+        try Directory.Delete(tmp, true) with _ -> ()
   ]

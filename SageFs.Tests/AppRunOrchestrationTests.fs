@@ -135,7 +135,8 @@ let private fakeOps (info: SessionInfo) (handle: WorkerMessage -> Async<WorkerRe
         Task.FromResult(Ok "restarting")
       AwaitReady = fun _ _ ->
         r.Calls.Enqueue "await-ready"
-        Task.FromResult(Ok ()) }
+        Task.FromResult(Ok ())
+      GetAdoptedCore = fun _ -> Task.FromResult(None) }
 
 let private calls (r: Recorded) = r.Calls.ToArray() |> Array.toList
 let private states (r: Recorded) = r.States.ToArray() |> Array.toList
@@ -613,7 +614,7 @@ let ownerMailboxTests =
     testTask "WHY — SessionManager — the mailbox drops a run step from before a Stop because the owner, not the caller, decides what the app is doing" {
       let cancellation = new System.Threading.CancellationTokenSource()
       let runtime : SessionManager.SessionManagerRuntime =
-        { StartWorkerProcess = fun _ _ _ _ _ _ -> Ok (System.Diagnostics.Process.GetCurrentProcess())
+        { StartWorkerProcess = fun _ _ _ _ _ _ -> Ok ({ Process = System.Diagnostics.Process.GetCurrentProcess(); AdoptedCore = None } : SessionManager.SpawnedWorker)
           AwaitWorkerPort = fun _ _ _ _ -> ()
           StopWorker = fun _ -> async { return () }
           RunBuildAsync = fun _ _ -> async { return Ok "built" } }

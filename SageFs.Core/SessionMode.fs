@@ -42,6 +42,10 @@ type SessionManagementOps = {
   AwaitReady: SessionId -> System.TimeSpan -> Task<Result<unit, SageFsError>>
   /// Switch the workflow for a session.
   SwitchWorkflow: string -> WorkflowTypes.SessionWorkflow -> Task<Result<string, SageFsError>>
+  /// Identity `(assemblyVersion, originalBuildWriteTimeUtc)` of the SageFs.Core
+  /// build this session's worker adopted at spawn, or `None` when the session
+  /// does not self-host SageFs.Core. Drives the self-host staleness affordance.
+  GetAdoptedCore: SessionId -> Task<(string * System.DateTime) option>
 }
 
 module SessionManagementOps =
@@ -63,4 +67,5 @@ module SessionManagementOps =
     EndAppRun = fun _ _ _ _ -> Task.FromResult(AppRun.RunEnd.NotCurrent)
     AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
     SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
+    GetAdoptedCore = fun _ -> Task.FromResult(None)
   }

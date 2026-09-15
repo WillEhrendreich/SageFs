@@ -42,7 +42,7 @@ let private mkRuntime
           fun _ _ _ _ _ _ ->
             startCalls <- startCalls + 1
             verbs.Add Verb.Start
-            startWorker startCalls
+            startWorker startCalls |> Result.map (fun p -> ({ Process = p; AdoptedCore = None } : SessionManager.SpawnedWorker))
         AwaitWorkerPort = fun _ _ _ _ -> ()
         StopWorker =
           fun _ ->

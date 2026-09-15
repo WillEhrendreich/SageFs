@@ -54,6 +54,7 @@ module McpSessionIsolation =
           EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
           AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
           SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
+          GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None)
         }
         SessionMap = sessionMap
         McpPort = 0
@@ -149,7 +150,8 @@ module McpSessionIsolation =
             AdvanceRun = SageFs.SessionManagementOps.stub.AdvanceRun
             EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
             AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
-            SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available")) }
+            SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
+            GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None) }
           SessionMap = sessionMap
           McpPort = 0
           Dispatch = None
@@ -401,7 +403,8 @@ module WorkingDirRoutingPriority =
           AdvanceRun = SageFs.SessionManagementOps.stub.AdvanceRun
           EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
           AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
-          SwitchWorkflow = fun _ _ -> Task.FromResult(Error(SageFsError.HardResetFailed "Not available")) }
+          SwitchWorkflow = fun _ _ -> Task.FromResult(Error(SageFsError.HardResetFailed "Not available"))
+          GetAdoptedCore = fun _ -> Task.FromResult(None) }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
       GetFeatureState = None; RecordEval = None; ActivityTracker = SageFs.AgentActivityTracker.create()
@@ -572,6 +575,7 @@ module ResetIsolation =
       EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
       AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
       SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
+      GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None)
     }
     let ctx =
       { FrictionStore = None
@@ -665,7 +669,8 @@ module ResetIsolation =
       AdvanceRun = SageFs.SessionManagementOps.stub.AdvanceRun
       EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
       AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
-      SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available")) }
+      SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
+      GetAdoptedCore = fun _ -> Task.FromResult(None) }
 
     let ctx =
       { FrictionStore = None
@@ -742,6 +747,7 @@ module ResetIsolation =
         EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
         AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
+        GetAdoptedCore = fun _ -> Task.FromResult(None)
       }
 
       let ctx =
@@ -905,6 +911,7 @@ module ResetIsolation =
         EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
         AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
+        GetAdoptedCore = fun _ -> Task.FromResult(None)
       }
 
       let ctx =
@@ -993,6 +1000,7 @@ module ResetIsolation =
         EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
         AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
         SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
+        GetAdoptedCore = fun _ -> Task.FromResult(None)
       }
 
       let ctx =
@@ -1289,7 +1297,8 @@ module SessionMapEviction =
         AdvanceRun = SageFs.SessionManagementOps.stub.AdvanceRun
         EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
         AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
-        SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available")) }
+        SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
+        GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None) }
       SessionMap = ConcurrentDictionary<string, string>()
       McpPort = 0
       Dispatch = None

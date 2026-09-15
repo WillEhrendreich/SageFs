@@ -21,6 +21,15 @@ open SageFs.ProjectLoading
 ///   Spawning workers outside the agent — races on ManagerState.Sessions map.
 module SessionManager =
 
+  /// A freshly spawned worker OS process, plus the identity of the session
+  /// project's own SageFs.Core build adopted into it (`None` when the session
+  /// does not self-host SageFs.Core). `AdoptedCore` is captured at spawn — the
+  /// ground truth for the self-host staleness signal surfaced in status.
+  type SpawnedWorker = {
+    Process: Process
+    AdoptedCore: (string * DateTime) option
+  }
+
   type ManagedSession = {
     Info: SessionInfo
     Process: Process
@@ -40,6 +49,11 @@ module SessionManager =
     AppGeneration: AppRun.RunGeneration
     /// Classification of all projects loaded in this session.
     ProjectRoles: ClassifiedProject list
+    /// Identity `(assemblyVersion, originalBuildWriteTimeUtc)` of the session
+    /// project's own SageFs.Core build adopted into this worker at spawn, or
+    /// `None` when the session does not self-host SageFs.Core. Compared against
+    /// the newest build on disk to surface the self-host staleness signal.
+    AdoptedCore: (string * DateTime) option
   }
 
   /// What a worker said when asked for its tests.
@@ -201,6 +215,11 @@ module SessionManager =
     WarmupProgress: Map<SessionId, string>
     /// Per-session worker HTTP base URLs (for hot-reload proxy, etc.).
     WorkerBaseUrls: Map<SessionId, string>
+    /// Per-session identity `(assemblyVersion, originalBuildWriteTimeUtc)` of
+    /// the SageFs.Core build adopted into the worker at spawn — present only
+    /// for sessions that self-host SageFs.Core. Compared against the newest
+    /// build on disk to surface the self-host staleness affordance.
+    AdoptedCore: Map<SessionId, string * DateTime>
   }
 
   module QuerySnapshot =
@@ -214,7 +233,13 @@ module SessionManager =
           match ms.WorkerBaseUrl.Length > 0 with
           | true -> Map.add id ms.WorkerBaseUrl acc
           | false -> acc) Map.empty
-      { Sessions = sessions; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls }
+      let adoptedCore =
+        state.Sessions
+        |> Map.fold (fun acc id ms ->
+          match ms.AdoptedCore with
+          | Some identity -> Map.add id identity acc
+          | None -> acc) Map.empty
+      { Sessions = sessions; WarmupProgress = state.WarmupProgress; WorkerBaseUrls = workerUrls; AdoptedCore = adoptedCore }
 
     let fromManagerState (state: ManagerState) : QuerySnapshot =
       fromState state
@@ -225,10 +250,10 @@ module SessionManager =
     let allSessions (snap: QuerySnapshot) : SessionInfo list =
       snap.Sessions |> Map.toList |> List.map snd
 
-    let empty = { Sessions = Map.empty; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty }
+    let empty = { Sessions = Map.empty; WarmupProgress = Map.empty; WorkerBaseUrls = Map.empty; AdoptedCore = Map.empty }
 
   type SessionManagerRuntime = {
-    StartWorkerProcess: SessionId -> string list -> string -> bool -> WorkflowTypes.SessionWorkflow -> (int -> int -> unit) -> Result<Process, SageFsError>
+    StartWorkerProcess: SessionId -> string list -> string -> bool -> WorkflowTypes.SessionWorkflow -> (int -> int -> unit) -> Result<SpawnedWorker, SageFsError>
     AwaitWorkerPort: SessionId -> Process -> MailboxProcessor<SessionCommand> -> CancellationToken -> unit
     StopWorker: ManagedSession -> Async<unit>
     RunBuildAsync: string list -> string -> Async<Result<string, SageFsError>>
@@ -286,7 +311,7 @@ module SessionManager =
     (autoOpenNamespaces: bool)
     (workflow: WorkflowTypes.SessionWorkflow)
     (onExited: int -> int -> unit)
-    : Result<Process, SageFsError> =
+    : Result<SpawnedWorker, SageFsError> =
     let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) projects false false autoOpenNamespaces workflow
     // Spawn the FSI HOST (separate minimal-closure process), resolved relative
     // to the daemon's own location (see plan: fsi-host-supervisor).
@@ -312,7 +337,9 @@ module SessionManager =
     let hostVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version
     match HostCoreAdoption.resolveLaunchRoot System.AppContext.BaseDirectory (SessionId.value sessionId) projects hostVersion with
     | Error reason -> Error (SageFsError.WorkerSpawnFailed reason)
-    | Ok (launchRoot, hostCleanup) ->
+    | Ok launchPlan ->
+    let launchRoot = launchPlan.LaunchRoot
+    let hostCleanup = launchPlan.Cleanup
     match Args.resolveHostLaunch launchRoot (OperatingSystem.IsWindows()) dotnetMuxer File.Exists with
     | Error reason ->
       hostCleanup |> Option.iter (fun cleanup -> try cleanup () with _ -> ())
@@ -360,7 +387,7 @@ module SessionManager =
         // exited, its own SageFs.Host.dll/SageFs.Core.dll are no longer
         // read from disk, so it is safe to remove.
         hostCleanup |> Option.iter (fun cleanup -> try cleanup () with _ -> ()))
-      Ok proc
+      Ok { Process = proc; AdoptedCore = launchPlan.AdoptedCore }
 
   /// Read the worker's stdout until WORKER_PORT is reported, then post
   /// a WorkerReady (or WorkerSpawnFailed) message back to the agent.
@@ -702,7 +729,8 @@ module SessionManager =
       let onExited workerPid exitCode =
         inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
       match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
-      | Ok proc ->
+      | Ok spawned ->
+        let proc = spawned.Process
         let info : SessionInfo = {
           Id = id
           Name = session.Info.Name
@@ -729,6 +757,7 @@ module SessionManager =
           RestartState = session.RestartState
           AppGeneration = session.AppGeneration
           ProjectRoles = session.ProjectRoles
+          AdoptedCore = spawned.AdoptedCore
         }
         let newState = ManagerState.addSession id restarted state
         Instrumentation.sessionsRestarted.Add(1L)
@@ -775,16 +804,21 @@ module SessionManager =
           reply.Reply(Error err)
           Instrumentation.failSpan span (SageFsError.describe err)
           state
-        | Ok proc ->
+        | Ok spawned ->
+          let proc = spawned.Process
           // Registry continuity (P7): the session stays registered for the
           // whole restart, marked Restarting with a pending proxy. The old
           // worker's pid stays on Info.WorkerPid until the swap commits, so
           // its real exit during warmup is ignored by the stale-pid guard (P2).
+          // The fresh spawn re-adopted the newest SageFs.Core on disk, so the
+          // session's AdoptedCore is updated now; the WorkerReady commit
+          // (`{ session with ... }`) then inherits this fresh value.
           let restarting =
             { session with
                 Proxy = pendingProxy
                 WorkerBaseUrl = ""
                 Workflow = workflow
+                AdoptedCore = spawned.AdoptedCore
                 Info =
                   { session.Info with
                       Status = SessionLifecycleStatus.Restarting (SessionLifecycleStatus.workerPid session.Info.Status)
@@ -844,7 +878,8 @@ module SessionManager =
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
             match runtime.StartWorkerProcess sessionId projects workingDir autoOpenNamespaces workflow onExited with
-            | Ok proc ->
+            | Ok spawned ->
+              let proc = spawned.Process
               // Register session immediately with pending proxy — don't block
               let info : SessionInfo = {
                 Id = sessionId
@@ -872,6 +907,7 @@ module SessionManager =
                 RestartState = RestartPolicy.emptyState
                 AppGeneration = AppRun.AppSlot.initial.Generation
                 ProjectRoles = []
+                AdoptedCore = spawned.AdoptedCore
               }
               let newState = ManagerState.addSession sessionId managed state
               reply.Reply(Ok info)
@@ -1375,12 +1411,14 @@ module SessionManager =
             let onExited workerPid exitCode =
               inbox.Post(SessionCommand.WorkerExited(id, workerPid, exitCode))
             match runtime.StartWorkerProcess id session.Projects session.WorkingDir session.AutoOpenNamespaces session.Workflow onExited with
-            | Ok proc ->
+            | Ok spawned ->
+              let proc = spawned.Process
               let restarted =
                 { session with
                     Process = proc
                     Proxy = pendingProxy
                     WorkerBaseUrl = ""
+                    AdoptedCore = spawned.AdoptedCore
                     Info =
                       { session.Info with
                           Status = SessionLifecycleStatus.Starting { Pid = proc.Id; Port = None }

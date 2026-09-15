@@ -357,6 +357,8 @@ let createSessionOps
       task { return SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) }
     GetAllSessions = fun () ->
       task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
+    GetAdoptedCore = fun sessionId ->
+      task { return (readSnapshot()).AdoptedCore |> Map.tryFind sessionId }
     UpdateSessionStatus = fun sessionId (status: WorkerProtocol.SessionLifecycleStatus) ->
       task {
         sessionManager.Post(
