@@ -9,8 +9,17 @@ open SageFs.ProjectLoading
 open SageFs.WarmUp
 
 module internal WarmupReplayCache =
+  // Bump whenever the warmup DISCOVERY algorithm changes what it puts in a plan
+  // (not just the serialized shape) — SchemaVersion is part of the Fingerprint,
+  // so bumping it discards every on-disk plan an older algorithm wrote.
+  // v4→v5: the auto-open discovery was corrected to exclude non-public modules
+  // (only `t.IsPublic` top-level modules are opened), but plans written before
+  // that fix still listed `internal` modules like `SageFs.WarmupReplayCache`,
+  // which then failed to open on every replay ("namespace not defined") — a
+  // non-fatal but user-visible warmup error. Bumping invalidates those stale
+  // plans so fresh, correct discovery runs (roast-7 dogfood finding F7).
   [<Literal>]
-  let SchemaVersion = 4
+  let SchemaVersion = 5
 
   type FileStamp = {
     Path: string

@@ -428,6 +428,26 @@ let extractOpensFromLines (lines: string[]) : string[] =
        | false -> None)
   |> Array.distinct
 
+/// The full names of the INTERNAL top-level F# modules among `types` (e.g.
+/// `SageFs.WarmupReplayCache`). Warmup must not replay a source file's own
+/// `open` of such a module: it is legal inside the assembly but fails from the
+/// FSI session, which cannot see internal members of a separately-loaded
+/// assembly ("namespace not defined") — non-fatal warmup noise (roast-7 F7).
+/// A top-level module is a non-nested type carrying the F# Module construct
+/// flag; `internal` shows up in reflection as `not IsPublic` on a non-nested
+/// type. Pure over the reflected types so it is unit-testable against a real
+/// assembly.
+let internalTopLevelModuleFullNames (types: System.Type[]) : Set<string> =
+  types
+  |> Array.filter (fun t ->
+    (not t.IsPublic) && (not t.IsNested) && not (isNull t.FullName)
+    && (t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.CompilationMappingAttribute>, false)
+        |> Array.exists (fun attr ->
+          let cma = attr :?> Microsoft.FSharp.Core.CompilationMappingAttribute
+          cma.SourceConstructFlags = Microsoft.FSharp.Core.SourceConstructFlags.Module)))
+  |> Array.map (fun t -> t.FullName)
+  |> Set.ofArray
+
 let internal resolveWarmupReplayPlan
   (logger: ILogger)
   (cachePath: string option)
@@ -466,6 +486,16 @@ let private discoverWarmupReplayPlan
     let openedNamespaces = System.Collections.Generic.HashSet<string>()
     let namesToOpen = System.Collections.Generic.List<string>()
     let moduleNames = System.Collections.Generic.HashSet<string>()
+    // Full names of the project's own INTERNAL top-level modules (e.g.
+    // `SageFs.WarmupReplayCache`). The source-scan (extractOpensFromLines)
+    // collects `open X` lines verbatim from each .fs file — including a file's
+    // legal SAME-assembly `open` of an internal module — and replays them in the
+    // FSI session, which is a DIFFERENT assembly where that module is not
+    // accessible, so the open fails ("namespace not defined"): non-fatal but
+    // user-visible warmup noise (roast-7 dogfood finding F7). Collected from the
+    // reflection scan below (which knows visibility) and filtered out before the
+    // opens are replayed.
+    let internalModuleFullNames = System.Collections.Generic.HashSet<string>()
     let loadedAssemblies = System.Collections.Generic.List<LoadedAssembly>()
     // Problems discovered during warmup planning that the user must see
     // (missing project DLLs, zero namespaces found despite auto-open ON).
@@ -591,6 +621,12 @@ let private discoverWarmupReplayPlan
               | false -> t.Name)
             |> Array.distinct
 
+          // Record this assembly's INTERNAL top-level modules so source-scanned
+          // `open`s of them (legal in-assembly, impossible from the FSI session)
+          // can be dropped before replay (F7).
+          for name in internalTopLevelModuleFullNames types do
+            internalModuleFullNames.Add name |> ignore
+
           for ns in rootNamespaces do
             match openedNamespaces.Add(ns) with
             | true ->
@@ -639,8 +675,13 @@ let private discoverWarmupReplayPlan
         sprintf "Auto-open was enabled and %d source file(s) were scanned, but no namespaces/modules were found to open. If the project defines modules, ensure they are compiled into the project assembly (dotnet build) and are not hidden behind RequireQualifiedAccess." n)
     | _ -> ()
 
+    // Drop opens that name the project's own internal top-level modules — they
+    // are legal inside the assembly's source (where extractOpensFromLines found
+    // them) but fail from the FSI session, which cannot see internal members of
+    // a separately-loaded assembly (roast-7 dogfood finding F7).
     let namePairs =
       namesToOpen
+      |> Seq.filter (fun name -> not (internalModuleFullNames.Contains name))
       |> Seq.map (fun name ->
         name,
         match moduleNames.Contains(name) with
