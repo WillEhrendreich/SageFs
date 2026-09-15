@@ -853,11 +853,25 @@ module SessionManager =
               answer (Error (SageFsError.WorkerSpawnFailed "the session stopped before it became Ready"))
             | SessionLifecycleStatus.Starting _ | SessionLifecycleStatus.Restarting _ | SessionLifecycleStatus.Building _ -> acc) state
 
+      let lastGoodState = ref ManagerState.empty
+      // publishSnapshot is a fire-and-forget notification; a throwing snapshot
+      // projection must never take the whole supervisor down with it.
+      let publishSnapshotSafe (state: ManagerState) =
+        try publishSnapshot state
+        with ex -> Log.warn "[SessionManager] publishSnapshot threw (continuing): %s" ex.Message
+      // settleReadyWaiters is a state transform; if it throws, keep the
+      // post-command state rather than letting the loop die.
+      let settleReadyWaitersSafe (state: ManagerState) =
+        try settleReadyWaiters state
+        with ex ->
+          Log.warn "[SessionManager] settleReadyWaiters threw (keeping state'): %s" ex.Message
+          state
       let rec loop (state: ManagerState) = async {
-        publishSnapshot state
+        lastGoodState.Value <- state
+        publishSnapshotSafe state
         let! cmd = inbox.Receive()
         let! state' = superviseStep state cmd
-        return! loop (settleReadyWaiters state')
+        return! loop (settleReadyWaitersSafe state')
       }
       and step (state: ManagerState) (cmd: SessionCommand) : Async<ManagerState> = async {
         match cmd with
@@ -1754,12 +1768,21 @@ module SessionManager =
           | SessionCommand.WorkerReportedFaulted _ -> ()
           return state
       }
-      async {
+      // Supervise the supervisor: per-message superviseStep + the guarded
+      // scaffolding above mean the loop should only ever exit on cancellation.
+      // But if anything unforeseen still escapes, restart from the last-good
+      // state (sessions preserved) rather than orphaning every session forever.
+      let rec supervise () = async {
         try
-          return! loop ManagerState.empty
-        with ex ->
-          Log.error "[SessionManager] Mailbox died unexpectedly: %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+          return! loop lastGoodState.Value
+        with
+        | :? OperationCanceledException -> ()  // cancellation stops the supervisor, as intended
+        | ex ->
+          Log.error "[SessionManager] Mailbox loop threw unexpectedly; restarting from last-good state (sessions preserved): %s\n%s" ex.Message (if isNull ex.StackTrace then "" else ex.StackTrace)
+          Instrumentation.actorErrors.Add(1L, System.Collections.Generic.KeyValuePair("actor.name", "session-manager-loop" :> obj))
+          return! supervise ()
       }
+      supervise ()
     ), cancellationToken = ct)
     (mailbox, fun () -> snapshotRef.Value)
 
