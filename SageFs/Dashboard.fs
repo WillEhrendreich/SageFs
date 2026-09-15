@@ -1580,6 +1580,72 @@ let mapPostRaw (route: string) (read: HttpContext -> 'T) (handler: 'T -> HttpHan
 let mapGetRaw (route: string) (read: HttpContext -> 'T) (handler: 'T -> HttpHandler) : HttpEndpoint =
   get route (fun ctx -> handler (read ctx) ctx)
 
+// ── Phase B2: Settings panel edit/clear (server-authoritative, Ds.post + morph) ──
+
+/// Global-scoped config paths for the standalone settings page. The resolver
+/// and store already support the repo layer; it is surfaced per-session later.
+let private settingsPaths () : SageFs.ConfigPaths =
+  { GlobalDir = DaemonState.SageFsDir; Repo = SageFs.NoRepoCheckout }
+
+let private settingsRows (paths: SageFs.ConfigPaths) : SettingsPanel.SettingRow list =
+  SageFs.SettingsCatalog.pilots
+  |> List.map (fun d -> { Descriptor = d; Resolved = SageFs.SettingsCatalog.resolve paths d })
+
+let private descriptorForSignal (sigName: string) : SageFs.SettingDescriptor option =
+  SageFs.SettingsCatalog.pilots |> List.tryFind (fun d -> SettingsPanel.signalName d.Key = sigName)
+
+/// Morph the whole panel back with the given notice — the one authoritative
+/// re-render after an edit (Tao of Datastar).
+let private morphSettingsPanel (ctx: HttpContext) (notice: SettingsPanel.PanelNotice) (paths: SageFs.ConfigPaths) =
+  task {
+    Response.sseStartResponse ctx |> ignore
+    do! ssePatchNode ctx (SettingsPanel.renderPanel notice (settingsRows paths))
+  }
+
+let createSettingsEditHandler : string -> HttpHandler =
+  fun sigName ctx -> task {
+    try
+      let paths = settingsPaths ()
+      match descriptorForSignal sigName with
+      | None -> do! morphSettingsPanel ctx (SettingsPanel.Rejected("Unknown setting", sigName)) paths
+      | Some d ->
+        use! doc = readSignalsJsonSized ctx
+        let rawValue =
+          match doc.RootElement.TryGetProperty(sigName) with
+          | true, prop ->
+            match prop.ValueKind with
+            | System.Text.Json.JsonValueKind.String -> prop.GetString()
+            | _ -> prop.GetRawText()
+          | _ -> ""
+        let notice =
+          match SageFs.SettingsCatalog.edit paths SageFs.LGlobal rawValue d with
+          | Ok _ -> SettingsPanel.Applied d.Name
+          | Error e -> SettingsPanel.Rejected(d.Name, SageFs.ConfigError.describe e)
+        do! morphSettingsPanel ctx notice paths
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
+let createSettingsClearHandler : string -> HttpHandler =
+  fun sigName ctx -> task {
+    try
+      let paths = settingsPaths ()
+      let notice =
+        match descriptorForSignal sigName with
+        | None -> SettingsPanel.Rejected("Unknown setting", sigName)
+        | Some d ->
+          match SageFs.SettingsCatalog.clear paths SageFs.LGlobal d with
+          | Ok _ -> SettingsPanel.Applied (sprintf "%s (reset)" d.Name)
+          | Error e -> SettingsPanel.Rejected(d.Name, SageFs.ConfigError.describe e)
+      do! morphSettingsPanel ctx notice paths
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
 let createSessionActionHandler
   (q: DashboardQueries)
   (infra: DashboardInfra)
@@ -2328,14 +2394,14 @@ let createEndpoints
     // config catalog. Global-scoped for this standalone page (the repo-override
     // layer is surfaced per-session; the resolver + store already support it).
     yield get "/dashboard/settings" (fun ctx -> task {
-      let paths : SageFs.ConfigPaths = { GlobalDir = DaemonState.SageFsDir; Repo = SageFs.NoRepoCheckout }
-      let rows : SettingsPanel.SettingRow list =
-        SageFs.SettingsCatalog.pilots
-        |> List.map (fun d ->
-          { Descriptor = d
-            Resolved = SageFs.SettingsCatalog.resolve paths d })
+      let rows = settingsRows (settingsPaths ())
       return! FalcoResponse.ofHtml (SettingsPanel.renderPage rows) ctx
     })
+    // Edit/clear a setting: Ds.post from the panel -> SettingsCatalog -> morph
+    // the whole panel back with a notice. Route param is the sanitised signal
+    // name (no dots), mapped back to the descriptor.
+    yield mapPostRaw "/dashboard/settings/edit/{sig}" (routeValue "sig") createSettingsEditHandler
+    yield mapPostRaw "/dashboard/settings/clear/{sig}" (routeValue "sig") createSettingsClearHandler
     yield post "/dashboard/eval" (createEvalHandler q infra a.EvalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)
     yield post "/dashboard/completions" (createCompletionsHandler infra.GetCompletions)

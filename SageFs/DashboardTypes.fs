@@ -81,6 +81,8 @@ module Signals =
   /// HARD_RESET) so every control is disabled while ANY action is running.
   let [<Literal>] ActionLoading = "actionLoading"
   let [<Literal>] ConfigLoading = "configLoading"
+  /// In-flight indicator for a Settings panel save/reset (Phase B2).
+  let [<Literal>] SettingsSaving = "settingsSaving"
   let [<Literal>] LiveTestingLoading = "liveTestingLoading"
   let [<Literal>] TempLoading = "tempLoading"
   let [<Literal>] Theme = "theme"

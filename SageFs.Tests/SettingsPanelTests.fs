@@ -24,7 +24,7 @@ let tests =
         let rows : SettingsPanel.SettingRow list =
           SettingsCatalog.pilots
           |> List.map (fun d -> { Descriptor = d; Resolved = SettingsCatalog.resolve paths d })
-        renderNode (SettingsPanel.renderPanel rows)
+        renderNode (SettingsPanel.renderPanel SettingsPanel.Quiet rows)
       finally
         try Directory.Delete(dir, true) with _ -> ()
 

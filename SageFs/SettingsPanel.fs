@@ -4,6 +4,7 @@ open Falco.Markup
 open Falco.Datastar
 open StarFederation.Datastar.FSharp
 open SageFs
+open SageFs.Server.DashboardTypes
 
 /// The dashboard Settings panel (unified-settings-design.md Phase B), rendered
 /// server-authoritatively from the resolved config catalog — the Tao of
@@ -26,6 +27,13 @@ module SettingsPanel =
     Descriptor: SettingDescriptor
     Resolved: Result<Provenance, ConfigError>
   }
+
+  /// The outcome of the last edit, shown as a banner after a morph. A DU (not a
+  /// bool/string option) so success and rejection each carry their own detail.
+  type PanelNotice =
+    | Quiet
+    | Applied of name: string
+    | Rejected of name: string * why: string
 
   /// A setting key sanitised into a valid Datastar signal name / URL segment
   /// (no dots or dashes). Deterministic and reversible-by-lookup: the handler
@@ -67,48 +75,92 @@ module SettingsPanel =
         [ Attr.class' "settings-perlayer" ]
         [ Text.enc (String.concat "  →  " parts) ]
 
-  /// One setting row. Read-only for now (Phase B1); the edit control lands in
-  /// Phase B2 as a `Ds.bind` input + `Ds.post` Save/Clear.
+  /// The edit control for a row (Phase B2). `Guarded` settings (the bind-host
+  /// RCE guard) are intentionally not casually editable from the panel; `Live`
+  /// and `RestartRequired` get a `Ds.bind` input + `Ds.post` Save, plus a Reset
+  /// when a layer above default set the value. All interactivity is via the
+  /// `Ds.*` builders — no hand-written data-* strings.
+  let private editControl (d: SettingDescriptor) (p: Provenance) : XmlNode =
+    let sigName = signalName d.Key
+    let current = d.Render p.Effective
+    match d.Applicability with
+    | Guarded ->
+      Elem.span [ Attr.class' "settings-guarded-note" ] [ Text.raw "guarded — edit via config, not casually" ]
+    | Live | RestartRequired ->
+      // Reset is offered only when a layer above default set the value.
+      let resetButton =
+        match p.Source with
+        | LDefault -> Elem.span [] []
+        | LGlobal | LRepo | LSession ->
+          Elem.button
+            [ Attr.class' "settings-btn settings-btn-clear"
+              Ds.onClick (Ds.post (sprintf "/dashboard/settings/clear/%s" sigName)) ]
+            [ Text.raw "Reset" ]
+      Elem.div [ Attr.class' "settings-edit" ] [
+        Elem.input [
+          Attr.type' "text"; Attr.class' "settings-input"
+          Ds.signal (sigName, current)
+          Ds.bind sigName ]
+        Elem.button
+          [ Attr.class' "settings-btn"
+            Ds.indicator Signals.SettingsSaving
+            Ds.attr' ("disabled", "$settingsSaving")
+            Ds.onClick (Ds.post (sprintf "/dashboard/settings/edit/%s" sigName)) ]
+          [ Text.raw "Save" ]
+        resetButton
+      ]
+
+  /// One setting row: label + chip, description, resolved value + provenance,
+  /// and (for a resolvable row) the edit control.
   let private renderRow (row: SettingRow) : XmlNode =
     let d = row.Descriptor
-    let valueCell =
+    let valueAndEdit =
       match row.Resolved with
       | Ok p ->
-        Elem.div [ Attr.class' "settings-value" ] [
-          Elem.span [ Attr.class' "settings-effective" ] [ Text.enc (d.Render p.Effective) ]
-          sourceBadge p.Source
-          perLayerLine d.Render p
-        ]
+        [ Elem.div [ Attr.class' "settings-value" ] [
+            Elem.span [ Attr.class' "settings-effective" ] [ Text.enc (d.Render p.Effective) ]
+            sourceBadge p.Source
+            perLayerLine d.Render p ]
+          editControl d p ]
       | Error e ->
-        Elem.div [ Attr.class' "settings-value settings-value-error" ] [
-          Text.enc (sprintf "⚠ %s" (ConfigError.describe e))
-        ]
-    Elem.div
-      [ Attr.class' "settings-row"; Attr.create "data-setting-key" d.Key ]
+        [ Elem.div [ Attr.class' "settings-value settings-value-error" ] [
+            Text.enc (sprintf "⚠ %s" (ConfigError.describe e)) ] ]
+    let head =
       [ Elem.div [ Attr.class' "settings-row-head" ] [
           Elem.span [ Attr.class' "settings-name" ] [ Text.enc d.Name ]
           applicabilityChip d.Applicability ]
-        Elem.div [ Attr.class' "settings-desc" ] [ Text.enc d.Description ]
-        valueCell ]
+        Elem.div [ Attr.class' "settings-desc" ] [ Text.enc d.Description ] ]
+    Elem.div
+      [ Attr.class' "settings-row"; Attr.create "data-setting-key" d.Key ]
+      (head @ valueAndEdit)
+
+  /// The last-edit banner. `Quiet` renders nothing.
+  let private noticeBanner (notice: PanelNotice) : XmlNode =
+    match notice with
+    | Quiet -> Elem.span [] []
+    | Applied name ->
+      Elem.div [ Attr.class' "settings-notice settings-notice-ok" ] [ Text.enc (sprintf "✓ %s saved" name) ]
+    | Rejected(name, why) ->
+      Elem.div [ Attr.class' "settings-notice settings-notice-err" ] [ Text.enc (sprintf "⚠ %s: %s" name why) ]
 
   /// The panel body: rows grouped by category, in the DU's display order.
-  /// Empty categories are omitted.
-  let renderPanel (rows: SettingRow list) : XmlNode =
-    let byCategory (cat: SettingCategory) =
-      rows |> List.filter (fun r -> r.Descriptor.Category = cat)
-    let groups =
-      SettingCategory.displayOrder
-      |> List.choose (fun cat ->
-        match byCategory cat with
-        | [] -> None
-        | catRows ->
-          Some (
-            Elem.div [ Attr.class' "settings-group" ] [
-              Elem.h3 [ Attr.class' "settings-group-title" ] [ Text.enc (SettingCategory.label cat) ]
-              yield! catRows |> List.map renderRow ]))
+  /// Empty categories are omitted. Carries the `SettingsSaving` indicator signal
+  /// on the root so Save/Reset buttons get immediate in-flight feedback, and the
+  /// last-edit notice banner. Re-rendered whole and morphed by `PanelDomId`
+  /// after each edit (one authoritative render — the Tao of Datastar).
+  let private renderGroup (rows: SettingRow list) (cat: SettingCategory) : XmlNode list =
+    match rows |> List.filter (fun r -> r.Descriptor.Category = cat) with
+    | [] -> []
+    | catRows ->
+      let title = Elem.h3 [ Attr.class' "settings-group-title" ] [ Text.enc (SettingCategory.label cat) ]
+      [ Elem.div [ Attr.class' "settings-group" ] (title :: List.map renderRow catRows) ]
+
+  let renderPanel (notice: PanelNotice) (rows: SettingRow list) : XmlNode =
+    let groups = SettingCategory.displayOrder |> List.collect (renderGroup rows)
     Elem.div
-      [ Attr.id PanelDomId; Attr.class' "panel settings-panel" ]
+      [ Attr.id PanelDomId; Attr.class' "panel settings-panel"; Ds.signal (Signals.SettingsSaving, false) ]
       [ Elem.h2 [] [ Text.raw "Settings" ]
+        noticeBanner notice
         Elem.div [ Attr.class' "settings-groups" ] groups ]
 
   /// The full standalone page `GET /dashboard/settings` serves. Includes the
@@ -124,7 +176,7 @@ module SettingsPanel =
       Elem.body [] [
         Elem.div [ Attr.class' "settings-page" ] [
           Elem.p [] [ Elem.a [ Attr.href "/dashboard" ] [ Text.raw "← Dashboard" ] ]
-          renderPanel rows
+          renderPanel Quiet rows
         ]
       ]
     ]
