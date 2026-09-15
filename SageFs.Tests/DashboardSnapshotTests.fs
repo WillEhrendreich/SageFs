@@ -693,9 +693,12 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     html |> Expect.stringContains "has expand toggle onclick" "expandedDashboard = !$expandedDashboard"
   }
 
-  test "renderMainContent expand toggle button has class expand-toggle-btn" {
+  test "renderMainContent has the expand toggle on the Sessions panel (not by app settings)" {
+    // The 'more session info' toggle moved from the app-header (by settings) to
+    // the Sessions panel header; it keeps the stable id so it stays targetable.
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
-    html |> Expect.stringContains "has expand-toggle-btn CSS class" "expand-toggle-btn"
+    html |> Expect.stringContains "expand toggle present by id" "id=\"expand-toggle-btn\""
+    html |> Expect.stringContains "expand toggle toggles the expandedDashboard signal" "expandedDashboard"
   }
 
   // ── SSE full-state push on connect (Task 2) ───────────────────

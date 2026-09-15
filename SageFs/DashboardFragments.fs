@@ -1479,12 +1479,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       ]
       // Right side — expand toggle, theme picker
       Elem.div [ Attr.class' "tabline-right"; Attr.style "display:flex;align-items:center;height:100%;margin-left:auto;" ] [
-        Elem.button
-          [ Attr.class' "expand-toggle-btn"
-            Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.ExpandedDashboard Signals.ExpandedDashboard)
-            Ds.text (sprintf "$%s ? '✕' : '⋯'" Signals.ExpandedDashboard)
-            Attr.create "aria-label""Toggle extra panels (Hot Reload, Live Testing, Bindings)" ]
-          []
+        // The "more session info" toggle lives on the Sessions panel header now,
+        // not up here by app-level settings — see the sidebar-header below.
         Elem.a
           [ Attr.class' "expand-toggle-btn"
             Attr.href "/dashboard/settings"
@@ -1627,6 +1623,15 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         Elem.div [ Attr.class' "sidebar-header" ] [
           Elem.h2 [] [ Text.raw "Sessions" ]
           Elem.span [ Attr.style "margin-left:auto;margin-right:8px;" ] [ connectionNode ]
+          // Show/hide the extra per-session panels (Hot Reload, Live Testing,
+          // Bindings, Context) — belongs with the sessions, not by app settings.
+          Elem.button
+            [ Attr.class' "sidebar-header-btn"
+              Attr.id "expand-toggle-btn"
+              Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.ExpandedDashboard Signals.ExpandedDashboard)
+              Ds.text (sprintf "$%s ? '⊖' : '⊕'" Signals.ExpandedDashboard)
+              Ds.attr' ("aria-label", sprintf "$%s ? 'Hide extra session panels' : 'Show extra session panels (Hot Reload, Live Testing, Bindings, Context)'" Signals.ExpandedDashboard) ]
+            []
           Elem.button
             [ Attr.class' "sidebar-header-btn"
               Attr.id "sidebar-toggle-btn"
