@@ -147,7 +147,9 @@ module SettingsCatalog =
   /// — a validated runtime setter that nothing could reach — to a real edit.
   let perTestTimeout : SettingDescriptor = {
     Key = "livetest.perTestTimeoutSeconds"
+    Name = "Per-test timeout"
     Description = "Per-test timeout for live testing (seconds, 1-600)."
+    Category = LiveTesting
     Scope = RepoOverridable
     Applicability = Live
     Default = defaultTimeout 5.0
@@ -159,7 +161,9 @@ module SettingsCatalog =
   /// Live: the whole-run timeout for a live-test cycle.
   let globalTestRunTimeout : SettingDescriptor = {
     Key = "livetest.globalTestRunTimeoutSeconds"
+    Name = "Test-run timeout"
     Description = "Total timeout for one live-test run (seconds, 1-600)."
+    Category = LiveTesting
     Scope = RepoOverridable
     Applicability = Live
     Default = defaultTimeout 120.0
@@ -172,7 +176,9 @@ module SettingsCatalog =
   /// out-of-range value cannot be persisted; applied on the next daemon start.
   let mcpPort : SettingDescriptor = {
     Key = "daemon.mcpPort"
+    Name = "MCP port"
     Description = "MCP server port (1024-65535). Applies on the next daemon restart."
+    Category = DaemonSettings
     Scope = Global
     Applicability = RestartRequired
     Default = VPort (match Port.create SageFsConfig.DefaultMcpPort with Ok p -> p | Error _ -> failwith "default MCP port must be valid")
@@ -190,7 +196,9 @@ module SettingsCatalog =
   /// unrepresentable, not merely rejected at runtime.
   let bindHost : SettingDescriptor = {
     Key = "daemon.bindHost"
+    Name = "Bind host"
     Description = "Loopback bind address for the HTTP servers (localhost, 127.0.0.1, ::1). Non-loopback is refused."
+    Category = DaemonSettings
     Scope = Global
     Applicability = Guarded
     Default = VBindHost SageFsConfig.LoopbackHost.Localhost

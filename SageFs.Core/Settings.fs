@@ -143,6 +143,27 @@ type Provenance = {
   PerLayer: (ConfigLayer * SettingValue) list
 }
 
+/// The category a setting is grouped under in the UI. A DU, not a free string,
+/// so the group set is closed and the display order is total.
+type SettingCategory =
+  | Appearance
+  | SessionSettings
+  | LiveTesting
+  | DaemonSettings
+
+[<RequireQualifiedAccess>]
+module SettingCategory =
+  let label (c: SettingCategory) : string =
+    match c with
+    | Appearance -> "Appearance"
+    | SessionSettings -> "Session"
+    | LiveTesting -> "Live testing"
+    | DaemonSettings -> "Daemon"
+
+  /// Display order for the panel — exhaustive over the DU.
+  let displayOrder : SettingCategory list =
+    [ Appearance; SessionSettings; LiveTesting; DaemonSettings ]
+
 /// Where a setting may be set.
 type SettingScope =
   /// Machine-wide only (never a per-repo override).
@@ -167,7 +188,10 @@ type SettingApplicability =
 /// descriptor drives resolution, the editor, and (later) the UI row.
 type SettingDescriptor = {
   Key: string
+  /// Short human-facing label for the row (the Key is the stable id).
+  Name: string
   Description: string
+  Category: SettingCategory
   Scope: SettingScope
   Applicability: SettingApplicability
   Default: SettingValue

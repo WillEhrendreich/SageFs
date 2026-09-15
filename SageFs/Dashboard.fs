@@ -2324,6 +2324,18 @@ let createEndpoints
       (fun ctx -> routeValue "kind" ctx, routeValue "id" ctx)
       (createInspectHandler q infra)
     yield get "/dashboard/inspect" (createInspectSearchHandler q infra)
+    // Phase B: the runtime Settings panel, server-rendered from the resolved
+    // config catalog. Global-scoped for this standalone page (the repo-override
+    // layer is surfaced per-session; the resolver + store already support it).
+    yield get "/dashboard/settings" (fun ctx -> task {
+      let paths : SageFs.ConfigPaths = { GlobalDir = DaemonState.SageFsDir; Repo = SageFs.NoRepoCheckout }
+      let rows : SettingsPanel.SettingRow list =
+        SageFs.SettingsCatalog.pilots
+        |> List.map (fun d ->
+          { Descriptor = d
+            Resolved = SageFs.SettingsCatalog.resolve paths d })
+      return! FalcoResponse.ofHtml (SettingsPanel.renderPage rows) ctx
+    })
     yield post "/dashboard/eval" (createEvalHandler q infra a.EvalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)
     yield post "/dashboard/completions" (createCompletionsHandler infra.GetCompletions)

@@ -79,6 +79,7 @@
         <Compile Include="DashboardTypes.fs" />
     <Compile Include="DashboardFragments.fs" />
         <Compile Include="CohortInspector.fs" />
+        <Compile Include="SettingsPanel.fs" />
         <Compile Include="Dashboard.fs" />
         <Compile Include="McpPushNotifications.fs" />
         <Compile Include="McpStateHandlers.fs" />

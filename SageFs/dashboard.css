@@ -1419,3 +1419,36 @@ body[data-connected="false"] #main {
 body[data-connected="false"] .statusline-info {
   color: var(--fg-red);
 }
+
+/* ── Settings panel (unified-settings-design.md Phase B) ───────────────── */
+.settings-page { padding: 1rem 1.25rem; max-width: 900px; margin: 0 auto; }
+.settings-page > p { margin: 0 0 0.75rem; }
+.settings-groups { display: flex; flex-direction: column; gap: 1.25rem; }
+.settings-group { display: flex; flex-direction: column; gap: 0.5rem; }
+.settings-group-title {
+  margin: 0; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--fg-dim); border-bottom: 1px solid var(--border-normal); padding-bottom: 0.25rem;
+}
+.settings-row {
+  display: flex; flex-direction: column; gap: 0.25rem;
+  padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--border-normal);
+}
+.settings-row-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.settings-name { font-weight: bold; }
+.settings-desc { font-size: 0.8rem; color: var(--fg-dim); overflow-wrap: anywhere; }
+.settings-value { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.85rem; }
+.settings-effective { font-family: 'JetBrains Mono', monospace; }
+.settings-value-error { color: var(--fg-red); }
+.settings-perlayer { font-size: 0.75rem; color: var(--fg-dim); font-family: 'JetBrains Mono', monospace; }
+
+.settings-badge, .settings-chip {
+  font-size: 0.65rem; padding: 0.05rem 0.4rem; border-radius: 0.6rem;
+  border: 1px solid var(--border-normal); white-space: nowrap;
+}
+.settings-badge-default { color: var(--fg-dim); }
+.settings-badge-global { color: var(--fg-blue); border-color: var(--fg-blue); }
+.settings-badge-repo { color: var(--fg-green); border-color: var(--fg-green); }
+.settings-badge-session { color: var(--fg-yellow); border-color: var(--fg-yellow); }
+.settings-chip-live { color: var(--fg-green); border-color: var(--fg-green); }
+.settings-chip-restart { color: var(--fg-yellow); border-color: var(--fg-yellow); }
+.settings-chip-guarded { color: var(--fg-red); border-color: var(--fg-red); }
