@@ -513,6 +513,10 @@ type ParsedSession = {
   /// live worker pid (starting, faulted, stopped) or the pid's process has
   /// already exited.
   WorkerRssBytes: int64 option
+  /// The self-host staleness affordance line (F5b) for a session that adopted
+  /// its own SageFs.Core build, when a newer build has since landed on disk;
+  /// None for a non-self-hosting or up-to-date session.
+  SelfHostStaleness: string option
 }
 
 /// Best-effort live RSS of a worker process, by pid. Never throws: a pid
@@ -587,7 +591,10 @@ let sessionCardOf
     App = info.App
     WorkerRssBytes =
       WorkerProtocol.SessionLifecycleStatus.workerPid info.Status
-      |> Option.bind tryGetWorkerRssBytes }
+      |> Option.bind tryGetWorkerRssBytes
+    // Enriched (like TestSummary etc.) by buildSessionCardsFrom via a
+    // DashboardQueries lookup; the base card carries no staleness.
+    SelfHostStaleness = None }
 
 /// Every session the sidebar lists — all but Stopped — in registry order (the
 /// same order the initial page and viewing reconciliation use).
@@ -726,6 +733,10 @@ type DashboardQueries = {
   GetSessionAgentBadges: WorkerProtocol.SessionId -> AgentBadge list
   /// Get the CSS class for session guidance (ambient row styling).
   GetSessionGuidanceCss: WorkerProtocol.SessionId -> string
+  /// Self-host staleness affordance (F5b) for a session that adopted its own
+  /// SageFs.Core build and a newer build has since landed on disk; None for a
+  /// non-self-hosting or up-to-date session.
+  GetSessionSelfHostStaleness: WorkerProtocol.SessionId -> string option
   /// Get the workflow for a session — returns Interactive as default.
   GetSessionWorkflow: WorkerProtocol.SessionId -> WorkflowTypes.SessionWorkflow
   /// Get the active project name for a session (for Run App feature).

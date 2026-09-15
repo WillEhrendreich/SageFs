@@ -56,6 +56,7 @@ let private mkQueries (getAllSessionsCount: int ref) (sessions: WorkerProtocol.S
     GetTestSourceLocations = fun () -> []
     GetSessionAgentBadges = fun _ -> []
     GetSessionGuidanceCss = fun _ -> ""
+    GetSessionSelfHostStaleness = fun _ -> None
     GetSessionWorkflow = fun _ -> WorkflowTypes.SessionWorkflow.Interactive
     GetSessionActiveProject = fun _ -> None
     GetSessionProjectRoles = fun _ -> []

@@ -1041,6 +1041,17 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Attr.style "font-size: 0.7rem; color: var(--fg-yellow); font-style: italic;" ]
                   [ textEnc (sprintf "⏳ %s" msg) ]
               | None -> ()
+              // Self-host staleness (F5b): this session adopted its own
+              // SageFs.Core build and a newer one has since landed on disk —
+              // its own line so it never cramps the badges, wrapping at any
+              // width. The text already carries the ⚠ prefix + remediation.
+              match s.SelfHostStaleness with
+              | Some line ->
+                Elem.div
+                  [ Attr.class' "self-host-stale"
+                    Attr.style "font-size: 0.7rem; color: var(--fg-yellow); font-weight: bold; overflow-wrap: anywhere; margin-top: 2px;" ]
+                  [ textEnc line ]
+              | None -> ()
               // Row 2: working directory
               match s.WorkingDir.Length > 0 with
               | true ->

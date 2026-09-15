@@ -2642,6 +2642,20 @@ let run
       match workers with
       | [] -> ""
       | _ -> "guidance-contested"
+    GetSessionSelfHostStaleness = fun sessionId ->
+      let snap = readSnapshot()
+      // Only a session that adopted its own SageFs.Core carries an AdoptedCore
+      // identity, so the on-disk scan runs ONLY for those (rare) self-hosting
+      // sessions — the common dashboard tick pays nothing.
+      match snap.AdoptedCore |> Map.tryFind sessionId with
+      | None -> None
+      | Some adopted ->
+        match SessionManager.QuerySnapshot.tryGetSession sessionId snap with
+        | None -> None
+        | Some info ->
+          SageFs.HostCoreAdoption.newestCandidateIdentity info.Projects
+          |> SageFs.HostCoreAdoption.selfHostFreshness (Some adopted)
+          |> SageFs.HostCoreAdoption.formatFreshnessAffordance
     GetSessionWorkflow = fun sessionId ->
       match SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) with
       | Some info -> info.Workflow

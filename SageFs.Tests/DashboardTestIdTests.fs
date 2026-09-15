@@ -30,7 +30,7 @@ let private mkSession (id: string) (app: SageFs.AppRun.AppRunState) (projectRole
     TestSummary = None
     CoverageSummary = None
     TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-    ActiveProject = None; ProjectRoles = projectRoles; App = app; WorkerRssBytes = None }
+    ActiveProject = None; ProjectRoles = projectRoles; App = app; WorkerRssBytes = None; SelfHostStaleness = None }
 
 let private mkSnap () : DashboardSnapshot =
   { DashboardSnapshot.Version = "0.0.0"

@@ -315,7 +315,8 @@ let buildSessionCardsFrom (q: DashboardQueries) (sessions: WorkerProtocol.Sessio
         CoverageTreemap = q.GetSessionCoverageTreemap card.Id
         BindingEntries = q.GetSessionBindings card.Id
         AgentBadges = q.GetSessionAgentBadges card.Id
-        GuidanceCssClass = q.GetSessionGuidanceCss card.Id })
+        GuidanceCssClass = q.GetSessionGuidanceCss card.Id
+        SelfHostStaleness = q.GetSessionSelfHostStaleness card.Id })
 
 /// Standalone entry point for callers that do not already have a fresh
 /// session list in hand — fetches once, then delegates to `buildSessionCardsFrom`.
