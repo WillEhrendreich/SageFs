@@ -960,3 +960,26 @@ let waitForGraphTests =
             (WaitForGraph.describeCycle cycle)
         )
   ]
+
+[<Tests>]
+let fileSizeBudgets =
+  // Ratchet guard (roast-8 §2 / §14 item 2): the "god files" the roasts keep
+  // flagging must not keep growing. Budgets sit just above current size; when a
+  // file is split, RATCHET THE BUDGET DOWN — never up. A failure here means
+  // "split before you add," not "raise the number."
+  let repoRoot = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..")
+  let budgets =
+    [ "SageFs/Mcp.fs", 5100
+      "SageFs.Core/Features/LiveTestingTypes.fs", 5100
+      "SageFs/SageFsApp.fs", 2900
+      "SageFs.Core/AppState.fs", 2000
+      "SageFs.Core/SessionManager.fs", 1850 ]
+  testList "Architecture — file-size budgets (ratchet down, never raise)" [
+    for (rel, budget) in budgets ->
+      testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->
+        let path = System.IO.Path.Combine(repoRoot, rel)
+        let lines = System.IO.File.ReadAllLines(path).Length
+        (lines <= budget)
+        |> Expect.isTrue
+          (sprintf "%s is %d lines, over its %d budget — split it (and ratchet the budget DOWN), never raise the budget" rel lines budget)
+  ]
