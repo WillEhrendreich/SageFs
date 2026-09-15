@@ -117,4 +117,64 @@ let dogfoodReplTests =
         evalIn proxy "dogfood-ns" "SageFs.Tests.EvalTimelineTests.evalTimelineTests |> ignore;;"
         |> Result.mapError SageFsError.describe
         |> Expect.isOk "SageFs.Tests.EvalTimelineTests resolves as a namespace path, not as PaneId.Tests")
+
+    // F5b Wave 2: the self-host staleness signal, proven end-to-end against a
+    // REAL adoption rather than synthetic inputs. A session on SageFs.Tests
+    // adopts the project's own SageFs.Core at spawn (HostCoreAdoption), and the
+    // daemon records that adopted build's identity on the ManagedSession. When
+    // a newer build later lands on disk, the freshness decision must flip
+    // Current -> Stale so get_fsi_status can tell the agent to hard-reset. The
+    // "newer build on disk" is simulated by bumping the candidate's write time
+    // and restoring it in a finally, so the repo's build output is left
+    // byte-identical.
+    testCase "WHY — a real self-host session records its adopted SageFs.Core and reports Current, then Stale once a newer build lands on disk, because a self-hosting agent must be told when its REPL is running code the disk has moved past (F5b)" <| fun _ ->
+      use cts = new CancellationTokenSource(240_000)
+      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
+      let created =
+        mgr.PostAndAsyncReply(fun reply ->
+          SageFs.SessionManager.SessionCommand.CreateSession(
+            [ testsProject ], testsDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+        |> Async.RunSynchronously
+      match created with
+      | Error err -> failtestf "create failed: %s" (SageFsError.describe err)
+      | Ok info ->
+        try
+          mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
+          |> Async.RunSynchronously
+          |> Expect.isOk "the SageFs.Tests session reaches Ready"
+          let session =
+            mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.GetSession(info.Id, reply))
+            |> Async.RunSynchronously
+          match session with
+          | None -> failtest "session vanished after Ready"
+          | Some s ->
+            // (a) A real adoption was captured at spawn.
+            s.AdoptedCore
+            |> Expect.isSome "a session on SageFs.Tests adopts its own SageFs.Core, so AdoptedCore is recorded"
+            // (b) At spawn, the adopted build IS the newest on disk -> Current.
+            let newestAtSpawn = HostCoreAdoption.newestCandidateIdentity s.Projects
+            newestAtSpawn |> Expect.isSome "the project ships a SageFs.Core build on disk"
+            HostCoreAdoption.selfHostFreshness s.AdoptedCore newestAtSpawn
+            |> Expect.equal "a freshly adopted build is Current" HostCoreAdoption.SelfHostFreshness.Current
+            // (c) Simulate a rebuild landing: bump the candidate's write time
+            // past the epsilon, then restore it so the build output is unchanged.
+            match HostCoreAdoption.findCandidates (HostCoreAdoption.projectDirsOf s.Projects) with
+            | [] -> failtest "no SageFs.Core candidate found on disk for the self-host session"
+            | candidate :: _ ->
+              let original = File.GetLastWriteTimeUtc candidate
+              try
+                File.SetLastWriteTimeUtc(candidate, original.AddSeconds 30.0)
+                let newestAfterRebuild = HostCoreAdoption.newestCandidateIdentity s.Projects
+                let freshness = HostCoreAdoption.selfHostFreshness s.AdoptedCore newestAfterRebuild
+                match freshness with
+                | HostCoreAdoption.SelfHostFreshness.Stale _ ->
+                  HostCoreAdoption.formatFreshnessAffordance freshness
+                  |> Expect.isSome "a newer build on disk surfaces the actionable staleness affordance"
+                | other -> failtestf "expected Stale after a newer build landed on disk, got %A" other
+              finally
+                File.SetLastWriteTimeUtc(candidate, original)
+        finally
+          mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.StopSession(info.Id, reply))
+          |> Async.RunSynchronously
+          |> ignore
   ]

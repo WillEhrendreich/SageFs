@@ -75,13 +75,22 @@ let tests =
       HostCoreAdoption.formatFreshnessAffordance (HostCoreAdoption.SelfHostFreshness.Indeterminate "no build loaded")
       |> Expect.isNone "Indeterminate surfaces no affordance"
 
-    testCase "WHY — HostCoreAdoption.formatFreshnessAffordance — Stale yields a line naming both builds and the exact remediation because the agent must know what to run" <| fun _ ->
+    testCase "WHY — HostCoreAdoption.formatFreshnessAffordance — a version-bump Stale names both builds and the exact remediation because the agent must know what to run" <| fun _ ->
       match HostCoreAdoption.formatFreshnessAffordance (HostCoreAdoption.SelfHostFreshness.Stale("0.6.500", "0.6.501")) with
       | Some line ->
         line |> Expect.stringContains "names the loaded build" "0.6.500"
         line |> Expect.stringContains "names the newer on-disk build" "0.6.501"
         line |> Expect.stringContains "gives the exact remediation" "hard_reset_fsi_session"
         line |> Expect.stringContains "spells out the rebuild flag" "rebuild=true"
+      | None -> failwith "expected a Stale affordance line, got None"
+
+    testCase "WHY — HostCoreAdoption.formatFreshnessAffordance — a same-version Stale (local rebuild) never prints the identical version twice because 'loaded X, newer build (X)' reads as a bug" <| fun _ ->
+      match HostCoreAdoption.formatFreshnessAffordance (HostCoreAdoption.SelfHostFreshness.Stale("0.6.517.0", "0.6.517.0")) with
+      | Some line ->
+        line |> Expect.stringContains "still names the loaded build once" "0.6.517.0"
+        line |> Expect.stringContains "explains it is a same-version rebuild" "same version"
+        (line.Contains "(0.6.517.0)") |> Expect.isFalse "never repeats the identical version in a parenthetical"
+        line |> Expect.stringContains "gives the exact remediation" "rebuild=true"
       | None -> failwith "expected a Stale affordance line, got None"
 
     testCase "WHY — HostCoreAdoption.newestCandidateIdentity — no self-host candidate on disk is None because a project that does not ship SageFs.Core has nothing to compare" <| fun _ ->

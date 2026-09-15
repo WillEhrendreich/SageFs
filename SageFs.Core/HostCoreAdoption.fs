@@ -256,7 +256,12 @@ module HostCoreAdoption =
     | SelfHostFreshness.Current -> None
     | SelfHostFreshness.Indeterminate _ -> None
     | SelfHostFreshness.Stale(loaded, newest) ->
-      Some(
-        sprintf
-          "⚠ Self-host staleness: this session loaded SageFs.Core %s, but a newer build (%s) is on disk. Run hard_reset_fsi_session with rebuild=true to reload the current build."
-          loaded newest)
+      // A local rebuild keeps the same assembly version (the version bumps
+      // only on commit), so the common self-host case is "same version, newer
+      // bytes". Naming the identical version twice ("loaded X … newer build
+      // (X)") reads as a bug, so that case gets its own phrasing.
+      let detail =
+        match loaded = newest with
+        | true -> sprintf "this session loaded SageFs.Core %s, but a newer build of the same version has been compiled on disk since" loaded
+        | false -> sprintf "this session loaded SageFs.Core %s, but a newer build (%s) is on disk" loaded newest
+      Some("⚠ Self-host staleness: " + detail + ". Run hard_reset_fsi_session with rebuild=true to reload the current build.")
