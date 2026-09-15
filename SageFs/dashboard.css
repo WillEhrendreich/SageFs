@@ -1025,6 +1025,37 @@ h2 {
   opacity: 0.8;
 }
 
+/* Modern styled tooltip for icon-only controls. Keyed on aria-label so one
+   attribute gives both the accessible name and the styled tooltip — no native
+   double-tooltip, no a11y regression, and morph-safe (server-rendered). Appears
+   after a short hover delay via the opacity transition-delay. */
+[aria-label]:not(input):not(textarea) { position: relative; }
+[aria-label]:not(input):not(textarea):hover::after,
+[aria-label]:not(input):not(textarea):focus-visible::after {
+  content: attr(aria-label);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 260px;
+  background: var(--bg-panel);
+  color: var(--fg-default);
+  border: 1px solid var(--border-normal);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  white-space: normal;
+  text-align: left;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0;
+  animation: tip-fade-in 0.12s ease 0.55s forwards;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+}
+@keyframes tip-fade-in { to { opacity: 1; } }
+
 /* Perf-stats reveal toggle (📊) — count stays; the detail hides behind it. */
 .perf-toggle-btn {
   background: none;

@@ -241,7 +241,7 @@ let renderAlarmBanner (alarms: SystemAlarmEntry list) =
             Elem.span [ Attr.class' "meta" ] [ textEnc alarmCountLabel ]
             Elem.button
               [ Attr.class' "alarm-dismiss"
-                Attr.title "Dismiss all alarms"
+                Attr.create "aria-label""Dismiss all alarms"
                 Ds.onClick (Ds.post "/dashboard/dismiss-alarm") ]
               [ Text.raw "✕ dismiss" ]
           ]
@@ -269,7 +269,7 @@ let renderAutoOpenToggleIcon (enabled: bool) =
       "Warmup auto-open is OFF — namespaces/modules are NOT opened automatically during warmup. Click to enable (rewrites .SageFs/config.fsx back to AutoOpenNamespaces = true)."
   Elem.button
     [ Attr.class' "session-btn session-btn-autoopen"
-      Attr.title tooltip
+      Attr.create "aria-label"tooltip
       Attr.style (sprintf "color: %s;" color)
       Ds.onClick (Ds.post endpoint) ]
     [ textEnc glyph ]
@@ -414,7 +414,7 @@ let renderEvalStats (stats: EvalStatsView) =
     textEnc (sprintf "%d evals" stats.Count)
     Elem.button
       [ Attr.class' "perf-toggle-btn"
-        Attr.title "Show eval performance detail (avg/min/max, latency percentiles, eval-to-pixel)"
+        Attr.create "aria-label""Show eval performance detail (avg/min/max, latency percentiles, eval-to-pixel)"
         Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.PerfStatsOpen Signals.PerfStatsOpen) ]
       [ Text.raw "📊" ]
     Elem.span [ Attr.class' "eval-perf-detail meta"; Ds.show (sprintf "$%s" Signals.PerfStatsOpen) ] [
@@ -422,7 +422,7 @@ let renderEvalStats (stats: EvalStatsView) =
       match stats.Sparkline with
       | "" -> ()
       | sparkline ->
-        Elem.span [ Attr.class' "eval-sparkline"; Attr.title "Recent eval latency (oldest → newest)" ] [
+        Elem.span [ Attr.class' "eval-sparkline"; Attr.create "aria-label""Recent eval latency (oldest → newest)" ] [
           textEnc (sprintf " %s" sparkline)
         ]
       Elem.span [ Attr.class' "eval-percentiles" ] [
@@ -667,7 +667,7 @@ let renderSessionPicker (previous: PreviousSession list) =
                   | true ->
                     Elem.div
                       [ Attr.style "font-size: 0.75rem; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-                        Attr.title (attrEnc s.WorkingDir) ]
+                        Attr.create "aria-label"(attrEnc s.WorkingDir) ]
                       [ Text.raw "📁 "; textEnc s.WorkingDir ]
                   | false -> ()
                   match s.Projects.IsEmpty with
@@ -777,7 +777,7 @@ let renderTestTreemap (entries: Features.LiveTesting.TestTreemapEntry array) : X
           Elem.div
             [ Attr.style (sprintf "position:absolute;left:%.1fpx;top:%.1fpx;width:%.1fpx;height:%.1fpx;background:%s;opacity:0.85;border:0.5px solid rgba(0,0,0,0.3);overflow:hidden;box-sizing:border-box;"
                 r.X r.Y r.W r.H bgColor)
-              Attr.title (attrEnc title)
+              Attr.create "aria-label"(attrEnc title)
               Ds.show (sprintf "$testFilter === 'all' || $testFilter === '%s'" statusFilter) ]
             [ match showLabel with
               | true ->
@@ -888,7 +888,7 @@ let rec private renderCoverageLevels
                   (sprintf
                     "position:absolute;left:%.1fpx;top:%.1fpx;width:%.1fpx;height:%.1fpx;background:%s;opacity:0.85;border:0.5px solid rgba(0,0,0,0.3);overflow:hidden;box-sizing:border-box;cursor:pointer;"
                     r.X r.Y r.W r.H color)
-                Attr.title (attrEnc title)
+                Attr.create "aria-label"(attrEnc title)
                 Ds.onEvent ("click", sprintf "$%s = %s" drillSignal (jsStringLiteral child.Id)) ]
               [ match showLabel with
                 | true ->
@@ -943,7 +943,7 @@ let renderBindingExplorer (bindings: Features.BindingExplorer.BindingInfo array)
             | Some v ->
               Elem.span
                 [ Attr.style "color:var(--fg-green,#98c379);font-size:0.65rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px;"
-                  Attr.title (attrEnc v) ]
+                  Attr.create "aria-label"(attrEnc v) ]
                 [ textEnc (sprintf "= %s" v) ]
             | None -> ()
             match b.ReferencedIn.Length with
@@ -1041,7 +1041,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 yield! s.AgentBadges |> List.map (fun badge ->
                   Elem.span
                     [ Attr.class' badge.CssClass
-                      Attr.title (attrEnc (
+                      Attr.create "aria-label"(attrEnc (
                         match badge.DetailLabel.Length > 0 with
                         | true -> sprintf "%s — files: %s" badge.Name badge.DetailLabel
                         | false -> badge.Name)) ]
@@ -1083,7 +1083,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 Elem.div
                   [ Attr.class' "session-dir"
                     Attr.style "font-size: 0.75rem; color: var(--fg-dim);"
-                    Attr.title (attrEnc s.WorkingDir) ]
+                    Attr.create "aria-label"(attrEnc s.WorkingDir) ]
                   [ Text.raw "📁 "; textEnc s.WorkingDir ]
               | false -> ()
               // Row 3: projects as tags + evals + last activity
@@ -1151,7 +1151,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Elem.span [ Attr.style "display:inline-flex;align-items:center;gap:2px;" ] [
                     Elem.span
                       [ Attr.style (sprintf "display:inline-block;width:48px;height:8px;border-radius:0;background:linear-gradient(to right,%s);" gradientStops)
-                        Attr.title title ]
+                        Attr.create "aria-label"title ]
                       []
                     Elem.span
                       [ Attr.style "font-size:0.6rem;color:var(--fg-dim);" ]
@@ -1187,7 +1187,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
               | false ->
                 Elem.button
                   [ Attr.class' "session-btn"
-                    Attr.title "Switch — show this session's output here"
+                    Attr.create "aria-label""Switch — show this session's output here"
                     Ds.onClick (Ds.post (sprintf "/dashboard/session/switch/%s" sid)) ]
                   [ Text.raw "⇄" ]
               | true -> ()
@@ -1212,26 +1212,26 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       Attr.href (attrEnc url)
                       Attr.target "_blank"
                       Attr.rel "noopener"
-                      Attr.title (attrEnc (sprintf "Open %s — save a source file to hot reload it" url)) ]
+                      Attr.create "aria-label"(attrEnc (sprintf "Open %s — save a source file to hot reload it" url)) ]
                     [ Text.raw "🌐" ]
                 | AppRun.AppEndpoint.NoServer -> ()
                 Elem.button
                   [ Attr.class' "session-btn session-btn-success"
                     testid "stop-app"
-                    Attr.title (attrEnc (sprintf "Stop App — %s" (AppRun.describeState s.App)))
+                    Attr.create "aria-label"(attrEnc (sprintf "Stop App — %s" (AppRun.describeState s.App)))
                     Ds.onClick (Ds.post (sprintf "/dashboard/stop-app/%s" sid)) ]
                   [ Text.raw "■" ]
               | _, AppRun.AppRunState.Starting _ ->
                 Elem.button
                   [ Attr.class' "session-btn"
                     Attr.disabled
-                    Attr.title (attrEnc (AppRun.describeState s.App)) ]
+                    Attr.create "aria-label"(attrEnc (AppRun.describeState s.App)) ]
                   [ Text.raw "⏳" ]
               | [ project ], _ ->
                 Elem.button
                   [ Attr.class' "session-btn session-btn-primary"
                     testid "run-app"
-                    Attr.title (attrEnc (runTitle (AppRun.projectName project.Path)))
+                    Attr.create "aria-label"(attrEnc (runTitle (AppRun.projectName project.Path)))
                     Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
                   [ Text.raw "▶" ]
               | projects, _ ->
@@ -1254,7 +1254,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Elem.select
                     [ Attr.id selectId
                       Attr.class' "session-run-select"
-                      Attr.title "Choose which executable to run with hot reload" ]
+                      Attr.create "aria-label""Choose which executable to run with hot reload" ]
                     (names |> List.map (fun n ->
                       Elem.option
                         ([ Attr.value (attrEnc n) ] @ (match n = defaultName with | true -> [ Attr.create "selected" "selected" ] | false -> []))
@@ -1262,23 +1262,23 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Elem.button
                     [ Attr.class' "session-btn session-btn-primary"
                       testid "run-app"
-                      Attr.title "Run the selected project with hot reload"
+                      Attr.create "aria-label""Run the selected project with hot reload"
                       Ds.onEvent ("click", sprintf "@post('/dashboard/run-app/%s/' + encodeURIComponent(document.getElementById('%s').value))" sid selectId) ]
                     [ Text.raw "▶" ]
                 ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
-                  Attr.title "Stop — unload the session (saved memory kept)"
+                  Attr.create "aria-label""Stop — unload the session (saved memory kept)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/stop/%s" sid)) ]
                 [ Text.raw "■" ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-warn"
-                  Attr.title "Dispose — stop the session (no separate saved-memory file remains; purge removes the manifest entry)"
+                  Attr.create "aria-label""Dispose — stop the session (no separate saved-memory file remains; purge removes the manifest entry)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/dispose/%s" sid)) ]
                 [ Text.raw "⌫" ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
-                  Attr.title "Purge — dispose and delete binaries + manifest entry (corrupt state)"
+                  Attr.create "aria-label""Purge — dispose and delete binaries + manifest entry (corrupt state)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/purge/%s" sid)) ]
                 [ Text.raw "✖" ]
             ]
@@ -1442,7 +1442,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       Elem.div
         [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"
           Attr.style "font-size: 0.72rem;"
-          Attr.title "Connected clients — 🌐 browsers · 🤖 agents · 💻 terminals" ]
+          Attr.create "aria-label""Connected clients — 🌐 browsers · 🤖 agents · 💻 terminals" ]
         [ textEnc label ]
     | None ->
       Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] []
@@ -1472,12 +1472,12 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
           [ Attr.class' "expand-toggle-btn"
             Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.ExpandedDashboard Signals.ExpandedDashboard)
             Ds.text (sprintf "$%s ? '✕' : '⋯'" Signals.ExpandedDashboard)
-            Attr.title "Toggle extra panels (Hot Reload, Live Testing, Bindings)" ]
+            Attr.create "aria-label""Toggle extra panels (Hot Reload, Live Testing, Bindings)" ]
           []
         Elem.a
           [ Attr.class' "expand-toggle-btn"
             Attr.href "/dashboard/settings"
-            Attr.title "Runtime settings"
+            Attr.create "aria-label""Runtime settings"
             Attr.style "text-decoration:none;display:inline-flex;align-items:center;justify-content:center;" ]
           [ Text.raw "⚙" ]
         snap.ThemePicker
@@ -1621,7 +1621,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
               Attr.id "sidebar-toggle-btn"
               Ds.onEvent ("click", "$sidebarOpen = !$sidebarOpen")
               Ds.text "$sidebarOpen ? '✕' : '☰'"
-              Attr.title "$sidebarOpen ? 'Collapse panel' : 'Expand panel'" ]
+              Ds.attr' ("aria-label", "$sidebarOpen ? 'Collapse panel' : 'Expand panel'") ]
             []
         ]
         Elem.div [ Attr.class' "sidebar-inner" ] [
@@ -2582,7 +2582,7 @@ let renderLiveBindingsPanel (snapshot: SageFs.Features.LiveValueTree.LiveValueSn
   let kindBadge (node: SageFs.Features.LiveValueTree.LiveValueNode) =
     match node.Kind with
     | SageFs.Features.LiveValueTree.NodeKind.Closure ->
-      [ Elem.span [ Attr.class' "live-closure-badge"; Attr.title "Best-effort expansion of captured values" ] [ Text.raw "~(best-effort)" ] ]
+      [ Elem.span [ Attr.class' "live-closure-badge"; Attr.create "aria-label""Best-effort expansion of captured values" ] [ Text.raw "~(best-effort)" ] ]
     | SageFs.Features.LiveValueTree.NodeKind.Cycle ->
       [ Elem.span [ Attr.class' "live-cycle" ] [ Text.raw "↩ (cycle)" ] ]
     | SageFs.Features.LiveValueTree.NodeKind.Truncated ->
