@@ -427,16 +427,19 @@ let private worktreeBranchAndSessionFromSetIntegrationRefResult (text: string) :
     text.Substring(afterMarker, stop - afterMarker)
   extract "worktree=" true, extract "branch=" true, extract "session=" false
 
-let rec private waitUntil (deadline: DateTime) (describe: unit -> string) (check: unit -> Task<bool>) : Task<unit> =
+// Iterative (not recursive): a `let rec ... return! self` poll in a `task {}`
+// unwinds completion through every frame, so a slow CI runner that needs many
+// iterations overflowed the stack and the test ERRORED intermittently (the
+// Gap 3 flake). A while loop is O(1) stack depth — it cannot overflow however
+// long the wait runs.
+let private waitUntil (deadline: DateTime) (describe: unit -> string) (check: unit -> Task<bool>) : Task<unit> =
   task {
-    let! ok = check ()
-    if ok then
-      return ()
-    elif DateTime.UtcNow > deadline then
-      return failtestf "condition not met within timeout: %s" (describe ())
-    else
-      do! Task.Delay 250
-      return! waitUntil deadline describe check
+    let mutable satisfied = false
+    while not satisfied do
+      let! ok = check ()
+      if ok then satisfied <- true
+      elif DateTime.UtcNow > deadline then failtestf "condition not met within timeout: %s" (describe ())
+      else do! Task.Delay 250
   }
 
 /// Polls `probe` for up to `deadline`. Returns `Some` the first time `probe`
@@ -445,17 +448,19 @@ let rec private waitUntil (deadline: DateTime) (describe: unit -> string) (check
 /// ENTIRE window elapsed with `probe` always returning `None` — the
 /// "verified nothing happened" case this file uses to prove a landing
 /// never advances the git ref.
-let rec private pollForUpTo (deadline: DateTime) (probe: unit -> Task<'a option>) : Task<'a option> =
+let private pollForUpTo (deadline: DateTime) (probe: unit -> Task<'a option>) : Task<'a option> =
   task {
-    let! result = probe ()
-    match result with
-    | Some _ -> return result
-    | None ->
-      if DateTime.UtcNow > deadline then
-        return None
-      else
-        do! Task.Delay 500
-        return! pollForUpTo deadline probe
+    // Iterative for the same stack-safety reason as waitUntil above.
+    let mutable result = None
+    let mutable finished = false
+    while not finished do
+      let! r = probe ()
+      match r with
+      | Some _ -> result <- r; finished <- true
+      | None ->
+        if DateTime.UtcNow > deadline then finished <- true // window elapsed: result stays None
+        else do! Task.Delay 500
+    return result
   }
 
 let private seconds (n: float) = DateTime.UtcNow.AddSeconds n
@@ -521,38 +526,37 @@ let private getLiveSnapshot (http: HttpClient) : Task<LiveSnapshot> =
     }
   }
 
-let rec private waitForLiveSnapshot
+let private waitForLiveSnapshot
   (http: HttpClient)
   (deadline: DateTime)
   (describe: string)
   (predicate: LiveSnapshot -> bool)
   : Task<LiveSnapshot> =
   task {
-    let! snap = getLiveSnapshot http
-    match predicate snap with
-    | true -> return snap
-    | false ->
-      match DateTime.UtcNow > deadline with
-      | true -> return failtestf "live-testing status never satisfied '%s' within timeout. Last snapshot: %A" describe snap
-      | false ->
-        do! Task.Delay 500
-        return! waitForLiveSnapshot http deadline describe predicate
+    // Iterative for stack safety (see waitUntil). Loop exits only when the
+    // predicate holds (found = Some) or failtestf throws past the deadline, so
+    // found.Value is always populated after the loop.
+    let mutable found = None
+    while Option.isNone found do
+      let! snap = getLiveSnapshot http
+      if predicate snap then found <- Some snap
+      elif DateTime.UtcNow > deadline then failtestf "live-testing status never satisfied '%s' within timeout. Last snapshot: %A" describe snap
+      else do! Task.Delay 500
+    return found.Value
   }
 
 let private isSessionReady (sessionId: string) (listSessionsText: string) =
   listSessionsText.Contains sessionId && listSessionsText.Contains " Ready "
 
-let rec private waitForSessionReady (client: McpClient) (sessionId: string) (deadline: DateTime) : Task<unit> =
+let private waitForSessionReady (client: McpClient) (sessionId: string) (deadline: DateTime) : Task<unit> =
   task {
-    let! text = listSessions client
-    match isSessionReady sessionId text with
-    | true -> return ()
-    | false ->
-      match DateTime.UtcNow > deadline with
-      | true -> return failtestf "session %s never reached Ready within timeout. list_sessions: %s" sessionId text
-      | false ->
-        do! Task.Delay 500
-        return! waitForSessionReady client sessionId deadline
+    // Iterative for stack safety (see waitUntil).
+    let mutable ready = false
+    while not ready do
+      let! text = listSessions client
+      if isSessionReady sessionId text then ready <- true
+      elif DateTime.UtcNow > deadline then failtestf "session %s never reached Ready within timeout. list_sessions: %s" sessionId text
+      else do! Task.Delay 500
   }
 
 [<Tests>]

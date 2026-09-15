@@ -303,16 +303,20 @@ let private worktreeAndBranchFromSetIntegrationRefResult (text: string) : string
     text.Substring(afterMarker, stop - afterMarker)
   extract "worktree=", extract "branch="
 
-let rec private waitUntil (deadline: DateTime) (describe: unit -> string) (check: unit -> Task<bool>) : Task<unit> =
+// Iterative, not recursive: a `let rec ... return! self` poll in a `task {}`
+// unwinds completion through every frame (F# task, unlike async, does not
+// trampoline return!), so a slow runner needing many iterations overflows the
+// stack and the test ERRORS intermittently — the same flake fixed in
+// CohortLandingGateIntegrationTests. This 60s/100ms poll can reach ~600
+// iterations, so the risk is higher here. A while loop is O(1) stack depth.
+let private waitUntil (deadline: DateTime) (describe: unit -> string) (check: unit -> Task<bool>) : Task<unit> =
   task {
-    let! ok = check ()
-    if ok then
-      return ()
-    elif DateTime.UtcNow > deadline then
-      return failtestf "condition not met within timeout: %s" (describe ())
-    else
-      do! Task.Delay 100
-      return! waitUntil deadline describe check
+    let mutable satisfied = false
+    while not satisfied do
+      let! ok = check ()
+      if ok then satisfied <- true
+      elif DateTime.UtcNow > deadline then failtestf "condition not met within timeout: %s" (describe ())
+      else do! Task.Delay 100
   }
 
 let private defaultDeadline () = DateTime.UtcNow.AddSeconds 60.0
