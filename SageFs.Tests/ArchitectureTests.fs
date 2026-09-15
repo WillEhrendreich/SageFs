@@ -490,16 +490,14 @@ let architectureTests =
       // Cases with no production construction site today. Each entry names
       // the reason — remove the entry the moment a real construction site
       // lands, or the "allow-list rot" test below will fail.
+      // NOTE (roast-7 §5, now wired): RenewLease and Tick were removed from this
+      // list when the daemon's cohort lease reaper landed — a 60s timer in
+      // DaemonMode.cohortReaperCallback renews each active Present member's lease
+      // and posts Tick, so silent-member detection via
+      // `Clock - LastRenewal >= leaseWindow` runs in production. Their presence
+      // here would now fail the "allow-list rot" test below.
       let cohortCommandAllowList =
         Map.ofList [
-          "RenewLease",
-          "no production poster for member-liveness renewal exists yet — \
-           `decide` only pattern-matches it (SageFs.Core/Cohort.fs); nothing \
-           in the shell renews a lease on a member's behalf"
-          "Tick",
-          "the lease reaper — the shell never posts a periodic Tick, so \
-           silent-member detection via `Clock - LastRenewal >= leaseWindow` \
-           is unreachable in production (roast-7 §5)"
           "DelegateConductor",
           "constructed only by SageFs.Tests today; no MCP tool or dashboard \
            action delegates the conductor role yet (roast-7 §5)"

@@ -117,6 +117,24 @@ type DaemonInfra = {
 }
 
 /// Create one-time daemon infrastructure (logger, HTTP client, friction store, CTS).
+/// The Present cohort members whose bound identity shows fresh activity — the
+/// ones whose lease the reaper renews on this tick before reaping the silent
+/// rest (roast-7 §5). Pure: `isActive` is the freshness probe (production:
+/// AgentActivityTracker.getActivePresences with a window shorter than the
+/// tracker's own 5-min hard eviction, so an active member is always caught
+/// before its presence is dropped). Keyed on the cohort's OWN MemberIds, so a
+/// renewal can never miss a member on a display-string round-trip.
+let cohortMembersToRenew
+  (isActive: MemberTable.MemberId -> bool)
+  (members: Map<MemberTable.MemberId, SageFs.Cohort.MemberRecord>)
+  : MemberTable.MemberId list =
+  members
+  |> Map.toList
+  |> List.choose (fun (m, r) ->
+    match r.Presence with
+    | SageFs.Cohort.MemberPresence.Present when isActive m -> Some m
+    | _ -> None)
+
 let createDaemonInfrastructure () : DaemonInfra =
   let otelConfigured = DaemonInfo.otelConfigured
   let loggerFactory =
@@ -2155,6 +2173,45 @@ let run
     activityCleanupTimerRef <- t
     t
 
+  // Cohort lease reaper (roast-7 §5) — makes the 30-minute lease actually cost
+  // silence. Every 60s: renew the lease of each Present member seen active in
+  // the last 2 minutes (a window shorter than the 5-min tracker eviction, so an
+  // active member is always renewed before its presence is dropped), THEN post
+  // Tick so decide departs members silent past leaseWindow and orphans their
+  // claims. Without this the Tick handler and leaseWindow were dead — a departed
+  // member's claims were never released on a live daemon. Renewal is keyed on
+  // the cohort's OWN MemberIds (ReadCohortState), decoupled from the display
+  // tracker's short eviction that broke the earlier attempt.
+  let cohortReaperRenewWindow = TimeSpan.FromMinutes 2.0
+  let mutable cohortReaperTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  let cohortReaperCallback _ =
+    try
+      let now = DateTime.UtcNow
+      let state = cohortOwner.ReadCohortState()
+      match Map.isEmpty state.Members with
+      | true -> () // no members — nothing to renew or reap
+      | false ->
+        let freshKeys =
+          AgentActivityTracker.getActivePresences activityTracker None cohortReaperRenewWindow now
+          |> List.map (fun p -> p.AgentName)
+          |> Set.ofList
+        let isActive (m: MemberTable.MemberId) = Set.contains (MemberTable.MemberId.display m) freshKeys
+        for m in cohortMembersToRenew isActive state.Members do
+          cohortOwner.Post(SageFs.Cohort.CohortCommand.RenewLease m, ignore)
+        cohortOwner.Post(SageFs.Cohort.CohortCommand.Tick, ignore)
+    with ex ->
+      log.LogWarning("Cohort reaper tick threw unexpectedly: {Error}", ex.Message)
+    // reschedule after this run (one-shot pattern, guards the shutdown race)
+    if not (isNull cohortReaperTimerRef) then
+      try cohortReaperTimerRef.Change(60_000, System.Threading.Timeout.Infinite) |> ignore
+      with :? System.ObjectDisposedException -> ()
+  let cohortReaperTimer =
+    let t = new System.Threading.Timer(
+      System.Threading.TimerCallback(cohortReaperCallback),
+      null, 60_000, System.Threading.Timeout.Infinite)
+    cohortReaperTimerRef <- t
+    t
+
   // Live testing file watcher manager — per-session directory watchers.
   // onFileReloaded receives only REAL session IDs: the daemon-CWD fallback
   // watcher claims no session, so files it sees never fire FileReloaded (a
@@ -2940,6 +2997,9 @@ let run
   | TimerStop.Joined -> ()
   // Dispose activity cleanup timer (best-effort, no wait needed — cleanup is idempotent)
   try activityCleanupTimer.Dispose()
+  with :? System.ObjectDisposedException -> ()
+  // Dispose the cohort lease reaper (best-effort — Tick/RenewLease are idempotent)
+  try cohortReaperTimer.Dispose()
   with :? System.ObjectDisposedException -> ()
   try watcherSyncTimer.Dispose()
   with :? System.ObjectDisposedException -> ()
