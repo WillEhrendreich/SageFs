@@ -103,11 +103,32 @@ module EnumValue =
   let value (EnumValue(_, chosen)) = chosen
   let allowed (EnumValue(a, _)) = a
 
+/// A binary setting's state as a domain DU, not a `bool` — a flag that can be
+/// "off" says why by its case name, and this stays exhaustive if a third state
+/// is ever needed. (Domain-modeling rule: no `bool` for state.)
+type Toggle =
+  | On
+  | Off
+
+[<RequireQualifiedAccess>]
+module Toggle =
+  let isOn (t: Toggle) : bool =
+    // The single boundary where the DU becomes a bool, for subsystems whose
+    // API still takes one; the domain itself never stores a bool.
+    match t with
+    | On -> true
+    | Off -> false
+
+  let ofBool (b: bool) : Toggle =
+    match b with
+    | true -> On
+    | false -> Off
+
 /// The unified value of any setting. Every case's payload is already a type
 /// whose only inhabitants are legal, so a `SettingValue` cannot carry an
 /// illegal configuration.
 type SettingValue =
-  | VBool of bool
+  | VToggle of Toggle
   | VPort of Port
   | VTimeout of ValidTimeout
   | VBindHost of SageFsConfig.LoopbackHost

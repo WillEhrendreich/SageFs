@@ -15,11 +15,18 @@ open System
 /// type, `LoopbackHost`, not a runtime check). Theme and auto-open are
 /// existing-subsystem migrations and belong to Phase C.
 
-/// Where the file layers live. `RepoRoot` is `None` for a session with no
-/// git checkout (only the global layer applies).
+/// Whether a session has a git checkout that can carry a repo-override layer.
+/// "No repo" is a first-class domain case (a bare/scratch session with only the
+/// global layer), modelled as a DU case rather than a null string — absence
+/// here means something specific, so it says so by its name.
+type RepoLayerLocation =
+  | NoRepoCheckout
+  | RepoRootAt of path: string
+
+/// Where the file layers live for a session.
 type ConfigPaths = {
   GlobalDir: string
-  RepoRoot: string option
+  Repo: RepoLayerLocation
 }
 
 [<RequireQualifiedAccess>]
@@ -30,13 +37,14 @@ module SettingsCatalog =
     SettingsStore.readLayer path |> Map.tryFind key
 
   /// Resolve one descriptor's effective value + provenance across the file
-  /// layers, plus an optional in-memory session override (the highest layer).
-  /// A parse failure at any present layer is surfaced (with why) rather than
-  /// silently dropped — a corrupt persisted value must not resolve to a
-  /// wrong-but-plausible one.
+  /// layers (global, and repo when the session has a checkout). A parse failure
+  /// at any present layer is surfaced (with why) rather than silently dropped —
+  /// a corrupt persisted value must not resolve to a wrong-but-plausible one.
+  /// (Session-scope overrides are transient and not yet wired; the pure
+  /// SettingsResolver already carries LSession via its layer list for when they
+  /// land.)
   let resolve
     (paths: ConfigPaths)
-    (sessionOverride: SettingValue option)
     (descriptor: SettingDescriptor)
     : Result<Provenance, ConfigError> =
     let parseAt (layer: ConfigLayer) (raw: string option) : Result<(ConfigLayer * SettingValue) option, ConfigError> =
@@ -49,20 +57,15 @@ module SettingsCatalog =
 
     let globalRaw = rawAt (SettingsStore.globalPath paths.GlobalDir) descriptor.Key
     let repoRaw =
-      match paths.RepoRoot with
-      | Some root -> rawAt (SettingsStore.repoPath root) descriptor.Key
-      | None -> None
+      match paths.Repo with
+      | RepoRootAt root -> rawAt (SettingsStore.repoPath root) descriptor.Key
+      | NoRepoCheckout -> None
 
     match parseAt LGlobal globalRaw, parseAt LRepo repoRaw with
     | Error why, _ -> Error why
     | _, Error why -> Error why
     | Ok g, Ok r ->
-      let set =
-        [ yield! Option.toList g
-          yield! Option.toList r
-          match sessionOverride with
-          | Some v -> yield (LSession, v)
-          | None -> () ]
+      let set = [ yield! Option.toList g; yield! Option.toList r ]
       Ok (SettingsResolver.resolve descriptor.Default set)
 
   /// Edit a setting at a persisted layer: parse the raw input (the sole
@@ -83,9 +86,9 @@ module SettingsCatalog =
         match layer with
         | LGlobal -> SettingsStore.setKey (SettingsStore.globalPath paths.GlobalDir) descriptor.Key (descriptor.Render value)
         | LRepo ->
-          match paths.RepoRoot with
-          | Some root -> SettingsStore.setKey (SettingsStore.repoPath root) descriptor.Key (descriptor.Render value)
-          | None -> Error (LayerUnavailable "this session has no repo checkout, so there is no repo layer to write to")
+          match paths.Repo with
+          | RepoRootAt root -> SettingsStore.setKey (SettingsStore.repoPath root) descriptor.Key (descriptor.Render value)
+          | NoRepoCheckout -> Error (LayerUnavailable "this session has no repo checkout, so there is no repo layer to write to")
         | LDefault | LSession -> Error (LayerUnavailable "edits persist to the global or repo layer, not default/session")
       match persisted with
       | Error e -> Error e
@@ -93,7 +96,7 @@ module SettingsCatalog =
         match descriptor.Applicability with
         | Live -> descriptor.Apply value
         | RestartRequired | Guarded -> ()
-        resolve paths None descriptor
+        resolve paths descriptor
 
   /// Clear a persisted override at a layer so the value falls back to the
   /// next-lower layer, then re-resolve.
@@ -106,13 +109,13 @@ module SettingsCatalog =
       match layer with
       | LGlobal -> SettingsStore.clearKey (SettingsStore.globalPath paths.GlobalDir) descriptor.Key
       | LRepo ->
-        match paths.RepoRoot with
-        | Some root -> SettingsStore.clearKey (SettingsStore.repoPath root) descriptor.Key
-        | None -> Ok ()
+        match paths.Repo with
+        | RepoRootAt root -> SettingsStore.clearKey (SettingsStore.repoPath root) descriptor.Key
+        | NoRepoCheckout -> Ok ()
       | LDefault | LSession -> Error (LayerUnavailable "only the global or repo layer can be cleared")
     match cleared with
     | Error e -> Error e
-    | Ok () -> resolve paths None descriptor
+    | Ok () -> resolve paths descriptor
 
   // ---------------------------------------------------------------------------
   // Phase-A pilot descriptors

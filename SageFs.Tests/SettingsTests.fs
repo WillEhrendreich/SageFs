@@ -58,30 +58,30 @@ let tests =
     // -- Resolver: precedence + provenance --
 
     testCase "WHY — resolve returns the default when no layer is set because LDefault is always present" <| fun _ ->
-      let p = SettingsResolver.resolve (VBool false) []
+      let p = SettingsResolver.resolve (VToggle Off) []
       p.Source |> Expect.equal "source is default" LDefault
-      p.Effective |> Expect.equal "effective is the default" (VBool false)
+      p.Effective |> Expect.equal "effective is the default" (VToggle Off)
 
     testCase "WHY — repo overrides global because a higher layer wins" <| fun _ ->
-      let p = SettingsResolver.resolve (VBool false) [ LGlobal, VBool true; LRepo, VBool false ]
+      let p = SettingsResolver.resolve (VToggle Off) [ LGlobal, VToggle On; LRepo, VToggle Off ]
       p.Source |> Expect.equal "repo is the source" LRepo
-      p.Effective |> Expect.equal "repo's value wins" (VBool false)
+      p.Effective |> Expect.equal "repo's value wins" (VToggle Off)
 
     testCase "WHY — session overrides repo and global because it is the highest layer" <| fun _ ->
-      let p = SettingsResolver.resolve (VBool false) [ LGlobal, VBool true; LRepo, VBool false; LSession, VBool true ]
+      let p = SettingsResolver.resolve (VToggle Off) [ LGlobal, VToggle On; LRepo, VToggle Off; LSession, VToggle On ]
       p.Source |> Expect.equal "session is the source" LSession
 
     testCase "WHY — provenance records every set layer so the UI can show base-vs-override" <| fun _ ->
-      let p = SettingsResolver.resolve (VBool false) [ LGlobal, VBool true; LRepo, VBool false ]
+      let p = SettingsResolver.resolve (VToggle Off) [ LGlobal, VToggle On; LRepo, VToggle Off ]
       p.PerLayer |> List.map fst
       |> Expect.equal "all three layers, lowest-first" [ LDefault; LGlobal; LRepo ]
 
     testProperty "WHY — resolve's source is always the highest-ranked layer present because precedence is total" <| fun (useGlobal: bool) (useRepo: bool) (useSession: bool) ->
       let set =
-        [ if useGlobal then yield LGlobal, VBool true
-          if useRepo then yield LRepo, VBool true
-          if useSession then yield LSession, VBool true ]
-      let p = SettingsResolver.resolve (VBool false) set
+        [ if useGlobal then yield LGlobal, VToggle On
+          if useRepo then yield LRepo, VToggle On
+          if useSession then yield LSession, VToggle On ]
+      let p = SettingsResolver.resolve (VToggle Off) set
       let expected =
         if useSession then LSession
         elif useRepo then LRepo
@@ -157,7 +157,7 @@ let catalogTests =
       withTempDir (fun dir ->
         let original = Timeouts.perTestDefault ()
         try
-          let paths = { GlobalDir = dir; RepoRoot = None }
+          let paths = { GlobalDir = dir; Repo = NoRepoCheckout }
           match SettingsCatalog.edit paths LGlobal "30" SettingsCatalog.perTestTimeout with
           | Error why -> failtestf "expected Ok, got Error %A" why
           | Ok prov ->
@@ -173,7 +173,7 @@ let catalogTests =
 
     testCase "WHY — an out-of-range port edit is refused at parse and never persisted, because illegal config is unrepresentable" <| fun _ ->
       withTempDir (fun dir ->
-        let paths = { GlobalDir = dir; RepoRoot = None }
+        let paths = { GlobalDir = dir; Repo = NoRepoCheckout }
         SettingsCatalog.edit paths LGlobal "70000" SettingsCatalog.mcpPort
         |> Expect.isError "70000 is not a valid port"
         // Nothing was written.
@@ -182,7 +182,7 @@ let catalogTests =
 
     testCase "WHY — a valid RestartRequired port edit persists and resolves but is not applied live, because the port only takes effect on restart" <| fun _ ->
       withTempDir (fun dir ->
-        let paths = { GlobalDir = dir; RepoRoot = None }
+        let paths = { GlobalDir = dir; Repo = NoRepoCheckout }
         match SettingsCatalog.edit paths LGlobal "40000" SettingsCatalog.mcpPort with
         | Error why -> failtestf "expected Ok, got Error %A" why
         | Ok prov ->
@@ -194,7 +194,7 @@ let catalogTests =
 
     testCase "WHY — a non-loopback bind host is refused at parse, because a LAN bind is RCE and must be structurally impossible" <| fun _ ->
       withTempDir (fun dir ->
-        let paths = { GlobalDir = dir; RepoRoot = None }
+        let paths = { GlobalDir = dir; Repo = NoRepoCheckout }
         SettingsCatalog.edit paths LGlobal "0.0.0.0" SettingsCatalog.bindHost
         |> Expect.isError "0.0.0.0 is not loopback"
         SettingsStore.readLayer (SettingsStore.globalPath dir) |> Map.tryFind SettingsCatalog.bindHost.Key
@@ -202,7 +202,7 @@ let catalogTests =
 
     testCase "WHY — a loopback bind host edit resolves to the typed LoopbackHost, because loopback values are legal" <| fun _ ->
       withTempDir (fun dir ->
-        let paths = { GlobalDir = dir; RepoRoot = None }
+        let paths = { GlobalDir = dir; Repo = NoRepoCheckout }
         match SettingsCatalog.edit paths LGlobal "127.0.0.1" SettingsCatalog.bindHost with
         | Error why -> failtestf "expected Ok, got Error %A" why
         | Ok prov ->
@@ -214,7 +214,7 @@ let catalogTests =
         Directory.CreateDirectory repo |> ignore
         let original = Timeouts.perTestDefault ()
         try
-          let paths = { GlobalDir = dir; RepoRoot = Some repo }
+          let paths = { GlobalDir = dir; Repo = RepoRootAt repo }
           SettingsCatalog.edit paths LGlobal "10" SettingsCatalog.perTestTimeout |> ignore
           match SettingsCatalog.edit paths LRepo "30" SettingsCatalog.perTestTimeout with
           | Error why -> failtestf "repo edit failed: %A" why
