@@ -207,30 +207,61 @@ let emptySolution = {
 /// own bin/<Config>/<TFM>/x.dll AND the referenced projects' reference
 /// assemblies at obj/<Config>/<TFM>/ref/x.dll. The nearest Debug/Release
 /// directory in the path is the configuration, whatever the layout.
+/// The same build-output path under the OTHER configuration (Debug ↔ Release),
+/// or None when the path contains no Debug/Release segment. The nearest such
+/// segment (searched from the end) is the configuration, whatever the layout.
+let siblingConfigPath (dllPath: string) : string option =
+  let separators = [| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |]
+  let segments = dllPath.Split separators
+  let isConfig (segment: string) =
+    String.Equals(segment, "Debug", StringComparison.OrdinalIgnoreCase)
+    || String.Equals(segment, "Release", StringComparison.OrdinalIgnoreCase)
+  match segments |> Array.tryFindIndexBack isConfig with
+  | None -> None
+  | Some index ->
+    let sibling =
+      match String.Equals(segments.[index], "Debug", StringComparison.OrdinalIgnoreCase) with
+      | true -> "Release"
+      | false -> "Debug"
+    segments
+    |> Array.mapi (fun i segment -> match i = index with | true -> sibling | false -> segment)
+    |> String.concat (string Path.DirectorySeparatorChar)
+    |> Some
+
 let resolveSiblingConfigOutput (dllPath: string) : string option =
   try
     match File.Exists dllPath with
     | true -> Some dllPath
     | false ->
-      let separators = [| Path.DirectorySeparatorChar; Path.AltDirectorySeparatorChar |]
-      let segments = dllPath.Split separators
-      let isConfig (segment: string) =
-        String.Equals(segment, "Debug", StringComparison.OrdinalIgnoreCase)
-        || String.Equals(segment, "Release", StringComparison.OrdinalIgnoreCase)
-      match segments |> Array.tryFindIndexBack isConfig with
-      | None -> None
-      | Some index ->
-        let sibling =
-          match String.Equals(segments.[index], "Debug", StringComparison.OrdinalIgnoreCase) with
-          | true -> "Release"
-          | false -> "Debug"
-        let candidate =
-          segments
-          |> Array.mapi (fun i segment -> match i = index with | true -> sibling | false -> segment)
-          |> String.concat (string Path.DirectorySeparatorChar)
-        match File.Exists candidate with
-        | true -> Some candidate
-        | false -> None
+      match siblingConfigPath dllPath with
+      | Some candidate when File.Exists candidate -> Some candidate
+      | _ -> None
+  with _ -> None
+
+/// The FRESHEST existing build output across the Debug/Release sibling
+/// configurations. Existence alone is not enough: Ionide evaluates projects
+/// with MSBuild's default Configuration (Debug), so it reports a bin/Debug
+/// TargetPath even when the user's real, current build is Release — and if a
+/// STALE Debug output happens to exist, `resolveSiblingConfigOutput` (which
+/// stops at the first path that exists) would load that stale assembly into the
+/// REPL. That was a genuine dogfood failure: a session ran a project's OLD code
+/// while the freshly-built Release output sat unused. Picking the newest write
+/// time across configs means the code you built is the code the REPL runs,
+/// regardless of which config Ionide named. Pure: existence + write time are
+/// injected so the selection is unit-testable without a filesystem.
+let chooseFreshestConfigOutputWith
+    (exists: string -> bool)
+    (writeTimeUtc: string -> DateTime)
+    (dllPath: string) : string option =
+  let candidates =
+    dllPath :: (siblingConfigPath dllPath |> Option.toList)
+    |> List.filter exists
+  match candidates with
+  | [] -> None
+  | xs -> xs |> List.maxBy writeTimeUtc |> Some
+
+let resolveFreshestConfigOutput (dllPath: string) : string option =
+  try chooseFreshestConfigOutputWith File.Exists File.GetLastWriteTimeUtc dllPath
   with _ -> None
 
 let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
@@ -340,21 +371,20 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
       }
     | _ ->
       // Ionide's loader evaluates projects with MSBuild defaults (Debug
-      // output), so TargetPath points at bin/Debug even when the user only
-      // built Release (or vice versa). Rewrite each project's TargetPath to
-      // whichever config output actually exists so a Release-only build loads
-      // instead of faulting with "Missing DLL". When neither exists the
-      // original path is kept so the missing-DLL error stays accurate.
+      // output), so TargetPath points at bin/Debug even when the user's real,
+      // current build is Release (or vice versa). Rewrite each project's
+      // TargetPath to the FRESHEST config output across Debug/Release — not
+      // merely one that exists — so a stale Debug artifact can never shadow a
+      // freshly-built Release one in the REPL (a real dogfood failure: a
+      // session ran a project's old code while its new build sat unused). When
+      // neither exists the original path is kept so the missing-DLL error stays
+      // accurate.
       let loadedProjects' =
         loadedProjects
         |> Seq.map (fun po ->
-          match File.Exists po.TargetPath with
-          | true -> po
-          | false ->
-            let alt = resolveSiblingConfigOutput po.TargetPath
-            match alt with
-            | Some existing when File.Exists existing -> { po with TargetPath = existing }
-            | _ -> po)
+          match resolveFreshestConfigOutput po.TargetPath with
+          | Some fresh -> { po with TargetPath = fresh }
+          | None -> po)
         |> Seq.toList
       let fcsProjectOptions = List.ofSeq <| FCS.mapManyOptions loadedProjects'
       {

@@ -198,6 +198,64 @@ let tests =
         |> Expect.isNone "non-bin layout should yield None"
       }
     ]
+
+    // F6 regression: Ionide reports a Debug TargetPath, but if a STALE Debug
+    // output exists while the fresh build is Release, existence-only resolution
+    // loads the stale assembly. chooseFreshestConfigOutputWith must pick the
+    // newest across configs. Pure — existence + write time injected.
+    testList "chooseFreshestConfigOutputWith" [
+      let dbg = "/proj/bin/Debug/net10.0/X.dll"
+      let rel = "/proj/bin/Release/net10.0/X.dll"
+      let mt (older: string) (newer: string) (p: string) =
+        if p = older then DateTime(2026, 1, 1) elif p = newer then DateTime(2026, 6, 1) else DateTime(2025, 1, 1)
+      let both p = p = dbg || p = rel
+
+      test "reported Debug is stale, Release is newer -> Release" {
+        chooseFreshestConfigOutputWith both (mt dbg rel) dbg
+        |> Expect.equal "the fresh Release build must win over the stale Debug one" (Some rel)
+      }
+
+      test "reported Release is stale, Debug is newer -> Debug" {
+        chooseFreshestConfigOutputWith both (mt rel dbg) rel
+        |> Expect.equal "the newest build wins regardless of which config Ionide named" (Some dbg)
+      }
+
+      test "only the reported config exists -> that config" {
+        chooseFreshestConfigOutputWith (fun p -> p = dbg) (mt dbg rel) dbg
+        |> Expect.equal "with no sibling, the sole existing output is used" (Some dbg)
+      }
+
+      test "neither config output exists -> None" {
+        chooseFreshestConfigOutputWith (fun _ -> false) (mt dbg rel) dbg
+        |> Expect.isNone "keep the original path so the missing-DLL error stays accurate"
+      }
+
+      test "no config segment in the path -> the path itself when it exists" {
+        chooseFreshestConfigOutputWith (fun p -> p = "/x/y.dll") (mt dbg rel) "/x/y.dll"
+        |> Expect.equal "a path with no Debug/Release segment resolves to itself" (Some "/x/y.dll")
+      }
+    ]
+
+    testList "resolveFreshestConfigOutput (real filesystem)" [
+      test "WHY — a fresh Release build wins over a stale Debug output, because the REPL must run the code you built, not an old artifact" {
+        let root = Path.Combine(Path.GetTempPath(), "sagefs-fresh-" + Guid.NewGuid().ToString("N"))
+        let debugDll = Path.Combine(root, "bin", "Debug", "net10.0", "App.dll")
+        let releaseDll = Path.Combine(root, "bin", "Release", "net10.0", "App.dll")
+        Directory.CreateDirectory(Path.GetDirectoryName debugDll) |> ignore
+        Directory.CreateDirectory(Path.GetDirectoryName releaseDll) |> ignore
+        File.WriteAllText(debugDll, "stale")
+        File.WriteAllText(releaseDll, "fresh")
+        // Make Debug provably older than Release.
+        File.SetLastWriteTimeUtc(debugDll, DateTime(2026, 1, 1))
+        File.SetLastWriteTimeUtc(releaseDll, DateTime(2026, 6, 1))
+        try
+          // Ionide would report the Debug path; the freshest across configs is Release.
+          resolveFreshestConfigOutput debugDll
+          |> Expect.equal "the newer Release build must be selected" (Some releaseDll)
+        finally
+          Directory.Delete(root, true)
+      }
+    ]
   ]
 
 /// A Release-only build: Ionide reports Debug paths, only Release outputs exist.
