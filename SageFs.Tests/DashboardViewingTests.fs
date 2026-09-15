@@ -45,19 +45,37 @@ let tests = testList "Dashboard viewing reconcile" [
     reconcileViewing (Some (ready 9).Id) [] |> Expect.equal "picker" ViewingDecision.ShowPicker
   }
 
-  test "WHY — reconcileViewing — with nothing selected the picker stays because the landing page waits for the user's click" {
-    reconcileViewing None [ ready 1 ] |> Expect.equal "picker stays" ViewingDecision.ShowPicker
+  test "WHY — reconcileViewing — with nothing selected but a live session existing, default to that session because the picker is only for an empty daemon (a created session must appear, not leave the tab on the picker)" {
+    reconcileViewing None [ ready 1 ] |> Expect.equal "default to the live session" (ViewingDecision.SwitchTo (ready 1).Id)
   }
 
-  testProperty "WHY — reconcileViewing — the decision always names a live session or the picker, and keeps the current one exactly when it is live, because the stream must never render a dead session" <|
-    fun (statuses: bool list) (pick: NonNegativeInt) ->
+  test "WHY — reconcileViewing — nothing selected and no sessions shows the picker because there is genuinely nothing to view" {
+    reconcileViewing None [] |> Expect.equal "picker" ViewingDecision.ShowPicker
+  }
+
+  test "WHY — reconcileViewing — nothing selected and only a Stopped session shows the picker because a dead session is not a default to land on" {
+    reconcileViewing None [ info 1 WorkerProtocol.SessionStatus.Stopped ] |> Expect.equal "picker" ViewingDecision.ShowPicker
+  }
+
+  test "WHY — firstLiveSession — skips Stopped sessions and returns the first live one because the default view must never be a dead session" {
+    let stopped = info 1 WorkerProtocol.SessionStatus.Stopped
+    let a = ready 2
+    firstLiveSession [ stopped; a ] |> Expect.equal "first live is a" (Some a.Id)
+    firstLiveSession [ stopped ] |> Expect.isNone "only-stopped has no live default"
+    firstLiveSession [] |> Expect.isNone "empty has no live default"
+  }
+
+  testProperty "WHY — reconcileViewing — the decision always names a live session or the picker, keeps the current one exactly when it is live, and otherwise (including nothing selected) defaults to the first live session, because the stream must never render a dead session and the picker is for the empty daemon alone" <|
+    fun (statuses: bool list) (pick: NonNegativeInt) (selectNone: bool) ->
       let sessions =
         statuses
         |> List.mapi (fun i live -> info i (match live with | true -> WorkerProtocol.SessionStatus.Ready | false -> WorkerProtocol.SessionStatus.Stopped))
+      // Exercise BOTH the nothing-selected case and a concrete selection.
       let current =
-        match sessions with
-        | [] -> Some (ready 999).Id
-        | _ -> Some sessions.[pick.Get % sessions.Length].Id
+        match selectNone, sessions with
+        | true, _ -> None
+        | false, [] -> Some (ready 999).Id
+        | false, _ -> Some sessions.[pick.Get % sessions.Length].Id
       let liveIds = sessions |> List.filter isLive |> List.map (fun s -> s.Id)
       match reconcileViewing current sessions with
       | ViewingDecision.Keep sid -> Some sid = current && List.contains sid liveIds

@@ -395,19 +395,30 @@ type ViewingDecision =
   /// Nothing is selected, or nothing is left to view.
   | ShowPicker
 
-/// Pure viewing reconciliation: keep a live viewed session, move off a dead
-/// one to the first live session (the same default the initial GET uses), and
-/// otherwise show the picker. With nothing selected the picker stays — the
-/// landing page waits for the user's click.
+/// A live session is any that is not Stopped (a Stopped worker is gone). The
+/// first live session is the default the dashboard shows when nothing specific
+/// is selected — the picker is for "no sessions to show", never a landing
+/// state to sit on while a live session exists.
+let firstLiveSession (sessions: WorkerProtocol.SessionInfo list) : WorkerProtocol.SessionId option =
+  sessions
+  |> List.filter (fun s -> s.Status <> WorkerProtocol.SessionLifecycleStatus.Stopped)
+  |> List.tryHead
+  |> Option.map (fun s -> s.Id)
+
+/// Pure viewing reconciliation: keep a live viewed session; otherwise — whether
+/// nothing is selected or the selected session has died — default to the first
+/// live session, and show the picker ONLY when there are zero live sessions.
+/// A newly-created session must therefore appear in the output panel on the
+/// next push, not leave the tab sitting on the picker (the picker exists for
+/// the empty-daemon case alone).
 let reconcileViewing
   (current: WorkerProtocol.SessionId option)
   (sessions: WorkerProtocol.SessionInfo list)
   : ViewingDecision =
   let live = sessions |> List.filter (fun s -> s.Status <> WorkerProtocol.SessionLifecycleStatus.Stopped)
   match current with
-  | None -> ViewingDecision.ShowPicker
   | Some sid when live |> List.exists (fun s -> s.Id = sid) -> ViewingDecision.Keep sid
-  | Some _ ->
+  | _ ->
     match live with
     | first :: _ -> ViewingDecision.SwitchTo first.Id
     | [] -> ViewingDecision.ShowPicker
@@ -976,8 +987,9 @@ let createStreamHandler
     // or the picker when none exist) and is re-targeted whenever the signal
     // changes via dashboard POST handlers (RetargetView on this channel).
     let! sessions = q.GetAllSessions ()
-    let defaultViewingSession =
-      sessions |> List.tryHead |> Option.map (fun s -> s.Id)
+    // Default to the first LIVE session (mirrors the initial GET); reconcileViewing
+    // re-checks on every push, so a session created later still gets picked up.
+    let defaultViewingSession = firstLiveSession sessions
     let mutable currentSessionOpt = defaultViewingSession
     // The time-scrubber's per-tab `Viewing` (§6.5, Phase 2 item 16): `None`
     // (the default) means this tab renders the live cohort frame; `Some seq`
@@ -2273,9 +2285,11 @@ let createEndpoints
         // parameter — deep links land on the picker and the signal drives
         // everything thereafter, synced with the backend.
         let clientId = Guid.NewGuid().ToString("N").[..7]
-        match sessions |> List.tryHead with
-        | Some first ->
-          let! snap, resolvedId, _, _ = buildDashboardSnapshot q infra first.Id (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
+        // Default to the first LIVE session (never a Stopped/dead one); the
+        // picker shows only when there are zero live sessions to display.
+        match firstLiveSession sessions with
+        | Some firstId ->
+          let! snap, resolvedId, _, _ = buildDashboardSnapshot q infra firstId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
           let html = renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
         | None ->
