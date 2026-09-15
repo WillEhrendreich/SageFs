@@ -1154,9 +1154,22 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
     html |> Expect.stringContains "sessionId should appear" "my-session-42"
   }
 
-  test "WorkingDir appears in rendered output" {
-    let html = mkSnap "0.0.0" "s1" @"C:\MyProject\Src" "ready" |> renderMainContent |> renderNode
-    html |> Expect.stringContains "working dir should appear" @"C:\MyProject\Src"
+  test "WorkingDir appears on the session card" {
+    // The working dir moved off the main-content chrome (it read as an obnoxious
+    // boxed tab there) onto the session card — its one home. Field completeness
+    // now means it surfaces on the card, not in renderMainContent's own markup.
+    let sid = WorkerProtocol.SessionId.validate "0a2b3c4d" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
+    let s : ParsedSession =
+      { Id = sid; Status = SessionDisplayStatus.Running; StatusMessage = None
+        ProjectsText = "(A.fsproj)"; EvalCount = 1
+        Uptime = "1m"; WorkingDir = @"C:\MyProject\Src"; LastActivity = "A"
+        TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
+        BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
+        ActiveProject = None; ProjectRoles = []
+        App = AppRun.AppRunState.NotRunning
+        WorkerRssBytes = None; SelfHostStaleness = None }
+    let html = renderSessionsForSession "0a2b3c4e" [ s ] false |> renderNode
+    html |> Expect.stringContains "working dir should appear on the card" @"C:\MyProject\Src"
   }
 
   test "SessionState appears in rendered output" {

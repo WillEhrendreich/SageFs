@@ -187,8 +187,13 @@ let private disclosureSummaryStyle =
 /// undefined (falsy) everywhere — GET, stream, and morph alike — which
 /// renders closed, and the first `toggle` creates the signal in the store.
 let signalDetails (signalName: string) (attrs: XmlAttribute list) (children: XmlNode list) : XmlNode =
+  // Every collapsible panel gets a stable DOM id (the Datastar way — things are
+  // targetable). Callers may pass their own id; otherwise derive one from the
+  // signal name so no panel renders id-less.
+  let hasId = attrs |> List.exists (function KeyValueAttr("id", _) -> true | _ -> false)
+  let idAttr = if hasId then [] else [ Attr.id signalName ]
   Elem.details
-    (attrs
+    (idAttr @ attrs
      @ [ Ds.attr' ("open", sprintf "$%s" signalName)
          Ds.onEvent ("toggle", sprintf "$%s = event.target.open" signalName) ])
     children
@@ -1277,18 +1282,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     [ Text.raw "\U0001F5FA "
                       textEnc (sprintf "coverage map · %.0f%% (%d/%d probes)" pct root.CoveredCount root.ProbeCount) ]
                   renderCoverageTreemap sid s.CoverageTreemap ]
-            // Collapsible bound values explorer
-            match s.BindingEntries.Length with
-            | 0 -> ()
-            | _ ->
-              signalDetails
-                (sprintf "sessionBindingsOpen_%s" sid)
-                [ Attr.style "margin-top: 4px; font-size: 0.75rem;" ]
-                [ Elem.summary
-                    [ Attr.style "cursor:pointer;color:var(--fg-dim);user-select:none;" ]
-                    [ Text.raw "📦 "
-                      textEnc (sprintf "%d bindings" s.BindingEntries.Length) ]
-                  renderBindingExplorer s.BindingEntries ]
+            // (Bound-values explorer removed from the session card — bindings
+            // are not a per-card concern; they live in the Bindings panel.)
           ])
     // The action legend only makes sense when there are sessions to act on.
     match sessions.IsEmpty with
@@ -1457,20 +1452,18 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     ]
     // Daemon health bar — version, uptime, memory, session health
     snap.DaemonHealth
-    // Session context line — the two facts that lived nowhere else: the working
-    // dir (its one home) and, once the first eval has completed the chain, the
-    // unique eval-to-pixel latency. The decorative ">" cmdline and the empty
-    // fixed bottom statusline that used to carry these are gone; readiness,
-    // session id, version and eval count are each said once, above.
-    Elem.div [ Attr.class' "session-context" ] [
-      renderStatuslineLeft snap.SessionState snap.WorkingDir
-      match snap.EvalToPixelP50Ms, snap.EvalToPixelP99Ms with
-      | Some p50, Some p99 ->
-        Elem.div [ Attr.class' "statusline-stat"; testid "eval-to-pixel-latency" ] [
+    // Eval-to-pixel latency — the one unique perf stat — as a slim, dim line
+    // under the health bar, shown ONLY once the first eval has completed the
+    // chain, so there is never an empty band when idle. The working dir is not
+    // repeated here; it lives on the session's sidebar card.
+    match snap.EvalToPixelP50Ms, snap.EvalToPixelP99Ms with
+    | Some p50, Some p99 ->
+      Elem.div [ Attr.class' "session-context" ] [
+        Elem.span [ Attr.class' "session-context-latency"; testid "eval-to-pixel-latency" ] [
           textEnc (sprintf "px p50 %.1fms p99 %.1fms" p50 p99)
         ]
-      | _ -> ()
-    ]
+      ]
+    | _ -> ()
     // Expanded-only panels: alarm, failure narratives, diagnostics.
     // The eval filmstrip ("N evals" per-cell history) was removed — it pushed
     // the whole UI down to show raw eval code+timing that the top eval-stats

@@ -1008,24 +1008,21 @@ h2 {
 /* ── Bottom Statusline ────────────────────────────────────────── */
 /* Fixed bottom bar like sagetech.dev's vim statusline */
 
-/* In-flow session-context line under the daemon health bar. Carries the
-   working dir (left) and, once an eval has completed the chain, the
-   eval-to-pixel latency (pushed right). Replaces the old fixed bottom
-   statusline + decorative cmdline bands. */
+/* Slim, dim eval-to-pixel latency line under the daemon health bar. Shown
+   only once an eval has completed the chain (no empty band when idle); no
+   box, no border — just a quiet right-aligned perf readout. */
 .session-context {
   display: flex;
+  justify-content: flex-end;
   align-items: center;
-  height: var(--statusline-h);
   flex-shrink: 0;
-  background: var(--bg-panel);
-  border-top: 1px solid var(--border-normal);
-  font-size: 12px;
-  font-family: inherit;
-  overflow-x: auto;
+  padding: 2px 12px;
+  font-size: 0.7rem;
+  color: var(--fg-dim);
 }
 
-.session-context .statusline-stat {
-  margin-left: auto;
+.session-context-latency {
+  opacity: 0.8;
 }
 
 .statusline-left {
