@@ -2371,8 +2371,17 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
             projProp.EnumerateArray()
             |> Seq.map (fun e -> e.GetString())
             |> Seq.toList
+            // A well-formed client sends a real array. But a client that stuffed
+            // the JSON-array TEXT into one element (["[\"a.fsproj\"]"]) would
+            // otherwise get that text as a bogus project path — the same
+            // double-encoding that broke create_session. Re-parse a lone
+            // bracket-looking element through the tolerant parser.
+            |> function
+               | [ single ] -> SageFs.McpAdapter.parseProjectsArg single
+               | many -> many |> List.filter (System.String.IsNullOrWhiteSpace >> not)
           | System.Text.Json.JsonValueKind.String ->
-            [ projProp.GetString() ]
+            // JSON array or comma-separated text arriving as a string.
+            SageFs.McpAdapter.parseProjectsArg (projProp.GetString())
           | _ -> []
         | false -> []
       let workflow =

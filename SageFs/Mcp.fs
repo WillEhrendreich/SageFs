@@ -47,6 +47,49 @@ module McpAdapter =
       |> Seq.toArray
     (real |> Array.truncate (max 0 cap)), real.Length
 
+  /// Parse the `projects` argument of create_session tolerantly. The MCP tool
+  /// contract historically took a COMMA-SEPARATED string, but every hint the
+  /// daemon emits (the NoSession message, the tool description) tells agents to
+  /// pass a JSON array — `projects=["a.fsproj"]`. An agent that followed the
+  /// docs got the whole JSON-array TEXT taken as one bogus project path
+  /// (`.Split(',')` finds no comma), so no project loaded and the session still
+  /// reached a vacuous Ready. This accepts BOTH forms — JSON array (the
+  /// documented shape), comma-separated (the legacy shape), or a single path —
+  /// and drops empties so `[]`/`""` mean "bare scratch REPL, no project". Pure
+  /// and testable. Found by dogfooding: self-hosting a SageFs.Core session.
+  let parseProjectsArg (raw: string) : string list =
+    match System.String.IsNullOrWhiteSpace raw with
+    | true -> []
+    | false ->
+      let trimmed = raw.Trim()
+      let fromJsonArray () =
+        try
+          use doc = JsonDocument.Parse trimmed
+          match doc.RootElement.ValueKind with
+          | JsonValueKind.Array ->
+            doc.RootElement.EnumerateArray()
+            |> Seq.choose (fun e ->
+                match e.ValueKind with
+                | JsonValueKind.String -> Some(e.GetString())
+                | _ -> None)
+            |> Seq.toList
+            |> Some
+          | _ -> None
+        with _ -> None
+      let entries =
+        match trimmed.StartsWith("[", System.StringComparison.Ordinal) with
+        | true ->
+          // Looks like the documented JSON-array form. Parse it; if it is
+          // malformed, fall back to comma-split so a stray bracket never
+          // swallows the paths whole.
+          match fromJsonArray () with
+          | Some xs -> xs
+          | None -> trimmed.Split(',') |> Array.toList
+        | false -> trimmed.Split(',') |> Array.toList
+      entries
+      |> List.map (fun s -> s.Trim())
+      |> List.filter (System.String.IsNullOrWhiteSpace >> not)
+
   let formatAvailableProjects (workingDir: string) (projects: string array) (solutions: string array) (moreCount: int) =
     let projectList =
       match Array.isEmpty projects with

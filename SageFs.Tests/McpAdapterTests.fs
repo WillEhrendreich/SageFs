@@ -910,4 +910,59 @@ let outboundCapTests =
       // marker/cap combination — this still catches any truncation that is
       // unboundedly wrong (e.g. returning the untruncated input).
       System.Text.Encoding.UTF8.GetByteCount(result) <= cap + 128
+
+    // --- parseProjectsArg: the create_session projects argument ---
+    // Regression for the self-hosting dogfood blocker (F5): the tool's own docs
+    // tell agents to pass a JSON array, but the parser split on commas, so the
+    // whole JSON-array text became one bogus project path and no project loaded
+    // — while the session still reached a vacuous Ready.
+    testCase "parseProjectsArg accepts the documented JSON-array form"
+    <| fun _ ->
+      McpAdapter.parseProjectsArg "[\"/abs/SageFs.Core.fsproj\"]"
+      |> Expect.equal "a JSON array must unwrap to its paths, not be taken literally" [ "/abs/SageFs.Core.fsproj" ]
+
+    testCase "parseProjectsArg accepts a multi-element JSON array"
+    <| fun _ ->
+      McpAdapter.parseProjectsArg "[\"a.fsproj\", \"b.fsproj\"]"
+      |> Expect.equal "should yield both paths" [ "a.fsproj"; "b.fsproj" ]
+
+    testCase "parseProjectsArg accepts the legacy comma-separated form"
+    <| fun _ ->
+      McpAdapter.parseProjectsArg "a.fsproj, b.fsproj"
+      |> Expect.equal "comma-separated must still work" [ "a.fsproj"; "b.fsproj" ]
+
+    testCase "parseProjectsArg accepts a single bare path"
+    <| fun _ ->
+      McpAdapter.parseProjectsArg "a.fsproj"
+      |> Expect.equal "a single path is one project" [ "a.fsproj" ]
+
+    testCase "parseProjectsArg treats [] as a bare scratch REPL"
+    <| fun _ ->
+      McpAdapter.parseProjectsArg "[]"
+      |> Expect.equal "empty JSON array means no project" []
+
+    testCase "parseProjectsArg treats empty/whitespace as no project"
+    <| fun _ ->
+      McpAdapter.parseProjectsArg "   "
+      |> Expect.equal "whitespace means no project" []
+
+    testCase "parseProjectsArg drops empty entries from a comma list"
+    <| fun _ ->
+      McpAdapter.parseProjectsArg "a.fsproj, , b.fsproj,"
+      |> Expect.equal "stray commas must not produce empty paths" [ "a.fsproj"; "b.fsproj" ]
+
+    testProperty "parseProjectsArg never yields an empty or whitespace path (property)"
+    <| fun (paths: NonEmptyArray<NonWhiteSpaceString>) ->
+      // Build a JSON array from arbitrary non-whitespace tokens (comma-free so
+      // the array shape is unambiguous), then assert no element is blank.
+      let tokens =
+        paths.Get
+        |> Array.map (fun s -> s.Get.Replace(",", "_").Replace("\"", "'"))
+        |> Array.filter (fun s -> not (System.String.IsNullOrWhiteSpace s))
+      match tokens with
+      | [||] -> true // vacuous: nothing to assert
+      | _ ->
+        let json = "[" + (tokens |> Array.map (fun t -> "\"" + t + "\"") |> String.concat ", ") + "]"
+        McpAdapter.parseProjectsArg json
+        |> List.forall (fun p -> not (System.String.IsNullOrWhiteSpace p))
   ]

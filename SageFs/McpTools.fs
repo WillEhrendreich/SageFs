@@ -1027,9 +1027,9 @@ AFTER CREATION:
 
 WORKTREES: a session's working directory is checkout-aware. If working_directory sits inside a git worktree (e.g. `.claude/worktrees/agent-x`), the session is bound to THAT worktree, not to the main checkout, and list_sessions/the dashboard show its branch. A request from inside a worktree never silently routes into the main checkout's session — create a session for the worktree instead of assuming one exists.
 
-projects: Comma-separated list of absolute or relative .fsproj file paths.""")>]
+projects: A JSON array of .fsproj paths — projects=["path/to/Foo.fsproj"] — or a comma-separated list; pass [] (or "") for a bare scratch REPL with no project. Both absolute and relative paths work.""")>]
     member _.create_session(
-        [<Description("Comma-separated list of .fsproj files to load")>] projects: string,
+        [<Description("Projects to load: a JSON array like [\"Foo.fsproj\"], or a comma-separated list, or [] for a bare scratch REPL")>] projects: string,
         [<Description("Working directory for the session")>] working_directory: string,
         [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Used for session routing and multi-agent coordination. Defaults to 'mcp' if omitted.")>]
         [<Optional; DefaultParameterValue("")>]
@@ -1037,7 +1037,7 @@ projects: Comma-separated list of absolute or relative .fsproj file paths.""")>]
     ) : Task<string> =
         let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "mcp" | false -> agentName
         logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}, agent={Agent}", projects, working_directory, agent)
-        let projectList = projects.Split(',') |> Array.map (fun s -> s.Trim()) |> Array.toList
+        let projectList = SageFs.McpAdapter.parseProjectsArg projects
         createSession ctx agent projectList working_directory SageFs.WorkflowTypes.SessionWorkflow.Interactive |> withEcho ctx "create_session"
 
     [<McpServerTool>]
