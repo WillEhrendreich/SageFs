@@ -172,3 +172,44 @@ module HostCoreAdoption =
           Ok(privateRoot, Some(fun () -> cleanup privateRoot))
       with ex ->
         Error(sprintf "Could not verify the session project's SageFs.Core build at %s: %s" best ex.Message)
+
+  /// How the currently-loaded SageFs.Core build compares to the newest
+  /// build found on disk — the F5b Phase 1 self-hosting signal: a loaded
+  /// build must never silently run stale code without the daemon knowing
+  /// it.
+  [<RequireQualifiedAccess>]
+  type SelfHostFreshness =
+    /// The loaded build IS the newest build on disk.
+    | Current
+    /// A newer (or differently versioned) build exists on disk.
+    | Stale of loaded: string * newest: string
+    /// Freshness cannot be determined — no loaded copy, or no candidate
+    /// found on disk.
+    | Indeterminate of reason: string
+
+  /// Small tolerance against filesystem write-time jitter (copy/build
+  /// pipelines can nudge a timestamp by a few hundred ms without the bytes
+  /// actually changing) so a same-version build is never flagged Stale
+  /// purely from clock noise.
+  let private freshnessEpsilon = TimeSpan.FromSeconds 2.0
+
+  /// Pure: is the loaded SageFs.Core the newest build on disk?
+  ///
+  /// `loaded` and `newest` are each `(assemblyVersion, fileWriteTimeUtc)`,
+  /// or `None` when there is nothing to compare (no build currently
+  /// loaded, or no on-disk candidate at all). Stale when the newest
+  /// candidate's version differs from the loaded one, OR its write time is
+  /// newer than the loaded one's by more than `freshnessEpsilon`.
+  let selfHostFreshness
+    (loaded: (string * DateTime) option)
+    (newest: (string * DateTime) option)
+    : SelfHostFreshness =
+    match loaded, newest with
+    | None, _ -> SelfHostFreshness.Indeterminate "no SageFs.Core build is currently loaded to compare against"
+    | _, None -> SelfHostFreshness.Indeterminate "no SageFs.Core build was found on disk to compare against"
+    | Some(loadedVersion, loadedWriteTime), Some(newestVersion, newestWriteTime) ->
+      let versionDiffers = newestVersion <> loadedVersion
+      let newerOnDisk = newestWriteTime - loadedWriteTime > freshnessEpsilon
+      match versionDiffers || newerOnDisk with
+      | true -> SelfHostFreshness.Stale(loadedVersion, newestVersion)
+      | false -> SelfHostFreshness.Current
