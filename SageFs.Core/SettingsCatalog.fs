@@ -212,6 +212,24 @@ module SettingsCatalog =
     Apply = ignore
   }
 
+  /// Live: the directory a new session defaults to. Typed as DirectoryPath, so
+  /// only an absolute path (or the unset empty) can be stored — a relative path
+  /// that would resolve against the daemon's cwd is structurally rejected. Read
+  /// when the New Session form renders and when a session is created; no live
+  /// subsystem to push to, so Apply is a no-op.
+  let sessionDefaultWorkingDir : SettingDescriptor = {
+    Key = "session.defaultWorkingDirectory"
+    Name = "Default working directory"
+    Description = "The directory a new session starts in (absolute path). Leave empty for no default. Pre-fills the New Session form."
+    Category = SessionSettings
+    Scope = RepoOverridable
+    Applicability = Live
+    Default = (match DirectoryPath.create "" with Ok d -> VDir d | Error _ -> failwith "the empty directory must be valid")
+    Parse = fun raw -> DirectoryPath.create raw |> Result.map VDir
+    Render = fun v -> match v with VDir d -> DirectoryPath.value d | _ -> ""
+    Apply = ignore
+  }
+
   /// The Phase-A pilot catalog.
   let pilots : SettingDescriptor list =
-    [ perTestTimeout; globalTestRunTimeout; mcpPort; bindHost ]
+    [ sessionDefaultWorkingDir; perTestTimeout; globalTestRunTimeout; mcpPort; bindHost ]

@@ -494,12 +494,12 @@ let mkRegion id content = {
 
 let shellStructureTests = testList "shell structure (replaces browser existence checks)" [
   testTask "renderShell snapshot" {
-    let html = renderShell "0.0.0-test" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "0.0.0-test" "test-id" "" "" (Elem.div [] []) |> renderNode
     do! verifyDashboard "dashboard_shell" html
   }
 
   test "shell has SageFs title" {
-    let html = renderShell "1.2.3" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "1.2.3" "test-id" "" "" (Elem.div [] []) |> renderNode
     html |> Expect.stringContains "shell has SageFs title" "SageFs"
   }
 
@@ -507,7 +507,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
   // font or preconnect from an external origin (fonts used to come from
   // fonts.googleapis.com).
   test "shell loads nothing from an external origin" {
-    let html = renderShell "1.2.3" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "1.2.3" "test-id" "" "" (Elem.div [] []) |> renderNode
     let externalLoads =
       System.Text.RegularExpressions.Regex.Matches(
         html, @"(?:src|href)\s*=\s*""https?://|url\(\s*['""]?https?://|@import")
@@ -515,7 +515,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
   }
 
   test "every @font-face the shell declares is an embedded woff2 served by the daemon" {
-    let html = renderShell "1.2.3" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "1.2.3" "test-id" "" "" (Elem.div [] []) |> renderNode
     let declared =
       System.Text.RegularExpressions.Regex.Matches(html, @"url\('/dashboard/fonts/([^']+)'\)")
       |> Seq.map (fun m -> m.Groups.[1].Value)
@@ -626,7 +626,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
 
   test "WHY — evaluator has no session-bound hidden input because an empty input overwrites the selected-session signal" {
     let mainHtml = renderMainContent (mkSnap "0.0.0") |> renderNode
-    let shellHtml = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let shellHtml = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     shellHtml |> Expect.stringContains "shell must own the selected-session signal" "viewing-session-id"
     (mainHtml.Contains "data-bind:viewing-session-id") |> Expect.isFalse "hidden input must not overwrite the selected-session signal"
     (mainHtml.Contains "data-bind:session-id") |> Expect.isFalse "no second session identity may exist"
@@ -668,7 +668,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
   }
 
   test "server-status banner has no data-show attribute" {
-    let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     let bannerStart = html.IndexOf("id=\"server-status\"")
     (bannerStart > -1) |> Expect.isTrue "server-status exists"
     let tagEnd = html.IndexOf(">", bannerStart)
@@ -678,7 +678,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
 
   // ── Minimal mode (Task 1) ──────────────────────────────────────
   test "renderShell has expandedDashboard signal" {
-    let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     // Datastar renders signal names as kebab-case in attributes (expandedDashboard → expanded-dashboard)
     html |> Expect.stringContains "shell has expanded-dashboard signal attribute" "expanded-dashboard"
   }
@@ -702,7 +702,7 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
   test "SSE full-state push: shell connects to stream endpoint" {
     // createStreamHandler calls pushState() immediately on connect (initial pushState in try/catch).
     // This test verifies the shell wires up the SSE stream that triggers the initial state push.
-    let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     html |> Expect.stringContains "shell connects to SSE stream endpoint for initial push" "/dashboard/stream"
   }
 ]
@@ -711,14 +711,14 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
 
 let zeroJsBadgeTests = testList "Zero-JS badge" [
   test "shell contains no framework JS (React/Vue/Angular/Svelte)" {
-    let html = renderShell "1.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "1.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     let frameworks = [ "react"; "vue"; "angular"; "svelte"; "jquery"; "alpine" ]
     for fw in frameworks do
       (html.ToLowerInvariant().Contains fw) |> Expect.isFalse (sprintf "should not contain %s framework reference" fw)
   }
 
   test "shell contains only Datastar CDN script as external JS" {
-    let html = renderShell "1.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "1.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     let srcPattern = System.Text.RegularExpressions.Regex("src=\"([^\"]+)\"")
     let scriptSrcs = srcPattern.Matches(html)
     let jsSources =
@@ -731,7 +731,7 @@ let zeroJsBadgeTests = testList "Zero-JS badge" [
   }
 
   test "inline scripts are utility-only, not application logic" {
-    let html = renderShell "1.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "1.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     let scriptPattern = System.Text.RegularExpressions.Regex("<script[^>]*>([\\s\\S]*?)</script>")
     let scriptBlocks = scriptPattern.Matches(html)
     let inlineScripts = [ for m in scriptBlocks -> m.Groups.[1].Value ]
@@ -747,7 +747,7 @@ let zeroJsBadgeTests = testList "Zero-JS badge" [
   }
 
   test "total inline JS payload is under 5KB" {
-    let html = renderShell "1.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "1.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     let scriptPattern = System.Text.RegularExpressions.Regex("<script[^>]*>([\\s\\S]*?)</script>")
     let scriptBlocks = scriptPattern.Matches(html)
     let totalBytes =
@@ -757,7 +757,7 @@ let zeroJsBadgeTests = testList "Zero-JS badge" [
   }
 
   test "no application-level JS event handlers in HTML attributes" {
-    let html = renderShell "1.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "1.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     // onclick/onchange etc. should use Datastar data-on-* attributes, not raw HTML
     (html.Contains " onclick=") |> Expect.isFalse "should not use raw onclick (use Ds.onClick)"
     (html.Contains " onchange=") |> Expect.isFalse "should not use raw onchange (use Ds.onEvent)"
@@ -1025,18 +1025,18 @@ let testFilterTests = testList "Test filter bar" [
 let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
 
   test "shell initializes SSE stream via data-init" {
-    let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     html |> Expect.stringContains "must have data-init for SSE" "data-init"
     html |> Expect.stringContains "must target stream endpoint" "/dashboard/stream"
   }
 
   test "shell loads Datastar CDN script" {
-    let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     html |> Expect.stringContains "must include datastar CDN" "datastar"
   }
 
   test "all Signals are initialized in shell via data-signals" {
-    let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     // Datastar renders signal names kebab-case: helpVisible → help-visible
     let expectedSignalAttrs =
       [ "data-signals:help-visible"; "data-signals:sidebar-open"; "data-signals:viewing-session-id"
@@ -1047,12 +1047,12 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
   }
 
   test "main div has correct DOM ID" {
-    let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     html |> Expect.stringContains "must have main div" (sprintf "id=\"%s\"" DomIds.Main)
   }
 
   test "server-status div has correct DOM ID" {
-    let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     html |> Expect.stringContains "must have server-status div" (sprintf "id=\"%s\"" DomIds.ServerStatus)
   }
 
@@ -1092,7 +1092,7 @@ let datastarComplianceTests = testList "Datastar compliance (synthesis 5.4)" [
   }
 
   test "shell has no React/Vue/Angular framework references" {
-    let html = renderShell "0.0.0" "test-id" "" (Elem.div [] []) |> renderNode
+    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     let banned = [ "react"; "vue"; "angular"; "svelte"; "htmx"; "alpine" ]
     let lower = html.ToLowerInvariant()
     for framework in banned do

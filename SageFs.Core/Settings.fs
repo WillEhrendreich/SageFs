@@ -124,6 +124,26 @@ module Toggle =
     | true -> On
     | false -> Off
 
+/// A working-directory path constrained to its legal inhabitants: either unset
+/// (empty) or an absolute, rooted path. A relative path is rejected — it would
+/// resolve against whatever the daemon's cwd happens to be, so it can never be a
+/// dependable default. Existence is deliberately NOT required (the directory may
+/// be created before it is first used).
+type DirectoryPath = private DirectoryPath of string
+
+[<RequireQualifiedAccess>]
+module DirectoryPath =
+  let create (raw: string) : Result<DirectoryPath, ConfigError> =
+    let trimmed = (raw |> Option.ofObj |> Option.defaultValue "").Trim()
+    match trimmed with
+    | "" -> Ok (DirectoryPath "")
+    | p when System.IO.Path.IsPathRooted p -> Ok (DirectoryPath p)
+    | p -> Error (Malformed(sprintf "working directory must be an absolute path, got '%s'" p))
+
+  let value (DirectoryPath p) = p
+  /// Whether an actual directory is set (an empty path means "no default").
+  let isSet (DirectoryPath p) = p <> ""
+
 /// The unified value of any setting. Every case's payload is already a type
 /// whose only inhabitants are legal, so a `SettingValue` cannot carry an
 /// illegal configuration.
@@ -133,6 +153,7 @@ type SettingValue =
   | VTimeout of ValidTimeout
   | VBindHost of SageFsConfig.LoopbackHost
   | VEnum of EnumValue
+  | VDir of DirectoryPath
 
 /// The resolved value plus its provenance: which layer supplied the effective
 /// value, and the value present at every layer that set one (so the UI can

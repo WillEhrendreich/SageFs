@@ -270,7 +270,7 @@ let keyboardHandlerScript () =
 /// server-side default for the signal (first available session, or empty for
 /// the picker). There is NO session query parameter anywhere — the dashboard
 /// is driven entirely by the `viewingSessionId` signal synced with the backend.
-let renderShell (version: string) (clientId: string) (initialSessionId: string) (initialContent: XmlNode) =
+let renderShell (version: string) (clientId: string) (initialSessionId: string) (defaultWorkingDir: string) (initialContent: XmlNode) =
   Elem.html [] [
     Elem.head [] [
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
@@ -285,7 +285,7 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       Elem.style [] [ Text.raw fontFaceCss ]
     ]
     Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true" ] [
-      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, ""); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, false); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "") ] []
+      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, false); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "") ] []
       Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
         Text.raw "⏳ Connecting to server..."
       ]
@@ -1596,6 +1596,15 @@ let private settingsRows (paths: SageFs.ConfigPaths) : SettingsPanel.SettingRow 
   SageFs.SettingsCatalog.pilots
   |> List.map (fun d -> { Descriptor = d; Resolved = SageFs.SettingsCatalog.resolve paths d })
 
+/// The persisted default working directory (session.defaultWorkingDirectory),
+/// resolved across the config layers, used to pre-fill the New Session form.
+/// Fail-safe: any resolution error yields "" (no default).
+let private resolveDefaultWorkingDir () : string =
+  let d = SageFs.SettingsCatalog.sessionDefaultWorkingDir
+  match SageFs.SettingsCatalog.resolve (settingsPaths ()) d with
+  | Ok p -> d.Render p.Effective
+  | Error _ -> ""
+
 let private descriptorForSignal (sigName: string) : SageFs.SettingDescriptor option =
   SageFs.SettingsCatalog.pilots |> List.tryFind (fun d -> SettingsPanel.signalName d.Key = sigName)
 
@@ -2370,7 +2379,7 @@ let createEndpoints
         match firstLiveSession sessions with
         | Some firstId ->
           let! snap, resolvedId, _, _ = buildDashboardSnapshot q infra firstId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
-          let html = renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (renderMainContent snap)
+          let html = renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (resolveDefaultWorkingDir ()) (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
         | None ->
           // No session in play: render the FULL dashboard shell with the
@@ -2380,12 +2389,12 @@ let createEndpoints
           // the same state, so the initial HTML must contain #session-picker
           // or Datastar fails the page with PatchElementsNoTargetsFound.
           let! snap = buildNoSessionSnapshot q infra
-          let html = renderShell infra.Version clientId "" (renderMainContent snap)
+          let html = renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
       with _ ->
         let clientId = Guid.NewGuid().ToString("N").[..7]
         let! snap = buildNoSessionSnapshot q infra
-        let html = renderShell infra.Version clientId "" (renderMainContent snap)
+        let html = renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContent snap)
         return! FalcoResponse.ofHtml html ctx
     })
     // Stream endpoint for a specific page — the client id is a PATH segment

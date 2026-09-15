@@ -234,3 +234,49 @@ let catalogTests =
         finally
           Timeouts.setPerTestTimeout original)
   ]
+
+[<Tests>]
+let defaultWorkingDirTests =
+  testList "Settings — default working directory (session.defaultWorkingDirectory)" [
+
+    testCase "WHY — an empty path is the legal 'unset' state, so 'no default' is representable without a bool/option" <| fun _ ->
+      match DirectoryPath.create "" with
+      | Ok d -> DirectoryPath.isSet d |> Expect.isFalse "empty means unset"
+      | Error e -> failtestf "empty should be Ok, got %A" e
+
+    testCase "WHY — an absolute path is accepted, because it resolves the same regardless of the daemon's cwd" <| fun _ ->
+      let p = if OperatingSystem.IsWindows() then @"C:\proj" else "/home/x/proj"
+      match DirectoryPath.create p with
+      | Ok d -> DirectoryPath.value d |> Expect.equal "round-trips" p
+      | Error e -> failtestf "absolute should be Ok, got %A" e
+
+    testCase "WHY — a relative path is refused, because it would resolve differently per cwd and can never be a dependable default (illegal state unrepresentable)" <| fun _ ->
+      match DirectoryPath.create "some/rel/path" with
+      | Ok _ -> failtest "relative path must be refused"
+      | Error _ -> ()
+
+    testCase "WHY — the descriptor writes to the repo layer and re-resolves from it, so a repo can pin its own default working dir" <| fun _ ->
+      withTempDir (fun root ->
+        let gdir = Path.Combine(root, "g")
+        let repo = Path.Combine(root, "r")
+        Directory.CreateDirectory gdir |> ignore
+        Directory.CreateDirectory repo |> ignore
+        let paths : ConfigPaths = { GlobalDir = gdir; Repo = RepoRootAt repo }
+        let d = SettingsCatalog.sessionDefaultWorkingDir
+        let abs = if OperatingSystem.IsWindows() then @"C:\work" else "/home/x/work"
+        match SettingsCatalog.edit paths LRepo abs d with
+        | Error why -> failtestf "edit failed: %A" why
+        | Ok _ ->
+          match SettingsCatalog.resolve paths d with
+          | Error why -> failtestf "resolve failed: %A" why
+          | Ok prov ->
+            prov.Source |> Expect.equal "resolved from repo" LRepo
+            d.Render prov.Effective |> Expect.equal "the repo default" abs)
+
+    testCase "WHY — a relative path is refused at edit too, so a bad value never reaches settings.json" <| fun _ ->
+      withTempDir (fun root ->
+        let paths : ConfigPaths = { GlobalDir = root; Repo = NoRepoCheckout }
+        match SettingsCatalog.edit paths LGlobal "rel/path" SettingsCatalog.sessionDefaultWorkingDir with
+        | Ok _ -> failtest "relative must be refused at edit"
+        | Error _ -> ())
+  ]
