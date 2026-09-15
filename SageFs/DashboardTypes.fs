@@ -32,6 +32,7 @@ module DomIds =
   let [<Literal>] DiagnosticsPanel = "diagnostics-panel"
   let [<Literal>] FilmstripPanel = "filmstrip-panel"
   let [<Literal>] DiscoveredProjects = "discovered-projects"
+  let [<Literal>] DirSuggestions = "dir-suggestions"
   let [<Literal>] HotReloadPanel = "hot-reload-panel"
   let [<Literal>] LiveTestingPanel = "live-testing-panel"
   let [<Literal>] TestTrace = "test-trace"
@@ -144,6 +145,40 @@ module Signals =
   /// browser-side type system: when connected=false, NO UI element may show
   /// "Ready" or "No session" — only the disconnected overlay is legal.
   let [<Literal>] Connected = "connected"
+
+/// Directory autocomplete for the New Session working-directory input. `split`
+/// is pure and unit-tested; `suggest` adds the one filesystem read.
+[<RequireQualifiedAccess>]
+module DirSuggest =
+  /// Split a partial path into (directory-to-list, name-prefix). A path ending
+  /// in a separator lists that directory's children; otherwise the last segment
+  /// is a case-insensitive prefix filter within its parent. Pure.
+  let split (partial: string) : string * string =
+    let p = (partial |> Option.ofObj |> Option.defaultValue "").Trim()
+    if p = "" then "", ""
+    elif p.EndsWith "/" || p.EndsWith(string System.IO.Path.DirectorySeparatorChar) then p, ""
+    else
+      let dir = System.IO.Path.GetDirectoryName p
+      let name = System.IO.Path.GetFileName p
+      (if isNull dir then "" else dir), name
+
+  /// Matching subdirectories for a partial path. Fail-safe (any error → []),
+  /// directories only, capped at 20, sorted by name. Empty input → no
+  /// suggestions (don't spam the picker before the user has typed anything).
+  let suggest (partial: string) : string list =
+    let p = (partial |> Option.ofObj |> Option.defaultValue "").Trim()
+    if p = "" then [] else
+    let dir, prefix = split p
+    let dirToList =
+      if dir = "" then (if p.StartsWith "/" then "/" else System.Environment.CurrentDirectory)
+      else dir
+    try
+      System.IO.Directory.GetDirectories dirToList
+      |> Array.filter (fun d -> (System.IO.Path.GetFileName d).StartsWith(prefix, System.StringComparison.OrdinalIgnoreCase))
+      |> Array.sortBy System.IO.Path.GetFileName
+      |> Array.truncate 20
+      |> Array.toList
+    with _ -> []
 
 /// Precomputed syntax-color RGB → CSS class lookup (eliminates 12-branch if/elif chain)
 let syntaxColorLookup =

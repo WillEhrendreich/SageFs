@@ -1970,6 +1970,21 @@ let createDiscoverHandler : HttpHandler =
     | :? System.ObjectDisposedException -> ()
   }
 
+/// Create the directory-autocomplete POST handler — morphs the datalist with
+/// subdirectories matching the partial path as the user types.
+let createDirSuggestHandler : HttpHandler =
+  fun ctx -> task {
+    try
+      use! doc = readSignalsJsonSized ctx
+      let dir = getSignalString doc "newSessionDir" "new-session-dir"
+      Response.sseStartResponse ctx |> ignore
+      do! ssePatchNode ctx (renderDirSuggestions (DirSuggest.suggest dir))
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
 /// Create the create-session POST handler.
 let createCreateSessionHandler
   (infra: DashboardInfra)
@@ -2431,6 +2446,7 @@ let createEndpoints
     yield post "/dashboard/hard-reset" (createResetHandler a.HardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
+    yield post "/dashboard/dir-suggest" createDirSuggestHandler
     yield post "/dashboard/friction/send" (createFrictionSendHandler q)
     // Dismiss all system alarms — clears the shared buffer and re-triggers SSE push.
     yield post "/dashboard/dismiss-alarm" (fun ctx -> task {

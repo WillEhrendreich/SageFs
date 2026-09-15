@@ -1042,7 +1042,7 @@ h2 {
   background: var(--bg-panel);
   color: var(--fg-default);
   border: 1px solid var(--border-normal);
-  border-radius: 6px;
+  border-radius: 0;
   padding: 4px 8px;
   font-size: 0.72rem;
   line-height: 1.35;
@@ -1076,8 +1076,11 @@ h2 {
   background: var(--bg-panel);
   color: var(--fg-normal, inherit);
   border: 1px solid var(--border-normal);
-  border-radius: 4px;
-  padding: 2px 4px;
+  border-radius: 0;
+  /* Match the 28px square action buttons so the row is one clean height. */
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 4px;
   font-size: 0.72rem;
   max-width: 150px;
   min-width: 0;
@@ -1459,14 +1462,14 @@ body[data-connected="false"] .statusline-info {
 /* Settings scope toggle (Phase C1) */
 .settings-scope { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0 0.75rem; font-size: 0.8rem; }
 .settings-scope-label { color: var(--fg-dim); }
-.settings-scope-select { background: var(--bg-panel); color: var(--fg-normal, inherit); border: 1px solid var(--border-normal); border-radius: 0.25rem; padding: 0.1rem 0.3rem; font-size: 0.8rem; }
+.settings-scope-select { background: var(--bg-panel); color: var(--fg-normal, inherit); border: 1px solid var(--border-normal); border-radius: 0; padding: 0.1rem 0.3rem; font-size: 0.8rem; }
 
 /* No-session sessions panel empty state (anchors the panel; no floating bare text) */
 .sessions-empty {
   padding: 14px 12px;
   margin: 4px 0;
   border: 1px dashed var(--border-normal);
-  border-radius: 6px;
+  border-radius: 0;
   text-align: center;
   color: var(--fg-dim);
   font-size: 0.85rem;

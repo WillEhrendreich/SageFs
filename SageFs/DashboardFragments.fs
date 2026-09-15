@@ -130,6 +130,13 @@ let renderThemePicker (selectedTheme: string) =
         ([ Attr.value name ] @ (match name = selectedTheme with | true -> [ Attr.create "selected" "selected" ] | false -> []))
         [ textEnc name ]))
 
+/// The directory-autocomplete datalist for the New Session working-dir input.
+/// Morphed by POST /dashboard/dir-suggest as the user types; the input binds to
+/// it via `list="dir-suggestions"`, so the browser shows native suggestions.
+let renderDirSuggestions (dirs: string list) : XmlNode =
+  Elem.datalist [ Attr.id DomIds.DirSuggestions ]
+    (dirs |> List.map (fun d -> Elem.option [ Attr.value (attrEnc d) ] []))
+
 
 let renderSessionStatus (sessionState: string) (sessionId: string) (workingDir: string) (warmupProgress: string) (workflowLabel: string) =
   let warmupNode =
@@ -335,8 +342,10 @@ let renderDaemonHealth (view: DaemonHealthView) =
         match view.SessionSummaries with
         | [] -> emoji
         | _ -> sprintf "%s %s" emoji label
-      textEnc (sprintf "%s · SageFs %s · up %s · %dMB"
-        statusText view.Version view.UptimeLabel view.MemoryMB)
+      textEnc (sprintf "%s · SageFs %s · up %s · " statusText view.Version view.UptimeLabel)
+      Elem.span
+        [ Attr.create "aria-label" "Memory the SageFs daemon process itself is using (refreshes every few seconds)" ]
+        [ textEnc (sprintf "%dMB" view.MemoryMB) ]
     ]
     match sessionSummaryText view.SessionSummaries with
     | None -> ()
@@ -1112,8 +1121,10 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 // or if the pid has already exited (never a fault).
                 match s.WorkerRssBytes with
                 | Some bytes ->
-                  Elem.span [ Attr.class' "meta"; testid "session-rss" ] [
-                    textEnc (sprintf "RSS: %dMB" (bytes / 1024L / 1024L))
+                  Elem.span
+                    [ Attr.class' "meta"; testid "session-rss"
+                      Attr.create "aria-label" "Memory this session's FSI worker process is using (resident set size)" ] [
+                    textEnc (sprintf "Memory: %dMB" (bytes / 1024L / 1024L))
                   ]
                 | None -> ()
                 match s.TestSummary with
@@ -1653,7 +1664,12 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                   [ Attr.class' "eval-input"
                     Attr.style "min-height: auto; height: 2rem;"
                     Ds.bind Signals.NewSessionDir
-                    Attr.create "placeholder" @"C:\path\to\project" ]
+                    // Native directory autocomplete: the datalist below is
+                    // morphed by /dashboard/dir-suggest as the user types.
+                    Attr.create "list" DomIds.DirSuggestions
+                    Ds.onEvent ("input.debounce_250ms", "@post('/dashboard/dir-suggest')")
+                    Attr.create "placeholder" "/path/to/project" ]
+                renderDirSuggestions []
                 Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
                   Elem.button
                     [ Attr.class' "eval-btn"
