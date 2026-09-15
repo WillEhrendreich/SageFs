@@ -147,7 +147,11 @@ let storeTests =
 /// Live timeout pilot mutates a process-global (Timeouts) that other suites read.
 [<Tests>]
 let catalogTests =
-  testSequenced <| testList "Settings catalog" [
+  // Same sequenced group as TimeoutsTests' "Thread-safe mutable timeouts": both
+  // mutate the process-global Timeouts.perTestDefault, so they must be mutually
+  // exclusive, not merely internally sequenced (testSequenced only orders within
+  // a list; a parallel list would still read a transiently-mutated global).
+  testSequencedGroup "timeouts-global" <| testList "Settings catalog" [
 
     testCase "WHY — editing the Live per-test timeout persists AND applies to the running Timeouts, because it revives the dead setTestTimeouts path" <| fun _ ->
       withTempDir (fun dir ->
@@ -155,7 +159,7 @@ let catalogTests =
         try
           let paths = { GlobalDir = dir; RepoRoot = None }
           match SettingsCatalog.edit paths LGlobal "30" SettingsCatalog.perTestTimeout with
-          | Error why -> failtestf "expected Ok, got Error %s" why
+          | Error why -> failtestf "expected Ok, got Error %A" why
           | Ok prov ->
             prov.Source |> Expect.equal "resolved from the global layer" LGlobal
             // Live apply reached the process-global setter.
@@ -180,7 +184,7 @@ let catalogTests =
       withTempDir (fun dir ->
         let paths = { GlobalDir = dir; RepoRoot = None }
         match SettingsCatalog.edit paths LGlobal "40000" SettingsCatalog.mcpPort with
-        | Error why -> failtestf "expected Ok, got Error %s" why
+        | Error why -> failtestf "expected Ok, got Error %A" why
         | Ok prov ->
           match prov.Effective with
           | VPort p -> Port.value p |> Expect.equal "resolves to 40000" 40000
@@ -200,7 +204,7 @@ let catalogTests =
       withTempDir (fun dir ->
         let paths = { GlobalDir = dir; RepoRoot = None }
         match SettingsCatalog.edit paths LGlobal "127.0.0.1" SettingsCatalog.bindHost with
-        | Error why -> failtestf "expected Ok, got Error %s" why
+        | Error why -> failtestf "expected Ok, got Error %A" why
         | Ok prov ->
           prov.Effective |> Expect.equal "resolves to the IPv4 loopback" (VBindHost SageFsConfig.LoopbackHost.Ipv4))
 
@@ -213,7 +217,7 @@ let catalogTests =
           let paths = { GlobalDir = dir; RepoRoot = Some repo }
           SettingsCatalog.edit paths LGlobal "10" SettingsCatalog.perTestTimeout |> ignore
           match SettingsCatalog.edit paths LRepo "30" SettingsCatalog.perTestTimeout with
-          | Error why -> failtestf "repo edit failed: %s" why
+          | Error why -> failtestf "repo edit failed: %A" why
           | Ok prov ->
             prov.Source |> Expect.equal "repo override wins" LRepo
             match prov.Effective with
@@ -221,7 +225,7 @@ let catalogTests =
             | other -> failtestf "expected VTimeout, got %A" other
           // Clearing the repo override falls back to the global value.
           match SettingsCatalog.clear paths LRepo SettingsCatalog.perTestTimeout with
-          | Error why -> failtestf "clear failed: %s" why
+          | Error why -> failtestf "clear failed: %A" why
           | Ok prov ->
             prov.Source |> Expect.equal "falls back to global" LGlobal
             match prov.Effective with

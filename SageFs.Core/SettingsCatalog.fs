@@ -38,14 +38,14 @@ module SettingsCatalog =
     (paths: ConfigPaths)
     (sessionOverride: SettingValue option)
     (descriptor: SettingDescriptor)
-    : Result<Provenance, string> =
-    let parseAt (layer: ConfigLayer) (raw: string option) : Result<(ConfigLayer * SettingValue) option, string> =
+    : Result<Provenance, ConfigError> =
+    let parseAt (layer: ConfigLayer) (raw: string option) : Result<(ConfigLayer * SettingValue) option, ConfigError> =
       match raw with
       | None -> Ok None
       | Some r ->
         match descriptor.Parse r with
         | Ok v -> Ok (Some(layer, v))
-        | Error why -> Error (sprintf "%s (%A layer): %s" descriptor.Key layer why)
+        | Error why -> Error (LayerValueInvalid(descriptor.Key, layer, ConfigError.describe why))
 
     let globalRaw = rawAt (SettingsStore.globalPath paths.GlobalDir) descriptor.Key
     let repoRaw =
@@ -75,7 +75,7 @@ module SettingsCatalog =
     (layer: ConfigLayer)
     (raw: string)
     (descriptor: SettingDescriptor)
-    : Result<Provenance, string> =
+    : Result<Provenance, ConfigError> =
     match descriptor.Parse raw with
     | Error why -> Error why
     | Ok value ->
@@ -85,8 +85,8 @@ module SettingsCatalog =
         | LRepo ->
           match paths.RepoRoot with
           | Some root -> SettingsStore.setKey (SettingsStore.repoPath root) descriptor.Key (descriptor.Render value)
-          | None -> Error "this session has no repo checkout, so there is no repo layer to write to"
-        | LDefault | LSession -> Error "edits persist to the global or repo layer, not default/session"
+          | None -> Error (LayerUnavailable "this session has no repo checkout, so there is no repo layer to write to")
+        | LDefault | LSession -> Error (LayerUnavailable "edits persist to the global or repo layer, not default/session")
       match persisted with
       | Error e -> Error e
       | Ok () ->
@@ -101,7 +101,7 @@ module SettingsCatalog =
     (paths: ConfigPaths)
     (layer: ConfigLayer)
     (descriptor: SettingDescriptor)
-    : Result<Provenance, string> =
+    : Result<Provenance, ConfigError> =
     let cleared =
       match layer with
       | LGlobal -> SettingsStore.clearKey (SettingsStore.globalPath paths.GlobalDir) descriptor.Key
@@ -109,7 +109,7 @@ module SettingsCatalog =
         match paths.RepoRoot with
         | Some root -> SettingsStore.clearKey (SettingsStore.repoPath root) descriptor.Key
         | None -> Ok ()
-      | LDefault | LSession -> Error "only the global or repo layer can be cleared"
+      | LDefault | LSession -> Error (LayerUnavailable "only the global or repo layer can be cleared")
     match cleared with
     | Error e -> Error e
     | Ok () -> resolve paths None descriptor
@@ -118,13 +118,15 @@ module SettingsCatalog =
   // Phase-A pilot descriptors
   // ---------------------------------------------------------------------------
 
-  let private secondsToTimeoutValue (raw: string) : Result<SettingValue, string> =
+  let private secondsToTimeoutValue (raw: string) : Result<SettingValue, ConfigError> =
     match Double.TryParse raw with
-    | false, _ -> Error (sprintf "expected a number of seconds, got '%s'" raw)
+    | false, _ -> Error (Malformed (sprintf "expected a number of seconds, got '%s'" raw))
     | true, s ->
+      // ValidTimeout.create predates the config core and still returns a string
+      // error; adapt it to the typed OutOfRange at this boundary.
       match ValidTimeout.create (TimeSpan.FromSeconds s) with
       | Ok t -> Ok (VTimeout t)
-      | Error why -> Error why
+      | Error why -> Error (OutOfRange why)
 
   let private renderTimeout (v: SettingValue) : string =
     match v with
@@ -173,7 +175,7 @@ module SettingsCatalog =
     Default = VPort (match Port.create SageFsConfig.DefaultMcpPort with Ok p -> p | Error _ -> failwith "default MCP port must be valid")
     Parse = fun raw ->
       match Int32.TryParse raw with
-      | false, _ -> Error (sprintf "expected a port number, got '%s'" raw)
+      | false, _ -> Error (Malformed (sprintf "expected a port number, got '%s'" raw))
       | true, n -> Port.create n |> Result.map VPort
     Render = fun v -> match v with VPort p -> string (Port.value p) | _ -> ""
     Apply = ignore
@@ -189,7 +191,12 @@ module SettingsCatalog =
     Scope = Global
     Applicability = Guarded
     Default = VBindHost SageFsConfig.LoopbackHost.Localhost
-    Parse = fun raw -> SageFsConfig.LoopbackHost.parse raw |> Result.map VBindHost
+    // LoopbackHost.parse predates the config core and returns a string error;
+    // adapt it to the typed NotLoopback at this boundary.
+    Parse = fun raw ->
+      match SageFsConfig.LoopbackHost.parse raw with
+      | Ok h -> Ok (VBindHost h)
+      | Error why -> Error (NotLoopback why)
     Render = fun v -> match v with VBindHost h -> SageFsConfig.LoopbackHost.urlHost h | _ -> ""
     Apply = ignore
   }

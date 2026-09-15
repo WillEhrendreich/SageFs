@@ -55,7 +55,10 @@ let timeoutsTests = testList "Timeouts" [
       |> Expect.isTrue "must be a positive span within the 10-minute cap"
   ]
 
-  testSequenced <| testList "Thread-safe mutable timeouts" [
+  // Sequenced group (not just testSequenced): SettingsTests' catalog suite also
+  // mutates these process-global timeouts, so the two lists must be mutually
+  // exclusive across the parallel run, not merely internally ordered.
+  testSequencedGroup "timeouts-global" <| testList "Thread-safe mutable timeouts" [
     testCase "setPerTestTimeout rejects invalid value" <| fun _ ->
       let before = Timeouts.perTestDefault ()
       Timeouts.setPerTestTimeout (TimeSpan.FromMilliseconds(100.0))

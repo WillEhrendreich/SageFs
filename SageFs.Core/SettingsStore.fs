@@ -44,7 +44,7 @@ module SettingsStore =
 
   /// Atomically replace a layer file with `m` (tmp + move), creating the
   /// directory if needed.
-  let private writeLayer (path: string) (m: Map<string, string>) : Result<unit, string> =
+  let private writeLayer (path: string) (m: Map<string, string>) : Result<unit, ConfigError> =
     try
       let dir = Path.GetDirectoryName path
       match String.IsNullOrEmpty dir || Directory.Exists dir with
@@ -58,15 +58,15 @@ module SettingsStore =
       File.WriteAllText(tmp, json)
       File.Move(tmp, path, true)
       Ok ()
-    with ex -> Error (sprintf "failed to write %s: %s" path ex.Message)
+    with ex -> Error (PersistFailed (sprintf "failed to write %s: %s" path ex.Message))
 
   /// Set (or overwrite) one key in a layer, preserving every other key.
-  let setKey (path: string) (key: string) (rawValue: string) : Result<unit, string> =
+  let setKey (path: string) (key: string) (rawValue: string) : Result<unit, ConfigError> =
     readLayer path |> Map.add key rawValue |> writeLayer path
 
   /// Clear one key from a layer so its value falls back to the next-lower
   /// layer. Clearing an absent key is a no-op success.
-  let clearKey (path: string) (key: string) : Result<unit, string> =
+  let clearKey (path: string) (key: string) : Result<unit, ConfigError> =
     let m = readLayer path
     match Map.containsKey key m with
     | false -> Ok ()

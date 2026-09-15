@@ -9,49 +9,9 @@ open System
 /// legal — a bounded `Port`, a closed-set `EnumValue`, the reused
 /// `ValidTimeout` (Timeouts.fs) and `LoopbackHost` (SageFsConfig.fs) — so no
 /// code path downstream of `parse` ever holds a value it must re-check. The
-/// only place a raw string becomes a typed value is a `parse` that returns
-/// *why* on failure; `resolve`/`apply` operate on values that are legal by
-/// construction.
-
-/// A TCP port a user may bind. Only the unprivileged range is constructable,
-/// so a `Port` can never name a privileged (<1024) or out-of-range port.
-type Port = private Port of int
-
-[<RequireQualifiedAccess>]
-module Port =
-  let create (n: int) : Result<Port, string> =
-    match n >= 1024 && n <= 65535 with
-    | true -> Ok (Port n)
-    | false -> Error (sprintf "port must be between 1024 and 65535, got %d" n)
-
-  let value (Port n) = n
-
-/// A member of a closed set of strings (a theme name, a workflow, a run
-/// policy). The chosen value is provably one of `allowed` — there is no way
-/// to construct an `EnumValue` outside its own set. The descriptor supplies
-/// the allowed set, so this one type serves every closed-string setting
-/// without the core needing to know the specific sets.
-type EnumValue = private EnumValue of allowed: string list * chosen: string
-
-[<RequireQualifiedAccess>]
-module EnumValue =
-  let create (allowed: string list) (raw: string) : Result<EnumValue, string> =
-    match List.contains raw allowed with
-    | true -> Ok (EnumValue(allowed, raw))
-    | false -> Error (sprintf "'%s' is not one of [%s]" raw (String.concat "; " allowed))
-
-  let value (EnumValue(_, chosen)) = chosen
-  let allowed (EnumValue(a, _)) = a
-
-/// The unified value of any setting. Every case's payload is already a type
-/// whose only inhabitants are legal, so a `SettingValue` cannot carry an
-/// illegal configuration.
-type SettingValue =
-  | VBool of bool
-  | VPort of Port
-  | VTimeout of ValidTimeout
-  | VBindHost of SageFsConfig.LoopbackHost
-  | VEnum of EnumValue
+/// only place a raw string becomes a typed value is a `parse` that returns a
+/// typed `ConfigError` (never a bare string — the repo's error-algebra
+/// discipline) explaining *why* on failure.
 
 /// The layers a value can come from, lowest precedence first. A higher layer
 /// overrides a lower one; `LSession` is a transient in-memory override, the
@@ -71,6 +31,87 @@ module ConfigLayer =
     | LGlobal -> 1
     | LRepo -> 2
     | LSession -> 3
+
+  let label (layer: ConfigLayer) : string =
+    match layer with
+    | LDefault -> "default"
+    | LGlobal -> "global"
+    | LRepo -> "repo"
+    | LSession -> "session"
+
+/// Why a setting operation failed — a typed error, never a bare string, so
+/// consumers can dispatch on the cause and a boundary can map it to the
+/// repo's SageFsError algebra. Every case carries the detail a user needs.
+type ConfigError =
+  /// A numeric value outside its allowed range (port, timeout).
+  | OutOfRange of detail: string
+  /// A value that is not a member of a closed set (an enum choice).
+  | NotAMember of got: string * allowed: string list
+  /// Input that could not be parsed into the value type at all.
+  | Malformed of detail: string
+  /// A bind host that is not a loopback address — the RCE guard.
+  | NotLoopback of detail: string
+  /// The chosen layer cannot be written (no repo checkout, or a
+  /// non-persisted layer such as default/session).
+  | LayerUnavailable of detail: string
+  /// Persisting the value to its layer file failed.
+  | PersistFailed of detail: string
+  /// A value already persisted at a layer failed to parse back into its type.
+  | LayerValueInvalid of key: string * layer: ConfigLayer * detail: string
+
+[<RequireQualifiedAccess>]
+module ConfigError =
+  /// A single-line, user-facing description.
+  let describe (e: ConfigError) : string =
+    match e with
+    | OutOfRange detail -> detail
+    | NotAMember(got, allowed) -> sprintf "'%s' is not one of [%s]" got (String.concat "; " allowed)
+    | Malformed detail -> detail
+    | NotLoopback detail -> detail
+    | LayerUnavailable detail -> detail
+    | PersistFailed detail -> detail
+    | LayerValueInvalid(key, layer, detail) ->
+      sprintf "%s (%s layer): %s" key (ConfigLayer.label layer) detail
+
+/// A TCP port a user may bind. Only the unprivileged range is constructable,
+/// so a `Port` can never name a privileged (<1024) or out-of-range port.
+type Port = private Port of int
+
+[<RequireQualifiedAccess>]
+module Port =
+  let create (n: int) : Result<Port, ConfigError> =
+    match n >= 1024 && n <= 65535 with
+    | true -> Ok (Port n)
+    | false -> Error (OutOfRange (sprintf "port must be between 1024 and 65535, got %d" n))
+
+  let value (Port n) = n
+
+/// A member of a closed set of strings (a theme name, a workflow, a run
+/// policy). The chosen value is provably one of `allowed` — there is no way
+/// to construct an `EnumValue` outside its own set. The descriptor supplies
+/// the allowed set, so this one type serves every closed-string setting
+/// without the core needing to know the specific sets.
+type EnumValue = private EnumValue of allowed: string list * chosen: string
+
+[<RequireQualifiedAccess>]
+module EnumValue =
+  let create (allowed: string list) (raw: string) : Result<EnumValue, ConfigError> =
+    match List.contains raw allowed with
+    | true -> Ok (EnumValue(allowed, raw))
+    | false -> Error (NotAMember(raw, allowed))
+
+  let value (EnumValue(_, chosen)) = chosen
+  let allowed (EnumValue(a, _)) = a
+
+/// The unified value of any setting. Every case's payload is already a type
+/// whose only inhabitants are legal, so a `SettingValue` cannot carry an
+/// illegal configuration.
+type SettingValue =
+  | VBool of bool
+  | VPort of Port
+  | VTimeout of ValidTimeout
+  | VBindHost of SageFsConfig.LoopbackHost
+  | VEnum of EnumValue
 
 /// The resolved value plus its provenance: which layer supplied the effective
 /// value, and the value present at every layer that set one (so the UI can
@@ -109,9 +150,9 @@ type SettingDescriptor = {
   Scope: SettingScope
   Applicability: SettingApplicability
   Default: SettingValue
-  /// The ONLY boundary where a raw string becomes a typed value; returns why
-  /// on failure. Nothing downstream re-validates.
-  Parse: string -> Result<SettingValue, string>
+  /// The ONLY boundary where a raw string becomes a typed value; returns a
+  /// typed ConfigError on failure. Nothing downstream re-validates.
+  Parse: string -> Result<SettingValue, ConfigError>
   /// The inverse of `parse` for persistence.
   Render: SettingValue -> string
   /// Push an already-legal value into the live subsystem.
