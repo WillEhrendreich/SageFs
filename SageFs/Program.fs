@@ -351,7 +351,7 @@ let main args =
     printfn "                         live sessions and no MCP/SSE clients."
     printfn ""
     printfn "Environment Variables:"
-    printfn "  SageFs_MCP_PORT           Override MCP server port (same as --mcp-port)"
+    printfn "  SAGEFS_MCP_PORT           Override MCP server port (same as --mcp-port)"
     printfn "  SAGEFS_BIND_HOST          Loopback bind address: localhost (default), 127.0.0.1 or ::1."
     printfn "                            Non-loopback addresses are refused — SageFs has no authentication."
     printfn ""
