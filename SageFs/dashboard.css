@@ -1025,6 +1025,33 @@ h2 {
   opacity: 0.8;
 }
 
+/* Perf-stats reveal toggle (📊) — count stays; the detail hides behind it. */
+.perf-toggle-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 0.72rem;
+  opacity: 0.45;
+  transition: opacity 0.15s;
+}
+.perf-toggle-btn:hover { opacity: 1; }
+.eval-perf-detail { color: var(--fg-dim); }
+
+/* Session run-target dropdown: several executables collapse to one <select>
+   + a single Run button, instead of a wall of per-project buttons. */
+.session-run-picker { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.session-run-select {
+  background: var(--bg-panel);
+  color: var(--fg-normal, inherit);
+  border: 1px solid var(--border-normal);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 0.72rem;
+  max-width: 150px;
+  min-width: 0;
+}
+
 .statusline-left {
   display: flex;
   align-items: center;

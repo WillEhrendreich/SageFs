@@ -100,6 +100,9 @@ module Signals =
   let [<Literal>] FilmstripOpen = "filmstripOpen"
   let [<Literal>] DiagnosticsOpen = "diagnosticsOpen"
   let [<Literal>] EvaluateSectionOpen = "evaluateSectionOpen"
+  /// Reveals the eval performance detail (avg/min/max, percentiles, eval-to-pixel
+  /// latency) — hidden by default; perf is noise unless you're chasing a slowdown.
+  let [<Literal>] PerfStatsOpen = "perfStatsOpen"
   let [<Literal>] NewSessionOpen = "newSessionOpen"
   let [<Literal>] HotReloadFilesOpen = "hotReloadFilesOpen"
   let [<Literal>] FrictionPanelOpen = "frictionPanelOpen"

@@ -116,6 +116,10 @@ let renderThemePicker (selectedTheme: string) =
   Elem.select
     [ Attr.id DomIds.ThemePicker
       Attr.class' "theme-select"
+      // Seed the theme signal with the actual current theme so data-bind shows
+      // it — otherwise the shell's empty "" default clobbers the server-rendered
+      // <option selected>, and the picker never reflects the live theme.
+      Ds.signal (Signals.Theme, selectedTheme)
       Ds.bind Signals.Theme
       // Send the freshly-selected value (not the signal, which is updated
       // async by data-bind) by reading the select element at event time.
@@ -402,21 +406,31 @@ let renderFailureNarratives (view: FailureNarrativesPanelView) =
       ]
   ]
 
-/// Render eval stats as an HTML fragment — includes sparkline and P50/P95 latency.
+/// Render eval stats: just the eval count by default, with all the perf detail
+/// (avg/min/max, sparkline, P50/P95) behind a 📊 toggle — perf numbers are noise
+/// unless you're chasing a slowdown, so they stay hidden until asked for.
 let renderEvalStats (stats: EvalStatsView) =
   Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "meta" ] [
-    textEnc (sprintf "%d evals · avg %.0fms · min %.0fms · max %.0fms" stats.Count stats.AvgMs stats.MinMs stats.MaxMs)
-    match stats.Sparkline with
-    | "" -> ()
-    | sparkline ->
-      Elem.span [ Attr.class' "eval-sparkline"; Attr.title "Recent eval latency (oldest → newest)" ] [
-        textEnc (sprintf " %s" sparkline)
-      ]
-      Elem.span [ Attr.class' "eval-percentiles meta" ] [
+    textEnc (sprintf "%d evals" stats.Count)
+    Elem.button
+      [ Attr.class' "perf-toggle-btn"
+        Attr.title "Show eval performance detail (avg/min/max, latency percentiles, eval-to-pixel)"
+        Ds.onEvent ("click", sprintf "$%s = !$%s" Signals.PerfStatsOpen Signals.PerfStatsOpen) ]
+      [ Text.raw "📊" ]
+    Elem.span [ Attr.class' "eval-perf-detail meta"; Ds.show (sprintf "$%s" Signals.PerfStatsOpen) ] [
+      textEnc (sprintf " · avg %.0fms · min %.0fms · max %.0fms" stats.AvgMs stats.MinMs stats.MaxMs)
+      match stats.Sparkline with
+      | "" -> ()
+      | sparkline ->
+        Elem.span [ Attr.class' "eval-sparkline"; Attr.title "Recent eval latency (oldest → newest)" ] [
+          textEnc (sprintf " %s" sparkline)
+        ]
+      Elem.span [ Attr.class' "eval-percentiles" ] [
         textEnc (sprintf " · P50 %s · P95 %s"
           (stats.P50Ms |> Option.map (sprintf "%.0fms") |> Option.defaultValue "—")
           (stats.P95Ms |> Option.map (sprintf "%.0fms") |> Option.defaultValue "—"))
       ]
+    ]
   ]
 
 /// Render a pipeline stage badge for the railway visualization.
@@ -1221,18 +1235,37 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
                   [ Text.raw "▶" ]
               | projects, _ ->
-                // Several executables: each button must say which project it
-                // runs, so it is a labeled pill (auto width, label truncates
-                // with an ellipsis) — text never goes in the 28px icon box.
-                for project in projects do
-                  let name = AppRun.projectName project.Path
+                // Several executables: a dropdown to choose which to run
+                // (defaulting to the session's active/loaded project) plus one
+                // Run button — not a wall of per-project buttons. A plain
+                // <select> with the server-rendered <option selected>; the Run
+                // button reads its value at click, so an attacker-influenced
+                // .fsproj name never lands in a signal or raw in the DOM.
+                let selectId = sprintf "run-select-%s" sid
+                let names = projects |> List.map (fun p -> AppRun.projectName p.Path)
+                let defaultName =
+                  match s.ActiveProject with
+                  | Some active ->
+                    match projects |> List.tryFind (fun p -> p.Path = active || AppRun.projectName p.Path = active) with
+                    | Some p -> AppRun.projectName p.Path
+                    | None -> List.head names
+                  | None -> List.head names
+                Elem.div [ Attr.class' "session-run-picker" ] [
+                  Elem.select
+                    [ Attr.id selectId
+                      Attr.class' "session-run-select"
+                      Attr.title "Choose which executable to run with hot reload" ]
+                    (names |> List.map (fun n ->
+                      Elem.option
+                        ([ Attr.value (attrEnc n) ] @ (match n = defaultName with | true -> [ Attr.create "selected" "selected" ] | false -> []))
+                        [ textEnc n ]))
                   Elem.button
-                    [ Attr.class' "session-btn session-btn-primary session-btn-labeled"
+                    [ Attr.class' "session-btn session-btn-primary"
                       testid "run-app"
-                      Attr.title (attrEnc (runTitle name))
-                      Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s/%s" sid (Uri.EscapeDataString name))) ]
-                    [ Elem.span [ Attr.create "aria-hidden" "true" ] [ Text.raw "▶" ]
-                      Elem.span [ Attr.class' "session-btn-label" ] [ textEnc name ] ]
+                      Attr.title "Run the selected project with hot reload"
+                      Ds.onEvent ("click", sprintf "@post('/dashboard/run-app/%s/' + encodeURIComponent(document.getElementById('%s').value))" sid selectId) ]
+                    [ Text.raw "▶" ]
+                ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.title "Stop — unload the session (saved memory kept)"
@@ -1452,13 +1485,13 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     ]
     // Daemon health bar — version, uptime, memory, session health
     snap.DaemonHealth
-    // Eval-to-pixel latency — the one unique perf stat — as a slim, dim line
-    // under the health bar, shown ONLY once the first eval has completed the
-    // chain, so there is never an empty band when idle. The working dir is not
-    // repeated here; it lives on the session's sidebar card.
+    // Eval-to-pixel latency — hidden by default (perf is noise unless you're
+    // chasing a slowdown); revealed with the rest of the perf detail via the
+    // 📊 toggle ($perfStatsOpen). Rendered only once an eval has completed the
+    // chain. The working dir is not repeated here; it lives on the sidebar card.
     match snap.EvalToPixelP50Ms, snap.EvalToPixelP99Ms with
     | Some p50, Some p99 ->
-      Elem.div [ Attr.class' "session-context" ] [
+      Elem.div [ Attr.class' "session-context"; Ds.show (sprintf "$%s" Signals.PerfStatsOpen) ] [
         Elem.span [ Attr.class' "session-context-latency"; testid "eval-to-pixel-latency" ] [
           textEnc (sprintf "px p50 %.1fms p99 %.1fms" p50 p99)
         ]

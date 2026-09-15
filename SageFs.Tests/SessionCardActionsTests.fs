@@ -26,15 +26,16 @@ let private render viewing sessions =
 
 [<Tests>]
 let tests = testList "Session card actions" [
-  test "WHY — run buttons — each executable's name renders inside a truncating label pill, never inside a fixed 28px icon box, because the text overflowed onto the neighbouring buttons" {
+  test "WHY — run buttons — several executables render as a dropdown + one Run button, not a wall of per-project buttons, because switching is rare and N labeled buttons crowded the card" {
     let s =
       mkCardSession "0a2b3c4d" [
         "/a/SageFs.Tests.fsproj", ProjectLoading.ProjectRole.Executable
         "/a/SageFsWebAppFixture.fsproj", ProjectLoading.ProjectRole.Executable ]
     let html = render "0a2b3c4e" [ s ]
-    html |> Expect.stringContains "labeled run button" "session-btn session-btn-primary session-btn-labeled"
-    html |> Expect.stringContains "first name in a truncating label" "<span class=\"session-btn-label\">SageFs.Tests</span>"
-    html |> Expect.stringContains "second name in a truncating label" "<span class=\"session-btn-label\">SageFsWebAppFixture</span>"
+    html |> Expect.stringContains "a run-target dropdown replaces the button wall" "session-run-select"
+    html |> Expect.stringContains "first project is an option" "<option value=\"SageFs.Tests\""
+    html |> Expect.stringContains "second project is an option" "SageFsWebAppFixture"
+    html.Contains "session-btn-labeled" |> Expect.isFalse "no per-project labeled buttons remain"
   }
 
   test "WHY — run buttons — a project name is HTML-encoded in its label because a hostile .fsproj name must not reach the DOM as markup" {
