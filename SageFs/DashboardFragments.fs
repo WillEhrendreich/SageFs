@@ -1432,6 +1432,12 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             Ds.text (sprintf "$%s ? '✕' : '⋯'" Signals.ExpandedDashboard)
             Attr.title "Toggle extra panels (Hot Reload, Live Testing, Bindings)" ]
           []
+        Elem.a
+          [ Attr.class' "expand-toggle-btn"
+            Attr.href "/dashboard/settings"
+            Attr.title "Runtime settings"
+            Attr.style "text-decoration:none;display:inline-flex;align-items:center;justify-content:center;" ]
+          [ Text.raw "⚙" ]
         snap.ThemePicker
       ]
     ]
