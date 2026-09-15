@@ -140,6 +140,18 @@ let createDaemonInfrastructure () : DaemonInfra =
 
   log.LogInformation("SageFs daemon v{Version} starting", DaemonInfo.version)
 
+  // Sweep shadow-copy directories left behind by worker processes that are
+  // provably gone. cleanupStaleDirs otherwise only runs when a live session
+  // hard-resets, so a daemon that was hard-killed (or its workers were) leaks
+  // its /tmp/sagefs-shadow-* dirs until some future session happens to rebuild.
+  // Doing it on every boot keeps the graveyard swept and fails closed — only
+  // dead-owner dirs are ever removed, never a live session's.
+  try
+    ShadowCopy.cleanupStaleDirs ()
+    log.LogInformation("Swept stale shadow-copy directories from prior runs")
+  with ex ->
+    log.LogWarning("Shadow-copy sweep on startup failed: {Error}", ex.Message)
+
   // Ensure adequate thread pool for concurrent SSE/MCP/effects
   let minWorker, minIO = System.Threading.ThreadPool.GetMinThreads()
   let desiredMin = max 32 (System.Environment.ProcessorCount * 4)
