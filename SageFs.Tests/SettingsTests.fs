@@ -140,3 +140,93 @@ let storeTests =
       let p = SettingsStore.repoPath "/home/x/proj"
       p.Replace('\\', '/') |> Expect.stringContains "under .SageFs" "/proj/.SageFs/settings.json"
   ]
+
+/// Phase A4: the catalog glue ties descriptors to the store end-to-end —
+/// parse -> persist to the chosen layer -> apply-if-live -> re-resolve — and
+/// an illegal edit is refused at parse, never persisted. Sequenced because the
+/// Live timeout pilot mutates a process-global (Timeouts) that other suites read.
+[<Tests>]
+let catalogTests =
+  testSequenced <| testList "Settings catalog" [
+
+    testCase "WHY — editing the Live per-test timeout persists AND applies to the running Timeouts, because it revives the dead setTestTimeouts path" <| fun _ ->
+      withTempDir (fun dir ->
+        let original = Timeouts.perTestDefault ()
+        try
+          let paths = { GlobalDir = dir; RepoRoot = None }
+          match SettingsCatalog.edit paths LGlobal "30" SettingsCatalog.perTestTimeout with
+          | Error why -> failtestf "expected Ok, got Error %s" why
+          | Ok prov ->
+            prov.Source |> Expect.equal "resolved from the global layer" LGlobal
+            // Live apply reached the process-global setter.
+            (Timeouts.perTestDefault ()).TotalSeconds |> Expect.equal "Timeouts now reflects the edit" 30.0
+            // And it round-trips through resolution.
+            match prov.Effective with
+            | VTimeout t -> (ValidTimeout.value t).TotalSeconds |> Expect.equal "effective is 30s" 30.0
+            | other -> failtestf "expected VTimeout, got %A" other
+        finally
+          Timeouts.setPerTestTimeout original)
+
+    testCase "WHY — an out-of-range port edit is refused at parse and never persisted, because illegal config is unrepresentable" <| fun _ ->
+      withTempDir (fun dir ->
+        let paths = { GlobalDir = dir; RepoRoot = None }
+        SettingsCatalog.edit paths LGlobal "70000" SettingsCatalog.mcpPort
+        |> Expect.isError "70000 is not a valid port"
+        // Nothing was written.
+        SettingsStore.readLayer (SettingsStore.globalPath dir) |> Map.tryFind SettingsCatalog.mcpPort.Key
+        |> Expect.isNone "a refused edit persists nothing")
+
+    testCase "WHY — a valid RestartRequired port edit persists and resolves but is not applied live, because the port only takes effect on restart" <| fun _ ->
+      withTempDir (fun dir ->
+        let paths = { GlobalDir = dir; RepoRoot = None }
+        match SettingsCatalog.edit paths LGlobal "40000" SettingsCatalog.mcpPort with
+        | Error why -> failtestf "expected Ok, got Error %s" why
+        | Ok prov ->
+          match prov.Effective with
+          | VPort p -> Port.value p |> Expect.equal "resolves to 40000" 40000
+          | other -> failtestf "expected VPort, got %A" other
+          SettingsStore.readLayer (SettingsStore.globalPath dir) |> Map.tryFind SettingsCatalog.mcpPort.Key
+          |> Expect.equal "persisted the rendered value" (Some "40000"))
+
+    testCase "WHY — a non-loopback bind host is refused at parse, because a LAN bind is RCE and must be structurally impossible" <| fun _ ->
+      withTempDir (fun dir ->
+        let paths = { GlobalDir = dir; RepoRoot = None }
+        SettingsCatalog.edit paths LGlobal "0.0.0.0" SettingsCatalog.bindHost
+        |> Expect.isError "0.0.0.0 is not loopback"
+        SettingsStore.readLayer (SettingsStore.globalPath dir) |> Map.tryFind SettingsCatalog.bindHost.Key
+        |> Expect.isNone "a refused bind host persists nothing")
+
+    testCase "WHY — a loopback bind host edit resolves to the typed LoopbackHost, because loopback values are legal" <| fun _ ->
+      withTempDir (fun dir ->
+        let paths = { GlobalDir = dir; RepoRoot = None }
+        match SettingsCatalog.edit paths LGlobal "127.0.0.1" SettingsCatalog.bindHost with
+        | Error why -> failtestf "expected Ok, got Error %s" why
+        | Ok prov ->
+          prov.Effective |> Expect.equal "resolves to the IPv4 loopback" (VBindHost SageFsConfig.LoopbackHost.Ipv4))
+
+    testCase "WHY — a repo override beats the global value, then clearing it falls back, because that is the base-vs-override contract" <| fun _ ->
+      withTempDir (fun dir ->
+        let repo = Path.Combine(dir, "repo")
+        Directory.CreateDirectory repo |> ignore
+        let original = Timeouts.perTestDefault ()
+        try
+          let paths = { GlobalDir = dir; RepoRoot = Some repo }
+          SettingsCatalog.edit paths LGlobal "10" SettingsCatalog.perTestTimeout |> ignore
+          match SettingsCatalog.edit paths LRepo "30" SettingsCatalog.perTestTimeout with
+          | Error why -> failtestf "repo edit failed: %s" why
+          | Ok prov ->
+            prov.Source |> Expect.equal "repo override wins" LRepo
+            match prov.Effective with
+            | VTimeout t -> (ValidTimeout.value t).TotalSeconds |> Expect.equal "repo's 30s wins over global 10s" 30.0
+            | other -> failtestf "expected VTimeout, got %A" other
+          // Clearing the repo override falls back to the global value.
+          match SettingsCatalog.clear paths LRepo SettingsCatalog.perTestTimeout with
+          | Error why -> failtestf "clear failed: %s" why
+          | Ok prov ->
+            prov.Source |> Expect.equal "falls back to global" LGlobal
+            match prov.Effective with
+            | VTimeout t -> (ValidTimeout.value t).TotalSeconds |> Expect.equal "global's 10s is the fallback" 10.0
+            | other -> failtestf "expected VTimeout, got %A" other
+        finally
+          Timeouts.setPerTestTimeout original)
+  ]
