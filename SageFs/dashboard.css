@@ -1401,6 +1401,11 @@ body[data-connected="false"] .statusline-info {
 .settings-chip-restart { color: var(--fg-yellow); border-color: var(--fg-yellow); }
 .settings-chip-guarded { color: var(--fg-red); border-color: var(--fg-red); }
 
+/* Settings scope toggle (Phase C1) */
+.settings-scope { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0 0.75rem; font-size: 0.8rem; }
+.settings-scope-label { color: var(--fg-dim); }
+.settings-scope-select { background: var(--bg-panel); color: var(--fg-normal, inherit); border: 1px solid var(--border-normal); border-radius: 0.25rem; padding: 0.1rem 0.3rem; font-size: 0.8rem; }
+
 /* No-session sessions panel empty state (anchors the panel; no floating bare text) */
 .sessions-empty {
   padding: 14px 12px;

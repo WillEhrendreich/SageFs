@@ -1582,10 +1582,13 @@ let mapGetRaw (route: string) (read: HttpContext -> 'T) (handler: 'T -> HttpHand
 
 // ── Phase B2: Settings panel edit/clear (server-authoritative, Ds.post + morph) ──
 
-/// Global-scoped config paths for the standalone settings page. The resolver
-/// and store already support the repo layer; it is surfaced per-session later.
+/// Config paths for the settings page: the global store, plus the daemon's own
+/// working directory as the repo layer (its `.SageFs/settings.json`). The
+/// fail-safe read means a cwd with no repo settings simply contributes nothing,
+/// so the panel shows global/default until a repo override is written.
 let private settingsPaths () : SageFs.ConfigPaths =
-  { GlobalDir = DaemonState.SageFsDir; Repo = SageFs.NoRepoCheckout }
+  { GlobalDir = DaemonState.SageFsDir
+    Repo = SageFs.RepoRootAt (System.Environment.CurrentDirectory) }
 
 let private settingsRows (paths: SageFs.ConfigPaths) : SettingsPanel.SettingRow list =
   SageFs.SettingsCatalog.pilots
@@ -1610,15 +1613,17 @@ let createSettingsEditHandler : string -> HttpHandler =
       | None -> do! morphSettingsPanel ctx (SettingsPanel.Rejected("Unknown setting", sigName)) paths
       | Some d ->
         use! doc = readSignalsJsonSized ctx
-        let rawValue =
-          match doc.RootElement.TryGetProperty(sigName) with
+        let readSignal (name: string) =
+          match doc.RootElement.TryGetProperty(name) with
           | true, prop ->
             match prop.ValueKind with
             | System.Text.Json.JsonValueKind.String -> prop.GetString()
             | _ -> prop.GetRawText()
           | _ -> ""
+        let rawValue = readSignal sigName
+        let layer = SettingsPanel.layerForScope (readSignal Signals.SettingsScope) d
         let notice =
-          match SageFs.SettingsCatalog.edit paths SageFs.LGlobal rawValue d with
+          match SageFs.SettingsCatalog.edit paths layer rawValue d with
           | Ok _ -> SettingsPanel.Applied d.Name
           | Error e -> SettingsPanel.Rejected(d.Name, SageFs.ConfigError.describe e)
         do! morphSettingsPanel ctx notice paths
@@ -1632,14 +1637,20 @@ let createSettingsClearHandler : string -> HttpHandler =
   fun sigName ctx -> task {
     try
       let paths = settingsPaths ()
-      let notice =
-        match descriptorForSignal sigName with
-        | None -> SettingsPanel.Rejected("Unknown setting", sigName)
-        | Some d ->
-          match SageFs.SettingsCatalog.clear paths SageFs.LGlobal d with
+      match descriptorForSignal sigName with
+      | None -> do! morphSettingsPanel ctx (SettingsPanel.Rejected("Unknown setting", sigName)) paths
+      | Some d ->
+        use! doc = readSignalsJsonSized ctx
+        let scope =
+          match doc.RootElement.TryGetProperty(Signals.SettingsScope) with
+          | true, prop when prop.ValueKind = System.Text.Json.JsonValueKind.String -> prop.GetString()
+          | _ -> SettingsPanel.ScopeGlobal
+        let layer = SettingsPanel.layerForScope scope d
+        let notice =
+          match SageFs.SettingsCatalog.clear paths layer d with
           | Ok _ -> SettingsPanel.Applied (sprintf "%s (reset)" d.Name)
           | Error e -> SettingsPanel.Rejected(d.Name, SageFs.ConfigError.describe e)
-      do! morphSettingsPanel ctx notice paths
+        do! morphSettingsPanel ctx notice paths
     with
     | :? RequestTooLargeException -> ()
     | :? System.IO.IOException -> ()

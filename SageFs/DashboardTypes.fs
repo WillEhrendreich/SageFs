@@ -83,6 +83,8 @@ module Signals =
   let [<Literal>] ConfigLoading = "configLoading"
   /// In-flight indicator for a Settings panel save/reset (Phase B2).
   let [<Literal>] SettingsSaving = "settingsSaving"
+  /// Which layer a Settings edit targets: "global" or "repo" (Phase C1).
+  let [<Literal>] SettingsScope = "settingsScope"
   let [<Literal>] LiveTestingLoading = "liveTestingLoading"
   let [<Literal>] TempLoading = "tempLoading"
   let [<Literal>] Theme = "theme"

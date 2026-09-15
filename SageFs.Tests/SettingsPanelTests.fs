@@ -51,4 +51,27 @@ let tests =
     testCase "WHY — the panel root carries the stable DOM id, so an edit can morph it in place" <| fun _ ->
       let html = renderAllDefault ()
       html |> Expect.stringContains "stable morph target id" SettingsPanel.PanelDomId
+
+    // ── Phase C1: the edit-target scope toggle ──────────────────────────
+    // layerForScope is the single mapping used by both render and handler.
+    let repoD = SettingsCatalog.pilots |> List.find (fun d -> d.Scope = RepoOverridable)
+    let globalD = SettingsCatalog.pilots |> List.find (fun d -> d.Scope = Global)
+
+    testCase "WHY — a repo-overridable setting edited in repo scope targets the repo layer, so a per-repo override is possible" <| fun _ ->
+      SettingsPanel.layerForScope SettingsPanel.ScopeRepo repoD
+      |> Expect.equal "repo scope on a RepoOverridable setting writes the repo layer" LRepo
+
+    testCase "WHY — a repo-overridable setting edited in global scope targets the global layer, so the toggle is honoured both ways" <| fun _ ->
+      SettingsPanel.layerForScope SettingsPanel.ScopeGlobal repoD
+      |> Expect.equal "global scope writes the global layer" LGlobal
+
+    testCase "WHY — a global-only setting stays global even when repo scope is chosen, so a daemon-wide setting can never be silently shadowed per-repo (the safety property)" <| fun _ ->
+      SettingsPanel.layerForScope SettingsPanel.ScopeRepo globalD
+      |> Expect.equal "a Global setting ignores the repo toggle" LGlobal
+
+    testCase "WHY — the scope selector offers both edit targets, so the user can choose where a write lands" <| fun _ ->
+      let html = renderAllDefault ()
+      html |> Expect.stringContains "scope selector present" "settings-scope-select"
+      html |> Expect.stringContains "global target option" ">Global<"
+      html |> Expect.stringContains "repo target option" ">This repo<"
   ]

@@ -41,6 +41,22 @@ module SettingsPanel =
   let signalName (key: string) : string =
     "set_" + key.Replace('.', '_').Replace('-', '_')
 
+  /// The two edit-target scope values a client can hold in the scope signal.
+  [<Literal>]
+  let ScopeGlobal = "global"
+  [<Literal>]
+  let ScopeRepo = "repo"
+
+  /// Which layer an edit targets, given the client's scope choice and the
+  /// setting's own scope. A `Global`-only setting always edits the global
+  /// layer regardless of the toggle; only a `RepoOverridable` setting can be
+  /// written to the repo layer. (One place owns this mapping, used by both the
+  /// render and the handler.)
+  let layerForScope (scope: string) (d: SettingDescriptor) : ConfigLayer =
+    match d.Scope with
+    | RepoOverridable when scope = ScopeRepo -> LRepo
+    | _ -> LGlobal
+
   /// The applicability chip — a DU-driven label+class+tooltip, so a new case
   /// would not silently fall through.
   let private applicabilityChip (a: SettingApplicability) : XmlNode =
@@ -155,11 +171,26 @@ module SettingsPanel =
       let title = Elem.h3 [ Attr.class' "settings-group-title" ] [ Text.enc (SettingCategory.label cat) ]
       [ Elem.div [ Attr.class' "settings-group" ] (title :: List.map renderRow catRows) ]
 
+  /// The edit-target scope toggle. Writes land in the chosen layer (repo only
+  /// applies to RepoOverridable settings). Bound to the scope signal, sent with
+  /// every Save/Reset @post.
+  let private scopeSelector : XmlNode =
+    Elem.div [ Attr.class' "settings-scope" ] [
+      Elem.span [ Attr.class' "settings-scope-label" ] [ Text.raw "Edit target:" ]
+      Elem.select [ Attr.class' "settings-scope-select"; Ds.bind Signals.SettingsScope ] [
+        Elem.option [ Attr.value ScopeGlobal ] [ Text.raw "Global" ]
+        Elem.option [ Attr.value ScopeRepo ] [ Text.raw "This repo" ]
+      ]
+    ]
+
   let renderPanel (notice: PanelNotice) (rows: SettingRow list) : XmlNode =
     let groups = SettingCategory.displayOrder |> List.collect (renderGroup rows)
     Elem.div
-      [ Attr.id PanelDomId; Attr.class' "panel settings-panel"; Ds.signal (Signals.SettingsSaving, false) ]
+      [ Attr.id PanelDomId; Attr.class' "panel settings-panel"
+        Ds.signal (Signals.SettingsSaving, false)
+        Ds.signal (Signals.SettingsScope, ScopeGlobal) ]
       [ Elem.h2 [] [ Text.raw "Settings" ]
+        scopeSelector
         noticeBanner notice
         Elem.div [ Attr.class' "settings-groups" ] groups ]
 
