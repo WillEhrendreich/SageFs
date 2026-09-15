@@ -69,7 +69,7 @@ let tests =
           GetElmModel = None
           GetElmRegions = None
           GetWarmupContext = None
-          GetFeatureState = None
+          GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveSnapshotSink = None
           CohortOwner = None }

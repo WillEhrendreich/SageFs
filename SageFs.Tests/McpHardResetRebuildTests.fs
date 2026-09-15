@@ -62,7 +62,7 @@ let private mkProbe (sessionId: string) (restartResult: Result<string, SageFsErr
         match msg with
         | SageFsMsg.Event (TuiEvent.SessionStatusChanged (_, display)) -> finished.TrySetResult display |> ignore
         | _ -> ())
-      GetElmModel = None; GetElmRegions = None; GetWarmupContext = None; GetFeatureState = None
+      GetElmModel = None; GetElmRegions = None; GetWarmupContext = None; GetFeatureState = None; RecordEval = None
       ActivityTracker = AgentActivityTracker.create (); LiveSnapshotSink = None; CohortOwner = None }
   { SessionId = sessionId; Ctx = ctx; Restarts = restarts; StatusWrites = writes; Routed = routed; Finished = finished }
 

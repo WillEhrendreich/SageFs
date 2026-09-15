@@ -822,6 +822,15 @@ module McpTools =
     GetWarmupContext: (string -> Threading.Tasks.Task<WarmupContext option>) option
     /// Read the current feature push state (eval history, bindings, timeline).
     GetFeatureState: (unit -> Features.FeatureHooks.FeaturePushState) option
+    /// Record a completed eval (code, result, durationMs) into the feature push
+    /// state's history — the WRITE counterpart to GetFeatureState. The daemon
+    /// wires this to the same `FeaturePushState ref` its `/exec` bridge writes,
+    /// so the pure-MCP `send_fsharp_code` path populates the eval history that
+    /// `get_recent_fsi_events`/filmstrip/impact_forecast read (roast-7 §2/§3
+    /// follow-up — before this, only the CLI-integrated `/exec` client wrote,
+    /// so a pure-MCP agent's `get_recent_fsi_events` lied "no events yet" right
+    /// after a successful eval). `None` in tests, like LiveSnapshotSink.
+    RecordEval: (string -> string -> int64 -> unit) option
     /// In-memory agent activity tracker for multi-agent coordination.
     ActivityTracker: AgentActivityTracker.Tracker
     /// Receives the live bound-value snapshot after each successful eval
@@ -1913,6 +1922,7 @@ module McpTools =
           // key's text (Phase 0 item 4 of sagefs-multiagent-vision.md §10).
           AgentActivityTracker.recordMemberActivity ctx.ActivityTracker (memberIdFor agentName) sid filePath intent DateTime.UtcNow
 
+          let evalSw = System.Diagnostics.Stopwatch.StartNew()
           let mutable allOutputs = []
           let mutable outcome = Evaluated false
           let mutable allDiags : WorkerProtocol.WorkerDiagnostic list = []
@@ -1936,6 +1946,13 @@ module McpTools =
             | _ -> allOutputs |> List.tryHead |> Option.defaultValue ""
 
           Features.EvalDedup.DedupCache.record evalDedupCache sid code finalOutput (DateTimeOffset.UtcNow)
+          evalSw.Stop()
+          // Record the eval into the shared feature push-state history so the
+          // pure-MCP path feeds get_recent_fsi_events/filmstrip/impact_forecast,
+          // exactly as the /exec bridge already does (roast-7 §2/§3). None in
+          // tests. Uses the raw finalOutput (not the advisory-enriched text) to
+          // match what /exec stores.
+          ctx.RecordEval |> Option.iter (fun record -> record code finalOutput evalSw.ElapsedMilliseconds)
           Instrumentation.succeedSpan span
           // Compute file-overlap advisory AFTER caching raw output
           let enrichedOutput =
@@ -1972,17 +1989,13 @@ module McpTools =
   /// dashboard filmstrip and `plan_ripple`/`impact_forecast` already read
   /// (`Features.FeatureHooks.recentEvals`) — never a hardcoded string.
   ///
-  /// KNOWN GAP (documented rather than silently papered over): the daemon's
-  /// `/exec` HTTP bridge (McpServer.fs, used by the CLI-integrated client)
-  /// records every eval into this history; the pure-MCP `send_fsharp_code`
-  /// path (this file) does not yet write to it — see McpContext.GetFeatureState,
-  /// a read-only getter with no matching setter reachable from here.
-  /// Widening that write path needs a new McpContext field, which would
-  /// touch every one of the ~14 test files that construct McpContext record
-  /// literals outside this change's owned-file list, so it is left for a
-  /// dedicated follow-up. This function is honest about the result either
-  /// way: real events when they exist, a plain "no events yet" when they do
-  /// not — never a lie.
+  /// Both write paths now feed this history: the daemon's `/exec` HTTP bridge
+  /// (McpServer.fs, CLI-integrated client) AND the pure-MCP `send_fsharp_code`
+  /// path, which records via `McpContext.RecordEval` — the write counterpart to
+  /// GetFeatureState, wired to the same `FeaturePushState ref` (roast-7 §2/§3
+  /// follow-up, the gap this comment used to describe). This function is honest
+  /// either way: real events when they exist, a plain "no events yet" when they
+  /// do not — never a lie.
   let getRecentEvents (ctx: McpContext) (agent: string) (count: int) (workingDirectory: string option) : Task<string> =
     withSessionWd ctx agent workingDirectory (fun _sid -> task {
       match ctx.GetFeatureState with

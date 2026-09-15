@@ -744,11 +744,11 @@ type McpServerConfig = {
 }
 
 // Create shared MCP context (private — called only by startMcpServer)
-let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> option) (featureStateGetter: (unit -> SageFs.Features.FeatureHooks.FeaturePushState) option) : McpContext =
+let private mkContext (cfg: McpServerConfig) (stateChangedStr: IEvent<string> option) (featureStateGetter: (unit -> SageFs.Features.FeatureHooks.FeaturePushState) option) (recordEval: (string -> string -> int64 -> unit) option) : McpContext =
   let dispatch = cfg.ElmRuntime |> Option.map (fun r -> r.Dispatch)
   let getElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
   let getElmRegions = cfg.ElmRuntime |> Option.map (fun r -> r.GetRegions)
-  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; ActivityTracker = cfg.ActivityTracker; LiveSnapshotSink = cfg.LiveSnapshotSink; CohortOwner = cfg.CohortOwner }
+  { FrictionStore = cfg.FrictionStore; DiagnosticsChanged = cfg.DiagnosticsChanged; StateChanged = stateChangedStr; SessionOps = cfg.SessionOps; SessionMap = ConcurrentDictionary<string, string>(); McpPort = cfg.Port; Dispatch = dispatch; GetElmModel = getElmModel; GetElmRegions = getElmRegions; GetWarmupContext = cfg.GetWarmupContext; GetFeatureState = featureStateGetter; RecordEval = recordEval; ActivityTracker = cfg.ActivityTracker; LiveSnapshotSink = cfg.LiveSnapshotSink; CohortOwner = cfg.CohortOwner }
 
 // ── SSE context: groups immutable dependencies for state change handlers ──
 
@@ -2748,7 +2748,13 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
           bridge.Publish)
       let featurePushState =
         cfg.SharedFeatureState |> Option.defaultWith (fun () -> ref SageFs.Features.FeatureHooks.FeaturePushState.empty)
-      let mcpContext = mkContext cfg stateChangedStr (Some (fun () -> featurePushState.Value))
+      let mcpContext =
+        mkContext cfg stateChangedStr
+          (Some (fun () -> featurePushState.Value))
+          // Same ref the /exec bridge writes at (McpServer /exec handler): the
+          // pure-MCP send_fsharp_code path now records its evals here too, so
+          // get_recent_fsi_events/filmstrip/impact_forecast see them (roast-7 §2/§3).
+          (Some (fun code result ms -> featurePushState.Value <- SageFs.Features.FeatureHooks.recordEval code result ms featurePushState.Value))
       let serverTracker = McpServerTracker()
       let sseJsonOpts = JsonSerializerOptions()
       sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())

@@ -61,7 +61,7 @@ let private mkCtx (sessionInfo: SessionInfo) (sessionContext: SessionContext opt
             SessionContext = sessionContext })
     GetElmRegions = None
     GetWarmupContext = None
-    GetFeatureState = None
+    GetFeatureState = None; RecordEval = None
     ActivityTracker = SageFs.AgentActivityTracker.create()
     LiveSnapshotSink = None
     CohortOwner = None }

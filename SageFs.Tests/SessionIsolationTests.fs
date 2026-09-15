@@ -61,7 +61,7 @@ module McpSessionIsolation =
         GetElmModel = None
         GetElmRegions = None
         GetWarmupContext = None
-        GetFeatureState = None
+        GetFeatureState = None; RecordEval = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
         LiveSnapshotSink = None
         CohortOwner = None } : McpContext
@@ -156,7 +156,7 @@ module McpSessionIsolation =
           GetElmModel = None
           GetElmRegions = None
           GetWarmupContext = None
-          GetFeatureState = None
+          GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveSnapshotSink = None
           CohortOwner = None } : McpContext
@@ -404,7 +404,7 @@ module WorkingDirRoutingPriority =
           SwitchWorkflow = fun _ _ -> Task.FromResult(Error(SageFsError.HardResetFailed "Not available")) }
       SessionMap = sessionMap; McpPort = 0; Dispatch = None
       GetElmModel = None; GetElmRegions = None; GetWarmupContext = None
-      GetFeatureState = None; ActivityTracker = SageFs.AgentActivityTracker.create()
+      GetFeatureState = None; RecordEval = None; ActivityTracker = SageFs.AgentActivityTracker.create()
       LiveSnapshotSink = None; CohortOwner = None }
 
   let tests = testSequenced <| testList "workingDirectory routing priority" [
@@ -584,7 +584,7 @@ module ResetIsolation =
         GetElmModel = None
         GetElmRegions = None
         GetWarmupContext = None
-        GetFeatureState = None
+        GetFeatureState = None; RecordEval = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
         LiveSnapshotSink = None
         CohortOwner = None } : McpContext
@@ -678,7 +678,7 @@ module ResetIsolation =
         GetElmModel = None
         GetElmRegions = None
         GetWarmupContext = None
-        GetFeatureState = None
+        GetFeatureState = None; RecordEval = None
         ActivityTracker = SageFs.AgentActivityTracker.create()
         LiveSnapshotSink = None
         CohortOwner = None } : McpContext
@@ -755,7 +755,7 @@ module ResetIsolation =
           GetElmModel = None
           GetElmRegions = None
           GetWarmupContext = None
-          GetFeatureState = None
+          GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveSnapshotSink = None
           CohortOwner = None } : McpContext
@@ -918,7 +918,7 @@ module ResetIsolation =
           GetElmModel = None
           GetElmRegions = None
           GetWarmupContext = None
-          GetFeatureState = None
+          GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveSnapshotSink = None
           CohortOwner = None } : McpContext
@@ -1006,7 +1006,7 @@ module ResetIsolation =
           GetElmModel = None
           GetElmRegions = None
           GetWarmupContext = None
-          GetFeatureState = None
+          GetFeatureState = None; RecordEval = None
           ActivityTracker = SageFs.AgentActivityTracker.create()
           LiveSnapshotSink = None
           CohortOwner = None } : McpContext
@@ -1296,7 +1296,7 @@ module SessionMapEviction =
       GetElmModel = None
       GetElmRegions = None
       GetWarmupContext = None
-      GetFeatureState = None
+      GetFeatureState = None; RecordEval = None
       ActivityTracker = SageFs.AgentActivityTracker.create()
       LiveSnapshotSink = None
       CohortOwner = None } : McpContext

@@ -240,7 +240,7 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     GetElmModel = None
     GetElmRegions = None
     GetWarmupContext = None
-    GetFeatureState = None
+    GetFeatureState = None; RecordEval = None
     ActivityTracker = AgentActivityTracker.create ()
     LiveSnapshotSink = None
     CohortOwner = None

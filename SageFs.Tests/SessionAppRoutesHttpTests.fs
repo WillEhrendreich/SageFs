@@ -155,7 +155,7 @@ let private startTestServer (ops: SessionManagementOps) = task {
       GetElmModel = None
       GetElmRegions = None
       GetWarmupContext = None
-      GetFeatureState = None
+      GetFeatureState = None; RecordEval = None
       ActivityTracker = config.ActivityTracker
       LiveSnapshotSink = None
       CohortOwner = None }
