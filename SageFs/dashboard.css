@@ -98,8 +98,10 @@ h2 {
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
-  /* Pad for fixed tabline top + statusline/cmdline bottom */
-  padding: var(--tabline-h) 0 calc(var(--statusline-h) + var(--cmdline-h));
+  /* Pad for the fixed tabline top only; the bottom statusline/cmdline bands
+     are gone — their two useful facts now ride the in-flow session-context
+     line under the health bar. */
+  padding: var(--tabline-h) 0 0;
 }
 
 /* Tabline — fixed top bar like sagetech.dev */
@@ -1006,19 +1008,24 @@ h2 {
 /* ── Bottom Statusline ────────────────────────────────────────── */
 /* Fixed bottom bar like sagetech.dev's vim statusline */
 
-.statusline {
-  position: fixed;
-  bottom: var(--cmdline-h);
-  left: 0;
-  right: 0;
-  height: var(--statusline-h);
-  z-index: 50;
+/* In-flow session-context line under the daemon health bar. Carries the
+   working dir (left) and, once an eval has completed the chain, the
+   eval-to-pixel latency (pushed right). Replaces the old fixed bottom
+   statusline + decorative cmdline bands. */
+.session-context {
   display: flex;
   align-items: center;
+  height: var(--statusline-h);
+  flex-shrink: 0;
   background: var(--bg-panel);
   border-top: 1px solid var(--border-normal);
   font-size: 12px;
   font-family: inherit;
+  overflow-x: auto;
+}
+
+.session-context .statusline-stat {
+  margin-left: auto;
 }
 
 .statusline-left {
@@ -1093,51 +1100,6 @@ h2 {
   background: var(--fg-blue);
   color: var(--bg-default);
   font-weight: 700;
-}
-
-/* ── Command Line (Evaluate) ──────────────────────────────────── */
-/* Fixed bottom bar like sagetech.dev's cmdline */
-
-.cmdline {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: var(--cmdline-h);
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  padding: 0 8px;
-  background: var(--bg-default);
-  border-top: 1px solid var(--border-normal);
-  font-size: 13px;
-}
-
-.cmdline-prompt {
-  color: var(--fg-blue);
-  margin-right: 8px;
-  font-weight: 700;
-}
-
-.cmdline-text {
-  color: var(--fg-default);
-  flex: 1;
-}
-
-/* Blinking block cursor */
-.cmdline-cursor {
-  display: inline-block;
-  width: 0.6em;
-  height: 1.1em;
-  margin-left: 2px;
-  background: var(--fg-default);
-  color: var(--bg-default);
-  animation: cursor-blink 1.1s steps(1) infinite;
-}
-
-@keyframes cursor-blink {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0; }
 }
 
 /* ── Scrollbar styling ────────────────────────────────────────── */
@@ -1251,22 +1213,8 @@ h2 {
    the page itself to scroll horizontally. */
 @media (max-width: 480px) {
   .app-header,
-  .statusline {
+  .session-context {
     overflow-x: auto;
-  }
-
-  .cmdline {
-    padding: 0 1rem;
-  }
-
-  .cmdline-text {
-    /* A long in-progress eval line stays on one row and truncates
-       instead of pushing the fixed-height cmdline bar wider than the
-       screen. */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
   }
 }
 
@@ -1452,3 +1400,20 @@ body[data-connected="false"] .statusline-info {
 .settings-chip-live { color: var(--fg-green); border-color: var(--fg-green); }
 .settings-chip-restart { color: var(--fg-yellow); border-color: var(--fg-yellow); }
 .settings-chip-guarded { color: var(--fg-red); border-color: var(--fg-red); }
+
+/* No-session sessions panel empty state (anchors the panel; no floating bare text) */
+.sessions-empty {
+  padding: 14px 12px;
+  margin: 4px 0;
+  border: 1px dashed var(--border-normal);
+  border-radius: 6px;
+  text-align: center;
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+}
+.sessions-empty-hint {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--fg-dim);
+  opacity: 0.8;
+}

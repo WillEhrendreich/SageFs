@@ -319,9 +319,12 @@ let renderDaemonHealth (view: DaemonHealthView) =
         Some (sprintf "⚠️ %d sessions · %d degraded: %s" summaries.Length problems.Length names)
   Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] [
     Elem.span [ Attr.style "font-weight: bold;" ] [
+      // Daemon facts only (version · uptime · memory). Readiness lives in the
+      // top status tab + the green dot; the no-session state is shown by the
+      // Sessions panel empty-state — neither is repeated here.
       let statusText =
         match view.SessionSummaries with
-        | [] -> sprintf "%s Ready · No active sessions" emoji
+        | [] -> emoji
         | _ -> sprintf "%s %s" emoji label
       textEnc (sprintf "%s · SageFs %s · up %s · %dMB"
         statusText view.Version view.UptimeLabel view.MemoryMB)
@@ -959,7 +962,10 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
     | false -> ()
     match sessions.IsEmpty && not creating with
     | true ->
-      Text.raw "No sessions"
+      Elem.div [ Attr.class' "sessions-empty" ] [
+        Text.raw "No active sessions"
+        Elem.div [ Attr.class' "sessions-empty-hint" ] [ Text.raw "Start one with Quick Start, or open a directory." ]
+      ]
     | false ->
       yield! sessions |> List.mapi (fun i (s: ParsedSession) ->
         let statusClass = SessionDisplayStatus.cssClass s.Status
@@ -1284,21 +1290,25 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       textEnc (sprintf "%d bindings" s.BindingEntries.Length) ]
                   renderBindingExplorer s.BindingEntries ]
           ])
-    Elem.div
-      [ Attr.style "display: flex; justify-content: space-between; align-items: center; font-size: 0.7rem; color: var(--fg-dim); padding: 4px 0; margin-top: 4px;" ]
-      [
-        Elem.span [] [
-          Text.raw "⇄ switch · ■ stop · ⌫ dispose · ✖ purge"
+    // The action legend only makes sense when there are sessions to act on.
+    match sessions.IsEmpty with
+    | true -> ()
+    | false ->
+      Elem.div
+        [ Attr.style "display: flex; justify-content: space-between; align-items: center; font-size: 0.7rem; color: var(--fg-dim); padding: 4px 0; margin-top: 4px;" ]
+        [
+          Elem.span [] [
+            Text.raw "⇄ switch · ■ stop · ⌫ dispose · ✖ purge"
+          ]
+          match sessions.Length > 1 with
+          | true ->
+            Elem.button
+              [ Attr.class' "session-btn session-btn-danger"
+                Attr.style "font-size: 0.65rem; padding: 1px 6px;"
+                Ds.onClick (Ds.post "/dashboard/session/stop-others") ]
+              [ Text.raw "■ stop others" ]
+          | false -> ()
         ]
-        match sessions.Length > 1 with
-        | true ->
-          Elem.button
-            [ Attr.class' "session-btn session-btn-danger"
-              Attr.style "font-size: 0.65rem; padding: 1px 6px;"
-              Ds.onClick (Ds.post "/dashboard/session/stop-others") ]
-            [ Text.raw "■ stop others" ]
-        | false -> ()
-      ]
   ]
 
 
@@ -1384,9 +1394,9 @@ let renderCurrentDiagnostics (diags: Diagnostic list) =
 /// Statusline left block: session state + working directory.
 /// Shared by the full-shell render and the switch/teardown SSE patches so the
 /// two can never diverge (the patch once dropped the classes and the encoding).
-let renderStatuslineLeft (stateLabel: string) (workingDir: string) =
+let renderStatuslineLeft (_stateLabel: string) (workingDir: string) =
+  // The status/readiness label lives in the top status tab — not repeated here.
   Elem.div [ Attr.id "statusline-left"; Attr.class' "statusline-left" ] [
-    Elem.div [ Attr.id "statusline-branch"; Attr.class' "statusline-branch" ] [ textEnc stateLabel ]
     Elem.div [ Attr.id "statusline-file"; Attr.class' "statusline-file" ] [ textEnc workingDir ]
   ]
 
@@ -1397,13 +1407,17 @@ let renderStatuslineLeft (stateLabel: string) (workingDir: string) =
 /// See: "The Tao of Datastar" — https://data-star.dev/essays/tao_of_datastar
 let renderMainContent (snap: DashboardSnapshot) : XmlNode =
   let connectionNode =
+    // Connected-clients count (browsers 🌐 · agents 🤖 · terminals 💻). Lives in
+    // the Sessions panel header (not floating above the panel body).
     match snap.ConnectionLabel with
     | Some label ->
-      Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] [
-        textEnc label
-      ]
+      Elem.div
+        [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"
+          Attr.style "font-size: 0.72rem;"
+          Attr.title "Connected clients — 🌐 browsers · 🤖 agents · 💻 terminals" ]
+        [ textEnc label ]
     | None ->
-      Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.75rem; margin-top: 4px;" ] []
+      Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] []
   Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" (attrEnc snap.SessionId); Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard) ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
@@ -1415,7 +1429,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       ]
       // Status tabs — center
       Elem.div [ Attr.class' "tabline-menu"; Attr.style "display:flex;align-items:center;height:100%;flex:1;min-width:0;" ] [
-        Elem.div [ Attr.id DomIds.SessionStatus; Attr.class' "tabline-status"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);font-size:12px;" ] [
+        Elem.div [ Attr.id DomIds.SessionStatus; Attr.class' "tabline-status"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);font-size:12px;white-space:nowrap;flex-shrink:0;" ] [
           Elem.span [ Attr.class' (sprintf "status %s" (DashboardConnectionState.statusBadgeCssClass snap.ConnectionState)); Attr.style "border-radius:0;" ] [
             textEnc (DashboardConnectionState.statusBadgeLabel snap.SessionState snap.ConnectionState) ]
         ]
@@ -1443,6 +1457,20 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
     ]
     // Daemon health bar — version, uptime, memory, session health
     snap.DaemonHealth
+    // Session context line — the two facts that lived nowhere else: the working
+    // dir (its one home) and, once the first eval has completed the chain, the
+    // unique eval-to-pixel latency. The decorative ">" cmdline and the empty
+    // fixed bottom statusline that used to carry these are gone; readiness,
+    // session id, version and eval count are each said once, above.
+    Elem.div [ Attr.class' "session-context" ] [
+      renderStatuslineLeft snap.SessionState snap.WorkingDir
+      match snap.EvalToPixelP50Ms, snap.EvalToPixelP99Ms with
+      | Some p50, Some p99 ->
+        Elem.div [ Attr.class' "statusline-stat"; testid "eval-to-pixel-latency" ] [
+          textEnc (sprintf "px p50 %.1fms p99 %.1fms" p50 p99)
+        ]
+      | _ -> ()
+    ]
     // Expanded-only panels: alarm, failure narratives, diagnostics, filmstrip
     Elem.div [ Attr.class' "expanded-only" ] [
       snap.AlarmPanel
@@ -1559,6 +1587,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         // Sidebar header — title + dynamic collapse/expand toggle (always visible)
         Elem.div [ Attr.class' "sidebar-header" ] [
           Elem.h2 [] [ Text.raw "Sessions" ]
+          Elem.span [ Attr.style "margin-left:auto;margin-right:8px;" ] [ connectionNode ]
           Elem.button
             [ Attr.class' "sidebar-header-btn"
               Attr.id "sidebar-toggle-btn"
@@ -1570,7 +1599,6 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         Elem.div [ Attr.class' "sidebar-inner" ] [
           // Sessions panel (with context + bindings inline per row)
           Elem.div [ Attr.class' "panel" ] [
-            connectionNode
             snap.SessionsPanel
           ]
           // Dynamic sidebar panels — expanded-only (hot reload, live testing, bindings, session context)
@@ -1631,35 +1659,6 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             ]
         ]
       ]
-    ]
-    // Bottom statusline — fixed position
-    Elem.div [ Attr.class' "statusline" ] [
-      renderStatuslineLeft snap.SessionState snap.WorkingDir
-      Elem.div [ Attr.class' "statusline-info" ] [
-        textEnc (DashboardConnectionState.statuslineLabel snap.WorkingDir snap.Version snap.ConnectionState)
-      ]
-      Elem.div [ Attr.class' "statusline-right" ] [
-        Elem.div [ Attr.class' "statusline-stat" ] [
-          textEnc (sprintf "%d evals" snap.EvalStats.Count)
-        ]
-        // Eval-to-pixel latency p50/p99 (vision §3.4, §7.4; roast-6 Phase 0
-        // item 1) — the whole request-to-morph chain, over the last 256
-        // completed chains. Absent until the first eval has completed it.
-        match snap.EvalToPixelP50Ms, snap.EvalToPixelP99Ms with
-        | Some p50, Some p99 ->
-          Elem.div [ Attr.class' "statusline-stat"; testid "eval-to-pixel-latency" ] [
-            textEnc (sprintf "px p50 %.1fms p99 %.1fms" p50 p99)
-          ]
-        | _ -> ()
-        Elem.div [ Attr.class' "statusline-stat-accent" ] [
-          textEnc (sprintf "v%s" snap.Version)
-        ]
-      ]
-    ]
-    // Bottom command line — evaluate input as cmdline
-    Elem.div [ Attr.class' "cmdline" ] [
-      Elem.span [ Attr.class' "cmdline-prompt" ] [ Text.raw ">" ]
-      Elem.span [ Attr.class' "cmdline-text" ] [ textEnc (DashboardConnectionState.cmdlineLabel snap.ConnectionState) ]
     ]
   ]
 

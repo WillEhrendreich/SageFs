@@ -550,8 +550,16 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     EvalToPixelP99Ms = None }
 
   test "renderMainContent shows version" {
-    let html = renderMainContent (mkSnap "1.2.3") |> renderNode
-    html |> Expect.stringContains "main content has version" "v1.2.3"
+    // Version lives in the daemon health bar ("SageFs <version>"), not in a
+    // separate statusline/cmdline band (those are gone). A realistic snapshot
+    // carries a health node, so mkSnap's empty stub is replaced here.
+    let health =
+      renderDaemonHealth
+        { Version = "1.2.3"; MemoryMB = 0; UptimeLabel = "0s"
+          OverallHealth = Features.OverallHealth.Healthy
+          SessionCount = 0; SessionSummaries = []; TestsPassed = None; TestsFailed = None }
+    let html = renderMainContent { mkSnap "1.2.3" with DaemonHealth = health } |> renderNode
+    html |> Expect.stringContains "main content shows the version in the health bar" "1.2.3"
   }
 
   test "WHY — connection monitor script is valid JavaScript because a syntax error can disable dashboard stream diagnostics" {
@@ -1130,7 +1138,14 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
       EvalToPixelP50Ms = None
       EvalToPixelP99Ms = None }
   test "Version appears in rendered output" {
-    let html = mkSnap "1.2.3" "s1" "C:\\" "ready" |> renderMainContent |> renderNode
+    // Version lives in the daemon health bar; a realistic snapshot carries one.
+    let health =
+      renderDaemonHealth
+        { Version = "1.2.3"; MemoryMB = 0; UptimeLabel = "0s"
+          OverallHealth = Features.OverallHealth.Healthy
+          SessionCount = 0; SessionSummaries = []; TestsPassed = None; TestsFailed = None }
+    let snap = { (mkSnap "1.2.3" "s1" "C:\\" "ready") with DaemonHealth = health }
+    let html = renderMainContent snap |> renderNode
     html |> Expect.stringContains "version should appear" "1.2.3"
   }
 
