@@ -196,6 +196,41 @@ let sessionManagerMailboxSupervisionTests =
         | Error err -> failtestf "clean stop of unaffected session failed: %s" (SageFsError.describe err)
       })
     }
+
+    testTask "SwitchWorkflow answers its channel on a handler exception instead of hanging (roast-7 §5 follow-up)" {
+      // SwitchWorkflow carries a reply channel and spawn-first restarts into the
+      // new workflow. If that spawn throws, the supervision backstop must answer
+      // the channel (fail-closed) — previously SwitchWorkflow was the ONE
+      // reply-carrying command left in the no-op group, so its caller hung
+      // forever. Force the switch's spawn (the 2nd StartWorkerProcess call) to
+      // throw and assert the caller gets an Error, not a hang.
+      let switchFault = ref false
+      let runtime =
+        mkRuntime
+          (fun call ->
+            if switchFault.Value && call >= 2 then failwith "spawn boom during workflow switch"
+            else okStart call)
+          (fun () -> async { return () })
+          (fun () -> async { return Ok "build ok" })
+
+      do! withHarness runtime.Runtime (fun harness -> task {
+        let! info = createSession harness
+
+        switchFault.Value <- true
+        match! tryPostAndReply 1500 harness.Mailbox (fun reply ->
+          SessionCommand.SwitchWorkflow(info.Id, WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults, reply)) with
+        | Some (Error (SageFsError.HardResetFailed _)) -> ()
+        | Some other -> failtestf "expected fail-closed HardResetFailed, got %A" other
+        | None -> failtest "SwitchWorkflow hung — the handler exception left the reply channel unanswered"
+        switchFault.Value <- false
+
+        // The mailbox must still be alive and the session not silently orphaned.
+        let! sessions = postAndReply harness.Mailbox (fun reply -> SessionCommand.ListSessions reply)
+        sessions
+        |> List.map (fun s -> s.Id)
+        |> Expect.contains "session survives the SwitchWorkflow exception (mailbox not killed)" info.Id
+      })
+    }
   ]
 
 [<Tests>]

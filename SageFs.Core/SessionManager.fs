@@ -1694,14 +1694,16 @@ module SessionManager =
             tryReply reply (AppRun.StepOutcome.Stale current)
           | SessionCommand.EndAppRun(_, _, _, _, reply) ->
             tryReply reply AppRun.RunEnd.NotCurrent
-          // Every command below carries no reply channel to guard EXCEPT
-          // SwitchWorkflow — which does (AsyncReplyChannel<Result<string,
-          // SageFsError>>) and is NOT guarded here. That is a real gap
-          // (roast-7 follow-up, not fixed by this pass): an exception while
-          // processing SwitchWorkflow leaves its caller's channel unanswered
-          // and the caller hangs forever, unlike every other reply-carrying
-          // command above. Left as behaviour-identical to the previous
-          // wildcard — flagged explicitly so it cannot be missed again.
+          // SwitchWorkflow carries a reply channel (AsyncReplyChannel<Result<
+          // string, SageFsError>>) and MUST be answered on a crash — an
+          // exception in its handler (it spawn-first restarts the worker into
+          // the new workflow) otherwise left the caller hanging forever, unlike
+          // every other reply-carrying command above. Fail closed with the same
+          // HardResetFailed shape the handler's own error paths use, since a
+          // workflow switch IS a restart (roast-7 §5 follow-up).
+          | SessionCommand.SwitchWorkflow(_, _, reply) ->
+            tryReply reply (Error (SageFsError.HardResetFailed (sprintf "Workflow switch failed: %s" ex.Message)))
+          // Every command below carries no reply channel to guard.
           | SessionCommand.TouchSession _
           | SessionCommand.WorkerExited _
           | SessionCommand.WorkerReady _
@@ -1711,8 +1713,7 @@ module SessionManager =
           | SessionCommand.WorkerWarmupProgress _
           | SessionCommand.UpdateSessionStatus _
           | SessionCommand.WorkerReportedReady _
-          | SessionCommand.WorkerReportedFaulted _
-          | SessionCommand.SwitchWorkflow _ -> ()
+          | SessionCommand.WorkerReportedFaulted _ -> ()
           return state
       }
       async {
