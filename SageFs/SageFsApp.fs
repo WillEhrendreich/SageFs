@@ -1455,7 +1455,14 @@ module SageFsUpdate =
             { s with Activation = Features.LiveTesting.LiveTestingActivation.Inactive })
         { model with LiveTesting = lt }, []
 
-      | TuiEvent.AffectedTestsComputed testIds ->
+      | TuiEvent.AffectedTestsComputed (testIds, changedSymbolNames) ->
+        // Augment the worker's NAME-matched set with the live FCS symbol-use
+        // graph so a test in another module that USES a changed symbol is not
+        // missed (roast-7 §4 follow-up). Fail-safe: augmentAffectedWithGraph
+        // returns a superset — it can only add correct tests, never drop one.
+        let testIds =
+          Features.LiveTesting.LiveTestingHook.augmentAffectedWithGraph
+            testIds changedSymbolNames model.LiveTesting.DepGraph
         let changedIds = Set.ofArray testIds
         let lt =
           refreshStatusesForChangedIds model.LiveTesting changedIds (fun s ->

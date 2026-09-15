@@ -300,7 +300,7 @@ type TuiEvent =
   | TestRunCompleted of sessionId: string option
   | LiveTestingEnabled
   | LiveTestingDisabled
-  | AffectedTestsComputed of testIds: Features.LiveTesting.TestId array
+  | AffectedTestsComputed of testIds: Features.LiveTesting.TestId array * changedSymbolNames: string list
   | CoverageUpdated of coverage: Features.LiveTesting.CoverageState
   | CoverageBitmapCollected of testIds: Features.LiveTesting.TestId array * bitmap: Features.LiveTesting.CoverageBitmap
   | RunPolicyChanged of category: Features.LiveTesting.TestCategory * policy: Features.LiveTesting.RunPolicy

@@ -29,6 +29,56 @@ let affectedTestCycleTests = testList "affected-test cycle" [
   }
 ]
 
+// roast-7 §4 follow-up: the daemon augments the hot-reload path's NAME-matched
+// affected set with the live FCS symbol-use graph, so a test in another module
+// that USES a changed symbol is not missed. The union is fail-safe: it can only
+// ADD correct tests, never DROP one (under-selection would hide a real failure
+// as a false green). Proven first in a live SageFs REPL, then here.
+[<Tests>]
+let augmentAffectedWithGraphTests =
+  let tAlpha = TestId.create "Alpha.t_alpha" TestFramework.Expecto
+  let tBeta = TestId.create "Beta.t_beta" TestFramework.Expecto
+  // Beta.t_beta USES SageFs.Alpha.compute from another module — a use the
+  // hot-reload name matcher (module Alpha only) would miss.
+  let graph =
+    TestDependencyGraph.fromDirect (Map.ofList [ "SageFs.Alpha.compute", [| tBeta; tAlpha |] ])
+  testList "LiveTestingHook.augmentAffectedWithGraph (roast-7 §4)" [
+    test "WHY — recovers a cross-module test the name match missed, via the symbol-use graph" {
+      let nameMatched = [| tAlpha |]
+      let augmented = LiveTestingHook.augmentAffectedWithGraph nameMatched [ "SageFs.Alpha.compute" ] graph
+      augmented |> Expect.contains "keeps the name-matched test" tAlpha
+      augmented |> Expect.contains "adds the cross-module test that USES the changed symbol" tBeta
+    }
+
+    test "WHY — is a superset of the name-matched set (fail-safe: never drops a test)" {
+      let nameMatched = [| tAlpha; TestId.create "Gamma.t_gamma" TestFramework.Expecto |]
+      let augmented = LiveTestingHook.augmentAffectedWithGraph nameMatched [ "SageFs.Alpha.compute" ] graph
+      nameMatched
+      |> Array.forall (fun t -> Array.contains t augmented)
+      |> Expect.isTrue "every name-matched test survives augmentation"
+    }
+
+    test "WHY — an unknown changed symbol adds nothing (exact-key lookup, no noise)" {
+      let nameMatched = [| tAlpha |]
+      LiveTestingHook.augmentAffectedWithGraph nameMatched [ "SageFs.Nope.missing" ] graph
+      |> Expect.equal "no graph entry -> set unchanged" nameMatched
+    }
+
+    test "WHY — no changed symbols means the name-matched set is returned unchanged" {
+      let nameMatched = [| tAlpha; tBeta |]
+      LiveTestingHook.augmentAffectedWithGraph nameMatched [] graph
+      |> Expect.equal "empty changed set is a no-op" nameMatched
+    }
+
+    test "WHY — result is deduplicated when name match and graph overlap" {
+      // tBeta is both name-matched AND graph-matched; it must appear once.
+      let nameMatched = [| tAlpha; tBeta |]
+      let augmented = LiveTestingHook.augmentAffectedWithGraph nameMatched [ "SageFs.Alpha.compute" ] graph
+      augmented |> Array.filter (fun t -> t = tBeta) |> Array.length
+      |> Expect.equal "tBeta appears exactly once" 1
+    }
+  ]
+
 [<Tests>]
 let policyFilterTests = testList "PolicyFilter" [
   test "OnEveryChange runs on all triggers" {

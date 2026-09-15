@@ -899,6 +899,13 @@ type LiveTestHookResult = {
   DetectedProviders: ProviderDescription list
   DiscoveredTests: TestCase array
   AffectedTestIds: TestId array
+  /// The dotted qualified names of the symbols this reload changed (from the
+  /// hot-reload middleware's `Method.FullName`). Carried so the daemon can
+  /// AUGMENT the name-matched AffectedTestIds with the live FCS symbol-use
+  /// graph (TestDependencyGraph) — catching cross-module tests that USE a
+  /// changed symbol but share no name with it, which name-matching alone
+  /// misses (roast-7 §4 follow-up).
+  ChangedSymbolNames: string list
   RunTest: TestCase -> Async<TestResult>
 }
 
@@ -909,6 +916,7 @@ module LiveTestHookResult =
     DetectedProviders = []
     DiscoveredTests = [||]
     AffectedTestIds = [||]
+    ChangedSymbolNames = []
     RunTest = noOp
   }
 
@@ -918,13 +926,15 @@ type LiveTestHookResultDto = {
   DetectedProviders: ProviderDescription list
   DiscoveredTests: TestCase array
   AffectedTestIds: TestId array
+  ChangedSymbolNames: string array
 }
 
 module LiveTestHookResultDto =
   let fromResult (r: LiveTestHookResult) : LiveTestHookResultDto =
     { DetectedProviders = r.DetectedProviders
       DiscoveredTests = r.DiscoveredTests
-      AffectedTestIds = r.AffectedTestIds }
+      AffectedTestIds = r.AffectedTestIds
+      ChangedSymbolNames = r.ChangedSymbolNames |> List.toArray }
 
 module LiveTestingHook =
 
@@ -1096,7 +1106,29 @@ module LiveTestingHook =
     { DetectedProviders = providers
       DiscoveredTests = tests
       AffectedTestIds = affected
+      ChangedSymbolNames = updatedMethodNames
       RunTest = discovery.RunTest }
+
+  /// AUGMENT a name-matched affected-test set with the live FCS symbol-use
+  /// graph: union the name-matched ids with every test the graph says
+  /// (transitively) USES one of the changed symbols. This is the roast-7 §4
+  /// follow-up — name matching alone misses a test in module B that calls a
+  /// changed function in module A. FAIL-SAFE BY CONSTRUCTION: the result is a
+  /// superset of `nameMatched`, so it can only ADD correct, evidence-based
+  /// tests, never DROP one (an under-selected suite would hide a real failure
+  /// as a false green — the outcome that must be impossible). When the graph
+  /// has no entry for a changed symbol (e.g. names don't line up, or the FCS
+  /// cycle hasn't populated it yet) it adds nothing — neutral, never wrong.
+  let augmentAffectedWithGraph
+    (nameMatched: TestId array)
+    (changedSymbolNames: string list)
+    (graph: TestDependencyGraph)
+    : TestId array =
+    match changedSymbolNames with
+    | [] -> nameMatched
+    | _ ->
+      Array.append nameMatched (TestDependencyGraph.findAffected changedSymbolNames graph)
+      |> Array.distinct
 
 // --- Cancellation chaining for stale work ---
 

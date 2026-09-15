@@ -1783,7 +1783,7 @@ module McpTools =
               | false -> notifyElm ctx (TuiEvent.TestsDiscovered (sid, hookResult.DiscoveredTests))
               | true -> ()
               match Array.isEmpty hookResult.AffectedTestIds with
-              | false -> notifyElm ctx (TuiEvent.AffectedTestsComputed hookResult.AffectedTestIds)
+              | false -> notifyElm ctx (TuiEvent.AffectedTestsComputed (hookResult.AffectedTestIds, hookResult.ChangedSymbolNames |> Array.toList))
               | true -> ()
             with ex -> Log.warn "Failed to deserialize hook result: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           | None -> ()

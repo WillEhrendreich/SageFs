@@ -739,6 +739,7 @@ let serializationRoundtripTests = testList "serialization roundtrip integration"
           Labels = []; Framework = TestFramework.XUnit; Category = TestCategory.Integration }
       |]
       AffectedTestIds = [| TestId.create "Test.add" TestFramework.Expecto |]
+      ChangedSymbolNames = [||]
     }
 
     let json = SageFs.WorkerProtocol.Serialization.serialize original
@@ -760,6 +761,7 @@ let serializationRoundtripTests = testList "serialization roundtrip integration"
           Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
       |]
       AffectedTestIds = [| TestId.create "Mod.test1" TestFramework.Expecto |]
+      ChangedSymbolNames = [||]
     }
 
     let json = SageFs.WorkerProtocol.Serialization.serialize hookResult
@@ -768,7 +770,7 @@ let serializationRoundtripTests = testList "serialization roundtrip integration"
     let m0 = (SageFsModel.initial())
     let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.ProvidersDetected deserialized.DetectedProviders)) m0
     let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered ("test-session", deserialized.DiscoveredTests))) m1
-    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.AffectedTestsComputed deserialized.AffectedTestIds)) m2
+    let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.AffectedTestsComputed (deserialized.AffectedTestIds, deserialized.ChangedSymbolNames |> Array.toList))) m2
 
     let annotations = LiveTesting.annotationsForFile "Mod.fs" m3.LiveTesting.TestState
     annotations.Length

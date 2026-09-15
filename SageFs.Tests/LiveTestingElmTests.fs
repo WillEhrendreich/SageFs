@@ -193,7 +193,7 @@ let elmIntegrationTests = testList "LiveTesting Elm Integration" [
       let t2 = mkTestId "t2" (TestFramework.Unknown "x")
       let model', _ =
         SageFsUpdate.update
-          (SageFsMsg.Event (TuiEvent.AffectedTestsComputed [| t1; t2 |]))
+          (SageFsMsg.Event (TuiEvent.AffectedTestsComputed ([| t1; t2 |], [])))
           (SageFsModel.initial())
       Set.count model'.LiveTesting.TestState.AffectedTests
       |> Expect.equal "should have 2 affected" 2
@@ -1408,7 +1408,7 @@ let elmUpdateStatusRecomputationTests = testList "Elm update StatusEntries recom
     let stateRecomputed = stateWithTests |> LiveTestState.withStatusEntries (LiveTesting.computeStatusEntries stateWithTests)
     let model1 = { model0 with LiveTesting = { model0.LiveTesting with TestState = stateRecomputed } }
 
-    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.AffectedTestsComputed [| tid |])) model1
+    let model2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.AffectedTestsComputed ([| tid |], []))) model1
 
     model2.LiveTesting.TestState.StatusIndex.Entries
     |> Array.tryHead
