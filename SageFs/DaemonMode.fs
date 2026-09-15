@@ -590,8 +590,13 @@ let createHotReloadProxyEndpoints
         | true -> stateChangedEvent.Trigger (HotReloadChanged sid)
         | false -> ()
       with ex ->
+        // Log the detail server-side; never leak ex.Message (URLs, paths,
+        // exception internals) into the client body.
+        Log.warn "[hotReloadProxy] proxy to worker failed for %s%s: %s\n%s"
+          (WorkerProtocol.SessionId.value sid) workerPath ex.Message
+          (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
         ctx.Response.StatusCode <- 502
-        do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+        do! ctx.Response.WriteAsJsonAsync({| error = "Hot-reload proxy to the worker failed" |})
     | None ->
       ctx.Response.StatusCode <- 404
       do! ctx.Response.WriteAsJsonAsync({| error = "Session not found or not ready" |})
