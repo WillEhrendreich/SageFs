@@ -992,12 +992,31 @@ module McpTools =
 
     let private clock (at: DateTime) = at.ToLocalTime().ToString("HH:mm:ss")
 
+    /// F5b Phase 2 — self-host reload confirmation. `hard_reset_fsi_session
+    /// rebuild=true` already rebuilds, respawns, and re-adopts via
+    /// `HostCoreAdoption` (SessionManager.fs:313); what a self-hosting agent
+    /// (developing SageFs.Core inside a SageFs.Core session) could not see is
+    /// WHICH SageFs.Core build the daemon now considers current. Adoption
+    /// only ever substitutes a session project's own build when its version
+    /// EQUALS this daemon's own SageFs.Core version (HostCoreAdoption.decide,
+    /// fail-closed on divergence) — so this daemon's own loaded SageFs.Core
+    /// version is exactly the version the freshly-respawned worker is now
+    /// running, whether via adoption (self-host case) or the shared host
+    /// (ordinary case). Reflects on a type from that assembly rather than a
+    /// module, mirroring HostCoreAdoption's own doc-comment convention
+    /// (`typeof<SageFs.SageFsError>.Assembly...`, HostCoreAdoption.fs:22).
+    let private loadedCoreVersion () : string =
+      typeof<SageFsError>.Assembly.GetName().Version
+      |> Option.ofObj
+      |> Option.map (fun v -> v.ToString())
+      |> Option.defaultValue "unknown"
+
     /// One status line for get_fsi_status.
     let describe (now: DateTime) = function
       | RebuildOutcome.InProgress startedAt ->
         sprintf "🔨 Rebuild in progress (%.0fs) — the current worker keeps serving until the new build is ready." (now - startedAt).TotalSeconds
       | RebuildOutcome.Succeeded finishedAt ->
-        sprintf "✅ Last rebuild succeeded at %s." (clock finishedAt)
+        sprintf "✅ Last rebuild succeeded at %s — SageFs.Core %s is now loaded (respawned + re-adopted)." (clock finishedAt) (loadedCoreVersion ())
       | RebuildOutcome.FailedStillServing (error, finishedAt) ->
         sprintf "⚠️ Last rebuild failed at %s — still serving the previous build.\n%s" (clock finishedAt) (SageFsError.describeForAgent error)
       | RebuildOutcome.FailedNotServing (error, finishedAt) ->

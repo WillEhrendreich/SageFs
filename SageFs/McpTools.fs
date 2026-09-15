@@ -674,7 +674,18 @@ IMPORTANT:
 - During that restart window, get_fsi_status may temporarily report that the session is still warming up instead of returning a full status snapshot.
 
 WORKFLOW: For test-only changes, use this with rebuild=true instead of the full pack/reinstall cycle.
-The full pack/reinstall cycle is only needed when SageFs's own source code changes (SageFs\ or SageFs.Server\).""")>]
+The full pack/reinstall cycle is only needed when SageFs's own source code changes (SageFs\ or SageFs.Server\).
+
+SELF-HOSTING SageFs.Core (developing SageFs.Core inside a SageFs.Core session):
+This is the ONE blessed reload path — hard_reset_fsi_session with rebuild=true rebuilds
+the project, respawns the worker process, and re-adopts your freshly-built SageFs.Core
+into it, so the session runs the code you just edited instead of the copy loaded at
+worker spawn. There is no separate "self-host reload" tool — this IS it. After calling
+it, poll get_fsi_status until State='Ready'; once ready, the status text confirms which
+SageFs.Core version is now loaded so you can see the rebuild actually took effect.
+In-process hot reload cannot do this for SageFs.Core itself (the running worker's
+SageFs.Core is a Trusted-Platform-Assembly resolved by the native binder before any
+in-process trick gets a say) — rebuild+respawn is the real, honest mechanism.""")>]
     member _.hard_reset_fsi_session(
         [<Description("Set rebuild=true to run 'dotnet build' before reloading (default false)")>]
         [<Optional; DefaultParameterValue(false)>]
