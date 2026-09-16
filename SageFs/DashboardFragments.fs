@@ -684,7 +684,8 @@ let renderSessionPicker (previous: PreviousSession list) =
             Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
               Elem.button
                 [ Attr.class' "eval-btn"
-                  Attr.style "flex: 1; font-size: 0.8rem; display: inline-flex; align-items: center; justify-content: center; gap: 2px; height: 2rem;"
+                  Attr.style "flex: 1; font-size: 0.8rem;"
+                  Attr.create "aria-label" "Discover — scan this directory for projects"
                   Ds.indicator Signals.DiscoverLoading
                   Ds.attr' ("disabled", "$discoverLoading")
                   Ds.onClick (Ds.post "/dashboard/discover-projects") ]
@@ -693,7 +694,8 @@ let renderSessionPicker (previous: PreviousSession list) =
                   Text.raw "Discover" ]
               Elem.button
                 [ Attr.class' "eval-btn"
-                  Attr.style "flex: 1; font-size: 0.8rem; display: inline-flex; align-items: center; justify-content: center; gap: 2px; height: 2rem;"
+                  Attr.style "flex: 1; font-size: 0.8rem;"
+                  Attr.create "aria-label" "Create — start a new session in this directory"
                   Ds.indicator Signals.CreateLoading
                   Ds.attr' ("disabled", "$createLoading")
                   Ds.onClick (Ds.post "/dashboard/session/create") ]
@@ -1585,6 +1587,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
               ]
               Elem.button
                 [ Attr.class' "panel-header-btn"
+                  Attr.create "aria-label" "Clear — clear the output panel"
                   Ds.onClick (Ds.post "/dashboard/clear-output") ]
                 [ Text.raw "[CLEAR]" ]
             ]
@@ -1602,6 +1605,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
             Elem.div [ Attr.style "display: flex; justify-content: flex-end; padding: 2px 0;" ] [
               Elem.button
                 [ Attr.class' "panel-header-btn"
+                  Attr.create "aria-label" "Toggle keyboard shortcuts help"
                   Ds.onEvent ("click", "$helpVisible = !$helpVisible") ]
                 [ Text.raw "⌨" ]
             ]
@@ -1636,6 +1640,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 Elem.button
                   [ Attr.class' "eval-btn"
                     testid "eval"
+                    Attr.create "aria-label" "Evaluate — run the code in the editor"
                     Ds.indicator Signals.ActionLoading
                     Ds.attr' ("disabled", "$actionLoading")
                     Ds.onClick (Ds.post "/dashboard/eval") ]
@@ -1645,6 +1650,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 Elem.button
                   [ Attr.class' "eval-btn eval-btn-reset"
                     testid "reset"
+                    Attr.create "aria-label" "Reset — restart the FSI session, keeping loaded projects"
                     Ds.indicator Signals.ActionLoading
                     Ds.attr' ("disabled", "$actionLoading")
                     Ds.onClick (Ds.post "/dashboard/reset") ]
@@ -1654,6 +1660,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 Elem.button
                   [ Attr.class' "eval-btn eval-btn-reset eval-btn-hard"
                     testid "hard-reset"
+                    Attr.create "aria-label" "Hard Reset — rebuild and restart the FSI session from scratch"
                     Ds.indicator Signals.ActionLoading
                     Ds.attr' ("disabled", "$actionLoading")
                     Ds.onClick (Ds.post "/dashboard/hard-reset") ]
@@ -1662,7 +1669,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                     Text.raw "[HARD_RESET]" ]
                 Elem.label
                   [ Attr.class' "eval-btn"
-                    Attr.style "background: var(--fg-blue); cursor: pointer; display: inline-flex; align-items: center; gap: 2px; height: 2rem; padding: 0 0.75rem;" ]
+                    Attr.create "aria-label" "Load File — read a local .fs/.fsx/.fsi file into the editor"
+                    Attr.style "background: var(--fg-blue); cursor: pointer;" ]
                   [ Elem.input
                       [ Attr.type' "file"
                         Attr.accept ".fs,.fsx,.fsi"
@@ -1737,7 +1745,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                 Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
                   Elem.button
                     [ Attr.class' "eval-btn"
-                      Attr.style "flex: 1; height: 2rem; padding: 0 0.5rem; font-size: 0.8rem;"
+                      Attr.style "flex: 1; font-size: 0.8rem;"
+                      Attr.create "aria-label" "Discover — scan this directory for projects"
                       Ds.indicator Signals.DiscoverLoading
                       Ds.attr' ("disabled", "$discoverLoading")
                       Ds.onClick (Ds.post "/dashboard/discover-projects") ]
@@ -1756,8 +1765,9 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                     Attr.create "placeholder" "MyProject.fsproj" ]
                 Elem.button
                   [ Attr.class' "eval-btn"
-                    Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem; display: inline-flex; align-items: center; justify-content: center; gap: 2px; height: 2rem;"
+                    Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
                     testid "new-session"
+                    Attr.create "aria-label" "Create — start a new session in this directory"
                     Ds.indicator Signals.CreateLoading
                     Ds.attr' ("disabled", "$createLoading")
                     Ds.onClick (Ds.post "/dashboard/session/create") ]
@@ -1867,13 +1877,15 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
     Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
       Elem.button
         ([ Attr.class' "eval-btn"
-           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;" ]
+           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+           Attr.create "aria-label" "Watch All — hot-reload every discovered source file" ]
          @ indicatorAttrs hotReloadWatchAllLoading
          @ [ Ds.onClick (hotReloadClick "" "watch-all") ])
         [ loadingSpan hotReloadWatchAllLoading; Text.raw "Watch All" ]
       Elem.button
         ([ Attr.class' "eval-btn"
-           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;" ]
+           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+           Attr.create "aria-label" "Unwatch All — stop hot-reloading every discovered source file" ]
          @ indicatorAttrs hotReloadUnwatchAllLoading
          @ [ Ds.onClick (hotReloadClick "" "unwatch-all") ])
         [ loadingSpan hotReloadUnwatchAllLoading; Text.raw "Unwatch All" ]
@@ -2010,7 +2022,8 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
         Elem.div [ Attr.style "display: flex; gap: 0.4rem; align-items: center; margin-top: 0.4rem;" ] [
           Elem.button
             [ Attr.class' "eval-btn"
-              Attr.style "font-size: 0.75rem; height: 2rem; padding: 0 0.6rem;"
+              Attr.style "font-size: 0.75rem;"
+              Attr.create "aria-label" "Send Report — submit the friction report"
               Ds.indicator Signals.FrictionSending
               Ds.attr' ("disabled", "$frictionSending")
               Ds.onEvent ("click", "var edits={};document.querySelectorAll('.friction-edit').forEach(function(ta){if(ta.dataset.tool&&ta.dataset.kind)edits[ta.dataset.tool+'|'+ta.dataset.kind]=ta.value});var h=document.getElementById('friction-edits-json');h.value=JSON.stringify(edits);h.dispatchEvent(new Event('input',{bubbles:true}));@post('/dashboard/friction/send')") ]
@@ -2406,6 +2419,7 @@ let renderLiveTestingPanel (activity: Features.LiveTestActivity.LiveTestActivity
         [ Attr.class' "eval-btn"
           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
           testid "live-testing-toggle"
+          Attr.create "aria-label" (sprintf "%s — %s live testing" label (match activity with Features.LiveTestActivity.LiveTestActivity.Off -> "start" | _ -> "stop"))
           Ds.indicator Signals.LiveTestingLoading
           Ds.attr' ("disabled", "$liveTestingLoading")
           Ds.onClick (Ds.post endpoint) ]
@@ -2824,6 +2838,18 @@ let evalResultError (msg: string) =
     Elem.pre [ Attr.class' "output-line output-error"; Attr.style "margin-top: 0.5rem;" ] [
       // msg is user/agent-derived (directory names, eval output); encoded
       // here exactly once — callers pass the raw string.
+      textEnc msg
+    ]
+  ]
+
+/// Helper: render an eval-result info fragment — used for optimistic
+/// "in progress" feedback patched in BEFORE a slow action (reset, hard
+/// reset, session create) resolves, mirroring the teardown path's
+/// immediate "⏳ Stopping…" card swap (roast UX-8: RESET/HARD_RESET/create
+/// showed nothing until the action itself finished).
+let evalResultInfo (msg: string) =
+  Elem.div [ Attr.id DomIds.EvalResult ] [
+    Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem;" ] [
       textEnc msg
     ]
   ]

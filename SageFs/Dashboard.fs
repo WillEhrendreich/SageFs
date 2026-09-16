@@ -1522,8 +1522,10 @@ let createCompletionsHandler
                errorDetails = details |})
   }
 
-/// Create the reset POST handler.
+/// Create the reset POST handler. `label` names the action in every message
+/// ("Reset" / "Hard Reset") so one handler serves both routes.
 let createResetHandler
+  (label: string)
   (resetSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>)
   : HttpHandler =
   fun ctx -> task {
@@ -1538,19 +1540,18 @@ let createResetHandler
           Log.warn "[Dashboard] Session ID extraction from JSON failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
           return Error "Failed to parse request"
       }
+      Response.sseStartResponse ctx |> ignore
       match sessionIdResult with
       | Error errMsg ->
-        Response.sseStartResponse ctx |> ignore
-        let resultHtml =
-          Elem.div [ Attr.id DomIds.EvalResult ] [
-            Elem.pre [ Attr.class' "output-line output-error"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              textEnc (sprintf "Reset: %s" errMsg)
-            ]
-          ]
-        do! ssePatchNode ctx resultHtml
+        do! ssePatchNode ctx (evalResultError (sprintf "%s: %s" label errMsg))
       | Ok sessionId ->
+        // Immediate feedback: show the in-flight state before the reset
+        // itself (which can take seconds — minutes for a hard-reset
+        // rebuild) resolves. Mirrors the teardown path's immediate
+        // "⏳ Stopping…" card swap (roast UX-8: RESET/HARD_RESET showed
+        // nothing until the action itself finished).
+        do! ssePatchNode ctx (evalResultInfo (sprintf "%s: in progress…" label))
         let! result = resetSession sessionId
-        Response.sseStartResponse ctx |> ignore
         let msg =
           match result with
           | Ok m -> m
@@ -1558,7 +1559,7 @@ let createResetHandler
         let resultHtml =
           Elem.div [ Attr.id DomIds.EvalResult ] [
             Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ] [
-              textEnc (sprintf "Reset: %s" msg)
+              textEnc (sprintf "%s: %s" label msg)
             ]
           ]
         do! ssePatchNode ctx resultHtml
@@ -1566,7 +1567,7 @@ let createResetHandler
         let clearedOutput =
           Elem.div [ Attr.id DomIds.OutputPanel ] [
             Elem.span [ Attr.class' "meta"; Attr.style "padding: 0.5rem;" ] [
-              textEnc (sprintf "Reset: %s" msg)
+              textEnc (sprintf "%s: %s" label msg)
             ]
           ]
         do! ssePatchNode ctx clearedOutput
@@ -2000,6 +2001,7 @@ let createDirSuggestHandler : HttpHandler =
 
 /// Create the create-session POST handler.
 let createCreateSessionHandler
+  (q: DashboardQueries)
   (infra: DashboardInfra)
   (createSession: string list -> string -> Threading.Tasks.Task<Result<WorkerProtocol.SessionId, string>>)
   (switchSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>)
@@ -2027,6 +2029,13 @@ let createCreateSessionHandler
           | true ->
             do! ssePatchNode ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
           | false ->
+            // Immediate feedback: show the in-flight state before the
+            // 15-30s warmup resolves — mirrors the teardown path's
+            // immediate "⏳ Stopping…" card swap (roast UX-8: session
+            // create showed nothing until warmup finished).
+            let! preCards = buildSessionCards q
+            do! ssePatchNode ctx (renderSessionsForSession "" preCards true)
+            do! ssePatchNode ctx (evalResultInfo (sprintf "Creating session in %s… (warmup can take up to 30s)" dir))
             let! result = createSession projects dir
             match result with
             | Ok newSessionId ->
@@ -2463,8 +2472,8 @@ let createEndpoints
     yield post "/dashboard/eval" (createEvalHandler q infra a.EvalCode)
     yield post "/dashboard/eval-file" (createEvalFileHandler q.GetSessionWorkingDir a.EvalCode)
     yield post "/dashboard/completions" (createCompletionsHandler infra.GetCompletions)
-    yield post "/dashboard/reset" (createResetHandler a.ResetSession)
-    yield post "/dashboard/hard-reset" (createResetHandler a.HardResetSession)
+    yield post "/dashboard/reset" (createResetHandler "Reset" a.ResetSession)
+    yield post "/dashboard/hard-reset" (createResetHandler "Hard Reset" a.HardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
     yield post "/dashboard/dir-suggest" createDirSuggestHandler
@@ -2585,7 +2594,7 @@ let createEndpoints
     yield post "/dashboard/cohort/scrub" (createCohortScrubHandler infra)
     yield post "/dashboard/live-testing/enable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.EnableLiveTesting)
     yield post "/dashboard/live-testing/disable" (createLiveTestingToggleHandler a.Dispatch infra.TriggerStateChange SageFsMsg.DisableLiveTesting)
-    yield post "/dashboard/session/create" (createCreateSessionHandler infra a.CreateSession a.SwitchSession)
+    yield post "/dashboard/session/create" (createCreateSessionHandler q infra a.CreateSession a.SwitchSession)
     yield post "/dashboard/config/disable-auto-open" (createToggleWarmupAutoOpenHandler a false)
     yield post "/dashboard/config/enable-auto-open" (createToggleWarmupAutoOpenHandler a true)
     yield mapPostRaw "/dashboard/session/switch/{id}"
