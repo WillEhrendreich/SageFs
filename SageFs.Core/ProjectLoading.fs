@@ -524,7 +524,10 @@ let solutionToFsiArgs (logger: ILogger) (_useAsp: bool) (hotReload: bool) sln =
     for dll in missing do
       logger.LogError (sprintf "Missing DLL: %s" dll)
     failwithf
-      "Not all DLLs are found (%d missing: %s). Build the project (dotnet build) before starting a session — both the Debug and Release outputs were checked."
+      "Not all DLLs are found (%d missing: %s) — this project isn't built yet (both Debug and Release outputs were checked). \
+       Recover WITHOUT leaving SageFs: run hard_reset_fsi_session with rebuild:true (or click HARD_RESET on the dashboard) — \
+       SageFs builds the project and surfaces any compiler errors (e.g. FS0001) right here, so you never have to switch to a \
+       terminal to find out why the build fails. (You can also build it yourself first: dotnet build.)"
       missing.Length
       (missing |> List.map Path.GetFileName |> String.concat ", ")
   // Flags from project OtherOptions that FSI should inherit for source-level
