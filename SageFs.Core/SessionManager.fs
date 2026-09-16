@@ -1175,7 +1175,27 @@ module SessionManager =
                     // Retire the old worker off the critical path; its exit event
                     // now carries a pid that no longer matches Info.WorkerPid, so
                     // WorkerExited will ignore it (stale-pid guard).
-                    Async.Start(runtime.StopWorker oldSession, ct)
+                    //
+                    // Reaping the outgoing worker is SAFETY-CRITICAL: run it on a
+                    // dedicated thread, NOT Async.Start (the thread pool). Under
+                    // pool saturation / memory pressure a pool-queued retirement
+                    // can be starved indefinitely, leaking the outgoing worker
+                    // exactly when memory is scarcest — repeated hard_resets under
+                    // load then pile up multi-GB of un-reaped workers (observed
+                    // 2026-09-15). A dedicated background thread can't be starved
+                    // behind other pool work. StopWorker is invoked SYNCHRONOUSLY
+                    // (registering the retirement intent before the swap returns);
+                    // its awaitable — which ends in proc.Kill on the real path —
+                    // runs to completion on the dedicated thread.
+                    let retireAsync = runtime.StopWorker oldSession
+                    let retire () =
+                      try Async.RunSynchronously retireAsync
+                      with ex ->
+                        Log.warn "[SessionManager] Old-worker retirement failed for %s: %s" (SessionId.value id) ex.Message
+                    let thread = System.Threading.Thread(System.Threading.ThreadStart retire)
+                    thread.IsBackground <- true
+                    thread.Name <- sprintf "sagefs-retire-%s" (SessionId.value id)
+                    thread.Start()
                     ManagerState.clearPendingSwap id stateAfterInstall
                   | None ->
                     stateAfterInstall
