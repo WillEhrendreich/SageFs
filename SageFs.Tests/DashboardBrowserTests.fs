@@ -149,6 +149,23 @@ module PlaywrightFixture =
 /// sections are <details> accordions collapsed by default, so journeys must
 /// open them before interacting with their contents.
 module DashboardDom =
+  /// Enable "expanded" dashboard mode. The extra session panels — Hot Reload,
+  /// Live Testing, Bindings, Session Context, Friction, AND the New Session
+  /// form — live inside `.expanded-only` wrappers (display:none in the default
+  /// minimal mode) and are revealed only when #main gains the `expanded` class
+  /// (the `expandedDashboard` signal). Journeys that touch those panels must
+  /// turn expanded mode on first. Idempotent — a no-op when already expanded.
+  let ensureExpanded (page: IPage) = task {
+    let! isExpanded =
+      page.EvaluateAsync<bool>(
+        "() => { var m = document.querySelector('#main'); return m ? m.classList.contains('expanded') : false; }")
+    if not isExpanded then
+      do! page.Locator("#expand-toggle-btn").First.ClickAsync()
+      // Wait until #main actually carries the expanded class before returning.
+      do! page.Locator("#main.expanded").First.WaitForAsync(
+        LocatorWaitForOptions(State = WaitForSelectorState.Attached, Timeout = 5000.0f))
+  }
+
   /// Open the Evaluate accordion (#evaluate-section is a <details
   /// class="eval-area"> collapsed by default). No-op when already open.
   let openEvalArea (page: IPage) = task {
@@ -170,6 +187,8 @@ module DashboardDom =
   /// repeatedly from `throughPanelReset` (a second unconditional click would
   /// instead toggle it closed again).
   let openNewSession (page: IPage) = task {
+    // New Session lives in an `.expanded-only` wrapper — reveal it first.
+    do! ensureExpanded page
     let! isOpen =
       page.EvaluateAsync<bool>(
         "() => { var el = document.querySelector('.new-session-panel'); return el ? el.open : false; }")
@@ -190,6 +209,8 @@ module DashboardDom =
   /// default). No-op when already open — safe to call repeatedly from
   /// `throughPanelReset`.
   let openFrictionPanel (page: IPage) = task {
+    // The Friction panel lives in an `.expanded-only` wrapper — reveal it first.
+    do! ensureExpanded page
     let! isOpen =
       page.EvaluateAsync<bool>(
         "() => { var el = document.querySelector('#friction-panel'); return el ? el.open : false; }")
@@ -282,16 +303,17 @@ let tests =
     do! DashboardDom.openEvalArea page
     do! page.WaitForTimeoutAsync(500.0f)
     let helpWrapper = page.Locator("#keyboard-help-wrapper")
-    // Datastar initializes $helpVisible=true — the wrapper starts open.
-    do! helpWrapper.WaitForAsync(
-      LocatorWaitForOptions(State = WaitForSelectorState.Visible))
     let helpBtn = page.Locator("#evaluate-section .panel-header-btn").First
+    // The wrapper's visibility is signal-driven (Ds.show "$helpVisible"), so it
+    // survives the SSE morph. Assert the TOGGLE regardless of the default: one
+    // click flips visibility, a second click flips it back.
+    let! initiallyVisible = helpWrapper.IsVisibleAsync()
+    let flippedState = if initiallyVisible then WaitForSelectorState.Hidden else WaitForSelectorState.Visible
+    let restoredState = if initiallyVisible then WaitForSelectorState.Visible else WaitForSelectorState.Hidden
     do! helpBtn.ClickAsync()
-    do! helpWrapper.WaitForAsync(
-      LocatorWaitForOptions(State = WaitForSelectorState.Hidden))
+    do! helpWrapper.WaitForAsync(LocatorWaitForOptions(State = flippedState))
     do! helpBtn.ClickAsync()
-    do! helpWrapper.WaitForAsync(
-      LocatorWaitForOptions(State = WaitForSelectorState.Visible))
+    do! helpWrapper.WaitForAsync(LocatorWaitForOptions(State = restoredState))
   })
 
   playwrightTest "accordion open state survives the periodic SSE morph" (fun page -> task {
@@ -483,9 +505,14 @@ let tests =
     do! page.WaitForTimeoutAsync(500.0f)
     do! DashboardDom.openEvalArea page
     let helpWrapper = page.Locator("#keyboard-help-wrapper")
-    // $helpVisible starts true — the shortcuts table is visible on load.
-    do! helpWrapper.WaitForAsync(
-      LocatorWaitForOptions(State = WaitForSelectorState.Visible))
+    let helpToggle = page.Locator("#evaluate-section .panel-header-btn").First
+    // Keyboard help starts hidden ($helpVisible=false) — open it so the
+    // shortcuts table is in view before asserting its contents.
+    let! helpVisible0 = helpWrapper.IsVisibleAsync()
+    if not helpVisible0 then
+      do! helpToggle.ClickAsync()
+      do! helpWrapper.WaitForAsync(
+        LocatorWaitForOptions(State = WaitForSelectorState.Visible))
     let table = page.GetByRole(AriaRole.Table)
     do! PlaywrightExpect.isVisibleAsync table "shortcuts table visible"
     let altEnter = page.GetByText("Alt+Enter")
@@ -646,9 +673,10 @@ let tests =
         placeholder <> null
         && System.Text.RegularExpressions.Regex.IsMatch(placeholder, "Enter F# code"))
         "textarea placeholder mentions Enter F# code"
-      // Eval button
+      // Eval button (the shell renders the evaluate section in more than one
+      // template, so match the first — mirrors the Reset locator below).
       let evalBtn =
-        page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Eval"))
+        page.GetByRole(AriaRole.Button, PageGetByRoleOptions(Name = "Eval")).First
       do! PlaywrightExpect.isVisibleAsync evalBtn "Eval button visible"
       // Reset button (first match — [RESET] or ↻ Reset)
       let resetBtn =
@@ -670,8 +698,9 @@ let tests =
     // IsVisibleAsync snapshots on a loaded machine — reopen and retry the
     // whole assertion block (see DashboardDom.throughPanelReset).
     do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openNewSession page) 5 (fun () -> task {
-      // Working directory input (placeholder contains "path\to\project")
-      let dirInput = page.Locator("input[placeholder*=\"path\\\\to\\\\project\"]")
+      // Working directory input (placeholder "/path/to/project"), scoped to the
+      // New Session panel so it never matches a similar input elsewhere.
+      let dirInput = page.Locator(".new-session-panel input[placeholder*=\"/path/to/project\"]").First
       do! PlaywrightExpect.isVisibleAsync dirInput "working directory input visible"
       // Discover button
       let discoverBtn =
@@ -691,6 +720,7 @@ let tests =
 
   playwrightTest "friction panel renders honest empty state with no send form" (fun page -> task {
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
     let summary = panel.Locator("summary")
@@ -717,6 +747,7 @@ let tests =
 
   playwrightTest "live testing panel enables and disables through SSE round-trip" (fun page -> task {
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#live-testing-panel")
     do! PlaywrightExpect.isVisibleAsync panel "live testing panel visible"
     do! PlaywrightExpect.waitForText 15_000 panel "Live Testing: OFF"
@@ -741,6 +772,7 @@ let tests =
 
   playwrightTest "friction feedback recorded locally reflects in the panel with the send form" (fun page -> task {
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
     // Record ONE explicit feedback through the product's recorder API into
@@ -768,6 +800,8 @@ let tests =
 
     // A fresh page load rebuilds the panel from the store (cold GET render).
     let! _ = page.ReloadAsync()
+    // The reload reset expanded mode too — re-enable so the panel is visible.
+    do! DashboardDom.ensureExpanded page
     do! PlaywrightExpect.waitForText 15_000 (page.Locator("#friction-panel summary")) "1 feedback"
     // The reload reset the <details> to closed — open it for role queries.
     let! isOpen =
@@ -785,6 +819,7 @@ let tests =
 
   playwrightTest "friction send validates the destination and surfaces the result inline" (fun page -> task {
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
     do! PlaywrightExpect.isVisibleAsync panel "friction panel visible"
     // Open the <details> so the send form is in the accessibility tree.
