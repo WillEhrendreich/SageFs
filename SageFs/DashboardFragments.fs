@@ -197,16 +197,33 @@ let private disclosureSummaryStyle =
 /// separate declaration: until the user toggles it, `$name` reads as
 /// undefined (falsy) everywhere — GET, stream, and morph alike — which
 /// renders closed, and the first `toggle` creates the signal in the store.
+/// The few collapsible panels that start OPEN (mirrors their init signal in
+/// Dashboard.fs); every other panel starts collapsed.
+let private defaultOpenSignals : Set<string> =
+  set [ Signals.BindingsPanelOpen; Signals.SessionContextFailedOpensOpen ]
+
 let signalDetails (signalName: string) (attrs: XmlAttribute list) (children: XmlNode list) : XmlNode =
   // Every collapsible panel gets a stable DOM id (the Datastar way — things are
   // targetable). Callers may pass their own id; otherwise derive one from the
   // signal name so no panel renders id-less.
   let hasId = attrs |> List.exists (function KeyValueAttr("id", _) -> true | _ -> false)
   let idAttr = if hasId then [] else [ Attr.id signalName ]
+  // Open state is owned by the NATIVE <details> element and preserved across the
+  // ~1s SSE-fallback morph by `data-preserve-attr="open"`. The previous
+  // `data-attr:open="$sig"` + `data-on:toggle` pair fought a real summary click:
+  // the reactive open<-signal bind reverted the just-opened panel (the signal
+  // stayed false because the toggle-writeback lost the race), so with panels
+  // collapsed-by-default a click could not open them at all. Letting native
+  // <details> own the click and only asking morph to keep the `open` attribute
+  // makes the panels reliably clickable AND morph-safe. Panels that must start
+  // open render `open` server-side (their first GET has no morph to preserve).
+  let openAttr =
+    match defaultOpenSignals.Contains signalName with
+    | true -> [ Attr.create "open" "" ]
+    | false -> []
   Elem.details
-    (idAttr @ attrs
-     @ [ Ds.attr' ("open", sprintf "$%s" signalName)
-         Ds.onEvent ("toggle", sprintf "$%s = event.target.open" signalName) ])
+    (idAttr @ attrs @ openAttr
+     @ [ Attr.create "data-preserve-attr" "open" ])
     children
 
 /// Reduce arbitrary (possibly FSI-derived) text to identifier characters, for
