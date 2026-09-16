@@ -1270,6 +1270,53 @@ module SessionCycleIsolation =
       |> function
          | Some { Result = TestResult.Failed _ } -> ()
          | other -> failwithf "session B should see its own Failed result in its own (background) cycle, got %A" other
+    };
+
+    test "a session's warmup discovery lands in its own cycle even though it was NEVER active — no SessionSwitched seed, no enable round-trip (roast UX-6 keystone)" {
+      // The exact background-session gap this item closes: B is created
+      // while A is already active and B is NEVER switched to (unlike the
+      // "seed" test above, which briefly makes B Primary before parking it —
+      // that seed step is the workaround this fix removes the need for).
+      // Before the fix, `tryResolveLiveTestingTarget` returned `None` for a
+      // `Some sid` target that is neither the active session NOR already a
+      // key in `PerSessionLiveTesting`, so the daemon's warmup-time
+      // `TestsDiscovered` dispatch was silently dropped on the floor — a
+      // background session's Total stayed 0 until an `enable` round-trip
+      // (which happens to switch-and-seed) gave it a map entry to land in.
+      let tc =
+        { TestCase.Id = TestId.create "RuntimeBugs.Tests.addTest" TestFramework.Expecto
+          FullName = "RuntimeBugs.Tests.addTest"; DisplayName = "addTest"
+          Origin = TestOrigin.ReflectionOnly; Labels = []; Framework = TestFramework.Expecto
+          Category = TestCategory.Unit }
+      let sidA = WorkerProtocol.SessionId.newId ()
+      let sidB = WorkerProtocol.SessionId.newId ()
+      let sidAStr = WorkerProtocol.SessionId.value sidA
+      let sidBStr = WorkerProtocol.SessionId.value sidB
+
+      let m0 = SageFsModel.initial ()
+      let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidA "/repo/a"))) m0
+      // A becomes active (a real session-create flow always ends up with
+      // exactly one active session very quickly).
+      let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, sidAStr))) m1
+      // B is created as a pure background session — created, but NEVER
+      // switched to. This is the "hot-reload cohort + live-testing cohort
+      // running side by side" scenario: B's worker warms up and discovers
+      // its own tests entirely in the background.
+      let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidB "/repo/b"))) m2
+
+      // B's worker reports warmup-time discovery. A is still Primary/active
+      // throughout — no SessionSwitched to B, ever.
+      let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sidBStr, [| tc |]))) m3
+
+      let bState = (SageFsModel.cycleForSession sidBStr m4).TestState
+      bState.DiscoveredTests
+      |> Array.exists (fun t -> t.Id = tc.Id)
+      |> Expect.isTrue "B's warmup discovery should populate its OWN cycle without ever being active"
+
+      // A's Primary cycle must stay untouched by B's background discovery.
+      m4.LiveTesting.TestState.DiscoveredTests
+      |> Array.exists (fun t -> t.Id = tc.Id)
+      |> Expect.isFalse "A's Primary cycle must not gain B's discovered test"
     } ]
 
 /// SessionMap (agent→session) eviction contract. The map previously had no
