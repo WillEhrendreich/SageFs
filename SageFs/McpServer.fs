@@ -2520,15 +2520,34 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
         | Some a -> do! jsonResponse ctx 200 {| success = true; message = result; activation = a |}
         | None -> do! jsonResponse ctx 200 {| success = true; message = result |}
     }
+  // Optional per-session targeting (roast UX-6 keystone): a caller that
+  // knows which session it means (dashboard/editor clients driving a
+  // specific background session's live-testing loop) can POST
+  // {"sessionId": "..."} to target exactly that session's own cycle instead
+  // of always the daemon-global active session. No body, or a body without
+  // sessionId, preserves the original Primary-only behavior exactly — this
+  // is purely additive.
+  let tryReadTargetSessionId (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+    match ctx.Request.ContentLength with
+    | contentLength when not contentLength.HasValue || contentLength.Value <= 0L -> return None
+    | _ ->
+      try
+        use! doc = readJsonBody ctx
+        return tryGetJsonStringAliases doc.RootElement [ "sessionId"; "session_id"; "session" ]
+      with _ ->
+        return None
+  }
   app.MapPost("/api/live-testing/enable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      let! result = SageFs.McpTools.setLiveTesting rctx.McpContext true
+      let! targetSession = tryReadTargetSessionId ctx
+      let! result = SageFs.McpTools.setLiveTestingForSession rctx.McpContext true targetSession
       do! respond ctx result (Some "active")
     } :> Task
   ) |> ignore
   app.MapPost("/api/live-testing/disable", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
-      let! result = SageFs.McpTools.setLiveTesting rctx.McpContext false
+      let! targetSession = tryReadTargetSessionId ctx
+      let! result = SageFs.McpTools.setLiveTestingForSession rctx.McpContext false targetSession
       do! respond ctx result (Some "inactive")
     } :> Task
   ) |> ignore
@@ -2641,7 +2660,16 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
         match System.String.IsNullOrWhiteSpace fp with
         | true -> None
         | false -> Some fp
-      let! result = SageFs.McpTools.getLiveTestStatus rctx.McpContext "http" fileParam
+      // Optional per-session read (roast UX-6 keystone): ?session=<id> reads
+      // THAT session's own cycle instead of the daemon-global active
+      // session — lets a caller observe a background session's
+      // warmup-discovered tests directly. Omitted, this is unchanged.
+      let sessionParam =
+        let sp = ctx.Request.Query.["session"].ToString()
+        match System.String.IsNullOrWhiteSpace sp with
+        | true -> None
+        | false -> Some sp
+      let! result = SageFs.McpTools.getLiveTestStatusForSession rctx.McpContext "http" fileParam sessionParam
       do! rawJsonResponse ctx result
     } :> Task
   ) |> ignore

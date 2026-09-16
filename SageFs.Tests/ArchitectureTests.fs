@@ -972,7 +972,12 @@ let fileSizeBudgets =
     [ "SageFs/Mcp.fs", 4200
       "SageFs/McpAdapter.fs", 850
       "SageFs.Core/Features/LiveTestingTypes.fs", 5100
-      "SageFs/SageFsApp.fs", 2900
+      // 2900 -> 2950: a one-time bump for the roast UX-6 keystone (per-session
+      // live-testing enable/disable — EnableLiveTestingForSession /
+      // DisableLiveTestingForSession, resolveOrCreateLiveTestingTarget) — a
+      // deliberate, reviewed feature, not silent accretion. Ratchet back DOWN
+      // when this file is split; never bump to paper over drift.
+      "SageFs/SageFsApp.fs", 2950
       "SageFs.Core/AppState.fs", 2000
       // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
       // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,

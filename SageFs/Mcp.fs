@@ -2085,26 +2085,45 @@ module McpTools =
             | false -> Some { FilePath = filePath; Line = int m.Groups.[2].Value }
           | false -> None)
 
-  let getLiveTestStatus (ctx: McpContext) (agentName: string) (fileFilter: string option) : Task<string> =
+  let rec getLiveTestStatus (ctx: McpContext) (agentName: string) (fileFilter: string option) : Task<string> =
+    getLiveTestStatusForSession ctx agentName fileFilter None
+
+  /// Like `getLiveTestStatus`, but `targetSession` (when given) reads that
+  /// session's OWN live-testing cycle via `SageFsModel.cycleForSession`
+  /// (Primary when it's the active session, its own `PerSessionLiveTesting`
+  /// entry otherwise) instead of always resolving "the" active session —
+  /// the read-side half of the roast UX-6 keystone: a background session's
+  /// warmup-discovered tests are observable without ever switching to it.
+  and getLiveTestStatusForSession
+    (ctx: McpContext)
+    (agentName: string)
+    (fileFilter: string option)
+    (targetSession: string option)
+    : Task<string> =
     task {
       match ctx.GetElmModel with
       | None -> return "Live testing not available — Elm loop not started."
       | Some getModel ->
         let model = getModel ()
-        let state = model.LiveTesting.TestState
+        // Prefer an explicit target session; otherwise the per-client session
+        // from SessionMap; otherwise fall back to the global active session.
+        // This prevents session A's tests from bleeding into session B's view
+        // when the daemon-global active session differs from the calling
+        // client's current session (or from the explicitly requested one).
+        let activeId =
+          match targetSession with
+          | Some sid when sid <> "" -> sid
+          | _ ->
+            let perClient = activeSessionId ctx agentName
+            match perClient <> "" with
+            | true -> perClient
+            | false ->
+              ActiveSession.sessionId model.Sessions.ActiveSessionId
+              |> Option.map WorkerProtocol.SessionId.value
+              |> Option.defaultValue ""
+        let state = (SageFsModel.cycleForSession activeId model).TestState
         let discoveryState = Features.LiveTesting.LiveTestState.discoveryState state
         let discoveryRequiresEval = Features.LiveTesting.LiveTestState.requiresPrimingEval state
-        // Prefer per-client session from SessionMap; fall back to global active session.
-        // This prevents session A's tests from bleeding into session B's view when the
-        // daemon-global active session differs from the calling client's current session.
-        let activeId =
-          let perClient = activeSessionId ctx agentName
-          match perClient <> "" with
-          | true -> perClient
-          | false ->
-            ActiveSession.sessionId model.Sessions.ActiveSessionId
-            |> Option.map WorkerProtocol.SessionId.value
-            |> Option.defaultValue ""
         let sessionEntries =
           Features.LiveTesting.LiveTestState.statusEntriesForSession activeId state
         let summary =
@@ -2174,12 +2193,26 @@ module McpTools =
         return JsonSerializer.Serialize(resp, liveTestJsonOpts)
     }
 
-  let setLiveTesting (ctx: McpContext) (enabled: bool) : Task<string> =
+  let rec setLiveTesting (ctx: McpContext) (enabled: bool) : Task<string> =
+    setLiveTestingForSession ctx enabled None
+
+  /// Like `setLiveTesting`, but `targetSession` (when given) activates
+  /// exactly THAT session's own cycle (`EnableLiveTestingForSession`/
+  /// `DisableLiveTestingForSession` — auto-vivifying a `PerSessionLiveTesting`
+  /// entry when it's not Primary) instead of always the Primary/active
+  /// session — the write-side half of the roast UX-6 keystone: a background
+  /// session can be enabled without ever switching to it first.
+  and setLiveTestingForSession (ctx: McpContext) (enabled: bool) (targetSession: string option) : Task<string> =
     task {
       match ctx.Dispatch with
       | None -> return "Cannot set live testing — Elm loop not started."
       | Some dispatch ->
-        let msg = match enabled with | true -> SageFsMsg.EnableLiveTesting | false -> SageFsMsg.DisableLiveTesting
+        let msg =
+          match enabled, targetSession with
+          | true, Some sid when sid <> "" -> SageFsMsg.EnableLiveTestingForSession sid
+          | false, Some sid when sid <> "" -> SageFsMsg.DisableLiveTestingForSession sid
+          | true, _ -> SageFsMsg.EnableLiveTesting
+          | false, _ -> SageFsMsg.DisableLiveTesting
         dispatch msg
         match enabled with
         | false ->
@@ -2187,7 +2220,15 @@ module McpTools =
         | true ->
           match ctx.GetElmModel with
           | Some getModel ->
-            let state = (getModel ()).LiveTesting.TestState
+            let model = getModel ()
+            let activeId =
+              match targetSession with
+              | Some sid when sid <> "" -> sid
+              | _ ->
+                ActiveSession.sessionId model.Sessions.ActiveSessionId
+                |> Option.map WorkerProtocol.SessionId.value
+                |> Option.defaultValue ""
+            let state = (SageFsModel.cycleForSession activeId model).TestState
             let discovered = state.DiscoveredTests.Length
             match discovered > 0 with
             | true ->

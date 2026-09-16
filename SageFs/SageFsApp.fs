@@ -236,6 +236,13 @@ type SageFsMsg =
   | CycleTheme
   | EnableLiveTesting
   | DisableLiveTesting
+  /// Session-scoped enable/disable (roast UX-6 keystone): targets exactly
+  /// this session's own cycle (auto-vivifying `PerSessionLiveTesting` when
+  /// it's not Primary), so a background session runs its own independent
+  /// live-testing loop without ever being switched to. `EnableLiveTesting`/
+  /// `DisableLiveTesting` stay Primary-only for call sites with no session.
+  | EnableLiveTestingForSession of sessionId: string
+  | DisableLiveTestingForSession of sessionId: string
   | CycleRunPolicy
   | ToggleCoverage
   | TestCycleTick of now: DateTimeOffset
@@ -355,7 +362,28 @@ module SageFsModel =
   let cycleFor (target: LiveTestingTarget) (model: SageFsModel) : Features.LiveTesting.LiveTestCycleState =
     match target with
     | LiveTestingTarget.Primary -> model.LiveTesting
-    | LiveTestingTarget.Background sid -> model.PerSessionLiveTesting |> Map.find sid
+    | LiveTestingTarget.Background sid ->
+      // Total, not `Map.find`: a write to a freshly-resolved `Background sid`
+      // (see `resolveOrCreateLiveTestingTarget`) has no map entry yet.
+      model.PerSessionLiveTesting
+      |> Map.tryFind sid
+      |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
+
+  /// WRITE-path resolution (roast UX-6 keystone): an explicit, daemon-verified
+  /// sessionId always lands somewhere, unlike `tryResolveLiveTestingTarget`
+  /// (used for reads), which returns `None` for a background session with no
+  /// `PerSessionLiveTesting` entry yet — silently dropping its own
+  /// warmup-discovered tests/results. Reads never auto-vivify; only writes do.
+  let resolveOrCreateLiveTestingTarget
+    (targetSession: string option)
+    (model: SageFsModel)
+    : LiveTestingTarget =
+    match tryResolveLiveTestingTarget targetSession model with
+    | Some target -> target
+    | None ->
+      match targetSession with
+      | Some sid -> LiveTestingTarget.Background sid
+      | None -> LiveTestingTarget.Primary
 
   /// The `LiveTestCycleState` that belongs to `sessionId`, for reads (dashboard
   /// per-session summaries, cohort outcome queries, SSE activity). Falls back to
@@ -795,13 +823,11 @@ module SageFsUpdate =
     (updateCycle: Features.LiveTesting.LiveTestCycleState -> Features.LiveTesting.LiveTestCycleState * 'result)
     (model: SageFsModel)
     =
-    match SageFsModel.tryResolveLiveTestingTarget targetSession model with
-    | Some target ->
-      let current = SageFsModel.cycleFor target model
-      let cycle', result = updateCycle current
-      setLiveTestingState target cycle' model, Some result
-    | None ->
-      model, None
+    // Auto-vivifies (roast UX-6 keystone) — see resolveOrCreateLiveTestingTarget.
+    let target = SageFsModel.resolveOrCreateLiveTestingTarget targetSession model
+    let current = SageFsModel.cycleFor target model
+    let cycle', result = updateCycle current
+    setLiveTestingState target cycle' model, Some result
 
   let private retagRequestFcsTypeCheck
     (targetSession: string option)
@@ -1647,6 +1673,63 @@ module SageFsUpdate =
                 (SessionId.value session.Id, session.WorkingDirectory)))
             | _ -> None)
         { model with LiveTesting = lt }, watcherEffects
+
+    | SageFsMsg.EnableLiveTestingForSession sessionId ->
+      // Mirrors `EnableLiveTesting`, targeting this session's own cycle.
+      let target = SageFsModel.resolveOrCreateLiveTestingTarget (Some sessionId) model
+      let cycle = SageFsModel.cycleFor target model
+      match cycle.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Active with
+      | true ->
+        model, []
+      | false ->
+        let sessionInfo =
+          model.Sessions.Sessions |> List.tryFind (fun s -> SessionId.value s.Id = sessionId)
+        let markDiscovering discovery =
+          match Array.isEmpty cycle.TestState.DiscoveredTests with
+          | true -> discovery |> Map.add sessionId Features.LiveTesting.DiscoveryProgress.InProgress
+          | false -> discovery
+        let cycle' =
+          refreshStatusesKeepingEntries cycle (fun s ->
+            { s with
+                Activation = Features.LiveTesting.LiveTestingActivation.Active
+                SessionDiscovery = markDiscovering s.SessionDiscovery })
+        let effects =
+          match Array.isEmpty cycle'.TestState.DiscoveredTests with
+          | true ->
+            // Rare: warmup discovery hasn't landed yet. Same broadcast
+            // request `EnableLiveTesting` uses — harmless for other sessions.
+            [SageFsEffect.TestCycle Features.LiveTesting.TestCycleEffect.RequestInitialDiscovery]
+          | false ->
+            let allIds = cycle'.TestState.DiscoveredTests |> Array.map (fun tc -> tc.Id)
+            Features.LiveTesting.LiveTestCycleState.triggerExecutionForAffected
+              allIds Features.LiveTesting.RunTrigger.ExplicitRun (Some sessionId) cycle'
+            |> List.map SageFsEffect.TestCycle
+        let watcherEffects =
+          match sessionInfo with
+          | Some session ->
+            [ SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.RegisterFileWatcher
+                (sessionId, session.WorkingDirectory)) ]
+          | None -> []
+        setLiveTestingState target cycle' model, effects @ watcherEffects
+
+    | SageFsMsg.DisableLiveTestingForSession sessionId ->
+      let target = SageFsModel.resolveOrCreateLiveTestingTarget (Some sessionId) model
+      let cycle = SageFsModel.cycleFor target model
+      match cycle.TestState.Activation = Features.LiveTesting.LiveTestingActivation.Inactive with
+      | true ->
+        model, []
+      | false ->
+        let cycle' =
+          refreshStatusesKeepingEntries cycle (fun s ->
+            { s with Activation = Features.LiveTesting.LiveTestingActivation.Inactive })
+        let watcherEffects =
+          model.Sessions.Sessions
+          |> List.tryFind (fun s -> SessionId.value s.Id = sessionId)
+          |> Option.map (fun session ->
+            SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.DisposeFileWatcher
+              (sessionId, session.WorkingDirectory)))
+          |> Option.toList
+        setLiveTestingState target cycle' model, watcherEffects
 
     | SageFsMsg.CycleRunPolicy ->
       let lt = model.LiveTesting
