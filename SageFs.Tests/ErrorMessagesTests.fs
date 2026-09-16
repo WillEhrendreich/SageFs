@@ -156,4 +156,40 @@ let errorMessagesTests =
         |> Expect.stringContains "should have newline separator" "\n\n"
       }
     ]
+
+    testList "runtime exception summary (UX-3)" [
+      let userStack =
+        "System.DivideByZeroException: Attempted to divide by zero.\n" +
+        "   at Microsoft.FSharp.Core.Operators.op_Division[T1,T2,T3](T1 x, T2 y) in /_/src/FSharp.Core/prim-types.fs:line 4200\n" +
+        "   at RuntimeBugs.Stats.mean(FSharpList`1 xs) in /home/will/proj/Stats.fs:line 12\n" +
+        "   at <StartupCode$FSI_0007>.$FSI_0007.main@() in FSI_0007.fsx:line 3"
+
+      test "finds the first USER source frame, skipping framework frames" {
+        firstUserSourceFrame userStack
+        |> Expect.equal "should pick the user's Stats.fs frame, not FSharp.Core or FSI" (Some "Stats.fs(12)")
+      }
+
+      test "returns None when the stack has only framework/FSI frames" {
+        let frameworkOnly =
+          "System.Exception: boom\n" +
+          "   at Microsoft.FSharp.Core.X() in /_/src/FSharp.Core/x.fs:line 1\n" +
+          "   at <StartupCode$FSI_0002>.$FSI_0002.main@() in FSI_0002.fsx:line 1"
+        firstUserSourceFrame frameworkOnly
+        |> Expect.isNone "a bare REPL eval with no user source frame yields None"
+      }
+
+      test "summary leads with type, message, and the user frame" {
+        let s = runtimeExceptionSummary "System.DivideByZeroException" "Attempted to divide by zero." userStack
+        s |> Expect.stringContains "leads with the exception type" "System.DivideByZeroException"
+        s |> Expect.stringContains "leads with the message" "Attempted to divide by zero."
+        s |> Expect.stringContains "surfaces the user code location" "Stats.fs(12)"
+        s |> Expect.stringContains "keeps the full stack below" "prim-types.fs"
+      }
+
+      test "summary without a user frame still leads with type and message" {
+        let s = runtimeExceptionSummary "System.Exception" "boom" "System.Exception: boom\n   at Foo() in FSI_0001.fsx:line 1"
+        s |> Expect.stringContains "type present" "System.Exception"
+        s |> Expect.stringContains "message present" "boom"
+      }
+    ]
   ]

@@ -144,10 +144,21 @@ let noAppRuns : AppRunHandlers = {
 /// The error a failed eval reports across the process boundary: a structured
 /// SageFsError the actor raised (e.g. EvalSupersededByReset) keeps its case;
 /// any other exception becomes `fallback` with the full exception text.
+let rec private rootCause (e: exn) : exn =
+  match box e.InnerException with
+  | null -> e
+  | _ -> rootCause e.InnerException
+
 let private toWorkerError (fallback: string -> SageFsError) (ex: exn) : SageFsError =
   match ex with
   | :? SageFsErrorException as e -> e.Error
-  | _ -> fallback (ex.ToString())
+  | _ ->
+    // Lead with the real (root-cause) exception type + message and the first
+    // line of the user's own code in the stack, then the full text — so a
+    // runtime failure reads like an actionable location, not a raw stack dump
+    // (roast UX-3). The full ex.ToString() (with inner stacks) is kept below.
+    let root = rootCause ex
+    fallback (ErrorMessages.runtimeExceptionSummary (root.GetType().Name) root.Message (ex.ToString()))
 
 /// Handle a single WorkerMessage by dispatching to the actor.
 let handleMessage

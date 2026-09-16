@@ -88,3 +88,50 @@ module ErrorMessages =
   let formatError (errorText: string) =
     let suggestion = errorText |> categorize |> getSuggestion
     sprintf "%s\n\n%s" errorText suggestion
+
+  /// Path fragments that mark a stack frame as framework/runtime noise rather
+  /// than the user's own code — used to find the first USER source frame in a
+  /// runtime exception's stack (roast UX-3). Matched case-insensitively.
+  let private frameworkFrameFragments =
+    [| "/src/fsharp/"; "\\src\\fsharp\\"        // FSharp.Core / F# compiler build paths
+       "/_work/"; "\\_work\\"; "/_/src/"          // dotnet CI build-machine paths
+       "microsoft.fsharp."; "system."; "microsoft."
+       "fsi_"; "startupcode$fsi"                   // FSI dynamic wrappers
+       "/expecto/"; "\\expecto\\" |]
+
+  /// The first "at ... in <file>:line N" frame whose file is the user's own
+  /// source (a real .fs/.fsx path, not a framework/FSI frame), formatted as
+  /// "File.fs(N)". None when the stack has no such frame (e.g. a bare REPL eval
+  /// with only FSI/framework frames).
+  let firstUserSourceFrame (stackTrace: string) : string option =
+    match System.String.IsNullOrEmpty stackTrace with
+    | true -> None
+    | false ->
+      stackTrace.Split([| '\n'; '\r' |], System.StringSplitOptions.RemoveEmptyEntries)
+      |> Array.tryPick (fun raw ->
+        let line = raw.Trim()
+        let lower = line.ToLowerInvariant()
+        let looksLikeSourceFrame =
+          line.Contains(" in ") && (lower.Contains(".fs:line ") || lower.Contains(".fsx:line "))
+        match looksLikeSourceFrame && not (frameworkFrameFragments |> Array.exists lower.Contains) with
+        | false -> None
+        | true ->
+          let afterIn = line.Substring(line.IndexOf(" in ") + 4)
+          match afterIn.LastIndexOf(":line ") with
+          | idx when idx > 0 ->
+            let filePath = afterIn.Substring(0, idx)
+            let lineNo = afterIn.Substring(idx + ":line ".Length).Trim()
+            Some (sprintf "%s(%s)" (System.IO.Path.GetFileName filePath) lineNo)
+          | _ -> None)
+
+  /// Summarize a runtime exception from a failed eval so the ACTIONABLE bits —
+  /// the exception type, its message, and the first line of the USER's own code
+  /// in the stack — lead, instead of being buried under framework frames (roast
+  /// UX-3). `full` is the raw exception text (ex.ToString()); it is kept below
+  /// the summary so nothing is lost.
+  let runtimeExceptionSummary (typeName: string) (message: string) (full: string) : string =
+    let head =
+      match firstUserSourceFrame full with
+      | Some frame -> sprintf "%s: %s\n  ↳ in your code at %s" typeName message frame
+      | None -> sprintf "%s: %s" typeName message
+    sprintf "%s\n\n%s" head full
