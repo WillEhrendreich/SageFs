@@ -1,14 +1,14 @@
 # ☕ Coming from Java?
 
-Welcome. You've been writing `AbstractSingletonProxyFactoryBean` and we won't judge you — the ecosystem made you do it. But it's time. F# is what Java always wished it could be: expressive, type-safe, concise, and running on a genuinely great runtime (.NET, not JVM — yes, the GC is better).
+You've probably written `AbstractSingletonProxyFactoryBean` — the ecosystem left you no choice. F# is what Java's design aims for: expressive, type-safe, concise, and it runs on .NET instead of the JVM, with a better GC.
 
-Pain you're leaving behind: 10 files for one feature, XML everywhere, Spring Boot startup time, `Optional<Optional<List<? extends Comparable<? super T>>>>`, and `NullPointerException` at line 1 of your stack trace.
+You'll leave behind 10 files for one feature, XML everywhere, Spring Boot startup time, `Optional<Optional<List<? extends Comparable<? super T>>>>`, and `NullPointerException` at line 1 of your stack trace.
 
-**What you'll love immediately:**
-- A `Person` record is one line. Getters, equals, hashCode, toString — free.
-- Pattern matching on sealed types, with exhaustiveness checking — the Java 21 feature, but good
-- No `Optional.ofNullable(x).map(f).orElse(null)` — `Option<'T>` is a language citizen
-- Build time: `dotnet build` is fast. SageFs day-to-day: no build at all.
+**What you'll notice right away:**
+- A `Person` record is one line. Getters, equals, hashCode, toString come free.
+- Pattern matching on sealed types, with exhaustiveness checking (Java 21 added something similar)
+- No `Optional.ofNullable(x).map(f).orElse(null)`; `Option<'T>` is built into the language
+- `dotnet build` is fast, and day-to-day work in SageFs needs no build at all
 
 **→ [Start here: `samples/from-java/hello.fsx`](../samples/from-java/hello.fsx)**
 

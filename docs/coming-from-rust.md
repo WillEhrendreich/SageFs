@@ -1,14 +1,14 @@
 # 🦀 Coming from Rust?
 
-You're going to feel right at home. `Option`, `Result`, pattern matching, discriminated unions, immutability by default, zero `null` — F# and Rust share the same design philosophy. The difference is that F# runs on .NET, skips the borrow checker, and gives you hot reload and interactive scripting.
+F# and Rust share the same design philosophy: `Option`, `Result`, pattern matching, discriminated unions, immutability by default, and no `null`. F# runs on .NET instead, has no borrow checker, and adds hot reload and interactive scripting.
 
-Pain you're leaving behind: borrow checker fights for straightforward code, 45-second compile times for medium projects, no REPL, and having to reach for Python every time you want to explore data.
+You'll leave behind borrow checker fights over straightforward code, 45-second compile times for medium projects, no REPL, and reaching for Python whenever you want to explore data.
 
-**What you'll love immediately:**
-- `Option<'T>`, `Result<'T, 'E>`, and exhaustive pattern matching — just like Rust
-- Records and DUs have structural equality by default — no `#[derive(PartialEq)]` needed
-- Hot reload: your running program patches itself on save — impossible in Rust, trivial here
-- `.fsx` scripts give you the interactive exploration story Rust has always lacked
+**What you'll notice right away:**
+- `Option<'T>`, `Result<'T, 'E>`, and exhaustive pattern matching, just like Rust
+- Records and DUs have structural equality by default, with no `#[derive(PartialEq)]` needed
+- Hot reload: your running program patches itself on save, which Rust can't do
+- `.fsx` scripts give you the interactive exploration that Rust has never had
 
 **→ [Start here: `samples/from-rust/hello.fsx`](../samples/from-rust/hello.fsx)**
 

@@ -1,14 +1,14 @@
 # 🐍 Coming from Python?
 
-You already love interactive development — you live in the REPL. F# gives you the same energy, plus a compiler that catches your bugs before you run anything, blazing-fast pipelines instead of list comprehensions, and a type system that makes refactoring feel like a superpower instead of a minefield.
+If you already work in a REPL, F# will feel familiar. You get the same interactive style, plus a compiler that catches bugs before you run anything, fast pipelines in place of list comprehensions, and a type system that makes refactoring safe instead of risky.
 
-Pain you're leaving behind: `AttributeError: 'NoneType' object has no attribute 'foo'`, mystery runtime crashes, and the "just run it and see" debugging loop.
+You'll leave behind `AttributeError: 'NoneType' object has no attribute 'foo'`, mystery runtime crashes, and the "just run it and see" debugging loop.
 
-**What you'll love immediately:**
-- `|>` pipelines read like Python chains, but faster and type-checked
-- Pattern matching makes `if/elif/elif/elif/else` forests extinct
-- `Option<'T>` means `None` is handled at compile time — no more surprise crashes
-- SageFs = your Jupyter notebook, but in your editor, with live tests and hot reload
+**What you'll notice right away:**
+- `|>` pipelines read like Python chains, but they're faster and type-checked
+- Pattern matching replaces `if/elif/elif/elif/else` chains
+- `Option<'T>` means `None` is handled at compile time, so it can't cause a surprise crash
+- SageFs works like a Jupyter notebook in your editor, with live tests and hot reload
 
 **→ [Start here: `samples/from-python/hello.fsx`](../samples/from-python/hello.fsx)**
 
