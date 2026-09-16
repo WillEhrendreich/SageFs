@@ -14,17 +14,16 @@
 /// `LiveTestingTypes.fs` `RunGeneration`/`TestRunPhase`), polling the Elm
 /// model until that generation's run is no longer in flight.
 ///
-/// Known limitation, inherited from `RunTestsRequested` itself: that handler
-/// always mutates `model.LiveTesting` (the "Primary" live-testing cycle) —
-/// see `SageFsApp.fs`'s `RunTestsRequested`/`applyBufferedTestResults`, which
-/// read/write `model.LiveTesting` unconditionally rather than routing through
-/// `PerSessionLiveTesting` the way `TestRunStarted`/`TestRunCompleted` do.
-/// So today this primitive only produces a trustworthy verdict when
-/// `sessionId` is the session live-testing is actually tracking as Primary.
-/// Fixing that routing is out of scope for this item (SageFsApp.fs is one of
-/// the files this item must not touch) — a caller landing a cohort onto a
-/// non-primary session should verify that assumption before trusting the
-/// result.
+/// `RunTestsRequested` now carries an explicit `targetSession` (mirrors
+/// `CoverageBitmapCollected`/`TestRunStarted`'s per-session routing — see
+/// `SageFsApp.fs`'s handler and `SageFsModel.cycleForSession`), so this
+/// primitive routes every read AND the dispatch itself through `sessionId`'s
+/// own live-testing cycle (Primary when it's the active session, its own
+/// `PerSessionLiveTesting` slot otherwise) instead of assuming `sessionId` is
+/// whatever session Primary happens to be tracking. A caller no longer has to
+/// force `sessionId` to become Primary (e.g. via `SessionSwitched`) before
+/// trusting this primitive's verdict — concurrent cohorts landing onto
+/// different background sessions are each observed through their own cycle.
 module SageFs.Features.CohortLandingVerify
 
 open System
@@ -130,10 +129,10 @@ let runTestsInSession
       return Ok []
     | _ ->
 
-    let testState = elmRuntime.GetModel().LiveTesting.TestState
+    let testState = (SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())).TestState
 
     // Fail closed on a caller/routing mismatch instead of silently running
-    // a different session's tests (or a subset of them): Primary now belongs
+    // a different session's tests (or a subset of them): a cycle now belongs
     // wholly to one session (`LiveTestState.ownerSessionId`), so either every
     // requested test is attributed to `sessionId` or none of them are.
     let notAttributedToSession =
@@ -166,7 +165,7 @@ let runTestsInSession
     let priorGeneration = testState.LastGeneration
     let deadline = DateTime.UtcNow + awaitBudget ()
 
-    elmRuntime.Dispatch (SageFsMsg.Event (TuiEvent.RunTestsRequested testCases))
+    elmRuntime.Dispatch (SageFsMsg.Event (TuiEvent.RunTestsRequested (Some sessionId, testCases)))
 
     // Dispatch is asynchronous (ElmLoop.fs runs a dedicated drain thread), so
     // the model doesn't necessarily reflect the new run the instant Dispatch
@@ -174,7 +173,7 @@ let runTestsInSession
     // tracking completion of "our" generation.
     let rec awaitStart () : Async<Result<RunGeneration, string>> =
       async {
-        let currentGeneration = elmRuntime.GetModel().LiveTesting.TestState.LastGeneration
+        let currentGeneration = (SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())).TestState.LastGeneration
         match currentGeneration <> priorGeneration with
         | true -> return Ok currentGeneration
         | false ->
@@ -187,7 +186,7 @@ let runTestsInSession
 
     let rec awaitCompletion (generation: RunGeneration) : Async<Result<TestId list, string>> =
       async {
-        let state = elmRuntime.GetModel().LiveTesting.TestState
+        let state = (SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())).TestState
         match isGenerationComplete generation state with
         | true -> return Ok (failingOf tests state)
         | false ->

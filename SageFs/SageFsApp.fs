@@ -1501,39 +1501,45 @@ module SageFsUpdate =
           |> List.map SageFsEffect.TestCycle
         { model with LiveTesting = lt }, effects
 
-      | TuiEvent.RunTestsRequested tests ->
+      | TuiEvent.RunTestsRequested (requestedSession, tests) ->
+        // Routed to its own cycle (Primary/Background — mirrors
+        // CoverageBitmapCollected/TestRunStarted). `None` -> Primary as before.
         let testIds = tests |> Array.map (fun t -> t.Id)
         let changedIds = Set.ofArray testIds
-        // Primary belongs wholly to one session (see `LiveTestState.ownerSessionId`);
-        // compute it up front from the state BEFORE this run's phase update — the
-        // owner doesn't change just because a run started.
-        let targetSession = Features.LiveTesting.LiveTestState.ownerSessionId model.LiveTesting.TestState
-        let lt =
-          refreshStatusesForChangedIds model.LiveTesting changedIds (fun s ->
-            let phase, gen = TestRunPhase.startRun s.LastGeneration
-            let phases =
-              match targetSession with
-              | Some sid -> s.RunPhases |> Map.add sid phase
-              | None -> s.RunPhases
-            { s with LastGeneration = gen; AffectedTests = changedIds; RunPhases = phases })
-        let effects =
-          match Array.isEmpty tests with
-          | true -> []
-          | false ->
-            let sessionMaps =
-              match targetSession |> Option.bind (fun s -> Map.tryFind s lt.InstrumentationMaps) with
-              | Some maps -> maps
-              | None -> lt.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
-            [ Features.LiveTesting.TestCycleEffect.RunAffectedTests {
-                Tests = tests
-                Trigger = Features.LiveTesting.RunTrigger.ExplicitRun
-                TreeSitterElapsed = System.TimeSpan.Zero
-                FcsElapsed = System.TimeSpan.Zero
-                SessionId = targetSession
-                InstrumentationMaps = sessionMaps
-              }
-              |> SageFsEffect.TestCycle ]
-        { model with LiveTesting = lt }, effects
+        let model', effects =
+          tryUpdateLiveTestingState requestedSession (fun cycle ->
+            // Explicit session id wins; else the cycle's own owner, as before.
+            let targetSession =
+              match requestedSession with
+              | Some _ -> requestedSession
+              | None -> Features.LiveTesting.LiveTestState.ownerSessionId cycle.TestState
+            let lt =
+              refreshStatusesForChangedIds cycle changedIds (fun s ->
+                let phase, gen = TestRunPhase.startRun s.LastGeneration
+                let phases =
+                  match targetSession with
+                  | Some sid -> s.RunPhases |> Map.add sid phase
+                  | None -> s.RunPhases
+                { s with LastGeneration = gen; AffectedTests = changedIds; RunPhases = phases })
+            let effects =
+              match Array.isEmpty tests with
+              | true -> []
+              | false ->
+                let sessionMaps =
+                  match targetSession |> Option.bind (fun s -> Map.tryFind s lt.InstrumentationMaps) with
+                  | Some maps -> maps
+                  | None -> lt.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+                [ Features.LiveTesting.TestCycleEffect.RunAffectedTests {
+                    Tests = tests
+                    Trigger = Features.LiveTesting.RunTrigger.ExplicitRun
+                    TreeSitterElapsed = System.TimeSpan.Zero
+                    FcsElapsed = System.TimeSpan.Zero
+                    SessionId = targetSession
+                    InstrumentationMaps = sessionMaps
+                  }
+                  |> SageFsEffect.TestCycle ]
+            lt, effects) model
+        model', (effects |> Option.defaultValue [])
 
       | TuiEvent.CoverageUpdated coverage ->
         let lt = model.LiveTesting

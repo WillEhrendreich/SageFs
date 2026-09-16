@@ -77,7 +77,7 @@ let private mkFakeRuntime
   let dispatchCount = ref 0
   let dispatch (msg: SageFsMsg) =
     match msg with
-    | SageFsMsg.Event (TuiEvent.RunTestsRequested tests) ->
+    | SageFsMsg.Event (TuiEvent.RunTestsRequested (_, tests)) ->
       System.Threading.Interlocked.Increment dispatchCount |> ignore
       let running = onRunTestsRequested applyState tests modelRef.Value.LiveTesting.TestState
       applyState running
