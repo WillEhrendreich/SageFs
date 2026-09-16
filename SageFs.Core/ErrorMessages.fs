@@ -135,3 +135,83 @@ module ErrorMessages =
       | Some frame -> sprintf "%s: %s\n  ↳ in your code at %s" typeName message frame
       | None -> sprintf "%s: %s" typeName message
     sprintf "%s\n\n%s" head full
+
+  /// Phrases Expecto's own assertion failures actually emit (`Expect.equal`,
+  /// `Expect.isTrue`, `floatClose`, etc. — confirmed against the compiled
+  /// Expecto 11.0.0-alpha8 string table) — used to promote the ONE line that
+  /// says what actually went wrong out from between framework stack frames
+  /// (roast UX-5). Matched case-insensitively.
+  let private assertionFragments =
+    [| "actual value was"; "expected it to be"; "but had expected"; "expected:" |]
+
+  /// Classification of a single line of eval/test output for the dashboard's
+  /// output pane (roast UX-5) — a real DU, not a bool, so "is this a
+  /// framework frame" can never silently disagree with "is this the
+  /// assertion".
+  [<RequireQualifiedAccess>]
+  type OutputFrameKind =
+    | UserFrame
+    | FrameworkFrame
+    | Assertion
+    | Plain
+
+  /// Classify one line of output text (roast UX-5). A "frame" line is an
+  /// `at ... in File.fs:line N` stack-trace line — it is a `FrameworkFrame`
+  /// exactly when it matches `frameworkFrameFragments`, the SAME source of
+  /// truth `firstUserSourceFrame` uses, so the fold and the UX-3 summary can
+  /// never drift on what counts as "the user's own code"; otherwise it is a
+  /// `UserFrame`. Failing that, a line naming Expecto's own assertion
+  /// phrasing is the `Assertion` — the one line the fold must always
+  /// promote. Everything else is `Plain`.
+  let classifyLine (line: string) : OutputFrameKind =
+    let lower = line.ToLowerInvariant()
+    let looksLikeFrame =
+      line.Contains(" in ") && (lower.Contains(".fs:line ") || lower.Contains(".fsx:line "))
+    match () with
+    | _ when looksLikeFrame && (frameworkFrameFragments |> Array.exists lower.Contains) ->
+      OutputFrameKind.FrameworkFrame
+    | _ when looksLikeFrame -> OutputFrameKind.UserFrame
+    | _ when assertionFragments |> Array.exists lower.Contains -> OutputFrameKind.Assertion
+    | _ -> OutputFrameKind.Plain
+
+  /// Classify every line of a multi-line output/test-failure blob (roast
+  /// UX-5). Pure text in, pure classification out — no rendering here; the
+  /// dashboard groups contiguous `FrameworkFrame` runs into a folded panel
+  /// via `foldFrameworkGroups`.
+  let classifyOutputLines (text: string) : (OutputFrameKind * string) list =
+    match System.String.IsNullOrEmpty text with
+    | true -> []
+    | false ->
+      text.Split([| '\n'; '\r' |], System.StringSplitOptions.RemoveEmptyEntries)
+      |> Array.toList
+      |> List.map (fun line -> (classifyLine line, line))
+
+  /// A run of classified output, grouped for folding (roast UX-5): contiguous
+  /// `FrameworkFrame` lines collapse into one `FoldedFrames` group (rendered
+  /// as a folded "N framework frames" panel, collapsed by default); every
+  /// other line stays its own `SingleLine`, unfolded.
+  type OutputFold<'a> =
+    | FoldedFrames of 'a list
+    | SingleLine of OutputFrameKind * 'a
+
+  /// Group classified lines so contiguous `FrameworkFrame` runs collapse into
+  /// one `FoldedFrames` group and everything else stays a `SingleLine`
+  /// (roast UX-5). Generic over the payload so callers (e.g. the dashboard's
+  /// `OutputLine`, which also carries a timestamp and syntax-highlighting
+  /// metadata) can group their own richer records using this exact fold
+  /// boundary instead of re-deriving it.
+  let foldFrameworkGroups (classified: (OutputFrameKind * 'a) list) : OutputFold<'a> list =
+    classified
+    |> List.fold (fun acc (kind, payload) ->
+      match kind, acc with
+      | OutputFrameKind.FrameworkFrame, (FoldedFrames frames) :: rest ->
+        FoldedFrames (payload :: frames) :: rest
+      | OutputFrameKind.FrameworkFrame, _ ->
+        FoldedFrames [ payload ] :: acc
+      | _, _ ->
+        SingleLine (kind, payload) :: acc)
+      []
+    |> List.rev
+    |> List.map (function
+      | FoldedFrames frames -> FoldedFrames (List.rev frames)
+      | SingleLine (kind, payload) -> SingleLine (kind, payload))

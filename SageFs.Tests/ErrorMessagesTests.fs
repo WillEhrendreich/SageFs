@@ -192,4 +192,81 @@ let errorMessagesTests =
         s |> Expect.stringContains "message present" "boom"
       }
     ]
+
+    testList "output line classification (UX-5)" [
+      // A realistic failure blob: the assertion line Expecto emits, two
+      // contiguous framework frames (Expecto itself, then FSharp.Core's async
+      // machinery), the user's OWN Stats.fs frame, and one more framework
+      // frame (the FSI wrapper) after it — so the fold has to close one group,
+      // emit a non-framework line, and open a second group.
+      let assertionLine = "Actual value was 6.0 but had expected it to be 4.0."
+      let expectoFrame = "   at Expecto.Expect.equal[T](String message, T expected, T actual) in /_/src/Expecto/Expect.fs:line 205"
+      let asyncFrame = "   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T](...) in /_/src/FSharp.Core/async.fs:line 509"
+      let userFrame = "   at RuntimeBugs.StatsTests.testMean() in /home/will/proj/Stats.fs:line 12"
+      let fsiFrame = "   at <StartupCode$FSI_0007>.$FSI_0007.main@() in FSI_0007.fsx:line 3"
+      let blob =
+        [ assertionLine; expectoFrame; asyncFrame; userFrame; fsiFrame ]
+        |> String.concat "\n"
+
+      test "a framework frame (Expecto's own frame) classifies as FrameworkFrame" {
+        classifyLine expectoFrame
+        |> Expect.equal "Expecto's own frame is framework noise" OutputFrameKind.FrameworkFrame
+      }
+
+      test "a framework frame (FSharp.Core async machinery) classifies as FrameworkFrame" {
+        classifyLine asyncFrame
+        |> Expect.equal "FSharp.Core async plumbing is framework noise" OutputFrameKind.FrameworkFrame
+      }
+
+      test "the user's own source frame classifies as UserFrame" {
+        classifyLine userFrame
+        |> Expect.equal "Stats.fs is the user's own code" OutputFrameKind.UserFrame
+      }
+
+      test "an Expecto assertion line classifies as Assertion" {
+        classifyLine assertionLine
+        |> Expect.equal "the actual/expected line is the assertion" OutputFrameKind.Assertion
+      }
+
+      test "an ordinary line with no frame or assertion phrasing classifies as Plain" {
+        classifyLine "some ordinary console output"
+        |> Expect.equal "ordinary text is Plain" OutputFrameKind.Plain
+      }
+
+      test "classifyOutputLines classifies every line of the blob in order" {
+        classifyOutputLines blob
+        |> Expect.equal "one classified tuple per line, in order" [
+          OutputFrameKind.Assertion, assertionLine
+          OutputFrameKind.FrameworkFrame, expectoFrame
+          OutputFrameKind.FrameworkFrame, asyncFrame
+          OutputFrameKind.UserFrame, userFrame
+          OutputFrameKind.FrameworkFrame, fsiFrame
+        ]
+      }
+
+      test "classifyOutputLines on an empty blob yields no lines" {
+        classifyOutputLines ""
+        |> Expect.equal "empty input classifies to nothing" []
+      }
+
+      test "foldFrameworkGroups collapses contiguous framework frames and leaves everything else single" {
+        classifyOutputLines blob
+        |> foldFrameworkGroups
+        |> Expect.equal "assertion, one 2-frame group, the user frame, then a 1-frame group" [
+          SingleLine (OutputFrameKind.Assertion, assertionLine)
+          FoldedFrames [ expectoFrame; asyncFrame ]
+          SingleLine (OutputFrameKind.UserFrame, userFrame)
+          FoldedFrames [ fsiFrame ]
+        ]
+      }
+
+      test "foldFrameworkGroups on an all-plain blob produces only SingleLine groups, no folding" {
+        [ OutputFrameKind.Plain, "line one"; OutputFrameKind.Plain, "line two" ]
+        |> foldFrameworkGroups
+        |> Expect.equal "no framework frames means nothing to fold" [
+          SingleLine (OutputFrameKind.Plain, "line one")
+          SingleLine (OutputFrameKind.Plain, "line two")
+        ]
+      }
+    ]
   ]

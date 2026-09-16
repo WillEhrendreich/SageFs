@@ -333,6 +333,34 @@ h2 {
   color: var(--fg-dim);
 }
 
+/* Promoted output lines — the Expecto assertion and the user's own source
+   frame (roast UX-5) — stand out from the framework-frame wall around them. */
+.output-line-promoted {
+  border-left: 3px solid var(--fg-yellow);
+  padding-left: 0.4rem;
+  font-weight: bold;
+}
+
+/* Folded framework-frame group — collapsed by default so the ONE useful
+   line (the assertion / the user's frame) isn't buried between walls of
+   framework stack frames (roast UX-5). */
+.output-frame-group {
+  margin: 0;
+}
+
+.output-frame-group-summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  color: var(--fg-dim);
+  font-size: 0.8rem;
+  padding: 1px 0.5rem;
+}
+
+.output-frame-group-body .output-line {
+  opacity: 0.75;
+}
+
 /* ── Eval Area ────────────────────────────────────────────────── */
 
 .eval-area {
