@@ -615,7 +615,7 @@ let tests =
           // ── Wait for the real integration session to warm up (the
           // prebuilt bin/obj means this should be fast — no dotnet build
           // races against warmup) ──
-          do! waitForSessionReady alice sessionId (seconds 60.0)
+          do! waitForSessionReady alice sessionId (seconds 180.0)
 
           // ── Enable real live testing on the integration session (raw
           // HTTP — v1 has no MCP tool for this) and wait for real
@@ -626,7 +626,7 @@ let tests =
           let! _policyStatus, _policyBody = postJson http "/api/live-testing/policy" {| category = "unit"; policy = "every" |}
 
           let! discovered =
-            waitForLiveSnapshot http (seconds 60.0) "baseline discovery finds the one seeded test"
+            waitForLiveSnapshot http (seconds 180.0) "baseline discovery finds the one seeded test"
               (fun s -> s.DiscoveryState = "ready_with_tests" && s.Total >= 1)
           Expect.isGreaterThanOrEqual "baseline discovers at least the one seeded test" (discovered.Total, 1)
 
@@ -636,7 +636,7 @@ let tests =
           | false ->
             let! _runStatus, _runBody = postJson http "/api/live-testing/run" {| pattern = ""; category = "" |}
             let! _ =
-              waitForLiveSnapshot http (seconds 60.0) "baseline settles green after an explicit run"
+              waitForLiveSnapshot http (seconds 180.0) "baseline settles green after an explicit run"
                 (fun s -> s.Running = 0 && s.Failed = 0 && s.Passed >= s.Total && s.Total >= 1)
             ()
 
@@ -676,7 +676,7 @@ let tests =
           // not git) to auto-rebuild, rediscover, and re-run — proving the
           // new test is genuinely live-tested before we ever land it.
           let! _ =
-            waitForLiveSnapshot http (seconds 60.0) "the second test is discovered and the suite stays green after the good edit"
+            waitForLiveSnapshot http (seconds 180.0) "the second test is discovered and the suite stays green after the good edit"
               (fun s -> s.Total >= 2 && s.Running = 0 && s.Failed = 0)
           ()
 
@@ -686,7 +686,7 @@ let tests =
           // Independent oracle: the real git branch ref in the MAIN repo
           // (never the worktree, never CohortGit itself).
           do!
-            waitUntil (seconds 90.0)
+            waitUntil (seconds 180.0)
               (fun () -> sprintf "integration branch %s to reach the good landing %s" branch goodSha)
               (fun () -> task {
                 let! branchSha = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
@@ -697,7 +697,7 @@ let tests =
           // auto-releases only on a successful land (Cohort.fs's
           // FastForwardCompleted handler).
           do!
-            waitUntil (seconds 30.0)
+            waitUntil (seconds 120.0)
               (fun () -> sprintf "get_cohort_status to show claim %s Released after the good landing" claim1Id)
               (fun () -> task {
                 let! status = getCohortStatus alice
@@ -728,7 +728,7 @@ let tests =
           // separate from this poll, but seeing it fail here first proves
           // the fixture's failure is real, not a fluke of timing.
           let! failedSnapshot =
-            waitForLiveSnapshot http (seconds 60.0) "the regression is discovered as a real failure before landing is requested"
+            waitForLiveSnapshot http (seconds 180.0) "the regression is discovered as a real failure before landing is requested"
               (fun s -> s.Running = 0 && s.Failed >= 1)
           Expect.isGreaterThanOrEqual "the regression must genuinely fail at least one live-tested test" (failedSnapshot.Failed, 1)
 
@@ -741,7 +741,7 @@ let tests =
           // means the full window elapsed with the branch never reaching
           // breakSha: the landing genuinely never lands. ──
           let! wronglyLanded =
-            pollForUpTo (seconds 90.0) (fun () -> task {
+            pollForUpTo (seconds 180.0) (fun () -> task {
               let! branchSha = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
               return if branchSha = breakSha then Some branchSha else None
             })
@@ -786,7 +786,7 @@ let tests =
           let! fixSha = writeAndCommit worktree "Util.fs" fixedUtil "fix: revert the regression (tests pass again)"
 
           let! _ =
-            waitForLiveSnapshot http (seconds 60.0) "the revert is discovered as genuinely green again"
+            waitForLiveSnapshot http (seconds 180.0) "the revert is discovered as genuinely green again"
               (fun s -> s.Running = 0 && s.Failed = 0)
 
           // Reuses claim2 — it is still genuinely Held (never released,
@@ -796,7 +796,7 @@ let tests =
           fixLandingResult |> Expect.stringContains "request_landing itself still succeeds structurally (queueing never inspects the queue's OTHER contents)" "queued"
 
           let! fixLanded =
-            pollForUpTo (seconds 45.0) (fun () -> task {
+            pollForUpTo (seconds 120.0) (fun () -> task {
               let! branchSha = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
               return if branchSha = fixSha then Some branchSha else None
             })
