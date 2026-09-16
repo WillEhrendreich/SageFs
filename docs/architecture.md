@@ -1,8 +1,8 @@
 # 🏗️ Architecture
 
-SageFs is **daemon-first**: one server, many clients. The daemon starts bare and creates sessions on demand. Each session is an **isolated worker sub-process** with its own FSI, project, and file watcher. VS Code, Neovim, Visual Studio, the web dashboard, and MCP clients communicate with the daemon through session-scoped HTTP and SSE contracts. See the [architecture diagram](../Readme.md#-one-daemon-every-client--simultaneously) for how clients connect.
+SageFs runs as a single daemon that serves many clients. The daemon starts with no project loaded and creates sessions on demand. Each session is an isolated worker sub-process with its own FSI, project, and file watcher. VS Code, Neovim, Visual Studio, the web dashboard, and MCP clients all talk to the daemon through session-scoped HTTP and SSE contracts. See the [architecture diagram](../Readme.md#-one-daemon-every-client--simultaneously) for how clients connect.
 
-5700+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, binary persistence property tests.
+SageFs has 5700+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, and binary persistence property tests.
 
 ## Project Structure
 
@@ -29,20 +29,20 @@ Editor / Dashboard / MCP command
       → structured result and SSE state updates
 ```
 
-The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated and are not current product interfaces. Their rendering code remains in the repository as legacy implementation history. Raylib application and game demos remain valuable, supported examples of using SageFs with game projects; they do not depend on the deprecated SageFs GUI frontend.
+The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated and are not current product interfaces; their rendering code stays in the repository as legacy history. Raylib application and game demos are still supported examples of using SageFs with game projects, and they don't depend on the deprecated SageFs GUI frontend.
 
 ## Session Lifecycle
 
-1. Daemon starts bare — no project, no session
+1. Daemon starts with no project and no session loaded
 2. A client creates a session with a project path
 3. The daemon spawns a worker sub-process, loads the project, starts watching files
-4. Clients send code, read diagnostics, run tests — all through the daemon
+4. Clients send code, read diagnostics, and run tests, all through the daemon
 5. Multiple clients can connect to the same session simultaneously
 
 ## FSI Quirks & Rewrites
 
-SageFs auto-rewrites `use` → `let` inside nested scopes (functions, CEs) because FSI doesn't support `use` in those positions. This means disposables aren't auto-disposed in the REPL — fine for experiments, be aware for long sessions.
+SageFs automatically rewrites `use` to `let` inside nested scopes (functions, computation expressions) because FSI doesn't support `use` there. This means disposables aren't automatically disposed in the REPL. That's fine for quick experiments, but keep it in mind for long sessions.
 
-Other FSI behaviors: redefinition shadows (doesn't error), `;;` boundaries are independent transactions, no `[<EntryPoint>]`, assembly loading is session-scoped.
+Other FSI behaviors: redefining a binding shadows it instead of erroring, each `;;` boundary is its own transaction, there's no `[<EntryPoint>]`, and assembly loading is scoped to the session.
 
 Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](../SageFs.Core/FsiRewrite.fs) (~25 lines). PRs welcome.

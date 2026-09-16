@@ -1,15 +1,15 @@
 # 🤖 MCP Tools Reference
 
-SageFs exposes dozens of MCP tools — from `send_fsharp_code` to `run_tests` to `discover_features`. Any MCP client can connect.
+SageFs exposes dozens of MCP tools, including `send_fsharp_code`, `run_tests`, and `discover_features`. Any MCP client can connect.
 
 ## Connection
 
-**Streamable HTTP** (recommended — auto-reconnects, no session drops):
+**Streamable HTTP** (recommended: it auto-reconnects and doesn't drop sessions):
 ```json
 { "mcpServers": { "sagefs": { "type": "streamable-http", "url": "http://localhost:37749/" } } }
 ```
 
-**SSE** (legacy clients that don't support Streamable HTTP yet):
+**SSE** (for legacy clients that don't support Streamable HTTP yet):
 ```json
 { "mcpServers": { "sagefs": { "type": "sse", "url": "http://localhost:37749/sse" } } }
 ```
@@ -93,4 +93,4 @@ SageFs exposes dozens of MCP tools — from `send_fsharp_code` to `run_tests` to
 { "mcpServers": { "sagefs": { "url": "http://localhost:37749/sse" } } }
 ```
 
-Works with GitHub Copilot (CLI & VS Code), Claude Code, Claude Desktop, OpenCode, Windsurf, Cursor, and any MCP-compatible tool. The **edit → auto-test → poll** workflow means agents don't even need to call eval — just edit files and check `get_live_test_status`.
+This works with GitHub Copilot (CLI and VS Code), Claude Code, Claude Desktop, OpenCode, Windsurf, Cursor, and any MCP-compatible tool. With the edit, auto-test, and poll workflow, agents don't even need to call eval; they can just edit files and check `get_live_test_status`.

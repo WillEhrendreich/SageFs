@@ -6,11 +6,11 @@
 > Neovim, and Visual Studio. The `POST /api/live-testing/evaluate-scope` contract below remains a
 > design exploration rather than the active editor/daemon contract.
 
-> **Priority**: #1. This is the feature that makes VS Enterprise look like a joke.
+> **Priority**: #1 — this feature is meant to outclass VS Enterprise's Live Unit Testing.
 
-## The Pitch (Honest Framing)
+## How This Compares to VS Enterprise
 
-VS Enterprise's Live Unit Testing triggers on unsaved edits — same as us. The difference is **architecture**: they copy your buffer to a ProjFS workspace, run full MSBuild, instrument IL, then execute tests. That takes **5-30 seconds**. SageFs sends the changed function definition straight to FSI — a REPL that redefines bindings on the fly. No build. No file copying. No IL instrumentation. **Sub-second feedback**.
+VS Enterprise's Live Unit Testing triggers on unsaved edits, the same as SageFs. The architecture is different: VS Enterprise copies your buffer to a ProjFS workspace, runs full MSBuild, instruments IL, then runs the tests, which takes 5-30 seconds. SageFs sends the changed function definition straight to FSI, a REPL that redefines bindings on the fly, with no build, no file copying, and no IL instrumentation. Feedback arrives in under a second.
 
 | Dimension | VS Enterprise | SageFs |
 |-----------|--------------|--------|
@@ -24,11 +24,11 @@ VS Enterprise's Live Unit Testing triggers on unsaved edits — same as us. The 
 | **Platform** | Windows only (ProjFS) | Cross-platform (.NET) |
 | **Cost** | ~$250/month Enterprise license | Free, MIT |
 
-**We don't compete on trigger mechanism — we compete on speed, scope, broken-code tolerance, editor breadth, framework breadth, and cost.**
+The trigger mechanism is the same as VS Enterprise's. The advantages are speed, scope, tolerance for broken code, editor breadth, framework breadth, and cost.
 
-## Core Insight: FSI Is a REPL
+## FSI Is a REPL
 
-FSI (F# Interactive) is a **REPL**. You send it a function definition, it redefines that binding immediately. You don't need to send a whole file. You don't need `#load`. You don't need temp files. You don't need shadow copies. This is what SageFs already does — `sagefs-send_fsharp_code` sends arbitrary F# snippets to FSI all day long.
+FSI (F# Interactive) is a REPL: send it a function definition and it redefines that binding immediately. There's no need to send a whole file, use `#load`, create temp files, or use shadow copies. SageFs already works this way — `sagefs-send_fsharp_code` sends arbitrary F# snippets to FSI continuously.
 
 ```fsharp
 // Send this to FSI:
@@ -45,7 +45,7 @@ This means the as-you-type pipeline is:
 5. SageFs runs affected tests (which now call the redefined function)
 6. Results pushed via SSE
 
-**No files written. No `#load`. No shadow copies. No patching. Just a REPL doing what REPLs do.**
+No files are written, no `#load`, no shadow copies, and no patching. The REPL just redefines bindings directly.
 
 ## Endpoint Contract
 
@@ -73,15 +73,11 @@ Content-Type: application/json
 | `startLine` / `endLine` | Where in the file this scope lives (for mapping) |
 | `generation` | Client-side monotonic counter. Server discards stale requests. |
 
-### Why Scope-Level, Not Full-File
+### Why Scope-Level Payloads
 
-FSI is a REPL. It evaluates expressions and definitions, not files. Sending the full file would mean:
-- Redefining EVERY binding in the file on every keystroke (wasteful)
-- Re-running the module's side effects (if any)
-- Slower type-checking (whole file vs one function)
-- Sending 10-80KB instead of 0.5-5KB
+FSI evaluates expressions and definitions, not whole files. Sending the full file on every keystroke would redefine every binding in the file (wasteful), re-run the module's side effects if it has any, take longer to type-check (a whole file instead of one function), and send 10-80KB instead of 0.5-5KB.
 
-The scope-level payload matches how FSI actually works. The editor extracts the function being edited, sends just that definition, FSI redefines just that binding.
+The scope-level payload matches how FSI actually works: the editor extracts the function being edited, sends just that definition, and FSI redefines just that binding.
 
 ## Scope Detection Per Editor
 
@@ -93,9 +89,9 @@ Each editor uses its native mechanism to find the enclosing function:
 | **VS Code** | `vscode.executeDocumentSymbolProvider` (Ionide LSP) | Cached symbols from last successful parse |
 | **Visual Studio** | Indentation-based scan | F# indentation-sensitivity makes this 90%+ accurate |
 
-All three are 5-15 lines of editor-specific code. They don't need to agree on implementation — they just need to produce `{ scopeName, scopeText, startLine, endLine }`.
+All three are 5-15 lines of editor-specific code. They don't need to share an implementation; they just need to produce `{ scopeName, scopeText, startLine, endLine }`.
 
-**When scope detection fails** (e.g., cursor is between functions, or syntax is too broken): the editor simply doesn't POST. No harm done — user sees stale results until the code stabilizes.
+When scope detection fails (for example, the cursor is between functions, or the syntax is too broken), the editor doesn't POST. The user just sees stale results until the code stabilizes.
 
 ## Server Test Cycle
 
@@ -114,9 +110,7 @@ POST /api/live-testing/evaluate-scope received
 
 If the user changes a function's return type (even implicitly via type inference), callers compiled against the old signature are stale. FSI redefines the function with the new signature, but tests compiled against the old one may fail with type mismatches.
 
-**Approach**: Type-check the scope, compare inferred signature with the cached previous signature:
-- **Signature stable** (90% of edits): Send to FSI, run tests. Fast path.
-- **Signature changed** (10%): Mark dependent tests as "Stale" via SSE. Save triggers the existing file-watcher reload path (recompile dependents). Still faster than VS Enterprise's 5-30s.
+The approach: type-check the scope and compare the inferred signature with the cached previous one. If the signature is stable (90% of edits), send it to FSI and run the tests — the fast path. If the signature changed (10% of edits), mark dependent tests as "Stale" via SSE; saving the file triggers the existing file-watcher reload path, which recompiles dependents. Even this path is faster than VS Enterprise's 5-30s.
 
 ### Performance Budget
 
@@ -130,7 +124,7 @@ If the user changes a function's return type (even implicitly via type inference
 | SSE push | <5ms |
 | **Total end-to-end** | **300-800ms typical** |
 
-Type-checking a single function in warm FCS context is significantly faster than type-checking a whole file. This is another advantage of scope-level evaluation.
+Type-checking a single function in a warm FCS context is much faster than type-checking a whole file, which is another advantage of scope-level evaluation.
 
 ## Dependency Graph Model
 
@@ -145,11 +139,11 @@ type TestDependencyGraph = {
 }
 ```
 
-**Keys are fully-qualified names** (e.g., `Payments.validate`, not `validate`) to distinguish same-named functions in different modules.
+Keys are fully-qualified names (for example, `Payments.validate`, not `validate`) so functions with the same name in different modules stay distinct.
 
-Transitive closure is computed eagerly at map-build time. Editing function B (where A calls B and test T covers A) correctly triggers T.
+Transitive closure is computed eagerly when the map is built. If test T covers function A, and A calls function B, editing B correctly triggers T.
 
-Local functions and closures are captured by their parent scope — no separate mapping needed.
+Local functions and closures are captured by their parent scope, so they need no separate mapping.
 
 ## Failure Modes
 
@@ -162,7 +156,7 @@ Local functions and closures are captured by their parent scope — no separate 
 | Two editors same file | Generation counter orders requests | Most recent edit evaluated. |
 | SageFs daemon not running | POST fails | Editor shows "SageFs not connected". |
 
-**The 90/10 rule**: Body changes (90% of edits) get instant feedback. Signature changes (10%) degrade to save-triggered refresh. Both are still faster than VS Enterprise.
+By this design, body changes (90% of edits) get instant feedback, and signature changes (10%) fall back to a save-triggered refresh. Both are still faster than VS Enterprise.
 
 ## Editor Implementation Guide
 

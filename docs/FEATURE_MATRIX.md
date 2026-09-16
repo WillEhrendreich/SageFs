@@ -1,8 +1,8 @@
 # SageFs Feature Matrix
 
-Current product surfaces are the web dashboard, editor integrations, and MCP. The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated and are intentionally excluded from this current-support matrix.
+Current product surfaces are the web dashboard, editor integrations, and MCP. The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated and excluded from this matrix.
 
-Raylib application and game projects remain supported. The demos in `samples/demos/` prove SageFs can provide live development for Raylib projects; they are separate from the deprecated SageFs GUI frontend.
+Raylib application and game projects remain supported. The demos in `samples/demos/` show SageFs providing live development for Raylib projects, separate from the deprecated SageFs GUI frontend.
 
 > **Legend**: Supported = dedicated client experience | Shared = available through the daemon or MCP | Partial = client support is incomplete | N/A = not meaningful for that client
 
@@ -84,4 +84,4 @@ Raylib application and game projects remain supported. The demos in `samples/dem
 
 ## MCP
 
-MCP is the structured automation surface for session-aware F# evaluation, test discovery and execution, failure explanation, targeted verification, and diagnostics. The set of tools shown to a client depends on session state, so consult the MCP tools exposed by the running daemon rather than relying on a fixed count.
+MCP gives programmatic access for session-aware F# evaluation, test discovery and execution, failure explanation, targeted verification, and diagnostics. Which tools are shown to a client depends on session state, so check the MCP tools exposed by the running daemon instead of relying on a fixed count.

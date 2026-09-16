@@ -1,14 +1,14 @@
 # 📓 Coming from Jupyter Notebooks?
 
-You're already living the interactive-first dream. SageFs takes everything you love about notebooks (eval any expression, see results inline, build understanding iteratively) and fixes everything you hate (kernel crashes, "restart and run all", the JSON-blob hell of version control, no type checking, no hot reload into production).
+SageFs keeps what you like about notebooks — evaluate any expression, see results inline, build understanding step by step — and fixes what you don't: kernel crashes, "restart and run all," `.ipynb` files that turn into JSON blobs in version control, no type checking, and no path from exploration to production code.
 
-Pain you're leaving behind: "the kernel died", cell execution order mysteries, `git diff` on `.ipynb` showing base64 blobs, and the chasm between notebook exploration and shipped code.
+You'll leave behind "the kernel died," cell execution order mysteries, `git diff` on `.ipynb` showing base64 blobs, and the gap between notebook exploration and shipped code.
 
-**What you'll love immediately:**
-- Alt+Enter on *any* expression — not just at the end of a cell
-- Your code is a real `.fsx` file that `git diff` shows beautifully
-- Write Expecto tests alongside your analysis — they run on every save
-- When you're ready to ship, your exploration code *is* the production code
+**What you'll notice right away:**
+- Alt+Enter works on any expression, not just at the end of a cell
+- Your code is a real `.fsx` file, so `git diff` shows it clearly
+- Write Expecto tests alongside your analysis; they run on every save
+- When you're ready to ship, your exploration code is the production code
 
 **→ [Start here: `samples/from-jupyter/notebook.fsx`](../samples/from-jupyter/notebook.fsx)**
 
