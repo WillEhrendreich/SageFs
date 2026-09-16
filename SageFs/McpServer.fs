@@ -1726,7 +1726,10 @@ let mapExecutionRoutes (app: WebApplication) (rctx: RouteContext) =
       | resolvedSid when not (System.String.IsNullOrEmpty resolvedSid) ->
         SageFs.McpTools.setActiveSessionId rctx.McpContext "http" resolvedSid
       | _ -> ()
-      rctx.FeaturePushState.Value <- SageFs.Features.FeatureHooks.recordEval code result sw.ElapsedMilliseconds rctx.FeaturePushState.Value
+      // NOTE: do NOT record the eval into FeaturePushState here — evalFSharpCodeWithOutcome
+      // (called above) already records it via ctx.RecordEval (Mcp.fs), which writes this same
+      // shared ref. Recording again here double-counted every /exec eval in the history
+      // (get_recent_fsi_events / filmstrip showed each cell twice; roast UX-7).
       // Emit eval_result SSE for inline decorations in editor plugins
       match evalFp, evalBsl with
       | Some fp, Some bsl ->
