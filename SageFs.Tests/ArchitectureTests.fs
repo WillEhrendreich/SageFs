@@ -969,7 +969,8 @@ let fileSizeBudgets =
   // "split before you add," not "raise the number."
   let repoRoot = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..")
   let budgets =
-    [ "SageFs/Mcp.fs", 5100
+    [ "SageFs/Mcp.fs", 4400
+      "SageFs/McpAdapter.fs", 850
       "SageFs.Core/Features/LiveTestingTypes.fs", 5100
       "SageFs/SageFsApp.fs", 2900
       "SageFs.Core/AppState.fs", 2000

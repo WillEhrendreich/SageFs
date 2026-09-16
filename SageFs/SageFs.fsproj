@@ -84,6 +84,7 @@
         <Compile Include="McpPushNotifications.fs" />
         <Compile Include="McpStateHandlers.fs" />
         <Compile Include="JupyterKernel.fs" />
+        <Compile Include="McpAdapter.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />
