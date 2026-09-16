@@ -107,6 +107,9 @@ module SessionManager =
     | ScheduleRestart of SessionId
     | StopAll of AsyncReplyChannel<unit>
     | WorkerWarmupProgress of SessionId * progress: string
+    /// One APP_OUTPUT= line of a run_app'd app's stdout, routed to the session
+    /// output stream so the dashboard shows a running console/game app (#82).
+    | WorkerAppOutput of SessionId * line: string
     | UpdateSessionStatus of SessionId * WorkerProtocol.SessionLifecycleStatus
     /// A worker's ready poll saw Ready; it carries the worker's pid and its classified projects.
     | WorkerReportedReady of SessionId * workerPid: int * ClassifiedProject list
@@ -446,10 +449,27 @@ module SessionManager =
               | false -> ()
         match found with
         | Some baseUrl when baseUrl.Length > 0 ->
+          // Port found: disable the startup-timeout guard so the long-lived
+          // post-startup stdout read below can't trip it and kill a live worker.
+          cts.CancelAfter(System.Threading.Timeout.Infinite)
           let proxy = HttpWorkerClient.httpProxy baseUrl
           inbox.Post(SessionCommand.WorkerReady(sessionId, proc.Id, baseUrl, proxy))
-        | _ -> ()
-        do! stderrTask |> Async.AwaitTask
+          // #82: keep reading stdout past the port line for a run_app'd app's
+          // APP_OUTPUT= lines (to EOF; read errors/EOF swallowed, not a spawn fail).
+          let appOutTask =
+            System.Threading.Tasks.Task.Run(fun () ->
+              try
+                let mutable l = proc.StandardOutput.ReadLine()
+                while not (isNull l) do
+                  (match AppOutput.tryParse l with
+                   | Some payload -> inbox.Post(SessionCommand.WorkerAppOutput(sessionId, payload))
+                   | None -> ())
+                  l <- proc.StandardOutput.ReadLine()
+              with _ -> ())
+          do! stderrTask |> Async.AwaitTask
+          do! appOutTask |> Async.AwaitTask
+        | _ ->
+          do! stderrTask |> Async.AwaitTask
       with
       | :? OperationCanceledException when not ct.IsCancellationRequested ->
         // Linked CTS fired: per-session startup timeout, NOT daemon shutdown.
@@ -708,7 +728,8 @@ module SessionManager =
     (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit)
     (onSessionReady: SessionId -> unit)
     (onWarmupProgress: SessionId -> string -> unit)
-    (onSessionFaulted: SessionId -> string -> unit) =
+    (onSessionFaulted: SessionId -> string -> unit)
+    (onAppOutput: SessionId -> string -> unit) =
     let snapshotRef = ref QuerySnapshot.empty
     // default policy: this predicate is defined as "true iff Restarting" — every
     // other SessionLifecycleStatus (present or future) is false by that same
@@ -1529,6 +1550,10 @@ module SessionManager =
           onWarmupProgress id progress
           return newState
 
+        | SessionCommand.WorkerAppOutput(id, line) ->
+          onAppOutput id line  // route a running app's stdout to session output (#82)
+          return state
+
         | SessionCommand.UpdateSessionStatus(id, newStatus) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
@@ -1783,6 +1808,7 @@ module SessionManager =
           | SessionCommand.WorkerSpawnFailed _
           | SessionCommand.ScheduleRestart _
           | SessionCommand.WorkerWarmupProgress _
+          | SessionCommand.WorkerAppOutput _
           | SessionCommand.UpdateSessionStatus _
           | SessionCommand.WorkerReportedReady _
           | SessionCommand.WorkerReportedFaulted _ -> ()
@@ -1813,7 +1839,8 @@ module SessionManager =
     (onInstrumentationMaps: SessionId -> Features.LiveTesting.InstrumentationMap array -> unit)
     (onSessionReady: SessionId -> unit)
     (onWarmupProgress: SessionId -> string -> unit)
-    (onSessionFaulted: SessionId -> string -> unit) =
+    (onSessionFaulted: SessionId -> string -> unit)
+    (onAppOutput: SessionId -> string -> unit) =
     createWith
       defaultRuntime
       ct
@@ -1823,3 +1850,4 @@ module SessionManager =
       onSessionReady
       onWarmupProgress
       onSessionFaulted
+      onAppOutput
