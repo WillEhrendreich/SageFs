@@ -2015,26 +2015,48 @@ let run
   // subscribers fire only when the snapshot actually changed (FSharp.Data.Adaptive).
   let liveBindingsAdaptive = SageFs.Features.LiveBindingsAdaptive.create ()
 
-  // Permanent binding-scope subscriber — updates sharedBindingScope on every eval completion
-  // regardless of MCP SSE client connectivity. Fixes the dashboard "0 bindings" problem when
-  // no editor client is connected. W12(R10): Volatile.Write for ARM memory barrier.
+  // Permanent binding-scope subscriber — updates sharedBindingScope on eval
+  // completion regardless of MCP SSE client connectivity. Fixes the dashboard
+  // "0 bindings" problem when no editor client is connected. W12(R10):
+  // Volatile.Write for ARM memory barrier.
+  //
+  // #88: this fires on EVERY output change (outputCount delta), and each rebuild
+  // re-reads the whole active buffer and re-parses it. Under continuous output —
+  // a run_app'd console/game app (#82), or a burst of evals — that ran per
+  // output line and grew daemon RSS unboundedly. Two guards fix it without
+  // losing the no-client fallback: (1) DEBOUNCE — coalesce a burst of changes
+  // into at most one rebuild per quiet window (bindings are a display panel;
+  // sub-second latency is fine); (2) NEVER WIPE — if the latest output parses to
+  // no bindings (plain app/printfn output), keep the last good scope instead of
+  // overwriting it with None.
   let lastBindingOutputCount = ref -1
+  let bindingRebuildGate = obj ()
+  let mutable bindingRebuildTimer : System.Threading.Timer = null
+  let rebuildBindingScope () =
+    let model = elmRuntime.GetModel()
+    // Use GetActiveBuffer (not GetBuffer) to handle AwaitingSession → staging buffer case.
+    let activeBuf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
+    let rawOutput =
+      activeBuf.FilterToList(fun o -> o.Kind = OutputKind.Result)
+      |> List.rev
+      |> List.map (fun o -> o.Text)
+      |> String.concat "\n"
+    match SageFs.Features.BindingExplorer.fromRawOutput rawOutput with
+    | Some scope -> System.Threading.Volatile.Write(&sharedBindingScope.contents, Some scope)
+    | None -> ()  // no parseable bindings (e.g. app output) — keep the last good scope
   let _bindingScopeSubscription =
     stateChangedEvent.Publish.Subscribe(fun change ->
       match change with
       | SseEvent.ModelChanged (outputCount, _) when outputCount <> lastBindingOutputCount.Value ->
         lastBindingOutputCount.Value <- outputCount
-        let model = elmRuntime.GetModel()
-        // Use GetActiveBuffer (not GetBuffer) to handle AwaitingSession → staging buffer case.
-        // GetBuffer(sessionId) returns empty if session not found; GetActiveBuffer uses staging as fallback.
-        let activeBuf = model.RecentOutput.GetActiveBuffer(model.Sessions.ActiveSessionId)
-        let rawOutput =
-          activeBuf.FilterToList(fun o -> o.Kind = OutputKind.Result)
-          |> List.rev
-          |> List.map (fun o -> o.Text)
-          |> String.concat "\n"
-        let newScope = SageFs.Features.BindingExplorer.fromRawOutput rawOutput
-        System.Threading.Volatile.Write(&sharedBindingScope.contents, newScope)
+        lock bindingRebuildGate (fun () ->
+          match bindingRebuildTimer with
+          | null ->
+            bindingRebuildTimer <-
+              new System.Threading.Timer(
+                (fun _ -> try rebuildBindingScope () with ex -> Log.warn "[binding-scope] rebuild failed: %s" ex.Message),
+                null, 250, System.Threading.Timeout.Infinite)
+          | t -> t.Change(250, System.Threading.Timeout.Infinite) |> ignore)
       | _ -> ())
 
   // Create the multi-agent coordination tracker (in-memory, daemon-lifetime)
