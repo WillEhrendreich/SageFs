@@ -13,7 +13,15 @@ open SageFs.Tests.TestInfrastructure
 
 [<Tests>]
 let tests =
-  testList "MCP tool execution" [
+  // Sequenced: these exercise the MCP tool members against the shared in-process
+  // FSI actor (globalActorResult), and several of them MUTATE it (defining
+  // bindings, driving evals). Run in parallel with the other shared-actor tests
+  // (SessionReset, StableIdentityEval, FsiCrossSubmission, SessionIsolation — all
+  // already testSequenced) they contend on the one FSI session's output capture,
+  // and a concurrent eval/reset intermittently blanks this eval's result text
+  // ("result text should be present" flake, CI-only). Sequencing isolates them
+  // from the parallel phase, matching every sibling shared-actor suite.
+  testSequenced <| testList "MCP tool execution" [
     testTask "hard_reset_fsi_session with rebuild returns before background restart completes" {
       let result = globalActorResult.Value
       let sessionMap = ConcurrentDictionary<string, string>()
