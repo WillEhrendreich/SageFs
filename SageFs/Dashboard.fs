@@ -67,14 +67,22 @@ let dashboardCss =
   use reader = new StreamReader(stream)
   reader.ReadToEnd()
 
+/// The SHA-256 (uppercase hex) of the pinned Datastar bundle bytes below. This
+/// is the ENFORCED pin: DatastarBundleIntegrityTests hashes the embedded
+/// resource and fails the build if it drifts from this value, so the served
+/// bytes can never silently diverge from the reviewed bundle. Upgrading
+/// Datastar means replacing datastar.js AND updating this constant in one
+/// reviewed change — exactly "a separate, testable change."
+let datastarBundleSha256 =
+  "5D6B7794A50A83D82DA962AEC5E382F5AE83AC7AFBC751F903F7A9C6BD433C65"
+
 /// Pinned Datastar client bundle — loaded from the embedded resource and
 /// served by the daemon at /dashboard/datastar.js. WHY pinned + self-hosted:
 /// the dashboard previously fetched starfederation/datastar@develop from a
 /// CDN at runtime — a moving, unversioned branch (supply-chain + XSS
 /// surface, and a version skew breaks every open dashboard tab). The bytes
 /// below are the exact @develop bundle the dashboard was built against,
-/// frozen in-repo (SHA-256 5D6B7794A50A83D82DA962AEC5E382F5AE83AC7AFBC751F
-/// 903F7A9C6BD433C65). Upgrading Datastar is a separate, testable change.
+/// frozen in-repo; its integrity is pinned by `datastarBundleSha256` above.
 let datastarBundle =
   let asm = System.Reflection.Assembly.GetExecutingAssembly()
   use stream = asm.GetManifestResourceStream("SageFs.datastar.js")
