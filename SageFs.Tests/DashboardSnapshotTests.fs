@@ -62,7 +62,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
       { Timestamp = Some "12:30:45"; Kind = ErrorLine; Text = "Actual value was 6.0 but had expected it to be 4.0." }
       { Timestamp = None; Kind = ErrorLine; Text = "   at Expecto.Expect.equal[T](String message, T expected, T actual) in /_/src/Expecto/Expect.fs:line 205" }
       { Timestamp = None; Kind = ErrorLine; Text = "   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T](...) in /_/src/FSharp.Core/async.fs:line 509" }
-      { Timestamp = None; Kind = ErrorLine; Text = "   at RuntimeBugs.StatsTests.testMean() in /home/will/proj/Stats.fs:line 12" }
+      { Timestamp = None; Kind = ErrorLine; Text = "   at RuntimeBugs.StatsTests.testMean() in /code/RuntimeBugs/Stats.fs:line 12" }
       { Timestamp = None; Kind = ErrorLine; Text = "   at <StartupCode$FSI_0007>.$FSI_0007.main@() in FSI_0007.fsx:line 3" }
     ]
     let html = renderOutput lines "No output yet" |> renderNode

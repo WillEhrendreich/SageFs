@@ -161,7 +161,7 @@ let errorMessagesTests =
       let userStack =
         "System.DivideByZeroException: Attempted to divide by zero.\n" +
         "   at Microsoft.FSharp.Core.Operators.op_Division[T1,T2,T3](T1 x, T2 y) in /_/src/FSharp.Core/prim-types.fs:line 4200\n" +
-        "   at RuntimeBugs.Stats.mean(FSharpList`1 xs) in /home/will/proj/Stats.fs:line 12\n" +
+        "   at RuntimeBugs.Stats.mean(FSharpList`1 xs) in /code/RuntimeBugs/Stats.fs:line 12\n" +
         "   at <StartupCode$FSI_0007>.$FSI_0007.main@() in FSI_0007.fsx:line 3"
 
       test "finds the first USER source frame, skipping framework frames" {
@@ -202,7 +202,7 @@ let errorMessagesTests =
       let assertionLine = "Actual value was 6.0 but had expected it to be 4.0."
       let expectoFrame = "   at Expecto.Expect.equal[T](String message, T expected, T actual) in /_/src/Expecto/Expect.fs:line 205"
       let asyncFrame = "   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T](...) in /_/src/FSharp.Core/async.fs:line 509"
-      let userFrame = "   at RuntimeBugs.StatsTests.testMean() in /home/will/proj/Stats.fs:line 12"
+      let userFrame = "   at RuntimeBugs.StatsTests.testMean() in /code/RuntimeBugs/Stats.fs:line 12"
       let fsiFrame = "   at <StartupCode$FSI_0007>.$FSI_0007.main@() in FSI_0007.fsx:line 3"
       let blob =
         [ assertionLine; expectoFrame; asyncFrame; userFrame; fsiFrame ]
