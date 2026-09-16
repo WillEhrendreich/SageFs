@@ -26,6 +26,7 @@ type private RuntimeHarness = {
   Verbs: ResizeArray<Verb>
   GetBuildCalls: unit -> int
   GetStartCalls: unit -> int
+  GetStoppedPids: unit -> int list
 }
 
 let private mkRuntime
@@ -34,6 +35,7 @@ let private mkRuntime
   let mutable buildCalls = 0
   let mutable startCalls = 0
   let verbs = ResizeArray<Verb>()
+  let stoppedPids = ResizeArray<int>()
 
   {
     Runtime =
@@ -45,8 +47,14 @@ let private mkRuntime
             startWorker startCalls |> Result.map (fun p -> ({ Process = p; AdoptedCore = None } : SessionManager.SpawnedWorker))
         AwaitWorkerPort = fun _ _ _ _ -> ()
         StopWorker =
-          fun _ ->
+          fun session ->
             verbs.Add Verb.Stop
+            // Record which OS process this call actually targets — the pid of
+            // the ManagedSession's own `.Process` field, exactly what
+            // `stopWorker` reads in production. This is what a second
+            // consecutive swap must get right: it must target the worker that
+            // is ACTUALLY outgoing, not a stale reference to an earlier one.
+            stoppedPids.Add session.Process.Id
             async { return () }
         RunBuildAsync =
           fun _ _ -> async {
@@ -58,6 +66,7 @@ let private mkRuntime
     Verbs = verbs
     GetBuildCalls = fun () -> buildCalls
     GetStartCalls = fun () -> startCalls
+    GetStoppedPids = fun () -> stoppedPids |> List.ofSeq
   }
 
 let private withHarness runtime run =
@@ -476,6 +485,85 @@ let sessionManagerSpawnFirstRestartTests =
         sessionReady.Info.Status
         |> isReady
         |> Expect.isTrue "session must return to Ready after the swap commits"
+
+    testCase "T9 — a second consecutive spawn-first swap retires ITS OWN outgoing worker, not the first swap's already-retired one" <| fun _ ->
+      // Reproduces the confirmed leak: back-to-back hard_reset rebuild:true on
+      // the same session leaks the intermediate worker. Needs three distinct
+      // live OS processes to play worker0 (created), worker1 (first swap's
+      // replacement / second swap's outgoing), and worker2 (second swap's
+      // replacement).
+      let distinctProcesses =
+        Process.GetProcesses()
+        |> Array.filter (fun p -> p.Id <> Process.GetCurrentProcess().Id && p.Id > 0)
+      if distinctProcesses.Length < 2 then
+        skiptest "need three distinct live processes to simulate three worker generations"
+      let worker1Process = distinctProcesses.[0]
+      let worker2Process = distinctProcesses.[1]
+
+      let runtime =
+        mkRuntime
+          (fun _ -> Ok "build ok")
+          (fun call ->
+            match call with
+            | 1 -> Ok(Process.GetCurrentProcess())
+            | 2 -> Ok worker1Process
+            | _ -> Ok worker2Process)
+
+      withHarness runtime.Runtime <| fun harness ->
+        let info = createSession harness
+        makeSessionReady harness info
+        let worker0Pid =
+          getManagedSession harness info.Id
+          |> getWorkerPid
+
+        // Swap #1: worker0 -> worker1.
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        | Ok _ -> ()
+        | Error err -> failtestf "restart #1 failed: %s" (SageFsError.describe err)
+        harness.Mailbox.Post(
+          SessionCommand.WorkerReady(
+            info.Id,
+            worker1Process.Id,
+            "http://localhost:4124",
+            readyProxy))
+        harness.Mailbox.Post(SessionCommand.UpdateSessionStatus(info.Id, SessionLifecycleStatus.Ready { Pid = worker1Process.Id; Port = Some 4124 }))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> ignore
+
+        let afterFirstSwap = getManagedSession harness info.Id
+        SessionLifecycleStatus.workerPid afterFirstSwap.Info.Status
+        |> Expect.equal "swap #1 commits worker1's pid" (Some worker1Process.Id)
+        // Registry bookkeeping: the currently-registered session's own Process
+        // handle must actually BE the live worker (worker1), not a lingering
+        // reference to the already-retired worker0 — this is the root cause
+        // under test: if `.Process` still points at worker0 here, swap #2 will
+        // park the wrong worker in PendingSwap and never retire worker1.
+        afterFirstSwap.Process.Id
+        |> Expect.equal "the registered session's own Process must be the NEW worker after a committed swap" worker1Process.Id
+
+        // Swap #2: worker1 -> worker2.
+        match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.RestartSession(info.Id, false, reply)) with
+        | Ok _ -> ()
+        | Error err -> failtestf "restart #2 failed: %s" (SageFsError.describe err)
+        harness.Mailbox.Post(
+          SessionCommand.WorkerReady(
+            info.Id,
+            worker2Process.Id,
+            "http://localhost:4125",
+            readyProxy))
+        harness.Mailbox.PostAndReply(fun reply -> SessionCommand.GetSession(info.Id, reply))
+        |> ignore
+
+        let afterSecondSwap = getManagedSession harness info.Id
+        SessionLifecycleStatus.workerPid afterSecondSwap.Info.Status
+        |> Expect.equal "swap #2 commits worker2's pid" (Some worker2Process.Id)
+
+        // The decisive assertion: two swaps must retire two DISTINCT workers —
+        // worker0 (retired by swap #1) then worker1 (retired by swap #2). A
+        // leak shows up as swap #2 retiring worker0 again (or not retiring
+        // worker1 at all), leaving worker1 as an orphaned live process.
+        runtime.GetStoppedPids()
+        |> Expect.equal "each swap must retire its own outgoing worker — no worker retired twice, none skipped" [ worker0Pid; worker1Process.Id ]
   ]
 
 [<Tests>]

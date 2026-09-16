@@ -834,8 +834,15 @@ module SessionManager =
           // The fresh spawn re-adopted the newest SageFs.Core on disk, so the
           // session's AdoptedCore is updated now; the WorkerReady commit
           // (`{ session with ... }`) then inherits this fresh value.
+          //
+          // Process MUST become the fresh spawn here: `session` (this
+          // record's pre-update value) is what a LATER swap parks in
+          // PendingSwap to retire. Leaving `.Process` stale here made a
+          // second consecutive swap retire an already-dead process and leak
+          // the real outgoing worker.
           let restarting =
             { session with
+                Process = proc
                 Proxy = pendingProxy
                 WorkerBaseUrl = ""
                 Workflow = workflow
