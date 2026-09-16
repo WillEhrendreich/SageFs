@@ -41,11 +41,15 @@ module EvalStats =
 let availableTools (state: SessionState) : string list =
   match state with
   | Uninitialized ->
+    // switch_session must be available here: when the ACTIVE session is
+    // uninitialized/absent but OTHER sessions exist and are Ready, selecting one
+    // is exactly the recovery the "N sessions exist... switch_session to select
+    // one" hint points at — omitting it was a catch-22 (roast UX / affordances).
     [ "get_fsi_status"; "get_friction_report"; "get_available_projects"
-      "list_sessions"; "create_session"; "decompose_pipeline" ]
+      "list_sessions"; "switch_session"; "create_session"; "decompose_pipeline" ]
   | WarmingUp ->
     [ "get_fsi_status"; "get_recent_fsi_events"; "get_friction_report"
-      "get_available_projects"; "list_sessions"; "create_session"
+      "get_available_projects"; "list_sessions"; "switch_session"; "create_session"
       "decompose_pipeline" ]
   | Ready ->
     [ "send_fsharp_code"

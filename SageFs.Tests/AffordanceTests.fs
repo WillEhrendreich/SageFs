@@ -30,6 +30,15 @@ let affordanceTests =
         |> List.contains "send_fsharp_code"
         |> Expect.isFalse "should not offer eval during warmup"
 
+      testCase "Uninitialized and WarmingUp offer switch_session (no select-a-session catch-22)"
+      <| fun _ ->
+        availableTools Uninitialized
+        |> List.contains "switch_session"
+        |> Expect.isTrue "must offer switch_session when the active session is uninitialized but others exist"
+        availableTools WarmingUp
+        |> List.contains "switch_session"
+        |> Expect.isTrue "must offer switch_session while a session warms up"
+
       testCase "Ready state offers send_fsharp_code"
       <| fun _ ->
         availableTools Ready
