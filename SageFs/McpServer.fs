@@ -2414,10 +2414,7 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
       let workflow =
         let mutable wfProp = Unchecked.defaultof<System.Text.Json.JsonElement>
         match root.TryGetProperty("workflow", &wfProp) with
-        | true ->
-          match wfProp.GetString() with
-          | "WebLive" | "Live" -> SageFs.WorkflowTypes.SessionWorkflow.WebLive SageFs.WorkflowTypes.BrowserRefreshConfig.defaults
-          | _ -> SageFs.WorkflowTypes.SessionWorkflow.Interactive
+        | true -> SageFs.WorkflowTypes.SessionWorkflow.ofString (wfProp.GetString())
         | false -> SageFs.WorkflowTypes.SessionWorkflow.Interactive
       // Finding #13: unlike the dashboard's own session-create path
       // (DashboardTypes.resolveSessionProjects), this route previously fed

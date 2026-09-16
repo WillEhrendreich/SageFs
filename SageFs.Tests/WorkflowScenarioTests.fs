@@ -266,6 +266,29 @@ let private defaultWorkflowScenarios =
 
 // ── Root test list ──────────────────────────────────────────
 
+// The single string→workflow parse shared by the CLI, HTTP API, and the MCP
+// create_session tool. WHY it matters: create_session used to hardcode
+// Interactive, so an agent could not start a hot-reload session at all —
+// ofString is what lets an agent choose the mode. These pin the aliases and
+// the safe default (unknown/empty → Interactive, never a surprise hot reload).
+let ofStringScenarios =
+  testList "SessionWorkflow.ofString" [
+    testCase "every WebLive alias parses to hot reload, case-insensitively" <| fun () ->
+      [ "live"; "Live"; "LIVE"; "weblive"; "WebLive"; "WEBLIVE"; "web"; "  live  " ]
+      |> List.map (SessionWorkflow.ofString >> SessionWorkflow.isHotReloadActive)
+      |> Expect.allEqual "every WebLive alias must enable hot reload" true
+
+    testCase "interactive and repl parse to the full REPL" <| fun () ->
+      [ "interactive"; "Interactive"; "repl"; "REPL" ]
+      |> List.map SessionWorkflow.ofString
+      |> Expect.allEqual "interactive/repl must parse to Interactive" SessionWorkflow.Interactive
+
+    testCase "unknown, empty, and null default to Interactive, never WebLive" <| fun () ->
+      [ ""; "   "; null; "garbage"; "webbly" ]
+      |> List.map (SessionWorkflow.ofString >> SessionWorkflow.isHotReloadActive)
+      |> Expect.allEqual "unknown/empty/null must default to Interactive (hot reload OFF)" false
+  ]
+
 [<Tests>]
 let workflowScenarioTests =
   testList "Workflow scenarios" [
@@ -275,4 +298,5 @@ let workflowScenarioTests =
     transitionCostScenarios
     detectionScenarios
     defaultWorkflowScenarios
+    ofStringScenarios
   ]

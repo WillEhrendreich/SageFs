@@ -1044,12 +1044,16 @@ projects: A JSON array of .fsproj paths — projects=["path/to/Foo.fsproj"] — 
         [<Description("Working directory for the session")>] working_directory: string,
         [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Used for session routing and multi-agent coordination. Defaults to 'mcp' if omitted.")>]
         [<Optional; DefaultParameterValue("")>]
-        agentName: string
+        agentName: string,
+        [<Description("Session mode: 'interactive' (default) for a full REPL, or 'live'/'weblive' for a web app with hot reload (browser auto-refresh on save; the REPL is restricted to expressions). Case-insensitive.")>]
+        [<Optional; DefaultParameterValue("")>]
+        workflow: string
     ) : Task<string> =
         let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "mcp" | false -> agentName
-        logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}, agent={Agent}", projects, working_directory, agent)
+        let sessionWorkflow = SageFs.WorkflowTypes.SessionWorkflow.ofString workflow
+        logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}, agent={Agent}, workflow={Workflow}", projects, working_directory, agent, SageFs.WorkflowTypes.SessionWorkflow.label sessionWorkflow)
         let projectList = SageFs.McpAdapter.parseProjectsArg projects
-        createSession ctx agent projectList working_directory SageFs.WorkflowTypes.SessionWorkflow.Interactive |> withEcho ctx "create_session"
+        createSession ctx agent projectList working_directory sessionWorkflow |> withEcho ctx "create_session"
 
     [<McpServerTool>]
     [<Description("""List all active FSI sessions with their metadata: session ID, project names, current status, working directory, and last activity timestamp.

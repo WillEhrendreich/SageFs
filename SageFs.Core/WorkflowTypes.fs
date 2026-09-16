@@ -93,6 +93,17 @@ module SessionWorkflow =
   /// Default workflow — full REPL, no restrictions.
   let defaultWorkflow = SessionWorkflow.Interactive
 
+  /// Parse a user- or agent-supplied workflow string into a SessionWorkflow.
+  /// Case-insensitive and alias-tolerant, so the CLI, HTTP API, and MCP tools
+  /// all accept the same spellings ("live"/"weblive"/"web" → hot reload;
+  /// "interactive"/"repl" → full REPL). Unknown or empty input defaults to
+  /// Interactive, the safe full-REPL mode. This is the single source of truth
+  /// for the string→workflow mapping — surfaces call it instead of re-matching.
+  let ofString (s: string) : SessionWorkflow =
+    match (s |> Option.ofObj |> Option.defaultValue "").Trim().ToLowerInvariant() with
+    | "weblive" | "live" | "web" -> SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+    | _ -> SessionWorkflow.Interactive
+
   /// Convert from the legacy bool representation.
   /// Used at the boundary where env vars are parsed.
   let fromHotReloadBool = function
