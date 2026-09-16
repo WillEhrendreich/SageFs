@@ -1101,6 +1101,7 @@ ROUTING BEHAVIOR:
         logger.LogDebug("MCP-TOOL: switch_session called: id={Id}", session_id)
         switchSession ctx "mcp" session_id |> withEcho ctx "switch_session"
 
+    [<McpServerTool>]
     [<Description("""Switch the workflow mode for a session.
 Workflows control the tradeoff between REPL capability and browser hot reload:
 - REPL (Interactive): Full type redefinition, interactive exploration
@@ -1111,13 +1112,15 @@ Switching creates a new session — REPL definitions and cell state are lost."""
     member _.switch_workflow(
         [<Description("Target workflow: 'interactive' or 'weblive' (aliases: 'repl', 'live')")>]
         target: string,
-        [<Description("Working directory of the MCP client.")>]
+        [<Description("Working directory of the MCP client. Omit to target the active session.")>]
+        [<Optional; DefaultParameterValue("")>]
         working_directory: string,
         [<Description("Preview only — returns transition cost without switching. Default: false")>]
-        dryRun: System.Nullable<bool>
+        [<Optional; DefaultParameterValue(false)>]
+        dryRun: bool
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
-        let dry = match dryRun.HasValue with | true -> dryRun.Value | false -> false
+        let dry = dryRun
         logger.LogDebug("MCP-TOOL: switch_workflow called: target={Target}, dir={Dir}, dryRun={DryRun}", target, working_directory, dry)
         switchWorkflow ctx "mcp" wd target dry |> withEcho ctx "switch_workflow"
 

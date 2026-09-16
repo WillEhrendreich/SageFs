@@ -199,10 +199,10 @@ let affordanceAlgebraTests =
 let toolRegistrationTests =
   testList "tool registration completeness" [
 
-    testCase "affordance module covers exactly 36 unique tool names" <| fun _ ->
+    testCase "affordance module covers exactly 37 unique tool names" <| fun _ ->
       allAffordanceTools
       |> List.length
-      |> Expect.equal "unique affordance tools" 36
+      |> Expect.equal "unique affordance tools" 37
 
     testCase "all affordance tool names are non-empty and non-whitespace"
     <| fun _ ->
@@ -229,10 +229,11 @@ let toolRegistrationTests =
           "SageFsTools type not found in loaded assemblies; \
            reflection test skipped"
       | Some methods ->
-        // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
-        // Slice 2) + the 1 item-14c cohort tool (set_integration_ref).
+        // 42 (incl. switch_workflow, finally [<McpServerTool>]-registered) + the
+        // 7 Claims v1 cohort tools (cohort-integration-plan.md Slice 2) + the 1
+        // item-14c cohort tool (set_integration_ref).
         methods.Length
-          |> Expect.equal "MCP tool method count" 49
+          |> Expect.equal "MCP tool method count" 50
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -305,7 +306,7 @@ let stateTransitionSafetyTests =
               "checkToolAvailability threw for (%A, %s): %s"
               state tool ex.Message))
       tested
-          |> Expect.equal "should test all 180 state×tool combos" 180
+          |> Expect.equal "should test all 185 state×tool combos" 185
 
     testCase "all rejections return ToolNotAvailable specifically" <| fun _ ->
       allStates
@@ -384,7 +385,7 @@ let stateTransitionSafetyTests =
         | Ok _ ->
           failtestf "bogus tool must be rejected in %A" state)
 
-    testCase "245-combo safety: all MCP tools × all states never throw (reflection)"
+    testCase "250-combo safety: all MCP tools × all states never throw (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -408,7 +409,7 @@ let stateTransitionSafetyTests =
         // Slice 2) + the 1 item-14c cohort tool (set_integration_ref) = 49.
         tested
         |> Expect.equal
-          "should test 5 states × 49 tools = 245" 245
+          "should test 5 states × 50 tools = 250" 250
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──

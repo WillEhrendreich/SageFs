@@ -62,6 +62,7 @@ let requiredParamsByTool =
     "create_session", set ["projects"; "working_directory"]
     "stop_session", set ["session_id"]
     "switch_session", set ["session_id"]
+    "switch_workflow", set ["target"]
     "targeted_verify", set ["behavior"]
     "report_friction", set ["tool_name"; "feedback_kind"; "short_reason"]
     "explain_test_failure", set ["test_name"]
@@ -219,7 +220,7 @@ let descriptionPropertyTests =
       // Slice 2: join_cohort/leave_cohort/acquire_claim/release_claim/
       // reassign_claim/request_landing/get_cohort_status) + the 1 item-14c
       // cohort tool (set_integration_ref).
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 49
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 50
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->
