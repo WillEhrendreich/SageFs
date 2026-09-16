@@ -984,3 +984,45 @@ let fileSizeBudgets =
         |> Expect.isTrue
           (sprintf "%s is %d lines, over its %d budget — split it (and ratchet the budget DOWN), never raise the budget" rel lines budget)
   ]
+
+[<Tests>]
+let blockingCallBudgets =
+  // Ratchet guard (roast-8 §9 / §14 item 5): blocking calls in test bodies —
+  // Async.RunSynchronously, Thread.Sleep poll loops, .Wait(, and
+  // GetAwaiter().GetResult() — starve the thread pool and make the suite time
+  // out. The repo bans them; genuinely-justified sleeps (real timer tests,
+  // signal-wait helpers) are the documented exceptions the current counts
+  // already fold in. These budgets FREEZE the current debt at exactly its
+  // present level: any NEW blocking call fails the build. When a test is
+  // converted to testTask/testAsync + awaitable conditions, RATCHET THE BUDGET
+  // DOWN — never up. A failure here means "convert, don't add."
+  let testsRoot = __SOURCE_DIRECTORY__
+  // Every test source file EXCEPT this one (it names the patterns as string
+  // literals below, which would otherwise count itself) and generated bin/obj.
+  let sourceFiles =
+    System.IO.Directory.GetFiles(testsRoot, "*.fs", System.IO.SearchOption.AllDirectories)
+    |> Array.filter (fun p ->
+      let n = p.Replace('\\', '/')
+      not (n.Contains "/bin/")
+      && not (n.Contains "/obj/")
+      && not (n.EndsWith "ArchitectureTests.fs"))
+  let countPattern (pattern: string) =
+    sourceFiles
+    |> Array.sumBy (fun f ->
+      System.IO.File.ReadAllLines f
+      |> Array.filter (fun line -> line.Contains pattern)
+      |> Array.length)
+  // pattern, current frozen count. Ratchet DOWN as tests are converted.
+  let budgets =
+    [ "Async.RunSynchronously", 44
+      "Thread.Sleep", 42
+      ".Wait(", 23
+      "GetAwaiter().GetResult()", 24 ]
+  testList "Architecture — blocking-call budgets (ratchet down, never raise)" [
+    for (pattern, budget) in budgets ->
+      testCase (sprintf "WHY — test bodies keep '%s' at or below %d, so the thread-pool-starving blocking-call debt can only shrink" pattern budget) <| fun _ ->
+        let actual = countPattern pattern
+        (actual <= budget)
+        |> Expect.isTrue
+          (sprintf "'%s' now appears on %d test lines, over the %d budget — convert a test to testTask/testAsync + awaitable conditions (and ratchet the budget DOWN), never raise it" pattern actual budget)
+  ]
