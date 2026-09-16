@@ -1697,19 +1697,50 @@ let run
   let wakeLiveTestTick : (SageFsModel -> unit) ref = ref ignore
   let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef (fun model -> wakeLiveTestTick.Value model) cts.Token
 
-  // #82: route a run_app'd app's stdout lines (posted as WorkerAppOutput, then
-  // surfaced through the create callback above) into that session's output
-  // panel, reusing the existing OutputEmitted append path. Assigned here because
-  // elmRuntime only exists now.
+  // #82: route a run_app'd app's stdout into that session's output panel via the
+  // existing OutputEmitted append path — BATCHED (#88). A continuous app (a
+  // console ticker, a 60fps game) emits far faster than the dashboard needs to
+  // repaint, and one model change per line churns the daemon heap into
+  // multi-GB RSS. So coalesce lines per session and flush at most every 150ms as
+  // a single OutputEmitted — the model-change rate is bounded regardless of
+  // output rate. Kind = Info (not Result) so app output never triggers the
+  // binding-scope rebuild, which parses only Result output for `val` bindings.
+  let appOutputGate = obj ()
+  let appOutputPending = System.Collections.Generic.Dictionary<string, System.Text.StringBuilder>()
+  let flushAppOutput () =
+    let toFlush =
+      lock appOutputGate (fun () ->
+        let items = [ for kv in appOutputPending -> kv.Key, kv.Value.ToString() ]
+        appOutputPending.Clear()
+        items)
+    for (sidStr, text) in toFlush do
+      let trimmed = text.TrimEnd('\n')
+      if trimmed.Length > 0 then
+        elmRuntime.Dispatch(
+          SageFsMsg.Event(
+            TuiEvent.OutputEmitted
+              { Kind = OutputKind.Info
+                Text = trimmed
+                Timestamp = System.DateTime.UtcNow
+                SessionId = sidStr }))
+  // Persistent periodic flusher (every 150ms; a no-op when nothing is pending).
+  // MUST be rooted for the daemon's lifetime: a `System.Threading.Timer` whose
+  // only reference is an unused local is collected (the task state machine never
+  // captures it), silently stopping the flush. It is kept alive by its disposal
+  // at graceful shutdown below (mirrors activityCleanupTimer/cohortReaperTimer).
+  let appOutputFlushTimer =
+    new System.Threading.Timer(
+      (fun _ -> try flushAppOutput () with ex -> Log.warn "[app-output] flush failed: %s" ex.Message),
+      null, 150, 150)
   onAppOutputCallback <-
     fun sidStr line ->
-      elmRuntime.Dispatch(
-        SageFsMsg.Event(
-          TuiEvent.OutputEmitted
-            { Kind = OutputKind.Result
-              Text = line
-              Timestamp = System.DateTime.UtcNow
-              SessionId = sidStr }))
+      lock appOutputGate (fun () ->
+        match appOutputPending.TryGetValue sidStr with
+        | true, sb -> sb.Append(line: string).Append('\n') |> ignore
+        | false, _ ->
+          let sb = System.Text.StringBuilder()
+          sb.Append(line: string).Append('\n') |> ignore
+          appOutputPending.[sidStr] <- sb)
 
   // The single owner of this daemon's implicit cohort (cohort-integration-plan.md
   // Slice 2, D1/D2/D4/D5): holds the live CohortState, appends every applied
@@ -3064,6 +3095,9 @@ let run
   try cohortReaperTimer.Dispose()
   with :? System.ObjectDisposedException -> ()
   try watcherSyncTimer.Dispose()
+  with :? System.ObjectDisposedException -> ()
+  // #82: also roots appOutputFlushTimer for the daemon's lifetime (see its def).
+  try appOutputFlushTimer.Dispose()
   with :? System.ObjectDisposedException -> ()
   match ttlTimer with
   | Some t ->
