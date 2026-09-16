@@ -61,6 +61,15 @@ body::after {
 
 /* ── Base ─────────────────────────────────────────────────────── */
 
+/* `rem` is always relative to the ROOT (html) element's font-size, not
+   body's — Ctrl+/- (Dashboard.fs) sets --font-size on document.documentElement
+   (html === :root), but only `body` consumed it below, so every `rem`-sized
+   control on the page (buttons, panels, text) silently ignored zoom (roast
+   UX-8). Setting it here too makes every rem in the stylesheet track zoom. */
+html {
+  font-size: var(--font-size);
+}
+
 body {
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
   background: var(--bg-default);
@@ -404,17 +413,33 @@ h2 {
   }
 }
 
+/* One shared control idiom for every non-icon dashboard action button
+   (EVAL/RESET/HARD_RESET, CLEAR, Discover/Create, Send Report, Hot Reload
+   Watch/Unwatch, Live Testing toggle, ...): flex-centered content, a fixed
+   height, and consistent gap/padding baked into the base class — so a
+   caller never has to re-declare the same five properties inline just to
+   look consistent (roast UX-8: "eval-btn/panel-header-btn auto-sized vs
+   .session-btn 28px" — this is .session-btn's uniform-box doctrine applied
+   to the labeled-text button family). A caller may still override height/
+   font-size inline for a genuinely denser context (e.g. a narrow sidebar
+   panel); the override wins, only the shared shape is no longer duplicated. */
 .eval-btn {
   background: var(--fg-blue);
   color: var(--bg-default);
   border: none;
   border-radius: 0;
-  padding: 0.5rem 1rem;
   cursor: pointer;
   font-family: inherit;
   font-weight: bold;
   font-size: 0.85rem;
   transition: opacity 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 2rem;
+  padding: 0 0.75rem;
+  flex-shrink: 0;
 
   &:hover {
     opacity: 0.85;
@@ -430,34 +455,21 @@ h2 {
   }
 }
 
-/* Eval action row (EVAL / RESET / HARD_RESET / Load File).
-   One shared control idiom: every button is the same fixed height with
-   flex-centered glyphs and labels, and consistent gaps between them —
-   no per-button size drift (taste: uniform fixed-size square controls). */
+.eval-btn-reset {
+  background: var(--fg-green);
+}
+
+.eval-btn-hard {
+  background: var(--fg-red);
+}
+
+/* Eval action row (EVAL / RESET / HARD_RESET / Load File). */
 .eval-controls {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 0.5rem;
-
-  & .eval-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 2px;
-    height: 2rem;
-    padding: 0 0.75rem;
-    flex-shrink: 0;
-  }
-
-  & .eval-btn-reset {
-    background: var(--fg-green);
-  }
-
-  & .eval-btn-hard {
-    background: var(--fg-red);
-  }
 }
 
 /* ── Editor ───────────────────────────────────────────────────── */
