@@ -1660,6 +1660,10 @@ let run
     fun _ _ -> ()
   let mutable onWarmupProgressCallback : (string -> string -> unit) =
     fun _ _ -> ()
+  // #82: assigned after elmRuntime exists (below) — routes a run_app'd app's
+  // stdout lines to the session output panel via TuiEvent.OutputEmitted.
+  let mutable onAppOutputCallback : (string -> string -> unit) =
+    fun _ _ -> ()
 
   // Create SessionManager — the single source of truth for all sessions
   // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
@@ -1671,6 +1675,7 @@ let run
       (fun sid -> stateChangedEvent.Trigger (SessionReady sid))
       (fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress)
       (fun sid error -> stateChangedEvent.Trigger (SessionFaulted (sid, error)))
+      (fun sid line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) line)
 
   let sessionOps = createSessionOps sessionManager readSnapshot manifestOwner
   // String-to-SessionId adapters for proxyToSession (which takes string callbacks)
@@ -1691,6 +1696,20 @@ let run
   // assigned once the tick timer exists (below).
   let wakeLiveTestTick : (SageFsModel -> unit) ref = ref ignore
   let elmRuntime = createElmRuntime sessionManager readSnapshot httpClient stateChangedEvent watcherManagerRef (fun model -> wakeLiveTestTick.Value model) cts.Token
+
+  // #82: route a run_app'd app's stdout lines (posted as WorkerAppOutput, then
+  // surfaced through the create callback above) into that session's output
+  // panel, reusing the existing OutputEmitted append path. Assigned here because
+  // elmRuntime only exists now.
+  onAppOutputCallback <-
+    fun sidStr line ->
+      elmRuntime.Dispatch(
+        SageFsMsg.Event(
+          TuiEvent.OutputEmitted
+            { Kind = OutputKind.Result
+              Text = line
+              Timestamp = System.DateTime.UtcNow
+              SessionId = sidStr }))
 
   // The single owner of this daemon's implicit cohort (cohort-integration-plan.md
   // Slice 2, D1/D2/D4/D5): holds the live CohortState, appends every applied

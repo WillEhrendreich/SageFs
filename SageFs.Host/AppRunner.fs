@@ -226,6 +226,17 @@ let private launch
         hostBuilt.TrySetResult host |> ignore
       | _ -> ()
   use _subscription = subscribeHosting onEvent
+  // #82: surface the running app's stdout. The app writes to Console.Out on the
+  // thread below; install a persistent line-tagging tee (APP_OUTPUT=<line> to the
+  // real stdout FD) so the daemon's kept-alive worker-stdout reader routes it to
+  // the session output panel. Idempotent + left installed: it survives the eval
+  // loop's temporary Console.SetOut/restore (the eval captures it as originalOut).
+  let () =
+    match System.Console.Out with
+    | :? SageFs.AppOutput.AppOutputWriter -> ()
+    | _ ->
+      let rawStdout = new System.IO.StreamWriter(System.Console.OpenStandardOutput(), AutoFlush = true)
+      System.Console.SetOut(new SageFs.AppOutput.AppOutputWriter(rawStdout))
   let thread =
     Thread(
       (fun () ->
