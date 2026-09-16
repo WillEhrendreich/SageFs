@@ -7,6 +7,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.McpTools
+open SageFs.McpSessionRouting
 open SageFs.Tests.TestInfrastructure
 open SageFs.Tests.SharedGenerators
 open System.Collections.Concurrent
@@ -253,6 +254,7 @@ module WorkingDirDeepMatching =
   /// requests to the owning session instead of reporting it missing.
 
   open SageFs.McpTools
+open SageFs.McpSessionRouting
 
   let mkInfo id workDir : WorkerProtocol.SessionInfo =
     { Id = id; Name = None; Projects = []
