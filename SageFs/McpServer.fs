@@ -1279,20 +1279,44 @@ let wireModelChangeHandlers
             PushEvent.TestResultsBatch payload)
           ctx.TestEventBroadcast.Trigger(
             SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload)
+          // Per-file coverage projection (`projectWithCoverage` does a Map.ofSeq
+          // tree-rebalance per annotated file) is the daemon's dominant model-
+          // change cost. `shouldPushTestSummary` returns true on EVERY change
+          // while a run is complete (the common idle case), so without this
+          // guard the 40 Hz test-cycle heartbeat re-projects unchanged coverage
+          // and pegs multiple cores. Skip it when the test/coverage state has
+          // not changed since the last projection (roast §3/§6, task #89).
+          let projectionKey =
+            SageFs.McpStateHandlers.testSummaryProjectionKey
+              (string lt.Activation)
+              lt.DiscoveryGeneration
+              (RunGeneration.value lt.LastGeneration)
+              (TestRunPhase.isAnyRunning lt.RunPhases)
+              sessionEntries.Length
+              activeId
+          let recomputeCoverage, mcState' =
+            SageFs.McpStateHandlers.shouldRecomputeTestSummary projectionKey modelChangeState.Value
+          modelChangeState.Value <- mcState'
           let files =
-            sessionEntries
-            |> Array.choose (fun e ->
-              match e.Origin with
-              | TestOrigin.SourceMapped (f, _) -> Some f
-              | _ -> None)
-            |> Array.distinct
+            match recomputeCoverage with
+            | false -> [||]
+            | true ->
+              sessionEntries
+              |> Array.choose (fun e ->
+                match e.Origin with
+                | TestOrigin.SourceMapped (f, _) -> Some f
+                | _ -> None)
+              |> Array.distinct
           let instrFiles =
-            model.LiveTesting.InstrumentationMaps
-            |> Map.values |> Seq.collect id
-            |> Seq.collect (fun m -> m.Slots |> Array.map (fun s -> s.File))
-            |> Seq.distinct
-            |> Seq.filter (fun f -> not (Array.contains f files))
-            |> Array.ofSeq
+            match recomputeCoverage with
+            | false -> [||]
+            | true ->
+              model.LiveTesting.InstrumentationMaps
+              |> Map.values |> Seq.collect id
+              |> Seq.collect (fun m -> m.Slots |> Array.map (fun s -> s.File))
+              |> Seq.distinct
+              |> Seq.filter (fun f -> not (Array.contains f files))
+              |> Array.ofSeq
           let allFiles = Array.append files instrFiles
           for file in allFiles do
             let fa = SageFs.Features.LiveTesting.FileAnnotations.projectWithCoverage file model.LiveTesting

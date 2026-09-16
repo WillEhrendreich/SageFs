@@ -154,6 +154,67 @@ let throttleTests = testList "shouldPushTestSummary" [
   }
 ]
 
+let testSummaryDedupTests = testList "testSummaryProjectionKey / shouldRecomputeTestSummary" [
+  test "key is stable for identical inputs" {
+    let a = testSummaryProjectionKey "Active" 3L 7 false 42 "abcd1234"
+    let b = testSummaryProjectionKey "Active" 3L 7 false 42 "abcd1234"
+    a |> Expect.equal "same inputs => same key" b
+  }
+
+  test "key changes when the run generation advances" {
+    let before = testSummaryProjectionKey "Active" 3L 7 false 42 "abcd1234"
+    let after = testSummaryProjectionKey "Active" 3L 8 false 42 "abcd1234"
+    after |> Expect.notEqual "a new run generation must change the key" before
+  }
+
+  test "key changes when the discovery generation advances" {
+    let before = testSummaryProjectionKey "Active" 3L 7 false 42 "abcd1234"
+    let after = testSummaryProjectionKey "Active" 4L 7 false 42 "abcd1234"
+    after |> Expect.notEqual "a new discovery generation must change the key" before
+  }
+
+  test "key changes when entry count changes" {
+    let before = testSummaryProjectionKey "Active" 3L 7 false 42 "abcd1234"
+    let after = testSummaryProjectionKey "Active" 3L 7 false 43 "abcd1234"
+    after |> Expect.notEqual "a different entry count must change the key" before
+  }
+
+  test "key changes when a run starts (anyRunning flips)" {
+    let idle = testSummaryProjectionKey "Active" 3L 7 false 42 "abcd1234"
+    let running = testSummaryProjectionKey "Active" 3L 7 true 42 "abcd1234"
+    running |> Expect.notEqual "anyRunning must change the key" idle
+  }
+
+  test "key changes per active session so a switch always re-projects" {
+    let s1 = testSummaryProjectionKey "Active" 3L 7 false 42 "aaaa1111"
+    let s2 = testSummaryProjectionKey "Active" 3L 7 false 42 "bbbb2222"
+    s2 |> Expect.notEqual "a different active session must change the key" s1
+  }
+
+  test "recompute is skipped when the key matches the last projection" {
+    let key = testSummaryProjectionKey "Active" 3L 7 false 42 "abcd1234"
+    let state = { ModelChangeState.empty with LastTestSummaryKey = key }
+    let recompute, state' = shouldRecomputeTestSummary key state
+    recompute |> Expect.isFalse "unchanged state must skip the expensive projection"
+    state'.LastTestSummaryKey |> Expect.equal "state is untouched on a skip" key
+  }
+
+  test "recompute proceeds and records the key when it changed" {
+    let oldKey = testSummaryProjectionKey "Active" 3L 7 false 42 "abcd1234"
+    let newKey = testSummaryProjectionKey "Active" 3L 8 false 42 "abcd1234"
+    let state = { ModelChangeState.empty with LastTestSummaryKey = oldKey }
+    let recompute, state' = shouldRecomputeTestSummary newKey state
+    recompute |> Expect.isTrue "a changed key must recompute"
+    state'.LastTestSummaryKey |> Expect.equal "the new key is recorded" newKey
+  }
+
+  test "first projection (empty last key) always recomputes" {
+    let key = testSummaryProjectionKey "ReadyZeroTests" 1L 0 false 0 "abcd1234"
+    let recompute, _ = shouldRecomputeTestSummary key ModelChangeState.empty
+    recompute |> Expect.isTrue "the first appearance of a state must push (zero-test observability)"
+  }
+]
+
 [<Tests>]
 let allStateHandlerTests = testList "McpStateHandlers" [
   extractDiagErrorsTests
@@ -161,4 +222,5 @@ let allStateHandlerTests = testList "McpStateHandlers" [
   processTestTraceChangeTests
   processBindingsChangeTests
   throttleTests
+  testSummaryDedupTests
 ]

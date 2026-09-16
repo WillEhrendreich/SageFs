@@ -11,6 +11,9 @@ type ModelChangeState = {
   LastTestSsePushTicks: int64
   LastTestTraceJson: string
   TestSseThrottleMs: int64
+  /// Dedup key of the last test-summary/coverage projection (see
+  /// `testSummaryProjectionKey`). "" until the first push.
+  LastTestSummaryKey: string
 }
 
 module ModelChangeState =
@@ -20,6 +23,7 @@ module ModelChangeState =
     LastTestSsePushTicks = 0L
     LastTestTraceJson = ""
     TestSseThrottleMs = 250L
+    LastTestSummaryKey = ""
   }
 
 /// Effects produced by processing a model change.
@@ -62,6 +66,36 @@ let processTestTraceChange
     [ BroadcastTestSse traceJson ]
   | false ->
     state, []
+
+/// A cheap dedup key for the test-summary + per-file coverage projection.
+/// The projection's output is a pure function of the live-test generations,
+/// activation, run-in-flight state and discovered-entry count. When this key is
+/// unchanged the model changed for some OTHER reason (stdout, diagnostics, a
+/// heartbeat test-cycle tick that fired no test work), so re-running the
+/// O(files) coverage projection — a `Map.ofSeq` tree-rebalance per annotated
+/// file — would produce identical output. Skipping it there is what keeps a
+/// 40 Hz tick off the CPU. The first appearance of each distinct state still
+/// passes (its key differs from the previous one), so completion/zero-test
+/// observability is preserved.
+let testSummaryProjectionKey
+  (activationTag: string)
+  (discoveryGeneration: int64)
+  (runGeneration: int)
+  (anyRunning: bool)
+  (entryCount: int)
+  (activeId: string)
+  : string =
+  System.String.Concat
+    [| activationTag; "|"; string discoveryGeneration; "|"; string runGeneration
+       "|"; (if anyRunning then "1" else "0"); "|"; string entryCount; "|"; activeId |]
+
+/// Decide whether the (expensive) test-summary/coverage projection should run
+/// for this model change. Returns (recompute, updatedState): false skips the
+/// push when `key` matches the last projection; true records the new key.
+let shouldRecomputeTestSummary (key: string) (state: ModelChangeState) : bool * ModelChangeState =
+  match key = state.LastTestSummaryKey with
+  | true -> false, state
+  | false -> true, { state with LastTestSummaryKey = key }
 
 /// Decide whether a test summary SSE push should go through.
 /// Returns true when elapsed >= throttleMs OR run is complete.
