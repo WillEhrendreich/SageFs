@@ -953,6 +953,83 @@ let coverageBitmapSessionRoutingTests =
     }
   ]
 
+// --- RunTestsRequested session routing (completes the per-session live-
+// testing API triad: enable/disable/status were already session-aware —
+// roast UX-6 — this closes the last leg, the test-RUN path. Mirrors
+// CoverageBitmapCollected's session routing test above.) ---
+
+[<Tests>]
+let runTestsRequestedSessionRoutingTests =
+  let mkSnap (id: WorkerProtocol.SessionId) (dir: string) : SessionSnapshot =
+    { Id = id; Name = None; Projects = [ dir + "/Project.fsproj" ]
+      Status = SessionDisplayStatus.Running
+      LastActivity = System.DateTime.UtcNow
+      EvalCount = 0
+      UpSince = System.DateTime.UtcNow
+      WorkingDirectory = dir }
+
+  testList "RunTestsRequested session routing" [
+    test "a run requested for a BACKGROUND session lands in its own cycle, not the active session's" {
+      let sidA = WorkerProtocol.SessionId.newId ()
+      let sidB = WorkerProtocol.SessionId.newId ()
+      let sidAStr = WorkerProtocol.SessionId.value sidA
+      let sidBStr = WorkerProtocol.SessionId.value sidB
+
+      let m0 = SageFsModel.initial ()
+      let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidA "/repo/worktree-a"))) m0
+      let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidB "/repo/worktree-b"))) m1
+      // Seed B into PerSessionLiveTesting by briefly switching to it, then
+      // back to A — mirrors CoverageBitmapCollected's seeding pattern so A
+      // ends up Primary/active while B sits parked in the background.
+      let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, sidBStr))) m2
+      let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some sidBStr, sidAStr))) m3
+
+      let tc1 = mkTestCase "ns/t1" (TestFramework.Unknown "x") TestCategory.Unit
+      let tc2 = mkTestCase "ns/t2" (TestFramework.Unknown "x") TestCategory.Unit
+      let final, effects =
+        SageFsUpdate.update
+          (SageFsMsg.Event (TuiEvent.RunTestsRequested (Some sidBStr, [| tc1; tc2 |])))
+          m4
+
+      let bAffected = (SageFsModel.cycleForSession sidBStr final).TestState.AffectedTests
+      bAffected
+      |> Expect.equal
+        "background session B's own cycle should carry the affected test ids"
+        (Set.ofArray [| tc1.Id; tc2.Id |])
+
+      final.LiveTesting.TestState.AffectedTests
+      |> Set.isEmpty
+      |> Expect.isTrue "the active/Primary session (A) must NOT receive B's run"
+
+      let effectSessionIds =
+        effects
+        |> List.choose (function
+          | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests req) -> Some req.SessionId
+          | _ -> None)
+      effectSessionIds
+      |> Expect.equal "the emitted RunAffectedTests effect should be stamped for session B" [ Some sidBStr ]
+    }
+
+    test "a run requested with no target session still routes to the Primary cycle (no regression)" {
+      let tc = mkTestCase "ns/t1" (TestFramework.Unknown "x") TestCategory.Unit
+      let model', effects =
+        SageFsUpdate.update
+          (SageFsMsg.Event (TuiEvent.RunTestsRequested (None, [| tc |])))
+          (SageFsModel.initial())
+
+      model'.LiveTesting.TestState.AffectedTests
+      |> Expect.equal "None targetSession still runs against Primary, same as before" (Set.ofArray [| tc.Id |])
+
+      let effectSessionIds =
+        effects
+        |> List.choose (function
+          | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests req) -> Some req.SessionId
+          | _ -> None)
+      effectSessionIds
+      |> Expect.equal "a Primary-only run has no session id on its effect (no regression)" [ None ]
+    }
+  ]
+
 // --- Coverage-Based Test Selection Tests ---
 
 [<Tests>]

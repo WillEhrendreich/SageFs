@@ -2566,6 +2566,13 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
       let root = json.RootElement
       let patternFilter = tryGetJsonStringAliases root [ "pattern" ]
       let fileFilter = tryGetJsonStringAliases root [ "file"; "filePath"; "file_path" ]
+      // Optional per-session targeting (completes the per-session live-testing
+      // API triad alongside enable/disable/status — see `tryReadTargetSessionId`
+      // above): a caller that knows which session it means can pass
+      // `sessionId` to run and read discovered tests from exactly that
+      // session's own cycle instead of always the daemon-global active
+      // session. No `sessionId` preserves the original Primary-only behavior.
+      let targetSession = tryGetJsonStringAliases root [ "sessionId"; "session_id"; "session" ]
       let categoryFilter =
         tryGetJsonStringAliases root [ "category" ]
         |> Option.bind (fun category ->
@@ -2586,7 +2593,10 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
           do! jsonResponse ctx 503 {| success = false; error = "Cannot run tests — Elm model unavailable." |}
       | Some dispatch, Some getModel ->
           let model = getModel()
-          let discoveredTests = model.LiveTesting.TestState.DiscoveredTests
+          let discoveredTests =
+            match targetSession with
+            | Some sid -> (SageFsModel.cycleForSession sid model).TestState.DiscoveredTests
+            | None -> model.LiveTesting.TestState.DiscoveredTests
 
           match Array.isEmpty discoveredTests with
           | true ->
@@ -2623,7 +2633,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
                     error = sprintf "No discovered tests matched the explicit run filters (%s)." filterSummary
                   |}
               | false ->
-                  dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.RunTestsRequested tests))
+                  dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.RunTestsRequested (targetSession, tests)))
                   do! jsonResponse ctx 200 {|
                     success = true
                     queued = tests.Length

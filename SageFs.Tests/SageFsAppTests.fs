@@ -1221,7 +1221,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
     let updated, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.RunTestsRequested [| discovered.[0] |]))
+        (SageFsMsg.Event (TuiEvent.RunTestsRequested (None, [| discovered.[0] |])))
         activeModel
     let updatedEntries = updated.LiveTesting.TestState.StatusIndex.Entries
     let affectedUpdated =
