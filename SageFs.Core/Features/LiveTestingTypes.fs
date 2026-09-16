@@ -1516,7 +1516,17 @@ module LiveTestDiscoveryState =
     | LiveTestDiscoveryState.Discovering ->
       "Live testing is active and discovery is still in progress."
     | LiveTestDiscoveryState.ReadyZeroTests ->
-      "Live testing completed discovery but found zero tests."
+      // Actionable zero-state (roast UX-2): a bare "found zero tests" is a
+      // dead-end. Name the likely causes and the concrete recovery action so a
+      // stuck user can get unstuck instead of concluding the feature is broken.
+      "Live testing found zero tests. If this project has tests: (1) the test \
+       assembly may not be loaded yet — run hard_reset_fsi_session with \
+       rebuild:true to rebuild and reload, which re-runs discovery; (2) confirm \
+       the project references a supported framework (Expecto, xUnit, NUnit, \
+       MSTest, TUnit) and exposes public tests (Expecto [<Tests>] values, or \
+       [<Fact>]/[<Test>]/[<TestMethod>] methods); (3) for a background \
+       (non-active) session, switch to it and re-enable live testing to force a \
+       fresh discovery pass."
     | LiveTestDiscoveryState.ReadyWithTests count ->
       sprintf "Live testing discovered %d tests." count
 

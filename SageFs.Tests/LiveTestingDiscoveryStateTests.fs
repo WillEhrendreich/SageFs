@@ -98,6 +98,17 @@ let tests =
       |> Expect.equal "generic discovery hint should not assume priming is required" "Live testing is active and discovery is still in progress."
     }
 
+    test "zero-test discovery hint is actionable, not a dead-end (roast UX-2)" {
+      // 'Live testing completed discovery but found zero tests.' with no cause
+      // and no next step is a dead-end. The hint must name likely causes and a
+      // concrete recovery action so a stuck user can get unstuck.
+      let hint = LiveTestDiscoveryState.hint LiveTestDiscoveryState.ReadyZeroTests
+      hint
+      |> Expect.stringContains "zero-test hint must name the rebuild/reload recovery action" "hard_reset_fsi_session"
+      hint
+      |> Expect.stringContains "zero-test hint must name the supported frameworks so the user can check their project" "Expecto"
+    }
+
     test "active state with queued discovery does not require priming eval" {
       let state =
         { LiveTestState.empty with
