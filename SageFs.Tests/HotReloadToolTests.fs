@@ -11,8 +11,9 @@ open SageFs.WorkerProtocol
 open SageFs.WorkflowTypes
 
 // Build a minimal SageFsTools + McpContext pair for direct invocation.
-let private mkTools
+let private mkToolsWf
   (workerPort: int option)
+  (workflow: SessionWorkflow)
   : SageFsTools =
   let diagnosticsChanged = Event<SageFs.Features.DiagnosticsStore.T>()
   let sid = SessionId.newId ()
@@ -35,7 +36,7 @@ let private mkTools
         CreatedAt = System.DateTime.UtcNow
         LastActivity = System.DateTime.UtcNow
         Status = SessionLifecycleStatus.Ready { Pid = 42; Port = workerPort }
-        Workflow = SessionWorkflow.Interactive
+        Workflow = workflow
         ActiveProject = None
         ProjectRoles = []
         App = SageFs.AppRun.AppRunState.NotRunning
@@ -69,6 +70,10 @@ let private mkTools
   }
   SageFsTools(ctx, NullLogger<SageFsTools>.Instance)
 
+/// Default fixture — an Interactive (REPL) session, the common case.
+let private mkTools (workerPort: int option) : SageFsTools =
+  mkToolsWf workerPort SessionWorkflow.Interactive
+
 [<Tests>]
 let hotReloadToolTests =
   testList "HotReloadTool" [
@@ -77,19 +82,18 @@ let hotReloadToolTests =
     // lists via TestInfrastructure.withEnvVar (Expecto runs lists in
     // parallel; the DevReload.KillSwitch list mutates the same var).
 
-    testCase "enable_hot_reload returns PatchFailed gracefully when SageFs.Host is not loaded" <| fun _ ->
+    testCase "enable_hot_reload on an Interactive session directs to Live mode instead of a false patch" <| fun _ ->
       SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" None (fun () ->
-        let port = 40000
-        let tools = mkTools (Some port)
+        let tools = mkTools (Some 40000)
         let m = tools.GetType().GetMethod("enable_hot_reload")
         let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
-        raw.Result
-        |> System.Text.Json.JsonDocument.Parse
-        |> fun doc -> doc.RootElement
-        |> fun n ->
-          let health = n.GetProperty("health").GetString()
-          Expect.stringContains "should mention PatchFailed" "PatchFailed" health
-          Expect.stringContains "should mention DevReloadInjector or host assembly" "DevReloadInjector" health)
+        let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
+        Expect.isFalse (n.GetProperty("patched").GetBoolean()) "an Interactive session is not patched"
+        Expect.stringContains (n.GetProperty("health").GetString()) "Interactive" "health names the REPL/Interactive mode"
+        let steps =
+          n.GetProperty("nextSteps").EnumerateArray() |> Seq.map (fun x -> x.GetString()) |> String.concat " "
+        Expect.stringContains steps "switch_workflow" "nextSteps directs to switch_workflow"
+        Expect.stringContains steps "workflow=live" "nextSteps directs to create a Live session")
 
     testCase "enable_hot_reload respects SAGEFS_DEVRELOAD=0" <| fun _ ->
       SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" (Some "0") (fun () ->
@@ -111,21 +115,32 @@ let hotReloadToolTests =
           |> String.concat " "
         steps |> Expect.stringContains "should mention how to unset the env var" "unset")
 
-    testCase "enable_hot_reload returns PatchFailed when worker port is 0" <| fun _ ->
-      let tools = mkTools None
-      let m = tools.GetType().GetMethod("enable_hot_reload")
-      let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
-      let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
-      Expect.isFalse (n.GetProperty("patched").GetBoolean()) "should not be patched"
-      Expect.stringContains "should mention PatchFailed" "PatchFailed" (n.GetProperty("health").GetString())
+    testCase "enable_hot_reload on a Live session reports hot reload is already active" <| fun _ ->
+      SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" None (fun () ->
+        let tools = mkToolsWf (Some 40000) (SessionWorkflow.WebLive BrowserRefreshConfig.defaults)
+        let m = tools.GetType().GetMethod("enable_hot_reload")
+        let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
+        let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
+        Expect.isTrue (n.GetProperty("patched").GetBoolean()) "a Live session already has hot reload"
+        Expect.stringContains (n.GetProperty("health").GetString()) "Live" "health says the session is in Live mode")
 
-    testCase "disable_hot_reload returns disabled: true with health Disabled" <| fun _ ->
+    testCase "disable_hot_reload on an Interactive session reports hot reload was never active" <| fun _ ->
       let tools = mkTools (Some 40000)
       let m = tools.GetType().GetMethod("disable_hot_reload")
       let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
       let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
-      Expect.isTrue (n.GetProperty("disabled").GetBoolean()) "should be disabled"
-      Expect.equal (n.GetProperty("health").GetString()) "Disabled" "health should be Disabled"
+      Expect.isTrue (n.GetProperty("disabled").GetBoolean()) "an Interactive session has hot reload off already"
+      Expect.stringContains (n.GetProperty("health").GetString()) "Interactive" "health explains REPL mode"
+
+    testCase "disable_hot_reload on a Live session is honest that runtime disable is not wired up" <| fun _ ->
+      let tools = mkToolsWf (Some 40000) (SessionWorkflow.WebLive BrowserRefreshConfig.defaults)
+      let m = tools.GetType().GetMethod("disable_hot_reload")
+      let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
+      let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
+      Expect.isFalse (n.GetProperty("disabled").GetBoolean()) "it does not falsely claim to have disabled a Live session"
+      let steps =
+        n.GetProperty("nextSteps").EnumerateArray() |> Seq.map (fun x -> x.GetString()) |> String.concat " "
+      Expect.stringContains steps "switch_workflow" "nextSteps directs to switch_workflow"
 
     // WHY — When the tool is invoked correctly, its body must not throw. The
     // AIFunctionFactory reflection wrapper may throw on argument-type mismatch

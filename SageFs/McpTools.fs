@@ -826,26 +826,16 @@ process-wide kill switch for hot reload.""")>]
             | SageFs.DevReload.Active _ -> "Active"
             | SageFs.DevReload.Degraded r -> sprintf "Degraded: %s" r
             | SageFs.DevReload.Disabled -> "Disabled"
-        // The DevReloadInjector module lives in the SageFs.Host assembly, which
-        // is a different assembly than SageFs.dll. We can't `open` it directly
-        // because it's a higher-level project (SageFs references SageFs.Host, not
-        // vice versa). The F# compiler treats SageFs.Host's modules as
-        // unreachable from SageFs.dll, even though the assembly is referenced.
-        // Workaround: load the type via reflection.
-        let devReloadType : System.Type option =
-          System.AppDomain.CurrentDomain.GetAssemblies()
-          |> Array.tryPick (fun a ->
-            a.GetType("SageFs.DevReloadInjector") |> Option.ofObj)
-        let invokeStatic (name: string) (args: obj[]) =
-          match devReloadType with
-          | Some t ->
-            t.GetMethod(name, System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.Static)
-            |> Option.ofObj
-            |> Option.iter (fun m -> m.Invoke(null, args) |> ignore)
-          | None -> ()
-        // Resolve the session via working directory, then look up its worker port.
-        // We need the port to wire the DevReload SSE URL; if it's missing the
-        // user hasn't finished warm-up, so surface PatchFailed and tell them.
+        // Hot reload cannot be retrofitted onto a running Interactive session.
+        // Live mode installs the DevReload Harmony patches at worker startup AND
+        // starts FSI with `--multiemit-` (see SessionWorkflow.fsiArgs) — that
+        // flag is what lets Harmony detour re-eval'd methods, and it can only be
+        // set when the session (its FSI process) is created. So the honest answer
+        // depends on the session's actual workflow: a Live session already has
+        // hot reload; an Interactive session must switch to Live (which recreates
+        // the FSI process) to get it. The old reflection-into-the-daemon approach
+        // could never work — DevReloadInjector lives in the worker process, not
+        // the daemon — and reported a misleading "architecture is broken" error.
         logger.LogDebug("MCP-TOOL: enable_hot_reload called")
         withSessionWd ctx "mcp" wd (fun sidStr -> task {
             let sid = match SageFs.WorkerProtocol.SessionId.validate sidStr with
@@ -853,23 +843,23 @@ process-wide kill switch for hot reload.""")>]
                        | Error _ -> SageFs.WorkerProtocol.SessionId.newId ()
             let! infoOpt = ctx.SessionOps.GetSessionInfo sid
             let workerPort = infoOpt |> Option.bind (fun i -> SageFs.WorkerProtocol.SessionLifecycleStatus.workerPort i.Status) |> Option.defaultValue 0
+            let workflow = infoOpt |> Option.map (fun i -> i.Workflow) |> Option.defaultValue SageFs.WorkflowTypes.SessionWorkflow.Interactive
             if disabledByEnvVar then
                 SageFs.DevReload.DevReloadHealthTracker.transition SageFs.DevReload.Disabled
                 return resultJson false workerPort "Disabled (SAGEFS_DEVRELOAD env var)" true
-                    [| "unset SAGEFS_DEVRELOAD or set it to '1' and call enable_hot_reload again" |]
-            elif workerPort <= 0 then
-                return resultJson false 0 "PatchFailed: worker port not yet set" false
-                    [| "Wait for the worker to report WORKER_PORT= on stdout (happens during warm-up), then retry." |]
-            elif Option.isNone devReloadType then
-                return resultJson false workerPort "PatchFailed: SageFs.DevReloadInjector type not loaded" false
-                    [| "This tool runs in the SageFs daemon process. SageFs.Host is normally loaded by the worker. If you see this, the architecture is broken." |]
+                    [| "unset SAGEFS_DEVRELOAD or set it to '1', then start the session in Live mode" |]
             else
-                invokeStatic "setWorkerPort" [| box workerPort |]
-                invokeStatic "install" [||]
-                return resultJson true workerPort (healthToString (SageFs.DevReload.DevReloadHealthTracker.current ())) false
-                    [| "If a webapp is currently running (webapp.Run() blocking), call cancel_eval to stop it."
-                       "Re-evaluate webapp.Run() — Harmony will inject DevReloadMiddleware on this call."
-                       "Edit any .fs file under the watched root; browser auto-refresh should fire." |]
+                match workflow with
+                | SageFs.WorkflowTypes.SessionWorkflow.WebLive _ ->
+                    return resultJson true workerPort "Active (session is in Live mode)" false
+                        [| "Hot reload is already on — this session was created in Live mode."
+                           "Start your web app (run_app, or eval webapp.Run()); connected browsers auto-refresh on save."
+                           "Edit any watched .fs file to see the reload fire." |]
+                | SageFs.WorkflowTypes.SessionWorkflow.Interactive ->
+                    return resultJson false workerPort "Not available: this session is in Interactive (REPL) mode" false
+                        [| "Hot reload requires Live mode, which is configured when the session's FSI process starts and cannot be turned on afterward."
+                           "Switch this session to Live mode: switch_workflow target=live (this recreates the session, so REPL definitions and cell state are lost)."
+                           "Or start a fresh Live session: create_session workflow=live." |]
         })
         |> withEcho ctx "enable_hot_reload"
 
@@ -896,30 +886,30 @@ var, this is per-session and reversible. The env var, if set, takes precedence."
     ) : Task<string> =
         let wd = match System.String.IsNullOrWhiteSpace working_directory with | true -> None | false -> Some working_directory
         logger.LogDebug("MCP-TOOL: disable_hot_reload called")
-        withSessionWd ctx "mcp" wd (fun _ -> task {
-            // Reflection-based call to disableForSession (SageFs.Host module).
-            let devReloadType : System.Type option =
-              System.AppDomain.CurrentDomain.GetAssemblies()
-              |> Array.tryPick (fun a ->
-                a.GetType("SageFs.DevReloadInjector") |> Option.ofObj)
-            match devReloadType with
-            | Some t ->
-              t.GetMethod("disableForSession", System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.Static)
-              |> Option.ofObj
-              |> Option.iter (fun m -> m.Invoke(null, [||]) |> ignore)
-            | None -> ()
-            let health =
-                match SageFs.DevReload.DevReloadHealthTracker.current () with
-                | SageFs.DevReload.Disabled -> "Disabled"
-                | SageFs.DevReload.PatchPending -> "PatchPending (unexpected — disable should transition to Disabled)"
-                | SageFs.DevReload.PatchFailed r -> sprintf "PatchFailed: %s" r
-                | SageFs.DevReload.Injected -> "Injected (unexpected)"
-                | SageFs.DevReload.Active _ -> "Active (unexpected)"
-                | SageFs.DevReload.Degraded r -> sprintf "Degraded: %s" r
+        // The per-session runtime toggle (DevReloadInjector.disableForSession)
+        // lives in the worker process, which the daemon can't reach directly —
+        // the old reflection-into-the-daemon call silently found nothing and
+        // reported disabled=true anyway. Answer honestly by the session's real
+        // workflow instead of claiming a no-op succeeded.
+        let resultJson (disabled: bool) (health: string) (nextSteps: string[]) =
             let result = JsonObject()
-            result.["disabled"] <- JsonValue.Create(true)
+            result.["disabled"] <- JsonValue.Create(disabled)
             result.["health"] <- JsonValue.Create(health)
-            return result.ToJsonString()
+            result.["nextSteps"] <- JsonValue.Create(nextSteps)
+            result.ToJsonString()
+        withSessionWd ctx "mcp" wd (fun sidStr -> task {
+            let sid = match SageFs.WorkerProtocol.SessionId.validate sidStr with
+                       | Ok s -> s
+                       | Error _ -> SageFs.WorkerProtocol.SessionId.newId ()
+            let! infoOpt = ctx.SessionOps.GetSessionInfo sid
+            let workflow = infoOpt |> Option.map (fun i -> i.Workflow) |> Option.defaultValue SageFs.WorkflowTypes.SessionWorkflow.Interactive
+            match workflow with
+            | SageFs.WorkflowTypes.SessionWorkflow.Interactive ->
+                return resultJson true "Not active: this session is in Interactive (REPL) mode, so hot reload was never on" [||]
+            | SageFs.WorkflowTypes.SessionWorkflow.WebLive _ ->
+                return resultJson false "Active: this session is in Live mode; a per-session runtime off-switch is not wired up"
+                    [| "To turn hot reload off, switch this session to Interactive mode: switch_workflow target=interactive (recreates the session; REPL state is lost)."
+                       "To disable hot reload daemon-wide, start the daemon with SAGEFS_DEVRELOAD=0." |]
         })
         |> withEcho ctx "disable_hot_reload"
 
