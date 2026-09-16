@@ -175,3 +175,11 @@ module CompileOrderInsight =
             Severity = BuildDiagnosticSeverity.Warning
             Code = Some "SAGEFS-COMPILE-ORDER"
             Message = hint }
+
+  /// Append the compile-order advisory to a failed build's diagnostics when one
+  /// applies; otherwise return them unchanged. This keeps the "should we add a
+  /// hint?" policy here with the analysis, so the build-fault site is a one-liner.
+  let enrich (projPath: string) (diagnostics: BuildDiagnostic list) : BuildDiagnostic list =
+    match forProject projPath diagnostics with
+    | Some hint -> diagnostics @ [ hint ]
+    | None -> diagnostics
