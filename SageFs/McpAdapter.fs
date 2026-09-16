@@ -698,12 +698,13 @@ Available: %s%s%s""" sessionId eventCount (SessionState.label state) projectsStr
           snapshot.EvalCount snapshot.AvgDurationMs snapshot.MinDurationMs snapshot.MaxDurationMs
       | false -> ""
     let tools = Affordances.availableTools state |> String.concat ", "
-    sprintf """Session: %s | Events: %d | State: %s | Projects: %s
+    let modeLabel = WorkflowTypes.SessionWorkflow.label info.Workflow
+    sprintf """Session: %s | Mode: %s | Events: %d | State: %s | Projects: %s
 Available: %s%s
 
 📋 Startup Information:
 - Working Directory: %s
-- MCP Port: %d""" sessionId eventCount (SessionState.label state) projectsStr tools statsSection info.WorkingDirectory mcpPort
+- MCP Port: %d""" sessionId modeLabel eventCount (SessionState.label state) projectsStr tools statsSection info.WorkingDirectory mcpPort
 
   /// Diagnostics as JSON array *items* (no enclosing brackets — callers
   /// interpolate into their own `"diagnostics":[%s]` field), spans included

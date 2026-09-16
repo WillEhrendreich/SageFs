@@ -1234,7 +1234,7 @@ module McpTools =
                   Status = WorkerProtocol.SessionLifecycleStatus.label sessionInfo.Status
                   Warmup = warmup
                   FileStatuses = []
-                  Workflow = WorkflowTypes.SessionWorkflow.Interactive
+                  Workflow = sessionInfo.Workflow
                   AutoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory sessionInfo.WorkingDirectory
                 }
                 return sprintf "\n\n%s" (McpAdapter.formatWarmupDetailForLlm sessionCtx)
