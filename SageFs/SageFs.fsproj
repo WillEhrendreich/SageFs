@@ -86,6 +86,7 @@
         <Compile Include="JupyterKernel.fs" />
         <Compile Include="McpAdapter.fs" />
         <Compile Include="McpSessionRouting.fs" />
+        <Compile Include="McpRouteError.fs" />
         <Compile Include="Mcp.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />
