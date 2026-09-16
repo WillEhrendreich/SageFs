@@ -689,7 +689,15 @@ module SessionManager =
             proc.Dispose()
             match exitCode <> 0 with
             | true ->
-              return Error (SageFsError.BuildFailed(exitCode, buildDiagnosticsOf (List.ofSeq stdoutLines) (List.ofSeq stderrLines)))
+              let diagnostics = buildDiagnosticsOf (List.ofSeq stdoutLines) (List.ofSeq stderrLines)
+              // F#-aware: if the FS0039 "not defined" cluster is really a
+              // compile-order problem, append the "move X above Y" advisory so
+              // every surface that renders diagnostics surfaces the fix (UX-4).
+              let enriched =
+                match CompileOrderInsight.forProject buildProject diagnostics with
+                | Some hint -> diagnostics @ [ hint ]
+                | None -> diagnostics
+              return Error (SageFsError.BuildFailed(exitCode, enriched))
             | false ->
               return Ok "Build succeeded"
         finally

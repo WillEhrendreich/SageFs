@@ -240,6 +240,7 @@
         <Compile Include="SageFsErrorClassificationTests.fs" />
         <Compile Include="SageFsErrorJsonTests.fs" />
         <Compile Include="SageFsErrorPropertyTests.fs" />
+        <Compile Include="CompileOrderInsightTests.fs" />
         <Compile Include="ErrorAlgebraHardeningTests.fs" />
         <Compile Include="McpToolErrorBodyTests.fs" />
         <Compile Include="SessionIdTests.fs" />

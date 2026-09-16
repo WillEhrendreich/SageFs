@@ -121,6 +121,8 @@
         <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />
         <Compile Include="SageFsError.fs" />
+        <!-- After SageFsError: F#-aware compile-order insight over BuildDiagnostic (roast UX-4). -->
+        <Compile Include="CompileOrderInsight.fs" />
         <!-- After SageFsError: the railway effect type over the algebra. -->
         <Compile Include="SageFsIO.fs" />
         <!-- After SageFsError: an app state carries the structured error that ended its run. -->
