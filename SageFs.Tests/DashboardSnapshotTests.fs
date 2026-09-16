@@ -51,6 +51,24 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
     do! verifyDashboard "dashboard_output_empty" html
   }
 
+  // roast UX-5: a realistic Expecto failure — the assertion line, two
+  // contiguous framework frames, the user's own Stats.fs frame, then one
+  // more framework frame. Expect the two framework runs each folded into
+  // their own collapsed `<details>` group, and the assertion + Stats.fs
+  // frame promoted with `output-line-promoted`. All lines are ErrorLine so
+  // this snapshot is stable regardless of tree-sitter availability.
+  testTask "renderOutput folds framework frames and promotes the assertion + user frame (roast UX-5)" {
+    let lines = [
+      { Timestamp = Some "12:30:45"; Kind = ErrorLine; Text = "Actual value was 6.0 but had expected it to be 4.0." }
+      { Timestamp = None; Kind = ErrorLine; Text = "   at Expecto.Expect.equal[T](String message, T expected, T actual) in /_/src/Expecto/Expect.fs:line 205" }
+      { Timestamp = None; Kind = ErrorLine; Text = "   at Microsoft.FSharp.Control.AsyncPrimitives.CallThenInvoke[T](...) in /_/src/FSharp.Core/async.fs:line 509" }
+      { Timestamp = None; Kind = ErrorLine; Text = "   at RuntimeBugs.StatsTests.testMean() in /home/will/proj/Stats.fs:line 12" }
+      { Timestamp = None; Kind = ErrorLine; Text = "   at <StartupCode$FSI_0007>.$FSI_0007.main@() in FSI_0007.fsx:line 3" }
+    ]
+    let html = renderOutput lines "No output yet" |> renderNode
+    do! verifyDashboard "dashboard_output_foldedFrames" html
+  }
+
   testTask "renderDiagnostics with errors and warnings" {
     let diags = [
       { Severity = DiagError; Message = "Type mismatch"; Line = 5; Col = 10 }

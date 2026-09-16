@@ -11,6 +11,7 @@ open SageFs
 open SageFs.Measures
 open SageFs.WarmUp
 open SageFs.Affordances
+open SageFs.ErrorMessages
 open SageFs.Server.DashboardTypes
 
 /// Use renderNode + sseStringElements instead of sseHtmlElements
@@ -553,6 +554,64 @@ let renderHighlightedLine (spans: ColorSpan array) (line: string) : XmlNode list
     | false -> ()
     nodes |> Seq.toList
 
+/// Render one parsed output line as its own line div, with an optional extra
+/// CSS class appended (used to promote the Expecto assertion and the user's
+/// own source frame — roast UX-5). Factored out of `renderOutputForSession`
+/// so the ordinary and the framework-frame-folded render paths share exactly
+/// one rendering of a single line.
+let private renderSingleOutputLine (extraCss: string) (line: OutputLine) : XmlNode =
+  let css = OutputLineKind.toCssClass line.Kind
+  let cls =
+    match extraCss with
+    | "" -> sprintf "output-line %s" css
+    | extra -> sprintf "output-line %s %s" css extra
+  Elem.div [ Attr.class' cls ] [
+    match line.Timestamp with
+    | Some t ->
+      Elem.span [ Attr.class' "meta"; Attr.style "margin-right: 0.5rem;" ] [
+        textEnc t
+      ]
+    | None -> ()
+    match (line.Kind = ResultLine || line.Kind = InfoLine) && SyntaxHighlight.isAvailable () with
+    | true ->
+      let allSpans = SyntaxHighlight.tokenize Theme.defaults line.Text
+      match allSpans.Length > 0 with
+      | true -> yield! renderHighlightedLine allSpans.[0] line.Text
+      | false -> textEnc line.Text
+    | false ->
+      textEnc line.Text
+  ]
+
+/// Fold contiguous framework stack-frames into one collapsed panel, and
+/// promote the Expecto assertion line and the user's own source frame (roast
+/// UX-5 — "the ONE useful line buried between walls of framework frames").
+/// Classification reuses `ErrorMessages.classifyLine`/`foldFrameworkGroups`
+/// — the SAME `frameworkFrameFragments` source of truth the UX-3
+/// runtime-exception summary uses — so the fold and that summary can never
+/// disagree about what counts as "the user's own code". Framework-frame
+/// groups render collapsed by default (`signalDetails`'s ordinary
+/// not-in-`defaultOpenSignals` behavior); a click opens them, and that open
+/// state survives the ~1s SSE-fallback morph like every other panel.
+let private renderFoldableOutputLines (lines: OutputLine list) : XmlNode list =
+  lines
+  |> List.map (fun line -> (classifyLine line.Text, line))
+  |> foldFrameworkGroups
+  |> List.mapi (fun groupIdx group ->
+    match group with
+    | SingleLine (OutputFrameKind.Assertion, line) -> renderSingleOutputLine "output-line-promoted" line
+    | SingleLine (OutputFrameKind.UserFrame, line) -> renderSingleOutputLine "output-line-promoted" line
+    | SingleLine (_, line) -> renderSingleOutputLine "" line
+    | FoldedFrames frames ->
+      let signalName = sprintf "outputFrameGroup_%d" groupIdx
+      signalDetails signalName [ Attr.class' "output-frame-group" ] [
+        Elem.summary [ Attr.class' "output-frame-group-summary" ] [
+          textEnc (sprintf "▸ %d framework frame%s" frames.Length (if frames.Length = 1 then "" else "s"))
+        ]
+        Elem.div [ Attr.class' "output-frame-group-body" ] [
+          yield! frames |> List.map (renderSingleOutputLine "")
+        ]
+      ])
+
 /// Render output lines as an HTML fragment.
 let renderOutputForSession (sessionId: string) (lines: OutputLine list) (placeholder: string) =
   Elem.div [ Attr.id DomIds.OutputPanel; testid "session-output"; Attr.create "data-session-id" (attrEnc sessionId) ] [
@@ -560,24 +619,7 @@ let renderOutputForSession (sessionId: string) (lines: OutputLine list) (placeho
     | true ->
       Elem.span [ Attr.class' "meta" ] [ textEnc placeholder ]
     | false ->
-      yield! lines |> List.map (fun line ->
-        let css = OutputLineKind.toCssClass line.Kind
-        Elem.div [ Attr.class' (sprintf "output-line %s" css) ] [
-          match line.Timestamp with
-          | Some t ->
-            Elem.span [ Attr.class' "meta"; Attr.style "margin-right: 0.5rem;" ] [
-              textEnc t
-            ]
-          | None -> ()
-          match (line.Kind = ResultLine || line.Kind = InfoLine) && SyntaxHighlight.isAvailable () with
-          | true ->
-            let allSpans = SyntaxHighlight.tokenize Theme.defaults line.Text
-            match allSpans.Length > 0 with
-            | true -> yield! renderHighlightedLine allSpans.[0] line.Text
-            | false -> textEnc line.Text
-          | false ->
-            textEnc line.Text
-        ])
+      yield! renderFoldableOutputLines lines
   ]
 
 let renderOutput (lines: OutputLine list) (placeholder: string) =
