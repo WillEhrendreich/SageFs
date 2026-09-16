@@ -110,7 +110,6 @@
         <Compile Include="SessionCreationTests.fs" />
         <Compile Include="SessionCreationUxTests.fs" />
         <Compile Include="DatastarBundleIntegrityTests.fs" />
-        <Compile Include="AppOutputTests.fs" />
         <Compile Include="ExplorationTests.fs" />
         <Compile Include="HotReloadTests.fs" />
         <Compile Include="HotReloadStateTests.fs" />

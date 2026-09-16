@@ -974,11 +974,7 @@ let fileSizeBudgets =
       "SageFs.Core/Features/LiveTestingTypes.fs", 5100
       "SageFs/SageFsApp.fs", 2900
       "SageFs.Core/AppState.fs", 2000
-      // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
-      // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,
-      // reviewed feature, not silent accretion. Ratchet back DOWN when
-      // SessionManager is split; never bump to paper over drift.
-      "SageFs.Core/SessionManager.fs", 1860 ]
+      "SageFs.Core/SessionManager.fs", 1850 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->

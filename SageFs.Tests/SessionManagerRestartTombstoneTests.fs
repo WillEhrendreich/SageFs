@@ -85,7 +85,6 @@ let private withHarness runtime run =
       ignore
       (fun _ _ -> ())
       (fun sid msg -> faultedEvents.Add(sid, msg))
-      (fun _ _ -> ())
 
   let harness = {
     Mailbox = mailbox

@@ -24,7 +24,6 @@
         <Compile Include="ModelSnapshot.fs" />
         <Compile Include="TimeTravel.fs" />
         <Compile Include="Utils.fs" />
-        <Compile Include="AppOutput.fs" />
         <Compile Include="Checkout.fs" />
         <Compile Include="MemberTable.fs" />
         <Compile Include="Tutorial.fs" />

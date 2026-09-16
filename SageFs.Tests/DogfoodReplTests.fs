@@ -40,7 +40,7 @@ let private evalIn (proxy: SessionProxy) (rid: string) (code: string) : Result<s
 /// expensive part, and both questions are about the same loaded session.
 let private withDogfoodSession (run: SessionProxy -> unit) =
   use cts = new CancellationTokenSource(240_000)
-  let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+  let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
   let created =
     mgr.PostAndAsyncReply(fun reply ->
       SageFs.SessionManager.SessionCommand.CreateSession(
@@ -129,7 +129,7 @@ let dogfoodReplTests =
     // byte-identical.
     testCase "WHY — a real self-host session records its adopted SageFs.Core and reports Current, then Stale once a newer build lands on disk, because a self-hosting agent must be told when its REPL is running code the disk has moved past (F5b)" <| fun _ ->
       use cts = new CancellationTokenSource(240_000)
-      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
       let created =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(

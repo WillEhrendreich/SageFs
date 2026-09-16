@@ -73,7 +73,6 @@ let private withHarness runtime run =
       ignore
       (fun _ _ -> ())
       (fun sid msg -> faultedEvents.Add(sid, msg))
-      (fun _ _ -> ())
 
   let harness = {
     Mailbox = mailbox
@@ -498,7 +497,7 @@ let sessionManagerProjectRolesTests =
         }
       let cancellation = new CancellationTokenSource()
       let mailbox, _ =
-        createWith runtime.Runtime cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+        createWith runtime.Runtime cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
       try
         let! created =
           mailbox.PostAndAsyncReply(fun reply ->
@@ -605,7 +604,7 @@ let workerFaultReportTests =
         }
       let cancellation = new CancellationTokenSource()
       let mailbox, _ =
-        createWith runtime.Runtime cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+        createWith runtime.Runtime cancellation.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
       try
         let! created =
           mailbox.PostAndAsyncReply(fun reply ->

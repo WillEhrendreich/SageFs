@@ -348,7 +348,7 @@ let sessionManagerLifecycleTests =
 
     testTask "create session, eval code, stop session" {
       let cts = new CancellationTokenSource(120_000)
-      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
       let! createResult =
         mgr.PostAndAsyncReply(fun reply ->
@@ -426,7 +426,7 @@ let sessionManagerLifecycleTests =
 
     testTask "worker crash is detected and the session is restarted on a new worker" {
       let cts = new CancellationTokenSource(120_000)
-      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
       let! createResult =
         mgr.PostAndAsyncReply(fun reply ->
@@ -479,7 +479,7 @@ let sessionManagerLifecycleTests =
 
     testTask "multiple sessions are independent" {
       let cts = new CancellationTokenSource(120_000)
-      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
+      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ())
 
       // Two sessions for the SAME directory are one session by design — the
       // owner rejects the duplicate — so the second lives in its own dir.
