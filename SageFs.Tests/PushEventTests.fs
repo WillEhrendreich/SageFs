@@ -127,3 +127,43 @@ let pushEventFormatForLlmTests = testList "PushEvent.formatForLlm" [
     result |> Expect.stringContains "has failure count" "1 failure"
     result |> Expect.stringContains "has severity icon" "🔴")
 ]
+
+[<Tests>]
+let eventAccumulatorSessionScopingTests =
+  testList "EventAccumulator per-session scoping" [
+
+    testCase "DrainFor returns the active session's own events plus daemon-level ones, holding other sessions'" <| fun _ ->
+      let acc = EventAccumulator()
+      acc.Add(Some "aaaa1111", PushEvent.FileReloaded "a.fs")
+      acc.Add(Some "bbbb2222", PushEvent.FileReloaded "b.fs")
+      acc.Add(None, PushEvent.SystemAlarm("boot", "up"))
+      acc.DrainFor(Some "aaaa1111")
+      |> Array.map (fun e -> e.SessionId)
+      |> Array.sortBy (function None -> "" | Some s -> s)
+      |> Expect.equal "A gets its own event and the daemon-level one, never B's" [| None; Some "aaaa1111" |]
+      // B's event was held, not consumed by A's drain.
+      acc.DrainFor(Some "bbbb2222")
+      |> Array.map (fun e -> e.SessionId)
+      |> Expect.equal "B still receives its own event on its own call" [| Some "bbbb2222" |]
+
+    testCase "DrainFor None (no session in view) drains everything" <| fun _ ->
+      let acc = EventAccumulator()
+      acc.Add(Some "aaaa1111", PushEvent.FileReloaded "a.fs")
+      acc.Add(Some "bbbb2222", PushEvent.FileReloaded "b.fs")
+      acc.DrainFor(None)
+      |> Array.length
+      |> Expect.equal "with no active session, all events drain (labeled by the formatter)" 2
+
+    testCase "Replace dedup is per-session — one session's state change never clobbers another's" <| fun _ ->
+      let acc = EventAccumulator()
+      acc.Add(Some "aaaa1111", PushEvent.StateChanged(1, 0))
+      acc.Add(Some "bbbb2222", PushEvent.StateChanged(2, 0))
+      acc.Add(Some "aaaa1111", PushEvent.StateChanged(3, 0))  // replaces A's own, not B's
+      let all = acc.DrainFor(None)
+      all |> Array.length |> Expect.equal "A deduped to one, B untouched -> 2 events total" 2
+      all |> Array.filter (fun e -> e.SessionId = Some "bbbb2222") |> Array.length
+      |> Expect.equal "B's StateChanged survives A's replace" 1
+      all
+      |> Array.tryPick (fun e -> match e.SessionId, e.Event with Some "aaaa1111", PushEvent.StateChanged(o, _) -> Some o | _ -> None)
+      |> Expect.equal "A's surviving event is its latest (3), not the replaced 1" (Some 3)
+  ]

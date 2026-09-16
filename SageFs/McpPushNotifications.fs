@@ -147,19 +147,24 @@ module PushEvent =
 
 type AccumulatedEvent = {
   Timestamp: DateTimeOffset
+  /// The session whose activity produced this event. None = a daemon-level
+  /// event with no single owning session (shown to every caller). Carrying the
+  /// origin lets a tool response surface only the events for the session the
+  /// caller is working in, instead of every session's events at once.
+  SessionId: string option
   Event: PushEvent
 }
 
 /// Thread-safe accumulator with smart dedup.
-/// Replace-strategy events overwrite the previous instance.
+/// Replace-strategy events overwrite the previous instance OF THE SAME SESSION.
 /// Accumulate-strategy events are appended.
 type EventAccumulator() =
   let events = ConcurrentQueue<AccumulatedEvent>()
   let maxEvents = 50
   let replaceLock = obj()
 
-  member _.Add(evt: PushEvent) =
-    let entry = { Timestamp = DateTimeOffset.UtcNow; Event = evt }
+  member _.Add(sessionId: string option, evt: PushEvent) =
+    let entry = { Timestamp = DateTimeOffset.UtcNow; SessionId = sessionId; Event = evt }
     match PushEvent.mergeStrategy evt with
     | MergeStrategy.Replace ->
       lock replaceLock (fun () ->
@@ -167,7 +172,9 @@ type EventAccumulator() =
         let temp = ResizeArray()
         let mutable item = Unchecked.defaultof<AccumulatedEvent>
         while events.TryDequeue(&item) do
-          match PushEvent.tag item.Event <> tag with
+          // Only a same-session, same-tag event is replaced — one session's
+          // "state changed" must never overwrite another session's.
+          match PushEvent.tag item.Event <> tag || item.SessionId <> sessionId with
           | true -> temp.Add(item)
           | false -> ()
         for e in temp do events.Enqueue(e)
@@ -178,6 +185,7 @@ type EventAccumulator() =
         while events.Count > maxEvents do
           events.TryDequeue() |> ignore)
 
+  /// Drain every accumulated event, regardless of session.
   member _.Drain() =
     lock replaceLock (fun () ->
       let result = ResizeArray()
@@ -185,5 +193,28 @@ type EventAccumulator() =
       while events.TryDequeue(&item) do
         result.Add(item)
       result.ToArray())
+
+  /// Drain only the events the caller should see for `activeSessionId`: that
+  /// session's own events plus session-less (daemon-level) events. Events
+  /// belonging to OTHER sessions are left in the queue for their own session's
+  /// next call. When `activeSessionId` is None (no session resolved for this
+  /// call), everything is drained — a caller with no session in view still sees
+  /// what happened, and the formatter labels each event with its origin.
+  member _.DrainFor(activeSessionId: string option) =
+    lock replaceLock (fun () ->
+      let taken = ResizeArray()
+      let kept = ResizeArray()
+      let mutable item = Unchecked.defaultof<AccumulatedEvent>
+      while events.TryDequeue(&item) do
+        let forCaller =
+          match activeSessionId, item.SessionId with
+          | _, None -> true               // daemon-level events go to everyone
+          | None, _ -> true               // no active session -> show all (labeled)
+          | Some active, Some origin -> active = origin
+        match forCaller with
+        | true -> taken.Add(item)
+        | false -> kept.Add(item)
+      for e in kept do events.Enqueue(e)
+      taken.ToArray())
 
   member _.Count = events.Count

@@ -142,13 +142,23 @@ type McpServerTracker() =
           servers.TryRemove(deadId) |> ignore
     }
 
-  /// Accumulate a structured event for delivery on the next tool response.
-  member _.AccumulateEvent(evt: PushEvent) = accumulator.Add(evt)
+  /// Accumulate a structured event for delivery on the next tool response,
+  /// tagged with the session whose activity produced it (None = daemon-level).
+  member _.AccumulateEvent(sessionId: string option, evt: PushEvent) = accumulator.Add(sessionId, evt)
 
-  /// Drain accumulated events, format for LLM, return as string array.
-  member _.DrainEvents() =
-    accumulator.Drain()
-    |> Array.map (fun e -> PushEvent.formatForLlm e.Event)
+  /// Drain the events the caller should see for `activeSessionId` (that
+  /// session's own events plus daemon-level ones), formatted for the LLM. An
+  /// event from a different session that is still shown (the no-active-session
+  /// fallback) is labeled with its origin so it is never mistaken for the
+  /// session in view.
+  member _.DrainEvents(activeSessionId: string option) =
+    accumulator.DrainFor(activeSessionId)
+    |> Array.map (fun e ->
+      let body = PushEvent.formatForLlm e.Event
+      match e.SessionId with
+      | Some sid when Some sid <> activeSessionId ->
+        sprintf "[%s] %s" (sid.Substring(0, min 8 sid.Length)) body
+      | _ -> body)
 
   member _.Count = servers.Count
   member _.PendingEvents = accumulator.Count
@@ -248,7 +258,14 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
       | false -> ()
 
       let inline appendEvents (result: CallToolResult) =
-        let events = tracker.DrainEvents()
+        // Scope the events banner to the session this caller is working in
+        // (the "mcp" agent's active session), so one session's events don't
+        // surface in another's tool response. Daemon-level events still show.
+        let activeSid =
+          match activeSessionId mcpCtx "mcp" with
+          | "" -> None
+          | s -> Some s
+        let events = tracker.DrainEvents(activeSid)
         match events.Length > 0 with
         | true ->
           let eventText =
@@ -942,7 +959,7 @@ let wireSessionEventSubscription
           | false -> ())
         |> ignore
       | SseEvent.SessionReady sid ->
-        ctx.ServerTracker.AccumulateEvent(PushEvent.WarmupCompleted)
+        ctx.ServerTracker.AccumulateEvent(Some (SageFs.WorkerProtocol.SessionId.value sid), PushEvent.WarmupCompleted)
         let sidStr = SageFs.WorkerProtocol.SessionId.value sid
         task {
           try
@@ -985,10 +1002,10 @@ let wireSessionEventSubscription
         let sidStr = SageFs.WorkerProtocol.SessionId.value sid
         let sseFrame = SageFs.SseWriter.formatWarmupProgressEvent ctx.SseJsonOpts (Some sidStr) step total msg
         ctx.SessionEventBroadcast.Trigger(sseFrame)
-      | SseEvent.FileReloaded (_sid, path) ->
-        ctx.ServerTracker.AccumulateEvent(PushEvent.FileReloaded path)
-      | SseEvent.SessionFaulted (_sid, error) ->
-        ctx.ServerTracker.AccumulateEvent(PushEvent.SessionFaulted error)
+      | SseEvent.FileReloaded (sid, path) ->
+        ctx.ServerTracker.AccumulateEvent(Some (SageFs.WorkerProtocol.SessionId.value sid), PushEvent.FileReloaded path)
+      | SseEvent.SessionFaulted (sid, error) ->
+        ctx.ServerTracker.AccumulateEvent(Some (SageFs.WorkerProtocol.SessionId.value sid), PushEvent.SessionFaulted error)
       // Handled by wireModelChangeHandlers's own subscription instead.
       | SseEvent.ModelChanged _
       | SseEvent.SystemAlarm _ -> ()
@@ -1165,7 +1182,7 @@ let wireModelChangeHandlers
       modelChangeState.Value <- state'
       for effect in effects do
         match effect with
-        | AccumulatePush evt -> ctx.ServerTracker.AccumulateEvent(evt)
+        | AccumulatePush evt -> ctx.ServerTracker.AccumulateEvent(SseContext.activeSessionId ctx, evt)
         | BroadcastTestSse _ -> ())
 
   let handleBindingsChange outputCount =
@@ -1254,7 +1271,7 @@ let wireModelChangeHandlers
         let s = SageFs.Features.LiveTesting.TestSummary.fromStatuses
                   lt.Activation (sessionEntries |> Array.map (fun e -> e.Status))
         ctx.ServerTracker.AccumulateEvent(
-          PushEvent.TestSummaryChanged (s, lt.LastDecision))
+          Some activeId, PushEvent.TestSummaryChanged (s, lt.LastDecision))
         let now = System.Diagnostics.Stopwatch.GetTimestamp()
         let isRunComplete = not (TestRunPhase.isAnyRunning lt.RunPhases)
         match shouldPushTestSummary now modelChangeState.Value.LastTestSsePushTicks modelChangeState.Value.TestSseThrottleMs isRunComplete with
@@ -1276,7 +1293,7 @@ let wireModelChangeHandlers
             SageFs.Features.LiveTesting.TestResultsBatchPayload.create
               lt.LastGeneration freshness completion lt.Activation sessionEntries lt.LastDecision
           ctx.ServerTracker.AccumulateEvent(
-            PushEvent.TestResultsBatch payload)
+            Some activeId, PushEvent.TestResultsBatch payload)
           ctx.TestEventBroadcast.Trigger(
             SageFs.SseWriter.formatTestResultsBatchEvent ctx.SseJsonOpts (Some activeId) payload)
           // Per-file coverage projection (`projectWithCoverage` does a Map.ofSeq
@@ -1380,7 +1397,7 @@ let wireModelChangeHandlers
       match isRunComplete && not lt.Cached.FailureNarratives.IsEmpty with
       | true ->
         let activeId = SseContext.activeSessionId ctx |> Option.defaultValue ""
-        ctx.ServerTracker.AccumulateEvent(PushEvent.FailureNarrativesUpdated lt.Cached.FailureNarratives)
+        ctx.ServerTracker.AccumulateEvent(SseContext.activeSessionId ctx, PushEvent.FailureNarrativesUpdated lt.Cached.FailureNarratives)
         match activeId.Length > 0 with
         | true ->
           ctx.TestEventBroadcast.Trigger(
@@ -1418,7 +1435,7 @@ let wireModelChangeHandlers
         let report =
           SageFs.Features.Diagnostician.Diagnostician.compose
             graph failuresWithNarratives scopeBindings state.CachedTimeline
-        ctx.ServerTracker.AccumulateEvent(PushEvent.DiagnosisReady report)
+        ctx.ServerTracker.AccumulateEvent(SseContext.activeSessionId ctx, PushEvent.DiagnosisReady report)
         let activeId = SseContext.activeSessionId ctx |> Option.defaultValue ""
         match activeId.Length > 0 with
         | true ->
@@ -1432,7 +1449,7 @@ let wireModelChangeHandlers
     | SseEvent.ModelChanged (outputCount, diagCount) ->
       try
         ctx.ServerTracker.AccumulateEvent(
-          PushEvent.StateChanged(outputCount, diagCount))
+          SseContext.activeSessionId ctx, PushEvent.StateChanged(outputCount, diagCount))
         handleDiagnosticsChange diagCount
         handleBindingsChange outputCount
         handleTestTraceChange ()
@@ -1445,7 +1462,7 @@ let wireModelChangeHandlers
           match model.ResolvedSourceLocations with
           | [] -> ()
           | locs ->
-            ctx.ServerTracker.AccumulateEvent(PushEvent.TestSourceLocations locs)
+            ctx.ServerTracker.AccumulateEvent(SseContext.activeSessionId ctx, PushEvent.TestSourceLocations locs)
             ctx.TestEventBroadcast.Trigger(
               SageFs.SseWriter.formatTestSourceLocationsEvent ctx.SseJsonOpts (SseContext.activeSessionId ctx) locs))
         match ctx.ServerTracker.Count > 0 with
@@ -1467,7 +1484,8 @@ let wireModelChangeHandlers
         Log.warn "[MCP] State change JSON error (non-fatal): %s\n%s" jex.Message (jex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       | ex -> Log.error "[MCP] State change handler error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
     | SseEvent.SystemAlarm (phase, msg) ->
-      ctx.ServerTracker.AccumulateEvent(PushEvent.SystemAlarm (phase, msg))
+      // Daemon-level alarm — no single owning session, so every caller sees it.
+      ctx.ServerTracker.AccumulateEvent(None, PushEvent.SystemAlarm (phase, msg))
     // Handled by wireSessionEventSubscription's own subscription instead.
     | SseEvent.HotReloadChanged _
     | SseEvent.SessionReady _
