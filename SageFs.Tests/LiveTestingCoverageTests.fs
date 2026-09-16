@@ -830,7 +830,7 @@ let coverageBitmapWiringTests = testList "CoverageBitmap cycle Wiring" [
     let bitmap = CoverageBitmap.ofBoolArray hits
     let model', _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid1; tid2 |], bitmap)))
+        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| tid1; tid2 |], bitmap)))
         (SageFsModel.initial())
     let bitmaps = model'.LiveTesting.TestState.TestCoverageBitmaps
     Map.count bitmaps
@@ -851,11 +851,11 @@ let coverageBitmapWiringTests = testList "CoverageBitmap cycle Wiring" [
     let bm2 = CoverageBitmap.ofBoolArray [| false; true |]
     let model1, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid1; tid2 |], bm1)))
+        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| tid1; tid2 |], bm1)))
         (SageFsModel.initial())
     let model2, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid3 |], bm2)))
+        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| tid3 |], bm2)))
         model1
     let bitmaps = model2.LiveTesting.TestState.TestCoverageBitmaps
     Map.count bitmaps
@@ -870,11 +870,11 @@ let coverageBitmapWiringTests = testList "CoverageBitmap cycle Wiring" [
     let bm2 = CoverageBitmap.ofBoolArray [| false; true; true |]
     let model1, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid |], bm1)))
+        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| tid |], bm1)))
         (SageFsModel.initial())
     let model2, _ =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid |], bm2)))
+        (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| tid |], bm2)))
         model1
     let bitmaps = model2.LiveTesting.TestState.TestCoverageBitmaps
     Map.count bitmaps
@@ -888,6 +888,70 @@ let coverageBitmapWiringTests = testList "CoverageBitmap cycle Wiring" [
     |> Expect.isTrue "should start empty"
   }
 ]
+
+// --- CoverageBitmapCollected session routing (roast follow-up: mirrors
+// TestResultsBatch's targetSession routing — coverage from a BACKGROUND
+// session must land in ITS OWN cycle, never the active/Primary one) ---
+
+[<Tests>]
+let coverageBitmapSessionRoutingTests =
+  let mkSnap (id: WorkerProtocol.SessionId) (dir: string) : SessionSnapshot =
+    { Id = id; Name = None; Projects = [ dir + "/Project.fsproj" ]
+      Status = SessionDisplayStatus.Running
+      LastActivity = System.DateTime.UtcNow
+      EvalCount = 0
+      UpSince = System.DateTime.UtcNow
+      WorkingDirectory = dir }
+
+  testList "CoverageBitmapCollected session routing" [
+    test "coverage for a BACKGROUND session lands in its own cycle, not the active session's" {
+      let sidA = WorkerProtocol.SessionId.newId ()
+      let sidB = WorkerProtocol.SessionId.newId ()
+      let sidAStr = WorkerProtocol.SessionId.value sidA
+      let sidBStr = WorkerProtocol.SessionId.value sidB
+
+      let m0 = SageFsModel.initial ()
+      let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidA "/repo/worktree-a"))) m0
+      let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidB "/repo/worktree-b"))) m1
+      // Seed B into PerSessionLiveTesting by briefly switching to it, then
+      // back to A — mirrors SessionCycleIsolation's seeding pattern so A
+      // ends up Primary/active while B sits parked in the background.
+      let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, sidBStr))) m2
+      let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (Some sidBStr, sidAStr))) m3
+
+      let tid1 = mkTestId "ns" (TestFramework.Unknown "t1")
+      let tid2 = mkTestId "ns" (TestFramework.Unknown "t2")
+      let bitmap = CoverageBitmap.ofBoolArray [| true; false; true |]
+      let final, _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (Some sidBStr, [| tid1; tid2 |], bitmap)))
+          m4
+
+      let bBitmaps = (SageFsModel.cycleForSession sidBStr final).TestState.TestCoverageBitmaps
+      Map.count bBitmaps
+      |> Expect.equal "background session B should have its own 2 entries" 2
+      Map.tryFind tid1 bBitmaps
+      |> Option.map (CoverageBitmap.equivalent bitmap)
+      |> Expect.equal "B's tid1 bitmap should match" (Some true)
+
+      final.LiveTesting.TestState.TestCoverageBitmaps
+      |> Map.isEmpty
+      |> Expect.isTrue "the active/Primary session (A) must NOT receive B's coverage"
+    }
+
+    test "coverage with no target session still routes to the Primary cycle (no regression)" {
+      let tid = mkTestId "ns" (TestFramework.Unknown "t1")
+      let bitmap = CoverageBitmap.ofBoolArray [| true; false |]
+      let model', _ =
+        SageFsUpdate.update
+          (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| tid |], bitmap)))
+          (SageFsModel.initial())
+      model'.LiveTesting.TestState.TestCoverageBitmaps
+      |> Map.tryFind tid
+      |> Option.map (CoverageBitmap.equivalent bitmap)
+      |> Expect.equal "None targetSession routes to Primary, same as before" (Some true)
+    }
+  ]
 
 // --- Coverage-Based Test Selection Tests ---
 
@@ -1313,7 +1377,7 @@ let coverageCycleVerificationTests = testList "Coverage cycle Verification" [
     let tid = TestId.TestId "ns.test1"
     let bitmap = CoverageBitmap.ofBoolArray [| true; false; true |]
     let model0 = (SageFsModel.initial())
-    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected ([| tid |], bitmap))) model0
+    let model1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (None, [| tid |], bitmap))) model0
     model1.LiveTesting.TestState.TestCoverageBitmaps
     |> Map.containsKey tid
     |> Expect.isTrue "should have bitmap for test"

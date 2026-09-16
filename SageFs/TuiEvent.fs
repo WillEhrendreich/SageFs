@@ -302,7 +302,7 @@ type TuiEvent =
   | LiveTestingDisabled
   | AffectedTestsComputed of testIds: Features.LiveTesting.TestId array * changedSymbolNames: string list
   | CoverageUpdated of coverage: Features.LiveTesting.CoverageState
-  | CoverageBitmapCollected of testIds: Features.LiveTesting.TestId array * bitmap: Features.LiveTesting.CoverageBitmap
+  | CoverageBitmapCollected of sessionId: string option * testIds: Features.LiveTesting.TestId array * bitmap: Features.LiveTesting.CoverageBitmap
   | RunPolicyChanged of category: Features.LiveTesting.TestCategory * policy: Features.LiveTesting.RunPolicy
   | ProvidersDetected of providers: Features.LiveTesting.ProviderDescription list
   | TestCycleTimingRecorded of timing: Features.LiveTesting.TestCycleTiming
