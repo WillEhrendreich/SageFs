@@ -329,7 +329,7 @@
 
 <h1 class="doc-title">Documentation</h1>
 <p class="doc-subtitle">
-  Everything you need to know about installing, configuring, and using SageFs —
+  How to install, configure, and use SageFs —
   the live F# development environment with instant feedback.
 </p>
 
@@ -636,7 +636,7 @@ SageFs
 <p>
   SageFs uses a <strong>daemon + worker</strong> architecture. When you start SageFs, a single daemon process
   launches and manages everything: HTTP endpoints, SSE subscriptions, MCP server, session routing.
-  Actual F# evaluation happens in separate <strong>worker</strong> processes — one per session.
+  F# evaluation happens in separate <strong>worker</strong> processes — one per session.
 </p>
 
 <h3>Why separate processes?</h3>
@@ -665,7 +665,7 @@ SageFs
 <p>
   The <a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/Watchdog.fs"><code>Watchdog</code></a>
   monitors every worker. If one crashes, it auto-restarts with exponential backoff. State is
-  State is persisted to binary manifests (<a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/EventStore.fs"><code>EventStore.fs</code></a>),
+  persisted to binary manifests (<a href="https://github.com/WillEhrendreich/SageFs/blob/master/SageFs.Core/EventStore.fs"><code>EventStore.fs</code></a>),
   so a recovered session resumes where it left off.
 </p>
 
