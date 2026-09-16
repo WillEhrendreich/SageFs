@@ -37,6 +37,12 @@ let addConfig dir content =
 let addSolution dir name =
   writeText (Path.Combine(dir, name)) ""
 
+/// Unwrap the Ok list from resolveSessionProjects, failing the test on Error.
+let okProjects (msg: string) (r: Result<string list, SageFsError>) : string list =
+  match r with
+  | Ok ps -> ps
+  | Error e -> failtestf "%s: expected Ok, got Error %A" msg e
+
 [<Tests>]
 let tests = testSequenced <| testList "Session Creation" [
 
@@ -49,7 +55,7 @@ let tests = testSequenced <| testList "Session Creation" [
           addConfig dir """{ DirectoryConfig.empty with Load = NoLoad }""")
         (fun dir ->
           resolveSessionProjects dir ""
-          |> Expect.isEmpty "should return no projects with NoLoad")
+          |> Expect.equal "should return no projects with NoLoad" (Ok []))
 
     testCase "auto-discovers with AutoDetect config" <| fun _ ->
       withTempDir
@@ -58,6 +64,7 @@ let tests = testSequenced <| testList "Session Creation" [
           addConfig dir """{ DirectoryConfig.empty with Load = AutoDetect }""")
         (fun dir ->
           resolveSessionProjects dir ""
+          |> okProjects "AutoDetect"
           |> Expect.isNonEmpty "should auto-discover with AutoDetect")
 
     testCase "auto-discovers when no config exists" <| fun _ ->
@@ -65,6 +72,7 @@ let tests = testSequenced <| testList "Session Creation" [
         (fun dir -> addFakeProject dir "Fake.fsproj")
         (fun dir ->
           resolveSessionProjects dir ""
+          |> okProjects "no config"
           |> Expect.isNonEmpty "should auto-discover when no config file")
 
     testCase "uses config Projects over auto-discovery" <| fun _ ->
@@ -74,7 +82,7 @@ let tests = testSequenced <| testList "Session Creation" [
           addFakeProject dir "Other.fsproj"
           addConfig dir """{ DirectoryConfig.empty with Load = Projects ["Other.fsproj"] }""")
         (fun dir ->
-          let result = resolveSessionProjects dir ""
+          let result = resolveSessionProjects dir "" |> okProjects "config Projects"
           result |> Expect.hasLength "should use config Projects" 1
           result.[0]
           |> Expect.stringContains "should be config project" "Other.fsproj")
@@ -84,7 +92,7 @@ let tests = testSequenced <| testList "Session Creation" [
         (fun _ -> ())
         (fun dir ->
           resolveSessionProjects dir ""
-          |> Expect.isEmpty "should return empty for empty directory")
+          |> Expect.equal "should return empty for empty directory" (Ok []))
 
     testCase "prefers manual over config" <| fun _ ->
       withTempDir
@@ -93,7 +101,7 @@ let tests = testSequenced <| testList "Session Creation" [
           addFakeProject dir "Manual.fsproj"
           addConfig dir """{ DirectoryConfig.empty with Load = Projects ["Fake.fsproj"] }""")
         (fun dir ->
-          let result = resolveSessionProjects dir "Manual.fsproj"
+          let result = resolveSessionProjects dir "Manual.fsproj" |> okProjects "manual over config"
           result |> Expect.hasLength "should use manual project" 1
           result.[0]
           |> Expect.stringContains "should be manual project" "Manual.fsproj")
@@ -104,7 +112,7 @@ let tests = testSequenced <| testList "Session Creation" [
           addFakeProject dir "Fake.fsproj"
           addSolution dir "Fake.sln")
         (fun dir ->
-          let result = resolveSessionProjects dir ""
+          let result = resolveSessionProjects dir "" |> okProjects "solution over project"
           result |> Expect.hasLength "should find one solution" 1
           result.[0]
           |> Expect.stringContains "should prefer solution" "Fake.sln")
@@ -115,24 +123,45 @@ let tests = testSequenced <| testList "Session Creation" [
           addSolution dir "MyApp.sln"
           addConfig dir """{ DirectoryConfig.empty with Load = Solution "MyApp.sln" }""")
         (fun dir ->
-          let result = resolveSessionProjects dir ""
+          let result = resolveSessionProjects dir "" |> okProjects "config solution"
           result |> Expect.hasLength "should find one solution" 1
           result.[0]
           |> Expect.stringContains "should use config solution" "MyApp.sln")
 
-    testCase "drops manual projects outside the working directory" <| fun _ ->
+    testCase "REJECTS manual projects outside the working directory (not silently dropped)" <| fun _ ->
       withTempDir
         (fun dir -> addFakeProject dir "Inside.fsproj")
         (fun dir ->
-          // A rooted project path elsewhere on disk must be rejected — a
-          // dashboard peer cannot point the daemon at arbitrary projects.
+          // A rooted project path elsewhere on disk must be REFUSED loudly — a
+          // dashboard peer cannot point the daemon at arbitrary projects, and a
+          // caller who names N projects must never get a session quietly missing
+          // one (roast-8 §4: unify with validateSessionCreateRequest).
           let outside =
             Path.Combine(Path.GetTempPath(), sprintf "sagefs-outside-%s.fsproj" (Guid.NewGuid().ToString("N").[..7]))
           try
             writeText outside "<Project />"
-            let result = resolveSessionProjects dir outside
-            result
-            |> Expect.isEmpty "rooted manual project outside the working dir must be dropped"
+            match resolveSessionProjects dir outside with
+            | Error (SageFsError.UnsafeSessionPath(p, _)) ->
+              p |> Expect.equal "error must name the escaping path" outside
+            | other ->
+              failtestf "escaping manual project must be rejected, got %A" other
+          finally
+            if File.Exists outside then File.Delete outside)
+
+    testCase "REJECTS on the first escaping project even when a valid one is also named" <| fun _ ->
+      withTempDir
+        (fun dir -> addFakeProject dir "Inside.fsproj")
+        (fun dir ->
+          let inside = Path.Combine(dir, "Inside.fsproj")
+          let outside =
+            Path.Combine(Path.GetTempPath(), sprintf "sagefs-outside-%s.fsproj" (Guid.NewGuid().ToString("N").[..7]))
+          try
+            writeText outside "<Project />"
+            match resolveSessionProjects dir (inside + "," + outside) with
+            | Error (SageFsError.UnsafeSessionPath(p, _)) ->
+              p |> Expect.equal "error names the escaping path, not the valid one" outside
+            | other ->
+              failtestf "a mix with one escaping project must be rejected, got %A" other
           finally
             if File.Exists outside then File.Delete outside)
 
@@ -141,7 +170,7 @@ let tests = testSequenced <| testList "Session Creation" [
         (fun dir -> addFakeProject dir "Inside.fsproj")
         (fun dir ->
           let rootedInside = Path.Combine(dir, "Inside.fsproj")
-          let result = resolveSessionProjects dir rootedInside
+          let result = resolveSessionProjects dir rootedInside |> okProjects "rooted inside"
           result |> Expect.hasLength "rooted manual project inside the working dir must be kept" 1
           result.[0]
           |> Expect.stringContains "should be the inside project" "Inside.fsproj")

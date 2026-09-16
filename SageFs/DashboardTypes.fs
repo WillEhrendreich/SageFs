@@ -1093,7 +1093,16 @@ let loadThemes (sageFsDir: string) : Collections.Concurrent.ConcurrentDictionary
 /// Manual project paths are CONTAINED to the chosen working directory: a
 /// dashboard peer must not be able to point the daemon at an arbitrary
 /// project elsewhere on disk (mirrors the eval-file containment discipline).
-let resolveSessionProjects (dir: string) (manualProjects: string) =
+///
+/// A manually-named project that escapes the working directory is REJECTED
+/// loudly — `Error (SageFsError.UnsafeSessionPath …)` — rather than silently
+/// filtered out of the list, so a caller who names N projects can never get a
+/// session quietly created with fewer, missing one it asked for. This matches
+/// `McpServer.validateSessionCreateRequest`, which already rejects the whole
+/// request on the first unsafe path (roast-8 §4: the two validators disagreed).
+/// Auto-detection (empty manual input) only ever produces paths under `dir`,
+/// so it is always `Ok`.
+let resolveSessionProjects (dir: string) (manualProjects: string) : Result<string list, SageFsError> =
   let autoDetectProjects dir =
     let discovered = discoverProjects dir
     match discovered.Solutions.IsEmpty with
@@ -1118,30 +1127,36 @@ let resolveSessionProjects (dir: string) (manualProjects: string) =
     || canonical.Equals(canonicalDir, StringComparison.OrdinalIgnoreCase)
   match String.IsNullOrWhiteSpace manualProjects with
   | false ->
-    manualProjects.Split(',')
-    |> Array.map (fun s -> s.Trim())
-    |> Array.filter (fun s -> s.Length > 0)
-    |> Array.map (fun p ->
-      match Path.IsPathRooted p with
-      | true -> p
-      | false -> Path.Combine(dir, p))
-    |> Array.filter isContainedInDir
-    |> Array.toList
+    let resolved =
+      manualProjects.Split(',')
+      |> Array.map (fun s -> s.Trim())
+      |> Array.filter (fun s -> s.Length > 0)
+      |> Array.map (fun p ->
+        match Path.IsPathRooted p with
+        | true -> p
+        | false -> Path.Combine(dir, p))
+      |> Array.toList
+    // Reject loudly on the first escaping project rather than dropping it.
+    match resolved |> List.tryFind (isContainedInDir >> not) with
+    | Some escaping ->
+      Error (SageFsError.UnsafeSessionPath(escaping, "project path escapes the session working directory"))
+    | None -> Ok resolved
   | true ->
     match DirectoryConfig.load dir with
     | Some config ->
       match config.Load with
       | Solution path ->
         let full = match Path.IsPathRooted path with | true -> path | false -> Path.Combine(dir, path)
-        [ full ]
+        Ok [ full ]
       | Projects paths ->
         paths |> List.map (fun p ->
           match Path.IsPathRooted p with
           | true -> p
           | false -> Path.Combine(dir, p))
-      | NoLoad -> []
-      | AutoDetect -> autoDetectProjects dir
-    | _ -> autoDetectProjects dir
+        |> Ok
+      | NoLoad -> Ok []
+      | AutoDetect -> Ok (autoDetectProjects dir)
+    | _ -> Ok (autoDetectProjects dir)
 
 /// Raised when a request body exceeds the configured size limit (results in 413 response).
 /// Handlers that use readSignalsJsonSized or checkBodySize should catch this exception

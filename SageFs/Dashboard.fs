@@ -2004,30 +2004,35 @@ let createCreateSessionHandler
       | false, false ->
         do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
       | false, true ->
-        let projects = resolveSessionProjects dir manualProjects
-        match projects.IsEmpty with
-        | true ->
-          do! ssePatchNode ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
-        | false ->
-          let! result = createSession projects dir
-          match result with
-          | Ok newSessionId ->
-            // Switch to the new session so the SSE stream picks it up.
-            let! _ = switchSession newSessionId
-            // Push the new viewing identity so every dashboard action targets it,
-            // and retarget this page's SSE stream to the new session (signal-driven
-            // session selection — no URL query parameter).
-            retargetStream infra channelClientId (Some newSessionId)
-            do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
-            do! ssePatchNode ctx (
-              Elem.div [ Attr.id DomIds.EvalResult ] [
-                Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
-                  textEnc (sprintf "Session '%s' created. Switched to it." (WorkerProtocol.SessionId.value newSessionId))
-                ]
-              ])
-          | Error msg ->
-            do! ssePatchNode ctx (evalResultError (sprintf "Failed: %s" msg))
-          do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.DiscoveredProjects ] [])
+        match resolveSessionProjects dir manualProjects with
+        | Error err ->
+          // A named project escaped the working directory — refuse loudly
+          // instead of quietly creating a session missing a project.
+          do! ssePatchNode ctx (evalResultError (SageFs.SageFsError.describe err))
+        | Ok projects ->
+          match projects.IsEmpty with
+          | true ->
+            do! ssePatchNode ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
+          | false ->
+            let! result = createSession projects dir
+            match result with
+            | Ok newSessionId ->
+              // Switch to the new session so the SSE stream picks it up.
+              let! _ = switchSession newSessionId
+              // Push the new viewing identity so every dashboard action targets it,
+              // and retarget this page's SSE stream to the new session (signal-driven
+              // session selection — no URL query parameter).
+              retargetStream infra channelClientId (Some newSessionId)
+              do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) (WorkerProtocol.SessionId.value newSessionId)
+              do! ssePatchNode ctx (
+                Elem.div [ Attr.id DomIds.EvalResult ] [
+                  Elem.pre [ Attr.class' "output-line output-result"; Attr.style "margin-top: 0.5rem;" ] [
+                    textEnc (sprintf "Session '%s' created. Switched to it." (WorkerProtocol.SessionId.value newSessionId))
+                  ]
+                ])
+            | Error msg ->
+              do! ssePatchNode ctx (evalResultError (sprintf "Failed: %s" msg))
+            do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.DiscoveredProjects ] [])
     with
     | :? RequestTooLargeException -> ()
     | :? System.IO.IOException -> ()
@@ -2089,8 +2094,11 @@ let createToggleWarmupAutoOpenHandler
             match enable with
             | false -> []
             | true ->
-              resolveSessionProjects dir ""
-              |> List.truncate 1
+              // Empty manual input => auto-detect, which is always Ok; the
+              // Error arm keeps the match total (it cannot fire here).
+              match resolveSessionProjects dir "" with
+              | Ok ps -> ps |> List.truncate 1
+              | Error _ -> []
           let! result = a.CreateSession projects dir
           match result with
           | Ok newSessionId ->
