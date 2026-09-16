@@ -1561,13 +1561,14 @@ module SageFsUpdate =
         { model with
             LiveTesting = { lt with TestState = { lt.TestState with CoverageAnnotations = annotations } } }, []
 
-      | TuiEvent.CoverageBitmapCollected (testIds, bitmap) ->
+      | TuiEvent.CoverageBitmapCollected (sessionId, testIds, bitmap) ->
         Instrumentation.coverageBitmapsCollected.Add(1L)
-        let lt = model.LiveTesting
-        let bitmaps =
-          testIds |> Array.fold (fun acc tid -> Map.add tid bitmap acc) lt.TestState.TestCoverageBitmaps
-        { model with
-            LiveTesting = { lt with TestState = { lt.TestState with TestCoverageBitmaps = bitmaps } } }, []
+        let model', _ =
+          tryUpdateLiveTestingState sessionId (fun cycle ->
+            let bitmaps =
+              testIds |> Array.fold (fun acc tid -> Map.add tid bitmap acc) cycle.TestState.TestCoverageBitmaps
+            { cycle with TestState = { cycle.TestState with TestCoverageBitmaps = bitmaps } }, ()) model
+        model', []
 
       | TuiEvent.RunPolicyChanged (category, policy) ->
         let lt = recomputeStatuses model.LiveTesting (fun s -> { s with RunPolicies = Map.add category policy s.RunPolicies })
@@ -2792,7 +2793,7 @@ module SageFsEffectHandler =
                         let coverage = Features.LiveTesting.InstrumentationMap.toCoverageState hits mergedMap
                         dispatch (SageFsMsg.Event (TuiEvent.CoverageUpdated coverage))
                         let bitmap = Features.LiveTesting.CoverageBitmap.ofBoolArray hits
-                        dispatch (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (testIds, bitmap)))
+                        dispatch (SageFsMsg.Event (TuiEvent.CoverageBitmapCollected (targetSession, testIds, bitmap)))
                         match activity <> null with
                         | true ->
                           activity.SetTag("coverage.total_probes", hits.Length) |> ignore
