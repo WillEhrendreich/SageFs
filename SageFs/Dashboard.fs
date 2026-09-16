@@ -282,6 +282,11 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
   Elem.html [] [
     Elem.head [] [
       Elem.title [] [ Text.raw "SageFs Dashboard" ]
+      // Inline 🧙 favicon (base64 SVG data URI) — matches the header glyph and
+      // makes no external request, so the browser tab stops 404-ing on
+      // /favicon.ico (roast UX-8). base64 (not raw SVG) so attribute encoding
+      // can't mangle the data URI.
+      Elem.link [ Attr.rel "icon"; Attr.type' "image/svg+xml"; Attr.href "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7wn6eZPC90ZXh0Pjwvc3ZnPg==" ]
       connectionMonitorScript ()
       // Self-hosted pinned Datastar bundle (see `datastarBundle`) — never
       // fetch a moving CDN branch at runtime.
