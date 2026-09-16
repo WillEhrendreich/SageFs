@@ -842,7 +842,7 @@
 <div class="hero reveal">
   <h1>Write F#. <em>See it live.</em></h1>
   <p>
-    SageFs is a live development environment that eliminates the edit‑build‑run cycle.
+    SageFs is a live development environment that removes the edit-build-run cycle.
     Tests run as you type — no save needed. Eval code on demand with <code>Alt+Enter</code>.
     Results stream to the dashboard, editor integrations, and MCP clients from a single shared daemon.
   </p>
@@ -872,7 +872,7 @@
     <div class="gs-step">
       <span class="gs-num">03</span>
       <h3>Code</h3>
-      <p>Edit any <code>.fs</code> file — tests run on every change. Hit <code>Alt+Enter</code> to evaluate code on demand. Results stream to your editor.</p>
+      <p>Edit any <code>.fs</code> file and tests run on every change. Hit <code>Alt+Enter</code> to evaluate code on demand. Results stream to your editor.</p>
     </div>
   </div>
 
@@ -884,15 +884,15 @@
   <div class="section-label">What happens when you run it</div>
   <div class="section-title">From keystroke to result in under a second</div>
   <div class="section-desc">
-    Here's the path your code takes — from the moment you change it
-    to the moment you see results in your editor.
+    Here's what happens between the moment you change your code
+    and the moment you see results in your editor.
   </div>
 
   <div class="flow">
     <div class="flow-step" data-color="blue">
       <span class="step-num">01 — You write code</span>
       <h3>Change a line</h3>
-      <p>Edit any <code>.fs</code> or <code>.fsx</code> file. Tests start running on every change — no save needed. Hit <code>Alt+Enter</code> to evaluate code on demand. Both modes, all the time.</p>
+      <p>Edit any <code>.fs</code> or <code>.fsx</code> file. Tests start running on every change — no save needed. Hit <code>Alt+Enter</code> to evaluate code on demand. Both modes work all the time.</p>
       <span class="time">0 ms</span>
     </div>
 
@@ -910,7 +910,7 @@
     <div class="flow-step" data-color="purple">
       <span class="step-num">03 — Worker evaluates</span>
       <h3>Code runs in FSI</h3>
-      <p>A dedicated worker process — already warmed up with your project's dependencies loaded — compiles and executes the changed code. No cold start. No full rebuild.</p>
+      <p>A dedicated worker process, already warmed up with your project's dependencies loaded, compiles and executes the changed code — no cold start, no full rebuild.</p>
       <span class="time">~100 ms</span>
     </div>
 
@@ -928,7 +928,7 @@
     <div class="flow-step" data-color="cyan">
       <span class="step-num">05 — Results everywhere</span>
       <h3>All editors update</h3>
-      <p>Via Server-Sent Events (SSE), every connected client — the dashboard, VS Code, Neovim, Visual Studio, and MCP agents — sees the results simultaneously. No polling. No refresh.</p>
+      <p>Every connected client — the dashboard, VS Code, Neovim, Visual Studio, and MCP agents — sees the results at the same time over Server-Sent Events (SSE). No polling, no refresh needed.</p>
       <span class="time">~500 ms total</span>
     </div>
   </div>
@@ -940,7 +940,7 @@
   <div class="section-title">Dashboard and editors, one live session</div>
   <div class="section-desc">
     The dashboard and every editor connect to the same running daemon. Switch between them
-    freely — your session, your test results, your eval history all stay in sync.
+    freely: your session, test results, and eval history all stay in sync.
   </div>
 
   <div class="editors-grid">
@@ -1038,12 +1038,12 @@
 
 <!-- ─── ONE DAEMON ─── -->
 <div class="protocol-band reveal" id="protocol">
-  <div class="section-label">The secret sauce</div>
-  <div class="section-title">One daemon. Every client. Always in sync.</div>
+  <div class="section-label">Why it stays in sync</div>
+  <div class="section-title">One daemon, every client, always in sync</div>
   <div class="section-desc">
     SageFs runs a single background daemon that owns all sessions, workers, and state.
-    The dashboard, every editor, and every AI agent connect through the same daemon contracts.
-    Crash-proof supervision means it auto-restarts on failure.
+    The dashboard, every editor, and every AI agent connect through the same daemon contracts,
+    and supervision means it restarts automatically if something fails.
   </div>
 
   <div class="protocol-diagram">
@@ -1079,16 +1079,16 @@
       <div class="proto-card daemon">
         <div class="proto-name">SageFs Daemon</div>
         <div class="proto-detail">
-          Elm-style state machine. All sessions, all test results, all editor state
-          lives here. Broadcasts every change to every client via SSE.
-          Exposes MCP tools for AI agents. One process, one source of truth.
+          Elm-style state machine. All sessions, test results, and editor state
+          live here, and it broadcasts every change to every client via SSE.
+          It also exposes MCP tools for AI agents — one process, one source of truth.
         </div>
       </div>
     </div>
 
     <div class="proto-flow-arrow"><span>↕ HTTP to isolated worker processes ↕</span></div>
 
-    <div class="proto-row-label">Workers — where your code actually runs</div>
+    <div class="proto-row-label">Workers — where your code runs</div>
     <div class="proto-row">
       <div class="proto-card worker-active">
         <div class="proto-name">Active Worker</div>
@@ -1112,8 +1112,8 @@
   <div class="section-label">Under the hood</div>
   <div class="section-title">What makes it fast, reliable, and smart</div>
   <div class="section-desc">
-    Each piece of SageFs exists to solve a specific problem you'd hit
-    building a live F# environment. Here's why each one matters.
+    Each piece of SageFs solves a specific problem you'd hit
+    building a live F# environment.
   </div>
 
   <div class="engine-grid">
@@ -1250,10 +1250,10 @@
   <div class="section-label">Built for AI agents</div>
   <div class="section-title">Give Claude (or any AI) a live compiler</div>
   <div class="section-desc">
-    SageFs exposes the Model Context Protocol (MCP) — the same protocol that powers
-    Claude Desktop and GitHub Copilot tool use. AI agents don't just generate code.
-    They execute it, type-check it, run tests, and iterate — against your real project.
-    30 tools. Zero boilerplate.
+    SageFs exposes the Model Context Protocol (MCP), the same protocol that powers
+    Claude Desktop and GitHub Copilot tool use. AI agents use it to execute code,
+    type-check it, run tests, and iterate against your real project.
+    30 tools, no boilerplate.
   </div>
 
   <div class="ai-tools">
@@ -1271,7 +1271,7 @@
     </div>
     <div class="ai-tool">
       <div class="tool-name">get_completions</div>
-      <div class="tool-desc">Code completions at any cursor position. The agent discovers available APIs from your actual loaded assemblies.</div>
+      <div class="tool-desc">Code completions at any cursor position. The agent discovers available APIs from your loaded assemblies.</div>
     </div>
     <div class="ai-tool">
       <div class="tool-name">explore_namespace / explore_type</div>
@@ -1291,7 +1291,7 @@
     </div>
     <div class="ai-tool">
       <div class="tool-name">explain_test_failure</div>
-      <div class="tool-desc">Enriched failure context for a test that just broke. Shows <em>exactly which symbols changed</em> between the last passing and first failing run, plus FsCheck counterexamples.</div>
+      <div class="tool-desc">Enriched failure context for a test that just broke. Shows <em>which symbols changed</em> between the last passing and first failing run, plus FsCheck counterexamples.</div>
     </div>
     <div class="ai-tool">
       <div class="tool-name">query_test_coverage</div>

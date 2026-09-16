@@ -8,7 +8,7 @@ If you really need to get ahold of me, the most reliable way is on discord, so y
 
 ### You save. Tests pass. Browser updates. Under a second.
 
-A live F# engine — hot reload, live testing, AI-native — for every editor, for free.
+A live F# engine with hot reload, live testing, and AI-agent support — for any editor, free.
 
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
@@ -20,7 +20,7 @@ A live F# engine — hot reload, live testing, AI-native — for every editor, f
 
 ## What is SageFs?
 
-SageFs is a live F# development engine. Start it once, then connect through VS Code, Neovim, the web dashboard, or an MCP client to get sub-500ms feedback on every save: inline results, live test markers, hot reload, and agent access. It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients can share live state simultaneously.
+SageFs is a live F# development engine. Start it once, then connect from VS Code, Neovim, the web dashboard, or an MCP client, and you get feedback on every save in under 500ms: inline results, live test markers, hot reload, and agent access. It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients can all share live state at the same time.
 
 **How is SageFs different from Ionide?** Ionide provides IntelliSense, diagnostics, and project support through the F# Compiler Service. SageFs adds live execution: eval any expression and see results inline, continuous test feedback on every save, and hot reload that patches your running app. Use both together — Ionide for editing, SageFs for running.
 
@@ -30,24 +30,24 @@ SageFs is a live F# development engine. Start it once, then connect through VS C
 
 ## Table of Contents
 
-- [Three Things That Change Everything](#three-things-that-change-everything)
+- [Key Features](#key-features)
 - [Get Started](#get-started)
 - [Two Workflows: REPL vs Live](#two-workflows-repl-vs-live)
-- [Mental Model](#mental-model--how-sagefs-works)
+- [How SageFs Works](#how-sagefs-works)
 - [What You Get in Each Editor](#what-you-get-in-each-editor)
 - [Keybindings](#%EF%B8%8F-keybindings-across-editors)
-- [Gutter Icons](#-understanding-the-gutter-icons)
-- [The $3,000/year Feature — Free](#the-3000year-feature--free)
+- [Gutter Icons](#-gutter-icons)
+- [Live Testing Cost Comparison](#live-testing-cost-comparison)
 - [Under the Hood](#under-the-hood)
 - [Repository Map](#repository-map--where-things-live)
-- [Coming from Another Language?](#welcome-traveler---pick-your-home-language)
+- [Coming from Another Language?](#coming-from-another-language)
 - [Visual Demos](#-visual-demos)
 - [Contributing](#contributing)
 - [License](#license)
 
 >### 🆕 Never written F#? You're in the right place.
 >
-> Pick your language — each guide maps familiar concepts to F#, with runnable examples that show results the instant you press Alt+Enter.
+> Pick your language — each guide maps familiar concepts to F#, with runnable examples that show results as soon as you press Alt+Enter.
 >
 > 🐍 [Python](docs/coming-from-python.md) · 📓 [Jupyter](docs/coming-from-jupyter.md) · 🔷 [C#](docs/coming-from-csharp.md) · ☕ [Java](docs/coming-from-java.md) · 🟨 [JS/TS](docs/coming-from-javascript.md) · 🦀 [Rust](docs/coming-from-rust.md) · 🧘 [F# Koans](docs/coming-from-koans.md)
 >
@@ -55,21 +55,21 @@ SageFs is a live F# development engine. Start it once, then connect through VS C
 
 ---
 
-## Three Things That Change Everything
+## Key Features
 
-### ⚡ Hot Reload — Save and It's Live
+### ⚡ Hot Reload
 
 > **🚧 Status: In progress** — the reload pipeline (watch → eval → SSE refresh) is live, but propagating changes into a *running* app is still being completed for module-declared apps. See [docs/hot-reload.md](docs/hot-reload.md) for the current status.
 
-Save a `.fs` file. SageFs reloads it in ~100ms via [Harmony](https://github.com/pardeike/Harmony) runtime patching. No rebuild. No restart. Connected browsers auto-refresh via SSE. Your web app is already showing the new code before your fingers leave the keyboard.
+Save a `.fs` file and SageFs reloads it in about 100ms using [Harmony](https://github.com/pardeike/Harmony) runtime patching — no rebuild, no restart. Connected browsers refresh automatically over SSE.
 
-### 🤖 AI-Native — Your Agent Can Compile
+### 🤖 AI Agent Support
 
-SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an **affordance-driven state machine** and a deliberately small tool surface — AI agents only see tools valid for the current session state, and the core MCP path stays focused on session trust, F# evaluation, exact test execution, and failure explanation. No wasted tokens guessing. Copilot, Claude, and any MCP client can execute F# code, type-check, verify a changed behavior, and run tests against your real project.
+SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an affordance-driven state machine and a deliberately small tool surface: AI agents only see the tools valid for the current session state, so they don't waste tokens guessing. The core MCP path focuses on session trust, F# evaluation, exact test execution, and failure explanation. Copilot, Claude, and any MCP client can execute F# code, type-check it, verify a changed behavior, and run tests against your real project.
 
-### 🖥️ One Daemon, Every Client — Simultaneously
+### 🖥️ One Daemon, Every Client
 
-Start SageFs once. Connect from VS Code, Neovim, the web dashboard, or an MCP client. Open several at the same time: they can share a live session while retaining per-client session selection.
+Start SageFs once, then connect from VS Code, Neovim, the web dashboard, or an MCP client. Open several at the same time — they can share a live session, and each client keeps its own session selection.
 
 ```mermaid
 flowchart TB
@@ -134,7 +134,7 @@ SageFs opens an interactive terminal. Then create a session for `YourProject.fsp
 > ⚠️ **Work in progress** — live testing is functional but still being stabilized. You may encounter rough edges, especially around session switching and test discovery timing. We're actively improving it.
 
 When live testing is enabled and a test session is loaded, save-triggered runs can update gutter state automatically.
-The core engine, SSE events, coverage data, and editor integrations are real today, but client polish and discovery/session behavior are still catching up. Expecto is the best-covered path right now.
+The core engine, SSE events, coverage data, and editor integrations already work today, but client polish and discovery/session behavior are still catching up. Expecto is the best-covered path right now.
 
 ### 6. What you'll see
 
@@ -151,7 +151,7 @@ MCP (legacy SSE):       http://localhost:37749/sse    ← older MCP clients
 Dashboard:              http://localhost:37750/dashboard
 ```
 
-> **New to F#?** You don't need any F# knowledge to start. Jump to the [migration guide for your language](#welcome-traveler---pick-your-home-language) — each one maps concepts you already know to F#, with runnable examples.
+> **New to F#?** You don't need any F# knowledge to start. Jump to the [migration guide for your language](#coming-from-another-language) — each one maps concepts you already know to F#, with runnable examples.
 
 <details>
 <summary>Build from source</summary>
@@ -173,7 +173,7 @@ dotnet tool install --global SageFs --add-source ./nupkg --no-cache
 
 > 📖 **[Full guide: Understanding Workflow Modes](docs/workflow-modes.md)** — decision tree, diagrams, real-world scenarios, troubleshooting, and why live testing isn't a third mode.
 
-SageFs sessions run in one of two modes.The tradeoff is a physical constraint of the .NET runtime — not a SageFs limitation.
+SageFs sessions run in one of two modes. The tradeoff between them comes from a physical constraint of the .NET runtime, not from a SageFs limitation.
 
 **REPL mode** (default) gives you a full interactive F# session. You can redefine types, experiment freely, and iterate on designs. This is what you want when you're prototyping domain types, exploring APIs, or working through a problem interactively.
 
@@ -210,7 +210,7 @@ When SageFs detects web-oriented packages in your project (Falco.Datastar, Giraf
 
 ---
 
-## Mental Model — How SageFs Works
+## How SageFs Works
 
 SageFs has exactly **three concepts**: a daemon, sessions, and clients.
 
@@ -239,9 +239,9 @@ flowchart TB
     style AI fill:#1a1b26,stroke:#bb9af7,color:#c0caf5
 ```
 
-**The daemon is a service.** It starts bare — no project, no session. It just listens. Clients tell it what to do.
+**The daemon is a service.** It starts with no project and no session — it just listens, and clients tell it what to do.
 
-**Sessions are isolated workers.** Each session is a separate OS process with its own FSI instance, its own loaded project, its own file watcher. They can't interfere with each other. Create as many as you need.
+**Sessions are isolated workers.** Each session is a separate OS process with its own FSI instance, project, and file watcher, so they can't interfere with each other. Create as many as you need.
 
 **Clients are thin.** Editor integrations, dashboard tabs, the Jupyter bridge, and MCP clients all connect to the same daemon. They create sessions, send code, and read results. Multiple clients can share the same session or each use their own.
 
@@ -305,7 +305,7 @@ Features: Cell eval, inline results, gutter signs, SSE live updates, live test p
 
 #### AI Agent (MCP)
 
-SageFs exposes a **small surgical MCP surface** — from `send_fsharp_code` to `targeted_verify` to `run_tests`. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client config examples.
+SageFs exposes a small, focused MCP surface — from `send_fsharp_code` to `targeted_verify` to `run_tests`. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and configuration examples for each client.
 
 **Streamable HTTP** (recommended — auto-reconnects, no session drops):
 ```json
@@ -359,7 +359,7 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel
 
 ---
 
-## 🎨 Understanding the Gutter Icons
+## 🎨 Gutter Icons
 
 | Icon | Meaning |
 |------|---------|
@@ -375,11 +375,11 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel
 
 ---
 
-## The $3,000/year Feature — Free
+## Live Testing Cost Comparison
 
-Visual Studio Enterprise charges **~$250/month per seat** for Live Unit Testing. That's **$3,000/year per developer.** It only works in Visual Studio. It only supports 3 frameworks. It takes 5-30 seconds. It requires your code to compile.
+Visual Studio Enterprise charges about $250/month per seat for Live Unit Testing — $3,000/year per developer. It only works in Visual Studio, it only supports 3 frameworks, it takes 5-30 seconds, and it requires your code to compile first.
 
-SageFs is building toward that same feedback loop with a REPL-centered architecture. The core live-testing engine is real, but the end-to-end experience is still being stabilized and is not equally polished in every client yet.
+SageFs is building toward that same feedback loop with a REPL-centered architecture. The core live-testing engine works, but the end-to-end experience is still being stabilized and isn't equally polished in every client yet.
 
 | | VS Enterprise Live Testing | **SageFs** |
 |:---|:---|:---|
@@ -398,7 +398,7 @@ SageFs is building toward that same feedback loop with a REPL-centered architect
 2. **~350ms** — F# Compiler Service type-checks → dependency graph, reachability annotations
 3. **~500ms** — Affected-test execution via hot-eval → ✓/✗ results inline
 
-Tests are auto-categorized (Unit, Integration, Browser, Property, Benchmark, Architecture) with smart run policies — unit and property tests default to auto-run, integration/browser/architecture default to demand, and benchmarks stay disabled until explicitly enabled. All configurable.
+Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable.
 
 </details>
 
@@ -441,7 +441,7 @@ If you're tracing the live testing / "test as you type" stack, start here:
 - Neovim client wiring: the separate `sagefs.nvim` repo
 
 <details>
-<summary><strong>🛡️ Supervised Mode — crash-proof development</strong></summary>
+<summary><strong>🛡️ Supervised Mode — restart automatically on crash</strong></summary>
 
 <br />
 
@@ -560,12 +560,12 @@ If the config already exists, SageFs opens or points you at the file instead of 
 
 ---
 
-## Welcome, Traveler 👋 — Pick Your Home Language
+## Coming from Another Language?
 
 SageFs isn't just for F# veterans. Find your background below and get started with a guide that maps concepts you already know to F#, with runnable examples.
 
 > **Quick orientation:** Every sample in [`/samples`](samples/) is a runnable `.fsx` script.
-> Open it in a supported editor with SageFs connected, hit **Alt+Enter** on any expression, and results appear inline. Instantly.
+> Open it in a supported editor with SageFs connected, hit **Alt+Enter** on any expression, and results appear inline instantly.
 
 | Background | One-liner | Guide |
 |:---|:---|:---|
@@ -585,19 +585,19 @@ See what SageFs makes possible beyond the REPL:
 
 #### 🌐 Reactive Web App — Falco + Datastar, zero JavaScript
 
-A full CRUD todo app in ~100 lines of F#. Edit a handler, save — the browser updates before you look away. No webpack. No bundler. No framework ceremony.
+A full CRUD todo app in about 100 lines of F#. Edit a handler and save — the browser updates immediately, with no webpack, no bundler, and no framework setup.
 
 **→ [`samples/demos/webapp-datastar.fsx`](samples/demos/webapp-datastar.fsx)**
 
 #### 🎨 GPU Window — Raylib Hello World with hot reload
 
-A Raylib window that hot-patches on save. Change the color, the text, the animation — save — it's live in the *running window*. No restart, no flicker.
+A Raylib window that hot-patches on save. Change the color, the text, or the animation, save, and it updates live in the running window — no restart, no flicker.
 
 **→ [`samples/demos/raylib-hello.fsx`](samples/demos/raylib-hello.fsx)**
 
 #### 🕹️ Interactive Game — live-tweakable physics
 
-A playable star-catcher game. Edit `starMaxSpeed`, `playerWidth`, `starColors` in the source file, save, and the changes apply to the *running game* without interrupting play. This is what live development actually feels like.
+A playable star-catcher game. Edit `starMaxSpeed`, `playerWidth`, and `starColors` in the source file, save, and the changes apply to the running game without interrupting play.
 
 **→ [`samples/demos/raylib-game.fsx`](samples/demos/raylib-game.fsx)**
 
@@ -605,7 +605,7 @@ A playable star-catcher game. Edit `starMaxSpeed`, `playerWidth`, `starColors` i
 
 ## Contributing
 
-SageFs is open source and we welcome contributions! Whether it's a bug fix, documentation improvement, new test, or a whole feature — PRs are encouraged.
+SageFs is open source, and contributions are welcome — bug fixes, documentation improvements, new tests, or whole features. PRs are encouraged.
 
 **→ [Read the Contributing Guide](CONTRIBUTING.md)** for setup instructions, debugging workflow, coding standards, and how to make your first PR.
 
@@ -617,6 +617,6 @@ New to the codebase? Check the **Good First Contributions** section in the contr
 
 ## Acknowledgments
 
-SageFs exists because of Jo Van Eyck's [fsi-mcp-server](https://github.com/jovaneyck/fsi-mcp-server) — an elegant, minimal F# Interactive MCP server that proved the concept of connecting FSI to editors via MCP. That project was the catalyst that made everything here possible.
+SageFs exists because of Jo Van Eyck's [fsi-mcp-server](https://github.com/jovaneyck/fsi-mcp-server), a minimal F# Interactive MCP server that proved the concept of connecting FSI to editors via MCP. That project made everything here possible.
 
 [FsiX](https://github.com/soweli-p/FsiX) · [sagefs.nvim](https://github.com/WillEhrendreich/sagefs.nvim) · [Falco](https://github.com/pimbrouwers/Falco) & [Falco.Datastar](https://github.com/spiraloss/Falco.Datastar) · [Harmony](https://github.com/pardeike/Harmony) · [Ionide.ProjInfo](https://github.com/ionide/proj-info/) · [Raylib-cs](https://github.com/ChrisDill/Raylib-cs) · [Fable](https://fable.io/) · [ModelContextProtocol](https://modelcontextprotocol.io/)
