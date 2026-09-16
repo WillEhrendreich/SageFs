@@ -66,6 +66,9 @@ let availableTools (state: SessionState) : string list =
       "get_available_projects"
       "reset_fsi_session"
       "hard_reset_fsi_session"
+      // Switching REPL <-> Live (hot reload) is a Ready-session action — the
+      // web-package detection hint points agents here, so it must be callable.
+      "switch_workflow"
       "cancel_eval"
       // Feature-analysis surface (P15–P19 + orphaned modules): all session
       // read-only, available once a session is Ready.
@@ -186,6 +189,7 @@ let private gatingDomain : Map<string, ToolGate> =
     "create_session", ToolGate.StateGated
     "reset_fsi_session", ToolGate.StateGated
     "hard_reset_fsi_session", ToolGate.StateGated
+    "switch_workflow", ToolGate.StateGated
     "cancel_eval", ToolGate.StateGated
     // Feature-analysis surface (P15–P19 + orphaned modules): session
     // read-only, gated on a Ready session like the other analysis tools.

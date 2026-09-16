@@ -143,6 +143,20 @@ let gateDecisionTests =
               (checkToolAvailability state tool)
           | _ -> ()))
 
+    testCase "switch_workflow is declared and callable in Ready (the web-detection hint must point at a real tool)"
+    <| fun _ ->
+      // Regression: switch_workflow was a registered [<McpServerTool>] but absent
+      // from the gate, so checkToolCallAllowed failed it closed (undeclared) and
+      // the "use switch_workflow to switch to live" hint pointed at an uncallable
+      // tool. It must be declared, StateGated, and offered in Ready.
+      toolGate "switch_workflow"
+      |> Expect.equal "switch_workflow must be gated, not undeclared (undeclared fails closed)" (Some ToolGate.StateGated)
+      availableTools Ready
+      |> List.contains "switch_workflow"
+      |> Expect.isTrue "switch_workflow must be offered once a session is Ready"
+      checkToolCallAllowed Ready "switch_workflow"
+      |> Expect.isOk "switch_workflow must be allowed to run in Ready"
+
     testCase "gate rejects an unavailable StateGated tool with ToolNotAvailable"
     <| fun _ ->
       // WarmingUp is a canonical wrong state for code execution.
