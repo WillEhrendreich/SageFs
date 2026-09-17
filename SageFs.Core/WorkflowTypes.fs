@@ -43,12 +43,16 @@ type ProjectKind =
 
 module ProjectKind =
 
-  /// Native game AND desktop-UI libraries — both run a native window with a
-  /// render/event loop and no WebApplication.
+  /// Native game AND desktop-UI markers — both run a native window with a
+  /// render/event loop and no WebApplication. Some desktop frameworks are
+  /// enabled by an MSBuild PROPERTY, not a package (WPF/WinForms have no
+  /// package at all — see ProjectLoading.classifyProject, which surfaces the
+  /// active `Use*` properties as classification markers).
   let private nativeGuiPackages =
-    [ "Raylib"; "SDL2"; "Silk.NET"; "MonoGame"; "SFML"          // games
-      "Avalonia"; "Microsoft.Maui"; "Microsoft.WindowsAppSDK"   // desktop UI
-      "Microsoft.WinUI"; "Uno.UI"; "Uno.WinUI" ]
+    [ "Raylib"; "SDL2"; "Silk.NET"; "MonoGame"; "SFML"          // game packages
+      "Avalonia"; "Microsoft.Maui"; "Microsoft.WindowsAppSDK"   // desktop-UI packages
+      "Microsoft.WinUI"; "Uno.UI"; "Uno.WinUI"
+      "UseWPF"; "UseWindowsForms"; "UseMaui"; "UseWinUI" ]       // desktop-UI MSBuild property markers
 
   /// Web frameworks whose presence means a web app.
   let private webPackages = [ "Falco"; "Giraffe"; "Saturn"; "Microsoft.AspNetCore" ]

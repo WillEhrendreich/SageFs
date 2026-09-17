@@ -122,24 +122,34 @@ module ManualProjectParse =
           // bin/ — they come from the shared framework. MSBuild's FrameworkReference
           // normally adds them; the manual fallback must add them explicitly or FSI
           // fails with "type ... is defined in an assembly that is not referenced".
-          let aspNetShared =
-            let dotnetRoot =
-              Environment.GetEnvironmentVariable("DOTNET_ROOT")
-              |> Option.ofObj
-              |> Option.defaultWith (fun () ->
-                // typeof<obj>.Assembly.Location = .../shared/Microsoft.NETCore.App/<ver>/System.Private.CoreLib.dll
-                // ../../../ = dotnet root
-                let runtimeDir = Path.GetDirectoryName(typeof<obj>.Assembly.Location)
-                Path.GetFullPath(Path.Combine(runtimeDir, "..", "..", "..")))
-            let aspNetDir = Path.Combine(dotnetRoot, "shared", "Microsoft.AspNetCore.App")
-            match Directory.Exists aspNetDir with
+          let dotnetRoot =
+            Environment.GetEnvironmentVariable("DOTNET_ROOT")
+            |> Option.ofObj
+            |> Option.defaultWith (fun () ->
+              // typeof<obj>.Assembly.Location = .../shared/Microsoft.NETCore.App/<ver>/System.Private.CoreLib.dll
+              // ../../../ = dotnet root
+              let runtimeDir = Path.GetDirectoryName(typeof<obj>.Assembly.Location)
+              Path.GetFullPath(Path.Combine(runtimeDir, "..", "..", "..")))
+          // Newest-version *.dll of a shared framework under the dotnet root, or []
+          // when that framework is not installed. A FrameworkReference normally adds
+          // these; the manual fallback must add them or FSI fails with "type ... is
+          // defined in an assembly that is not referenced".
+          let sharedFrameworkDlls (frameworkName: string) =
+            let dir = Path.Combine(dotnetRoot, "shared", frameworkName)
+            match Directory.Exists dir with
             | false -> []
             | true ->
-              Directory.EnumerateDirectories aspNetDir
+              Directory.EnumerateDirectories dir
               |> Seq.sortDescending
               |> Seq.tryHead
               |> Option.map (fun verDir -> Directory.EnumerateFiles(verDir, "*.dll", SearchOption.TopDirectoryOnly) |> Seq.toList)
               |> Option.defaultValue []
+          let aspNetShared = sharedFrameworkDlls "Microsoft.AspNetCore.App"
+          // WPF/WinForms assemblies come from the Microsoft.WindowsDesktop.App shared
+          // framework (Windows only), exactly the way ASP.NET Core does. The directory
+          // is absent on Linux/macOS, so this is a no-op there and present only on a
+          // Windows box with the Desktop runtime installed.
+          let windowsDesktopShared = sharedFrameworkDlls "Microsoft.WindowsDesktop.App"
           // Apply the same safety filter to BOTH lists (native DLLs like
           // aspnetcorev2_inprocess.dll exist in the shared framework and must
           // never be passed to FSI as -r: references).
@@ -155,9 +165,10 @@ module ManualProjectParse =
           let combined =
             dlls
             |> List.append (aspNetShared |> List.filter (fun d -> not (binNames.Contains(Path.GetFileName d))))
+            |> List.append (windowsDesktopShared |> List.filter (fun d -> not (binNames.Contains(Path.GetFileName d))))
             |> List.filter isManagedRef
             |> List.distinct
-          logger.LogInfo (sprintf "  Collected %d reference DLL(s) from %s (%d ASP.NET shared framework)" combined.Length binDir aspNetShared.Length)
+          logger.LogInfo (sprintf "  Collected %d reference DLL(s) from %s (%d ASP.NET + %d WindowsDesktop shared framework)" combined.Length binDir aspNetShared.Length windowsDesktopShared.Length)
           combined)
 
   /// Parse an .fsproj (and its project references) into FSharpProjectOptions.
@@ -411,6 +422,18 @@ let isTestProject (proj: ProjectOptions) : bool =
 let discoverTestProjects (projects: ProjectOptions list) : ProjectOptions list =
   projects |> List.filter isTestProject
 
+/// Desktop-UI frameworks are enabled by MSBuild properties, not packages
+/// (WPF/WinForms have no package — they are `<UseWPF>`/`<UseWindowsForms>` on a
+/// `-windows` TFM; MAUI/WinUI add `<UseMaui>`/`<UseWinUI>` alongside packages).
+/// Surface the active ones as classification markers so ProjectKind can see a
+/// desktop UI it could never detect from package references alone.
+let private activeUiPropertyMarkers (proj: ProjectOptions) : string list =
+  [ "UseWPF"; "UseWindowsForms"; "UseMaui"; "UseWinUI" ]
+  |> List.filter (fun prop ->
+    match proj.AllProperties.TryFind prop with
+    | Some vals -> vals |> Set.exists (fun v -> String.Equals(v, "true", StringComparison.OrdinalIgnoreCase))
+    | None -> false)
+
 /// Classify a single project by its role (Executable, Library, or Test).
 /// Uses MSBuild OutputType property and test package reference heuristics.
 let classifyProject (proj: ProjectOptions) : ClassifiedProject =
@@ -420,9 +443,13 @@ let classifyProject (proj: ProjectOptions) : ClassifiedProject =
     | _ ->
       if isTestProject proj then ProjectRole.Test
       else ProjectRole.Library
+  let packageRefs = proj.PackageReferences |> List.map (fun pr -> Path.GetFileNameWithoutExtension(pr.FullPath))
   { Path = proj.ProjectFileName
     Role = role
-    PackageRefs = proj.PackageReferences |> List.map (fun pr -> Path.GetFileNameWithoutExtension(pr.FullPath)) }
+    // Package refs plus active desktop-UI property markers (UseWPF/…), so a
+    // WPF/WinForms/MAUI/WinUI project — whose UI framework is a property, not a
+    // package — still classifies as native-GUI.
+    PackageRefs = packageRefs @ activeUiPropertyMarkers proj }
 
 /// Classify all projects in a solution, returning a map of path to classification.
 let classifyProjects (projects: ProjectOptions list) : ClassifiedProject list =

@@ -246,6 +246,12 @@ let projectKindTests =
       |> Expect.equal "WinUI is native-gui" "native-gui"
       ProjectKind.classify [ "Uno.WinUI" ] |> ProjectKind.label
       |> Expect.equal "Uno is native-gui" "native-gui"
+      // WPF/WinForms have NO package — they are MSBuild properties, surfaced as
+      // markers by classifyProject. WPF detection must survive a Windows checkout.
+      ProjectKind.classify [ "FSharp.Core"; "UseWPF" ] |> ProjectKind.label
+      |> Expect.equal "WPF (UseWPF marker) is native-gui" "native-gui"
+      ProjectKind.classify [ "UseWindowsForms" ] |> ProjectKind.label
+      |> Expect.equal "WinForms (UseWindowsForms marker) is native-gui" "native-gui"
 
     testCase "everything else is Console" <| fun _ ->
       ProjectKind.classify [ "Expecto"; "FSharp.Core" ] |> ProjectKind.label
