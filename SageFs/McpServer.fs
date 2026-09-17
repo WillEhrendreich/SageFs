@@ -2397,6 +2397,42 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
             do! jsonResponse ctx 202 {| success = true; sessionId = sidStr; filePath = filePath |}
     } :> Task
   ) |> ignore
+  // Export a session's eval history as a clean .fsx transcript. Declared in
+  // EndpointContracts but previously never mapped, so both editor clients' export
+  // commands 404'd. Returns { evalCount, content } — the shape the clients read.
+  // Eval history is retained for the active session, so export is meaningful for
+  // it; a non-active session reports zero entries rather than another session's.
+  app.MapGet("/api/sessions/{sid}/export-fsx", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let raw = ctx.Request.RouteValues.["sid"] |> string
+      match SageFs.WorkerProtocol.SessionId.validate raw with
+      | Error msg ->
+        do! jsonResponse ctx 400 {| success = false; error = msg |}
+      | Ok sid ->
+        let sidStr = SageFs.WorkerProtocol.SessionId.value sid
+        let! info = rctx.Config.SessionOps.GetSessionInfo sid
+        match info with
+        | None ->
+          do! jsonResponse ctx 404 {| success = false; error = sprintf "Session '%s' not found" sidStr |}
+        | Some inf ->
+          match SseContext.activeSessionId rctx.SseContext with
+          | Some active when active = sidStr ->
+            let state = rctx.FeaturePushState.Value
+            let evalCount = state.EvalHistory |> List.length
+            let name = inf.Projects |> List.tryHead |> Option.defaultValue "SageFs Session"
+            let content =
+              match state.EvalHistory with
+              | [] -> ""
+              | _ ->
+                state
+                |> SageFs.Features.FeatureHooks.cellGraph
+                |> SageFs.Features.SessionScribe.SessionScribe.fromGraph
+                |> SageFs.Features.SessionScribe.SessionScribe.exportFsx name
+            do! jsonResponse ctx 200 {| success = true; sessionId = sidStr; evalCount = evalCount; content = content |}
+          | _ ->
+            do! jsonResponse ctx 200 {| success = true; sessionId = sidStr; evalCount = 0; content = ""; note = "Export is available for the active session." |}
+    } :> Task
+  ) |> ignore
   app.MapPost("/api/sessions/create", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       use! doc = readJsonBody ctx
