@@ -255,3 +255,25 @@ let projectKindTests =
       | ProjectKind.Web cfg -> cfg.WatchPatterns |> Expect.isNonEmpty "web carries a config"
       | other -> failtestf "expected Web, got %A" other
   ]
+
+[<Tests>]
+let reloadStrategyTests =
+  testList "ReloadStrategy derivation" [
+    testCase "Interactive never reloads, whatever the project kind" <| fun _ ->
+      for kind in [ ProjectKind.Web BrowserRefreshConfig.defaults; ProjectKind.Console; ProjectKind.Game ] do
+        SessionWorkflow.reloadStrategy SessionWorkflow.Interactive kind
+        |> Expect.equal "interactive = no reload" ReloadStrategy.NoReload
+
+    testCase "hot-reload + web -> WebReload carrying the workflow's config" <| fun _ ->
+      let cfg = { WatchPatterns = [ "*.fs" ] }
+      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive cfg) (ProjectKind.Web BrowserRefreshConfig.defaults)
+      |> Expect.equal "web reload keeps the workflow cfg" (ReloadStrategy.WebReload cfg)
+
+    testCase "hot-reload + console -> method-detour only (no web machinery)" <| fun _ ->
+      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive BrowserRefreshConfig.defaults) ProjectKind.Console
+      |> Expect.equal "console = detour only" ReloadStrategy.MethodDetourOnly
+
+    testCase "hot-reload + game -> game-loop reload (no WebApplication patches)" <| fun _ ->
+      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive BrowserRefreshConfig.defaults) ProjectKind.Game
+      |> Expect.equal "game = loop reload" ReloadStrategy.GameLoopReload
+  ]

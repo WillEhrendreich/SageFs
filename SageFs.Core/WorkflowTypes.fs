@@ -104,6 +104,22 @@ type SessionWorkflow =
   /// Hot reload active, restricted REPL. The "building a web app" workflow.
   | WebLive of BrowserRefreshConfig
 
+/// How hot reload actually applies to a running app — derived from the workflow
+/// AND the project kind, never chosen directly. This is the seam that decouples
+/// "hot reload is on" from "this is a web app": the same hot-reload workflow
+/// produces web-middleware reload, method-detour-only, or game-loop reload
+/// depending on what kind of project is loaded.
+[<RequireQualifiedAccess>]
+type ReloadStrategy =
+  /// No hot reload (Interactive workflow).
+  | NoReload
+  /// Web app: FSI method-detour PLUS DevReload middleware and browser SSE refresh.
+  | WebReload of BrowserRefreshConfig
+  /// Console/headless: FSI method-detour only, no web machinery.
+  | MethodDetourOnly
+  /// Native game: frame-loop method-detour, no WebApplication/RunAsync patches.
+  | GameLoopReload
+
 module SessionWorkflow =
 
   /// Derive the feedback strategy from the workflow.
@@ -131,6 +147,19 @@ module SessionWorkflow =
   let isHotReloadActive = function
     | SessionWorkflow.Interactive -> false
     | SessionWorkflow.WebLive _   -> true
+
+  /// Derive the actual reload strategy from the workflow AND the project kind —
+  /// total, no ambiguity. Interactive never reloads. A hot-reload workflow
+  /// reloads differently per kind: web gets middleware + browser refresh,
+  /// console gets method-detour only, a game gets frame-loop detour.
+  let reloadStrategy (workflow: SessionWorkflow) (kind: ProjectKind) : ReloadStrategy =
+    match workflow with
+    | SessionWorkflow.Interactive -> ReloadStrategy.NoReload
+    | SessionWorkflow.WebLive cfg ->
+      match kind with
+      | ProjectKind.Web _   -> ReloadStrategy.WebReload cfg
+      | ProjectKind.Console -> ReloadStrategy.MethodDetourOnly
+      | ProjectKind.Game    -> ReloadStrategy.GameLoopReload
 
   /// Default workflow — full REPL, no restrictions.
   let defaultWorkflow = SessionWorkflow.Interactive
