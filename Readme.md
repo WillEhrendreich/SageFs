@@ -398,7 +398,7 @@ SageFs is building toward that same feedback loop with a REPL-centered architect
 2. **~350ms** — F# Compiler Service type-checks → dependency graph, reachability annotations
 3. **~500ms** — Affected-test execution via hot-eval → ✓/✗ results inline
 
-Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable.
+Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 610 property-based tests exercise the binary format, state machines, and event folds against generated inputs (this count is derived from source, not hand-maintained).
 
 </details>
 
