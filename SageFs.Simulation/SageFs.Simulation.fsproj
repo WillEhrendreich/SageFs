@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Library</OutputType>
+        <IsPackable>false</IsPackable>
+        <!-- Deterministic Simulation Testing (DST) harness for the pure
+             supervision core. Targets net10.0 like SageFs.Core (see
+             Directory.Build.props). Pure F#, no IO, no third-party deps —
+             only SageFs.Core, so the harness folds through the REAL policy. -->
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Scenario.fs" />
+        <Compile Include="Runner.fs" />
+        <Compile Include="Invariants.fs" />
+        <Compile Include="Generators.fs" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
+    </ItemGroup>
+
+</Project>

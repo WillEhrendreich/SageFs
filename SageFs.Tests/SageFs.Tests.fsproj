@@ -259,6 +259,7 @@
         <Compile Include="BatchFlusherTests.fs" />
         <Compile Include="BatchFlusherPropertyTests.fs" />
         <Compile Include="LifecyclePropertyTests.fs" />
+        <Compile Include="SimulationTests.fs" />
         <Compile Include="PerfBudget.fs" />
         <Compile Include="FsiCrossSubmissionTests.fs" />
         <Compile Include="Round4HardeningTests.fs" />
@@ -449,6 +450,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\SageFs.Core\SageFs.Core.fsproj" />
+        <ProjectReference Include="..\SageFs.Simulation\SageFs.Simulation.fsproj" />
         <ProjectReference Include="..\SageFs\SageFs.fsproj" />
         <ProjectReference Include="..\SageFs.Host\SageFs.Host.fsproj" />
         <!-- The web-app hot-reload fixture is a build-time dependency: the

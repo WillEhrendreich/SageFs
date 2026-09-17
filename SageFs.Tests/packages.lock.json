@@ -432,7 +432,7 @@
           "OpenTelemetry.Instrumentation.Http": "[1.18.0, )",
           "OpenTelemetry.Instrumentation.Runtime": "[1.18.0, )",
           "SQLitePCLRaw.lib.e_sqlite3": "[2.1.12, )",
-          "SageFs.Core": "[0.6.491, )",
+          "SageFs.Core": "[0.6.556, )",
           "Serilog.Extensions.Logging.File": "[9.0.0-dev-02303, )"
         }
       },
@@ -456,7 +456,13 @@
       "sagefs.host": {
         "type": "Project",
         "dependencies": {
-          "SageFs.Core": "[0.6.491, )"
+          "SageFs.Core": "[0.6.556, )"
+        }
+      },
+      "sagefs.simulation": {
+        "type": "Project",
+        "dependencies": {
+          "SageFs.Core": "[0.6.556, )"
         }
       },
       "Falco.Datastar": {
