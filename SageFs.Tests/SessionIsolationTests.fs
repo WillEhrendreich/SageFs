@@ -99,18 +99,23 @@ module McpSessionIsolation =
       |> Expect.equal "ctx2 should remain on A" "aaaaaa01"
     }
 
-    testCaseAsync "switchSession does NOT dispatch SessionSwitched to Elm" <| async {
+    testCaseAsync "switchSession moves the daemon-global active session via SessionSwitched" <| async {
+      // The per-agent SessionMap update alone left session-less calls (e.g.
+      // GET /api/live-testing/status with no ?session=) stuck on whatever
+      // session was last created. switchSession now also dispatches
+      // SessionSwitched so the daemon-global active session follows the switch,
+      // and those no-arg calls resolve to the session the user is working in.
       let ctx, dispatched = ctxWithTracking "aaaaaa01"
 
       let! _ = switchSessionIgnoringStoreErrors ctx "test" "bbbbbb02" |> Async.AwaitTask
 
       dispatched
-      |> Seq.filter (fun msg ->
+      |> Seq.choose (fun msg ->
         match msg with
-        | SageFsMsg.Event (TuiEvent.SessionSwitched _) -> true
-        | _ -> false)
-      |> Seq.length
-      |> Expect.equal "switchSession should not dispatch SessionSwitched to Elm" 0
+        | SageFsMsg.Event (TuiEvent.SessionSwitched (_, toId)) -> Some toId
+        | _ -> None)
+      |> Seq.toList
+      |> Expect.equal "switchSession dispatches exactly one SessionSwitched to the target session" [ "bbbbbb02" ]
     }
 
     testCaseAsync "switchSession does NOT dispatch ListSessions to Elm" <| async {

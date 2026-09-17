@@ -1917,6 +1917,14 @@ module McpTools =
         | Some _ ->
           let _prev = activeSessionId ctx agent
           setActiveSessionId ctx agent sessionId
+          // Also move the daemon-global active session, so session-less calls
+          // (e.g. GET /api/live-testing/status with no ?session=) follow the
+          // switch instead of staying on whatever session was last created.
+          // Mirrors the create path's SessionSwitched dispatch; the handler
+          // also parks/promotes the per-session live-testing state.
+          match ctx.Dispatch with
+          | Some dispatch -> dispatch (SageFsMsg.Event (TuiEvent.SessionSwitched(None, sessionId)))
+          | None -> ()
           return sprintf "Switched to session '%s'" sessionId
         | None ->
           return sprintf "Error: Session '%s' not found" sessionId
