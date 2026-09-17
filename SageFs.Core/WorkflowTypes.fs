@@ -21,6 +21,48 @@ type BrowserRefreshConfig = {
 module BrowserRefreshConfig =
   let defaults = { WatchPatterns = [ "*.fs"; "*.fsx" ] }
 
+// ─── Project kind ───────────────────────────────────────────
+
+/// What kind of runtime a session's projects are, which decides HOW hot reload
+/// applies. The browser-refresh config lives on `Web` because it is only
+/// meaningful there — a Console or Game project structurally cannot carry a
+/// browser config, so that illegal combination cannot be constructed.
+[<RequireQualifiedAccess>]
+type ProjectKind =
+  /// A web app (ASP.NET Core / Falco / Giraffe / Saturn). Hot reload uses the
+  /// DevReload middleware plus browser SSE refresh.
+  | Web of BrowserRefreshConfig
+  /// A console or headless app. Hot reload uses FSI method-detour only — no web
+  /// machinery.
+  | Console
+  /// A native windowed game (Raylib / SDL / Silk.NET / MonoGame). Hot reload
+  /// detours frame-loop methods; no WebApplication patches.
+  | Game
+
+module ProjectKind =
+
+  /// Native game / graphics libraries whose presence means a windowed game.
+  let private gamePackages = [ "Raylib"; "SDL2"; "Silk.NET"; "MonoGame"; "SFML" ]
+
+  /// Web frameworks whose presence means a web app.
+  let private webPackages = [ "Falco"; "Giraffe"; "Saturn"; "Microsoft.AspNetCore" ]
+
+  /// Classify a project by its package references. Game wins over Web wins over
+  /// Console: a native game library dominates the runtime shape, then a web
+  /// framework, else a plain console/headless app.
+  let classify (packageRefs: string list) : ProjectKind =
+    let has (names: string list) =
+      packageRefs |> List.exists (fun ref -> names |> List.exists ref.Contains)
+    if has gamePackages then ProjectKind.Game
+    elif has webPackages then ProjectKind.Web BrowserRefreshConfig.defaults
+    else ProjectKind.Console
+
+  /// Short user-facing label.
+  let label = function
+    | ProjectKind.Web _   -> "web"
+    | ProjectKind.Console -> "console"
+    | ProjectKind.Game    -> "game"
+
 // ─── Feedback strategy ──────────────────────────────────────
 
 /// How the user wants to see their changes reflected.

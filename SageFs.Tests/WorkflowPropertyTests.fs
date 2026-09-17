@@ -220,3 +220,38 @@ let workflowPropertyTests =
         |> Expect.hasLength "should find both web packages" 2
     ]
   ]
+
+[<Tests>]
+let projectKindTests =
+  testList "ProjectKind classification" [
+    testCase "web frameworks classify as Web" <| fun _ ->
+      ProjectKind.classify [ "Falco.Datastar"; "FSharp.Core" ] |> ProjectKind.label
+      |> Expect.equal "Falco is web" "web"
+      ProjectKind.classify [ "Microsoft.AspNetCore.App" ] |> ProjectKind.label
+      |> Expect.equal "AspNetCore is web" "web"
+      ProjectKind.classify [ "Giraffe" ] |> ProjectKind.label
+      |> Expect.equal "Giraffe is web" "web"
+
+    testCase "native game libraries classify as Game" <| fun _ ->
+      ProjectKind.classify [ "Raylib-cs" ] |> ProjectKind.label
+      |> Expect.equal "Raylib is game" "game"
+      ProjectKind.classify [ "SDL2-CS" ] |> ProjectKind.label
+      |> Expect.equal "SDL2 is game" "game"
+
+    testCase "everything else is Console" <| fun _ ->
+      ProjectKind.classify [ "Expecto"; "FSharp.Core" ] |> ProjectKind.label
+      |> Expect.equal "plain is console" "console"
+      ProjectKind.classify [] |> ProjectKind.label
+      |> Expect.equal "empty is console" "console"
+
+    testCase "Game wins over Web when both are present" <| fun _ ->
+      // A native game that also references a web lib is still a game — native
+      // windowing dominates the reload strategy.
+      ProjectKind.classify [ "Raylib-cs"; "Microsoft.AspNetCore.App" ] |> ProjectKind.label
+      |> Expect.equal "game precedence" "game"
+
+    testCase "a Web project structurally carries a browser config" <| fun _ ->
+      match ProjectKind.classify [ "Falco" ] with
+      | ProjectKind.Web cfg -> cfg.WatchPatterns |> Expect.isNonEmpty "web carries a config"
+      | other -> failtestf "expected Web, got %A" other
+  ]
