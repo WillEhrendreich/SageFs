@@ -154,6 +154,23 @@ let gateDecisionTests =
       checkToolCallAllowed Ready "switch_workflow"
       |> Expect.isOk "switch_workflow must be allowed to run in Ready"
 
+    testCase "switch_session is AlwaysAvailable and callable in every state (navigating away from a busy/faulted session must never be blocked)"
+    <| fun _ ->
+      // Regression (roast-9 §2): switch_session was StateGated, so the gate —
+      // which evaluates the ACTIVE session's state — rejected it whenever the
+      // active session was Evaluating or Faulted, blocking the exact recovery
+      // switch_session exists for. It is navigation, not code execution: it only
+      // rebinds which session the agent views, so it has no session-state
+      // dependence and must be callable in every state, like stop_session.
+      toolGate "switch_session"
+      |> Expect.equal
+        "switch_session must be AlwaysAvailable (navigation has no session-state dependence)"
+        (Some ToolGate.AlwaysAvailable)
+      allStates
+      |> List.iter (fun state ->
+        checkToolCallAllowed state "switch_session"
+        |> Expect.isOk (sprintf "switch_session must be callable in %A" state))
+
     testCase "gate rejects an unavailable StateGated tool with ToolNotAvailable"
     <| fun _ ->
       // WarmingUp is a canonical wrong state for code execution.

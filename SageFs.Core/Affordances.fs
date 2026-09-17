@@ -100,6 +100,9 @@ let availableTools (state: SessionState) : string list =
       "get_friction_report"
       "get_available_projects"
       "list_sessions"
+      // switch_session is always callable (navigation, not execution) — advertise
+      // it so an agent whose active session is mid-eval knows it can switch away.
+      "switch_session"
       "check_fsharp_code"
       "decompose_pipeline" ]
   | Faulted ->
@@ -108,6 +111,9 @@ let availableTools (state: SessionState) : string list =
       "get_friction_report"
       "get_available_projects"
       "list_sessions"
+      // switch_session is always callable — advertise it so an agent on a
+      // faulted session knows it can switch to a healthy one.
+      "switch_session"
       "create_session"
       "reset_fsi_session"
       "hard_reset_fsi_session"
@@ -156,6 +162,13 @@ let private gatingDomain : Map<string, ToolGate> =
     "enable_hot_reload", ToolGate.AlwaysAvailable
     "disable_hot_reload", ToolGate.AlwaysAvailable
     "stop_session", ToolGate.AlwaysAvailable
+    // switch_session is navigation, not code execution: it only rebinds which
+    // session the agent views and moves the daemon-global active pointer. It
+    // never touches an FSI session or worker, so it cannot depend on any
+    // session's execution state — and gating it on the ACTIVE session's state
+    // wrongly rejected "switch away from a busy/faulted session," the exact
+    // recovery it exists for (roast-9 §2). It belongs here with stop_session.
+    "switch_session", ToolGate.AlwaysAvailable
     // Stateless code analysis — no session required (decomposes the passed
     // pipeline expression directly).
     "decompose_pipeline", ToolGate.AlwaysAvailable
@@ -185,7 +198,6 @@ let private gatingDomain : Map<string, ToolGate> =
     "targeted_verify", ToolGate.StateGated
     "list_tests", ToolGate.StateGated
     "explain_test_failure", ToolGate.StateGated
-    "switch_session", ToolGate.StateGated
     "create_session", ToolGate.StateGated
     "reset_fsi_session", ToolGate.StateGated
     "hard_reset_fsi_session", ToolGate.StateGated
