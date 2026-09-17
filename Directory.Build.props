@@ -16,7 +16,7 @@
          NoWarn NU1608/NU1902 for the pre-1.0/known-audited transitive pins. -->
     <CheckNulls>true</CheckNulls>
     <NoWarn>$(NoWarn);NU1608;NU1902</NoWarn>
-    <Version>0.6.562</Version>
+    <Version>0.6.563</Version>
     <!-- Reproducible/tamper-evident restore: commit packages.lock.json per
          project and fail restore if it drifts from Directory.Packages.props
          without a regenerate. RestoreLockedMode is scoped to CI so local
