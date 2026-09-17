@@ -25,7 +25,7 @@ module BrowserRefreshConfig =
 
 /// What kind of runtime a session's projects are, which decides HOW hot reload
 /// applies. The browser-refresh config lives on `Web` because it is only
-/// meaningful there — a Console or Game project structurally cannot carry a
+/// meaningful there — a Console or native-GUI project structurally cannot carry a
 /// browser config, so that illegal combination cannot be constructed.
 [<RequireQualifiedAccess>]
 type ProjectKind =
@@ -35,33 +35,45 @@ type ProjectKind =
   /// A console or headless app. Hot reload uses FSI method-detour only — no web
   /// machinery.
   | Console
-  /// A native windowed game (Raylib / SDL / Silk.NET / MonoGame). Hot reload
-  /// detours frame-loop methods; no WebApplication patches.
-  | Game
+  /// A native windowed app — a game (Raylib / SDL / Silk.NET / MonoGame) or a
+  /// desktop UI (Avalonia / MAUI / WinUI / Uno / WPF). Both run a native window
+  /// with a render/event loop and no WebApplication. Hot reload detours the
+  /// frame/render-loop methods; no WebApplication/RunAsync patches.
+  | NativeGui
 
 module ProjectKind =
 
-  /// Native game / graphics libraries whose presence means a windowed game.
-  let private gamePackages = [ "Raylib"; "SDL2"; "Silk.NET"; "MonoGame"; "SFML" ]
+  /// Native game AND desktop-UI libraries — both run a native window with a
+  /// render/event loop and no WebApplication.
+  let private nativeGuiPackages =
+    [ "Raylib"; "SDL2"; "Silk.NET"; "MonoGame"; "SFML"          // games
+      "Avalonia"; "Microsoft.Maui"; "Microsoft.WindowsAppSDK"   // desktop UI
+      "Microsoft.WinUI"; "Uno.UI"; "Uno.WinUI" ]
 
   /// Web frameworks whose presence means a web app.
   let private webPackages = [ "Falco"; "Giraffe"; "Saturn"; "Microsoft.AspNetCore" ]
 
-  /// Classify a project by its package references. Game wins over Web wins over
-  /// Console: a native game library dominates the runtime shape, then a web
-  /// framework, else a plain console/headless app.
+  /// Classify a project by its package references. NativeGui wins over Web wins
+  /// over Console: a native game/desktop-UI library dominates the runtime shape,
+  /// then a web framework, else a plain console/headless app.
+  ///
+  /// WPF is a Windows framework feature enabled by `<UseWPF>`, not a package, so
+  /// it is not detected here and lands in Console. That is harmless and not a
+  /// regression: the web DevReload patch is inert for a WPF app (it never calls
+  /// WebApplication.Run) and reload still works through the method detour — so
+  /// existing Windows/WPF users are unaffected.
   let classify (packageRefs: string list) : ProjectKind =
     let has (names: string list) =
       packageRefs |> List.exists (fun ref -> names |> List.exists ref.Contains)
-    if has gamePackages then ProjectKind.Game
+    if has nativeGuiPackages then ProjectKind.NativeGui
     elif has webPackages then ProjectKind.Web BrowserRefreshConfig.defaults
     else ProjectKind.Console
 
   /// Short user-facing label.
   let label = function
-    | ProjectKind.Web _   -> "web"
-    | ProjectKind.Console -> "console"
-    | ProjectKind.Game    -> "game"
+    | ProjectKind.Web _     -> "web"
+    | ProjectKind.Console   -> "console"
+    | ProjectKind.NativeGui -> "native-gui"
 
 // ─── Feedback strategy ──────────────────────────────────────
 
@@ -117,8 +129,9 @@ type ReloadStrategy =
   | WebReload of BrowserRefreshConfig
   /// Console/headless: FSI method-detour only, no web machinery.
   | MethodDetourOnly
-  /// Native game: frame-loop method-detour, no WebApplication/RunAsync patches.
-  | GameLoopReload
+  /// Native GUI (game or desktop UI): frame/render-loop method-detour, no
+  /// WebApplication/RunAsync patches.
+  | NativeGuiReload
 
 module ReloadStrategy =
 
@@ -137,7 +150,7 @@ module ReloadStrategy =
   let installsWebDevReload = function
     | ReloadStrategy.WebReload _      -> true
     | ReloadStrategy.MethodDetourOnly -> true
-    | ReloadStrategy.GameLoopReload   -> false
+    | ReloadStrategy.NativeGuiReload  -> false
     | ReloadStrategy.NoReload         -> false
 
 module SessionWorkflow =
@@ -179,7 +192,7 @@ module SessionWorkflow =
       match kind with
       | ProjectKind.Web _   -> ReloadStrategy.WebReload cfg
       | ProjectKind.Console -> ReloadStrategy.MethodDetourOnly
-      | ProjectKind.Game    -> ReloadStrategy.GameLoopReload
+      | ProjectKind.NativeGui -> ReloadStrategy.NativeGuiReload
 
   /// Default workflow — full REPL, no restrictions.
   let defaultWorkflow = SessionWorkflow.Interactive

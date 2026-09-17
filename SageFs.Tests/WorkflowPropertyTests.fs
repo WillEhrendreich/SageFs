@@ -232,11 +232,20 @@ let projectKindTests =
       ProjectKind.classify [ "Giraffe" ] |> ProjectKind.label
       |> Expect.equal "Giraffe is web" "web"
 
-    testCase "native game libraries classify as Game" <| fun _ ->
+    testCase "native game AND desktop-UI libraries classify as NativeGui" <| fun _ ->
       ProjectKind.classify [ "Raylib-cs" ] |> ProjectKind.label
-      |> Expect.equal "Raylib is game" "game"
+      |> Expect.equal "Raylib is native-gui" "native-gui"
       ProjectKind.classify [ "SDL2-CS" ] |> ProjectKind.label
-      |> Expect.equal "SDL2 is game" "game"
+      |> Expect.equal "SDL2 is native-gui" "native-gui"
+      // Desktop UI frameworks are native-GUI too (no WebApplication).
+      ProjectKind.classify [ "Avalonia"; "Avalonia.Desktop"; "SkiaSharp" ] |> ProjectKind.label
+      |> Expect.equal "Avalonia is native-gui" "native-gui"
+      ProjectKind.classify [ "Microsoft.Maui.Controls" ] |> ProjectKind.label
+      |> Expect.equal "MAUI is native-gui" "native-gui"
+      ProjectKind.classify [ "Microsoft.WindowsAppSDK" ] |> ProjectKind.label
+      |> Expect.equal "WinUI is native-gui" "native-gui"
+      ProjectKind.classify [ "Uno.WinUI" ] |> ProjectKind.label
+      |> Expect.equal "Uno is native-gui" "native-gui"
 
     testCase "everything else is Console" <| fun _ ->
       ProjectKind.classify [ "Expecto"; "FSharp.Core" ] |> ProjectKind.label
@@ -244,11 +253,11 @@ let projectKindTests =
       ProjectKind.classify [] |> ProjectKind.label
       |> Expect.equal "empty is console" "console"
 
-    testCase "Game wins over Web when both are present" <| fun _ ->
+    testCase "NativeGui wins over Web when both are present" <| fun _ ->
       // A native game that also references a web lib is still a game — native
       // windowing dominates the reload strategy.
       ProjectKind.classify [ "Raylib-cs"; "Microsoft.AspNetCore.App" ] |> ProjectKind.label
-      |> Expect.equal "game precedence" "game"
+      |> Expect.equal "native-gui precedence" "native-gui"
 
     testCase "a Web project structurally carries a browser config" <| fun _ ->
       match ProjectKind.classify [ "Falco" ] with
@@ -260,7 +269,7 @@ let projectKindTests =
 let reloadStrategyTests =
   testList "ReloadStrategy derivation" [
     testCase "Interactive never reloads, whatever the project kind" <| fun _ ->
-      for kind in [ ProjectKind.Web BrowserRefreshConfig.defaults; ProjectKind.Console; ProjectKind.Game ] do
+      for kind in [ ProjectKind.Web BrowserRefreshConfig.defaults; ProjectKind.Console; ProjectKind.NativeGui ] do
         SessionWorkflow.reloadStrategy SessionWorkflow.Interactive kind
         |> Expect.equal "interactive = no reload" ReloadStrategy.NoReload
 
@@ -274,8 +283,8 @@ let reloadStrategyTests =
       |> Expect.equal "console = detour only" ReloadStrategy.MethodDetourOnly
 
     testCase "hot-reload + game -> game-loop reload (no WebApplication patches)" <| fun _ ->
-      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive BrowserRefreshConfig.defaults) ProjectKind.Game
-      |> Expect.equal "game = loop reload" ReloadStrategy.GameLoopReload
+      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive BrowserRefreshConfig.defaults) ProjectKind.NativeGui
+      |> Expect.equal "game = loop reload" ReloadStrategy.NativeGuiReload
   ]
 
 [<Tests>]
@@ -290,7 +299,7 @@ let devReloadGateTests =
       |> Expect.isTrue "console installs defensively (no regression for plain ASP.NET)"
 
     testCase "a native game never installs the web patch" <| fun _ ->
-      ReloadStrategy.installsWebDevReload ReloadStrategy.GameLoopReload
+      ReloadStrategy.installsWebDevReload ReloadStrategy.NativeGuiReload
       |> Expect.isFalse "game skips the web patch"
 
     testCase "no reload installs nothing" <| fun _ ->
