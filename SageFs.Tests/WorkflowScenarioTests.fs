@@ -309,6 +309,21 @@ let ofStringScenarios =
       [ ""; "   "; null; "garbage"; "webbly" ]
       |> List.map (SessionWorkflow.ofString >> SessionWorkflow.isHotReloadActive)
       |> Expect.allEqual "unknown/empty/null must default to Interactive (hot reload OFF)" false
+
+    testCase "tryOfString returns None for unknown/empty so callers can reject" <| fun () ->
+      [ ""; "   "; null; "garbage"; "webbly" ]
+      |> List.map SessionWorkflow.tryOfString
+      |> Expect.allEqual "tryOfString must be None for anything unrecognized" None
+
+    testCase "tryOfString recognizes an explicit interactive/repl request" <| fun () ->
+      [ "interactive"; "repl"; "REPL" ]
+      |> List.map SessionWorkflow.tryOfString
+      |> Expect.allEqual "explicit interactive/repl parses to Some Interactive" (Some SessionWorkflow.Interactive)
+
+    testCase "tryOfString recognizes livetesting and hotreload aliases" <| fun () ->
+      (SessionWorkflow.tryOfString "livetesting", SessionWorkflow.tryOfString "hotreload")
+      |> Expect.equal "livetesting → Some LiveTesting, hotreload → Some HotReload"
+        (Some SessionWorkflow.LiveTesting, Some (SessionWorkflow.HotReload BrowserRefreshConfig.defaults))
   ]
 
 [<Tests>]

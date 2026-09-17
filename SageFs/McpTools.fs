@@ -1039,7 +1039,7 @@ projects: A JSON array of .fsproj paths — projects=["path/to/Foo.fsproj"] — 
         [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Used for session routing and multi-agent coordination. Defaults to 'mcp' if omitted.")>]
         [<Optional; DefaultParameterValue("")>]
         agentName: string,
-        [<Description("Session mode: 'interactive' (default) for a full REPL, or 'live'/'weblive' for a web app with hot reload (browser auto-refresh on save; the REPL is restricted to expressions). Case-insensitive.")>]
+        [<Description("Session mode (case-insensitive): 'interactive' (default) for a full REPL; 'livetesting' for a full REPL that also re-runs the affected tests on every save (TDD as you type — no hot reload); or 'hotreload'/'live' for a web/app session with hot reload (browser auto-refresh on save; the REPL is restricted to expressions).")>]
         [<Optional; DefaultParameterValue("")>]
         workflow: string
     ) : Task<string> =
@@ -1104,7 +1104,7 @@ Workflows control the tradeoff between REPL capability and browser hot reload:
 Set dryRun=true to preview the transition cost without executing.
 Switching creates a new session — REPL definitions and cell state are lost.""")>]
     member _.switch_workflow(
-        [<Description("Target workflow: 'interactive' or 'weblive' (aliases: 'repl', 'live')")>]
+        [<Description("Target workflow: 'interactive' (full REPL), 'livetesting' (full REPL + tests on save), or 'hotreload' (app hot reload; aliases: 'weblive', 'live', 'web'). Switching recreates the session, so REPL state is lost.")>]
         target: string,
         [<Description("Working directory of the MCP client. Omit to target the active session.")>]
         [<Optional; DefaultParameterValue("")>]

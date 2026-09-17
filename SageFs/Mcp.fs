@@ -1945,16 +1945,12 @@ module McpTools =
     (dryRun: bool)
     : Task<string> =
     task {
-      // 1. Parse target workflow
-      let targetOpt =
-        match targetStr.ToLowerInvariant().Trim() with
-        | "interactive" | "repl" -> Some WorkflowTypes.SessionWorkflow.Interactive
-        | "weblive" | "live" ->
-          Some (WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults)
-        | _ -> None
+      // 1. Parse target workflow — one alias table (WorkflowTypes.tryOfString),
+      // shared with ofString, so create and switch never disagree on spellings.
+      let targetOpt = WorkflowTypes.SessionWorkflow.tryOfString targetStr
       match targetOpt with
       | None ->
-        return sprintf "Error: unknown workflow '%s'. Valid values: 'interactive' (REPL), 'weblive' (Live)" targetStr
+        return sprintf "Error: unknown workflow '%s'. Valid values: 'interactive' (REPL), 'livetesting' (Live Testing), 'hotreload' (Hot Reload)" targetStr
       | Some target ->
       // 2. Resolve session from working directory
       let! resolution = resolveSessionId ctx agent None workingDirectory

@@ -1628,6 +1628,11 @@ let run
   // stdout lines to the session output panel via TuiEvent.OutputEmitted.
   let mutable onAppOutputCallback : (string -> string -> unit) =
     fun _ _ -> ()
+  // Assigned after elmRuntime exists (below): when a session becomes ready,
+  // auto-enable live testing if its workflow is LiveTesting, so a LiveTesting
+  // session runs tests from its first save without a manual enable toggle.
+  let mutable onSessionReadyExtra : (WorkerProtocol.SessionId -> unit) =
+    fun _ -> ()
 
   // Create SessionManager — the single source of truth for all sessions
   // Returns (mailbox, readSnapshot) — CQRS: reads go to snapshot, writes to mailbox
@@ -1636,7 +1641,7 @@ let run
       (fun () -> stateChangedEvent.Trigger SessionProgress)
       (fun sid report -> onTestDiscoveryCallback sid report)
       (fun sid maps -> onInstrumentationMapsCallback sid maps)
-      (fun sid -> stateChangedEvent.Trigger (SessionReady sid))
+      (fun sid -> stateChangedEvent.Trigger (SessionReady sid); onSessionReadyExtra sid)
       (fun sid progress -> onWarmupProgressCallback (WorkerProtocol.SessionId.value sid) progress)
       (fun sid error -> stateChangedEvent.Trigger (SessionFaulted (sid, error)))
       (fun sid line -> onAppOutputCallback (WorkerProtocol.SessionId.value sid) line)
@@ -2005,6 +2010,21 @@ let run
 
   // Wire test discovery from SessionManager → Elm model
   onTestDiscoveryCallback <- handleTestDiscovery readSnapshot workingDir log elmRuntime.Dispatch
+
+  // Auto-enable live testing for LiveTesting-workflow sessions the moment they
+  // become ready (covers create, switch-workflow, HTTP, dashboard, and resume
+  // — every path funnels through onSessionReady). EnableLiveTestingForSession
+  // is idempotent (no-ops if already Active) and tolerates warmup discovery not
+  // having landed yet, so firing on every ready transition is safe. The runtime
+  // enable/disable toggle can still turn it off within the session.
+  onSessionReadyExtra <- fun sid ->
+    SessionManager.QuerySnapshot.tryGetSession sid (readSnapshot())
+    |> Option.iter (fun info ->
+      match info.Workflow with
+      | WorkflowTypes.SessionWorkflow.LiveTesting ->
+        elmRuntime.Dispatch(SageFsMsg.EnableLiveTestingForSession (WorkerProtocol.SessionId.value sid))
+      | WorkflowTypes.SessionWorkflow.Interactive
+      | WorkflowTypes.SessionWorkflow.HotReload _ -> ())
 
   // Wire instrumentation maps from SessionManager → Elm model
   onInstrumentationMapsCallback <- fun sid maps ->

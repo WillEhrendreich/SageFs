@@ -221,11 +221,19 @@ module SessionWorkflow =
   ///
   /// Note "live" maps to hot reload for backward compatibility (the workflow
   /// was once labelled "Live"); the tests-on-save mode is "livetesting".
-  let ofString (s: string) : SessionWorkflow =
+  /// Parse a workflow string, returning None for anything unrecognized.
+  /// The single alias table; `ofString` defaults None to Interactive, while
+  /// callers that must reject an unknown target (e.g. switch_workflow) use this
+  /// directly instead of writing a second parser that drifts from this one.
+  let tryOfString (s: string) : SessionWorkflow option =
     match (s |> Option.ofObj |> Option.defaultValue "").Trim().ToLowerInvariant() with
-    | "hotreload" | "weblive" | "live" | "web" -> SessionWorkflow.HotReload BrowserRefreshConfig.defaults
-    | "livetesting" | "live-testing" | "testing" | "test" -> SessionWorkflow.LiveTesting
-    | _ -> SessionWorkflow.Interactive
+    | "interactive" | "repl" | "normal" -> Some SessionWorkflow.Interactive
+    | "hotreload" | "weblive" | "live" | "web" -> Some (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
+    | "livetesting" | "live-testing" | "testing" | "test" -> Some SessionWorkflow.LiveTesting
+    | _ -> None
+
+  let ofString (s: string) : SessionWorkflow =
+    tryOfString s |> Option.defaultValue SessionWorkflow.Interactive
 
   /// Convert from the legacy bool representation.
   /// Used at the boundary where env vars are parsed.
