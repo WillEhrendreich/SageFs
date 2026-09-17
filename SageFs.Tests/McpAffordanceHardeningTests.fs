@@ -23,19 +23,16 @@ let private allAffordanceTools =
 let private snakeCaseRegex =
   Regex(@"^[a-z][a-z0-9_]*$", RegexOptions.Compiled)
 
+// `typeof` (not a runtime assembly scan) so the tool-count contract always runs
+// and can never silently skip on assembly load order. Still an Option to keep the
+// callers' `match ... with None -> skiptest | Some -> ...` shape, but it is now
+// always Some.
 let private tryGetMcpToolMethods () =
-  try
-    AppDomain.CurrentDomain.GetAssemblies()
-    |> Array.collect (fun a ->
-      try a.GetTypes() with _ -> [||])
-    |> Array.tryFind (fun t -> t.Name = "SageFsTools")
-    |> Option.map (fun t ->
-      t.GetMethods()
-      |> Array.filter (fun m ->
-        m.GetCustomAttributes(true)
-        |> Array.exists (fun attr ->
-          attr.GetType().Name = "McpServerToolAttribute")))
-  with _ -> None
+  typeof<SageFs.Server.McpTools.SageFsTools>.GetMethods()
+  |> Array.filter (fun m ->
+    m.GetCustomAttributes(true)
+    |> Array.exists (fun attr -> attr.GetType().Name = "McpServerToolAttribute"))
+  |> Some
 
 // ── Group 1: State Machine Reachability ──
 

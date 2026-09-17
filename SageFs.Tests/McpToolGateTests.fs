@@ -23,18 +23,15 @@ let private allModelTools =
   |> List.distinct
 
 /// [<McpServerTool>]-attributed public methods on SageFs.Server.McpTools.SageFsTools.
+/// Referenced via `typeof` (not a runtime assembly scan) so the type is always
+/// resolved and this contract can never silently skip on assembly load order —
+/// the earlier scan-and-skip let switch_workflow ship registered-but-ungated.
 let private registeredMcpToolNames () =
-  AppDomain.CurrentDomain.GetAssemblies()
-  |> Array.collect (fun a ->
-    try a.GetTypes() with _ -> [||])
-  |> Array.tryFind (fun t -> t.Name = "SageFsTools")
-  |> Option.map (fun t ->
-    t.GetMethods()
-    |> Array.filter (fun m ->
-      m.GetCustomAttributes(true)
-      |> Array.exists (fun attr -> attr.GetType().Name = "McpServerToolAttribute"))
-    |> Array.map (fun m -> m.Name))
-  |> Option.defaultValue [||]
+  typeof<SageFs.Server.McpTools.SageFsTools>.GetMethods()
+  |> Array.filter (fun m ->
+    m.GetCustomAttributes(true)
+    |> Array.exists (fun attr -> attr.GetType().Name = "McpServerToolAttribute"))
+  |> Array.map (fun m -> m.Name)
 
 let private registeredToolSet () =
   registeredMcpToolNames () |> Set.ofArray
