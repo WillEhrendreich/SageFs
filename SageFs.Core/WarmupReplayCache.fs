@@ -251,8 +251,13 @@ module internal WarmupReplayCache =
     | true -> ()
     | false -> Directory.CreateDirectory(directory) |> ignore
 
-    JsonSerializer.Serialize(plan, jsonOptions)
-    |> fun json -> File.WriteAllText(path, json)
+    // Write to a temp file then atomically move it over `path`, matching the
+    // rest of the persistence layer: a crash or a concurrent read never sees a
+    // half-written cache. Worst case is a clean miss that triggers rediscovery.
+    let json = JsonSerializer.Serialize(plan, jsonOptions)
+    let tmp = path + ".tmp"
+    File.WriteAllText(tmp, json)
+    File.Move(tmp, path, true)
 
   let trySave (path: string) (plan: ReplayPlan) =
     try

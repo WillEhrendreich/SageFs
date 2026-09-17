@@ -2290,8 +2290,9 @@ let createApiDispatchHandler
     with
     | :? RequestTooLargeException -> ()  // 413 already written
     | ex ->
+      Log.warn "[dashboard] /api/dispatch failed: %s" ex.Message
       ctx.Response.StatusCode <- 400
-      do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+      do! ctx.Response.WriteAsJsonAsync({| error = "Request failed" |})
   }
 
 /// Live-testing toggle route: dispatch the change, then push so the panel shows the
@@ -2534,8 +2535,9 @@ let createEndpoints
       with
       | :? RequestTooLargeException -> ()
       | ex ->
+        Log.warn "[dashboard] /dashboard/set-theme failed: %s" ex.Message
         ctx.Response.StatusCode <- 400
-        do! ctx.Response.WriteAsJsonAsync({| error = ex.Message |})
+        do! ctx.Response.WriteAsJsonAsync({| error = "Request failed" |})
     })
     // Create session in temp directory
     yield post "/dashboard/session/create-temp" (fun ctx -> task {

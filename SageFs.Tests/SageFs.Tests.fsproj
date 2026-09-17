@@ -309,7 +309,6 @@
          <Compile Include="FrictionSqliteEndToEndTests.fs" />
          <Compile Include="FrictionReviewViewTests.fs" />
          <Compile Include="TargetedVerifyMcpToolTests.fs" />
-         <Compile Include="McpTargetedVerificationToolTests.fs" />
          <Compile Include="JupyterKernelTests.fs" />
          <Compile Include="JupyterDaemonBridgeTests.fs" />
         <Compile Include="TracingMiddlewareTests.fs" />
