@@ -5,6 +5,7 @@
     <Platform Name="x86" />
   </Configurations>
   <Project Path="SageFs.Core/SageFs.Core.fsproj" />
+  <Project Path="SageFs.Simulation/SageFs.Simulation.fsproj" />
   <Project Path="SageFs/SageFs.fsproj" />
   <Project Path="SageFs.Host/SageFs.Host.fsproj" />
   <Project Path="SageFs.Tests/SageFs.Tests.fsproj" />
