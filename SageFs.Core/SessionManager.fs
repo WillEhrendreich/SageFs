@@ -1139,23 +1139,18 @@ module SessionManager =
             // worker (carrying the OLD pid) must never commit — it would point
             // the registry back at the dying process and clear the pending swap,
             // after which the NEW worker's ready would be ignored as "stale" and
-            // the session would be left serving a dead worker.
-            let isStaleReady =
-              match ManagerState.tryGetPendingSwap id state with
-              | Some oldSession ->
-                workerPid > 0 && SessionLifecycleStatus.workerPid oldSession.Info.Status = Some workerPid
-              | None ->
-                // No swap pending: a ready whose pid differs from an already-
-                // registered live pid is a straggler from a replaced worker
-                // (e.g. a double-spawned older process reporting late).
-                match SessionLifecycleStatus.workerPid session.Info.Status with
-                | Some currentPid -> workerPid > 0 && currentPid <> workerPid
-                | None -> false
-            match isStaleReady with
-            | true ->
+            // the session would be left serving a dead worker. The pid decision
+            // is the single source of truth in WorkerEventGuard, shared with
+            // WorkerSpawnFailed/WorkerExited so the guard can never drift.
+            let currentPid = SessionLifecycleStatus.workerPid session.Info.Status
+            let pendingSwapPid =
+              ManagerState.tryGetPendingSwap id state
+              |> Option.bind (fun oldSession -> SessionLifecycleStatus.workerPid oldSession.Info.Status)
+            match WorkerEventGuard.classifyReady currentPid pendingSwapPid workerPid with
+            | WorkerEventGuard.ReadyDecision.IgnoreStale ->
               Log.warn "[SessionManager] Ignoring stale WorkerReady for session %s (event pid %d != current pid)" (SessionId.value id) workerPid
               return state
-            | false ->
+            | WorkerEventGuard.ReadyDecision.Commit ->
               match hasValidReadyTransport baseUrl proxy with
               | false ->
                 let msg = describeInvalidReadyTransport "Worker" baseUrl proxy
@@ -1319,16 +1314,24 @@ module SessionManager =
         | SessionCommand.WorkerSpawnFailed(id, workerPid, msg) ->
           match ManagerState.tryGetSession id state with
           | Some session ->
-            match ManagerState.tryGetPendingSwap id state with
-            | Some oldSession ->
-              // Spawn-first restart in progress: the failure is for the NEW
-              // (pending) worker — its pid differs from the registered session's
-              // pid (which still points at the OLD, still-serving worker). This
-              // is NOT stale: the pending worker genuinely failed to come up.
-              // Fail-closed per P3/P4: revert the swap — restore the old session
-              // (still Ready, old worker serving) and clear the pending entry.
-              match SessionLifecycleStatus.workerPid session.Info.Status with
-              | Some oldPid when oldPid <> workerPid && workerPid > 0 ->
+            // The pid decision is the single source of truth in WorkerEventGuard,
+            // shared with WorkerReady/WorkerExited. RevertSwap: a spawn-first
+            // restart is in progress and the failure is for the NEW (pending)
+            // worker — its pid differs from the registered session's pid (still
+            // the OLD, still-serving worker) — so fail-closed (P3/P4) by reverting
+            // the swap: restore the old session and clear the pending entry.
+            // IgnoreStale: a straggler spawn-failure from a replaced worker (a
+            // hard reset killed the old process while its awaitWorkerPort task was
+            // still reading stdout; on EOF it posts WorkerSpawnFailed, which would
+            // tombstone the FRESH worker). Fault: the current worker failed.
+            let currentPid = SessionLifecycleStatus.workerPid session.Info.Status
+            let pendingSwapPid =
+              ManagerState.tryGetPendingSwap id state
+              |> Option.bind (fun oldSession -> SessionLifecycleStatus.workerPid oldSession.Info.Status)
+            match WorkerEventGuard.classifySpawnFailed currentPid pendingSwapPid workerPid with
+            | WorkerEventGuard.SpawnFailedDecision.RevertSwap ->
+              match ManagerState.tryGetPendingSwap id state with
+              | Some oldSession ->
                 Log.warn "[SessionManager] Replacement worker spawn failed for session %s; reverting to the still-serving old worker: %s" (SessionId.value id) msg
                 let newState =
                   ManagerState.clearPendingSwap id
@@ -1336,31 +1339,24 @@ module SessionManager =
                         WarmupProgress = Map.remove id state.WarmupProgress }
                 onSessionReady id
                 return newState
-              | _ ->
+              | None ->
+                // Unreachable: RevertSwap is only returned when a swap is pending.
                 Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
                 let updated = faultedTombstone (Some msg) session
                 let newState = ManagerState.addSession id updated state
-                onSessionReady id  // notify clients of Faulted state change
+                onSessionReady id
                 onSessionFaulted id msg
                 return newState
-            | None ->
-              // Ignore stale spawn-failure events from a replaced worker: a hard
-              // reset kills the old process while its awaitWorkerPort task is
-              // still reading stdout; on EOF it posts WorkerSpawnFailed, which
-              // would tombstone the FRESH worker to Faulted. The pid on the
-              // message exists precisely so this race can be closed (the same
-              // discipline WorkerExited already applies).
-              match SessionLifecycleStatus.workerPid session.Info.Status with
-              | Some currentPid when workerPid > 0 && currentPid <> workerPid ->
-                Log.warn "[SessionManager] Ignoring stale WorkerSpawnFailed for session %s (event pid %d != current pid %d)" (SessionId.value id) workerPid currentPid
-                return state
-              | _ ->
-                Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
-                let updated = faultedTombstone (Some msg) session
-                let newState = ManagerState.addSession id updated state
-                onSessionReady id  // notify clients of Faulted state change
-                onSessionFaulted id msg
-                return newState
+            | WorkerEventGuard.SpawnFailedDecision.IgnoreStale ->
+              Log.warn "[SessionManager] Ignoring stale WorkerSpawnFailed for session %s (event pid %d != current pid %A)" (SessionId.value id) workerPid currentPid
+              return state
+            | WorkerEventGuard.SpawnFailedDecision.Fault ->
+              Log.warn "[SessionManager] Worker spawn failed for session %s: %s" (SessionId.value id) msg
+              let updated = faultedTombstone (Some msg) session
+              let newState = ManagerState.addSession id updated state
+              onSessionReady id  // notify clients of Faulted state change
+              onSessionFaulted id msg
+              return newState
           | None ->
             return state
 
@@ -1373,32 +1369,28 @@ module SessionManager =
             // is expected — it is being retired once the new worker reports
             // Ready (or the swap reverts). Treat its exit as inert so it can
             // never be mistaken for a real crash of the registered session.
-            match ManagerState.tryGetPendingSwap id state with
-            | Some oldSession when workerPid > 0 && SessionLifecycleStatus.workerPid oldSession.Info.Status = Some workerPid ->
+            // Stale exits from an already-replaced worker (e.g. after
+            // RestartSession) and synthetic NotifyWorkerDied events (workerPid
+            // = -1) are inert too. The pid decision is the single source of
+            // truth in WorkerEventGuard, shared with WorkerReady/WorkerSpawnFailed.
+            let currentPid = SessionLifecycleStatus.workerPid session.Info.Status
+            let pendingSwapPid =
+              ManagerState.tryGetPendingSwap id state
+              |> Option.bind (fun oldSession -> SessionLifecycleStatus.workerPid oldSession.Info.Status)
+            let markStaleSpan () =
+              match isNull span with
+              | false -> span.SetTag("stale_event", true) |> ignore
+              | true -> ()
+              Instrumentation.succeedSpan span
+            match WorkerEventGuard.classifyExited currentPid pendingSwapPid workerPid with
+            | WorkerEventGuard.ExitDecision.IgnoreRetired ->
               Log.warn "[SessionManager] Ignoring retired worker exit for session %s during spawn-first restart (pid %d)" (SessionId.value id) workerPid
-              match isNull span with
-              | false -> span.SetTag("stale_event", true) |> ignore
-              | true -> ()
-              Instrumentation.succeedSpan span
+              markStaleSpan ()
               return state
-            | _ ->
-            // Ignore stale exit events from old workers (e.g., after RestartSession)
-            // Also ignore synthetic NotifyWorkerDied events (workerPid = -1) which
-            // should not be treated as real process exits.
-            match SessionLifecycleStatus.workerPid session.Info.Status with
-            | None when workerPid > 0 ->
-              match isNull span with
-              | false -> span.SetTag("stale_event", true) |> ignore
-              | true -> ()
-              Instrumentation.succeedSpan span
+            | WorkerEventGuard.ExitDecision.IgnoreStale ->
+              markStaleSpan ()
               return state
-            | Some currentPid when currentPid <> workerPid && workerPid > 0 ->
-              match isNull span with
-              | false -> span.SetTag("stale_event", true) |> ignore
-              | true -> ()
-              Instrumentation.succeedSpan span
-              return state
-            | _ ->
+            | WorkerEventGuard.ExitDecision.Apply ->
             let outcome =
               SessionLifecycle.onWorkerExited
                 state.RestartPolicy

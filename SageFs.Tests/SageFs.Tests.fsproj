@@ -261,6 +261,7 @@
         <Compile Include="BatchFlusherPropertyTests.fs" />
         <Compile Include="LifecyclePropertyTests.fs" />
         <Compile Include="SimulationTests.fs" />
+        <Compile Include="WorkerLifecycleSimTests.fs" />
         <Compile Include="PerfBudget.fs" />
         <Compile Include="FsiCrossSubmissionTests.fs" />
         <Compile Include="Round4HardeningTests.fs" />
