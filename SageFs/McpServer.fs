@@ -1371,20 +1371,23 @@ let wireModelChangeHandlers
           |> List.map (fun o -> o.Text)
           |> String.concat "\n"
         let state = featurePushState.Value
+        // Output-derived: recompute on every output tick.
         let state, diffSse =
           SageFs.Features.FeatureHooks.computeEvalDiffPush ctx.SseJsonOpts sid outputText state
-        let state, depsSse =
-          SageFs.Features.FeatureHooks.computeCellDepsPush ctx.SseJsonOpts sid state
-        let state, scopeSse =
-          SageFs.Features.FeatureHooks.computeBindingScopePush ctx.SseJsonOpts sid state
-        // W12(R10): Volatile.Write ensures the MCP-thread write is visible to dashboard HTTP threads.
-        let scopeSnapshot = SageFs.Features.FeatureHooks.scope state
-        System.Threading.Volatile.Write(&sharedBindingScope.contents, Some scopeSnapshot)
-        let state, timelineSse =
-          SageFs.Features.FeatureHooks.computeEvalTimelinePush ctx.SseJsonOpts sid state
+        // History-derived (cell deps, binding scope, eval timeline): recomputed
+        // only when a new eval advanced the history. An app's stdout changes the
+        // output count but not the scope/graph, so it no longer forces an
+        // O(history) rebuild just for the no-change suppression to discard it.
+        let state, historyDerivedSse, scopeSnapshot =
+          SageFs.Features.FeatureHooks.computeHistoryDerivedPushes ctx.SseJsonOpts sid state
+        // W12(R10): Volatile.Write ensures the MCP-thread write is visible to
+        // dashboard HTTP threads — only when the scope was actually recomputed;
+        // otherwise the last-written snapshot still stands (it is unchanged).
+        match scopeSnapshot with
+        | Some snap -> System.Threading.Volatile.Write(&sharedBindingScope.contents, Some snap)
+        | None -> ()
         featurePushState.Value <- state
-        [diffSse; depsSse; scopeSse; timelineSse]
-        |> List.choose id
+        (diffSse |> Option.toList) @ historyDerivedSse
         |> List.iter ctx.TestEventBroadcast.Trigger)
     | false -> ()
 

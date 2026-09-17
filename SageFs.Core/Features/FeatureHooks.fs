@@ -20,6 +20,11 @@ type FeaturePushState = {
   CellGraph: Lazy<CellDependencyGraph.CellGraph>
   /// Cached timeline state, updated incrementally in recordEval.
   CachedTimeline: EvalTimeline.TimelineState
+  /// `History.NextId` at the last time the history-derived pushes (cell deps,
+  /// binding scope, eval timeline) were emitted. App output changes the output
+  /// count but not the history, so comparing against this lets those pushes
+  /// skip the O(history) scope/graph rebuild on pure-output ticks.
+  LastPushedHistoryVersion: int
 }
   with
   /// Retained entries, newest first. Walks the whole history — hot paths use
@@ -52,6 +57,9 @@ module FeaturePushState =
     Scope = Lazy<_>.CreateFromValue emptyScope
     CellGraph = Lazy<_>.CreateFromValue emptyGraph
     CachedTimeline = EvalTimeline.TimelineState.empty
+    // -1 (never the initial empty history's NextId of 0) so the first push
+    // always recomputes.
+    LastPushedHistoryVersion = -1
   }
 
   let empty = withCap EvalStore.HistoryCap.standard
@@ -110,3 +118,25 @@ let computeEvalTimelinePush (opts: System.Text.Json.JsonSerializerOptions) (sess
     { state with LastEvalTimelineSse = Some sseStr }, None
   else
     { state with LastEvalTimelineSse = Some sseStr }, Some sseStr
+
+/// Recompute and emit the history-derived pushes (cell deps, binding scope,
+/// eval timeline) ONLY when the eval history advanced since they were last
+/// emitted. App output changes the output count but not the history, so on a
+/// pure-output tick this skips the O(history) scope/graph rebuild entirely
+/// (the server view is unchanged, so nothing is lost — server-authoritative,
+/// no client-side state). Returns the updated state, the SSE strings to emit,
+/// and the binding scope snapshot to share (Some only when it was recomputed).
+let computeHistoryDerivedPushes
+  (opts: System.Text.Json.JsonSerializerOptions)
+  (sessionId: string option)
+  (state: FeaturePushState)
+  : FeaturePushState * string list * BindingExplorer.BindingScopeSnapshot option =
+  match state.History.NextId = state.LastPushedHistoryVersion with
+  | true -> state, [], None
+  | false ->
+    let state, depsSse = computeCellDepsPush opts sessionId state
+    let state, scopeSse = computeBindingScopePush opts sessionId state
+    let scopeSnapshot = scope state
+    let state, timelineSse = computeEvalTimelinePush opts sessionId state
+    let state = { state with LastPushedHistoryVersion = state.History.NextId }
+    state, ([ depsSse; scopeSse; timelineSse ] |> List.choose id), Some scopeSnapshot
