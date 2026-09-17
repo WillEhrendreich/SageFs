@@ -40,7 +40,8 @@ ${extractFunction("parseSummary")}
 ${extractFunction("parseFreshness")}
 ${extractFunction("parseCompletion")}
 ${extractFunction("parseResultsBatch")}
-module.exports = { parseSummary, parseResultsBatch };
+${extractFunction("classifyStateEvent")}
+module.exports = { parseSummary, parseResultsBatch, classifyStateEvent };
 `;
 
 const context = {
@@ -53,6 +54,7 @@ const context = {
   some: (x) => x,
   fieldInt: (name, obj) => Number.isInteger(obj?.[name]) ? obj[name] : undefined,
   fieldString: (name, obj) => typeof obj?.[name] === "string" ? obj[name] : undefined,
+  fieldBool: (name, obj) => typeof obj?.[name] === "boolean" ? obj[name] : undefined,
   fieldObj: (name) => (obj) => obj?.[name],
   tryCastArray: (x) => Array.isArray(x) ? x : undefined,
   tryCastString: (x) => typeof x === "string" ? x : undefined,
@@ -102,11 +104,15 @@ const context = {
     this.tag = tag;
     this.fields = fields;
   },
+  StateEventAction: function(tag, fields) {
+    this.tag = tag;
+    this.fields = fields;
+  },
 };
 
 vm.runInNewContext(harness, context);
 
-const { parseSummary, parseResultsBatch } = context.module.exports;
+const { parseSummary, parseResultsBatch, classifyStateEvent } = context.module.exports;
 
 function readFixture(name) {
   return JSON.parse(fs.readFileSync(path.join(fixturesDir, name), "utf8"));
@@ -197,6 +203,78 @@ run("parseSummary defaults the activity to empty from an older daemon", () => {
   const summary = parseSummary({ Total: 3, Passed: 3, Failed: 0, Running: 0, Stale: 0, Disabled: 0 });
   assert(summary.Activity === "", `expected empty activity, got ${summary.Activity}`);
   assert(summary.NotYetRun === 0, `expected NotYetRun=0, got ${summary.NotYetRun}`);
+});
+
+// ── classifyStateEvent: the 0.6 "state" envelope (see SageFs/SseEvent.fs) ──
+// Each shape below was captured live from a 0.6.x daemon. The bug this guards
+// against: classifying only by the outer event name "state" drops every one of
+// these because the discriminant lives INSIDE the JSON.
+// Tags: 0 SessionFaulted, 1 FileReloaded, 2 WarmupProgress, 3 SessionReady,
+//       4 SessionSwitched, 5 HotReloadChanged, 6 SystemAlarm, 7 ModelChanged,
+//       8 Heartbeat, 9 Unknown.
+
+run("classifyStateEvent routes a session fault to its error, not the sid", () => {
+  const a = classifyStateEvent({ sessionFaulted: "abc12345", error: "boom in warmup" });
+  assert(a.tag === 0, `expected StateSessionFaulted (0), got ${a.tag}`);
+  assert(a.fields[0] === "boom in warmup", `expected the error message, got ${a.fields[0]}`);
+});
+
+run("classifyStateEvent defaults a fault with no error to a readable message", () => {
+  const a = classifyStateEvent({ sessionFaulted: "abc12345" });
+  assert(a.tag === 0, `expected StateSessionFaulted (0), got ${a.tag}`);
+  assert(a.fields[0] === "unknown error", `expected fallback message, got ${a.fields[0]}`);
+});
+
+run("classifyStateEvent routes a file reload to its path", () => {
+  const a = classifyStateEvent({ fileReloaded: "/repo/src/Foo.fs", sessionId: "abc12345" });
+  assert(a.tag === 1, `expected StateFileReloaded (1), got ${a.tag}`);
+  assert(a.fields[0] === "/repo/src/Foo.fs", `expected the reloaded path, got ${a.fields[0]}`);
+});
+
+run("classifyStateEvent reads warmup progress step/total", () => {
+  const a = classifyStateEvent({ warmupProgress: true, sessionId: "abc12345", step: 3, total: 7 });
+  assert(a.tag === 2, `expected StateWarmupProgress (2), got ${a.tag}`);
+  assert(a.fields[0] === 3 && a.fields[1] === 7, `expected step=3 total=7, got ${a.fields[0]}/${a.fields[1]}`);
+});
+
+run("classifyStateEvent recognizes session ready", () => {
+  const a = classifyStateEvent({ sessionReady: "abc12345" });
+  assert(a.tag === 3, `expected StateSessionReady (3), got ${a.tag}`);
+  assert(a.fields[0] === "abc12345", `expected the sid, got ${a.fields[0]}`);
+});
+
+run("classifyStateEvent recognizes session switched", () => {
+  const a = classifyStateEvent({ sessionSwitched: "def67890" });
+  assert(a.tag === 4, `expected StateSessionSwitched (4), got ${a.tag}`);
+  assert(a.fields[0] === "def67890", `expected the sid, got ${a.fields[0]}`);
+});
+
+run("classifyStateEvent recognizes a hot-reload change", () => {
+  const a = classifyStateEvent({ hotReloadChanged: true, sessionId: "abc12345" });
+  assert(a.tag === 5, `expected StateHotReloadChanged (5), got ${a.tag}`);
+  assert(a.fields[0] === "abc12345", `expected the sid, got ${a.fields[0]}`);
+});
+
+run("classifyStateEvent reads a system alarm phase/message", () => {
+  const a = classifyStateEvent({ systemAlarm: true, phase: "warmup", message: "disk full" });
+  assert(a.tag === 6, `expected StateSystemAlarm (6), got ${a.tag}`);
+  assert(a.fields[0] === "warmup" && a.fields[1] === "disk full", `unexpected phase/message: ${a.fields[0]}/${a.fields[1]}`);
+});
+
+run("classifyStateEvent reads a model-changed count pair", () => {
+  const a = classifyStateEvent({ outputCount: 12, diagCount: 3 });
+  assert(a.tag === 7, `expected StateModelChanged (7), got ${a.tag}`);
+  assert(a.fields[0] === 12 && a.fields[1] === 3, `expected 12/3, got ${a.fields[0]}/${a.fields[1]}`);
+});
+
+run("classifyStateEvent treats a bare heartbeat as no-op", () => {
+  const a = classifyStateEvent({ sessionProgress: true });
+  assert(a.tag === 8, `expected StateHeartbeat (8), got ${a.tag}`);
+});
+
+run("classifyStateEvent falls back to Unknown for an unrecognized shape", () => {
+  const a = classifyStateEvent({ somethingNew: 42 });
+  assert(a.tag === 9, `expected StateUnknown (9), got ${a.tag}`);
 });
 
 if (process.exitCode && process.exitCode !== 0) {

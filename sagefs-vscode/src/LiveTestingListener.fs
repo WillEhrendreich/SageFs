@@ -234,6 +234,71 @@ let parseFailureNarratives (data: obj) : VscFailureNarrative array =
   |> Option.defaultValue [||]
   |> Array.map parseFailureNarrative
 
+// ── "state" envelope classification (daemon 0.6 wire protocol) ─────────
+//
+// The 0.6 daemon no longer emits a distinct named SSE frame per lifecycle
+// change. Instead it folds most of them into ONE frame named "state" whose
+// real discriminant is which field the JSON carries (see the daemon's
+// SageFs/SseEvent.fs, SseChannel.State). A client that classifies only by the
+// OUTER event name ("state") and ignores the inner field therefore drops every
+// fault / file-reload / progress signal — the exact bug that hit the nvim
+// plugin. classifyStateEvent is the pure field→action map that fixes it; the
+// dispatcher routes each action to the existing callbacks.
+
+/// The concrete action a "state" envelope maps to, decided purely by the field
+/// the daemon populated. Field shapes are pinned in SageFs/SseEvent.fs.
+type StateEventAction =
+  | StateSessionFaulted of error: string
+  | StateFileReloaded of path: string
+  | StateWarmupProgress of step: int * total: int
+  | StateSessionReady of sessionId: string
+  | StateSessionSwitched of sessionId: string
+  | StateHotReloadChanged of sessionId: string
+  | StateSystemAlarm of phase: string * message: string
+  | StateModelChanged of outputCount: int * diagCount: int
+  | StateHeartbeat
+  | StateUnknown
+
+/// Map a decoded "state" SSE payload to its action by inspecting which field is
+/// present. Order matters only where a payload could carry more than one marker
+/// (it does not today); the discriminants are mutually exclusive on the wire.
+let classifyStateEvent (data: obj) : StateEventAction =
+  match fieldString "sessionFaulted" data with
+  | Some _ ->
+    // The "sessionFaulted" field is the sid; the human-readable cause is "error".
+    StateSessionFaulted (fieldString "error" data |> Option.defaultValue "unknown error")
+  | None ->
+  match fieldString "fileReloaded" data with
+  | Some path -> StateFileReloaded path
+  | None ->
+  match fieldBool "warmupProgress" data with
+  | Some true ->
+    StateWarmupProgress (
+      fieldInt "step" data |> Option.defaultValue 0,
+      fieldInt "total" data |> Option.defaultValue 0)
+  | _ ->
+  match fieldString "sessionReady" data with
+  | Some sid -> StateSessionReady sid
+  | None ->
+  match fieldString "sessionSwitched" data with
+  | Some sid -> StateSessionSwitched sid
+  | None ->
+  match fieldBool "hotReloadChanged" data with
+  | Some true -> StateHotReloadChanged (fieldString "sessionId" data |> Option.defaultValue "")
+  | _ ->
+  match fieldBool "systemAlarm" data with
+  | Some true ->
+    StateSystemAlarm (
+      fieldString "phase" data |> Option.defaultValue "",
+      fieldString "message" data |> Option.defaultValue "")
+  | _ ->
+  match fieldInt "outputCount" data with
+  | Some oc -> StateModelChanged (oc, fieldInt "diagCount" data |> Option.defaultValue 0)
+  | None ->
+  match fieldBool "sessionProgress" data with
+  | Some true -> StateHeartbeat
+  | _ -> StateUnknown
+
 // ── Listener lifecycle ───────────────────────────────────────
 
 type LiveTestingCallbacks = {
@@ -348,10 +413,30 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
         if not allChanges.IsEmpty then
           callbacks.OnStateChange allChanges
       | "state" ->
-        callbacks.OnStatusRefresh ()
+        // 0.6 daemon folds many lifecycle changes into this one frame; the real
+        // signal is the field present, decoded by classifyStateEvent. Faults and
+        // file-reloads used to arrive as their own frames and were being dropped.
+        match classifyStateEvent data with
+        | StateSessionFaulted error -> callbacks.OnSessionFaulted error
+        | StateFileReloaded path -> callbacks.OnFileReloaded path
+        // Progress/ready/switch/hotreload/alarm/model changes all just mean
+        // "something moved — re-poll the daemon for fresh status". The detailed
+        // warmup UI is driven by the still-distinct "warmup_progress" frame.
+        | StateWarmupProgress _
+        | StateSessionReady _
+        | StateSessionSwitched _
+        | StateHotReloadChanged _
+        | StateSystemAlarm _
+        | StateModelChanged _
+        | StateUnknown -> callbacks.OnStatusRefresh ()
+        // Heartbeat carries no state change; refreshing on every beat is pure churn.
+        | StateHeartbeat -> ()
       | "session" ->
-        // Auto-detect the active session from warmup/activation events.
-        // The server injects sessionId (lowercase) inside "session" type events.
+        // "session" envelope: the inner "type" field is the discriminant. The
+        // server injects sessionId (lowercase) on these frames. NOTE: the 0.6
+        // daemon does NOT emit session_created/session_stopped/session_activated
+        // over SSE — session-list freshness comes from polling GET /api/sessions
+        // (see the sessions tree provider), not from these events.
         let subtype = fieldString "type" data |> Option.defaultValue ""
         match subtype with
         | "warmup_context_snapshot" | "session_activated" ->
@@ -359,6 +444,10 @@ let start (port: int) (callbacks: LiveTestingCallbacks) (onReconnect: (unit -> u
           | Some sid when sid <> "" ->
             sessionFilter <- Some sid
           | _ -> ()
+        | "hotreload_snapshot" | "hotreload_file_toggled" | "workflow_switching" ->
+          // Hot-reload watch set changed, or a workflow switch began — re-poll so
+          // the tree/status views reflect the new state.
+          callbacks.OnStatusRefresh ()
         | "workflow_switched" ->
           match fieldString "workflowLabel" data with
           | Some label -> callbacks.OnWorkflowChanged label
