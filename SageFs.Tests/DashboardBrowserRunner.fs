@@ -203,7 +203,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
 // ============================================================================
 // HR-DASH: hot-reload browser journeys (real save -> changed running app).
 //
-// Phase 2 entry point. Boots an isolated daemon, creates a WebLive session on
+// Phase 2 entry point. Boots an isolated daemon, creates a HotReload session on
 // a TEMP COPY of the WebAppFixture (one-session-per-workingDir rule), writes
 // a .SageFs/init.fsx into the copy that bootstraps ASP.NET Core refs (a bare
 // Web SDK project's Ionide FSI args omit them), starts the fixture app on a
@@ -438,13 +438,13 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
       dumpDaemonLogs ()
       exitWith 1
     else
-      // WebLive session on the temp fixture.
+      // HotReload session on the temp fixture.
       let fixtureProj = Path.Combine(fixtureDir, "WebAppFixture.fsproj")
       let payload =
         System.Text.Json.JsonSerializer.Serialize(
           {| projects = [| fixtureProj |]
              workingDirectory = fixtureDir
-             workflow = "WebLive" |})
+             workflow = "HotReload" |})
       let createStatus = syncPost "/api/sessions/create" payload
       if createStatus <> 200 then
         eprintfn "HR runner: session create failed (HTTP %d)" createStatus

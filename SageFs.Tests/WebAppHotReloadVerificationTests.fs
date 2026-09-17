@@ -65,7 +65,7 @@ let private fixtureDir () =
 /// `hostLog` accumulates the host's stdout/stderr for failure diagnostics.
 let private spawnHost (sessionId: string) (hostLog: StringBuilder) =
   let exe = hostExePath ()
-  let args, envVars = Args.buildWorkerSpawnConfig sessionId [] false false true (SageFs.WorkflowTypes.SessionWorkflow.WebLive SageFs.WorkflowTypes.BrowserRefreshConfig.defaults)
+  let args, envVars = Args.buildWorkerSpawnConfig sessionId [] false false true (SageFs.WorkflowTypes.SessionWorkflow.HotReload SageFs.WorkflowTypes.BrowserRefreshConfig.defaults)
   let psi = ProcessStartInfo(exe, args)
   psi.UseShellExecute <- false
   psi.RedirectStandardOutput <- true

@@ -45,7 +45,7 @@ let private session (workflow: WorkflowTypes.SessionWorkflow) (projects: Classif
     ProjectRoles = projects
     App = app }
 
-let private webLive = WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults
+let private webLive = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults
 let private interactive = WorkflowTypes.SessionWorkflow.Interactive
 
 type private Recorded = {
@@ -144,7 +144,7 @@ let private states (r: Recorded) = r.States.ToArray() |> Array.toList
 [<Tests>]
 let runAppTests =
   testList "AppRunOrchestration runApp" [
-    testTask "WHY — AppRunOrchestration.runApp — a WebLive session launches without restarting because hot reload is already installed" {
+    testTask "WHY — AppRunOrchestration.runApp — a HotReload session launches without restarting because hot reload is already installed" {
       let r = record ()
       let ops = fakeOps (session webLive [ exe web ] AppRunState.NotRunning) (worker never.Task) r
       let! result = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
@@ -155,7 +155,7 @@ let runAppTests =
       calls r |> List.contains "switch-to-weblive" |> Expect.isFalse "no restart"
     }
 
-    testTask "WHY — AppRunOrchestration.runApp — an Interactive session restarts into WebLive first because hot reload installs only at worker start" {
+    testTask "WHY — AppRunOrchestration.runApp — an Interactive session restarts into HotReload first because hot reload installs only at worker start" {
       let r = record ()
       let ops = fakeOps (session interactive [ exe web ] AppRunState.NotRunning) (worker never.Task) r
       let! _ = AppRunOrchestration.runApp ops clock readyTimeout sid RunRequest.DefaultTarget
@@ -201,7 +201,7 @@ let runAppTests =
       |> Expect.stringContains "the worker's reason" "no entry point"
     }
 
-    testTask "WHY — AppRunOrchestration.runApp — a failed restart into WebLive is CouldNotStart, not Crashed and not left Starting, because the app never ran: 'crashed' would tell the user their code died when it was the worker that never came up (roast-4 #3)" {
+    testTask "WHY — AppRunOrchestration.runApp — a failed restart into HotReload is CouldNotStart, not Crashed and not left Starting, because the app never ran: 'crashed' would tell the user their code died when it was the worker that never came up (roast-4 #3)" {
       let r = record ()
       let ops =
         { fakeOps (session interactive [ exe web ] AppRunState.NotRunning) (worker never.Task) r with

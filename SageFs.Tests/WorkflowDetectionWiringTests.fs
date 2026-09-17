@@ -135,18 +135,18 @@ let private webFrameworkHintScenarios =
         "Saturn project should produce a hint"
   ]
 
-// ── Scenario: Already in WebLive mode ──────────────────────────
+// ── Scenario: Already in HotReload mode ──────────────────────────
 
 let private alreadyWebLiveScenarios =
-  testList "no hint when already in WebLive" [
+  testList "no hint when already in HotReload" [
 
     testCase
-      "WebLive workflow produces no hint because user already chose Live"
+      "HotReload workflow produces no hint because user already chose Live"
       <| fun _ ->
-      // GIVEN a Datastar project already in WebLive mode
+      // GIVEN a Datastar project already in HotReload mode
       let packageRefs = [ "Falco.Datastar" ]
       let workflow =
-        SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+        SessionWorkflow.HotReload BrowserRefreshConfig.defaults
 
       // WHEN the detection helper runs
       let hint =
@@ -155,7 +155,7 @@ let private alreadyWebLiveScenarios =
       // THEN no hint — they're already in the right mode
       hint
       |> Expect.isNone
-        "WebLive workflow should not produce a redundant hint"
+        "HotReload workflow should not produce a redundant hint"
   ]
 
 // ── Scenario: Purity and transparency ──────────────────────────

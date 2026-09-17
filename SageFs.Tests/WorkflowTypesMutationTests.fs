@@ -3,7 +3,7 @@
 /// Proves the test suite catches mutations in the SessionWorkflow model —
 /// the DU that makes "hot reload + full REPL" structurally unrepresentable.
 /// A swapped case or dropped `--multiemit-` flag here would silently let a
-/// WebLive session run with the wrong FSI capability. Each case asserts
+/// HotReload session run with the wrong FSI capability. Each case asserts
 /// EXACT equality against the correct value so a mutant that returns any
 /// other wrong value is killed too.
 module WorkflowTypesMutationTests
@@ -12,7 +12,7 @@ open Expecto
 open Expecto.Flip
 open SageFs.WorkflowTypes
 
-let webLive = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+let webLive = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
 
 let workflowTypesMutationTests = testList "WorkflowTypes mutations" [
 
@@ -27,19 +27,28 @@ let workflowTypesMutationTests = testList "WorkflowTypes mutations" [
     |> Expect.equal "Interactive must be ReplDriven, Full capability, no extra args, label \"REPL\", hot reload OFF"
       (FeedbackStrategy.ReplDriven, ReplCapability.Full, [], "REPL", false)
 
-  testCase "WHY — webLive_is_SaveDriven_ExpressionOnly_multiemit_Live_label" <| fun () ->
+  testCase "WHY — liveTesting_is_ReplDriven_Full_no_args_LiveTesting_label_no_hotreload" <| fun () ->
+    (SessionWorkflow.feedbackStrategy SessionWorkflow.LiveTesting,
+     SessionWorkflow.replCapability SessionWorkflow.LiveTesting,
+     SessionWorkflow.fsiArgs SessionWorkflow.LiveTesting,
+     SessionWorkflow.label SessionWorkflow.LiveTesting,
+     SessionWorkflow.isHotReloadActive SessionWorkflow.LiveTesting)
+    |> Expect.equal "LiveTesting must be ReplDriven, Full capability (tests-on-save keeps the full REPL), no extra args, label \"Live Testing\", hot reload OFF"
+      (FeedbackStrategy.ReplDriven, ReplCapability.Full, [], "Live Testing", false)
+
+  testCase "WHY — webLive_is_SaveDriven_ExpressionOnly_multiemit_HotReload_label" <| fun () ->
     (SessionWorkflow.feedbackStrategy webLive,
      SessionWorkflow.replCapability webLive,
      SessionWorkflow.fsiArgs webLive,
      SessionWorkflow.label webLive,
      SessionWorkflow.isHotReloadActive webLive)
-    |> Expect.equal "WebLive must be SaveDriven, ExpressionOnly capability, [--multiemit-], label \"Live\", hot reload ON"
-      (FeedbackStrategy.SaveDriven BrowserRefreshConfig.defaults, ReplCapability.ExpressionOnly, [ "--multiemit-" ], "Live", true)
+    |> Expect.equal "HotReload must be SaveDriven, ExpressionOnly capability, [--multiemit-], label \"Hot Reload\", hot reload ON"
+      (FeedbackStrategy.SaveDriven BrowserRefreshConfig.defaults, ReplCapability.ExpressionOnly, [ "--multiemit-" ], "Hot Reload", true)
 
   testCase "WHY — fromHotReloadBool_true_is_webLive_false_is_interactive — the boolean-to-DU boundary mapping must not be swapped" <| fun () ->
     (SessionWorkflow.fromHotReloadBool true, SessionWorkflow.fromHotReloadBool false)
-    |> Expect.equal "true must map to WebLive (defaults), false must map to Interactive"
-      (SessionWorkflow.WebLive BrowserRefreshConfig.defaults, SessionWorkflow.Interactive)
+    |> Expect.equal "true must map to HotReload (defaults), false must map to Interactive"
+      (SessionWorkflow.HotReload BrowserRefreshConfig.defaults, SessionWorkflow.Interactive)
 
   testCase "WHY — replCapability_label_full_and_expressionOnly_are_distinct" <| fun () ->
     (ReplCapability.label ReplCapability.Full, ReplCapability.label ReplCapability.ExpressionOnly)
@@ -74,14 +83,14 @@ let workflowTypesMutationTests = testList "WorkflowTypes mutations" [
   testCase "WHY — preview_message_names_current_and_target_and_exact_counts" <| fun () ->
     let cost = { DefinitionsLost = 5; CellsLost = 9; EstimatedRestart = System.TimeSpan.Zero }
     WorkflowSwitchOutcome.preview SessionWorkflow.Interactive webLive cost
-    |> Expect.equal "preview must name current (REPL), target (Live), and the EXACT lost counts (5 definitions, 9 cells)"
-      (WorkflowSwitchOutcome.DryRunPreview (cost, "Preview: switching from REPL to Live would lose 5 definitions and 9 cells"))
+    |> Expect.equal "preview must name current (REPL), target (Hot Reload), and the EXACT lost counts (5 definitions, 9 cells)"
+      (WorkflowSwitchOutcome.DryRunPreview (cost, "Preview: switching from REPL to Hot Reload would lose 5 definitions and 9 cells"))
 
   testCase "WHY — switched_message_names_new_session_id" <| fun () ->
     let cost = TransitionCost.zero
     WorkflowSwitchOutcome.switched SessionWorkflow.Interactive webLive cost "abc12345"
     |> Expect.equal "Executed must carry previous, target, cost, the exact new session id, and a message naming it"
-      (WorkflowSwitchOutcome.Executed (SessionWorkflow.Interactive, webLive, cost, "abc12345", "Switched from REPL to Live (new session: abc12345)"))
+      (WorkflowSwitchOutcome.Executed (SessionWorkflow.Interactive, webLive, cost, "abc12345", "Switched from REPL to Hot Reload (new session: abc12345)"))
 
   testCase "WHY — cost_extracts_from_every_outcome_case" <| fun () ->
     let cost = { DefinitionsLost = 1; CellsLost = 2; EstimatedRestart = System.TimeSpan.Zero }
@@ -109,18 +118,18 @@ let workflowTypesMutationTests = testList "WorkflowTypes mutations" [
   testCase "WHY — suggest_datastar_takes_priority_over_generic_web — a project with BOTH kinds of hits must cite the Datastar reason" <| fun () ->
     WorkflowDetection.suggest [ "Falco.Datastar"; "Falco" ]
     |> Expect.equal "Datastar hits must win the priority order and be the ones reported as detected"
-      (Some { SuggestedWorkflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+      (Some { SuggestedWorkflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
               Reason = "Datastar project detected — Live mode enables SSE-driven DOM morphing"
               DetectedPackages = [ "Falco.Datastar" ] })
 
   testCase "WHY — suggest_web_only_no_datastar" <| fun () ->
     WorkflowDetection.suggest [ "Falco"; "Newtonsoft.Json" ]
     |> Expect.equal "a web-only project must cite the web reason and the exact matched package"
-      (Some { SuggestedWorkflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+      (Some { SuggestedWorkflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
               Reason = "Web project detected — Live mode enables browser hot reload"
               DetectedPackages = [ "Falco" ] })
 
-  testCase "WHY — suggest_no_hits_is_none — a non-web project must suggest nothing, not default to WebLive" <| fun () ->
+  testCase "WHY — suggest_no_hits_is_none — a non-web project must suggest nothing, not default to HotReload" <| fun () ->
     WorkflowDetection.suggest [ "Newtonsoft.Json"; "FSharp.Core" ]
     |> Expect.equal "no matching packages must be None" None
 

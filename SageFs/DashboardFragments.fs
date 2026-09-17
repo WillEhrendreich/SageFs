@@ -1273,7 +1273,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 | AppRun.AppRunState.Exited _ | AppRun.AppRunState.Crashed _ | AppRun.AppRunState.CouldNotStart _ | AppRun.AppRunState.BuildFailed _ | AppRun.AppRunState.LostTrack _ ->
                   sprintf "Run %s with hot reload — last run: %s" name (AppRun.describeState s.App)
                 | _ ->
-                  sprintf "Run %s with hot reload (an Interactive session restarts into WebLive first, losing its REPL bindings)" name
+                  sprintf "Run %s with hot reload (an Interactive session restarts into HotReload first, losing its REPL bindings)" name
               match runnable, s.App with
               | [], _ -> ()
               | _, AppRun.AppRunState.Running app ->

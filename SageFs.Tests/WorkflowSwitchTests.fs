@@ -30,7 +30,8 @@ let private genBrowserRefreshConfig =
 let private genSessionWorkflow =
   Gen.oneof [
     Gen.constant SessionWorkflow.Interactive
-    genBrowserRefreshConfig |> Gen.map SessionWorkflow.WebLive
+    Gen.constant SessionWorkflow.LiveTesting
+    genBrowserRefreshConfig |> Gen.map SessionWorkflow.HotReload
   ]
 
 let private genTransitionCost =
@@ -174,7 +175,7 @@ let workflowSwitchOutcomeTests =
         "preview returns cost without switching" <| fun _ ->
         // GIVEN a session in Interactive mode with some state
         let current = SessionWorkflow.Interactive
-        let target = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+        let target = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
         let cost = TransitionCost.compute 5 3
 
         // WHEN previewing the switch
@@ -210,9 +211,9 @@ let workflowSwitchOutcomeTests =
 
       testCase
         "switch creates Executed outcome with correct metadata" <| fun _ ->
-        // GIVEN switching from Interactive to WebLive
+        // GIVEN switching from Interactive to HotReload
         let previous = SessionWorkflow.Interactive
-        let target = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+        let target = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
         let cost = TransitionCost.compute 2 1
         let newSid = "abc-new-session"
 
@@ -231,7 +232,7 @@ let workflowSwitchOutcomeTests =
             "should record previous workflow" "REPL"
           SessionWorkflow.label tgt
           |> Expect.equal
-            "should record target workflow" "Live"
+            "should record target workflow" "Hot Reload"
           c
           |> Expect.equal
             "should carry transition cost" cost

@@ -30,7 +30,8 @@ let private genBrowserRefreshConfig =
 let private genSessionWorkflow =
   Gen.oneof [
     Gen.constant SessionWorkflow.Interactive
-    genBrowserRefreshConfig |> Gen.map SessionWorkflow.WebLive
+    Gen.constant SessionWorkflow.LiveTesting
+    genBrowserRefreshConfig |> Gen.map SessionWorkflow.HotReload
   ]
 
 type WorkflowGenerators =
@@ -64,9 +65,9 @@ let workflowPropertyTests =
           |> (=) FeedbackStrategy.ReplDriven
 
       testPropertyWithConfig workflowConfig
-        "WebLive always produces SaveDriven feedback" <|
+        "HotReload always produces SaveDriven feedback" <|
         fun (cfg: BrowserRefreshConfig) ->
-          SessionWorkflow.WebLive cfg
+          SessionWorkflow.HotReload cfg
           |> SessionWorkflow.feedbackStrategy
           |> (=) (FeedbackStrategy.SaveDriven cfg)
     ]
@@ -84,9 +85,9 @@ let workflowPropertyTests =
           |> not
 
       testPropertyWithConfig workflowConfig
-        "WebLive always emits --multiemit-" <|
+        "HotReload always emits --multiemit-" <|
         fun (cfg: BrowserRefreshConfig) ->
-          SessionWorkflow.WebLive cfg
+          SessionWorkflow.HotReload cfg
           |> SessionWorkflow.fsiArgs
           |> List.contains "--multiemit-"
 
@@ -148,7 +149,7 @@ let workflowPropertyTests =
           let interactiveLabel =
             SessionWorkflow.label SessionWorkflow.Interactive
           let webLiveLabel =
-            SessionWorkflow.label (SessionWorkflow.WebLive cfg)
+            SessionWorkflow.label (SessionWorkflow.HotReload cfg)
           interactiveLabel <> webLiveLabel
     ]
 
@@ -198,16 +199,17 @@ let workflowPropertyTests =
         result.Value.Reason
         |> Expect.stringContains "should mention Datastar" "Datastar"
 
-      testCase "suggested workflow is always WebLive" <| fun _ ->
+      testCase "suggested workflow is always HotReload" <| fun _ ->
         let result =
           [ "Saturn"; "FSharp.Core" ]
           |> WorkflowDetection.suggest
         match result with
         | Some s ->
           match s.SuggestedWorkflow with
-          | SessionWorkflow.WebLive _ -> ()
-          | SessionWorkflow.Interactive ->
-            failtest "should suggest WebLive, not Interactive"
+          | SessionWorkflow.HotReload _ -> ()
+          | SessionWorkflow.Interactive
+          | SessionWorkflow.LiveTesting ->
+            failtest "should suggest HotReload, not a non-hot-reload workflow"
         | None -> failtest "should produce suggestion for Saturn"
 
       testCase "detected packages list is accurate" <| fun _ ->
@@ -281,15 +283,15 @@ let reloadStrategyTests =
 
     testCase "hot-reload + web -> WebReload carrying the workflow's config" <| fun _ ->
       let cfg = { WatchPatterns = [ "*.fs" ] }
-      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive cfg) (ProjectKind.Web BrowserRefreshConfig.defaults)
+      SessionWorkflow.reloadStrategy (SessionWorkflow.HotReload cfg) (ProjectKind.Web BrowserRefreshConfig.defaults)
       |> Expect.equal "web reload keeps the workflow cfg" (ReloadStrategy.WebReload cfg)
 
     testCase "hot-reload + console -> method-detour only (no web machinery)" <| fun _ ->
-      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive BrowserRefreshConfig.defaults) ProjectKind.Console
+      SessionWorkflow.reloadStrategy (SessionWorkflow.HotReload BrowserRefreshConfig.defaults) ProjectKind.Console
       |> Expect.equal "console = detour only" ReloadStrategy.MethodDetourOnly
 
     testCase "hot-reload + game -> game-loop reload (no WebApplication patches)" <| fun _ ->
-      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive BrowserRefreshConfig.defaults) ProjectKind.NativeGui
+      SessionWorkflow.reloadStrategy (SessionWorkflow.HotReload BrowserRefreshConfig.defaults) ProjectKind.NativeGui
       |> Expect.equal "game = loop reload" ReloadStrategy.NativeGuiReload
   ]
 

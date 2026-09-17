@@ -12,7 +12,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 /// HR-DASH browser journeys — real save -> changed running app through the
 /// live dashboard. These run under `--integration-hr` (HotReloadBrowserRunner
-/// owns the daemon + a WebLive session on a temp WebAppFixture copy whose app
+/// owns the daemon + a HotReload session on a temp WebAppFixture copy whose app
 /// serves `Greeting.greeting()`).
 ///
 /// The runner sets:

@@ -18,7 +18,7 @@ open System.Net
 ///      the user has open: a remote site, a DNS-rebinding page whose hostname
 ///      resolves to 127.0.0.1, or — the case a loopback-prefix gate misses — a
 ///      page served from ANOTHER localhost port: an npm dev server running a
-///      compromised dependency, a Jupyter notebook, the user's own WebLive app.
+///      compromised dependency, a Jupyter notebook, the user's own HotReload app.
 ///      Every localhost port is the SAME SITE, so `Sec-Fetch-Site: same-site`
 ///      and a loopback Origin prove nothing about who is asking.
 ///

@@ -15,7 +15,7 @@ namespace SageFs
 module WorkflowErrorContext =
 
   /// Detect whether an error is a type redefinition error.
-  /// These only become workflow-relevant in WebLive (single-assembly) mode.
+  /// These only become workflow-relevant in HotReload (single-assembly) mode.
   let isTypeRedefinitionError (errorText: string) =
     errorText.Contains("Duplicate definition of type")
     || errorText.Contains("FS0037")
@@ -24,7 +24,7 @@ module WorkflowErrorContext =
   /// Enhance an error suggestion with workflow context.
   ///
   /// - In Interactive mode: identity — REPL has no restrictions, never inject misleading hints.
-  /// - In WebLive mode + type redef error: append switch hint explaining why and how to fix.
+  /// - In HotReload mode + type redef error: append switch hint explaining why and how to fix.
   /// - All other combinations: identity — don't add noise.
   let enhance
     (workflow: WorkflowTypes.SessionWorkflow)

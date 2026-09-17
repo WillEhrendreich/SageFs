@@ -1803,12 +1803,15 @@ module McpTools =
   // ── Session Management Operations ──────────────────────────────
 
   /// Pure helper: given package references and the current workflow, format
-  /// a non-blocking hint suggesting the user switch to WebLive if detection
+  /// a non-blocking hint suggesting the user switch to HotReload if detection
   /// finds web packages. Returns None when no suggestion applies.
   /// Decoupled from .fsproj reading for testability — callers provide the list.
   let formatDetectionHint (packageRefs: string list) (currentWorkflow: WorkflowTypes.SessionWorkflow) : string option =
     match currentWorkflow with
-    | WorkflowTypes.SessionWorkflow.Interactive ->
+    // Interactive and LiveTesting are both non-hot-reload, so a detected web
+    // project is worth a hot-reload nudge in either.
+    | WorkflowTypes.SessionWorkflow.Interactive
+    | WorkflowTypes.SessionWorkflow.LiveTesting ->
       match WorkflowTypes.WorkflowDetection.suggest packageRefs with
       | Some suggestion ->
         let pkgs = suggestion.DetectedPackages |> String.concat ", "
@@ -1817,7 +1820,7 @@ module McpTools =
             "💡 Detected web packages (%s). Consider switching to Live workflow for hot reload: use switch_workflow tool with target='live'"
             pkgs)
       | None -> None
-    | WorkflowTypes.SessionWorkflow.WebLive _ -> None
+    | WorkflowTypes.SessionWorkflow.HotReload _ -> None
 
   /// Read PackageReference Include values from a .fsproj file.
   /// Returns [] on any IO or parse error (non-blocking best-effort).
@@ -1932,7 +1935,7 @@ module McpTools =
 
   // ── Workflow Switching ──────────────────────────────────────────
 
-  /// Switch the workflow mode of a session (Interactive ↔ WebLive).
+  /// Switch the workflow mode of a session (Interactive ↔ HotReload).
   /// Creates a new session with the target workflow and stops the old one.
   let switchWorkflow
     (ctx: McpContext)
@@ -1947,7 +1950,7 @@ module McpTools =
         match targetStr.ToLowerInvariant().Trim() with
         | "interactive" | "repl" -> Some WorkflowTypes.SessionWorkflow.Interactive
         | "weblive" | "live" ->
-          Some (WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults)
+          Some (WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults)
         | _ -> None
       match targetOpt with
       | None ->

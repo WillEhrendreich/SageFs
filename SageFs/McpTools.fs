@@ -850,13 +850,15 @@ process-wide kill switch for hot reload.""")>]
                     [| "unset SAGEFS_DEVRELOAD or set it to '1', then start the session in Live mode" |]
             else
                 match workflow with
-                | SageFs.WorkflowTypes.SessionWorkflow.WebLive _ ->
+                | SageFs.WorkflowTypes.SessionWorkflow.HotReload _ ->
                     return resultJson true workerPort "Active (session is in Live mode)" false
                         [| "Hot reload is already on — this session was created in Live mode."
                            "Start your web app (run_app, or eval webapp.Run()); connected browsers auto-refresh on save."
                            "Edit any watched .fs file to see the reload fire." |]
-                | SageFs.WorkflowTypes.SessionWorkflow.Interactive ->
-                    return resultJson false workerPort "Not available: this session is in Interactive (REPL) mode" false
+                | SageFs.WorkflowTypes.SessionWorkflow.Interactive
+                | SageFs.WorkflowTypes.SessionWorkflow.LiveTesting ->
+                    let modeLabel = SageFs.WorkflowTypes.SessionWorkflow.label workflow
+                    return resultJson false workerPort (sprintf "Not available: this session is in %s mode" modeLabel) false
                         [| "Hot reload requires Live mode, which is configured when the session's FSI process starts and cannot be turned on afterward."
                            "Switch this session to Live mode: switch_workflow target=live (this recreates the session, so REPL definitions and cell state are lost)."
                            "Or start a fresh Live session: create_session workflow=live." |]
@@ -904,9 +906,11 @@ var, this is per-session and reversible. The env var, if set, takes precedence."
             let! infoOpt = ctx.SessionOps.GetSessionInfo sid
             let workflow = infoOpt |> Option.map (fun i -> i.Workflow) |> Option.defaultValue SageFs.WorkflowTypes.SessionWorkflow.Interactive
             match workflow with
-            | SageFs.WorkflowTypes.SessionWorkflow.Interactive ->
-                return resultJson true "Not active: this session is in Interactive (REPL) mode, so hot reload was never on" [||]
-            | SageFs.WorkflowTypes.SessionWorkflow.WebLive _ ->
+            | SageFs.WorkflowTypes.SessionWorkflow.Interactive
+            | SageFs.WorkflowTypes.SessionWorkflow.LiveTesting ->
+                let modeLabel = SageFs.WorkflowTypes.SessionWorkflow.label workflow
+                return resultJson true (sprintf "Not active: this session is in %s mode, so hot reload was never on" modeLabel) [||]
+            | SageFs.WorkflowTypes.SessionWorkflow.HotReload _ ->
                 return resultJson false "Active: this session is in Live mode; a per-session runtime off-switch is not wired up"
                     [| "To turn hot reload off, switch this session to Interactive mode: switch_workflow target=interactive (recreates the session; REPL state is lost)."
                        "To disable hot reload daemon-wide, start the daemon with SAGEFS_DEVRELOAD=0." |]
@@ -1095,7 +1099,7 @@ ROUTING BEHAVIOR:
     [<Description("""Switch the workflow mode for a session.
 Workflows control the tradeoff between REPL capability and browser hot reload:
 - REPL (Interactive): Full type redefinition, interactive exploration
-- Live (WebLive): Browser hot reload on save, expression-only REPL
+- Live (HotReload): Browser hot reload on save, expression-only REPL
 
 Set dryRun=true to preview the transition cost without executing.
 Switching creates a new session — REPL definitions and cell state are lost.""")>]
@@ -1736,7 +1740,7 @@ WORKFLOW: When run_tests shows a failure, call suggest_repair with the test name
     [<McpServerTool>]
     [<Description("""Run the session's executable project (OutputType=Exe) inside the session, the way `dotnet run` would, with hot reload.
 
-Invokes the compiled entry point, applies the project's Properties/launchSettings.json (the first "Project" profile's environment variables and applicationUrl), and uses a free loopback port when the project configures no URL. An Interactive session is first restarted into WebLive so hot reload is installed — its REPL bindings are lost. Saving the project's source files then hot-patches the running app.
+Invokes the compiled entry point, applies the project's Properties/launchSettings.json (the first "Project" profile's environment variables and applicationUrl), and uses a free loopback port when the project configures no URL. An Interactive session is first restarted into HotReload so hot reload is installed — its REPL bindings are lost. Saving the project's source files then hot-patches the running app.
 
 Parameters:
 - project: project name, file name or path (optional — the active project, or the only executable)

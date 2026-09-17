@@ -31,18 +31,18 @@ let private sessionCreationScenarios =
         ReplCapability.Full
 
     testCase
-      "creating a session with WebLive gets expression-only REPL" <| fun _ ->
+      "creating a session with HotReload gets expression-only REPL" <| fun _ ->
       // GIVEN a user building a Falco web app who wants hot reload
       let workflow =
-        SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+        SessionWorkflow.HotReload BrowserRefreshConfig.defaults
 
-      // WHEN they create a session with the WebLive workflow
+      // WHEN they create a session with the HotReload workflow
       let capability = SessionWorkflow.replCapability workflow
 
       // THEN they get expression-only REPL (no type redefinition)
       capability
       |> Expect.equal
-        "WebLive workflow should restrict REPL to expressions only"
+        "HotReload workflow should restrict REPL to expressions only"
         ReplCapability.ExpressionOnly
 
     testCase
@@ -59,10 +59,10 @@ let private sessionCreationScenarios =
         "Interactive mode should not activate hot reload"
 
     testCase
-      "WebLive session activates Harmony patching" <| fun _ ->
+      "HotReload session activates Harmony patching" <| fun _ ->
       // GIVEN a user who chose Live mode for browser refresh
       let workflow =
-        SessionWorkflow.WebLive { WatchPatterns = [ "*.fs" ] }
+        SessionWorkflow.HotReload { WatchPatterns = [ "*.fs" ] }
 
       // WHEN checking whether Harmony should be installed
       let hotReload = SessionWorkflow.isHotReloadActive workflow
@@ -70,7 +70,7 @@ let private sessionCreationScenarios =
       // THEN it IS — Harmony enables save-driven browser refresh
       hotReload
       |> Expect.isTrue
-        "WebLive mode should activate hot reload"
+        "HotReload mode should activate hot reload"
   ]
 
 // ── Scenario: Status bar display ────────────────────────────
@@ -89,17 +89,28 @@ let private statusBarScenarios =
       displayLabel
       |> Expect.equal "should display REPL" "REPL"
 
-    testCase "WebLive shows Live in status bar" <| fun _ ->
-      // GIVEN a user in WebLive mode
+    testCase "HotReload shows Hot Reload in status bar" <| fun _ ->
+      // GIVEN a user in HotReload mode
       let workflow =
-        SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+        SessionWorkflow.HotReload BrowserRefreshConfig.defaults
 
       // WHEN the status bar renders
       let displayLabel = SessionWorkflow.label workflow
 
-      // THEN it shows "Live" — indicates active hot reload
+      // THEN it shows "Hot Reload" — indicates active hot reload
       displayLabel
-      |> Expect.equal "should display Live" "Live"
+      |> Expect.equal "should display Hot Reload" "Hot Reload"
+
+    testCase "LiveTesting shows Live Testing in status bar" <| fun _ ->
+      // GIVEN a user in LiveTesting mode (tests-on-save, full REPL)
+      let workflow = SessionWorkflow.LiveTesting
+
+      // WHEN the status bar renders
+      let displayLabel = SessionWorkflow.label workflow
+
+      // THEN it shows "Live Testing" — distinct from hot reload's "Hot Reload"
+      displayLabel
+      |> Expect.equal "should display Live Testing" "Live Testing"
   ]
 
 // ── Scenario: FSI flag generation ───────────────────────────
@@ -121,10 +132,10 @@ let private fsiFlagScenarios =
         "Interactive should not need special FSI flags"
 
     testCase
-      "WebLive generates --multiemit- flag" <| fun _ ->
+      "HotReload generates --multiemit- flag" <| fun _ ->
       // GIVEN a user who wants browser hot reload
       let workflow =
-        SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+        SessionWorkflow.HotReload BrowserRefreshConfig.defaults
 
       // WHEN FSI starts
       let flags = SessionWorkflow.fsiArgs workflow
@@ -132,7 +143,7 @@ let private fsiFlagScenarios =
       // THEN --multiemit- is present — Harmony requires single-assembly mode
       flags
       |> Expect.equal
-        "WebLive should emit --multiemit- for Harmony compatibility"
+        "HotReload should emit --multiemit- for Harmony compatibility"
         [ "--multiemit-" ]
   ]
 
@@ -245,8 +256,9 @@ let private defaultWorkflowScenarios =
       // THEN they get Interactive — full REPL, no surprises
       match defaultWf with
       | SessionWorkflow.Interactive -> ()
-      | SessionWorkflow.WebLive _ ->
-        failtest "default should be Interactive, not WebLive"
+      | SessionWorkflow.LiveTesting
+      | SessionWorkflow.HotReload _ ->
+        failtest "default should be Interactive, not another workflow"
 
     testCase
       "default workflow has full REPL capability" <| fun _ ->
@@ -273,17 +285,27 @@ let private defaultWorkflowScenarios =
 // the safe default (unknown/empty → Interactive, never a surprise hot reload).
 let ofStringScenarios =
   testList "SessionWorkflow.ofString" [
-    testCase "every WebLive alias parses to hot reload, case-insensitively" <| fun () ->
-      [ "live"; "Live"; "LIVE"; "weblive"; "WebLive"; "WEBLIVE"; "web"; "  live  " ]
+    testCase "every HotReload alias parses to hot reload, case-insensitively" <| fun () ->
+      [ "live"; "Live"; "LIVE"; "weblive"; "HotReload"; "WEBLIVE"; "web"; "  live  " ]
       |> List.map (SessionWorkflow.ofString >> SessionWorkflow.isHotReloadActive)
-      |> Expect.allEqual "every WebLive alias must enable hot reload" true
+      |> Expect.allEqual "every HotReload alias must enable hot reload" true
 
     testCase "interactive and repl parse to the full REPL" <| fun () ->
       [ "interactive"; "Interactive"; "repl"; "REPL" ]
       |> List.map SessionWorkflow.ofString
       |> Expect.allEqual "interactive/repl must parse to Interactive" SessionWorkflow.Interactive
 
-    testCase "unknown, empty, and null default to Interactive, never WebLive" <| fun () ->
+    testCase "every LiveTesting alias parses to LiveTesting, case-insensitively" <| fun () ->
+      [ "livetesting"; "LiveTesting"; "live-testing"; "testing"; "test"; "  TEST  " ]
+      |> List.map SessionWorkflow.ofString
+      |> Expect.allEqual "every LiveTesting alias must parse to LiveTesting" SessionWorkflow.LiveTesting
+
+    testCase "LiveTesting aliases do not enable hot reload" <| fun () ->
+      [ "livetesting"; "testing"; "test" ]
+      |> List.map (SessionWorkflow.ofString >> SessionWorkflow.isHotReloadActive)
+      |> Expect.allEqual "LiveTesting keeps hot reload OFF (tests on save, no app patch)" false
+
+    testCase "unknown, empty, and null default to Interactive, never HotReload" <| fun () ->
       [ ""; "   "; null; "garbage"; "webbly" ]
       |> List.map (SessionWorkflow.ofString >> SessionWorkflow.isHotReloadActive)
       |> Expect.allEqual "unknown/empty/null must default to Interactive (hot reload OFF)" false

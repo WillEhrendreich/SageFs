@@ -1379,7 +1379,7 @@ let switchWorkflowCmd () =
           let workflow =
             match choice.Contains "REPL" with
             | true -> "Interactive"
-            | false -> "WebLive"
+            | false -> "HotReload"
           let projects = sess.projects |> String.concat ","
           let! result = Client.createSessionWithWorkflow projects sess.workingDirectory workflow c
           match result with

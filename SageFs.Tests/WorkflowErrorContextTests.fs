@@ -12,7 +12,8 @@ open SageFs.WorkflowTypes
 let private genWorkflow =
   Gen.oneof [
     Gen.constant SessionWorkflow.Interactive
-    Gen.constant (SessionWorkflow.WebLive BrowserRefreshConfig.defaults)
+    Gen.constant SessionWorkflow.LiveTesting
+    Gen.constant (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
   ]
 
 let private genErrorText =
@@ -80,8 +81,8 @@ let originalPreserved =
 /// HOW to fix (switch to REPL via switch_workflow tool).
 let webLiveFs0037IncludesSwitchHint =
   testCase
-    "WebLive + FS0037 → includes switch hint because type redef is blocked by single-assembly FSI" <| fun _ ->
-    let workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+    "HotReload + FS0037 → includes switch hint because type redef is blocked by single-assembly FSI" <| fun _ ->
+    let workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
     let error = "error FS0037: Duplicate definition of type 'Foo'"
     let suggestion = "💡 Tip: Type error."
 

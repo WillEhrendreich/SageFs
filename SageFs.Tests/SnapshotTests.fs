@@ -25,7 +25,7 @@ let formatTests =
         CommandLineArgs = [| "--mcp-port"; "8080" |]
         LoadedProjects = [ "Test.fsproj" ]
         WorkingDirectory = "/code/test"
-        Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+        Workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
         AutoOpenNamespaces = true
         AspireDetected = false
         StartupTimestamp = System.DateTime(2025, 1, 1, 0, 0, 0, System.DateTimeKind.Utc); StartupProfileLoaded = None
@@ -39,7 +39,7 @@ let formatTests =
         CommandLineArgs = [| "--mcp-port"; "8080" |]
         LoadedProjects = [ "Test.fsproj" ]
         WorkingDirectory = "/code/test"
-        Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+        Workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
         AutoOpenNamespaces = true
         AspireDetected = false
         StartupTimestamp = System.DateTime(2025, 1, 1, 0, 0, 0, System.DateTimeKind.Utc); StartupProfileLoaded = None

@@ -46,7 +46,7 @@ type WorkerConfig = {
   NoWatch: bool
   AutoOpenNamespaces: bool
   /// The session workflow — determines FSI flags, REPL capability, and hot reload.
-  /// Interactive = full REPL (default). WebLive = save-driven hot reload.
+  /// Interactive = full REPL (default). HotReload = save-driven hot reload.
   /// Derived from SAGEFS_HOT_RELOAD env var for backward compat.
   Workflow: WorkflowTypes.SessionWorkflow
   /// PID of the daemon that spawned this worker (None when run standalone,

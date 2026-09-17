@@ -302,7 +302,7 @@ let private startDaemonWithWebLiveSession () : Fixture =
     JsonSerializer.Serialize(
       {| projects = [| sampleProject |]
          workingDirectory = sampleDir
-         workflow = "WebLive" |})
+         workflow = "HotReload" |})
   use content = new StringContent(payload, Encoding.UTF8, "application/json")
   let createStatus = client.PostAsync("/api/sessions/create", content).GetAwaiter().GetResult()
   match createStatus.IsSuccessStatusCode with

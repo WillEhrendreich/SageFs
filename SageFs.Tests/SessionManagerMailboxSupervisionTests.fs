@@ -219,7 +219,7 @@ let sessionManagerMailboxSupervisionTests =
 
         switchFault.Value <- true
         match! tryPostAndReply 1500 harness.Mailbox (fun reply ->
-          SessionCommand.SwitchWorkflow(info.Id, WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults, reply)) with
+          SessionCommand.SwitchWorkflow(info.Id, WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults, reply)) with
         | Some (Error (SageFsError.HardResetFailed _)) -> ()
         | Some other -> failtestf "expected fail-closed HardResetFailed, got %A" other
         | None -> failtest "SwitchWorkflow hung — the handler exception left the reply channel unanswered"

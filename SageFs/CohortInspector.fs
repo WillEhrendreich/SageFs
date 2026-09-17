@@ -166,7 +166,8 @@ let private landingStateLabel = function
 
 let private workflowLabel = function
   | SessionWorkflow.Interactive -> "Interactive"
-  | SessionWorkflow.WebLive _ -> "WebLive"
+  | SessionWorkflow.LiveTesting -> "LiveTesting"
+  | SessionWorkflow.HotReload _ -> "HotReload"
 
 // ── Per-kind field projections — each `Map`/array lookup fails to
 // `None`, never an exception, so `inspect` below has exactly one place

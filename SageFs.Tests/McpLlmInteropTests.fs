@@ -35,7 +35,7 @@ module StartupConfigTests =
           CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Code\Test"
-          Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+          Workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
@@ -252,7 +252,7 @@ module McpAdapterEnhancementTests =
           CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
-          Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+          Workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
@@ -270,7 +270,7 @@ module McpAdapterEnhancementTests =
           CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
-          Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+          Workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None
@@ -288,7 +288,7 @@ module McpAdapterEnhancementTests =
           CommandLineArgs = [| "--mcp-port"; "8080" |]
           LoadedProjects = [ "Test.fsproj" ]
           WorkingDirectory = @"C:\Test"
-          Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+          Workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
           AutoOpenNamespaces = true
           AspireDetected = false
           StartupTimestamp = DateTime.UtcNow; StartupProfileLoaded = None

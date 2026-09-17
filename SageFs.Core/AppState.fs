@@ -738,7 +738,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
     // any user code runs. The middleware gates read these via
     // Session.TryFindBoundValue; if they are never bound, hot-reload detouring
     // and computation-expression rewriting silently no-op (the P0 hot-reload
-    // gap: WebLive sessions never detoured because _SageFsHotReload was
+    // gap: HotReload sessions never detoured because _SageFsHotReload was
     // unbound). getBaseConfigString() was dead code — wire it here.
     let baseConfig =
       try

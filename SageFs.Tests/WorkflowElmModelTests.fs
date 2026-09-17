@@ -13,7 +13,7 @@ let private modelWithSuggestion suggestion =
   { defaultModel with PendingSuggestion = Some suggestion }
 
 let private sampleSuggestion = {
-  SuggestedWorkflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+  SuggestedWorkflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
   Reason = "Datastar project detected"
   DetectedPackages = [ "Falco.Datastar" ]
 }
@@ -40,7 +40,7 @@ let suggestionReceivedPopulatesPending =
     |> Option.get
     |> fun s -> s.SuggestedWorkflow
     |> Expect.equal "should store the suggested workflow"
-        (SessionWorkflow.WebLive BrowserRefreshConfig.defaults)
+        (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
 
     effects
     |> Expect.isEmpty "receiving a suggestion is pure model update — no side effects"
@@ -114,14 +114,14 @@ let currentWorkflowReflectsSessionContext =
       Status = "Ready"
       Warmup = WarmupContext.empty
       FileStatuses = []
-      Workflow = SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+      Workflow = SessionWorkflow.HotReload BrowserRefreshConfig.defaults
       AutoOpenNamespaces = true
     }
     let model = { defaultModel with SessionContext = Some ctx }
 
     SageFsModel.currentWorkflow model
-    |> Expect.equal "should reflect WebLive from session context"
-        (SessionWorkflow.WebLive BrowserRefreshConfig.defaults)
+    |> Expect.equal "should reflect HotReload from session context"
+        (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
 
 // ─── Test list ──────────────────────────────────────────────
 

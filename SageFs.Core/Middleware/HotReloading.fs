@@ -477,7 +477,7 @@ let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newM
 
 let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assembly) (st: State) =
   // Chesterton's fence: the `prev = asm` dedup only applies to NON-dynamic
-  // assemblies. In WebLive the FSI session runs with --multiemit- (single
+  // assemblies. In HotReload the FSI session runs with --multiemit- (single
   // assembly mode): EVERY eval lands in the SAME persistent FSI-ASSEMBLY, so
   // object identity is constant and the old check made the middleware
   // early-return after the first eval — no hot-reload re-eval was ever

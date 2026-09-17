@@ -629,7 +629,7 @@ let sessionManagerStaleReadyReportTests =
         let info = createSession harness
         makeSessionReady harness info
         let oldPid = getWorkerPid (getManagedSession harness info.Id)
-        let webLive = WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults
+        let webLive = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults
         match harness.Mailbox.PostAndReply(fun reply -> SessionCommand.SwitchWorkflow(info.Id, webLive, reply)) with
         | Ok _ -> ()
         | Error err -> failtestf "switch failed: %s" (SageFsError.describe err)

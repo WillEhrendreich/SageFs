@@ -772,7 +772,7 @@ let run (sessionId: string) (port: int) = async {
 
   let watchForHotReload (projectPath: string) (assemblyPath: string) =
     match workerConfig.Workflow, IO.Path.GetDirectoryName(IO.Path.GetFullPath projectPath) with
-    | WorkflowTypes.SessionWorkflow.WebLive _, (NonNull projectDir) ->
+    | WorkflowTypes.SessionWorkflow.HotReload _, (NonNull projectDir) ->
       let sources =
         IO.Directory.GetFiles(projectDir, "*.fs", IO.SearchOption.AllDirectories)
         |> Array.filter (fun f ->

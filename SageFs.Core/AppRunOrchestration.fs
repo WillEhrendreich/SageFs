@@ -1,5 +1,5 @@
 /// Runs a session's executable project end to end, shared by the dashboard
-/// and MCP: resolve the target, restart into WebLive when needed (hot reload
+/// and MCP: resolve the target, restart into HotReload when needed (hot reload
 /// installs only at worker start), ask the worker to start the entry point,
 /// and record what the user should see at every step.
 ///
@@ -22,8 +22,11 @@ let startPhaseFor (status: SessionLifecycleStatus) (workflow: WorkflowTypes.Sess
   match status, workflow with
   // No worker (its last build failed, or it was stopped): Run rebuilds it first.
   | (SessionLifecycleStatus.Faulted _ | SessionLifecycleStatus.Stopped), _ -> StartPhase.RebuildingSession
-  | _, WorkflowTypes.SessionWorkflow.WebLive _ -> StartPhase.LaunchingEntryPoint
-  | _, WorkflowTypes.SessionWorkflow.Interactive -> StartPhase.RestartingIntoWebLive
+  | _, WorkflowTypes.SessionWorkflow.HotReload _ -> StartPhase.LaunchingEntryPoint
+  // Interactive and LiveTesting are both non-hot-reload: running an app wants
+  // it hot-reloadable, so restart into HotReload first (leaving live-testing —
+  // hot reload and live testing are mutually exclusive by design).
+  | _, (WorkflowTypes.SessionWorkflow.Interactive | WorkflowTypes.SessionWorkflow.LiveTesting) -> StartPhase.RestartingIntoWebLive
 
 let private askWorker (ops: SessionManagementOps) (sessionId: SessionId) (msg: WorkerMessage) : Task<Result<AppRunState, SageFsError>> =
   task {
@@ -217,7 +220,7 @@ let runApp
               }
             | StartPhase.RestartingIntoWebLive ->
               task {
-                match! ops.SwitchWorkflow sid (WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults) with
+                match! ops.SwitchWorkflow sid (WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults) with
                 | Error e -> return Error e
                 | Ok _ -> return! ops.AwaitReady sessionId readyTimeout
               }

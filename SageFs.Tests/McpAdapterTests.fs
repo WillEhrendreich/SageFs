@@ -630,7 +630,7 @@ let jsonFormatVariantTests =
         let cfg : StartupConfig = {
           CommandLineArgs = [||]; LoadedProjects = ["Test.fsproj"]
           WorkingDirectory = "C:\\test"
-          Workflow = WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults; AutoOpenNamespaces = true; AspireDetected = false
+          Workflow = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults; AutoOpenNamespaces = true; AspireDetected = false
           StartupProfileLoaded = None; StartupTimestamp = DateTime.UtcNow
         }
         let result = McpAdapter.formatEnhancedStatusJson "x" 0 SessionState.Ready None (Some cfg)

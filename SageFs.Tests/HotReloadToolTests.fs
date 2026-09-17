@@ -89,7 +89,7 @@ let hotReloadToolTests =
         let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
         let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
         Expect.isFalse (n.GetProperty("patched").GetBoolean()) "an Interactive session is not patched"
-        Expect.stringContains (n.GetProperty("health").GetString()) "Interactive" "health names the REPL/Interactive mode"
+        Expect.stringContains (n.GetProperty("health").GetString()) "REPL" "health names the REPL (Interactive) mode by its label"
         let steps =
           n.GetProperty("nextSteps").EnumerateArray() |> Seq.map (fun x -> x.GetString()) |> String.concat " "
         Expect.stringContains steps "switch_workflow" "nextSteps directs to switch_workflow"
@@ -117,7 +117,7 @@ let hotReloadToolTests =
 
     testCase "enable_hot_reload on a Live session reports hot reload is already active" <| fun _ ->
       SageFs.Tests.TestInfrastructure.withEnvVar "SAGEFS_DEVRELOAD" None (fun () ->
-        let tools = mkToolsWf (Some 40000) (SessionWorkflow.WebLive BrowserRefreshConfig.defaults)
+        let tools = mkToolsWf (Some 40000) (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
         let m = tools.GetType().GetMethod("enable_hot_reload")
         let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
         let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
@@ -130,10 +130,10 @@ let hotReloadToolTests =
       let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
       let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement
       Expect.isTrue (n.GetProperty("disabled").GetBoolean()) "an Interactive session has hot reload off already"
-      Expect.stringContains (n.GetProperty("health").GetString()) "Interactive" "health explains REPL mode"
+      Expect.stringContains (n.GetProperty("health").GetString()) "REPL" "health explains REPL mode by its label"
 
     testCase "disable_hot_reload on a Live session is honest that runtime disable is not wired up" <| fun _ ->
-      let tools = mkToolsWf (Some 40000) (SessionWorkflow.WebLive BrowserRefreshConfig.defaults)
+      let tools = mkToolsWf (Some 40000) (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
       let m = tools.GetType().GetMethod("disable_hot_reload")
       let raw = m.Invoke(tools, [| box "" |]) :?> Task<string>
       let n = System.Text.Json.JsonDocument.Parse(raw.Result).RootElement

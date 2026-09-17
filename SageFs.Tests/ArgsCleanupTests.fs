@@ -279,8 +279,8 @@ let hotReloadWorkerConfigTests =
 let hotReloadSpawnConfigTests =
   testList "worker spawn config hot-reload" [
 
-    testCase "WebLive workflow sets SAGEFS_HOT_RELOAD env var" <| fun () ->
-      let _, envVars = buildWorkerSpawnConfig "s" [] false false true (SessionWorkflow.WebLive BrowserRefreshConfig.defaults)
+    testCase "HotReload workflow sets SAGEFS_HOT_RELOAD env var" <| fun () ->
+      let _, envVars = buildWorkerSpawnConfig "s" [] false false true (SessionWorkflow.HotReload BrowserRefreshConfig.defaults)
       envVars
       |> List.exists (fun (k, v) -> k = WorkerConfig.hotReloadEnvVar && v = "1")
       |> Expect.isTrue "hot-reload env var set"

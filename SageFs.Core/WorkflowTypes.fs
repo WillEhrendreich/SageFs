@@ -115,10 +115,15 @@ module ReplCapability =
 /// you cannot construct "hot reload + full REPL" because there is no DU case for it.
 [<RequireQualifiedAccess>]
 type SessionWorkflow =
-  /// Full REPL, no hot reload. The "exploring and prototyping" workflow.
+  /// Full REPL, no hot reload, no test-on-save. The "exploring and
+  /// prototyping" workflow.
   | Interactive
-  /// Hot reload active, restricted REPL. The "building a web app" workflow.
-  | WebLive of BrowserRefreshConfig
+  /// Full REPL, no hot reload, tests re-run on every save. The "TDD as you
+  /// type" workflow. Keeps the full REPL because running tests never patches
+  /// the running app, so the --multiemit- CLR constraint does not apply.
+  | LiveTesting
+  /// Hot reload active, restricted REPL. The "building an app" workflow.
+  | HotReload of BrowserRefreshConfig
 
 /// How hot reload actually applies to a running app — derived from the workflow
 /// AND the project kind, never chosen directly. This is the seam that decouples
@@ -162,7 +167,8 @@ module SessionWorkflow =
   /// Derive the feedback strategy from the workflow.
   let feedbackStrategy = function
     | SessionWorkflow.Interactive  -> FeedbackStrategy.ReplDriven
-    | SessionWorkflow.WebLive cfg  -> FeedbackStrategy.SaveDriven cfg
+    | SessionWorkflow.LiveTesting  -> FeedbackStrategy.ReplDriven
+    | SessionWorkflow.HotReload cfg  -> FeedbackStrategy.SaveDriven cfg
 
   /// Derive what the REPL can do — total function, no ambiguity.
   let replCapability workflow =
@@ -173,17 +179,20 @@ module SessionWorkflow =
   /// Derive the extra FSI args needed for this workflow.
   let fsiArgs = function
     | SessionWorkflow.Interactive -> []
-    | SessionWorkflow.WebLive _   -> [ "--multiemit-" ]
+    | SessionWorkflow.LiveTesting -> []
+    | SessionWorkflow.HotReload _   -> [ "--multiemit-" ]
 
   /// User-facing label — short, searchable, universal.
   let label = function
     | SessionWorkflow.Interactive -> "REPL"
-    | SessionWorkflow.WebLive _   -> "Live"
+    | SessionWorkflow.LiveTesting -> "Live Testing"
+    | SessionWorkflow.HotReload _   -> "Hot Reload"
 
   /// Whether hot reload (Harmony patching) is active.
   let isHotReloadActive = function
     | SessionWorkflow.Interactive -> false
-    | SessionWorkflow.WebLive _   -> true
+    | SessionWorkflow.LiveTesting -> false
+    | SessionWorkflow.HotReload _   -> true
 
   /// Derive the actual reload strategy from the workflow AND the project kind —
   /// total, no ambiguity. Interactive never reloads. A hot-reload workflow
@@ -192,7 +201,8 @@ module SessionWorkflow =
   let reloadStrategy (workflow: SessionWorkflow) (kind: ProjectKind) : ReloadStrategy =
     match workflow with
     | SessionWorkflow.Interactive -> ReloadStrategy.NoReload
-    | SessionWorkflow.WebLive cfg ->
+    | SessionWorkflow.LiveTesting -> ReloadStrategy.NoReload
+    | SessionWorkflow.HotReload cfg ->
       match kind with
       | ProjectKind.Web _   -> ReloadStrategy.WebReload cfg
       | ProjectKind.Console -> ReloadStrategy.MethodDetourOnly
@@ -203,19 +213,24 @@ module SessionWorkflow =
 
   /// Parse a user- or agent-supplied workflow string into a SessionWorkflow.
   /// Case-insensitive and alias-tolerant, so the CLI, HTTP API, and MCP tools
-  /// all accept the same spellings ("live"/"weblive"/"web" → hot reload;
-  /// "interactive"/"repl" → full REPL). Unknown or empty input defaults to
-  /// Interactive, the safe full-REPL mode. This is the single source of truth
-  /// for the string→workflow mapping — surfaces call it instead of re-matching.
+  /// all accept the same spellings ("hotreload"/"live"/"weblive"/"web" → hot
+  /// reload; "livetesting"/"testing"/"test" → tests on save; "interactive"/
+  /// "repl" → full REPL). Unknown or empty input defaults to Interactive, the
+  /// safe full-REPL mode. This is the single source of truth for the
+  /// string→workflow mapping — surfaces call it instead of re-matching.
+  ///
+  /// Note "live" maps to hot reload for backward compatibility (the workflow
+  /// was once labelled "Live"); the tests-on-save mode is "livetesting".
   let ofString (s: string) : SessionWorkflow =
     match (s |> Option.ofObj |> Option.defaultValue "").Trim().ToLowerInvariant() with
-    | "weblive" | "live" | "web" -> SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+    | "hotreload" | "weblive" | "live" | "web" -> SessionWorkflow.HotReload BrowserRefreshConfig.defaults
+    | "livetesting" | "live-testing" | "testing" | "test" -> SessionWorkflow.LiveTesting
     | _ -> SessionWorkflow.Interactive
 
   /// Convert from the legacy bool representation.
   /// Used at the boundary where env vars are parsed.
   let fromHotReloadBool = function
-    | true  -> SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+    | true  -> SessionWorkflow.HotReload BrowserRefreshConfig.defaults
     | false -> SessionWorkflow.Interactive
 
 // ─── Transition cost ────────────────────────────────────────
@@ -370,7 +385,7 @@ module WorkflowDetection =
     | _ :: _, _ ->
       Some {
         SuggestedWorkflow =
-          SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+          SessionWorkflow.HotReload BrowserRefreshConfig.defaults
         Reason =
           "Datastar project detected — Live mode enables SSE-driven DOM morphing"
         DetectedPackages = datastarHits
@@ -378,7 +393,7 @@ module WorkflowDetection =
     | [], _ :: _ ->
       Some {
         SuggestedWorkflow =
-          SessionWorkflow.WebLive BrowserRefreshConfig.defaults
+          SessionWorkflow.HotReload BrowserRefreshConfig.defaults
         Reason =
           "Web project detected — Live mode enables browser hot reload"
         DetectedPackages = webHits

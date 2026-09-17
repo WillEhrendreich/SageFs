@@ -53,7 +53,7 @@ let private baseInfo (app: AppRunState) : SessionInfo =
     WorkingDirectory = "/src"
     SolutionRoot = None
     Status = SessionLifecycleStatus.Ready { Pid = 1; Port = Some 5555 }
-    Workflow = WorkflowTypes.SessionWorkflow.WebLive WorkflowTypes.BrowserRefreshConfig.defaults
+    Workflow = WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults
     CreatedAt = at
     LastActivity = at
     ActiveProject = None
