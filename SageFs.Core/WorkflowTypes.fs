@@ -120,6 +120,26 @@ type ReloadStrategy =
   /// Native game: frame-loop method-detour, no WebApplication/RunAsync patches.
   | GameLoopReload
 
+module ReloadStrategy =
+
+  /// Whether to install the web DevReload middleware (the WebApplication.Run/
+  /// RunAsync Harmony patch plus browser SSE refresh).
+  ///
+  /// Installed for a web app, AND for the method-detour (console) case — because
+  /// a plain ASP.NET app that references the AspNetCore FRAMEWORK rather than a
+  /// web package cannot be told apart from a console app by package refs alone,
+  /// and the patch is inert for a genuine console app (it never calls
+  /// WebApplication.Run), so installing it defensively is correct and never a
+  /// regression. A native game is the one kind we are certain has no
+  /// WebApplication, so it — and non-reloading Interactive — skip it.
+  /// (A precise console-vs-framework-web split would need per-project framework
+  /// references, which the loader does not surface yet.)
+  let installsWebDevReload = function
+    | ReloadStrategy.WebReload _      -> true
+    | ReloadStrategy.MethodDetourOnly -> true
+    | ReloadStrategy.GameLoopReload   -> false
+    | ReloadStrategy.NoReload         -> false
+
 module SessionWorkflow =
 
   /// Derive the feedback strategy from the workflow.

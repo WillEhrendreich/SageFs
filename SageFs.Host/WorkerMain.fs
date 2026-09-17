@@ -404,13 +404,18 @@ let run (sessionId: string) (port: int) = async {
     ActorCreation.createActor actorArgs |> Async.AwaitTask
   let actor = result.Actor
 
-  // Install DevReload Harmony patches only when the workflow requires hot reload.
-  // In WebLive mode, Harmony detours JIT-compiled methods so save → #load → SSE refresh works.
-  // In Interactive mode, this is skipped — full REPL capability preserved.
-  match workerConfig.Workflow with
-  | WorkflowTypes.SessionWorkflow.WebLive _ ->
+  // Install the web DevReload middleware (the WebApplication.Run/RunAsync Harmony
+  // patch) only for a hot-reload session on a WEB project. Console and game
+  // hot-reload use the separate FSI method-detour engine and need no web patch —
+  // so the reload strategy, derived from the workflow AND the project kind,
+  // decides. Interactive never reloads at all.
+  let projectKind =
+    result.ProjectRoles
+    |> List.collect (fun p -> p.PackageRefs)
+    |> WorkflowTypes.ProjectKind.classify
+  let reloadStrategy = WorkflowTypes.SessionWorkflow.reloadStrategy workerConfig.Workflow projectKind
+  if WorkflowTypes.ReloadStrategy.installsWebDevReload reloadStrategy then
     DevReloadInjector.install()
-  | WorkflowTypes.SessionWorkflow.Interactive -> ()
 
   // Two-layer RunTest: project assemblies (stable) + dynamic FSI assemblies (updated per eval).
   // Warm-up evals go through the middleware (which discovers tests and builds a RunTest closure),

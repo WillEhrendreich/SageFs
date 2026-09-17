@@ -277,3 +277,23 @@ let reloadStrategyTests =
       SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive BrowserRefreshConfig.defaults) ProjectKind.Game
       |> Expect.equal "game = loop reload" ReloadStrategy.GameLoopReload
   ]
+
+[<Tests>]
+let devReloadGateTests =
+  testList "web DevReload install gate" [
+    testCase "a web app installs the web patch" <| fun _ ->
+      ReloadStrategy.installsWebDevReload (ReloadStrategy.WebReload BrowserRefreshConfig.defaults)
+      |> Expect.isTrue "web installs"
+
+    testCase "console/method-detour installs defensively — a framework-ref web app is indistinguishable here and the patch is inert for a true console" <| fun _ ->
+      ReloadStrategy.installsWebDevReload ReloadStrategy.MethodDetourOnly
+      |> Expect.isTrue "console installs defensively (no regression for plain ASP.NET)"
+
+    testCase "a native game never installs the web patch" <| fun _ ->
+      ReloadStrategy.installsWebDevReload ReloadStrategy.GameLoopReload
+      |> Expect.isFalse "game skips the web patch"
+
+    testCase "no reload installs nothing" <| fun _ ->
+      ReloadStrategy.installsWebDevReload ReloadStrategy.NoReload
+      |> Expect.isFalse "interactive skips"
+  ]
