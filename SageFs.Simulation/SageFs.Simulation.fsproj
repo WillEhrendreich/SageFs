@@ -14,6 +14,10 @@
         <Compile Include="Runner.fs" />
         <Compile Include="Invariants.fs" />
         <Compile Include="Generators.fs" />
+        <!-- Phase 2: SessionManager worker-lifecycle pid-race simulation. -->
+        <Compile Include="WorkerLifecycleSim.fs" />
+        <Compile Include="WorkerLifecycleInvariants.fs" />
+        <Compile Include="MgrGenerators.fs" />
     </ItemGroup>
 
     <ItemGroup>
