@@ -326,6 +326,37 @@ let run (sessionId: string) (port: int) = async {
         |> Option.map (fun d -> System.IO.Path.GetFullPath d)
       else None)
     |> List.choose id
+
+  // Make the hosted project's NATIVE dependencies resolvable. The build copies
+  // native libs (e.g. Raylib-cs's libraylib.so) into the project output's
+  // `runtimes/<rid>/native/`, which CoreCLR's default P/Invoke probe never
+  // searches when the managed assembly is loaded from elsewhere. Without this,
+  // a P/Invoke (Raylib.InitWindow) throws DllNotFoundException; if that throw is
+  // on a user-spawned background thread the runtime FailFasts the whole worker.
+  // Registering the resolver removes the throw at its source. Fail-closed: a miss
+  // defers to the default behavior, so nothing regresses for projects without
+  // native deps. See NativeResolution.fs for the full rationale.
+  //
+  // Probe EVERY <bin>/<config>/<tfm> output dir, not just the newest: a stale or
+  // empty sibling config dir must never hide the config that actually deposited
+  // the native lib (an empty Debug/ newer than a built Release/ was exactly this
+  // trap). candidatePaths appends `runtimes/<rid>/native/` to each root.
+  let nativeSearchRoots =
+    loadConfig.Projects
+    |> List.collect (fun projPath ->
+      let binDir =
+        System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath projPath), "bin")
+      match System.IO.Directory.Exists binDir with
+      | false -> []
+      | true ->
+        System.IO.Directory.EnumerateDirectories binDir
+        |> Seq.collect (fun cfg -> System.IO.Directory.EnumerateDirectories cfg)
+        |> Seq.map System.IO.Path.GetFullPath
+        |> Seq.toList)
+  SageFs.NativeResolution.install
+    (fun m -> Log.info "%s" m)
+    (nativeSearchRoots @ projectBinDirs @ [ System.AppContext.BaseDirectory ])
+
   match projectBinDirs with
   | [] -> ()
   | dirs ->
