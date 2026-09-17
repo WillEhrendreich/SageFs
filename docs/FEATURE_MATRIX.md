@@ -1,6 +1,6 @@
 # SageFs Feature Matrix
 
-Current product surfaces are the web dashboard, editor integrations, and MCP. The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated and excluded from this matrix.
+Current product surfaces are the web dashboard, editor integrations (VS Code and Neovim), and MCP. The built-in SageTUI client, legacy TUI, `SageFs.Gui` Raylib frontend, and the Visual Studio extension are deprecated and excluded from this matrix.
 
 Raylib application and game projects remain supported. The demos in `samples/demos/` show SageFs providing live development for Raylib projects, separate from the deprecated SageFs GUI frontend.
 
@@ -8,66 +8,69 @@ Raylib application and game projects remain supported. The demos in `samples/dem
 
 ## Core Evaluation
 
-| Feature | VS Code | Neovim | Visual Studio | Web Dashboard | MCP |
-|:--------|:-------:|:------:|:-------------:|:-------------:|:---:|
-| Evaluate code, blocks, or files | Supported | Supported | Supported | Supported | Supported |
-| Display evaluation results | Supported | Supported | Supported | Supported | Supported |
-| Cancel a running evaluation | Supported | Supported | Supported | Supported | Supported |
-| Evaluation history | Supported | Supported | Partial | Supported | Supported |
-| Session-scoped diagnostics | Supported | Supported | Supported | Supported | Supported |
+| Feature | VS Code | Neovim | Web Dashboard | MCP |
+|:--------|:-------:|:------:|:-------------:|:---:|
+| Evaluate code, blocks, or files | Supported | Supported | Supported | Supported |
+| Display evaluation results | Supported | Supported | Supported | Supported |
+| Cancel a running evaluation | Supported | Supported | Supported | Supported |
+| Evaluation history | Supported | Supported | Supported | Supported |
+| Session-scoped diagnostics | Supported | Supported | Supported | Supported |
 
 ## Session Management
 
-| Feature | VS Code | Neovim | Visual Studio | Web Dashboard | MCP |
-|:--------|:-------:|:------:|:-------------:|:-------------:|:---:|
-| Create and switch sessions | Supported | Supported | Supported | Supported | Supported |
-| Soft reset | Supported | Supported | Supported | Supported | Supported |
-| Hard reset and rebuild | Supported | Supported | Supported | Supported | Supported |
-| Multi-session selection | Supported | Supported | Supported | Supported | Supported |
-| Per-client active session | Supported | Supported | Supported | Supported | Supported |
+| Feature | VS Code | Neovim | Web Dashboard | MCP |
+|:--------|:-------:|:------:|:-------------:|:---:|
+| Create and switch sessions | Supported | Supported | Supported | Supported |
+| Soft reset | Supported | Supported | Supported | Supported |
+| Hard reset and rebuild | Supported | Supported | Supported | Supported |
+| Multi-session selection | Supported | Supported | Supported | Supported |
+| Per-client active session | Supported | Supported | Supported | Supported |
 
 ## Live Testing
 
-| Feature | VS Code | Neovim | Visual Studio | Web Dashboard | MCP |
-|:--------|:-------:|:------:|:-------------:|:-------------:|:---:|
-| Test discovery and execution | Supported | Supported | Supported | Supported | Supported |
-| Run affected tests on save | Supported | Supported | Supported | Shared | Shared |
-| Test result panel | Supported | Supported | Supported | Supported | Supported |
-| Test gutter markers | Supported | Supported | Supported | N/A | N/A |
-| Coverage gutters | Supported | Supported | Supported | N/A | N/A |
-| Failure narratives | Supported | Supported | Supported | Supported | Supported |
-| Test policy and timeout controls | Supported | Supported | Partial | Supported | Supported |
-| Explain test failures and causal changes | Shared | Shared | Shared | Supported | Supported |
+Live testing works but is still being stabilized, with rough edges around session switching and test discovery timing. Expecto has the best coverage; xUnit (including v3), NUnit, MSTest, and TUnit are also detected.
+
+| Feature | VS Code | Neovim | Web Dashboard | MCP |
+|:--------|:-------:|:------:|:-------------:|:---:|
+| Test discovery and execution | Supported | Supported | Supported | Supported |
+| Run affected tests on save | Supported | Supported | Shared | Shared |
+| Test result panel | Supported | Supported | Supported | N/A |
+| Test gutter markers | Supported | Supported | N/A | N/A |
+| Coverage gutters | Supported | Supported | N/A | N/A |
+| Failure narratives | Supported | Supported | Supported | Supported |
+| Explain test failures and causal changes | Shared | Shared | Supported | Supported |
 
 ## Code Intelligence
 
-| Feature | VS Code | Neovim | Visual Studio | Web Dashboard | MCP |
-|:--------|:-------:|:------:|:-------------:|:-------------:|:---:|
-| Completions | Supported | Supported | Supported | N/A | Supported |
-| CodeLens | Supported | Supported | Supported | N/A | N/A |
-| Type and namespace exploration | Supported | Supported | Partial | Partial | Supported |
-| Dependency and coverage queries | Shared | Shared | Shared | Supported | Supported |
-| Domain model and pipeline analysis | Shared | Shared | Shared | Partial | Supported |
+| Feature | VS Code | Neovim | Web Dashboard | MCP |
+|:--------|:-------:|:------:|:-------------:|:---:|
+| Completions | Supported | Supported | N/A | N/A |
+| CodeLens | Supported | Supported | N/A | N/A |
+| Dependency and coverage queries | Shared | Shared | Supported | Supported |
+| Domain model and pipeline analysis | Shared | Shared | Partial | Supported |
+
+Completions and CodeLens are editor features backed by FSharp.Compiler.Service; they are not MCP tools.
 
 ## Hot Reload and Health
 
-| Feature | VS Code | Neovim | Visual Studio | Web Dashboard | MCP |
-|:--------|:-------:|:------:|:-------------:|:-------------:|:---:|
-| File watching and reload state | Supported | Supported | Supported | Supported | Supported |
-| Browser refresh status | Supported | Supported | Supported | Supported | Supported |
-| Health and connection state | Supported | Supported | Supported | Supported | Supported |
-| Warmup progress | Supported | Supported | Supported | Supported | Supported |
-| Typed errors and recovery guidance | Supported | Supported | Supported | Supported | Supported |
+Hot reload watches `.fs` files and runs the full pipeline (watch, `#load`/FSI eval, Harmony patch, SSE refresh). Browser auto-refresh works. Propagating a change into a running module-declared app is still being completed.
+
+| Feature | VS Code | Neovim | Web Dashboard | MCP |
+|:--------|:-------:|:------:|:-------------:|:---:|
+| File watching and reload state | Supported | Supported | Supported | Supported |
+| Browser refresh status | Supported | Supported | Supported | Supported |
+| Health and connection state | Supported | Supported | Supported | Supported |
+| Warmup progress | Supported | Supported | Supported | Supported |
+| Typed errors and recovery guidance | Supported | Supported | Supported | Supported |
 
 ## Client Roles
 
 | Client | Primary Role | Transport |
 |:-------|:-------------|:----------|
-| **VS Code** | Full editor workflow, inline results, testing, coverage, and navigation | HTTP commands + SSE |
-| **Neovim** | Full editor workflow, inline results, testing, coverage, and navigation | HTTP commands + SSE |
-| **Visual Studio** | Native editor workflow, diagnostics, testing, and project integration | HTTP commands + SSE |
+| **VS Code** | Full editor workflow: inline results, testing, coverage, and navigation | HTTP commands + SSE |
+| **Neovim** | Full editor workflow: inline results, testing, coverage, and navigation | HTTP commands + SSE |
 | **Web Dashboard** | Browser-based session operations, output, test state, diagnostics, and observability | Falco.Datastar + SSE |
-| **MCP** | Agent and programmatic access to FSI, sessions, tests, and diagnostics | Streamable HTTP; legacy SSE where required |
+| **MCP** | Agent and programmatic access to FSI, sessions, tests, and diagnostics | Streamable HTTP at `/`; legacy SSE at `/sse` |
 
 ## Common Editor Commands
 
@@ -84,4 +87,4 @@ Raylib application and game projects remain supported. The demos in `samples/dem
 
 ## MCP
 
-MCP gives programmatic access for session-aware F# evaluation, test discovery and execution, failure explanation, targeted verification, and diagnostics. Which tools are shown to a client depends on session state, so check the MCP tools exposed by the running daemon instead of relying on a fixed count.
+MCP gives programmatic access for session-aware F# evaluation, test discovery and execution, failure explanation, targeted verification, and diagnostics. The daemon advertises 50 tools, and which ones a client sees depends on session state (the affordance gate). Check the tools exposed by the running daemon rather than relying on a fixed list.

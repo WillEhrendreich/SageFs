@@ -10,7 +10,6 @@ health check in your editor.
 |:-------|:--------|
 | **VS Code** | `Ctrl+Shift+P` → "SageFs: Check Health" |
 | **Neovim** | `:checkhealth sagefs` |
-| **Visual Studio** | Check the SageFs output channel (View → Output → SageFs) |
 | **CLI / dashboard** | `sagefs status` and `http://localhost:37750/dashboard` |
 
 ---
@@ -96,7 +95,7 @@ Use hard reset to pick up source file changes:
 - Verify live testing is enabled: check your editor's test status indicator
 - Check run policies: some test categories (integration, browser) default to
   `demand` (manual trigger only)
-- Run `:SageFsLiveTestStatus` (Neovim), check the Tests pane (VS Code), use the dashboard, or query live-test status through MCP
+- Check live-test status in your editor: `:SageFsLiveTestStatus` (Neovim), the Tests pane (VS Code), or the web dashboard
 
 ### SSE connections dropping
 
@@ -130,7 +129,7 @@ starting SageFs (or in your shell profile).
 |:---------|:--------|:------------|
 | `SAGEFS_WARMUP_INACTIVITY_SECONDS` | `30` | Max seconds of inactivity during warmup before declaring failure |
 | `SAGEFS_WARMUP_MAX_MINUTES` | `10` | Absolute max warmup duration |
-| `SAGEFS_PER_TEST_TIMEOUT_SECONDS` | `5` | Per-test timeout (also configurable at runtime via MCP `set_test_timeouts`) |
+| `SAGEFS_PER_TEST_TIMEOUT_SECONDS` | `5` | Per-test timeout |
 | `SAGEFS_BUILD_TIMEOUT_MINUTES` | `10` | Max time for `dotnet build` during hard reset |
 | `SAGEFS_WORKER_HTTP_READ_SECONDS` | `30` | HTTP read timeout for daemon→worker communication |
 | `SAGEFS_WORKER_STARTUP_TIMEOUT_MS` | `120000` | Worker process startup timeout (milliseconds) |

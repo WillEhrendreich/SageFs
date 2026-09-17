@@ -1,6 +1,11 @@
 ================================================================================
-SAGEFS LIVE TESTING & COVERAGE SYSTEM - COMPLETE IMPLEMENTATION GUIDE
+SAGEFS LIVE TESTING & COVERAGE SYSTEM - IMPLEMENTATION GUIDE
 ================================================================================
+
+STATUS: Live testing is functional but still being stabilized. Rough edges
+remain around session switching and test-discovery timing. Expecto has the best
+coverage. This guide describes the internal design; line numbers are approximate
+and drift as the code changes.
 
 QUICK REFERENCE - KEY FILES & FUNCTIONS
 ================================================================================
@@ -12,7 +17,7 @@ QUICK REFERENCE - KEY FILES & FUNCTIONS
      * AttributeDiscovery.discoverWithRunner (lines 86-103): Discovery + execution closures
      * ReflectionExecutor.executeMethod (lines 109-145): Invoke via MethodInfo.Invoke
      * ExpectoExecutor (lines 204-400+): Custom reflection-based Expecto runner
-   - Frameworks Supported: Expecto, xUnit, NUnit, MSTest, TUnit
+   - Frameworks Supported: Expecto, xUnit (incl. xUnit v3), NUnit, MSTest, TUnit
    - Key Type: DiscoveryResult { Tests: TestCase list; RunTest: TestCase → Async<TestResult> }
 
 2. Coverage Instrumentation (IL-Level):
@@ -60,13 +65,22 @@ QUICK REFERENCE - KEY FILES & FUNCTIONS
    - Tier Rules: Failed(0) → New(1) → Passed(2) → Skipped(3) → NotRun(4)
    - Environmental flaky failures demoted from tier 0 to tier 2
 
-7. Test Explainer (MCP Tools):
+7. Test Explainer & Verification:
    - File: SageFs.Core/Mcp.fs
-   - Key Functions:
-     * explainTestRun (lines 1665-1717): Why test ran - explain_test_run tool
-     * explainTestFailure (lines 1818-1870+): Why test failed - explain_test_failure tool
-     * getFileCoverage (lines 1798-1816): Per-line coverage - get_file_coverage tool
-   - Uses TestRunExplainer.explainTest (lines 3267-3299) to compute reason
+   - MCP tools (what agents actually call):
+     * explain_test_failure — why a test failed
+     * targeted_verify — run and verify specific tests
+     * list_tests — list discovered tests
+     * coverage_intel — coverage summary
+   - Internal functions behind these (not standalone MCP tools):
+     * explainTestRun — computes why a test ran
+     * getFileCoverage — per-line coverage; surfaced to editors via SSE
+       file_annotations and the HTTP API (GET /api/live-testing/file-annotations),
+       not as an MCP tool
+   - There is no run_tests, enable_live_testing, get_live_test_status,
+     get_test_trace, explain_test_run, or get_file_coverage MCP tool. Live-testing
+     enable/disable/status/run are HTTP API endpoints under /api/live-testing/...
+     used by editors and the dashboard.
 
 8. Per-Line Coverage Data:
    - File: SageFs.Core/Features/LiveTestingTypes.fs (lines 3031-3230)
@@ -125,8 +139,8 @@ TestCase:
   DisplayName: string                 // e.g. "test_add"
   Origin: TestOrigin                  // SourceMapped(file, line) | ReflectionOnly
   Labels: string list
-  Framework: TestFramework            // Expecto | XUnit | NUnit | MSTest | TUnit
-  Category: TestCategory              // Unit | Integration | Browser | Benchmark | Architecture | Property
+  Framework: TestFramework            // Expecto | XUnit | NUnit | MSTest | TUnit | Unknown of string
+  Category: TestCategory              // Unit | Integration | Browser | Benchmark | Architecture | Property | Custom of string
 }
 
 TestRunResult:

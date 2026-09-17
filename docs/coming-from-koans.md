@@ -1,14 +1,14 @@
 # 🧘 Coming from FSharpKoans?
 
-You've already proven you know F# — you filled in the blanks, matched the patterns, piped the lists. But the Koans workflow was slow: `dotnet watch run`, squint at terminal output, scroll to find which koan broke, fix it, wait 3 seconds, repeat. SageFs gives you the same F# you learned, with instant inline feedback, live test gutter markers, and no more squinting at the terminal.
+You already know F# — you filled in the blanks, matched the patterns, piped the lists. SageFs gives you that same F# with instant inline feedback and live test markers, instead of the koans loop of `dotnet watch run`, terminal output, and squinting to find which koan broke.
 
-You'll leave behind the 2-4 second `dotnet watch run` cycle, terminal-only pass/fail output, the custom `[<Koan>]` framework that doesn't work anywhere else, and the gap between finishing the exercises and building real things.
+You leave behind the `dotnet watch run` cycle, terminal-only pass/fail output, the custom `[<Koan>]` framework that works nowhere else, and the gap between finishing the exercises and building real things.
 
 **What you'll notice right away:**
-- Alt+Enter on any expression shows the result inline, not in the terminal
-- Expecto tests with live gutter markers (✓/✗) build on what koan assertions taught you
-- No more `dotnet run` cycles; feedback arrives in about 200ms
-- The skills you learned in koans (DUs, pipelines, options, pattern matching) apply directly to real code
+- Alt+Enter on any expression shows the result inline, not in the terminal.
+- Expecto tests with live gutter markers (✓/✗) build on what koan assertions taught you.
+- No more `dotnet run` cycles; inline feedback is instant.
+- The skills from koans (DUs, pipelines, options, pattern matching) apply directly to real code.
 
 **→ [Start here: `samples/from-koans/00-about-sagefs-koans.fsx`](../samples/from-koans/00-about-sagefs-koans.fsx)** (the roadmap; then work through `01-about-asserts.fsx` → `21-about-filtering.fsx` at your own pace)
 
@@ -19,7 +19,7 @@ You'll leave behind the 2-4 second `dotnet watch run` cycle, terminal-only pass/
 //     dotnet run → FAIL → fix → run → PASS → next (~3 sec cycle)
 
 // SageFs: just evaluate it.
-let x = 1 + 1   // Alt+Enter → 2, right here, in ~200ms
+let x = 1 + 1   // Alt+Enter → 2, right here
 
 // Your DU skills, applied to a real domain:
 type OrderStatus =

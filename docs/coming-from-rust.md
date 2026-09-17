@@ -1,14 +1,14 @@
 # 🦀 Coming from Rust?
 
-F# and Rust share the same design philosophy: `Option`, `Result`, pattern matching, discriminated unions, immutability by default, and no `null`. F# runs on .NET instead, has no borrow checker, and adds hot reload and interactive scripting.
+F# shares Rust's core ideas: `Option`, `Result`, pattern matching, discriminated unions, immutability by default, and no `null`. It runs on .NET, has no borrow checker, and adds a REPL, `.fsx` scripting, and hot reload.
 
-You'll leave behind borrow checker fights over straightforward code, 45-second compile times for medium projects, no REPL, and reaching for Python whenever you want to explore data.
+You leave behind borrow-checker fights over straightforward code, slow compiles on medium projects, no REPL, and reaching for Python whenever you want to explore data.
 
 **What you'll notice right away:**
-- `Option<'T>`, `Result<'T, 'E>`, and exhaustive pattern matching, just like Rust
-- Records and DUs have structural equality by default, with no `#[derive(PartialEq)]` needed
-- Hot reload: your running program patches itself on save, which Rust can't do
-- `.fsx` scripts give you the interactive exploration that Rust has never had
+- `Option<'T>`, `Result<'T, 'E>`, and exhaustive pattern matching, like Rust.
+- Records and DUs get structural equality by default, with no `#[derive(PartialEq)]` needed.
+- Hot reload: SageFs watches your files and re-evaluates on save, refreshing running web apps in the browser.
+- `.fsx` scripts give you the interactive exploration Rust doesn't have.
 
 **→ [Start here: `samples/from-rust/hello.fsx`](../samples/from-rust/hello.fsx)**
 

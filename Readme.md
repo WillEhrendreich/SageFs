@@ -121,7 +121,7 @@ SageFs opens an interactive terminal. Then create a session for `YourProject.fsp
 
 ### 4. Connect your editor
 
-**VS Code** — Install the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases) for now, open an F# file, press `Alt+Enter` on any expression. Result appears inline in < 500ms.
+**VS Code** — Install **SageFs** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) or [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs) (or the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases)), open an F# file, and press `Alt+Enter` on any expression. The result appears inline in under 500ms.
 
 **Neovim** — Add `"WillEhrendreich/sagefs.nvim"` to your plugin manager. Press `Alt+Enter` to evaluate. See [Neovim setup](https://github.com/WillEhrendreich/sagefs.nvim).
 
@@ -288,13 +288,13 @@ Every frontend connects to the same daemon. Open several at once — they all se
 
 #### VS Code
 
-Install from the `.vsix` in [Releases](https://github.com/WillEhrendreich/SageFs/releases). Written entirely in F# via [Fable](https://fable.io/) — no TypeScript.
+Install **SageFs** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) or [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs), or the `.vsix` in [Releases](https://github.com/WillEhrendreich/SageFs/releases). Written in F# via [Fable](https://fable.io/), not TypeScript.
 
 Current wiring includes Alt+Enter eval, CodeLens, live test decorations, native Test Explorer integration, hot reload sidebar, session context, type explorer, call graph, event history, dashboard webview, status bar, auto-start, Ionide command hijacking, coverage gutter bars, inline failure decorations, failure narrative enrichment, and test source-jump.
 
 #### Neovim
 
-[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) — 59 Lua modules, 1400+ tests, 57 commands.
+[**sagefs.nvim**](https://github.com/WillEhrendreich/sagefs.nvim) — 62 Lua modules, 55 commands, 1400+ tests.
 
 ```lua
 -- lazy.nvim
@@ -305,7 +305,7 @@ Features: Cell eval, inline results, gutter signs, SSE live updates, live test p
 
 #### AI Agent (MCP)
 
-SageFs exposes a small, focused MCP surface — from `send_fsharp_code` to `targeted_verify` to `run_tests`. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and configuration examples for each client.
+SageFs exposes about 50 MCP tools — from `send_fsharp_code` to `targeted_verify` to `list_tests` — gated by session state, so an agent only sees the ones valid right now. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
 
 **Streamable HTTP** (recommended — auto-reconnects, no session drops):
 ```json
@@ -410,7 +410,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 
 **Multi-Session** — Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
-**MCP Tools** — 17 focused tools for session trust, code execution, exact test execution, failure explanation, and local friction reporting. [Full reference →](docs/mcp-tools.md)
+**MCP Tools** — about 50 tools for session trust, code execution, test listing and verification, failure explanation, analysis, and local friction reporting. They are affordance-gated: agents see only the tools valid for the current session state. [Full reference →](docs/mcp-tools.md)
 
 **SSE Events** — All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 
@@ -471,7 +471,7 @@ SageFs persists session state and test caches to compact binary files (`.sagefs`
 
 - **Session files** (`.sagefs`): Full session state — interactions, diagnostics, outputs, eval timeline
 - **Test cache files** (`.sagetc`): Test discovery results, outcomes, durations, bitmaps of affected tests
-- **Session isolation**: Each session writes to its own file, verified by 610 property-based tests including concurrent write safety
+- **Session isolation**: Each session writes to its own file, verified by property-based tests covering format corruption, round-trips, and write isolation
 
 Design: length-prefixed strings, section headers with byte-count envelopes, version negotiation, and field-level bounds checking prevent OOM from crafted inputs.
 
@@ -495,7 +495,7 @@ Daemon options:
   --no-watch             Disable file watching for all sessions
   --prune                Mark all stale sessions as stopped, then exit
   --supervised           Auto-restart on crash (exponential backoff)
-  --mcp-port PORT        Custom MCP port (default: 37749)
+  --mcp-port PORT        Custom MCP port (default: 37749). The dashboard runs on this port + 1.
 ```
 
 The daemon starts bare and waits for clients to create or connect to sessions.
@@ -562,7 +562,7 @@ If the config already exists, SageFs opens or points you at the file instead of 
 
 ## Coming from Another Language?
 
-SageFs isn't just for F# veterans. Find your background below and get started with a guide that maps concepts you already know to F#, with runnable examples.
+You don't need to know F# already. Find your background below for a guide that maps concepts you know to F#, with runnable examples.
 
 > **Quick orientation:** Every sample in [`/samples`](samples/) is a runnable `.fsx` script.
 > Open it in a supported editor with SageFs connected, hit **Alt+Enter** on any expression, and results appear inline instantly.

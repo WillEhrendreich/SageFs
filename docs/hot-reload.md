@@ -1,22 +1,43 @@
-# 🔥 Hot Reload — How It Works
+# Hot Reload — How It Works
 
 > ## 🚧 Status: In Progress
 >
-> The pipeline described below is wired and runs live, but hot reload is **not
-> fully working yet**: changes do not yet propagate into the running app for
-> module-declared apps (see [internal status](internal/HOT_RELOAD_STATUS.md)).
-> Treat it as experimental until the status banner there is removed.
+> The pipeline is wired and runs live, but one part is still being finished.
+>
+> **Works today:**
+> - File watch → `#load` → FSI eval → Harmony patch → SSE broadcast runs end to end.
+> - Browser auto-refresh (DevReload) works: SageFs injects a reload script into
+>   your app's HTML and refreshes connected tabs on save, no manual F5.
+>
+> **Still being completed:**
+> - Propagating code changes into a *running* app for module-declared,
+>   route-captured apps (the common Falco/ASP.NET pattern: `module App.Program`
+>   + `let routes = [...]` captured by value at startup). Re-evaluating the file
+>   creates new FSI functions, but the running route table still points at the
+>   old closures. See [internal status](internal/HOT_RELOAD_STATUS.md).
+>
+> Treat hot reload as experimental until the status banner there is removed.
 
-> **Prerequisite:** Hot reload requires **Live mode**. If you're in REPL mode (the default), browser hot reload is not active. See [Workflow Modes](workflow-modes.md) for how to switch.
+> **Prerequisite:** Hot reload requires **Live mode**. In REPL mode (the default),
+> browser hot reload is off. See [Workflow Modes](workflow-modes.md) for how to switch.
 
-1. File watcher detects `.fs`/`.fsx` changes (~500ms debounce)
-2. `#load` sends the file to FSI (~100ms)
-3. [Harmony](https://github.com/pardeike/Harmony) patches method pointers at runtime, with no restart
-4. SSE pushes a reload signal to connected browsers
+## The pipeline
 
-Web apps need no extra configuration. SageFs auto-injects DevReload middleware into your ASP.NET pipeline via [Harmony](https://github.com/pardeike/Harmony), with no code changes needed. Your Falco/ASP.NET app gets browser auto-refresh as soon as SageFs is running. If something breaks, an accessible error overlay appears in the browser with source context, editor links, and automatic reload once the error is fixed.
+1. The file watcher detects `.fs`/`.fsx` changes (~500ms debounce).
+2. `#load` sends the file to FSI (~100ms).
+3. [Harmony](https://github.com/pardeike/Harmony) patches method pointers at runtime, no restart.
+4. SSE pushes a reload signal to connected browsers.
 
-Set `SAGEFS_DEVRELOAD=0` to disable auto-injection if needed.
+## Browser auto-refresh (DevReload)
+
+Web apps need no extra configuration. SageFs auto-injects DevReload middleware
+into your ASP.NET pipeline via [Harmony](https://github.com/pardeike/Harmony),
+with no code changes. Your Falco/ASP.NET app gets browser auto-refresh once
+SageFs is running. When a compile fails, an accessible error overlay appears in
+the browser with source context and editor links, and the page reloads
+automatically once the error is fixed.
+
+Set `SAGEFS_DEVRELOAD=0` (or `false`) to disable auto-injection.
 
 The VS Code extension gives per-file and per-directory hot reload toggles.
 

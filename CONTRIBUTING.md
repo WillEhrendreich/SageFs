@@ -17,7 +17,7 @@ Welcome! SageFs is an open-source project and we genuinely appreciate contributi
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (see `global.json` for exact version)
 - Git
-- An editor — VS Code with Ionide, Neovim, Visual Studio, or your preference
+- An editor — VS Code with Ionide, Neovim, Rider, or your preference
 
 ### Clone and Build
 
@@ -68,9 +68,9 @@ sagefs
 SageFs.Core/       — Shared engine, session, testing, persistence, and protocol logic (start here!)
 SageFs/            — CLI tool, daemon, MCP server, dashboard, plus retained deprecated TUI source
 SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy source
-SageFs.Tests/      — Expecto test project (6200+ tests)
+SageFs.Tests/      — Expecto test project (thousands of tests; the README badge is auto-derived)
 sagefs-vscode/     — VS Code extension (F# via Fable → JavaScript)
-sagefs-vs/         — Visual Studio extension (C# shim + F# core)
+sagefs-vs/         — Deprecated Visual Studio extension (C# + F#), retained as legacy source; not built or published
 docs/              — GitHub Pages documentation site
 ```
 
@@ -203,7 +203,7 @@ For local development, prefer running tests inside SageFs's own REPL for instant
 
 Tests are auto-categorized:
 - **Unit** — pure logic, runs on every change
-- **Integration** — needs external resources, runs on save
+- **Integration** — needs external resources, runs on demand by default
 - **Browser** — Playwright .NET tests, runs on demand
 - **Property** — FsCheck generative tests
 - **Benchmark** — performance tests
@@ -280,7 +280,7 @@ list |> Expect.hasLength "should have 3 items" 3
 - Does it follow F# idioms? (pattern matching, immutability, composition)
 - Does it have tests?
 - Does it use 2-space indentation?
-- Does it affect multiple current clients? (VS Code, Neovim, Visual Studio, web dashboard, MCP)
+- Does it affect multiple current clients? (VS Code, Neovim, web dashboard, MCP)
 - Are commit messages conventional?
 
 ## Good First Contributions
@@ -317,9 +317,7 @@ SageFs is **daemon-first** — one long-running server, many clients:
      ┌───────┐ ┌────┴──┐ ┌┴──────┐  ┌──────────┐
      │VS Code│ │Neovim │ │ Web   │  │MCP Client│
      └───────┘ └───────┘ │ Dash  │  └──────────┘
-     ┌─────────────┐      └───────┘
-     │Visual Studio│
-     └─────────────┘
+                          └───────┘
 ```
 
 Key architectural concepts:

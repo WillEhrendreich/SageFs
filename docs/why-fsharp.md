@@ -1,16 +1,14 @@
 # Why F#? — Lessons from Building SageFs
 
-> *The best argument for a language is a tool so good that people ask "what's it written in?"*
-
-SageFs is a live F# development environment with a REPL engine, web dashboard, editor integrations,
-MCP surface, and daemon architecture built primarily in F#. This document explains why F# was the right
-choice, using real code from the SageFs codebase as evidence.
+SageFs is a live F# development environment: a REPL engine, web dashboard, editor integrations, MCP
+surface, and daemon, built primarily in F#. This document explains why F# was a good fit, with real code
+from the codebase as evidence.
 
 ---
 
 ## 1. Discriminated Unions Make Impossible States Unrepresentable
 
-SageFs models session lifecycle as a discriminated union:
+SageFs models session and worker lifecycle with discriminated unions. A simplified example:
 
 ```fsharp
 type SessionState =
@@ -21,13 +19,12 @@ type SessionState =
   | Faulted
 ```
 
-There is no `null` session. There is no boolean `isReady` that can desync from `isEvaluating`.
-The compiler enforces exhaustive handling — add a new state and every `match` in the codebase
-lights up until you handle it. When we added `EvalTraced` to the event DU, two files needed
-updating. The compiler found both instantly.
+There is no `null` session, and no boolean `isReady` that can desync from `isEvaluating`. The compiler
+enforces exhaustive handling: add a new state and every `match` in the codebase fails to compile until you
+handle it. When we added `EvalTraced` to the event DU, the compiler flagged both files that needed updating.
 
-**In C#** you'd have an enum plus runtime checks plus defensive `if (state == null)` guards.
-In F# the type system does the work at compile time, for free, forever.
+In C# the same code needs an enum plus runtime checks plus defensive `if (state == null)` guards. In F# the
+type system does that work at compile time.
 
 ---
 
@@ -48,10 +45,9 @@ Every function in the chain either succeeds and passes the value forward, or fai
 short-circuits with a typed error. No hidden control flow. No forgotten catch blocks.
 No `NullReferenceException` three stack frames deep.
 
-**The SageFsError DU** has 26 cases across 4 categories (client/server/gateway/infra).
-Architecture tests verify every case has exactly one classification and a valid HTTP status
-code. You literally cannot add a new error type without classifying it — the compiler won't
-let you.
+The `SageFsError` DU has cases across four categories (client/server/gateway/infra). Architecture tests
+verify every case has exactly one classification and a valid HTTP status code, so you cannot add a new error
+type without classifying it.
 
 ---
 
@@ -154,9 +150,9 @@ No macros. No code generation. Just the type system.
 
 ## 7. The Module System Scales Without Ceremony
 
-SageFs.Core has 201 top-level modules (tracked by architecture tests with a regression
-ceiling). Each module is a namespace with functions — no class hierarchies, no dependency
-injection containers, no abstract factory patterns.
+SageFs.Core has more than 200 top-level modules (tracked by an architecture test with a regression
+ceiling). Each module is a namespace with functions: no class hierarchies, no dependency-injection
+containers, no abstract factory patterns.
 
 ```fsharp
 module SageFs.Middleware.Tracing
@@ -182,11 +178,12 @@ testProperty "RingBuffer push/toList length ≤ capacity" (fun (items: int list,
   RingBuffer.toList buf |> List.length <= cap')
 ```
 
-This single test replaces dozens of hand-written examples. FsCheck found our `BatchFlusher`
-race condition that no example test caught — by generating rapid concurrent sequences that
-triggered the exact interleaving that caused data loss.
+This single test replaces dozens of hand-written examples. FsCheck found a `BatchFlusher` race condition
+that no example test caught, by generating rapid concurrent sequences that hit the exact interleaving that
+caused data loss.
 
-**4,668 tests** and growing, with property tests covering every core abstraction.
+The suite has thousands of tests, with property tests covering the core abstractions. The exact count is
+auto-derived into the README badge.
 
 ---
 
@@ -218,8 +215,8 @@ Because SageFs is written in F#, it can:
 - **Generate Fable JavaScript** for the VS Code extension from the same F# source
 - **Share types** between the CLI, dashboard, editor integrations, and test project with minimal translation
 
-The tool and the language amplify each other. SageFs makes F# development better.
-F# makes SageFs possible.
+Being written in F# is what lets SageFs hot-reload F# source, use FSharp.Compiler.Service directly, and
+share types end to end.
 
 ---
 
@@ -227,11 +224,10 @@ F# makes SageFs possible.
 
 | Metric | Value |
 |--------|-------|
-| Tests | 4,668+ |
-| Property tests | 50+ |
-| Lines of F# | ~40,000 |
-| Current client surfaces | VS Code, Visual Studio, Neovim, web dashboard, MCP |
-| Runtime overhead of UoM | 0 bytes |
+| Tests | thousands (auto-derived into the README badge) |
+| Property tests | hundreds |
+| Current client surfaces | VS Code, Neovim, web dashboard, MCP |
+| Runtime overhead of units of measure | 0 bytes (erased at compile time) |
 | Null reference exceptions | 0 (by design) |
 | Unhandled pattern matches | 0 (compiler-enforced) |
 
@@ -241,11 +237,11 @@ F# makes SageFs possible.
 
 ```bash
 dotnet tool install --global SageFs
-SageFs
+sagefs
 ```
 
 Then open your editor and create a session for `MyProject.fsproj`. SageFs connects automatically.
 
 ---
 
-*SageFs is open source. The code speaks for itself.*
+SageFs is open source.

@@ -1,14 +1,14 @@
 # 🟨 Coming from JavaScript / TypeScript?
 
-If you've shipped `undefined is not a function` to production for years, F# offers a different deal: a type system that actually catches these bugs, no concept of `undefined`, and hot reload that's fast enough to feel instant.
+F# catches `undefined is not a function` at compile time. There is no `undefined` in the language, and inline evaluation is fast enough to feel instant.
 
-You'll leave behind `node_modules` eating your disk, `any` creep in TypeScript, `undefined` vs `null` vs `""` vs `0` all being falsy, and webpack rebuilds that outlast your lunch break.
+You leave behind `node_modules` eating your disk, `any` creep in TypeScript, the `undefined`/`null`/`""`/`0` falsy mess, and webpack rebuilds that outlast your lunch break.
 
 **What you'll notice right away:**
-- `Option<'T>` means "might not exist," enforced by the compiler, so there's no runtime surprise
-- `|>` pipelines work like `.filter().map().reduce()`, but for any function, not just array methods
-- No `this` binding bugs; functions are just functions
-- Fable compiles F# to clean JavaScript, and the SageFs VS Code extension is F# all the way down
+- `Option<'T>` means "might not exist," and the compiler makes you handle it. No runtime surprise.
+- `|>` pipelines work like `.filter().map().reduce()`, but for any function, not just array methods.
+- No `this` binding bugs. Functions are just functions.
+- Fable compiles F# to JavaScript, and the SageFs VS Code extension is written in F# and compiled with Fable.
 
 **→ [Start here: `samples/from-javascript/hello.fsx`](../samples/from-javascript/hello.fsx)**
 

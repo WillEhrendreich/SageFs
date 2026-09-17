@@ -14,7 +14,7 @@ SageFs brings live evaluation, instant test feedback, and coverage visualization
 | **Failure Details** | Inline `⊘` markers show Expected vs Actual diffs |
 | **Failure Narratives** | Rich context: what changed, when it last passed, causal analysis |
 | **Test Source Jump** | Test Explorer items link to their source location automatically |
-| **Hot Reload** | Method-level patching — change code, see results without restart |
+| **Hot Reload** | Save a `.fs` file and SageFs reloads it via Harmony method patching. Browser refresh over SSE works; propagating changes into a running module-declared app is still being completed. |
 | **Eval Performance** | Status bar sparkline with P50/P95/P99 eval latencies |
 
 > **Available on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) and [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs).**
@@ -286,7 +286,7 @@ The daemon isn't running. Fix:
 4. Make sure your cursor is in an F# file (keybindings only activate for `fsharp` language)
 
 ### Tests not appearing in gutter
-1. Your project needs [Expecto](https://github.com/haf/expecto) tests (not xUnit/NUnit)
+1. SageFs discovers [Expecto](https://github.com/haf/expecto), xUnit (including v3), NUnit, MSTest, and TUnit tests. Expecto is the best-covered path today, so start there if you can.
 2. Enable live testing: Command Palette → "SageFs: Enable Live Testing"
 3. Check that the daemon discovered tests: status bar should show a test count (e.g., `🧪 42/42 ✓`)
 4. Check the Output panel for errors

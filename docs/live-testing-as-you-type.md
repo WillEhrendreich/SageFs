@@ -1,12 +1,19 @@
 # As-You-Type Live Testing — Architecture & Design
 
-> **Status note**: This document is now partly historical. The currently shipped compiled-project
+> **Status note**: This document is partly historical. The currently shipped compiled-project
 > editor path uses **session-scoped buffer sync** via
-> `POST /api/sessions/{sid}/buffer-changed` with debounced unsaved buffer content from VS Code,
-> Neovim, and Visual Studio. The `POST /api/live-testing/evaluate-scope` contract below remains a
-> design exploration rather than the active editor/daemon contract.
+> `POST /api/sessions/{sid}/buffer-changed` with debounced unsaved buffer content from the
+> current editors (VS Code and Neovim). The `POST /api/live-testing/evaluate-scope` contract
+> below is a design exploration, not the active editor/daemon contract. Visual Studio appears
+> in some tables below as an original design target; that extension is now deprecated, so treat
+> those rows as historical design notes rather than current product.
 
 > **Priority**: #1 — this feature is meant to outclass VS Enterprise's Live Unit Testing.
+
+> **Maturity**: Live testing is functional but still being stabilized. Expect rough
+> edges around session switching and test-discovery timing. Expecto has the best
+> coverage. The speed numbers below are the design target and typical measurements,
+> not a guarantee.
 
 ## How This Compares to VS Enterprise
 
@@ -20,7 +27,7 @@ VS Enterprise's Live Unit Testing triggers on unsaved edits, the same as SageFs.
 | **Broken code** | Dead — must compile to instrument | Tree-sitter/LSP works mid-keystroke |
 | **Scope** | Rebuilds impacted projects | Single function definition |
 | **Frameworks** | xUnit, NUnit, MSTest | + Expecto, TUnit, extensible; FsCheck `[<Property>]` tests are discovered and shown in the live panel |
-| **Clients** | Visual Studio only | Neovim, VS Code, Visual Studio, web dashboard, MCP |
+| **Clients** | Visual Studio only | Neovim, VS Code, web dashboard, MCP |
 | **Platform** | Windows only (ProjFS) | Cross-platform (.NET) |
 | **Cost** | ~$250/month Enterprise license | Free, MIT |
 

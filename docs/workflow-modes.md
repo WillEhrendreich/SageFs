@@ -1,6 +1,6 @@
 # Understanding SageFs Workflow Modes
 
-SageFs has **two workflow modes** and **one independent feature** that people often confuse for a third mode. This guide clears that up completely.
+SageFs has **two workflow modes** and **one independent feature** that people often mistake for a third mode. This guide sorts them out.
 
 ## The 30-Second Version
 
@@ -40,7 +40,7 @@ SageFs has **two workflow modes** and **one independent feature** that people of
 - Redefine types (`type Order = ...`) as many times as you want
 - Redefine modules, DUs, records, classes — everything
 - Full interactive exploration with instant feedback
-- All 50 MCP tools work normally
+- The same MCP tool surface as Live mode (tools are gated by session state, not by workflow)
 
 **What you give up:**
 - No automatic browser refresh. If you're running a web app, you'll need to refresh the browser manually after editing `.fs` files.
@@ -54,13 +54,17 @@ SageFs has **two workflow modes** and **one independent feature** that people of
 
 ### Live Mode (WebLive) — For Web Developers
 
-**What it feels like:** Save a file, and your browser updates instantly. No rebuild, no restart, no manual refresh. You see the change in under a second.
+**What it feels like:** Save a file and the browser refreshes on its own. No rebuild, no restart, no manual F5.
 
 **What you can do:**
-- Edit function bodies, let bindings, expressions — browser updates on save via SSE
-- Harmony runtime patching injects your changes into the running app
-- SageFs auto-injects a dev-reload middleware into your ASP.NET pipeline — zero config
-- All 50 MCP tools work normally
+- Edit function bodies, let bindings, and expressions; save triggers `#load` + a Harmony patch + an SSE browser refresh
+- SageFs auto-injects dev-reload middleware into your ASP.NET pipeline, no config
+- The same MCP tool surface as REPL mode (tools are gated by session state, not by workflow)
+
+> **Caveat:** Browser auto-refresh works today. Propagating a saved change into a
+> *running* app is still being finished for the common module-declared,
+> route-captured pattern (`module App.Program` + `let routes = [...]`). See
+> [Hot Reload](hot-reload.md) for current status.
 
 **What you give up:**
 - You **cannot redefine types**. Trying to redefine a `type` in the REPL produces `FS0037: Duplicate definition of type`. This is a CLR constraint, not a SageFs bug (more on this below).
@@ -94,7 +98,7 @@ Not sure?
 
 ## Why Can't I Have Both?
 
-This is the question everyone asks. The answer is a hard constraint in the .NET runtime itself:
+Because of a hard constraint in the .NET runtime.
 
 **The chain of constraints:**
 
@@ -107,9 +111,7 @@ This is the question everyone asks. The answer is a hard constraint in the .NET 
 Hot reload needs Harmony → Harmony needs --multiemit- → --multiemit- blocks type redefinition
 ```
 
-This is a **physical constraint of the CLR**, not a SageFs design choice. If Microsoft changes how FSI emits assemblies, or Harmony finds a way to work with multi-emit, this limitation goes away. Until then, you pick one or the other per session.
-
-**The good news:** Switching is instant. You're never locked in.
+This is a CLR constraint, not a SageFs design choice. If FSI changes how it emits assemblies, or Harmony learns to work with multi-emit, the limitation goes away. Until then you pick one per session. Switching between them is cheap (see below).
 
 ---
 
@@ -163,11 +165,15 @@ When enabled, SageFs watches which functions your tests call (via a dependency g
 
 ### How to enable it
 
-```
-enable_live_testing     ← MCP tool (any editor via MCP)
-```
+Turn it on from your editor or the dashboard:
 
-Or through your editor's UI (Neovim: `:SageFsEnableLiveTesting`, VS Code: Command Palette).
+- **VS Code**: Command Palette → `SageFs: Enable Live Testing`
+- **Neovim**: `:SageFsEnableLiveTesting`
+- **Web dashboard**: the live-testing control on the session
+
+Editors and the dashboard drive this through the daemon HTTP API
+(`POST /api/live-testing/enable`). There is no `enable_live_testing` MCP tool —
+the MCP testing tools are `list_tests`, `targeted_verify`, and `explain_test_failure`.
 
 ### Why it's not a mode
 

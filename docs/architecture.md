@@ -1,8 +1,10 @@
 # 🏗️ Architecture
 
-SageFs runs as a single daemon that serves many clients. The daemon starts with no project loaded and creates sessions on demand. Each session is an isolated worker sub-process with its own FSI, project, and file watcher. VS Code, Neovim, Visual Studio, the web dashboard, and MCP clients all talk to the daemon through session-scoped HTTP and SSE contracts. See the [architecture diagram](../Readme.md#-one-daemon-every-client--simultaneously) for how clients connect.
+One SageFs daemon runs per machine. It starts with no project loaded and creates sessions on demand. Each session is a separate OS worker process with its own FSI, loaded project assemblies, and file watcher. VS Code, Neovim, the web dashboard, and MCP clients all talk to the daemon through session-scoped HTTP and SSE contracts. See the [architecture diagram](../Readme.md#-one-daemon-every-client--simultaneously) for how clients connect.
 
-SageFs has 5700+ tests: Expecto unit tests, FsCheck property-based state machine tests, Verify snapshots, and binary persistence property tests.
+The daemon listens on port 37749 for MCP (streamable HTTP at `/`, legacy SSE at `/sse`) and the editor state stream (`/events`). The web dashboard runs on port 37750 at `/dashboard`. Target framework is net10.0; the solution file is `SageFs.slnx`.
+
+The test suite uses Expecto unit tests, FsCheck property-based state-machine tests, Verify snapshots, and binary-persistence property tests. The current test count is auto-derived into the README badge.
 
 ## Project Structure
 
@@ -12,7 +14,7 @@ SageFs/            — CLI tool, daemon, MCP server, dashboard, and retained leg
 SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy source
 SageFs.Tests/      — Expecto test project
 sagefs-vscode/     — VS Code extension (Fable F#→JS)
-sagefs-vs/         — Visual Studio extension (C# + F#)
+sagefs-vs/         — Deprecated Visual Studio extension (C# + F#), retained as legacy source
 docs/              — GitHub Pages site
 ```
 

@@ -1,36 +1,40 @@
-# 🔀 Multi-Session — Isolated Worker Processes
+# Multi-Session — Isolated Worker Processes
 
-Run multiple F# sessions simultaneously — different projects, different states. Each session is an **isolated worker sub-process** (Erlang-style fault isolation). SSE events are tagged with `SessionId` — no cross-talk between editor windows watching different projects. Create, switch, and stop sessions from any frontend.
+Run several F# sessions at once, each on a different project and in a different state. Every session is a separate OS worker process, so one session cannot corrupt or crash another. SSE events carry a `SessionId`, so editor windows watching different projects never see each other's output. Create, switch, and stop sessions from any client.
 
 ## Creating Sessions
 
-Sessions are created on demand by clients (editors, AI agents, the dashboard). The daemon starts bare and waits for session creation requests.
+Clients (editors, AI agents, the dashboard) create sessions on demand. The daemon starts bare and waits for create requests.
 
 ```
-POST /api/sessions/create
+POST /api/sessions/create        (on the MCP port, 37749)
 {
-  "projectPath": "path/to/MyProject.fsproj",
-  "workingDirectory": "path/to/project"
+  "workingDirectory": "path/to/project",
+  "projects": ["path/to/MyProject.fsproj"],
+  "workflow": "Interactive"
 }
 ```
+
+`workingDirectory` is required. `projects` is an array of `.fsproj` paths (omit it to start bare). `workflow` is optional and defaults to `Interactive`. Agents can use the `create_session` MCP tool instead.
 
 ## Session Isolation
 
 Each session is a separate OS process with its own:
+
 - FSI instance
 - Loaded project assemblies
 - File watcher
-- Test runner state
+- Test-runner state
 
-Sessions cannot interfere with each other. If one crashes, others continue running.
+If one session crashes, the others keep running. See [Session Isolation](session-isolation.md) for the routing design.
 
 ## Session Management
 
-- **Create**: `POST /api/sessions/create` or MCP tool `create_session`
-- **List**: MCP tool `list_sessions`
-- **Switch**: MCP tool `switch_session`
-- **Stop**: MCP tool `stop_session`
+| Action | HTTP | MCP tool |
+|:-------|:-----|:---------|
+| Create | `POST /api/sessions/create` | `create_session` |
+| List | — | `list_sessions` |
+| Switch | — | `switch_session` |
+| Stop | — | `stop_session` |
 
-All editor plugins support session management through their respective UIs.
-
-See also: [Session Isolation](session-isolation.md)
+Each client keeps its own active session. Switching in one client does not move any other client. VS Code, Neovim, and the dashboard all expose these actions in their UIs.

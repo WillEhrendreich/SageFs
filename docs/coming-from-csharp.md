@@ -1,14 +1,14 @@
 # 🔷 Coming from C#?
 
-You're on the same .NET runtime, the same NuGet packages, and the same `dotnet` CLI. The difference is you stop writing `public class AbstractRepositoryFactoryImpl` and start writing code that says what it means.
+Same .NET runtime, same NuGet packages, same `dotnet` CLI. What changes is the code you write: a 3-line concept is 3 lines, not a `public class AbstractRepositoryFactoryImpl`.
 
-You'll leave behind 50-line classes for 3-line concepts, null reference exceptions at 3am, `dotnet watch` taking 10 seconds to rebuild after a typo fix, and writing the same LINQ query a dozen different ways because the extension method didn't exist.
+No more 50-line classes for small concepts, no more null reference exceptions, no more `dotnet watch` taking ten seconds to rebuild after a typo fix.
 
 **What you'll notice right away:**
-- Records are immutable value objects with equality built in, in one line
-- Discriminated unions make `sealed class + pattern matching` simple instead of painful
+- Records are immutable value objects with structural equality, in one line
+- Discriminated unions give you `sealed class + pattern matching` without the ceremony
 - `Result<'T, 'TError>` replaces `try/catch` for expected failure paths
-- SageFs hot reload patches method pointers at runtime, so there's no rebuild and no restart
+- SageFs hot reload uses Harmony to patch running code, so many edits apply without a full rebuild or restart
 
 **→ [Start here: `samples/from-csharp/hello.fsx`](../samples/from-csharp/hello.fsx)**
 
