@@ -154,7 +154,11 @@ let resilienceTests = testList "detour resilience" [
 // process-global ActivitySource state.
 [<Tests>]
 let allTests =
-  testSequenced (testList "DevReloadCanary" [
+  // Shared sequenced group with MethodPatcherTests: both install real Harmony
+  // patches, which are process-global, so no Harmony-patching suite may run
+  // concurrently with another. A shared group name serializes them across files
+  // (a per-file `testSequenced` only orders within one file).
+  testSequencedGroup "sagefs-harmony" (testList "DevReloadCanary" [
     canaryUnitTests
     prefixPatchIntegrationTests
     resilienceTests
