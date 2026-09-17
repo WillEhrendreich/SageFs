@@ -27,6 +27,19 @@ module DaemonState =
       let home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
       Path.Combine(home, ".SageFs")
 
+  /// Ensure the data dir exists and is owner-only on Unix (roast-9 §8: it held
+  /// manifests, the friction db, and cohort ledger under the default umask,
+  /// world-readable on a shared machine). Chmods an existing dir too, so a dir
+  /// created loosely by any writer is tightened. Best-effort: a failed chmod
+  /// never blocks startup.
+  let ensureDataDir () =
+    let dir = SageFsDir
+    Directory.CreateDirectory dir |> ignore
+    if not (OperatingSystem.IsWindows()) then
+      try
+        File.SetUnixFileMode(dir, UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute)
+      with _ -> ()
+
   let defaultMcpPort = 37749
 
   let jsonOptions =

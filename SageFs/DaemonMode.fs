@@ -183,9 +183,9 @@ let createDaemonInfrastructure () : DaemonInfra =
   let frictionStore =
     try
       let dir = DaemonState.SageFsDir
-      match System.IO.Directory.Exists dir with
-      | false -> System.IO.Directory.CreateDirectory dir |> ignore
-      | true -> ()
+      // Creates the dir if missing AND hardens it to owner-only on Unix, even if
+      // another writer created it first (roast-9 §8).
+      DaemonState.ensureDataDir ()
       let dbPath = System.IO.Path.Combine(dir, "friction.db")
       let connStr = sprintf "Data Source=%s" dbPath
       let store = SageFs.Features.FrictionSqlite.Store.create connStr
