@@ -21,6 +21,48 @@ type BrowserRefreshConfig = {
 module BrowserRefreshConfig =
   let defaults = { WatchPatterns = [ "*.fs"; "*.fsx" ] }
 
+// ─── Project kind ───────────────────────────────────────────
+
+/// What kind of runtime a session's projects are, which decides HOW hot reload
+/// applies. The browser-refresh config lives on `Web` because it is only
+/// meaningful there — a Console or Game project structurally cannot carry a
+/// browser config, so that illegal combination cannot be constructed.
+[<RequireQualifiedAccess>]
+type ProjectKind =
+  /// A web app (ASP.NET Core / Falco / Giraffe / Saturn). Hot reload uses the
+  /// DevReload middleware plus browser SSE refresh.
+  | Web of BrowserRefreshConfig
+  /// A console or headless app. Hot reload uses FSI method-detour only — no web
+  /// machinery.
+  | Console
+  /// A native windowed game (Raylib / SDL / Silk.NET / MonoGame). Hot reload
+  /// detours frame-loop methods; no WebApplication patches.
+  | Game
+
+module ProjectKind =
+
+  /// Native game / graphics libraries whose presence means a windowed game.
+  let private gamePackages = [ "Raylib"; "SDL2"; "Silk.NET"; "MonoGame"; "SFML" ]
+
+  /// Web frameworks whose presence means a web app.
+  let private webPackages = [ "Falco"; "Giraffe"; "Saturn"; "Microsoft.AspNetCore" ]
+
+  /// Classify a project by its package references. Game wins over Web wins over
+  /// Console: a native game library dominates the runtime shape, then a web
+  /// framework, else a plain console/headless app.
+  let classify (packageRefs: string list) : ProjectKind =
+    let has (names: string list) =
+      packageRefs |> List.exists (fun ref -> names |> List.exists ref.Contains)
+    if has gamePackages then ProjectKind.Game
+    elif has webPackages then ProjectKind.Web BrowserRefreshConfig.defaults
+    else ProjectKind.Console
+
+  /// Short user-facing label.
+  let label = function
+    | ProjectKind.Web _   -> "web"
+    | ProjectKind.Console -> "console"
+    | ProjectKind.Game    -> "game"
+
 // ─── Feedback strategy ──────────────────────────────────────
 
 /// How the user wants to see their changes reflected.
@@ -62,6 +104,42 @@ type SessionWorkflow =
   /// Hot reload active, restricted REPL. The "building a web app" workflow.
   | WebLive of BrowserRefreshConfig
 
+/// How hot reload actually applies to a running app — derived from the workflow
+/// AND the project kind, never chosen directly. This is the seam that decouples
+/// "hot reload is on" from "this is a web app": the same hot-reload workflow
+/// produces web-middleware reload, method-detour-only, or game-loop reload
+/// depending on what kind of project is loaded.
+[<RequireQualifiedAccess>]
+type ReloadStrategy =
+  /// No hot reload (Interactive workflow).
+  | NoReload
+  /// Web app: FSI method-detour PLUS DevReload middleware and browser SSE refresh.
+  | WebReload of BrowserRefreshConfig
+  /// Console/headless: FSI method-detour only, no web machinery.
+  | MethodDetourOnly
+  /// Native game: frame-loop method-detour, no WebApplication/RunAsync patches.
+  | GameLoopReload
+
+module ReloadStrategy =
+
+  /// Whether to install the web DevReload middleware (the WebApplication.Run/
+  /// RunAsync Harmony patch plus browser SSE refresh).
+  ///
+  /// Installed for a web app, AND for the method-detour (console) case — because
+  /// a plain ASP.NET app that references the AspNetCore FRAMEWORK rather than a
+  /// web package cannot be told apart from a console app by package refs alone,
+  /// and the patch is inert for a genuine console app (it never calls
+  /// WebApplication.Run), so installing it defensively is correct and never a
+  /// regression. A native game is the one kind we are certain has no
+  /// WebApplication, so it — and non-reloading Interactive — skip it.
+  /// (A precise console-vs-framework-web split would need per-project framework
+  /// references, which the loader does not surface yet.)
+  let installsWebDevReload = function
+    | ReloadStrategy.WebReload _      -> true
+    | ReloadStrategy.MethodDetourOnly -> true
+    | ReloadStrategy.GameLoopReload   -> false
+    | ReloadStrategy.NoReload         -> false
+
 module SessionWorkflow =
 
   /// Derive the feedback strategy from the workflow.
@@ -89,6 +167,19 @@ module SessionWorkflow =
   let isHotReloadActive = function
     | SessionWorkflow.Interactive -> false
     | SessionWorkflow.WebLive _   -> true
+
+  /// Derive the actual reload strategy from the workflow AND the project kind —
+  /// total, no ambiguity. Interactive never reloads. A hot-reload workflow
+  /// reloads differently per kind: web gets middleware + browser refresh,
+  /// console gets method-detour only, a game gets frame-loop detour.
+  let reloadStrategy (workflow: SessionWorkflow) (kind: ProjectKind) : ReloadStrategy =
+    match workflow with
+    | SessionWorkflow.Interactive -> ReloadStrategy.NoReload
+    | SessionWorkflow.WebLive cfg ->
+      match kind with
+      | ProjectKind.Web _   -> ReloadStrategy.WebReload cfg
+      | ProjectKind.Console -> ReloadStrategy.MethodDetourOnly
+      | ProjectKind.Game    -> ReloadStrategy.GameLoopReload
 
   /// Default workflow — full REPL, no restrictions.
   let defaultWorkflow = SessionWorkflow.Interactive

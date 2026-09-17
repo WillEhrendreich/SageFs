@@ -220,3 +220,80 @@ let workflowPropertyTests =
         |> Expect.hasLength "should find both web packages" 2
     ]
   ]
+
+[<Tests>]
+let projectKindTests =
+  testList "ProjectKind classification" [
+    testCase "web frameworks classify as Web" <| fun _ ->
+      ProjectKind.classify [ "Falco.Datastar"; "FSharp.Core" ] |> ProjectKind.label
+      |> Expect.equal "Falco is web" "web"
+      ProjectKind.classify [ "Microsoft.AspNetCore.App" ] |> ProjectKind.label
+      |> Expect.equal "AspNetCore is web" "web"
+      ProjectKind.classify [ "Giraffe" ] |> ProjectKind.label
+      |> Expect.equal "Giraffe is web" "web"
+
+    testCase "native game libraries classify as Game" <| fun _ ->
+      ProjectKind.classify [ "Raylib-cs" ] |> ProjectKind.label
+      |> Expect.equal "Raylib is game" "game"
+      ProjectKind.classify [ "SDL2-CS" ] |> ProjectKind.label
+      |> Expect.equal "SDL2 is game" "game"
+
+    testCase "everything else is Console" <| fun _ ->
+      ProjectKind.classify [ "Expecto"; "FSharp.Core" ] |> ProjectKind.label
+      |> Expect.equal "plain is console" "console"
+      ProjectKind.classify [] |> ProjectKind.label
+      |> Expect.equal "empty is console" "console"
+
+    testCase "Game wins over Web when both are present" <| fun _ ->
+      // A native game that also references a web lib is still a game — native
+      // windowing dominates the reload strategy.
+      ProjectKind.classify [ "Raylib-cs"; "Microsoft.AspNetCore.App" ] |> ProjectKind.label
+      |> Expect.equal "game precedence" "game"
+
+    testCase "a Web project structurally carries a browser config" <| fun _ ->
+      match ProjectKind.classify [ "Falco" ] with
+      | ProjectKind.Web cfg -> cfg.WatchPatterns |> Expect.isNonEmpty "web carries a config"
+      | other -> failtestf "expected Web, got %A" other
+  ]
+
+[<Tests>]
+let reloadStrategyTests =
+  testList "ReloadStrategy derivation" [
+    testCase "Interactive never reloads, whatever the project kind" <| fun _ ->
+      for kind in [ ProjectKind.Web BrowserRefreshConfig.defaults; ProjectKind.Console; ProjectKind.Game ] do
+        SessionWorkflow.reloadStrategy SessionWorkflow.Interactive kind
+        |> Expect.equal "interactive = no reload" ReloadStrategy.NoReload
+
+    testCase "hot-reload + web -> WebReload carrying the workflow's config" <| fun _ ->
+      let cfg = { WatchPatterns = [ "*.fs" ] }
+      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive cfg) (ProjectKind.Web BrowserRefreshConfig.defaults)
+      |> Expect.equal "web reload keeps the workflow cfg" (ReloadStrategy.WebReload cfg)
+
+    testCase "hot-reload + console -> method-detour only (no web machinery)" <| fun _ ->
+      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive BrowserRefreshConfig.defaults) ProjectKind.Console
+      |> Expect.equal "console = detour only" ReloadStrategy.MethodDetourOnly
+
+    testCase "hot-reload + game -> game-loop reload (no WebApplication patches)" <| fun _ ->
+      SessionWorkflow.reloadStrategy (SessionWorkflow.WebLive BrowserRefreshConfig.defaults) ProjectKind.Game
+      |> Expect.equal "game = loop reload" ReloadStrategy.GameLoopReload
+  ]
+
+[<Tests>]
+let devReloadGateTests =
+  testList "web DevReload install gate" [
+    testCase "a web app installs the web patch" <| fun _ ->
+      ReloadStrategy.installsWebDevReload (ReloadStrategy.WebReload BrowserRefreshConfig.defaults)
+      |> Expect.isTrue "web installs"
+
+    testCase "console/method-detour installs defensively — a framework-ref web app is indistinguishable here and the patch is inert for a true console" <| fun _ ->
+      ReloadStrategy.installsWebDevReload ReloadStrategy.MethodDetourOnly
+      |> Expect.isTrue "console installs defensively (no regression for plain ASP.NET)"
+
+    testCase "a native game never installs the web patch" <| fun _ ->
+      ReloadStrategy.installsWebDevReload ReloadStrategy.GameLoopReload
+      |> Expect.isFalse "game skips the web patch"
+
+    testCase "no reload installs nothing" <| fun _ ->
+      ReloadStrategy.installsWebDevReload ReloadStrategy.NoReload
+      |> Expect.isFalse "interactive skips"
+  ]
