@@ -6,6 +6,15 @@ open VerifyTests
 
 [<EntryPoint>]
 let main argv =
+  // Restamp the README test-count badge + property count from the live source.
+  let isUpdateBadge = argv |> Array.exists (fun a -> a = "--update-badge")
+  match isUpdateBadge with
+  | true ->
+    let r = SageFs.Tests.TestCountBadge.updateReadme ()
+    printfn "README test-count badge: total=%d properties=%d changed=%b" r.Total r.Properties r.Changed
+    0
+  | false ->
+
   let isReleaseReadiness = argv |> Array.exists (fun arg -> arg = "--release-readiness")
   match isReleaseReadiness with
   | true ->

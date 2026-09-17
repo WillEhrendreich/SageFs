@@ -9,6 +9,7 @@
 
     <ItemGroup>
         <Compile Include="TestInfrastructure.fs" />
+        <Compile Include="TestCountBadge.fs" />
         <Compile Include="StableIdentityProbeFixture.fs" />
         <Compile Include="StableIdentityEvalTests.fs" />
         <Compile Include="SageFsConfigTests.fs" />
@@ -418,6 +419,7 @@
         <Compile Include="InputHashCoverageTests.fs" />
         <Compile Include="LandingCacheTests.fs" />
         <Compile Include="AffectedTestsTests.fs" />
+        <Compile Include="ReadmeBadgeTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
