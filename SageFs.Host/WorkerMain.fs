@@ -312,7 +312,7 @@ let run (sessionId: string) (port: int) = async {
   // of the same library, FSI's runtime probe would load SageFs's copy and #load
   // of project sources fails with 0x80131040 (assembly manifest mismatch).
   // Pre-load the project's bin assemblies BEFORE FSI starts so the project's
-  // versions bind first. The worker itself doesn't use Falco/Marten/etc. — the
+  // versions bind first. The worker itself doesn't use Falco/Npgsql/etc. — the
   // bundled copies exist only because the daemon does — so pre-loading the
   // project's versions is safe.
   let projectBinDirs =

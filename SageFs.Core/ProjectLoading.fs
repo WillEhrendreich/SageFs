@@ -340,7 +340,7 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
       let manual = projects |> List.collect (fun projPath -> ManualProjectParse.parseFsproj logger projPath)
       let refs = ManualProjectParse.collectBinReferences logger projects
       // LibPaths must lead with the project's bin dir so FSI's assembly probe
-      // resolves the project's own dependency versions (Falco, Marten, ...)
+      // resolves the project's own dependency versions (Falco, Npgsql, ...)
       // BEFORE the worker process's own copies (SageFs bundles Falco for its
       // dashboard — a version collision breaks #load with 0x80131040).
       let binLibPaths =

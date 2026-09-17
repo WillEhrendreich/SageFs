@@ -32,7 +32,7 @@ let tests =
       (HostAdaptation.refusalReasons plan) |> Expect.isNonEmpty "refusal must carry an actionable reason"
 
     testCase "project-only libs are no conflict" <| fun _ ->
-      let plan = HostAdaptation.plan [ ("Marten", "7.0.0"); ("Falco", "6.0.0") ]
+      let plan = HostAdaptation.plan [ ("Npgsql", "7.0.0"); ("Falco", "6.0.0") ]
 
       (HostAdaptation.hasRefusal plan) |> Expect.isFalse "project-only libs never refuse"
       (plan |> List.forall (function HostAdaptation.NoConflict _ -> true | _ -> false)) |> Expect.isTrue "all decisions are NoConflict"
