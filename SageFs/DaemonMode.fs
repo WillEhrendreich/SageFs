@@ -869,11 +869,29 @@ let periodicManifestSave
       1L, System.Collections.Generic.KeyValuePair("task", box "manifest_save"))
     log.LogWarning("Periodic manifest save error: {Error}", ex.Message)
 
-/// Create a debounced file watcher for live testing.
-/// Returns (watcher, debounceTimer) — caller must dispose both.
-/// Manages per-session file watchers for live testing.
-/// Each session directory gets its own FileSystemWatcher. Watchers are created
-/// when sessions are discovered and disposed when sessions are removed.
+/// Messages the LiveTestWatcherManager actor accepts: the pure
+/// `LiveTestWatcherCore.Msg` protocol, plus a read-only query and teardown
+/// that the pure core has no reason to know about. Kept out of
+/// `LiveTestWatcherCore.Msg` so that type stays exactly the tested, proven
+/// decision protocol.
+type private ActorMsg =
+  | Core of LiveTestWatcherCore.Msg
+  | GetWatched of AsyncReplyChannel<string list>
+  | Shutdown of AsyncReplyChannel<unit>
+
+/// Manages per-session file watchers for live testing, as a single-owner
+/// mailbox actor over the pure `LiveTestWatcherCore` decision core (roast-9
+/// #10). Each session directory gets its own FileSystemWatcher. Watchers are
+/// created when sessions are discovered and disposed when sessions are
+/// removed.
+///
+/// All state (which dirs are claimed by which sessions, which paths are
+/// pending a debounced drain, which dirs are actually watched) is owned
+/// solely by one MailboxProcessor loop — no ConcurrentDictionary, no lock, no
+/// epoch/generation counter. FileSystemWatcher callbacks and the debounce
+/// timer only ever `Post` a message; they never read or write state
+/// directly. See `LiveTestWatcherCore` for why this makes the old
+/// stale-event race impossible by construction instead of guarded against.
 type LiveTestWatcherManager
   ( dispatch: SageFsMsg -> unit,
     onFileReloaded: WorkerProtocol.SessionId -> string -> unit,
@@ -887,222 +905,168 @@ type LiveTestWatcherManager
   // under it fire FileContentChanged but never FileReloaded (a path with no
   // owning session must not be attributed to a fabricated one).
 
-  let liveTestWatcherDebounceMs = 75
+  let debounceMs = 75
+  let normalizedFallback = fallbackDir |> Option.map System.IO.Path.GetFullPath
+  let logger = Log.asILogger ()
+  // 0 = not disposed, 1 = disposed. Guards against a second Dispose() call
+  // hanging forever on PostAndReply — the actor loop does not recurse after
+  // Shutdown, so nothing would ever answer a second reply channel.
+  let mutable disposedFlag = 0
 
-  let watchers = System.Collections.Concurrent.ConcurrentDictionary<string, System.IO.FileSystemWatcher * System.Threading.Timer>()
-  // dir -> owning session IDs (only real sessions; the fallback dir is tracked
-  // separately via fallbackDir).
-  let dirSessions = System.Collections.Concurrent.ConcurrentDictionary<string, WorkerProtocol.SessionId list>()
-  // dir -> generation counter. Incremented every time a watcher for the dir is
-  // stopped (dispose/recreate lifecycle). Events queued before a stop carry the
-  // dir's epoch at queue time; a queued path whose epoch no longer matches is a
-  // stale event from a dead watcher generation and is dropped at fire time.
-  let dirEpochs = System.Collections.Concurrent.ConcurrentDictionary<string, int64>()
-  let pendingPaths = System.Collections.Concurrent.ConcurrentDictionary<string, bool>()
-  // path -> epoch of the dir that queued it (the dir prefix that matched at
-  // queue time). Kept in lock-step with pendingPaths.
-  let pendingEpochs = System.Collections.Concurrent.ConcurrentDictionary<string, int64>()
-  let pendingLock = obj()
-  let debounceMs = liveTestWatcherDebounceMs
+  let mailbox =
+    MailboxProcessor<ActorMsg>.Start(fun inbox ->
 
-  /// The watched directory that contains `path` (longest-prefix wins), if any.
-  /// Fallback dir participates only when no session dir claims the path.
-  let dirForPath (path: string) =
-    let normalizedPath = System.IO.Path.GetFullPath(path)
-    dirSessions
-    |> Seq.filter (fun kvp -> normalizedPath.StartsWith(System.IO.Path.GetFullPath(kvp.Key), System.StringComparison.OrdinalIgnoreCase))
-    |> Seq.sortByDescending (fun kvp -> kvp.Key.Length)
-    |> Seq.tryHead
-    |> Option.map (fun kvp -> kvp.Key)
-    |> Option.orElseWith (fun () ->
-      match fallbackDir with
-      | Some f when normalizedPath.StartsWith(System.IO.Path.GetFullPath(f), System.StringComparison.OrdinalIgnoreCase) -> Some f
-      | _ -> None)
+      // Impure edge: the live FileSystemWatcher handles and the debounce
+      // timer. Touched ONLY from inside this loop — the single owner of all
+      // watcher state. Rooted in the loop's own closure (not a class field),
+      // so nothing outside this actor can reach in and mutate it, and the
+      // timer can never be GC'd out from under a live daemon (see memory:
+      // daemon timer GC bug — a timer with no other root gets collected and
+      // silently stops firing).
+      let watchers = System.Collections.Generic.Dictionary<string, System.IO.FileSystemWatcher>()
 
-  /// Current epoch for a watched dir (0 if never stopped).
-  let epochOf (dir: string) =
-    match dirEpochs.TryGetValue(dir) with
-    | true, e -> e
-    | false, _ -> 0L
+      let handleFileChanged (directories: string list) (e: System.IO.FileSystemEventArgs) =
+        let path = e.FullPath
+        // A file inside another checkout nested under the watched directory (a
+        // git worktree such as .claude/worktrees/*, a vendored repo) belongs
+        // to that project — feeding it to this session's live testing
+        // type-checked foreign copies of the session's own files.
+        let inNestedCheckout =
+          directories |> List.exists (fun root -> SageFs.FileWatcher.isInNestedCheckout root path SageFs.FileWatcher.hasCheckoutMarker)
+        let watchedSource =
+          SageFs.FileWatcher.shouldTriggerRebuild
+            { Directories = directories; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = debounceMs }
+            path
+        match watchedSource && not inNestedCheckout with
+        | true -> inbox.Post (Core (LiveTestWatcherCore.FileSaved path))
+        | false -> ()
 
-  /// Session ID(s) owning the directory that contains `path` (longest-prefix
-  /// dir wins — a file under a session's dir must not be attributed to the
-  /// daemon-CWD fallback).
-  let sessionsForPath (path: string) =
-    let normalizedPath = System.IO.Path.GetFullPath(path)
-    dirSessions
-    |> Seq.filter (fun kvp -> normalizedPath.StartsWith(System.IO.Path.GetFullPath(kvp.Key), System.StringComparison.OrdinalIgnoreCase))
-    |> Seq.sortByDescending (fun kvp -> kvp.Key.Length)
-    |> Seq.tryHead
-    |> Option.map (fun kvp -> kvp.Value)
-    |> Option.defaultValue []
-
-  let debounceCallback _ =
-    let paths =
-      lock pendingLock (fun () ->
-        let ps = pendingPaths.Keys |> Seq.toArray
-        let epochs = ps |> Array.map (fun p -> match pendingEpochs.TryGetValue(p) with | true, e -> Some e | false, _ -> None)
-        pendingPaths.Clear()
-        pendingEpochs.Clear()
-        Array.zip ps epochs)
-    for (path, queuedEpoch) in paths do
-      try
-        // Stale-event guard: if the dir that queued this path was stopped and
-        // recreated (or dropped entirely) while the debounce was pending, the
-        // queued event belongs to a dead watcher generation. Drop it — a stale
-        // reload must never reach a fresh session claim.
-        let dir = dirForPath path
-        let isStale = SageFs.LiveTestWatcherStaleGuard.isStaleEvent dir queuedEpoch epochOf
-        match isStale with
+      let startWatcher (dir: string) =
+        match watchers.ContainsKey dir with
         | true -> ()
         | false ->
-          let fi = System.IO.FileInfo(path)
-          match fi.Exists && fi.Length < 1_048_576L with
-          | true ->
-            let content = System.IO.File.ReadAllText(path)
-            dispatch (SageFsMsg.FileContentChanged(path, content))
-            for sessionId in sessionsForPath path do
-              onFileReloaded sessionId path
-          | false -> ()
-      with
-      | :? System.IO.IOException -> ()
-      | :? System.UnauthorizedAccessException -> ()
+          let watcher = new System.IO.FileSystemWatcher(dir)
+          watcher.IncludeSubdirectories <- true
+          // FileName too: editors that save safely (vim, JetBrains, sed -i)
+          // write a temp file and rename it over the source, which is a
+          // rename, not a write.
+          watcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite ||| System.IO.NotifyFilters.FileName
+          watcher.Filters.Add("*.fs")
+          watcher.Filters.Add("*.fsx")
+          let handler = handleFileChanged [dir]
+          watcher.Changed.Add(handler)
+          watcher.Created.Add(handler)
+          // A rename's FullPath is the new name — the source file that was saved.
+          watcher.Renamed.Add(fun e -> handler e)
+          watcher.EnableRaisingEvents <- true
+          watchers.[dir] <- watcher
+          Log.info "[watcher] Registered file watcher for %s" dir
 
-  let sharedDebounceTimer =
-    new System.Threading.Timer(
-      System.Threading.TimerCallback(debounceCallback), null,
-      System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite)
+      let stopWatcher (dir: string) =
+        match watchers.TryGetValue dir with
+        | true, watcher ->
+          watcher.EnableRaisingEvents <- false
+          watcher.Dispose()
+          watchers.Remove(dir) |> ignore
+          Log.info "[watcher] Disposed file watcher for %s" dir
+        | false, _ -> ()
 
-  let handleFileChanged (directories: string list) (e: System.IO.FileSystemEventArgs) =
-    let path = e.FullPath
-    // A file inside another checkout nested under the watched directory (a git
-    // worktree such as .claude/worktrees/*, a vendored repo) belongs to that
-    // project — feeding it to this session's live testing type-checked foreign
-    // copies of the session's own files.
-    let inNestedCheckout =
-      directories |> List.exists (fun root -> SageFs.FileWatcher.isInNestedCheckout root path SageFs.FileWatcher.hasCheckoutMarker)
-    let watchedSource =
-      SageFs.FileWatcher.shouldTriggerRebuild
-        { Directories = directories; Extensions = [".fs"; ".fsx"]; ExcludePatterns = []; DebounceMs = debounceMs }
-        path
-    match watchedSource && not inNestedCheckout with
-    | true ->
-      lock pendingLock (fun () ->
-        // Snapshot the dir's epoch now; the fire-time guard compares against
-        // it to drop events queued by a watcher generation that was stopped.
-        let queuedEpoch =
-          match dirForPath path with
-          | Some d -> epochOf d
-          | None -> 0L
-        pendingPaths.TryAdd(path, true) |> ignore
-        pendingEpochs.[path] <- queuedEpoch
-        sharedDebounceTimer.Change(debounceMs, System.Threading.Timeout.Infinite) |> ignore)
-    | false -> ()
+      // One rooted debounce timer for the whole actor. Its callback only
+      // ever posts DebounceElapsed — no state is touched on the timer thread.
+      let debounceTimer =
+        new System.Threading.Timer(
+          System.Threading.TimerCallback(fun _ -> inbox.Post (Core LiveTestWatcherCore.DebounceElapsed)),
+          null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite)
 
-  let startWatcher (dir: string) =
-    watchers.GetOrAdd(dir, fun d ->
-      let watcher = new System.IO.FileSystemWatcher(d)
-      watcher.IncludeSubdirectories <- true
-      // FileName too: editors that save safely (vim, JetBrains, sed -i) write a
-      // temp file and rename it over the source, which is a rename, not a write.
-      watcher.NotifyFilter <- System.IO.NotifyFilters.LastWrite ||| System.IO.NotifyFilters.FileName
-      watcher.Filters.Add("*.fs")
-      watcher.Filters.Add("*.fsx")
-      let handler = handleFileChanged [d]
-      watcher.Changed.Add(handler)
-      watcher.Created.Add(handler)
-      // A rename's FullPath is the new name — the source file that was saved.
-      watcher.Renamed.Add(fun e -> handler e)
-      watcher.EnableRaisingEvents <- true
-      Log.info "[watcher] Registered file watcher for %s" d
-      watcher, sharedDebounceTimer) |> ignore
+      let drainPath (state: LiveTestWatcherCore.State) (path: string) =
+        // FileContentChanged fires for any path under a currently-watched dir
+        // — a claimed session dir OR the session-less fallback dir. That is the
+        // fallback contract ("files under the fallback fire FileContentChanged
+        // but never FileReloaded") and it is what triggers a rebuild/rerun. A
+        // save queued before its dir was removed resolves to a dir no longer in
+        // Watched and is dropped here (the old stale-event case). onFileReloaded
+        // is attributed only to the sessions that actually claim the dir.
+        match LiveTestWatcherCore.isUnderWatchedDir state.Watched path with
+        | false -> ()
+        | true ->
+          try
+            let fi = System.IO.FileInfo(path)
+            match fi.Exists && fi.Length < 1_048_576L with
+            | true ->
+              let content = System.IO.File.ReadAllText(path)
+              dispatch (SageFsMsg.FileContentChanged(path, content))
+              for sessionId in LiveTestWatcherCore.sessionsForPath state.DirSessions path do
+                onFileReloaded sessionId path
+            | false -> ()
+          with
+          | :? System.IO.IOException -> ()
+          | :? System.UnauthorizedAccessException -> ()
 
-  let stopWatcher (dir: string) =
-    match watchers.TryRemove(dir) with
-    | true, (watcher, _) ->
-      watcher.EnableRaisingEvents <- false
-      watcher.Dispose()
-      // Bump the dir's epoch so any event queued by this watcher generation
-      // is recognized as stale and dropped at debounce-fire time.
-      dirEpochs.AddOrUpdate(dir, 1L, fun _ e -> e + 1L) |> ignore
-      Log.info "[watcher] Disposed file watcher for %s" dir
-    | false, _ -> ()
+      /// Apply one pure-core message and run the effects it produces. This is
+      /// the only place that mutates the impure edge (watchers dict, timer).
+      let processCoreMessage (state: LiveTestWatcherCore.State) (msg: LiveTestWatcherCore.Msg) = async {
+        let newState, effects = LiveTestWatcherCore.apply normalizedFallback state msg
+        for effect in effects do
+          match effect with
+          | LiveTestWatcherCore.StartWatch dir -> startWatcher dir
+          | LiveTestWatcherCore.StopWatch dir -> stopWatcher dir
+          | LiveTestWatcherCore.ArmDebounce -> debounceTimer.Change(debounceMs, System.Threading.Timeout.Infinite) |> ignore
+          | LiveTestWatcherCore.DrainPending paths -> for path in paths do drainPath newState path
+        return newState
+      }
 
-  /// Whether `dir` must stay watched: it is the fallback dir, or a session
-  /// claims it. (The fallback watcher itself covers nested session dirs via
-  /// IncludeSubdirectories, so no nesting special-case is needed here.)
-  let isNeeded (dir: string) =
-    let isFallback =
-      match fallbackDir with
-      | Some f -> System.String.Equals(System.IO.Path.GetFullPath f, System.IO.Path.GetFullPath dir, System.StringComparison.OrdinalIgnoreCase)
-      | None -> false
-    let hasSession =
-      match dirSessions.TryGetValue(dir) with
-      | true, claims -> not claims.IsEmpty
-      | false, _ -> false
-    isFallback || hasSession
+      let resilientProcess = ResilientActor.wrapLoop logger "live-test-watcher" processCoreMessage
+
+      let rec loop (state: LiveTestWatcherCore.State) = async {
+        let! actorMsg = inbox.Receive()
+        match actorMsg with
+        | Core coreMsg ->
+          let! newState = resilientProcess state coreMsg
+          return! loop newState
+        | GetWatched reply ->
+          reply.Reply(state.Watched |> Set.toList)
+          return! loop state
+        | Shutdown reply ->
+          // Teardown runs on the owner thread too — no race with an
+          // in-flight StartWatch/StopWatch effect from an earlier message.
+          debounceTimer.Dispose()
+          for KeyValue(_, w) in watchers do
+            w.EnableRaisingEvents <- false
+            w.Dispose()
+          watchers.Clear()
+          reply.Reply(())
+          // Deliberately do not recurse — the actor stops processing here.
+      }
+      loop LiveTestWatcherCore.empty)
 
   /// Register a watcher for a directory, attributed to a session (idempotent).
   member _.AddDirectory(dir: string, sessionId: WorkerProtocol.SessionId) =
     match System.IO.Directory.Exists(dir) with
     | false -> ()
-    | true ->
-      dirSessions.AddOrUpdate(
-        dir,
-        [sessionId],
-        fun _ existing ->
-          if List.contains sessionId existing then existing
-          else sessionId :: existing)
-      |> ignore
-      startWatcher dir
+    | true -> mailbox.Post (Core (LiveTestWatcherCore.AddDirectory(System.IO.Path.GetFullPath dir, sessionId)))
 
   /// Remove one session's claim on a directory. The watcher is disposed only
   /// when nothing needs it anymore — a dir shared by two sessions keeps its
   /// watcher when one session stops.
   member _.RemoveDirectory(dir: string, sessionId: WorkerProtocol.SessionId) =
-    let remaining =
-      dirSessions.AddOrUpdate(
-        dir,
-        [],
-        fun _ existing -> existing |> List.filter (fun s -> s <> sessionId))
-    match remaining with
-    | [] ->
-      dirSessions.TryRemove(dir) |> ignore
-      if not (isNeeded dir) then stopWatcher dir
-    | _ -> ()
+    mailbox.Post (Core (LiveTestWatcherCore.RemoveDirectory(System.IO.Path.GetFullPath dir, sessionId)))
 
   /// Sync watchers to match the current sessions. Each entry is
   /// (sessionId, workingDir). One dir may host several sessions; the watcher
   /// is created once and attributes reloads to every owning session.
-  member this.SyncToSessions(sessions: (WorkerProtocol.SessionId * string) list) =
-    let desiredDirs = sessions |> List.map snd |> Set.ofList
-    for (sessionId, dir) in sessions do
-      this.AddDirectory(dir, sessionId)
-    // Remove session claims for dirs that no session references anymore, then
-    // dispose watchers nothing needs (isNeeded covers the fallback).
-    let claimedDirs = dirSessions.Keys |> Seq.toList
-    for dir in claimedDirs do
-      if not (desiredDirs.Contains dir) then
-        // Drop all session claims for this dir; the fallback may still keep it.
-        dirSessions.TryRemove(dir) |> ignore
-        if not (isNeeded dir) then stopWatcher dir
-    // Watch the fallback dir (session-less) if it is not already covered by a
-    // session claim or nested session dir.
-    match fallbackDir with
-    | Some f when System.IO.Directory.Exists(f) ->
-      if not (dirSessions.ContainsKey f) then startWatcher f
-    | _ -> ()
+  member _.SyncToSessions(sessions: (WorkerProtocol.SessionId * string) list) =
+    let normalized = sessions |> List.map (fun (sessionId, dir) -> sessionId, System.IO.Path.GetFullPath dir)
+    mailbox.Post (Core (LiveTestWatcherCore.SyncToSessions normalized))
 
-  member _.WatchedDirectories = watchers.Keys |> Seq.toList
+  member _.WatchedDirectories = mailbox.PostAndReply(GetWatched)
 
   interface System.IDisposable with
     member _.Dispose() =
-      for KeyValue(_, (w, _)) in watchers do
-        w.EnableRaisingEvents <- false
-        w.Dispose()
-      watchers.Clear()
-      dirSessions.Clear()
-      sharedDebounceTimer.Dispose()
+      match System.Threading.Interlocked.Exchange(&disposedFlag, 1) with
+      | 1 -> () // already disposed — no-op, matches the original's idempotent Dispose
+      | _ ->
+        try mailbox.PostAndReply((fun reply -> Shutdown reply), timeout = 5000) |> ignore
+        with :? System.TimeoutException -> Log.warn "[watcher] Shutdown timed out waiting for the mailbox"
 
 /// Cohort claim early-warning (multi-agent vision §5.1): resolve which
 /// cohort member (if any) should receive an `ObserveSave` advisory for a

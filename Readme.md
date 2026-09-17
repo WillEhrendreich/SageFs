@@ -13,7 +13,7 @@ A live F# engine with hot reload, live testing, and AI-agent support — for any
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-7936+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-7945+-22c55e?style=flat-square)]()
 [![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
 
 </div>
@@ -471,7 +471,7 @@ SageFs persists session state and test caches to compact binary files (`.sagefs`
 
 - **Session files** (`.sagefs`): Full session state — interactions, diagnostics, outputs, eval timeline
 - **Test cache files** (`.sagetc`): Test discovery results, outcomes, durations, bitmaps of affected tests
-- **Session isolation**: Each session writes to its own file, verified by 608 property-based tests including concurrent write safety
+- **Session isolation**: Each session writes to its own file, verified by 610 property-based tests including concurrent write safety
 
 Design: length-prefixed strings, section headers with byte-count envelopes, version negotiation, and field-level bounds checking prevent OOM from crafted inputs.
 

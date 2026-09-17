@@ -28,6 +28,14 @@ let private watchAfter (save: string -> unit) = task {
   use manager = new LiveTestWatcherManager(ignore, (fun _ path -> reloaded.TrySetResult path |> ignore), None)
   try
     manager.AddDirectory(dir.FullName, sid)
+    // AddDirectory posts to the watcher actor's mailbox, so the watcher is
+    // created asynchronously. WatchedDirectories is a PostAndReply, so it only
+    // returns once the queued AddDirectory has been processed and the
+    // FileSystemWatcher armed — without this barrier the save below can race
+    // ahead of watcher creation and be missed. (In production saves happen long
+    // after a session is added, so this race never occurs there.)
+    manager.WatchedDirectories |> ignore
+    do! Task.Delay 50 // small settle for the OS watcher to begin delivering events
     save target
     let! winner = Task.WhenAny(reloaded.Task :> Task, Task.Delay(TimeSpan.FromSeconds 5.0))
     return

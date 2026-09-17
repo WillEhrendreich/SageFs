@@ -159,7 +159,7 @@
         <Compile Include="DevReload.fs" />
         <Compile Include="FileWatcher.fs" />
         <Compile Include="DaemonOwnership.fs" />
-        <Compile Include="LiveTestWatcherStaleGuard.fs" />
+        <Compile Include="LiveTestWatcherCore.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />

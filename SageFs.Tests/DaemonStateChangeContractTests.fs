@@ -71,45 +71,13 @@ let daemonStateChangeContractTests =
       |> Expect.stringContains "session B payload should name B" "\"sessionId\":\"bbbb2222\""
   ]
 
-[<Tests>]
-let liveTestWatcherStaleEventTests =
-  testList "LiveTestWatcherManager stale-event guard" [
-
-    testCase "queued event from a stopped watcher generation is stale and dropped" <| fun _ ->
-      // An event queued while dir X was at epoch 0; the watcher was stopped
-      // (epoch → 1) before the debounce fired. The pure guard must declare it
-      // stale so the debounce callback drops it instead of dispatching a
-      // FileContentChanged/FileReloaded for a dead watcher's reload.
-      let epochs = System.Collections.Generic.Dictionary<string, int64>()
-      // The watcher was stopped after the event queued, advancing the epoch.
-      epochs.["/proj"] <- 1L
-      let currentEpoch (d: string) =
-        match epochs.TryGetValue(d) with
-        | true, e -> e
-        | false, _ -> 0L
-      LiveTestWatcherStaleGuard.isStaleEvent (Some "/proj") (Some 0L) currentEpoch
-      |> Expect.isTrue "epoch advanced past queue time → stale"
-
-    testCase "queued event whose dir no longer resolves is stale and dropped" <| fun _ ->
-      let currentEpoch (_d: string) = 0L
-      LiveTestWatcherStaleGuard.isStaleEvent None (Some 0L) currentEpoch
-      |> Expect.isTrue "no resolving dir → stale (fallback dropped too)"
-
-    testCase "queued event from the current watcher generation is fresh" <| fun _ ->
-      let epochs = System.Collections.Generic.Dictionary<string, int64>()
-      epochs.["/proj"] <- 2L
-      let currentEpoch (d: string) =
-        match epochs.TryGetValue(d) with
-        | true, e -> e
-        | false, _ -> 0L
-      LiveTestWatcherStaleGuard.isStaleEvent (Some "/proj") (Some 2L) currentEpoch
-      |> Expect.isFalse "epoch unchanged since queue → fresh"
-
-    testCase "event queued before any stop and never recreated stays fresh" <| fun _ ->
-      let currentEpoch (_d: string) = 0L
-      LiveTestWatcherStaleGuard.isStaleEvent (Some "/proj") (Some 0L) currentEpoch
-      |> Expect.isFalse "epoch 0 → 0 with a resolving dir → fresh"
-  ]
+// LiveTestWatcherStaleGuard and its tests were deleted (roast-9 #10): the
+// epoch/generation guard is now structurally impossible to need. A single
+// mailbox owner processes messages FIFO, so a FileSaved posted by a watcher
+// that is later torn down always sits behind the RemoveDirectory/StopWatch
+// that tore it down — by the time DebounceElapsed drains it, the resolved
+// session claim is already gone and the path is dropped. See
+// SageFs.Core/LiveTestWatcherCore.fs and SageFs.Tests/LiveTestWatcherCoreTests.fs.
 
 // ── Behavioral: LiveTestWatcherManager session attribution ──────────────
 // Real FileSystemWatcher + debounce (75ms) — integration territory, so it
@@ -141,6 +109,11 @@ let liveTestWatcherAttributionTests =
       mgr.AddDirectory(dir, sA)
       mgr.AddDirectory(dir, sB)
       try
+        // Barrier: the actor's AddDirectory is async (mailbox Post), so wait
+        // until it has been processed and the watcher armed before saving.
+        // WatchedDirectories is a PostAndReply, so it returns only after the
+        // queued AddDirectory calls have run.
+        mgr.WatchedDirectories |> ignore
         let probe = Path.Combine(dir, "Lib.fs")
         File.WriteAllText(probe, "module Lib")
         // Debounce is 75ms; allow generous time for the watcher + debounce.
@@ -172,6 +145,9 @@ let liveTestWatcherAttributionTests =
       mgr.AddDirectory(dir, sA)
       mgr.AddDirectory(dir, sB)
       try
+        // Barrier: the actor's AddDirectory is async, so wait until it has been
+        // processed and the watcher armed (WatchedDirectories is a PostAndReply).
+        mgr.WatchedDirectories |> ignore
         // Warm up the watcher so the first event is not swallowed by
         // FileSystemWatcher startup.
         let warm = Path.Combine(dir, "Warm.fs")
