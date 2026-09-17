@@ -250,16 +250,31 @@ CREATE TABLE IF NOT EXISTS sent_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_sent_reports_report_id ON sent_reports (report_id);"
         command.ExecuteNonQuery() |> ignore
-        // Migrate existing tables that lack the sagefs_version column.
-        // SQLite raises an error if the column already exists, so we catch that.
-        let migrate tableName =
-          try
-            use cmd = connection.CreateCommand()
-            cmd.CommandText <- sprintf "ALTER TABLE %s ADD COLUMN sagefs_version TEXT NOT NULL DEFAULT ''" tableName
-            cmd.ExecuteNonQuery() |> ignore
-          with _ -> () // Column already exists — safe to ignore
-        migrate "friction_events"
-        migrate "explicit_feedback"
+        // Schema versioning (mirrors CohortLedger): read PRAGMA user_version and
+        // only run the one-time migration when the DB predates it, instead of
+        // re-issuing an ALTER that fails every startup on an up-to-date DB.
+        let readUserVersion () =
+          use cmd = connection.CreateCommand()
+          cmd.CommandText <- "PRAGMA user_version"
+          Convert.ToInt64(cmd.ExecuteScalar())
+        match readUserVersion () < 1L with
+        | false -> ()
+        | true ->
+          // Migrate pre-versioning tables that lack the sagefs_version column.
+          // A duplicate-column error means the column is already present (fresh
+          // DBs get it from CREATE above); any OTHER error is a real failure and
+          // must surface, not be swallowed.
+          let migrate tableName =
+            try
+              use cmd = connection.CreateCommand()
+              cmd.CommandText <- sprintf "ALTER TABLE %s ADD COLUMN sagefs_version TEXT NOT NULL DEFAULT ''" tableName
+              cmd.ExecuteNonQuery() |> ignore
+            with :? SqliteException as e when e.Message.Contains "duplicate column" -> ()
+          migrate "friction_events"
+          migrate "explicit_feedback"
+          use setVersion = connection.CreateCommand()
+          setVersion.CommandText <- "PRAGMA user_version = 1"
+          setVersion.ExecuteNonQuery() |> ignore
         Ok ()
       with ex -> Error ex.Message
 
