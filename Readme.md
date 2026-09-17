@@ -131,7 +131,7 @@ SageFs opens an interactive terminal. Then create a session for `YourProject.fsp
 
 ### 5. Enable live testing
 
-> ⚠️ **Work in progress** — live testing is functional but still being stabilized. You may encounter rough edges, especially around session switching and test discovery timing. We're actively improving it.
+> **The core loop works today** — save-to-green live testing runs end-to-end: SageFs discovers your tests, runs the affected ones, and streams pass/fail inline with source-mapped gutter markers and coverage (verified end-to-end on Expecto). Breadth is still hardening — other frameworks, session switching, and test-discovery timing can still have rough edges.
 
 When live testing is enabled and a test session is loaded, save-triggered runs can update gutter state automatically.
 The core engine, SSE events, coverage data, and editor integrations already work today, but client polish and discovery/session behavior are still catching up. Expecto is the best-covered path right now.
