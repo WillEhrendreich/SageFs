@@ -262,15 +262,14 @@ let daemonLifecycleTests =
 
       let daemonProc = Process.Start(psi)
       try
-        // Wait for daemon to respond on HTTP
-        let mutable attempts = 0
-        let mutable info : DaemonInfo option = None
-        while attempts < 60 && info.IsNone do
-          Thread.Sleep(100)
-          info <- DaemonState.readOnPort port
-          attempts <- attempts + 1
+        // Wait for daemon to respond on HTTP — event-driven, no sleep-poll.
+        let ready =
+          SageFs.Tests.TestInfrastructure.waitFor
+            (int Timeouts.integrationDaemonReady.TotalMilliseconds)
+            (fun () -> (DaemonState.readOnPort port) |> Option.isSome)
+        let info = if ready then DaemonState.readOnPort port else None
 
-        info |> Expect.isSome "daemon should respond within 30s"
+        info |> Expect.isSome "daemon should respond within the readiness ceiling"
         let di = info.Value
         di.Port |> Expect.equal "port matches" port
         di.Pid |> Expect.equal "PID matches" daemonProc.Id
@@ -309,12 +308,11 @@ let daemonLifecycleTests =
         stopProc.ExitCode |> Expect.equal "stop exits 0" 0
         stopOutput |> Expect.stringContains "reports the stopped daemon's pid" (sprintf "Daemon stopped (PID %d)" daemonProc.Id)
 
-        // Verify daemon process actually exited (poll with timeout)
-        let mutable exited = false
-        let sw = System.Diagnostics.Stopwatch.StartNew()
-        while not exited && sw.ElapsedMilliseconds < 5000L do
-          exited <- try daemonProc.HasExited with _ -> true
-          if not exited then Thread.Sleep(100)
+        // Verify daemon process actually exited — event-driven, no sleep-poll.
+        let exited =
+          SageFs.Tests.TestInfrastructure.waitFor
+            5000
+            (fun () -> try daemonProc.HasExited with _ -> true)
         exited |> Expect.isTrue "daemon process should have exited"
 
         // Verify daemon is no longer responding
@@ -347,7 +345,7 @@ let sessionManagerLifecycleTests =
   Integration.hostList "SessionManager lifecycle" [
 
     testTask "create session, eval code, stop session" {
-      let cts = new CancellationTokenSource(120_000)
+      let cts = new CancellationTokenSource(int Timeouts.integrationDaemonReady.TotalMilliseconds)
       let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
 
       let! createResult =
@@ -424,61 +422,17 @@ let sessionManagerLifecycleTests =
         cts.Dispose()
     }
 
-    testTask "worker crash is detected and the session is restarted on a new worker" {
-      let cts = new CancellationTokenSource(120_000)
-      let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
-
-      let! createResult =
-        mgr.PostAndAsyncReply(fun reply ->
-          SageFs.SessionManager.SessionCommand.CreateSession(
-            [], testProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
-        |> Async.StartAsTask
-
-      match createResult with
-      | Error err -> failwithf "create failed: %s" (SageFsError.describe err)
-      | Ok info ->
-      try
-        SessionLifecycleStatus.workerPid info.Status |> Expect.isSome "has worker PID"
-        // A crash means a worker that was serving: wait for Ready first.
-        let! (ready: Result<unit, SageFsError>) =
-          mgr.PostAndAsyncReply(fun reply ->
-            SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
-          |> Async.StartAsTask
-        ready |> Expect.isOk "the worker reaches Ready before it is killed"
-        let pid = (SessionLifecycleStatus.workerPid info.Status).Value
-
-        // Kill the worker process externally
-        try
-          let p = Process.GetProcessById(pid)
-          p.Kill()
-          p.WaitForExit(5000) |> ignore
-        with _ -> ()
-
-        // Supervision restarts a crashed worker with backoff (RestartPolicy):
-        // the session stays registered and comes back on a new process.
-        let mutable restartedPid = None
-        let sw = System.Diagnostics.Stopwatch.StartNew()
-        while restartedPid.IsNone && sw.ElapsedMilliseconds < 60_000L do
-          let! (sessions: SageFs.WorkerProtocol.SessionInfo list) =
-            mgr.PostAndAsyncReply(fun reply ->
-              SageFs.SessionManager.SessionCommand.ListSessions reply)
-            |> Async.StartAsTask
-          restartedPid <-
-            sessions
-            |> List.tryFind (fun s -> s.Id = info.Id)
-            |> Option.bind (fun s -> SessionLifecycleStatus.workerPid s.Status)
-            |> Option.filter (fun p -> p <> pid)
-          if restartedPid.IsNone then do! System.Threading.Tasks.Task.Delay 100
-
-        restartedPid
-        |> Expect.isSome "the crashed session is restarted on a new worker process"
-      finally
-        cleanupSession mgr info.Id
-        cts.Dispose()
-    }
-
-    testTask "multiple sessions are independent" {
-      let cts = new CancellationTokenSource(120_000)
+    // Collapsed real-process smoke (was two tests: "worker crash is detected
+    // and the session is restarted on a new worker" + "multiple sessions are
+    // independent"). The DECISIONS those tests asserted — restart-on-crash
+    // policy and session-routing independence — are already property-tested
+    // by the pure DST sims (WorkerLifecycleSim + RestartPolicy +
+    // WorkerEventGuard). What only a real-process test can prove is the WIRE:
+    // two real OS worker processes are independently routable, and killing
+    // one real process is observed as a genuine restart onto a new pid while
+    // the other session is undisturbed. This is the minimal union of both.
+    testTask "two independent sessions stay routable, and a killed worker restarts on a new pid" {
+      let cts = new CancellationTokenSource(int Timeouts.integrationDaemonReady.TotalMilliseconds)
       let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
 
       // Two sessions for the SAME directory are one session by design — the
@@ -499,11 +453,7 @@ let sessionManagerLifecycleTests =
       match result1, result2 with
       | Ok info1, Ok info2 ->
         try
-          // Sessions have different IDs
-          info1.Id
-          |> Expect.notEqual "different session ids" info2.Id
-
-          // Both have different worker PIDs
+          // Both have different worker PIDs — proves independent wire routing.
           SessionLifecycleStatus.workerPid info1.Status
           |> Expect.isSome "session 1 has PID"
           SessionLifecycleStatus.workerPid info2.Status
@@ -520,7 +470,6 @@ let sessionManagerLifecycleTests =
               |> Async.StartAsTask
             ready |> Expect.isOk "each worker reaches Ready before its eval"
 
-          // Get proxies
           let getProxy id =
             mgr.PostAndAsyncReply(fun reply ->
               SageFs.SessionManager.SessionCommand.GetSession(
@@ -532,7 +481,8 @@ let sessionManagerLifecycleTests =
           let proxy1 = s1.Value.Proxy
           let proxy2 = s2.Value.Proxy
 
-          // Eval different code in each session
+          // Eval different code in each session — proves routing reaches the
+          // correct real worker process, not just the correct in-proc record.
           let! (resp1: WorkerResponse) =
             proxy1 (
               WorkerMessage.EvalCode(
@@ -556,13 +506,44 @@ let sessionManagerLifecycleTests =
             |> Expect.stringContains "session 2 has 222" "222"
           | _ -> failwithf "unexpected: %A" resp2
 
-          // List sessions — should have 2
-          let! (sessions: SageFs.WorkerProtocol.SessionInfo list) =
+          // Kill session 1's real worker process externally.
+          let pid1 = (SessionLifecycleStatus.workerPid info1.Status).Value
+          try
+            let p = Process.GetProcessById(pid1)
+            p.Kill()
+            p.WaitForExit(5000) |> ignore
+          with _ -> ()
+
+          // Supervision restarts the crashed worker with backoff
+          // (RestartPolicy): the session stays registered and comes back on
+          // a new real process, while session 2 stays undisturbed.
+          let! restarted =
+            SageFs.Tests.TestInfrastructure.waitForAsync
+              (int Timeouts.integrationWorkerRestart.TotalMilliseconds)
+              (fun () -> task {
+                let! sessions =
+                  mgr.PostAndAsyncReply(fun reply ->
+                    SageFs.SessionManager.SessionCommand.ListSessions reply)
+                  |> Async.StartAsTask
+                return
+                  sessions
+                  |> List.tryFind (fun s -> s.Id = info1.Id)
+                  |> Option.bind (fun s -> SessionLifecycleStatus.workerPid s.Status)
+                  |> Option.filter (fun p -> p <> pid1)
+                  |> Option.isSome })
+
+          restarted
+          |> Expect.isTrue "the crashed session is restarted on a new worker process"
+
+          let! (sessionsAfterRestart: SageFs.WorkerProtocol.SessionInfo list) =
             mgr.PostAndAsyncReply(fun reply ->
-              SageFs.SessionManager.SessionCommand.ListSessions
-                reply)
+              SageFs.SessionManager.SessionCommand.ListSessions reply)
             |> Async.StartAsTask
-          sessions.Length |> Expect.equal "2 sessions" 2
+          sessionsAfterRestart
+          |> List.tryFind (fun s -> s.Id = info2.Id)
+          |> Option.bind (fun s -> SessionLifecycleStatus.workerPid s.Status)
+          |> Expect.equal "session 2's worker is untouched by session 1's crash"
+            (SessionLifecycleStatus.workerPid info2.Status)
 
           // Stop both
           let! (_: Result<unit, SageFsError>) =

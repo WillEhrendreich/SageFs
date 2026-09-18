@@ -26,7 +26,7 @@ open SageFs.Tests.TestInfrastructure
 module StartupConfigTests =
   
   let tests =
-    Integration.hostList "StartupConfig type and storage" [
+    testList "StartupConfig type and storage" [
       
       testCase "StartupConfig should have all required fields"
       <| fun _ ->
@@ -163,8 +163,9 @@ module EnhancedStatusTests =
 
 module ProjectDiscoveryTests =
 
+  // Pure: string predicates and formatters over literal inputs — no live worker/session.
   let tests =
-    Integration.hostList "Project discovery for LLMs" [
+    testList "Project discovery for LLMs" [
 
       testCase "loadSolution runs without error and returns a solution"
       <| fun _ ->
@@ -208,34 +209,36 @@ module ProjectDiscoveryTests =
         let result =
           SageFs.McpAdapter.formatAvailableProjects "/test/dir" [||] [||] 0
         result |> Expect.stringContains "Should show none for empty" "(none found)"
-
-      testCase "get_available_projects tool formats discoverable projects for LLMs"
-      <| fun _ ->
-        task {
-          let ctx = sharedCtx ()
-
-          // Get the working directory the actor actually uses
-          let! phase = globalActorResult.Value.Actor.PostAndAsyncReply(fun reply -> GetSessionPhase reply)
-          let workingDir =
-            match phase with
-            | Active (st, _) ->
-              match st.StartupConfig with
-              | Some config -> config.WorkingDirectory
-              | None -> Environment.CurrentDirectory
-            | _ -> Environment.CurrentDirectory
-
-          let! result = getAvailableProjects ctx "test" None
-
-          result |> Expect.stringContains "Should have projects section" "Projects"
-          result |> Expect.stringContains "Should have solutions section" "Solutions"
-          result |> Expect.stringContains "Should mention project extension" ".fsproj"
-          result |> Expect.stringContains "Should mention solution extension" ".sln"
-          result |> Expect.stringContains "Should guide users toward explicit session creation" "create_session"
-          result |> Expect.stringContains "Should show working directory" workingDir
-        }
-        |> Async.AwaitTask
-        |> Async.RunSynchronously
     ]
+
+  // NOT pure: needs the shared live FSI actor (sharedCtx/globalActorResult) — stays Integration.
+  let liveTests =
+    Integration.hostCase "get_available_projects tool formats discoverable projects for LLMs"
+    <| fun () ->
+      task {
+        let ctx = sharedCtx ()
+
+        // Get the working directory the actor actually uses
+        let! phase = globalActorResult.Value.Actor.PostAndAsyncReply(fun reply -> GetSessionPhase reply)
+        let workingDir =
+          match phase with
+          | Active (st, _) ->
+            match st.StartupConfig with
+            | Some config -> config.WorkingDirectory
+            | None -> Environment.CurrentDirectory
+          | _ -> Environment.CurrentDirectory
+
+        let! result = getAvailableProjects ctx "test" None
+
+        result |> Expect.stringContains "Should have projects section" "Projects"
+        result |> Expect.stringContains "Should have solutions section" "Solutions"
+        result |> Expect.stringContains "Should mention project extension" ".fsproj"
+        result |> Expect.stringContains "Should mention solution extension" ".sln"
+        result |> Expect.stringContains "Should guide users toward explicit session creation" "create_session"
+        result |> Expect.stringContains "Should show working directory" workingDir
+      }
+      |> Async.AwaitTask
+      |> Async.RunSynchronously
 
 // ============================================================================
 // CRITICAL IMPROVEMENT #7: Adapter Functions for Formatting
@@ -667,6 +670,7 @@ let allTests =
     GetStartupInfoTests.tests
     EnhancedStatusTests.tests
     ProjectDiscoveryTests.tests
+    ProjectDiscoveryTests.liveTests
     McpAdapterEnhancementTests.tests
     ShadowCopyTests.tests
     WarmUpTests.tests
