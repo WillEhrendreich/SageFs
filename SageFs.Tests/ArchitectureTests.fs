@@ -971,13 +971,25 @@ let fileSizeBudgets =
   let budgets =
     [ "SageFs/Mcp.fs", 4200
       "SageFs/McpAdapter.fs", 850
-      "SageFs.Core/Features/LiveTestingTypes.fs", 5100
+      // 5100 -> 5160: a one-time bump for the live-testing-asyoutype-plan.md
+      // Brief 4 keystone (EvalThenRunRequest, TestCycleEffect.
+      // EvalBufferThenRunAffected, TestCycleEffects.redirectToEvalBuffer,
+      // and its handleFcsResult wiring) — a deliberate, reviewed feature,
+      // not silent accretion. Ratchet back DOWN when this file is split;
+      // never bump to paper over drift.
+      "SageFs.Core/Features/LiveTestingTypes.fs", 5160
       // 2900 -> 2950: a one-time bump for the roast UX-6 keystone (per-session
       // live-testing enable/disable — EnableLiveTestingForSession /
       // DisableLiveTestingForSession, resolveOrCreateLiveTestingTarget) — a
       // deliberate, reviewed feature, not silent accretion. Ratchet back DOWN
       // when this file is split; never bump to paper over drift.
-      "SageFs/SageFsApp.fs", 2950
+      // 2950 -> 3060: a one-time bump for the live-testing-asyoutype-plan.md
+      // Brief 4 keystone (TuiEvent.LiveDiscoveryMerged handler and the
+      // EvalBufferThenRunAffected effect interpreter — the daemon-side call
+      // into WorkerMessage.EvalLiveTestFile) — a deliberate, reviewed
+      // feature, not silent accretion. Ratchet back DOWN when this file is
+      // split; never bump to paper over drift.
+      "SageFs/SageFsApp.fs", 3060
       "SageFs.Core/AppState.fs", 2000
       // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
       // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,

@@ -3391,12 +3391,33 @@ module TypeCheckRequest =
     TreeSitterElapsed = System.TimeSpan.Zero
   }
 
+/// Payload for `TestCycleEffect.EvalBufferThenRunAffected` — a sibling of
+/// `TestRunRequest` (live-testing-asyoutype-plan.md §2/Brief 4) rather than
+/// an extension of it, so every EXISTING `TestRunRequest` construction site
+/// (RunAffectedTests/RequestRebuild) is untouched. `FilePath`/`Content` are
+/// the debounced, type-check-passing buffer that must be identity-preserving
+/// eval'd (Brief 3's `WorkerMessage.EvalLiveTestFile`) before `Run.Tests`
+/// (already coverage/graph-selected by `decideAfterTypeCheck`) can be run
+/// against FRESH code instead of the stale compiled DLL.
+type EvalThenRunRequest = {
+  FilePath: string
+  Content: string
+  Run: TestRunRequest
+}
+
 [<RequireQualifiedAccess>]
 type TestCycleEffect =
   | RequestInitialDiscovery
   | ParseTreeSitter of content: string * filePath: string
   | RequestFcsTypeCheck of TypeCheckRequest
   | RunAffectedTests of TestRunRequest
+  /// Identity-preserving eval of the edited buffer, then run of the tests
+  /// `Run.Tests` already selected as affected — replaces the compiled-DLL
+  /// decision for a compiled `.fs` file on BOTH Keystroke and FileSave (see
+  /// `TestCycleEffects.redirectToEvalBuffer`). `.fsx`/expression paths, and
+  /// any compiled-file decision made without known buffer content, are left
+  /// as plain `RunAffectedTests`/`RequestRebuild` — unchanged.
+  | EvalBufferThenRunAffected of EvalThenRunRequest
   | CancelRebuild of sessionId: string option * generation: int64
   | RequestRebuild of generation: int64 * TestRunRequest
   | RegisterFileWatcher of sessionId: string * directory: string
@@ -3487,7 +3508,9 @@ module TestCycleEffects =
         | true ->
           state.DiscoveredTests |> Array.map (fun tc -> tc.Id),
           SelectionPrecision.ConservativeFallback,
-          "The dependency graph could not narrow this compiled-file change, so SageFs conservatively queued all discovered tests behind a rebuild."
+          // Mechanism-neutral (Brief 4): redirectToEvalBuffer may retarget
+          // this into an FSI eval, not always a rebuild.
+          "The dependency graph could not narrow this compiled-file change, so SageFs conservatively queued all discovered tests for a fresh run."
         | false when Array.isEmpty affected ->
           [||],
           SelectionPrecision.NoImpactedTests,
@@ -3614,6 +3637,33 @@ module TestCycleEffects =
     : TestCycleEffect list =
     decideAfterTypeCheck changedSymbols changedFilePath trigger depGraph state lastTiming instrumentationMaps
     |> fun outcome -> outcome.Effects
+
+  /// Redirects the compiled-DLL decision — `RunAffectedTests` (Keystroke) or
+  /// `RequestRebuild` (FileSave/ExplicitRun) — into `EvalBufferThenRunAffected`
+  /// for a compiled `.fs` file whose buffer content is known, so the edited
+  /// buffer is eval'd into FSI instead of running/rebuilding the stale
+  /// compiled DLL (live-testing-asyoutype-plan.md §2/Brief 4). Total, pure:
+  /// a `.fsx`/expression file, or a compiled file with no known content
+  /// (`content = None`), passes every effect through UNCHANGED — this never
+  /// narrows or drops an effect, only retargets which mechanism runs it.
+  let redirectToEvalBuffer
+    (content: string option)
+    (filePath: string)
+    (effects: TestCycleEffect list)
+    : TestCycleEffect list =
+    let isCompiledFile =
+      filePath.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase)
+      && not (filePath.EndsWith(".fsx", System.StringComparison.OrdinalIgnoreCase))
+    match isCompiledFile, content with
+    | true, Some c ->
+      effects
+      |> List.map (fun effect ->
+        match effect with
+        | TestCycleEffect.RunAffectedTests req
+        | TestCycleEffect.RequestRebuild (_, req) ->
+          TestCycleEffect.EvalBufferThenRunAffected { FilePath = filePath; Content = c; Run = req }
+        | other -> other)
+    | _ -> effects
 
   let fallbackRebuildAfterFailedTypeCheck
     (filePath: string)
@@ -4201,8 +4251,17 @@ module LiveTestCycleState =
           s1.LastTiming
           s1.InstrumentationMaps
       let s1' = { s1 with TestState = { s1.TestState with LastDecision = outcome.Decision } }
-      let effects', s2 = storePendingRebuild filePath s1'.LatestAnalysisIdentity outcome.Effects s1'
-      effects', storeQueuedRebuild filePath s1'.LatestAnalysisIdentity queuedOutcome.Effects s2
+      // Brief 4: redirect the compiled-DLL decision into an FSI eval of the
+      // now-known buffer content, for both Keystroke and FileSave. Applied
+      // AFTER decideAfterTypeCheck so the pending/queued-rebuild bookkeeping
+      // below — which only recognizes RequestRebuild — correctly becomes a
+      // no-op once RequestRebuild has been redirected (the eval path has no
+      // rebuild to cancel/queue; it is not the slow multi-second rebuild the
+      // bookkeeping exists to serialize).
+      let outcomeEffects = TestCycleEffects.redirectToEvalBuffer s1'.LatestContent filePath outcome.Effects
+      let queuedOutcomeEffects = TestCycleEffects.redirectToEvalBuffer s1'.LatestContent filePath queuedOutcome.Effects
+      let effects', s2 = storePendingRebuild filePath s1'.LatestAnalysisIdentity outcomeEffects s1'
+      effects', storeQueuedRebuild filePath s1'.LatestAnalysisIdentity queuedOutcomeEffects s2
     | FcsTypeCheckResult.Failed (filePath, errors) ->
       let effects =
         TestCycleEffects.fallbackRebuildAfterFailedTypeCheck
