@@ -97,6 +97,46 @@ module SessionTrust =
     | SessionTrust.Trusted _ -> true
     | _ -> false
 
+  /// What a bounded "wait for the session to settle" loop should do with a
+  /// single sampled trust reading. A settle-wait that only proceeds on `Trusted`
+  /// and retries on *everything else* (the shape `awaitIntegrationSessionTrusted`
+  /// had) burns its whole deadline on a session that is already dead — a
+  /// `Faulted`/`Stopped` worker reads as `Unavailable` and will NEVER become
+  /// `Trusted` by waiting — and then reports only a vague "never settled"
+  /// timeout. This splits the reading into the three things a waiter can
+  /// actually do about it.
+  [<RequireQualifiedAccess>]
+  type SettleDecision =
+    /// The session is trustworthy right now; proceed (carrying its id).
+    | Ready of sessionId: string
+    /// Genuinely transient — the session is still warming up and may yet become
+    /// ready; keep waiting (subject to the caller's own deadline).
+    | Retry
+    /// The session will not become ready by waiting (dead, missing, ambiguous,
+    /// stale, or type-compromised). Stop now and surface this reason verbatim —
+    /// it is the actionable "why" a caller can put in front of an agent instead
+    /// of a deadline message.
+    | Terminal of reason: string
+
+  /// Total and exhaustive over `SessionTrust` (the roast doctrine: a wildcard
+  /// over a rich DU is where a settle loop silently mis-waits). Only `WarmingUp`
+  /// is transient; every other non-`Trusted` case is terminal-by-waiting and
+  /// carries a reason describing why.
+  let settleDecision (trust: SessionTrust) : SettleDecision =
+    match trust with
+    | SessionTrust.Trusted sid -> SettleDecision.Ready sid
+    | SessionTrust.WarmingUp _ -> SettleDecision.Retry
+    | SessionTrust.Unavailable(sid, status) ->
+      SettleDecision.Terminal(sprintf "integration session '%s' is %s and will not become ready by waiting" sid status)
+    | SessionTrust.Missing ->
+      SettleDecision.Terminal "no integration session is running to verify against"
+    | SessionTrust.Ambiguous ids ->
+      SettleDecision.Terminal(sprintf "%d sessions match the integration session — ambiguous, cannot verify" (List.length ids))
+    | SessionTrust.StaleDefinitions path ->
+      SettleDecision.Terminal(sprintf "integration session has stale definitions (%s); it needs a rebuild, not a wait" path)
+    | SessionTrust.TypeIdentityCompromised diagnostic ->
+      SettleDecision.Terminal(sprintf "integration session type identity is compromised: %s" diagnostic)
+
 [<RequireQualifiedAccess>]
 type VerificationMode =
   | SnippetFirst

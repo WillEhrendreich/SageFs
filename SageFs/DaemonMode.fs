@@ -1797,15 +1797,22 @@ let run
     let rec loop (confirmations: int) =
       async {
         let! obs = observe ()
-        match Features.Verification.SessionTrust.classify obs with
-        | Features.Verification.SessionTrust.Trusted _ ->
+        match Features.Verification.SessionTrust.settleDecision (Features.Verification.SessionTrust.classify obs) with
+        | Features.Verification.SessionTrust.SettleDecision.Ready _ ->
           if confirmations >= 1 then return Ok obs
           else
             do! Async.Sleep 500
             return! loop (confirmations + 1)
-        | other ->
+        | Features.Verification.SessionTrust.SettleDecision.Terminal reason ->
+          // Fail fast: a dead/missing/ambiguous session will NEVER become
+          // trustworthy by waiting, so do not burn the whole deadline on it.
+          // The reason is actionable ("integration session 'x' is Faulted …")
+          // and flows verbatim into VerificationInconclusive -> Blocked so an
+          // agent reading get_cohort_status sees WHY, not just a timeout.
+          return Error reason
+        | Features.Verification.SessionTrust.SettleDecision.Retry ->
           if System.DateTime.UtcNow > deadline then
-            return Error (sprintf "integration session '%s' never settled to a trustworthy state within %.0fs (last: %A)" sessionId integrationSettleTimeout.TotalSeconds other)
+            return Error (sprintf "integration session '%s' never settled to a trustworthy state within %.0fs (still warming up)" sessionId integrationSettleTimeout.TotalSeconds)
           else
             do! Async.Sleep 300
             return! loop 0
