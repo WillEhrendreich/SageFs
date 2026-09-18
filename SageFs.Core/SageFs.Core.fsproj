@@ -61,6 +61,7 @@
         <Compile Include="Features\LiveTestingInstrumentation.fs" />
         <Compile Include="Features\ReflectionDiscovery.fs" />
         <Compile Include="Features\LiveTestingExecutors.fs" />
+        <Compile Include="Features\TestDiscoveryMerge.fs" />
         <Compile Include="Features\TestTreeSitter.fs" />
         <Compile Include="Features\AutoCompletion.fs" />
         <Compile Include="Features\Diagnostics.fs" />
