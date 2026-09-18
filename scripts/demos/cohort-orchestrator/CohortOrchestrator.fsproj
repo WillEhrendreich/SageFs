@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Standalone demo-recording driver, deliberately NOT added to SageFs.slnx
+       (see scripts/demos/README-shaped comment in drive-cohort.sh): it is
+       build-and-run tooling for producing a recording, not product or test
+       code. It still inherits this repo's Directory.Build.props/
+       Directory.Packages.props (MSBuild import walks up the directory tree
+       regardless of slnx membership), so it gets the same net10.0 TFM and
+       the same centrally-pinned ModelContextProtocol version the daemon and
+       SageFs.Tests already use — no local version pin here either. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <!-- Needed for `use! client = connect port` over McpClient, which is only
+         IAsyncDisposable — matches SageFs.Tests.fsproj's own LangVersion. -->
+    <LangVersion>preview</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Explicit, so central package management pins the same preview
+         FSharp.Core the rest of this repo uses — the one whose `task { }`
+         builder supports `use!` over an IAsyncDisposable (McpClient is only
+         IAsyncDisposable, not IDisposable). Other standalone projects in this
+         repo (SageFs.Demos, etc.) need the same explicit reference for the
+         same reason. -->
+    <PackageReference Include="FSharp.Core" />
+    <PackageReference Include="ModelContextProtocol" />
+  </ItemGroup>
+
+</Project>
