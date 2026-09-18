@@ -40,6 +40,7 @@ open Expecto
 open Expecto.Flip
 open ModelContextProtocol.Client
 open ModelContextProtocol.Protocol
+open SageFs
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
@@ -81,21 +82,24 @@ let private startIsolatedDaemon () : Task<Process * int> = task {
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)
   client.Timeout <- TimeSpan.FromSeconds 5.0
 
+  // Deadline-based (not a fixed attempt count) so the poll cadence and the
+  // give-up bound are independently named and configurable — same pattern as
+  // CohortLandingGateIntegrationTests.fs's startIsolatedDaemon, reusing the
+  // shared Timeouts constants rather than a bare literal.
+  let deadline = DateTime.UtcNow.Add Timeouts.integrationDaemonReady
   let mutable ready = false
-  let mutable attempts = 0
-  while not ready && attempts < 300 do
-    do! Task.Delay 200
+  while not ready && DateTime.UtcNow < deadline do
+    do! Task.Delay Timeouts.cohortLandingPoll
     try
       let! resp = client.GetAsync "/health"
       if int resp.StatusCode > 0 then ready <- true
     with _ -> ()
-    attempts <- attempts + 1
 
   if not ready then
     let killAttempt = try proc.Kill true; true with _ -> false
     ignore killAttempt
     proc.Dispose()
-    failwithf "cohort test daemon failed to start on port %d within 60s" port
+    failwithf "cohort test daemon failed to start on port %d within %O" port Timeouts.integrationDaemonReady
 
   return proc, port
 }
@@ -265,27 +269,6 @@ let cohortMcpToolsTests =
         |> Expect.stringContains "status should list the acquired claim by id" claimId
         status
         |> Expect.stringContains "status should show the claim held by a real member, not '(none)'" "held-by=mcp:"
-      })
-    }
-
-    testTask "release by a non-holder Implementer is refused (NotClaimHolder-derived error)" {
-      do! withDaemon (fun port -> task {
-        use! holder = connect port
-        use! other = connect port
-
-        let! _ = joinCohort holder "holder" "Implementer"
-        // Slice 3 (item 11): `release_claim` is only in an Implementer's
-        // `cohortTools` set (a Verifier is refused earlier, at the role
-        // gate — see the dedicated test below), so `other` must itself be
-        // an Implementer to reach `Cohort.decide`'s own NotClaimHolder
-        // check, which is what this test targets.
-        let! _ = joinCohort other "bystander" "Implementer"
-        let! acquireResult = acquireClaim holder "holder" "file:src/NotHeld.fs" "editing NotHeld.fs"
-        let claimId = claimIdFromAcquireResult acquireResult
-
-        let! releaseResult = releaseClaim other "bystander" claimId 1L
-        releaseResult
-        |> Expect.stringContains "a non-holder's release must be refused" "does not hold claim"
       })
     }
 

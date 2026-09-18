@@ -1840,13 +1840,17 @@ let run
   /// OLD binary and a breaking change lands (a fail-open). Bounded by the settle
   /// timeout; on timeout it proceeds (the fail-closed narrow still runs the whole
   /// suite) rather than hanging.
-  let rediscoverRebasedFiles (sessionId: string) (worktreePath: string) (baseSha: string) (headSha: string) : Async<unit> =
+  let rediscoverRebasedFiles (sessionId: string) (worktreePath: string) (baseSha: string) (headSha: string) : Async<Result<unit, string>> =
     async {
       // FileContentChanged is honored only for an Active live-testing cycle; an
       // Interactive session isn't Active until this (idempotent) enable.
       elmRuntime.Dispatch(SageFsMsg.EnableLiveTestingForSession sessionId)
       match! Features.CohortGit.diffNames worktreePath baseSha headSha with
-      | Error _ -> ()
+      | Error _ ->
+        // Can't determine what the rebase changed => can't re-discover it => we
+        // would verify on stale discovery. Fail CLOSED (inconclusive/resubmit).
+        Log.warn "[cohort-landing] could not diff the rebased files for session %s — cannot trust verification, failing closed" sessionId
+        return Error "could not diff the rebased files to re-discover them; cannot trust verification — resubmit"
       | Ok changedFiles ->
         let changedFsFiles =
           changedFiles
@@ -1854,7 +1858,7 @@ let run
           |> List.map (fun rel -> System.IO.Path.Combine(worktreePath, rel))
           |> List.filter System.IO.File.Exists
         match changedFsFiles with
-        | [] -> ()
+        | [] -> return Ok () // nothing to rediscover; the existing discovery is valid
         | _ ->
           let priorGen =
             (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.DiscoveryGeneration
@@ -1879,8 +1883,18 @@ let run
           let! bumped = awaitModelCondition Timeouts.cohortRediscover (fun () -> genOf () > priorGen)
           if bumped then
             Log.info "[cohort-landing] rediscovered %d rebased file(s) in session %s (gen %d -> %d)" changedFsFiles.Length sessionId priorGen (genOf ())
+            return Ok ()
           else
-            Log.warn "[cohort-landing] rediscovery of session %s did not advance the discovery generation within the settle window — verifying on what discovery has" sessionId
+            // THE FAIL-CLOSED FIX (F17, found by the multi-connection dogfood): if
+            // the FSI hot-eval did NOT advance the discovery generation past the
+            // rebase, the affected-set and test run below would read the PREVIOUS
+            // landing's discovery (0 failing) and land a genuinely test-breaking
+            // change — a fail-OPEN. Never verify on stale discovery: report
+            // inconclusive so `decide` records Blocked(Inconclusive)/
+            // RebaseAndResubmit and the requester retries once the integration
+            // session settles, rather than fast-forwarding an unverified change.
+            Log.warn "[cohort-landing] rediscovery of session %s did not advance the discovery generation within the settle window — failing closed (inconclusive) rather than verifying stale discovery" sessionId
+            return Error "post-rebase re-discovery did not settle within the window; verifying on stale discovery would fail-open — resubmit once the integration session settles"
     }
 
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
@@ -1925,7 +1939,12 @@ let run
             // (fast FSI hot-eval, not a full rebuild) and wait for discovery to
             // advance BEFORE reading tests, so the affected set + the run below
             // reflect the member's ACTUAL code, never the stale pre-rebase binary.
-            do! rediscoverRebasedFiles sessionId binding.WorktreePath baseSha headSha
+            // Fail CLOSED if the rebased code did not actually re-discover: the
+            // owner maps this Error to VerificationInconclusive (never a false
+            // "0 failing"), so a landing can never fast-forward on stale discovery.
+            match! rediscoverRebasedFiles sessionId binding.WorktreePath baseSha headSha with
+            | Error reason -> return Error reason
+            | Ok () ->
             let cycle = SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())
             let state = cycle.TestState
             let allTests =

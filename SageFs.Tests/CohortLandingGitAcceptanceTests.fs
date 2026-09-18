@@ -157,6 +157,17 @@ let private gitBackedPerformer (integrationWorktree: string) (mainRepo: string) 
     FastForward = fun _ toSha -> async { return! CohortGit.fastForwardBranch mainRepo branch toSha }
     Notify = fun _ _ -> () }
 
+/// Poll cadence for `waitUntil` below — named rather than a bare literal, so
+/// the cadence and the give-up bound (`landingWaitBudget`) are independently
+/// visible at their use site.
+let private landingWaitPoll = TimeSpan.FromMilliseconds 25.0
+
+/// Give-up bound for a real-git-backed landing to reach a terminal state
+/// (Landed or Blocked). Generous relative to `landingWaitPoll` because each
+/// poll drives real `git` subprocesses (rebase/fast-forward), not an
+/// in-memory check.
+let private landingWaitBudget = TimeSpan.FromSeconds 30.0
+
 /// Polls (via `Flush` + a short async sleep, never `Thread.Sleep`) until
 /// `check` holds or `deadline` passes — completions from the real git
 /// subprocesses arrive on the mailbox from background `Async.Start` workers,
@@ -169,11 +180,11 @@ let rec private waitUntil (owner: CohortOwner.Handle) (deadline: DateTime) (desc
     elif DateTime.UtcNow > deadline then
       failtestf "condition not met within timeout: %s" (describe ())
     else
-      do! Async.Sleep 25
+      do! Async.Sleep landingWaitPoll
       return! waitUntil owner deadline describe check
   }
 
-let private defaultDeadline () = DateTime.UtcNow.AddSeconds 30.0
+let private defaultDeadline () = DateTime.UtcNow.Add landingWaitBudget
 
 let private landingOf (owner: CohortOwner.Handle) (id: LandingId) : LandingRequest<MemberId> =
   owner.ReadCohortState().Landings
