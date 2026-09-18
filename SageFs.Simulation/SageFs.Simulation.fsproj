@@ -18,6 +18,10 @@
         <Compile Include="WorkerLifecycleSim.fs" />
         <Compile Include="WorkerLifecycleInvariants.fs" />
         <Compile Include="MgrGenerators.fs" />
+        <!-- Phase 3A / Brief B1: reference-vs-candidate oracle for the
+             supervision core. -->
+        <Compile Include="ReferenceModel.fs" />
+        <Compile Include="Oracle.fs" />
     </ItemGroup>
 
     <ItemGroup>
