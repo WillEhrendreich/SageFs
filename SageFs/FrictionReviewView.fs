@@ -13,6 +13,7 @@ open SageFs.Features.FrictionTelemetry
 open SageFs.Features.FrictionTelemetryTypes
 open SageFs.Features.FrictionSanitize
 open SageFs.Features.FrictionSqlite
+open SageFs.Features.ObservedFrictionTypes
 
 type FrictionReviewSnapshot = {
   /// The canonical in-memory report (source of truth for re-deriving the
@@ -27,10 +28,21 @@ type FrictionReviewSnapshot = {
   SentReports: SentReport list
   /// Whether the store is empty (nothing to review or send).
   IsEmpty: bool
+  /// Passively-detected (observed) friction signals over the same event
+  /// stream the report was built from (observed-friction-plan.md §B8).
+  /// Callers compute this via `ObservedFriction.detectAll
+  /// DetectorConfig.defaults events` — the exact invocation Brief B7 uses
+  /// in `McpFrictionRecorder.reportDirect` — and pass the result in here,
+  /// rather than this view recomputing the detector pass itself: the
+  /// daemon-side `FrictionReportWithSignals` bundle (B7) already carries
+  /// it, so re-running `detectAll` per dashboard render would duplicate an
+  /// O(events) fold on every SSE push for no new information.
+  ObservedSignals: DetectedSignal list
 }
 
-/// Build the drawer view model from the canonical report + send history.
-let build (report: FrictionReport) (sentReports: SentReport list) : FrictionReviewSnapshot =
+/// Build the drawer view model from the canonical report + observed
+/// signals (see `FrictionReviewSnapshot.ObservedSignals`) + send history.
+let build (report: FrictionReport) (observedSignals: DetectedSignal list) (sentReports: SentReport list) : FrictionReviewSnapshot =
   {
     Report = report
     Outgoing = toOutgoing (SageFsVersion.current ()) report Map.empty
@@ -38,6 +50,7 @@ let build (report: FrictionReport) (sentReports: SentReport list) : FrictionRevi
     FeedbackCount = report.TotalFeedbackItems
     SentReports = sentReports |> List.sortByDescending (fun s -> s.SentAtUtc)
     IsEmpty = report.TotalEvents = 0 && report.TotalFeedbackItems = 0
+    ObservedSignals = observedSignals
   }
 
 /// Re-derive the outgoing payload with user edits applied per (tool, kind).

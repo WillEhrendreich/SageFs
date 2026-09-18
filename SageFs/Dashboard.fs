@@ -807,10 +807,12 @@ let buildDashboardSnapshotWithSessions
             let historyResult = store.ListSentReports ()
             match reportResult, historyResult with
             | Ok bundle, Ok history ->
-              // ObservedSignals surfacing in this panel is Brief B8 (dashboard);
-              // this call site is only touched here to follow reportDirect's
-              // changed return shape (Brief B7).
-              let view = SageFs.Features.FrictionReviewView.build bundle.Report history
+              // Brief B8: thread the ObservedSignals bundle B7 already
+              // computed (reportDirect ran ObservedFriction.detectAll once)
+              // straight into the view — this is the single required
+              // one-argument addition at this call site; no other logic
+              // here changes.
+              let view = SageFs.Features.FrictionReviewView.build bundle.Report bundle.ObservedSignals history
               return renderFrictionPanel view
             | _ -> return Elem.div [ Attr.id DomIds.FrictionPanel ] []
         }

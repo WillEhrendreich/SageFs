@@ -1947,6 +1947,76 @@ let renderHotReloadEmpty =
     ]
   ]
 
+/// One human-readable line per `FrictionSignal` case — exhaustive over the
+/// DU so a new detector case fails this module to compile until it gets a
+/// summary line here (mirrors `McpTools.observedSignalJson`'s exhaustive
+/// match, but renders prose for the dashboard instead of a JSON node).
+let private observedSignalSummary (signal: SageFs.Features.ObservedFrictionTypes.FrictionSignal) =
+  match signal with
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.ExcessivePolling(tool, calls, successes, _) ->
+    sprintf "%s polled %d times (%d succeeded) — looks like flailing, not warmup"
+      (SageFs.Features.FrictionTelemetryTypes.ToolName.value tool) calls successes
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.ResetThrash(resets, _) ->
+    sprintf "%d resets in a short window — thrashing" resets
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.HardResetAfterCreate gap ->
+    sprintf "hard reset %dms after session create" (SageFs.Features.FrictionTelemetryTypes.DurationMs.value gap)
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.UnattributedFailure(rawTool, count) ->
+    sprintf "%d unattributed failures (%s)" count rawTool
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.InvalidStateCall(tool, blocked) ->
+    sprintf "%s blocked %d times by an affordance mismatch"
+      (SageFs.Features.FrictionTelemetryTypes.ToolName.value tool) blocked
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.RepeatedSameError(blocker, run) ->
+    sprintf "%s repeated %d times in a row" (string blocker) run
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.RetryLoop(tool, attempts) ->
+    sprintf "%s retried %d times after failing" (SageFs.Features.FrictionTelemetryTypes.ToolName.value tool) attempts
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.Abandonment(tool, lastBlocker) ->
+    sprintf "%s abandoned after %s, no later success"
+      (SageFs.Features.FrictionTelemetryTypes.ToolName.value tool) (string lastBlocker)
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.SlowTimeToFirstSuccess(elapsed, failedBefore) ->
+    sprintf "first success took %dms (%d failures before)"
+      (SageFs.Features.FrictionTelemetryTypes.DurationMs.value elapsed) failedBefore
+
+/// Confidence is a DU (`SignalConfidence`), never a float knob — render it
+/// as a small badge rather than flattening it to a number.
+let private confidenceBadge (confidence: SageFs.Features.ObservedFrictionTypes.SignalConfidence) =
+  match confidence with
+  | SageFs.Features.ObservedFrictionTypes.SignalConfidence.Strong ->
+    Elem.span
+      [ Attr.class' "meta"
+        Attr.style "margin-left: 0.4rem; font-size: 0.62rem; padding: 0 0.3rem; border-radius: 3px; background: var(--fg-green); color: var(--bg);" ]
+      [ Text.raw "strong" ]
+  | SageFs.Features.ObservedFrictionTypes.SignalConfidence.Heuristic ->
+    Elem.span
+      [ Attr.class' "meta"
+        Attr.style "margin-left: 0.4rem; font-size: 0.62rem; padding: 0 0.3rem; border-radius: 3px; background: var(--fg-dim); color: var(--bg);" ]
+      [ Text.raw "heuristic" ]
+
+/// Render the "Observed friction" section: passively-detected signals
+/// (observed-friction-plan.md §B8), driven off `ObservedFriction.detectAll`
+/// via `FrictionReviewSnapshot.ObservedSignals`. Renders UNCONDITIONALLY —
+/// zero signals is a quiet "No observed friction yet" line, never a
+/// broken/empty node, so this section never breaks the panel regardless of
+/// whether any friction has been recorded at all.
+let private renderObservedFrictionSection (signals: SageFs.Features.ObservedFrictionTypes.DetectedSignal list) =
+  Elem.div [ Attr.class' "observed-friction"; Attr.style "margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
+    Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.75rem; font-weight: bold; color: var(--fg-blue);" ] [
+      Text.raw "Observed friction"
+    ]
+    match signals with
+    | [] ->
+      Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] [
+        Text.raw "No observed friction yet."
+      ]
+    | items ->
+      Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.72rem; color: var(--fg-dim);" ] [
+        for d in items do
+          Elem.li [ Attr.create "data-signal-id" (attrEnc (SageFs.Features.ObservedFrictionTypes.FrictionSignal.id d.Signal)) ] [
+            textEnc (observedSignalSummary d.Signal)
+            confidenceBadge d.Confidence
+          ]
+      ]
+  ]
+
 /// Render the friction review panel (Phase 5 dashboard journey).
 ///
 /// Privacy model: this panel shows ONLY the user's LOCAL friction telemetry
@@ -1961,6 +2031,11 @@ let renderFrictionPanel (snap: SageFs.Features.FrictionReviewView.FrictionReview
         Text.raw "🧾 "
         textEnc (sprintf "Friction (%d events, %d feedback)" snap.EventCount snap.FeedbackCount) ]
     ]
+    // Renders unconditionally — independent of snap.IsEmpty — so the
+    // observed-friction section (and its own zero-signals quiet line) is
+    // never skipped, and so the whole panel keeps rendering even when
+    // there is nothing else to show.
+    renderObservedFrictionSection snap.ObservedSignals
     match snap.IsEmpty with
     | true ->
       Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.8rem; margin-top: 0.4rem;" ] [
