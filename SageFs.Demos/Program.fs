@@ -89,7 +89,10 @@ let private runRecord (scenarioIdArg: string option) : int =
     printfn "  steps.md: %s" artifacts.StepsMd
     printfn "  manifest: %s" artifacts.Manifest
 
-    if stepLog.Steps |> List.forall (fun s -> s.Outcome = "Passed") then 0 else 1
+    // Fail only on a real Failed beat; a Skipped (no-expectation) beat is
+    // honestly unverified, visible as not-Passed in the manifest, and does not
+    // fail the record — a green can be audited for what it did NOT prove.
+    if stepLog.Steps |> List.forall (fun s -> s.Outcome <> "Failed") then 0 else 1
 
 /// The cell-agent verb: runs ONLY inside a sealed cell, as the bwrap-launched
 /// pid 1 (`Runtime.fs`'s inner script invokes exactly this). Never throws

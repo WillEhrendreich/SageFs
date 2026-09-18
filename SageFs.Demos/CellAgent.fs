@@ -457,7 +457,12 @@ let private runStep
     let! observed =
       match step.ExpectSelector with
       | None -> async { return true }
-      | Some selector -> observer.Observe selector 90000.0
+      // 5-minute ceiling: a cohort `land_and_wait` beat polls until the daemon
+      // has really rebased + built the fixture worktree offline + run the tests
+      // in the integration session — which is minutes in the sealed cell, not
+      // the ~seconds a click/eval takes. A generous ceiling only bites when a
+      // step is genuinely stuck; fast steps still return the instant they match.
+      | Some selector -> observer.Observe selector 300000.0
 
     let observedAtMs = sw.ElapsedMilliseconds
     // A short settle so the recorded segment ends on a held, readable final
@@ -466,7 +471,20 @@ let private runStep
     do! Async.Sleep(max 200 step.DwellMs)
     do! Recorder.stop recording
 
-    let outcome = not targetMissing && observed
+    // Fail-CLOSED scoring: a step with NO expectation selector proved nothing,
+    // so it is Skipped (honestly unverified), NEVER a false green. Only a
+    // selector that actually appeared is Passed; a selector that didn't appear,
+    // or a missing click target, is Failed. (Previously a None selector scored
+    // `observed = true` and the beat passed vacuously — the flagship
+    // `TestOutcome` expectation lowers to None for every client, so "a test went
+    // green" recorded as Passed without ever being observed. Skipped makes that
+    // gap visible in the manifest instead of stamping it green.)
+    let outcomeStr =
+      if targetMissing then "Failed"
+      else
+        match step.ExpectSelector with
+        | None -> "Skipped"
+        | Some _ -> if observed then "Passed" else "Failed"
 
     let message =
       if preClickMissing then
@@ -489,7 +507,7 @@ let private runStep
         EndedMs = sw.ElapsedMilliseconds
         PointerPath = pointerPath
         ObservedAtMs = observedAtMs
-        Outcome = (if outcome then "Passed" else "Failed")
+        Outcome = outcomeStr
         Message = message }
   }
 
@@ -592,5 +610,8 @@ let run () : Async<int> =
       let log: Wire.StepLog = { ScenarioId = plan.ScenarioId; Steps = results }
       Wire.serializeStepLog log |> Console.Out.WriteLine
       Console.Out.Flush()
-      return (if log.Steps |> List.forall (fun s -> s.Outcome = "Passed") then 0 else 1)
+      // Fail only on a real Failed beat; a Skipped (no-expectation, honestly
+      // unverified) beat does not fail the record but is visible as not-Passed in
+      // the manifest — so a green record can be audited for what it did NOT prove.
+      return (if log.Steps |> List.forall (fun s -> s.Outcome <> "Failed") then 0 else 1)
   }

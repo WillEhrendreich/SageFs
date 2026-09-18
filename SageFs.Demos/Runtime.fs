@@ -945,7 +945,11 @@ let private toDomainStepLog (scenario: Scenario) (outDir: string) (wire: Wire.St
           EndedMs = int s.EndedMs
           PointerPath = s.PointerPath |> List.map (fun p -> { X = p.[0]; Y = p.[1] })
           ObservedAtMs = int s.ObservedAtMs
-          Outcome = (if s.Outcome = "Passed" then Outcome.Passed else Outcome.Failed) }) }
+          Outcome =
+            (match s.Outcome with
+             | "Passed" -> Outcome.Passed
+             | "Skipped" -> Outcome.Skipped
+             | _ -> Outcome.Failed) }) }
 
 /// Records `scenario` end to end: build the daemon from `repoRoot`'s source,
 /// build and run the bwrap cell, and turn the returned `StepLog` into real
