@@ -72,6 +72,9 @@
         <Compile Include="FileReloadRoutingSim.fs" />
         <Compile Include="FileReloadRoutingInvariants.fs" />
         <Compile Include="FileReloadRoutingGenerators.fs" />
+        <!-- P2: pure linearizability checker (permutation search over the real
+             Cohort.decide) for the concurrency keystone (H1 claim exclusivity). -->
+        <Compile Include="Linearizability.fs" />
     </ItemGroup>
 
     <ItemGroup>

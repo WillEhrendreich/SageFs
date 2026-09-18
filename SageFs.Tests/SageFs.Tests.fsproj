@@ -452,6 +452,7 @@
         <Compile Include="InputHashCoverageTests.fs" />
         <Compile Include="LandingCacheTests.fs" />
         <Compile Include="AffectedTestsTests.fs" />
+        <Compile Include="CohortLinearizabilityTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
