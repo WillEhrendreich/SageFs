@@ -18,6 +18,9 @@
         <Compile Include="WorkerLifecycleSim.fs" />
         <Compile Include="WorkerLifecycleInvariants.fs" />
         <Compile Include="MgrGenerators.fs" />
+        <!-- Brief B2: deterministic delta-debugging (ddmin) shrinker for
+             failing Scenario/MgrScenario reproducers. -->
+        <Compile Include="Shrink.fs" />
     </ItemGroup>
 
     <ItemGroup>
