@@ -41,8 +41,8 @@ let tests =
     // the two dependencies in the Wave-1 leverage order) flips this
     // `ptestCase` -> `testCase` once both assertions hold against the
     // real detectors.
-    ptestCase
-      "PENDING (B1 + B3) — harvest replay yields UnattributedFailure(4) + ExcessivePolling(72) and no false positives"
+    testCase
+      "harvest replay yields UnattributedFailure(4) + ExcessivePolling(72) and no false positives"
     <| fun _ ->
       let signals = detectAll DetectorConfig.defaults harvestReplayEvents
 
