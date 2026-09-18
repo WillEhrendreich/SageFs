@@ -30,6 +30,9 @@
              simulation — session preservation across a mailbox fault. -->
         <Compile Include="SupervisorSim.fs" />
         <Compile Include="SupervisorInvariants.fs" />
+        <!-- Phase 3A / Brief B3: coverage matrix — which invariants were
+             non-vacuously exercised vs merely "held" across a battery. -->
+        <Compile Include="Coverage.fs" />
     </ItemGroup>
 
     <ItemGroup>
