@@ -394,12 +394,12 @@ module SageFsModel =
     | Some target -> cycleFor target model
     | None -> Features.LiveTesting.LiveTestCycleState.empty
 
-  /// The cycle that OWNS `sessionId`'s data, resolved INDEPENDENTLY of the
-  /// active pointer — `Primary` when it owns the session, else the session's own
-  /// slot. `cycleForSession` returns EMPTY once the pointer diverges (e.g.
-  /// `SessionStopped`), which is what lost a background cohort-landing verdict.
+  /// The cycle that OWNS `sessionId`'s data, resolved INDEPENDENTLY of the active
+  /// pointer (so a cohort-landing verdict survives a pointer diverge): Primary
+  /// when it CARRIES this session's discovery (containsKey, NOT the tryHead
+  /// `ownerSessionId`), else the session's own background slot.
   let cycleOwnedBySession (sessionId: string) (model: SageFsModel) : Features.LiveTesting.LiveTestCycleState =
-    match Features.LiveTesting.LiveTestState.ownerSessionId model.LiveTesting.TestState = Some sessionId with
+    match model.LiveTesting.TestState.SessionDiscovery |> Map.containsKey sessionId with
     | true -> model.LiveTesting
     | false ->
       model.PerSessionLiveTesting

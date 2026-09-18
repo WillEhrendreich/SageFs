@@ -1876,20 +1876,22 @@ let run
                 Features.LiveTesting.AffectedTests.affected changedFiles coveredFilesOf allTests
             return Ok (narrowed |> List.map Features.CohortTestProjection.toCohortTestId)
         }
-      // Item 14d's documented caveat: `CohortLandingVerify.runTestsInSession`
-      // only produces a trustworthy verdict for the session live-testing
-      // tracks as Primary (`model.LiveTesting`) — `RunTestsRequested` always
-      // mutates that cycle, never `PerSessionLiveTesting`. So the integration
-      // session is made Primary (the same `SessionSwitched` event the
-      // dashboard/editor clients dispatch on a session switch, DaemonMode.fs
-      // elsewhere) immediately before every run this performer makes.
+      // `CohortLandingVerify` reads and writes the integration session's OWN
+      // cycle (`SageFsModel.cycleOwnedBySession`, attribution-by-containsKey),
+      // so this performer no longer forces the session to Primary via a
+      // `SessionSwitched` dispatch. That dispatch was not just redundant — it
+      // was actively destructive: mid-rebuild the session's Primary cycle is
+      // transiently empty (owner=None), and `switchActiveLiveTestingState` then
+      // treats the switch as a real one and PROMOTES the empty Background cycle
+      // into Primary, WIPING the discovery `ComputeAffected` just used — the
+      // "N of N not attributed" landing-gate flake. Reads/writes route by
+      // sessionId regardless of the active pointer, so the switch is gone.
       RunTests = fun _landingId tests ->
         async {
           match McpTools.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
           | Some { SessionId = None } -> return Error "integration session not started"
           | Some ({ SessionId = Some sessionId } as binding) ->
-            elmRuntime.Dispatch(SageFsMsg.Event(TuiEvent.SessionSwitched(None, sessionId)))
             // (Gap 3) Settle first, then verify against the SETTLED observation.
             // Verifying while the rebase-triggered rebuild is still in flight is
             // exactly what made a good landing block on "session still warming

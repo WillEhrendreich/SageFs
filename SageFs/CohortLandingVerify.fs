@@ -132,21 +132,38 @@ let runTestsInSession
     let testState = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
 
     // Fail closed on a caller/routing mismatch instead of silently running
-    // a different session's tests (or a subset of them): a cycle now belongs
-    // wholly to one session (`LiveTestState.ownerSessionId`), so either every
-    // requested test is attributed to `sessionId` or none of them are.
+    // a different session's tests. Attribution is "did `sessionId` discover
+    // into this cycle" — `SessionDiscovery |> Map.containsKey sessionId` — NOT
+    // `ownerSessionId = Some sessionId`: `ownerSessionId` is `Map.tryHead`, so
+    // a cycle that legitimately carries `sessionId`'s discovery alongside
+    // another key would be mis-rejected purely by key sort order. containsKey
+    // is the correct, order-independent question.
+    let attributed = testState.SessionDiscovery |> Map.containsKey sessionId
     let notAttributedToSession =
-      match LiveTestState.ownerSessionId testState = Some sessionId with
+      match attributed with
       | true -> []
       | false -> tests
 
     match notAttributedToSession with
     | _ :: _ ->
       let names = notAttributedToSession |> List.map TestId.value |> String.concat ", "
+      // Self-diagnosing (this was a CI-only flake with no visible state): dump
+      // where the session's discovery actually lives at the refusal point.
+      let model = elmRuntime.GetModel()
+      let keysOf (s: LiveTestState) = s.SessionDiscovery |> Map.toList |> List.map fst |> String.concat ","
+      let diag =
+        sprintf
+          "[diag active=%A primaryOwner=%A primaryKeys=[%s] perSessionKeys=[%s] resolvedKeys=[%s] resolvedTotal=%d]"
+          model.Sessions.ActiveSessionId
+          (LiveTestState.ownerSessionId model.LiveTesting.TestState)
+          (keysOf model.LiveTesting.TestState)
+          (model.PerSessionLiveTesting |> Map.toList |> List.map fst |> String.concat ",")
+          (keysOf testState)
+          testState.DiscoveredTests.Length
       return Error (
         sprintf
-          "Refusing to run — %d of %d requested test(s) are not attributed to session '%s': %s"
-          notAttributedToSession.Length tests.Length sessionId names)
+          "Refusing to run — %d of %d requested test(s) are not attributed to session '%s': %s %s"
+          notAttributedToSession.Length tests.Length sessionId names diag)
     | [] ->
 
     let requestedIds = tests |> Set.ofList
