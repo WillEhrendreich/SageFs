@@ -18,6 +18,10 @@
         <Compile Include="WorkerLifecycleSim.fs" />
         <Compile Include="WorkerLifecycleInvariants.fs" />
         <Compile Include="MgrGenerators.fs" />
+        <!-- Phase 3 (B6): SessionManager mailbox supervise/last-good-restart
+             simulation — session preservation across a mailbox fault. -->
+        <Compile Include="SupervisorSim.fs" />
+        <Compile Include="SupervisorInvariants.fs" />
     </ItemGroup>
 
     <ItemGroup>
