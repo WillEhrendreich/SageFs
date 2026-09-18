@@ -1825,7 +1825,10 @@ let run
           match McpTools.cohortIntegrationRef.Value with
           | None -> return Error(cohortIntegrationNotConfigured ())
           | Some binding ->
+            let! headBefore = Features.CohortGit.revParse binding.WorktreePath "HEAD"
+            Log.info "[cohort-landing] Rebase worktree=%s HEAD-before=%A onto=%s" binding.WorktreePath headBefore onto
             let! result = Features.CohortGit.rebase binding.WorktreePath onto
+            Log.info "[cohort-landing] Rebase result=%A" result
             match result with
             | Ok realNewHead -> return Ok realNewHead
             | Error files -> return Error files

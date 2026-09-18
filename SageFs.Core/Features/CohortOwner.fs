@@ -206,11 +206,17 @@ module CohortOwner =
     : unit =
     let complete = postCompletion logger post
     for effect in effects do
+      // Landing-effect tracing: each effect dispatched + (below) its result is
+      // logged, so a landing's actual progress is visible in the daemon log —
+      // the state transitions themselves only fire as SSE events, so without
+      // this a stalled landing is invisible to anyone reading the log.
+      logger.LogInfo(sprintf "[cohort-owner] dispatch %A" effect)
       match effect with
       | CohortEffect.Rebase(LandingId id, onto) ->
         Async.Start(
           async {
             let! result = performer.Rebase id onto
+            logger.LogInfo(sprintf "[cohort-owner] Rebase(%s onto %s) -> %A" id onto result)
             complete (CohortCommand.RebaseCompleted(LandingId id, result))
           }
         )
@@ -219,6 +225,7 @@ module CohortOwner =
           async {
             match! performer.ComputeAffected id baseSha headSha with
             | Ok tests ->
+              logger.LogInfo(sprintf "[cohort-owner] ComputeAffected(%s) -> %d tests" id (List.length tests))
               complete (CohortCommand.AffectedComputed(LandingId id, tests))
             | Error reason ->
               // The affected set could not be computed against a trustworthy
@@ -236,6 +243,7 @@ module CohortOwner =
           async {
             match! performer.RunTests id tests with
             | Ok failing ->
+              logger.LogInfo(sprintf "[cohort-owner] RunTests(%s) -> %d failing" id (List.length failing))
               complete (CohortCommand.TestsCompleted(LandingId id, failing))
             | Error reason ->
               // The verifier could not reach a verdict (e.g. the integration
@@ -253,6 +261,7 @@ module CohortOwner =
         Async.Start(
           async {
             let! result = performer.FastForward id toSha
+            logger.LogInfo(sprintf "[cohort-owner] FastForward(%s -> %s) -> %A" id toSha result)
             match result with
             | Ok committedSha -> complete (CohortCommand.FastForwardCompleted(LandingId id, committedSha))
             | Error reason ->
