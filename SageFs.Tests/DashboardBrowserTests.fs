@@ -559,11 +559,18 @@ let tests =
     Expect.isTrue panelExists "diagnostics panel exists"
   })
 
-  // --- Connection banner: disconnect-only design ---
-  // The banner must NOT use Datastar signals (data-show) because the server
-  // can't push signal updates when it's dead. Banner starts hidden; JS shows
-  // it only when problems occur.
-  // NOTE: data-show absence is now verified by shellStructureTests in DashboardSnapshotTests.fs
+  // --- Connection banner: server-heartbeat + client-staleness design ---
+  // (todo-dashboard-disconnect-indicator.md) The banner DOES use a Datastar
+  // signal (data-show="!$connected") — safely, because the flip is driven by
+  // a CLIENT-side Ds.onInterval comparing "now" against the last
+  // server-patched heartbeat timestamp, never by the server pushing anything
+  // while it's dead. Banner starts hidden; the client shows it once no
+  // heartbeat has landed within Timeouts.dashboardStaleAfter.
+  // NOTE: the data-show wiring is verified by shellStructureTests in
+  // DashboardSnapshotTests.fs ("server-status banner reacts to the connected
+  // signal via data-show"); the dedicated kill/respawn journey lives in
+  // DashboardDisconnectIndicatorBrowserTests.fs (its own isolated daemon —
+  // this shared-daemon suite never kills the daemon it depends on).
 
   playwrightTest "server-status banner is invisible when connected" (fun page -> task {
     // Give SSE time to connect

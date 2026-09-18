@@ -113,6 +113,12 @@ module Timeouts =
   // -- Dashboard / UI --
   let dashboardPollInterval = TimeSpan.FromMilliseconds(100.0)
   let sseEventInterval = TimeSpan.FromSeconds(1.0)
+  /// Server SSE heartbeat cadence: the stream loop patches a heartbeat signal at
+  /// least this often (even on no-change ticks) so the client can prove liveness.
+  let dashboardHeartbeat = envOrDefault "SAGEFS_DASHBOARD_HEARTBEAT_SECONDS" 5.0
+  /// Client staleness budget: if no heartbeat arrives within this window the
+  /// dashboard flips Signals.Connected=false and shows the disconnect banner.
+  let dashboardStaleAfter = envOrDefault "SAGEFS_DASHBOARD_STALE_AFTER_SECONDS" 15.0
 
   // -- Daemon / Server --
   let workerEndpointFetch = TimeSpan.FromMilliseconds(500.0)

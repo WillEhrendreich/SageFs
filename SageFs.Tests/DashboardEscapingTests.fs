@@ -183,8 +183,8 @@ type private TrustedSink = {
 }
 
 let private trustedSinks = [
-  { File = "Dashboard.fs"; Prefix = " (sprintf \"\"\""; Count = 5
-    Why = "inline <script> blocks; interpolate DomIds constants only" }
+  { File = "Dashboard.fs"; Prefix = " (sprintf \"\"\""; Count = 4
+    Why = "inline <script> blocks; interpolate DomIds constants only (the old connectionMonitorScript fetch-monkeypatch block was removed for the SSE-heartbeat disconnect indicator)" }
   { File = "Dashboard.fs"; Prefix = " fontFaceCss"; Count = 1
     Why = "@font-face CSS built from constant weights and the embedded-font URLs only" }
   { File = "DashboardFragments.fs"; Prefix = " (sprintf \":root { %s }\" (Theme.toCssVariables config))"; Count = 1

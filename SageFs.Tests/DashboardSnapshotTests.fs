@@ -14,7 +14,15 @@ open SageFs.Server.DashboardTypes
 open SageFs.Server.DashboardFragments
 
 let verifyDashboard (name: string) (html: string) =
-  SageFs.Tests.TestInfrastructure.Snapshots.verify "DashboardSnapshotTests" name "html" html
+  // The dashboard shell seeds a LIVE Unix-ms heartbeat timestamp
+  // (data-signals:ds-heartbeat-at = DateTimeOffset.UtcNow…) so the disconnect
+  // indicator never false-positives before the first server heartbeat arrives.
+  // That value changes every render, so scrub it to keep the snapshot
+  // deterministic (no-op for fragment snapshots that don't emit it).
+  let scrubbed =
+    System.Text.RegularExpressions.Regex.Replace(
+      html, "ds-heartbeat-at=\"[0-9]+\"", "ds-heartbeat-at=\"<heartbeat-ms>\"")
+  SageFs.Tests.TestInfrastructure.Snapshots.verify "DashboardSnapshotTests" name "html" scrubbed
 
 
 let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
@@ -580,10 +588,17 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     html |> Expect.stringContains "main content shows the version in the health bar" "1.2.3"
   }
 
-  test "WHY — connection monitor script is valid JavaScript because a syntax error can disable dashboard stream diagnostics" {
-    let html = connectionMonitorScript () |> renderNode
-    (html.Contains(";\n        .catch")) |> Expect.isFalse "promise catch must remain chained to then"
-    html |> Expect.stringContains "monitor must handle stream failures" ".catch(function()"
+  test "WHY — disconnect indicator is a server heartbeat + client staleness timer because the old fetch-monkeypatch never saw a mid-stream daemon death (todo-dashboard-disconnect-indicator.md)" {
+    // connectionMonitorScript (window.fetch monkeypatch + MutationObserver)
+    // was replaced: the server now patches a heartbeat signal on a named
+    // cadence (Timeouts.dashboardHeartbeat) and the client compares it
+    // against Timeouts.dashboardStaleAfter via Ds.onInterval — both wired
+    // through renderShell, not a hand-written <script> block.
+    let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
+    html |> Expect.stringContains "wrapper div carries the client-side staleness check on a bounded interval" "data-on-interval__duration."
+    html |> Expect.stringContains "staleness check compares against the server-patched heartbeat signal" "$dsHeartbeatAt"
+    html |> Expect.stringContains "staleness check flips the connected signal" "$connected = (Date.now() - $dsHeartbeatAt)"
+    html |> Expect.stringContains "staleness check mirrors the literal string onto body[data-connected]" "document.body.setAttribute('data-connected', $connected ? 'true' : 'false')"
   }
 
   test "WHY — selected-session projection — main, selected card, and output share one session identity because separate identities can display another session's output" {
@@ -685,13 +700,23 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     html |> Expect.stringContains "new session section is a collapsible details" "New Session"
   }
 
-  test "server-status banner has no data-show attribute" {
+  test "server-status banner reacts to the connected signal via data-show" {
+    // Was "banner has no data-show attribute" under the old fetch-monkeypatch
+    // design ("the server can't push signal updates when it's dead"). The
+    // disconnect-indicator fix (todo-dashboard-disconnect-indicator.md)
+    // replaced that with a CLIENT-driven staleness timer (Ds.onInterval)
+    // that flips the `connected` signal locally — the server never needs to
+    // push anything for the banner to show, so `Ds.show` is now correct and
+    // required: it's what makes the banner react to the client-side flip.
     let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     let bannerStart = html.IndexOf("id=\"server-status\"")
     (bannerStart > -1) |> Expect.isTrue "server-status exists"
     let tagEnd = html.IndexOf(">", bannerStart)
     let tag = html.Substring(bannerStart, tagEnd - bannerStart)
-    (tag.Contains("data-show")) |> Expect.isFalse "banner must not use data-show"
+    (tag.Contains("data-show=\"!$connected\"")) |> Expect.isTrue "banner shows when the client-side connected signal is false"
+    // Pre-hydration safety net: still hidden via plain inline style before
+    // Datastar's JS has run, so there is never a flash of the banner on load.
+    (tag.Contains("display:none")) |> Expect.isTrue "banner still has a static display:none default pre-hydration"
   }
 
   // ── Minimal mode (Task 1) ──────────────────────────────────────

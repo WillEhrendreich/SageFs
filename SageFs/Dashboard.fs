@@ -154,42 +154,46 @@ let resolveBindingsPanelSnapshot
 // Each returns an XmlNode (Elem.script) for embedding in the shell <head>/<body>.
 // ---------------------------------------------------------------------------
 
-/// SSE connection monitor — intercepts fetch to detect stream lifecycle.
-/// Shows a banner on SSE fetch failure. The Datastar SSE client uses
-/// EventSource (not fetch), so this probe is only a secondary signal.
-/// The primary connection-health signal is the MutationObserver on #main:
-/// every successful SSE push replaces the main content, which clears the
-/// banner.
-let connectionMonitorScript () =
-  Elem.script [] [ Text.raw (sprintf """
-    (function(){
-      var b=document.getElementById('%s');
-      var m=document.getElementById('main');
-      if(b&&m){new MutationObserver(function(){b.style.display='none';}).observe(m,{childList:true});}
-      var f=window.fetch;window.fetch=function(u){var p=f.apply(this,arguments);
-      if(typeof u==='string'&&u.indexOf('/dashboard/stream')!==-1){
-        p.then(function(r){
-          if(b){
-            if(r.ok){
-              b.style.display='none';
-              document.body.setAttribute('data-connected','true');
-            }else{
-              b.textContent='\u274c Server error ('+r.status+')';
-              b.style.display='';
-              document.body.setAttribute('data-connected','false');
-            }
-          }
-        })
-         .catch(function(){
-           if(b){
-             b.textContent='\u274c Daemon not running \u2014 start SageFs to continue';
-             b.style.display='';
-             document.body.setAttribute('data-connected','false');
-           }
-         });}
-      return p;};
-    })();
-  """ DomIds.ServerStatus) ]
+/// SSE connection monitor — a server-emitted heartbeat signal plus a
+/// client-side staleness timer, both driven through Datastar's own
+/// structure-typed API (Ds.signal / Ds.onInterval), never a hand-patched
+/// `window.fetch` or a MutationObserver on `#main`.
+///
+/// WHY this replaced the old fetch-monkeypatch: the Datastar SSE client
+/// resolves the fetch's `r.ok` as soon as response HEADERS arrive — a daemon
+/// that dies MID-STREAM errors at the body level, which `.then(r)` never
+/// sees, so the old probe never fired on the real failure mode. And the
+/// MutationObserver-on-`#main` half only ever HID the banner: it had no path
+/// that showed it, and the no-change-SSE-suppression means `#main`
+/// legitimately stops mutating while still perfectly connected, so a
+/// mutation-based heartbeat would have false-positived anyway.
+///
+/// This mechanism is transport-independent (works whichever transport
+/// Datastar's SSE plugin uses) and immune to the no-change-render guard: the
+/// stream loop patches `ConnMonitor.HeartbeatSignal` on a fixed cadence
+/// (`Timeouts.dashboardHeartbeat`) REGARDLESS of whether the rendered
+/// snapshot changed. The browser just watches the clock against the last
+/// value it received.
+module private ConnMonitor =
+  /// Client-observable heartbeat signal — not in the shared `Signals` module
+  /// (DashboardTypes.fs) because it is a private implementation detail of
+  /// this connection-monitor mechanism; no other code reads or writes it.
+  [<Literal>]
+  let HeartbeatSignal = "dsHeartbeatAt"
+
+/// The reactive `data-on-interval` expression: every `dashboardHeartbeat`
+/// tick, compare "now" against the last heartbeat timestamp the server
+/// patched into `dsHeartbeatAt`. Stale beyond `dashboardStaleAfter` flips
+/// `Signals.Connected` false (which `Ds.show` on the banner reacts to) and
+/// mirrors the literal string onto `body[data-connected]` for anything else
+/// that reads it (tests, other scripts) — matching the pre-existing
+/// static-attribute convention rather than relying on Datastar's own
+/// attribute-binding boolean stringification.
+let private connectionStaleCheckExpr () =
+  let staleMs = int64 Timeouts.dashboardStaleAfter.TotalMilliseconds
+  sprintf
+    "$%s = (Date.now() - $%s) < %d; document.body.setAttribute('data-connected', $%s ? 'true' : 'false')"
+    Signals.Connected ConnMonitor.HeartbeatSignal staleMs Signals.Connected
 
 /// Completion insertion utility — called from server-rendered dropdown items.
 /// Inserts text at cursor position, replacing the partial word being typed.
@@ -287,7 +291,6 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       // /favicon.ico (roast UX-8). base64 (not raw SVG) so attribute encoding
       // can't mangle the data URI.
       Elem.link [ Attr.rel "icon"; Attr.type' "image/svg+xml"; Attr.href "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7wn6eZPC90ZXh0Pjwvc3ZnPg==" ]
-      connectionMonitorScript ()
       // Self-hosted pinned Datastar bundle (see `datastarBundle`) — never
       // fetch a moving CDN branch at runtime.
       Elem.script [ Attr.type' "module"; Attr.src "/dashboard/datastar.js" ] []
@@ -298,9 +301,18 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
       Elem.style [] [ Text.raw fontFaceCss ]
     ]
     Elem.body [ Ds.safariStreamingFix; Attr.create "data-connected" "true" ] [
-      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, false); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "") ] []
-      Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none" ] [
-        Text.raw "⏳ Connecting to server..."
+      Elem.div [ Ds.onInit (Ds.get (sprintf "/dashboard/stream/%s" clientId)); Ds.signal (Signals.HelpVisible, false); Ds.signal (Signals.SidebarOpen, true); Ds.signal (Signals.Connected, true); Ds.signal (Signals.ViewingSessionId, initialSessionId); Ds.signal (Signals.ClientId, clientId); Ds.signal (Signals.Code, ""); Ds.signal (Signals.NewSessionDir, defaultWorkingDir); Ds.signal (Signals.ManualProjects, ""); Ds.signal (Signals.Theme, ""); Ds.signal (Signals.CursorPos, "0"); Ds.signal (Signals.TestFilter, "all"); Ds.signal (Signals.ExpandedDashboard, false); Ds.signal (Signals.BindingsPanelOpen, true); Ds.signal (Signals.FrictionEndpoint, ""); Ds.signal (Signals.FrictionToken, ""); Ds.signal (Signals.FrictionEdits, "{}"); Ds.signal (Signals.FrictionSending, false); Ds.signal (Signals.AlarmBannerOpen, false); Ds.signal (Signals.FailureNarrativesOpen, false); Ds.signal (Signals.FilmstripOpen, false); Ds.signal (Signals.DiagnosticsOpen, false); Ds.signal (Signals.EvaluateSectionOpen, false); Ds.signal (Signals.PerfStatsOpen, false); Ds.signal (Signals.NewSessionOpen, false); Ds.signal (Signals.HotReloadFilesOpen, false); Ds.signal (Signals.FrictionPanelOpen, false); Ds.signal (Signals.FrictionHistoryOpen, false); Ds.signal (Signals.SessionContextOpen, false); Ds.signal (Signals.SessionContextAssembliesOpen, false); Ds.signal (Signals.SessionContextNamespacesOpen, false); Ds.signal (Signals.SessionContextFailedOpensOpen, true); Ds.signal (Signals.SessionContextTimingOpen, false); Ds.signal (Signals.SessionContextFilesOpen, false); Ds.signal (Signals.ShadowedBindingsOpen, false); Ds.signal (Signals.CohortPanelOpen, false); Ds.signal (Signals.CohortMatrixTextOpen, false); Ds.signal (Signals.CohortTerritoryTextOpen, false); Ds.signal (Signals.CohortViewingSeq, "");
+                // Disconnect-indicator heartbeat (todo-dashboard-disconnect-indicator.md):
+                // seeded to "now" so the very first client-side staleness check
+                // (before the stream's first heartbeat patch lands) never
+                // false-positives; the stream loop keeps it fresh thereafter.
+                Ds.signal (ConnMonitor.HeartbeatSignal, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                // Re-evaluated every `dashboardHeartbeat` tick, client-side —
+                // a bounded, named-constant interval, not a hand-rolled
+                // setInterval/poll-sleep.
+                Ds.onInterval (connectionStaleCheckExpr (), int Timeouts.dashboardHeartbeat.TotalMilliseconds) ] []
+      Elem.div [ Attr.id DomIds.ServerStatus; Attr.class' "conn-banner conn-disconnected"; Attr.style "display:none"; Ds.show (sprintf "!$%s" Signals.Connected) ] [
+        Text.raw "❌ Daemon not running — start SageFs to continue"
       ]
       Elem.div [ Attr.id DomIds.Main ] [ initialContent ]
       completionInsertScript ()
@@ -1039,6 +1051,12 @@ let createStreamHandler
     // but the SSE morph only fires when the rendered HTML differs — a poll tick
     // with nothing changed sends zero payload bytes instead of a full fat morph.
     let mutable lastPushedMain = ""
+    // Disconnect-indicator heartbeat (todo-dashboard-disconnect-indicator.md):
+    // the last time this connection patched `ConnMonitor.HeartbeatSignal`.
+    // Gates `sendHeartbeatIfDue` below to the named `Timeouts.dashboardHeartbeat`
+    // cadence, independent of render/state-change traffic — the whole point is
+    // that it fires even on a tick the no-change guard suppresses.
+    let mutable lastHeartbeatAt = DateTime.MinValue
     // Render-skip guard (roast-6 Finding #10): renderMainContent/renderNode
     // are the expensive part of a tick — a snapshot structurally identical
     // to the one this connection last rendered never reaches them at all.
@@ -1083,6 +1101,29 @@ let createStreamHandler
       liveBindingsSub.Value |> Option.iter (fun d -> d.Dispose())
       liveBindingsSub.Value <- None
       currentSessionOpt |> Option.iter (subscribeLiveBindings infra clientId liveBindingsSub)
+
+    /// Patches `ConnMonitor.HeartbeatSignal` to "now" when at least
+    /// `Timeouts.dashboardHeartbeat` has elapsed since the last patch — the
+    /// server half of the disconnect-indicator mechanism
+    /// (todo-dashboard-disconnect-indicator.md). Called from every mailbox
+    /// loop iteration (busy or idle) so the cadence holds regardless of
+    /// state-change traffic or the no-change render guard: a tick that
+    /// renders nothing still proves the daemon is alive on the wire.
+    let sendHeartbeatIfDue () = task {
+      let now = DateTime.UtcNow
+      match now - lastHeartbeatAt >= Timeouts.dashboardHeartbeat with
+      | false -> ()
+      | true ->
+        lastHeartbeatAt <- now
+        try
+          do! Response.ssePatchSignal ctx (SignalPath.sp ConnMonitor.HeartbeatSignal) (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+        with
+        | :? System.IO.IOException -> ()
+        | :? ObjectDisposedException -> ()
+        | :? OperationCanceledException -> ()
+        | :? System.ArgumentOutOfRangeException -> ()
+        | :? System.InvalidOperationException -> ()
+    }
 
     let pushState () = task {
       // A viewed session that died outside this page's teardown path must not
@@ -1248,15 +1289,23 @@ let createStreamHandler
           | ex -> Log.debug "[Dashboard SSE] pushState failed: %s" ex.Message
         }
         let rec loop () = async {
-          let! msg = inbox.TryReceive(15_000)
+          // Disconnect-indicator heartbeat: checked on every iteration
+          // (busy or idle) so it fires on the named `dashboardHeartbeat`
+          // cadence regardless of how much other mailbox traffic there is —
+          // a burst of state-change ticks that all render nothing (no-change
+          // guard) must not starve it. The idle-timeout below is bounded by
+          // the same constant, so a fully quiet connection re-enters this
+          // loop often enough to keep the cadence during idle periods too.
+          do! sendHeartbeatIfDue () |> Async.AwaitTask
+          let! msg = inbox.TryReceive(int Timeouts.dashboardHeartbeat.TotalMilliseconds)
           match msg with
           | None ->
-            // Idle timeout — send SSE keepalive comment. The 15s interval
-            // matches the Datastar client's expected heartbeat and stays
-            // well under Kestrel's default keep-alive timeout. The write
-            // is wrapped to swallow connection-closed exceptions so the
-            // loop survives transient client disconnects (Datastar will
-            // reconnect via a new EventSource).
+            // Idle timeout — send SSE keepalive comment. Bounded by
+            // `Timeouts.dashboardHeartbeat` (stays well under Kestrel's
+            // default keep-alive timeout regardless of its configured
+            // value). The write is wrapped to swallow connection-closed
+            // exceptions so the loop survives transient client disconnects
+            // (Datastar will reconnect via its own retry).
             try
               if not ctx.RequestAborted.IsCancellationRequested then
                 let bytes = System.Text.Encoding.UTF8.GetBytes(": keepalive\n\n")
