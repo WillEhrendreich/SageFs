@@ -328,7 +328,11 @@ let private startIsolatedDaemon (workingDir: string) (dataDir: string) : Task<Pr
 
   let mutable ready = false
   let mutable attempts = 0
-  while not ready && attempts < 300 do
+  // 900 * 200ms = 180s. Cold CI runners build the daemon from scratch (and the
+  // cold build serializes through the SessionManager mailbox), so 60s ERRORs
+  // intermittently on CI while passing locally — the documented cohort-landing-gate
+  // flake. 180s is the headroom; a genuinely stuck daemon still fails, just later.
+  while not ready && attempts < 900 do
     do! Task.Delay 200
     try
       let! resp = client.GetAsync "/health"
@@ -340,7 +344,7 @@ let private startIsolatedDaemon (workingDir: string) (dataDir: string) : Task<Pr
     let killAttempt = try proc.Kill true; true with _ -> false
     ignore killAttempt
     proc.Dispose()
-    failwithf "cohort landing-gate daemon failed to start on port %d within 60s" port
+    failwithf "cohort landing-gate daemon failed to start on port %d within 180s" port
 
   return proc, port
 }
