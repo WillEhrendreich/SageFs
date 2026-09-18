@@ -18,6 +18,9 @@
         <Compile Include="WorkerLifecycleSim.fs" />
         <Compile Include="WorkerLifecycleInvariants.fs" />
         <Compile Include="MgrGenerators.fs" />
+        <!-- Phase 3A / Brief B3: coverage matrix — which invariants were
+             non-vacuously exercised vs merely "held" across a battery. -->
+        <Compile Include="Coverage.fs" />
     </ItemGroup>
 
     <ItemGroup>
