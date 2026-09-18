@@ -50,6 +50,12 @@
         <Compile Include="CohortLandingSim.fs" />
         <Compile Include="CohortLandingInvariants.fs" />
         <Compile Include="CohortLandingGenerators.fs" />
+        <!-- Phase 1 exhaustive spec proof: BFS the ENTIRE bounded reachable
+             CohortState space through the REAL Cohort.decide and prove the named
+             rules (not sample them); a Faults twin reintroduces the RebaseConflict
+             jam so NO-TERMINAL-IN-QUEUE is proven to have teeth. CsCheck's
+             Exhaustive+Faults modes — see sagefs-learn-from-cscheck.md. -->
+        <Compile Include="CohortSpec.fs" />
         <!-- Eval-actor DST: fold the REAL SageFs.AppState.EvalActorDecision.decide
              (the eval actor mailbox's pure routing core) through a pure,
              clock-free reducer, replacing four slow FSI-warmup Integration

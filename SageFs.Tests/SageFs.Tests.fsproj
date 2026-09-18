@@ -271,6 +271,7 @@
         <Compile Include="WorkerLifecycleSimTests.fs" />
         <Compile Include="ManifestSimTests.fs" />
         <Compile Include="CohortLandingSimTests.fs" />
+        <Compile Include="CohortSpecTests.fs" />
         <Compile Include="EvalActorSimTests.fs" />
         <Compile Include="FileReloadRoutingSimTests.fs" />
         <Compile Include="DstFaultInjectionTests.fs" />
