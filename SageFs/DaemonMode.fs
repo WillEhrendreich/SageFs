@@ -1819,6 +1819,65 @@ let run
       }
     loop 0
 
+  /// After a landing rebase rewrites the integration worktree's files, force the
+  /// integration session to recompile + rediscover the CHANGED files via the FAST
+  /// FSI hot-eval path (`SageFsMsg.FileContentChanged` -> `EvalLiveTestFile` — no
+  /// dotnet build, no worker restart), then wait for `DiscoveryGeneration` to
+  /// advance so ComputeAffected/RunTests read the member's ACTUAL rebased code,
+  /// never stale compiled output. An INTERACTIVE integration session doesn't
+  /// watch files, so nothing else drives this — without it the gate verifies the
+  /// OLD binary and a breaking change lands (a fail-open). Bounded by the settle
+  /// timeout; on timeout it proceeds (the fail-closed narrow still runs the whole
+  /// suite) rather than hanging.
+  let rediscoverRebasedFiles (sessionId: string) (worktreePath: string) (baseSha: string) (headSha: string) : Async<unit> =
+    async {
+      // FileContentChanged is honored only for an Active live-testing cycle; an
+      // Interactive session isn't Active until this (idempotent) enable.
+      elmRuntime.Dispatch(SageFsMsg.EnableLiveTestingForSession sessionId)
+      match! Features.CohortGit.diffNames worktreePath baseSha headSha with
+      | Error _ -> ()
+      | Ok changedFiles ->
+        let changedFsFiles =
+          changedFiles
+          |> List.filter (fun f -> f.EndsWith(".fs", System.StringComparison.OrdinalIgnoreCase))
+          |> List.map (fun rel -> System.IO.Path.Combine(worktreePath, rel))
+          |> List.filter System.IO.File.Exists
+        match changedFsFiles with
+        | [] -> ()
+        | _ ->
+          let priorGen =
+            (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.DiscoveryGeneration
+          // Eval in path order (git diff is sorted, which matches the fixture's
+          // compile order Alice < Bob < Tests) so a file's dependencies are
+          // hot-loaded before the file that references them.
+          for full in changedFsFiles do
+            match (try Some(System.IO.File.ReadAllText full) with _ -> None) with
+            | Some content when content <> "" -> elmRuntime.Dispatch(SageFsMsg.FileContentChanged(full, content))
+            | _ -> ()
+          // A SHORT budget, NOT the full settle timeout: the FSI hot-eval bumps
+          // the generation within seconds when it is going to, so a longer wait
+          // is pure latency on every landing (which blows a caller's own landing
+          // deadline — CohortDogfoodIntegrationTests waits 60s per landing). If
+          // it hasn't bumped in this window it isn't going to; proceed (the
+          // fail-closed narrow still runs the whole suite, and the worker's
+          // dynamic run closure was already updated by the eval).
+          let deadline = System.DateTime.UtcNow + System.TimeSpan.FromSeconds 30.0
+          let rec waitGen () =
+            async {
+              let gen =
+                (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.DiscoveryGeneration
+              match gen > priorGen with
+              | true -> Log.info "[cohort-landing] rediscovered %d rebased file(s) in session %s (gen %d -> %d)" changedFsFiles.Length sessionId priorGen gen
+              | false ->
+                match System.DateTime.UtcNow > deadline with
+                | true -> Log.warn "[cohort-landing] rediscovery of session %s did not advance the discovery generation within the settle window — verifying on what discovery has" sessionId
+                | false ->
+                  do! Async.Sleep 200
+                  return! waitGen ()
+            }
+          do! waitGen ()
+    }
+
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
     { Rebase = fun _landingId onto commits ->
         async {
@@ -1857,6 +1916,11 @@ let run
             match! awaitIntegrationSessionTrusted sessionId with
             | Error reason -> return Error reason
             | Ok _settledObservation ->
+            // The rebase rewrote the worktree source; recompile + rediscover it
+            // (fast FSI hot-eval, not a full rebuild) and wait for discovery to
+            // advance BEFORE reading tests, so the affected set + the run below
+            // reflect the member's ACTUAL code, never the stale pre-rebase binary.
+            do! rediscoverRebasedFiles sessionId binding.WorktreePath baseSha headSha
             let cycle = SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())
             let state = cycle.TestState
             let allTests =
