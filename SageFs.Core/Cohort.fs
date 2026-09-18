@@ -251,13 +251,16 @@ module Cohort =
     /// couldn't run them" (e.g. the integration session was still warming up
     /// after the rebase-triggered rebuild, or was otherwise untrustworthy).
     /// Kept structurally distinct from `FailingTests` on purpose: an
-    /// inconclusive verification is a transient, environmental condition, not
-    /// a statement that the landing's code is broken. Conflating the two — the
-    /// old behaviour, which reported every "couldn't verify" as "all tests
-    /// failing" — collapsed an inconclusive result into a definitive failure
-    /// (and permanently jammed the serial queue, since a `FailingTests` head is
-    /// never popped). Distinguishing them lets `decide` treat this case as
-    /// retryable-by-resubmission and un-jam the queue instead.
+    /// inconclusive verification is a transient, environmental condition, not a
+    /// statement that the landing's code is broken — so its `NextAction` is
+    /// `RebaseAndResubmit` (retry the same landing once the environment settles),
+    /// where a real `FailingTests` is `FixTests` (the code IS broken; fix it and
+    /// submit a fresh landing). Both now pop the queue, so neither ever
+    /// dead-locks the cohort — the distinction is what the requester should DO,
+    /// not whether the queue advances. Conflating the two — the old behaviour,
+    /// which reported every "couldn't verify" as "all tests failing" — collapsed
+    /// a transient into a definitive failure and told the requester to fix code
+    /// that was never broken.
     | Inconclusive of reason: string
 
   [<RequireQualifiedAccess>]
@@ -811,9 +814,21 @@ module Cohort =
               let newState = { state with Landings = Map.add id verifying state.Landings }
               Ok(newState, [], [ CohortEffect.FastForward(id, rebasedHead) ])
             | fails ->
+              // A genuine test failure blocks THIS landing, but it must not jam
+              // the whole cohort: pop it from the queue and advance the next one,
+              // exactly like every other terminal transition (Inconclusive, land,
+              // withdraw). The landing stays recorded as Blocked(FailingTests) with
+              // NextAction.FixTests — the requester fixes it and submits a fresh
+              // landing — while OTHER members' unrelated landings are never
+              // dead-locked behind it. (Earlier this left the failed landing at
+              // the queue head forever, so one member's failing test froze every
+              // landing in the cohort: a definitive failure dead-locked while a
+              // transient Inconclusive auto-recovered — exactly backwards.)
               let blocked = { req with State = LandingState.Blocked(LandingBlocker.FailingTests fails, NextAction.FixTests fails) }
-              let newState = { state with Landings = Map.add id blocked state.Landings }
-              Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State) ], [])
+              let poppedQueue = state.Queue |> List.filter (fun x -> x <> id)
+              let stateAfter = { state with Landings = Map.add id blocked state.Landings; Queue = poppedQueue }
+              let advanced, advEvents, advEffects = advanceQueue stateAfter
+              Ok(advanced, CohortEvent.LandingStateChanged(id, blocked.State) :: advEvents, advEffects)
           // default policy: TestsCompleted only advances a landing that is
           // actually Verifying — every other LandingState is refused as
           // out-of-order, by construction, for any case the DU ever grows to.

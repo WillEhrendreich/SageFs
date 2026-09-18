@@ -192,7 +192,7 @@ let cohortLandingLoopTests =
       | other -> failtestf "expected Blocked(FailingTests, FixTests), got %A" other
     }
 
-    testTask "WHY — an INCONCLUSIVE verification (couldn't run the tests, NOT a real failure) blocks with Inconclusive, is popped from the queue, and lets the next landing advance — it never permanently jams the queue the way FailingTests does (Gap 3, roast-7 mode-shift)" {
+    testTask "WHY — an INCONCLUSIVE verification (couldn't run the tests, NOT a real failure) blocks with Inconclusive, is popped from the queue, and lets the next landing advance — it never jams the serial queue (Gap 3, roast-7 mode-shift)" {
       let ledger = InMemory.create<MemberId> ()
       // Rebase and ComputeAffected succeed; the verifier cannot reach a verdict
       // (e.g. the integration session is still warming up after the rebase
@@ -207,9 +207,9 @@ let cohortLandingLoopTests =
       let! landingB = requestLanding owner bob "B" |> Async.AwaitTask
 
       // A cannot verify -> Blocked(Inconclusive) and is popped; B then ADVANCES
-      // (proving the queue un-jammed) and hits the same inconclusive. If an
-      // inconclusive jammed the queue the way FailingTests does, B would stay
-      // Queued forever and this would time out.
+      // (proving the queue un-jammed) and hits the same inconclusive. If a
+      // blocked landing jammed the queue, B would stay Queued forever and this
+      // would time out.
       do!
         waitUntil owner (defaultDeadline ())
           (fun () -> sprintf "A=%A B=%A" (landingOf owner landingA).State (landingOf owner landingB).State)
@@ -250,5 +250,40 @@ let cohortLandingLoopTests =
 
       owner.ReadCohortState().Queue
       |> Expect.equal "the queue is strictly FIFO: A in front, B behind it" [ landingA; landingB ]
+    }
+
+    testTask "WHY — a real FAILING test blocks THIS landing but is POPPED so it never dead-locks the cohort: the next landing advances past it, just like an inconclusive one (roast-10 queue-jam fix)" {
+      let ledger = InMemory.create<MemberId> ()
+      // Rebase + ComputeAffected succeed and the run reaches a verdict where a
+      // test GENUINELY fails (Ok [failing], distinct from an Error/inconclusive).
+      let failing = [ TestId "SomeTest.fails" ]
+      let performer = happyPathPerformer failing failing (fun toSha -> toSha + "-committed")
+      use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
+      let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))
+      let! _ = owner.Commit(CohortCommand.Join(bob, JoinableRole.Verifier, None))
+      let! landingA = requestLanding owner alice "A" |> Async.AwaitTask
+      let! landingB = requestLanding owner bob "B" |> Async.AwaitTask
+
+      // A fails a real test -> Blocked(FailingTests) and is POPPED; B then
+      // ADVANCES (proving the queue un-jammed) and hits the same failing test.
+      // Before the fix, A's FailingTests head was never popped, so B stayed
+      // Queued forever and this would time out — one member's failing test
+      // dead-locking every other member's landing.
+      do!
+        waitUntil owner (defaultDeadline ())
+          (fun () -> sprintf "A=%A B=%A" (landingOf owner landingA).State (landingOf owner landingB).State)
+          (fun () ->
+            match (landingOf owner landingA).State, (landingOf owner landingB).State with
+            | LandingState.Blocked(LandingBlocker.FailingTests _, _), LandingState.Blocked(LandingBlocker.FailingTests _, _) -> true
+            | _ -> false)
+
+      match (landingOf owner landingA).State with
+      | LandingState.Blocked(LandingBlocker.FailingTests fails, NextAction.FixTests fixTests) ->
+        fails |> Expect.equal "the blocker names the real failing test" failing
+        fixTests |> Expect.equal "the next action is FixTests (fix the code and resubmit), not RebaseAndResubmit" failing
+      | other -> failtestf "expected Blocked(FailingTests, FixTests), got %A" other
+
+      owner.ReadCohortState().Queue
+      |> Expect.equal "a failing landing is popped (it never jams the serial queue); B advanced past it and was popped too" []
     }
   ]
