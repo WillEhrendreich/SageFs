@@ -138,16 +138,26 @@ let replNeovim: Scenario =
     Cost = CostClass.web
     Masks = [] }
 
-/// `lt-neovim` (§6's matrix; step 4 blocked — see the LT blocker note below).
-/// Mirrors `lt-dashboard`'s exact narrative and exact blocker
+/// `lt-neovim` (§6's matrix; step 8 blocked — see the LT blocker note
+/// below). Mirrors `lt-dashboard`'s exact narrative and exact blocker
 /// (`Scenarios.fs`'s `ltDashboard` doc): opens the real `FromCSharp` test
-/// project, turns live testing on via `:SageFsEnableTesting`, then waits for
-/// a real passed-test signal. Steps 1-3 are the genuine, real workflow;
-/// step 4 is wired but honestly left NOT YET PASSING, per this task's own
-/// instruction — the blocker is `SageFs.Core`'s live-testing discovery never
-/// completing for a project opened this way, a product bug out of a demo
-/// island's scope (AGENTS.md), identical to `lt-dashboard`'s own documented
-/// blocker, not chased here.
+/// project, turns live testing on via `:SageFsEnableTesting`, then proves
+/// the headline "as you type" claim for real — breaks `add` with an
+/// unsaved edit and watches live testing go red with NO `:w`, then fixes it
+/// and watches it go green again, still unsaved — before finally waiting
+/// for a real passed-test signal. Steps 1-7 are the genuine, real
+/// workflow; step 8 is wired but honestly left NOT YET PASSING, per this
+/// task's own instruction — the blocker is `SageFs.Core`'s live-testing
+/// discovery never completing for a project opened this way, a product bug
+/// out of a demo island's scope (AGENTS.md), identical to `lt-dashboard`'s
+/// own documented blocker, not chased here.
+///
+/// Steps 4-7 (break/fix, no save) depend on `sagefs.nvim` actually POSTing
+/// unsaved buffer edits to the daemon — `M.post_buffer_changed` existed but
+/// was never wired to any autocmd until the debounced `TextChanged`/
+/// `TextChangedI` autocmd added alongside this scenario edit. If the demo
+/// harness archives a pinned commit of `sagefs.nvim` rather than tracking
+/// `master`, that pin needs bumping past this fix for these steps to pass.
 let ltNeovim: Scenario =
   { Id = ScenarioId.derive Capability.LiveTesting Client.Neovim AppKind.NoApp
     Capability = Capability.LiveTesting
@@ -156,27 +166,73 @@ let ltNeovim: Scenario =
     Sample = Sample.FromCSharp
     Layout = LayoutTemplate.EditorFull
     Steps =
-      [ { Caption = Caption.mk "1/4 · Create a session for the real test project"
+      [ { Caption = Caption.mk "1/8 · Create a session for the real test project"
           Action = Action.Setup(ClientCommand.CreateSession Sample.FromCSharp)
           Expect = Expectation.PageTextContains(outputPanelSelector, "Scanned")
           Dwell = Dwell.short }
-        { Caption = Caption.mk "2/4 · It warms up and goes green"
+        { Caption = Caption.mk "2/8 · It warms up and goes green"
           Action = Action.Await Signal.sessionReady
           Expect = Expectation.PageTextContains(sessionStatusSelector, "Ready")
           Dwell = Dwell.medium }
-        { Caption = Caption.mk "3/4 · Turn live testing on"
+        { Caption = Caption.mk "3/8 · Turn live testing on"
           Action = Action.Type(Target.NvimCommandLine, Text.mk ":SageFsEnableTesting\n", CadenceSeed.ofId "lt-neovim-enable-testing")
           // "Live Testing: ON" (not a bare "ON") — matches `Scenarios.
           // VsCode.fs`'s `ltVsCode` step 3 exactly (the SAME shared
           // dashboard panel both clients' toggles observe).
           Expect = Expectation.PageTextContains(liveTestingPanelSelector, "Live Testing: ON")
           Dwell = Dwell.medium }
+        // ── As-you-type break/fix (no save) ──────────────────────────────
+        // `Hello.fs:49` is `let add a b = a + b`, the function `Hello.fs`'s
+        // own `type inference` test list exercises via `add 3 4 |>
+        // Expect.equal "3 + 4 = 7" 7` (line 108-110). `cc` (change-line)
+        // deletes the whole line and enters insert mode in one keystroke —
+        // the same modal-command-then-typed-text shape `replNeovim` uses
+        // for `o` (its own doc explains why: `Cadence.charToKey` has no
+        // keysym for embedding a raw ESC in typed text, so leaving insert
+        // mode is always its own separate `Action.Chord` step). Column is
+        // irrelevant to `cc` — it targets the whole line regardless of
+        // where the cursor lands on it.
+        { Caption = Caption.mk "4/8 · Break a test as you type — no save"
+          Action =
+            Action.Type(
+              Target.EditorPosition({ Sample = Sample.FromCSharp; RelativePath = "Hello.fs" }, 49, 1),
+              Text.mk "cclet add a b = a - b",
+              CadenceSeed.ofId "lt-neovim-break-add"
+            )
+          Expect = Expectation.NvimBufferContains(Text.mk "a - b")
+          Dwell = Dwell.short }
+        { Caption = Caption.mk "5/8 · Leave insert mode"
+          // Never saved — this is the whole point: SageFs reacts to the
+          // unsaved buffer content itself (`post_buffer_changed`'s
+          // debounced POST to `/api/sessions/{sid}/buffer-changed`), not to
+          // a file-write. "✗" (not a bare failure word) matches
+          // `DashboardFragments.fs`'s own real failed-count glyph the
+          // live-testing panel renders.
+          Action = Action.Chord [ Key.Escape ]
+          Expect = Expectation.PageTextContains(liveTestingPanelSelector, "✗")
+          Dwell = Dwell.long }
+        { Caption = Caption.mk "6/8 · Fix it — back to green"
+          Action =
+            Action.Type(
+              Target.EditorPosition({ Sample = Sample.FromCSharp; RelativePath = "Hello.fs" }, 49, 1),
+              Text.mk "cclet add a b = a + b",
+              CadenceSeed.ofId "lt-neovim-fix-add"
+            )
+          Expect = Expectation.NvimBufferContains(Text.mk "a + b")
+          Dwell = Dwell.short }
+        { Caption = Caption.mk "7/8 · Leave insert mode"
+          // Still no `:w` — same unsaved-edit channel as step 5, proving
+          // the round trip: broken as you type, fixed as you type, neither
+          // one ever touched disk.
+          Action = Action.Chord [ Key.Escape ]
+          Expect = Expectation.PageTextContains(liveTestingPanelSelector, "✓")
+          Dwell = Dwell.long }
         // NOT YET PASSING — see the doc comment above. Wired, never faked.
         // The observation channel is corrected to the real one
         // (`lt-dashboard`'s own step 4) even though this step cannot
         // reach it today — never left pointed at a channel that could
         // never observe it either way.
-        { Caption = Caption.mk "4/4 · SageFs runs the real tests — they pass"
+        { Caption = Caption.mk "8/8 · SageFs runs the real tests — they pass"
           Action = Action.Await Signal.testRunCompleted
           Expect = Expectation.PageTextContains(liveTestingPanelSelector, "✓")
           Dwell = Dwell.long } ]
