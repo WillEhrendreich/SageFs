@@ -1777,47 +1777,58 @@ let run
   // `VerificationInconclusive` — never a false pass, never a permanent queue jam.
   // Runs on the effect worker (Async.Start'd off the CohortOwner mailbox), so a
   // long wait here never blocks the single writer.
-  let integrationSettleTimeout = System.TimeSpan.FromSeconds 120.0
+  let integrationSettleTimeout = Timeouts.cohortIntegrationSettle
   let awaitIntegrationSessionTrusted (sessionId: string) : Async<Result<Features.Verification.SessionTrust.SessionObservation, string>> =
-    let deadline = System.DateTime.UtcNow + integrationSettleTimeout
-    let observe () =
-      async {
-        let! sessionInfo = sessionOps.GetSessionInfo(toSessionId sessionId) |> Async.AwaitTask
-        return
-          ({ MatchingSessionIds = [ sessionId ]
-             SessionStatus = sessionInfo |> Option.map (fun s -> s.Status)
-             LoadedState = None
-             TypeIdentityDiagnostic = None } : Features.Verification.SessionTrust.SessionObservation)
-      }
-    // Require the session to read Trusted TWICE across a short window before
-    // proceeding: the rebase's file write and the watcher's rebuild trigger race
-    // each other, so a single Trusted read could be the pre-rebuild session that
-    // is about to go WarmingUp. A second confirmation ~500ms later crosses that
-    // debounce; any WarmingUp in between resets the confirmation.
-    let rec loop (confirmations: int) =
-      async {
+    async {
+      let observe () =
+        async {
+          let! sessionInfo = sessionOps.GetSessionInfo(toSessionId sessionId) |> Async.AwaitTask
+          return
+            ({ MatchingSessionIds = [ sessionId ]
+               SessionStatus = sessionInfo |> Option.map (fun s -> s.Status)
+               LoadedState = None
+               TypeIdentityDiagnostic = None } : Features.Verification.SessionTrust.SessionObservation)
+        }
+      // Event-driven + location-transparent: PARK on the SessionManager actor's
+      // AwaitReady, which releases the instant the session reaches Ready (or the
+      // moment it can't) — a message to the owner, never a poll cadence, so it
+      // completes exactly as fast as the transition and would work unchanged if
+      // that owner were on another machine. Then classify ONCE (a pure decision
+      // over the observed status) to distinguish a genuinely trustworthy session
+      // from one that registered Ready but is Faulted/Stale.
+      match! sessionOps.AwaitReady (toSessionId sessionId) integrationSettleTimeout |> Async.AwaitTask with
+      | Error e -> return Error (sprintf "integration session '%s' did not become ready: %s" sessionId (SageFsError.describeForAgent e))
+      | Ok () ->
         let! obs = observe ()
         match Features.Verification.SessionTrust.settleDecision (Features.Verification.SessionTrust.classify obs) with
-        | Features.Verification.SessionTrust.SettleDecision.Ready _ ->
-          if confirmations >= 1 then return Ok obs
-          else
-            do! Async.Sleep 500
-            return! loop (confirmations + 1)
-        | Features.Verification.SessionTrust.SettleDecision.Terminal reason ->
-          // Fail fast: a dead/missing/ambiguous session will NEVER become
-          // trustworthy by waiting, so do not burn the whole deadline on it.
-          // The reason is actionable ("integration session 'x' is Faulted …")
-          // and flows verbatim into VerificationInconclusive -> Blocked so an
-          // agent reading get_cohort_status sees WHY, not just a timeout.
-          return Error reason
+        | Features.Verification.SessionTrust.SettleDecision.Ready _ -> return Ok obs
+        | Features.Verification.SessionTrust.SettleDecision.Terminal reason -> return Error reason
         | Features.Verification.SessionTrust.SettleDecision.Retry ->
-          if System.DateTime.UtcNow > deadline then
-            return Error (sprintf "integration session '%s' never settled to a trustworthy state within %.0fs (still warming up)" sessionId integrationSettleTimeout.TotalSeconds)
-          else
-            do! Async.Sleep 300
-            return! loop 0
-      }
-    loop 0
+          return Error (sprintf "integration session '%s' registered Ready but is not yet trustworthy" sessionId)
+    }
+
+  /// Wait until a PURE condition over the current model holds, driven by the
+  /// daemon's model-changed notification — completes the instant the condition
+  /// flips, never on a poll cadence, so it takes exactly as long as the work and
+  /// no longer. `timeout` is only a safety bound. The condition is a pure
+  /// `unit -> bool` read; the notification is the `StateChangedEvent` interface
+  /// (in-process today, a swappable transport for a remote model owner tomorrow —
+  /// location transparency). Returns true if the condition held, false on timeout.
+  let awaitModelCondition (timeout: System.TimeSpan) (cond: unit -> bool) : Async<bool> =
+    async {
+      if cond () then return true
+      else
+        let tcs = System.Threading.Tasks.TaskCompletionSource<bool>()
+        use _sub = stateChangedEvent.Publish.Subscribe(fun _ -> if cond () then tcs.TrySetResult true |> ignore)
+        // Re-check AFTER subscribing to close the lost-wakeup window (the model
+        // may have changed between the first check and the subscription).
+        if cond () then return true
+        else
+          let! winner =
+            System.Threading.Tasks.Task.WhenAny(tcs.Task, System.Threading.Tasks.Task.Delay timeout)
+            |> Async.AwaitTask
+          return System.Object.ReferenceEquals(winner, tcs.Task :> System.Threading.Tasks.Task) && tcs.Task.Result
+    }
 
   /// After a landing rebase rewrites the integration worktree's files, force the
   /// integration session to recompile + rediscover the CHANGED files via the FAST
@@ -1854,28 +1865,22 @@ let run
             match (try Some(System.IO.File.ReadAllText full) with _ -> None) with
             | Some content when content <> "" -> elmRuntime.Dispatch(SageFsMsg.FileContentChanged(full, content))
             | _ -> ()
-          // A SHORT budget, NOT the full settle timeout: the FSI hot-eval bumps
-          // the generation within seconds when it is going to, so a longer wait
-          // is pure latency on every landing (which blows a caller's own landing
-          // deadline — CohortDogfoodIntegrationTests waits 60s per landing). If
-          // it hasn't bumped in this window it isn't going to; proceed (the
-          // fail-closed narrow still runs the whole suite, and the worker's
-          // dynamic run closure was already updated by the eval).
-          let deadline = System.DateTime.UtcNow + System.TimeSpan.FromSeconds 30.0
-          let rec waitGen () =
-            async {
-              let gen =
-                (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.DiscoveryGeneration
-              match gen > priorGen with
-              | true -> Log.info "[cohort-landing] rediscovered %d rebased file(s) in session %s (gen %d -> %d)" changedFsFiles.Length sessionId priorGen gen
-              | false ->
-                match System.DateTime.UtcNow > deadline with
-                | true -> Log.warn "[cohort-landing] rediscovery of session %s did not advance the discovery generation within the settle window — verifying on what discovery has" sessionId
-                | false ->
-                  do! Async.Sleep 200
-                  return! waitGen ()
-            }
-          do! waitGen ()
+          // A SHORT budget (Timeouts.cohortRediscover), NOT the full settle
+          // timeout: the FSI hot-eval bumps the generation within seconds when it
+          // is going to, so a longer wait is pure latency on every landing (which
+          // blows a caller's own landing deadline — CohortDogfoodIntegrationTests
+          // waits 60s per landing). If it hasn't bumped in this window it isn't
+          // going to; proceed (the fail-closed narrow still runs the whole suite,
+          // and the worker's dynamic run closure was already updated by the eval).
+          // Event-driven: the LiveDiscoveryMerged that the hot-eval produces bumps
+          // DiscoveryGeneration and fires the model-changed notification, so this
+          // completes the instant discovery reflects the rebased code — no poll.
+          let genOf () = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.DiscoveryGeneration
+          let! bumped = awaitModelCondition Timeouts.cohortRediscover (fun () -> genOf () > priorGen)
+          if bumped then
+            Log.info "[cohort-landing] rediscovered %d rebased file(s) in session %s (gen %d -> %d)" changedFsFiles.Length sessionId priorGen (genOf ())
+          else
+            Log.warn "[cohort-landing] rediscovery of session %s did not advance the discovery generation within the settle window — verifying on what discovery has" sessionId
     }
 
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
@@ -2030,7 +2035,7 @@ let run
                   Some(Features.LiveTesting.InputHashCoverage.ofCoverage toolchain fileReader merged bm)
                 | _ -> None
             let runMisses toRun =
-              Features.CohortLandingVerify.runTestsInSession elmRuntime observation sessionId toRun
+              Features.CohortLandingVerify.runTestsInSession elmRuntime awaitModelCondition observation sessionId toRun
             // Talks to the single owner via a message (roast-6 #7a) — never
             // a shared ref read-modify-written from this performer.
             let! result =

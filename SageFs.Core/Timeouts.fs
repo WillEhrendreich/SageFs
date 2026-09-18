@@ -82,6 +82,22 @@ module Timeouts =
   // -- Process Management --
   let buildCompletion = envOrDefaultMinutes "SAGEFS_BUILD_TIMEOUT_MINUTES" 10.0
   let processNormalExit = TimeSpan.FromSeconds(3.0)
+
+  // -- Cohort landing gate --
+  /// How long the landing gate waits for the integration session to settle to a
+  /// trustworthy state after a rebase before giving up (a terminal/dead session
+  /// fails fast via SessionTrust.settleDecision; this bounds only a genuinely
+  /// warming session). Env-overridable.
+  let cohortIntegrationSettle = envOrDefault "SAGEFS_COHORT_SETTLE_SECONDS" 120.0
+  /// Give-up bound on waiting for the integration session to REDISCOVER after a
+  /// landing rebase hot-evals its changed files. The DiscoveryGeneration bump is
+  /// the real completion signal; this only stops the wait if the eval never
+  /// lands. Kept well under a caller's own landing deadline. Env-overridable.
+  let cohortRediscover = envOrDefault "SAGEFS_COHORT_REDISCOVER_SECONDS" 30.0
+  /// Poll cadence while waiting on the settle / rediscovery generation signals.
+  let cohortLandingPoll = TimeSpan.FromMilliseconds(200.0)
+  /// The debounce a second "Trusted" read must clear to cross the rebuild race.
+  let cohortSettleConfirm = TimeSpan.FromMilliseconds(500.0)
   let processKillVerify = TimeSpan.FromSeconds(2.0)
   let stdioFlush = TimeSpan.FromSeconds(5.0)
 

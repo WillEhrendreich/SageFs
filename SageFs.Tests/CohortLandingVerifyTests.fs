@@ -88,6 +88,25 @@ let private mkFakeRuntime
       GetRegions = fun () -> [] }
   runtime, (fun () -> dispatchCount.Value)
 
+/// The event-driven wait capability `runTestsInSession` now takes. Production
+/// injects the daemon's model-changed-event version; the fake runtime here has no
+/// such event (its completion fiber just mutates `modelRef`), so this test double
+/// checks the pure condition on a tight, bounded cadence. It is a test observer of
+/// an async fake, not a production wait.
+let private testAwait (timeout: System.TimeSpan) (cond: unit -> bool) : Async<bool> =
+  async {
+    let deadline = DateTime.UtcNow + timeout
+    let rec loop () =
+      async {
+        if cond () then return true
+        elif DateTime.UtcNow > deadline then return false
+        else
+          do! Async.Sleep 5
+          return! loop ()
+      }
+    return! loop ()
+  }
+
 /// Mirrors `RunTestsRequested`'s real shape (SageFsApp.fs:1423): bump the
 /// shared generation counter, mark every session the requested tests are
 /// attributed to as `Running` that generation.
@@ -226,7 +245,7 @@ let tests =
               DiscoveredTests = [| tc1 |]
               SessionDiscovery = Map.ofList [ "sess1", DiscoveryProgress.Completed ] }
         let runtime, dispatchCount = mkFakeRuntime initial (fun _apply tests state -> startRunReducer tests state)
-        let! result = runTestsInSession runtime missingObservation "sess1" [ tc1.Id ]
+        let! result = runTestsInSession runtime testAwait missingObservation "sess1" [ tc1.Id ]
         match result with
         | Error _ -> ()
         | Ok _ -> failtest "expected the untrustworthy session to be refused"
@@ -241,7 +260,7 @@ let tests =
               DiscoveredTests = [| tc1 |]
               SessionDiscovery = Map.ofList [ "sess1", DiscoveryProgress.Completed ] }
         let runtime, dispatchCount = mkFakeRuntime initial (fun _apply tests state -> startRunReducer tests state)
-        let! result = runTestsInSession runtime (warmingUpObservation "sess1") "sess1" [ tc1.Id ]
+        let! result = runTestsInSession runtime testAwait (warmingUpObservation "sess1") "sess1" [ tc1.Id ]
         match result with
         | Error _ -> ()
         | Ok _ -> failtest "expected the warming-up session to be refused"
@@ -252,7 +271,7 @@ let tests =
       testAsync "an empty test list trivially succeeds without dispatching a run" {
         let initial = LiveTestState.empty
         let runtime, dispatchCount = mkFakeRuntime initial (fun _apply tests state -> startRunReducer tests state)
-        let! result = runTestsInSession runtime (trustedObservation "sess1") "sess1" []
+        let! result = runTestsInSession runtime testAwait (trustedObservation "sess1") "sess1" []
         result |> Expect.equal "nothing to run, nothing failing" (Ok [])
         dispatchCount ()
         |> Expect.equal "no run was dispatched for an empty request" 0
@@ -265,7 +284,7 @@ let tests =
               DiscoveredTests = [| tc1 |]
               SessionDiscovery = Map.ofList [ "otherSession", DiscoveryProgress.Completed ] }
         let runtime, dispatchCount = mkFakeRuntime initial (fun _apply tests state -> startRunReducer tests state)
-        let! result = runTestsInSession runtime (trustedObservation "sess1") "sess1" [ tc1.Id ]
+        let! result = runTestsInSession runtime testAwait (trustedObservation "sess1") "sess1" [ tc1.Id ]
         match result with
         | Error _ -> ()
         | Ok _ -> failtest "expected a session-attribution mismatch to be refused"
@@ -302,7 +321,7 @@ let tests =
           } |> Async.Start
           running
         let runtime, dispatchCount = mkFakeRuntime initial onRunTestsRequested
-        let! result = runTestsInSession runtime (trustedObservation "sess1") "sess1" [ tc1.Id; tc2.Id ]
+        let! result = runTestsInSession runtime testAwait (trustedObservation "sess1") "sess1" [ tc1.Id; tc2.Id ]
         result |> Expect.equal "t1 passed, t2 failed" (Ok [ tc2.Id ])
         dispatchCount ()
         |> Expect.equal "exactly one run was dispatched" 1

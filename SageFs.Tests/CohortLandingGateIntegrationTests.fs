@@ -52,28 +52,20 @@
 ///      too, reusing the still-`Held` claim from step 4 — genuinely
 ///      checking whether v1's cohort can recover and land the fix after a
 ///      block. Source-read first (`Cohort.fs`'s `TestsCompleted` arm, the
-///      `Blocked` case): a landing that reaches `Blocked` is NEVER popped
-///      from `CohortState.Queue`, and `CohortCommand` has no
-///      cancel/dismiss/retry case — so a landing queued behind an
-///      unresolved `Blocked` head can never even start its own `Rebase`
-///      (`advanceQueue` only fires `Rebase` when the QUEUE HEAD's state is
-///      exactly `Queued`). This test verifies that prediction empirically
-///      (bounded poll, not a fixed sleep) rather than trusting the source
-///      read alone, and asserts the REAL observed outcome — it does not
-///      pretend recovery works if it doesn't.
+///      `Blocked` case): a landing that reaches `Blocked(FailingTests)` is
+///      now POPPED from `CohortState.Queue` (like every other terminal
+///      transition), so a landing queued behind it advances and a FIXING
+///      landing recovers on its own. (This test used to document the
+///      opposite — a jammed queue head with no cancel/retry — which was the
+///      original v1 behaviour; that queue-jam is fixed in `Cohort.fs`'s
+///      `TestsCompleted` arm. The bonus step below now asserts recovery as a
+///      contract and fails loudly if the jam ever returns.)
 ///
-/// WHY GOOD LANDS FIRST (not "break, prove blocked, then land the fix" as
-/// a naive reading of the brief might suggest): because of the finding in
-/// step 5. A landing that reaches `Blocked(FailingTests ...)` permanently
-/// occupies `CohortState.Queue`'s head in v1 — there is no
-/// `CancelLanding`/`RetryLanding` command in `Cohort.fs`'s
-/// `CohortCommand<'m>` DU. Landing the FIX after the BREAK's landing
-/// blocked would therefore get stuck too, for a reason that has nothing to
-/// do with whether the fix itself is good — it would just prove the queue
-/// is jammed, not that "the gate lets good landings through." Landing the
-/// good change FIRST (while the queue is still empty/healthy) and the
-/// breaking change SECOND (nothing needs to land after it) cleanly proves
-/// both halves of the brief with the real production pipeline, and this
+/// WHY GOOD LANDS FIRST (not "break, prove blocked, then land the fix"):
+/// landing the good change FIRST (while the queue is empty) and the breaking
+/// change SECOND cleanly proves both halves of the brief — a good landing
+/// lands, a breaking one is blocked — with the real production pipeline, and
+/// the bonus step then proves the queue recovers when the fix lands. This
 /// file still empirically checks the post-block recovery question as a
 /// separate, honestly-labeled bonus (step 5) rather than silently avoiding
 /// it.
@@ -779,11 +771,14 @@ let tests =
           |> Expect.stringContains "the breaking landing is Blocked on the REAL failing test, visible directly in the read model" "FailingTests"
 
           // ══════════════════════════════════════════════════════════════
-          // BONUS, HONEST FINDING: does landing the FIX after a block
-          // recover? (see file header — source-read prediction: no, v1 has
-          // no CancelLanding/RetryLanding, so the blocked landing
-          // permanently occupies the queue head and nothing behind it can
-          // even start its own Rebase). Verified empirically, not assumed.
+          // RECOVERY AFTER A BLOCK is now a CONTRACT, not a surprise: a
+          // landing that fails a real test is popped from the queue (like
+          // every other terminal transition), so a subsequent FIXING landing
+          // — reusing the still-Held claim — lands on its own with no
+          // out-of-band withdraw. (This test used to document the opposite:
+          // v1's `Blocked(FailingTests)` head was never popped, so the fix
+          // never got its own Rebase. That queue-jam is fixed — see
+          // `Cohort.fs` `TestsCompleted`'s `fails` arm.)
           // ══════════════════════════════════════════════════════════════
 
           let fixedUtil = "module Fixture.Util\n\nlet add a b = a + b\n"
@@ -807,25 +802,15 @@ let tests =
 
           match fixLanded with
           | Some _ ->
-            // v1 CAN recover after a block — genuinely better than the
-            // source read predicted. Land the good news.
             let! branchAfterFix = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
             branchAfterFix
-            |> Expect.equal "HONEST FINDING (better than predicted): the fix landed after the earlier block — v1's cohort queue recovers on its own" fixSha
+            |> Expect.equal "the fixing landing recovers on its own after the earlier block — the failed landing was popped from the queue, so the fix got its own Rebase and landed without any out-of-band withdraw" fixSha
           | None ->
-            // Matches the source-read prediction: the fix landing never
-            // gets its own Rebase started because the QUEUE HEAD (the
-            // earlier, still-Blocked breaking landing) is never popped —
-            // Cohort.fs's `advanceQueue` only fires the next landing's
-            // Rebase effect when the FRONT of the queue is `Queued`, and
-            // `TestsCompleted`'s `Blocked` arm never removes the landing
-            // from `CohortState.Queue`. There is no CancelLanding/
-            // RetryLanding command in `CohortCommand<'m>` to unstick it.
-            let! branchStillAtGood = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
-            branchStillAtGood
-            |> Expect.equal
-              "HONEST FINDING (matches source-read prediction): once a landing blocks on failing tests, it permanently occupies the cohort's landing queue head in v1 — a SUBSEQUENT landing (even a genuinely fixing one, reusing the still-Held claim) never lands either, because Cohort.fs has no CancelLanding/RetryLanding command to un-stick the blocked queue head. This is a real, separate gap from the gate itself working correctly."
-              goodSha
+            // The failed breaking landing is popped from the queue, so the
+            // fix MUST get its own Rebase and land. If it doesn't, the
+            // queue-jam has regressed (a failed landing is stuck at the head
+            // again, dead-locking everything behind it).
+            failtest "REGRESSION: the fixing landing never landed — a failed landing is jamming the queue head again (Cohort.fs TestsCompleted must pop the queue like every other terminal transition)"
 
           http.Dispose()
 

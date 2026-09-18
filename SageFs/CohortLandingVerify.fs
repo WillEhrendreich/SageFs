@@ -113,6 +113,11 @@ let private describeUntrustworthy (trust: SessionTrust) : string =
 /// even start or complete the run in time, `Error reason`.
 let runTestsInSession
   (elmRuntime: ElmRuntime<SageFsModel, SageFsMsg, RenderRegion>)
+  // Event-driven wait capability (`timeout -> condition -> Async<bool>`): fires
+  // the instant a pure condition over the model holds, off the model-changed
+  // notification — never a poll cadence. Injected so this module stays free of
+  // the daemon's event plumbing (and could wait on a remote model owner later).
+  (awaitCondition: System.TimeSpan -> (unit -> bool) -> Async<bool>)
   (sessionObservation: SessionTrust.SessionObservation)
   (sessionId: string)
   (tests: TestId list)
@@ -180,42 +185,24 @@ let runTestsInSession
     | true ->
 
     let priorGeneration = testState.LastGeneration
-    let deadline = DateTime.UtcNow + awaitBudget ()
+    let budget = awaitBudget ()
+    let genNow () = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.LastGeneration
+    let stateNow () = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
 
     elmRuntime.Dispatch (SageFsMsg.Event (TuiEvent.RunTestsRequested (Some sessionId, testCases)))
 
-    // Dispatch is asynchronous (ElmLoop.fs runs a dedicated drain thread), so
-    // the model doesn't necessarily reflect the new run the instant Dispatch
-    // returns — wait for the shared generation counter to move before
-    // tracking completion of "our" generation.
-    let rec awaitStart () : Async<Result<RunGeneration, string>> =
-      async {
-        let currentGeneration = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.LastGeneration
-        match currentGeneration <> priorGeneration with
-        | true -> return Ok currentGeneration
-        | false ->
-          match DateTime.UtcNow > deadline with
-          | true -> return Error "Test run timed out before it started."
-          | false ->
-            do! Async.Sleep pollDelayMs
-            return! awaitStart ()
-      }
-
-    let rec awaitCompletion (generation: RunGeneration) : Async<Result<TestId list, string>> =
-      async {
-        let state = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
-        match isGenerationComplete generation state with
-        | true -> return Ok (failingOf tests state)
-        | false ->
-          match DateTime.UtcNow > deadline with
-          | true -> return Error "Test run timed out."
-          | false ->
-            do! Async.Sleep pollDelayMs
-            return! awaitCompletion generation
-      }
-
-    let! started = awaitStart ()
+    // Event-driven, pure conditions: RunTestsRequested bumps LastGeneration and,
+    // on completion, marks that generation complete — both fire the model-changed
+    // notification, so `awaitCondition` completes the instant each holds, never on
+    // a poll cadence. Wait for the run to START (generation moved off
+    // `priorGeneration`), capture that generation, then wait for it to COMPLETE.
+    let! started = awaitCondition budget (fun () -> genNow () <> priorGeneration)
     match started with
-    | Error reason -> return Error reason
-    | Ok generation -> return! awaitCompletion generation
+    | false -> return Error "Test run timed out before it started."
+    | true ->
+      let generation = genNow ()
+      let! completed = awaitCondition budget (fun () -> isGenerationComplete generation (stateNow ()))
+      match completed with
+      | false -> return Error "Test run timed out."
+      | true -> return Ok (failingOf tests (stateNow ()))
   }
