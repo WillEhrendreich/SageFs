@@ -273,7 +273,7 @@ let globalActorResult = lazy(
 /// Create a SessionProxy from a test actor result
 let mkProxy (result: ActorResult) : SageFs.WorkerProtocol.SessionProxy =
   fun msg ->
-    SageFs.Server.WorkerMain.handleMessage result.Actor result.GetSessionState result.GetEvalStats result.GetStatusMessage result.ProjectRoles (fun () -> SageFs.Features.LiveTesting.LiveTestHookResult.noOp) (fun _ -> ()) (fun () -> [||], []) SageFs.Server.WorkerMain.noAppRuns msg
+    SageFs.Server.WorkerMain.handleMessage result.Actor result.GetSessionState result.GetEvalStats result.GetStatusMessage result.ProjectRoles (fun () -> SageFs.Features.LiveTesting.LiveTestHookResult.noOp) (fun _ -> ()) (fun () -> [||], []) (fun _ _ -> async { return Result.Error (SageFs.SageFsError.EvalFailed "EvalLiveTestFile not available on this test proxy") }) SageFs.Server.WorkerMain.noAppRuns msg
 
 /// Create a test SessionManagementOps that routes to the global actor
 let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.SessionId) : SageFs.SessionManagementOps =

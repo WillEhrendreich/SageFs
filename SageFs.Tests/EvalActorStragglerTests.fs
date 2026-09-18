@@ -117,6 +117,7 @@ let private workerEval (actor: AppActor) =
   SageFs.Server.WorkerMain.handleMessage
     actor (fun () -> SessionState.Ready) (fun () -> Affordances.EvalStats.empty) (fun () -> None) []
     (fun () -> SageFs.Features.LiveTesting.LiveTestHookResult.noOp) (fun _ -> ()) (fun () -> [||], [])
+    (fun _ _ -> async { return Result.Error (SageFsError.EvalFailed "EvalLiveTestFile not available on this test worker") })
     SageFs.Server.WorkerMain.noAppRuns
     (WorkerProtocol.WorkerMessage.EvalCode("x", "r1"))
   |> Async.StartAsTask

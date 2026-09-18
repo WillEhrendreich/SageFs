@@ -130,6 +130,10 @@ module WorkerHttpTransport =
     let runTests = WorkerRoute.Post "/run-tests"
     let runTestsStream = WorkerRoute.Post "/run-tests-stream"
     let testDiscovery = WorkerRoute.Get ("/test-discovery", GetAccess.ReadOnly)
+    /// Identity-preserving buffer eval for as-you-type live testing (Brief 3
+    /// of live-testing-asyoutype-plan.md). Executes F# from the request body —
+    /// same mutating/CSRF-gated class as `/eval`.
+    let evalLiveTestFile = WorkerRoute.Post "/eval-live-test-file"
     let instrumentationMaps = WorkerRoute.Get ("/instrumentation-maps", GetAccess.ReadOnly)
     let shutdown = WorkerRoute.Post "/shutdown"
     let warmupContext = WorkerRoute.Get ("/warmup-context", GetAccess.ReadOnly)
@@ -150,7 +154,7 @@ module WorkerHttpTransport =
     Routes.diagThreadpool; Routes.status; Routes.liveValues; Routes.eval; Routes.check
     Routes.typecheckSymbols; Routes.completions; Routes.cancel; Routes.loadScript
     Routes.reset; Routes.hardReset; Routes.runTests; Routes.runTestsStream
-    Routes.testDiscovery; Routes.instrumentationMaps; Routes.shutdown
+    Routes.testDiscovery; Routes.evalLiveTestFile; Routes.instrumentationMaps; Routes.shutdown
     Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle
     Routes.hotReloadWatchAll; Routes.hotReloadUnwatchAll
     Routes.hotReloadWatchProject; Routes.hotReloadUnwatchProject
@@ -540,6 +544,15 @@ module WorkerHttpTransport =
       map Routes.testDiscovery (Func<HttpContext, Task>(fun ctx -> task {
         let rid = ctx.Request.Query["replyId"].ToString()
         return! respond' ctx (WorkerMessage.GetTestDiscovery rid)
+      })) |> ignore
+
+      map Routes.evalLiveTestFile (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let filePath = (jsonProp doc "filePath").GetString()
+        let content = (jsonProp doc "content").GetString()
+        let rid = (jsonProp doc "replyId").GetString()
+        return! respond' ctx (WorkerMessage.EvalLiveTestFile(filePath, content, rid))
       })) |> ignore
 
       map Routes.instrumentationMaps (Func<HttpContext, Task>(fun ctx -> task {
