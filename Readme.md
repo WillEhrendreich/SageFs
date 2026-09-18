@@ -1,4 +1,4 @@
-This is an experiment in testing the limits of agentic development, and so many of it's features are still in progress and not as well understood as I'd like.
+This is an experiment in testing the limits of agentic development, and so many of its features are still in progress and not as well understood as I'd like.
 Feel free to submit issues, or pull requests, if you like. 
 If you really need to get ahold of me, the most reliable way is on discord, so you can hit me up there, if you like, my name is the same on there, too.
 
@@ -13,7 +13,7 @@ A live F# engine with hot reload, live testing, and AI-agent support — for any
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-8132+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-8173+-22c55e?style=flat-square)]()
 [![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
 
 </div>
@@ -397,7 +397,7 @@ SageFs delivers that loop with a REPL-centered architecture, and goes past it: a
 2. **~350ms** — F# Compiler Service type-checks → dependency graph, reachability annotations
 3. **~500ms** — Affected-test execution via hot-eval → ✓/✗ results inline
 
-Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 654 property-based tests exercise the binary format, state machines, and event folds against generated inputs (this count is derived from source, not hand-maintained).
+Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 657 property-based tests exercise the binary format, state machines, and event folds against generated inputs (this count is derived from source, not hand-maintained).
 
 </details>
 
@@ -453,26 +453,25 @@ Erlang-style supervisor with exponential backoff (1s → 2s → 4s → max 30s).
 </details>
 
 <details>
-<summary><strong>⚡ Standby Pool — instant hard resets</strong></summary>
+<summary><strong>⚡ Spawn-First Restart — no dead window on hard reset</strong></summary>
 
 <br />
 
-SageFs maintains a pool of pre-warmed FSI sessions. Hard resets swap the active session for an already-warm one — near-instant recovery instead of a 30-60 second rebuild.
+A hard reset spawns the replacement worker *first* and only retires the old one once the new one is ready, so the session is never left without a live worker mid-swap. (`rebuild=true` still runs a `dotnet build` before the swap; `rebuild=false` reuses the current build.)
 
 </details>
 
 <details>
-<summary><strong>💾 Binary Session Persistence — instant resume</strong></summary>
+<summary><strong>💾 Binary Persistence — instant resume</strong></summary>
 
 <br />
 
-SageFs persists session state and test caches to compact binary files (`.sagefs` v3, `.sagetc` v1) for near-instant cold starts. No JSON parsing, no database — raw binary with CRC-32C integrity checking.
+SageFs persists the daemon's session registry and per-session test caches to compact binary files for near-instant cold starts. No JSON parsing, no database — raw binary with CRC-32C integrity checking.
 
-- **Session files** (`.sagefs`): Full session state — interactions, diagnostics, outputs, eval timeline
-- **Test cache files** (`.sagetc`): Test discovery results, outcomes, durations, bitmaps of affected tests
-- **Session isolation**: Each session writes to its own file, verified by property-based tests covering format corruption, round-trips, and write isolation
+- **Daemon manifest** (`.sagefm`, v1): the durable session registry — which sessions existed, their projects, and working directories, plus which was active — replayed on startup to rebuild your sessions.
+- **Test cache files** (`.sagetc`, v1): test discovery results, outcomes, durations, and coverage bitmaps of affected tests.
 
-Design: length-prefixed strings, section headers with byte-count envelopes, version negotiation, and field-level bounds checking prevent OOM from crafted inputs.
+Design: length-prefixed strings, section headers with byte-count envelopes, version negotiation, and field-level bounds checking prevent OOM from crafted inputs. The formats are verified by property-based tests covering format corruption, round-trips, and write isolation.
 
 </details>
 
