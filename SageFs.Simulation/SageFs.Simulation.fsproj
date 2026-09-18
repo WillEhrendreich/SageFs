@@ -18,6 +18,10 @@
         <Compile Include="WorkerLifecycleSim.fs" />
         <Compile Include="WorkerLifecycleInvariants.fs" />
         <Compile Include="MgrGenerators.fs" />
+        <!-- Phase 3 Brief B5: ManifestOwner / ManifestMutation concurrency + fault DST. -->
+        <Compile Include="ManifestSim.fs" />
+        <Compile Include="ManifestInvariants.fs" />
+        <Compile Include="ManifestGenerators.fs" />
     </ItemGroup>
 
     <ItemGroup>
