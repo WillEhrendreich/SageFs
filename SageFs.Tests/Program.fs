@@ -203,6 +203,22 @@ let main argv =
   let filteredArgv =
     argv |> Array.filter (fun a -> a <> "--all" && a <> "--integration" && a <> "--compliance")
 
+  // Capture this run's console output to a bounded, ANSI-stripped last-run log
+  // so the summary and failures can be re-read (or re-grepped) WITHOUT re-running
+  // the suite. The real console still gets everything, colors included; the file
+  // is the plain copy. Overwritten each run (bounded to one run) and skipped in
+  // CI. Born from the friction of losing a 55s run to a grep that missed on ANSI.
+  let inCi = match Environment.GetEnvironmentVariable "CI" with | null | "" -> false | _ -> true
+  let runCapture = System.Text.StringBuilder()
+  let originalOut = Console.Out
+  if not inCi then
+    let tee =
+      { new System.IO.TextWriter() with
+          member _.Encoding = originalOut.Encoding
+          member _.Write(c: char) = originalOut.Write c; runCapture.Append c |> ignore
+          member _.Write(s: string) = originalOut.Write s; runCapture.Append s |> ignore }
+    Console.SetOut tee
+
   let result =
     match complianceOnly with
     | true ->
@@ -235,14 +251,23 @@ let main argv =
         leaked |> List.iter (eprintfn "  %s")
         1
 
+  // Flush the captured output to the bounded, ANSI-stripped last-run log.
+  if not inCi then
+    Console.SetOut originalOut
+    try
+      let stripped = System.Text.RegularExpressions.Regex.Replace(runCapture.ToString(), "\\[[0-9;?]*[a-zA-Z]", "")
+      let bounded = if stripped.Length > 200_000 then stripped.Substring(stripped.Length - 200_000) else stripped
+      let logPath = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "test-results", "last-run.log")
+      System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName logPath) |> ignore
+      System.IO.File.WriteAllText(logPath, bounded)
+    with _ -> ()
+
   // Auto-stamp the README test-count badge from the live count as a SILENT
   // side-effect of a local suite run (writes only when the number actually
   // drifted). This replaces the old freshness test, which failed on every test
   // addition — pure churn with no signal. Skipped in CI so CI stays read-only
   // (local-first: the developer commits the fresh badge; CI only runs tests).
-  match Environment.GetEnvironmentVariable "CI" with
-  | null | "" -> (try SageFs.Tests.TestCountBadge.updateReadme () |> ignore with _ -> ())
-  | _ -> ()
+  if not inCi then (try SageFs.Tests.TestCountBadge.updateReadme () |> ignore with _ -> ())
 
   // Force exit: Kestrel ConsoleLifetime and other test infrastructure may leave
   // foreground threads alive after all tests complete, preventing clean shutdown.
