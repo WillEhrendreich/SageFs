@@ -30,7 +30,7 @@ let private frictionEvent outcome followUp =
     Duration = duration 12
     FollowUp = followUp
     ContextCost = ContextCost.Focused
-    SageFsVersion = "" }
+    SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
 [<Tests>]
 let tests =

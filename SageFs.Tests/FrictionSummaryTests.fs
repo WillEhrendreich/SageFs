@@ -23,7 +23,7 @@ let private eventWith toolName outcome followUp =
     Duration = duration 5
     FollowUp = followUp
     ContextCost = ContextCost.Tiny
-    SageFsVersion = "" }
+    SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
 [<Tests>]
 let tests =

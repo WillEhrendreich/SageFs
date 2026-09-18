@@ -31,7 +31,7 @@ let private mkEvent (tool: string) (outcome: FrictionOutcome) (atUtcOffsetSecond
     Duration = DurationMs.create 1 |> ok
     FollowUp = FollowUp.NoFollowUpYet
     ContextCost = ContextCost.Focused
-    SageFsVersion = "" }
+    SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
 /// The harvest replay pattern (observed-friction-plan.md §e /
 /// ObservedFrictionAcceptanceTests.fs): 4x "unknown (missing argument)"

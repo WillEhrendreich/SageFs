@@ -19,7 +19,7 @@ let private event =
     Duration = DurationMs.create 12 |> ok
     FollowUp = FollowUp.FollowedByTool (ToolName.create "list_tests" |> ok)
     ContextCost = ContextCost.Focused
-    SageFsVersion = "" }
+    SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
 [<Tests>]
 let tests =

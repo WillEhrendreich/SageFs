@@ -40,7 +40,7 @@ let private sampleReport () =
       Duration = duration 5
       FollowUp = FollowUp.NoFollowUpYet
       ContextCost = ContextCost.Tiny
-      SageFsVersion = "" }
+      SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
     { OccurredAtUtc = DateTimeOffset.UtcNow
       Session = session "session-1"
       Tool = tool "run_tests"
@@ -49,7 +49,7 @@ let private sampleReport () =
       Duration = duration 8
       FollowUp = FollowUp.SessionEnded
       ContextCost = ContextCost.Focused
-      SageFsVersion = "" }
+      SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
   ]
   let feedback = [
     { OccurredAtUtc = DateTimeOffset.UtcNow
@@ -80,7 +80,7 @@ let private mkEvent (toolName: string) (outcome: FrictionOutcome) (atUtcOffsetSe
     Duration = duration 1
     FollowUp = FollowUp.NoFollowUpYet
     ContextCost = ContextCost.Focused
-    SageFsVersion = "" }
+    SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
 let private harvestReplayEvents : FrictionEvent list =
   let unattributed =

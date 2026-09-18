@@ -91,17 +91,55 @@ let frictionOutcomeOf (outcome: Result<string, SageFs.SageFsError>) : SageFs.Fea
   | Ok _ -> SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.CompletedCleanly
   | Error err -> SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker (blockerKindOf err)
 
+/// Brief B9 (observed-friction-plan.md §B9) — the FSI session id "mcp"'s
+/// connection currently has active, if any. `"mcp"` here is only a dummy
+/// agentName argument: `activeSessionId`/`resolvedKey` resolve the REAL
+/// routing key from the connection-bound `currentTransportSessionId`
+/// (Mcp.fs:88-103) whenever a transport is bound, ignoring the agentName
+/// entirely in that case — so this correctly finds the calling connection's
+/// own active session without `recordToolResult` needing an agentName
+/// parameter threaded through every `withEcho*` call site. Falls back to the
+/// "mcp" sentinel (the pre-B9 behavior) only when no transport is bound
+/// (direct/unit-test calls) or the connection has no active session yet.
+let private resolvedSessionRefValue (ctx: McpContext) =
+  match activeSessionId ctx "mcp" with
+  | "" -> "mcp"
+  | sid -> sid
+
+/// Brief B9 — the resolved, connection-bound routing identity for the
+/// CURRENT call, or "" when no transport is bound (matches the additive
+/// field's back-compat default). See `resolvedSessionRefValue` above for why
+/// "mcp" is a safe dummy agentName here.
+let private resolvedAgentKeyValue () =
+  match currentTransportSessionId.Value with
+  | Some tsid when not (System.String.IsNullOrWhiteSpace tsid) -> resolvedKey "mcp"
+  | _ -> ""
+
+/// Brief B9 — a short, sanitized (never raw code/secrets/paths/emails/
+/// session-ids) summary of the failure, derived from the tool's own typed
+/// `SageFsError` via `FrictionSanitize.sanitizeText`. "" for a clean
+/// completion.
+let private errorSignatureOf (outcome: Result<string, SageFs.SageFsError>) =
+  match outcome with
+  | Ok _ -> ""
+  | Error err ->
+    SageFs.Features.FrictionSanitize.sanitizeText
+      (SageFs.SageFsError.describe err)
+      SageFs.Features.FrictionSanitize.MaxTextLen
+
 let recordToolResult (ctx: McpContext) (toolName: string) (outcome: Result<string, SageFs.SageFsError>) (elapsedMs: int) =
   let event : SageFs.Features.FrictionTelemetryTypes.FrictionEvent =
     { SageFs.Features.FrictionTelemetryTypes.FrictionEvent.OccurredAtUtc = System.DateTimeOffset.UtcNow
-      Session = SageFs.Features.FrictionTelemetryTypes.SessionRef.create "mcp" |> ok
+      Session = SageFs.Features.FrictionTelemetryTypes.SessionRef.create (resolvedSessionRefValue ctx) |> ok
       Tool = SageFs.Features.FrictionTelemetryTypes.ToolName.create toolName |> ok
       Intent = SageFs.Features.FrictionTelemetryTypes.IntentKind.ExploreCode
       Outcome = frictionOutcomeOf outcome
       Duration = SageFs.Features.FrictionTelemetryTypes.DurationMs.create elapsedMs |> ok
       FollowUp = SageFs.Features.FrictionTelemetryTypes.FollowUp.NoFollowUpYet
       ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused
-      SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current () }
+      SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current ()
+      AgentKey = resolvedAgentKeyValue ()
+      ErrorSignature = errorSignatureOf outcome }
   match ctx.FrictionStore with
   | Some store ->
     task {

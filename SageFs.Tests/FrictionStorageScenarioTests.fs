@@ -24,7 +24,7 @@ let private mkEvent () =
     Duration = duration 10
     FollowUp = FollowUp.FollowedByTool (tool "list_tests")
     ContextCost = ContextCost.Focused
-    SageFsVersion = "" }
+    SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
 let private mkFeedback () =
   { OccurredAtUtc = DateTimeOffset.UtcNow

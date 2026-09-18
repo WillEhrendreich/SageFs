@@ -163,6 +163,30 @@ type McpServerTracker() =
   member _.Count = servers.Count
   member _.PendingEvents = accumulator.Count
 
+/// Brief B9 (observed-friction-plan.md §B9) — the resolved SageFs FSI
+/// session id for the CALLING connection, or the pre-B9 "mcp" sentinel when
+/// no transport is bound or the connection has no active session yet. "mcp"
+/// is only a dummy agentName argument here: `activeSessionId`/`resolvedKey`
+/// resolve the REAL routing key from the connection-bound
+/// `currentTransportSessionId` (Mcp.fs:88-103) whenever a transport is
+/// bound, regardless of the agentName passed in.
+let private resolvedSessionRefValue (ctx: McpContext) =
+  match activeSessionId ctx "mcp" with
+  | "" -> "mcp"
+  | sid -> sid
+
+/// Brief B9 — the resolved, connection-bound routing identity, or "" when no
+/// transport is bound (matches the additive field's back-compat default).
+let private resolvedAgentKeyValue () =
+  match currentTransportSessionId.Value with
+  | Some tsid when not (String.IsNullOrWhiteSpace tsid) -> resolvedKey "mcp"
+  | _ -> ""
+
+/// Brief B9 — sanitize free text (never raw code/secrets/paths/emails/
+/// session-ids) into the bounded `ErrorSignature` field.
+let private sanitizedSignature (text: string) =
+  SageFs.Features.FrictionSanitize.sanitizeText text SageFs.Features.FrictionSanitize.MaxTextLen
+
 /// Auto-save a friction report when a tool call throws. The user's directive:
 /// "no matter what we shouldn't throw exceptions... a really great idea would
 /// be to automatically have sagefs save it's own friction report upon hitting
@@ -179,7 +203,7 @@ let recordToolFailure (ctx: McpContext) (tracker: McpServerTracker) (ex: exn) =
     | _ -> "unknown"
   let event : SageFs.Features.FrictionTelemetryTypes.FrictionEvent =
     { OccurredAtUtc = System.DateTimeOffset.UtcNow
-      Session = SageFs.Features.FrictionTelemetryTypes.SessionRef.create "mcp" |> McpTools.ok
+      Session = SageFs.Features.FrictionTelemetryTypes.SessionRef.create (resolvedSessionRefValue ctx) |> McpTools.ok
       Tool = SageFs.Features.FrictionTelemetryTypes.ToolName.create toolName |> McpTools.ok
       Intent = SageFs.Features.FrictionTelemetryTypes.IntentKind.ExploreCode
       Outcome =
@@ -188,7 +212,9 @@ let recordToolFailure (ctx: McpContext) (tracker: McpServerTracker) (ex: exn) =
       Duration = SageFs.Features.FrictionTelemetryTypes.DurationMs.create 0 |> McpTools.ok
       FollowUp = SageFs.Features.FrictionTelemetryTypes.FollowUp.NoFollowUpYet
       ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused
-      SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current () }
+      SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current ()
+      AgentKey = resolvedAgentKeyValue ()
+      ErrorSignature = sanitizedSignature ex.Message }
   // Write to the durable SQLite store if available.
   // P0 automatic-capture defect: this previously built
   //   task { ... } |> Async.AwaitTask |> ignore
@@ -207,6 +233,40 @@ let recordToolFailure (ctx: McpContext) (tracker: McpServerTracker) (ex: exn) =
   // PushEvent is for SSE state broadcasts (file reloads, test results, etc.)
   // not for friction reporting. Friction lives in the durable SQLite store
   // and is queryable via the dashboard.
+
+/// Brief B9 (observed-friction-plan.md §B9) — record a tool-call-gate
+/// rejection as a friction event. A gate rejection is exactly what
+/// `BlockerKind.AffordanceMismatch` means (the tool-call gate refused to run
+/// the tool body at all), but before this it was never recorded — the
+/// `ObservedFrictionInvalidState` detector (registered since Brief B6) was
+/// structurally correct but starved of matching input. This is what finally
+/// gives it real data. Module-level (not nested in the request filter
+/// closure) so it is independently unit-testable, same shape as
+/// `recordToolFailure` above. Never throws — recording is best-effort.
+let recordGateRejection (ctx: McpContext) (toolName: string) (gateError: string) =
+  let event : SageFs.Features.FrictionTelemetryTypes.FrictionEvent =
+    { OccurredAtUtc = System.DateTimeOffset.UtcNow
+      Session = SageFs.Features.FrictionTelemetryTypes.SessionRef.create (resolvedSessionRefValue ctx) |> McpTools.ok
+      Tool = SageFs.Features.FrictionTelemetryTypes.ToolName.create toolName |> McpTools.ok
+      Intent = SageFs.Features.FrictionTelemetryTypes.IntentKind.ExploreCode
+      Outcome =
+        SageFs.Features.FrictionTelemetryTypes.FrictionOutcome.EncounteredBlocker
+          SageFs.Features.FrictionTelemetryTypes.BlockerKind.AffordanceMismatch
+      Duration = SageFs.Features.FrictionTelemetryTypes.DurationMs.create 0 |> McpTools.ok
+      FollowUp = SageFs.Features.FrictionTelemetryTypes.FollowUp.NoFollowUpYet
+      ContextCost = SageFs.Features.FrictionTelemetryTypes.ContextCost.Focused
+      SageFsVersion = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current ()
+      AgentKey = resolvedAgentKeyValue ()
+      ErrorSignature = sanitizedSignature gateError }
+  match ctx.FrictionStore with
+  | Some store ->
+    try
+      SageFs.Features.McpFrictionRecorder.Recorder.appendEventDirect store event
+      |> Async.AwaitTask
+      |> Async.RunSynchronously
+      |> ignore
+    with _ -> ()
+  | None -> ()
 
 /// Build a structured MCP `tools/call` error result from a `SageFsError`:
 /// sets `IsError = true` (per the protocol doc on `CallToolResult.IsError`,
@@ -374,7 +434,10 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
               mcpCtx "mcp" None workingDirectoryArg toolName
         }
 
-      let buildGateErrorResult (gateError: string) =
+      let buildGateErrorResult (toolName: string) (gateError: string) =
+        // Never throw or block the gate-rejection response on the friction
+        // write — recording is best-effort, exactly like recordToolFailure.
+        recordGateRejection mcpCtx toolName gateError
         let result = CallToolResult()
         result.IsError <- Nullable true
         result.Content.Add(TextContentBlock(Text = gateError))
@@ -395,7 +458,7 @@ let createServerCaptureFilter (mcpCtx: McpContext) (tracker: McpServerTracker) =
               let! gateResult = enforceToolGate requestName
               match gateResult with
               | Error gateError ->
-                return buildGateErrorResult gateError
+                return buildGateErrorResult requestName gateError
               | Ok _ ->
                 let! result = next.Invoke(ctx, ct).AsTask()
                 return appendEvents result
