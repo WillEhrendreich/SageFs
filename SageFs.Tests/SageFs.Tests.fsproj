@@ -115,6 +115,7 @@
         <Compile Include="AppOutputTests.fs" />
         <Compile Include="ExplorationTests.fs" />
         <Compile Include="HotReloadTests.fs" />
+        <Compile Include="HotReloadingDiscoveryGateTests.fs" />
         <Compile Include="HotReloadStateTests.fs" />
         <Compile Include="MutationTestingFramework.fs" />
         <Compile Include="HotReloadStateMutationTests.fs" />

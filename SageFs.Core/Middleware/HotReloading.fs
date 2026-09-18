@@ -786,10 +786,19 @@ let hotReloadingMiddleware next (request, st: AppState) =
 
         // Live testing hook: discover tests and detect providers.
         // Skip discovery when no methods were updated (expression-only evals)
-        // unless this is the first eval where we need initial test discovery.
+        // unless this is the first eval where we need initial test discovery,
+        // or the caller explicitly forces a rediscovery scan (e.g. the daemon
+        // asking eval-time discovery to catch a brand-new [<Tests>] value that
+        // detoured no existing method — see live-testing-asyoutype-plan.md
+        // Brief 2). The force flag only WIDENS scanning; it never changes the
+        // result for a submission with no [<Tests>] value in it.
         let needsInitialScan = reloadingSt.LiveTestInit = LiveTestInit.Pending && not (List.isEmpty reloadingSt.ProjectAssemblies)
+        let forceRediscover =
+          match Map.tryFind "liveTestRediscover" request.Args with
+          | Some v when v = box true -> true
+          | _ -> false
         let hookResult, reloadingSt =
-          match not (List.isEmpty updatedMethods) || needsInitialScan with
+          match not (List.isEmpty updatedMethods) || needsInitialScan || forceRediscover with
           | true ->
             let fsiHookResult =
               SageFs.Features.LiveTesting.LiveTestingHook.afterReload
