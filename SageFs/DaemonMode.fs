@@ -1820,14 +1820,16 @@ let run
     loop 0
 
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =
-    { Rebase = fun _landingId onto ->
+    { Rebase = fun _landingId onto commits ->
         async {
           match McpTools.cohortIntegrationRef.Value with
           | None -> return Error(cohortIntegrationNotConfigured ())
           | Some binding ->
-            let! headBefore = Features.CohortGit.revParse binding.WorktreePath "HEAD"
-            Log.info "[cohort-landing] Rebase worktree=%s HEAD-before=%A onto=%s" binding.WorktreePath headBefore onto
-            let! result = Features.CohortGit.rebase binding.WorktreePath onto
+            Log.info "[cohort-landing] Rebase worktree=%s onto=%s commits=%A" binding.WorktreePath onto commits
+            // Bring the member's OWN commits onto the integration head — the
+            // realistic model: a member's commits live on their own branch, not
+            // pre-positioned in the integration worktree.
+            let! result = Features.CohortGit.rebaseCommitsOnto binding.WorktreePath onto commits
             Log.info "[cohort-landing] Rebase result=%A" result
             match result with
             | Ok realNewHead -> return Ok realNewHead

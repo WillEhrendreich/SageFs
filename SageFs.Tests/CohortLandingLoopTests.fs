@@ -52,7 +52,7 @@ let private neverCompletes<'a> () : Async<'a> = Async.AwaitTask(TaskCompletionSo
 /// `Rebasing` can happen), so they also never complete — reaching them would
 /// itself be a test bug, not a value worth returning.
 let private frozenAtRebasePerformer : CohortOwner.LandingPerformer<MemberId> = {
-  Rebase = fun _ _ -> neverCompletes ()
+  Rebase = fun _ _ _ -> neverCompletes ()
   ComputeAffected = fun _ _ _ -> neverCompletes ()
   RunTests = fun _ _ -> neverCompletes ()
   FastForward = fun _ _ -> neverCompletes ()
@@ -72,7 +72,7 @@ let private happyPathPerformer
   (failingTests: TestId list)
   (fastForwardShaOf: string -> string)
   : CohortOwner.LandingPerformer<MemberId> =
-  { Rebase = fun _ onto -> async { return Ok(onto + "-rebased") }
+  { Rebase = fun _ onto _ -> async { return Ok(onto + "-rebased") }
     ComputeAffected = fun _ _ _ -> async { return Ok affectedTests }
     RunTests = fun _ _ -> async { return Ok failingTests }
     FastForward = fun _ toSha -> async { return Ok(fastForwardShaOf toSha) }
@@ -153,7 +153,7 @@ let cohortLandingLoopTests =
       let ledger = InMemory.create<MemberId> ()
       let performer = {
         frozenAtRebasePerformer with
-          Rebase = fun _ _ -> async { return Error [ "Conflicting.fs" ] }
+          Rebase = fun _ _ _ -> async { return Error [ "Conflicting.fs" ] }
       }
       use owner = CohortOwner.startWithPerformer silentLogger ledger (fixedClock epoch) (counterEntropy ()) (fun _ -> ([], [], [], 0L)) performer
       let! _ = owner.Commit(CohortCommand.Join(alice, JoinableRole.Implementer, None))

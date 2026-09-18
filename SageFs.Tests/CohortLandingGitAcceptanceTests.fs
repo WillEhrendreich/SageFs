@@ -145,9 +145,9 @@ let private writeAndCommit (dir: string) (relPath: string) (content: string) (me
 /// `ComputeAffected`/`RunTests` are the documented stubs (see this file's
 /// header).
 let private gitBackedPerformer (integrationWorktree: string) (mainRepo: string) (branch: string) : CohortOwner.LandingPerformer<MemberId> =
-  { Rebase = fun _ onto ->
+  { Rebase = fun _ onto commits ->
       async {
-        let! result = CohortGit.rebase integrationWorktree onto
+        let! result = CohortGit.rebaseCommitsOnto integrationWorktree onto commits
         match result with
         | Ok realNewHead -> return Ok realNewHead
         | Error files -> return Error files

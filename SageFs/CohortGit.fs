@@ -242,6 +242,54 @@ let rebase (repoDir: string) (onto: string) : Async<Result<string, string list>>
         | files -> return Error files
   }
 
+/// Replay the member's OWN commits onto `onto` in the integration worktree —
+/// the realistic cohort model: a member's commits live on their own
+/// branch/checkout (reachable in the shared object store), and landing brings
+/// them onto the integration head. Takes the member's commit tip (the last of
+/// `commits`), force-checks-it-out detached (`--force` discards any dirty
+/// tracked build output the integration session's warmup rebuild may have left,
+/// which would otherwise block the checkout), computes the merge base with
+/// `onto`, and rebases `--onto onto` so ONLY the member's own commits are
+/// replayed — never `onto`'s own history. Returns the new head sha (the
+/// FastForward target) or the conflicting files, exactly like `rebase`. A
+/// landing with no commits is a caller error, never a silent no-op land.
+let rebaseCommitsOnto (repoDir: string) (onto: string) (commits: string list) : Async<Result<string, string list>> =
+  async {
+    match commits |> List.tryLast with
+    | None -> return Error(infraError "landing carries no commits to replay onto the integration head")
+    | Some memberTip ->
+      let! checkoutResult = runGit repoDir worktreeTimeout [ "checkout"; "--force"; "--detach"; memberTip ]
+      match checkoutResult with
+      | Error reason -> return Error(infraError (sprintf "could not check out member commit %s: %s" memberTip reason))
+      | Ok _ ->
+        let! mbResult = runGit repoDir shortTimeout [ "merge-base"; onto; memberTip ]
+        match mbResult with
+        | Error reason -> return Error(infraError (sprintf "could not find the merge base of %s and %s: %s" onto memberTip reason))
+        | Ok mergeBaseRaw ->
+          let mergeBase = mergeBaseRaw.Trim()
+          let! rebaseResult = runGit repoDir rebaseTimeout [ "rebase"; "--onto"; onto; mergeBase ]
+          match rebaseResult with
+          | Ok _ ->
+            let! head = revParse repoDir "HEAD"
+            match head with
+            | Ok sha -> return Ok sha
+            | Error reason -> return Error(infraError reason)
+          | Error rebaseReason ->
+            let! inProgress = isRebaseInProgress repoDir
+            match inProgress with
+            | false -> return Error(infraError rebaseReason)
+            | true ->
+              let! conflictResult = runGit repoDir shortTimeout [ "diff"; "--name-only"; "--diff-filter=U" ]
+              let conflictFiles =
+                match conflictResult with
+                | Ok text -> splitLines text
+                | Error _ -> []
+              let! _abort = runGit repoDir shortTimeout [ "rebase"; "--abort" ]
+              match conflictFiles with
+              | [] -> return Error(infraError (sprintf "rebase --onto %s left a rebase in progress with no conflicting files: %s" onto rebaseReason))
+              | files -> return Error files
+  }
+
 /// Fast-forwards `refs/heads/<branch>` to `toSha` without ever creating a
 /// merge commit and without requiring `branch` to be checked out: resolves
 /// the branch's current sha, verifies it is an ancestor of `toSha` via

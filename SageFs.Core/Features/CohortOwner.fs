@@ -72,7 +72,10 @@ module CohortOwner =
   ///    for forward compatibility and is exercised by no production path
   ///    yet.
   type LandingPerformer<'m> = {
-    Rebase: string -> string -> Async<Result<string, string list>>
+    /// `Rebase landingId onto commits` — replay the member's own `commits`
+    /// onto `onto` in the integration worktree, returning the new head sha or
+    /// the conflicting files.
+    Rebase: string -> string -> string list -> Async<Result<string, string list>>
     /// `Ok tests` = the affected set was computed against a trustworthy,
     /// settled integration session. `Error reason` = the session could not be
     /// read reliably (e.g. still rebuilding after the rebase), so the affected
@@ -105,7 +108,7 @@ module CohortOwner =
     /// a later slice (14c) uses to inject the real `CohortGit`-backed
     /// performer.
     let stub<'m> : LandingPerformer<'m> =
-      { Rebase = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<string, string list>>().Task)
+      { Rebase = fun _ _ _ -> Async.AwaitTask(TaskCompletionSource<Result<string, string list>>().Task)
         ComputeAffected = fun _ _ _ -> Async.AwaitTask(TaskCompletionSource<Result<TestId list, string>>().Task)
         RunTests = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<TestId list, string>>().Task)
         FastForward = fun _ _ -> Async.AwaitTask(TaskCompletionSource<Result<string, string>>().Task)
@@ -212,11 +215,11 @@ module CohortOwner =
       // this a stalled landing is invisible to anyone reading the log.
       logger.LogInfo(sprintf "[cohort-owner] dispatch %A" effect)
       match effect with
-      | CohortEffect.Rebase(LandingId id, onto) ->
+      | CohortEffect.Rebase(LandingId id, onto, commits) ->
         Async.Start(
           async {
-            let! result = performer.Rebase id onto
-            logger.LogInfo(sprintf "[cohort-owner] Rebase(%s onto %s) -> %A" id onto result)
+            let! result = performer.Rebase id onto commits
+            logger.LogInfo(sprintf "[cohort-owner] Rebase(%s onto %s commits=%A) -> %A" id onto commits result)
             complete (CohortCommand.RebaseCompleted(LandingId id, result))
           }
         )

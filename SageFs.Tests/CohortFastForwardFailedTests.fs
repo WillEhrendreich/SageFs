@@ -70,7 +70,7 @@ let decideTests =
         events
         |> Expect.equal "a LandingStateChanged event fires" [ CohortEvent.LandingStateChanged(landingId, LandingState.Rebasing "H0") ]
         effects
-        |> Expect.equal "a fresh Rebase effect is emitted so the pipeline actually retries" [ CohortEffect.Rebase(landingId, "H0") ]
+        |> Expect.equal "a fresh Rebase effect is emitted so the pipeline actually retries" [ CohortEffect.Rebase(landingId, "H0", [ "c1" ]) ]
       | Error err -> failtestf "expected Ok, got %A" err
 
     testCase "WHY — a FastForward infra failure with a MOVED head reuses the real HeadMoved diagnosis, never mislabeled as a plain retry" <| fun () ->
@@ -167,7 +167,7 @@ let cohortFastForwardFailedOwnerTests =
       let ledger = InMemory.create<MemberId> ()
       let mutable fastForwardCalls = 0
       let performer : CohortOwner.LandingPerformer<MemberId> = {
-        Rebase = fun _ onto -> async { return Ok(onto + "-rebased") }
+        Rebase = fun _ onto _ -> async { return Ok(onto + "-rebased") }
         ComputeAffected = fun _ _ _ -> async { return Ok [ TestId "t1" ] }
         RunTests = fun _ _ -> async { return Ok [] }
         FastForward = fun _ toSha ->

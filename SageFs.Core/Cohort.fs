@@ -446,7 +446,14 @@ module Cohort =
   /// them, and posts a typed completion back as a command (§7.1).
   [<RequireQualifiedAccess>]
   type CohortEffect<'m> =
-    | Rebase of LandingId * onto: string
+    /// Replay the member's own `commits` (their landing request's `Commits`,
+    /// reachable in the shared object store) onto `onto` in the integration
+    /// worktree — the realistic cohort model: a member's commits live on their
+    /// OWN branch/checkout, and landing brings them onto the integration head.
+    /// (Earlier this carried only `onto` and rebased whatever the worktree HEAD
+    /// already was, which silently required the caller to pre-position the
+    /// worktree at the commits — the integration worktree never had them.)
+    | Rebase of LandingId * onto: string * commits: string list
     | ComputeAffected of LandingId * baseSha: string * headSha: string
     | RunTests of LandingId * TestId list
     | FastForward of LandingId * toSha: string
@@ -547,7 +554,7 @@ module Cohort =
         let onto = state.IntegrationHead
         let rebasing = { req with State = LandingState.Rebasing onto }
         let newState = { state with Landings = Map.add next rebasing state.Landings }
-        newState, [ CohortEvent.LandingStateChanged(next, rebasing.State) ], [ CohortEffect.Rebase(next, onto) ]
+        newState, [ CohortEvent.LandingStateChanged(next, rebasing.State) ], [ CohortEffect.Rebase(next, onto, req.Commits) ]
       // default policy: a front-of-queue landing that is missing (should not
       // happen) or already past Queued (Rebasing/Verifying/Blocked/Landed/
       // Withdrawn) needs no fresh Rebase effect — a no-op for every
@@ -935,7 +942,7 @@ module Cohort =
             | false ->
               let rebasing = { req with State = LandingState.Rebasing base' }
               let newState = { state with Landings = Map.add id rebasing state.Landings }
-              Ok(newState, [ CohortEvent.LandingStateChanged(id, rebasing.State) ], [ CohortEffect.Rebase(id, base') ])
+              Ok(newState, [ CohortEvent.LandingStateChanged(id, rebasing.State) ], [ CohortEffect.Rebase(id, base', req.Commits) ])
           // default policy: FastForwardFailed only re-enters the rebase loop
           // for a landing that is actually Verifying — every other
           // LandingState is refused as out-of-order, by construction, for
