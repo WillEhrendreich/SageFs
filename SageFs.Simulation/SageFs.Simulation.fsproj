@@ -39,6 +39,10 @@
         <!-- Phase 3A / B4: revision-stamped scenario identity + saved-seed
              regression corpus. -->
         <Compile Include="SeedCorpus.fs" />
+        <!-- Phase 3C / Brief B8: pure fault-injection combinators (clock
+             skew, reorder, drop, duplicate) composing over the generators
+             and the manifest sim (B5). -->
+        <Compile Include="FaultInjection.fs" />
     </ItemGroup>
 
     <ItemGroup>
