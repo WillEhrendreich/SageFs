@@ -323,6 +323,18 @@
          <Compile Include="McpFrictionSummaryToolTests.fs" />
          <Compile Include="FrictionSqliteEndToEndTests.fs" />
          <Compile Include="FrictionReviewViewTests.fs" />
+         <!-- Observed (passive) friction — foundation tests (Brief B0),
+              then one pending stub per Wave-1 detector brief (B1-B6, each
+              flips its own `ptestCase` -> `testCase` when it lands), then
+              the harvest-replay acceptance test (pending until B1+B3). -->
+         <Compile Include="ObservedFrictionTypesTests.fs" />
+         <Compile Include="ObservedFrictionPollingTests.fs" />
+         <Compile Include="ObservedFrictionResetThrashTests.fs" />
+         <Compile Include="ObservedFrictionUnattributedTests.fs" />
+         <Compile Include="ObservedFrictionResolutionTests.fs" />
+         <Compile Include="ObservedFrictionRepetitionTests.fs" />
+         <Compile Include="ObservedFrictionInvalidStateTests.fs" />
+         <Compile Include="ObservedFrictionAcceptanceTests.fs" />
          <Compile Include="TargetedVerifyMcpToolTests.fs" />
          <Compile Include="JupyterKernelTests.fs" />
          <Compile Include="JupyterDaemonBridgeTests.fs" />

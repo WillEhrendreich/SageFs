@@ -120,6 +120,18 @@
              moved to SageFs.fsproj — friction storage is daemon-only; the
              worker process (SageFs.Host) never referenced them, so they
              pulled Microsoft.Data.Sqlite into its closure for nothing. -->
+        <!-- Observed (passive) friction — pure derivation over FrictionEvent
+             (observed-friction-plan.md). Types first, then one stub file per
+             Wave-1 detector brief (B1-B6, each a no-op `[] `until its brief
+             lands), then the engine that registers every stub. -->
+        <Compile Include="Features\ObservedFrictionTypes.fs" />
+        <Compile Include="Features\ObservedFriction.Polling.fs" />
+        <Compile Include="Features\ObservedFriction.ResetThrash.fs" />
+        <Compile Include="Features\ObservedFriction.Unattributed.fs" />
+        <Compile Include="Features\ObservedFriction.Resolution.fs" />
+        <Compile Include="Features\ObservedFriction.Repetition.fs" />
+        <Compile Include="Features\ObservedFriction.InvalidState.fs" />
+        <Compile Include="Features\ObservedFriction.fs" />
         <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />
         <Compile Include="SageFsError.fs" />
