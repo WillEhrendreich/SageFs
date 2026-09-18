@@ -235,6 +235,15 @@ let main argv =
         leaked |> List.iter (eprintfn "  %s")
         1
 
+  // Auto-stamp the README test-count badge from the live count as a SILENT
+  // side-effect of a local suite run (writes only when the number actually
+  // drifted). This replaces the old freshness test, which failed on every test
+  // addition — pure churn with no signal. Skipped in CI so CI stays read-only
+  // (local-first: the developer commits the fresh badge; CI only runs tests).
+  match Environment.GetEnvironmentVariable "CI" with
+  | null | "" -> (try SageFs.Tests.TestCountBadge.updateReadme () |> ignore with _ -> ())
+  | _ -> ()
+
   // Force exit: Kestrel ConsoleLifetime and other test infrastructure may leave
   // foreground threads alive after all tests complete, preventing clean shutdown.
   Environment.Exit result

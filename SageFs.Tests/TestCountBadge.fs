@@ -3,8 +3,11 @@
 /// The numbers are derived from a live source, never hand-typed: the total is
 /// the count of runnable test cases Expecto discovers in this assembly, and the
 /// property count is every property-test declaration in the test source. A
-/// freshness test (ReadmeBadgeTests) fails when the README drifts from these,
-/// and `dotnet run --project SageFs.Tests -- --update-badge` restamps it.
+/// local suite run auto-stamps the README from these at the end of the run (see
+/// Program.fs — silent, write-only-when-changed, skipped in CI), and
+/// `dotnet run --project SageFs.Tests -- --update-badge` restamps on demand.
+/// There is deliberately NO test asserting the count — that only ever failed on
+/// adding tests, which is churn, not signal.
 ///
 /// Every function here was dogfooded in the SageFs REPL before it landed:
 /// countLeaves against a known 7-leaf tree, the stamp/parse regexes against the

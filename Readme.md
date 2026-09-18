@@ -13,7 +13,7 @@ A live F# engine with hot reload, live testing, and AI-agent support — for any
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-8000+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-8002+-22c55e?style=flat-square)]()
 [![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
 
 </div>
