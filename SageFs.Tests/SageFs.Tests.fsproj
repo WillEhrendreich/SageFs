@@ -199,6 +199,7 @@
          <Compile Include="SessionManagerCqrsTests.fs" />
          <Compile Include="SessionManagerRestartTombstoneTests.fs" />
          <Compile Include="SessionManagerSpawnFirstRestartTests.fs" />
+         <Compile Include="CreateSessionDedupeTests.fs" />
          <Compile Include="SessionManagerMailboxSupervisionTests.fs" />
          <Compile Include="AutoCompletionAndEventsTests.fs" />
          <Compile Include="DrawAndRectPrimitivesTests.fs" />
