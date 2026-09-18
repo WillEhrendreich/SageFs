@@ -36,6 +36,10 @@
         <!-- Brief B2: deterministic delta-debugging (ddmin) shrinker for
              failing Scenario/MgrScenario reproducers. -->
         <Compile Include="Shrink.fs" />
+        <!-- Phase 3C / Brief B8: pure fault-injection combinators (clock
+             skew, reorder, drop, duplicate) composing over the generators
+             and the manifest sim (B5). -->
+        <Compile Include="FaultInjection.fs" />
     </ItemGroup>
 
     <ItemGroup>

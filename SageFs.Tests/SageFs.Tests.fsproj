@@ -267,6 +267,7 @@
         <Compile Include="DstOracleTests.fs" />
         <Compile Include="WorkerLifecycleSimTests.fs" />
         <Compile Include="ManifestSimTests.fs" />
+        <Compile Include="DstFaultInjectionTests.fs" />
         <Compile Include="SupervisorSimTests.fs" />
         <Compile Include="DstCoverageTests.fs" />
         <Compile Include="DstShrinkTests.fs" />
