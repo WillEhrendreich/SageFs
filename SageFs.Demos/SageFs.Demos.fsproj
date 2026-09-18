@@ -62,6 +62,7 @@
     <Compile Include="Runtime.Neovim.fs" />
     <Compile Include="Runtime.App.fs" />
     <Compile Include="Runtime.Agent.fs" />
+    <Compile Include="Runtime.Cohort.fs" />
     <Compile Include="Runtime.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

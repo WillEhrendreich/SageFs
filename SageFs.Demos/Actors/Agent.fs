@@ -483,6 +483,107 @@ let parseWire (wireSelector: string) : (string * string) option =
   | [| stepLabel; toolName |] -> Some(stepLabel, toolName)
   | _ -> None
 
+/// WIDENED wire encoding, added alongside (never replacing) `parseWire`
+/// above: a sibling parser for a 4-field form that can drive an ARBITRARY
+/// MCP tool with its own agent identity and a wire-carried expected
+/// substring -- the vocabulary cohort scenarios need (`join_cohort`,
+/// `acquire_claim`, `set_integration_ref`, `request_landing`,
+/// `get_cohort_status`, ...), none of which fit the legacy form's
+/// per-tool `argumentsFor`/`expectedSubstringFor` lookup tables (those are
+/// keyed on a small, fixed tool set and have no notion of "which agent").
+/// `parseWire` itself is left byte-for-byte unchanged -- its 2-field
+/// contract (and its exact `(string * string) option` return shape) is
+/// exercised directly by `AgentTests.fs`, which this island does not
+/// edit -- so this is a NEW function, detected purely by field count
+/// after splitting on the SAME `\u001e` (RS) separator and stripping the
+/// SAME synthetic `:has-text("")` suffix `Runtime.fs`'s `wireStepOf`
+/// always appends onto a `PageTextContains` selector. A selector can only
+/// ever match one of the two field counts, so trying both parsers is
+/// unambiguous and neither can accidentally shadow the other.
+///
+/// EXACT WIRE FORMAT (this is the contract a phase-C `cohortStep`
+/// scenario helper must produce -- see also `parseArgsEncoded` below):
+///
+///   "<agentName>\u001e<toolName>\u001e<argsEncoded>\u001e<expected>"
+///
+/// - `agentName`   -- the cohort member making this call (e.g.
+///                   "alice", "bob"). Prepended as
+///                   `("agentName", agentName)` onto the MCP `arguments`
+///                   list sent to `toolName` -- every cohort tool
+///                   takes `agentName` as a required argument, so callers
+///                   never repeat it inside `argsEncoded`.
+/// - `toolName`    -- any MCP tool name, passed straight to
+///                   `Rpc.callTool` (already fully generic: toolName +
+///                   `(string * string) list` args -> response text --
+///                   no per-tool arguments recipe is needed here, unlike
+///                   the legacy form's `argumentsFor`).
+/// - `argsEncoded` -- the REMAINING tool arguments (beyond
+///                   `agentName`), as `;;`-delimited `key=value` pairs,
+///                   e.g. `"role=Implementer;;working_directory=/fixture"`.
+///                   `;;` was chosen because it collides with neither the
+///                   field separator (`\u001e`) nor the `=` inside a
+///                   pair. Each pair splits on its FIRST `=` only, so a
+///                   value that itself contains `=` (a commit
+///                   `statement`, say) survives intact. An empty string
+///                   decodes to `[]` -- for a tool that needs only
+///                   `agentName`, e.g. `get_cohort_status`.
+/// - `expected`    -- the WIRE-CARRIED substring the poll loop checks
+///                   for in the tool's raw text response, taking the
+///                   place the legacy form's fixed per-tool
+///                   `expectedSubstringFor` lookup plays. This is
+///                   essential, not optional convenience: cohort beats
+///                   need DIFFERENT expected wording from the SAME tool
+///                   depending on the beat -- e.g. `acquire_claim`
+///                   expects a claim id on a clean claim, but must expect
+///                   the SPECIFIC conflict wording (naming the current
+///                   holder, e.g. "already claimed by") on a
+///                   deliberately-rejected one; the generic "doesn't look
+///                   like a failure" sniff (`looksLikeFailure`) would
+///                   wrongly FAIL that rejected-claim beat, since a
+///                   conflict response legitimately contains no "Error"
+///                   text of its own. An empty `expected` still falls
+///                   back to that same generic
+///                   `not (looksLikeFailure response)` check, for a
+///                   cohort tool call with nothing tool-specific to
+///                   assert.
+///
+/// Not `private`: mirrors `parseWire` being non-private for
+/// `AgentTests.fs` -- a cohort-focused test file can round-trip this
+/// the same way, against the real
+/// (agentName, toolName, argsEncoded, expected) tuple, without touching
+/// `parseWire`'s own existing contract.
+let parseCohortWire (wireSelector: string) : (string * string * string * string) option =
+  let suffix = ":has-text(\"\")"
+
+  let stripped =
+    if wireSelector.EndsWith suffix then
+      wireSelector.Substring(0, wireSelector.Length - suffix.Length)
+    else
+      wireSelector
+
+  match stripped.Split '' with
+  | [| agentName; toolName; argsEncoded; expected |] -> Some(agentName, toolName, argsEncoded, expected)
+  | _ -> None
+
+/// Decodes `parseCohortWire`'s `argsEncoded` field -- see that
+/// function's doc comment for the exact format: `;;`-delimited
+/// `key=value` pairs, each split on its FIRST `=` only. An
+/// empty/whitespace-only input, or a pair with no `=` at all, contributes
+/// nothing (never a crash on a malformed pair -- this actor fails a
+/// step by returning `false`/an error transcript entry, never by
+/// throwing).
+let parseArgsEncoded (argsEncoded: string) : (string * string) list =
+  if String.IsNullOrEmpty argsEncoded then
+    []
+  else
+    argsEncoded.Split([| ";;" |], StringSplitOptions.None)
+    |> Array.filter (fun pair -> pair <> "")
+    |> Array.choose (fun pair ->
+      match pair.IndexOf '=' with
+      | -1 -> None
+      | i -> Some(pair.Substring(0, i), pair.Substring(i + 1)))
+    |> Array.toList
+
 let private sampleDir (repoRoot: string) : string =
   Path.Combine(repoRoot, Sample.relativePath Sample.WebappDatastar)
 
@@ -537,11 +638,82 @@ let private expectedSubstringFor (toolName: string) : string =
 let private looksLikeFailure (response: string) : bool =
   response.StartsWith "Error" || response.Contains "already exists"
 
+/// Shared poll loop for BOTH wire forms once `stepLabel`/`toolName`/
+/// `arguments`/`expected` have been resolved (the legacy form resolves
+/// them from `RepoRoot`/`argumentsFor`/`expectedSubstringFor`; the
+/// widened cohort form resolves them directly from the wire — see
+/// `parseCohortWire`'s doc comment). Repeatedly calls the tool over a
+/// real MCP round trip, pushes every real response to the transcript, and
+/// succeeds as soon as the response contains `expected` — or, when
+/// `expected = ""`, as soon as it doesn't look like a failure
+/// (`looksLikeFailure`, the legacy form's own fallback, preserved
+/// exactly). Never a fabricated "waiting..." line: a real poll loop, not
+/// a single shot, because `get_fsi_status` genuinely needs to be asked
+/// more than once while a real cold FSI warmup finishes (§9's own "a real
+/// session warmup can genuinely take longer than a UI-click expectation
+/// ever needed to" — the exact reasoning `CellAgent.fs`'s own 90s
+/// expectation ceiling documents), and a cohort `request_landing`/
+/// `get_cohort_status` pair needs the identical polling shape while the
+/// daemon runs the landing's test matrix.
+let private pollTool
+  (handle: Handle)
+  (stepLabel: string)
+  (toolName: string)
+  (arguments: (string * string) list)
+  (expected: string)
+  (timeoutMs: float)
+  : Async<bool> =
+  async {
+    match! ensureInitialized handle with
+    | Error e ->
+      do! pushEntry handle.Page { Step = stepLabel; Tool = "initialize"; Ok = false; Response = e }
+      return false
+    | Ok() ->
+
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let mutable outcome = None
+
+    while outcome.IsNone && float sw.ElapsedMilliseconds < timeoutMs do
+      match! Rpc.callTool handle.Session toolName arguments with
+      | Error e ->
+        do! pushEntry handle.Page { Step = stepLabel; Tool = toolName; Ok = false; Response = e }
+        outcome <- Some false
+      | Ok response ->
+        let matched =
+          if expected = "" then
+            not (looksLikeFailure response)
+          else
+            response.Contains expected
+
+        do! pushEntry handle.Page { Step = stepLabel; Tool = toolName; Ok = matched; Response = response }
+
+        if matched then
+          outcome <- Some true
+        else
+          do! Async.Sleep 1000
+
+    return outcome |> Option.defaultValue false
+  }
+
 let toLiveActor (handle: Handle) : LiveActor =
   let resolveRect (_selector: string) : Async<ScreenRect option> = async { return None }
 
   let observe (wireSelector: string) (timeoutMs: float) : Async<bool> =
     async {
+      // Try the WIDENED 4-field cohort form first (an arbitrary tool +
+      // agentName + wire-carried expected). It can never collide with the
+      // legacy 2-field form — a selector's field count picks exactly one
+      // parser — so trying it first costs nothing on a legacy selector
+      // (`parseCohortWire` returns None immediately on a 2-field split).
+      match parseCohortWire wireSelector with
+      | Some(agentName, toolName, argsEncoded, expected) ->
+        let stepLabel = sprintf "%s -> %s" agentName toolName
+        let arguments = ("agentName", agentName) :: parseArgsEncoded argsEncoded
+        return! pollTool handle stepLabel toolName arguments expected timeoutMs
+      | None ->
+
+      // Fall back to the ORIGINAL `agent-mcp` encoding, unchanged: same
+      // checks, same order, same error text as before this widening.
       match parseWire wireSelector with
       | None -> return false
       | Some(stepLabel, toolName) ->
@@ -565,43 +737,8 @@ let toLiveActor (handle: Handle) : LiveActor =
         return false
       | Ok arguments ->
 
-      match! ensureInitialized handle with
-      | Error e ->
-        do! pushEntry handle.Page { Step = stepLabel; Tool = "initialize"; Ok = false; Response = e }
-        return false
-      | Ok() ->
-
       let expected = expectedSubstringFor toolName
-      let sw = Diagnostics.Stopwatch.StartNew()
-      let mutable outcome = None
-
-      // A real poll loop, not a single shot: `get_fsi_status` genuinely
-      // needs to be asked more than once while a real cold FSI warmup
-      // finishes (§9's own "a real session warmup can genuinely take
-      // longer than a UI-click expectation ever needed to" — the exact
-      // reasoning `CellAgent.fs`'s own 90s expectation ceiling documents).
-      // Every iteration is a genuine, separate MCP round trip, pushed to
-      // the transcript as it happens — never a fabricated "waiting..." line.
-      while outcome.IsNone && float sw.ElapsedMilliseconds < timeoutMs do
-        match! Rpc.callTool handle.Session toolName arguments with
-        | Error e ->
-          do! pushEntry handle.Page { Step = stepLabel; Tool = toolName; Ok = false; Response = e }
-          outcome <- Some false
-        | Ok response ->
-          let matched =
-            if expected = "" then
-              not (looksLikeFailure response)
-            else
-              response.Contains expected
-
-          do! pushEntry handle.Page { Step = stepLabel; Tool = toolName; Ok = matched; Response = response }
-
-          if matched then
-            outcome <- Some true
-          else
-            do! Async.Sleep 1000
-
-      return outcome |> Option.defaultValue false
+      return! pollTool handle stepLabel toolName arguments expected timeoutMs
     }
 
   { Id = ActorId.Agent
