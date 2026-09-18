@@ -111,6 +111,8 @@ let testHandler (msg: WorkerMessage) : Async<WorkerResponse> = async {
     return WorkerResponse.TestRunResults(rid, [||])
   | WorkerMessage.GetTestDiscovery rid ->
     return WorkerResponse.InitialTestDiscovery([||], [])
+  | WorkerMessage.EvalLiveTestFile(_, _, rid) ->
+    return WorkerResponse.EvalLiveTestFileResult(rid, Ok ([||], []))
   | WorkerMessage.GetInstrumentationMaps rid ->
     return WorkerResponse.InstrumentationMapsResult(rid, [||])
   | WorkerMessage.GetLiveValues rid ->

@@ -44,6 +44,9 @@ module HttpWorkerClient =
       Some (Serialization.serialize {| tests = tests; maxParallelism = maxParallelism; replyId = rid |})
     | WorkerMessage.GetTestDiscovery rid ->
       "GET", sprintf "/test-discovery?replyId=%s" (Uri.EscapeDataString rid), None
+    | WorkerMessage.EvalLiveTestFile(filePath, content, rid) ->
+      "POST", "/eval-live-test-file",
+      Some (Serialization.serialize {| filePath = filePath; content = content; replyId = rid |})
     | WorkerMessage.GetInstrumentationMaps rid ->
       "GET", sprintf "/instrumentation-maps?replyId=%s" (Uri.EscapeDataString rid), None
     | WorkerMessage.RunApp(project, previous, rid) ->

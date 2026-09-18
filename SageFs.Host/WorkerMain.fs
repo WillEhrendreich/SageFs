@@ -170,6 +170,7 @@ let handleMessage
   (getRunTest: unit -> (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>))
   (setRunTest: (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) -> unit)
   (getInitialDiscovery: unit -> Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list)
+  (evalLiveTestFile: string -> string -> Async<Result<Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list, SageFsError>>)
   (appRuns: AppRunHandlers)
   (msg: WorkerMessage)
   : Async<WorkerResponse> =
@@ -277,6 +278,10 @@ let handleMessage
       let tests, providers = getInitialDiscovery()
       return WorkerResponse.InitialTestDiscovery(tests, providers)
 
+    | WorkerMessage.EvalLiveTestFile(filePath, content, replyId) ->
+      let! result = evalLiveTestFile filePath content
+      return WorkerResponse.EvalLiveTestFileResult(replyId, result)
+
     | WorkerMessage.GetInstrumentationMaps _ ->
       return WorkerResponse.InstrumentationMapsResult("", [||])
 
@@ -295,6 +300,116 @@ let handleMessage
     | WorkerMessage.Shutdown ->
       return WorkerResponse.WorkerShuttingDown
   }
+
+/// Constructs the live-merged test-discovery view and the identity-preserving
+/// buffer-eval handler for as-you-type live testing
+/// (live-testing-asyoutype-plan.md Brief 3 — the keystone). Factored out of
+/// `run` so it is directly testable against a real FSI actor
+/// (e.g. TestInfrastructure's `globalActorResult`) without spinning up the
+/// whole worker process (project loading, HTTP server, file watcher).
+///
+/// Returns:
+///  - `getInitialDiscovery`: `GetTestDiscovery`'s live view — the compiled
+///    baseline merged with whatever the latest FSI buffer eval discovered,
+///    dynamic winning by `TestId` (Invariant 2, Brief 1's
+///    `TestDiscoveryMerge.merge`). Before any buffer has been eval'd, the
+///    dynamic side is empty and this is exactly the old frozen compiled set
+///    (`merge x [||] = x`).
+///  - `evalLiveTestFile`: eval a (possibly unsaved) editor buffer's content
+///    through the SAME `parseFileStructureCached` + `preprocessForFsi
+///    ... EvalMode.File` transform the on-disk file-watcher reload uses
+///    (`onFileChanged`'s `ReloadRoute.ReevaluateFile` branch below) so the
+///    re-eval'd test's `DeclaringType.FullName` — and therefore its
+///    `TestId` — matches the compiled test's exactly (Invariant 5 of the
+///    plan's §2): a raw `#load` or bare-body eval would break that identity
+///    and turn an edit into a duplicate instead of an override. Forces
+///    eval-time rediscovery via Brief 2's `liveTestRediscover` flag so a
+///    brand-new `[<Tests>]` value — which detours no existing method — is
+///    scanned too.
+///
+///    FAIL-CLOSED (Invariant 4): on a parse failure OR an eval failure,
+///    NEITHER the compilation-state cache NOR either dynamic slot
+///    (discovery, run-test) is written — the last-good live view is left
+///    exactly as it was, and the caller sees `Error`. A broken intermediate
+///    keystroke can never wipe or falsely flip prior results.
+let mkLiveTestEvalSupport
+  (actor: AppActor)
+  (initialDiscoveredTests: Features.LiveTesting.TestCase array)
+  (initialProviders: Features.LiveTesting.ProviderDescription list)
+  (setDynamicRunTest: (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) -> unit)
+  : (unit -> Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list) * (string -> string -> Async<Result<Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list, SageFsError>>) =
+
+  // Dynamic test DISCOVERY from FSI evals — the live-merged sibling of the
+  // worker's `latestDynamicRunTest` slot. Same ref + Volatile/Interlocked
+  // discipline: writer is the eval path (HTTP handler thread via
+  // `EvalLiveTestFile`), reader is any thread calling `GetTestDiscovery`.
+  let dynamicDiscovery : Features.LiveTesting.TestCase array ref = ref [||]
+  let setDynamicDiscovery (tests: Features.LiveTesting.TestCase array) =
+    System.Threading.Interlocked.Exchange(dynamicDiscovery, tests) |> ignore
+
+  let getInitialDiscovery () =
+    let dynamic = System.Threading.Volatile.Read(&dynamicDiscovery.contents)
+    SageFs.Features.LiveTesting.TestDiscoveryMerge.merge initialDiscoveredTests dynamic, initialProviders
+
+  // Per-eval-file CompilationContext state for `EvalLiveTestFile`, tracking
+  // this handler's own EvaluatedModules/FileCache — deliberately separate
+  // from the file watcher's own `compilationState` (that one only exists
+  // when a watcher is running; buffer-changed evals must work with the
+  // watcher off, e.g. Interactive workflow sessions with live testing on).
+  let liveTestFileCompilationState : Middleware.CompilationContext.CompilationState ref =
+    ref Middleware.CompilationContext.CompilationState.empty
+
+  let evalLiveTestFile (filePath: string) (content: string)
+    : Async<Result<Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list, SageFsError>> =
+    async {
+      let cacheState = System.Threading.Volatile.Read(&liveTestFileCompilationState.contents)
+      try
+        let! fileStructure, updatedCache =
+          Middleware.CompilationContext.parseFileStructureCached filePath content cacheState.FileCache
+          |> Async.AwaitTask
+        let preprocessed, updatedModules =
+          Middleware.CompilationContext.preprocessForFsi
+            (Some fileStructure)
+            Middleware.CompilationContext.EvalMode.File
+            None
+            cacheState.EvaluatedModules
+            content
+        let request =
+          { Code = preprocessed.Code
+            Args = Map.ofList [ "hotReload", box true; "liveTestRediscover", box true ] }
+        use cts = new CancellationTokenSource(Timeouts.workerHttpRequest)
+        let! response =
+          actor.PostAndAsyncReply(fun rc -> Eval(request, cts.Token, rc))
+          |> Instrumentation.tracedActorPost Instrumentation.EvalCategory.HotReload
+        match response.EvaluationResult with
+        | Error ex ->
+          // Eval failed (compile error in the buffer) — leave the
+          // compilation-state cache AND both dynamic slots untouched.
+          return Error (toWorkerError SageFsError.EvalFailed ex)
+        | Ok _ ->
+          // Only commit identity-tracking state on a CONFIRMED-good eval —
+          // a failed submission must never be "remembered" as evaluated.
+          System.Threading.Volatile.Write(
+            &liveTestFileCompilationState.contents,
+            { cacheState with EvaluatedModules = updatedModules; FileCache = updatedCache })
+          match response.Metadata |> Map.tryFind "liveTestRunTest" with
+          | Some (:? (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) as runTest) ->
+            setDynamicRunTest runTest
+          | _ -> ()
+          let freshDynamic =
+            match response.Metadata |> Map.tryFind "liveTestHookResult" with
+            | Some (:? Features.LiveTesting.LiveTestHookResultDto as dto) -> dto.DiscoveredTests
+            | _ -> System.Threading.Volatile.Read(&dynamicDiscovery.contents)
+          setDynamicDiscovery freshDynamic
+          let merged = SageFs.Features.LiveTesting.TestDiscoveryMerge.merge initialDiscoveredTests freshDynamic
+          return Ok (merged, initialProviders)
+      with ex ->
+        // Parse-level failure (FCS chokes on malformed syntax before an eval
+        // is even attempted) — same fail-closed contract as an eval error.
+        return Error (toWorkerError SageFsError.EvalFailed ex)
+    }
+
+  getInitialDiscovery, evalLiveTestFile
 
 /// Run the worker process: create actor, start HTTP server, handle messages.
 let run (sessionId: string) (port: int) = async {
@@ -517,6 +632,14 @@ let run (sessionId: string) (port: int) = async {
         | found -> return found }
     | None -> projectRunTest
   let setDynamicRunTest v = System.Threading.Interlocked.Exchange(latestDynamicRunTest, Some v) |> ignore
+
+  // Live-testing-asyoutype-plan.md Brief 3 (the keystone): the live-merged
+  // discovery view + identity-preserving buffer-eval handler. Factored out
+  // as `mkLiveTestEvalSupport` (below `handleMessage`) so it is directly
+  // testable against a real FSI actor without spinning up the whole worker
+  // process (project loading, HTTP server, file watcher).
+  let getInitialDiscovery, evalLiveTestFile =
+    mkLiveTestEvalSupport actor initialDiscoveredTests initialProviders setDynamicRunTest
 
   let appRunner = AppRunner.create AppRunner.defaultTimeouts AppRunner.processEnv
   // The source each running app's DLL was built from, advanced after every
@@ -828,7 +951,7 @@ let run (sessionId: string) (port: int) = async {
   // Signal readiness over the pipe
   let handler =
     handleMessage actor result.GetSessionState result.GetEvalStats result.GetStatusMessage result.ProjectRoles
-      getRunTest setDynamicRunTest (fun () -> initialDiscoveredTests, initialProviders) appRuns
+      getRunTest setDynamicRunTest getInitialDiscovery evalLiveTestFile appRuns
 
   let readyHandler (msg: WorkerMessage) = async {
     match msg with

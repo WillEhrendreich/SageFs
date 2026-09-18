@@ -242,6 +242,16 @@ module WorkerProtocol =
     | GetLiveValues of replyId: string
     | RunTests of tests: Features.LiveTesting.TestCase array * maxParallelism: int * replyId: string
     | GetTestDiscovery of replyId: string
+    /// Identity-preserving whole-file eval of a (possibly unsaved) editor
+    /// buffer for as-you-type live testing (live-testing-asyoutype-plan.md
+    /// Brief 3): `content` is evaluated through the same `EvalMode.File`
+    /// CompilationContext transform the file-watcher's on-disk reload uses,
+    /// with eval-time test discovery FORCED (Brief 2's `liveTestRediscover`
+    /// flag) so a brand-new or edited `[<Tests>]` value is scanned even when
+    /// it detours no existing method. `filePath` is used only for parsing/
+    /// identity (module-path derivation, diagnostics); the file on disk is
+    /// never read or written by this message.
+    | EvalLiveTestFile of filePath: string * content: string * replyId: string
     | GetInstrumentationMaps of replyId: string
     | RunApp of project: string * previous: AppRun.PreviousAddress * replyId: string
     | StopApp of scope: AppRun.StopScope * replyId: string
@@ -331,6 +341,18 @@ module WorkerProtocol =
     | ScriptLoaded of replyId: string * result: Result<string, SageFsError>
     | TestRunResults of replyId: string * results: Features.LiveTesting.TestRunResult array
     | InitialTestDiscovery of tests: Features.LiveTesting.TestCase array * providers: Features.LiveTesting.ProviderDescription list
+    /// Reply to EvalLiveTestFile. Mirrors InitialTestDiscovery's `(tests,
+    /// providers)` shape — same wire vocabulary, not a forked one — but
+    /// wrapped in a Result so a parse/eval failure is a first-class DU case
+    /// (fail-closed, Invariant 4 of live-testing-asyoutype-plan.md §2)
+    /// instead of an exception: on Error, the worker's dynamic discovery and
+    /// run-test slots are left untouched and the caller must retain its
+    /// last-good state rather than wipe to a false-empty or false-green view.
+    /// On Ok, `tests` is already the LIVE MERGE (TestDiscoveryMerge.merge) of
+    /// the compiled baseline with the freshly eval'd dynamic discovery.
+    | EvalLiveTestFileResult of
+        replyId: string *
+        result: Result<Features.LiveTesting.TestCase array * Features.LiveTesting.ProviderDescription list, SageFsError>
     | InstrumentationMapsResult of replyId: string * maps: Features.LiveTesting.InstrumentationMap array
     | AppRunResult of replyId: string * result: Result<AppRun.AppRunState, SageFsError>
     | WorkerReady

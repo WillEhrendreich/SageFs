@@ -115,6 +115,8 @@
         <Compile Include="AppOutputTests.fs" />
         <Compile Include="ExplorationTests.fs" />
         <Compile Include="HotReloadTests.fs" />
+        <Compile Include="HotReloadingDiscoveryGateTests.fs" />
+        <Compile Include="WorkerLiveTestEvalTests.fs" />
         <Compile Include="HotReloadStateTests.fs" />
         <Compile Include="MutationTestingFramework.fs" />
         <Compile Include="HotReloadStateMutationTests.fs" />
@@ -191,6 +193,7 @@
          <Compile Include="LiveTestingTypesTests.fs" />
          <Compile Include="LiveTestingDiscoveryStateTests.fs" />
          <Compile Include="TestRunKeyTests.fs" />
+         <Compile Include="TestDiscoveryMergeTests.fs" />
          <!-- Client-side pure fold (shared with the Fable VS Code extension):
               linked so the rediscovery-sweep contract is tested in Expecto. -->
          <Compile Include="..\sagefs-vscode\src\LiveTestingTypes.fs" />
