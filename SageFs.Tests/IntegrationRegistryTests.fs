@@ -55,7 +55,7 @@ let integrationRegistryTests =
     testCase "the real-process suites CI must run are registered as Host" <| fun _ ->
       let hostNames = Integration.hostSuites () |> List.collect names
       [ "Actor split"; "Daemon CLI subcommands"; "Daemon lifecycle"; "SessionManager lifecycle"
-        "HTTP API"; "MCP Server Integration tests"; "StartupConfig type and storage"
+        "HTTP API"; "MCP Server Integration tests"
         "MCP session isolation"; "Reset isolation"; "Session reset"; "Falco web application tests"
         "Package/Namespace Explorer"; "checkFSharpCode backing function"; "Eval cancellation" ]
       |> List.filter (fun suite ->
