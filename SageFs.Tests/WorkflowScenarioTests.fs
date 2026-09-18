@@ -102,7 +102,7 @@ let private statusBarScenarios =
       |> Expect.equal "should display Hot Reload" "Hot Reload"
 
     testCase "LiveTesting shows Live Testing in status bar" <| fun _ ->
-      // GIVEN a user in LiveTesting mode (tests-on-save, full REPL)
+      // GIVEN a user in LiveTesting mode (tests re-run as you type, full REPL)
       let workflow = SessionWorkflow.LiveTesting
 
       // WHEN the status bar renders

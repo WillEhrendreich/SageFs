@@ -1630,7 +1630,8 @@ let run
     fun _ _ -> ()
   // Assigned after elmRuntime exists (below): when a session becomes ready,
   // auto-enable live testing if its workflow is LiveTesting, so a LiveTesting
-  // session runs tests from its first save without a manual enable toggle.
+  // session re-runs the affected tests as you type (debounced keystrokes) from
+  // the moment it is ready, without a manual enable toggle.
   let mutable onSessionReadyExtra : (WorkerProtocol.SessionId -> unit) =
     fun _ -> ()
 

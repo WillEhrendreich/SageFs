@@ -118,9 +118,11 @@ type SessionWorkflow =
   /// Full REPL, no hot reload, no test-on-save. The "exploring and
   /// prototyping" workflow.
   | Interactive
-  /// Full REPL, no hot reload, tests re-run on every save. The "TDD as you
-  /// type" workflow. Keeps the full REPL because running tests never patches
-  /// the running app, so the --multiemit- CLR constraint does not apply.
+  /// Full REPL, no hot reload, affected tests re-run on debounced keystrokes
+  /// (as you type — the editor streams buffer changes, it is NOT save-driven).
+  /// The "TDD as you type" workflow. Keeps the full REPL because running tests
+  /// never patches the running app, so the --multiemit- CLR constraint does
+  /// not apply.
   | LiveTesting
   /// Hot reload active, restricted REPL. The "building an app" workflow.
   | HotReload of BrowserRefreshConfig
@@ -214,13 +216,13 @@ module SessionWorkflow =
   /// Parse a user- or agent-supplied workflow string into a SessionWorkflow.
   /// Case-insensitive and alias-tolerant, so the CLI, HTTP API, and MCP tools
   /// all accept the same spellings ("hotreload"/"live"/"weblive"/"web" → hot
-  /// reload; "livetesting"/"testing"/"test" → tests on save; "interactive"/
+  /// reload; "livetesting"/"testing"/"test" → tests as you type; "interactive"/
   /// "repl" → full REPL). Unknown or empty input defaults to Interactive, the
   /// safe full-REPL mode. This is the single source of truth for the
   /// string→workflow mapping — surfaces call it instead of re-matching.
   ///
   /// Note "live" maps to hot reload for backward compatibility (the workflow
-  /// was once labelled "Live"); the tests-on-save mode is "livetesting".
+  /// was once labelled "Live"); the as-you-type testing mode is "livetesting".
   /// Parse a workflow string, returning None for anything unrecognized.
   /// The single alias table; `ofString` defaults None to Interactive, while
   /// callers that must reject an unknown target (e.g. switch_workflow) use this

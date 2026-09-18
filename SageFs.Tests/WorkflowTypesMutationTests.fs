@@ -33,7 +33,7 @@ let workflowTypesMutationTests = testList "WorkflowTypes mutations" [
      SessionWorkflow.fsiArgs SessionWorkflow.LiveTesting,
      SessionWorkflow.label SessionWorkflow.LiveTesting,
      SessionWorkflow.isHotReloadActive SessionWorkflow.LiveTesting)
-    |> Expect.equal "LiveTesting must be ReplDriven, Full capability (tests-on-save keeps the full REPL), no extra args, label \"Live Testing\", hot reload OFF"
+    |> Expect.equal "LiveTesting must be ReplDriven, Full capability (as-you-type testing keeps the full REPL), no extra args, label \"Live Testing\", hot reload OFF"
       (FeedbackStrategy.ReplDriven, ReplCapability.Full, [], "Live Testing", false)
 
   testCase "WHY — webLive_is_SaveDriven_ExpressionOnly_multiemit_HotReload_label" <| fun () ->
