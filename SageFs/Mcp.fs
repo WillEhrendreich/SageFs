@@ -4062,15 +4062,6 @@ module McpTools =
             | None -> Error (SageFsError.Unexpected (exn "request_landing committed with no LandingQueued event")))
     }
 
-  /// Read-only: dereferences the owner's published frame pointer directly
-  /// (D4) — no mailbox round-trip.
-  let getCohortStatus (ctx: McpContext) : Task<Result<string, SageFsError>> =
-    task {
-      match requireCohortOwner ctx with
-      | Error e -> return Error e
-      | Ok owner -> return Ok (renderCohortFrame (owner.ReadFrame()))
-    }
-
   // ── Integration ref/worktree (item 14c) ───────────────────────────────
   //
   // `Cohort.CohortState.IntegrationHead` (the git sha) is the only piece of
@@ -4187,4 +4178,23 @@ module McpTools =
                 sprintf
                   "Integration configured: head=%s worktree=%s branch=%s. WARNING: the integration session failed to start (%s) — landings will report this reason until it is retried."
                   sha worktreePath branch reason)
+    }
+
+  /// Read-only frame deref (D4), plus the integration session's state so a
+  /// failed/dead session shows PROACTIVELY, not only when a landing hits it.
+  /// (Here, after `cohortIntegrationRef`, so it can read the binding.)
+  let getCohortStatus (ctx: McpContext) : Task<Result<string, SageFsError>> =
+    task {
+      match requireCohortOwner ctx with
+      | Error e -> return Error e
+      | Ok owner ->
+        let integration =
+          match cohortIntegrationRef.Value with
+          | None -> "Integration session: (not configured — call set_integration_ref)"
+          | Some b ->
+            match b.Session with
+            | IntegrationSession.Started sid -> sprintf "Integration session: %s (started)" sid
+            | IntegrationSession.Failed reason -> sprintf "Integration session: FAILED to start — %s" reason
+            | IntegrationSession.Pending -> "Integration session: pending"
+        return Ok (renderCohortFrame (owner.ReadFrame()) + integration + "\n")
     }
