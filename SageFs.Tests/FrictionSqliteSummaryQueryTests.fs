@@ -25,7 +25,7 @@ let private mkEvent blocker =
     Duration = duration 6
     FollowUp = FollowUp.NoFollowUpYet
     ContextCost = ContextCost.Focused
-    SageFsVersion = "" }
+    SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
 [<Tests>]
 let tests =

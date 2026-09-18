@@ -101,6 +101,22 @@ type FrictionEvent = {
   FollowUp: FollowUp
   ContextCost: ContextCost
   SageFsVersion: string
+  /// Brief B9 (observed-friction-plan.md §B9) — the resolved, connection-bound
+  /// routing identity (`McpTools.resolvedKey`/`currentTransportSessionId`),
+  /// NOT the caller's self-declared `agentName`. Additive/back-compat: old
+  /// rows (recorded before this column existed) decode with `""`, mirroring
+  /// the `SageFsVersion` migration precedent — an empty AgentKey means
+  /// "no transport session was bound when this event was recorded", never a
+  /// parse failure.
+  AgentKey: string
+  /// Brief B9 — a short, PRE-SANITIZED (via `FrictionSanitize.sanitizeText`)
+  /// summary of the failure that produced this event, for fine-grained
+  /// RepeatedSameError/RetryLoop grouping beyond the coarse `BlockerKind`.
+  /// NEVER raw user code, secrets, paths, emails, or session ids — those are
+  /// scrubbed by the sanitizer before this field is ever populated. `""` for
+  /// a clean completion and for every pre-B9 row (additive/back-compat,
+  /// mirrors `SageFsVersion`).
+  ErrorSignature: string
 }
 
 [<RequireQualifiedAccess>]

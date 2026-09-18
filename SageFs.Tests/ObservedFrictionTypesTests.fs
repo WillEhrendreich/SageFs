@@ -30,7 +30,7 @@ let event (tool: string) (outcome: FrictionOutcome) (atUtcOffsetSeconds: float) 
     Duration = DurationMs.create 1 |> ok
     FollowUp = FollowUp.NoFollowUpYet
     ContextCost = ContextCost.Focused
-    SageFsVersion = "" }
+    SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
 let private sampleWindow = { FirstAtUtc = baseTimeUtc; LastAtUtc = baseTimeUtc; EventCount = 1 }
 let private sampleTool = ToolName.create "send_fsharp_code" |> ok

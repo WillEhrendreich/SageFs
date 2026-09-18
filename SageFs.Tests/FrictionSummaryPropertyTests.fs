@@ -22,7 +22,7 @@ let private baseEvent outcome =
     Duration = duration 7
     FollowUp = FollowUp.NoFollowUpYet
     ContextCost = ContextCost.Focused
-    SageFsVersion = "" }
+    SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
 [<Tests>]
 let tests =

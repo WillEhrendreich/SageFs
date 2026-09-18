@@ -20,7 +20,7 @@ let tests =
           Duration = DurationMs.create 1 |> ok
           FollowUp = FollowUp.SessionEnded
           ContextCost = ContextCost.Tiny
-          SageFsVersion = "" }
+          SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
       FrictionEvent.outcomeKind event = OutcomeKind.Succeeded
 
     testProperty "blocked outcomes always map to blocked outcome kind" <| fun () ->
@@ -40,6 +40,6 @@ let tests =
             Duration = DurationMs.create 2 |> ok
             FollowUp = FollowUp.NoFollowUpYet
             ContextCost = ContextCost.Focused
-            SageFsVersion = "" }
+            SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
         FrictionEvent.outcomeKind event = OutcomeKind.Blocked)
   ]

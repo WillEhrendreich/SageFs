@@ -23,7 +23,7 @@ let private mkEvent toolName outcome followUp =
     Duration = duration 10
     FollowUp = followUp
     ContextCost = ContextCost.Focused
-    SageFsVersion = "" }
+    SageFsVersion = ""; AgentKey = ""; ErrorSignature = "" }
 
 [<Tests>]
 let tests =

@@ -145,7 +145,7 @@ module private Decoding =
     | "ResolvedOutsideMcp" -> Ok AlternativePath.ResolvedOutsideMcp
     | other -> Error (sprintf "Unknown alternative kind '%s'." other)
 
-  let decodeEvent occurredAt sessionId toolName intent outcome blocker resolution resolutionTool duration followUp followUpTool contextCost sageFsVersion =
+  let decodeEvent occurredAt sessionId toolName intent outcome blocker resolution resolutionTool duration followUp followUpTool contextCost sageFsVersion agentKey errorSignature =
     match parseSession sessionId with
     | Error err -> Error err
     | Ok session ->
@@ -174,6 +174,8 @@ module private Decoding =
                   FollowUp = parsedFollowUp
                   ContextCost = parsedCost
                   SageFsVersion = sageFsVersion
+                  AgentKey = agentKey
+                  ErrorSignature = errorSignature
                 }
 
   let decodeFeedback occurredAt sessionId toolName kind shortReason alternativeKind alternativeTool sageFsVersion =
@@ -225,7 +227,9 @@ CREATE TABLE IF NOT EXISTS friction_events (
   follow_up_kind TEXT NOT NULL,
   follow_up_tool_name TEXT NULL,
   context_cost_kind TEXT NOT NULL,
-  sagefs_version TEXT NOT NULL DEFAULT ''
+  sagefs_version TEXT NOT NULL DEFAULT '',
+  agent_key TEXT NOT NULL DEFAULT '',
+  error_signature TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS explicit_feedback (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -257,24 +261,36 @@ CREATE INDEX IF NOT EXISTS idx_sent_reports_report_id ON sent_reports (report_id
           use cmd = connection.CreateCommand()
           cmd.CommandText <- "PRAGMA user_version"
           Convert.ToInt64(cmd.ExecuteScalar())
+        // A duplicate-column error means the column is already present (fresh
+        // DBs get every column from CREATE above); any OTHER error is a real
+        // failure and must surface, not be swallowed.
+        let addColumn tableName columnDef =
+          try
+            use cmd = connection.CreateCommand()
+            cmd.CommandText <- sprintf "ALTER TABLE %s ADD COLUMN %s" tableName columnDef
+            cmd.ExecuteNonQuery() |> ignore
+          with :? SqliteException as e when e.Message.Contains "duplicate column" -> ()
+        let setUserVersion version =
+          use cmd = connection.CreateCommand()
+          cmd.CommandText <- sprintf "PRAGMA user_version = %d" (version: int)
+          cmd.ExecuteNonQuery() |> ignore
         match readUserVersion () < 1L with
         | false -> ()
         | true ->
           // Migrate pre-versioning tables that lack the sagefs_version column.
-          // A duplicate-column error means the column is already present (fresh
-          // DBs get it from CREATE above); any OTHER error is a real failure and
-          // must surface, not be swallowed.
-          let migrate tableName =
-            try
-              use cmd = connection.CreateCommand()
-              cmd.CommandText <- sprintf "ALTER TABLE %s ADD COLUMN sagefs_version TEXT NOT NULL DEFAULT ''" tableName
-              cmd.ExecuteNonQuery() |> ignore
-            with :? SqliteException as e when e.Message.Contains "duplicate column" -> ()
-          migrate "friction_events"
-          migrate "explicit_feedback"
-          use setVersion = connection.CreateCommand()
-          setVersion.CommandText <- "PRAGMA user_version = 1"
-          setVersion.ExecuteNonQuery() |> ignore
+          addColumn "friction_events" "sagefs_version TEXT NOT NULL DEFAULT ''"
+          addColumn "explicit_feedback" "sagefs_version TEXT NOT NULL DEFAULT ''"
+          setUserVersion 1
+        match readUserVersion () < 2L with
+        | false -> ()
+        | true ->
+          // Brief B9 (observed-friction-plan.md §B9): additive attribution +
+          // sanitized error-signature columns on friction_events only — an
+          // old-schema DB (columns absent) still decodes cleanly because
+          // ReadEvents below treats a missing column as "".
+          addColumn "friction_events" "agent_key TEXT NOT NULL DEFAULT ''"
+          addColumn "friction_events" "error_signature TEXT NOT NULL DEFAULT ''"
+          setUserVersion 2
         Ok ()
       with ex -> Error ex.Message
 
@@ -288,9 +304,11 @@ CREATE INDEX IF NOT EXISTS idx_sent_reports_report_id ON sent_reports (report_id
         command.CommandText <- "
 INSERT INTO friction_events (
   occurred_at_utc, session_id, tool_name, intent_kind, outcome_kind, blocker_kind,
-  resolution_kind, resolution_tool_name, duration_ms, follow_up_kind, follow_up_tool_name, context_cost_kind, sagefs_version)
+  resolution_kind, resolution_tool_name, duration_ms, follow_up_kind, follow_up_tool_name, context_cost_kind, sagefs_version,
+  agent_key, error_signature)
 VALUES ($occurred_at_utc, $session_id, $tool_name, $intent_kind, $outcome_kind, $blocker_kind,
-  $resolution_kind, $resolution_tool_name, $duration_ms, $follow_up_kind, $follow_up_tool_name, $context_cost_kind, $sagefs_version);"
+  $resolution_kind, $resolution_tool_name, $duration_ms, $follow_up_kind, $follow_up_tool_name, $context_cost_kind, $sagefs_version,
+  $agent_key, $error_signature);"
         command.Parameters.AddWithValue("$occurred_at_utc", event.OccurredAtUtc.ToString("O")) |> ignore
         command.Parameters.AddWithValue("$session_id", SessionRef.value event.Session) |> ignore
         command.Parameters.AddWithValue("$tool_name", ToolName.value event.Tool) |> ignore
@@ -304,6 +322,8 @@ VALUES ($occurred_at_utc, $session_id, $tool_name, $intent_kind, $outcome_kind, 
         command.Parameters.AddWithValue("$follow_up_tool_name", followUpTool |> Option.map box |> Option.defaultValue dbNullObj) |> ignore
         command.Parameters.AddWithValue("$context_cost_kind", Encoding.contextCostText event.ContextCost) |> ignore
         command.Parameters.AddWithValue("$sagefs_version", event.SageFsVersion) |> ignore
+        command.Parameters.AddWithValue("$agent_key", event.AgentKey) |> ignore
+        command.Parameters.AddWithValue("$error_signature", event.ErrorSignature) |> ignore
         command.ExecuteNonQuery() |> ignore
         Ok ()
       with ex -> Error ex.Message
@@ -336,7 +356,8 @@ VALUES ($occurred_at_utc, $session_id, $tool_name, $feedback_kind, $short_reason
         use command = connection.CreateCommand()
         command.CommandText <- "
 SELECT occurred_at_utc, session_id, tool_name, intent_kind, outcome_kind, blocker_kind,
-       resolution_kind, resolution_tool_name, duration_ms, follow_up_kind, follow_up_tool_name, context_cost_kind, sagefs_version
+       resolution_kind, resolution_tool_name, duration_ms, follow_up_kind, follow_up_tool_name, context_cost_kind, sagefs_version,
+       agent_key, error_signature
 FROM friction_events
 ORDER BY id;"
         use reader = command.ExecuteReader()
@@ -346,6 +367,12 @@ ORDER BY id;"
           | Error err -> raise (InvalidOperationException err)
           | Ok intent ->
             let sageFsVersion = if reader.IsDBNull(12) then "" else reader.GetString(12)
+            // Additive B9 columns — a DB migrated up-front by Initialize()
+            // always has them, but IsDBNull guards a legitimately-NULL value
+            // the same way sagefs_version does above (belt-and-suspenders,
+            // matching the migration's back-compat contract).
+            let agentKey = if reader.IsDBNull(13) then "" else reader.GetString(13)
+            let errorSignature = if reader.IsDBNull(14) then "" else reader.GetString(14)
             let decoded =
               Decoding.decodeEvent
                 (DateTimeOffset.Parse(reader.GetString(0)))
@@ -361,6 +388,8 @@ ORDER BY id;"
                 (if reader.IsDBNull(10) then None else Some (reader.GetString(10)))
                 (reader.GetString(11))
                 sageFsVersion
+                agentKey
+                errorSignature
             match decoded with
             | Ok event -> events <- event :: events
             | Error err -> raise (InvalidOperationException err)

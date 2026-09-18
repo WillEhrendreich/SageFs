@@ -50,6 +50,11 @@ type StoredEvent = {
   FollowUpToolName: string option
   ContextCostKind: string
   SageFsVersion: string
+  /// Brief B9 additive fields — absent on JSON serialized before B9, which
+  /// deserializes them to the CLR string default (null); `decodeEvent` below
+  /// treats a null the same as "" so old envelopes still decode cleanly.
+  AgentKey: string
+  ErrorSignature: string
 }
 
 [<CLIMutable>]
@@ -204,7 +209,15 @@ module private Codec =
       FollowUpKind = followUpKind
       FollowUpToolName = followUpTool
       ContextCostKind = contextCostText event.ContextCost
-      SageFsVersion = event.SageFsVersion }
+      SageFsVersion = event.SageFsVersion
+      AgentKey = event.AgentKey
+      ErrorSignature = event.ErrorSignature }
+
+  /// Brief B9: a JSON envelope written before this field existed deserializes
+  /// it to CLR `null` (this is a `[<CLIMutable>]` type, not an F# record
+  /// construction) — treat null exactly like "", mirroring the SQLite
+  /// migration's back-compat default.
+  let private orEmpty (s: string) = match s with null -> "" | v -> v
 
   let decodeEvent (event: StoredEvent) : Result<FrictionEvent, string> =
     match SessionRef.create event.SessionId with
@@ -237,7 +250,9 @@ module private Codec =
                       Duration = duration
                       FollowUp = followUp
                       ContextCost = contextCost
-                      SageFsVersion = event.SageFsVersion }
+                      SageFsVersion = orEmpty event.SageFsVersion
+                      AgentKey = orEmpty event.AgentKey
+                      ErrorSignature = orEmpty event.ErrorSignature }
 
   let encodeFeedback (feedback: ExplicitFeedback) : StoredFeedback =
     let alternativeKind, alternativeTool = alternativeParts feedback.AlternativeUsed
