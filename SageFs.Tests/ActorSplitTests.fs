@@ -1,109 +1,15 @@
 module SageFs.Tests.ActorSplitTests
 
-open System.Threading
 open Expecto
-open Expecto.Flip
-open SageFs.AppState
 
-module Integration = SageFs.Tests.TestInfrastructure.Integration
-
-let quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
-
-let createActorResult () =
-  let args = SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty true
-  SageFs.ActorCreation.createActor args |> Async.AwaitTask |> Async.RunSynchronously
-
+/// Query-liveness (GetSessionPhase/Autocomplete/GetDiagnostics responding
+/// during a long eval) previously required a real FSI-warmup Integration
+/// session (~15-30s) to prove. It is now the `query-liveness` invariant in
+/// SageFs.Simulation/EvalActorSim.fs + EvalActorInvariants.fs, folding the
+/// REAL SageFs.EvalActorDecision.decide, and asserted in
+/// SageFs.Tests/EvalActorSimTests.fs — proven in milliseconds, with a
+/// single-actor twin proving the invariant has teeth (it fires the twin,
+/// holds the real reducer). See EvalActorSimTests.fs "queryDuringEval" and
+/// "REPRODUCED — single-actor twin blocks a Query mid-eval".
 [<Tests>]
-let actorSplitTests =
-  Integration.hostList "Actor split" [
-
-    testCase "GetSessionPhase responds during long eval"
-    <| fun _ ->
-      let result = createActorResult ()
-
-      // Start a long-running eval in the background
-      let evalTask =
-        async {
-          let request = { Code = "System.Threading.Thread.Sleep(5000);;"; Args = Map.empty }
-          return!
-            result.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
-        }
-        |> Async.StartAsTask
-
-      // Give eval time to start
-
-      // Query should respond without waiting for eval to complete
-      let queryTask =
-        async {
-          return!
-            result.Actor.PostAndAsyncReply(fun reply -> GetSessionPhase reply)
-        }
-        |> Async.StartAsTask
-
-      // With the current single-actor design, this will timeout (proving the problem)
-      // After the split, this should complete quickly
-      let completed = queryTask.Wait(2000)
-      completed
-      |> Expect.isTrue "GetSessionPhase should respond during eval"
-
-      // Clean up — cancel the long eval
-      result.CancelEval() |> ignore
-      evalTask.Wait(3000) |> ignore
-
-    testCase "Autocomplete responds during long eval"
-    <| fun _ ->
-      let result = createActorResult ()
-
-      // Start a long-running eval
-      let evalTask =
-        async {
-          let request = { Code = "System.Threading.Thread.Sleep(5000);;"; Args = Map.empty }
-          return!
-            result.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
-        }
-        |> Async.StartAsTask
-
-
-      // Autocomplete should respond during eval
-      let queryTask =
-        async {
-          return!
-            result.Actor.PostAndAsyncReply(fun reply -> Autocomplete("System.Console.", 15, "Console.", reply))
-        }
-        |> Async.StartAsTask
-
-      let completed = queryTask.Wait(2000)
-      completed
-      |> Expect.isTrue "Autocomplete should respond during eval"
-
-      result.CancelEval() |> ignore
-      evalTask.Wait(3000) |> ignore
-
-    testCase "GetDiagnostics responds during long eval"
-    <| fun _ ->
-      let result = createActorResult ()
-      Thread.Sleep(50)
-
-      let evalTask =
-        async {
-          let request = { Code = "System.Threading.Thread.Sleep(5000);;"; Args = Map.empty }
-          return!
-            result.Actor.PostAndAsyncReply(fun reply -> Eval(request, CancellationToken.None, reply))
-        }
-        |> Async.StartAsTask
-
-
-      let queryTask =
-        async {
-          return!
-            result.Actor.PostAndAsyncReply(fun reply -> GetDiagnostics("let x = 1", reply))
-        }
-        |> Async.StartAsTask
-
-      let completed = queryTask.Wait(2000)
-      completed
-      |> Expect.isTrue "GetDiagnostics should respond during eval"
-
-      result.CancelEval() |> ignore
-      evalTask.Wait(3000) |> ignore
-  ]
+let actorSplitTests = testList "Actor split" []

@@ -1,60 +1,18 @@
 module SageFs.Tests.EvalActorResilienceTests
 
-open System.Threading
 open Expecto
-open Expecto.Flip
-open SageFs
-open SageFs.AppState
 
-module Integration = SageFs.Tests.TestInfrastructure.Integration
-
-let quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
-
-let createActorResult () =
-  let args = SageFs.ActorCreation.mkCommonActorArgs quietLogger false ignore SageFs.Args.ProjectLoadConfig.empty true
-  SageFs.ActorCreation.createActor args |> Async.AwaitTask |> Async.RunSynchronously
-
-/// Bounded wait for the actor to reach a session state (real FSI warm-up).
-let waitForSessionState (result: SageFs.ActorCreation.ActorResult) (state: SessionState) =
-  SageFs.Tests.TestInfrastructure.waitFor 30000 (fun () -> result.GetSessionState() = state)
-
+/// "The eval actor survives a handler exception and keeps processing
+/// commands" previously required a real FSI-warmup Integration session plus
+/// the `evalActorFaultInjector` test-only seam to prove. It is now the
+/// `loop-survival` invariant in SageFs.Simulation/EvalActorSim.fs +
+/// EvalActorInvariants.fs, folding the REAL
+/// SageFs.EvalActorDecision.decide through a guarded fold that
+/// mirrors ResilientActor.wrapLoop exactly (catch, keep previous state,
+/// continue), with an unwrapped twin proving the invariant has teeth (it
+/// dies at the poison; the guarded/real reducer does not). Asserted in
+/// SageFs.Tests/EvalActorSimTests.fs — proven in milliseconds. See
+/// EvalActorSimTests.fs "poisonMidScenario: every op after the poison still
+/// runs (guarded)" and "REPRODUCED — unwrapped twin dies on the poison".
 [<Tests>]
-let evalActorResilienceTests =
-  Integration.hostList "Eval actor resilience" [
-
-    testCase "eval actor survives a handler exception and keeps processing commands" <| fun _ ->
-      let result = createActorResult ()
-      waitForSessionState result SessionState.Ready
-      |> Expect.isTrue "session should reach Ready after warm-up"
-
-      // Arm the test-only fault injector so the eval actor's message-processing
-      // function throws once, then disarm it immediately. The subsequent probe
-      // command must still be answered — proving an escaped handler exception
-      // no longer kills the eval mailbox permanently.
-      let armed = ref true
-      SageFs.AppState.evalActorFaultInjector <- Some(fun () ->
-        if armed.Value then
-          armed.Value <- false
-          failwith "injected eval-actor fault")
-
-      try
-        // Command 1: cheap command routed to the eval actor — its handler throws.
-        result.Actor.Post(EnableStdout)
-
-        // Command 2: AddMiddleware round-trips THROUGH the eval actor (the reply
-        // is only sent by its EvalAddMiddleware handler). If the mailbox died,
-        // this is never answered and the probe times out.
-        let probe =
-          result.Actor.PostAndAsyncReply(fun reply -> AddMiddleware([], reply))
-          |> Async.StartAsTask
-        let answered = probe.Wait(15000)
-
-        answered
-        |> Expect.isTrue "eval actor should process the next command after a handler exception"
-
-        // The wrap preserves the previous state: the session stays Ready.
-        result.GetSessionState()
-        |> Expect.equal "session state preserved after handler exception" SessionState.Ready
-      finally
-        SageFs.AppState.evalActorFaultInjector <- None
-  ]
+let evalActorResilienceTests = testList "Eval actor resilience" []

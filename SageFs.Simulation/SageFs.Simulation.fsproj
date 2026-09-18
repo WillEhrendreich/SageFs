@@ -50,6 +50,17 @@
         <Compile Include="CohortLandingSim.fs" />
         <Compile Include="CohortLandingInvariants.fs" />
         <Compile Include="CohortLandingGenerators.fs" />
+        <!-- Eval-actor DST: fold the REAL SageFs.AppState.EvalActorDecision.decide
+             (the eval actor mailbox's pure routing core) through a pure,
+             clock-free reducer, replacing four slow FSI-warmup Integration
+             suites (ActorSplitTests, EvalCancellationTests,
+             EvalActorResilienceTests, EvalActorStragglerTests). Two twin
+             reducers reintroduce the historical bugs the invariants pin:
+             generation-blind (resurrects a stale straggler) and single-actor
+             (blocks Query while Evaluating). -->
+        <Compile Include="EvalActorSim.fs" />
+        <Compile Include="EvalActorInvariants.fs" />
+        <Compile Include="EvalActorGenerators.fs" />
     </ItemGroup>
 
     <ItemGroup>

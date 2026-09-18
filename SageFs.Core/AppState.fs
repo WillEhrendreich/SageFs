@@ -12,6 +12,7 @@ open SageFs.ProjectLoading
 open SageFs.Utils
 open SageFs.WarmUp
 open SageFs.WarmupReplayCache
+open SageFs.EvalActorDecision
 
 type FilePath = string
 
@@ -151,10 +152,6 @@ type EvalResponse = {
 
 type EvalRequest = { Code: string; Args: Map<string, obj> }
 
-/// Whether the active session is idle or currently evaluating code.
-/// Only meaningful when the session is Active — not a top-level lifecycle state.
-type SessionActivity = Idle | Evaluating
-
 /// Rich session lifecycle phase — the source of truth for QuerySnapshot.
 /// Carries domain data only in states where it's meaningful, making
 /// impossible states (e.g., "Faulted with a valid AppState") unrepresentable.
@@ -231,16 +228,6 @@ type internal QueryCommand =
   | QueryGetDiagnostics of text: string * AsyncReplyChannel<Diagnostics.Diagnostic array>
   | QueryGetTypeCheckWithSymbols of text: string * filePath: string * AsyncReplyChannel<Diagnostics.TypeCheckWithSymbolsResult>
   | QueryGetBoundValue of name: string * AsyncReplyChannel<obj Option>
-
-/// Which incarnation of the FSI session an eval ran against. Every reset
-/// (soft or hard) replaces the session and advances the generation, so a
-/// result stamped with an older one belongs to a session that no longer exists.
-[<Struct>]
-type SessionGeneration = private SessionGeneration of int64
-
-module SessionGeneration =
-  let initial = SessionGeneration 0L
-  let next (SessionGeneration g) = SessionGeneration (g + 1L)
 
 /// Internal command for the eval actor — only mutation/eval operations
 type internal EvalCommand =
@@ -357,22 +344,17 @@ let cleanStdout (raw: string) =
     | false -> ()
   sb.ToString()
 
-/// The eval gate: can code be evaluated right now? Phase-based — no null
-/// checks, because a live Session/OutStream exist iff phase is Active.
-/// Initializing covers two windows: initial warm-up (eval never arrives —
-/// init() runs before the loop processes messages) and the in-flight reset
-/// window (EvalRun IS queued behind EvalReset). Gating the latter is a
-/// deliberate fail-closed improvement over the old parallel SessionState
-/// loop variable, which reported WarmingUp (gate passed) while the reset was
-/// mid-flight — a queued eval could have run against a session being torn
-/// down. Faulted carries no AppState at all, so recovery is via reset.
-let tryGetEvalAvailabilityError (phase: SessionPhase) =
+/// The one seam between the real, IO-backed `SessionPhase` and
+/// `EvalActorDecision.EvalPhase` (see SageFs.Core/EvalActorDecision.fs for
+/// the pure decision core this narrows into — `decide`, `EvalInput`,
+/// `EvalDecision`, and why that module is a standalone file rather than
+/// nested here). The only place a live `AppState` is looked at is to read
+/// the `SessionActivity` sitting next to it; it is never touched otherwise.
+let phaseOf (phase: SessionPhase) : EvalActorDecision.EvalPhase =
   match phase with
-  | Faulted _ ->
-    Some "Session is faulted. Run hard_reset_fsi_session to recover."
-  | Initializing _ ->
-    Some "Session is resetting. Wait for reset to complete before evaluating."
-  | Active (_, _) -> None
+  | Initializing _ -> EvalActorDecision.EvalPhase.Initializing
+  | Active(_, activity) -> EvalActorDecision.EvalPhase.Active activity
+  | Faulted _ -> EvalActorDecision.EvalPhase.Faulted
 
 let evalFn (token: CancellationToken) =
   fun ({ Code = code }, st) ->
@@ -1200,11 +1182,15 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             st.OutStream.Enable()
           return (phase, middleware, evalStats)
         | EvalRun(request, cts, reply) ->
-          match tryGetEvalAvailabilityError phase with
-          | Some message ->
+          match EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) EvalActorDecision.EvalInput.Submit with
+          | EvalActorDecision.EvalDecision.RejectEval err ->
             currentEvalCts.Value <- None
+            let message =
+              match err with
+              | SageFsError.EvalFailed reason -> reason
+              | other -> SageFsError.describe other
             let errResponse = {
-              EvaluationResult = Error (SageFsErrorException(SageFsError.EvalFailed message) :> exn)
+              EvaluationResult = Error (SageFsErrorException err :> exn)
               Diagnostics = [||]
               EvaluatedCode = request.Code
               Metadata = Map.empty
@@ -1212,7 +1198,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             emit (Events.EvalFailed {| Code = request.Code; Error = message; Diagnostics = [] |})
             reply.Reply errResponse
             return (phase, middleware, evalStats)
-          | None ->
+          | EvalActorDecision.EvalDecision.RunEval ->
             match phase with
             | Active (st, _) ->
               publishSnapshot st Evaluating evalStats
@@ -1244,10 +1230,20 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               evalThread.Start()
               return (Active (st, Evaluating), middleware, evalStats)
             | Initializing _ | Faulted _ ->
-              // Unreachable: tryGetEvalAvailabilityError gates these phases with
-              // Some above. Kept exhaustive so the phase match is total.
+              // Unreachable: EvalActorDecision.decide's Submit arm only
+              // returns RunEval for EvalPhase.Active — see `decide` above.
+              // Kept exhaustive so the phase match is total.
               return (phase, middleware, evalStats)
-        | EvalFinished(_, sw, code, reply, generation) when generation <> sessionGeneration.Value ->
+          | EvalActorDecision.EvalDecision.ServeQuery
+          | EvalActorDecision.EvalDecision.ApplyFinished
+          | EvalActorDecision.EvalDecision.DropSupersededFinished
+          | EvalActorDecision.EvalDecision.AdvanceGenerationAndReset ->
+            // Unreachable: decide only returns these for Query/Cancel/
+            // Finished/Reset inputs, never Submit. Kept exhaustive.
+            return (phase, middleware, evalStats)
+        | EvalFinished(_, sw, code, reply, generation)
+            when EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) (EvalActorDecision.EvalInput.Finished generation)
+                 = EvalActorDecision.EvalDecision.DropSupersededFinished ->
           // Straggler: the eval thread outlived a reset that disposed the
           // session it ran on and put a fresh one in its place. Its AppState
           // wraps the disposed session — adopting it would bring that session
@@ -1259,6 +1255,8 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           reply.Reply (supersededResponse code)
           return (phase, middleware, evalStats)
         | EvalFinished(result, sw, code, reply, _) ->
+          // ApplyFinished: EvalActorDecision.decide's Finished arm returned
+          // ApplyFinished here (the generation matched) — see the guard above.
           sw.Stop()
           // Eval-to-pixel latency chain, stage 2/5: the eval actor received
           // the eval thread's result back on its own mailbox.
@@ -1334,7 +1332,13 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             reply.Reply (WorkerProtocol.Serialization.serialize (Features.LiveValueTree.buildSnapshot "" 0L []))
           return (phase, middleware, evalStats)
         | EvalReset reply ->
-          sessionGeneration.Value <- SessionGeneration.next sessionGeneration.Value
+          // decide's Reset arm always returns AdvanceGenerationAndReset,
+          // regardless of phase — routed through it anyway so this call site
+          // stays the single source of truth rather than a hand-inlined copy.
+          match EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) EvalActorDecision.EvalInput.Reset with
+          | EvalActorDecision.EvalDecision.AdvanceGenerationAndReset ->
+            sessionGeneration.Value <- SessionGeneration.next sessionGeneration.Value
+          | _ -> () // unreachable: Reset always advances
           try
             publishPhase (Initializing None) evalStats
             logger.LogInfo "🔄 Resetting FSI session..."
@@ -1437,7 +1441,11 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             reply.Reply(Error (SageFsError.ResetFailed ex.Message))
             return (Faulted reason, middleware, evalStats)
         | EvalHardReset (rebuild, reply) ->
-          sessionGeneration.Value <- SessionGeneration.next sessionGeneration.Value
+          // See EvalReset above: routed through decide for one source of truth.
+          match EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) EvalActorDecision.EvalInput.Reset with
+          | EvalActorDecision.EvalDecision.AdvanceGenerationAndReset ->
+            sessionGeneration.Value <- SessionGeneration.next sessionGeneration.Value
+          | _ -> () // unreachable: Reset always advances
           try
             publishPhase (Initializing None) evalStats
             logger.LogInfo "🔨 Hard resetting FSI session..."

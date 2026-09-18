@@ -54,10 +54,13 @@ let integrationRegistryTests =
 
     testCase "the real-process suites CI must run are registered as Host" <| fun _ ->
       let hostNames = Integration.hostSuites () |> List.collect names
-      [ "Actor split"; "Daemon CLI subcommands"; "Daemon lifecycle"; "SessionManager lifecycle"
+      // NB: "Actor split", "Eval cancellation" and "StartupConfig type and storage" are no
+      // longer Host suites — the first two are now DST invariants (EvalActorSim) in the default
+      // suite, the third is a pure default-suite testList after re-homing.
+      [ "Daemon CLI subcommands"; "Daemon lifecycle"; "SessionManager lifecycle"
         "HTTP API"; "MCP Server Integration tests"
         "MCP session isolation"; "Reset isolation"; "Session reset"; "Falco web application tests"
-        "Package/Namespace Explorer"; "checkFSharpCode backing function"; "Eval cancellation" ]
+        "Package/Namespace Explorer"; "checkFSharpCode backing function" ]
       |> List.filter (fun suite ->
         not (hostNames |> List.exists (fun n -> n.Contains("[Integration] " + suite))))
       |> Expect.isEmpty "every listed suite runs under --integration-host"

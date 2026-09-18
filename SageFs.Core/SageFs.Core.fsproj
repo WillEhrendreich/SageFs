@@ -176,6 +176,12 @@
         <Compile Include="FileWatcher.fs" />
         <Compile Include="DaemonOwnership.fs" />
         <Compile Include="LiveTestWatcherCore.fs" />
+        <!-- Pure eval-actor decision core (SessionActivity/SessionGeneration/
+             EvalPhase/EvalInput/EvalDecision/decide) — compiled BEFORE
+             AppState.fs so it stays a standalone file the DST harness can
+             fold, instead of ratcheting AppState.fs over its line budget
+             (see EvalActorDecision.fs's header for why it can't be nested). -->
+        <Compile Include="EvalActorDecision.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />

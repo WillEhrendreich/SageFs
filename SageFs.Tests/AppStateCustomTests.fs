@@ -4,6 +4,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.AppState
+open SageFs.EvalActorDecision
 open SageFs.Middleware.Directives.OpenDirective
 
 let private mkFiles names = OpenedFiles.ofSet (Set.ofList names)

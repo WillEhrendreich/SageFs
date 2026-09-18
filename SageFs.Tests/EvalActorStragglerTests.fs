@@ -1,106 +1,29 @@
 module SageFs.Tests.EvalActorStragglerTests
 
-open System
-open System.Threading
 open System.Threading.Tasks
 open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.AppState
 
-module Integration = SageFs.Tests.TestInfrastructure.Integration
-
-let private quietLogger = SageFs.Tests.TestInfrastructure.quietLogger
-
-/// Code the injected pipeline treats as an eval that outlives a reset.
-[<Literal>]
-let private StragglerCode = "straggler"
-
-/// An eval-actor over a bare FSI session whose pipeline turns StragglerCode
-/// into an eval that ignores cancellation and thread interrupts (user code
-/// that swallows ThreadInterruptedException, a native call) and only returns
-/// when the test opens the gate. Every other submission runs the real eval.
-type private StragglerHarness = {
-  Actor: AppActor
-  /// Completes with the session the straggler started on.
-  Started: TaskCompletionSource<FSharp.Compiler.Interactive.Shell.FsiEvaluationSession>
-  /// Opening it lets the straggler return Ok with the AppState it started on.
-  Gate: TaskCompletionSource<unit>
-}
-
-let private mkHarness () : StragglerHarness =
-  let started = TaskCompletionSource<FSharp.Compiler.Interactive.Shell.FsiEvaluationSession>(TaskCreationOptions.RunContinuationsAsynchronously)
-  let gate = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
-  let build : PipelineBuildFn =
-    fun _middleware evalFn ->
-      fun (request, st) ->
-        match request.Code with
-        | StragglerCode ->
-          started.TrySetResult st.Session |> ignore
-          let mutable released = false
-          while not released do
-            try
-              gate.Task.Wait()
-              released <- true
-            with
-            | :? ThreadInterruptedException -> ()
-          { EvaluationResult = Ok "straggler finished"
-            Diagnostics = [||]
-            EvaluatedCode = request.Code
-            Metadata = Map.empty }, st
-        | _ -> evalFn (request, st)
-  let actor, _, _, _, _, _, _, _, _ =
-    mkAppStateActor
-      quietLogger Map.empty IO.TextWriter.Null false
-      ProjectLoading.emptySolution None false false ignore build
-      ProjectLoading.emptySolution
-  { Actor = actor; Started = started; Gate = gate }
-
-/// Await a task, failing the test when it does not finish in time.
-let private within (seconds: float) (what: string) (t: Task<'T>) : Task<'T> = task {
-  let! winner = Task.WhenAny(t :> Task, Task.Delay(TimeSpan.FromSeconds seconds))
-  obj.ReferenceEquals(winner, t) |> Expect.isTrue (sprintf "%s within %.0fs" what seconds)
-  return! t
-}
-
-let private eval (actor: AppActor) (code: string) =
-  actor.PostAndAsyncReply(fun reply -> Eval({ Code = code; Args = Map.empty }, CancellationToken.None, reply))
-  |> Async.StartAsTask
-
+/// The generation-supersession / no-resurrection decision this file used to
+/// prove via a real FSI-warmup Integration harness (spawning a bare
+/// eval-actor, submitting a straggler eval that ignores cancellation, then
+/// resetting while it's in flight) is now the `no-resurrection` invariant in
+/// SageFs.Simulation/EvalActorSim.fs + EvalActorInvariants.fs, folding the
+/// REAL SageFs.EvalActorDecision.decide, with a generation-blind
+/// twin proving the invariant has teeth. Asserted in
+/// SageFs.Tests/EvalActorSimTests.fs — proven in milliseconds. See
+/// EvalActorSimTests.fs "resetDuringEval: a straggler Finished for the
+/// superseded generation is dropped" and "REPRODUCED — generation-blind
+/// twin resurrects a superseded straggler".
+///
+/// `supersededAtWorkerBoundaryTests` below is UNCHANGED — it is the one real
+/// process-boundary smoke worth keeping: it proves the structured
+/// `SageFsError.EvalSupersededByReset` case crosses the worker HTTP
+/// boundary intact, which the pure DST above cannot exercise.
 [<Tests>]
-let evalActorStragglerTests =
-  Integration.hostList "Eval actor straggler" [
-
-    testTask "WHY — an eval that outlives a reset must not bring back the disposed session, because every later eval would run against it and the fresh session would leak" {
-      let h = mkHarness ()
-      // AddMiddleware is answered only once warm-up finished and the loop runs.
-      do! h.Actor.PostAndAsyncReply(fun reply -> AddMiddleware([], reply)) |> Async.StartAsTask |> within 60.0 "warm-up"
-      let straggler = eval h.Actor StragglerCode
-      let! oldSession = h.Started.Task |> within 10.0 "the straggler starts"
-
-      let! reset =
-        h.Actor.PostAndAsyncReply(fun reply -> ResetSession reply) |> Async.StartAsTask |> within 60.0 "the reset"
-      reset |> Expect.isOk "the reset succeeds while the straggler is still running"
-
-      h.Gate.SetResult()
-      let! stragglerReply = straggler |> within 10.0 "the straggler's caller is answered"
-
-      let! phase = h.Actor.PostAndAsyncReply(fun reply -> GetSessionPhase reply) |> Async.StartAsTask |> within 10.0 "the phase query"
-      match phase with
-      | Active (st, _) ->
-        obj.ReferenceEquals(st.Session, oldSession)
-        |> Expect.isFalse "the session is the fresh one the reset created, not the one it disposed"
-      | other -> failtestf "expected an Active session after the reset, got %A" other
-
-      match stragglerReply.EvaluationResult with
-      | Error (:? SageFsErrorException as e) ->
-        e.Error |> Expect.equal "the caller learns its eval was superseded by the reset" SageFsError.EvalSupersededByReset
-      | other -> failtestf "expected the structured superseded-by-reset error, got %A" other
-
-      let! after = eval h.Actor "1 + 1" |> within 30.0 "an eval after the reset"
-      after.EvaluationResult |> Expect.isOk "the fresh session keeps evaluating"
-    }
-  ]
+let evalActorStragglerTests = testList "Eval actor straggler" []
 
 /// An actor that answers every Eval with a fixed response.
 let private answeringActor (response: EvalResponse) : AppActor =
