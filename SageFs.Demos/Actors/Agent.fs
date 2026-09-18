@@ -26,6 +26,7 @@ open System
 open System.IO
 open System.Net.Http
 open System.Net.Http.Headers
+open System.Runtime.CompilerServices
 open System.Text
 open System.Text.Json
 open System.Text.Json.Nodes
@@ -291,6 +292,131 @@ module RepoRoot =
     with _ ->
       None
 
+/// ---------------------------------------------------------------------
+/// Locating the cohort demo's git+Expecto FIXTURE inside the cell — the
+/// SAME "walk down from the filesystem root looking for a marker file"
+/// technique `RepoRoot` above uses, applied to a different tree for a
+/// different reason (cohort-demo-scenario-plan.md's phase B' dual-session
+/// correction: `land_and_wait` below needs to `git rev-parse` the fixture's
+/// `alice-good`/`bob-break` branches to real commit shas at call time,
+/// since only the HOST-side `Runtime.Cohort.prepareFixture` — a phase A
+/// module this island does not touch or link against — ever sees the
+/// `FixtureResult` value; the wire (`Wire.fs`, also untouched) has no
+/// channel to hand this actor that value directly, so it must be
+/// rediscovered the same way `RepoRoot.find` rediscovers the repo root).
+///
+/// `Runtime.Cohort.prepareFixture` builds its throwaway git repo under
+/// `Directory.CreateTempSubdirectory()` — i.e. under the HOST's own
+/// `/tmp` — and `Runtime.Cohort.actorBinds` RW-binds it into the cell at
+/// the IDENTICAL absolute path (`Sandbox.fs`'s `(host, cell)` bind-pair
+/// convention, mirroring `cellSpec`'s existing `sampleDir, sampleDir`
+/// RW-bind `Runtime.Cohort.fs`'s own doc comment points at). Unlike
+/// `RepoRoot.skipNames`, this module's skip set deliberately does NOT
+/// exclude `"tmp"`: `Sandbox.args` gives every cell a bare `--tmpfs /tmp`
+/// (a fresh, EMPTY tmpfs — confirmed directly against `Sandbox.fs`'s own
+/// flag list, `--tmpfs "/tmp"`) with the fixture's one subdirectory
+/// bind-mounted on top of it, so `/tmp` inside the cell holds nothing but
+/// that one directory (plus whatever else the sandbox itself mounts
+/// there) — never the large, unrelated tree `RepoRoot`'s own doc comment
+/// found under `/usr` when it first tried an unbounded walk. Excluding
+/// `"tmp"` here would make the fixture, which lives ONLY under `/tmp`,
+/// permanently unfindable.
+/// ---------------------------------------------------------------------
+module FixtureRoot =
+
+  /// Same rationale as `RepoRoot.skipNames` for every entry EXCEPT
+  /// `"tmp"`, which is deliberately absent — see this module's own doc
+  /// comment above.
+  let private skipNames =
+    set
+      [ ".nuget"
+        ".git"
+        "proc"
+        "sys"
+        "dev"
+        "chrome-bin"
+        "dotnet-root"
+        "sagefs-bin"
+        "demos-bin"
+        "obj"
+        "bin"
+        "sbin"
+        "lib"
+        "lib64"
+        "usr"
+        "etc"
+        "node_modules" ]
+
+  let rec private search (budget: int ref) (depth: int) (dir: string) : string option =
+    if depth < 0 || budget.Value <= 0 then
+      None
+    else
+      budget.Value <- budget.Value - 1
+
+      try
+        if File.Exists(Path.Combine(dir, "Fixture.fsproj")) then
+          Some dir
+        else
+          Directory.EnumerateDirectories dir
+          |> Seq.filter (fun d -> not (skipNames.Contains(Path.GetFileName d)))
+          |> Seq.tryPick (search budget (depth - 1))
+      with _ ->
+        None
+
+  /// Searches under the filesystem root for the cohort fixture's own
+  /// `Fixture.fsproj` marker (written by `Runtime.Cohort.writeFixtureSources`
+  /// — a project name no real repo project or sample uses), bounded the
+  /// same way `RepoRoot.find` is so a misconfigured cell fails fast and
+  /// loud instead of hanging.
+  let find () : string option =
+    let budget = ref 20000
+
+    try
+      Directory.EnumerateDirectories "/"
+      |> Seq.filter (fun d -> not (skipNames.Contains(Path.GetFileName d)))
+      |> Seq.tryPick (search budget 14)
+    with _ ->
+      None
+
+  /// Resolves `gitRef` (a branch name, tag, or sha) to its commit sha
+  /// inside the fixture repo at `fixtureDir` via a raw `git rev-parse`
+  /// process — `land_and_wait` below uses this to turn the wire's
+  /// `shaTag=alice-good`/`shaTag=bob-break` into the real commit sha
+  /// `request_landing`'s `commits` argument needs, without this actor
+  /// ever being handed the sha directly (see this module's own doc
+  /// comment on why). Mirrors `Runtime.Cohort.fs`'s own `git` helper
+  /// exactly (same `ProcessStartInfo` shape, same stdout-trim-on-success/
+  /// stderr-on-failure contract) — this island does not reference that
+  /// module (a phase A file this island does not link against), so the
+  /// process-spawning is duplicated here rather than shared, same as
+  /// every other actor in this project spawning its own processes.
+  let resolveGitRefSha (fixtureDir: string) (gitRef: string) : Async<Result<string, string>> =
+    async {
+      try
+        let psi =
+          Diagnostics.ProcessStartInfo(
+            "git",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = fixtureDir)
+
+        psi.ArgumentList.Add "rev-parse"
+        psi.ArgumentList.Add gitRef
+        use proc = new Diagnostics.Process(StartInfo = psi)
+        proc.Start() |> ignore
+        let! stdout = proc.StandardOutput.ReadToEndAsync() |> Async.AwaitTask
+        let! stderr = proc.StandardError.ReadToEndAsync() |> Async.AwaitTask
+        do! proc.WaitForExitAsync() |> Async.AwaitTask
+
+        if proc.ExitCode = 0 then
+          return Ok(stdout.Trim())
+        else
+          return Error(sprintf "git rev-parse %s exited %d in %s: %s" gitRef proc.ExitCode fixtureDir stderr)
+      with ex ->
+        return Error ex.Message
+    }
+
 /// One real MCP exchange, exactly as observed on the wire — never a
 /// scripted/canned line. `Response` is the tool's own raw text content.
 type TranscriptEntry =
@@ -350,6 +476,57 @@ type Handle =
     Page: IPage
     Session: Rpc.Session
     InitResult: Result<unit, string> option ref }
+
+/// ---------------------------------------------------------------------
+/// Per-Handle COHORT state — the dual-session correction (cohort-demo-
+/// scenario-plan.md finding #2, verified live against `SageFs/Mcp.fs`'s
+/// `memberIdFor`: cohort member identity is bound to the MCP TRANSPORT
+/// SESSION, not the `agentName` argument, so `alice` and `bob` collapse
+/// to one member unless each runs its own `initialize` handshake on its
+/// own `Rpc.Session` — see `sessionFor` below).
+///
+/// Deliberately NOT new fields on `Handle` above: `Handle` is a public
+/// record `SageFs.Demos.Tests.AgentTests`'s
+/// "a malformed wire selector fails closed" test constructs directly with
+/// a positional field literal (`Playwright = ...; Context = ...; Page =
+/// ...; Session = ...; InitResult = ...`), mirroring `CellAgentTests.fs`'s
+/// own `Dashboard.Handle` test — a REQUIRED field added to `Handle` here
+/// would break that pre-existing, out-of-scope test file's compile for
+/// every future actor-state addition, which is exactly the kind of
+/// ripple a wire-widening correction should not cause (`parseCohortWire`
+/// itself took the same care: a NEW sibling function, `parseWire` left
+/// byte-for-byte unchanged). A `ConditionalWeakTable` keyed on
+/// `handle.Session` (a reference type, freshly allocated once per
+/// `launch` call, so it is a stable, unique-per-Handle key) gives every
+/// `Handle` its own private dual-session/claims state without widening
+/// the record at all: entries are created lazily on first use and are
+/// naturally garbage-collected alongside their owning `Handle`/`Session`,
+/// so nothing here needs explicit teardown beyond disposing the cached
+/// `HttpClient`s in `close` below.
+/// ---------------------------------------------------------------------
+module private CohortState =
+
+  /// One extra `Rpc.Session` per cohort `agentName` this Handle has
+  /// driven a cohort-wire step for (`alice`, `bob`, ...) — each gets its
+  /// OWN `initialize` handshake (`sessionFor`), so each is a genuinely
+  /// distinct daemon member.
+  let private sessionsByHandle =
+    ConditionalWeakTable<Rpc.Session, Collections.Generic.Dictionary<string, Rpc.Session>>()
+
+  /// The (claimId, fence) an `agentName` most recently got back from a
+  /// successful `acquire_claim` cohort-wire call — `land_and_wait` (beats
+  /// 7/8 of the plan) needs these to build `request_landing`'s
+  /// `"claimId:fence"` `claims` argument without the wire having to carry
+  /// a claim id/fence it cannot know ahead of a live `acquire_claim`
+  /// response.
+  let private claimsByHandle =
+    ConditionalWeakTable<Rpc.Session, Collections.Generic.Dictionary<string, string * int64>>()
+
+  let sessionsFor (handle: Handle) : Collections.Generic.Dictionary<string, Rpc.Session> =
+    sessionsByHandle.GetValue(handle.Session, (fun _ -> Collections.Generic.Dictionary()))
+
+  let claimsFor (handle: Handle) : Collections.Generic.Dictionary<string, string * int64> =
+    claimsByHandle.GetValue(handle.Session, (fun _ -> Collections.Generic.Dictionary()))
 
 /// Xvfb runs `-nocursor` — see `Actors/Dashboard.fs`'s identical doc comment
 /// for why every page this project drives also forces `cursor: none`
@@ -417,6 +594,13 @@ let close (handle: Handle) : Async<unit> =
     do! handle.Context.CloseAsync() |> Async.AwaitTask
     handle.Playwright.Dispose()
     handle.Session.Http.Dispose()
+
+    // Dispose every per-agentName cohort session's own HttpClient too
+    // (CohortState above) — each one is a real, separately-allocated
+    // `Rpc.Session` from `sessionFor`, never covered by the legacy
+    // `handle.Session.Http.Dispose()` above.
+    for kv in CohortState.sessionsFor handle do
+      kv.Value.Http.Dispose()
   }
 
 let private pushEntry (page: IPage) (entry: TranscriptEntry) : Async<unit> =
@@ -452,6 +636,89 @@ let private ensureInitialized (handle: Handle) : Async<Result<unit, string>> =
       handle.InitResult.Value <- Some r
       return r
   }
+
+/// Get-or-create THIS `Handle`'s own `Rpc.Session` for `agentName` — the
+/// dual-session correction (cohort-demo-scenario-plan.md finding #2): a
+/// FRESH `Rpc.Session` runs its own `initialize` handshake, which the MCP
+/// SDK answers with its own `Mcp-Session-Id` header, which
+/// `SageFs/Mcp.fs`'s `memberIdFor` binds distinct cohort membership to
+/// (`MemberId.Mcp transportSessionId`) — so `alice` and `bob`, driven
+/// through two different sessions from this one function, are two real,
+/// distinct cohort members, never the same `agentName` string collapsed
+/// onto one shared connection (verified empirically live before this
+/// function existed — see the plan's finding #2: two `agentName`s on ONE
+/// connection both resolved to the SAME member and the second
+/// `join_cohort` failed with "already a member"). Idempotent per
+/// `agentName`: a later cohort step for an already-seen agent reuses its
+/// already-initialized session, exactly like `ensureInitialized` above
+/// does for the legacy path's single session.
+let private sessionFor (handle: Handle) (agentName: string) : Async<Result<Rpc.Session, string>> =
+  async {
+    let sessions = CohortState.sessionsFor handle
+
+    match sessions.TryGetValue agentName with
+    | true, session -> return Ok session
+    | false, _ ->
+      let session = Rpc.create ()
+
+      match! Rpc.initialize session with
+      | Error e -> return Error(sprintf "initialize (%s): %s" agentName e)
+      | Ok() ->
+        sessions.[agentName] <- session
+        return Ok session
+  }
+
+/// Parses `acquireClaim`'s own real success text (`SageFs/Mcp.fs`:
+/// `sprintf "Acquired claim %s over %s (fence=%d)." cid scope (int64
+/// fence)`) to recover the claim id and fence `land_and_wait` (beats 7/8)
+/// needs to build `request_landing`'s `"claimId:fence"` argument. Manual
+/// string search rather than `Regex` — mirrors this file's own existing
+/// parsers (`parseWire`/`parseCohortWire`/`parseArgsEncoded`), all of
+/// which fail closed (`None`) on anything that doesn't look exactly like
+/// the expected shape rather than guessing.
+let private tryParseAcquiredClaim (response: string) : (string * int64) option =
+  let prefix = "Acquired claim "
+  let overMarker = " over "
+  let fenceMarker = "(fence="
+
+  if not (response.StartsWith prefix) then
+    None
+  else
+    let afterPrefix = response.Substring prefix.Length
+    let overIdx = afterPrefix.IndexOf overMarker
+
+    if overIdx < 0 then
+      None
+    else
+      let claimId = afterPrefix.Substring(0, overIdx)
+      let fenceIdx = response.IndexOf fenceMarker
+
+      if fenceIdx < 0 then
+        None
+      else
+        let afterFence = response.Substring(fenceIdx + fenceMarker.Length)
+        let closeIdx = afterFence.IndexOf ')'
+
+        if closeIdx < 0 then
+          None
+        else
+          match Int64.TryParse(afterFence.Substring(0, closeIdx)) with
+          | true, fence -> Some(claimId, fence)
+          | false, _ -> None
+
+/// Captures a successful `acquire_claim` cohort-wire response's
+/// (claimId, fence) for `agentName` (`CohortState.claimsFor`) so a LATER
+/// `land_and_wait` step for the SAME agent can present it to
+/// `request_landing`. Best-effort: a response that doesn't parse (should
+/// never happen for a genuinely successful `acquire_claim` call, since
+/// `acquireClaim`'s own success text is fixed — see
+/// `tryParseAcquiredClaim`'s doc comment) leaves nothing recorded, and
+/// `land_and_wait` reports that plainly rather than this function ever
+/// throwing.
+let private recordClaim (handle: Handle) (agentName: string) (response: string) : unit =
+  match tryParseAcquiredClaim response with
+  | Some(claimId, fence) -> (CohortState.claimsFor handle).[agentName] <- (claimId, fence)
+  | None -> ()
 
 /// The convention this actor's OWN scenario (`Scenarios.Agent.fs`) uses to
 /// pack a real MCP call into the one opaque string field a non-input
@@ -655,28 +922,36 @@ let private looksLikeFailure (response: string) : bool =
 /// expectation ceiling documents), and a cohort `request_landing`/
 /// `get_cohort_status` pair needs the identical polling shape while the
 /// daemon runs the landing's test matrix.
+///
+/// Takes an explicit `session` (dual-session correction — the legacy
+/// caller passes `handle.Session`, a cohort caller passes its own
+/// agent-specific session from `sessionFor`) rather than deriving one
+/// from `handle` itself, and an `onSuccess` callback fired with the
+/// MATCHING response text (the legacy caller passes `ignore`; the cohort
+/// caller uses it to capture a successful `acquire_claim`'s claim id/
+/// fence via `recordClaim`). Session initialization is now the CALLER's
+/// responsibility (`ensureInitialized`/`sessionFor` both already return
+/// an initialized session), not this function's — it no longer touches
+/// `handle.Session`/`handle.InitResult` at all, only `handle.Page` to
+/// render the transcript.
 let private pollTool
-  (handle: Handle)
+  (page: IPage)
+  (session: Rpc.Session)
   (stepLabel: string)
   (toolName: string)
   (arguments: (string * string) list)
   (expected: string)
   (timeoutMs: float)
+  (onSuccess: string -> unit)
   : Async<bool> =
   async {
-    match! ensureInitialized handle with
-    | Error e ->
-      do! pushEntry handle.Page { Step = stepLabel; Tool = "initialize"; Ok = false; Response = e }
-      return false
-    | Ok() ->
-
     let sw = Diagnostics.Stopwatch.StartNew()
     let mutable outcome = None
 
     while outcome.IsNone && float sw.ElapsedMilliseconds < timeoutMs do
-      match! Rpc.callTool handle.Session toolName arguments with
+      match! Rpc.callTool session toolName arguments with
       | Error e ->
-        do! pushEntry handle.Page { Step = stepLabel; Tool = toolName; Ok = false; Response = e }
+        do! pushEntry page { Step = stepLabel; Tool = toolName; Ok = false; Response = e }
         outcome <- Some false
       | Ok response ->
         let matched =
@@ -685,14 +960,133 @@ let private pollTool
           else
             response.Contains expected
 
-        do! pushEntry handle.Page { Step = stepLabel; Tool = toolName; Ok = matched; Response = response }
+        do! pushEntry page { Step = stepLabel; Tool = toolName; Ok = matched; Response = response }
 
         if matched then
+          onSuccess response
           outcome <- Some true
         else
           do! Async.Sleep 1000
 
     return outcome |> Option.defaultValue false
+  }
+
+/// The "land and wait" pseudo-tool (`land_and_wait` on the wire, wired
+/// from `Scenarios.Cohort.fs`'s beats 7/8 — cohort-demo-scenario-plan.md's
+/// "alice's good change lands" / "bob's breaking change is BLOCKED").
+/// `land_and_wait` is NEVER sent to the daemon as an MCP tool name — it is
+/// this actor's OWN two-call recipe, because a real landing genuinely
+/// needs two distinct MCP calls with different retry shapes: ONE
+/// `request_landing` (queues the landing — calling it again would queue a
+/// SECOND, duplicate landing, so it must never be inside a retry loop),
+/// then a POLL of `get_cohort_status` until the queued landing's own
+/// state — asynchronously advanced by the daemon's landing performer —
+/// reaches `expected` (`"Landed"` for beat 7, `"FailingTests"` for
+/// beat 8, both real substrings of `Cohort.LandingState`'s `%A` rendering
+/// in `SageFs/Mcp.fs`'s `renderCohortFrame`). `pollTool`'s single-tool
+/// retry-until-match loop cannot express "call tool A once, then poll
+/// tool B" — hence this dedicated function instead of trying to shoehorn
+/// it through `pollTool` alone (it still uses `pollTool` for its own
+/// `get_cohort_status` half).
+///
+/// `argsEncoded` carries `shaTag=<git ref in the fixture repo>` (required
+/// — resolved to a real commit sha via `FixtureRoot.resolveGitRefSha`,
+/// never a sha this actor is handed directly, see `FixtureRoot`'s own
+/// doc comment on why) and an optional `statement=<landing statement>`
+/// (defaults to a generic one naming the agent and ref). The claim
+/// (`claimId:fence`) `request_landing` needs comes from
+/// `CohortState.claimsFor handle`, populated by an EARLIER cohort-wire
+/// `acquire_claim` step for the SAME `agentName` via `recordClaim` — never
+/// carried on this step's own wire, since it cannot be known until that
+/// earlier call's real response comes back.
+let private landAndWait
+  (handle: Handle)
+  (session: Rpc.Session)
+  (stepLabel: string)
+  (agentName: string)
+  (argsEncoded: string)
+  (expected: string)
+  (timeoutMs: float)
+  : Async<bool> =
+  async {
+    let args = parseArgsEncoded argsEncoded
+    let tryArg key = args |> List.tryFind (fun (k, _) -> k = key) |> Option.map snd
+
+    match tryArg "shaTag" with
+    | None ->
+      do!
+        pushEntry
+          handle.Page
+          { Step = stepLabel
+            Tool = "land_and_wait"
+            Ok = false
+            Response = "land_and_wait requires 'shaTag=<git ref in the fixture repo>' in its argsEncoded" }
+
+      return false
+    | Some shaTag ->
+
+    match (CohortState.claimsFor handle).TryGetValue agentName with
+    | false, _ ->
+      do!
+        pushEntry
+          handle.Page
+          { Step = stepLabel
+            Tool = "land_and_wait"
+            Ok = false
+            Response = sprintf "no claim recorded for %s — an acquire_claim cohort-wire step for %s must run (and succeed) first" agentName agentName }
+
+      return false
+    | true, (claimId, fence) ->
+
+    match FixtureRoot.find () with
+    | None ->
+      do!
+        pushEntry
+          handle.Page
+          { Step = stepLabel
+            Tool = "land_and_wait"
+            Ok = false
+            Response = "could not locate the cohort fixture inside this cell (Fixture.fsproj not found)" }
+
+      return false
+    | Some fixtureDir ->
+
+    match! FixtureRoot.resolveGitRefSha fixtureDir shaTag with
+    | Error e ->
+      do!
+        pushEntry
+          handle.Page
+          { Step = stepLabel
+            Tool = "land_and_wait"
+            Ok = false
+            Response = sprintf "could not resolve '%s' to a commit sha in %s: %s" shaTag fixtureDir e }
+
+      return false
+    | Ok sha ->
+
+    let statement = tryArg "statement" |> Option.defaultValue (sprintf "%s lands %s" agentName shaTag)
+
+    let landingArgs =
+      [ "agentName", agentName
+        "claims", sprintf "%s:%d" claimId fence
+        "commits", sha
+        "statement", statement ]
+
+    match! Rpc.callTool session "request_landing" landingArgs with
+    | Error e ->
+      do! pushEntry handle.Page { Step = stepLabel; Tool = "request_landing"; Ok = false; Response = e }
+      return false
+    | Ok response when looksLikeFailure response ->
+      do! pushEntry handle.Page { Step = stepLabel; Tool = "request_landing"; Ok = false; Response = response }
+      return false
+    | Ok response ->
+      do! pushEntry handle.Page { Step = stepLabel; Tool = "request_landing"; Ok = true; Response = response }
+      // request_landing only QUEUES the landing — the daemon's own landing
+      // performer advances it through Rebasing/Verifying to Landed/Blocked
+      // asynchronously (McpTools.fs's own `request_landing` doc: "this
+      // queues the request AND the pipeline runs it; watch its progress
+      // via get_cohort_status"). `get_cohort_status` takes no arguments.
+      return! pollTool handle.Page session stepLabel "get_cohort_status" [] expected timeoutMs ignore
   }
 
 let toLiveActor (handle: Handle) : LiveActor =
@@ -708,12 +1102,34 @@ let toLiveActor (handle: Handle) : LiveActor =
       match parseCohortWire wireSelector with
       | Some(agentName, toolName, argsEncoded, expected) ->
         let stepLabel = sprintf "%s -> %s" agentName toolName
-        let arguments = ("agentName", agentName) :: parseArgsEncoded argsEncoded
-        return! pollTool handle stepLabel toolName arguments expected timeoutMs
+
+        // Dual-session correction: every cohort-wire call routes through
+        // THIS agent's own `Rpc.Session` (`sessionFor`), never the legacy
+        // `handle.Session` — see `sessionFor`'s and `CohortState`'s doc
+        // comments for why this is what makes alice/bob genuinely distinct
+        // cohort members.
+        match! sessionFor handle agentName with
+        | Error e ->
+          do! pushEntry handle.Page { Step = stepLabel; Tool = "initialize"; Ok = false; Response = e }
+          return false
+        | Ok session ->
+
+        if toolName = "land_and_wait" then
+          return! landAndWait handle session stepLabel agentName argsEncoded expected timeoutMs
+        else
+          let arguments = ("agentName", agentName) :: parseArgsEncoded argsEncoded
+          // Only `acquire_claim` needs its successful response captured
+          // (a later `land_and_wait` step's `request_landing` call needs
+          // the claim id/fence it returns) — every other cohort tool has
+          // nothing later steps read back off this actor's own state.
+          let onSuccess = if toolName = "acquire_claim" then recordClaim handle agentName else ignore
+          return! pollTool handle.Page session stepLabel toolName arguments expected timeoutMs onSuccess
       | None ->
 
       // Fall back to the ORIGINAL `agent-mcp` encoding, unchanged: same
-      // checks, same order, same error text as before this widening.
+      // checks, same order, same error text as before this widening —
+      // still routed through the single legacy `handle.Session`/
+      // `ensureInitialized`, never a per-agent cohort session.
       match parseWire wireSelector with
       | None -> return false
       | Some(stepLabel, toolName) ->
@@ -737,8 +1153,14 @@ let toLiveActor (handle: Handle) : LiveActor =
         return false
       | Ok arguments ->
 
+      match! ensureInitialized handle with
+      | Error e ->
+        do! pushEntry handle.Page { Step = stepLabel; Tool = "initialize"; Ok = false; Response = e }
+        return false
+      | Ok() ->
+
       let expected = expectedSubstringFor toolName
-      return! pollTool handle stepLabel toolName arguments expected timeoutMs
+      return! pollTool handle.Page handle.Session stepLabel toolName arguments expected timeoutMs ignore
     }
 
   { Id = ActorId.Agent

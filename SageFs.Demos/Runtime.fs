@@ -502,9 +502,21 @@ let private wirePlanOf
 /// second window) here, right after the daemon is confirmed healthy and
 /// before the cell-agent is exec'd — never by editing this function again.
 /// Island F contributes no fragment of its own, so `actorPrologue = []`
-/// reproduces the exact pre-seam script byte-for-line. Triple-quoted so
-/// every `$`/`\` below is literal bash, not an F# escape.
-let private innerScript (actorPrologue: string list) : string =
+/// reproduces the exact pre-seam script byte-for-line. `daemonCwd` is the
+/// cohort demo's own unavoidable core edit (cohort-demo-scenario-plan.md
+/// §"The genuine work" item 1): the cohort's git operations run against
+/// `Environment.CurrentDirectory` (`SageFs.Core/Mcp.fs`'s `mainRepoDir`), so
+/// filming `cohort-landing` needs the daemon launched with a real git
+/// fixture as its cwd — the `actorPrologue` splice below runs AFTER the
+/// daemon is already healthy, so it cannot set this; only a pre-daemon `cd`
+/// can. `None` (every non-cohort scenario) reproduces the exact pre-seam
+/// script byte-for-line — no `cd` line at all. Triple-quoted so every
+/// `$`/`\` below is literal bash, not an F# escape.
+let private innerScript (daemonCwd: string option) (actorPrologue: string list) : string =
+  let cdLine =
+    match daemonCwd with
+    | Some dir -> sprintf "cd \"%s\"" dir
+    | None -> ": # no daemon cwd override for this scenario"
   sprintf
     """
 set -euo pipefail
@@ -521,6 +533,7 @@ export DISPLAY=:99
 export SAGEFS_DATA_DIR=/home/demo/.sagefs
 export SAGEFS_BIND_HOST=127.0.0.1
 export DOTNET_ROOT=/dotnet-root
+%s
 /dotnet-root/dotnet /sagefs-bin/SageFs.dll --mcp-port 47749 --no-watch --no-resume \
   --owner-pid $$ --ttl 5m \
   </dev/null >/out/daemon.log 2>&1 &
@@ -553,6 +566,7 @@ for i in $(seq 1 20); do kill -0 "$XVFB_PID" 2>/dev/null || break; sleep 0.1; do
 kill -KILL "$XVFB_PID" 2>/dev/null || true
 exit "$CELLAGENT_EXIT"
 """
+    cdLine
     (actorPrologue |> String.concat "\n")
 
 /// §10: a scenario that opens a REAL project (`Text.RepoRootToken`) needs
@@ -591,6 +605,16 @@ let private cellSpec
   // until an actor island fills them, reproducing the exact pre-seam cell.
   (actorBinds: (string * string) list)
   (actorPrologue: string list)
+  // The cohort demo's own extension points (cohort-demo-scenario-plan.md
+  // §"The genuine work" items 1-2), threaded ONLY for the `cohort-landing`
+  // scenario — `[]`/`None` for every other scenario reproduces the exact
+  // pre-cohort cell byte-for-line. `cohortRwBinds` is RW (not RO, unlike
+  // `actorBinds` above): the daemon's cohort git ops write a `git worktree
+  // add` output plus `obj`/`bin` into this fixture once `set_integration_ref`
+  // runs (`Runtime.Cohort.fs`'s own doc on why a read-only fixture would
+  // fault the worktree's design-time build).
+  (cohortRwBinds: (string * string) list)
+  (daemonCwd: string option)
   : Sandbox.CellSpec =
   { RoBinds =
       [ "/etc/fonts", "/etc/fonts"
@@ -602,7 +626,7 @@ let private cellSpec
         repoRoot, repoRoot
         nugetPackagesDir, nugetPackagesDir ]
       @ actorBinds
-    RwBinds = [ hostOutDir, "/out"; sampleDir, sampleDir ]
+    RwBinds = [ hostOutDir, "/out"; sampleDir, sampleDir ] @ cohortRwBinds
     Env =
       [ "HOME", "/home/demo"
         // `/xdotool-bin` is harmless in `PATH` even for a scenario that
@@ -636,7 +660,7 @@ let private cellSpec
         // minimal /dev).
         "LIBGL_ALWAYS_SOFTWARE", "1"
         "__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/50_mesa.json" ]
-    InnerCommand = [ "/bin/sh"; "-c"; innerScript actorPrologue ] }
+    InnerCommand = [ "/bin/sh"; "-c"; innerScript daemonCwd actorPrologue ] }
 
 // ---------------------------------------------------------------------------
 // Per-actor cell binds/prologue/wire-config resolution (seam integration):
@@ -969,8 +993,33 @@ let record (repoRoot: string) (scenario: Scenario) : Async<Result<Wire.StepLog *
     | Error e -> return Error e
     | Ok(actorBinds, actorPrologue, vsCodeConfig, nvimConfig, appConfig) ->
 
+    // The cohort demo's own extension point (cohort-demo-scenario-plan.md
+    // §"The genuine work" items 1-2), gated strictly on the scenario id —
+    // every other scenario takes the `None`/`[]` branch below and gets the
+    // exact pre-cohort cell (no fixture build, no extra bind, no `cd`).
+    let isCohortScenario = scenarioIdText = "cohort-landing"
+
+    let! cohortFixtureResult =
+      async {
+        if isCohortScenario then
+          match! Runtime.Cohort.prepareFixture () with
+          | Ok fixture -> return Ok(Some fixture)
+          | Error e -> return Error(sprintf "cohort fixture setup failed: %s" e)
+        else
+          return Ok None
+      }
+
+    match cohortFixtureResult with
+    | Error e -> return Error e
+    | Ok cohortFixtureOpt ->
+
+    let cohortRwBinds = cohortFixtureOpt |> Option.map Runtime.Cohort.actorBinds |> Option.defaultValue []
+    let daemonCwd = cohortFixtureOpt |> Option.map Runtime.Cohort.daemonCwd
+
     let sampleDir = Path.Combine(repoRoot, Sample.relativePath scenario.Sample)
-    let spec = cellSpec sagefsBin demosBin dotnetRoot chromeDir cellOutDir repoRoot (nugetPackagesDir ()) sampleDir actorBinds actorPrologue
+    let spec =
+      cellSpec sagefsBin demosBin dotnetRoot chromeDir cellOutDir repoRoot (nugetPackagesDir ()) sampleDir actorBinds actorPrologue cohortRwBinds
+        daemonCwd
     let planJson = Wire.serializePlan (wirePlanOf repoRoot vsCodeConfig nvimConfig appConfig scenario)
     let! exitCode, stdout, stderr = Sandbox.run spec planJson
 

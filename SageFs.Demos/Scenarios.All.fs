@@ -10,3 +10,4 @@ let all: SageFs.Demos.Domain.Scenario list =
   @ SageFs.Demos.Scenarios.VsCode.scenarios
   @ SageFs.Demos.Scenarios.Neovim.scenarios
   @ SageFs.Demos.Scenarios.Agent.scenarios
+  @ SageFs.Demos.Scenarios.Cohort.scenarios

@@ -57,6 +57,7 @@
     <Compile Include="Scenarios.VsCode.fs" />
     <Compile Include="Scenarios.Neovim.fs" />
     <Compile Include="Scenarios.Agent.fs" />
+    <Compile Include="Scenarios.Cohort.fs" />
     <Compile Include="Scenarios.All.fs" />
     <Compile Include="Runtime.VsCode.fs" />
     <Compile Include="Runtime.Neovim.fs" />
