@@ -1844,7 +1844,7 @@ let run
             match! awaitIntegrationSessionTrusted sessionId with
             | Error reason -> return Error reason
             | Ok _settledObservation ->
-            let cycle = SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())
+            let cycle = SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())
             let state = cycle.TestState
             let allTests =
               Features.LiveTesting.LiveTestState.statusEntriesForSession sessionId state
@@ -1907,7 +1907,7 @@ let run
             // test always runs and is never cached, so a source change can never
             // be masked by a stale skip). LandingCache.verify then runs only the
             // cache misses (+ untrusted tests) and records the trustworthy ones.
-            let lt = SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())
+            let lt = SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())
             let maps =
               match Map.tryFind sessionId lt.InstrumentationMaps with
               | Some m when m.Length > 0 -> m

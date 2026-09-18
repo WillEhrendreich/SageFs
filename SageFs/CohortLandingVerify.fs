@@ -129,7 +129,7 @@ let runTestsInSession
       return Ok []
     | _ ->
 
-    let testState = (SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())).TestState
+    let testState = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
 
     // Fail closed on a caller/routing mismatch instead of silently running
     // a different session's tests (or a subset of them): a cycle now belongs
@@ -173,7 +173,7 @@ let runTestsInSession
     // tracking completion of "our" generation.
     let rec awaitStart () : Async<Result<RunGeneration, string>> =
       async {
-        let currentGeneration = (SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())).TestState.LastGeneration
+        let currentGeneration = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.LastGeneration
         match currentGeneration <> priorGeneration with
         | true -> return Ok currentGeneration
         | false ->
@@ -186,7 +186,7 @@ let runTestsInSession
 
     let rec awaitCompletion (generation: RunGeneration) : Async<Result<TestId list, string>> =
       async {
-        let state = (SageFsModel.cycleForSession sessionId (elmRuntime.GetModel())).TestState
+        let state = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
         match isGenerationComplete generation state with
         | true -> return Ok (failingOf tests state)
         | false ->

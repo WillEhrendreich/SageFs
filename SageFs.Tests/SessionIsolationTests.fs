@@ -1322,6 +1322,68 @@ module SessionCycleIsolation =
       m4.LiveTesting.TestState.DiscoveredTests
       |> Array.exists (fun t -> t.Id = tc.Id)
       |> Expect.isFalse "A's Primary cycle must not gain B's discovered test"
+    };
+
+    test "cycleOwnedBySession finds a session's discovery even when the Primary cycle belongs to a DIFFERENT session (the cohort-landing attribution flake)" {
+      // The exact divergence that ERRORED CohortLandingGate on cold CI runners:
+      // the landing verifier reads a background session's discovery to attribute
+      // and run its tests, but `Sessions.ActiveSessionId` (the session pointer)
+      // and the OWNER of the Primary live-testing cycle can diverge. A
+      // `SessionStopped` of the active session advances the pointer to the next
+      // session while deliberately LEAVING the Primary cycle as the stopped
+      // session's stale data (see SageFsApp.fs `SessionStopped`). After that,
+      // `cycleForSession B` resolves to Primary (B is now the session-active
+      // one) but Primary is owned by A — so `ownerSessionId <> Some B`, and the
+      // landing verifier's attribution guard refuses to run ("N of N requested
+      // test(s) are not attributed to session"). `cycleOwnedBySession` keys off
+      // the real data owner, so it finds B's discovery in B's own cycle.
+      let tcA =
+        { TestCase.Id = TestId.create "A.tests" TestFramework.Expecto
+          FullName = "A.tests"; DisplayName = "tests"; Origin = TestOrigin.ReflectionOnly
+          Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
+      let tcB =
+        { TestCase.Id = TestId.create "B.tests" TestFramework.Expecto
+          FullName = "B.tests"; DisplayName = "tests"; Origin = TestOrigin.ReflectionOnly
+          Labels = []; Framework = TestFramework.Expecto; Category = TestCategory.Unit }
+      let sidA = WorkerProtocol.SessionId.newId ()
+      let sidB = WorkerProtocol.SessionId.newId ()
+      let sidAStr = WorkerProtocol.SessionId.value sidA
+      let sidBStr = WorkerProtocol.SessionId.value sidB
+
+      let m0 = SageFsModel.initial ()
+      let m1, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidA "/repo/a"))) m0
+      let m2, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionCreated (mkSnap sidB "/repo/b"))) m1
+      // A becomes active and discovers into Primary (owner = A).
+      let m3, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionSwitched (None, sidAStr))) m2
+      let m4, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sidAStr, [| tcA |]))) m3
+      // B discovers in the background (never active) — its discovery lands in
+      // B's own PerSessionLiveTesting cycle.
+      let m5, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered (sidBStr, [| tcB |]))) m4
+      // A (the active session) is stopped: the pointer advances to B, but the
+      // Primary cycle is deliberately left as A's stale data.
+      let final, _ = SageFsUpdate.update (SageFsMsg.Event (TuiEvent.SessionStopped sidAStr)) m5
+
+      // The divergence is real: Primary is still owned by A even though B is the
+      // active session now.
+      Features.LiveTesting.LiveTestState.ownerSessionId final.LiveTesting.TestState
+      |> Expect.equal "Primary cycle must still be owned by the stopped session A (the divergence)" (Some sidAStr)
+
+      // The OLD resolver (`cycleForSession`) returns the wrong cycle for B — it
+      // hands back Primary (A's data) because B is the session-active one, so an
+      // attribution check against B fails. This is the flake.
+      let viaCycleForSession = SageFsModel.cycleForSession sidBStr final
+      Features.LiveTesting.LiveTestState.ownerSessionId viaCycleForSession.TestState
+      |> Expect.notEqual "cycleForSession resolves B to the WRONG (A-owned) Primary cycle — the attribution bug" (Some sidBStr)
+
+      // The FIX (`cycleOwnedBySession`) resolves B to B's own cycle regardless of
+      // the diverged active pointer, so the landing verifier attributes and runs
+      // B's tests correctly.
+      let viaOwned = SageFsModel.cycleOwnedBySession sidBStr final
+      Features.LiveTesting.LiveTestState.ownerSessionId viaOwned.TestState
+      |> Expect.equal "cycleOwnedBySession resolves B to B's OWN cycle despite the diverged active pointer" (Some sidBStr)
+      viaOwned.TestState.DiscoveredTests
+      |> Array.exists (fun t -> t.Id = tcB.Id)
+      |> Expect.isTrue "cycleOwnedBySession must surface B's own discovered test"
     } ]
 
 /// SessionMap (agent→session) eviction contract. The map previously had no

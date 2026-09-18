@@ -394,6 +394,18 @@ module SageFsModel =
     | Some target -> cycleFor target model
     | None -> Features.LiveTesting.LiveTestCycleState.empty
 
+  /// The cycle that OWNS `sessionId`'s data, resolved INDEPENDENTLY of the
+  /// active pointer — `Primary` when it owns the session, else the session's own
+  /// slot. `cycleForSession` returns EMPTY once the pointer diverges (e.g.
+  /// `SessionStopped`), which is what lost a background cohort-landing verdict.
+  let cycleOwnedBySession (sessionId: string) (model: SageFsModel) : Features.LiveTesting.LiveTestCycleState =
+    match Features.LiveTesting.LiveTestState.ownerSessionId model.LiveTesting.TestState = Some sessionId with
+    | true -> model.LiveTesting
+    | false ->
+      model.PerSessionLiveTesting
+      |> Map.tryFind sessionId
+      |> Option.defaultValue Features.LiveTesting.LiveTestCycleState.empty
+
   /// The one live-testing state for a session, as every surface shows it —
   /// tests, discovery, activation, compile block and pending rebuild all come
   /// from that session's own cycle now (see `cycleForSession`).
