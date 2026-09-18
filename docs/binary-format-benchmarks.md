@@ -2,6 +2,8 @@
 
 Benchmark results comparing the `.sagefs` v3 and `.sagetc` v1 binary formats against JSON (System.Text.Json) serialization.
 
+> **Note:** the `.sagefs` per-session format is no longer written in production — durable session state is now the daemon manifest (`.sagefm` v1). These numbers stand as a benchmark of the binary-vs-JSON codec approach the current formats share, not of an active persistence path.
+
 ---
 
 ## 1. Methodology

@@ -104,7 +104,6 @@ A single `state` event carries variant-specific fields.
 | `HotReloadChanged` | `hotReloadChanged: true` | Hot-reload state toggled. |
 | `FileReloaded` | `fileReloaded` (path) | File reloaded from disk. |
 | `SessionFaulted` | `sessionFaulted` (sessionId), `error` | Session entered a faulted state. |
-| `StandbyProgress` | `standbyProgress: true` | Standby session pool changed. |
 | `WarmupProgress` | `warmupProgress: true`, `sessionId`, `step`, `total` | Session warmup step progress. |
 | `SystemAlarm` | `systemAlarm: true`, `phase`, `message` | Critical system event (resource exhaustion, shutdown). |
 

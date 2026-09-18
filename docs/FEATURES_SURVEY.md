@@ -234,14 +234,11 @@ Plus **2** root-level SageFs.Core modules with feature characteristics
 - **Tests**: ✅ SessionFilmstripTests.fs
 - **Status**: LIT (MCP tool)
 
-### 26. **SessionPersistence** — .sagefs v3 binary format I/O.
-- **Module**: SageFs.Features.SessionPersistence (SessionBinaryTypes, SessionBinaryReader, SessionBinaryWriter)
-- **Types**: InteractionKind, EntryFlags, RefKind, SessionBinaryData
-- **Functions**: read, write
-- **MCP Tool**: ❌ No (internal persistence)
-- **SSE Emission**: ❌ No
-- **Tests**: ❌ No (complex I/O, likely in integration tests)
-- **Status**: DARK (pure I/O codec, no external wiring)
+### 26. **SessionPersistence** — .sagefs v3 per-session binary format (REMOVED).
+- **Status**: REMOVED. The `SageFs.Features.SessionPersistence` module and the
+  `.sagefs` per-session format had no production caller and were deleted. Durable
+  session state now lives in the daemon manifest (`.sagefm` v1, see
+  `ManifestPersistence`), replayed on startup to rebuild sessions.
 
 ### 27. **SessionScribe** — Topological sort + dedup for script export.
 - **Module**: SageFs.Features.SessionScribe

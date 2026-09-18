@@ -2,7 +2,7 @@
 
 **Version**: 1.1
 **Date**: 2026-03-02
-**Formats**: `.sagefs` v3 (session persistence), `.sagetc` v1 (test cache)
+**Formats**: `.sagefm` v1 (daemon session manifest — the durable session registry), `.sagetc` v1 (test cache). (`.sagefs` v3 below is the historical per-session format; it is retained in the codebase but is no longer written in production — the daemon manifest is the durable session state.)
 
 ---
 
