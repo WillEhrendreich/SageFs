@@ -13,14 +13,14 @@ A live F# engine with hot reload, live testing, and AI-agent support — for any
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-8123+-22c55e?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-8132+-22c55e?style=flat-square)]()
 [![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
 
 </div>
 
 ## What is SageFs?
 
-SageFs is a live F# development engine. Start it once, then connect from VS Code, Neovim, the web dashboard, or an MCP client, and you get feedback on every save in under 500ms: inline results, live test markers, hot reload, and agent access. It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients can all share live state at the same time.
+SageFs is a live F# development engine. Start it once, then connect from VS Code, Neovim, the web dashboard, or an MCP client, and you get feedback as you work: inline eval results in under 500ms, live test markers that re-run the affected tests against your edits (saved or not), hot reload, and agent access. It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients can all share live state at the same time.
 
 **How is SageFs different from Ionide?** Ionide provides IntelliSense, diagnostics, and project support through the F# Compiler Service. SageFs adds live execution: eval any expression and see results inline, continuous test feedback on every save, and hot reload that patches your running app. Use both together — Ionide for editing, SageFs for running.
 
@@ -131,10 +131,9 @@ SageFs opens an interactive terminal. Then create a session for `YourProject.fsp
 
 ### 5. Enable live testing
 
-> **The core loop works today** — save-to-green live testing runs end-to-end: SageFs discovers your tests, runs the affected ones, and streams pass/fail inline with source-mapped gutter markers and coverage (verified end-to-end on Expecto). Breadth is still hardening — other frameworks, session switching, and test-discovery timing can still have rough edges.
+> **Live testing runs as you type, not just on save.** SageFs evals your edited buffer into the session and re-runs only the *affected* tests against the new code — an unsaved edit flips a failing test red in a couple seconds and back to green when you fix it, without ever touching the file on disk. Results stream inline with source-mapped gutter markers and coverage. All five frameworks — Expecto, xUnit (v2 and v3), NUnit, MSTest, TUnit — discover, run, and report with framework-specific messages.
 
-When live testing is enabled and a test session is loaded, save-triggered runs can update gutter state automatically.
-The core engine, SSE events, coverage data, and editor integrations already work today, but client polish and discovery/session behavior are still catching up. Expecto is the best-covered path right now.
+When live testing is enabled and a project is loaded, edits — saved or unsaved — re-run the affected tests automatically and update gutter state. The engine, SSE events, coverage, and editor integrations work today across VS Code and Neovim.
 
 ### 6. What you'll see
 
@@ -379,7 +378,7 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel
 
 Visual Studio Enterprise charges about $250/month per seat for Live Unit Testing — $3,000/year per developer. It only works in Visual Studio, it only supports 3 frameworks, it takes 5-30 seconds, and it requires your code to compile first.
 
-SageFs is building toward that same feedback loop with a REPL-centered architecture. The core live-testing engine works, but the end-to-end experience is still being stabilized and isn't equally polished in every client yet.
+SageFs delivers that loop with a REPL-centered architecture, and goes past it: an unsaved edit evals into the session and re-runs only the *affected* tests against your new code in a couple seconds — no save, no full rebuild, and it works on incomplete code. Visual Studio's Live Unit Testing barely supports F# at all; SageFs is F#-first and works across VS Code and Neovim. Client polish still varies, but the engine, SSE, and coverage are solid.
 
 | | VS Enterprise Live Testing | **SageFs** |
 |:---|:---|:---|
@@ -398,7 +397,7 @@ SageFs is building toward that same feedback loop with a REPL-centered architect
 2. **~350ms** — F# Compiler Service type-checks → dependency graph, reachability annotations
 3. **~500ms** — Affected-test execution via hot-eval → ✓/✗ results inline
 
-Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 653 property-based tests exercise the binary format, state machines, and event folds against generated inputs (this count is derived from source, not hand-maintained).
+Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 654 property-based tests exercise the binary format, state machines, and event folds against generated inputs (this count is derived from source, not hand-maintained).
 
 </details>
 
