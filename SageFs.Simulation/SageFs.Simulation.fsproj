@@ -36,6 +36,9 @@
         <!-- Brief B2: deterministic delta-debugging (ddmin) shrinker for
              failing Scenario/MgrScenario reproducers. -->
         <Compile Include="Shrink.fs" />
+        <!-- Phase 3A / B4: revision-stamped scenario identity + saved-seed
+             regression corpus. -->
+        <Compile Include="SeedCorpus.fs" />
     </ItemGroup>
 
     <ItemGroup>
