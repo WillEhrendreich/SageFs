@@ -22,6 +22,10 @@
         <Compile Include="ManifestSim.fs" />
         <Compile Include="ManifestInvariants.fs" />
         <Compile Include="ManifestGenerators.fs" />
+        <!-- Phase 3A / Brief B1: reference-vs-candidate oracle for the
+             supervision core. -->
+        <Compile Include="ReferenceModel.fs" />
+        <Compile Include="Oracle.fs" />
     </ItemGroup>
 
     <ItemGroup>
