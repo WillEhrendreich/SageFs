@@ -134,8 +134,20 @@ module AttributeDiscovery =
       |> List.exists (fun testAttr ->
         attrName = testAttr || attrName = sprintf "%sAttribute" testAttr))
 
+  /// FSI wraps a whole-file eval's types in an incrementing `FSI_000N+` container
+  /// and renders the nested-module path with `+` separators, so an FSI-eval'd
+  /// test's `DeclaringType.FullName` (`FSI_5+A+B+C`) never matches the compiled
+  /// assembly's dotted name (`A.B.C`). Normalize both to the same dotted form so
+  /// a re-eval'd test shares identity with its compiled twin and the discovery
+  /// merge overrides instead of double-counting. A compiled name has no `FSI_`
+  /// prefix and no `+`, so this is a no-op there.
+  let normalizeTypeFullName (name: string) : string =
+    match name with
+    | null -> ""
+    | n -> System.Text.RegularExpressions.Regex.Replace(n, @"^FSI_\d+\+", "").Replace("+", ".")
+
   let toTestCase (framework: TestFramework) (category: TestCategory) (mi: MethodInfo) : TestCase =
-    let fullName = sprintf "%s.%s" mi.DeclaringType.FullName mi.Name
+    let fullName = sprintf "%s.%s" (normalizeTypeFullName mi.DeclaringType.FullName) mi.Name
     { Id = TestId.create fullName framework
       FullName = fullName
       DisplayName = mi.Name
@@ -174,7 +186,7 @@ module AttributeDiscovery =
   /// name include the stringified arguments so each row gets a unique identity.
   let private toTheoryTestCase (framework: TestFramework) (category: TestCategory) (mi: MethodInfo) (args: obj array) : TestCase =
     let argsStr = args |> Array.map (fun a -> if a = null then "null" else string a) |> String.concat ", "
-    let fullName = sprintf "%s.%s(%s)" mi.DeclaringType.FullName mi.Name argsStr
+    let fullName = sprintf "%s.%s(%s)" (normalizeTypeFullName mi.DeclaringType.FullName) mi.Name argsStr
     { Id = TestId.create fullName framework
       FullName = fullName
       DisplayName = sprintf "%s(%s)" mi.Name argsStr
@@ -560,7 +572,7 @@ module BuiltInExecutors =
           |> Array.collect (fun binding ->
             try
               let testValue = binding.ReadValue ()
-              let propertyFullName = sprintf "%s.%s" t.FullName binding.Name
+              let propertyFullName = sprintf "%s.%s" (AttributeDiscovery.normalizeTypeFullName t.FullName) binding.Name
               let flatTests = cache.ToTestCodeList.Invoke(null, [|testValue|])
               let enumerable = flatTests :?> System.Collections.IEnumerable
               [ for ft in enumerable do
@@ -589,7 +601,7 @@ module BuiltInExecutors =
           |> Array.collect (fun binding ->
             try
               let testValue = binding.ReadValue ()
-              let propertyFullName = sprintf "%s.%s" t.FullName binding.Name
+              let propertyFullName = sprintf "%s.%s" (AttributeDiscovery.normalizeTypeFullName t.FullName) binding.Name
               let flatTests = cache.ToTestCodeList.Invoke(null, [|testValue|])
               let enumerable = flatTests :?> System.Collections.IEnumerable
               [ for ft in enumerable do
