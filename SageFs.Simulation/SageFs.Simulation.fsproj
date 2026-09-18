@@ -43,6 +43,13 @@
              skew, reorder, drop, duplicate) composing over the generators
              and the manifest sim (B5). -->
         <Compile Include="FaultInjection.fs" />
+        <!-- Phase 3 landing queue-jam DST: fold the REAL Cohort.decide's serial
+             landing pipeline through a pure effect-performer; twin reducer
+             reintroduces the pre-fix queue-jam (396ee1c3) so the no-deadlock
+             invariants are proven to have teeth. -->
+        <Compile Include="CohortLandingSim.fs" />
+        <Compile Include="CohortLandingInvariants.fs" />
+        <Compile Include="CohortLandingGenerators.fs" />
     </ItemGroup>
 
     <ItemGroup>
