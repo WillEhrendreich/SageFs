@@ -1404,6 +1404,51 @@ module SageFsUpdate =
         | Some None -> model, []
         | None -> model, []
 
+      | TuiEvent.LiveDiscoveryMerged (sessionId, tests) ->
+        // Same merge as `TestsDiscovered` immediately above (source mapping,
+        // DiscoveryGeneration bump, zero-test completion) — deliberately
+        // WITHOUT its auto-run-every-discovered-test effect, which exists
+        // for the one-time activation baseline, not the per-keystroke
+        // eval-then-affected loop (Brief 4 — see the TuiEvent doc comment).
+        let model', outcome =
+          tryUpdateLiveTestingState (Some sessionId) (fun cycle ->
+            let state = cycle.TestState
+            let disc = Features.LiveTesting.LiveTesting.mergeDiscoveredTests [||] tests
+            let withSourceMap =
+              match Array.isEmpty state.SourceLocations with
+              | true ->
+                let sourceFiles =
+                  match model.SessionContext with
+                  | Some ctx -> ctx.FileStatuses |> List.map (fun f -> f.Path) |> Array.ofList
+                  | None -> [||]
+                Features.LiveTesting.SourceMapping.mapFromProjectFiles sourceFiles disc
+              | false -> Features.LiveTesting.SourceMapping.mergeSourceLocations state.SourceLocations disc
+            let sessionDiscovery =
+              Map.add sessionId Features.LiveTesting.DiscoveryProgress.Completed state.SessionDiscovery
+            let locs =
+              let emptyGraph : Features.CellDependencyGraph.CellGraph = { Cells = Map.empty; Edges = [] }
+              Features.TestSourceResolver.resolveTestLocations emptyGraph (Array.toList tests)
+            let firstCompletion = state.LastDiscoveryTime = System.DateTimeOffset.MinValue
+            let meaningfulChange =
+              state.DiscoveredTests <> withSourceMap
+              || state.SessionDiscovery <> sessionDiscovery
+              || model.ResolvedSourceLocations <> locs
+              || (firstCompletion && state.Activation = Features.LiveTesting.LiveTestingActivation.Active)
+            match meaningfulChange with
+            | false -> cycle, None
+            | true ->
+              let cycle' = recomputeStatuses cycle (fun s ->
+                { s with
+                    DiscoveredTests = withSourceMap
+                    LastDiscoveryTime = System.DateTimeOffset.UtcNow
+                    DiscoveryGeneration = s.DiscoveryGeneration + 1L
+                    SessionDiscovery = sessionDiscovery })
+              cycle', Some locs) model
+        match outcome with
+        | Some (Some locs) -> { model' with ResolvedSourceLocations = locs }, []
+        | Some None -> model, []
+        | None -> model, []
+
       | TuiEvent.TestSourceLocations locations ->
         { model with ResolvedSourceLocations = locations }, []
 
@@ -2581,6 +2626,59 @@ module SageFsEffectHandler =
                 dispatch (SageFsMsg.Event (TuiEvent.TestCycleTimingRecorded timing))
                 Instrumentation.succeedSpan span
               | false -> ()
+            })
+        | Features.LiveTesting.TestCycleEffect.EvalBufferThenRunAffected req ->
+          // Brief 4 keystone: identity-preserving eval of the edited buffer,
+          // then run exactly the tests already selected as affected — never
+          // the compiled DLL, never the whole suite (see
+          // live-testing-asyoutype-plan.md §2, Invariants 1/2/6).
+          let targetSid =
+            req.Run.SessionId
+            |> Option.bind (fun s -> match SessionId.validate s with Ok sid -> Some sid | Error _ -> None)
+          do! withSession deps dispatch targetSid (fun sid proxy ->
+            async {
+              let replyId = newReplyId ()
+              let! outcome =
+                async { return! proxy (WorkerMessage.EvalLiveTestFile(req.FilePath, req.Content, replyId)) }
+                |> Async.Catch
+              match outcome with
+              | Choice2Of2 ex ->
+                // Worker mid-restart etc.: surface it, but LiveTesting state
+                // (discovery + results) is untouched — fail-closed.
+                Utils.Log.warn "[SageFsApp] EvalLiveTestFile could not reach the worker for %s: %s" req.FilePath ex.Message
+                dispatch (SageFsMsg.Event (
+                  TuiEvent.EvalFailed (
+                    SessionId.value sid,
+                    sprintf "Live-test eval could not reach the worker: %s" ex.Message)))
+              | Choice1Of2 (WorkerResponse.EvalLiveTestFileResult (_, Error err)) ->
+                // Buffer doesn't compile / eval failed. Fail-closed (Invariant
+                // 4): do NOT dispatch a discovery merge or a run — the prior
+                // dynamic discovery + last-good results stay exactly as they
+                // were. Only the error is surfaced. (Brief 5 owns a dedicated
+                // stale/rollback DU; this is the honest interim signal.)
+                Utils.Log.warn "[SageFsApp] EvalLiveTestFile failed for %s: %s" req.FilePath (SageFsError.describe err)
+                dispatch (SageFsMsg.Event (
+                  TuiEvent.EvalFailed (SessionId.value sid, SageFsError.describe err)))
+              | Choice1Of2 (WorkerResponse.EvalLiveTestFileResult (_, Ok (tests, providers))) ->
+                match List.isEmpty providers with
+                | true -> ()
+                | false -> dispatch (SageFsMsg.Event (TuiEvent.ProvidersDetected providers))
+                // Merge the live (compiled ∪ dynamic) discovery WITHOUT
+                // auto-running every discovered test (see
+                // TuiEvent.LiveDiscoveryMerged), then run exactly the
+                // coverage/graph-selected tests `req.Run` already carries —
+                // re-resolved against the fresh merge so a re-run reflects
+                // the just-eval'd metadata rather than the pre-eval snapshot.
+                dispatch (SageFsMsg.Event (TuiEvent.LiveDiscoveryMerged (SessionId.value sid, tests)))
+                let runIds = req.Run.Tests |> Array.map (fun tc -> tc.Id) |> Set.ofArray
+                let freshTests = tests |> Array.filter (fun tc -> Set.contains tc.Id runIds)
+                let toRun = match Array.isEmpty freshTests with true -> req.Run.Tests | false -> freshTests
+                match Array.isEmpty toRun with
+                | true -> ()
+                | false ->
+                  dispatch (SageFsMsg.Event (
+                    TuiEvent.RunTestsRequested (Some (SessionId.value sid), toRun)))
+              | Choice1Of2 _ -> ()
             })
         | Features.LiveTesting.TestCycleEffect.CancelRebuild (targetSession, generation) ->
           match deps.TestCycleCancellation.Rebuild.cancel(targetSession, generation) with

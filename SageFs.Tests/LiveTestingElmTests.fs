@@ -588,14 +588,20 @@ let fileContentChangedTests = testList "FileContentChanged" [
         (FcsTypeCheckResult.Success ("src/Hello.fs", []))
         afterSave.LiveTesting
 
+    // FileContentChanged carries the saved content (onFileSaveWithContent),
+    // so Brief 4's redirectToEvalBuffer retargets the conservative-fallback
+    // RequestRebuild into EvalBufferThenRunAffected — the buffer is eval'd
+    // into FSI instead of a full rebuild (live-testing-asyoutype-plan.md
+    // §2, proof #2: "FileSave on a compiled file → RequestRebuild" was the
+    // bug this brief fixes).
     effects
     |> List.exists (fun effect ->
       match effect with
-      | TestCycleEffect.RequestRebuild (_, req) ->
-        req.Trigger = RunTrigger.FileSave
-        && req.Tests |> Array.exists (fun test -> test.Id = tc.Id)
+      | TestCycleEffect.EvalBufferThenRunAffected req ->
+        req.Run.Trigger = RunTrigger.FileSave
+        && req.Run.Tests |> Array.exists (fun test -> test.Id = tc.Id)
       | _ -> false)
-    |> Expect.isTrue "compiled saves with no dep-graph matches should still fall back to rebuilding affected tests"
+    |> Expect.isTrue "compiled saves with no dep-graph matches should still fall back to running affected tests, now via an FSI eval instead of a rebuild"
   }
 
   test "compiled file save with FCS failure still requests rebuild" {

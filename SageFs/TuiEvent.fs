@@ -294,6 +294,18 @@ type TuiEvent =
   // ── Live testing ──
   | TestLocationsDetected of sessionId: string * locations: Features.LiveTesting.SourceTestLocation array
   | TestsDiscovered of sessionId: string * tests: Features.LiveTesting.TestCase array
+  /// Merges a fresh live-merged discovery report (Brief 3's
+  /// `TestDiscoveryMerge.merge` — compiled ∪ FSI-eval'd, dynamic wins by
+  /// `TestId`) into `sessionId`'s cycle state EXACTLY as `TestsDiscovered`
+  /// does (source mapping, `DiscoveryGeneration` bump, zero-test
+  /// completion), but WITHOUT `TestsDiscovered`'s one-time-activation
+  /// side effect of auto-running every discovered test. The
+  /// eval-then-affected loop (live-testing-asyoutype-plan.md §2/Brief 4)
+  /// already knows exactly which tests to re-run (the coverage/graph-
+  /// selected set `decideAfterTypeCheck` chose before the eval) and
+  /// dispatches `RunTestsRequested` for that set separately — merging
+  /// discovery must never ALSO re-run the whole suite on every keystroke.
+  | LiveDiscoveryMerged of sessionId: string * tests: Features.LiveTesting.TestCase array
   | TestDiscoveryFailed of sessionId: string * reason: string
   | TestRunStarted of testIds: Features.LiveTesting.TestId array * sessionId: string option
   | TestResultsBatch of sessionId: string option * results: Features.LiveTesting.TestRunResult array
