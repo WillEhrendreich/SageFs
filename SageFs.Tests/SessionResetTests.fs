@@ -10,6 +10,7 @@ open SageFs
 open SageFs.AppState
 open SageFs.McpTools
 open SageFs.SessionManager
+open SageFs.SessionBuild
 open SageFs.Features.Events
 open SageFs.Tests.TestInfrastructure
 open SageFs.WorkerProtocol

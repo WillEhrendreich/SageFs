@@ -6,6 +6,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.SessionManager
+open SageFs.SessionBuild
 open SageFs.WorkerProtocol
 
 /// Shared verb log so ordering tests can assert spawn-before-stop.
@@ -669,9 +670,26 @@ let buildDiagnosticsOfTests =
 [<Tests>]
 let buildArgumentsTests =
   testList "SessionManager rebuild arguments" [
-    testCase "WHY — SessionManager.buildArguments — a rebuild is incremental because a clean build deletes the last good output first and one typo would leave nothing to run" <| fun _ ->
-      buildArguments "/src/Web/Web.fsproj"
-      |> Expect.equal "build the project without cleaning it first" [ "build"; "/src/Web/Web.fsproj"; "--no-restore" ]
+    testCase "WHY — buildArguments false — the fast path skips restore (incremental, --no-restore) because a clean build deletes the last good output first and one typo would leave nothing to run" <| fun _ ->
+      buildArguments false "/src/Web/Web.fsproj"
+      |> Expect.equal "fast rebuild is incremental and skips restore" [ "build"; "/src/Web/Web.fsproj"; "--no-restore" ]
+
+    testCase "WHY — buildArguments true — the restore path drops --no-restore so a never-restored project (NETSDK1004) or a changed package list gets its NuGet restore" <| fun _ ->
+      buildArguments true "/src/Web/Web.fsproj"
+      |> Expect.equal "restore rebuild lets dotnet build restore first" [ "build"; "/src/Web/Web.fsproj" ]
+
+    testCase "WHY — buildOutputNeedsRestore — NETSDK1004 (fresh .fsproj, no project.assets.json) means retry WITH restore, not report a compile failure" <| fun _ ->
+      buildOutputNeedsRestore
+        [ "/src/Web/Web.fsproj : error NETSDK1004: Assets file '/src/Web/obj/project.assets.json' not found. Run a NuGet package restore to generate this file." ]
+      |> Expect.isTrue "a missing-assets error must be recognized as restore-needed"
+
+    testCase "WHY — buildOutputNeedsRestore — a newly-added package (NU1101) also means retry WITH restore" <| fun _ ->
+      buildOutputNeedsRestore [ "error NU1101: Unable to find package Foo. No packages exist with this id." ]
+      |> Expect.isTrue "an unresolved-package error must be recognized as restore-needed"
+
+    testCase "WHY — buildOutputNeedsRestore — a plain compile error is NOT a restore problem, so the fast build's failure is reported as-is" <| fun _ ->
+      buildOutputNeedsRestore [ "Program.fs(3,5): error FS0039: The value or constructor 'foo' is not defined." ]
+      |> Expect.isFalse "a compile error must not trigger a restore retry"
   ]
 
 [<Tests>]

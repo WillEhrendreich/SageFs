@@ -572,129 +572,6 @@ module SessionManager =
         | ex ->
           Log.warn "[SessionManager] KillWorkerPids failed for pid %d: %s\n%s" pid ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
 
-  /// Run `dotnet build` for the primary project.
-  /// Called from the daemon process (worker is already stopped).
-  /// Async so we don't block the MailboxProcessor during build.
-  let resolveBuildProjectPath (workingDir: string) (projFile: string) =
-    match Path.IsPathRooted projFile with
-    | true -> projFile
-    | false -> Path.Combine(workingDir, projFile)
-
-  /// The diagnostics from a failed `dotnet build`, as structured data — no
-  /// surface-specific call to action baked in (see BuildDiagnostic.describe
-  /// and SageFsError.BuildFailed's own doc comment for why).
-  let buildDiagnosticsOf (stdout: string list) (stderr: string list) : BuildDiagnostic list =
-    let output = stdout @ stderr
-    // MSBuild ends each diagnostic with " [<project path>]"; the path is noise on a card.
-    let withoutProject (line: string) =
-      let trimmed = line.Trim()
-      match trimmed.EndsWith("]", StringComparison.Ordinal), trimmed.LastIndexOf(" [", StringComparison.Ordinal) with
-      | true, cut when cut > 0 -> trimmed.Substring(0, cut)
-      | _ -> trimmed
-    let errors =
-      output
-      |> List.filter (fun l -> l.Contains(": error ", StringComparison.Ordinal))
-      |> List.map withoutProject
-      |> List.distinct
-    match errors with
-    | [] ->
-      output
-      |> List.filter (fun l -> l.Trim() <> "")
-      |> List.rev |> List.truncate 15 |> List.rev
-      |> List.map BuildDiagnostic.ofLine
-    | found -> found |> List.truncate 10 |> List.map BuildDiagnostic.ofLine
-
-  /// The `dotnet` arguments of a session rebuild. Incremental on purpose: a
-  /// clean build deletes the last good output before compiling, so one compile
-  /// error would leave the project with nothing to run until built by hand.
-  let buildArguments (buildProject: string) : string list =
-    [ "build"; buildProject; "--no-restore" ]
-
-  /// Daemon-wide cap on concurrent `dotnet build` child processes (vision
-  /// §3.4 "diff-touches-compiled-file fraction" / roast-6 Phase 0 item 1).
-  /// `RunBuildAsync` runs off the mailbox loop (each session's cold-restart
-  /// build is a separate async), so with no cap here N concurrent warmups
-  /// launch N unbounded `dotnet build`s — each its own MSBuild node pool
-  /// fighting the others for CPU. Default cores/4 (min 1): a `dotnet build`
-  /// is itself internally parallel, so one build slot already uses several
-  /// cores; the cap bounds how many *builds* run at once, not how many
-  /// cores each one may use.
-  /// Not private: `SessionManagerBuildSemaphoreTests` asserts this matches
-  /// the documented "cores/4, min 1" policy without needing to spawn real
-  /// `dotnet build` processes in the default test suite.
-  let buildConcurrencyLimit = max 1 (Environment.ProcessorCount / 4)
-  let private buildSemaphore = new SemaphoreSlim(buildConcurrencyLimit, buildConcurrencyLimit)
-
-  /// Free build slots right now — full capacity when no build is in flight.
-  /// Lets a test observe the semaphore exists at the right capacity without
-  /// spawning a real (multi-second) `dotnet build` in the default suite.
-  let availableBuildSlots () = buildSemaphore.CurrentCount
-
-  let runBuildAsync (projects: string list) (workingDir: string) : Async<Result<string, SageFsError>> =
-    async {
-      let primaryProject = projects |> List.tryHead
-      match primaryProject with
-      | None -> return Ok "No projects to build"
-      | Some projFile ->
-        let buildProject = resolveBuildProjectPath workingDir projFile
-        let! ct = Async.CancellationToken
-        do! buildSemaphore.WaitAsync(ct) |> Async.AwaitTask
-        try
-          let psi = ProcessStartInfo(
-            "dotnet",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = workingDir)
-          for arg in buildArguments buildProject do
-            psi.ArgumentList.Add(arg)
-          let proc = Process.Start(psi)
-          let stderrLines = System.Collections.Generic.List<string>()
-          let stderrTask =
-            System.Threading.Tasks.Task.Run(fun () ->
-              let mutable line = proc.StandardError.ReadLine()
-              while not (isNull line) do
-                stderrLines.Add(line)
-                line <- proc.StandardError.ReadLine())
-          // dotnet build prints compiler errors on stdout, so both streams are kept.
-          let stdoutLines = System.Collections.Generic.List<string>()
-          let stdoutTask =
-            System.Threading.Tasks.Task.Run(fun () ->
-              let mutable line = proc.StandardOutput.ReadLine()
-              while not (isNull line) do
-                stdoutLines.Add(line)
-                line <- proc.StandardOutput.ReadLine())
-          let tcs = System.Threading.Tasks.TaskCompletionSource<bool>()
-          proc.EnableRaisingEvents <- true
-          proc.Exited.Add(fun _ -> tcs.TrySetResult(true) |> ignore)
-          match proc.HasExited with
-          | true -> tcs.TrySetResult(true) |> ignore
-          | false -> ()
-          let timeoutTask = System.Threading.Tasks.Task.Delay(600_000, ct)
-          let! completed =
-            System.Threading.Tasks.Task.WhenAny(tcs.Task, timeoutTask)
-            |> Async.AwaitTask
-          match Object.ReferenceEquals(completed, timeoutTask) with
-          | true ->
-            try proc.Kill(entireProcessTree = true) with ex -> Log.warn "[SessionManager] Kill build process on timeout: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-            proc.Dispose()
-            let timeoutDiagnostic =
-              { File = None; Line = None; Column = None; Code = None
-                Severity = BuildDiagnosticSeverity.Error
-                Message = "Build timed out (10 min limit)" }
-            return Error (SageFsError.BuildFailed(-1, [ timeoutDiagnostic ]))
-          | false ->
-            let! _ = System.Threading.Tasks.Task.WhenAll(stderrTask, stdoutTask) |> Async.AwaitTask
-            let exitCode = proc.ExitCode
-            proc.Dispose()
-            match exitCode <> 0 with
-            | true ->
-              return Error (SageFsError.BuildFailed(exitCode, CompileOrderInsight.enrich buildProject (buildDiagnosticsOf (List.ofSeq stdoutLines) (List.ofSeq stderrLines))))
-            | false ->
-              return Ok "Build succeeded"
-        finally
-          buildSemaphore.Release() |> ignore
-    }
 
   let private appSlotOf (session: ManagedSession) : AppRun.AppSlot =
     { Generation = session.AppGeneration; State = session.Info.App }
@@ -715,7 +592,7 @@ module SessionManager =
     StartWorkerProcess = startWorkerProcess
     AwaitWorkerPort = awaitWorkerPort
     StopWorker = stopWorker
-    RunBuildAsync = runBuildAsync
+    RunBuildAsync = SessionBuild.runBuildAsync
   }
 
   /// Create the supervisor MailboxProcessor.

@@ -1507,11 +1507,18 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               match primaryProject with
               | Some projFile ->
                 logger.LogInfo (sprintf "  Building %s..." (System.IO.Path.GetFileName projFile))
-                let runBuild () =
+                let runBuild (restore: bool) =
+                  // `dotnet` prints compile AND NETSDK errors on STDOUT, so both
+                  // streams are captured — a stderr-only read drops the actual
+                  // diagnostics and leaves a bare "Build failed (exit code 1)".
+                  let args =
+                    match restore with
+                    | false -> sprintf "build \"%s\" --no-restore" projFile
+                    | true  -> sprintf "build \"%s\"" projFile
                   let psi =
                     System.Diagnostics.ProcessStartInfo(
                       "dotnet",
-                      sprintf "build \"%s\" --no-restore" projFile,
+                      args,
                       RedirectStandardOutput = true,
                       RedirectStandardError = true,
                       UseShellExecute = false)
@@ -1522,18 +1529,18 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                   let maxTotalMs = 600_000        // 10 min absolute max
                   let mutable lastActivity = DateTime.UtcNow
                   let startedAt = lastActivity
-                  let stderrLines = System.Collections.Generic.List<string>()
-                  // Stream stderr line-by-line, updating activity clock
+                  let outputLines = System.Collections.Generic.List<string>()
+                  let addLine (l: string) = lock outputLines (fun () -> outputLines.Add(l))
                   let stderrTask = System.Threading.Tasks.Task.Run(fun () ->
                     let mutable line = proc.StandardError.ReadLine()
                     while not (isNull line) do
-                      stderrLines.Add(line)
+                      addLine line
                       lastActivity <- DateTime.UtcNow
                       line <- proc.StandardError.ReadLine())
-                  // Drain stdout, updating activity clock
-                  let _stdoutTask = System.Threading.Tasks.Task.Run(fun () ->
+                  let stdoutTask = System.Threading.Tasks.Task.Run(fun () ->
                     let mutable line = proc.StandardOutput.ReadLine()
                     while not (isNull line) do
+                      addLine line
                       lastActivity <- DateTime.UtcNow
                       line <- proc.StandardOutput.ReadLine())
                   // Poll for completion or inactivity timeout
@@ -1562,36 +1569,54 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                   match timedOut with
                   | true ->
                     try proc.Kill(entireProcessTree = true) with ex -> logger.LogDebug (sprintf "Build kill failed: %s" ex.Message)
-                    -1, sprintf "Build timed out (inactive for %ds or exceeded %d min limit)" (inactivityLimitMs / 1000) (maxTotalMs / 60_000)
+                    -1, [ sprintf "Build timed out (inactive for %ds or exceeded %d min limit)" (inactivityLimitMs / 1000) (maxTotalMs / 60_000) ]
                   | false ->
-                    try stderrTask.Wait(5000) |> ignore with ex -> logger.LogDebug (sprintf "Build stderr wait failed: %s" ex.Message)
-                    proc.ExitCode, String.concat "\n" stderrLines
-                let! exitCode, stderr = System.Threading.Tasks.Task.Run(fun () -> runBuild()) |> Async.AwaitTask
+                    try System.Threading.Tasks.Task.WaitAll([| stderrTask; stdoutTask |], 5000) |> ignore with ex -> logger.LogDebug (sprintf "Build output wait failed: %s" ex.Message)
+                    proc.ExitCode, (lock outputLines (fun () -> List.ofSeq outputLines))
+                // The failure message a hard-reset surfaces: the actual compiler/
+                // MSBuild diagnostics (each carries its own actionable wording),
+                // never a bare exit code.
+                let describeBuildFailure (exit: int) (output: string list) =
+                  let errors =
+                    SessionBuild.buildDiagnosticsOf output []
+                    |> List.map (fun (d: BuildDiagnostic) -> d.Message)
+                    |> String.concat "\n"
+                  match errors.Trim() with
+                  | "" -> sprintf "Build failed (exit code %d)." exit
+                  | e -> sprintf "Build failed (exit code %d):\n%s" exit e
+                // Fast path: no restore. Self-heal a fresh (NETSDK1004) or
+                // package-changed project that needs a NuGet restore instead of
+                // reporting the missing restore as a build failure.
+                let! exit0, out0 = System.Threading.Tasks.Task.Run(fun () -> runBuild false) |> Async.AwaitTask
+                let! exitCode, output =
+                  match exit0 <> 0 && SessionBuild.buildOutputNeedsRestore out0 with
+                  | true ->
+                    logger.LogInfo "  Restore needed — retrying build with a NuGet restore..."
+                    async {
+                      let! r = System.Threading.Tasks.Task.Run(fun () -> runBuild true) |> Async.AwaitTask
+                      return r }
+                  | false -> async { return exit0, out0 }
                 match exitCode <> 0 with
                 | true ->
-                  match stderr.Contains("denied") || stderr.Contains("locked") with
+                  let joined = String.concat "\n" output
+                  match joined.Contains("denied") || joined.Contains("locked") with
                   | true ->
                     logger.LogWarning "  ⚠️ DLL lock detected, retrying after GC..."
                     GC.Collect()
                     GC.WaitForPendingFinalizers()
                     GC.Collect()
                     do! Async.Sleep 500
-                    let! retryCode, retryErr = System.Threading.Tasks.Task.Run(fun () -> runBuild()) |> Async.AwaitTask
+                    let! retryCode, retryOut = System.Threading.Tasks.Task.Run(fun () -> runBuild false) |> Async.AwaitTask
                     match retryCode <> 0 with
                     | true ->
-                      let msg = sprintf "Build failed on retry (exit code %d): %s" retryCode retryErr
                       // Mid-function exit to the handler's existing `with ex ->
                       // Hard reset failed` recovery below (identical Faulted
                       // publish + error reply + Faulted-phase continuation).
-                      raise (System.Exception msg)
+                      raise (System.Exception (describeBuildFailure retryCode retryOut))
                     | false ->
                       logger.LogInfo "  ✅ Build succeeded on retry"
                   | false ->
-                    let msg = sprintf "Build failed (exit code %d): %s" exitCode stderr
-                    // Mid-function exit to the handler's existing `with ex ->
-                    // Hard reset failed` recovery below (identical Faulted
-                    // publish + error reply + Faulted-phase continuation).
-                    raise (System.Exception msg)
+                    raise (System.Exception (describeBuildFailure exitCode output))
                 | false ->
                   logger.LogInfo "  ✅ Build succeeded"
               | None ->
