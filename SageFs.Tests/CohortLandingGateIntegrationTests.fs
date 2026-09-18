@@ -47,28 +47,24 @@
 ///            already established: the backing claim's state, read via
 ///            `get_cohort_status`, stays `Held` (never flips to
 ///            `Released`, which only `FastForwardCompleted` does).
-///   5. BONUS, HONEST FINDING: this file also submits a THIRD commit that
-///      reverts the regression (tests pass again) and requests ITS landing
-///      too, reusing the still-`Held` claim from step 4 — genuinely
-///      checking whether v1's cohort can recover and land the fix after a
-///      block. Source-read first (`Cohort.fs`'s `TestsCompleted` arm, the
-///      `Blocked` case): a landing that reaches `Blocked(FailingTests)` is
-///      now POPPED from `CohortState.Queue` (like every other terminal
-///      transition), so a landing queued behind it advances and a FIXING
-///      landing recovers on its own. (This test used to document the
-///      opposite — a jammed queue head with no cancel/retry — which was the
-///      original v1 behaviour; that queue-jam is fixed in `Cohort.fs`'s
-///      `TestsCompleted` arm. The bonus step below now asserts recovery as a
-///      contract and fails loudly if the jam ever returns.)
+/// (A fifth step used to submit a THIRD commit reverting the regression and
+/// re-landing it, to empirically check whether the cohort recovers after a
+/// block. That recovery is a pure `Cohort.decide` queue-transition fact —
+/// a landing that reaches `Blocked(FailingTests)` is popped from
+/// `CohortState.Queue` like every other terminal transition, so a landing
+/// queued behind it advances — and it is now proven deterministically by
+/// `SageFs.Simulation.CohortLandingSim` / `CohortLandingSimTests.fs` over
+/// 500 generated seeds against the REAL `Cohort.decide`, so this file no
+/// longer re-walks a second full write→discover→land cycle to re-establish
+/// it; see that harness for the regression-proof if the queue-jam ever
+/// returns.)
 ///
 /// WHY GOOD LANDS FIRST (not "break, prove blocked, then land the fix"):
 /// landing the good change FIRST (while the queue is empty) and the breaking
 /// change SECOND cleanly proves both halves of the brief — a good landing
-/// lands, a breaking one is blocked — with the real production pipeline, and
-/// the bonus step then proves the queue recovers when the fix lands. This
-/// file still empirically checks the post-block recovery question as a
-/// separate, honestly-labeled bonus (step 5) rather than silently avoiding
-/// it.
+/// lands, a breaking one is blocked — with the real production pipeline,
+/// using the fewest real git/dotnet/live-testing cycles that still prove
+/// both halves.
 ///
 /// WHY THE FIXTURE COMMITS bin/obj: `ProjectLoading.fs` faults a session's
 /// warmup with "Missing DLL" when a project's `TargetPath` does not exist
@@ -125,6 +121,7 @@ open Expecto
 open Expecto.Flip
 open ModelContextProtocol.Client
 open ModelContextProtocol.Protocol
+open SageFs
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
@@ -318,25 +315,27 @@ let private startIsolatedDaemon (workingDir: string) (dataDir: string) : Task<Pr
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)
   client.Timeout <- TimeSpan.FromSeconds 5.0
 
+  // Cold CI runners build the daemon from scratch (and the cold build
+  // serializes through the SessionManager mailbox), so a short deadline
+  // ERRORs intermittently on CI while passing locally — the documented
+  // cohort-landing-gate flake. Timeouts.cohortLandingGateReady (180s
+  // default) is the headroom; a genuinely stuck daemon still fails, just
+  // later. Deadline-based (not a fixed attempt count) so the poll cadence
+  // and the give-up bound are independently named and configurable.
+  let deadline = DateTime.UtcNow.Add Timeouts.cohortLandingGateReady
   let mutable ready = false
-  let mutable attempts = 0
-  // 900 * 200ms = 180s. Cold CI runners build the daemon from scratch (and the
-  // cold build serializes through the SessionManager mailbox), so 60s ERRORs
-  // intermittently on CI while passing locally — the documented cohort-landing-gate
-  // flake. 180s is the headroom; a genuinely stuck daemon still fails, just later.
-  while not ready && attempts < 900 do
-    do! Task.Delay 200
+  while not ready && DateTime.UtcNow < deadline do
+    do! Task.Delay Timeouts.cohortLandingPoll
     try
       let! resp = client.GetAsync "/health"
       if int resp.StatusCode > 0 then ready <- true
     with _ -> ()
-    attempts <- attempts + 1
 
   if not ready then
     let killAttempt = try proc.Kill true; true with _ -> false
     ignore killAttempt
     proc.Dispose()
-    failwithf "cohort landing-gate daemon failed to start on port %d within 180s" port
+    failwithf "cohort landing-gate daemon failed to start on port %d within %O" port Timeouts.cohortLandingGateReady
 
   return proc, port
 }
@@ -428,14 +427,35 @@ let private worktreeBranchAndSessionFromSetIntegrationRefResult (text: string) :
 // iterations overflowed the stack and the test ERRORED intermittently (the
 // Gap 3 flake). A while loop is O(1) stack depth — it cannot overflow however
 // long the wait runs.
+//
+// Shared event-driven poll primitive: repeatedly evaluate `probe` — a real
+// predicate over live state (an HTTP status snapshot, an MCP `list_sessions`
+// response, a git ref) — at `Timeouts.cohortLandingPoll` cadence until it
+// yields `Some`, or fail with `describe` once `deadline` has passed. Every
+// deadline-bounded wait in this file (`waitUntil`, `waitForLiveSnapshot`,
+// `waitForSessionReady`) is this same loop over a differently-typed probe;
+// `pollForUpTo` below shares the cadence but not the fail-on-timeout
+// semantics (it proves ABSENCE, so timing out is its success case).
+let private pollUntilSome<'a> (deadline: DateTime) (describe: unit -> string) (probe: unit -> Task<'a option>) : Task<'a> =
+  task {
+    let mutable result = None
+    while Option.isNone result do
+      let! r = probe ()
+      match r with
+      | Some v -> result <- Some v
+      | None ->
+        if DateTime.UtcNow > deadline then failtestf "condition not met within timeout: %s" (describe ())
+        else do! Task.Delay Timeouts.cohortLandingPoll
+    return result.Value
+  }
+
 let private waitUntil (deadline: DateTime) (describe: unit -> string) (check: unit -> Task<bool>) : Task<unit> =
   task {
-    let mutable satisfied = false
-    while not satisfied do
+    let! _ = pollUntilSome deadline describe (fun () -> task {
       let! ok = check ()
-      if ok then satisfied <- true
-      elif DateTime.UtcNow > deadline then failtestf "condition not met within timeout: %s" (describe ())
-      else do! Task.Delay 250
+      return if ok then Some () else None
+    })
+    return ()
   }
 
 /// Polls `probe` for up to `deadline`. Returns `Some` the first time `probe`
@@ -455,11 +475,20 @@ let private pollForUpTo (deadline: DateTime) (probe: unit -> Task<'a option>) : 
       | Some _ -> result <- r; finished <- true
       | None ->
         if DateTime.UtcNow > deadline then finished <- true // window elapsed: result stays None
-        else do! Task.Delay 500
+        else do! Task.Delay Timeouts.cohortSettleConfirm
     return result
   }
 
-let private seconds (n: float) = DateTime.UtcNow.AddSeconds n
+/// The wide deadline for this smoke's slower waits (cold daemon boot, real
+/// dotnet-build-backed warmup, live-testing discovery). Named constant, not
+/// a bare literal — see `Timeouts.cohortLandingGateReady`'s doc.
+let private gateDeadline () = DateTime.UtcNow.Add Timeouts.cohortLandingGateReady
+
+/// The tighter deadline for waits on an already-warm pipeline (a claim
+/// release, a queue-recovery landing) — reuses the generic
+/// `integrationDaemonReady` bound (120s) rather than minting a second
+/// near-duplicate constant.
+let private readyDeadline () = DateTime.UtcNow.Add Timeouts.integrationDaemonReady
 
 /// The single `get_cohort_status` line describing entity `id` (a claim id or a
 /// landing id) — so a state assertion is made against THAT entity's own line,
@@ -528,31 +557,36 @@ let private waitForLiveSnapshot
   (describe: string)
   (predicate: LiveSnapshot -> bool)
   : Task<LiveSnapshot> =
-  task {
-    // Iterative for stack safety (see waitUntil). Loop exits only when the
-    // predicate holds (found = Some) or failtestf throws past the deadline, so
-    // found.Value is always populated after the loop.
-    let mutable found = None
-    while Option.isNone found do
+  // Mutable capture so the failure message can dump the LAST-seen snapshot,
+  // not just the deadline description — pollUntilSome's own `describe` only
+  // takes `unit -> string`, so the most recent snapshot is threaded through
+  // a closure-local cell.
+  let mutable last : LiveSnapshot option = None
+  pollUntilSome
+    deadline
+    (fun () -> sprintf "live-testing status never satisfied '%s' within timeout. Last snapshot: %A" describe last)
+    (fun () -> task {
       let! snap = getLiveSnapshot http
-      if predicate snap then found <- Some snap
-      elif DateTime.UtcNow > deadline then failtestf "live-testing status never satisfied '%s' within timeout. Last snapshot: %A" describe snap
-      else do! Task.Delay 500
-    return found.Value
-  }
+      last <- Some snap
+      return if predicate snap then Some snap else None
+    })
 
 let private isSessionReady (sessionId: string) (listSessionsText: string) =
   listSessionsText.Contains sessionId && listSessionsText.Contains " Ready "
 
 let private waitForSessionReady (client: McpClient) (sessionId: string) (deadline: DateTime) : Task<unit> =
+  let mutable last = ""
   task {
-    // Iterative for stack safety (see waitUntil).
-    let mutable ready = false
-    while not ready do
-      let! text = listSessions client
-      if isSessionReady sessionId text then ready <- true
-      elif DateTime.UtcNow > deadline then failtestf "session %s never reached Ready within timeout. list_sessions: %s" sessionId text
-      else do! Task.Delay 500
+    let! _ =
+      pollUntilSome
+        deadline
+        (fun () -> sprintf "session %s never reached Ready within timeout. list_sessions: %s" sessionId last)
+        (fun () -> task {
+          let! text = listSessions client
+          last <- text
+          return if isSessionReady sessionId text then Some () else None
+        })
+    return ()
   }
 
 [<Tests>]
@@ -611,7 +645,7 @@ let tests =
           // ── Wait for the real integration session to warm up (the
           // prebuilt bin/obj means this should be fast — no dotnet build
           // races against warmup) ──
-          do! waitForSessionReady alice sessionId (seconds 180.0)
+          do! waitForSessionReady alice sessionId (gateDeadline ())
 
           // ── Enable real live testing on the integration session (raw
           // HTTP — v1 has no MCP tool for this) and wait for real
@@ -622,7 +656,7 @@ let tests =
           let! _policyStatus, _policyBody = postJson http "/api/live-testing/policy" {| category = "unit"; policy = "every" |}
 
           let! discovered =
-            waitForLiveSnapshot http (seconds 180.0) "baseline discovery finds the one seeded test"
+            waitForLiveSnapshot http (gateDeadline ()) "baseline discovery finds the one seeded test"
               (fun s -> s.DiscoveryState = "ready_with_tests" && s.Total >= 1)
           Expect.isGreaterThanOrEqual "baseline discovers at least the one seeded test" (discovered.Total, 1)
 
@@ -632,7 +666,7 @@ let tests =
           | false ->
             let! _runStatus, _runBody = postJson http "/api/live-testing/run" {| pattern = ""; category = "" |}
             let! _ =
-              waitForLiveSnapshot http (seconds 180.0) "baseline settles green after an explicit run"
+              waitForLiveSnapshot http (gateDeadline ()) "baseline settles green after an explicit run"
                 (fun s -> s.Running = 0 && s.Failed = 0 && s.Passed >= s.Total && s.Total >= 1)
             ()
 
@@ -672,7 +706,7 @@ let tests =
           // not git) to auto-rebuild, rediscover, and re-run — proving the
           // new test is genuinely live-tested before we ever land it.
           let! _ =
-            waitForLiveSnapshot http (seconds 180.0) "the second test is discovered and the suite stays green after the good edit"
+            waitForLiveSnapshot http (gateDeadline ()) "the second test is discovered and the suite stays green after the good edit"
               (fun s -> s.Total >= 2 && s.Running = 0 && s.Failed = 0)
           ()
 
@@ -682,7 +716,7 @@ let tests =
           // Independent oracle: the real git branch ref in the MAIN repo
           // (never the worktree, never CohortGit itself).
           do!
-            waitUntil (seconds 180.0)
+            waitUntil (gateDeadline ())
               (fun () -> sprintf "integration branch %s to reach the good landing %s" branch goodSha)
               (fun () -> task {
                 let! branchSha = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
@@ -693,7 +727,7 @@ let tests =
           // auto-releases only on a successful land (Cohort.fs's
           // FastForwardCompleted handler).
           do!
-            waitUntil (seconds 120.0)
+            waitUntil (readyDeadline ())
               (fun () -> sprintf "get_cohort_status to show claim %s Released after the good landing" claim1Id)
               (fun () -> task {
                 let! status = getCohortStatus alice
@@ -724,7 +758,7 @@ let tests =
           // separate from this poll, but seeing it fail here first proves
           // the fixture's failure is real, not a fluke of timing.
           let! failedSnapshot =
-            waitForLiveSnapshot http (seconds 180.0) "the regression is discovered as a real failure before landing is requested"
+            waitForLiveSnapshot http (gateDeadline ()) "the regression is discovered as a real failure before landing is requested"
               (fun s -> s.Running = 0 && s.Failed >= 1)
           Expect.isGreaterThanOrEqual "the regression must genuinely fail at least one live-tested test" (failedSnapshot.Failed, 1)
 
@@ -737,7 +771,7 @@ let tests =
           // means the full window elapsed with the branch never reaching
           // breakSha: the landing genuinely never lands. ──
           let! wronglyLanded =
-            pollForUpTo (seconds 180.0) (fun () -> task {
+            pollForUpTo (gateDeadline ()) (fun () -> task {
               let! branchSha = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
               return if branchSha = breakSha then Some branchSha else None
             })
@@ -770,47 +804,20 @@ let tests =
           statusAfterBlock
           |> Expect.stringContains "the breaking landing is Blocked on the REAL failing test, visible directly in the read model" "FailingTests"
 
-          // ══════════════════════════════════════════════════════════════
-          // RECOVERY AFTER A BLOCK is now a CONTRACT, not a surprise: a
-          // landing that fails a real test is popped from the queue (like
-          // every other terminal transition), so a subsequent FIXING landing
-          // — reusing the still-Held claim — lands on its own with no
-          // out-of-band withdraw. (This test used to document the opposite:
-          // v1's `Blocked(FailingTests)` head was never popped, so the fix
-          // never got its own Rebase. That queue-jam is fixed — see
-          // `Cohort.fs` `TestsCompleted`'s `fails` arm.)
-          // ══════════════════════════════════════════════════════════════
-
-          let fixedUtil = "module Fixture.Util\n\nlet add a b = a + b\n"
-          let! fixSha = writeAndCommit worktree "Util.fs" fixedUtil "fix: revert the regression (tests pass again)"
-
-          let! _ =
-            waitForLiveSnapshot http (seconds 180.0) "the revert is discovered as genuinely green again"
-              (fun s -> s.Running = 0 && s.Failed = 0)
-
-          // Reuses claim2 — it is still genuinely Held (never released,
-          // per the block just proven above), so validateLandingClaims
-          // accepts it.
-          let! fixLandingResult = requestLanding alice "alice" (sprintf "%s:%d" claim2Id claim2Fence) fixSha "land the fix (empirically checking whether v1 can recover after a block)"
-          fixLandingResult |> Expect.stringContains "request_landing itself still succeeds structurally (queueing never inspects the queue's OTHER contents)" "queued"
-
-          let! fixLanded =
-            pollForUpTo (seconds 120.0) (fun () -> task {
-              let! branchSha = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
-              return if branchSha = fixSha then Some branchSha else None
-            })
-
-          match fixLanded with
-          | Some _ ->
-            let! branchAfterFix = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
-            branchAfterFix
-            |> Expect.equal "the fixing landing recovers on its own after the earlier block — the failed landing was popped from the queue, so the fix got its own Rebase and landed without any out-of-band withdraw" fixSha
-          | None ->
-            // The failed breaking landing is popped from the queue, so the
-            // fix MUST get its own Rebase and land. If it doesn't, the
-            // queue-jam has regressed (a failed landing is stuck at the head
-            // again, dead-locking everything behind it).
-            failtest "REGRESSION: the fixing landing never landed — a failed landing is jamming the queue head again (Cohort.fs TestsCompleted must pop the queue like every other terminal transition)"
+          // Recovery-after-a-block (a failed landing pops the queue so a
+          // subsequent fixing landing lands on its own) is NOT re-proven
+          // here anymore — that is a pure `Cohort.decide` queue-transition
+          // fact, and `SageFs.Simulation.CohortLandingSim` +
+          // `CohortLandingSimTests.fs` already prove it deterministically,
+          // against the REAL `Cohort.decide`, over 500 generated seeds plus
+          // named scenarios (`failingThenPassing`, `everyFailureThenPassing`)
+          // that fold the exact same "a terminal blocker pops, the next
+          // landing lands" shape this E2E used to re-walk through a second
+          // full write→discover→land cycle (another ~180s of real git/dotnet/
+          // live-testing wall time) for no additional decision coverage. This
+          // file's own job — the TEST-GATE question, requiring the REAL
+          // `RunTests`/`ComputeAffected` verifier to produce a genuine
+          // failing outcome — ends at the gate proof above.
 
           http.Dispose()
 
