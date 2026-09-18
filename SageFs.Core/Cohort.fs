@@ -773,9 +773,22 @@ module Cohort =
               let newState = { state with Landings = Map.add id verifying state.Landings }
               Ok(newState, [ CohortEvent.LandingStateChanged(id, verifying.State) ], [ CohortEffect.ComputeAffected(id, onto, newHead) ])
             | Error conflictFiles ->
+              // A rebase conflict blocks THIS landing, but — exactly like a
+              // failing TestsCompleted or a VerificationInconclusive — it must not
+              // jam the whole cohort: pop it from the queue and advance the next
+              // one. The landing stays recorded as Blocked(RebaseConflict) with
+              // NextAction.RebaseAndResubmit (the requester rebases and submits a
+              // fresh landing) while OTHER members' unrelated landings are never
+              // dead-locked behind it. (Earlier this left the conflicted landing
+              // at the queue head forever with no pop and no advance — the same
+              // serial-queue dead-lock the failing-tests arm had before 396ee1c3,
+              // overlooked on this sibling arm; the DST landing-queue-jam harness
+              // caught it as a violation of the no-terminal-in-queue invariant.)
               let blocked = { req with State = LandingState.Blocked(LandingBlocker.RebaseConflict conflictFiles, NextAction.RebaseAndResubmit) }
-              let newState = { state with Landings = Map.add id blocked state.Landings }
-              Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State) ], [])
+              let poppedQueue = state.Queue |> List.filter (fun x -> x <> id)
+              let stateAfter = { state with Landings = Map.add id blocked state.Landings; Queue = poppedQueue }
+              let advanced, advEvents, advEffects = advanceQueue stateAfter
+              Ok(advanced, CohortEvent.LandingStateChanged(id, blocked.State) :: advEvents, advEffects)
           // default policy: RebaseCompleted only advances a landing that is
           // actually Rebasing — every other LandingState is refused as
           // out-of-order, by construction, for any case the DU ever grows to.
