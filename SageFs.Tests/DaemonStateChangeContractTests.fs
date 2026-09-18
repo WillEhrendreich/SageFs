@@ -16,9 +16,6 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.Server
-open SageFs.Server.DaemonMode
-
-module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 /// 8-char lowercase hex, matching WorkerProtocol.SessionId.validate.
 let private sid (raw: string) =
@@ -79,100 +76,18 @@ let daemonStateChangeContractTests =
 // session claim is already gone and the path is dropped. See
 // SageFs.Core/LiveTestWatcherCore.fs and SageFs.Tests/LiveTestWatcherCoreTests.fs.
 
+
 // ── Behavioral: LiveTestWatcherManager session attribution ──────────────
-// Real FileSystemWatcher + debounce (75ms) — integration territory, so it
-// stays out of the default suite. Verifies the isolation fix end-to-end:
-// two sessions sharing ONE working dir each get the FileReloaded event for a
-// file save, and removing one session's claim stops its events while the
-// other session's continue.
-
-open System
-open System.IO
-open System.Threading
-open SageFs.Server.DaemonMode
-
-[<Tests>]
-let liveTestWatcherAttributionTests =
-  testList "LiveTestWatcherManager session attribution" [
-
-    Integration.hostCase "file save in a shared dir fires FileReloaded for every owning session" <| fun _ ->
-      let dir = Path.Combine(Path.GetTempPath(), "sagefs-watcher-test-" + Guid.NewGuid().ToString("N"))
-      Directory.CreateDirectory(dir) |> ignore
-      let sA = sid "aaaaaaaa"
-      let sB = sid "bbbbbbbb"
-      let fired = System.Collections.Concurrent.ConcurrentQueue<string * string>()
-      use mgr =
-        new LiveTestWatcherManager(
-          (fun _ -> ()),
-          (fun s p -> fired.Enqueue(WorkerProtocol.SessionId.value s, p)),
-          None)
-      mgr.AddDirectory(dir, sA)
-      mgr.AddDirectory(dir, sB)
-      try
-        // Barrier: the actor's AddDirectory is async (mailbox Post), so wait
-        // until it has been processed and the watcher armed before saving.
-        // WatchedDirectories is a PostAndReply, so it returns only after the
-        // queued AddDirectory calls have run.
-        mgr.WatchedDirectories |> ignore
-        let probe = Path.Combine(dir, "Lib.fs")
-        File.WriteAllText(probe, "module Lib")
-        // Debounce is 75ms; allow generous time for the watcher + debounce.
-        let sw = Diagnostics.Stopwatch.StartNew()
-        let mutable seenA = false
-        let mutable seenB = false
-        while (not seenA || not seenB) && sw.ElapsedMilliseconds < 10000L do
-          for (s, p) in fired do
-            if s = "aaaaaaaa" && p = probe then seenA <- true
-            if s = "bbbbbbbb" && p = probe then seenB <- true
-          if not (seenA && seenB) then Thread.Sleep 50
-        Expect.isTrue "session A should receive the FileReloaded for the shared-dir save" seenA
-        Expect.isTrue "session B should receive the FileReloaded for the shared-dir save" seenB
-      finally
-        try File.Delete(Path.Combine(dir, "Lib.fs")) with _ -> ()
-        try Directory.Delete(dir, true) with _ -> ()
-
-    Integration.hostCase "removing one session's claim stops only its FileReloaded events" <| fun _ ->
-      let dir = Path.Combine(Path.GetTempPath(), "sagefs-watcher-test-" + Guid.NewGuid().ToString("N"))
-      Directory.CreateDirectory(dir) |> ignore
-      let sA = sid "aaaaaaaa"
-      let sB = sid "bbbbbbbb"
-      let fired = System.Collections.Concurrent.ConcurrentQueue<string * string>()
-      use mgr =
-        new LiveTestWatcherManager(
-          (fun _ -> ()),
-          (fun s p -> fired.Enqueue(WorkerProtocol.SessionId.value s, p)),
-          None)
-      mgr.AddDirectory(dir, sA)
-      mgr.AddDirectory(dir, sB)
-      try
-        // Barrier: the actor's AddDirectory is async, so wait until it has been
-        // processed and the watcher armed (WatchedDirectories is a PostAndReply).
-        mgr.WatchedDirectories |> ignore
-        // Warm up the watcher so the first event is not swallowed by
-        // FileSystemWatcher startup.
-        let warm = Path.Combine(dir, "Warm.fs")
-        File.WriteAllText(warm, "module Warm")
-        Thread.Sleep 500
-        File.Delete warm
-
-        // Both sessions claimed; drop B's claim.
-        mgr.RemoveDirectory(dir, sB)
-
-        let probe = Path.Combine(dir, "Lib2.fs")
-        File.WriteAllText(probe, "module Lib2")
-        let sw = Diagnostics.Stopwatch.StartNew()
-        let mutable seenA = false
-        let mutable seenB = false
-        // Wait until A's event arrives, then keep waiting a little for a
-        // possible (wrong) B event before declaring B silent.
-        while sw.ElapsedMilliseconds < 10000L && (not seenA || sw.ElapsedMilliseconds < 1000L) do
-          for (s, p) in fired do
-            if s = "aaaaaaaa" && p = probe then seenA <- true
-            if s = "bbbbbbbb" && p = probe then seenB <- true
-          Thread.Sleep 50
-        Expect.isTrue "session A should still receive the FileReloaded" seenA
-        Expect.isFalse "session B must NOT receive FileReloaded after its claim was removed" seenB
-      finally
-        try File.Delete(Path.Combine(dir, "Lib2.fs")) with _ -> ()
-        try Directory.Delete(dir, true) with _ -> ()
-  ]
+// Two real-FileSystemWatcher Integration tests previously lived here ("file
+// save in a shared dir fires FileReloaded for every owning session" and
+// "removing one session's claim stops only its FileReloaded events") —
+// each spun up a real watcher, wrote probe files, and polled up to 10s.
+// Both are superseded by a DST harness that folds the REAL
+// LiveTestWatcherCore.apply/isUnderWatchedDir/sessionsForPath (the exact
+// pure functions the watcher shell calls) through the identical claim/save/
+// drain scenarios in milliseconds, with two twin routers proving the
+// invariants have teeth. See SageFs.Simulation/FileReloadRoutingSim.fs and
+// SageFs.Tests/FileReloadRoutingSimTests.fs. The pure serialization test
+// above ("FileReloaded for shared working dir distinguishes owning
+// sessions") stays — it pins the wire format, which the DST does not
+// exercise.

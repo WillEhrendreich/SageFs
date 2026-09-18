@@ -271,6 +271,7 @@
         <Compile Include="ManifestSimTests.fs" />
         <Compile Include="CohortLandingSimTests.fs" />
         <Compile Include="EvalActorSimTests.fs" />
+        <Compile Include="FileReloadRoutingSimTests.fs" />
         <Compile Include="DstFaultInjectionTests.fs" />
         <Compile Include="SupervisorSimTests.fs" />
         <Compile Include="DstCoverageTests.fs" />

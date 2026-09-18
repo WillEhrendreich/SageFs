@@ -61,6 +61,11 @@
         <Compile Include="EvalActorSim.fs" />
         <Compile Include="EvalActorInvariants.fs" />
         <Compile Include="EvalActorGenerators.fs" />
+        <!-- File-reload claim-routing DST: folds the real LiveTestWatcherCore
+             routing; twins broadcast-to-all / double-fire. -->
+        <Compile Include="FileReloadRoutingSim.fs" />
+        <Compile Include="FileReloadRoutingInvariants.fs" />
+        <Compile Include="FileReloadRoutingGenerators.fs" />
     </ItemGroup>
 
     <ItemGroup>
