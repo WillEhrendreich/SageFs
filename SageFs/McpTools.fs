@@ -118,7 +118,57 @@ let feedbackKindText = function
   | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.NeededAnotherToolToFinish -> "NeededAnotherToolToFinish"
   | SageFs.Features.FrictionTelemetryTypes.ExplicitFeedbackKind.ResultDidNotEstablishTrust -> "ResultDidNotEstablishTrust"
 
-let frictionReportJson (report: SageFs.Features.FrictionTelemetry.FrictionReport) =
+/// One JSON object per observed (passively-detected) signal: its stable id
+/// (`FrictionSignal.id`), confidence, scope, and the case's own fields.
+/// Exhaustive over `FrictionSignal` — the compiler refuses this module to
+/// build if a new case is added without a matching arm here (repo
+/// convention: no magic strings, and the algebra's cases drive their own
+/// serialization instead of being flattened to prose).
+let private observedSignalJson (signal: SageFs.Features.ObservedFrictionTypes.DetectedSignal) =
+  let node = JsonObject()
+  node["Id"] <- JsonValue.Create(SageFs.Features.ObservedFrictionTypes.FrictionSignal.id signal.Signal)
+  node["Confidence"] <- JsonValue.Create(string signal.Confidence)
+  node["Scope"] <-
+    JsonValue.Create(
+      match signal.Scope with
+      | SageFs.Features.ObservedFrictionTypes.SignalScope.DaemonWide -> "DaemonWide"
+      | SageFs.Features.ObservedFrictionTypes.SignalScope.Session session ->
+        sprintf "Session:%s" (SageFs.Features.FrictionTelemetryTypes.SessionRef.value session)
+      | SageFs.Features.ObservedFrictionTypes.SignalScope.Agent agent -> sprintf "Agent:%s" agent)
+  match signal.Signal with
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.ExcessivePolling(tool, calls, successes, window) ->
+    node["Tool"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.ToolName.value tool)
+    node["Calls"] <- JsonValue.Create(calls)
+    node["Successes"] <- JsonValue.Create(successes)
+    node["EventCount"] <- JsonValue.Create(window.EventCount)
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.ResetThrash(resets, window) ->
+    node["Resets"] <- JsonValue.Create(resets)
+    node["EventCount"] <- JsonValue.Create(window.EventCount)
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.HardResetAfterCreate gap ->
+    node["GapMs"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.DurationMs.value gap)
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.UnattributedFailure(rawTool, count) ->
+    node["RawTool"] <- JsonValue.Create(rawTool)
+    node["Count"] <- JsonValue.Create(count)
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.InvalidStateCall(tool, blocked) ->
+    node["Tool"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.ToolName.value tool)
+    node["Blocked"] <- JsonValue.Create(blocked)
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.RepeatedSameError(blocker, run) ->
+    node["Blocker"] <- JsonValue.Create(string blocker)
+    node["Run"] <- JsonValue.Create(run)
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.RetryLoop(tool, attempts) ->
+    node["Tool"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.ToolName.value tool)
+    node["Attempts"] <- JsonValue.Create(attempts)
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.Abandonment(tool, lastBlocker) ->
+    node["Tool"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.ToolName.value tool)
+    node["LastBlocker"] <- JsonValue.Create(string lastBlocker)
+  | SageFs.Features.ObservedFrictionTypes.FrictionSignal.SlowTimeToFirstSuccess(elapsed, failedBefore) ->
+    node["ElapsedMs"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.DurationMs.value elapsed)
+    node["FailedBefore"] <- JsonValue.Create(failedBefore)
+  node
+
+let frictionReportJson
+  (report: SageFs.Features.FrictionTelemetry.FrictionReport)
+  (observedSignals: SageFs.Features.ObservedFrictionTypes.DetectedSignal list) =
   let blockerText = function | Some blocker -> Some (string blocker) | None -> None
   let toolText = function | Some tool -> Some (SageFs.Features.FrictionTelemetryTypes.ToolName.value tool) | None -> None
 
@@ -200,6 +250,9 @@ let frictionReportJson (report: SageFs.Features.FrictionTelemetry.FrictionReport
     node["SuggestedAction"] <- JsonValue.Create(item.SuggestedAction)
     recommendedWorkItems.Add(node))
 
+  let observedSignalsJson = JsonArray()
+  observedSignals |> List.iter (fun signal -> observedSignalsJson.Add(observedSignalJson signal))
+
   payload["TotalEvents"] <- JsonValue.Create(report.TotalEvents)
   payload["TotalFeedbackItems"] <- JsonValue.Create(report.TotalFeedbackItems)
   payload["SageFsVersion"] <- JsonValue.Create(SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current ())
@@ -208,6 +261,7 @@ let frictionReportJson (report: SageFs.Features.FrictionTelemetry.FrictionReport
   payload["FrequentTransitions"] <- transitions
   payload["RecentFeedback"] <- recentFeedback
   payload["RecommendedWorkItems"] <- recommendedWorkItems
+  payload["ObservedSignals"] <- observedSignalsJson
   payload.ToJsonString()
 
 let withEcho (ctx: McpContext) (toolName: string) (t: Task<string>) : Task<string> =
@@ -1212,7 +1266,7 @@ This is a local read model over recorded friction, not a self-healing system."""
              let! result = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store (Some version)
              return
                match result with
-               | Ok report -> frictionReportJson report
+               | Ok bundle -> frictionReportJson bundle.Report bundle.ObservedSignals
                | Error err -> sprintf "Error: Friction store read failed: %s" err
            } |> withEcho ctx "get_friction_report"
          | None ->

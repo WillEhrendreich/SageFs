@@ -806,8 +806,11 @@ let buildDashboardSnapshotWithSessions
             let! reportResult = SageFs.Features.McpFrictionRecorder.Recorder.reportDirect store None
             let historyResult = store.ListSentReports ()
             match reportResult, historyResult with
-            | Ok report, Ok history ->
-              let view = SageFs.Features.FrictionReviewView.build report history
+            | Ok bundle, Ok history ->
+              // ObservedSignals surfacing in this panel is Brief B8 (dashboard);
+              // this call site is only touched here to follow reportDirect's
+              // changed return shape (Brief B7).
+              let view = SageFs.Features.FrictionReviewView.build bundle.Report history
               return renderFrictionPanel view
             | _ -> return Elem.div [ Attr.id DomIds.FrictionPanel ] []
         }
@@ -1900,8 +1903,8 @@ let createFrictionSendHandler
             match reportResult with
             | Error err ->
               do! ssePatchNode ctx (frictionSendResultDom false err "")
-            | Ok report ->
-              let outgoing = SageFs.Features.FrictionReviewView.buildOutgoingForSend report editsJson
+            | Ok bundle ->
+              let outgoing = SageFs.Features.FrictionReviewView.buildOutgoingForSend bundle.Report editsJson
               let payloadJson = System.Text.Json.JsonSerializer.Serialize(outgoing)
               let urlHash = frictionEndpointHash endpoint
               let mutable attemptError : string option = None

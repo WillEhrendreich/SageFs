@@ -5,8 +5,30 @@ open System.Text.Json
 open System.Threading.Tasks
 open SageFs.Features.FrictionTelemetryTypes
 open SageFs.Features.FrictionTelemetry
+open SageFs.Features.ObservedFrictionTypes
+open SageFs.Features.ObservedFriction
 
 open Microsoft.FSharp.Core
+
+/// The daemon-side friction report bundle: the pure Core read model
+/// (`FrictionTelemetry.FrictionReport`) plus observed (passively-detected)
+/// friction signals computed over the SAME version-filtered event stream
+/// (Brief B7, observed-friction-plan.md §B7).
+///
+/// This does NOT live on `FrictionTelemetry.FrictionReport` in
+/// SageFs.Core, and Core's compile order is NOT reordered to make it fit.
+/// `Features/FrictionTelemetry.fs` compiles at SageFs.Core.fsproj:116;
+/// `Features/ObservedFrictionTypes.fs`/`ObservedFriction.fs` (which define
+/// `DetectedSignal`/`detectAll`) compile later at :127-134, and
+/// `FrictionSanitize.fs` depends on `FrictionTelemetry.FrictionReport`, so
+/// reordering would cascade. `SageFs.fsproj` (this project) compiles
+/// after ALL of SageFs.Core, so `detectAll` is fully available here — the
+/// daemon layer is where the two Core-side read models are threaded
+/// together, not Core itself.
+type FrictionReportWithSignals = {
+  Report: FrictionReport
+  ObservedSignals: DetectedSignal list
+}
 
 type FrictionEnvelope = {
   Events: FrictionEvent list
@@ -315,10 +337,12 @@ module Recorder =
         match envelopeResult with
         | Ok envelope ->
           let filtered = filterByVersion versionFilter envelope
+          let observedSignals = ObservedFriction.detectAll DetectorConfig.defaults filtered.Events
           Ok (
             [ yield sprintf "Top blockers: %d" (Summaries.topBlockers filtered.Events |> List.length)
               yield sprintf "Tracked tools: %d" (Summaries.toolSummaries filtered.Events |> List.length)
               yield sprintf "Explicit feedback items: %d" filtered.Feedback.Length
+              yield sprintf "Observed signals: %d" observedSignals.Length
               match versionFilter with
               | Some v -> yield sprintf "Filtered to version: %s" v
               | None -> () ]
@@ -326,6 +350,10 @@ module Recorder =
         | Error err -> Error (sprintf "Friction store read failed: %s" err)
     }
 
+  /// Builds the report AND the observed (passively-detected) signals over
+  /// the same version-filtered event stream (Brief B7). See
+  /// `FrictionReportWithSignals`'s doc comment for why this bundle lives
+  /// here rather than as a field on Core's `FrictionReport`.
   let reportDirect (store: FrictionSqlite.FrictionStore) (versionFilter: string option) =
     task {
       let! envelopeResult = readEnvelopeDirect store
@@ -333,6 +361,8 @@ module Recorder =
         match envelopeResult with
         | Ok envelope ->
           let filtered = filterByVersion versionFilter envelope
-          Ok (Summaries.frictionReport filtered.Events filtered.Feedback)
+          let report = Summaries.frictionReport filtered.Events filtered.Feedback
+          let observedSignals = ObservedFriction.detectAll DetectorConfig.defaults filtered.Events
+          Ok ({ Report = report; ObservedSignals = observedSignals } : FrictionReportWithSignals)
         | Error err -> Error (sprintf "Friction store read failed: %s" err)
     }
