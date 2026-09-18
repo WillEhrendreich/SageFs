@@ -129,3 +129,20 @@ module Timeouts =
   /// Maximum time to poll a worker waiting for Ready status after spawn/restart.
   /// If exceeded, the session is faulted to prevent infinite WarmingUp states.
   let warmupReadyPollMax = envOrDefault "SAGEFS_WARMUP_READY_POLL_SECONDS" 120.0
+
+  // -- Test harness / integration --
+  /// Deadline for a spawned test daemon to reach a readable Ready state.
+  /// Replaces the bare 120_000ms literals in the daemon integration tests.
+  let integrationDaemonReady = envOrDefault "SAGEFS_TEST_DAEMON_READY_SECONDS" 120.0
+  /// Deadline for a killed worker to be restarted on a new pid in the
+  /// crash/restart integration smoke. Replaces the bare 60_000L literal.
+  let integrationWorkerRestart = envOrDefault "SAGEFS_TEST_WORKER_RESTART_SECONDS" 60.0
+  /// Warmup deadline for a browser-journey dashboard session (cold Chromium +
+  /// Release sample). Replaces the 300.0s literals in DashboardBrowserRunner.
+  let browserJourneyWarmup = envOrDefault "SAGEFS_TEST_BROWSER_WARMUP_SECONDS" 300.0
+  /// Build deadline for the web-app hot-reload verification sample.
+  /// Replaces the 180000ms literal.
+  let webAppHotReloadBuild = envOrDefault "SAGEFS_TEST_WEBAPP_BUILD_SECONDS" 180.0
+  /// Deadline for the hot-reload web-app sample to bind its port and report
+  /// ready. Replaces the 120.0s literal.
+  let webAppPortReady = envOrDefault "SAGEFS_TEST_WEBAPP_PORT_SECONDS" 120.0
