@@ -6,12 +6,24 @@
 /// `cohort-integration-plan.md`/`sagefs-multiagent-vision.md` describe:
 ///
 ///   join_cohort (x2, distinct connections) -> acquire_claim (disjoint
-///   scopes) -> a real claim CONFLICT is rejected -> set_integration_ref
-///   (conductor-only, real git worktree) -> two real commits, each rebased,
-///   verified, and fast-forwarded onto the integration branch by
-///   `DaemonMode.fs`'s REAL `cohortLandingPerformer` (not a fake/stub — the
-///   exact performer production wires into every daemon) -> teardown with
-///   zero leftover processes.
+///   scopes) -> set_integration_ref (conductor-only, real git worktree) ->
+///   two real commits, each rebased, verified, and fast-forwarded onto the
+///   integration branch by `DaemonMode.fs`'s REAL `cohortLandingPerformer`
+///   (not a fake/stub — the exact performer production wires into every
+///   daemon) -> teardown with zero leftover processes.
+///
+///   UPDATE: an earlier revision also re-asserted a real claim CONFLICT
+///   (bob stealing alice's already-held scope) and a conductor-only role-gate
+///   refusal (bob calling set_integration_ref) through this same real daemon.
+///   Both are pure `Cohort.decide` decisions — claim exclusivity and the
+///   SetIntegrationHead conductor gate — already covered elsewhere WITHOUT a
+///   daemon (claim exclusivity by CohortPropertyTests' property 1; the
+///   conductor gate by `CohortIntegrationHeadTests.fs`'s dedicated
+///   "Cohort.SetIntegrationHead (item 14c)" list) — so those daemon
+///   round trips were simply deleted, no replacement needed. See the "PURE
+///   Cohort.decide decisions" section below for the one decision that WAS
+///   genuinely uncovered (FastForwardCompleted's claim-release side effect)
+///   and got its own new, no-daemon `testCase` here instead.
 ///
 /// What is REAL:
 ///  - The daemon: a genuine `SageFs` process, `--owner-pid`/`--owner-start`/
@@ -60,11 +72,14 @@
 ///    Still stale, out of this fix's file-ownership scope: `request_landing`'s
 ///    own `[<Description>]` on `get_cohort_status` (`McpTools.fs`) still says
 ///    the v1 read model has no landing queue — that string was not touched
-///    here (another change owns `McpTools.fs`). The claim-auto-release
+///    here (another change owns `McpTools.fs`). UPDATE: the claim-auto-release
 ///    side-effect proof (`Cohort.decide`'s `FastForwardCompleted` handler,
-///    `Cohort.fs:788-798`, visible as `state=Released` in the Claims
-///    section) is kept below as an independent, still-true corroborating
-///    signal — not because it is the only signal any more.
+///    `Cohort.fs:911-921`) used to be re-asserted here as `state=Released` in
+///    the real-daemon `get_cohort_status` text (a pure Cohort.decide decision,
+///    reproved through a real daemon round-trip). It has moved to this file's
+///    own PURE "FastForwardCompleted auto-releases every backing claim"
+///    testCase (below, outside `Integration.hostList` — runs in the default
+///    suite, no daemon needed) — same coverage, no daemon, no network.
 ///  - Also stale, discovered while writing this test: `request_landing`'s
 ///    own `[<Description>]` (`McpTools.fs:1862`) still says "rebase/verify/
 ///    land themselves are a later slice's wiring and are not yet performed"
@@ -116,6 +131,8 @@ open Expecto
 open Expecto.Flip
 open ModelContextProtocol.Client
 open ModelContextProtocol.Protocol
+open SageFs
+open SageFs.Cohort
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
@@ -202,21 +219,26 @@ let private startIsolatedDaemon (workingDir: string) (dataDir: string) : Task<Pr
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)
   client.Timeout <- TimeSpan.FromSeconds 5.0
 
-  let mutable ready = false
-  let mutable attempts = 0
-  while not ready && attempts < 300 do
-    do! Task.Delay 200
-    try
-      let! resp = client.GetAsync "/health"
-      if int resp.StatusCode > 0 then ready <- true
-    with _ -> ()
-    attempts <- attempts + 1
+  // Event-driven, not a hand-rolled attempt-counter poll: the same
+  // TestInfrastructure.waitForAsync every other integration daemon-readiness
+  // wait in this suite uses, on the named Timeouts.integrationDaemonReady
+  // deadline ("Deadline for a spawned test daemon to reach a readable Ready
+  // state") instead of a bare 300*200ms=60s magic-number loop.
+  let! ready =
+    SageFs.Tests.TestInfrastructure.waitForAsync
+      (int Timeouts.integrationDaemonReady.TotalMilliseconds)
+      (fun () -> task {
+        try
+          let! resp = client.GetAsync "/health"
+          return int resp.StatusCode > 0
+        with _ -> return false
+      })
 
   if not ready then
     let killAttempt = try proc.Kill true; true with _ -> false
     ignore killAttempt
     proc.Dispose()
-    failwithf "cohort dogfood daemon failed to start on port %d within 60s" port
+    failwithf "cohort dogfood daemon failed to start on port %d within %.0fs" port Timeouts.integrationDaemonReady.TotalSeconds
 
   return proc, port
 }
@@ -303,23 +325,94 @@ let private worktreeAndBranchFromSetIntegrationRefResult (text: string) : string
     text.Substring(afterMarker, stop - afterMarker)
   extract "worktree=", extract "branch="
 
-// Iterative, not recursive: a `let rec ... return! self` poll in a `task {}`
-// unwinds completion through every frame (F# task, unlike async, does not
-// trampoline return!), so a slow runner needing many iterations overflows the
-// stack and the test ERRORS intermittently — the same flake fixed in
-// CohortLandingGateIntegrationTests. This 60s/100ms poll can reach ~600
-// iterations, so the risk is higher here. A while loop is O(1) stack depth.
-let private waitUntil (deadline: DateTime) (describe: unit -> string) (check: unit -> Task<bool>) : Task<unit> =
+// Event-driven, not a hand-rolled deadline/sleep loop: delegates the actual
+// polling to TestInfrastructure.waitForAsync (an O(1)-stack-depth while loop,
+// not a `let rec ... return! self` — that recursive shape overflows the stack
+// on a slow runner needing many iterations, the same flake fixed in
+// CohortLandingGateIntegrationTests) and only adds the replayable failure
+// description this suite's git-ref/read-model oracles want on a miss.
+let private waitUntil (timeoutMs: int) (describe: unit -> string) (check: unit -> Task<bool>) : Task<unit> =
   task {
-    let mutable satisfied = false
-    while not satisfied do
-      let! ok = check ()
-      if ok then satisfied <- true
-      elif DateTime.UtcNow > deadline then failtestf "condition not met within timeout: %s" (describe ())
-      else do! Task.Delay 100
+    let! satisfied = SageFs.Tests.TestInfrastructure.waitForAsync timeoutMs check
+    if not satisfied then failtestf "condition not met within timeout: %s" (describe ())
   }
 
-let private defaultDeadline () = DateTime.UtcNow.AddSeconds 60.0
+/// Deadline for this smoke's real-git/read-model settle waits (branch ref
+/// reaching a landed sha). `Timeouts.cohortIntegrationSettle` is the named
+/// constant the production landing gate itself uses for "wait for a rebase's
+/// landing to settle" — the same semantic wait this test performs against a
+/// real daemon, so it reuses the real timeout rather than a bare local literal.
+let private landingSettleTimeoutMs () = int Timeouts.cohortIntegrationSettle.TotalMilliseconds
+
+// ── PURE Cohort.decide decisions this real-daemon dogfood used to re-prove ─
+//
+// The dogfood smoke below used to re-assert TWO pure `Cohort.decide`
+// decisions through a real spawned daemon (join_cohort/set_integration_ref/
+// get_cohort_status round trips):
+//   - the SetIntegrationHead conductor gate — turns out this is NOT a
+//     genuinely-uncovered decision: `SageFs.Tests/CohortIntegrationHeadTests.fs`
+//     ("Cohort.SetIntegrationHead (item 14c)") already exercises `decide`
+//     directly for exactly this (conductor succeeds; a mere Member is refused
+//     NotConductor; an anonymous/never-joined caller is refused NotConductor;
+//     an unrelated queued landing is untouched). So its real-daemon re-assert
+//     was simply deleted — no replacement needed, the pure coverage already
+//     exists (found while writing this section; CohortPropertyTests' own
+//     properties 19/20 cover the analogous ReassignClaim/DelegateConductor
+//     gates but not this one — the actual pure coverage lives in a THIRD
+//     file, not CohortPropertyTests).
+//   - FastForwardCompleted's claim-auto-release side effect (Cohort.fs's
+//     `FastForwardCompleted` handler releasing every backing claim) — this
+//     one IS genuinely uncovered as a pure fact: neither CohortPropertyTests
+//     (property 6 only checks claims are Held BEFORE land, not Released
+//     after) nor any other file in this suite asserts `ClaimState.Released`
+//     as `FastForwardCompleted`'s own direct, pure result. It gets a fast,
+//     no-daemon `Cohort.decide` testCase here — the same "call `decide`
+//     directly, assert the resulting state/events" shape CohortPropertyTests'
+//     own targeted-race tests (4, 11, 12, 15, 19, 20) and
+//     CohortIntegrationHeadTests.fs use. Runs in the DEFAULT suite (not
+//     `Integration.hostList` below), since it needs no process, no port, and
+//     no git.
+[<Tests>]
+let pureDecisionTests =
+  testList "CohortDogfood — pure Cohort.decide decisions (no daemon)" [
+
+    testCase "FastForwardCompleted auto-releases every backing claim" <| fun () ->
+      let clock = DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+      let step state cmd =
+        match decide clock [||] state cmd with
+        | Ok(s, _, _) -> s
+        | Error e -> failwithf "unexpected setup failure: %A" e
+      let requester = "alice"
+      let s1 = step (CohortState.empty ()) (CohortCommand.Join(requester, JoinableRole.Implementer, None))
+      let s2 = step s1 (CohortCommand.AcquireClaim(requester, ClaimScope.File "X.fs", "purpose"))
+      let claimId, claimFence =
+        match s2.Claims |> Map.toList with
+        | [ (cid, c) ] -> cid, c.Fence
+        | other -> failwithf "expected exactly one claim after setup, got %A" other
+      let s3 = step s2 (CohortCommand.RequestLanding(requester, [ claimId, claimFence ], [ "commit-1" ], "land it"))
+      let landingId =
+        match s3.Landings |> Map.toList with
+        | [ (lid, _) ] -> lid
+        | other -> failwithf "expected exactly one landing after setup, got %A" other
+      // Force the landing straight to Verifying against the CURRENT
+      // IntegrationHead so FastForwardCompleted's own Property-11 HeadMoved
+      // guard passes — this test's subject is the release side effect, not
+      // the rebase/verify pipeline (that is CohortLandingSim's job).
+      let verifying =
+        { s3.Landings.[landingId] with
+            State = LandingState.Verifying(s3.IntegrationHead, "rebased-head", 0, 0) }
+      let s4 = { s3 with Landings = Map.add landingId verifying s3.Landings }
+
+      match decide clock [||] s4 (CohortCommand.FastForwardCompleted(landingId, "landed-sha")) with
+      | Ok(s5, events, _) ->
+        match s5.Claims.[claimId].State with
+        | ClaimState.Released(by, _) -> by |> Expect.equal "the released claim names the landing's own requester" requester
+        | other -> failtestf "expected the backing claim to be Released after a successful land, got %A" other
+        events
+        |> List.exists (function CohortEvent.ClaimReleased(c, by, _) -> c = claimId && by = requester | _ -> false)
+        |> Expect.isTrue "a ClaimReleased event is emitted for the landing's backing claim"
+      | Error e -> failtestf "expected FastForwardCompleted to succeed and release the backing claim, got %A" e
+  ]
 
 [<Tests>]
 let tests =
@@ -332,7 +425,7 @@ let tests =
 
     yield! [
 
-      testTask "WHY — a real two-member cohort joins, claims disjoint files, is refused a conflicting claim, and lands two real commits through the real daemon-owned landing pipeline (multi-agent vision, honest e2e proof)" {
+      testTask "WHY — a real two-member cohort joins over two distinct MCP connections, claims disjoint files, and lands two real commits through the real daemon-owned landing pipeline (multi-agent vision, honest e2e proof)" {
         // ── Fixture: a throwaway temp git repo, never this repo, never the
         // user's live daemon's checkout ──
         let mainRepo = Directory.CreateTempSubdirectory("cohort-dogfood-main-").FullName
@@ -358,12 +451,18 @@ let tests =
           use! bob = connect port
 
           // ── Two distinct connections = two distinct cohort members ──
+          // (Conductor-on-first-join is a pure Cohort.decide decision, already
+          // proven by CohortPropertyTests' property 21 — "ConductorBound fires
+          // at most once and Conductor always equals that first joiner" — and
+          // re-asserted at this same real-daemon wire level by
+          // CohortMcpToolsIntegrationTests.fs. This smoke's own subject is
+          // identity: that two DISTINCT MCP connections bind to two DISTINCT
+          // members, which no pure property exercises — synthetic `Agent`
+          // identities there are never connection-bound.)
           let! aliceJoin = joinCohort alice "alice" "Implementer"
-          aliceJoin |> Expect.stringContains "the first joiner becomes conductor" "You are the conductor"
           let aliceId = memberIdFromJoinResult aliceJoin
 
           let! (bobJoin: string) = joinCohort bob "bob" "Implementer"
-          bobJoin.Contains "You are the conductor" |> Expect.isFalse "the second joiner must not become conductor"
           let bobId = memberIdFromJoinResult bobJoin
 
           aliceId |> Expect.notEqual "two separate MCP connections must be two separate cohort members, never the same one" bobId
@@ -382,15 +481,20 @@ let tests =
 
           aliceClaimId |> Expect.notEqual "disjoint claims mint distinct ids" bobClaimId
 
-          // ── A real claim CONFLICT: bob tries to steal alice's already-held scope ──
-          let! conflictResult = acquireClaim bob "bob" "file:member-a.fs" "try to steal alice's file"
-          conflictResult
-          |> Expect.stringContains "a claim over an already-held scope must be refused" "is already claimed by"
-
-          // ── Conductor-only gate: bob (not conductor) is refused set_integration_ref ──
-          let! bobSetRefAttempt = setIntegrationRef bob "bob" "HEAD"
-          bobSetRefAttempt
-          |> Expect.stringContains "a non-conductor's set_integration_ref must be refused by the role gate" "does not permit it"
+          // (A real claim CONFLICT over an already-held scope, and the
+          // conductor-only role gate on set_integration_ref, used to be
+          // re-asserted here through the real daemon. Both are pure
+          // Cohort.decide decisions already covered elsewhere without a
+          // daemon: claim exclusivity is CohortPropertyTests' property 1
+          // ("no two overlapping claims are Held at once, in any reachable
+          // state"), and the SetIntegrationHead conductor gate is
+          // CohortIntegrationHeadTests.fs's "Cohort.SetIntegrationHead (item
+          // 14c)" list (conductor succeeds / non-conductor refused / anonymous
+          // refused / unrelated state untouched — see the "PURE Cohort.decide
+          // decisions" section above for how that was found). Both duplicative
+          // real-daemon re-asserts were deleted; the wire-level role-gate
+          // shape is also independently covered by
+          // CohortMcpToolsIntegrationTests.fs for release_claim/reassign.)
 
           // ── The conductor configures the real integration worktree/branch ──
           let! setRefResult = setIntegrationRef alice "alice" "HEAD"
@@ -408,26 +512,23 @@ let tests =
           // Independent oracle: the real git branch ref, exactly
           // CohortLandingGitAcceptanceTests.fs's discipline.
           do!
-            waitUntil (defaultDeadline ())
+            waitUntil (landingSettleTimeoutMs ())
               (fun () -> sprintf "integration branch %s to reach %s" branch memberASha)
               (fun () -> task {
                 let! branchSha = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
                 return branchSha = memberASha
               })
 
-          // MCP-only proof of the same fact: the backing claim auto-releases
-          // on a successful land (Cohort.fs's FastForwardCompleted handler).
-          do!
-            waitUntil (defaultDeadline ())
-              (fun () -> sprintf "get_cohort_status to show claim %s Released" aliceClaimId)
-              (fun () -> task {
-                let! status = getCohortStatus alice
-                return status.Contains(sprintf "%s " aliceClaimId) && status.Contains "state=Released"
-              })
-
+          // (This used to also wait for, then re-assert, get_cohort_status
+          // showing the backing claim Released — an MCP-only proof of
+          // Cohort.fs's FastForwardCompleted auto-release side effect. That
+          // decision is a pure Cohort.decide transition, now covered directly
+          // — and faster, with no daemon round-trip — by this file's own PURE
+          // "FastForwardCompleted auto-releases every backing claim"
+          // testCase below. The git-ref wait above already proves the landing
+          // genuinely completed, so no synchronization was lost by dropping
+          // the redundant wait.)
           let! statusAfterAliceLanding = getCohortStatus alice
-          statusAfterAliceLanding
-          |> Expect.stringContains "alice's claim shows released after landing" (sprintf "%s " aliceClaimId)
           // The gap this test used to document is closed: get_cohort_status
           // now surfaces the landing directly (Cohort.fs's CohortFrame gained
           // Landings/IntegrationHead fields, sourced from the same
@@ -450,7 +551,7 @@ let tests =
           bobLandingResult |> Expect.stringContains "bob's request_landing must also queue a real landing" "queued"
 
           do!
-            waitUntil (defaultDeadline ())
+            waitUntil (landingSettleTimeoutMs ())
               (fun () -> sprintf "integration branch %s to reach %s" branch memberBSha)
               (fun () -> task {
                 let! branchSha = git mainRepo [ "rev-parse"; sprintf "refs/heads/%s" branch ]
@@ -467,9 +568,7 @@ let tests =
           let! finalStatus = getCohortStatus bob
           finalStatus |> Expect.stringContains "both members remain present after landing" "Members (2):"
           finalStatus
-          |> Expect.stringContains "bob's claim shows released after landing" (sprintf "%s " bobClaimId)
-          finalStatus
-          |> Expect.stringContains "both landings are now visible in the read model, not just inferred from claim release" "Landings (2):"
+          |> Expect.stringContains "both landings are now visible in the read model" "Landings (2):"
 
           // ── Teardown: kill the daemon this test owns, then confirm zero leftovers ──
           killDaemon proc
