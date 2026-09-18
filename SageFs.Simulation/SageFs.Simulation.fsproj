@@ -33,6 +33,9 @@
         <!-- Phase 3A / Brief B3: coverage matrix — which invariants were
              non-vacuously exercised vs merely "held" across a battery. -->
         <Compile Include="Coverage.fs" />
+        <!-- Brief B2: deterministic delta-debugging (ddmin) shrinker for
+             failing Scenario/MgrScenario reproducers. -->
+        <Compile Include="Shrink.fs" />
     </ItemGroup>
 
     <ItemGroup>

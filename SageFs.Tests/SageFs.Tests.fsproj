@@ -268,6 +268,7 @@
         <Compile Include="ManifestSimTests.fs" />
         <Compile Include="SupervisorSimTests.fs" />
         <Compile Include="DstCoverageTests.fs" />
+        <Compile Include="DstShrinkTests.fs" />
         <Compile Include="PerfBudget.fs" />
         <Compile Include="FsiCrossSubmissionTests.fs" />
         <Compile Include="Round4HardeningTests.fs" />
