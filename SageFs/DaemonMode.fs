@@ -1873,7 +1873,20 @@ let run
                     | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
                       Some(Features.LiveTesting.InputHashCoverage.coveredFiles merged bm)
                     | _ -> None
-                Features.LiveTesting.AffectedTests.affected changedFiles coveredFilesOf allTests
+                let affectedTests =
+                  Features.LiveTesting.AffectedTests.affected changedFiles coveredFilesOf allTests
+                // FAIL-CLOSED gate. A landing that carries real file changes but
+                // narrows to ZERO affected tests would run nothing and land
+                // trivially "green" — the fail-OPEN that lets a test-breaking
+                // change through the gate. It happens when coverage can't be
+                // trusted: the integration worktree inherits the main repo's
+                // prebuilt PDB, so a test's covered-file paths point at the wrong
+                // build and never match the diff. Never trust an empty narrow on a
+                // real diff — run the whole suite. Running everything is always
+                // correct; an unverified landing is not.
+                match affectedTests with
+                | [] when not (List.isEmpty changedFiles) && not (List.isEmpty allTests) -> allTests
+                | _ -> affectedTests
             return Ok (narrowed |> List.map Features.CohortTestProjection.toCohortTestId)
         }
       // `CohortLandingVerify` reads and writes the integration session's OWN

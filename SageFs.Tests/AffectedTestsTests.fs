@@ -178,9 +178,12 @@ let affectedTests =
         let coveredOf _ = Some [ target ]
         AffectedTests.affected changed coveredOf [ t ] = [ t ]
 
-    testProperty "with no changed files, affected is exactly the untrusted-coverage subset" <|
+    testProperty "with no changed files, affected is exactly the untrusted-coverage subset (None OR empty-covered)" <|
       fun (entries: (bool * string list) list) ->
         let ids, coveredOf = buildCoveredOf "empty-diff" entries
-        let expected = ids |> List.filter (fun t -> coveredOf t |> Option.isNone)
+        // Untrusted = None OR Some [] — an empty covered set is coverage we
+        // cannot trust (see AffectedTests.affected), so it is always affected.
+        let expected =
+          ids |> List.filter (fun t -> match coveredOf t with None | Some [] -> true | Some _ -> false)
         AffectedTests.affected [] coveredOf ids = expected
   ]

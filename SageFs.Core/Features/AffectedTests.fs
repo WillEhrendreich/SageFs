@@ -37,5 +37,10 @@ module AffectedTests =
     |> List.filter (fun t ->
       match coveredFilesOf t with
       | None -> true
+      // Empty covered set = coverage we cannot trust (every executed test touches
+      // at least its own source file), so treat it as affected — same
+      // conservative rule as `None`. Trusting `Some []` as "covers nothing, so
+      // unaffected" is a fail-OPEN that would skip a test the change may have broken.
+      | Some [] -> true
       | Some covered ->
         covered |> List.exists (fun cf -> changedFiles |> List.exists (fileMatches cf)))
