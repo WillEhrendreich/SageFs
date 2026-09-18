@@ -1841,8 +1841,9 @@ let run
         async {
           match McpTools.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
-          | Some { SessionId = None } -> return Error "integration session not started"
-          | Some ({ SessionId = Some sessionId } as binding) ->
+          | Some { Session = McpTools.IntegrationSession.Failed reason } -> return Error (sprintf "integration session failed to start: %s" reason)
+          | Some { Session = McpTools.IntegrationSession.Pending } -> return Error "integration session not started yet — retry set_integration_ref"
+          | Some ({ Session = McpTools.IntegrationSession.Started sessionId } as binding) ->
             // (Gap 3) Settle first: the rebase that just ran retriggered the
             // session's rebuild, and reading discovery mid-rebuild can see it
             // transiently empty — which would compute an EMPTY affected set and
@@ -1910,8 +1911,9 @@ let run
         async {
           match McpTools.cohortIntegrationRef.Value with
           | None -> return Error "integration not configured — call set_integration_ref first"
-          | Some { SessionId = None } -> return Error "integration session not started"
-          | Some ({ SessionId = Some sessionId } as binding) ->
+          | Some { Session = McpTools.IntegrationSession.Failed reason } -> return Error (sprintf "integration session failed to start: %s" reason)
+          | Some { Session = McpTools.IntegrationSession.Pending } -> return Error "integration session not started yet — retry set_integration_ref"
+          | Some ({ Session = McpTools.IntegrationSession.Started sessionId } as binding) ->
             // (Gap 3) Settle first, then verify against the SETTLED observation.
             // Verifying while the rebase-triggered rebuild is still in flight is
             // exactly what made a good landing block on "session still warming

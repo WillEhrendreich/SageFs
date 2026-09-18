@@ -4085,14 +4085,24 @@ module McpTools =
   // `None`) even though `IntegrationHead` itself survives via ledger replay
   // — a landing effect finds no worktree to run git against until
   // `set_integration_ref` is called again.
+  /// The integration session's lifecycle. Replaces a `string option` that
+  /// conflated "not created yet" with "failed to create" (both `None`) and so
+  /// dropped the fault reason a landing needs — this DU carries it into
+  /// Blocked(Inconclusive)/get_cohort_status.
+  [<RequireQualifiedAccess>]
+  type IntegrationSession =
+    | Started of sessionId: string
+    /// Session create/warmup failed — reason surfaced to every landing.
+    | Failed of reason: string
+    /// Git side configured; session create not yet completed. Transient.
+    | Pending
+
   type CohortIntegrationBinding = {
     WorktreePath: string
     Branch: string
-    /// `None` until the integration session itself is created (below) — the
-    /// git side of this binding (worktree + branch) is independently usable
-    /// (Rebase/FastForward don't need a session) even when the session side
-    /// failed or hasn't run yet.
-    SessionId: string option
+    /// Git side (worktree+branch) is usable for Rebase/FastForward whatever
+    /// this is.
+    Session: IntegrationSession
   }
 
   /// Daemon-lifetime, process-global: v1 supports exactly one implicit
@@ -4124,31 +4134,14 @@ module McpTools =
   /// all) and, redundantly, by `Cohort.decide`'s own `SetIntegrationHead`
   /// arm (step (d) below).
   ///
-  /// Steps, in order (design is intentionally sequential, not transactional
-  /// — see the per-step failure handling below):
-  ///  (a) resolve `integrationRef` to a sha in the MAIN repo
-  ///      (`Environment.CurrentDirectory` — the daemon's own working
-  ///      directory, never an arbitrary caller-supplied path);
-  ///  (b) create the integration worktree at a fixed per-daemon path on a
-  ///      fresh branch `sagefs/cohort-<shortsha>` off that sha, removing a
-  ///      stale worktree from a prior call first;
-  ///  (c) store the worktree path + branch in `cohortIntegrationRef`
-  ///      (`SessionId = None` for now);
-  ///  (d) dispatch `SetIntegrationHead` through the cohort owner;
-  ///  (e) create a daemon-owned integration session on the worktree via the
-  ///      normal session-create path, and record its id in
-  ///      `cohortIntegrationRef` too.
-  ///
-  /// (d) and (e) are not required for (a)-(c) to have taken effect: if the
-  /// caller turns out not to be the conductor, (d) fails and this returns
-  /// Error — the git worktree from (b)/(c) is left in place (a redundant,
-  /// harmless side effect the MCP authority gate above is what actually
-  /// prevents in production, since a non-conductor never reaches this
-  /// function). If (e) fails, the git side of the binding (worktree +
-  /// branch + IntegrationHead) is already fully configured and usable for
-  /// Rebase/FastForward — this returns Ok with a note that no integration
-  /// session was created, rather than unwinding git state that is already
-  /// correct.
+  /// Sequential, not transactional: (a) revParse the ref to a sha in the MAIN
+  /// repo (the daemon's own cwd, never a caller path); (b) add a fresh
+  /// `sagefs/cohort-<shortsha>` worktree off it (removing a stale one first);
+  /// (c) store worktree+branch (`Session = Pending`); (d) dispatch
+  /// `SetIntegrationHead`; (e) create the integration session and record it.
+  /// The git side (a-c) is usable for Rebase/FastForward on its own, so an (e)
+  /// failure returns Ok with the fault recorded as `Session = Failed`, never
+  /// unwinding correct git state.
   let setIntegrationRef (ctx: McpContext) (agentName: string) (integrationRef: string) : Task<Result<string, SageFsError>> =
     task {
       let mainRepoDir = Environment.CurrentDirectory
@@ -4168,7 +4161,7 @@ module McpTools =
         | Error reason ->
           return Error (SageFsError.SessionCreationFailed (sprintf "could not create the integration worktree at %s on branch %s: %s" worktreePath branch reason))
         | Ok () ->
-          cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; SessionId = None }
+          cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; Session = IntegrationSession.Pending }
           let who = memberIdFor agentName
           let! commitResult = commitCohort ctx (Cohort.CohortCommand.SetIntegrationHead(who, sha))
           match commitResult with
@@ -4178,15 +4171,20 @@ module McpTools =
             let! sessionResult = ctx.SessionOps.CreateSession projects worktreePath WorkflowTypes.SessionWorkflow.Interactive
             match sessionResult with
             | Ok sessionId ->
-              cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; SessionId = Some sessionId }
+              cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; Session = IntegrationSession.Started sessionId }
               return Ok (
                 sprintf
                   "Integration configured: head=%s worktree=%s branch=%s session=%s"
                   sha worktreePath branch sessionId)
             | Error sessionErr ->
-              Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the integration session failed to start: %s" sha worktreePath branch (SageFsError.describeForAgent sessionErr)
+              // Capture the fault reason IN the binding (not just the log), so
+              // every landing that needs the session reports this reason via
+              // get_cohort_status instead of a generic "not started".
+              let reason = SageFsError.describeForAgent sessionErr
+              cohortIntegrationRef.Value <- Some { WorktreePath = worktreePath; Branch = branch; Session = IntegrationSession.Failed reason }
+              Log.warn "[set_integration_ref] git side configured (head=%s worktree=%s branch=%s) but the integration session failed to start: %s" sha worktreePath branch reason
               return Ok (
                 sprintf
-                  "Integration configured: head=%s worktree=%s branch=%s. WARNING: the integration session failed to start (%s) — landings will run with no session to verify tests against until this is retried."
-                  sha worktreePath branch (SageFsError.describeForAgent sessionErr))
+                  "Integration configured: head=%s worktree=%s branch=%s. WARNING: the integration session failed to start (%s) — landings will report this reason until it is retried."
+                  sha worktreePath branch reason)
     }
