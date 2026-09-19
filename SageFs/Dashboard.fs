@@ -156,8 +156,8 @@ let resolveBindingsPanelSnapshot
 
 /// SSE connection monitor — a server-emitted heartbeat signal plus a
 /// client-side staleness timer, both driven through Datastar's own
-/// structure-typed API (Ds.signal / Ds.onInterval), never a hand-patched
-/// `window.fetch` or a MutationObserver on `#main`.
+/// structure-typed API (Ds.signal / Ds.effect / Ds.onInterval), never a
+/// hand-patched `window.fetch` or a MutationObserver on `#main`.
 ///
 /// WHY this replaced the old fetch-monkeypatch: the Datastar SSE client
 /// resolves the fetch's `r.ok` as soon as response HEADERS arrive — a daemon
@@ -174,26 +174,66 @@ let resolveBindingsPanelSnapshot
 /// (`Timeouts.dashboardHeartbeat`) REGARDLESS of whether the rendered
 /// snapshot changed. The browser just watches the clock against the last
 /// value it received.
+///
+/// WHY there is a SECOND signal (`LastSeenSignal`), and not a direct compare
+/// against `HeartbeatSignal` (GLM roast #5, sagefs-roast-2day-cmd.md): the
+/// server patches `HeartbeatSignal` with ITS OWN absolute `UtcNow` in
+/// milliseconds. Comparing that against the browser's own `Date.now()`
+/// (as the original E9 fix did) is a CROSS-CLOCK comparison — if the
+/// client's clock is even a little behind the server's, the difference stays
+/// small (or goes negative) forever, so the staleness check never trips and
+/// the banner fails OPEN on a dead daemon; if the client's clock is ahead,
+/// the same expression can exceed the staleness budget immediately on a
+/// perfectly healthy daemon. Either direction of skew breaks the guarantee
+/// this indicator exists to provide. The fix: never compare the two clocks.
+/// `LastSeenSignal` is written ONLY from the browser's own `Date.now()`,
+/// every time `HeartbeatSignal` changes (via `Ds.effect`, which re-runs
+/// whenever a signal it reads is patched) — so every value on both sides of
+/// the later staleness comparison (`connectionStaleCheckExpr`) comes from the
+/// SAME clock, and no skew between browser and server can move the result.
 module private ConnMonitor =
-  /// Client-observable heartbeat signal — not in the shared `Signals` module
-  /// (DashboardTypes.fs) because it is a private implementation detail of
-  /// this connection-monitor mechanism; no other code reads or writes it.
+  /// Server-patched, absolute-clock heartbeat — a monotonic CHANGE TOKEN,
+  /// never compared directly against the browser's own clock. Not in the
+  /// shared `Signals` module (DashboardTypes.fs) because it is a private
+  /// implementation detail of this connection-monitor mechanism; no other
+  /// code reads or writes it.
   [<Literal>]
   let HeartbeatSignal = "dsHeartbeatAt"
 
+  /// Client-local arrival timestamp: the browser's own `Date.now()` at the
+  /// moment it last observed `HeartbeatSignal` change. Written only by
+  /// `heartbeatArrivalEffectExpr`'s `Ds.effect`; read only by
+  /// `connectionStaleCheckExpr`'s `Ds.onInterval`. Both reads and writes use
+  /// the browser's clock exclusively — this is what makes the staleness
+  /// check immune to server/client clock skew.
+  [<Literal>]
+  let LastSeenSignal = "dsLastSeenAt"
+
+/// The reactive `data-effect` expression: reads `HeartbeatSignal` (creating
+/// the dependency Datastar's effect tracking needs) purely to detect that it
+/// changed, then stamps `LastSeenSignal` with the BROWSER's own `Date.now()`.
+/// Fires once immediately on page load (so `LastSeenSignal` is fresh before
+/// the first `Ds.onInterval` tick even runs) and again every time the server
+/// patches a new heartbeat value in.
+let private heartbeatArrivalEffectExpr () =
+  sprintf "$%s = ($%s, Date.now())" ConnMonitor.LastSeenSignal ConnMonitor.HeartbeatSignal
+
 /// The reactive `data-on-interval` expression: every `dashboardHeartbeat`
-/// tick, compare "now" against the last heartbeat timestamp the server
-/// patched into `dsHeartbeatAt`. Stale beyond `dashboardStaleAfter` flips
-/// `Signals.Connected` false (which `Ds.show` on the banner reacts to) and
-/// mirrors the literal string onto `body[data-connected]` for anything else
-/// that reads it (tests, other scripts) — matching the pre-existing
-/// static-attribute convention rather than relying on Datastar's own
-/// attribute-binding boolean stringification.
+/// tick, compare "now" against `LastSeenSignal` — the browser's OWN
+/// timestamp of when it last saw the heartbeat change, not the server's
+/// absolute clock value. Both sides of this comparison are the browser's
+/// `Date.now()`, so no server/client clock skew can move the result (see the
+/// `ConnMonitor` module doc for the regression this replaced). Stale beyond
+/// `dashboardStaleAfter` flips `Signals.Connected` false (which `Ds.show` on
+/// the banner reacts to) and mirrors the literal string onto
+/// `body[data-connected]` for anything else that reads it (tests, other
+/// scripts) — matching the pre-existing static-attribute convention rather
+/// than relying on Datastar's own attribute-binding boolean stringification.
 let private connectionStaleCheckExpr () =
   let staleMs = int64 Timeouts.dashboardStaleAfter.TotalMilliseconds
   sprintf
     "$%s = (Date.now() - $%s) < %d; document.body.setAttribute('data-connected', $%s ? 'true' : 'false')"
-    Signals.Connected ConnMonitor.HeartbeatSignal staleMs Signals.Connected
+    Signals.Connected ConnMonitor.LastSeenSignal staleMs Signals.Connected
 
 /// Completion insertion utility — called from server-rendered dropdown items.
 /// Inserts text at cursor position, replacing the partial word being typed.
@@ -306,7 +346,20 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
                 // seeded to "now" so the very first client-side staleness check
                 // (before the stream's first heartbeat patch lands) never
                 // false-positives; the stream loop keeps it fresh thereafter.
+                // This is a server-clock value used ONLY as a change token —
+                // never compared directly against the browser's clock (see
+                // `ConnMonitor` module doc, GLM roast #5).
                 Ds.signal (ConnMonitor.HeartbeatSignal, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                // Client-local arrival stamp, seeded with a placeholder — it is
+                // immediately overwritten by `heartbeatArrivalEffectExpr`'s
+                // `Ds.effect`, which fires on page load before the first
+                // `Ds.onInterval` tick can ever run, so this seed value is never
+                // actually read for a staleness decision.
+                Ds.signal (ConnMonitor.LastSeenSignal, 0L);
+                // Stamps `LastSeenSignal` with the BROWSER's own `Date.now()`
+                // every time `HeartbeatSignal` changes — the client-local-arrival
+                // half of the clock-skew fix (see `ConnMonitor` module doc).
+                Ds.effect (heartbeatArrivalEffectExpr ());
                 // Re-evaluated every `dashboardHeartbeat` tick, client-side —
                 // a bounded, named-constant interval, not a hand-rolled
                 // setInterval/poll-sleep.

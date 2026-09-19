@@ -1,13 +1,23 @@
 /// Browser coverage for the dashboard disconnect indicator
-/// (todo-dashboard-disconnect-indicator.md, cohort item E9).
+/// (todo-dashboard-disconnect-indicator.md, cohort item E9; clock-skew fix,
+/// cohort item R5 / GLM roast #5).
 ///
-/// Regression: the daemon dying mid-stream (redeploy, crash, SIGTERM) gave no
-/// visible sign on an open dashboard tab — the banner element and CSS existed
-/// but nothing ever turned them on. The fix is a server SSE heartbeat
+/// Regression (E9): the daemon dying mid-stream (redeploy, crash, SIGTERM)
+/// gave no visible sign on an open dashboard tab — the banner element and CSS
+/// existed but nothing ever turned them on. The fix is a server SSE heartbeat
 /// (`Timeouts.dashboardHeartbeat`) patched into a client-observable Datastar
 /// signal, checked client-side on a `Ds.onInterval` against
 /// `Timeouts.dashboardStaleAfter`; see Dashboard.fs's `ConnMonitor` module and
 /// `connectionStaleCheckExpr`.
+///
+/// Regression (R5): E9's own comparison read the server's absolute heartbeat
+/// timestamp directly against the browser's `Date.now()` — a cross-clock
+/// comparison that fails OPEN (banner never shows on a dead daemon) when the
+/// client clock lags the server. The fix stamps a CLIENT-local arrival
+/// signal (`ConnMonitor.LastSeenSignal`) via `Ds.effect` every time the
+/// server's heartbeat changes, and compares `Date.now()` only against that —
+/// both sides of every comparison are now the browser's own clock. See the
+/// `clockSkewJourney` tests below for the regression coverage.
 ///
 /// This suite owns its OWN isolated daemon on non-default, freshly-picked
 /// ports (never 37749/37750 — must never collide with a shared dogfood
@@ -301,11 +311,102 @@ let private disconnectIndicatorJourney () = task {
     try Directory.Delete(daemon.DataDir, true) with _ -> ()
 }
 
+/// Overrides `Date.now()` for every page/frame in this browser context, BEFORE
+/// any page script runs on any navigation (`AddInitScriptAsync` — the same
+/// mechanism Playwright's own docs use to seed `Math.random`). Only
+/// `Date.now` is patched — the sole `Date` API the disconnect-indicator
+/// client script touches (`heartbeatArrivalEffectExpr` /
+/// `connectionStaleCheckExpr` in Dashboard.fs); `new Date()` and friends are
+/// left alone so the rest of the page behaves normally.
+let private addClockSkew (ctx: IBrowserContext) (offsetMs: int64) : Task<unit> = task {
+  let script =
+    sprintf
+      "(() => { const __off = %d; const __real = Date.now.bind(Date); Date.now = () => __real() + __off; })();"
+      offsetMs
+  do! ctx.AddInitScriptAsync(script = script)
+}
+
+/// Clock-skew regression coverage (cohort item R5, GLM roast #5,
+/// sagefs-roast-2day-cmd.md): the pre-fix comparison read the SERVER's
+/// absolute heartbeat timestamp (`dsHeartbeatAt`, patched with the daemon's
+/// own `UtcNow`) directly against the CLIENT's own `Date.now()`. A client
+/// clock far BEHIND the server made `Date.now() - $dsHeartbeatAt` stay
+/// small-or-negative forever, so the staleness check never tripped — the
+/// banner would never show on a dead daemon (fail-OPEN, resurrecting the
+/// exact regression E9's fix was meant to close). A client clock far AHEAD
+/// of the server made the same expression exceed the staleness budget
+/// immediately, showing the banner on a perfectly healthy daemon
+/// (false-positive). The fix (Dashboard.fs `ConnMonitor.LastSeenSignal` +
+/// `heartbeatArrivalEffectExpr`) compares `Date.now()` only against a
+/// CLIENT-local arrival stamp, so neither direction of skew can move the
+/// result — this journey proves both directions under a 10-minute skew, far
+/// beyond any plausible clock drift, while the daemon's actual liveness
+/// (healthy / killed) still drives the indicator correctly.
+///
+/// `skewMs` is applied to the whole browser context, so it is already in
+/// effect on the very first navigation. Positive = client ahead of real
+/// time; negative = client behind.
+let private clockSkewJourney (skewMs: int64) = task {
+  let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let mutable daemon = IsolatedDaemon.start repoRoot
+  let mutable playwright: IPlaywright option = None
+
+  try
+    let! initialHealthy = IsolatedDaemon.waitHealthy 60.0 daemon
+    match initialHealthy with
+    | false ->
+      eprintfn "Clock-skew journey (skewMs=%d): daemon never became healthy on port %d" skewMs daemon.McpPort
+      IsolatedDaemon.dumpLogs daemon
+      Tests.failtestf "isolated daemon on port %d never became healthy" daemon.McpPort
+    | true ->
+
+    let! pw = Playwright.CreateAsync()
+    let! b = pw.Chromium.LaunchAsync(BrowserTypeLaunchOptions(Headless = true))
+    playwright <- Some pw
+    let! ctx = b.NewContextAsync()
+    do! addClockSkew ctx skewMs
+    let! page = ctx.NewPageAsync()
+    let! _ = page.GotoAsync(sprintf "http://localhost:%d/dashboard" daemon.DashboardPort)
+
+    // 1. Daemon up, under skew: banner hidden, data-connected="true". Under
+    //    the OLD cross-clock comparison, a far-AHEAD client clock would
+    //    already fail this — the banner would show on a healthy daemon.
+    let! initiallyHidden = waitUntil 10_000 (fun () -> bannerHidden page)
+    Expect.isTrue initiallyHidden
+      (sprintf "banner hidden on a healthy daemon under %dms client clock skew" skewMs)
+    let! initiallyConnected = waitUntil 5_000 (fun () -> dataConnected page "true")
+    Expect.isTrue initiallyConnected
+      (sprintf "body[data-connected]=\"true\" on a healthy daemon under %dms client clock skew" skewMs)
+
+    // 2. Kill the daemon: banner STILL becomes visible within the staleness
+    //    budget. Under the OLD cross-clock comparison, a far-BEHIND client
+    //    clock made this assertion fail forever — the exact fail-OPEN
+    //    regression this journey exists to catch.
+    IsolatedDaemon.kill daemon
+    let! becameVisible = waitUntil TestTiming.staleWaitBudgetMs (fun () -> bannerVisible page)
+    Expect.isTrue becameVisible
+      (sprintf "banner became visible within %dms of the daemon dying, under %dms client clock skew"
+        TestTiming.staleWaitBudgetMs skewMs)
+    let! becameDisconnected = waitUntil 5_000 (fun () -> dataConnected page "false")
+    Expect.isTrue becameDisconnected
+      (sprintf "body[data-connected] flipped to \"false\" after staleness under %dms client clock skew" skewMs)
+
+    try do! ctx.CloseAsync() with _ -> ()
+  finally
+    playwright |> Option.iter (fun p -> try p.Dispose() with _ -> ())
+    IsolatedDaemon.kill daemon
+    try Directory.Delete(daemon.DataDir, true) with _ -> ()
+}
+
 [<Tests>]
 let tests =
   testList "Dashboard disconnect-indicator browser tests" [
     testTask "[Integration] Dashboard disconnect indicator: kill/respawn journey" {
       do! disconnectIndicatorJourney () }
+    testTask "[Integration] Dashboard disconnect indicator: client clock far BEHIND real time still detects staleness (GLM roast #5)" {
+      do! clockSkewJourney -600_000L }
+    testTask "[Integration] Dashboard disconnect indicator: client clock far AHEAD of real time still detects staleness (GLM roast #5)" {
+      do! clockSkewJourney 600_000L }
   ]
   |> Integration.register (Integration.Dedicated "--integration-disconnect")
 
