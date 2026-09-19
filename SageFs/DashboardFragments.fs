@@ -2176,6 +2176,11 @@ let private cohortClaimStateLabel (state: SageFs.Cohort.ClaimState<MemberTable.M
 let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId>) : XmlNode =
   let memberCount = frame.MemberIds.Length
   let claimCount = frame.ClaimIds.Length
+  // Bounded rows (CohortBoundedView): headers keep the TOTAL, the lists draw at
+  // most `rowCap` rows most-actionable-first, and an overflow line says what
+  // was hidden — never a silent truncation.
+  let memberView = Features.CohortBoundedView.members Features.CohortBoundedView.rowCap frame
+  let claimView = Features.CohortBoundedView.claims Features.CohortBoundedView.rowCap frame
   signalDetails Signals.CohortPanelOpen [ Attr.id DomIds.CohortPanel; Attr.class' "panel"; Attr.style "margin-top: 0.5rem;" ] [
     Elem.summary [ Attr.style "cursor: pointer; font-weight: bold; font-size: 0.85rem; user-select: none; color: var(--fg-blue);" ] [
       Text.raw "👥 "
@@ -2196,7 +2201,7 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
             Text.raw "Members"
           ]
           Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.25rem;" ] [
-            for i in 0 .. memberCount - 1 do
+            for i in memberView.Shown do
               Elem.li [ Attr.style "display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap; overflow-wrap: anywhere;" ] [
                 textEnc (MemberTable.MemberId.display frame.MemberIds.[i])
                 Elem.span [ Attr.class' "badge"; Attr.style "background: var(--bg-focus); color: var(--fg-dim);" ] [
@@ -2207,6 +2212,12 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
                 ]
               ]
           ]
+          match memberView.HiddenTotal with
+          | 0 -> ()
+          | _ ->
+            Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+              textEnc (Features.CohortBoundedView.memberOverflowLabel memberView)
+            ]
         ]
         match claimCount with
         | 0 ->
@@ -2219,7 +2230,7 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
               textEnc (sprintf "Claims (%d)" claimCount)
             ]
             Elem.ul [ Attr.style "margin: 2px 0; padding-left: 1.1em; font-size: 0.75rem; display: flex; flex-direction: column; gap: 0.3rem;" ] [
-              for i in 0 .. claimCount - 1 do
+              for i in claimView.Shown do
                 let (SageFs.Cohort.ClaimId claimIdStr) = frame.ClaimIds.[i]
                 let holderIdx = frame.ClaimHolderIndex.[i]
                 let holderText =
@@ -2237,6 +2248,12 @@ let rec renderCohortPanel (frame: SageFs.Cohort.CohortFrame<MemberTable.MemberId
                   ]
                 ]
             ]
+            match claimView.HiddenTotal with
+            | 0 -> ()
+            | _ ->
+              Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.7rem;" ] [
+                textEnc (Features.CohortBoundedView.claimOverflowLabel claimView)
+              ]
           ]
         renderCohortMatrix frame
         renderCohortTerritory frame
@@ -2293,14 +2310,27 @@ and private renderCohortTerritory (frame: SageFs.Cohort.CohortFrame<MemberTable.
   | [] -> Elem.div [] []
   | _ ->
     let svg = Features.CohortTerritory.toSvg 320.0 200.0 tiles
+    // The picture keeps every tile (a fixed-size map); the TEXT legend is a
+    // list and is bounded like the others, with an honest overflow line.
+    let tileArr = Array.ofList tiles
+    let legendView =
+      Features.CohortBoundedView.bound Features.CohortBoundedView.rowCap
+        (fun i ->
+          match tileArr.[i].HolderIndex >= 0 with
+          | true -> Features.CohortBoundedView.ClaimClass.HeldClaim
+          | false -> Features.CohortBoundedView.ClaimClass.OrphanedClaim)
+        tileArr.Length
     let legend =
-      tiles
-      |> List.map (fun t ->
-        let holderText =
-          match t.HolderIndex >= 0 && t.HolderIndex < frame.MemberIds.Length with
-          | true -> MemberTable.MemberId.display frame.MemberIds.[t.HolderIndex]
-          | false -> "unclaimed"
-        sprintf "%s — %s" t.Label holderText)
+      [ for i in legendView.Shown do
+          let t = tileArr.[i]
+          let holderText =
+            match t.HolderIndex >= 0 && t.HolderIndex < frame.MemberIds.Length with
+            | true -> MemberTable.MemberId.display frame.MemberIds.[t.HolderIndex]
+            | false -> "unclaimed"
+          yield sprintf "%s — %s" t.Label holderText
+        match legendView.HiddenTotal with
+        | 0 -> ()
+        | _ -> yield Features.CohortBoundedView.claimOverflowLabel legendView ]
       |> String.concat "\n"
     Elem.div [ Attr.id DomIds.CohortTerritory; Attr.style "margin-top: 0.4rem;" ] [
       Elem.div [ Attr.class' "meta"; Attr.style "font-size: 0.72rem; margin-bottom: 0.2rem;" ] [

@@ -76,6 +76,8 @@
         <Compile Include="Features\CohortTestProjection.fs" />
         <Compile Include="Features\CohortMatrixRender.fs" />
         <Compile Include="Features\CohortTerritory.fs" />
+        <Compile Include="Features\CohortBoundedView.fs" />
+        <Compile Include="Features\CohortStatusText.fs" />
         <Compile Include="Features\CohortLanes.fs" />
         <Compile Include="Features\CohortScrubber.fs" />
         <Compile Include="Features\CohortIntegrationScope.fs" />

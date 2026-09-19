@@ -46,6 +46,7 @@ let private stateWithLandingVerifying (integrationHead: string) (base': string) 
       Statement = statement
       State = LandingState.Verifying(base', rebasedHead, 1, 0)
       FastForwardAttempts = 0
+      Settlement = LandingSettlement.Unsettled
     }
     let state = {
       CohortState.empty () with
@@ -114,11 +115,13 @@ let decideTests =
           BaseAtQueue = "H0"; Statement = aliceStatement
           State = LandingState.Verifying("H0", "H0-rebased", 1, 0)
           FastForwardAttempts = 0
+          Settlement = LandingSettlement.Unsettled
         }
         let bobReq : LandingRequest<MemberId> = {
           Id = bobLandingId; Requester = bob; Claims = []; Commits = [ "c2" ]
           BaseAtQueue = "H0"; Statement = bobStatement; State = LandingState.Queued
           FastForwardAttempts = 0
+          Settlement = LandingSettlement.Unsettled
         }
         let state0 = {
           CohortState.empty () with
@@ -194,6 +197,7 @@ let decideTests =
           Id = landingId; Requester = requester; Claims = []; Commits = [ "c1" ]
           BaseAtQueue = "H0"; Statement = statement; State = LandingState.Rebasing "H0"
           FastForwardAttempts = 0
+          Settlement = LandingSettlement.Unsettled
         }
         let state = {
           CohortState.empty () with

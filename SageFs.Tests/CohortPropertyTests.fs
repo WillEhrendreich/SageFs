@@ -519,7 +519,7 @@ let cohortPropertyTests =
           let req =
             { Id = LandingId "l-0"; Requester = requester; Claims = [ (claim.Id, claim.Fence) ]; Commits = [ "c1" ]
               BaseAtQueue = h1'; Statement = statement; State = LandingState.Verifying(h1', "rebased-" + h1', 1, 0)
-              FastForwardAttempts = 0 }
+              FastForwardAttempts = 0; Settlement = LandingSettlement.Unsettled }
           let state =
             { CohortState.empty () with
                 IntegrationHead = h2'

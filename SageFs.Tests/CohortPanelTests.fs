@@ -54,6 +54,36 @@ let cohortPanelTests =
       html |> Expect.stringContains "shows the panel heading with zero members" "Cohort — 0 members"
       html |> Expect.stringContains "explains how to join, instead of rendering nothing" "join_cohort"
 
+    testCase "WHY — a burst of orphaned claims renders a BOUNDED list with an honest overflow line, never 43 rows" <| fun _ ->
+      // The live symptom: 43 orphaned claims, hours old, all listed. Each of
+      // 43 members holds one claim, then departs (orphaning it).
+      let members = [ for i in 1 .. 43 -> MemberId.Minted (sprintf "agent-%d" i) ]
+      let frame =
+        frameAfter
+          [ for m in members -> CohortCommand.Join(m, JoinableRole.Implementer, None)
+            for i, m in List.indexed members -> CohortCommand.AcquireClaim(m, ClaimScope.File (sprintf "src/F%d.fs" i), "editing")
+            for m in members -> CohortCommand.Depart m ]
+      let html = renderCohortPanel frame |> render
+      html |> Expect.stringContains "the heading still reports the TRUE total" "Claims (43)"
+      let cap = Features.CohortBoundedView.rowCap
+      (html.Split("fence ").Length - 1)
+      |> Expect.equal "only `rowCap` claim rows are drawn" cap
+      html |> Expect.stringContains "the overflow line says how many were hidden and why" (sprintf "+%d more claims (%d orphaned)" (43 - cap) (43 - cap))
+      html |> Expect.stringContains "members are bounded the same way" (sprintf "+%d more members (%d departed)" (43 - cap) (43 - cap))
+
+    testCase "WHY — get_cohort_status text is bounded the same way, with the true totals and a '+N more' line" <| fun _ ->
+      let members = [ for i in 1 .. 43 -> MemberId.Minted (sprintf "agent-%d" i) ]
+      let frame =
+        frameAfter
+          [ for m in members -> CohortCommand.Join(m, JoinableRole.Implementer, None)
+            for i, m in List.indexed members -> CohortCommand.AcquireClaim(m, ClaimScope.File (sprintf "src/F%d.fs" i), "editing")
+            for m in members -> CohortCommand.Depart m ]
+      let text = Features.CohortStatusText.render frame
+      let cap = Features.CohortBoundedView.rowCap
+      text |> Expect.stringContains "the header keeps the true claim total" "Claims (43):"
+      (text.Split("held-by=").Length - 1) |> Expect.equal "only `rowCap` claim rows are listed" cap
+      text |> Expect.stringContains "the hidden claims are counted, not dropped" (sprintf "+%d more claims (%d orphaned)" (43 - cap) (43 - cap))
+
     testCase "WHY — a joined member renders their id and role" <| fun _ ->
       let frame = frameAfter [ CohortCommand.Join(alice, JoinableRole.Implementer, None) ]
       let html = renderCohortPanel frame |> render

@@ -83,11 +83,21 @@ let tests =
         [ 1 .. 90 ]
         |> List.fold (fun st minute -> reaperTick (fun who -> who = "busy") (t0.AddMinutes(float minute)) st) start
       presenceOf "busy" final |> Expect.equal "busy stays Present — renewed every tick" (Some MemberPresence.Present)
-      match presenceOf "idle" final with
-      | Some (MemberPresence.Departed _) -> ()
-      | other -> failtestf "idle should be Departed, was %A" other
-      // busy keeps its claim; idle's claim is orphaned by the reap.
+      // idle departs at the lease window (minute 30), and — settled history is
+      // not kept forever (Cohort.Retention) — is purged one retention window
+      // later (minute 60), so by minute 90 its seat and orphaned claim are gone.
+      presenceOf "idle" final |> Expect.isNone "idle's departed seat is purged once the retention window has elapsed"
+      // busy keeps its claim; idle's claim was orphaned by the reap, then pruned.
       heldClaims final |> Expect.equal "only busy's claim is still Held" 1
+      final.Claims |> Map.count |> Expect.equal "idle's orphaned claim has aged out of state" 1
+      // Midway (minute 45 — departed at 30, inside the retention window) the
+      // seat is still visible as Departed, so the conductor can still act on it.
+      let midway =
+        [ 1 .. 45 ]
+        |> List.fold (fun st minute -> reaperTick (fun who -> who = "busy") (t0.AddMinutes(float minute)) st) start
+      match presenceOf "idle" midway with
+      | Some (MemberPresence.Departed _) -> ()
+      | other -> failtestf "idle should still be Departed inside the retention window, was %A" other
 
     testCase "an idle member is reaped exactly at the lease window, not before"
     <| fun _ ->

@@ -225,6 +225,15 @@ module Cohort =
     State: ClaimState<'m>
   }
 
+  /// WHY `Retention.sweep` removed a claim from `CohortState` — carried on
+  /// the `ClaimPruned` event so the ledger records the reason, never just the
+  /// fact. `SupersededBy` names the claim that now covers the same scope.
+  [<RequireQualifiedAccess>]
+  type ClaimPruneReason =
+    | OrphanedPastRetention of since: DateTime
+    | ReleasedPastRetention of at: DateTime
+    | SupersededBy of ClaimId
+
   // ── Landing (§5.4) ──────────────────────────────────────────────────────
 
   [<RequireQualifiedAccess>]
@@ -278,6 +287,17 @@ module Cohort =
     | Landed of integrationCommit: string
     | Withdrawn
 
+  /// When a landing stopped being live. `decide` keeps this in lock-step with
+  /// `LandingState` in ONE place (`stampSettlement`, applied to every command's
+  /// result): terminal states (Blocked/Landed/Withdrawn) are `SettledAt`, live
+  /// ones (Queued/Rebasing/Verifying) are `Unsettled` — so the two can never
+  /// disagree, and `Retention` can age a settled landing out without any
+  /// terminal arm having to remember to stamp a time.
+  [<RequireQualifiedAccess>]
+  type LandingSettlement =
+    | Unsettled
+    | SettledAt of DateTime
+
   type LandingRequest<'m> = {
     Id: LandingId
     Requester: 'm
@@ -300,6 +320,8 @@ module Cohort =
     /// CohortInspector) that only pattern-match their EXISTING arity; adding
     /// it here keeps that arity untouched.
     FastForwardAttempts: int
+    /// Maintained solely by `stampSettlement` — see `LandingSettlement`.
+    Settlement: LandingSettlement
   }
 
   // ── Cohort state (§7.1) — never persisted; `replay` is the only way to get one ─
@@ -330,6 +352,17 @@ module Cohort =
   /// something, so this is generous. `Clock` being a parameter means tests exert
   /// this via generated `DateTime` deltas, never a shortened constant.
   let leaseWindow = TimeSpan.FromMinutes 30.0
+
+  /// How long SETTLED history stays in `CohortState` before `Retention.sweep`
+  /// (run by every `Tick`) removes it: an orphaned claim (the conductor's
+  /// window to `ReassignClaim` it), a released claim, a departed member, a
+  /// settled (Blocked/Landed/Withdrawn) landing. Before this existed none of
+  /// them was ever removed — the dashboard and `get_cohort_status` listed
+  /// 43 orphaned claims, 4 departed members and 9 blocked landings, hours
+  /// old. One window for all of them so a member's seat and the claims that
+  /// name it age out together. Like `leaseWindow`, `Clock` is a parameter, so
+  /// tests exert it via generated `DateTime` deltas, never a shortened value.
+  let settledRetention = TimeSpan.FromMinutes 30.0
 
   module CohortState =
     let empty () : CohortState<'m> = {
@@ -463,6 +496,12 @@ module Cohort =
     | IntegrationConfigured of head: string
     /// A conductor cleared a veto via `ResolveVeto` and re-Queued the landing.
     | LandingVetoResolved of LandingId * by: 'm
+    /// `Retention.sweep` removed settled history from `CohortState` (emitted by
+    /// `Tick`). Audit only — replay re-derives the removal from the recorded
+    /// `Tick` command and its `Clock`, never from these events.
+    | ClaimPruned of ClaimId * ClaimPruneReason
+    | LandingPruned of LandingId * settledAt: DateTime
+    | MemberPurged of 'm * departedSince: DateTime
 
   /// What the pure machine asks the shell to DO. `decide` never rebases, never
   /// runs a test, never writes SQLite — it returns these, the shell performs
@@ -627,13 +666,135 @@ module Cohort =
   /// site (AGENTS.md / cmd-handoff.md §1.4: no magic numbers anywhere).
   let private maxFastForwardAttempts = 3
 
+  // ── Retention: settled history does not live forever ────────────────────
+
+  /// The pure decision of what settled history leaves `CohortState` at a given
+  /// `now`. Run by every `Tick` (the reaper's existing periodic command — there
+  /// is no per-artifact event to hang a time-based expiry on), and a pure
+  /// function of `(state, now)`, so `replay` re-derives every prune from the
+  /// recorded `Tick` clocks. It only ever removes SETTLED artifacts — never a
+  /// `Held` claim, a `Present` member, the conductor's seat, or a live landing.
+  module Retention =
+
+    let private aged (now: DateTime) (since: DateTime) = now - since >= settledRetention
+
+    /// Which claim outranks the others on the same scope: a `Held` claim beats
+    /// any orphan; among orphans the newest (highest fence) wins. The fence is
+    /// bumped on every state change and `ClaimId` breaks any tie, so the choice
+    /// is total and deterministic.
+    let private rankKey (c: Claim<'m>) =
+      let liveness =
+        match c.State with
+        | ClaimState.Held _ -> 1
+        | ClaimState.Orphaned _
+        | ClaimState.Released _ -> 0
+      liveness, c.Fence, c.Id
+
+    /// Claims to remove, with why. An orphan is dead weight the moment ANOTHER
+    /// claim covers the same scope (a live `Held` one, or a newer orphan) — the
+    /// conductor has nothing left to reassign — otherwise it lives out the
+    /// window. A released claim is history and lives out the window.
+    let claimsToPrune (now: DateTime) (claims: Map<ClaimId, Claim<'m>>) : (ClaimId * ClaimPruneReason) list =
+      let winners : Map<ClaimScope, Claim<'m>> =
+        claims
+        |> Map.fold
+          (fun acc _ c ->
+            match c.State with
+            | ClaimState.Released _ -> acc
+            | ClaimState.Held _
+            | ClaimState.Orphaned _ ->
+              match Map.tryFind c.Scope acc with
+              | Some w when rankKey w >= rankKey c -> acc
+              | Some _
+              | None -> Map.add c.Scope c acc)
+          Map.empty
+      [ for KeyValue(id, c) in claims do
+          match c.State with
+          | ClaimState.Held _ -> ()
+          | ClaimState.Released(_, at) ->
+            if aged now at then yield id, ClaimPruneReason.ReleasedPastRetention at
+          | ClaimState.Orphaned(_, since) ->
+            let winner = Map.find c.Scope winners
+            if winner.Id <> id then yield id, ClaimPruneReason.SupersededBy winner.Id
+            elif aged now since then yield id, ClaimPruneReason.OrphanedPastRetention since ]
+
+    /// Settled landings to remove. A landing vetoed and awaiting the conductor
+    /// is an outstanding DECISION, not history, so it stays until resolved.
+    let landingsToPrune (now: DateTime) (landings: Map<LandingId, LandingRequest<'m>>) : (LandingId * DateTime) list =
+      [ for KeyValue(id, l) in landings do
+          match l.Settlement with
+          | LandingSettlement.Unsettled -> ()
+          | LandingSettlement.SettledAt at ->
+            match l.State with
+            | LandingState.Blocked(LandingBlocker.VetoedBy _, NextAction.AwaitConductor) -> ()
+            // default policy: every other settled landing is history.
+            | _ -> if aged now at then yield id, at ]
+
+    /// Departed members to purge, judged against the claims/landings that
+    /// SURVIVED this sweep: a seat that a remaining claim or landing still
+    /// names, or the conductor's seat (authority resolves through it), stays.
+    let membersToPurge (now: DateTime) (state: CohortState<'m>) : ('m * DateTime) list =
+      let mentioned =
+        Set.union
+          (state.Claims
+           |> Map.toSeq
+           |> Seq.map (fun (_, c) ->
+             match c.State with
+             | ClaimState.Held h -> h
+             | ClaimState.Orphaned(h, _) -> h
+             | ClaimState.Released(by, _) -> by)
+           |> Set.ofSeq)
+          (state.Landings |> Map.toSeq |> Seq.map (fun (_, l) -> l.Requester) |> Set.ofSeq)
+      [ for KeyValue(m, r) in state.Members do
+          match r.Presence with
+          | MemberPresence.Present -> ()
+          | MemberPresence.Departed since ->
+            if aged now since && state.Conductor <> Some m && not (Set.contains m mentioned) then
+              yield m, since ]
+
+    let sweep (now: DateTime) (state: CohortState<'m>) : CohortState<'m> * CohortEvent<'m> list =
+      let claimPrunes = claimsToPrune now state.Claims
+      let landingPrunes = landingsToPrune now state.Landings
+      let survivors =
+        { state with
+            Claims = claimPrunes |> List.fold (fun m (id, _) -> Map.remove id m) state.Claims
+            Landings = landingPrunes |> List.fold (fun m (id, _) -> Map.remove id m) state.Landings }
+      let memberPurges = membersToPurge now survivors
+      let swept =
+        { survivors with Members = memberPurges |> List.fold (fun m (who, _) -> Map.remove who m) survivors.Members }
+      swept,
+      [ for id, reason in claimPrunes -> CohortEvent.ClaimPruned(id, reason)
+        for id, at in landingPrunes -> CohortEvent.LandingPruned(id, at)
+        for who, since in memberPurges -> CohortEvent.MemberPurged(who, since) ]
+
+    /// TWIN — the pre-fix behavior, frozen as a regression witness: `Tick`
+    /// only departed silent members and never removed anything. NOT wired
+    /// into any product path; `CohortRetentionTests` proves the bounded
+    /// invariant FAILS under it on the live scene (43 orphans, departed
+    /// members, blocked landings, hours old).
+    let neverPrunesTwin (_now: DateTime) (state: CohortState<'m>) : CohortState<'m> * CohortEvent<'m> list =
+      state, []
+
+  /// Keep `LandingRequest.Settlement` in lock-step with `LandingState` — the
+  /// single place it is written, applied to every command's result.
+  let private stampSettlement (now: DateTime) (state: CohortState<'m>) : CohortState<'m> =
+    let restamp (l: LandingRequest<'m>) : LandingRequest<'m> =
+      match l.State, l.Settlement with
+      | (LandingState.Blocked _ | LandingState.Landed _ | LandingState.Withdrawn), LandingSettlement.Unsettled ->
+        { l with Settlement = LandingSettlement.SettledAt now }
+      | (LandingState.Queued | LandingState.Rebasing _ | LandingState.Verifying _), LandingSettlement.SettledAt _ ->
+        { l with Settlement = LandingSettlement.Unsettled }
+      | (LandingState.Blocked _ | LandingState.Landed _ | LandingState.Withdrawn), LandingSettlement.SettledAt _
+      | (LandingState.Queued | LandingState.Rebasing _ | LandingState.Verifying _), LandingSettlement.Unsettled -> l
+    { state with Landings = state.Landings |> Map.map (fun _ l -> restamp l) }
+
   // ── decide (§7.1) ───────────────────────────────────────────────────────
 
   /// The one pure decision function. No IO, no `DateTime.UtcNow`, no
   /// `Guid.NewGuid()`. `CohortOwner` (a future item's shell actor) is the only
   /// thing that calls this in production; every property in this file calls it
   /// directly.
-  let decide (clock: Clock) (entropy: Entropy) (state: CohortState<'m>) (command: CohortCommand<'m>)
+  let private decideRaw (clock: Clock) (entropy: Entropy) (state: CohortState<'m>) (command: CohortCommand<'m>)
       : Result<CohortState<'m> * CohortEvent<'m> list * CohortEffect<'m> list, CohortError<'m>> =
     match command with
 
@@ -676,14 +837,17 @@ module Cohort =
         |> Map.toList
         |> List.filter (fun (_, r) -> r.Presence = MemberPresence.Present && (clock - r.LastRenewal) >= leaseWindow)
         |> List.map fst
-      let finalState, events =
+      let departedState, departEvents =
         expired
         |> List.fold
           (fun (st, evs) who ->
             let st2, whoEvents = departMember who clock st
             st2, evs @ whoEvents)
           (state, [])
-      Ok(finalState, events, [])
+      // Settled history is swept on the SAME tick (Retention): a departure
+      // above stamps `since = clock`, so nothing departed here is pruned here.
+      let sweptState, pruneEvents = Retention.sweep clock departedState
+      Ok(sweptState, departEvents @ pruneEvents, [])
 
     | CohortCommand.AcquireClaim(who, scope, purposeRaw) ->
       if not (isPresent state who) then Error(CohortError.MemberNotPresent who)
@@ -812,6 +976,7 @@ module Cohort =
                 Statement = statement
                 State = LandingState.Queued
                 FastForwardAttempts = 0
+                Settlement = LandingSettlement.Unsettled
               }
               let queued = { state with Landings = Map.add landingId req state.Landings; Queue = state.Queue @ [ landingId ] }
               let advanced, advEvents, advEffects = advanceQueue queued
@@ -1193,6 +1358,14 @@ module Cohort =
       // other Authority (Member, Anonymous) is refused, same as
       // SetIntegrationHead/ReassignClaim/DelegateConductor above.
       | _ -> Error(CohortError.NotConductor by)
+
+  /// Every command's result passes through `stampSettlement`, so a landing's
+  /// `Settlement` is derived from its `LandingState` in exactly one place and
+  /// no terminal arm above has to stamp (or remember to un-stamp on re-queue).
+  let decide (clock: Clock) (entropy: Entropy) (state: CohortState<'m>) (command: CohortCommand<'m>)
+      : Result<CohortState<'m> * CohortEvent<'m> list * CohortEffect<'m> list, CohortError<'m>> =
+    decideRaw clock entropy state command
+    |> Result.map (fun (newState, events, effects) -> stampSettlement clock newState, events, effects)
 
   // ── The ledger IS the event store (§5.2) ───────────────────────────────
 

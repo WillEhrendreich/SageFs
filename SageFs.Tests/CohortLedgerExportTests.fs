@@ -322,7 +322,7 @@ let private expectedState : CohortState<MemberId> =
           BaseAtQueue = Cohort.nullSha
           Statement = statement
           State = LandingState.Rebasing Cohort.nullSha
-          FastForwardAttempts = 0 }
+          FastForwardAttempts = 0; Settlement = LandingSettlement.Unsettled }
       ]
     Queue = [ expectedLandingId ]
     Conductor = Some scenarioAlice }

@@ -439,6 +439,8 @@
         <Compile Include="CohortLandingVerifyTests.fs" />
         <Compile Include="CohortLandingLoopTests.fs" />
         <Compile Include="CohortReaperTests.fs" />
+        <Compile Include="CohortRetentionTests.fs" />
+        <Compile Include="CohortBoundedViewTests.fs" />
         <Compile Include="CohortFastForwardFailedTests.fs" />
         <Compile Include="CohortLandingCacheOwnerTests.fs" />
         <Compile Include="CohortIntegrationHeadTests.fs" />

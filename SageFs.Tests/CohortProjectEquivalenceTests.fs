@@ -279,7 +279,7 @@ let private genLandingRequest : Gen<LandingId * LandingRequest<int>> =
         BaseAtQueue = "sha-base-at-queue"
         Statement = statement
         State = state
-        FastForwardAttempts = fastForwardAttempts }
+        FastForwardAttempts = fastForwardAttempts; Settlement = LandingSettlement.Unsettled }
   }
 
 let private genLandings : Gen<Map<LandingId, LandingRequest<int>>> =

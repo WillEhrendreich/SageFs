@@ -166,7 +166,13 @@ module CohortLanes =
     // `LandingQueued`-shaped re-entry would otherwise expect; there is no
     // re-open primitive here, and none is needed — the re-Queue emits its own
     // `LandingStateChanged`, which this match already treats as a no-op.
-    | CohortEvent.LandingVetoResolved _ -> acc
+    | CohortEvent.LandingVetoResolved _
+    // Retention pruning (`Cohort.Retention.sweep`) removes settled history
+    // from `CohortState`; the lane spans were already closed by the events
+    // that settled them, so a prune adds nothing to draw.
+    | CohortEvent.ClaimPruned _
+    | CohortEvent.LandingPruned _
+    | CohortEvent.MemberPurged _ -> acc
 
   /// Greedy interval-scheduling track assignment (classic Gantt/flame-graph
   /// stacking): walk spans in `Start` order, reuse the lowest-numbered track
