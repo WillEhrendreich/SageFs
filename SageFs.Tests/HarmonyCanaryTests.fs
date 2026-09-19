@@ -136,9 +136,20 @@ let integrationTests = testList "HarmonyCanary integration" [
       failwithf "expected CanaryError but got %A" other
 ]
 
+// Shared sequenced group with MethodPatcherTests and DevReloadCanaryTests:
+// integrationTests calls DevReloadHealthTracker.reset()/.transition/.current()
+// directly (process-global static state) AND applies real Harmony detours via
+// detourMethod, which itself transitions the same tracker (DevReload.fs).
+// Left unsequenced, its two DevReloadHealthTracker-touching cases race each
+// other under Expecto's parallel pool, and race the other "sagefs-harmony"
+// suites' detourMethod calls, for the shared static — an order-dependent
+// flake (a fresh default run can exit 2 on a spurious Degraded/BytesUnchanged
+// mismatch). A per-file `testSequenced` only orders within this file; the
+// named group serializes across all three files the way MethodPatcherTests
+// and DevReloadCanaryTests already do.
 [<Tests>]
 let allTests =
-  testList "HarmonyCanary" [
+  testSequencedGroup "sagefs-harmony" (testList "HarmonyCanary" [
     validateCanaryUnitTests
     integrationTests
-  ]
+  ])

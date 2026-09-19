@@ -230,18 +230,12 @@ let main argv =
       Tests.runTestsInAssemblyWithCLIArgs [] filteredArgv
     | false ->
       // Default: exclude the registered [Integration] suites (structurally, by
-      // the identity of their test bodies — see TestInfrastructure.Integration).
-      // Run with --all or --integration to include them.
-      let tests =
-        Impl.testFromThisAssembly ()
-        |> Option.defaultValue (testList "empty" [])
-        |> SageFs.Tests.TestInfrastructure.Integration.excludeRegistered
-        // Exclude [Benchmark]-tagged wall-clock perf tests from the fast default
-        // suite — their p95/latency budgets flake under load (roast-5 §12). They
-        // run on demand via --all/--benchmark, not on every default run.
-        |> Test.filter
-          defaultConfig.joinWith.asString
-          (fun z -> not ((defaultConfig.joinWith.format z).Contains "[Benchmark]"))
+      // the identity of their test bodies — see TestInfrastructure.Integration)
+      // and the [Benchmark]-tagged wall-clock perf tests (roast-5 §12). Run with
+      // --all or --integration to include them. TestInfrastructure.Integration.
+      // defaultSuite is the SAME function TestCountBadge uses to derive the
+      // README count, so "what ran" and "what the badge claims" can't drift.
+      let tests = SageFs.Tests.TestInfrastructure.Integration.defaultSuite ()
       // Fail closed: an "[Integration]"-tagged test that bypassed the registry
       // would silently join the fast default run.
       match SageFs.Tests.TestInfrastructure.Integration.unregisteredTagged tests with
@@ -262,12 +256,12 @@ let main argv =
       System.IO.File.WriteAllText(logPath, bounded)
     with _ -> ()
 
-  // Auto-stamp the README test-count badge from the live count as a SILENT
-  // side-effect of a local suite run (writes only when the number actually
-  // drifted). This replaces the old freshness test, which failed on every test
-  // addition — pure churn with no signal. Skipped in CI so CI stays read-only
-  // (local-first: the developer commits the fresh badge; CI only runs tests).
-  if not inCi then (try SageFs.Tests.TestCountBadge.updateReadme () |> ignore with _ -> ())
+  // The README test-count badge is NOT restamped here. A test run — local or
+  // CI — must be side-effect-free on the working tree: it exercises the
+  // suite, nothing else. Restamping is an explicit, separate step:
+  // `dotnet run --project SageFs.Tests -- --update-badge` (see the top of
+  // this file), run by a developer (or a dedicated CI step) when the count
+  // has actually moved, never as a byproduct of `--summary`.
 
   // Force exit: Kestrel ConsoleLifetime and other test infrastructure may leave
   // foreground threads alive after all tests complete, preventing clean shutdown.

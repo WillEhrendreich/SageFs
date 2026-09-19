@@ -1,13 +1,15 @@
 /// Keeps the README test-count badge and the property-test count honest.
 ///
 /// The numbers are derived from a live source, never hand-typed: the total is
-/// the count of runnable test cases Expecto discovers in this assembly, and the
-/// property count is every property-test declaration in the test source. A
-/// local suite run auto-stamps the README from these at the end of the run (see
-/// Program.fs — silent, write-only-when-changed, skipped in CI), and
-/// `dotnet run --project SageFs.Tests -- --update-badge` restamps on demand.
-/// There is deliberately NO test asserting the count — that only ever failed on
-/// adding tests, which is churn, not signal.
+/// the count of runnable test cases in the SAME tree the default `--summary`
+/// run executes (SageFs.Tests.TestInfrastructure.Integration.defaultSuite —
+/// registered [Integration] suites and [Benchmark]-tagged tests excluded), and
+/// the property count is every property-test declaration in the test source.
+/// Restamping is an explicit, separate step —
+/// `dotnet run --project SageFs.Tests -- --update-badge` — never a side effect
+/// of running the suite: a plain test run (local or CI) must leave the working
+/// tree untouched. There is deliberately NO test asserting the count — that
+/// only ever failed on adding tests, which is churn, not signal.
 ///
 /// Every function here was dogfooded in the SageFs REPL before it landed:
 /// countLeaves against a known 7-leaf tree, the stamp/parse regexes against the
@@ -29,13 +31,16 @@ let rec countLeaves (t: Test) : int =
   | TestLabel (_, inner, _) -> countLeaves inner
   | Test.Sequenced (_, inner) -> countLeaves inner
 
-/// Every runnable test case across all [<Tests>] in this assembly — the default
-/// suite plus the integration-registered suites, counted the way Expecto
-/// discovers them.
+/// Every runnable test case in the tree a plain default run
+/// (`dotnet run --project SageFs.Tests -- --summary`) actually executes —
+/// the SAME tree SageFs.Tests.TestInfrastructure.Integration.defaultSuite
+/// builds for Program.fs's default runner (registered [Integration] suites
+/// and [Benchmark]-tagged tests excluded). Sharing one function is what
+/// keeps the badge honest: it previously counted the whole assembly,
+/// including suites the default run never touches, so the badge, the
+/// auto-stamp and the real run's own count disagreed.
 let totalTestCount () : int =
-  match Impl.testFromThisAssembly () with
-  | Some t -> countLeaves t
-  | None -> 0
+  SageFs.Tests.TestInfrastructure.Integration.defaultSuite () |> countLeaves
 
 /// The test source directory (compile-time constant, same trick the snapshot
 /// tests use to find their fixtures at runtime).

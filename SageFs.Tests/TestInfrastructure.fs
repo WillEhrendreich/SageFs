@@ -178,6 +178,24 @@ module Integration =
     |> List.map (fun flat -> String.concat "/" flat.name)
     |> List.filter (fun name -> name.Contains "[Integration]")
 
+  /// The tree a plain default run (`--summary`, no `--all`/`--integration`)
+  /// actually executes: every [<Tests>] value in this assembly, minus the
+  /// registered Integration suites and the [Benchmark]-tagged wall-clock perf
+  /// tests excluded from the fast default run (roast-5 §12). Program.fs's
+  /// default runner and TestCountBadge's README stamp both call this ONE
+  /// function so the "how many tests actually ran" count and the "how many
+  /// tests does the badge claim" count can never drift apart — previously the
+  /// badge counted the whole assembly (including suites the default run never
+  /// executes), which is why the badge, the auto-stamp and the real run
+  /// reported three different numbers.
+  let defaultSuite () =
+    Expecto.Impl.testFromThisAssembly ()
+    |> Option.defaultValue (Expecto.Tests.testList "empty" [])
+    |> excludeRegistered
+    |> Expecto.Test.filter
+         Expecto.Tests.defaultConfig.joinWith.asString
+         (fun z -> not ((Expecto.Tests.defaultConfig.joinWith.format z).Contains "[Benchmark]"))
+
 let quietLogger =
   { new SageFs.Utils.ILogger with
       member _.LogDebug msg = ()
