@@ -212,12 +212,21 @@ DASHBOARD_URL="http://localhost:$DASHBOARD_PORT/dashboard"
 
 CHROME_PROFILE="$DATA_DIR/chrome-profile"
 mkdir -p "$CHROME_PROFILE"
+# Self-contained config: chromium reads $XDG_CONFIG_HOME/chromium-flags.conf on
+# startup. On this box that file (~/.config/chromium-flags.conf, omarchy's
+# default) forces `--ozone-platform=wayland` and loads desktop extensions —
+# under Xvfb (X11 only, no compositor) the wayland backend can't init and
+# chromium SIGTRAPs, spamming coredumps AND degrading the capture. Point
+# XDG_CONFIG_HOME at an empty dir so the recorder NEVER inherits the user's
+# desktop chromium flags; it lives under DATA_DIR and is cleaned up with it.
+CHROME_XDG_CONFIG="$DATA_DIR/xdg-config"
+mkdir -p "$CHROME_XDG_CONFIG"
 log "launching chromium at $DASHBOARD_URL"
 # CRITICAL on a Wayland box: chromium defaults to the Wayland backend, which
 # ignores $DISPLAY and renders on the user's REAL screen. Force the X11
 # backend AND unset WAYLAND_DISPLAY so chromium can only ever reach the Xvfb
 # display, never the real compositor.
-env -u WAYLAND_DISPLAY "$CHROMIUM_BIN" \
+env -u WAYLAND_DISPLAY XDG_CONFIG_HOME="$CHROME_XDG_CONFIG" "$CHROMIUM_BIN" \
   --no-sandbox --disable-gpu --disable-dev-shm-usage \
   --ozone-platform=x11 \
   --window-size=1280,800 --window-position=0,0 \

@@ -137,7 +137,12 @@ kill -0 "$XVFB_PID" 2>/dev/null || die "Xvfb exited immediately, see $WORKDIR/xv
 
 log "launching drive command under DISPLAY=$DISPLAY_NUM: $DRIVE_CMD"
 command -v setsid >/dev/null 2>&1 || die "'setsid' not found in PATH (util-linux) — needed for clean process-group teardown"
-DISPLAY="$DISPLAY_NUM" setsid bash -c "$DRIVE_CMD" >"$WORKDIR/drive.log" 2>&1 &
+# Unset WAYLAND_DISPLAY for the whole drive command. On a Wayland host, GUI
+# toolkits (chromium, Electron/VS Code) prefer the Wayland backend and ignore
+# $DISPLAY, so they render on the user's REAL screen. Hiding the Wayland socket
+# forces them onto the Xvfb X11 display (or to fail cleanly) — they can never
+# reach the real compositor.
+env -u WAYLAND_DISPLAY DISPLAY="$DISPLAY_NUM" setsid bash -c "$DRIVE_CMD" >"$WORKDIR/drive.log" 2>&1 &
 DRIVE_PID=$!
 
 # Small settle delay so the driven app has a window painted before we grab.
