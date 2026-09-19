@@ -339,6 +339,57 @@ let tests =
     Expect.isTrue stillOpen "evaluate section stays open across the periodic SSE morph"
   })
 
+  playwrightTest "sidebar scroll position survives an SSE morph" (fun page -> task {
+    // Root cause: the server renders #main without the client-driven
+    // `expanded` class, so every morph strips it, the sidebar's tall
+    // `.expanded-only` panels collapse for a frame, and the browser clamps
+    // .sidebar-inner's scrollTop to the collapsed maximum — the user's scroll
+    // position snaps back near the top. Fix: `data-preserve-attr="class"`.
+    do! PlaywrightExpect.waitForSSE 15_000 page
+    let textarea = DashboardDom.textarea page
+    // Stage the eval first, at the normal viewport, so submitting it later is
+    // just a keypress. An idle daemon suppresses no-change pushes, so the eval
+    // is what produces the SSE morph while the sidebar is scrolled.
+    do! DashboardDom.throughPanelReset (fun () -> DashboardDom.openEvalArea page) 5 (fun () -> task {
+      do! textarea.FillAsync("""printfn "scroll-probe" """)
+    })
+    do! DashboardDom.ensureExpanded page
+    do! page.SetViewportSizeAsync(1280, 300)
+    let! scrolledTo =
+      page.EvaluateAsync<float>(
+        "() => { var el = document.querySelector('.sidebar-inner'); el.scrollTop = el.scrollHeight - el.clientHeight; return el.scrollTop; }")
+    // Guard against a vacuous pass: the collapsed sidebar can only scroll a
+    // few dozen px, so a target well above that distinguishes a reset.
+    Expect.isTrue (scrolledTo > 100.0) (sprintf "expanded sidebar must overflow enough to detect a reset (scrolled to %f)" scrolledTo)
+    // `__pushes` counts morph mutations anywhere under #main (proof a push
+    // landed). `__classStripped` counts #main class mutations whose previous
+    // value lacked `expanded` — i.e. the client-owned class was observed
+    // absent and then re-added. That is the mechanism behind the scroll reset,
+    // detected on every push regardless of whether a layout flush happened to
+    // land in the gap (which depends on how heavy the sidebar is).
+    let! _ =
+      page.EvaluateAsync<int>(
+        """() => {
+          window.__pushes = 0; window.__classStripped = 0;
+          var main = document.querySelector('#main');
+          new MutationObserver(() => { window.__pushes++; }).observe(main, { attributes: true, childList: true, subtree: true, characterData: true });
+          new MutationObserver(recs => { recs.forEach(r => { if (!(r.oldValue || '').includes('expanded')) window.__classStripped++; }); })
+            .observe(main, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+          return 0;
+        }""")
+    do! textarea.PressAsync("Alt+Enter")
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#output-panel" "scroll-probe"
+    do! page.WaitForTimeoutAsync(1500.0f)
+    let! pushes = page.EvaluateAsync<int>("() => window.__pushes")
+    Expect.isTrue (pushes > 0) "at least one SSE morph reached #main while the sidebar was scrolled"
+    let! stripped = page.EvaluateAsync<int>("() => window.__classStripped")
+    Expect.equal stripped 0 "the SSE morph must never strip and re-add the client-owned `expanded` class on #main"
+    let! after = page.EvaluateAsync<float>("() => document.querySelector('.sidebar-inner').scrollTop")
+    // A reset drops scrollTop to the collapsed maximum (well under the target);
+    // content growing above the viewport can only push it up via scroll anchoring.
+    Expect.isTrue (after > scrolledTo - 20.0) (sprintf "sidebar scrollTop must not snap back across SSE morphs (was %f, now %f)" scrolledTo after)
+  })
+
   playwrightTest "session status renders with state" (fun page -> task {
     // The tabline #session-status carries the state pill; the session id
     // renders in the sibling .tabline-info. Both are inside #main, pushed
