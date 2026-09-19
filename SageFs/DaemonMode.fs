@@ -1877,13 +1877,14 @@ let run
             match (try Some(System.IO.File.ReadAllText full) with _ -> None) with
             | Some content when content <> "" -> elmRuntime.Dispatch(SageFsMsg.FileContentChanged(full, content))
             | _ -> ()
-          // A SHORT budget (Timeouts.cohortRediscover), NOT the full settle
-          // timeout: the FSI hot-eval bumps the generation within seconds when it
-          // is going to, so a longer wait is pure latency on every landing (which
-          // blows a caller's own landing deadline — CohortDogfoodIntegrationTests
-          // waits 60s per landing). If it hasn't bumped in this window it isn't
-          // going to; proceed (the fail-closed narrow still runs the whole suite,
-          // and the worker's dynamic run closure was already updated by the eval).
+          // Event-driven wait (awaitModelCondition returns the instant generationOf
+          // advances), bounded by Timeouts.cohortRediscover. The ceiling must exceed
+          // the hot-eval's full-REBUILD fallback — the affected re-run bumps
+          // generationOf (LastGeneration) when it completes — while staying under the
+          // caller's landing deadline (see Timeouts.cohortRediscover's doc). A fast
+          // hot-eval landing completes in seconds regardless of the ceiling; only a
+          // rebuild-fallback landing uses the extra budget, and if even that doesn't
+          // land in the window we fail CLOSED (below), never verify stale discovery.
           // Event-driven: the hot-eval's re-RUN (LastGeneration) and/or re-DISCOVERY
           // (DiscoveryGeneration) bumps generationOf and fires the model-changed
           // notification, so this completes the instant the session's test view reflects

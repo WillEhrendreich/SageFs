@@ -89,11 +89,20 @@ module Timeouts =
   /// fails fast via SessionTrust.settleDecision; this bounds only a genuinely
   /// warming session). Env-overridable.
   let cohortIntegrationSettle = envOrDefault "SAGEFS_COHORT_SETTLE_SECONDS" 120.0
-  /// Give-up bound on waiting for the integration session to REDISCOVER after a
-  /// landing rebase hot-evals its changed files. The DiscoveryGeneration bump is
-  /// the real completion signal; this only stops the wait if the eval never
-  /// lands. Kept well under a caller's own landing deadline. Env-overridable.
-  let cohortRediscover = envOrDefault "SAGEFS_COHORT_REDISCOVER_SECONDS" 30.0
+  /// Give-up bound on waiting for the integration session to REDISCOVER + re-run
+  /// after a landing rebase hot-evals its changed files. The completion signal is
+  /// `CohortTestProjection.generationOf` (max of the RUN and DISCOVERY generations,
+  /// NOT DiscoveryGeneration alone — a breaking body-change bumps only the run
+  /// counter), and the wait is event-driven: it completes the instant that advances,
+  /// so a fast hot-eval landing pays no latency here. This ceiling must EXCEED the
+  /// hot-eval's full-REBUILD fallback — the original 30s was shorter than a rebuild,
+  /// so a body-change landing fell to Inconclusive before its re-run finished (the
+  /// F17 settle-window regression) — while staying UNDER the caller's own landing
+  /// deadline (cohortIntegrationSettle for CohortDogfood, cohortLandingGateReady for
+  /// the gate) so the subsequent verify + fast-forward still fits the caller's wait.
+  /// Env-overridable. (Deeper follow-up: make the hot-eval not fall back to a full
+  /// rebuild, so this ceiling can drop again.)
+  let cohortRediscover = envOrDefault "SAGEFS_COHORT_REDISCOVER_SECONDS" 90.0
   /// Poll cadence while waiting on the settle / rediscovery generation signals.
   let cohortLandingPoll = TimeSpan.FromMilliseconds(200.0)
   /// The debounce a second "Trusted" read must clear to cross the rebuild race.
