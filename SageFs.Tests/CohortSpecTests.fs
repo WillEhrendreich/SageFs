@@ -13,10 +13,26 @@ open SageFs.Simulation
 /// checking every rule at every reachable state. A completed BFS with no
 /// violation is a proof for that bound.
 ///
+/// HONESTY NOTE (armfix, cmd-handoff.md item B — read `CohortSpec.fs`'s own
+/// COVERAGE comment before repeating either claim below): the bound covers 13
+/// of `CohortCommand`'s 20 cases — REACHING, and proving safe, the arms that
+/// the previous alphabet could not reach at all (`VetoLanding`, `ResolveVeto`,
+/// `SetIntegrationHead`'s HeadMoved race, `ReleaseClaim`'s StaleClaimFence
+/// race, one `FastForwardFailed` retry cycle). It does NOT cover `Depart`,
+/// `RenewLease`, `Tick`, `ReassignClaim`, `DelegateConductor`, `ObserveSave`,
+/// `WithdrawLanding`, or FastForwardFailed's full retry-exhaustion cascade
+/// (verified separately by `CohortFastForwardFailedTests.fs`, not this BFS).
+/// Say "proven over the modeled subspace" — naming what's modeled — never
+/// "the whole cohort core is proven": that phrase describes 8/20 commands'
+/// worth of coverage, not 20/20, and was itself the roasts' central finding
+/// (roast-2day §1, roast-2day-cmd §1: a proof whose alphabet excludes the
+/// counterexamples is proof of the wrong thing).
+///
 /// The payoff is twofold:
 ///   * All five rules (CLAIM-EXCLUSIVE, FENCE-MONOTONE, CONDUCTOR-BOUND,
 ///     NO-TERMINAL-IN-QUEUE, QUEUE-SERIAL) HOLD over the ENTIRE bounded space of
-///     the real Cohort.decide — proven, not sampled.
+///     the real Cohort.decide, for the modeled 13/20-command subspace — proven,
+///     not sampled, for that subspace.
 ///   * The FAULTS-mode twin (the pre-fix RebaseConflict queue-jam) is CAUGHT by
 ///     NO-TERMINAL-IN-QUEUE across the same space — proof the rule has teeth.
 
@@ -24,7 +40,7 @@ open SageFs.Simulation
 let tests =
   testList "DST cohort spec (exhaustive proof)" [
 
-    testCase "the whole cohort core is PROVEN over the bounded model — every rule holds at every reachable state" <| fun _ ->
+    testCase "the modeled 13/20-command subspace is PROVEN — every rule holds at every reachable state, including the arms the old alphabet could not reach (VetoLanding/ResolveVeto/SetIntegrationHead/ReleaseClaim/FastForwardFailed)" <| fun _ ->
       let r = CohortSpec.proof ()
       // The BFS must actually close (empty frontier within the cap), or an empty
       // Violations list would be a sample, not a proof.

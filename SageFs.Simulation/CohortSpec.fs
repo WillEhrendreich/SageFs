@@ -17,22 +17,43 @@ open SageFs.Cohort
 /// Why the space is finite (the three forcing functions):
 ///   * Chaos is DATA over a small fixed alphabet: 2 members, 2 file scopes, and
 ///     the whole landing lifecycle driven by exploring BOTH outcome branches of
-///     each pending effect (rebase ok/conflict, tests pass/fail/inconclusive).
+///     each pending effect (rebase ok/conflict, tests pass/fail/inconclusive/
+///     fast-forward ok/fail), plus the out-of-band commands that can fire at
+///     ANY point regardless of pending effect: `ReleaseClaim` (fence
+///     movement), `VetoLanding`, `ResolveVeto`, `SetIntegrationHead`.
 ///   * Ids are minted DETERMINISTICALLY (a claim's id from its scope, a landing's
 ///     from its requester), so the same logical situation always mints the same
 ///     id and structurally-equal states dedup. (Modelling note: because a released
-///     claim keeps its id in the map, the bounded model does not re-acquire a
+///     claim keeps its id in the map, the bounded model does not RE-ACQUIRE a
 ///     scope after it is released — a sound restriction of the explored subspace,
-///     not a claim about the unbounded system.)
+///     not a claim about the unbounded system. `ReleaseClaim` itself — moving an
+///     already-minted claim's fence / off `Held` — IS modeled; only the
+///     subsequent re-acquire is excluded.)
 ///   * `Error` results (a conflicting acquire, a duplicate landing, an
-///     out-of-order completion) leave the state unchanged, so they never expand
-///     the frontier — the core's own guards bound the exploration.
+///     out-of-order completion, a non-conductor's `SetIntegrationHead`/
+///     `ResolveVeto`) leave the state unchanged, so they never expand the
+///     frontier — the core's own guards bound the exploration.
 ///
 /// The subject is the REAL `Cohort.decide`. The `faultRebaseConflictJam` twin
 /// reintroduces exactly the pre-fix queue-jam (a rebase conflict blocks the
 /// landing but never pops the queue); the `NO-TERMINAL-IN-QUEUE` rule HOLDS
 /// against the real core and is VIOLATED against the twin — which is what proves
 /// the rule (and the exhaustive checker) has teeth rather than passing vacuously.
+///
+/// COVERAGE (armfix, cmd-handoff.md item B — read this before citing "proven"
+/// anywhere, and re-count against `enabled`'s actual body if this module has
+/// changed since): `enabled` yields 13 of `CohortCommand`'s 20 cases — `Join`,
+/// `AcquireClaim`, `ReleaseClaim`, `RequestLanding`, `VetoLanding`,
+/// `ResolveVeto`, `SetIntegrationHead`, `RebaseCompleted`, `AffectedComputed`,
+/// `TestsCompleted`, `VerificationInconclusive`, `FastForwardCompleted`,
+/// `FastForwardFailed`. Still unmodeled: `Depart`, `RenewLease`, `Tick`,
+/// `ReassignClaim`, `DelegateConductor`, `ObserveSave`, `WithdrawLanding` —
+/// none of these sit on the `NO-TERMINAL-IN-QUEUE` counterexample path the
+/// roasts found (a member leaving, a lease timer, an orphaned-claim handoff,
+/// conductor delegation, a save-time warning, and a voluntary withdrawal are
+/// none of them a way to leave a TERMINAL landing stuck in `Queue`), so their
+/// absence does not undermine this proof's headline claim — but say so
+/// explicitly, every time, rather than "the whole cohort core is proven."
 module CohortSpec =
 
   /// Member identity in the bounded model is an opaque string.
@@ -141,11 +162,38 @@ module CohortSpec =
     | CohortCommand.FastForwardFailed _ -> true
     | _ -> false
 
+  /// A second, distinct integration-head value (armfix — cmd-handoff.md item
+  /// B — reaches the `HeadMoved` arms). Distinct from `nullSha` and from any
+  /// sha `RebaseCompleted`/`FastForwardCompleted` mint in this model, so
+  /// `SetIntegrationHead` genuinely moves `IntegrationHead` out from under an
+  /// in-flight landing's `Verifying.base'`.
+  let private altHead = "H2"
+
   /// The state-dependent enabled actions at a `(state, pending landing effect)`
-  /// node. Free commands (join / acquire / request) model concurrent members
-  /// acting at any time; the completions resolve the SINGLE pending landing
-  /// effect, exploring EVERY outcome branch (the serial queue means at most one
-  /// landing effect is ever pending).
+  /// node. Free commands (join / acquire / request / release / veto / resolve
+  /// / re-seed-head) model concurrent members acting at any time; the
+  /// completions resolve the SINGLE pending landing effect, exploring EVERY
+  /// outcome branch (the serial queue means at most one landing effect is
+  /// ever pending).
+  ///
+  /// armfix (cmd-handoff.md item B): the roasts (roast-2day §1, roast-2day-cmd
+  /// §1) named the earlier alphabet's blind spot precisely — `VetoLanding`,
+  /// `SetIntegrationHead`, and a claim's fence moving after `RequestLanding`
+  /// were ALL absent, which made `HeadMoved`/`StaleClaimFence`/the vetoed
+  /// state structurally UNREACHABLE, so `NO-TERMINAL-IN-QUEUE` was "proven"
+  /// only over a subspace that excluded the very arms that violated it in
+  /// production. Five additions close that: `ReleaseClaim` (fence movement:
+  /// a member releasing a claim that backs an IN-FLIGHT landing bumps its
+  /// fence / flips it off `Held`, exactly the race `FastForwardCompleted`'s
+  /// land-time re-check exists to catch), `VetoLanding` (any present member,
+  /// on any non-terminal landing — matches `decide`'s own no-gate design),
+  /// `ResolveVeto` (any present member attempts it; `decide` itself enforces
+  /// Conductor-only, so a non-conductor's attempt is just an `Error` the
+  /// explorer discards for free), `SetIntegrationHead` (re-seeds the head to
+  /// `altHead`, reachable by a non-conductor too for the same reason), and a
+  /// `FastForwardFailed` branch alongside `FastForwardCompleted` at every
+  /// pending `FastForward` node (this one was already in `isCompletionCmd`
+  /// but `enabled` never yielded it — roast-2day §1's exact finding).
   let private enabled (s: CohortState<Member>, pend: CohortEffect<Member> option) : (CohortCommand<Member> * Entropy) list =
     [ for m in members do
         if not (isPresent s m) then
@@ -163,6 +211,76 @@ module CohortSpec =
               | ClaimState.Held h when h = m -> Some(c.Id, c.Fence)
               | _ -> None)
           yield CohortCommand.RequestLanding(m, mine, [ "commit-" + m ], "land"), memberEntropy m
+      // The five additions below are each individually cheap (measured
+      // 6,427 -> 18k-53k nodes alone against a REPL probe of the real
+      // alphabet), but combined naively at FULL generality (every present
+      // member, every reachable claim/landing, every FastForwardFailed
+      // retry up to `maxFastForwardAttempts`) they interact
+      // MULTIPLICATIVELY — measured 3,000,000+ nodes and Capped=true, because
+      // `VetoLanding`+`ResolveVeto` and `FastForwardFailed`'s own retry both
+      // let a landing re-enter the SAME downstream subtree (rebase -> verify
+      // -> fast-forward) repeatedly, and every other free command is then
+      // re-offered at every one of those revisited nodes too. Three targeted
+      // restrictions bring the combined proof back to a fast, CLOSED
+      // exploration (measured 351,285 nodes, ~9s) without losing reachability
+      // of any of the target states (HeadMoved/StaleClaimFence/Veto/
+      // ResolveVeto): the invariants under proof (§ rules above) do not
+      // depend on WHICH present member acted, only on whether the queue
+      // stays correct — so a single fixed actor exercises the same state
+      // transitions a second actor would, and WHERE in the queue an action
+      // targets only matters at the front (only the front can be
+      // Rebasing/Verifying, `Cohort.fs`'s own FIFO invariant, so an action on
+      // a non-front landing never touches the in-flight pipeline this model
+      // exists to stress).
+      //   1. `ReleaseClaim`/`VetoLanding`: fixed to member "b" (never both),
+      //      and only against the FRONT-of-queue landing's own claims/id.
+      //   2. `ResolveVeto`/`SetIntegrationHead`: fixed to the conductor (the
+      //      only actor `decide` would ever accept for either).
+      //   3. `FastForwardFailed`'s transient-retry branch: only offered while
+      //      `FastForwardAttempts = 0` (one retry cycle, reaching
+      //      `Rebasing`+attempts=1 — enough to prove the retry transition
+      //      itself is reachable and safe). The EXHAUSTION transition
+      //      (3rd failure -> `Blocked(Inconclusive)`, popped) is verified
+      //      separately by `CohortFastForwardFailedTests.fs`'s example test
+      //      (driven step-by-step against the same real `Cohort.decide`,
+      //      REPL-proven during this fix), not by this BFS — modeling the
+      //      full 3-round cascade combined with every other free command
+      //      here was the single largest driver of the blow-up above.
+      // `VetoLanding`+`ResolveVeto` can still cycle a landing through the
+      // pipeline more than once within this bound (nothing here caps a
+      // repeat veto), but the fixed-actor/front-of-queue restrictions keep
+      // that cheap enough for the BFS to close well within `defaultCap`.
+      let frontLandingClaims =
+        match s.Queue |> List.tryHead |> Option.bind (fun fid -> Map.tryFind fid s.Landings) with
+        | Some req -> req.Claims
+        | None -> []
+      for (cid, fence) in frontLandingClaims do
+        match Map.tryFind cid s.Claims with
+        | Some c when c.State = ClaimState.Held "b" -> yield CohortCommand.ReleaseClaim("b", cid, fence), [||]
+        | _ -> ()
+      match s.Queue |> List.tryHead with
+      | Some lid ->
+        match Map.tryFind lid s.Landings with
+        | Some { State = LandingState.Landed _ | LandingState.Withdrawn } -> ()
+        | Some _ -> yield CohortCommand.VetoLanding("b", lid, "veto"), [||]
+        | None -> ()
+      | None -> ()
+      match s.Conductor with
+      | Some c ->
+        let vetoed =
+          s.Landings |> Map.toList
+          |> List.choose (fun (lid, req) ->
+            match req.State with
+            | LandingState.Blocked(LandingBlocker.VetoedBy _, _) -> Some lid
+            | _ -> None)
+        for lid in vetoed do
+          yield CohortCommand.ResolveVeto(c, lid), [||]
+        // The concurrent-head-move race — only while a landing effect is
+        // pending (Rebasing/Verifying is exactly when a head-move's
+        // diagnosis at land time matters).
+        if pend.IsSome then
+          yield CohortCommand.SetIntegrationHead(c, altHead), [||]
+      | None -> ()
       match pend with
       | Some(CohortEffect.Rebase(id, _, _)) ->
         yield CohortCommand.RebaseCompleted(id, Result.Ok("R-" + (let (LandingId x) = id in x))), [||]
@@ -172,7 +290,12 @@ module CohortSpec =
         yield CohortCommand.TestsCompleted(id, []), [||]
         yield CohortCommand.TestsCompleted(id, [ TestId "t" ]), [||]
         yield CohortCommand.VerificationInconclusive(id, "x"), [||]
-      | Some(CohortEffect.FastForward(id, sha)) -> yield CohortCommand.FastForwardCompleted(id, sha), [||]
+      | Some(CohortEffect.FastForward(id, sha)) ->
+        yield CohortCommand.FastForwardCompleted(id, sha), [||]
+        // One retry cycle only — see the block comment above.
+        match Map.tryFind id s.Landings with
+        | Some req when req.FastForwardAttempts = 0 -> yield CohortCommand.FastForwardFailed(id, "infra-fail"), [||]
+        | _ -> ()
       | _ -> () ]
 
   /// The result of an exhaustive exploration.

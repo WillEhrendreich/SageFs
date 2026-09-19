@@ -12,9 +12,16 @@ open SageFs.Simulation.CohortLandingInvariants
 ///
 /// The payoff is twofold:
 ///   * The invariants (a passing landing always lands; the queue never retains a
-///     terminal landing; every landing terminates) HOLD over generated scenarios
-///     when folded through the REAL `Cohort.decide` — the serial pipeline is
-///     provably free of the dead-lock.
+///     terminal landing; every landing terminates) HOLD over 500 SEEDED
+///     scenarios (`simConfig.maxTest`, below) when folded through the REAL
+///     `Cohort.decide` — the serial pipeline is free of the dead-lock under
+///     those 500 sampled scenarios. This is SAMPLING, not a proof (armfix,
+///     cmd-handoff.md item B — roast-2day §2 named this exact drift): the
+///     generator's own bounded alphabet (`CohortLandingGenerators.fs`) has no
+///     Veto/HeadMove/StaleClaimFence routes, so it cannot sample those arms
+///     either. `CohortSpec.fs`'s exhaustive BFS is where those arms are
+///     actually proven, over its own stated bounded alphabet — see that
+///     module's COVERAGE comment for exactly what it covers.
 ///   * The SAME invariants are VIOLATED, deterministically, when folded through a
 ///     `jammed` reducer modelling the pre-fix behavior (a failing `TestsCompleted`
 ///     blocks the landing but leaves it at the queue head). That is the historical
