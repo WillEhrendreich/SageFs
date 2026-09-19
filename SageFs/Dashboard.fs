@@ -720,7 +720,8 @@ let private applyCohortViewing
   let scrubControl = renderCohortScrubControl viewingSeq latest
   match Features.CohortScrubber.resolveViewedFrame ledger [||] (infra.ReadCohortFrame ()) viewingSeq with
   | Features.CohortScrubber.ViewedFrame.Live _ ->
-    { snap with CohortPanel = Elem.div [] [ scrubControl; snap.CohortPanel ] }
+    if snap.SessionId = "" then snap
+    else { snap with CohortPanel = Elem.div [] [ scrubControl; snap.CohortPanel ] }
   | Features.CohortScrubber.ViewedFrame.Scrubbed(frame, seq) ->
     let prefixLedger = Features.CohortScrubber.ledgerThroughSeq ledger seq
     { snap with
@@ -1029,13 +1030,9 @@ let buildNoSessionSnapshotWithSessions
       ThemeVars = renderThemeVars defaultThemeName
       BindingsPanel = renderBindingsPanel None
       FrictionPanel = Elem.div [ Attr.id DomIds.FrictionPanel ] []
-      // Daemon-scoped, not session-scoped (D4): rendered identically whether
-      // or not a session is in view, same as every other no-session panel here.
-      CohortPanel =
-        Elem.div [] [
-          renderCohortPanel (infra.ReadCohortFrame ())
-          renderCohortLanesPanel (infra.ReadCohortLedger ())
-        ]
+      // Cohort panel: only rendered when a session is selected (cohort data is
+      // daemon-scoped and irrelevant without a session to scope it against).
+      CohortPanel = Elem.div [] []
       ActiveProject = None
       ProjectRoles = []
       App = AppRun.AppRunState.NotRunning

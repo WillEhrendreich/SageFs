@@ -3,6 +3,7 @@ module SageFs.Tests.DashboardRenderGateTests
 open System
 open Expecto
 open Expecto.Flip
+open Falco.Markup
 open SageFs
 open SageFs.Server
 open SageFs.Server.DashboardTypes
@@ -120,5 +121,13 @@ let tests = testList "Dashboard render gate — no redundant GetAllSessions per 
     let queries = mkQueries counter []
     let! _ = buildNoSessionSnapshot queries (mkInfra ())
     counter.Value |> Expect.equal "the standalone entry point fetches sessions exactly once" 1
+  }
+
+  testTask "WHY — buildNoSessionSnapshotWithSessions renders an empty cohort panel because cohort data is irrelevant without a selected session" {
+    let! snap = buildNoSessionSnapshotWithSessions (mkQueries (ref 0) []) (mkInfra ()) []
+    let html = renderNode snap.CohortPanel
+    html.Contains("Cohort") |> Expect.isFalse "must not contain cohort panel heading"
+    html.Contains("Lanes") |> Expect.isFalse "must not contain lanes panel"
+    html.Contains("cohort-scrubber") |> Expect.isFalse "must not contain scrub control"
   }
 ]
