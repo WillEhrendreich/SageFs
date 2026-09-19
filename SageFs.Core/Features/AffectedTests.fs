@@ -44,3 +44,60 @@ module AffectedTests =
       | Some [] -> true
       | Some covered ->
         covered |> List.exists (fun cf -> changedFiles |> List.exists (fileMatches cf)))
+
+  /// F17 attributable-settle close: the set of tests a cohort landing gate
+  /// MUST verify for a rebase touching `changedFiles` — `affected`'s
+  /// coverage-based narrow, with a NO-EMPTY-ESCAPE fail-closed floor.
+  ///
+  /// Why `affected` alone is not enough here: `affected`'s per-test
+  /// "untrustworthy coverage -> always affected" rule only rescues tests
+  /// whose OWN coverage is untrustworthy. It says nothing about the case
+  /// where every candidate test looks CLEANLY unaffected because the
+  /// narrow itself is being asked the wrong question — e.g. a same-
+  /// signature BODY edit to an existing function (`add a b = a+b` ->
+  /// `a-b`) that a purely symbol-NAME-based change-detector (the live-
+  /// testing FCS pipeline's `changedSymbols` diff — see
+  /// `TestCycleEffects.decideAfterTypeCheck`) sees as no change at all,
+  /// while coverage bitmaps are cold right after a rebase (a separate,
+  /// not-yet-collected signal). Both signals can independently, honestly,
+  /// say "nothing affected" for a real, breaking, content change — and a
+  /// gate that trusts that verifies nothing and lands the regression.
+  ///
+  /// So: on a REAL diff (`changedFiles` non-empty) against a REAL
+  /// discovered suite (`allTests` non-empty), this function NEVER returns
+  /// an empty set — an empty coverage-based narrow falls back to the
+  /// WHOLE discovered suite rather than being trusted as "nothing to
+  /// verify". Conservative-over-precise: a gate is not a per-keystroke
+  /// path, so correctness outranks the cost of an occasional full run.
+  let verificationTestSet
+    (changedFiles: string list)
+    (coveredFilesOf: TestId -> string list option)
+    (allTests: TestId list)
+    : TestId list =
+    match changedFiles, allTests with
+    | [], _ | _, [] -> []
+    | _ ->
+      match affected changedFiles coveredFilesOf allTests with
+      | [] -> allTests
+      | narrowed -> narrowed
+
+  /// TWIN — the pre-fix decision shape, frozen as a regression witness.
+  /// Mirrors the live-testing FCS pipeline's ACTUAL current behavior for
+  /// the F17 scenario: narrow by symbol-NAME delta only (`changedSymbols`
+  /// empty for a body-only edit => nothing selected), with NO coverage
+  /// fallback and NO empty-escape floor. This is deliberately NOT wired
+  /// into any product path — it exists only so `NO-EMPTY-ESCAPE` can be
+  /// proven to fail under it, pinning the exact bug `verificationTestSet`
+  /// closes (see `AffectedTestsTests.fs`'s twin properties).
+  let nameOnlyTwin
+    (changedSymbols: string list)
+    (symbolToTests: Map<string, TestId array>)
+    : TestId list =
+    match changedSymbols with
+    | [] -> []
+    | syms ->
+      syms
+      |> List.choose (fun s -> Map.tryFind s symbolToTests)
+      |> Array.concat
+      |> Array.distinct
+      |> Array.toList

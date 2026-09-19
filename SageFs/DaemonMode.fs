@@ -1830,20 +1830,82 @@ let run
           return System.Object.ReferenceEquals(winner, tcs.Task :> System.Threading.Tasks.Task) && tcs.Task.Result
     }
 
-  /// After a landing rebase rewrites the integration worktree's files, force the
-  /// integration session to recompile + rediscover the CHANGED files via the FAST
-  /// FSI hot-eval path (`SageFsMsg.FileContentChanged` -> `EvalLiveTestFile` — no
-  /// dotnet build, no worker restart), then wait for `DiscoveryGeneration` to
-  /// advance so ComputeAffected/RunTests read the member's ACTUAL rebased code,
-  /// never stale compiled output. An INTERACTIVE integration session doesn't
-  /// watch files, so nothing else drives this — without it the gate verifies the
-  /// OLD binary and a breaking change lands (a fail-open). Bounded by the settle
-  /// timeout; on timeout it proceeds (the fail-closed narrow still runs the whole
-  /// suite) rather than hanging.
+  /// After a landing rebase rewrites the integration worktree's files, make
+  /// the integration session's OWN verification of those files provably
+  /// reflect the rebase before `ComputeAffected`/`RunTests` read anything —
+  /// the F17 attributable-settle close (cohort-dogfood-findings.md's F17
+  /// timing dig).
+  ///
+  /// PRIOR DESIGN (retired): dispatch `SageFsMsg.FileContentChanged` (the
+  /// as-you-type editing path) and wait for the live-testing FCS pipeline's
+  /// OWN incremental decision (`generationOf`, a shared run/discovery
+  /// counter) to advance. That was provably insufficient, not merely racy:
+  /// for a rebase whose diff is a same-signature BODY edit to an existing
+  /// function, the FCS pipeline's symbol-NAME diff sees no change at all
+  /// (`TestCycleEffects.decideAfterTypeCheck`'s `changedSymbols = []`
+  /// branch), decides "no impacted tests", and emits ZERO effects — no eval,
+  /// no run, nothing that could ever bump the counter the wait watched. No
+  /// window size fixes that (confirmed: tripling it changed nothing). Worse,
+  /// even a satisfied wait would not have been safe: the FSI session's bound
+  /// definition of the edited function stays STALE until something actually
+  /// re-evals the file's content into it, so reading discovery/results
+  /// without that re-eval risks running the OLD binding and reporting a
+  /// genuine regression as passing — the exact fail-open F17 exists to
+  /// prevent, one layer deeper than the shared-counter symptom.
+  ///
+  /// CURRENT DESIGN: don't route through the auto-detect editing pipeline at
+  /// all — it decides WHETHER to verify from a signal (symbol names) that
+  /// cannot see this class of change. Instead:
+  ///  1. Force-eval every rebased `.fs` file directly against the worker
+  ///     (`WorkerMessage.EvalLiveTestFile`, the same primitive the editing
+  ///     pipeline eventually calls) UNCONDITIONALLY, rebinding the session's
+  ///     live definitions to the rebase's actual content — awaited directly,
+  ///     no polling, no shared counter.
+  ///  2. Compute the CONSERVATIVE set of tests verification must cover via
+  ///     the pure `AffectedTests.verificationTestSet` (coverage-based when
+  ///     trustworthy, the WHOLE discovered suite when it isn't — NEVER empty
+  ///     on a real diff; see that function's NO-EMPTY-ESCAPE doc, proven in
+  ///     `AffectedTestsTests.fs`).
+  ///  3. Actually run that set (`CohortLandingVerify.runTestsInSession`, the
+  ///     same attributable, per-run-generation primitive `RunTests` already
+  ///     trusts) and wait for ITS OWN real completion — attributable because
+  ///     it is keyed to the specific generation THIS call's run started, not
+  ///     to any run that happens to complete in a window.
   let rediscoverRebasedFiles (sessionId: string) (worktreePath: string) (baseSha: string) (headSha: string) : Async<Result<unit, string>> =
+    // Eval one rebased file at a time (path order — git diff is sorted,
+    // matching the fixture's compile order Alice < Bob < Tests, so a file's
+    // dependencies are hot-loaded before the file that references them),
+    // merging each success's discovery. Fails CLOSED on the first eval that
+    // cannot be reached or does not compile — a partially re-evaluated
+    // session is not trustworthy enough to verify against.
+    let rec evalRebasedFiles (files: string list) : Async<Result<unit, string>> =
+      async {
+        match files with
+        | [] -> return Ok ()
+        | full :: rest ->
+          match (try Some(System.IO.File.ReadAllText full) with _ -> None) with
+          | None | Some "" -> return! evalRebasedFiles rest
+          | Some content ->
+            let replyId = sprintf "cohort-rediscover-%s" (System.Guid.NewGuid().ToString("N"))
+            let! outcome =
+              proxyToSession getProxyStr notifyWorkerDiedStr sessionId
+                (WorkerProtocol.WorkerMessage.EvalLiveTestFile(full, content, replyId))
+              |> Async.AwaitTask
+            match outcome with
+            | Error err ->
+              return Error (sprintf "could not re-eval rebased file %s: %s" full (SageFsError.describe err))
+            | Ok (WorkerProtocol.WorkerResponse.EvalLiveTestFileResult (_, Error err)) ->
+              return Error (sprintf "re-eval of rebased file %s failed: %s" full (SageFsError.describe err))
+            | Ok (WorkerProtocol.WorkerResponse.EvalLiveTestFileResult (_, Ok (tests, _providers))) ->
+              elmRuntime.Dispatch(SageFsMsg.Event (TuiEvent.LiveDiscoveryMerged (sessionId, tests)))
+              return! evalRebasedFiles rest
+            | Ok other ->
+              return Error (sprintf "unexpected worker response re-evaling rebased file %s: %A" full other)
+      }
     async {
-      // FileContentChanged is honored only for an Active live-testing cycle; an
-      // Interactive session isn't Active until this (idempotent) enable.
+      // FileContentChanged/RunTestsRequested are honored only for an Active
+      // live-testing cycle; an Interactive session isn't Active until this
+      // (idempotent) enable.
       elmRuntime.Dispatch(SageFsMsg.EnableLiveTestingForSession sessionId)
       match! Features.CohortGit.diffNames worktreePath baseSha headSha with
       | Error _ ->
@@ -1860,51 +1922,57 @@ let run
         match changedFsFiles with
         | [] -> return Ok () // nothing to rediscover; the existing discovery is valid
         | _ ->
-          let priorGen =
-            // The MONOTONIC test-view signal — max(LastGeneration, DiscoveryGeneration).
-            // NOT DiscoveryGeneration alone: that bumps only when the test SET changes (a
-            // TestsDiscovered merge), so a breaking BODY change (add->subtract flips an
-            // existing test's OUTCOME but adds no test) never bumps it — keying fail-closed
-            // on it alone fail-closes exactly the good/body-change landings. LastGeneration
-            // bumps on every completed test RUN, so the max advances the instant the rebased
-            // code is re-run OR re-discovered (CohortTestProjection.generationOf's contract:
-            // "callers must not swap this for either counter alone").
-            Features.CohortTestProjection.generationOf (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
-          // Eval in path order (git diff is sorted, which matches the fixture's
-          // compile order Alice < Bob < Tests) so a file's dependencies are
-          // hot-loaded before the file that references them.
-          for full in changedFsFiles do
-            match (try Some(System.IO.File.ReadAllText full) with _ -> None) with
-            | Some content when content <> "" -> elmRuntime.Dispatch(SageFsMsg.FileContentChanged(full, content))
-            | _ -> ()
-          // Event-driven wait (awaitModelCondition returns the instant generationOf
-          // advances), bounded by Timeouts.cohortRediscover. The ceiling must exceed
-          // the hot-eval's full-REBUILD fallback — the affected re-run bumps
-          // generationOf (LastGeneration) when it completes — while staying under the
-          // caller's landing deadline (see Timeouts.cohortRediscover's doc). A fast
-          // hot-eval landing completes in seconds regardless of the ceiling; only a
-          // rebuild-fallback landing uses the extra budget, and if even that doesn't
-          // land in the window we fail CLOSED (below), never verify stale discovery.
-          // Event-driven: the hot-eval's re-RUN (LastGeneration) and/or re-DISCOVERY
-          // (DiscoveryGeneration) bumps generationOf and fires the model-changed
-          // notification, so this completes the instant the session's test view reflects
-          // the rebased code — no poll.
-          let genOf () = Features.CohortTestProjection.generationOf (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
-          let! bumped = awaitModelCondition Timeouts.cohortRediscover (fun () -> genOf () > priorGen)
-          if bumped then
-            Log.info "[cohort-landing] rediscovered %d rebased file(s) in session %s (gen %d -> %d)" changedFsFiles.Length sessionId priorGen (genOf ())
+        match! evalRebasedFiles changedFsFiles with
+        | Error reason ->
+          Log.warn "[cohort-landing] rediscovery of session %s could not re-eval the rebase's own files — %s — failing closed" sessionId reason
+          return Error (sprintf "post-rebase re-eval did not complete: %s — resubmit once the integration session settles" reason)
+        | Ok () ->
+        // Every rebased file is now genuinely bound into the FSI session.
+        // Compute the CONSERVATIVE set of tests that must actually run to
+        // verify this rebase — coverage-based narrow with a NO-EMPTY-ESCAPE
+        // floor (never trust "nothing affected" on a real diff).
+        let cycle = SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())
+        let state = cycle.TestState
+        let allTests = state.DiscoveredTests |> Array.map (fun tc -> tc.Id) |> Array.toList
+        let maps =
+          match Map.tryFind sessionId cycle.InstrumentationMaps with
+          | Some m when m.Length > 0 -> m
+          | _ -> cycle.InstrumentationMaps |> Map.values |> Seq.collect id |> Array.ofSeq
+        let merged = Features.LiveTesting.InstrumentationMap.merge maps
+        let coveredFilesOf (tid: Features.LiveTesting.TestId) : string list option =
+          match merged.Slots.Length with
+          | 0 -> None
+          | _ ->
+            match Map.tryFind tid state.TestCoverageBitmaps with
+            | Some bm when bm.Count = merged.TotalProbes && bm.Count > 0 ->
+              Some(Features.LiveTesting.InputHashCoverage.coveredFiles merged bm)
+            | _ -> None
+        let toVerify =
+          Features.LiveTesting.AffectedTests.verificationTestSet changedFiles coveredFilesOf allTests
+        match toVerify with
+        | [] ->
+          // Nothing discovered at all yet — nothing to verify; ComputeAffected's
+          // own (unchanged) narrowing below reads the same empty state and agrees.
+          return Ok ()
+        | _ ->
+        match! awaitIntegrationSessionTrusted sessionId with
+        | Error reason -> return Error reason
+        | Ok observation ->
+          let! runResult =
+            Features.CohortLandingVerify.runTestsInSession elmRuntime awaitModelCondition observation sessionId toVerify
+          match runResult with
+          | Ok _failing ->
+            Log.info "[cohort-landing] rediscovered + verified %d test(s) covering %d rebased file(s) for session %s" toVerify.Length changedFsFiles.Length sessionId
             return Ok ()
-          else
-            // THE FAIL-CLOSED FIX (F17, found by the multi-connection dogfood): if
-            // the FSI hot-eval did NOT advance the discovery generation past the
-            // rebase, the affected-set and test run below would read the PREVIOUS
-            // landing's discovery (0 failing) and land a genuinely test-breaking
-            // change — a fail-OPEN. Never verify on stale discovery: report
-            // inconclusive so `decide` records Blocked(Inconclusive)/
-            // RebaseAndResubmit and the requester retries once the integration
-            // session settles, rather than fast-forwarding an unverified change.
-            Log.warn "[cohort-landing] rediscovery of session %s did not advance the discovery generation within the settle window — failing closed (inconclusive) rather than verifying stale discovery" sessionId
-            return Error "post-rebase re-discovery did not settle within the window; verifying on stale discovery would fail-open — resubmit once the integration session settles"
+          | Error reason ->
+            // THE FAIL-CLOSED GUARANTEE (F17): a conservative verification run
+            // that could not be trusted to complete must never be treated as
+            // "nothing failed" — report inconclusive so `decide` records
+            // Blocked(Inconclusive)/RebaseAndResubmit and the requester
+            // retries once the integration session settles, rather than
+            // fast-forwarding an unverified change.
+            Log.warn "[cohort-landing] rediscovery of session %s could not run the conservative verification set — %s — failing closed" sessionId reason
+            return Error (sprintf "post-rebase conservative verification run did not complete: %s — resubmit once the integration session settles" reason)
     }
 
   let cohortLandingPerformer : Features.CohortOwner.LandingPerformer<MemberTable.MemberId> =

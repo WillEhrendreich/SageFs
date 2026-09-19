@@ -187,3 +187,123 @@ let affectedTests =
           ids |> List.filter (fun t -> match coveredOf t with None | Some [] -> true | Some _ -> false)
         AffectedTests.affected [] coveredOf ids = expected
   ]
+
+/// F17 attributable-settle close. `verificationTestSet` is the pure decision
+/// a cohort landing gate uses to answer "which tests must run to verify
+/// THESE rebased files" — see its doc comment in AffectedTests.fs for the
+/// full story: a body-only edit to an existing function has an EMPTY
+/// symbol-name delta, and coverage can be legitimately cold right after a
+/// rebase, so BOTH of those signals can independently, honestly say
+/// "nothing affected" for a real, breaking change. NO-EMPTY-ESCAPE is the
+/// invariant that closes that hole: a real diff against a real discovered
+/// suite must never verify as "nothing to run".
+[<Tests>]
+let verificationTestSetTests =
+  testList "AffectedTests.verificationTestSet — NO-EMPTY-ESCAPE" [
+
+    test "an empty coverage-based narrow on a real diff falls back to the WHOLE discovered suite" {
+      // Every test's coverage is trustworthy (Some) but points at a file the
+      // diff never touched — affected's own narrow comes back [], the exact
+      // shape a body-only edit produces when coverage happens to be present
+      // but stale/uninformative.
+      let a = mkTestId "a"
+      let b = mkTestId "b"
+      let coveredOf _ = Some [ "Unrelated.fs" ]
+      AffectedTests.verificationTestSet [ "Util.fs" ] coveredOf [ a; b ]
+      |> Expect.equal "NO-EMPTY-ESCAPE: an empty narrow on a real diff must fall back to allTests, never []" [ a; b ]
+    }
+
+    test "with no changed files, nothing needs verifying" {
+      let a = mkTestId "a"
+      AffectedTests.verificationTestSet [] (fun _ -> None) [ a ]
+      |> Expect.isEmpty "an empty diff has nothing to verify"
+    }
+
+    test "with no discovered tests, nothing needs verifying" {
+      AffectedTests.verificationTestSet [ "Util.fs" ] (fun _ -> None) []
+      |> Expect.isEmpty "there is nothing to run when the suite is empty"
+    }
+
+    test "a genuinely precise coverage-based narrow is still honored (not always the whole suite)" {
+      let hits = mkTestId "hits"
+      let misses = mkTestId "misses"
+      let coveredOf t = if t = hits then Some [ "Util.fs" ] else Some [ "Other.fs" ]
+      AffectedTests.verificationTestSet [ "Util.fs" ] coveredOf [ hits; misses ]
+      |> Expect.equal "a real, precise narrow is trusted — conservative only when the narrow is empty" [ hits ]
+    }
+
+    // --- Properties ------------------------------------------------------
+
+    testProperty "CONSERVATIVE-SUPERSET: for a real diff, verificationTestSet always contains every test `affected` selects" <|
+      fun (changedRaw: NonEmptyArray<string>) (entries: (bool * string list) list) ->
+        // Only meaningful for a REAL diff — `affected` doesn't special-case an
+        // empty diff (it still returns untrusted-coverage tests even when
+        // nothing changed), but `verificationTestSet`'s contract is "what
+        // must this rebase verify", so an empty diff correctly verifies
+        // nothing regardless of what `affected` alone would say. See the
+        // dedicated "with no changed files" example test above.
+        let changed = changedRaw.Get |> Array.toList |> List.map sanitizeSegment |> List.distinct
+        let ids, coveredOf = buildCoveredOf "superset" entries
+        let narrow = AffectedTests.affected changed coveredOf ids
+        let verify = AffectedTests.verificationTestSet changed coveredOf ids
+        narrow |> List.forall (fun t -> List.contains t verify)
+
+    testProperty "NO-EMPTY-ESCAPE: a real diff against a real discovered suite is never verified as empty" <|
+      fun (changedRaw: NonEmptyArray<string>) (entries: NonEmptyArray<bool * string list>) ->
+        let changed = changedRaw.Get |> Array.toList |> List.map sanitizeSegment |> List.distinct
+        let ids, coveredOf = buildCoveredOf "no-empty-escape" (entries.Get |> Array.toList)
+        (not (List.isEmpty changed) && not (List.isEmpty ids))
+        ==> lazy (not (List.isEmpty (AffectedTests.verificationTestSet changed coveredOf ids)))
+
+    testProperty "verificationTestSet is always a subsequence of allTests, preserving order" <|
+      fun (changedRaw: string list) (entries: (bool * string list) list) ->
+        let changed = sanitizeSegments changedRaw
+        let ids, coveredOf = buildCoveredOf "subseq-verify" entries
+        let result = AffectedTests.verificationTestSet changed coveredOf ids
+        let rec isSubsequence xs ys =
+          match xs, ys with
+          | [], _ -> true
+          | x :: xs', y :: ys' when x = y -> isSubsequence xs' ys'
+          | _ :: _, _ :: ys' -> isSubsequence xs ys'
+          | _ :: _, [] -> false
+        isSubsequence result ids
+
+    // --- The twin: proves the invariant has TEETH ------------------------
+    //
+    // `nameOnlyTwin` freezes the pre-fix decision shape — the live-testing
+    // FCS pipeline's ACTUAL `changedSymbols`-only narrowing
+    // (`TestCycleEffects.decideAfterTypeCheck`), which `rediscoverRebasedFiles`
+    // used to depend on to decide whether ANY re-verification happened at
+    // all. A body-only edit to an existing, already-tested function has an
+    // EMPTY symbol-name delta (the function's name/signature didn't change),
+    // so the twin decides "nothing affected" even though `symbolToTests`
+    // proves real tests DO cover that symbol — reproducing the exact F17
+    // hole this file's `verificationTestSet` closes.
+
+    test "TWIN WITH TEETH: the name-only decision violates NO-EMPTY-ESCAPE on a real body-only edit" {
+      let a = mkTestId "covers-add"
+      let b = mkTestId "also-covers-add"
+      let symbolToTests = Map.ofList [ ("Fixture.Util.add", [| a; b |]) ]
+      // The body-only edit: `add`'s NAME/signature is unchanged, so the FCS
+      // pipeline's symbol diff reports no changed symbols at all — exactly
+      // `FileAnalysisCache.update`'s behavior for `a+b` -> `a-b`.
+      let changedSymbols : string list = []
+      AffectedTests.nameOnlyTwin changedSymbols symbolToTests
+      |> Expect.isEmpty "the twin reproduces the bug: real covering tests exist, but the name-only decision selects none"
+    }
+
+    testProperty "TWIN WITH TEETH: an empty symbol delta against a non-empty symbol->tests map always violates NO-EMPTY-ESCAPE" <|
+      fun (NonEmptyString symRaw) (testsRaw: NonEmptyArray<int>) ->
+        let sym = sanitizeSegment symRaw
+        let ids =
+          testsRaw.Get |> Array.toList |> List.distinct
+          |> List.map (fun i -> mkTestId (sprintf "twin-%d" i))
+        (not (List.isEmpty ids))
+        ==> lazy (
+          let symbolToTests = Map.ofList [ (sym, Array.ofList ids) ]
+          // changedSymbols=[] is exactly what a same-signature body edit
+          // produces — the twin's decision must come back empty, proving
+          // NO-EMPTY-ESCAPE would be VIOLATED if the product still decided
+          // this way (which `verificationTestSet` — proven above — does not).
+          AffectedTests.nameOnlyTwin [] symbolToTests = [])
+  ]

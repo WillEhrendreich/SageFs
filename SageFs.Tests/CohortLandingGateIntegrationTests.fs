@@ -601,7 +601,6 @@ let tests =
     yield! [
 
       testTask "WHY — a cohort landing is genuinely BLOCKED by a real, discovered, failing Expecto test — the real daemon-owned landing pipeline never fast-forwards it — while a genuinely passing landing DOES land through the same pipeline (closes multi-agent dogfood Gap 3)" {
-        skiptest "PENDING F17 attributable-settle close — cmd's #1 task (see cmd-handoff.md §9A + cohort-dogfood-findings.md F17 timing dig). F17 is SAFE today (fail-closed: this breaking landing NEVER lands a failure — it blocks as Inconclusive). This assertion wants the Blocked(FailingTests) verdict that the attributable-settle fix (per-landing absorption ack, not a shared generation counter) restores. Un-skip once that fix lands."
         let mainRepo = Directory.CreateTempSubdirectory("cohort-landing-gate-main-").FullName
         let dataDir = Directory.CreateTempSubdirectory("cohort-landing-gate-data-").FullName
         let mutable daemonProc: Process option = None
