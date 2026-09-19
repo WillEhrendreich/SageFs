@@ -507,6 +507,12 @@ let architectureTests =
           "VetoLanding",
           "constructed only by SageFs.Tests today; no MCP tool or dashboard \
            action vetoes a queued landing yet (roast-7 §5)"
+          "ResolveVeto",
+          "constructed only by SageFs.Tests/SageFs.Simulation today; no MCP \
+           tool or dashboard action resolves a veto yet — the command exists \
+           so `VetoLanding`'s NextAction.AwaitConductor has a real recovery \
+           path, wiring the MCP/dashboard verb is follow-up work (armfix, \
+           cmd-handoff.md item B2)"
         ]
 
       let cohortEffectAllowList =

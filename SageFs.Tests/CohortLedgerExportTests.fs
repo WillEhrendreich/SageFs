@@ -321,7 +321,8 @@ let private expectedState : CohortState<MemberId> =
           Commits = [ "sha1" ]
           BaseAtQueue = Cohort.nullSha
           Statement = statement
-          State = LandingState.Rebasing Cohort.nullSha }
+          State = LandingState.Rebasing Cohort.nullSha
+          FastForwardAttempts = 0 }
       ]
     Queue = [ expectedLandingId ]
     Conductor = Some scenarioAlice }

@@ -288,6 +288,18 @@ module Cohort =
     BaseAtQueue: string
     Statement: Statement
     State: LandingState<'m>
+    /// How many times `FastForwardFailed`'s transient-infra-failure branch has
+    /// re-entered `Rebasing` for THIS landing (roast-2day-cmd §RISK — bounded
+    /// so a persistent infra failure cannot retry forever, `decide`'s
+    /// `FastForwardFailed` case, `maxFastForwardAttempts`). Additive: 0 for
+    /// every landing until its first fast-forward failure. Deliberately on
+    /// the request record, not folded into `LandingState.Rebasing`'s own
+    /// shape — the count must survive the Rebasing -> Verifying -> (failure)
+    /// -> Rebasing round trip, and `LandingState.Rebasing`/`Verifying` are
+    /// read by several formatters outside this file (SseWriter, CohortPlay,
+    /// CohortInspector) that only pattern-match their EXISTING arity; adding
+    /// it here keeps that arity untouched.
+    FastForwardAttempts: int
   }
 
   // ── Cohort state (§7.1) — never persisted; `replay` is the only way to get one ─
@@ -418,6 +430,12 @@ module Cohort =
     /// it) changes — both already treat `IntegrationHead` as ordinary
     /// mutable state, whatever last set it.
     | SetIntegrationHead of by: 'm * head: string
+    /// Conductor action (armfix, cmd-handoff.md item B2): clear a
+    /// `Blocked(VetoedBy, AwaitConductor)` landing and re-Queue it (see the
+    /// `decide` case's doc comment for the re-Queue-vs-Withdraw design
+    /// rationale). Gated the same way as `SetIntegrationHead`/
+    /// `ReassignClaim`/`DelegateConductor`.
+    | ResolveVeto of by: 'm * LandingId
 
   [<RequireQualifiedAccess>]
   type CohortEvent<'m> =
@@ -443,6 +461,8 @@ module Cohort =
     | LandingVetoed of LandingId * by: 'm * reason: string
     /// The `IntegrationHead` binding was (re)configured (item 14c).
     | IntegrationConfigured of head: string
+    /// A conductor cleared a veto via `ResolveVeto` and re-Queued the landing.
+    | LandingVetoResolved of LandingId * by: 'm
 
   /// What the pure machine asks the shell to DO. `decide` never rebases, never
   /// runs a test, never writes SQLite — it returns these, the shell performs
@@ -568,6 +588,44 @@ module Cohort =
 
   let private requireAtFrontOfQueue (state: CohortState<'m>) (id: LandingId) : Result<unit, CohortError<'m>> =
     if state.Queue |> List.tryHead = Some id then Ok () else Error(CohortError.LandingNotAtFrontOfQueue id)
+
+  /// The ONE terminal-transition helper (roast-2day/roast-2day-cmd §1): every
+  /// arm that blocks a landing for good (this round of verification is over,
+  /// the requester must act) routes through here, so the pop+advance
+  /// discipline is a single copy-paste-proof site instead of four
+  /// independently-maintained ones. Before this helper existed,
+  /// `RebaseCompleted`'s conflict arm / `TestsCompleted`'s failing arm /
+  /// `VerificationInconclusive` each hand-rolled "filter the id out of
+  /// `Queue`, then `advanceQueue`" — and three OTHER arms
+  /// (`VetoLanding`, `FastForwardCompleted`'s `HeadMoved`/`StaleClaimFence`,
+  /// `FastForwardFailed`'s `HeadMoved`) quietly forgot the pop, jamming the
+  /// whole serial queue behind a landing that was never coming back
+  /// (`NO-TERMINAL-IN-QUEUE`, `CohortSpec.fs`). Routing every terminal arm
+  /// through this one function makes a future non-popping arm a
+  /// compile-visible anomaly (an arm that builds its own `Blocked` value
+  /// inline, instead of calling this, stands out in review) rather than a
+  /// silent, easy-to-repeat omission.
+  let private blockAndPop
+      (state: CohortState<'m>)
+      (id: LandingId)
+      (req: LandingRequest<'m>)
+      (blocker: LandingBlocker<'m>)
+      (nextAction: NextAction)
+      : CohortState<'m> * CohortEvent<'m> list * CohortEffect<'m> list =
+    let blocked = { req with State = LandingState.Blocked(blocker, nextAction) }
+    let poppedQueue = state.Queue |> List.filter (fun x -> x <> id)
+    let stateAfter = { state with Landings = Map.add id blocked state.Landings; Queue = poppedQueue }
+    let advanced, advEvents, advEffects = advanceQueue stateAfter
+    advanced, CohortEvent.LandingStateChanged(id, blocked.State) :: advEvents, advEffects
+
+  /// Bounded so a persistent `FastForward` infra failure (the branch moved
+  /// concurrently under a raw git command, a transient I/O error, a bad ref —
+  /// never a real head-move, which is `FastForwardFailed`'s own `HeadMoved`
+  /// guard, not this loop) cannot spin the rebase → verify → fast-forward
+  /// pipeline forever (roast-2day-cmd §RISK: "FastForwardFailed has no retry
+  /// bound"). A named module constant, never an inline literal at the call
+  /// site (AGENTS.md / cmd-handoff.md §1.4: no magic numbers anywhere).
+  let private maxFastForwardAttempts = 3
 
   // ── decide (§7.1) ───────────────────────────────────────────────────────
 
@@ -753,6 +811,7 @@ module Cohort =
                 BaseAtQueue = state.IntegrationHead
                 Statement = statement
                 State = LandingState.Queued
+                FastForwardAttempts = 0
               }
               let queued = { state with Landings = Map.add landingId req state.Landings; Queue = state.Queue @ [ landingId ] }
               let advanced, advEvents, advEffects = advanceQueue queued
@@ -776,19 +835,18 @@ module Cohort =
               // A rebase conflict blocks THIS landing, but — exactly like a
               // failing TestsCompleted or a VerificationInconclusive — it must not
               // jam the whole cohort: pop it from the queue and advance the next
-              // one. The landing stays recorded as Blocked(RebaseConflict) with
-              // NextAction.RebaseAndResubmit (the requester rebases and submits a
-              // fresh landing) while OTHER members' unrelated landings are never
-              // dead-locked behind it. (Earlier this left the conflicted landing
-              // at the queue head forever with no pop and no advance — the same
-              // serial-queue dead-lock the failing-tests arm had before 396ee1c3,
-              // overlooked on this sibling arm; the DST landing-queue-jam harness
-              // caught it as a violation of the no-terminal-in-queue invariant.)
-              let blocked = { req with State = LandingState.Blocked(LandingBlocker.RebaseConflict conflictFiles, NextAction.RebaseAndResubmit) }
-              let poppedQueue = state.Queue |> List.filter (fun x -> x <> id)
-              let stateAfter = { state with Landings = Map.add id blocked state.Landings; Queue = poppedQueue }
-              let advanced, advEvents, advEffects = advanceQueue stateAfter
-              Ok(advanced, CohortEvent.LandingStateChanged(id, blocked.State) :: advEvents, advEffects)
+              // one (`blockAndPop`, above). The landing stays recorded as
+              // Blocked(RebaseConflict) with NextAction.RebaseAndResubmit (the
+              // requester rebases and submits a fresh landing) while OTHER
+              // members' unrelated landings are never dead-locked behind it.
+              // (Earlier this left the conflicted landing at the queue head
+              // forever with no pop and no advance — the same serial-queue
+              // dead-lock the failing-tests arm had before 396ee1c3, overlooked
+              // on this sibling arm; the DST landing-queue-jam harness caught it
+              // as a violation of the no-terminal-in-queue invariant.)
+              let advanced, advEvents, advEffects =
+                blockAndPop state id req (LandingBlocker.RebaseConflict conflictFiles) NextAction.RebaseAndResubmit
+              Ok(advanced, advEvents, advEffects)
           // default policy: RebaseCompleted only advances a landing that is
           // actually Rebasing — every other LandingState is refused as
           // out-of-order, by construction, for any case the DU ever grows to.
@@ -828,20 +886,19 @@ module Cohort =
               Ok(newState, [], [ CohortEffect.FastForward(id, rebasedHead) ])
             | fails ->
               // A genuine test failure blocks THIS landing, but it must not jam
-              // the whole cohort: pop it from the queue and advance the next one,
-              // exactly like every other terminal transition (Inconclusive, land,
-              // withdraw). The landing stays recorded as Blocked(FailingTests) with
-              // NextAction.FixTests — the requester fixes it and submits a fresh
-              // landing — while OTHER members' unrelated landings are never
-              // dead-locked behind it. (Earlier this left the failed landing at
-              // the queue head forever, so one member's failing test froze every
-              // landing in the cohort: a definitive failure dead-locked while a
-              // transient Inconclusive auto-recovered — exactly backwards.)
-              let blocked = { req with State = LandingState.Blocked(LandingBlocker.FailingTests fails, NextAction.FixTests fails) }
-              let poppedQueue = state.Queue |> List.filter (fun x -> x <> id)
-              let stateAfter = { state with Landings = Map.add id blocked state.Landings; Queue = poppedQueue }
-              let advanced, advEvents, advEffects = advanceQueue stateAfter
-              Ok(advanced, CohortEvent.LandingStateChanged(id, blocked.State) :: advEvents, advEffects)
+              // the whole cohort: pop it from the queue and advance the next one
+              // (`blockAndPop`, above), exactly like every other terminal
+              // transition (Inconclusive, land, withdraw). The landing stays
+              // recorded as Blocked(FailingTests) with NextAction.FixTests — the
+              // requester fixes it and submits a fresh landing — while OTHER
+              // members' unrelated landings are never dead-locked behind it.
+              // (Earlier this left the failed landing at the queue head forever,
+              // so one member's failing test froze every landing in the cohort: a
+              // definitive failure dead-locked while a transient Inconclusive
+              // auto-recovered — exactly backwards.)
+              let advanced, advEvents, advEffects =
+                blockAndPop state id req (LandingBlocker.FailingTests fails) (NextAction.FixTests fails)
+              Ok(advanced, advEvents, advEffects)
           // default policy: TestsCompleted only advances a landing that is
           // actually Verifying — every other LandingState is refused as
           // out-of-order, by construction, for any case the DU ever grows to.
@@ -858,15 +915,14 @@ module Cohort =
           | LandingState.Verifying _ ->
             // Distinct from `TestsCompleted`'s `FailingTests`: an inconclusive
             // verification is transient/environmental, so it does NOT permanently
-            // jam the serial queue. Pop it (as `WithdrawLanding` does) and
-            // advance the next queued landing; the requester resubmits when the
-            // integration session is healthy again (`RebaseAndResubmit`). The
-            // landing still does not fast-forward — fail-closed is preserved.
-            let blocked = { req with State = LandingState.Blocked(LandingBlocker.Inconclusive reason, NextAction.RebaseAndResubmit) }
-            let poppedQueue = state.Queue |> List.filter (fun x -> x <> id)
-            let stateAfter = { state with Landings = Map.add id blocked state.Landings; Queue = poppedQueue }
-            let advanced, advEvents, advEffects = advanceQueue stateAfter
-            Ok(advanced, CohortEvent.LandingStateChanged(id, blocked.State) :: advEvents, advEffects)
+            // jam the serial queue. Pop it (`blockAndPop`, as `WithdrawLanding`
+            // does) and advance the next queued landing; the requester resubmits
+            // when the integration session is healthy again
+            // (`RebaseAndResubmit`). The landing still does not fast-forward —
+            // fail-closed is preserved.
+            let advanced, advEvents, advEffects =
+              blockAndPop state id req (LandingBlocker.Inconclusive reason) NextAction.RebaseAndResubmit
+            Ok(advanced, advEvents, advEffects)
           // default policy: VerificationInconclusive only advances a landing
           // that is actually Verifying — every other LandingState is refused
           // as out-of-order, by construction, for any case the DU ever grows to.
@@ -887,9 +943,20 @@ module Cohort =
             // the rebased head (which is always a fresh commit and never equals
             // the base, which would misfire HeadMoved on every real landing).
             if base' <> state.IntegrationHead then
-              let blocked = { req with State = LandingState.Blocked(LandingBlocker.HeadMoved(base', state.IntegrationHead), NextAction.RebaseAndResubmit) }
-              let newState = { state with Landings = Map.add id blocked state.Landings }
-              Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State) ], [])
+              // Roast-2day/roast-2day-cmd §1: this arm used to set Blocked and
+              // stop, WITHOUT popping the queue or calling `advanceQueue` — a
+              // concurrent `SetIntegrationHead` (the conductor re-seeding the
+              // integration ref mid-verification, e.g. F4 in
+              // cohort-dogfood-findings.md) parked the ENTIRE serial queue
+              // behind this one landing forever, with no in-band recovery but
+              // the requester's own `WithdrawLanding`. `blockAndPop` (above)
+              // closes it: the landing is still recorded Blocked(HeadMoved) with
+              // NextAction.RebaseAndResubmit — nothing about the diagnosis
+              // changes — but every OTHER member's queued landing is now free
+              // to advance instead of waiting on this one's requester.
+              let advanced, advEvents, advEffects =
+                blockAndPop state id req (LandingBlocker.HeadMoved(base', state.IntegrationHead)) NextAction.RebaseAndResubmit
+              Ok(advanced, advEvents, advEffects)
             else
               // Property 6: every claim in the request must still be Held by the
               // requester, at the presented fence, at land time.
@@ -904,9 +971,22 @@ module Cohort =
                 | None -> false
               match req.Claims |> List.tryFind (claimHeldOk >> not) with
               | Some(staleId, _) ->
-                let blocked = { req with State = LandingState.Blocked(LandingBlocker.StaleClaimFence staleId, NextAction.AwaitConductor) }
-                let newState = { state with Landings = Map.add id blocked state.Landings }
-                Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State) ], [])
+                // Same queue-jam class as the HeadMoved arm above (roast-2day/
+                // roast-2day-cmd §1) — a claim backing this landing was
+                // released/reassigned/orphaned between RequestLanding and land
+                // time, and this arm used to Block WITHOUT popping the queue.
+                // `blockAndPop` frees every other member's landing to advance;
+                // this one stays Blocked(StaleClaimFence) with
+                // NextAction.AwaitConductor, and the requester can still
+                // `WithdrawLanding` it (any non-terminal state is withdrawable)
+                // to resubmit against fresh claims at any time — no new command
+                // is needed to make this arm's block actionable, unlike
+                // VetoLanding's AwaitConductor (see `ResolveVeto` below), which
+                // has no such requester-side escape because a veto is not the
+                // requester's decision to reverse.
+                let advanced, advEvents, advEffects =
+                  blockAndPop state id req (LandingBlocker.StaleClaimFence staleId) NextAction.AwaitConductor
+                Ok(advanced, advEvents, advEffects)
               | None ->
                 let releaseFence, releasedClaims, releaseEventsRev =
                   req.Claims
@@ -939,7 +1019,7 @@ module Cohort =
           // as out-of-order, by construction, for any case the DU ever grows to.
           | _ -> Error(CohortError.LandingNotInExpectedState(id, "Verifying"))
 
-    | CohortCommand.FastForwardFailed(id, _reason) ->
+    | CohortCommand.FastForwardFailed(id, reason) ->
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req ->
@@ -961,16 +1041,37 @@ module Cohort =
             // landing re-enters `Rebasing` against the SAME base and
             // `decide` emits a fresh `Rebase` effect, so the
             // rebase -> verify -> fast-forward pipeline retries end-to-end
-            // instead of leaving the landing stuck in `Verifying` forever.
+            // instead of leaving the landing stuck in `Verifying` forever —
+            // but only up to `maxFastForwardAttempts` retries (roast-2day-cmd
+            // §RISK: "FastForwardFailed has no retry bound" — an infra
+            // failure that never clears used to loop rebase -> verify ->
+            // fast-forward forever at whatever pace the real git/test
+            // machinery ran). Once exhausted this pops the queue (`blockAndPop`)
+            // instead of retrying again, same as every other terminal arm.
             match base' <> state.IntegrationHead with
             | true ->
-              let blocked = { req with State = LandingState.Blocked(LandingBlocker.HeadMoved(base', state.IntegrationHead), NextAction.RebaseAndResubmit) }
-              let newState = { state with Landings = Map.add id blocked state.Landings }
-              Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State) ], [])
+              let advanced, advEvents, advEffects =
+                blockAndPop state id req (LandingBlocker.HeadMoved(base', state.IntegrationHead)) NextAction.RebaseAndResubmit
+              Ok(advanced, advEvents, advEffects)
             | false ->
-              let rebasing = { req with State = LandingState.Rebasing base' }
-              let newState = { state with Landings = Map.add id rebasing state.Landings }
-              Ok(newState, [ CohortEvent.LandingStateChanged(id, rebasing.State) ], [ CohortEffect.Rebase(id, base', req.Commits) ])
+              let attempts = req.FastForwardAttempts + 1
+              if attempts >= maxFastForwardAttempts then
+                // Retries exhausted: this is now a definitive, if
+                // environmental, failure to land — `Inconclusive` (the
+                // existing "we could not reach a trustworthy verdict" case)
+                // fits better than minting a speculative new blocker case for
+                // one exhausted-retries outcome; `NextAction.RebaseAndResubmit`
+                // tells the requester what to do (a fresh landing, once the
+                // infra issue clears), same as every other Inconclusive.
+                let blockerReason =
+                  sprintf "fast-forward failed %d times (giving up): %s" attempts reason
+                let advanced, advEvents, advEffects =
+                  blockAndPop state id req (LandingBlocker.Inconclusive blockerReason) NextAction.RebaseAndResubmit
+                Ok(advanced, advEvents, advEffects)
+              else
+                let rebasing = { req with State = LandingState.Rebasing base'; FastForwardAttempts = attempts }
+                let newState = { state with Landings = Map.add id rebasing state.Landings }
+                Ok(newState, [ CohortEvent.LandingStateChanged(id, rebasing.State) ], [ CohortEffect.Rebase(id, base', req.Commits) ])
           // default policy: FastForwardFailed only re-enters the rebase loop
           // for a landing that is actually Verifying — every other
           // LandingState is refused as out-of-order, by construction, for
@@ -1010,6 +1111,18 @@ module Cohort =
       | _ -> Error(CohortError.NotConductor by)
 
     | CohortCommand.VetoLanding(by, id, reason) ->
+      // roast-2day-cmd §RISK/§1: `VetoLanding` has NO authority gate on
+      // purpose (v1's design, unchanged here — see the command's doc
+      // comment) — "any present member may object" is the intended right,
+      // not a bug to close by gating it Conductor-only. What WAS a real bug:
+      // this arm set `Blocked` and never popped the queue, so if the vetoed
+      // landing was at the front, the ENTIRE serial queue jammed behind it —
+      // and, unlike `HeadMoved`/`StaleClaimFence` above, the requester's own
+      // `WithdrawLanding` was the only escape even though `NextAction` says
+      // `AwaitConductor` (a promise the code never kept). Two fixes land
+      // together: (1) `blockAndPop`, so a veto never jams anyone else's
+      // landing; (2) `ResolveVeto` (below), a genuine conductor verb that
+      // makes `AwaitConductor` true rather than aspirational.
       match Map.tryFind id state.Landings with
       | None -> Error(CohortError.UnknownLanding id)
       | Some req ->
@@ -1021,9 +1134,65 @@ module Cohort =
         // terminal states are enumerated above as the exclusions, so this is
         // the safe direction to default a new LandingState case into.
         | _ ->
-          let blocked = { req with State = LandingState.Blocked(LandingBlocker.VetoedBy(by, reason), NextAction.AwaitConductor) }
-          let newState = { state with Landings = Map.add id blocked state.Landings }
-          Ok(newState, [ CohortEvent.LandingStateChanged(id, blocked.State); CohortEvent.LandingVetoed(id, by, reason) ], [])
+          let advanced, advEvents, advEffects =
+            blockAndPop state id req (LandingBlocker.VetoedBy(by, reason)) NextAction.AwaitConductor
+          // `blockAndPop` always yields at least one event (this landing's own
+          // `LandingStateChanged`) — insert the dedicated `LandingVetoed` audit
+          // event right after it, same relative order the pre-blockAndPop code
+          // had, ahead of anything `advanceQueue` produced for the NEXT landing.
+          match advEvents with
+          | stateChanged :: rest -> Ok(advanced, stateChanged :: CohortEvent.LandingVetoed(id, by, reason) :: rest, advEffects)
+          | [] -> Ok(advanced, [ CohortEvent.LandingVetoed(id, by, reason) ], advEffects)
+
+    | CohortCommand.ResolveVeto(by, id) ->
+      // roast-2day-cmd §1/§RISK's missing conductor verb. Design choice
+      // (armfix, cmd-handoff.md item B2 — documented here because the code
+      // is the only place this decision will be read years from now):
+      // RE-QUEUE the landing rather than mark it Withdrawn.
+      //
+      //   * A veto is the CONDUCTOR's call, not the requester's — unlike
+      //     RebaseConflict/FailingTests (NextAction.RebaseAndResubmit, where
+      //     the CODE is what's wrong and the REQUESTER must act), a veto
+      //     commonly means "hold on" for a reason external to the landing
+      //     itself (a policy question, a pending discussion) that the
+      //     conductor, not the requester, is positioned to resolve. Forcing
+      //     a `Withdrawn` + fresh `RequestLanding` would make the requester
+      //     reconstruct `Claims`/`Commits`/`Statement` for a landing whose
+      //     content was never in question — busywork with no safety benefit.
+      //   * It is SAFE to re-Queue the original request as-is: `Claims` are
+      //     re-validated at land time regardless (the `StaleClaimFence`
+      //     check in `FastForwardCompleted`, Property 6) — if a presented
+      //     claim went stale while this landing sat vetoed, that surfaces
+      //     correctly on its own the next time it reaches the front, exactly
+      //     as it would for any other requeued landing. No re-validation
+      //     logic needs duplicating here.
+      //   * Gated identically to `SetIntegrationHead`/`ReassignClaim`/
+      //     `DelegateConductor` (`Authority.present by state =
+      //     Authority.Conductor _`, else `NotConductor`) — only the
+      //     conductor may clear a veto, matching `NextAction.AwaitConductor`.
+      match Authority.present by state with
+      | Authority.Conductor _ ->
+        match Map.tryFind id state.Landings with
+        | None -> Error(CohortError.UnknownLanding id)
+        | Some req ->
+          match req.State with
+          | LandingState.Blocked(LandingBlocker.VetoedBy _, _) ->
+            let requeued = { req with State = LandingState.Queued }
+            let stateAfter = { state with Landings = Map.add id requeued state.Landings; Queue = state.Queue @ [ id ] }
+            let advanced, advEvents, advEffects = advanceQueue stateAfter
+            Ok(advanced,
+               CohortEvent.LandingStateChanged(id, requeued.State) :: CohortEvent.LandingVetoResolved(id, by) :: advEvents,
+               advEffects)
+          // default policy: ResolveVeto only clears a landing that is
+          // actually Blocked(VetoedBy) — every other LandingState (it was
+          // never vetoed, or it was vetoed and has since moved on) is
+          // refused as out-of-order, by construction, for any case the DU
+          // ever grows to.
+          | _ -> Error(CohortError.LandingNotInExpectedState(id, "Blocked(VetoedBy)"))
+      // default policy: only a bound Conductor may resolve a veto — every
+      // other Authority (Member, Anonymous) is refused, same as
+      // SetIntegrationHead/ReassignClaim/DelegateConductor above.
+      | _ -> Error(CohortError.NotConductor by)
 
   // ── The ledger IS the event store (§5.2) ───────────────────────────────
 

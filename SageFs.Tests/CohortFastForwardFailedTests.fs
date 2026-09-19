@@ -45,6 +45,7 @@ let private stateWithLandingVerifying (integrationHead: string) (base': string) 
       BaseAtQueue = base'
       Statement = statement
       State = LandingState.Verifying(base', rebasedHead, 1, 0)
+      FastForwardAttempts = 0
     }
     let state = {
       CohortState.empty () with
@@ -95,6 +96,96 @@ let decideTests =
       | Error(CohortError.UnknownLanding(LandingId "nope")) -> ()
       | other -> failtestf "expected UnknownLanding, got %A" other
 
+    testCase "WHY — a PERSISTENT FastForward infra failure is bounded, not an infinite retry loop, and pops the queue for the next landing once exhausted (armfix, roast-2day-cmd §RISK: \"FastForwardFailed has no retry bound\")" <| fun () ->
+      // alice's landing sits at the front of the queue, Verifying against an
+      // UNMOVED head (base' = IntegrationHead = "H0") — every FastForwardFailed
+      // in this test takes the transient-infra retry branch, never HeadMoved.
+      // bob's landing is queued behind it, still Queued, so popping alice's is
+      // observable: bob's landing must advance the instant alice's retries run
+      // out, exactly the "every other member's landing must never dead-lock
+      // behind mine" property `blockAndPop` exists to guarantee.
+      let bob = MemberId.Minted "bob"
+      let landingId = LandingId "l-0"
+      let bobLandingId = LandingId "l-1"
+      match Purpose.tryCreate "purpose", Statement.tryCreate "land my change", Statement.tryCreate "bob's landing" with
+      | Ok _, Ok aliceStatement, Ok bobStatement ->
+        let aliceReq : LandingRequest<MemberId> = {
+          Id = landingId; Requester = requester; Claims = []; Commits = [ "c1" ]
+          BaseAtQueue = "H0"; Statement = aliceStatement
+          State = LandingState.Verifying("H0", "H0-rebased", 1, 0)
+          FastForwardAttempts = 0
+        }
+        let bobReq : LandingRequest<MemberId> = {
+          Id = bobLandingId; Requester = bob; Claims = []; Commits = [ "c2" ]
+          BaseAtQueue = "H0"; Statement = bobStatement; State = LandingState.Queued
+          FastForwardAttempts = 0
+        }
+        let state0 = {
+          CohortState.empty () with
+            IntegrationHead = "H0"
+            Members =
+              Map.ofList [
+                requester, { Role = JoinableRole.Implementer; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None }
+                bob, { Role = JoinableRole.Verifier; Presence = MemberPresence.Present; LastRenewal = epoch; Session = None }
+              ]
+            Landings = Map.ofList [ landingId, aliceReq; bobLandingId, bobReq ]
+            Queue = [ landingId; bobLandingId ]
+        }
+        // Drive FastForwardFailed against the SAME landing repeatedly, feeding
+        // each retry's own FastForwardAttempts back in — proving the bound
+        // against the REAL `Cohort.decide`, not asserting a hardcoded count.
+        // A handful more than any plausible bound catches an accidentally
+        // UNBOUNDED loop (the regression this test exists to pin) rather than
+        // silently looping forever.
+        // After a retry the landing re-enters Rebasing — not immediately
+        // re-callable with FastForwardFailed again (that arm only accepts
+        // Verifying, by construction). Walk it back through the SAME
+        // rebase -> verify -> fast-forward pipeline `CohortOwner` would drive
+        // it through in production before the next FastForwardFailed can
+        // fire, so this test exercises the real state machine end to end,
+        // not just the one arm in isolation.
+        let replayToVerifying (state: CohortState<MemberId>) : CohortState<MemberId> =
+          match state.Landings.[landingId].State with
+          | LandingState.Rebasing onto ->
+            match decide epoch [||] state (CohortCommand.RebaseCompleted(landingId, Ok(onto + "-rebased"))) with
+            | Error err -> failtestf "RebaseCompleted (replay) failed: %A" err
+            | Ok(s1, _, _) ->
+              match decide epoch [||] s1 (CohortCommand.AffectedComputed(landingId, [ TestId "t1" ])) with
+              | Error err -> failtestf "AffectedComputed (replay) failed: %A" err
+              | Ok(s2, _, _) ->
+                match decide epoch [||] s2 (CohortCommand.TestsCompleted(landingId, [])) with
+                | Error err -> failtestf "TestsCompleted (replay) failed: %A" err
+                | Ok(s3, _, _) -> s3
+          | other -> failtestf "expected Rebasing before replaying to Verifying, got %A" other
+        let rec drive (state: CohortState<MemberId>) (round: int) =
+          if round > 10 then
+            failtest "FastForwardFailed retried more than 10 times — the bound is not being enforced (armfix regression)"
+          else
+            match decide epoch [||] state (CohortCommand.FastForwardFailed(landingId, "git: transient I/O error")) with
+            | Error err -> failtestf "unexpected error on round %d: %A" round err
+            | Ok(newState, _, _) ->
+              match newState.Landings.[landingId].State with
+              | LandingState.Rebasing _ -> drive (replayToVerifying newState) (round + 1)
+              | LandingState.Blocked _ -> newState, round
+              | other -> failtestf "unexpected state on round %d: %A" round other
+        let finalState, roundsUntilExhausted = drive state0 1
+        (roundsUntilExhausted >= 1)
+        |> Expect.isTrue "the landing retries at least once before giving up"
+        finalState.Landings.[landingId].State
+        |> function
+           | LandingState.Blocked(LandingBlocker.Inconclusive reason, NextAction.RebaseAndResubmit) ->
+             reason |> Expect.stringContains "names why the landing gave up" "git: transient I/O error"
+           | other -> failtestf "expected Blocked(Inconclusive, RebaseAndResubmit) once exhausted, got %A" other
+        // The whole point: bob's UNRELATED landing is never dead-locked behind
+        // alice's exhausted retries — the queue popped alice out and advanced
+        // bob into Rebasing (`blockAndPop`, Cohort.fs).
+        finalState.Queue |> Expect.equal "alice's exhausted landing is popped; only bob remains queued" [ bobLandingId ]
+        finalState.Landings.[bobLandingId].State
+        |> function
+           | LandingState.Rebasing _ -> ()
+           | other -> failtestf "expected bob's landing to advance into Rebasing once alice's popped, got %A" other
+      | _ -> failtest "fixture setup failed"
+
     testCase "a landing not in Verifying (e.g. still Rebasing) is refused, not silently transitioned" <| fun () ->
       let landingId = LandingId "l-0"
       match Purpose.tryCreate "purpose", Statement.tryCreate "land my change" with
@@ -102,6 +193,7 @@ let decideTests =
         let req : LandingRequest<MemberId> = {
           Id = landingId; Requester = requester; Claims = []; Commits = [ "c1" ]
           BaseAtQueue = "H0"; Statement = statement; State = LandingState.Rebasing "H0"
+          FastForwardAttempts = 0
         }
         let state = {
           CohortState.empty () with

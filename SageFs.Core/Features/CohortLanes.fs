@@ -158,7 +158,15 @@ module CohortLanes =
     | CohortEvent.ConductorDelegated _
     | CohortEvent.ClaimViolationObserved _
     | CohortEvent.LandingStateChanged _
-    | CohortEvent.IntegrationConfigured _ -> acc
+    | CohortEvent.IntegrationConfigured _
+    // armfix (cmd-handoff.md item B2): a resolved veto has no lane-span shape
+    // of its own — the landing's span was never closed by the veto (unlike
+    // `LandingVetoed`, which does, via `closeLanding ... SpanOutcome.Failed`),
+    // so resolving it re-opens the SAME landing id's span the next
+    // `LandingQueued`-shaped re-entry would otherwise expect; there is no
+    // re-open primitive here, and none is needed — the re-Queue emits its own
+    // `LandingStateChanged`, which this match already treats as a no-op.
+    | CohortEvent.LandingVetoResolved _ -> acc
 
   /// Greedy interval-scheduling track assignment (classic Gantt/flame-graph
   /// stacking): walk spans in `Start` order, reuse the lowest-numbered track

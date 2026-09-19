@@ -268,6 +268,7 @@ let private genLandingRequest : Gen<LandingId * LandingRequest<int>> =
     let! commits = Gen.listOf (Gen.elements [ "sha-c1"; "sha-c2"; "sha-c3" ])
     let! statement = genStatement
     let! state = genLandingState
+    let! fastForwardAttempts = Gen.choose (0, 3)
     let lid = LandingId(sprintf "l-%d" idNum)
     return
       lid,
@@ -277,7 +278,8 @@ let private genLandingRequest : Gen<LandingId * LandingRequest<int>> =
         Commits = commits
         BaseAtQueue = "sha-base-at-queue"
         Statement = statement
-        State = state }
+        State = state
+        FastForwardAttempts = fastForwardAttempts }
   }
 
 let private genLandings : Gen<Map<LandingId, LandingRequest<int>>> =
