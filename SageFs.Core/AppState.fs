@@ -739,16 +739,6 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
       with ex ->
         logger.LogWarning (sprintf "  base.fsx eval failed (continuing): %s" ex.Message)
 
-    // Override _SageFsHotReload from its base.fsx default (true) to match the
-    // actual workflow. Interactive and LiveTesting sessions don't need Harmony
-    // method-detouring — only HotReload does. Without this, all sessions would
-    // run unnecessary Harmony detours because base.fsx always sets the flag true.
-    if not hotReload then
-      try
-        fsiSession.EvalInteraction("_SageFsHotReload <- false", ct)
-      with ex ->
-        logger.LogWarning (sprintf "  Failed to disable _SageFsHotReload: %s" ex.Message)
-
     for fileName in sln.StartupFiles do
       ct.ThrowIfCancellationRequested()
       logger.LogInfo $"Loading %s{fileName}"
