@@ -1861,7 +1861,15 @@ let run
         | [] -> return Ok () // nothing to rediscover; the existing discovery is valid
         | _ ->
           let priorGen =
-            (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.DiscoveryGeneration
+            // The MONOTONIC test-view signal — max(LastGeneration, DiscoveryGeneration).
+            // NOT DiscoveryGeneration alone: that bumps only when the test SET changes (a
+            // TestsDiscovered merge), so a breaking BODY change (add->subtract flips an
+            // existing test's OUTCOME but adds no test) never bumps it — keying fail-closed
+            // on it alone fail-closes exactly the good/body-change landings. LastGeneration
+            // bumps on every completed test RUN, so the max advances the instant the rebased
+            // code is re-run OR re-discovered (CohortTestProjection.generationOf's contract:
+            // "callers must not swap this for either counter alone").
+            Features.CohortTestProjection.generationOf (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
           // Eval in path order (git diff is sorted, which matches the fixture's
           // compile order Alice < Bob < Tests) so a file's dependencies are
           // hot-loaded before the file that references them.
@@ -1876,10 +1884,11 @@ let run
           // waits 60s per landing). If it hasn't bumped in this window it isn't
           // going to; proceed (the fail-closed narrow still runs the whole suite,
           // and the worker's dynamic run closure was already updated by the eval).
-          // Event-driven: the LiveDiscoveryMerged that the hot-eval produces bumps
-          // DiscoveryGeneration and fires the model-changed notification, so this
-          // completes the instant discovery reflects the rebased code — no poll.
-          let genOf () = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.DiscoveryGeneration
+          // Event-driven: the hot-eval's re-RUN (LastGeneration) and/or re-DISCOVERY
+          // (DiscoveryGeneration) bumps generationOf and fires the model-changed
+          // notification, so this completes the instant the session's test view reflects
+          // the rebased code — no poll.
+          let genOf () = Features.CohortTestProjection.generationOf (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
           let! bumped = awaitModelCondition Timeouts.cohortRediscover (fun () -> genOf () > priorGen)
           if bumped then
             Log.info "[cohort-landing] rediscovered %d rebased file(s) in session %s (gen %d -> %d)" changedFsFiles.Length sessionId priorGen (genOf ())
