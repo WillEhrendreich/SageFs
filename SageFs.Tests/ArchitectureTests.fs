@@ -975,7 +975,14 @@ let fileSizeBudgets =
   // "split before you add," not "raise the number."
   let repoRoot = System.IO.Path.Combine(__SOURCE_DIRECTORY__, "..")
   let budgets =
-    [ "SageFs/Mcp.fs", 4200
+    [ // 4200 -> 4270: a one-time bump for the F16/F5/F6 cohort-integration
+      // bootstrap fix (cohort-dogfood-findings.md) — main-repo-root
+      // resolution now reads the caller's own session instead of the
+      // daemon's cwd, and a worktree build now runs before session
+      // creation, fail-fast on failure. A deliberate, reviewed fix, not
+      // silent accretion. Ratchet back DOWN when this file is split; never
+      // bump to paper over drift.
+      "SageFs/Mcp.fs", 4270
       "SageFs/McpAdapter.fs", 850
       // 5100 -> 5160: a one-time bump for the live-testing-asyoutype-plan.md
       // Brief 4 keystone (EvalThenRunRequest, TestCycleEffect.

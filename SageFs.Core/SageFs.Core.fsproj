@@ -78,6 +78,7 @@
         <Compile Include="Features\CohortTerritory.fs" />
         <Compile Include="Features\CohortLanes.fs" />
         <Compile Include="Features\CohortScrubber.fs" />
+        <Compile Include="Features\CohortIntegrationScope.fs" />
         <Compile Include="Features\EvalDedup.fs" />
         <Compile Include="Features\EvalDiff.fs" />
         <Compile Include="Features\IdentifierScan.fs" />
