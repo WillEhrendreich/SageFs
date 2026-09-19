@@ -518,6 +518,18 @@ let mkRegion id content = {
   LineAnnotations = [||]
 }
 
+/// Opening tags that carry a client-signal-driven class (`data-class:*`) but
+/// do not list `class` in `data-preserve-attr` — each is an element the SSE
+/// morph will strip the client-added class from on every push.
+let clientClassElementsMissingPreserve (html: string) : string list =
+  System.Text.RegularExpressions.Regex.Matches(html, "<[a-zA-Z](?:\"[^\"]*\"|'[^']*'|[^<>\"'])*>")
+  |> Seq.map (fun m -> m.Value)
+  |> Seq.filter (fun tag -> tag.Contains "data-class")
+  |> Seq.filter (fun tag ->
+    let m = System.Text.RegularExpressions.Regex.Match(tag, "data-preserve-attr=\"([^\"]*)\"")
+    not (m.Success && m.Groups.[1].Value.Split(' ') |> Array.contains "class"))
+  |> Seq.toList
+
 let shellStructureTests = testList "shell structure (replaces browser existence checks)" [
   testTask "renderShell snapshot" {
     let html = renderShell "0.0.0-test" "test-id" "" "" (Elem.div [] []) |> renderNode
@@ -745,6 +757,26 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     let html = renderMainContent (mkSnap "0.0.0") |> renderNode
     html |> Expect.stringContains "expand toggle present by id" "id=\"expand-toggle-btn\""
     html |> Expect.stringContains "expand toggle toggles the expandedDashboard signal" "expandedDashboard"
+  }
+
+  // Scroll-reset bug: every SSE push morphs a server-rendered element that has
+  // no client-driven class into the DOM, so the morph strips the class Datastar
+  // added (`#main.expanded`), the tall `.expanded-only` panels collapse, and the
+  // browser clamps the sidebar's scrollTop before Datastar re-adds the class.
+  // `data-preserve-attr="class"` tells the morph to leave that attribute alone.
+  test "clientClassElementsMissingPreserve has teeth: flags a data-class element without preserve-attr, accepts one with it" {
+    clientClassElementsMissingPreserve """<div id="a" data-class:on="$x"></div>"""
+    |> Expect.hasLength "a bare data-class element is flagged" 1
+    clientClassElementsMissingPreserve """<div id="a" data-class:on="$x" data-preserve-attr="class"></div>"""
+    |> Expect.isEmpty "a data-class element that preserves class is accepted"
+    clientClassElementsMissingPreserve """<div id="a" data-class:on="$x" data-preserve-attr="open"></div>"""
+    |> Expect.hasLength "preserving some other attribute does not count" 1
+  }
+
+  test "every element whose class is driven by a client signal tells the morph to preserve class" {
+    let html = renderMainContent (mkSnap "0.0.0") |> renderNode
+    clientClassElementsMissingPreserve html
+    |> Expect.equal "no client-class element may be left for the SSE morph to strip" []
   }
 
   // ── SSE full-state push on connect (Task 2) ───────────────────

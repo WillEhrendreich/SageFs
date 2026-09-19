@@ -1042,12 +1042,7 @@ let renderStoppingCard (sessionId: WorkerProtocol.SessionId) =
 
 /// Render sessions as an HTML fragment with action buttons.
 let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession list) (creating: bool) =
-  Elem.div [
-    Attr.id DomIds.SessionsPanel
-    // Preserve scroll position during SSE morphs — the sessions list updates
-    // should not reset where the user was scrolled in the panel.
-    Attr.create "data-morph" "morph preserve-scroll"
-  ] [
+  Elem.div [ Attr.id DomIds.SessionsPanel ] [
     match creating with
     | true ->
       Elem.div
@@ -1523,7 +1518,8 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         [ textEnc label ]
     | None ->
       Elem.div [ Attr.id DomIds.ConnectionCounts; Attr.class' "meta"; Attr.style "font-size: 0.72rem;" ] []
-  Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" (attrEnc snap.SessionId); Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard) ] [
+  // `expanded` is client state; without preserveAttr the morph strips it, collapsing the sidebar and clamping its scrollTop.
+  Elem.div [ Attr.id DomIds.Main; Attr.create "data-viewing-session-id" (attrEnc snap.SessionId); Ds.class' ("expanded", sprintf "$%s" Signals.ExpandedDashboard); Ds.preserveAttr "class" ] [
     // Theme CSS variables — morphed with every push so theme changes propagate
     snap.ThemeVars
     // App header — tabline style like sagetech.dev
@@ -1690,7 +1686,7 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
       // Resize handle between main area and sidebar
       Elem.div [ Attr.class' "resize-handle"; Attr.id DomIds.SidebarResize ] []
       // Sidebar — sessions, panels, new session at bottom
-      Elem.div [ Attr.id DomIds.Sidebar; Attr.class' "sidebar"; Ds.class' ("collapsed", "!$sidebarOpen") ] [
+      Elem.div [ Attr.id DomIds.Sidebar; Attr.class' "sidebar"; Ds.class' ("collapsed", "!$sidebarOpen"); Ds.preserveAttr "class" ] [
         // Sidebar header — title + dynamic collapse/expand toggle (always visible)
         Elem.div [ Attr.class' "sidebar-header" ] [
           Elem.h2 [] [ Text.raw "Sessions" ]
