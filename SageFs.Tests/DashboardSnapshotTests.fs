@@ -590,14 +590,17 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
 
   test "WHY — disconnect indicator is a server heartbeat + client staleness timer because the old fetch-monkeypatch never saw a mid-stream daemon death (todo-dashboard-disconnect-indicator.md)" {
     // connectionMonitorScript (window.fetch monkeypatch + MutationObserver)
-    // was replaced: the server now patches a heartbeat signal on a named
-    // cadence (Timeouts.dashboardHeartbeat) and the client compares it
-    // against Timeouts.dashboardStaleAfter via Ds.onInterval — both wired
-    // through renderShell, not a hand-written <script> block.
+    // was replaced: the server patches a heartbeat signal on a named cadence
+    // (Timeouts.dashboardHeartbeat), and — after the GLM roast #5 client-clock
+    // fix — the client records the LOCAL arrival time of each heartbeat
+    // (dsLastSeenAt via a Ds.effect on the heartbeat token) and the staleness
+    // interval compares Date.now() - dsLastSeenAt (both the browser's OWN clock,
+    // so server/client skew can't fail-open). The server value is a monotonic
+    // change token, not a compared clock. All wired through renderShell.
     let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     html |> Expect.stringContains "wrapper div carries the client-side staleness check on a bounded interval" "data-on-interval__duration."
-    html |> Expect.stringContains "staleness check compares against the server-patched heartbeat signal" "$dsHeartbeatAt"
-    html |> Expect.stringContains "staleness check flips the connected signal" "$connected = (Date.now() - $dsHeartbeatAt)"
+    html |> Expect.stringContains "an effect records the LOCAL arrival time when the heartbeat token changes" "$dsLastSeenAt = ($dsHeartbeatAt, Date.now())"
+    html |> Expect.stringContains "staleness check compares the client's OWN clock against the local arrival time (no cross-clock skew)" "$connected = (Date.now() - $dsLastSeenAt)"
     html |> Expect.stringContains "staleness check mirrors the literal string onto body[data-connected]" "document.body.setAttribute('data-connected', $connected ? 'true' : 'false')"
   }
 
