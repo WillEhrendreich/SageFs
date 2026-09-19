@@ -1042,7 +1042,12 @@ let renderStoppingCard (sessionId: WorkerProtocol.SessionId) =
 
 /// Render sessions as an HTML fragment with action buttons.
 let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession list) (creating: bool) =
-  Elem.div [ Attr.id DomIds.SessionsPanel ] [
+  Elem.div [
+    Attr.id DomIds.SessionsPanel
+    // Preserve scroll position during SSE morphs — the sessions list updates
+    // should not reset where the user was scrolled in the panel.
+    Attr.create "data-morph" "morph preserve-scroll"
+  ] [
     match creating with
     | true ->
       Elem.div
