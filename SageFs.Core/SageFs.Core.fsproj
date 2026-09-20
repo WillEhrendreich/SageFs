@@ -197,6 +197,7 @@
              (see EvalActorDecision.fs's header for why it can't be nested). -->
         <Compile Include="EvalActorDecision.fs" />
         <Compile Include="FsiSession.fs" />
+        <Compile Include="RemoteFsiSession.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />

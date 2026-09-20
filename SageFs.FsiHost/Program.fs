@@ -54,11 +54,46 @@ let private severityOf (severity: FSharpDiagnosticSeverity) =
 let private toDiagnostic (d: FSharpDiagnostic) : FsiDiagnostic =
   { Severity = severityOf d.Severity
     ErrorNumber = d.ErrorNumber
+    Subcategory = d.Subcategory
     Message = d.Message
     StartLine = d.StartLine
     StartColumn = d.StartColumn
     EndLine = d.EndLine
     EndColumn = d.EndColumn }
+
+/// One unit of work for the session thread.
+type private Work =
+  | RunEval of id: int64 * code: string
+  | RunReadFlag of id: int64 * name: string
+  | RunReadValue of id: int64 * name: string
+
+let private typeNameOf (value: FsiValue) =
+  match value.ReflectionType with
+  | null -> ""
+  | t -> t.Name
+
+let private readFlag (session: FsiEvaluationSession) (name: string) : FlagReading =
+  match session.TryFindBoundValue name with
+  | None -> FlagWasUnbound
+  | Some bound ->
+    match bound.Value.ReflectionValue with
+    | :? bool as value -> FlagWasBool value
+    | _ -> FlagWasNotBool(typeNameOf bound.Value)
+
+let private maxValueText = 4096
+
+let private readValue (session: FsiEvaluationSession) (name: string) : ValueReading =
+  match session.GetBoundValues() |> List.tryFind (fun bound -> bound.Name = name) with
+  | None -> ValueUnbound
+  | Some bound ->
+    let text =
+      try
+        match bound.Value.ReflectionValue with
+        | null -> "null"
+        | value -> value.ToString()
+      with ex -> sprintf "<%s while reading the value>" (ex.GetType().Name)
+    let text = if text.Length > maxValueText then text.Substring(0, maxValueText) + "…" else text
+    ValueText(typeNameOf bound.Value, text)
 
 /// The eval currently running, so Interrupt can reach it.
 type private Running =
@@ -101,7 +136,8 @@ let private run (argsFile: string) : int =
     )
   )
 
-  let requests = new BlockingCollection<int64 * string>()
+  // Everything that touches the session runs on the one eval thread, in order: FSI sessions are not thread-safe.
+  let requests = new BlockingCollection<Work>()
   let runningLock = obj ()
   let mutable running: Running option = None
 
@@ -109,25 +145,28 @@ let private run (argsFile: string) : int =
     let mutable alive = true
     while alive do
       try
-        let id, code = requests.Take()
-        use cancel = new CancellationTokenSource()
-        lock runningLock (fun () -> running <- Some { Cancel = cancel; Thread = Thread.CurrentThread })
-        let outcome, diagnostics =
-          try
-            let result, diagnostics = session.EvalInteractionNonThrowing(code, cancel.Token)
-            let outcome =
-              match result with
-              | Choice1Of2 _ -> EvalSucceeded
-              | Choice2Of2 ex when cancel.IsCancellationRequested || (ex :? OperationCanceledException) -> EvalInterrupted
-              | Choice2Of2 ex -> EvalFailed ex.Message
-            outcome, diagnostics |> Array.map toDiagnostic |> Array.toList
-          with
-          | :? ThreadInterruptedException -> EvalInterrupted, []
-          | ex -> EvalFailed ex.Message, []
-        lock runningLock (fun () -> running <- None)
-        outWriter.Flush()
-        errWriter.Flush()
-        send (EvalResult(id, outcome, diagnostics))
+        match requests.Take() with
+        | RunReadFlag(id, name) -> send (FlagResult(id, readFlag session name))
+        | RunReadValue(id, name) -> send (ValueResult(id, readValue session name))
+        | RunEval(id, code) ->
+          use cancel = new CancellationTokenSource()
+          lock runningLock (fun () -> running <- Some { Cancel = cancel; Thread = Thread.CurrentThread })
+          let outcome, diagnostics =
+            try
+              let result, diagnostics = session.EvalInteractionNonThrowing(code, cancel.Token)
+              let outcome =
+                match result with
+                | Choice1Of2 _ -> EvalSucceeded
+                | Choice2Of2 ex when cancel.IsCancellationRequested || (ex :? OperationCanceledException) -> EvalInterrupted
+                | Choice2Of2 ex -> EvalFailed ex.Message
+              outcome, diagnostics |> Array.map toDiagnostic |> Array.toList
+            with
+            | :? ThreadInterruptedException -> EvalInterrupted, []
+            | ex -> EvalFailed ex.Message, []
+          lock runningLock (fun () -> running <- None)
+          outWriter.Flush()
+          errWriter.Flush()
+          send (EvalResult(id, outcome, diagnostics))
       with
       | :? ThreadInterruptedException -> () // an Interrupt that arrived between evals
       | :? InvalidOperationException -> alive <- false // requests completed: shutting down
@@ -142,7 +181,9 @@ let private run (argsFile: string) : int =
     | line ->
       match decodeRequest line with
       | Result.Error reason -> send (Output(StdErr, sprintf "[fsihost] rejected a request: %s\n" (describeError reason)))
-      | Result.Ok(Eval(id, code)) -> requests.Add((id, code))
+      | Result.Ok(Eval(id, code)) -> requests.Add(RunEval(id, code))
+      | Result.Ok(ReadFlag(id, name)) -> requests.Add(RunReadFlag(id, name))
+      | Result.Ok(ReadValue(id, name)) -> requests.Add(RunReadValue(id, name))
       | Result.Ok Interrupt ->
         lock runningLock (fun () ->
           match running with

@@ -33,6 +33,7 @@ type DiagnosticSeverity =
 type FsiDiagnostic =
   { Severity: DiagnosticSeverity
     ErrorNumber: int
+    Subcategory: string
     Message: string
     StartLine: int
     StartColumn: int
@@ -49,14 +50,29 @@ type OutputStream =
   | StdOut
   | StdErr
 
+/// What a boolean feature gate (`_SageFsHotReload`, `_SageFsCompExpr`) holds in the session.
+type FlagReading =
+  | FlagWasUnbound
+  | FlagWasBool of value: bool
+  | FlagWasNotBool of typeName: string
+
+/// What a bound name holds, as display text (a value itself cannot cross the process boundary).
+type ValueReading =
+  | ValueUnbound
+  | ValueText of typeName: string * text: string
+
 type Request =
   | Eval of id: int64 * code: string
+  | ReadFlag of id: int64 * name: string
+  | ReadValue of id: int64 * name: string
   | Interrupt
   | Shutdown
 
 type Response =
   | Ready of runtime: string * fsharpCore: string
   | EvalResult of id: int64 * outcome: EvalOutcome * diagnostics: FsiDiagnostic list
+  | FlagResult of id: int64 * reading: FlagReading
+  | ValueResult of id: int64 * reading: ValueReading
   | Output of stream: OutputStream * text: string
 
 /// Why a message could not be encoded/decoded. A typed union (never a bare string) so callers can match on the

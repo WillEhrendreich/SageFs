@@ -1,9 +1,9 @@
 /// SageFs's side of the isolated FSI host: spawns the host (built by FsiHostBuild), does the port
-/// handshake, and multiplexes evals over the FsiProtocol socket. The host's stdout/stderr are drained
+/// handshake, and multiplexes requests over the FsiProtocol socket. The host's stdout/stderr are drained
 /// continuously (an undrained pipe deadlocks a chatty child before it ever prints its ready line).
 ///
-/// A call NEVER hangs on a dead host: when the connection closes, every pending call completes with
-/// `HostLost` and so does every later call.
+/// A call NEVER hangs on a dead host: when the connection closes, every pending call completes as lost
+/// and so does every later call.
 module SageFs.FsiHostClient
 
 open System
@@ -21,6 +21,11 @@ open SageFs.FsiHost.FsiProtocol
 type EvalCall =
   | Completed of outcome: EvalOutcome * diagnostics: FsiDiagnostic list
   | HostLost of reason: string
+
+/// A non-eval request's answer, or the fact that the host was lost first.
+type HostCall<'T> =
+  | Answered of 'T
+  | HostGone of reason: string
 
 /// Why a host could not be started. Every case that has one carries the host's own last output.
 type StartError =
@@ -56,6 +61,11 @@ type StartOptions =
 
 let private portPrefix = "FSIHOST_PORT="
 
+/// What a pending request is completed with: the host's response, or the reason it was lost.
+type private Reply =
+  | Got of Response
+  | Gone of reason: string
+
 /// One running isolated FSI host and the connection to it.
 [<Sealed; AllowNullLiteral>]
 type FsiHostSession
@@ -70,7 +80,7 @@ type FsiHostSession
     onLog: string -> unit
   ) =
   let writer = new StreamWriter(client.GetStream(), UTF8Encoding false, AutoFlush = true)
-  let pending = ConcurrentDictionary<int64, TaskCompletionSource<EvalCall>>()
+  let pending = ConcurrentDictionary<int64, TaskCompletionSource<Reply>>()
   let sendLock = obj ()
   let lost = TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously)
   let exited = TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously)
@@ -80,12 +90,17 @@ type FsiHostSession
   let markLost (reason: string) =
     if lost.TrySetResult reason then
       for entry in pending.ToArray() do
-        entry.Value.TrySetResult(HostLost reason) |> ignore
+        entry.Value.TrySetResult(Gone reason) |> ignore
 
   let describeExit () =
     match proc.HasExited with
     | true -> sprintf "the FSI host exited (code %d)" proc.ExitCode
     | false -> "the connection to the FSI host closed"
+
+  let complete (id: int64) (response: Response) =
+    match pending.TryRemove id with
+    | true, waiting -> waiting.TrySetResult(Got response) |> ignore
+    | false, _ -> ()
 
   let readLoop () =
     try
@@ -98,10 +113,11 @@ type FsiHostSession
           | Result.Error reason -> onLog (sprintf "[fsihost] unreadable response: %s" (describeError reason))
           | Result.Ok(Ready _) -> ()
           | Result.Ok(Output(stream, text)) -> (try onOutput stream text with _ -> ())
-          | Result.Ok(EvalResult(id, outcome, diagnostics)) ->
-            match pending.TryRemove id with
-            | true, waiting -> waiting.TrySetResult(Completed(outcome, diagnostics)) |> ignore
-            | false, _ -> ()
+          // Every request/response pair is matched by id. Listing the cases (no wildcard) means a new
+          // Response case is a compile error here until it is routed.
+          | Result.Ok(EvalResult(id, _, _) as answer) -> complete id answer
+          | Result.Ok(FlagResult(id, _) as answer) -> complete id answer
+          | Result.Ok(ValueResult(id, _) as answer) -> complete id answer
     with ex ->
       onLog (sprintf "[fsihost] read loop ended: %s" ex.Message)
     // Give the process a moment to report its exit code, then fail everything still waiting.
@@ -121,6 +137,30 @@ type FsiHostSession
         true
       with _ -> false)
 
+  /// Send a request carrying a fresh id and wait for its answer. Cancelling interrupts the host.
+  let roundTrip (cancellationToken: CancellationToken) (make: int64 -> Request) : Async<Reply> =
+    async {
+      match lost.Task.IsCompleted with
+      | true -> return Gone lost.Task.Result
+      | false ->
+        let id = Interlocked.Increment(&nextId)
+        let waiting = TaskCompletionSource<Reply>(TaskCreationOptions.RunContinuationsAsynchronously)
+        pending[id] <- waiting
+        match send (make id) with
+        | false ->
+          pending.TryRemove id |> ignore
+          markLost (describeExit ())
+          return Gone lost.Task.Result
+        | true ->
+          // The connection may have dropped between the check and the registration.
+          if lost.Task.IsCompleted then waiting.TrySetResult(Gone lost.Task.Result) |> ignore
+          use _ = cancellationToken.Register(fun () -> send Interrupt |> ignore)
+          return! Async.AwaitTask waiting.Task
+    }
+
+  let unexpected (expected: string) (response: Response) =
+    sprintf "the FSI host answered a %s request with %A" expected response
+
   /// The .NET runtime the host is running on, e.g. ".NET 11.0.0-rc.1.26425.128".
   member _.Runtime = runtime
   /// The FSharp.Core version the host loaded (the SDK's own).
@@ -132,22 +172,28 @@ type FsiHostSession
   /// Evaluate a submission. Cancelling the token interrupts the running eval.
   member _.Eval(code: string, cancellationToken: CancellationToken) : Async<EvalCall> =
     async {
-      match lost.Task.IsCompleted with
-      | true -> return HostLost lost.Task.Result
-      | false ->
-        let id = Interlocked.Increment(&nextId)
-        let waiting = TaskCompletionSource<EvalCall>(TaskCreationOptions.RunContinuationsAsynchronously)
-        pending[id] <- waiting
-        match send (Eval(id, code)) with
-        | false ->
-          pending.TryRemove id |> ignore
-          markLost (describeExit ())
-          return HostLost lost.Task.Result
-        | true ->
-          // The connection may have dropped between the check and the registration.
-          if lost.Task.IsCompleted then waiting.TrySetResult(HostLost lost.Task.Result) |> ignore
-          use _ = cancellationToken.Register(fun () -> send Interrupt |> ignore)
-          return! Async.AwaitTask waiting.Task
+      match! roundTrip cancellationToken (fun id -> Eval(id, code)) with
+      | Got(EvalResult(_, outcome, diagnostics)) -> return Completed(outcome, diagnostics)
+      | Got other -> return HostLost(unexpected "eval" other)
+      | Gone reason -> return HostLost reason
+    }
+
+  /// Read a boolean feature gate bound in the session.
+  member _.ReadFlag(name: string) : Async<HostCall<FlagReading>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> ReadFlag(id, name)) with
+      | Got(FlagResult(_, reading)) -> return Answered reading
+      | Got other -> return HostGone(unexpected "flag" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Read a bound name as display text.
+  member _.ReadValue(name: string) : Async<HostCall<ValueReading>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> ReadValue(id, name)) with
+      | Got(ValueResult(_, reading)) -> return Answered reading
+      | Got other -> return HostGone(unexpected "value" other)
+      | Gone reason -> return HostGone reason
     }
 
   /// Interrupt whatever is running (no effect when idle).
