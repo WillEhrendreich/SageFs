@@ -335,6 +335,12 @@ module Window =
   let withProgress (location: int) (title: string) (task: obj -> CancellationToken -> JS.Promise<unit>) =
     _withProgress windowExports (createObj [ "location" ==> location; "title" ==> title ]) task
 
+  /// Progress the user can STOP. A long sequential operation with no cancel
+  /// token (evaluating every block in a file, one at a time) is minutes of
+  /// silence you are locked into.
+  let withCancellableProgress (location: int) (title: string) (task: obj -> CancellationToken -> JS.Promise<unit>) =
+    _withProgress windowExports (createObj [ "location" ==> location; "title" ==> title; "cancellable" ==> true ]) task
+
   [<Emit("$0.createTextEditorDecorationType($1)")>]
   let _createDecoType (w: obj) (opts: obj) : TextEditorDecorationType = jsNative
   let createTextEditorDecorationType (opts: obj) = _createDecoType windowExports opts

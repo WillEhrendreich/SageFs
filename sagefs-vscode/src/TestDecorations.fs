@@ -107,23 +107,38 @@ let private toRanges (entries: DecorationEntry list) : ResizeArray<obj> =
 let private toCoverageRanges (entries: CoverageEntry list) : ResizeArray<obj> =
   ResizeArray<obj>(entries |> List.map (fun e -> toRangeOption e.ZeroBasedLine e.HoverText))
 
-/// Apply test decorations to a single text editor based on current test state
+/// Whether the current `sagefs.density` preset draws a given annotation.
+/// This module had NO density check, so `minimal` — documented as "nothing
+/// persistent" — still painted test and coverage gutters on every file.
+let private densityShows (surface: SageFs.Vscode.DensityPure.AnnotationSurface) =
+  let density =
+    SageFs.Vscode.DensityPure.Density.ofString ((Workspace.getConfiguration "sagefs").get("density", "full"))
+  SageFs.Vscode.DensityPure.shows density surface
+
+/// Apply test decorations to a single text editor based on current test state.
+/// At a density that hides them, the existing decorations are CLEARED (an
+/// empty range list) rather than merely not refreshed — otherwise turning the
+/// setting down leaves the last painting on screen forever.
 let applyToEditor (state: VscLiveTestState) (editor: TextEditor) =
   let filePath = editor.document.fileName
   let decorations = decorationsForFile state filePath
+  let show = densityShows SageFs.Vscode.DensityPure.AnnotationSurface.TestSigns
+  let ranges entries = match show with true -> toRanges entries | false -> ResizeArray<obj>()
 
-  passedType |> Option.iter (fun dt -> editor.setDecorations(dt, toRanges decorations.Passed))
-  failedType |> Option.iter (fun dt -> editor.setDecorations(dt, toRanges decorations.Failed))
-  runningType |> Option.iter (fun dt -> editor.setDecorations(dt, toRanges decorations.Running))
+  passedType |> Option.iter (fun dt -> editor.setDecorations(dt, ranges decorations.Passed))
+  failedType |> Option.iter (fun dt -> editor.setDecorations(dt, ranges decorations.Failed))
+  runningType |> Option.iter (fun dt -> editor.setDecorations(dt, ranges decorations.Running))
 
 /// Apply coverage decorations to a single text editor
 let applyCoverageToEditor (state: VscLiveTestState) (editor: TextEditor) =
   let filePath = editor.document.fileName
   let decorations = coverageDecorationsForFile state filePath
+  let show = densityShows SageFs.Vscode.DensityPure.AnnotationSurface.CoverageGutters
+  let ranges entries = match show with true -> toCoverageRanges entries | false -> ResizeArray<obj>()
 
-  coveredPassingType |> Option.iter (fun dt -> editor.setDecorations(dt, toCoverageRanges decorations.Passing))
-  coveredFailingType |> Option.iter (fun dt -> editor.setDecorations(dt, toCoverageRanges decorations.Failing))
-  notCoveredType |> Option.iter (fun dt -> editor.setDecorations(dt, toCoverageRanges decorations.NotCovered))
+  coveredPassingType |> Option.iter (fun dt -> editor.setDecorations(dt, ranges decorations.Passing))
+  coveredFailingType |> Option.iter (fun dt -> editor.setDecorations(dt, ranges decorations.Failing))
+  notCoveredType |> Option.iter (fun dt -> editor.setDecorations(dt, ranges decorations.NotCovered))
 
 /// Apply coverage decorations to all visible editors
 let applyCoverageToAllEditors (state: VscLiveTestState) =

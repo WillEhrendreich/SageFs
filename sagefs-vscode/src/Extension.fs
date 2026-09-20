@@ -127,26 +127,22 @@ let mutable private inlineFailureDecoTypes: Map<string, TextEditorDecorationType
 let mutable private fileAnnotationsCache: Map<string, FileAnno.FileAnnotations> = Map.empty
 let mutable private daemonConnectionDisposables: Disposable list = []
 
-// Density preset: controls visual annotation verbosity
-type Density = Full | Normal | Minimal
+// Density preset: controls visual annotation verbosity. The DU, the parse and
+// — crucially — the per-surface table now live in DensityPure, so every
+// annotation is gated from ONE place instead of four surfaces each deciding
+// (or, as measured, not deciding) for themselves.
+type Density = SageFs.Vscode.DensityPure.Density
+module DensityPure = SageFs.Vscode.DensityPure
 
-let mutable currentDensity = Full
+let mutable currentDensity = Density.Full
 
-let densityFromString (s: string) =
-  match s.ToLowerInvariant() with
-  | "normal" -> Normal
-  | "minimal" -> Minimal
-  | _ -> Full
+let densityFromString = DensityPure.Density.ofString
+let densityToString = DensityPure.Density.toString
+let densityLabel = DensityPure.Density.label
 
-let densityToString = function
-  | Full -> "full"
-  | Normal -> "normal"
-  | Minimal -> "minimal"
-
-let densityLabel = function
-  | Full -> "Full"
-  | Normal -> "Normal"
-  | Minimal -> "Minimal"
+/// Whether the current preset draws a given annotation.
+let densityShows (surface: DensityPure.AnnotationSurface) =
+  DensityPure.shows currentDensity surface
 
 let private replaceOwnedResources dispose current next =
   current
@@ -170,17 +166,14 @@ let private disposeDaemonConnectionResources () =
 
 let cycleDensity () =
   let next =
-    match currentDensity with
-    | Full -> Normal
-    | Normal -> Minimal
-    | Minimal -> Full
+    DensityPure.Density.next currentDensity
   currentDensity <- next
   let cfg = Workspace.getConfiguration "sagefs"
   cfg.update("density", densityToString next, 1) |> ignore
   Window.showInformationMessage (sprintf "SageFs density: %s" (densityLabel next)) [||] |> ignore
-  match next with
-  | Minimal | Normal -> InlineDeco.clearCellHighlight ()
-  | Full -> ()
+  match DensityPure.shows next DensityPure.AnnotationSurface.CellHighlight with
+  | false -> InlineDeco.clearCellHighlight ()
+  | true -> ()
 
 // FSI bindings and test trace — maintained by SSE events (server-side CQRS)
 // No client-side parsing; server pushes snapshots via SSE bindings_snapshot/test_trace events
@@ -1153,18 +1146,35 @@ let withProgressResult (location: int) (title: string) (work: unit -> JS.Promise
   }
 
 /// Fire a client action that returns ApiOutcome, show brief status bar flash, then refresh.
-let simpleCommand (defaultMsg: string) (action: Client.Client -> JS.Promise<Client.ApiOutcome>) =
+/// Fire a client action that returns ApiOutcome, under a progress indicator,
+/// then report the outcome.
+///
+/// Two defects fixed here (roast §8):
+///   * it was after-the-fact only — a multi-second operation (reset: 15s;
+///     hard reset with rebuild: 60s) awaited in complete silence, and the only
+///     feedback arrived once it was over;
+///   * the "✓ done" flash OVERWROTE the main status-bar item for three
+///     seconds, so the session/project/workflow readout — the one persistent
+///     truthful thing on the bar — disappeared while it showed a checkmark.
+///     The outcome now goes to a notification, which is where a transient
+///     message belongs; the status bar keeps saying what the session is.
+let simpleCommand (title: string) (defaultMsg: string) (action: Client.Client -> JS.Promise<Client.ApiOutcome>) =
   withClient (fun c ->
     promise {
-      let! result = action c
-      let msg = result |> Client.ApiOutcome.messageOrDefault defaultMsg
-      match statusBarItem with
-      | Some sb ->
-        sb.text <- sprintf "$(check) %s" msg
-        jsSetTimeout (fun () -> refreshStatus () |> ignore) 3000 |> ignore
-      | None ->
-        Window.showInformationMessage (sprintf "SageFs: %s" msg) [||] |> ignore
-      refreshStatus ()
+      let! result = withProgressResult ProgressLocation.Notification title (fun () -> action c)
+      match result with
+      | None -> ()
+      | Some outcome ->
+        match outcome with
+        | Client.Failed err ->
+          Window.showErrorMessage (sprintf "SageFs: %s" err) [| "Show Output" |]
+          |> Promise.map (function Some "Show Output" -> showOutputPanel () | _ -> ())
+          |> promiseIgnoreLog (fun m -> (getOutput()).appendLine m)
+        | Client.Succeeded _ ->
+          Window.showInformationMessage
+            (sprintf "SageFs: %s" (outcome |> Client.ApiOutcome.messageOrDefault defaultMsg)) [||]
+          |> ignore
+        refreshStatus ()
     })
 
 type EvalResult =
@@ -1354,8 +1364,13 @@ let evalFile () =
         let out = getOutput ()
         out.show true
         out.appendLine (sprintf "──── eval file: %s ────" ed.document.fileName)
-        let! result = evalCore code filePath (Some "file") None
-        logEvalResult out result |> ignore
+        // Was a silent 30-second await (roast §8): no spinner, no notification,
+        // nothing until it finished or timed out.
+        do! Window.withProgress ProgressLocation.Window "SageFs: evaluating file..." (fun _p _t ->
+          promise {
+            let! result = evalCore code filePath (Some "file") None
+            logEvalResult out result |> ignore
+          })
   }
 
 let evalRange (args: obj) =
@@ -1389,7 +1404,7 @@ let evalRange (args: obj) =
   }
 
 let resetSessionCmd () =
-  simpleCommand "Reset complete" Client.resetSession
+  simpleCommand "SageFs: resetting session…" "Reset complete" Client.resetSession
 
 /// Evaluate all code blocks in the file sequentially (top to bottom).
 let evalAllBlocks () =
@@ -1410,37 +1425,51 @@ let evalAllBlocks () =
         let out = getOutput ()
         out.appendLine (sprintf "──── eval all blocks: %s ────" doc.fileName)
         let blocks = getAllBlockRanges doc
-        // Evaluate each block in sequence
+        // A sequential loop over EVERY block in the file, with no progress and
+        // no cancel token, reporting one toast at the end (roast §8). On a
+        // large file that is minutes of silence you cannot stop. Now: a
+        // cancellable notification reporting "block N of M" as it goes.
         let mutable errorCount = 0
-        for blockStart, blockEnd in blocks do
-          let range = newRange blockStart 0 blockEnd (int (doc.lineAt(float blockEnd).text.Length))
-          let raw = doc.getTextRange range
-          match raw.Trim() with
-          | "" -> ()
-          | _ ->
-            let code = if raw.TrimEnd().EndsWith(";;") then raw else raw.TrimEnd() + ";;"
-            let filePath = Some doc.fileName
-            let blockLine = Some (blockStart + 1) // 0-based → 1-based
-            InlineDeco.flashEvalRange ed blockStart blockEnd
-            let! result = evalCore code filePath (Some "block") blockLine
-            match logEvalResult out result with
-            | EvalOk (output, elapsed) ->
-              InlineDeco.showInlineResult ed output (Some elapsed) (Some blockEnd)
-            | EvalError errMsg ->
-              errorCount <- errorCount + 1
-              InlineDeco.showInlineDiagnostic ed errMsg (Some blockEnd)
-            | EvalConnectionError _ ->
-              errorCount <- errorCount + 1
+        let mutable cancelled = false
+        let mutable evaluated = 0
+        do! Window.withCancellableProgress ProgressLocation.Notification "SageFs: evaluating all blocks" (fun progress token ->
+          promise {
+            let mutable index = 0
+            for blockStart, blockEnd in blocks do
+              index <- index + 1
+              let range = newRange blockStart 0 blockEnd (int (doc.lineAt(float blockEnd).text.Length))
+              let raw = doc.getTextRange range
+              match cancelled || token.isCancellationRequested, raw.Trim() with
+              | true, _ -> cancelled <- true
+              | _, "" -> ()
+              | _ ->
+                progress?report (createObj [ "message" ==> sprintf "block %d of %d" index blocks.Length ]) |> ignore
+                let code = if raw.TrimEnd().EndsWith(";;") then raw else raw.TrimEnd() + ";;"
+                let filePath = Some doc.fileName
+                let blockLine = Some (blockStart + 1) // 0-based → 1-based
+                InlineDeco.flashEvalRange ed blockStart blockEnd
+                let! result = evalCore code filePath (Some "block") blockLine
+                evaluated <- evaluated + 1
+                match logEvalResult out result with
+                | EvalOk (output, elapsed) ->
+                  InlineDeco.showInlineResult ed output (Some elapsed) (Some blockEnd)
+                | EvalError errMsg ->
+                  errorCount <- errorCount + 1
+                  InlineDeco.showInlineDiagnostic ed errMsg (Some blockEnd)
+                | EvalConnectionError _ ->
+                  errorCount <- errorCount + 1
+          })
         let summary =
-          match errorCount with
-          | 0 -> sprintf "✓ All %d blocks evaluated" blocks.Length
-          | n -> sprintf "⚠ %d of %d blocks had errors" n blocks.Length
+          match cancelled, errorCount with
+          | true, _ -> sprintf "⨯ Cancelled after %d of %d blocks" evaluated blocks.Length
+          | false, 0 -> sprintf "✓ All %d blocks evaluated" blocks.Length
+          | false, n -> sprintf "⚠ %d of %d blocks had errors" n blocks.Length
         out.appendLine summary
         Window.showInformationMessage summary [||] |> ignore
   }
 
 let hardResetCmd () =
-  simpleCommand "Hard reset complete" (Client.hardReset true)
+  simpleCommand "SageFs: hard reset (rebuilding)…" "Hard reset complete" (Client.hardReset true)
 
 /// Reflects the session's app state on the status bar: the play glyph with
 /// the URL while running, a hidden item when nothing is running, and the
@@ -1482,7 +1511,11 @@ let runAppCmd () =
           match projOpt with
           | Some p when p.Trim().Length > 0 -> Some (p.Trim())
           | _ -> None
-        let! outcome = Client.runApp sid project c
+        // Starting an app is a multi-second operation that used to await in
+        // silence (roast §8).
+        let! outcomeOpt =
+          withProgressResult ProgressLocation.Notification "SageFs: starting app…" (fun () -> Client.runApp sid project c)
+        let outcome = outcomeOpt |> Option.defaultValue (Client.AppRunError { case = "Cancelled"; message = "The run-app request did not complete."; suggestedAction = "Try again, or check the output channel." })
         updateAppStatusBar outcome
         match outcome with
         // The dialog used to show err.message with NO buttons while
@@ -1827,15 +1860,45 @@ let sessionMenu () =
             | None -> ()
   }
 
-let stopDaemon () =
-  match daemonProcess with
-  | Some proc ->
-    killProc proc
-    daemonProcess <- None
-    disposeDaemonConnectionResources ()
-  | None -> ()
-  Window.showInformationMessage "SageFs: stop the daemon from its terminal or use `sagefs stop`." [||] |> ignore
-  refreshStatus ()
+/// Stop the daemon, whoever started it.
+///
+/// This used to kill ONLY the child process this extension spawned, and then
+/// unconditionally print "stop the daemon from its terminal" — including when
+/// it had just killed it. Against a daemon started anywhere else (the common
+/// case) it did nothing at all and said so misleadingly. Now: kill our own
+/// child if we own one, otherwise ask the daemon over HTTP, and report what
+/// actually happened.
+let stopDaemon () : JS.Promise<unit> =
+  promise {
+    match daemonProcess with
+    | Some proc ->
+      killProc proc
+      daemonProcess <- None
+      disposeDaemonConnectionResources ()
+      Window.showInformationMessage "SageFs: daemon stopped." [||] |> ignore
+      refreshStatus ()
+    | None ->
+      match client with
+      | None -> ()
+      | Some c ->
+        let! running = Client.isRunning c
+        match running with
+        | false ->
+          Window.showInformationMessage "SageFs: no daemon is running." [||] |> ignore
+          refreshStatus ()
+        | true ->
+          let! outcome = Client.shutdownDaemon c
+          disposeDaemonConnectionResources ()
+          match outcome with
+          | Client.Succeeded _ ->
+            Window.showInformationMessage "SageFs: daemon stopped." [||] |> ignore
+          | Client.Failed err ->
+            Window.showWarningMessage
+              (sprintf "%s\n→ Stop it from the terminal it was started in, or run `sagefs stop`." err)
+              [||]
+            |> ignore
+          refreshStatus ()
+  }
 
 let switchProject () =
   promise {
@@ -1850,10 +1913,28 @@ let switchProject () =
         persistProjectChoice p
         let out = getOutput ()
         out.appendLine (sprintf "Switching to project: %s" p)
-        stopDaemon ()
+        do! stopDaemon ()
         do! sleep 1000
         do! startDaemon ()
       | None -> ()
+  }
+
+/// Poll until nothing answers on the daemon's port, up to `attempts` half-second
+/// ticks. `startDaemon` short-circuits when it finds a daemon still running, so
+/// restarting without waiting for the old one to actually go away was a silent
+/// no-op that had just told you to go use the terminal.
+let rec waitForDaemonGone (attempts: int) : JS.Promise<unit> =
+  promise {
+    match client, attempts with
+    | _, n when n <= 0 -> ()
+    | None, _ -> ()
+    | Some c, _ ->
+      let! running = Client.isRunning c
+      match running with
+      | false -> ()
+      | true ->
+        do! sleep 500
+        do! waitForDaemonGone (attempts - 1)
   }
 
 let openDashboard () =
@@ -1905,29 +1986,35 @@ let evalAdvance () =
         let blockLine = Some (blockStart + 1) // 0-based → 1-based
         InlineDeco.flashEvalRange ed blockStart blockEnd
         let out = getOutput ()
-        let! result = evalCore code filePath (Some "block") blockLine
-        match logEvalResult out result with
-        | EvalError errMsg ->
-          InlineDeco.showInlineDiagnostic ed errMsg (Some blockEnd)
-        | EvalOk (output, elapsed) ->
-          InlineDeco.showInlineResult ed output (Some elapsed) (Some blockEnd)
-          // Move cursor to next non-blank line after the block end
-          let lineCount = int ed.document.lineCount
-          let mutable nextLine = blockEnd + 1
-          while nextLine < lineCount && ed.document.lineAt(float nextLine).text.Trim() = "" do
-            nextLine <- nextLine + 1
-          match nextLine < lineCount with
-          | true ->
-            let pos = newPosition nextLine 0
-            let sel = newSelection pos pos
-            setEditorSelection ed sel
-            revealEditorRange ed (newRange nextLine 0 nextLine 0)
-          | false -> ()
-        | EvalConnectionError _ -> ()
+        // `shift+enter` is the keybinding users press most often, and it was
+        // the one eval path with NO feedback at all (roast §8) — while
+        // `sagefs.eval` next to it already had `withProgress`.
+        do! Window.withProgress ProgressLocation.Window "SageFs: evaluating..." (fun _p _t ->
+          promise {
+            let! result = evalCore code filePath (Some "block") blockLine
+            match logEvalResult out result with
+            | EvalError errMsg ->
+              InlineDeco.showInlineDiagnostic ed errMsg (Some blockEnd)
+            | EvalOk (output, elapsed) ->
+              InlineDeco.showInlineResult ed output (Some elapsed) (Some blockEnd)
+              // Move cursor to next non-blank line after the block end
+              let lineCount = int ed.document.lineCount
+              let mutable nextLine = blockEnd + 1
+              while nextLine < lineCount && ed.document.lineAt(float nextLine).text.Trim() = "" do
+                nextLine <- nextLine + 1
+              match nextLine < lineCount with
+              | true ->
+                let pos = newPosition nextLine 0
+                let sel = newSelection pos pos
+                setEditorSelection ed sel
+                revealEditorRange ed (newRange nextLine 0 nextLine 0)
+              | false -> ()
+            | EvalConnectionError _ -> ()
+          })
   }
 
 let cancelEvalCmd () =
-  simpleCommand "Eval cancelled" Client.cancelEval
+  simpleCommand "SageFs: cancelling…" "Eval cancelled" Client.cancelEval
 
 /// Navigate to the next code block.
 let nextBlock () =
@@ -2380,13 +2467,16 @@ let activate (context: ExtensionContext) =
   reg "sagefs.prevBlock" (fun _ -> prevBlock ())
   reg "sagefs.loadScript" (fun _ -> loadScriptCmd () |> promiseIgnoreLog logToOutput)
   reg "sagefs.start" (fun _ -> startDaemon () |> promiseIgnoreLog logToOutput)
-  reg "sagefs.stop" (fun _ -> stopDaemon ())
+  reg "sagefs.stop" (fun _ -> stopDaemon () |> promiseIgnoreLog logToOutput)
   reg "sagefs.restart" (fun _ ->
     promise {
       let out = getOutput ()
       out.appendLine "Restarting SageFs daemon..."
-      stopDaemon ()
-      do! sleep 1000
+      // Await the stop, and wait for the port to actually free, before
+      // starting: `startDaemon` short-circuits when it finds a daemon still
+      // running, so a fire-and-forget stop made restart a silent no-op.
+      do! stopDaemon ()
+      do! waitForDaemonGone 20
       do! startDaemon ()
     } |> promiseIgnoreLog logToOutput)
   reg "sagefs.openDashboard" (fun _ -> openDashboard () |> promiseIgnoreLog logToOutput)
@@ -2495,11 +2585,11 @@ let activate (context: ExtensionContext) =
   reg "sagefs.clearResults" (fun _ -> InlineDeco.clearAllDecorations ())
   reg "sagefs.cycleDensity" (fun _ -> cycleDensity ())
   reg "sagefs.enableLiveTesting" (fun _ ->
-    simpleCommand "Live testing enabled" Client.enableLiveTesting |> promiseIgnoreLog logToOutput)
+    simpleCommand "SageFs: enabling live testing…" "Live testing enabled" Client.enableLiveTesting |> promiseIgnoreLog logToOutput)
   reg "sagefs.disableLiveTesting" (fun _ ->
-    simpleCommand "Live testing disabled" Client.disableLiveTesting |> promiseIgnoreLog logToOutput)
+    simpleCommand "SageFs: disabling live testing…" "Live testing disabled" Client.disableLiveTesting |> promiseIgnoreLog logToOutput)
   reg "sagefs.runTests" (fun _ ->
-    simpleCommand "Tests queued" (Client.runTests "") |> promiseIgnoreLog logToOutput)
+    simpleCommand "SageFs: running tests…" "Tests queued" (Client.runTests "") |> promiseIgnoreLog logToOutput)
   reg "sagefs.setRunPolicy" (fun _ ->
     withClient (fun c ->
       promise {
@@ -3190,9 +3280,9 @@ let activate (context: ExtensionContext) =
 
    // Cell highlight: update on cursor move / editor switch (respects density)
   let updateCellHighlightForEditor (ed: TextEditor) =
-    match currentDensity with
-    | Minimal | Normal -> InlineDeco.clearCellHighlight ()
-    | Full ->
+    match densityShows DensityPure.AnnotationSurface.CellHighlight with
+    | false -> InlineDeco.clearCellHighlight ()
+    | true ->
       let langId: string = try ed.document?languageId with _ -> ""
       match langId with
       | "fsharp" ->

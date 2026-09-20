@@ -86,6 +86,14 @@ let create () =
   createObj [
     "onDidChangeCodeLenses" ==> changeEmitter.event
     "provideCodeLenses" ==> fun (doc: TextDocument) (_token: obj) ->
+      // This provider had no density check at all, so `minimal` — documented
+      // as "nothing persistent" — still drew a coverage lens above every
+      // covered function.
+      let density =
+        SageFs.Vscode.DensityPure.Density.ofString ((Workspace.getConfiguration "sagefs").get("density", "full"))
+      match SageFs.Vscode.DensityPure.shows density SageFs.Vscode.DensityPure.AnnotationSurface.CoverageCodeLens with
+      | false -> [||]
+      | true ->
       let filePath = doc.fileName
       let views =
         match Map.tryFind filePath coverageViews with

@@ -13,10 +13,10 @@ let create () =
   createObj [
     "provideCodeLenses" ==> fun (doc: TextDocument) (_token: obj) ->
       let cfg = Workspace.getConfiguration "sagefs"
-      let density = cfg.get("density", "full")
-      match density with
-      | "minimal" | "normal" -> [||]
-      | _ ->
+      let density = SageFs.Vscode.DensityPure.Density.ofString (cfg.get("density", "full"))
+      match SageFs.Vscode.DensityPure.shows density SageFs.Vscode.DensityPure.AnnotationSurface.EvalCodeLens with
+      | false -> [||]
+      | true ->
       let lenses = ResizeArray<CodeLens>()
       let blocks = Blocks.getAllBlockRanges doc
       for blockStart, _blockEnd in blocks do

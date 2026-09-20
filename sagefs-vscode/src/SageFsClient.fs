@@ -323,6 +323,28 @@ let switchSession (sessionId: string) (c: Client) =
 let stopSession (sessionId: string) (c: Client) =
   postCommand c "/api/sessions/stop" (jsonStringify {| sessionId = sessionId |}) 10000
 
+/// Ask the daemon to shut itself down.
+///
+/// WHY this exists: `sagefs.stop` used to kill only the child process THIS
+/// extension spawned, and then unconditionally told you to "stop the daemon
+/// from its terminal" — including when it had just killed it. Against a daemon
+/// started anywhere else (the common case: the user runs one in a terminal)
+/// the command did nothing at all, and `sagefs.restart` was stop-then-start
+/// where `startDaemon` short-circuits on a running daemon, so restart silently
+/// did nothing having just told you to go use the terminal.
+///
+/// The route lives on the DASHBOARD port, not the MCP one.
+let shutdownDaemon (c: Client) : JS.Promise<ApiOutcome> =
+  promise {
+    try
+      let! resp = httpPostRaw (sprintf "http://localhost:%d/api/shutdown" c.dashboardPort) "{}" 5000
+      match resp.statusCode with
+      | 200 -> return Succeeded (Some "Daemon shutting down")
+      | code -> return Failed (sprintf "The daemon refused the shutdown request (HTTP %d)." code)
+    with err ->
+      return Failed (sprintf "Could not reach the daemon to shut it down: %s" (string err))
+  }
+
 let postBufferChanged (request: BufferChangedRequest) (c: Client) =
   postCommand
     c
