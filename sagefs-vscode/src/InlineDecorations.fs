@@ -243,6 +243,11 @@ let showBindingValues
     (blockStartLine: int)
     (bindingValues: SageFs.Vscode.FeatureTypes.ClientBindingValue list) =
   clearBindingValueDecorations ()
+  let cfg = Workspace.getConfiguration "sagefs"
+  let density = SageFs.Vscode.DensityPure.Density.ofString (cfg.get("density", "full"))
+  match SageFs.Vscode.DensityPure.shows density SageFs.Vscode.DensityPure.AnnotationSurface.BindingGhostText with
+  | false -> ()
+  | true ->
   let visible =
     bindingValues
     |> List.filter (fun bv -> InlineDecorationsPure.isVisibleBinding bv.IsFunctionValue bv.SourceLine)

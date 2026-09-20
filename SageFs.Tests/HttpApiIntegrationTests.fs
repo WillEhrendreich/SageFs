@@ -970,6 +970,89 @@ let httpApiRoutingTests =
         client.Dispose()
         killDaemon proc
     }
+
+    // Gap F (outcome-gate sweep): POST /api/sessions/{sid}/workflow reuses
+    // SessionOps.SwitchWorkflow, which restarts the SAME session id
+    // spawn-first into the target workflow (McpServer.fs:2641-2656) instead
+    // of the MCP tool's create-new/stop-old dance — chosen precisely so
+    // switching a workflow never produces a second session for one
+    // workingDirectory. Assert that invariant directly: one session before,
+    // the SAME one session after, now in the new workflow. A fork would
+    // leave two sessions registered for this directory — the exact
+    // "Multiple sessions match workingDirectory" failure mode the route was
+    // chosen to avoid.
+    testTask "POST /api/sessions/{sid}/workflow switches Interactive to HotReload on the SAME session, spawn-first" {
+      let port = reserveLoopbackPort (Some (39000 + (Random().Next(100))))
+      let! proc, client =
+        startDaemonWithArgs port repoRoot []
+      try
+        let! createStatus, createBody =
+          createSession client smokeSampleProject smokeSampleProjectDir
+        createStatus |> Expect.equal "session create should succeed" 200
+
+        let! ready, sessionsBody =
+          waitForReadySession client smokeSampleProjectDir (TimeSpan.FromSeconds(60.0))
+        ready
+        |> Expect.isTrue (sprintf "session should reach Ready before switching workflow. Create: %s Sessions: %s" createBody sessionsBody)
+
+        let sessionsBeforeDoc = JsonDocument.Parse(sessionsBody: string)
+        let sessionsForDir =
+          sessionsBeforeDoc.RootElement.GetProperty("sessions").EnumerateArray()
+          |> Seq.filter (fun session ->
+            normalizeDir (session.GetProperty("workingDirectory").GetString()) = normalizeDir smokeSampleProjectDir)
+          |> Seq.toArray
+        sessionsForDir.Length
+        |> Expect.equal "exactly one session for this workingDirectory before the switch" 1
+        let sessionId = sessionsForDir.[0].GetProperty("id").GetString()
+        sessionsForDir.[0].GetProperty("workflowLabel").GetString()
+        |> Expect.equal "a freshly created session starts in the default Interactive/REPL workflow" "REPL"
+        sessionsBeforeDoc.Dispose()
+
+        let! switchStatus, switchBody =
+          postJson client (sprintf "/api/sessions/%s/workflow" sessionId) {| workflow = "hotreload" |}
+        switchStatus |> Expect.equal "workflow switch accepted" 200
+        let switchDoc = JsonDocument.Parse(switchBody: string)
+        switchDoc.RootElement.GetProperty("success").GetBoolean()
+        |> Expect.isTrue (sprintf "workflow switch should report success: %s" switchBody)
+        switchDoc.RootElement.GetProperty("sessionId").GetString()
+        |> Expect.equal "the switch replies with the SAME session id — spawn-first restarts in place, it never forks" sessionId
+        switchDoc.RootElement.GetProperty("workflow").GetString()
+        |> Expect.equal "the switch reports the target workflow's label" "Hot Reload"
+        switchDoc.Dispose()
+
+        // spawn-first replies as soon as the replacement worker is accepted,
+        // before it is Ready (SessionManager.fs's `spawnFirst`) — poll until
+        // the SAME session id settles into Ready under the new workflow.
+        let started = DateTime.UtcNow
+        let timeout = TimeSpan.FromSeconds(60.0)
+        let mutable settled = false
+        let mutable lastBody = ""
+        while not settled && DateTime.UtcNow - started < timeout do
+          do! Task.Delay(500)
+          let! _, body = getJson client "/api/sessions"
+          lastBody <- body
+          let doc = JsonDocument.Parse(body: string)
+          let matching =
+            doc.RootElement.GetProperty("sessions").EnumerateArray()
+            |> Seq.filter (fun session ->
+              normalizeDir (session.GetProperty("workingDirectory").GetString()) = normalizeDir smokeSampleProjectDir)
+            |> Seq.toArray
+          settled <-
+            matching.Length = 1
+            && matching.[0].GetProperty("id").GetString() = sessionId
+            && matching.[0].GetProperty("status").GetString() = "Ready"
+            && matching.[0].GetProperty("workflowLabel").GetString() = "Hot Reload"
+          doc.Dispose()
+
+        settled
+        |> Expect.isTrue (
+          sprintf
+            "the SAME session id should settle Ready in Hot Reload after the switch — a fork would leave two sessions for one directory. Last /api/sessions: %s"
+            lastBody)
+      finally
+        client.Dispose()
+        killDaemon proc
+    }
   ]
 
 [<Tests>]

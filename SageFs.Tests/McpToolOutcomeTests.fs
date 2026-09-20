@@ -311,6 +311,81 @@ let mcpToolOutcomeTests =
           sprintf
             "list_tests should report the 3 tests /api/live-testing/status confirms are discovered and passing for this session — CONFIRMED LIVE DEFECT, see this test's header. Raw: %s"
             listAllRaw)
+
+        // ── coverage_intel: composes failure narratives + IL instrumentation
+        //    bitmaps + the dependency graph into per-failure coverage
+        //    intelligence. The outcome-gate sweep left this ungated because
+        //    it "could not confirm [instrumentation maps] populate for a
+        //    minimal fixture." Live-verified against this EXACT fixture:
+        //    they do — a real 9-branch instrumentation map for Sample.fs,
+        //    reported with a DiagnosticBlindSpot verdict at 0% coverage for
+        //    the test that just failed. Raw observed shape:
+        //    [{"TestName":"subtract computes the difference","Verdict":
+        //    "DiagnosticBlindSpot","CoveragePercent":0,"TotalBranches":9,
+        //    "BlindSpots":[...9 entries...],"CausalSymbols":[...,
+        //    "SageFs.Tests.Fixtures.McpToolOutcome.Sample.subtract",...]}] ──
+        let! coverageRaw =
+          pollToolUntil client "coverage_intel" [] (TimeSpan.FromSeconds 15.0) (fun raw ->
+            try JsonDocument.Parse(raw: string).RootElement.GetArrayLength() > 0
+            with _ -> false)
+        let coverageDoc = JsonDocument.Parse(coverageRaw: string)
+        let coverageReports = coverageDoc.RootElement.EnumerateArray() |> Seq.toList
+        coverageReports
+        |> Expect.isNonEmpty (sprintf "coverage_intel should report coverage for at least the one failing test. Raw: %s" coverageRaw)
+
+        let subtractCoverage =
+          coverageReports
+          |> List.tryFind (fun r -> r.GetProperty("TestName").GetString() = "subtract computes the difference")
+        subtractCoverage
+        |> Expect.isSome (sprintf "coverage_intel should report on the test that just failed. Raw: %s" coverageRaw)
+        let subtractReport = subtractCoverage.Value
+
+        (subtractReport.GetProperty("TotalBranches").GetInt32(), 0)
+        |> Expect.isGreaterThan "coverage_intel should carry a real IL-instrumented branch count for this compiled fixture, not zero"
+
+        subtractReport.GetProperty("BlindSpots").EnumerateArray() |> Seq.toList
+        |> Expect.isNonEmpty "coverage_intel should list uncovered branch locations for a test with 0% coverage"
+
+        subtractReport.GetProperty("CausalSymbols").EnumerateArray()
+        |> Seq.map (fun s -> s.GetString())
+        |> Seq.exists (fun s -> s.Contains "subtract")
+        |> Expect.isTrue (sprintf "coverage_intel's causal symbols should name the function that actually changed. Raw: %s" coverageRaw)
+        coverageDoc.Dispose()
+
+        // ── suggest_repair: composes explain_test_failure → causal symbol →
+        //    ripple plan. Live-verified real, non-vacuous output for this
+        //    fixture: TestName, CausalChanges and a Suggestion are always
+        //    populated. RipplePlan, however, is honestly confirmed NULL here
+        //    — not a bug, a documented dependency: it only resolves when the
+        //    primary causal symbol is a live FSI binding
+        //    (`state.EvalHistory` / `scope.ActiveBindings`, Mcp.fs's
+        //    suggestRepair), and this session — created via create_session
+        //    workflow=livetesting against a COMPILED project — never ran
+        //    send_fsharp_code, so it carries no eval history at all. The tool
+        //    correctly falls back to its documented "not in the current
+        //    session bindings, re-evaluate the cell" message instead of
+        //    crashing or returning nothing. Raw observed shape:
+        //    {"TestName":"subtract computes the difference","PrimarySymbol":
+        //    "Expect","RipplePlan":null,"Suggestion":"'Expect' is the likely
+        //    cause, but it's not in the current session bindings. ..."} ──
+        // No polling needed: explain_test_failure/diagnose above already
+        // confirmed (via their own polls) that the failure narrative for
+        // this test exists — suggest_repair reads the SAME cached
+        // narrative, so its data is ready on the first call.
+        let! repairRaw = callTool client "suggest_repair" [ "test_name", box "subtract computes the difference" ]
+        let repairDoc = JsonDocument.Parse(repairRaw: string)
+        let repairRoot = repairDoc.RootElement
+        repairRoot.GetProperty("TestName").GetString()
+        |> Expect.equal (sprintf "suggest_repair should name the test it was asked about. Raw: %s" repairRaw) "subtract computes the difference"
+        repairRoot.GetProperty("CausalChanges").EnumerateArray() |> Seq.toList
+        |> Expect.isNonEmpty (sprintf "suggest_repair should carry the same causal changes explain_test_failure reported. Raw: %s" repairRaw)
+        repairRoot.GetProperty("Suggestion").GetString()
+        |> Expect.isNotEmpty (sprintf "suggest_repair should always produce a human-readable suggestion, even without a ripple plan. Raw: %s" repairRaw)
+        repairRoot.GetProperty("RipplePlan").ValueKind
+        |> Expect.equal
+             "RipplePlan is honestly null for a compiled-project session with no FSI eval history — see this block's header comment"
+             JsonValueKind.Null
+        repairDoc.Dispose()
       finally
         try File.WriteAllText(samplePath, originalSample, Http.utf8NoBom) with _ -> ()
         httpClient.Dispose()

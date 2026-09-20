@@ -53,6 +53,11 @@ let create () =
   createObj [
     "onDidChangeCodeLenses" ==> changeEmitter.event
     "provideCodeLenses" ==> fun (doc: TextDocument) (_token: obj) ->
+      let cfg = Workspace.getConfiguration "sagefs"
+      let density = SageFs.Vscode.DensityPure.Density.ofString (cfg.get("density", "full"))
+      match SageFs.Vscode.DensityPure.shows density SageFs.Vscode.DensityPure.AnnotationSurface.TestCodeLens with
+      | false -> [||]
+      | true ->
       let filePath = doc.fileName
       let tests = LiveTestingTypes.VscLiveTestState.testsForFile filePath testState
       let lenses = ResizeArray<CodeLens>()
@@ -82,8 +87,9 @@ let create () =
             | None -> t.DisplayName
           let cmd = createObj [
             "title" ==> title
-            "command" ==> "sagefs.runTests"
+            "command" ==> "sagefs.runTest"
             "tooltip" ==> tooltip
+            "arguments" ==> [| t.FullName |]
           ]
           lenses.Add(newCodeLens range cmd)
           // Add inline narrative lens for failed tests — shows causal context without clicking
