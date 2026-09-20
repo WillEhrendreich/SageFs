@@ -167,6 +167,7 @@
         <Compile Include="McpWireProtocolTests.fs" />
          <Compile Include="HttpApiIntegrationTests.fs" />
          <Compile Include="WarmupContextTests.fs" />
+         <Compile Include="WarmupOpenReplayTests.fs" />
          <Compile Include="WarmupReplayCacheTests.fs" />
          <Compile Include="WarmupInitBoundaryTests.fs" />
          <Compile Include="SessionHealthTests.fs" />

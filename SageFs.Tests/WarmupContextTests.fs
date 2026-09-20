@@ -4,6 +4,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.AppState
+open SageFs.OpenReplay
 open SageFs.WarmUp
 open SageFs.McpAdapter
 open SageFs.WorkflowTypes

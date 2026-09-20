@@ -243,11 +243,10 @@ module SessionContextTui =
         let kind = OpenableKind.label f.Kind
         lines.Add(sprintf "✖ %s (%s): %s" f.Name kind f.ErrorMessage)
         for d in f.Diagnostics do
-          let loc =
-            match d.FileName with
-            | Some fn -> sprintf "%s:%d:%d" fn d.StartLine d.StartColumn
-            | None -> "unknown"
-          lines.Add(sprintf "    FS%04d %s — %s" d.ErrorNumber loc d.Message)
+          lines.Add(sprintf "    %s" (WarmupFcsDiagnostic.formatLine d))
+        match WarmupOpenFailure.suggestedAction f with
+        | Some action -> lines.Add(sprintf "    → %s" action)
+        | None -> ()
     | false -> ()
 
     let files = ctx.FileStatuses

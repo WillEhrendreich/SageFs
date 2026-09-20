@@ -14,6 +14,32 @@ type WarmupFcsDiagnostic = {
   EndColumn: int
 }
 
+module WarmupFcsDiagnostic =
+  /// One line of `FS%04d ... — message` for a diagnostic. When the
+  /// diagnostic carries no source file (warm-up opens are evaluated from
+  /// stdin, not a file — see `toWarmupDiagnostics`), the location segment is
+  /// omitted entirely rather than rendered as a fake "unknown" placeholder:
+  /// the absence of a location is a real fact, not something to paper over.
+  let formatLine (d: WarmupFcsDiagnostic) : string =
+    match d.FileName with
+    | Some fn -> sprintf "FS%04d %s:%d:%d — %s" d.ErrorNumber fn d.StartLine d.StartColumn d.Message
+    | None -> sprintf "FS%04d — %s" d.ErrorNumber d.Message
+
+  /// FSI's own exception message for a failed interaction is a generic
+  /// wrapper ("Operation could not be completed due to earlier error(s)")
+  /// regardless of what actually went wrong — true whether the failing
+  /// statement was the first in the submission or came after an earlier one
+  /// in the same batch. The real reason lives in the diagnostics FCS
+  /// reported alongside it. Prefer the first Error-severity diagnostic's own
+  /// message; fall back to the exception message only when FSI genuinely
+  /// captured no diagnostics at all (a host-level exception, not a compile
+  /// error).
+  let pickErrorMessage (exceptionMessage: string) (diagnostics: WarmupFcsDiagnostic list) : string =
+    diagnostics
+    |> List.tryFind (fun d -> d.Severity = "error")
+    |> Option.map (fun d -> d.Message)
+    |> Option.defaultValue exceptionMessage
+
 /// Whether an openable entity is an F# module or a namespace.
 [<RequireQualifiedAccess>]
 type OpenableKind =
@@ -51,6 +77,31 @@ type WarmupOpenFailure = {
   RetryCount: int
   DurationMs: float
 }
+
+module WarmupOpenFailure =
+  /// The sentinel name AppState.fs's discovery-time warnings use (a missing
+  /// project assembly, a partially-loaded one, or "nothing found to open")
+  /// when folded into the same failed-opens list the dashboard/TUI render.
+  /// Its `ErrorMessage` IS the actionable explanation already, so it gets no
+  /// separate suggestion below.
+  [<Literal>]
+  let DiscoveryWarningName = "(auto-open discovery)"
+
+  /// What to do about a genuine per-name open failure — one FSI actually
+  /// attempted and rejected, as opposed to a discovery-time warning. Honest
+  /// about what SageFs can and cannot know: a failed `open` alone doesn't
+  /// say whether the name is a typo, was never built, or names a
+  /// nested/private definition that only resolves fully qualified — so the
+  /// suggestion covers the mechanical fix (rebuild + reset) and names the
+  /// one class of cause SageFs itself knows it can never auto-open.
+  let suggestedAction (f: WarmupOpenFailure) : string option =
+    match f.Name = DiscoveryWarningName with
+    | true -> None
+    | false ->
+      Some (
+        sprintf
+          "Run 'dotnet build' for the project, then hard_reset_fsi_session. If '%s' still doesn't resolve after that, it is not a public, top-level, fully-qualified name in any loaded assembly — SageFs cannot auto-open a nested or private module by its short name; open it explicitly and fully qualified from your own code instead."
+          f.Name)
 
 /// Phase timing breakdown for warmup.
 type WarmupPhaseTiming = {

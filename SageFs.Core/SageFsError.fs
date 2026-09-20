@@ -524,7 +524,7 @@ module SageFsError =
     | SageFsError.CompletionFailed _ -> "Retry or run reset_fsi_session"
     | SageFsError.CancelFailed _ -> "Retry or run hard_reset_fsi_session"
     | SageFsError.EvalSupersededByReset -> "Run the code again in the fresh session"
-    | SageFsError.WarmupOpenFailed _ -> "Check that the namespace exists in the project"
+    | SageFsError.WarmupOpenFailed _ -> "Run 'dotnet build' for the project, then hard_reset_fsi_session. If it still doesn't resolve, it is not a public, top-level, fully-qualified name in any loaded assembly — SageFs cannot auto-open a nested or private module by its short name."
     | SageFsError.WarmupContextFailed _ -> "Run hard_reset_fsi_session"
     | SageFsError.HotReloadFailed _ -> "Check the file for syntax errors"
     | SageFsError.HotReloadStateError _ -> "Run hard_reset_fsi_session"

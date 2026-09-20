@@ -395,42 +395,12 @@ let evalFn (token: CancellationToken) =
 
 open System.Threading.Tasks
 open System.Threading
+open SageFs.OpenReplay
 
-/// Extract all `open` namespace/module names from a source file's lines.
-/// Returns distinct names preserving first-occurrence order.
-/// Ignores commented-out lines and any non-`open` lines.
-let extractOpensFromLines (lines: string[]) : string[] =
-  lines
-  |> Array.choose (fun line ->
-    let trimmed = line.Trim()
-    match trimmed.StartsWith("open ", System.StringComparison.Ordinal) && not (trimmed.StartsWith("//", System.StringComparison.Ordinal)) with
-    | false -> None
-    | true ->
-      let parts = trimmed.Split([|' '; '\t'|], StringSplitOptions.RemoveEmptyEntries)
-      match parts.Length >= 2 with
-       | true -> Some (parts.[1].TrimEnd(';'))
-       | false -> None)
-  |> Array.distinct
-
-/// The full names of the INTERNAL top-level F# modules among `types` (e.g.
-/// `SageFs.WarmupReplayCache`). Warmup must not replay a source file's own
-/// `open` of such a module: it is legal inside the assembly but fails from the
-/// FSI session, which cannot see internal members of a separately-loaded
-/// assembly ("namespace not defined") — non-fatal warmup noise (roast-7 F7).
-/// A top-level module is a non-nested type carrying the F# Module construct
-/// flag; `internal` shows up in reflection as `not IsPublic` on a non-nested
-/// type. Pure over the reflected types so it is unit-testable against a real
-/// assembly.
-let internalTopLevelModuleFullNames (types: System.Type[]) : Set<string> =
-  types
-  |> Array.filter (fun t ->
-    (not t.IsPublic) && (not t.IsNested) && not (isNull t.FullName)
-    && (t.GetCustomAttributes(typeof<Microsoft.FSharp.Core.CompilationMappingAttribute>, false)
-        |> Array.exists (fun attr ->
-          let cma = attr :?> Microsoft.FSharp.Core.CompilationMappingAttribute
-          cma.SourceConstructFlags = Microsoft.FSharp.Core.SourceConstructFlags.Module)))
-  |> Array.map (fun t -> t.FullName)
-  |> Set.ofArray
+/// Re-exported for backward compatibility — the tested surface used to live
+/// here; the implementation now lives in `SageFs.OpenReplay` alongside the
+/// rest of the pure open-replay decision core (see that file's header).
+let internalTopLevelModuleFullNames = OpenReplay.internalTopLevelModuleFullNames
 
 let internal resolveWarmupReplayPlan
   (logger: ILogger)
@@ -470,16 +440,17 @@ let private discoverWarmupReplayPlan
     let openedNamespaces = System.Collections.Generic.HashSet<string>()
     let namesToOpen = System.Collections.Generic.List<string>()
     let moduleNames = System.Collections.Generic.HashSet<string>()
-    // Full names of the project's own INTERNAL top-level modules (e.g.
-    // `SageFs.WarmupReplayCache`). The source-scan (extractOpensFromLines)
-    // collects `open X` lines verbatim from each .fs file — including a file's
-    // legal SAME-assembly `open` of an internal module — and replays them in the
-    // FSI session, which is a DIFFERENT assembly where that module is not
-    // accessible, so the open fails ("namespace not defined"): non-fatal but
-    // user-visible warmup noise (roast-7 dogfood finding F7). Collected from the
-    // reflection scan below (which knows visibility) and filtered out before the
-    // opens are replayed.
-    let internalModuleFullNames = System.Collections.Generic.HashSet<string>()
+    // Every F# module reflected out of the solution's own project assemblies
+    // (internal or public, nested or not). The source-scan
+    // (extractOpensFromLines) collects `open X` lines verbatim from each .fs
+    // file — including a file's own legal `open` of a module that is only
+    // legal exactly where it's written (an internal top-level module, or a
+    // nested module opened by its bare name) — and warmup must not replay
+    // those into the FSI session, a separately loaded assembly where they
+    // cannot resolve ("namespace not defined": non-fatal but user-visible
+    // warmup noise, roast-7 F7 and roast-8). `resolveWarmupOpens` decides,
+    // from these facts, which scraped names are safe to replay.
+    let moduleFacts = System.Collections.Generic.List<ReflectedModuleFact>()
     let loadedAssemblies = System.Collections.Generic.List<LoadedAssembly>()
     // Problems discovered during warmup planning that the user must see
     // (missing project DLLs, zero namespaces found despite auto-open ON).
@@ -562,6 +533,24 @@ let private discoverWarmupReplayPlan
               asm.GetTypes()
             with
             | :? System.Reflection.ReflectionTypeLoadException as ex ->
+              // The assembly loaded, but one or more of its types could not
+              // (a missing dependency, most commonly) — GetTypes() only
+              // gives back the types that DID load; LoaderExceptions names
+              // WHY the rest didn't, and the user needs that name, not a
+              // silent partial namespace/module scan.
+              let missingDependencies =
+                ex.LoaderExceptions
+                |> Array.choose (fun e -> if isNull e then None else Some e.Message)
+                |> Array.distinct
+              let msg =
+                sprintf "Project assembly loaded only partially: %s — %d of its type(s) could not be loaded (%s). Run 'dotnet build' to restore any missing dependency; namespaces/modules from the unloaded types could not be auto-opened."
+                  project.TargetPath
+                  (ex.Types |> Array.filter isNull |> Array.length)
+                  (match missingDependencies with
+                   | [||] -> "reason unknown — check the SageFs log"
+                   | names -> String.concat "; " names)
+              Log.warn "[Warmup] %s" msg
+              discoveryWarnings.Add(msg)
               ex.Types |> Array.filter (fun t -> not (isNull t))
 
           let rootNamespaces =
@@ -605,11 +594,11 @@ let private discoverWarmupReplayPlan
               | false -> t.Name)
             |> Array.distinct
 
-          // Record this assembly's INTERNAL top-level modules so source-scanned
-          // `open`s of them (legal in-assembly, impossible from the FSI session)
-          // can be dropped before replay (F7).
-          for name in internalTopLevelModuleFullNames types do
-            internalModuleFullNames.Add name |> ignore
+          // Record this assembly's module facts so source-scanned `open`s
+          // that cannot resolve from the FSI session (internal top-level
+          // modules — F7 — and nested modules, public or not) can be dropped
+          // before replay via `resolveWarmupOpens`.
+          moduleFacts.AddRange(reflectedModuleFacts types)
 
           for ns in rootNamespaces do
             match openedNamespaces.Add(ns) with
@@ -659,13 +648,21 @@ let private discoverWarmupReplayPlan
         sprintf "Auto-open was enabled and %d source file(s) were scanned, but no namespaces/modules were found to open. If the project defines modules, ensure they are compiled into the project assembly (dotnet build) and are not hidden behind RequireQualifiedAccess." n)
     | _ -> ()
 
-    // Drop opens that name the project's own internal top-level modules — they
-    // are legal inside the assembly's source (where extractOpensFromLines found
-    // them) but fail from the FSI session, which cannot see internal members of
-    // a separately-loaded assembly (roast-7 dogfood finding F7).
+    // Drop opens that cannot possibly resolve from the FSI session — internal
+    // top-level modules (roast-7 F7) and nested modules, public or not
+    // (roast-8) — one decision instead of two parallel filters. This can only
+    // ever DROP a name the reflection scan positively proved unresolvable;
+    // anything it has no evidence against (a BCL/NuGet namespace, say) is
+    // kept exactly as before. Dropped names are not warmup failures — they
+    // were never attempted — so they get a debug trace, never a warning.
+    let openResolution = resolveWarmupOpens (Seq.toList namesToOpen) (Seq.toList moduleFacts)
+
+    for droppedName, reason in openResolution.Dropped do
+      logger.LogDebug
+        (sprintf "  Dropped source-scanned open '%s' before replay: %s" droppedName (DroppedOpenReason.describe reason))
+
     let namePairs =
-      namesToOpen
-      |> Seq.filter (fun name -> not (internalModuleFullNames.Contains name))
+      openResolution.Replayable
       |> Seq.map (fun name ->
         name,
         match moduleNames.Contains(name) with
@@ -837,6 +834,10 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
           StartColumn = d.Range.StartColumn
           EndColumn = d.Range.EndColumn })
       |> Array.toList
+    // The real "why" for a failed open lives in the diagnostics, not in
+    // FSI's own generic exception message — see WarmUp.WarmupFcsDiagnostic.pickErrorMessage.
+    let describeOpenFailure (ex: exn) (diagnostics: Diagnostics.Diagnostic array) =
+      WarmupFcsDiagnostic.pickErrorMessage ex.Message (toWarmupDiagnostics diagnostics)
     let reportOpenSuccess name elapsed =
       openCount <- openCount + 1
       onProgress(openCount, totalNames, sprintf "✅ open %s (%.0fms)" name elapsed)
@@ -869,7 +870,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
           WarmUp.OpenSuccess elapsed
         | false ->
           reportOpenFailure name elapsed
-          WarmUp.OpenFailed (ex.Message, toWarmupDiagnostics diagnostics, elapsed)
+          WarmUp.OpenFailed (describeOpenFailure ex diagnostics, toWarmupDiagnostics diagnostics, elapsed)
     let batchOpener batch =
       ct.ThrowIfCancellationRequested()
       match batch with
@@ -896,8 +897,9 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
           logger.LogDebug (sprintf "✅ Opened batch of %d namespaces/modules in %.1fms" batch.Length elapsed)
           WarmUp.OpenSuccess elapsed
         | Choice2Of2 ex ->
-          logger.LogDebug (sprintf "Batch open failed for %d namespaces/modules in %.1fms: %s" batch.Length elapsed ex.Message)
-          WarmUp.OpenFailed (ex.Message, toWarmupDiagnostics diagnostics, elapsed)
+          let reason = describeOpenFailure ex diagnostics
+          logger.LogDebug (sprintf "Batch open failed for %d namespaces/modules in %.1fms: %s" batch.Length elapsed reason)
+          WarmUp.OpenFailed (reason, toWarmupDiagnostics diagnostics, elapsed)
 
     let succeeded, failed =
       match autoOpenNamespaces with
@@ -920,11 +922,10 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
         let kind = OpenableKind.label f.Kind
         logger.LogWarning (sprintf "  ✗ %s (%s): %s" f.Name kind f.ErrorMessage)
         for d in f.Diagnostics do
-          let loc =
-            match d.FileName with
-            | Some fn -> sprintf "%s:%d:%d" fn d.StartLine d.StartColumn
-            | None -> "unknown location"
-          logger.LogWarning (sprintf "    FS%04d %s — %s" d.ErrorNumber loc d.Message)
+          logger.LogWarning (sprintf "    %s" (WarmupFcsDiagnostic.formatLine d))
+        match WarmupOpenFailure.suggestedAction f with
+        | Some action -> logger.LogWarning (sprintf "    → %s" action)
+        | None -> ()
     | true -> ()
 
     // WHY — verify project references actually loaded into the AppDomain. FSI
@@ -970,7 +971,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
       let warningFailures =
         replayPlan.DiscoveryWarnings
         |> List.map (fun msg -> {
-          Name = "(auto-open discovery)"
+          Name = WarmupOpenFailure.DiscoveryWarningName
           Kind = OpenableKind.Namespace
           ErrorMessage = msg
           Diagnostics = []

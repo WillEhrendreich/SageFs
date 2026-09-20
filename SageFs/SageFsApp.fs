@@ -42,15 +42,14 @@ module WarmupBanner =
         Timestamp = now; SessionId = sid
       }
       for d in f.Diagnostics do
-        let loc =
-          match d.FileName with
-          | Some fn -> sprintf "%s:%d:%d" fn d.StartLine d.StartColumn
-          | None -> "unknown"
         lines.Add {
           Kind = OutputKind.Error
-          Text = sprintf "    FS%04d %s — %s" d.ErrorNumber loc d.Message
+          Text = sprintf "    %s" (WarmupFcsDiagnostic.formatLine d)
           Timestamp = now; SessionId = sid
         }
+      WarmupOpenFailure.suggestedAction f
+      |> Option.iter (fun action ->
+        lines.Add { Kind = OutputKind.Error; Text = sprintf "    → %s" action; Timestamp = now; SessionId = sid })
     match ctx.FileStatuses.Length > 0 with
     | true ->
       let loaded = ctx.FileStatuses |> List.filter (fun f -> f.Readiness = Loaded) |> List.length
