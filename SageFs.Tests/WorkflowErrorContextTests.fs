@@ -89,10 +89,21 @@ let webLiveFs0037IncludesSwitchHint =
     let enhanced = WorkflowErrorContext.enhance workflow error suggestion
 
     enhanced
-    |> Expect.stringContains "should mention Live mode restriction" "Live mode"
+    |> Expect.stringContains "should name the workflow the restriction applies to" "Hot Reload workflow"
 
     enhanced
     |> Expect.stringContains "should mention switch_workflow tool" "switch_workflow"
+
+    // WHY these two absences are asserted: the shipped hint used to end with "or
+    // Ctrl+W in TUI" — a keystroke in a client that no longer ships, so the one
+    // actionable half of the hint pointed at nothing. It also said "Live mode",
+    // which is the old name AND an alias trap: "live" means Hot Reload, not live
+    // testing. Both are easy to reintroduce from muscle memory, so they are pinned.
+    enhanced.Contains "TUI"
+    |> Expect.isFalse "must not name the deprecated TUI, whose keystroke no user can press"
+
+    enhanced.Contains "Live mode"
+    |> Expect.isFalse "must not say 'Live mode' — the workflow is HotReload, and 'live' is an alias trap"
 
     enhanced
     |> Expect.stringContains "should preserve original suggestion" suggestion
