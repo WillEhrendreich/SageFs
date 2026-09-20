@@ -492,7 +492,6 @@ Usage: sagefs [options]                Start daemon (bare by default)
 
 Daemon options:
   --no-resume            Skip restoring previous sessions on startup
-  --no-watch             Disable file watching for all sessions
   --prune                Mark all stale sessions as stopped, then exit
   --supervised           Auto-restart on crash (exponential backoff)
   --mcp-port PORT        Custom MCP port (default: 37749). The dashboard runs on this port + 1.
