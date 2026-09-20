@@ -184,29 +184,36 @@ let wireSessionHealthSubscriptionTests = testList "wireSessionHealthSubscription
 [<Tests>]
 let replayHealthSnapshotTests = testList "replayHealthSnapshot" [
 
-  testCase "writes the CURRENT (already-Degraded) verdict without waiting for a transition" <| fun _ ->
+  // WHY testTask rather than testCase plus a blocking await: blocking on an
+  // awaitable inside a test body is banned here — it starves the thread pool and
+  // is ratcheted by "Architecture — blocking-call budgets". `do!` is the whole fix.
+  // (The blocking call is deliberately not spelled out above: the ratchet counts
+  // any line containing that literal, so naming it would count as its own debt.)
+  testTask "writes the CURRENT (already-Degraded) verdict without waiting for a transition" {
     let getWarmup (_: string) = Task.FromResult (Some nothingLoadedWarmup)
     let getAllSessions () = Task.FromResult [ mkSessionInfo () ]
     let ctx = mkSseContext getWarmup (Event<string>())
     use stream = new IO.MemoryStream()
 
-    (replayHealthSnapshot ctx getAllSessions stream).GetAwaiter().GetResult()
+    do! replayHealthSnapshot ctx getAllSessions stream
 
     stream.Position <- 0L
     let written = (new IO.StreamReader(stream)).ReadToEnd()
     written |> Expect.stringContains "replay carries the session channel event" "event: session"
     written |> Expect.stringContains "replay carries the session id" (WorkerProtocol.SessionId.value sessId)
     written |> Expect.stringContains "replay carries the CURRENT Degraded verdict" "\"status\":\"Degraded\""
+  }
 
-  testCase "writes Healthy for a session with no warmup data yet (quiet common case)" <| fun _ ->
+  testTask "writes Healthy for a session with no warmup data yet (quiet common case)" {
     let getWarmup (_: string) = Task.FromResult (None: WarmupContext option)
     let getAllSessions () = Task.FromResult [ mkSessionInfo () ]
     let ctx = mkSseContext getWarmup (Event<string>())
     use stream = new IO.MemoryStream()
 
-    (replayHealthSnapshot ctx getAllSessions stream).GetAwaiter().GetResult()
+    do! replayHealthSnapshot ctx getAllSessions stream
 
     stream.Position <- 0L
     let written = (new IO.StreamReader(stream)).ReadToEnd()
     written |> Expect.stringContains "replay carries Healthy" "\"status\":\"Healthy\""
+  }
 ]

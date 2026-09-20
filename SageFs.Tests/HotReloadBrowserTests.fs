@@ -40,13 +40,18 @@ module HrEnv =
   let greetingFile = lazy Path.Combine(fixtureDir.Value, "Greeting.fs")
 
 /// HTTP GET the running app's / route.
-let private httpGet (url: string) =
+// WHY this awaits rather than blocking: every caller is already inside a task,
+// so `.GetAwaiter().GetResult()` here bought nothing and spent a pool thread.
+// The "Architecture — blocking-call budgets" ratchet counts exactly this, and
+// the rule is to shrink the debt rather than raise the number.
+let private httpGet (url: string) = task {
   use client = new HttpClient()
   client.Timeout <- TimeSpan.FromSeconds(10.0)
   try
-    client.GetStringAsync(url + "/").GetAwaiter().GetResult()
+    return! client.GetStringAsync(url + "/")
   with ex ->
-    failwithf "HTTP GET %s/ failed: %s" url ex.Message
+    return failwithf "HTTP GET %s/ failed: %s" url ex.Message
+}
 
 /// Poll the running app until its body contains `needle` (or timeout).
 let private waitForAppBody (url: string) (needle: string) (timeoutMs: int) = task {
@@ -54,7 +59,7 @@ let private waitForAppBody (url: string) (needle: string) (timeoutMs: int) = tas
   let mutable found = ""
   while found = "" && sw.ElapsedMilliseconds < int64 timeoutMs do
     try
-      let body = httpGet url
+      let! body = httpGet url
       if body.Contains needle then found <- body
     with _ -> ()
     if found = "" then do! Task.Delay(250)
@@ -154,7 +159,7 @@ let tests =
         let mutable served = false
         while not served && sw.ElapsedMilliseconds < 60_000L do
           try
-            let body = httpGet HrEnv.appUrl.Value
+            let! body = httpGet HrEnv.appUrl.Value
             if body.Contains("hello from hot reload (value B)") then
               served <- true
             else
