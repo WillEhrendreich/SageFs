@@ -730,7 +730,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
           match fsiInitErrors.Length > 0 with
           | true -> logger.LogWarning (sprintf "  FSI init warnings: %s" fsiInitErrors)
           | false -> ()
-          return (new FsiSession.InProcessFsiSession(raw) :> FsiSession.IFsiSession)
+          return (new FsiSession.InProcessFsiSession(raw, SessionAgent.agentInitOf sln) :> FsiSession.IFsiSession)
         }
       | SessionKinds.Isolated ->
         async {
@@ -1979,8 +1979,21 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
   let getStatusMessage () =
     let snap = System.Threading.Volatile.Read(&latestSnapshot)
     SessionPhase.statusMessage snap.Phase
+  // The session's agent scans the process its user's code lives in; a session that is not active has none to ask.
+  let inactive = HostAgent.AgentUnavailable "the session is not active"
+  let sessionAgent : SessionAgent.SessionAgent =
+    { DiscoverLoaded =
+        fun () ->
+          match (System.Threading.Volatile.Read(&latestSnapshot)).Phase with
+          | Active (st, _) when not (isNull (box st.Session)) -> st.Session.DiscoverLoaded()
+          | _ -> inactive
+      RunTest =
+        fun test ->
+          match (System.Threading.Volatile.Read(&latestSnapshot)).Phase with
+          | Active (st, _) when not (isNull (box st.Session)) -> st.Session.RunTest test
+          | _ -> async { return inactive } }
   let cancelCurrentEval () =
     actor.PostAndAsyncReply(fun reply -> CancelEval reply)
     |> Async.StartAsTask
 
-  actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage
+  actor, diagnosticsChangedEvent.Publish, cancelCurrentEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent

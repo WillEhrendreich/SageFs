@@ -15,14 +15,9 @@ let commonMiddleware: AppState.Middleware list = [
   HotReloading.hotReloadingMiddleware
 ]
 
-let commonInitFunctions = [ HotReloading.hotReloadingInitFunction ]
-
-/// The init functions for a worker whose sessions live in `kind`. An isolated session must not have the worker load
-/// the user's assemblies (see HotReloading.isolatedInitFunction).
-let initFunctionsFor (kind: SessionKinds.FsiSessionKind) : (Solution -> string * obj) list =
-  match kind with
-  | SessionKinds.InProcess -> commonInitFunctions
-  | SessionKinds.Isolated -> [ HotReloading.isolatedInitFunction ]
+/// Hot reload used to seed its registry here, loading every project's assemblies into the WORKER. The session's agent owns
+/// that now, in whichever process the user's code runs, so nothing is loaded on the worker's behalf.
+let commonInitFunctions : (Solution -> string * obj) list = []
 
 open System
 open System.IO
@@ -71,6 +66,8 @@ type ActorResult = {
   GetWarmupContext: unit -> WarmupContext
   GetStartupConfig: unit -> StartupConfig option
   GetStatusMessage: unit -> string option
+  /// Scan the session's process for the project's tests (the agent runs where the user's code runs).
+  Agent: SessionAgent.SessionAgent
   ProjectDirectories: string list
   /// Shared hot-reload state — file watcher reads, API writes.
   HotReloadStateRef: HotReloadState.T ref
@@ -134,11 +131,11 @@ let createActorImmediate a =
             |> Option.defaultValue "Unknown"
           { Tracing.NamedMiddleware.Name = name; Middleware = mw })
       Tracing.buildTracedPipeline named "CoreEval" evalFn
-  let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage =
+  let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent =
     mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled a.OnEvent tracedBuild sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
-  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = sln.Projects |> List.map (fun po -> po.ProjectFileName, po.TargetPath); ProjectRoles = SageFs.ProjectLoading.classifyProjects sln.Projects }
+  { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = sln.Projects |> List.map (fun po -> po.ProjectFileName, po.TargetPath); ProjectRoles = SageFs.ProjectLoading.classifyProjects sln.Projects }
 
 /// Phase 2: Add middleware — blocks until init() completes and the
 /// eval actor is ready to process messages in its main loop.

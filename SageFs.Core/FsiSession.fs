@@ -10,6 +10,7 @@ open System.Reflection
 open System.Threading
 open FSharp.Compiler.Interactive.Shell
 open SageFs.Features
+open SageFs.HostAgent
 open SageFs.Utils
 
 /// A boolean feature gate bound in the session (`_SageFsHotReload`, `_SageFsCompExpr`).
@@ -42,8 +43,15 @@ type IFsiSession =
   abstract TypeCheckWithSymbols: filePath: string * text: string -> Diagnostics.TypeCheckWithSymbolsResult
   /// The current value of a bound name, or null when it is not bound.
   abstract BoundValue: name: string -> obj | null
-  /// The assemblies FSI has emitted so far (hot reload and live testing reflect over these IN-PROCESS).
-  abstract DynamicAssemblies: Assembly[]
+  /// What starting the session's agent found (which project assemblies could not be loaded, and why).
+  abstract AgentStarted: AgentReply<AgentStarted>
+  /// The agent's work after an eval: redefined methods (detoured when asked) and the tests found. The agent runs where
+  /// the user's code runs, so this is an in-process call or a message to the isolated host.
+  abstract AfterEval: AfterEval -> AgentReply<AfterEvalReport>
+  /// Scan what the session's process has loaded for tests.
+  abstract DiscoverLoaded: unit -> AgentReply<Discovery>
+  /// Run one discovered test where it lives.
+  abstract RunTest: test: LiveTesting.TestCase -> Async<AgentReply<LiveTesting.TestResult>>
 
 /// Evaluate and raise on failure: the throwing form, for startup scripts whose failure must abort.
 let evalOrThrow (session: IFsiSession) (code: string) (cancellationToken: CancellationToken) : unit =
@@ -81,7 +89,9 @@ let private captureLiveValueSnapshotJson (session: FsiEvaluationSession) (genera
 
 /// An FSI session that lives in THIS process: today's behaviour, behind the port.
 [<Sealed; AllowNullLiteral>]
-type InProcessFsiSession(session: FsiEvaluationSession) =
+type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
+  let agent = Agent(init, currentProcess (fun () -> session.DynamicAssemblies))
+
   interface IFsiSession with
     member _.Eval(code, cancellationToken) =
       let result, diagnostics = session.EvalInteractionNonThrowing(code, cancellationToken)
@@ -118,6 +128,16 @@ type InProcessFsiSession(session: FsiEvaluationSession) =
       |> Option.map (fun bound -> bound.Value.ReflectionValue)
       |> Option.toObj
 
-    member _.DynamicAssemblies = session.DynamicAssemblies
+    member _.AgentStarted = AgentAnswered agent.Started
+
+    member _.AfterEval(request) = AgentAnswered(agent.AfterEval request)
+
+    member _.DiscoverLoaded() = AgentAnswered(agent.DiscoverLoaded())
+
+    member _.RunTest(test) =
+      async {
+        let! result = agent.RunTest test
+        return AgentAnswered result
+      }
 
     member _.Dispose() = (session :> IDisposable).Dispose()

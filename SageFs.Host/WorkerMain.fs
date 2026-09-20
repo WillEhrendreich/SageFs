@@ -535,7 +535,7 @@ let run (sessionId: string) (port: int) = async {
 
   let actorArgs : ActorCreation.ActorArgs = {
     Middleware = ActorCreation.commonMiddleware
-    InitFunctions = ActorCreation.initFunctionsFor (SessionKinds.fromEnvironmentWith System.Environment.GetEnvironmentVariable)
+    InitFunctions = ActorCreation.commonInitFunctions
     Logger = logger
     OutStream = IO.TextWriter.Null
     UseAsp = false
@@ -563,55 +563,23 @@ let run (sessionId: string) (port: int) = async {
   if WorkflowTypes.ReloadStrategy.installsWebDevReload reloadStrategy then
     DevReloadInjector.install()
 
-  // Two-layer RunTest: project assemblies (stable) + dynamic FSI assemblies (updated per eval).
-  // Warm-up evals go through the middleware (which discovers tests and builds a RunTest closure),
-  // but the response metadata is consumed internally by the actor — handleMessage never sees it.
-  // We discover tests directly from loaded assemblies after actor creation.
-  let testFrameworkMarkers = [| "Expecto"; "xunit.core"; "xunit.v3.core"; "nunit.framework"; "Microsoft.VisualStudio.TestPlatform.TestFramework"; "TUnit.Core" |]
-  let testAssemblies =
-    System.AppDomain.CurrentDomain.GetAssemblies()
-    |> Array.filter (fun a ->
-      try
-        a.GetReferencedAssemblies()
-        |> Array.exists (fun r -> testFrameworkMarkers |> Array.contains r.Name)
-      with ex ->
-        Log.warn "[WorkerMain] Assembly framework check failed for %s: %s\n%s" a.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        false)
-  let projectDiscoveryResults =
-    testAssemblies
-    |> Array.choose (fun asm ->
-      try
-        let hr =
-          Features.LiveTesting.LiveTestingHook.afterReload
-            Features.LiveTesting.BuiltInExecutors.builtIn asm []
-        match hr.DiscoveredTests.Length > 0 with
-        | true -> Some hr
-        | false -> None
-      with ex ->
-        Log.error "[WorkerMain] LiveTestingHook.afterReload failed for %s: %s\n%s" asm.FullName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-        None)
-
+  // The agent lives where the user's code lives (this process, or the isolated FSI host). It scans what that process has
+  // loaded for tests, and it runs them: interactively defined tests first, then the project's.
   let initialDiscoveredTests, initialProviders =
-    mergeInitialDiscoveryResults projectDiscoveryResults
+    match result.Agent.DiscoverLoaded() with
+    | HostAgent.AgentAnswered discovery -> discovery.Tests, discovery.Providers
+    | HostAgent.AgentUnavailable reason ->
+      Log.warn "[WorkerMain] no initial test discovery: %s" reason
+      [||], []
 
-  let projectRunTest =
-    let runTests = projectDiscoveryResults |> Array.map (fun r -> r.RunTest)
-    match runTests.Length with
-    | 0 ->
-      Features.LiveTesting.LiveTestHookResult.noOp
-    | 1 ->
-      runTests.[0]
-    | _ ->
-      fun (tc: Features.LiveTesting.TestCase) ->
-        let rec tryRunners (idx: int) remaining = async {
-          match remaining with
-          | [] -> return Features.LiveTesting.TestResult.NotRun
-          | rt :: rest ->
-            let! result = rt tc
-            match result with
-            | Features.LiveTesting.TestResult.NotRun -> return! tryRunners (idx + 1) rest
-            | found -> return found }
-        tryRunners 0 (runTests |> Array.toList)
+  let projectRunTest : Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult> =
+    fun test ->
+      async {
+        match! result.Agent.RunTest test with
+        | HostAgent.AgentAnswered outcome -> return outcome
+        | HostAgent.AgentUnavailable _ -> return Features.LiveTesting.TestResult.NotRun
+      }
+
 
   // Dynamic RunTest from FSI evals (updated on each eval via handleMessage.EvalCode).
   // Chesterton's fence: ref + Volatile.Read/Interlocked.Exchange instead of mutable.

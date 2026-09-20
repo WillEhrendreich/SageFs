@@ -66,6 +66,8 @@ let private toCompletionItem (host: FsiHostSession) (completionsId: int64) (inde
         | Answered _
         | HostGone _ -> [||]) }
 
+let private notYetAgent = "the isolated host has no agent yet"
+
 /// A session whose FSI lives in an isolated host process.
 [<Sealed; AllowNullLiteral>]
 type RemoteFsiSession(host: FsiHostSession) =
@@ -133,7 +135,14 @@ type RemoteFsiSession(host: FsiHostSession) =
         { Diagnostics.TypeCheckWithSymbolsResult.Diagnostics = [||]
           SymbolRefs = [] }
 
-    // Hot reload and live testing reflect over these IN the user's process: they need the host agent.
-    member _.DynamicAssemblies: Assembly[] = [||]
+    // The host agent (hot reload and live testing, which act on the user's assemblies IN the user's process) is not
+    // wired to the host yet: say so explicitly rather than answering with an empty report.
+    member _.AgentStarted = HostAgent.AgentUnavailable notYetAgent
+
+    member _.AfterEval(_request) = HostAgent.AgentUnavailable notYetAgent
+
+    member _.DiscoverLoaded() = HostAgent.AgentUnavailable notYetAgent
+
+    member _.RunTest(_test) = async { return HostAgent.AgentUnavailable notYetAgent }
 
     member _.Dispose() = (host :> IDisposable).Dispose()

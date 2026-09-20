@@ -12,183 +12,6 @@ open SageFs.DevReload
 open SageFs.Features.LiveTesting
 open SageFs.Middleware.HotReloadCore
 
-// Chesterton's fence: ConcurrentDictionary instead of ResizeArray because
-// assembly resolve callbacks fire on arbitrary CLR threads — a concurrent read
-// during mkReloadingState's writes on a plain List<T> would corrupt the array.
-// Using Keys as the iterable in resolveAssembly gives snapshot-safe enumeration.
-let assemblySearchPaths = Collections.Concurrent.ConcurrentDictionary<string, byte>()
-
-let resolveAssembly (args: ResolveEventArgs) =
-  let assemblyName = AssemblyName(args.Name)
-  let name = assemblyName.Name
-
-  // Chesterton's fence: check already-loaded assemblies FIRST, before touching disk.
-  // Assembly.LoadFrom uses the LoadFrom binding context, which can conflict with
-  // assemblies already in the default context — causing FileLoadException even when
-  // the file on disk has the correct version. This happens when Harmony's JIT hook
-  // triggers assembly resolution for assemblies the host already loaded.
-  // Returning the already-loaded instance avoids the context conflict entirely.
-  let alreadyLoaded =
-    AppDomain.CurrentDomain.GetAssemblies()
-    |> Array.tryFind (fun a ->
-      try a.GetName().Name = name with _ -> false)
-
-  match alreadyLoaded with
-  | Some asm -> asm
-  | None ->
-
-  let dllName = name + ".dll"
-
-  // Chesterton's fence: inspect assembly version metadata from the file BEFORE loading.
-  // Assembly.LoadFrom commits the assembly to the AppDomain permanently — loading all
-  // candidates then sorting would pollute the AppDomain with N assemblies when only one
-  // is needed. AssemblyName.GetAssemblyName reads PE metadata without loading.
-  assemblySearchPaths.Keys
-  |> Seq.choose (fun searchPath ->
-    let fullPath = Path.Combine(searchPath, dllName)
-    match File.Exists(fullPath) with
-    | true ->
-      try
-        let candidateName = AssemblyName.GetAssemblyName(fullPath)
-        match assemblyName.Version with
-        | null -> Some (fullPath, candidateName.Version)
-        | requestedVersion ->
-          match candidateName.Version >= requestedVersion with
-          | true -> Some (fullPath, candidateName.Version)
-          | false ->
-            Log.debug "Assembly %s version %O < requested %O, skipping %s"
-              assemblyName.Name candidateName.Version requestedVersion searchPath
-            None
-      with ex ->
-        Log.warn "Failed to inspect assembly at %s: %s" fullPath ex.Message
-        None
-    | false -> None)
-  |> Seq.sortByDescending snd
-  |> Seq.tryHead
-  |> Option.map (fun (path, _) ->
-    try Assembly.LoadFrom(path)
-    with :? FileLoadException ->
-      // Chesterton's fence: the native CLR binder rejected LoadFrom because it already
-      // tracks this assembly (from the host's deps.json) at a different version. This
-      // happens when user projects reference newer/older versions of the same packages
-      // as SageFs (e.g., SageFs has OTel 1.14.0, user project has OTel 1.15.0).
-      // Fall back to loading by simple name — the CLR will provide whatever version it
-      // has from its own probing paths, giving automatic version unification.
-      // Reentrancy-safe: the CLR won't re-enter AssemblyResolve for the same assembly.
-      try Assembly.Load(name)
-      with _ ->
-        // Last resort: load from byte array to bypass native binder identity tracking.
-        // This avoids the path-based version check entirely. Load PDB sidecar if
-        // available so stack traces retain source line numbers.
-        try
-          let pdbPath = Path.ChangeExtension(path, ".pdb")
-          match File.Exists(pdbPath) with
-          | true -> Assembly.Load(File.ReadAllBytes(path), File.ReadAllBytes(pdbPath))
-          | false -> Assembly.Load(File.ReadAllBytes(path))
-        with _ -> null)
-  |> Option.defaultValue null
-
-// Chesterton's fence: Interlocked.CompareExchange instead of ref bool.
-// Assembly resolve callbacks fire on arbitrary CLR threads. A plain ref read/write
-// has a TOCTOU race — two threads could both read 0 before either writes 1,
-// causing double-registration. CompareExchange is atomic.
-let private resolverRegistered = ref 0
-
-let setupAssemblyResolver () =
-  match System.Threading.Interlocked.CompareExchange(resolverRegistered, 1, 0) = 0 with
-  | true -> AppDomain.CurrentDomain.add_AssemblyResolve (ResolveEventHandler(fun _ args -> resolveAssembly args))
-  | false -> ()
-
-let registerSearchPath (path: string) =
-  let dir = Path.GetDirectoryName(path)
-  assemblySearchPaths.TryAdd(dir, 0uy) |> ignore
-
-let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
-  // Setup assembly resolver once
-  setupAssemblyResolver ()
-
-  // Register all project output directories for dependency resolution
-  sln.Projects |> List.iter (fun p -> registerSearchPath p.TargetPath)
-
-  // Register NuGet package directories so transitive dependencies resolve at runtime
-  sln.Projects
-  |> List.iter (fun p ->
-    p.PackageReferences |> List.iter (fun pr -> registerSearchPath pr.FullPath)
-    // Also register framework/SDK DLL directories from OtherOptions -r: args
-    p.OtherOptions
-    |> List.filter (fun s ->
-      s.StartsWith("-r:", System.StringComparison.Ordinal)
-      && s.EndsWith(".dll", System.StringComparison.Ordinal))
-    |> List.iter (fun s -> registerSearchPath (s.Substring(3))))
-
-  let results =
-    sln.Projects
-    |> List.map (fun p -> AssemblyLoadError.loadAssembly p.TargetPath)
-
-  let assemblies =
-    results |> List.choose (fun r -> match r with Ok a -> Some a | _ -> None)
-
-  let loadErrors =
-    results |> List.choose (fun r -> match r with Error e -> Some e | _ -> None)
-
-  match List.isEmpty loadErrors with
-  | false ->
-    loadErrors |> List.iter (fun e -> Log.logWarn $"%s{AssemblyLoadError.describe e}")
-  | true -> ()
-
-  // getAllMethods now handles all reflection errors internally
-  let allMethods = assemblies |> List.collect getAllMethods
-
-  let methods =
-    allMethods
-    |> List.groupBy (fun m -> m.MethodInfo.Name)
-    |> List.map (fun (methodName, methods) -> methodName, methods)
-    |> Map.ofList
-
-  {
-    Methods = methods
-    LastOpenModules = []
-    LastAssembly = None
-    ProjectAssemblies = assemblies
-    AssemblyLoadErrors = loadErrors
-    LiveTestInit = LiveTestInit.Pending
-  }
-
-/// The hot-reload state of a session that has loaded nothing.
-let emptyReloadingState : State =
-  { Methods = Map.empty
-    LastOpenModules = []
-    LastAssembly = None
-    ProjectAssemblies = []
-    AssemblyLoadErrors = []
-    LiveTestInit = LiveTestInit.Pending }
-
-let hotReloadingInitFunction (sln: SageFs.ProjectLoading.Solution) : string * obj =
-  try
-    "hotReload", box (mkReloadingState sln)
-  with ex ->
-    Log.logWarn $"HotReloading initialization failed: %s{ex.Message}"
-    "hotReload", box emptyReloadingState
-
-/// The init for an ISOLATED session. The user's code runs in the FSI host, so the worker must load nothing of the
-/// user's: no project assemblies (mkReloadingState would load every project's output into this process) and no
-/// AssemblyResolve handler over the user's package directories. Loading those here is precisely the conflict
-/// surface isolation exists to remove. Hot reload and live testing get their state from the host agent instead.
-let isolatedInitFunction (_solution: SageFs.ProjectLoading.Solution) : string * obj =
-  "hotReload", box emptyReloadingState
-
-[<Literal>]
-let hotReloadKey = "hotReload"
-
-/// Typed read from AppState.Custom — single cast site for hot-reload state.
-let getReloadingState (st: AppState) =
-  AppStateCustom.tryGetFeature<State> hotReloadKey st
-  |> Option.defaultWith (fun () -> mkReloadingState st.Solution)
-
-/// Typed write of hot-reload state into AppState.Custom.
-let setReloadingState (value: State) (st: AppState) : AppState =
-  AppStateCustom.set hotReloadKey value st
-
 /// Detect top-level function bindings (not value bindings).
 /// Function bindings have parameters between the name and '=':
 ///   let f () = ...      → function (unit param)
@@ -412,106 +235,53 @@ let hotReloadingMiddleware next (request, st: AppState) =
 
   let response, st = next (request, st)
 
-  // Always accumulate method registrations so live testing can discover tests.
-  // Only apply Harmony detours when hot-reload is explicitly enabled.
+  // The agent lives where the user's code lives (this process, or the isolated FSI host): it registers the methods the
+  // eval defined, detours them only when hot reload is on, and looks for tests. This middleware only asks.
   match response.EvaluationResult with
   | Error _ -> response, st
   | Ok _ ->
     match isNull (box st.Session) with
     | true -> response, st
     | false ->
-      match st.Session.DynamicAssemblies |> Array.tryLast with
-      | None -> response, st
-      | Some asm ->
-        let reloadingSt, updatedMethods =
-          getReloadingState st
-          |> getOpenModules response.EvaluatedCode
-          |> handleNewAsmFromRepl st.Logger hotReloadFlagEnabled asm
-
-        match shouldTriggerReload request.Args && not (List.isEmpty updatedMethods) with
+      let detours =
+        match hotReloadFlagEnabled with
+        | true -> SageFs.HostAgent.DetourPolicy.ApplyDetours
+        | false -> SageFs.HostAgent.DetourPolicy.RegisterOnly
+      // The force flag only WIDENS scanning (the daemon asking eval-time discovery to catch a brand-new [<Tests>] value
+      // that detoured no existing method); it never changes the result for a submission with no test value in it.
+      let discovery =
+        match Map.tryFind "liveTestRediscover" request.Args with
+        | Some v when v = box true -> SageFs.HostAgent.DiscoveryPolicy.Forced
+        | _ -> SageFs.HostAgent.DiscoveryPolicy.WhenChanged
+      match st.Session.AfterEval { EvaluatedCode = response.EvaluatedCode; Detours = detours; Discovery = discovery } with
+      | SageFs.HostAgent.AgentUnavailable reason ->
+        Log.warn "[HotReloading] the session's agent is unavailable, so this eval was not reloaded or scanned for tests: %s" reason
+        response, st
+      | SageFs.HostAgent.AgentAnswered report ->
+        match shouldTriggerReload request.Args && not (List.isEmpty report.UpdatedMethods) with
         | true -> triggerReload()
         | false -> ()
 
-        // Live testing hook: discover tests and detect providers.
-        // Skip discovery when no methods were updated (expression-only evals)
-        // unless this is the first eval where we need initial test discovery,
-        // or the caller explicitly forces a rediscovery scan (e.g. the daemon
-        // asking eval-time discovery to catch a brand-new [<Tests>] value that
-        // detoured no existing method — see live-testing-asyoutype-plan.md
-        // Brief 2). The force flag only WIDENS scanning; it never changes the
-        // result for a submission with no [<Tests>] value in it.
-        let needsInitialScan = reloadingSt.LiveTestInit = LiveTestInit.Pending && not (List.isEmpty reloadingSt.ProjectAssemblies)
-        let forceRediscover =
-          match Map.tryFind "liveTestRediscover" request.Args with
-          | Some v when v = box true -> true
-          | _ -> false
-        let hookResult, reloadingSt =
-          match not (List.isEmpty updatedMethods) || needsInitialScan || forceRediscover with
-          | true ->
-            let fsiHookResult =
-              SageFs.Features.LiveTesting.LiveTestingHook.afterReload
-                SageFs.Features.LiveTesting.BuiltInExecutors.builtIn
-                asm
-                updatedMethods
-
-            // On first eval, also scan pre-built project assemblies for tests.
-            match needsInitialScan with
-            | true ->
-              let projectResults =
-                reloadingSt.ProjectAssemblies
-                |> List.map (fun projAsm ->
-                  try
-                    SageFs.Features.LiveTesting.LiveTestingHook.afterReload
-                      SageFs.Features.LiveTesting.BuiltInExecutors.builtIn
-                      projAsm
-                      []
-                  with _ -> SageFs.Features.LiveTesting.LiveTestHookResult.empty)
-              let allResults = fsiHookResult :: projectResults
-              let composedRunTest =
-                let runTests = allResults |> List.map (fun r -> r.RunTest)
-                fun (tc: SageFs.Features.LiveTesting.TestCase) ->
-                  let rec tryRunners remaining =
-                    async {
-                      match remaining with
-                      | [] -> return SageFs.Features.LiveTesting.TestResult.NotRun
-                      | rt :: rest ->
-                        let! result = rt tc
-                        match result with
-                        | SageFs.Features.LiveTesting.TestResult.NotRun -> return! tryRunners rest
-                        | found -> return found
-                    }
-                  tryRunners runTests
-              let merged =
-                { SageFs.Features.LiveTesting.LiveTestHookResult.empty with
-                    DetectedProviders =
-                      allResults
-                      |> List.collect (fun r -> r.DetectedProviders)
-                      |> List.distinctBy (fun p ->
-                        match p with
-                        | SageFs.Features.LiveTesting.ProviderDescription.AttributeBased a -> a.Name
-                        | SageFs.Features.LiveTesting.ProviderDescription.Custom c -> c.Name)
-                    DiscoveredTests =
-                      allResults
-                      |> List.map (fun r -> r.DiscoveredTests)
-                      |> Array.concat
-                    AffectedTestIds = fsiHookResult.AffectedTestIds
-                    RunTest = composedRunTest }
-              merged, { reloadingSt with LiveTestInit = LiveTestInit.Done }
-            | false ->
-              fsiHookResult, reloadingSt
-          | false ->
-            SageFs.Features.LiveTesting.LiveTestHookResult.empty, reloadingSt
+        // Tests run where they live: the runner asks the session's agent, which tries interactively defined tests
+        // first and the project's after.
+        let session = st.Session
+        let runTest (test: TestCase) : Async<TestResult> =
+          async {
+            match! session.RunTest test with
+            | SageFs.HostAgent.AgentAnswered result -> return result
+            | SageFs.HostAgent.AgentUnavailable _ -> return TestResult.NotRun
+          }
 
         let metadata =
           match shouldTriggerReload request.Args with
-          | true -> response.Metadata.Add("reloadedMethods", updatedMethods)
+          | true -> response.Metadata.Add("reloadedMethods", report.UpdatedMethods)
           | false -> response.Metadata
-        let metadata = metadata.Add("liveTestHookResult", SageFs.Features.LiveTesting.LiveTestHookResultDto.fromResult hookResult)
-        let metadata = metadata.Add("liveTestRunTest", hookResult.RunTest)
+        let metadata = metadata.Add("liveTestHookResult", report.LiveTest)
+        let metadata = metadata.Add("liveTestRunTest", runTest)
         let metadata =
-          match List.isEmpty reloadingSt.AssemblyLoadErrors with
-          | false -> metadata.Add("assemblyLoadErrors", reloadingSt.AssemblyLoadErrors)
+          match List.isEmpty report.AssemblyLoadErrors with
+          | false -> metadata.Add("assemblyLoadErrors", report.AssemblyLoadErrors)
           | true -> metadata
 
-        { response with Metadata = metadata },
-        setReloadingState reloadingSt st
+        { response with Metadata = metadata }, st
+

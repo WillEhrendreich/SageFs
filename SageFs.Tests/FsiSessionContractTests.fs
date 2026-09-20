@@ -9,6 +9,7 @@ open FSharp.Compiler.Interactive.Shell
 open SageFs.FsiHostBuild
 open SageFs.FsiHostClient
 open SageFs.FsiSession
+open SageFs.HostAgent
 open SageFs.RemoteFsiSession
 open SageFs.Tests.TestInfrastructure
 
@@ -20,7 +21,8 @@ let private dotnet =
   | "" -> "dotnet"
   | path -> path
 
-let private fsiArgs = [ "fsi"; "--noninteractive"; "--nologo"; "--readline-" ]
+// --multiemit- is what a hot-reload session runs with: every eval lands in ONE assembly, so redefinitions can be paired.
+let private fsiArgs = [ "fsi"; "--noninteractive"; "--nologo"; "--readline-"; "--multiemit-" ]
 
 /// A fresh in-process session behind the port.
 let private newInProcess () : Async<IFsiSession> =
@@ -35,7 +37,7 @@ let private newInProcess () : Async<IFsiSession> =
         TextWriter.Null,
         collectible = true
       )
-    return new InProcessFsiSession(session) :> IFsiSession
+    return new InProcessFsiSession(session, { Projects = []; ResolveFrom = [] }) :> IFsiSession
   }
 
 /// One host build shared by every remote test (keyed by SDK + sources).
@@ -75,8 +77,17 @@ type Capability =
   | Completions
   | TypeChecking
   | Disposal
+  | HotReload
+  | LiveTesting
 
 let private eval (session: IFsiSession) (code: string) = session.Eval(code, CancellationToken.None)
+
+let private runTest (session: IFsiSession) (test: SageFs.Features.LiveTesting.TestCase) : Async<SageFs.Features.LiveTesting.TestResult> =
+  async {
+    match! session.RunTest test with
+    | AgentAnswered result -> return result
+    | AgentUnavailable reason -> return failtestf "the agent was unavailable: %s" reason
+  }
 
 let private mustSucceed (session: IFsiSession) (code: string) =
   match (eval session code).Outcome with
@@ -90,14 +101,33 @@ let private withSession (create: unit -> Async<IFsiSession>) (body: IFsiSession 
     finally session.Dispose()
   }
 
+let private withSessionAsync (create: unit -> Async<IFsiSession>) (body: IFsiSession -> Async<unit>) : Async<unit> =
+  async {
+    let! session = create ()
+    try return! body session
+    finally session.Dispose()
+  }
+
+let private expectoPath = typeof<Expecto.TestCode>.Assembly.Location
+
+/// A top-level (so FSI compiles it public) [<Tests>] value with one passing and one failing case.
+let private probeTests = "open Expecto\n[<Tests>]\nlet probeTests = testList \"probe\" [ testCase \"passes\" (fun () -> ()); testCase \"fails\" (fun () -> failwith \"boom\") ]"
+
+let private afterEval (session: IFsiSession) (code: string) (detours: DetourPolicy) (discovery: DiscoveryPolicy) : AfterEvalReport =
+  match session.AfterEval { EvaluatedCode = code; Detours = detours; Discovery = discovery } with
+  | AgentAnswered report -> report
+  | AgentUnavailable reason -> failtestf "the agent was unavailable: %s" reason
+
 /// The behaviour EVERY IFsiSession implementation must have. Instantiated for each implementation, so the
 /// in-process and isolated-host sessions are held to one specification. `notYet` lists the capabilities an
 /// implementation does not have yet: those cases are pending (ignored, and counted as such), never skipped silently.
 let contract (label: string) (create: unit -> Async<IFsiSession>) (notYet: Capability list) : Test =
-  let case (capability: Capability) (name: string) (body: IFsiSession -> unit) =
+  let caseAsync (capability: Capability) (name: string) (body: IFsiSession -> Async<unit>) =
     match List.contains capability notYet with
     | true -> ptestCase (sprintf "%s [%A: not yet in this implementation]" name capability) ignore
-    | false -> testCaseAsync name (withSession create body)
+    | false -> testCaseAsync name (withSessionAsync create body)
+  let case (capability: Capability) (name: string) (body: IFsiSession -> unit) =
+    caseAsync capability name (fun session -> async { body session })
   testList (sprintf "IFsiSession contract: %s" label) [
     case Evaluating "a valid submission succeeds with no error diagnostics" (fun session ->
       let result = eval session "let x = 21 * 2;;"
@@ -174,6 +204,46 @@ let contract (label: string) (create: unit -> Async<IFsiSession>) (notYet: Capab
     case Diagnostics "Diagnose reports the same error the eval would" (fun session ->
       Expect.isNonEmpty "diagnostic for a type error" (session.Diagnose "let z : int = \"s\""))
 
+    caseAsync LiveTesting "AfterEval discovers a test defined in the session, and RunTest runs it" (fun session ->
+      async {
+        mustSucceed session (sprintf "#r @\"%s\"" expectoPath)
+        mustSucceed session probeTests
+        let report = afterEval session probeTests DetourPolicy.RegisterOnly DiscoveryPolicy.Forced
+        let named (fragment: string) =
+          match report.LiveTest.DiscoveredTests |> Array.tryFind (fun t -> t.FullName.EndsWith fragment) with
+          | Some test -> test
+          | None -> failtestf "%s was not discovered among %A" fragment (report.LiveTest.DiscoveredTests |> Array.map (fun t -> t.FullName))
+        let passes = named "passes"
+        let fails = named "fails"
+        match! runTest session passes with
+        | SageFs.Features.LiveTesting.TestResult.Passed _ -> ()
+        | other -> failtestf "expected passes to pass, got %A" other
+        match! runTest session fails with
+        | SageFs.Features.LiveTesting.TestResult.Failed _ -> ()
+        | other -> failtestf "expected fails to fail, got %A" other
+      })
+
+    caseAsync LiveTesting "an expression-only eval discovers nothing new unless asked to look" (fun session ->
+      async {
+        mustSucceed session (sprintf "#r @\"%s\"" expectoPath)
+        mustSucceed session probeTests
+        afterEval session probeTests DetourPolicy.RegisterOnly DiscoveryPolicy.Forced |> ignore
+        mustSucceed session "let three = 1 + 2"
+        let quiet = afterEval session "let three = 1 + 2" DetourPolicy.RegisterOnly DiscoveryPolicy.WhenChanged
+        Expect.isEmpty "nothing redefined, so no tests are reported" quiet.LiveTest.DiscoveredTests
+      })
+
+    caseAsync HotReload "redefining a function reports it as an updated method" (fun session ->
+      async {
+        // Detours pair methods by their dotted path, so the function lives in a named module, as a reloaded file's does.
+        let version (delta: int) = sprintf "module Reload =\n  let addOne (x: int) = x + %d" delta
+        mustSucceed session (version 1)
+        afterEval session (version 1) DetourPolicy.ApplyDetours DiscoveryPolicy.WhenChanged |> ignore
+        mustSucceed session (version 100)
+        let report = afterEval session (version 100) DetourPolicy.ApplyDetours DiscoveryPolicy.WhenChanged
+        Expect.isTrue "addOne is among the updated methods" (report.UpdatedMethods |> List.exists (fun name -> name.EndsWith "addOne"))
+      })
+
     case Disposal "a disposed session can be disposed again" (fun session ->
       session.Dispose()
       session.Dispose())
@@ -185,17 +255,11 @@ let tests =
     Integration.hostList "in-process session" [
       contract "InProcessFsiSession" newInProcess []
 
-      testAsync "DynamicAssemblies exposes what FSI emitted (in-process only: hot reload reflects over these)" {
-        do!
-          withSession newInProcess (fun session ->
-            mustSucceed session "type Marker = { Value: int };;"
-            Expect.isNonEmpty "an assembly was emitted" session.DynamicAssemblies)
-      }
     ]
 
     Integration.hostList "isolated host session" [
-      // Capabilities the isolated host does not have yet would be listed here (each becomes a running case when
-      // implemented). The list is empty: the whole contract runs. Only DynamicAssemblies is host-agent work.
-      contract "RemoteFsiSession" newRemote []
+      // Capabilities the isolated host does not have yet are listed here (each becomes a running case when
+      // implemented). The host agent (hot reload + live testing) is being built: pending until then.
+      contract "RemoteFsiSession" newRemote [ HotReload; LiveTesting ]
     ]
   ]

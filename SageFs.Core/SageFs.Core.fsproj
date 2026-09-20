@@ -54,9 +54,6 @@
         <!-- LiveValueTree has no dependencies and is also compiled into the host, so the protocol can carry its
              snapshot type directly; it must precede the protocol here. -->
         <Compile Include="Features\LiveValueTree.fs" />
-        <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />
-        <Compile Include="FsiHostBuild.fs" />
-        <Compile Include="FsiHostClient.fs" />
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
         <EmbeddedResource Include="../SageFs.FsiHost/FsiHost.fsproj" LogicalName="FsiHost/FsiHost.fsproj" />
@@ -198,6 +195,11 @@
         <Compile Include="HotReloadState.fs" />
         <Compile Include="HttpOriginGuard.fs" />
         <Compile Include="DevReload.fs" />
+        <Compile Include="Middleware\HotReloadCore.fs" />
+        <Compile Include="HostAgent.fs" />
+        <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />
+        <Compile Include="FsiHostBuild.fs" />
+        <Compile Include="FsiHostClient.fs" />
         <Compile Include="FileWatcher.fs" />
         <Compile Include="DaemonOwnership.fs" />
         <Compile Include="LiveTestWatcherCore.fs" />
@@ -211,13 +213,13 @@
         <Compile Include="RemoteFsiSession.fs" />
         <Compile Include="IsolatedFsiSession.fs" />
         <Compile Include="ConfigHost.fs" />
+        <Compile Include="SessionAgent.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />
         <Compile Include="Middleware\Directives.fs" />
         <Compile Include="Middleware\CompilationContext.fs" />
         <Compile Include="Middleware\NonBlockingRun.fs" />
-        <Compile Include="Middleware\HotReloadCore.fs" />
         <Compile Include="Middleware\HotReloading.fs" />
         <Compile Include="Middleware\Tracing.fs" />
         <Compile Include="ActorCreation.fs" />

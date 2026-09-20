@@ -129,19 +129,6 @@ let tests =
         | "true" -> true
         | other -> SageFs.SessionKinds.fromEnvironmentWith (fun _ -> other) = SageFs.SessionKinds.InProcess
 
-      testCase "an isolated worker's init loads nothing of the user's: it never touches the solution" <| fun _ ->
-        // The in-process init loads every project's output assembly and installs a resolver over the user's package
-        // directories. The isolated one must not: it is handed a null solution and must not care.
-        let name, state = SageFs.Middleware.HotReloading.isolatedInitFunction Unchecked.defaultof<_>
-        Expect.equal "same key" SageFs.Middleware.HotReloading.hotReloadKey name
-        Expect.equal "the empty state" (box SageFs.Middleware.HotReloading.emptyReloadingState) state
-
-      testCase "the worker's init functions follow the session kind" <| fun _ ->
-        Expect.isTrue
-          "in-process keeps the loading init"
-          (obj.ReferenceEquals(SageFs.ActorCreation.initFunctionsFor SageFs.SessionKinds.InProcess, SageFs.ActorCreation.commonInitFunctions))
-        Expect.hasLength "isolated has exactly the inert init" 1 (SageFs.ActorCreation.initFunctionsFor SageFs.SessionKinds.Isolated)
-
       testCase "the switch reads exactly the documented variable" <| fun _ ->
         let mutable asked = ""
         SageFs.SessionKinds.fromEnvironmentWith (fun name ->
