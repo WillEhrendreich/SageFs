@@ -31,6 +31,7 @@ module BufferBridge = SageFs.Vscode.BufferBridge
 module DebugRects = SageFs.Vscode.DebugRects
 module SessionsTreePure = SageFs.Vscode.SessionsTreePure
 module StatusBarPure = SageFs.Vscode.StatusBarPure
+module WorkflowPickPure = SageFs.Vscode.WorkflowPickPure
 module ContextKeysPure = SageFs.Vscode.ContextKeysPure
 
 open SageFs.Vscode.LiveTestingTypes
@@ -606,8 +607,11 @@ let openGettingStarted () =
   promise {
     let content =
       "// ── SageFs Getting Started ─────────────────────────────────\n"
-      + "// Welcome! Select each expression and press Alt+Enter (Ctrl+Enter on Mac)\n"
-      + "// to evaluate it. Results appear inline, right next to your code.\n"
+      // Alt+Enter is the ONLY eval binding (package.json contributes no `mac`
+      // key), so this must not promise a second one. Pinned by
+      // tests/CommandContractTests.fsx against contributes.keybindings.
+      + "// Welcome! Select each expression and press Alt+Enter to evaluate it.\n"
+      + "// Results appear inline, right next to your code.\n"
       + "\n"
       + "// ── Step 1: Simple expressions ──\n"
       + "1 + 1;;\n"
@@ -1010,6 +1014,27 @@ let withClient (action: Client.Client -> JS.Promise<unit>) =
     match ok, client with
     | true, Some c -> do! action c
     | _ -> ()
+  }
+
+/// `Window.withProgress` can only run a `Promise<unit>`, so a long command that
+/// needs its operation's RESULT could not use it — which is why half the
+/// extension's multi-second commands (eval, hard reset, workflow switch, run
+/// tests) awaited in complete silence. This runs the work under a progress
+/// indicator and still hands the result back.
+///
+/// `None` is unreachable in practice (the inner promise always assigns before
+/// `withProgress` resolves); it exists so the type stays honest rather than
+/// forcing an `Unchecked.defaultof` here.
+let withProgressResult (location: int) (title: string) (work: unit -> JS.Promise<'T>) : JS.Promise<'T option> =
+  promise {
+    let mutable captured: 'T option = None
+    do!
+      Window.withProgress location title (fun _p _t ->
+        promise {
+          let! r = work ()
+          captured <- Some r
+        })
+    return captured
   }
 
 /// Fire a client action that returns ApiOutcome, show brief status bar flash, then refresh.
@@ -1447,42 +1472,86 @@ let stopSessionCmd () =
         activeSessionWorkingDirectory <- None
       | _ -> ())
 
-/// Context-aware workflow switching — shows QuickPick to choose REPL or Live workflow.
+/// Context-aware workflow switching.
+///
+/// This used to FORK rather than switch: it created a second session in the
+/// same working directory and never stopped the first, which is exactly the
+/// "Multiple sessions match workingDirectory" routing ambiguity this repo has
+/// fought before. It also targeted `Array.tryHead` rather than the active
+/// session, and left `activeSessionId` pointing at the old one afterwards, so
+/// evals kept landing in the session the user thought they had left.
+///
+/// The daemon's `switch_workflow` MCP tool documents the correct semantics —
+/// "creates a new session with the target workflow AND STOPS THE OLD ONE"
+/// (SageFs/Mcp.fs:1989-1990) — so that is what this does, over the two REST
+/// routes that exist today. When `POST /api/sessions/{id}/workflow` lands this
+/// becomes one call; the user-visible contract below does not change.
 let switchWorkflowCmd () =
   promise {
     match client with
     | None ->
-      Window.showWarningMessage "SageFs is not connected." [||] |> ignore
+      let! choice = Window.showWarningMessage "SageFs is not connected." [| "Start SageFs" |]
+      match choice with
+      | Some "Start SageFs" -> Commands.executeCommand "sagefs.start" |> ignore
+      | _ -> ()
     | Some c ->
       let! sessions = Client.listSessions c
-      match sessions |> Array.tryHead with
+      // The ACTIVE session, not whichever one the daemon happened to list first.
+      let target =
+        match activeSessionId with
+        | Some id -> sessions |> Array.tryFind (fun s -> s.id = id)
+        | None -> None
+        |> Option.orElseWith (fun () -> sessions |> Array.tryHead)
+      match target with
       | None ->
-        Window.showWarningMessage "No active session to switch workflow." [||] |> ignore
+        let! choice = Window.showWarningMessage "No session to switch workflow." [| "Create Session" |]
+        match choice with
+        | Some "Create Session" -> Commands.executeCommand "sagefs.createSession" |> ignore
+        | _ -> ()
       | Some sess ->
-        let items = [|
-          "$(notebook) REPL — Full interactive REPL, no hot reload"
-          "$(globe) Live — Hot reload with restricted REPL"
-        |]
-        let! picked = Window.showQuickPick items "Select workflow"
-        match picked with
-        | Some choice ->
-          let workflow =
-            match choice.Contains "REPL" with
-            | true -> "Interactive"
-            | false -> "HotReload"
-          let projects = sess.projects |> String.concat ","
-          let! result = Client.createSessionWithWorkflow projects sess.workingDirectory workflow c
-          match result with
-          | Client.Succeeded _ ->
-            let label =
-              match workflow with
-              | "Interactive" -> "REPL"
-              | _ -> "Live"
-            currentWorkflowLabel <- label
-            refreshStatus ()
-          | Client.Failed msg ->
-            Window.showErrorMessage (sprintf "Workflow switch failed: %s" msg) [||] |> ignore
+        let rows = WorkflowPickPure.rows sess.workflowLabel
+        let items =
+          rows
+          |> List.map (fun r ->
+            createObj [ "label" ==> r.Label; "description" ==> r.Description; "detail" ==> r.Detail ])
+          |> List.toArray
+        let! picked = Window.showQuickPickItems items (sprintf "Workflow for session %s" sess.id)
+        match picked |> Option.bind WorkflowPickPure.wireOfPickedLabel with
         | None -> ()
+        | Some wire ->
+          let targetLabel = WorkflowPickPure.labelOfWire wire |> Option.defaultValue wire
+          match targetLabel = sess.workflowLabel with
+          | true ->
+            Window.showInformationMessage (sprintf "Already in %s." targetLabel) [||] |> ignore
+          | false ->
+            let projects = sess.projects |> String.concat ","
+            let oldId = sess.id
+            let! result =
+              withProgressResult
+                ProgressLocation.Notification
+                (sprintf "SageFs: switching to %s…" targetLabel)
+                (fun () -> Client.createSessionWithWorkflow projects sess.workingDirectory wire c)
+            match result with
+            | None -> ()
+            | Some (Client.Succeeded _) ->
+              // Stop the old session BEFORE re-pointing the client, so two
+              // sessions never both answer for this directory.
+              let! stopped = Client.stopSession oldId c
+              match stopped with
+              | Client.Failed msg ->
+                (getOutput()).appendLine (sprintf "[SageFs] switched to %s but the old session %s did not stop: %s" targetLabel oldId msg)
+                Window.showWarningMessage
+                  (sprintf "Switched to %s, but the previous session (%s) is still running in this directory. Two sessions in one directory make evals ambiguous." targetLabel oldId)
+                  [| "Show Output" |]
+                |> ignore
+              | Client.Succeeded _ -> ()
+              activeSessionId <- None
+              activeSessionWorkingDirectory <- None
+              currentWorkflowLabel <- targetLabel
+              refreshStatus ()
+              Sessions.refresh ()
+            | Some (Client.Failed msg) ->
+              Window.showErrorMessage (sprintf "Workflow switch failed: %s" msg) [| "Show Output" |] |> ignore
   }
 
 /// Context-aware session menu — the primary entry point from the status bar.
@@ -2136,6 +2205,51 @@ let activate (context: ExtensionContext) =
       do! startDaemon ()
     } |> promiseIgnoreLog logToOutput)
   reg "sagefs.openDashboard" (fun _ -> openDashboard () |> promiseIgnoreLog logToOutput)
+  // `[Reconnect]` was offered on the "daemon connection lost" dialog and
+  // executed `sagefs.reconnect`, which existed nowhere. The rejected promise
+  // went to the output channel, so pressing the button looked like it worked.
+  // It now does what the button always claimed: re-discover the daemon's
+  // ports, re-probe, and say plainly which of the two happened.
+  reg "sagefs.reconnect" (fun _ ->
+    promise {
+      match client with
+      | None -> Window.showWarningMessage "SageFs is not activated." [||] |> ignore
+      | Some c ->
+        let! _ = discoverDaemonPorts c
+        let! running = Client.isRunning c
+        match running with
+        | true ->
+          refreshStatus ()
+          Sessions.refresh ()
+          Window.showInformationMessage (sprintf "Reconnected to the SageFs daemon on port %d." c.mcpPort) [||] |> ignore
+        | false ->
+          let! choice =
+            Window.showWarningMessage
+              (sprintf "No SageFs daemon answering on port %d." c.mcpPort)
+              [| "Start SageFs"; "Show Output" |]
+          match choice with
+          | Some "Start SageFs" -> do! startDaemon ()
+          | Some "Show Output" -> showOutputPanel ()
+          | _ -> ()
+    } |> promiseIgnoreLog logToOutput)
+  // `sagefs.showCoveringTests` was named by EVERY coverage CodeLens in every
+  // F# file and registered nowhere: clicking one popped `command not found`.
+  // The symbol rides the command's arguments because clicking a CodeLens does
+  // not move the caret, so the handler cannot recover it from the selection.
+  reg "sagefs.showCoveringTests" (fun args ->
+    let symbol = try unbox<string> (args?(0)) with _ -> (try unbox<string> args with _ -> "")
+    let filePath =
+      try unbox<string> (args?(1))
+      with _ -> Window.getActiveTextEditor () |> Option.map (fun ed -> ed.document.fileName) |> Option.defaultValue ""
+    match CovViewLens.tryFindView filePath symbol with
+    | None ->
+      Window.showInformationMessage
+        (sprintf "No coverage recorded for %s yet. Run the tests to populate it." (match symbol with "" -> "this function" | s -> s))
+        [||]
+      |> ignore
+    | Some view ->
+      let items = CovViewPure.PureProvider.describeCoverage view |> List.toArray
+      Window.showQuickPick items (sprintf "Coverage: %s" view.Symbol) |> promiseIgnoreLog logToOutput)
   reg "sagefs.switchProject" (fun _ -> switchProject () |> promiseIgnoreLog logToOutput)
   reg "sagefs.browseForProject" (fun _ -> browseForProject () |> promiseIgnoreLog logToOutput)
   reg "sagefs.checkHealth" (fun _ -> checkHealth () |> promiseIgnoreLog logToOutput)

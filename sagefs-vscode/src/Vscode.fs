@@ -306,6 +306,15 @@ module Window =
   let showQuickPick (items: string array) (placeHolder: string) =
     _showQuickPick windowExports items (createObj [ "placeHolder" ==> placeHolder ])
 
+  /// QuickPickItem-shaped pick. A string-array pick cannot carry a right-hand
+  /// `description` or a `detail` line, so it cannot say which option you are
+  /// already in — which is how "Switch Workflow" shipped with no current-state
+  /// marker. Returns the picked item's `label` (or None if dismissed).
+  [<Emit("$0.showQuickPick($1, $2).then(p => p === undefined ? undefined : p.label)")>]
+  let _showQuickPickItems (w: obj) (items: obj array) (opts: obj) : JS.Promise<string option> = jsNative
+  let showQuickPickItems (items: obj array) (placeHolder: string) =
+    _showQuickPickItems windowExports items (createObj [ "placeHolder" ==> placeHolder; "matchOnDetail" ==> true ])
+
   [<Emit("$0.showInputBox($1)")>]
   let _showInputBox (w: obj) (opts: obj) : JS.Promise<string option> = jsNative
   let showInputBox (prompt: string) =

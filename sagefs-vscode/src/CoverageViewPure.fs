@@ -94,6 +94,13 @@ type PureCodeLens = {
   Title: string
   Tooltip: string
   CommandLabel: string
+  /// The function this lens is about. The command NEEDS this — a lens whose
+  /// command takes no argument can only ever do something generic, which is
+  /// how "show covering tests" ended up naming a command nobody wrote.
+  Symbol: string
+  /// The file the symbol lives in, so the command can name it without
+  /// re-deriving it from the active editor (which may have moved).
+  FilePath: string
 }
 
 /// Pure projection: CoverageView → PureCodeLens. No Option, no bool,
@@ -117,7 +124,37 @@ module PureProvider =
     { Line = v.DefinitionLine
       Title = title
       Tooltip = sprintf "%d test(s), %s" v.TotalCount (tooltipSuffix v)
-      CommandLabel = "sagefs.showCoveringTests" }
+      CommandLabel = "sagefs.showCoveringTests"
+      Symbol = v.Symbol
+      FilePath = v.FilePath }
+
+  let healthLabel (h: CoverageHealth) =
+    match h with
+    | CoverageHealth.Passing -> "passing"
+    | CoverageHealth.Failing -> "failing"
+    | CoverageHealth.Running -> "running"
+    | CoverageHealth.Stale -> "stale"
+    | CoverageHealth.Skipped -> "skipped"
+    | CoverageHealth.Absent -> "no covering tests"
+
+  /// What `sagefs.showCoveringTests` renders for one symbol: everything the
+  /// client actually knows about that function's coverage.
+  ///
+  /// Honest about its ceiling — the `coverage_view` SSE payload carries
+  /// counts, a pre-formatted badge and a health verdict, but NOT the covering
+  /// tests' names, so this names the gap instead of implying it listed them.
+  /// Widening that payload is the same shape of work as Island C's
+  /// `file_reloaded` extension.
+  let describeCoverage (v: CoverageView) : string list =
+    [ sprintf "%s — %s" v.Symbol (healthLabel v.Health)
+      match v.TotalCount with
+      | 0 -> "No covering tests recorded for this function."
+      | 1 -> sprintf "1 covering test · %s" v.InlineBadgeText
+      | n -> sprintf "%d covering tests · %s" n v.InlineBadgeText
+      match v.Overflow with
+      | Overflow.Within -> ()
+      | Overflow.Overflow n -> sprintf "%d more not shown inline" n
+      sprintf "Defined at %s:%d" v.FilePath v.DefinitionLine ]
 
   let lensesForFile
     (config: CoverageViewConfig)

@@ -51,6 +51,14 @@ let updateFile (filePath: string) (generation: int) (view: CoverageView) =
     coverageViews <- Map.add filePath (generation, Array.append existing [| view |]) coverageViews
   refresh ()
 
+/// The coverage view for one symbol in one file — what the CodeLens command
+/// needs in order to say something about the function that was clicked,
+/// rather than something generic about the file.
+let tryFindView (filePath: string) (symbol: string) : CoverageView option =
+  match Map.tryFind filePath coverageViews with
+  | Some (_, arr) -> arr |> Array.tryFind (fun v -> v.Symbol = symbol)
+  | None -> None
+
 /// Update config from editor settings. Called by the extension when the
 /// user changes `sagefs.coverageView.inlineCollapseAt`.
 let updateConfig (newConfig: CoverageViewConfig) =
@@ -66,6 +74,10 @@ let private buildCodeLens (lens: PureCodeLens) : CodeLens =
     "title" ==> lens.Title
     "command" ==> lens.CommandLabel
     "tooltip" ==> lens.Tooltip
+    // Clicking a CodeLens does NOT move the caret, so the handler cannot
+    // recover which symbol was clicked from the editor selection. The symbol
+    // has to ride the command.
+    "arguments" ==> [| box lens.Symbol; box lens.FilePath |]
   ]
   newCodeLens range cmd
 
