@@ -31,7 +31,9 @@ let exactGraph graphEntries =
 /// effects, exactly as `LiveTestCycleState.handleFcsResult`'s `Success`
 /// branch now does in production (SageFs/SageFsApp.fs).
 let decideThenRedirect changedSymbols filePath trigger graph state content =
-  let outcome = TestCycleEffects.decideAfterTypeCheck changedSymbols filePath trigger graph state None Map.empty
+  let outcome =
+    TestCycleEffects.decideAfterTypeCheck
+      (FileSymbolDelta.ofChangedOnly changedSymbols) filePath trigger graph state None Map.empty
   TestCycleEffects.redirectToEvalBuffer content filePath outcome.Effects
 
 [<Tests>]

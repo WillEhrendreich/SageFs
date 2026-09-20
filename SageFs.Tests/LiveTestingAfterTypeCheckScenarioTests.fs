@@ -18,9 +18,103 @@ let exactGraph graphEntries =
       SymbolToTests = Map.ofList graphEntries
       TransitiveCoverage = Map.ofList graphEntries }
 
+/// The name-delta shape every pre-existing scenario below exercises: the
+/// type-check reported which symbol NAMES moved, and nothing about what the
+/// file contains.
+let nameDelta changed = FileSymbolDelta.ofChangedOnly changed
+
 [<Tests>]
 let tests =
   testList "Live testing afterTypeCheck scenarios" [
+    // Rewrite `let add a b = a + b` to `a - b`. The signature is identical, so
+    // the symbol-NAME set is identical, so the `Set<string>` difference that
+    // produces `Changed` is EMPTY — and before the file's own symbol set was
+    // threaded through, that empty delta was read as "no semantic change",
+    // selected zero tests, and reported green on a real regression. Only the
+    // cohort landing gate stood between a body-edit regression and master.
+    testCase "a body-only edit on save still selects the tests that reach the edited file" <| fun _ ->
+      let impacted = mkTest "Module.Tests.should_add" TestCategory.Unit
+      let unrelated = mkTest "Other.Tests.should_greet" TestCategory.Unit
+      let state =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            DiscoveredTests = [| impacted; unrelated |] }
+      // A populated graph — this is the steady state, not a cold start, and it
+      // is exactly the case the old guard declined to fall back on.
+      let graph =
+        exactGraph [ "Module.add", [| impacted.Id |]
+                     "Other.greet", [| unrelated.Id |] ]
+
+      let outcome =
+        TestCycleEffects.decideAfterTypeCheck
+          { Changed = []; InFile = [ "Module.add" ] }
+          "Module.fs"
+          RunTrigger.FileSave
+          graph
+          state
+          None
+          Map.empty
+
+      match outcome.Decision, outcome.Effects with
+      | Some decision, [ TestCycleEffect.RequestRebuild(_, req) ] ->
+        req.Tests
+        |> Array.map (fun tc -> tc.Id)
+        |> Expect.equal "only the tests reaching the edited file should be selected" [| impacted.Id |]
+        decision.Explanation.Precision
+        |> Expect.notEqual
+          "a body-only edit must never be reported as 'no impacted tests' — that is the green lie"
+          SelectionPrecision.NoImpactedTests
+      | other -> failtestf "expected a rebuild-and-run covering the edited file, got %A" other
+
+    // The other half of the contract: selecting on file scope must not mean
+    // selecting everything. A test that reaches nothing in the edited file
+    // stays unselected, or the fix would have traded a false green for a
+    // full-suite run on every save.
+    testCase "a body-only edit does not drag in tests that reach nothing in the edited file" <| fun _ ->
+      let unrelated = mkTest "Other.Tests.should_greet" TestCategory.Unit
+      let state =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            DiscoveredTests = [| unrelated |] }
+      let graph = exactGraph [ "Other.greet", [| unrelated.Id |] ]
+
+      let outcome =
+        TestCycleEffects.decideAfterTypeCheck
+          { Changed = []; InFile = [ "Module.add" ] }
+          "Module.fs"
+          RunTrigger.FileSave
+          graph
+          state
+          None
+          Map.empty
+
+      outcome.Effects
+      |> Expect.isEmpty "a file no test reaches should not queue an unrelated test"
+
+    // Keystrokes are excluded on purpose: a half-typed buffer resolves a
+    // shifting symbol set, and selecting on it would thrash the runner on
+    // every character.
+    testCase "a keystroke with no name change stays quiet instead of selecting by file scope" <| fun _ ->
+      let impacted = mkTest "Module.Tests.should_add" TestCategory.Unit
+      let state =
+        { LiveTestState.empty with
+            Activation = LiveTestingActivation.Active
+            DiscoveredTests = [| impacted |] }
+      let graph = exactGraph [ "Module.add", [| impacted.Id |] ]
+
+      let outcome =
+        TestCycleEffects.decideAfterTypeCheck
+          { Changed = []; InFile = [ "Module.add" ] }
+          "Module.fs"
+          RunTrigger.Keystroke
+          graph
+          state
+          None
+          Map.empty
+
+      outcome.Effects
+      |> Expect.isEmpty "file-scope selection is a save-time decision, not a per-keystroke one"
+
     testCase "when only the dependency graph explains the change, afterTypeCheck should report an exact decision so the user can trust the surgical rerun" <| fun _ ->
       let impacted = mkTest "Module.Tests.should_add" TestCategory.Unit
       let state =
@@ -31,7 +125,7 @@ let tests =
 
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          [ "Module.add" ]
+          (nameDelta [ "Module.add" ])
           "Module.fs"
           RunTrigger.Keystroke
           graph
@@ -64,7 +158,7 @@ let tests =
              HitsFieldName = "h" } |]
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          [ "Module.add" ]
+          (nameDelta [ "Module.add" ])
           "Module.fs"
           RunTrigger.Keystroke
           graph
@@ -90,7 +184,7 @@ let tests =
 
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          []
+          (nameDelta [])
           "Compiled.fs"
           RunTrigger.FileSave
           TestDependencyGraph.empty
@@ -116,7 +210,7 @@ let tests =
 
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          [ "Architecture.Rule" ]
+          (nameDelta [ "Architecture.Rule" ])
           "Architecture.fs"
           RunTrigger.Keystroke
           graph
@@ -140,7 +234,7 @@ let tests =
 
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          [ "Unknown.symbol" ]
+          (nameDelta [ "Unknown.symbol" ])
           "Module.fsx"
           RunTrigger.Keystroke
           TestDependencyGraph.empty

@@ -1053,7 +1053,13 @@ let fileSizeBudgets =
       // and its handleFcsResult wiring) — a deliberate, reviewed feature,
       // not silent accretion. Ratchet back DOWN when this file is split;
       // never bump to paper over drift.
-      "SageFs.Core/Features/LiveTestingTypes.fs", 5160
+      // 5160 -> 4425: the split this entry asked for. The inline-feedback read
+      // model (annotations, code lenses, coverage view, run explainer, session
+      // invariants — ~800 lines of editor PRESENTATION, referenced by nothing
+      // in the FSI host's embedded source closure) moved to
+      // Features/TestAnnotations.fs. Set to the file's exact post-split size:
+      // the next addition earns a reviewed bump rather than inheriting slack.
+      "SageFs.Core/Features/LiveTestingTypes.fs", 4425
       // 2900 -> 2950: a one-time bump for the roast UX-6 keystone (per-session
       // live-testing enable/disable — EnableLiveTestingForSession /
       // DisableLiveTestingForSession, resolveOrCreateLiveTestingTarget) — a

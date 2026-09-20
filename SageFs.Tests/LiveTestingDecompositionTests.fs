@@ -166,7 +166,7 @@ module EffectProducerTests =
             DiscoveredTests = [| tc |] }
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          ["mySymbol"]
+          (FileSymbolDelta.ofChangedOnly ["mySymbol"])
           "Script.fsx"
           RunTrigger.Keystroke
           depGraph
@@ -201,7 +201,7 @@ module EffectProducerTests =
             DiscoveredTests = [| tc |] }
       let outcome =
         TestCycleEffects.decideAfterTypeCheck
-          ["mySymbol"]
+          (FileSymbolDelta.ofChangedOnly ["mySymbol"])
           "Foo.fs"
           RunTrigger.FileSave
           depGraph
