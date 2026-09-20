@@ -71,3 +71,41 @@ module TestDiscovery =
       | None -> ""
     let fileCount = result.GroupedByFile.Length
     $"🔍 {result.Tests.Length} of {result.TotalCount} test(s){filterPart} across {fileCount} file(s)"
+
+/// One test in a listing that has no source position — discovered by
+/// reflection, so there is genuinely no file or line to report.
+type UnlocatedTest = { TestName: string; CellId: int }
+
+/// A file's tests in a listing.
+type ListedFile = { File: string; Tests: TestSourceLocation list }
+
+/// The whole answer to "what tests does this session have?", shaped for a
+/// client. `WithoutSourceLocation` is its own field rather than a group under
+/// a fabricated path, so a caller can tell "no location" from "line 0".
+type TestListing = {
+  TotalCount: int
+  Returned: int
+  /// Human-readable description of applied filters, or None if unfiltered —
+  /// same shape the query result carries, passed through unchanged.
+  FilterApplied: string option
+  Summary: string
+  GroupedByFile: ListedFile list
+  WithoutSourceLocation: UnlocatedTest list
+}
+
+/// Build the listing from an already-partitioned set of tests. Pure, and here
+/// rather than at the MCP boundary because it is presentation over this
+/// module's own result types — and because Mcp.fs is the accretion hub the
+/// file-size ratchet exists to shrink.
+let buildListing
+    (query: TestDiscoveryQuery)
+    (located: TestSourceLocation list)
+    (unlocated: (string * int) list)
+    : TestListing =
+  let result = TestDiscovery.applyQuery query located
+  { TotalCount = result.TotalCount + unlocated.Length
+    Returned = result.Tests.Length + unlocated.Length
+    FilterApplied = result.FilterApplied
+    Summary = TestDiscovery.summarize result
+    GroupedByFile = result.GroupedByFile |> List.map (fun (file, tests) -> { File = file; Tests = tests })
+    WithoutSourceLocation = unlocated |> List.map (fun (name, cellId) -> { TestName = name; CellId = cellId }) }

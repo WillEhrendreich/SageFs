@@ -3526,27 +3526,22 @@ module McpTools =
         let model = getModel ()
         let state = getState ()
         let graph = buildCellGraphFromState state
-        let locations =
-          model.LiveTesting.TestState.DiscoveredTests
-          |> Array.toList
-          |> Features.TestSourceResolver.resolveTestLocations graph
+        // partitionForListing, not resolveTestLocations: the latter silently
+        // drops every ReflectionOnly test, which is ALL of them for a
+        // compiled-project session — list_tests reported TotalCount 0 while the
+        // REST status endpoint reported three passing tests for that session.
+        let locations, unlocated =
+          Features.TestSourceResolver.partitionForListing
+            graph
+            (Array.toList model.LiveTesting.TestState.DiscoveredTests)
+            patternOpt
+            fileOpt
         let query : Features.TestDiscovery.TestDiscoveryQuery = {
           Pattern    = patternOpt |> Option.filter (fun s -> s.Length > 0)
           FilePath   = fileOpt |> Option.filter (fun s -> s.Length > 0)
           MaxResults = 200
         }
-        let result = Features.TestDiscovery.TestDiscovery.applyQuery query locations
-        let jsonData =
-          {| TotalCount    = result.TotalCount
-             Returned      = result.Tests.Length
-             FilterApplied = result.FilterApplied
-             Summary       = Features.TestDiscovery.TestDiscovery.summarize result
-             GroupedByFile = result.GroupedByFile |> List.map (fun (file, tests) ->
-               {| File  = file
-                  Tests = tests |> List.map (fun t ->
-                    {| TestName  = t.TestName
-                       StartLine = t.StartLine
-                       EndLine   = t.EndLine |}) |}) |}
+        let jsonData = Features.TestDiscovery.buildListing query locations unlocated
         return JsonSerializer.Serialize(jsonData, liveTestJsonOpts)
     }
 

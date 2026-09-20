@@ -36,6 +36,58 @@ let tests =
       result |> Expect.isEmpty "ReflectionOnly tests have no location data"
     }
 
+    // WHY — `resolveTestLocations` dropping ReflectionOnly tests is correct for a
+    // caller that needs a file and line, and catastrophic for a caller that needs
+    // the TEST LIST. `list_tests` is the latter, and every test in a
+    // compiled-project session is ReflectionOnly, so it reported TotalCount 0
+    // while /api/live-testing/status reported three passing tests for the same
+    // session — confirmed live. `resolveAllTests` must never lose a test.
+    test "resolveAllTests keeps ReflectionOnly tests that resolveTestLocations discards" {
+      let tests = [
+        makeTest "MyModule.test1" TestOrigin.ReflectionOnly
+        makeTest "MyModule.test2" TestOrigin.ReflectionOnly
+      ]
+      resolveTestLocations emptyGraph tests
+      |> Expect.isEmpty "the location-only view still has nothing to offer"
+
+      let all = resolveAllTests emptyGraph tests
+      all |> List.length |> Expect.equal "every test survives, located or not" 2
+      all
+      |> List.forall (function
+        | ResolvedTest.Unlocated _ -> true
+        | ResolvedTest.Located _ -> false)
+      |> Expect.isTrue "both are carried as Unlocated, not as a fabricated path"
+    }
+
+    test "resolveAllTests keeps a SourceMapped test Located and a ReflectionOnly one Unlocated" {
+      let tests = [
+        makeTest "MyModule.mapped" (TestOrigin.SourceMapped("/src/MyModule.fs", 42))
+        makeTest "MyModule.reflected" TestOrigin.ReflectionOnly
+      ]
+      let all = resolveAllTests emptyGraph tests
+      all |> List.length |> Expect.equal "neither kind is dropped" 2
+      all
+      |> List.choose (function
+        | ResolvedTest.Located l -> Some l.TestName
+        | ResolvedTest.Unlocated _ -> None)
+      |> Expect.equal "the mapped one keeps its location" [ "MyModule.mapped" ]
+      all
+      |> List.choose (function
+        | ResolvedTest.Unlocated(name, _) -> Some name
+        | ResolvedTest.Located _ -> None)
+      |> Expect.equal "the reflected one is reported without inventing one" [ "MyModule.reflected" ]
+    }
+
+    test "resolveAllTests never returns fewer tests than it was given" {
+      for origins in [ []; [ TestOrigin.ReflectionOnly ]
+                       [ TestOrigin.SourceMapped("/a.fs", 1); TestOrigin.ReflectionOnly ]
+                       [ TestOrigin.ReflectionOnly; TestOrigin.ReflectionOnly; TestOrigin.SourceMapped("/b.fs", 9) ] ] do
+        let tests = origins |> List.mapi (fun i o -> makeTest (sprintf "M.t%d" i) o)
+        resolveAllTests emptyGraph tests
+        |> List.length
+        |> Expect.equal (sprintf "no test may be lost for %d input(s)" tests.Length) tests.Length
+    }
+
     test "resolveTestLocations with SourceMapped test returns correct file path and line" {
       let tests = [ makeTest "MyModule.test1" (TestOrigin.SourceMapped ("/src/MyModule.fs", 42)) ]
       let result = resolveTestLocations emptyGraph tests

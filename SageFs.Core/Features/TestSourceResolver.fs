@@ -44,3 +44,77 @@ let resolveTestLocations
         EndLine   = line
       }
     | TestOrigin.ReflectionOnly -> None)
+
+/// A discovered test as a caller that must not lose tests should see it: either
+/// with a source position, or explicitly without one.
+///
+/// WHY this exists: `resolveTestLocations` drops every `ReflectionOnly` test on
+/// the floor. That is correct for a caller that needs a file and line (a gutter
+/// marker has nowhere to go without one), but catastrophic for a caller that
+/// needs the TEST LIST — and `list_tests` is exactly that caller. A session
+/// whose tests were discovered by reflection (every compiled-project session)
+/// has ReflectionOnly for ALL of them, so `list_tests` reported
+/// `TotalCount: 0` while `/api/live-testing/status` simultaneously reported
+/// three passing tests for the same session. `docs/mcp-tools.md` names
+/// `list_tests` as the way an agent reads test results, so the headline promise
+/// was returning an empty list for the common case.
+///
+/// The absence is a DU case rather than a placeholder path/line: an empty
+/// FilePath and a 0 line are a plausible-looking lie that a caller would render
+/// as a real location.
+[<RequireQualifiedAccess>]
+type ResolvedTest =
+  | Located of TestSourceLocation
+  | Unlocated of testName: string * cellId: int
+
+/// Every test, never fewer — tests with a source position keep it, tests
+/// without one are carried as `Unlocated` instead of being discarded.
+let resolveAllTests (graph: CellGraph) (tests: TestCase list) : ResolvedTest list =
+  let located = resolveTestLocations graph tests
+  let locatedNames = located |> List.map (fun l -> l.TestName) |> Set.ofList
+  let findCellId (tc: TestCase) =
+    graph.Cells
+    |> Map.tryPick (fun cellId info ->
+      match info.Produces |> List.exists (fun binding -> tc.FullName.Contains binding) with
+      | true -> Some cellId
+      | false -> None)
+    |> Option.defaultValue -1
+  let unlocated =
+    tests
+    |> List.filter (fun tc -> not (locatedNames.Contains tc.FullName))
+    |> List.map (fun tc -> ResolvedTest.Unlocated(tc.FullName, findCellId tc))
+  (located |> List.map ResolvedTest.Located) @ unlocated
+
+/// The located/unlocated split a test LISTING needs, with the listing's own
+/// filters applied to both halves. Pure, and here rather than at the MCP
+/// boundary because it is a decision about this module's own types — and
+/// because Mcp.fs is the accretion hub the file-size ratchet exists to shrink.
+///
+/// A test with no source position cannot satisfy a file filter, so it is
+/// excluded when one is given rather than being handed a fabricated path.
+let partitionForListing
+    (graph: CellGraph)
+    (tests: TestCase list)
+    (pattern: string option)
+    (filePath: string option)
+    : TestSourceLocation list * (string * int) list =
+  let nonEmpty = Option.filter (fun (s: string) -> s.Length > 0)
+  let resolved = resolveAllTests graph tests
+  let located =
+    resolved
+    |> List.choose (function
+      | ResolvedTest.Located l -> Some l
+      | ResolvedTest.Unlocated _ -> None)
+  let unlocated =
+    match nonEmpty filePath with
+    | Some _ -> []
+    | None ->
+      resolved
+      |> List.choose (function
+        | ResolvedTest.Unlocated(name, cellId) -> Some(name, cellId)
+        | ResolvedTest.Located _ -> None)
+      |> List.filter (fun (name, _) ->
+        match nonEmpty pattern with
+        | Some p -> name.Contains(p, System.StringComparison.OrdinalIgnoreCase)
+        | None -> true)
+  located, unlocated
