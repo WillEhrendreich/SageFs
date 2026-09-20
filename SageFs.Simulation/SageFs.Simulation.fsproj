@@ -67,6 +67,13 @@
         <Compile Include="EvalActorSim.fs" />
         <Compile Include="EvalActorInvariants.fs" />
         <Compile Include="EvalActorGenerators.fs" />
+        <!-- Workflow-switch DST (outcome-gate-sweep.md Gap F): folds the real
+             WorkerEventGuard pid-classification inside a faithful miniature
+             model of SwitchWorkflow/spawnFirst; twin stop-before-spawn opens
+             a dead window. -->
+        <Compile Include="WorkflowSwitchSim.fs" />
+        <Compile Include="WorkflowSwitchInvariants.fs" />
+        <Compile Include="WorkflowSwitchGenerators.fs" />
         <!-- File-reload claim-routing DST: folds the real LiveTestWatcherCore
              routing; twins broadcast-to-all / double-fire. -->
         <Compile Include="FileReloadRoutingSim.fs" />
