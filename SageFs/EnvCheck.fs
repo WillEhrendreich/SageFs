@@ -8,6 +8,7 @@ open System.Net.Http
 open System.Net
 open System.Net.Sockets
 open System.Text.Json
+open System.Xml.Linq
 open SageFs
 open SageFs.Server
 
@@ -284,19 +285,43 @@ let sdkCheckFromInputs
             pass ".NET SDK"
                  (sprintf ".NET SDK %s installed - global.json pin %s satisfied" selected req.Version)
 
-/// Locate the highest TargetFramework major (net<major>.<minor>) referenced by
-/// the projects/build props reachable upward from the working directory.
+/// Extract every TargetFramework(s) major version (net<major>.<minor>) from an
+/// MSBuild project/props document's actual `<TargetFramework>` /
+/// `<TargetFrameworks>` ELEMENTS — never from the file's raw text. A text scan
+/// also matches framework monikers mentioned inside an XML COMMENT (e.g. the
+/// repo's own Directory.Build.props carries a comment explaining exactly why
+/// NOT to bump to net11.0 yet) and would misreport the comment's warning as
+/// the project's real target. XDocument.Parse never surfaces comment text as
+/// element content, so this reads only what MSBuild itself would read.
+let targetFrameworkMajorsFromXml (xmlText: string) : int list =
+  let tfmRx = Text.RegularExpressions.Regex(@"^net(\d+)\.\d+")
+  let majorsOf (tfmList: string) =
+    tfmList.Split(';')
+    |> Array.toList
+    |> List.choose (fun tfm ->
+      match tfmRx.Match(tfm.Trim()) with
+      | m when m.Success ->
+        match Int32.TryParse m.Groups.[1].Value with
+        | true, major -> Some major
+        | _ -> None
+      | _ -> None)
+  try
+    let doc = XDocument.Parse(xmlText)
+    doc.Descendants()
+    |> Seq.filter (fun e ->
+      e.Name.LocalName = "TargetFramework" || e.Name.LocalName = "TargetFrameworks")
+    |> Seq.collect (fun e -> majorsOf e.Value)
+    |> Seq.toList
+  with _ -> []
+
+/// Locate the highest TargetFramework major referenced by the projects/build
+/// props reachable upward from the working directory.
 let private targetFrameworkMajorAt (dir: string) =
-  let netRx = Text.RegularExpressions.Regex("net(\\d+)\\.\\d+")
   let rec collect (dir: string) (acc: int list) =
     let read file =
       let path = Path.Combine(dir, file)
       if File.Exists path then
-        try
-          [ for m in netRx.Matches(File.ReadAllText path) do
-              match Int32.TryParse m.Groups.[1].Value with
-              | true, major -> yield major
-              | _ -> () ]
+        try targetFrameworkMajorsFromXml (File.ReadAllText path)
         with _ -> []
       else []
     let here =
@@ -405,14 +430,55 @@ let checkPort (label: string) (port: int) =
     fail label (sprintf "Port %d is already in use" port)
           (sprintf "Another process is using port %d. Use --mcp-port (or --dash-port) to choose a different port, or stop the conflicting process." port)
 
-let checkDaemon (mcpPort: int) =
-  match DaemonState.readOnPort mcpPort with
+/// How a bound port relates to a locally-probed SageFs daemon. A port held by
+/// OUR OWN daemon (the one this check just probed on `mcpPort`) is the
+/// expected state right after `sagefs` starts — not the same finding as a
+/// genuine conflict with an unrelated process holding the port.
+[<RequireQualifiedAccess>]
+type PortOwner =
+  | Free
+  | OurDaemon of pid: int
+  | Other
+
+/// Pure decision, no I/O: classify a port's occupancy against an (optional)
+/// daemon probe. `daemonInfo` carries both the MCP port and the dashboard
+/// port the probed daemon reports, so either port this check runs against can
+/// match it.
+let classifyPortOwner (port: int) (isFree: bool) (daemonInfo: DaemonInfo option) : PortOwner =
+  match isFree with
+  | true -> PortOwner.Free
+  | false ->
+    match daemonInfo with
+    | Some info when info.Port = port || info.DashboardPort = port -> PortOwner.OurDaemon info.Pid
+    | _ -> PortOwner.Other
+
+/// Daemon-aware port check used by `runAll`: a port occupied by our own
+/// already-running daemon passes (with an explanatory detail) instead of
+/// failing as though something else were squatting on it.
+let checkPortAgainstDaemon (label: string) (port: int) (daemonInfo: DaemonInfo option) : CheckResult =
+  match classifyPortOwner port (isPortFree port) daemonInfo with
+  | PortOwner.Free ->
+    pass label (sprintf "Port %d available" port)
+  | PortOwner.OurDaemon pid ->
+    pass label (sprintf "Port %d is held by the running SageFs daemon (PID %d) — expected, not a conflict" port pid)
+  | PortOwner.Other ->
+    fail label (sprintf "Port %d is already in use" port)
+          (sprintf "Another process is using port %d. Use --mcp-port (or --dash-port) to choose a different port, or stop the conflicting process." port)
+
+/// Pure rendering of the "SageFs daemon" row from an already-probed result —
+/// shares the probe `runAll` already made for the port checks instead of
+/// probing a second time.
+let checkDaemonFromInfo (daemonInfo: DaemonInfo option) =
+  match daemonInfo with
   | Some info ->
     warn "SageFs daemon"
          (sprintf "Already running (PID %d, port %d, started %s)" info.Pid info.Port (info.StartedAt.ToString("HH:mm:ss")))
-         "A daemon is already running. The new start will be a no-op or conflict. Run `sagefs stop` first if you want a fresh start."
+         "A daemon is already running. The port checks above reflect this as expected, not a conflict. Run `sagefs stop` first if you want a fresh start."
   | None ->
     pass "SageFs daemon" "No daemon running — ready to start"
+
+let checkDaemon (mcpPort: int) =
+  checkDaemonFromInfo (DaemonState.readOnPort mcpPort)
 
 let classifySessionAuthority (targetDir: string) (sessions: SessionAuthoritySession list) =
   let target = normalizeWorkingDirectory targetDir
@@ -498,14 +564,17 @@ let checkBindHost () =
     fail "Bind host" "Bind host: SAGEFS_BIND_HOST is not a loopback address — the daemon will not start" message
 
 let runAll (dir: string) (mcpPort: int) (dashPort: int) =
+  // One probe, shared by both port checks and the daemon row — a port held
+  // by THIS daemon is reported as expected on both, not as a conflict.
+  let daemonInfo = DaemonState.readOnPort mcpPort
   [ checkDotnetSdk ()
     checkFsiAvailable ()
     checkFsproj dir
     checkDirectoryConfig dir
     checkBindHost ()
-    checkPort "MCP port"       mcpPort
-    checkPort "Dashboard port" dashPort
-    checkDaemon mcpPort
+    checkPortAgainstDaemon "MCP port"       mcpPort daemonInfo
+    checkPortAgainstDaemon "Dashboard port" dashPort daemonInfo
+    checkDaemonFromInfo daemonInfo
     checkDaemonSessionAuthority dir mcpPort ]
 
 /// Print the check results to stdout. Returns the count of failures (for exit code).
