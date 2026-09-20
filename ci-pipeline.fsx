@@ -145,13 +145,13 @@ let writeReleaseManifest () =
 // ---- the pipeline ------------------------------------------------------------
 
 /// Run shell steps in order, stopping at the first failure.
-let rec runSteps (ctx: StageContext) (steps: string list) =
+let rec runSteps (runCommand: string -> Async<Result<unit, string>>) (steps: string list) =
   async {
     match steps with
     | [] -> return Ok()
     | step :: rest ->
-      match! ctx.RunCommand step with
-      | Ok () -> return! runSteps ctx rest
+      match! runCommand step with
+      | Ok () -> return! runSteps runCommand rest
       | Error e -> return Error e
   }
 
@@ -193,7 +193,7 @@ pipeline "sagefs" {
         | true -> return Ok()
         | false ->
           return!
-            runSteps ctx [
+            runSteps ctx.RunCommand [
               if not (Directory.Exists harmonyDir) then $"git clone --no-checkout {harmonyRepoUrl} \"{harmonyDir}\""
               $"git -C \"{harmonyDir}\" fetch --depth 1 origin {harmonyCommit}"
               $"git -C \"{harmonyDir}\" checkout --force {harmonyCommit}"
