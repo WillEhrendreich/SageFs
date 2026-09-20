@@ -60,6 +60,10 @@ module DomIds =
   let [<Literal>] CohortTerritory = "cohort-territory"
   let [<Literal>] CohortLanes = "cohort-lanes"
   let [<Literal>] CohortScrubber = "cohort-scrubber"
+  /// The workflow picker in the tabline — replaces the old read-only badge
+  /// (roast §4.1/§4.2/§11 Island B item 4). One id, morphed in place both
+  /// for the optimistic "switching…" state and the final result.
+  let [<Literal>] WorkflowSwitcher = "workflow-switcher"
   /// The viewed session's true `SessionHealth` verdict, rendered under the
   /// process-liveness daemon health bar — quiet for Starting/Healthy, the
   /// full reason inline for Degraded/Failed. Never hidden behind a disclosure.
@@ -160,6 +164,72 @@ module Signals =
   /// browser-side type system: when connected=false, NO UI element may show
   /// "Ready" or "No session" — only the disconnected overlay is legal.
   let [<Literal>] Connected = "connected"
+  /// In-flight indicator for the workflow switcher (`WorkflowSwitch`) — its
+  /// own signal, not shared with `ActionLoading`, because a workflow switch
+  /// restarts the session (seconds, sometimes a rebuild) and must not grey
+  /// out EVAL/RESET while it runs, nor be greyed out BY them.
+  let [<Literal>] WorkflowSwitchLoading = "workflowSwitchLoading"
+
+/// Pure logic for the dashboard's workflow switcher (sagefs-ux-roast.md
+/// Island A item 3 / this session's Island B item 2 — "the dashboard cannot
+/// see the workflow at all" badge upgraded to a real control). Deliberately
+/// has no dependency on `DashboardSnapshot`'s `WorkflowLabel: string` field:
+/// the picker only needs to compare each option's OWN label against the
+/// current session's label to decide which `<option>` is selected, so no
+/// new required field had to be threaded through every existing
+/// `DashboardSnapshot` literal across the test suite.
+[<RequireQualifiedAccess>]
+module WorkflowSwitch =
+  /// The three workflows the dashboard picker offers, in display order.
+  let options : WorkflowTypes.SessionWorkflow list =
+    [ WorkflowTypes.SessionWorkflow.Interactive
+      WorkflowTypes.SessionWorkflow.LiveTesting
+      WorkflowTypes.SessionWorkflow.HotReload WorkflowTypes.BrowserRefreshConfig.defaults ]
+
+  /// The exact string `POST /api/sessions/{sid}/workflow` accepts (one of
+  /// `WorkflowTypes.SessionWorkflow.tryOfString`'s canonical aliases) — NOT
+  /// the display label, which contains spaces `tryOfString` does not accept.
+  let requestValue = function
+    | WorkflowTypes.SessionWorkflow.Interactive -> "interactive"
+    | WorkflowTypes.SessionWorkflow.LiveTesting -> "livetesting"
+    | WorkflowTypes.SessionWorkflow.HotReload _ -> "hotreload"
+
+  /// Parse the response body `POST /api/sessions/{sid}/workflow` returns
+  /// (`McpServer.fs`'s `mapSessionRoutes`) into the plain `Result<string,
+  /// string>` shape every other `DashboardActions` member already uses. Two
+  /// distinct failure shapes exist on that route and both must parse: a
+  /// direct `{success:false; error}` (unrecognized workflow / malformed
+  /// session id) and a bare `SageFsError.toJson` object `{case; fields;
+  /// message; suggestedAction}` with no `success` key at all (e.g.
+  /// session-not-found). Never throws: an unreadable body degrades to a
+  /// generic message naming the HTTP status rather than crashing the
+  /// handler — the switch may already have happened or not, but the
+  /// dashboard must always be able to show SOMETHING.
+  let parseResponse (statusCode: int) (body: string) : Result<string, string> =
+    try
+      use doc = System.Text.Json.JsonDocument.Parse(body)
+      let root = doc.RootElement
+      let tryStr (name: string) =
+        match root.TryGetProperty(name) with
+        | true, p when p.ValueKind = System.Text.Json.JsonValueKind.String -> Some (p.GetString())
+        | _ -> None
+      let succeeded =
+        match root.TryGetProperty("success") with
+        | true, p -> p.ValueKind = System.Text.Json.JsonValueKind.True
+        | false, _ -> false
+      match succeeded with
+      | true ->
+        let workflow = tryStr "workflow" |> Option.defaultValue ""
+        tryStr "message"
+        |> Option.defaultValue (sprintf "Switched to %s" workflow)
+        |> Ok
+      | false ->
+        tryStr "error"
+        |> Option.orElse (tryStr "message")
+        |> Option.defaultValue (sprintf "Workflow switch failed (HTTP %d)" statusCode)
+        |> Error
+    with _ ->
+      Error (sprintf "Workflow switch returned an unreadable response (HTTP %d)" statusCode)
 
 /// Directory autocomplete for the New Session working-directory input. `split`
 /// is pure and unit-tested; `suggest` adds the one filesystem read.

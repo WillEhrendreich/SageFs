@@ -1757,6 +1757,94 @@ let createResetHandler
     | :? System.ObjectDisposedException -> ()
   }
 
+/// The ONLY place `/dashboard/switch-workflow` makes a real network call:
+/// the SAME REST route VS Code already uses (`POST
+/// /api/sessions/{sid}/workflow`, `McpServer.fs`), reached over loopback on
+/// the daemon's own MCP/API port (`infra.McpPort`) instead of a second,
+/// independent switch implementation — one route, one implementation, for
+/// every client that wants to switch a session's workflow.
+let switchWorkflowViaApi
+  (mcpPort: int)
+  (sessionId: WorkerProtocol.SessionId)
+  (target: WorkflowTypes.SessionWorkflow)
+  : Threading.Tasks.Task<Result<string, string>> =
+  task {
+    try
+      use http = new HttpClient()
+      // A HotReload switch can rebuild the target project before the new
+      // worker is ready — generous, matching Hard Reset's own expectations
+      // (SessionBuild's kill timer) rather than a short eval-style timeout.
+      http.Timeout <- TimeSpan.FromMinutes(10.0)
+      let url = sprintf "http://127.0.0.1:%d/api/sessions/%s/workflow" mcpPort (WorkerProtocol.SessionId.value sessionId)
+      let bodyJson = Text.Json.JsonSerializer.Serialize({| workflow = WorkflowSwitch.requestValue target |})
+      use req = new HttpRequestMessage(HttpMethod.Post, url)
+      req.Content <- new StringContent(bodyJson, Text.Encoding.UTF8, "application/json")
+      let! resp = http.SendAsync(req)
+      let! body = resp.Content.ReadAsStringAsync()
+      return WorkflowSwitch.parseResponse (int resp.StatusCode) body
+    with ex ->
+      return Error (sprintf "Could not reach the session API: %s" ex.Message)
+  }
+
+/// Create the workflow-switch POST handler. Parametrized over `getCurrentLabel`
+/// and `switchWorkflow` (mirroring `createResetHandler`'s injection of
+/// `resetSession`) purely for testability — a fake of each lets tests drive
+/// every branch (unknown session, bad target, API success, API failure)
+/// with no network and no daemon. Production wiring (`createEndpoints`)
+/// supplies `switchWorkflowViaApi infra.McpPort`, the only place a real HTTP
+/// call happens.
+let createWorkflowSwitchHandler
+  (getCurrentLabel: WorkerProtocol.SessionId -> string)
+  (switchWorkflow: WorkerProtocol.SessionId -> WorkflowTypes.SessionWorkflow -> Threading.Tasks.Task<Result<string, string>>)
+  : HttpHandler =
+  fun ctx -> task {
+    try
+      let! sessionIdResult, targetRaw = task {
+        try
+          use! doc = readSignalsJsonSized ctx
+          let sidResult =
+            match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
+            | true, prop -> WorkerProtocol.SessionId.validate (prop.GetString())
+            | _ -> Error "Missing viewingSessionId"
+          let target =
+            match doc.RootElement.TryGetProperty("workflowTarget") with
+            | true, prop when prop.ValueKind = Text.Json.JsonValueKind.String -> prop.GetString()
+            | _ -> ""
+          return sidResult, target
+        with ex ->
+          Log.warn "[Dashboard] workflow-switch request parse failed: %s" ex.Message
+          return Error "Failed to parse request", ""
+      }
+      Response.sseStartResponse ctx |> ignore
+      match sessionIdResult, WorkflowTypes.SessionWorkflow.tryOfString targetRaw with
+      | Error errMsg, _ ->
+        do! ssePatchNode ctx (evalResultError (sprintf "Workflow switch: %s" errMsg))
+      | Ok _, None ->
+        do! ssePatchNode ctx (evalResultError (sprintf "Workflow switch: unrecognized workflow '%s'" targetRaw))
+      | Ok sessionId, Some target ->
+        let currentLabel = getCurrentLabel sessionId
+        let targetLabel = WorkflowTypes.SessionWorkflow.label target
+        // Immediate feedback: swap the picker for a "switching…" status
+        // BEFORE awaiting the restart (which can take seconds — a rebuild if
+        // the worker needs one) — the teardown path's own best pattern
+        // (renderStoppingCard, roast UX-8), applied here.
+        do! ssePatchNode ctx (renderWorkflowSwitcherPending targetLabel)
+        let! result = switchWorkflow sessionId target
+        match result with
+        | Ok message ->
+          do! ssePatchNode ctx (renderWorkflowSwitcher targetLabel (WorkerProtocol.SessionId.value sessionId))
+          do! ssePatchNode ctx (evalResultInfo message)
+        | Error err ->
+          // Revert to the workflow the session is ACTUALLY still running —
+          // never leave the control stuck showing the failed target.
+          do! ssePatchNode ctx (renderWorkflowSwitcher currentLabel (WorkerProtocol.SessionId.value sessionId))
+          do! ssePatchNode ctx (evalResultError (sprintf "Workflow switch failed: %s" err))
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
 /// Cancel the session's in-flight eval. Cooperative on the worker side (CTS
 /// cancel + thread interrupt — see `DashboardActions.CancelEval`'s doc): this
 /// genuinely stops an eval blocked on I/O or one that checks a cancellation
@@ -2760,6 +2848,13 @@ let createEndpoints
     yield post "/dashboard/reset" (createResetHandler "Reset" a.ResetSession)
     yield post "/dashboard/hard-reset" (createResetHandler "Hard Reset" a.HardResetSession)
     yield post "/dashboard/cancel-eval" (createCancelEvalHandler a.CancelEval)
+    // The real workflow switcher (sagefs-ux-roast.md §4.1/§4.2/§11 Island B
+    // item 4): reuses the already-shipped `POST /api/sessions/{sid}/workflow`
+    // over loopback rather than adding a second switch implementation.
+    yield post "/dashboard/switch-workflow"
+      (createWorkflowSwitchHandler
+        (q.GetSessionWorkflow >> WorkflowTypes.SessionWorkflow.label)
+        (switchWorkflowViaApi infra.McpPort))
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
     yield post "/dashboard/toggle-project" createToggleProjectHandler

@@ -109,6 +109,11 @@
         <Compile Include="DashboardViewingTests.fs" />
         <Compile Include="DashboardRenderGateTests.fs" />
         <Compile Include="DashboardHealthVerdictRenderingTests.fs" />
+        <Compile Include="DashboardWorkflowSwitchTests.fs" />
+        <Compile Include="DashboardWorkflowSwitcherRenderTests.fs" />
+        <Compile Include="DashboardWorkflowSwitchHandlerTests.fs" />
+        <Compile Include="DashboardWorkflowSwitchApiWiringTests.fs" />
+        <Compile Include="SessionPhaseNoNullTombstoneTests.fs" />
         <Compile Include="SnapshotRenderGuardTests.fs" />
         <Compile Include="MultiUiConsistencyTests.fs" />
         <Compile Include="TuiGuiSharedTests.fs" />

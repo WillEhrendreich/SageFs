@@ -131,6 +131,50 @@ let renderThemePicker (selectedTheme: string) =
         ([ Attr.value name ] @ (match name = selectedTheme with | true -> [ Attr.create "selected" "selected" ] | false -> []))
         [ textEnc name ]))
 
+/// Render the workflow picker as a `<select id="workflow-switcher">` — the
+/// dashboard's answer to sagefs-ux-roast.md §4.1/§4.2/§11 Island B item 4:
+/// the badge that used to say "(read-only)" ("the dashboard cannot see the
+/// workflow at all") is now a real control. `currentLabel` is the viewed
+/// session's `WorkflowTypes.SessionWorkflow.label` — compared against each
+/// option's OWN label to decide which `<option>` is selected, so no raw
+/// `SessionWorkflow` value has to be threaded through `DashboardSnapshot`
+/// (which is constructed as a record literal across a dozen test files).
+/// Switching restarts the SAME session id (`SessionOps.SwitchWorkflow`,
+/// spawn-first — see `/dashboard/switch-workflow`), so the viewing session
+/// never changes across the switch and no retarget is needed.
+let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode =
+  match sessionId.Length > 0 with
+  | false -> Elem.span [ Attr.id DomIds.WorkflowSwitcher ] []
+  | true ->
+    Elem.select
+      [ Attr.id DomIds.WorkflowSwitcher
+        Attr.class' "badge workflow-select"
+        Attr.style "font-size:10px;margin-left:6px;"
+        Attr.create "aria-label" (attrEnc (sprintf "Workflow: %s — choose a workflow to switch (restarts the session)" currentLabel))
+        Ds.indicator Signals.WorkflowSwitchLoading
+        Ds.attr' ("disabled", sprintf "$%s" Signals.WorkflowSwitchLoading)
+        // event.target, not `this` — Datastar leaves `this` unbound (same
+        // gotcha renderThemePicker's own onEvent comment documents above).
+        Ds.onEvent ("change", "var w=event.target.value; @post('/dashboard/switch-workflow', {workflowTarget: w})") ]
+      (WorkflowSwitch.options |> List.map (fun w ->
+        let lbl = WorkflowTypes.SessionWorkflow.label w
+        Elem.option
+          ([ Attr.value (WorkflowSwitch.requestValue w) ] @ (match lbl = currentLabel with | true -> [ Attr.create "selected" "selected" ] | false -> []))
+          [ textEnc lbl ]))
+
+/// The transient control shown the instant a switch is requested — the
+/// teardown path's `renderStoppingCard` pattern (roast UX-8: "swap the card
+/// for a status message BEFORE awaiting") applied to the workflow switcher:
+/// this is pushed before the restart is awaited, not after it resolves.
+let renderWorkflowSwitcherPending (targetLabel: string) : XmlNode =
+  Elem.span
+    [ Attr.id DomIds.WorkflowSwitcher
+      Attr.class' "badge"
+      Attr.style "font-size:10px;margin-left:6px;"
+      Attr.create "aria-label" (attrEnc (sprintf "Switching workflow to %s…" targetLabel))
+      Attr.create "role" "status" ]
+    [ textEnc (sprintf "⏳ %s…" targetLabel) ]
+
 /// The directory-autocomplete datalist for the New Session working-dir input.
 /// Morphed by POST /dashboard/dir-suggest as the user types; the input binds to
 /// it via `list="dir-suggestions"`, so the browser shows native suggestions.
@@ -2007,21 +2051,15 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
         // shrink instead of overflowing onto the right-side theme picker at
         // phone width (sagefs-ux-roast.md §7.2 — a measured 130px collision
         // between this block and .tabline-right at 400px). The workflow
-        // label rides along here (read-only, honest — §4.1's "the dashboard
-        // cannot see the workflow at all") rather than as its own flex
-        // child, so it never adds a second overflow surface.
+        // switcher rides along here (a real control now, not a read-only
+        // badge — §4.1's "the dashboard cannot see the workflow at all")
+        // rather than as its own flex child, so it never adds a second
+        // overflow surface.
         Elem.div
           [ Attr.class' "tabline-info"
             Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:12px;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;" ] [
           textEnc (sprintf "Session: %s" snap.SessionId)
-          match snap.SessionId.Length > 0 with
-          | true ->
-            Elem.span
-              [ Attr.class' "badge"
-                Attr.style "margin-left:6px;font-size:10px;"
-                Attr.create "aria-label" (attrEnc (sprintf "Workflow: %s (read-only)" snap.WorkflowLabel)) ]
-              [ textEnc snap.WorkflowLabel ]
-          | false -> ()
+          renderWorkflowSwitcher snap.WorkflowLabel snap.SessionId
         ]
         // The duplicate #eval-stats id (this wrapper AND renderEvalStats's own
         // root both used to carry it — an invalid-HTML morph-target hazard in
