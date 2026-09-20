@@ -259,6 +259,7 @@
         <Compile Include="SageFsErrorClassificationTests.fs" />
         <Compile Include="SageFsErrorJsonTests.fs" />
         <Compile Include="ProjectCompatibilityTests.fs" />
+        <Compile Include="McpProjectLoadingUxTests.fs" />
         <Compile Include="SageFsErrorPropertyTests.fs" />
         <Compile Include="CompileOrderInsightTests.fs" />
         <Compile Include="ErrorAlgebraHardeningTests.fs" />
