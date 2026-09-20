@@ -8,6 +8,8 @@ open SageFs.Vscode.DaemonDiscovery
 open SageFs.Vscode.JsHelpers
 open SageFs.Vscode.SafeInterop
 
+module ErrorPresentationPure = SageFs.Vscode.ErrorPresentationPure
+
 [<Emit("console.warn('[SageFs]', $0 + ':', $1)")>]
 let private consoleWarn (context: string) (err: obj) : unit = jsNative
 
@@ -151,7 +153,26 @@ let postCommand (c: Client) (path: string) (body: string) (timeout: int) : JS.Pr
       | s when s >= 200 && s < 300 ->
         return jsonParse resp.body |> parseOutcome
       | s ->
-        return Failed (sprintf "HTTP %d: %s" s (resp.body.Substring(0, min 200 resp.body.Length)))
+        // A non-2xx body is one of two well-known shapes: `{success, error}`
+        // for a validation refusal (which carries the daemon's own "did you
+        // mean" text), or `SageFsError.toJson`'s
+        // `{case, message, suggestedAction}`. Truncating the raw JSON behind
+        // an "HTTP 400:" prefix threw away exactly the half a user can act on
+        // — the same defect §6.4 measured in Neovim's `err_detail`.
+        let parsed = try Some (jsonParse resp.body) with _ -> None
+        match parsed with
+        | None -> return Failed (sprintf "HTTP %d: %s" s (resp.body.Substring(0, min 200 resp.body.Length)))
+        | Some p ->
+          let message =
+            fieldString "error" p
+            |> Option.orElse (fieldString "message" p)
+            |> Option.defaultValue (sprintf "The daemon refused the request (HTTP %d)." s)
+          return
+            Failed (
+              ErrorPresentationPure.describe
+                { Case = fieldString "case" p |> Option.defaultValue ""
+                  Message = message
+                  SuggestedAction = fieldString "suggestedAction" p |> Option.defaultValue "" })
     with err ->
       return Failed (string err)
   }
@@ -316,6 +337,23 @@ let createSession (projects: string) (workingDirectory: string) (c: Client) =
 
 let createSessionWithWorkflow (projects: string) (workingDirectory: string) (workflow: string) (c: Client) =
   postCommand c "/api/sessions/create" (jsonStringify {| projects = [| projects |]; workingDirectory = workingDirectory; workflow = workflow |}) 30000
+
+/// Switch an EXISTING session into another workflow, keeping its id.
+///
+/// WHY this and not create-then-stop: the daemon restarts the same session
+/// spawn-first into the target workflow, so there is never a window where two
+/// sessions exist for one working directory — which is the
+/// "Multiple sessions match workingDirectory" routing ambiguity VS Code's old
+/// create-a-second-session-and-never-stop-the-first "switch" reproduced. This
+/// is the same path `AppRunOrchestration` uses to auto-switch into HotReload
+/// for `run_app`.
+///
+/// `workflow` is a `SessionWorkflow.tryOfString` alias; an unknown one is a
+/// 400 carrying the daemon's own "did you mean" text, which `postCommand`
+/// surfaces as the failure message rather than silently defaulting.
+/// Generous timeout: the target session is genuinely restarted and re-warmed.
+let switchSessionWorkflow (sessionId: string) (workflow: string) (c: Client) =
+  postCommand c (sprintf "/api/sessions/%s/workflow" sessionId) (jsonStringify {| workflow = workflow |}) 120000
 
 let switchSession (sessionId: string) (c: Client) =
   postCommand c "/api/sessions/switch" (jsonStringify {| sessionId = sessionId |}) 5000

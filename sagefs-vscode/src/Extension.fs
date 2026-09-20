@@ -1680,11 +1680,10 @@ let stopSessionCmd () =
 /// session, and left `activeSessionId` pointing at the old one afterwards, so
 /// evals kept landing in the session the user thought they had left.
 ///
-/// The daemon's `switch_workflow` MCP tool documents the correct semantics —
-/// "creates a new session with the target workflow AND STOPS THE OLD ONE"
-/// (SageFs/Mcp.fs:1989-1990) — so that is what this does, over the two REST
-/// routes that exist today. When `POST /api/sessions/{id}/workflow` lands this
-/// becomes one call; the user-visible contract below does not change.
+/// `POST /api/sessions/{sid}/workflow` is the right primitive for this, not a
+/// better-implemented fork: the daemon restarts the SAME session id spawn-first
+/// into the target workflow, so there is never a moment where two sessions
+/// exist for one working directory.
 let switchWorkflowCmd () =
   promise {
     match client with
@@ -1723,34 +1722,28 @@ let switchWorkflowCmd () =
           | true ->
             Window.showInformationMessage (sprintf "Already in %s." targetLabel) [||] |> ignore
           | false ->
-            let projects = sess.projects |> String.concat ","
-            let oldId = sess.id
+            // One call, one session id. The daemon restarts THIS session into
+            // the target workflow spawn-first, so the client keeps pointing at
+            // the same id throughout and no second session ever exists for
+            // this directory.
             let! result =
               withProgressResult
                 ProgressLocation.Notification
                 (sprintf "SageFs: switching to %s…" targetLabel)
-                (fun () -> Client.createSessionWithWorkflow projects sess.workingDirectory wire c)
+                (fun () -> Client.switchSessionWorkflow sess.id wire c)
             match result with
             | None -> ()
             | Some (Client.Succeeded _) ->
-              // Stop the old session BEFORE re-pointing the client, so two
-              // sessions never both answer for this directory.
-              let! stopped = Client.stopSession oldId c
-              match stopped with
-              | Client.Failed msg ->
-                (getOutput()).appendLine (sprintf "[SageFs] switched to %s but the old session %s did not stop: %s" targetLabel oldId msg)
-                Window.showWarningMessage
-                  (sprintf "Switched to %s, but the previous session (%s) is still running in this directory. Two sessions in one directory make evals ambiguous." targetLabel oldId)
-                  [| "Show Output" |]
-                |> ignore
-              | Client.Succeeded _ -> ()
-              activeSessionId <- None
-              activeSessionWorkingDirectory <- None
               currentWorkflowLabel <- targetLabel
               refreshStatus ()
               Sessions.refresh ()
             | Some (Client.Failed msg) ->
-              Window.showErrorMessage (sprintf "Workflow switch failed: %s" msg) [| "Show Output" |] |> ignore
+              // The daemon's 400 carries its own alias "did you mean" text and
+              // its 5xx carries a SageFsError body, so `msg` is already the
+              // useful half — it is shown, not swallowed into a generic line.
+              Window.showErrorMessage (sprintf "Workflow switch failed: %s" msg) [| "Show Output" |]
+              |> Promise.map (function Some "Show Output" -> showOutputPanel () | _ -> ())
+              |> promiseIgnoreLog (fun m -> (getOutput()).appendLine m)
   }
 
 /// Context-aware session menu — the primary entry point from the status bar.
@@ -2590,6 +2583,19 @@ let activate (context: ExtensionContext) =
     simpleCommand "SageFs: disabling live testing…" "Live testing disabled" Client.disableLiveTesting |> promiseIgnoreLog logToOutput)
   reg "sagefs.runTests" (fun _ ->
     simpleCommand "SageFs: running tests…" "Tests queued" (Client.runTests "") |> promiseIgnoreLog logToOutput)
+  // Run ONE test. The extension had no such command, which is why the per-test
+  // CodeLens — whose title is one test's outcome — was wired to
+  // `sagefs.runTests`, i.e. the whole suite (roast §4.3). The daemon's
+  // /api/live-testing/run has always taken a `pattern`; nothing was passing
+  // one. The test name arrives as the CodeLens argument.
+  reg "sagefs.runTest" (fun args ->
+    let testName = tryCastString args |> Option.defaultValue ""
+    match testName with
+    | "" ->
+      Window.showWarningMessage "No test selected. Use the CodeLens above a test, or Run All Tests." [||] |> ignore
+    | name ->
+      simpleCommand (sprintf "SageFs: running %s…" name) "Test queued" (Client.runTests name)
+      |> promiseIgnoreLog logToOutput)
   reg "sagefs.setRunPolicy" (fun _ ->
     withClient (fun c ->
       promise {

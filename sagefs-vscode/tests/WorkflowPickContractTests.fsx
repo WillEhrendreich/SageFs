@@ -103,6 +103,18 @@ let tests =
     testCase "WHY - labelOfWire answers the confirmation message without re-deriving the label" <| fun _ ->
       labelOfWire "HotReload" |> Expect.equal "hot reload" (Some "Hot Reload")
       labelOfWire "Nope" |> Expect.isNone "unknown wire has no label"
+
+    testCase "WHY - the wire values are the exact aliases POST /api/sessions/{sid}/workflow accepts" <| fun _ ->
+      // The route parses its body with the SAME `tryOfString` this loads, and
+      // a value it cannot parse is a 400 — not a silent default into a
+      // workflow the user did not pick. Round-tripping each wire value through
+      // the real parser AND back through `label` proves the picker and the
+      // route agree on all three, which is what stops the picker from claiming
+      // one mode while the session lands in another.
+      for c in choices do
+        SageFs.WorkflowTypes.SessionWorkflow.tryOfString c.Wire
+        |> Option.map SageFs.WorkflowTypes.SessionWorkflow.label
+        |> Expect.equal (sprintf "%s survives the route's parser intact" c.Wire) (Some c.Label)
   ]
 
 let argv = System.Environment.GetCommandLineArgs() |> Array.skipWhile (fun a -> not (a.EndsWith ".fsx")) |> Array.skip 1

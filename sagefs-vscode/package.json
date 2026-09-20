@@ -165,6 +165,10 @@
         "title": "SageFs: Run All Tests"
       },
       {
+        "command": "sagefs.runTest",
+        "title": "SageFs: Run This Test"
+      },
+      {
         "command": "sagefs.setRunPolicy",
         "title": "SageFs: Set Test Run Policy"
       },
@@ -480,6 +484,10 @@
         },
         {
           "command": "sagefs.showCoveringTests",
+          "when": "false"
+        },
+        {
+          "command": "sagefs.runTest",
           "when": "false"
         },
         {
