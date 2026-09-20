@@ -1037,7 +1037,7 @@ let fileSizeBudgets =
       // creation, fail-fast on failure. A deliberate, reviewed fix, not
       // silent accretion. Ratchet back DOWN when this file is split; never
       // bump to paper over drift.
-      "SageFs/Mcp.fs", 4270
+      "SageFs/Mcp.fs", 4262
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own

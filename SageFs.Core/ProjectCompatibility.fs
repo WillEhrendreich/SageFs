@@ -285,3 +285,22 @@ let findUnhostable (projects: string list) : (string * string list * Unsupported
     | ProjectHostability.NotHostable(tfms, reason) -> Some(project, tfms, reason)
     | ProjectHostability.Hostable _
     | ProjectHostability.Indeterminate _ -> None)
+
+/// One advisory line per project whose TOOLCHAIN means SageFs can only help
+/// with part of it — today, a Fable client, whose real runtime is a browser.
+///
+/// Advisory, never a refusal: a Fable client project genuinely builds and
+/// loads, and a Fable project sitting in a solution does not break a session
+/// on the rest of it. The user is simply told which half of their project
+/// SageFs is the right tool for. Pure — callers supply the references.
+///
+/// Lives here rather than in Mcp.fs because it is presentation over THIS
+/// module's own types and needs nothing from the MCP surface — and because
+/// Mcp.fs is the accretion hub the file-size ratchet exists to shrink.
+let formatToolchainAdvisories (projectRefs: (string * string list) list) : string list =
+  projectRefs
+  |> List.choose (fun (project, refs) ->
+    match classifyToolchain refs with
+    | ToolchainFit.DotNet -> None
+    | ToolchainFit.FableClient markers ->
+      Some(sprintf "ℹ️ %s" (describeFableClient (Path.GetFileName project) markers)))
