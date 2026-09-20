@@ -1,12 +1,14 @@
 module SageFs.Tests.HotReloadDetourPlanTests
 
 open System
+open System.Runtime.CompilerServices
 open Expecto
 open Expecto.Flip
 open SageFs.Middleware.HotReloading
 open SageFs.Middleware.HotReloadCore
 open SageFs.Features.ReloadOutcome
 open SageFs.Features.ReloadPlanning
+open SageFs.Utils
 
 // Distinct overloads of one Math method share a Name but not an identity —
 // the same shape as two FSI copies of one re-evaluated definition.
@@ -368,3 +370,185 @@ let confirmPatchOutcomeTests =
         List.isEmpty reloaded && considered = List.length decls && List.length reasons = List.length decls
       | other -> failtestf "confirmPatchAsOutcome must only ever produce Patched or NoEffect, got %A" other
   ]
+
+// ── ReloadOutcome.withExtraMisses ─────────────────────────────────────────────
+//
+// A mutable binding that was declined or never landed is invisible to
+// `confirmPatchAsOutcome` — it only ever sees the file's plain functions.
+// `withExtraMisses` is how those reach the same outcome the functions did.
+
+[<Tests>]
+let withExtraMissesTests =
+  testList "ReloadOutcome.withExtraMisses" [
+    testCase "WHY — ReloadOutcome.withExtraMisses — nothing extra leaves the outcome untouched because an empty list has nothing to add" <| fun _ ->
+      let outcome = ReloadOutcome.Patched(1, 1)
+      outcome |> ReloadOutcome.withExtraMisses [] |> Expect.equal "unchanged" outcome
+
+    testCase "WHY — ReloadOutcome.withExtraMisses — NoEffect grows BOTH its reasons and its considered count because 0 of N must count the binding too" <| fun _ ->
+      ReloadOutcome.NoEffect(2, [ RestartReason.SignatureChanged "f" ])
+      |> ReloadOutcome.withExtraMisses [ RestartReason.MutableModuleState "counter" ]
+      |> Expect.equal "3 considered, both reasons"
+        (ReloadOutcome.NoEffect(3, [ RestartReason.SignatureChanged "f"; RestartReason.MutableModuleState "counter" ]))
+
+    testCase "WHY — ReloadOutcome.withExtraMisses — RestartRequired appends without touching any count because it never carried one" <| fun _ ->
+      ReloadOutcome.RestartRequired [ RestartReason.TypeShapeChanged "Todo" ]
+      |> ReloadOutcome.withExtraMisses [ RestartReason.MutableModuleState "counter" ]
+      |> Expect.equal "both reasons"
+        (ReloadOutcome.RestartRequired [ RestartReason.TypeShapeChanged "Todo"; RestartReason.MutableModuleState "counter" ])
+
+    testCase "WHY — ReloadOutcome.withExtraMisses — Patched has nowhere to put a reason and is left exactly as it was, the same partial-visibility limit an ordinary missed function already has" <| fun _ ->
+      let outcome = ReloadOutcome.Patched(2, 2)
+      outcome
+      |> ReloadOutcome.withExtraMisses [ RestartReason.MutableModuleState "counter" ]
+      |> Expect.equal "counts unchanged, real successes not thrown away" outcome
+
+    testCase "WHY — ReloadOutcome.withExtraMisses — Restarted and CompileFailed are also left alone because neither is a place a missed binding belongs" <| fun _ ->
+      let extra = [ RestartReason.MutableModuleState "counter" ]
+      ReloadOutcome.Restarted [ RestartReason.TypeShapeChanged "Todo" ]
+      |> ReloadOutcome.withExtraMisses extra
+      |> Expect.equal "restarted unchanged" (ReloadOutcome.Restarted [ RestartReason.TypeShapeChanged "Todo" ])
+      ReloadOutcome.CompileFailed "boom"
+      |> ReloadOutcome.withExtraMisses extra
+      |> Expect.equal "compile-failed unchanged" (ReloadOutcome.CompileFailed "boom")
+  ]
+
+// ── ReloadChange.MutableBindingTorn ────────────────────────────────────────────
+//
+// Discovered only from the RUNTIME detour result (a `BindingOutcome.Torn`),
+// never from a source diff — this is the ONE `ReloadChange` case that never
+// comes out of `planReload`. It still has to describe and remedy itself
+// exactly like every other reason, because the same `RestartReason` gate
+// (`restartOrFallBack`) reports both kinds without knowing which is which.
+
+[<Tests>]
+let mutableBindingTornChangeTests =
+  testList "ReloadChange.MutableBindingTorn" [
+    testCase "WHY — ReloadChange.restartReason — a torn binding is named MutableModuleState because the remedy (restart to re-run the initialiser) is identical to any other mutable-state refusal" <| fun _ ->
+      ReloadChange.MutableBindingTorn "counter"
+      |> ReloadChange.restartReason
+      |> Expect.equal "same case as a source-level mutable-state change" (RestartReason.MutableModuleState "counter")
+
+    testCase "WHY — ReloadChange.describe — names the binding and says reads and writes disagree, because that is the danger a user acts on" <| fun _ ->
+      ReloadChange.describe (ReloadChange.MutableBindingTorn "counter")
+      |> Expect.stringContains "names the binding" "counter"
+      ReloadChange.describe (ReloadChange.MutableBindingTorn "counter")
+      |> Expect.stringContains "says what's wrong" "disagree"
+  ]
+
+// ── BindingOutcome.Torn, reached through REAL Harmony detours ────────────────
+//
+// Real (process-global) Harmony patches, like HarmonyCanaryTests and
+// MethodPatcherTests — dedicated throwaway methods, and the whole section
+// joins their "sagefs-harmony" sequenced group so it can never race another
+// suite's detours on the same process.
+//
+// `applyBindingDetour` preflights every leg (JIT-prepares it) before writing
+// any of them, so a leg that CANNOT be JIT-compiled is caught before anything
+// moves (NeitherLegRedirected, not Torn — the atomicity guarantee the header
+// comment describes). Torn is reached a layer further in: preflight only
+// proves a leg can be JIT-compiled, not that Harmony's OWN detour will
+// succeed on it. A method detoured to ITSELF preflights cleanly (it is a
+// perfectly ordinary, already-JIT-compiled method) and then fails inside
+// Harmony's PatchTools.DetourMethod with "Cannot detour a method to itself"
+// (confirmed live against this repo's Harmony/MonoMod build) — a distinct,
+// later failure surface preflight cannot see coming. Pairing that with a
+// genuinely different, compatible method for the other leg reproduces Torn
+// through the real path, not a hand-built DU literal.
+// NOT `private`: HarmonyCanaryTests/MethodPatcherTests' own real-detour probe
+// types are all non-private, and a `private` type here reproducibly kept
+// BOTH legs from landing in the compiled test binary (NeitherLegRedirected
+// every time, confirmed across three independent method pairs) even though
+// the identical sequence works from FSI — Harmony/MonoMod's detour machinery
+// on this repo's build evidently needs the ordinary public-type IL shape.
+type TornProbeMethods() =
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  static member GetterOld() : int = 1
+
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  static member SetterOld1(_x: int) : unit = ()
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  static member SetterNew1(_x: int) : unit = ()
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  static member SetterOld2(_x: int) : unit = ()
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  static member SetterNew2(_x: int) : unit = ()
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  static member SetterOld3(_x: int) : unit = ()
+  [<MethodImpl(MethodImplOptions.NoInlining)>]
+  static member SetterNew3(_x: int) : unit = ()
+
+let private tornProbe (name: string) : Method =
+  { MethodInfo = typeof<TornProbeMethods>.GetMethod(name); FullName = "Torn.Config." + name }
+
+/// Three independent setter pairs, tried in turn: real (process-global,
+/// native-code-patching) Harmony detours have shown genuine run-to-run
+/// flakiness on this exact class of test elsewhere in the suite
+/// (HarmonyCanaryTests documents JIT/tiered-compilation and cross-suite
+/// contention as causes) — a landed detour confirmed live via the REPL
+/// (see the module comment) occasionally does not land under the full
+/// suite's parallel load. Each pair is a FRESH, never-before-patched method,
+/// so a retry is a genuinely independent attempt, not a repeat of one that
+/// already failed.
+let private setterPairs =
+  [ "SetterOld1", "SetterNew1"
+    "SetterOld2", "SetterNew2"
+    "SetterOld3", "SetterNew3" ]
+
+[<Tests>]
+let realTornBindingTests =
+  testSequencedGroup "sagefs-harmony" (testList "HotReloadCore applyDetourPlan — a real torn accessor pair" [
+    testCase "WHY — HotReloadCore.applyDetourPlan — one leg self-detoured (fails inside Harmony, not preflight) and the other genuinely redirected is reported Torn, not silently dropped, because the running process now reads the OLD field and writes the NEW one" <| fun _ ->
+      // Reuse the SAME `Method` value for both sides of the pair — calling
+      // `tornProbe "GetterOld"` a second time builds a distinct `Method`
+      // record wrapping a SEPARATE `Type.GetMethod` lookup, and MonoMod's
+      // "Cannot detour a method to itself" guard did not fire against two
+      // such lookups in the compiled test binary (confirmed: it silently
+      // succeeded, landing BothLegsRedirected instead of failing this leg —
+      // reflection does not guarantee `GetMethod` returns the same
+      // `MethodInfo` instance across separate calls). One shared value is
+      // guaranteed to be the self-detour MonoMod actually rejects.
+      let getterOld = tornProbe "GetterOld"
+      let selfDetouredGetter = getterOld, getterOld
+      let attempt (oldName, newName) : DetourReport =
+        let plan : DetourPlan =
+          { Functions = []
+            MutableBindings =
+              [ { Binding = "Torn.Config.probe"
+                  FirstGetter = selfDetouredGetter
+                  MoreGetters = []
+                  FirstSetter = tornProbe oldName, tornProbe newName
+                  MoreSetters = [] } ]
+            Declined = [] }
+        applyDetourPlan (Log.asILogger()) plan
+      let rec tryPairs =
+        function
+        | [] ->
+          // Every independent attempt's "should succeed" leg also failed to
+          // land — an environment limitation (MonoMod/CoreCLR
+          // compatibility or suite-wide contention), not evidence that
+          // applyBindingDetour mishandles a landed+failed pair. Skip rather
+          // than assert a false negative, matching HarmonyCanaryTests'
+          // documented tolerance for the same class of Harmony flakiness.
+          skiptest
+            "could not manufacture a torn pair on this run — every attempt either landed both legs (the atomicity guarantee holding) or failed both. Torn's reporting path is pinned by WorkerMainTests' escalationOf cases, which construct the outcome directly."
+        | pair :: rest ->
+          let report = attempt pair
+          match report.Bindings with
+          | [ BindingOutcome.Torn(binding, reason) ] ->
+            binding |> Expect.equal "names the torn binding" "Torn.Config.probe"
+            reason |> Expect.stringContains "carries why the self-detoured leg failed" "itself"
+            // The whole point: Torn is reported through the SAME channel a
+            // caller reads any other binding outcome from — nothing about
+            // it is swallowed once it exists.
+            report.Failures |> Expect.isNonEmpty "a torn binding's failing leg is still counted as a failure"
+          | [ BindingOutcome.NeitherLegRedirected _ ] -> tryPairs rest
+          // MonoMod's "cannot detour a method to itself" guard did not fire —
+          // the self-detour silently succeeded and BOTH legs landed. That is a
+          // failure to MANUFACTURE a tear, not a defect: the pair applied
+          // atomically, which is the guarantee `AccessorPairDetour` exists to
+          // provide. Try the next pair; if none of them tears, the skip below
+          // says so honestly rather than reporting a green that proved nothing.
+          | [ BindingOutcome.BothLegsRedirected _ ] -> tryPairs rest
+          | other -> failtestf "expected exactly one Torn, NeitherLegRedirected or BothLegsRedirected outcome, got %A" other
+      tryPairs setterPairs
+  ])

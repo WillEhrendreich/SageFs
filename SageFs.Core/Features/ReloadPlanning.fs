@@ -73,6 +73,15 @@ type ReloadChange =
   /// re-point, which is a different thing from one that changed.
   | DeclarationAdded of name: string
   | UsesNonPublicMember of fn: string * memberName: string
+  /// A mutable binding's getter and setter were redirected onto different
+  /// code generations: one leg landed and the other did not, so reads and
+  /// writes now disagree about which field is live. Discovered only from the
+  /// RUNTIME detour result — never from a source diff, which is why this
+  /// case is reached from the patch-apply path rather than `planReload` —
+  /// and it forces a restart rather than joining the ordinary missed-patch
+  /// reasons, because by the time this is known the process is already
+  /// silently wrong.
+  | MutableBindingTorn of binding: string
 
 [<RequireQualifiedAccess>]
 type ReloadPlan =
@@ -94,6 +103,10 @@ module ReloadChange =
     | ReloadChange.DeclarationAdded name -> sprintf "%s was added" name
     | ReloadChange.UsesNonPublicMember (fn, memberName) ->
       sprintf "%s uses %s, which is not public, so it cannot be patched in place" fn memberName
+    | ReloadChange.MutableBindingTorn binding ->
+      sprintf
+        "'%s' tore: one of its accessors was re-pointed to the new code and the other was not, so reads and writes now disagree about which field is live"
+        binding
 
   let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
     first :: rest |> List.map describe |> String.concat "; "
@@ -131,6 +144,11 @@ module ReloadChange =
     // re-emitting the member alongside the patch) — unimplemented, not physics.
     | ReloadChange.UsesNonPublicMember (fn, memberName) ->
       RestartReason.NotYetSupported (sprintf "'%s', because it uses the non-public '%s'" fn memberName)
+    // A tear is a mutable-binding coherence failure, not a capability gap —
+    // the same reason a source-level `let mutable` edit gets when it cannot
+    // be patched at all. The remedy is identical: restart to re-run the
+    // initialiser, because SageFs will not guess which field is the real one.
+    | ReloadChange.MutableBindingTorn binding -> RestartReason.MutableModuleState binding
 
   let restartReasons (first: ReloadChange) (rest: ReloadChange list) : RestartReason list =
     first :: rest |> List.map restartReason

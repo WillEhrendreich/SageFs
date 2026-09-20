@@ -295,7 +295,16 @@ let hotReloadingMiddleware next (request, st: AppState) =
 
         let metadata =
           match shouldTriggerReload request.Args with
-          | true -> response.Metadata.Add("reloadedMethods", report.UpdatedMethods)
+          | true ->
+            // Mechanical passthrough only — the file-watcher pipeline
+            // (WorkerMain.fs) is where these become a user-facing
+            // RestartReason. Torn/declined/never-landed bindings used to
+            // stop here: `reloadedMethods` alone cannot tell a caller
+            // "nothing changed" from "a mutable binding just tore".
+            response.Metadata
+              .Add("reloadedMethods", report.UpdatedMethods)
+              .Add("hotReloadBindingOutcomes", report.DetourReport.Bindings)
+              .Add("hotReloadDeclinedBindings", report.DetourReport.Declined)
           | false -> response.Metadata
         let metadata = metadata.Add("liveTestHookResult", report.LiveTest)
         let metadata = metadata.Add("liveTestRunTest", runTest)

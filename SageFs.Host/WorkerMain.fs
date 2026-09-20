@@ -438,6 +438,65 @@ type SaveHandling =
   /// patch route refused, because they are still true afterwards.
   | FallBackWholeFile of reasons: Features.ReloadOutcome.RestartReason list
 
+/// What one eval's mutable-binding detours mean for the save as a whole — not
+/// just for `confirmPatchAsOutcome`'s function-only accounting, which never
+/// sees a binding at all. A named DU (not a bare bool or a `Choice`) because
+/// the two outcomes are handled by entirely different routes below.
+[<RequireQualifiedAccess>]
+type BindingEscalation =
+  /// At least one binding TORE (one accessor re-pointed, the other not): the
+  /// running process is now silently wrong, and nothing else in this eval's
+  /// missed set is dangerous enough to be reported as a mere "did not land"
+  /// — the save must restart the app, the same route a source-level
+  /// `MutableStateChanged` already takes.
+  | ForcesRestart of first: Features.ReloadPlanning.ReloadChange * rest: Features.ReloadPlanning.ReloadChange list
+  /// Nothing tore. A declined orphan leg, or an accessor pair whose
+  /// preflight/Harmony application failed on BOTH legs, moved nothing — safe
+  /// — and is reported as an extra `RestartReason` alongside whatever the
+  /// function-only patch accounting already found.
+  | ExtraReasons of Features.ReloadOutcome.RestartReason list
+
+/// What this eval's mutable-binding detours mean for the save, from the
+/// `BindingOutcome`/`DeclinedBinding` values `HotReloading.fs`'s middleware
+/// forwarded on the eval response. Pure — no I/O, no logging — so the danger
+/// judgement (does this force a restart?) is testable on its own, apart from
+/// the async plumbing that acts on it.
+///
+/// A TORN binding is not a missed patch: reads see the new field, writes
+/// still land in the old one (or the reverse), and nothing throws or logs
+/// past this point to say so. That is categorically different from "this
+/// edit needs a restart to take effect", which is safe to sit in until the
+/// user gets to it — so Torn always wins the whole verdict when it appears
+/// at all, regardless of what else this eval also managed to patch cleanly.
+let escalationOf
+  (bindings: Middleware.HotReloadCore.BindingOutcome list)
+  (declined: Middleware.HotReloadCore.DeclinedBinding list)
+  : BindingEscalation =
+  let torn =
+    bindings
+    |> List.choose (function
+      | Middleware.HotReloadCore.BindingOutcome.Torn(binding, _) -> Some binding
+      | Middleware.HotReloadCore.BindingOutcome.BothLegsRedirected _
+      | Middleware.HotReloadCore.BindingOutcome.NeitherLegRedirected _ -> None)
+  match torn with
+  | first :: rest ->
+    BindingEscalation.ForcesRestart(
+      Features.ReloadPlanning.ReloadChange.MutableBindingTorn first,
+      rest |> List.map Features.ReloadPlanning.ReloadChange.MutableBindingTorn)
+  | [] ->
+    let fromNeither =
+      bindings
+      |> List.choose (function
+        | Middleware.HotReloadCore.BindingOutcome.NeitherLegRedirected(binding, reason) ->
+          Some(
+            Features.ReloadOutcome.RestartReason.NotYetSupported(
+              sprintf "re-pointing the mutable binding '%s' (%s)" binding reason))
+        | Middleware.HotReloadCore.BindingOutcome.BothLegsRedirected _
+        | Middleware.HotReloadCore.BindingOutcome.Torn _ -> None)
+    let fromDeclined =
+      declined |> List.map (fun d -> Features.ReloadOutcome.RestartReason.MutableModuleState d.Binding)
+    BindingEscalation.ExtraReasons(fromNeither @ fromDeclined)
+
 /// Run the worker process: create actor, start HTTP server, handle messages.
 let run (sessionId: string) (port: int) = async {
   enableStdoutAutoFlush ()
@@ -680,6 +739,25 @@ let run (sessionId: string) (port: int) = async {
           | :? (string list) as methods -> Some methods
           | _ -> None)
         |> Option.defaultValue []
+      // What HotReloading.fs's middleware forwarded from this eval's
+      // DetourReport, straight off the metadata bag it wrote — see
+      // `reloadedMethodsOf` above for the same pattern.
+      let bindingOutcomesOf (response: EvalResponse) : Middleware.HotReloadCore.BindingOutcome list =
+        response.Metadata
+        |> Map.tryFind "hotReloadBindingOutcomes"
+        |> Option.bind (fun v ->
+          match v with
+          | :? (Middleware.HotReloadCore.BindingOutcome list) as outcomes -> Some outcomes
+          | _ -> None)
+        |> Option.defaultValue []
+      let declinedBindingsOf (response: EvalResponse) : Middleware.HotReloadCore.DeclinedBinding list =
+        response.Metadata
+        |> Map.tryFind "hotReloadDeclinedBindings"
+        |> Option.bind (fun v ->
+          match v with
+          | :? (Middleware.HotReloadCore.DeclinedBinding list) as declined -> Some declined
+          | _ -> None)
+        |> Option.defaultValue []
       // Chesterton's fence: broadcastCompilationFailed ensures the browser
       // overlay transitions from "Recompiling..." to the error message.
       // Without this, compilation errors leave the overlay stuck on blue
@@ -810,6 +888,18 @@ let run (sessionId: string) (port: int) = async {
                 return SaveHandling.Reported
               | Ok _ ->
                 let reloaded = reloadedMethodsOf response
+                match escalationOf (bindingOutcomesOf response) (declinedBindingsOf response) with
+                | BindingEscalation.ForcesRestart (first, rest) ->
+                  // A mutable binding TORE: the running process is already
+                  // silently wrong (reads and writes now disagree about
+                  // which field is live), no matter what else this eval
+                  // patched cleanly. Restarting is the only outcome that
+                  // clears that danger, so this takes the SAME forced-
+                  // restart route a source-level MutableStateChanged does —
+                  // it is never folded into the patch/no-effect reporting
+                  // below, where a `Patched(n, m)` success could bury it.
+                  return! restartOrFallBack fileName first rest
+                | BindingEscalation.ExtraReasons extraReasons ->
                 match Features.ReloadPlanning.confirmPatch baseline functions reloaded with
                 | Features.ReloadPlanning.PatchOutcome.Applied ->
                   reloadBaselines.[IO.Path.GetFullPath filePath] <- current
@@ -817,10 +907,14 @@ let run (sessionId: string) (port: int) = async {
                   // here: `confirmPatchAsOutcome` pairs the functions the user
                   // actually changed against the methods that were genuinely
                   // re-pointed, and names anything that was planned and did not
-                  // land (a declined or torn binding shows up here as a missed
-                  // patch with its own reason). The old rule counted incidental
-                  // methods that happened to match, which is the bug.
-                  let outcome = Features.ReloadPlanning.confirmPatchAsOutcome baseline functions reloaded
+                  // land. `withExtraMisses` folds in whatever a mutable
+                  // binding's OWN accounting found that confirmPatchAsOutcome
+                  // cannot see on its own — a declined orphan leg, or an
+                  // accessor pair whose preflight/Harmony application failed
+                  // outright — so those no longer die in the log unreported.
+                  let outcome =
+                    Features.ReloadPlanning.confirmPatchAsOutcome baseline functions reloaded
+                    |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses extraReasons
                   Features.ReloadBroadcast.broadcastOutcome outcome
                   Log.info "Hot reload: %s — %s (%s)"
                     fileName
@@ -1002,10 +1096,22 @@ let run (sessionId: string) (port: int) = async {
                   // all), so the message carries the remedy instead of claiming
                   // a restart that never happened.
                   let outcome =
-                    match restartReasons with
-                    | [] ->
-                      Features.ReloadOutcome.ReloadOutcome.ofPatchCounts (List.length reloaded) considered []
-                    | reasons -> Features.ReloadOutcome.ReloadOutcome.RestartRequired reasons
+                    match escalationOf (bindingOutcomesOf response) (declinedBindingsOf response) with
+                    | BindingEscalation.ForcesRestart (first, rest) ->
+                      // A mutable binding TORE while re-evaluating the whole
+                      // file. This route is already the one SageFs takes
+                      // when it cannot patch the running process in place —
+                      // the loudest honest outcome is RestartRequired, same
+                      // as any other startup-only change on this path, never
+                      // a Patched success that buries the danger.
+                      Features.ReloadOutcome.ReloadOutcome.RestartRequired(
+                        Features.ReloadPlanning.ReloadChange.restartReasons first rest @ restartReasons)
+                    | BindingEscalation.ExtraReasons extraReasons ->
+                      match restartReasons with
+                      | [] ->
+                        Features.ReloadOutcome.ReloadOutcome.ofPatchCounts (List.length reloaded) considered []
+                        |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses extraReasons
+                      | reasons -> Features.ReloadOutcome.ReloadOutcome.RestartRequired (reasons @ extraReasons)
                   Features.ReloadBroadcast.broadcastOutcome outcome
                   Log.info "Hot reload: %s — %s" fileName (Features.ReloadOutcome.ReloadOutcome.describe outcome)
                 | Error ex -> broadcastEvalFailure filePath preprocessed.LineOffset response ex

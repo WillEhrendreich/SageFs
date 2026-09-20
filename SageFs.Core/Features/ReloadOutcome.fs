@@ -187,3 +187,25 @@ module ReloadOutcome =
     match remedy outcome with
     | None -> describe outcome
     | Some action -> sprintf "%s\n→ %s" (describe outcome) action
+
+  /// Folds in reasons for things that were attempted and missed OUTSIDE the
+  /// accounting `outcome` was built from — a mutable binding that was
+  /// declined or could not be re-pointed, which a function-only patch count
+  /// never saw. Only `NoEffect`/`RestartRequired` have a reasons list to
+  /// extend, so `considered` grows with them there (the "0 of N" honesty the
+  /// whole type exists for); `Patched` already reported real successes for
+  /// the functions it counted, and gets no reasons field to lose them in —
+  /// the same partial-visibility limit an ordinary missed function already
+  /// has today. A binding that TORE, not merely missed, does not belong
+  /// here: it forces a restart of its own rather than joining this list.
+  let withExtraMisses (extra: RestartReason list) (outcome: ReloadOutcome) : ReloadOutcome =
+    match extra with
+    | [] -> outcome
+    | _ ->
+      match outcome with
+      | ReloadOutcome.NoEffect(considered, reasons) ->
+        ReloadOutcome.NoEffect(considered + List.length extra, reasons @ extra)
+      | ReloadOutcome.RestartRequired reasons -> ReloadOutcome.RestartRequired(reasons @ extra)
+      | ReloadOutcome.Patched _
+      | ReloadOutcome.Restarted _
+      | ReloadOutcome.CompileFailed _ -> outcome

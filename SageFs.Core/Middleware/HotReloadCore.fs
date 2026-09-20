@@ -503,6 +503,12 @@ type DetourReport = {
   Failures: string list
 }
 
+module DetourReport =
+  /// The report of an eval that touched nothing — no new assembly, or hot
+  /// reload disabled. Named so callers never hand-roll the all-empty record.
+  let empty : DetourReport =
+    { Redirected = []; Bindings = []; Declined = []; Failures = [] }
+
 /// Forces everything a detour will touch to resolve BEFORE any leg is written:
 /// the parameter and return types (which throw `TypeLoadException` for a stale
 /// FSI compilation unit) and the JIT-compiled body. A binding that is going to
@@ -661,7 +667,13 @@ let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newM
         newMethod.FullName ex.Message)
     false
 
-let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assembly) (st: State) =
+/// Registers a new REPL-emitted assembly and, when hot reload is on, applies
+/// every detour it makes possible. Returns the FULL report — not just the
+/// names that landed — because a caller that only sees `Redirected` cannot
+/// tell "nothing changed" from "a mutable binding just tore": both look like
+/// an empty/short list. `DetourReport.Bindings` and `.Declined` are how a
+/// torn or orphaned accessor pair reaches anyone past this function.
+let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assembly) (st: State) : State * DetourReport =
   // Chesterton's fence: the `prev = asm` dedup only applies to NON-dynamic
   // assemblies. In HotReload the FSI session runs with --multiemit- (single
   // assembly mode): EVERY eval lands in the SAME persistent FSI-ASSEMBLY, so
@@ -671,7 +683,7 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
   // must always be processed; the method merge is idempotent (Map.add
   // overwrites) and the detour matcher pairs old->new per eval.
   match st.LastAssembly with
-  | Some prev when prev = asm && not asm.IsDynamic -> st, []
+  | Some prev when prev = asm && not asm.IsDynamic -> st, DetourReport.empty
   | _ ->
     // Compute getAllMethods once — used for both method merge and hot-reload matching.
     // getAllMethods has internal try/catch for ReflectionTypeLoadException so this is safe.
@@ -718,7 +730,7 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
     { st with
         LastAssembly = Some asm
         Methods = mergedMethods },
-    report.Redirected
+    report
 
 let getOpenModules (replCode: string) st =
   let modules =

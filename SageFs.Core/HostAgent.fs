@@ -39,8 +39,12 @@ type AfterEval =
     Discovery: DiscoveryPolicy }
 
 /// What the agent found. `UpdatedMethods` are the dotted names of the methods that were redefined.
+/// `DetourReport` is the full picture behind that count: which mutable bindings
+/// tore, were declined, or landed both legs — the detail `UpdatedMethods` alone
+/// cannot express, and the reason a caller must not throw this field away.
 type AfterEvalReport =
   { UpdatedMethods: string list
+    DetourReport: DetourReport
     LiveTest: LiveTestHookResultDto
     AssemblyLoadErrors: AssemblyLoadError list }
 
@@ -130,10 +134,13 @@ let startState (init: AgentInit) : State =
     AssemblyLoadErrors = errors
     LiveTestInit = LiveTestInit.Pending }
 
-/// The outcome of one step: the new registry, the methods it redefined, and what live testing found.
+/// The outcome of one step: the new registry, the methods it redefined, the
+/// full detour report behind that (bindings torn/declined included), and what
+/// live testing found.
 type StepResult =
   { State: State
     UpdatedMethods: string list
+    DetourReport: DetourReport
     Hook: LiveTestHookResult }
 
 /// Merge per-assembly hook results into one: providers deduplicated by name, tests concatenated, the runners chained.
@@ -156,10 +163,11 @@ let afterEvalStep (executors: TestExecutor list) (logger: ILogger) (state: State
     match request.Detours with
     | DetourPolicy.ApplyDetours -> true
     | DetourPolicy.RegisterOnly -> false
-  let state, updated =
+  let state, detourReport =
     state
     |> getOpenModules request.EvaluatedCode
     |> handleNewAsmFromRepl logger apply asm
+  let updated = detourReport.Redirected
   let firstScan = state.LiveTestInit = LiveTestInit.Pending && not (List.isEmpty state.ProjectAssemblies)
   let forced =
     match request.Discovery with
@@ -167,11 +175,11 @@ let afterEvalStep (executors: TestExecutor list) (logger: ILogger) (state: State
     | DiscoveryPolicy.WhenChanged -> false
   match not (List.isEmpty updated) || firstScan || forced with
   | false ->
-    { State = state; UpdatedMethods = updated; Hook = LiveTestHookResult.empty }
+    { State = state; UpdatedMethods = updated; DetourReport = detourReport; Hook = LiveTestHookResult.empty }
   | true ->
     let fromEval = LiveTestingHook.afterReload executors asm updated
     match firstScan with
-    | false -> { State = state; UpdatedMethods = updated; Hook = fromEval }
+    | false -> { State = state; UpdatedMethods = updated; DetourReport = detourReport; Hook = fromEval }
     | true ->
       // The first scan also covers the pre-built project assemblies, whose tests no eval ever redefined.
       let fromProjects =
@@ -181,6 +189,7 @@ let afterEvalStep (executors: TestExecutor list) (logger: ILogger) (state: State
           with _ -> LiveTestHookResult.empty)
       { State = { state with LiveTestInit = LiveTestInit.Done }
         UpdatedMethods = updated
+        DetourReport = detourReport
         Hook = mergeHooks fromEval.AffectedTestIds (fromEval :: fromProjects) }
 
 /// The agent of one process. It owns that process's reload registry (single owner: `AfterEval` is called from the one
@@ -208,6 +217,7 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
       match sources.Dynamic() |> Array.tryLast with
       | None ->
         { UpdatedMethods = []
+          DetourReport = DetourReport.empty
           LiveTest = LiveTestHookResultDto.fromResult LiveTestHookResult.empty
           AssemblyLoadErrors = state.AssemblyLoadErrors }
       | Some asm ->
@@ -218,6 +228,7 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
         | true -> dynamicRunner <- Some step.Hook.RunTest
         | false -> ()
         { UpdatedMethods = step.UpdatedMethods
+          DetourReport = step.DetourReport
           LiveTest = LiveTestHookResultDto.fromResult step.Hook
           AssemblyLoadErrors = step.State.AssemblyLoadErrors })
 
