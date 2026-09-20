@@ -119,6 +119,10 @@ type FsiHostSession
           | Result.Ok(FlagResult(id, _) as answer) -> complete id answer
           | Result.Ok(ValueResult(id, _) as answer) -> complete id answer
           | Result.Ok(LiveValuesResult(id, _) as answer) -> complete id answer
+          | Result.Ok(CheckResult(id, _) as answer) -> complete id answer
+          | Result.Ok(SymbolsResult(id, _, _) as answer) -> complete id answer
+          | Result.Ok(CompletionsResult(id, _) as answer) -> complete id answer
+          | Result.Ok(DescriptionResult(id, _) as answer) -> complete id answer
     with ex ->
       onLog (sprintf "[fsihost] read loop ended: %s" ex.Message)
     // Give the process a moment to report its exit code, then fail everything still waiting.
@@ -203,6 +207,42 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> ReadLiveValues(id, generation)) with
       | Got(LiveValuesResult(_, snapshot)) -> return Answered snapshot
       | Got other -> return HostGone(unexpected "live values" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Diagnostics for a snippet checked against the session's current state.
+  member _.Check(text: string) : Async<HostCall<FsiDiagnostic list>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> Check(id, text)) with
+      | Got(CheckResult(_, diagnostics)) -> return Answered diagnostics
+      | Got other -> return HostGone(unexpected "check" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Diagnostics plus the symbol references of error-free code.
+  member _.CheckWithSymbols(filePath: string, text: string) : Async<HostCall<FsiDiagnostic list * WireSymbolRef list>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> CheckWithSymbols(id, filePath, text)) with
+      | Got(SymbolsResult(_, diagnostics, symbols)) -> return Answered(diagnostics, symbols)
+      | Got other -> return HostGone(unexpected "check with symbols" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Unsorted completion candidates at the caret, with the id to pass to `Describe`.
+  member _.Complete(text: string, caret: int) : Async<HostCall<int64 * WireCompletion list>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> Complete(id, text, caret)) with
+      | Got(CompletionsResult(id, items)) -> return Answered(id, items)
+      | Got other -> return HostGone(unexpected "complete" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// The description of candidate `index` of the `Complete` that returned `completionsId` (empty if superseded).
+  member _.Describe(completionsId: int64, index: int) : Async<HostCall<string>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> Describe(id, completionsId, index)) with
+      | Got(DescriptionResult(_, text)) -> return Answered text
+      | Got other -> return HostGone(unexpected "describe" other)
       | Gone reason -> return HostGone reason
     }
 

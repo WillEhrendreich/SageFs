@@ -198,7 +198,10 @@ module DirectiveCompletions =
       | false ->
         []
 
-let getCompletions session text carret word =
+/// Rank and truncate candidates, dispatching `:`/`#` input to the directive completions and everything else to
+/// `fsCompletions` (text -> caret -> word -> candidates). The F# candidates come from wherever the session lives:
+/// in this process (`getCompletions`) or an isolated host (RemoteFsiSession); the ranking is identical either way.
+let getCompletionsWith (fsCompletions: string -> int -> string -> CompletionItem seq) text carret word =
   let sortCompletions =
     Seq.sortByDescending (fun c -> scoreCandidate word c.ReplacementText)
     >> Seq.truncate 50
@@ -207,5 +210,8 @@ let getCompletions session text carret word =
   match text |> Seq.tryHead with
   | Some ':'
   | Some '#' -> DirectiveCompletions.commandCompletions text carret word |> sortCompletions
-  | Some _ -> FsCompletions.getFsCompletions session text carret word |> sortCompletions
+  | Some _ -> fsCompletions text carret word |> sortCompletions
   | None -> []
+
+let getCompletions session text carret word =
+  getCompletionsWith (FsCompletions.getFsCompletions session) text carret word

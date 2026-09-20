@@ -73,6 +73,7 @@ type Capability =
   | FeatureGates
   | LiveValues
   | Completions
+  | TypeChecking
   | Disposal
 
 let private eval (session: IFsiSession) (code: string) = session.Eval(code, CancellationToken.None)
@@ -148,6 +149,28 @@ let contract (label: string) (create: unit -> Async<IFsiSession>) (notYet: Capab
       let items = session.Completions("List.ma", 7, "ma")
       Expect.isTrue "map is offered" (items |> List.exists (fun item -> item.ReplacementText = "map")))
 
+    case Completions "a candidate's description is available on demand" (fun session ->
+      let items = session.Completions("List.ma", 7, "ma")
+      match items |> List.tryFind (fun item -> item.ReplacementText = "map") with
+      | None -> failtest "map was not offered"
+      | Some item ->
+        match item.GetDescription with
+        | None -> failtest "expected a lazy description"
+        | Some describe -> Expect.isNonEmpty "the description has text" (describe ()))
+
+    case TypeChecking "TypeCheckWithSymbols returns definitions and uses for good code" (fun session ->
+      let result = session.TypeCheckWithSymbols("Sample.fsx", "let addOne x = x + 1\nlet three = addOne 2")
+      Expect.isEmpty "no error diagnostics" result.Diagnostics
+      let named = result.SymbolRefs |> List.filter (fun symbol -> symbol.SymbolFullName.EndsWith "addOne")
+      Expect.isTrue "addOne is defined" (named |> List.exists (fun symbol -> symbol.UseKind = SageFs.Features.LiveTesting.SymbolUseKind.Definition))
+      Expect.isTrue "addOne is used" (named |> List.exists (fun symbol -> symbol.UseKind = SageFs.Features.LiveTesting.SymbolUseKind.Reference))
+      Expect.isTrue "the file path is carried" (named |> List.forall (fun symbol -> symbol.FilePath = "Sample.fsx")))
+
+    case TypeChecking "TypeCheckWithSymbols reports errors and no symbols for bad code" (fun session ->
+      let result = session.TypeCheckWithSymbols("Bad.fsx", "let bad : int = \"s\"")
+      Expect.isNonEmpty "an error diagnostic" result.Diagnostics
+      Expect.isEmpty "no symbols from code that does not check" result.SymbolRefs)
+
     case Diagnostics "Diagnose reports the same error the eval would" (fun session ->
       Expect.isNonEmpty "diagnostic for a type error" (session.Diagnose "let z : int = \"s\""))
 
@@ -171,7 +194,8 @@ let tests =
     ]
 
     Integration.hostList "isolated host session" [
-      // Everything the isolated host does not do YET is listed here; each becomes a running case when implemented.
-      contract "RemoteFsiSession" newRemote [ Completions; Diagnostics ]
+      // Capabilities the isolated host does not have yet would be listed here (each becomes a running case when
+      // implemented). The list is empty: the whole contract runs. Only DynamicAssemblies is host-agent work.
+      contract "RemoteFsiSession" newRemote []
     ]
   ]

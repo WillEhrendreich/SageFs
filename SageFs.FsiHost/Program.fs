@@ -15,7 +15,7 @@ open System.Net
 open System.Net.Sockets
 open System.Text
 open System.Threading
-open FSharp.Compiler.Diagnostics
+open FSharp.Compiler.EditorServices
 open FSharp.Compiler.Interactive.Shell
 open SageFs.Features
 open SageFs.FsiHost.FsiProtocol
@@ -45,29 +45,16 @@ type EventWriter(stream: OutputStream, send: Response -> unit) =
 
   override _.Flush() = lock buffer flushBuffer
 
-let private severityOf (severity: FSharpDiagnosticSeverity) =
-  match severity with
-  | FSharpDiagnosticSeverity.Hidden -> DiagHidden
-  | FSharpDiagnosticSeverity.Info -> DiagInfo
-  | FSharpDiagnosticSeverity.Warning -> DiagWarning
-  | FSharpDiagnosticSeverity.Error -> DiagError
-
-let private toDiagnostic (d: FSharpDiagnostic) : FsiDiagnostic =
-  { Severity = severityOf d.Severity
-    ErrorNumber = d.ErrorNumber
-    Subcategory = d.Subcategory
-    Message = d.Message
-    StartLine = d.StartLine
-    StartColumn = d.StartColumn
-    EndLine = d.EndLine
-    EndColumn = d.EndColumn }
-
 /// One unit of work for the session thread.
 type private Work =
   | RunEval of id: int64 * code: string
   | RunReadFlag of id: int64 * name: string
   | RunReadValue of id: int64 * name: string
   | RunReadLiveValues of id: int64 * generation: int64
+  | RunCheck of id: int64 * text: string
+  | RunCheckWithSymbols of id: int64 * filePath: string * text: string
+  | RunComplete of id: int64 * text: string * caret: int
+  | RunDescribe of id: int64 * completionsId: int64 * index: int
 
 let private typeNameOf (value: FsiValue) =
   match value.ReflectionType with
@@ -157,6 +144,8 @@ let private run (argsFile: string) : int =
 
   // Everything that touches the session runs on the one eval thread, in order: FSI sessions are not thread-safe.
   let requests = new BlockingCollection<Work>()
+  // The candidates of the latest Complete, for Describe. Only the session thread reads or writes it.
+  let lastCompletions = ref (0L, ([||]: DeclarationListItem[]))
   let runningLock = obj ()
   let mutable running: Running option = None
 
@@ -168,6 +157,24 @@ let private run (argsFile: string) : int =
         | RunReadFlag(id, name) -> send (FlagResult(id, readFlag session name))
         | RunReadValue(id, name) -> send (ValueResult(id, readValue session name))
         | RunReadLiveValues(id, generation) -> send (LiveValuesResult(id, liveValues session generation))
+        | RunCheck(id, text) ->
+          let diagnostics = try FcsQueries.check session text with _ -> []
+          send (CheckResult(id, diagnostics))
+        | RunCheckWithSymbols(id, filePath, text) ->
+          let diagnostics, symbols = try FcsQueries.checkWithSymbols session filePath text with _ -> [], []
+          send (SymbolsResult(id, diagnostics, symbols))
+        | RunComplete(id, text, caret) ->
+          // Keep the FCS items so a later Describe can produce a description for one of them.
+          let items = try FcsQueries.candidates session text caret with _ -> [||]
+          lastCompletions.Value <- (id, items)
+          send (CompletionsResult(id, items |> Array.map FcsQueries.toCompletion |> Array.toList))
+        | RunDescribe(id, completionsId, index) ->
+          let latestId, items = lastCompletions.Value
+          let text =
+            match latestId = completionsId && index >= 0 && index < items.Length with
+            | true -> (try FcsQueries.describe items.[index] with _ -> "")
+            | false -> "" // a newer Complete replaced the list this index referred to
+          send (DescriptionResult(id, text))
         | RunEval(id, code) ->
           use cancel = new CancellationTokenSource()
           lock runningLock (fun () -> running <- Some { Cancel = cancel; Thread = Thread.CurrentThread })
@@ -179,7 +186,7 @@ let private run (argsFile: string) : int =
                 | Choice1Of2 _ -> EvalSucceeded
                 | Choice2Of2 ex when cancel.IsCancellationRequested || (ex :? OperationCanceledException) -> EvalInterrupted
                 | Choice2Of2 ex -> EvalFailed ex.Message
-              outcome, diagnostics |> Array.map toDiagnostic |> Array.toList
+              outcome, diagnostics |> Array.map FcsQueries.toWire |> Array.toList
             with
             | :? ThreadInterruptedException -> EvalInterrupted, []
             | ex -> EvalFailed ex.Message, []
@@ -205,6 +212,10 @@ let private run (argsFile: string) : int =
       | Result.Ok(ReadFlag(id, name)) -> requests.Add(RunReadFlag(id, name))
       | Result.Ok(ReadValue(id, name)) -> requests.Add(RunReadValue(id, name))
       | Result.Ok(ReadLiveValues(id, generation)) -> requests.Add(RunReadLiveValues(id, generation))
+      | Result.Ok(Check(id, text)) -> requests.Add(RunCheck(id, text))
+      | Result.Ok(CheckWithSymbols(id, filePath, text)) -> requests.Add(RunCheckWithSymbols(id, filePath, text))
+      | Result.Ok(Complete(id, text, caret)) -> requests.Add(RunComplete(id, text, caret))
+      | Result.Ok(Describe(id, completionsId, index)) -> requests.Add(RunDescribe(id, completionsId, index))
       | Result.Ok Interrupt ->
         lock runningLock (fun () ->
           match running with

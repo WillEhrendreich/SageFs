@@ -21,6 +21,7 @@
   <ItemGroup>
     <Compile Include="LiveValueTree.fs" />
     <Compile Include="FsiProtocol.fs" />
+    <Compile Include="FcsQueries.fs" />
     <Compile Include="Program.fs" />
     <Reference Include="FSharp.Core"><HintPath>$(FSharpSdkDir)FSharp.Core.dll</HintPath></Reference>
     <Reference Include="FSharp.Compiler.Service"><HintPath>$(FSharpSdkDir)FSharp.Compiler.Service.dll</HintPath></Reference>

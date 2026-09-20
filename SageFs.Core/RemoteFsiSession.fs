@@ -3,13 +3,17 @@
 ///
 /// Capability status (kept honest, and mirrored by which contract tests run for this implementation):
 ///   implemented: Eval, ReadFlag, BoundValue (display text), LiveValuesJson (typed snapshot over the wire), Dispose
-///   not yet in the host (return neutral empties): Completions, Diagnose, TypeCheckWithSymbols
+///   also implemented: Completions (candidates from the host, ranked in SageFs; descriptions fetched lazily),
+///   Diagnose and TypeCheckWithSymbols (FCS runs in the host and answers with wire types)
 ///   in-process by nature until the host agent exists: DynamicAssemblies (hot reload / live testing) -> empty
 module SageFs.RemoteFsiSession
 
 open System
 open System.Reflection
 open System.Threading
+open FSharp.Compiler.EditorServices
+open FSharp.Compiler.Text
+open Microsoft.FSharp.Reflection
 open SageFs.Features
 open SageFs.FsiHost.FsiProtocol
 open SageFs.FsiHostClient
@@ -32,6 +36,35 @@ let private toDiagnostic (d: FsiDiagnostic) : Diagnostics.Diagnostic =
         StartColumn = d.StartColumn
         EndLine = d.EndLine
         EndColumn = d.EndColumn } }
+
+let private toSymbolReference (symbol: WireSymbolRef) : LiveTesting.SymbolReference =
+  { SymbolFullName = symbol.SymbolFullName
+    UseKind =
+      (match symbol.Use with
+       | WireDefinition -> LiveTesting.SymbolUseKind.Definition
+       | WireUsage -> LiveTesting.SymbolUseKind.Reference)
+    UsedInTestId = None
+    FilePath = symbol.FilePath
+    Line = symbol.Line }
+
+/// Map FCS's glyph name (sent by the host, taken from ITS FSharpGlyph type) back to SageFs's CompletionKind through
+/// the existing exhaustive `ofGlyph`. A glyph this SageFs's FCS does not know (a newer SDK's) degrades to Type.
+let private kindOfGlyph (name: string) : AutoCompletion.CompletionKind =
+  match FSharpType.GetUnionCases typeof<FSharpGlyph> |> Array.tryFind (fun case -> case.Name = name) with
+  | Some case -> AutoCompletion.CompletionKind.ofGlyph (FSharpValue.MakeUnion(case, [||]) :?> FSharpGlyph)
+  | None -> AutoCompletion.CompletionKind.Type
+
+let private toCompletionItem (host: FsiHostSession) (completionsId: int64) (index: int) (item: WireCompletion) : AutoCompletion.CompletionItem =
+  { DisplayText = item.DisplayText
+    ReplacementText = item.ReplacementText
+    Kind = kindOfGlyph item.Glyph
+    // Fetched on demand, like the in-process closure over FCS's tooltip.
+    GetDescription =
+      Some(fun () ->
+        match Async.RunSynchronously(host.Describe(completionsId, index)) with
+        | Answered text when text.Length > 0 -> [| TaggedText.tagText text |]
+        | Answered _
+        | HostGone _ -> [||]) }
 
 /// A session whose FSI lives in an isolated host process.
 [<Sealed; AllowNullLiteral>]
@@ -77,14 +110,28 @@ type RemoteFsiSession(host: FsiHostSession) =
       // A lost host has no values: an empty snapshot, exactly what a session with no bindings reports.
       | HostGone _ -> WorkerProtocol.Serialization.serialize (LiveValueTree.buildSnapshot "" next [])
 
-    // ---- not in the isolated host yet: neutral results, each a pending case in the contract tests ----
-    member _.Completions(_text, _caret, _word) = []
+    member _.Completions(text, caret, word) =
+      // F# candidates come from the host, unsorted; SageFs ranks them exactly as it does in-process.
+      let fromHost (queryText: string) (queryCaret: int) (_word: string) : AutoCompletion.CompletionItem seq =
+        match wait (host.Complete(queryText, queryCaret)) with
+        | Answered(completionsId, items) ->
+          items |> List.mapi (fun index item -> toCompletionItem host completionsId index item) |> Seq.ofList
+        | HostGone _ -> Seq.empty
+      AutoCompletion.getCompletionsWith fromHost text caret word
 
-    member _.Diagnose(_text) = [||]
+    member _.Diagnose(text) =
+      match wait (host.Check text) with
+      | Answered diagnostics -> diagnostics |> List.map toDiagnostic |> List.toArray
+      | HostGone _ -> [||]
 
-    member _.TypeCheckWithSymbols(_filePath, _text) =
-      { Diagnostics.TypeCheckWithSymbolsResult.Diagnostics = [||]
-        SymbolRefs = [] }
+    member _.TypeCheckWithSymbols(filePath, text) =
+      match wait (host.CheckWithSymbols(filePath, text)) with
+      | Answered(diagnostics, symbols) ->
+        { Diagnostics.TypeCheckWithSymbolsResult.Diagnostics = diagnostics |> List.map toDiagnostic |> List.toArray
+          SymbolRefs = symbols |> List.map toSymbolReference }
+      | HostGone _ ->
+        { Diagnostics.TypeCheckWithSymbolsResult.Diagnostics = [||]
+          SymbolRefs = [] }
 
     // Hot reload and live testing reflect over these IN the user's process: they need the host agent.
     member _.DynamicAssemblies: Assembly[] = [||]

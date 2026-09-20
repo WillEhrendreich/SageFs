@@ -62,12 +62,39 @@ type ValueReading =
   | ValueUnbound
   | ValueText of typeName: string * text: string
 
+/// How a symbol occurs in checked code (a DU, not a bool: a use is not merely "not a definition").
+type WireSymbolUse =
+  | WireDefinition
+  | WireUsage
+
+/// A resolved symbol occurrence, for the live-testing dependency graph.
+type WireSymbolRef =
+  { SymbolFullName: string
+    Use: WireSymbolUse
+    FilePath: string
+    Line: int }
+
+/// One completion candidate. The glyph is FCS's own case name for it, mapped back by SageFs's exhaustive
+/// `ofGlyph`; the (possibly expensive) description is fetched on demand with `Describe`.
+type WireCompletion =
+  { DisplayText: string
+    ReplacementText: string
+    Glyph: string }
+
 type Request =
   | Eval of id: int64 * code: string
   | ReadFlag of id: int64 * name: string
   | ReadValue of id: int64 * name: string
   /// The session's bound values as an expanded, bounded tree (the dashboard's watch window). The client picks the generation.
   | ReadLiveValues of id: int64 * generation: int64
+  /// Parse + type-check a snippet against the session's current state and report diagnostics.
+  | Check of id: int64 * text: string
+  /// Like Check, plus the symbol references of error-free code (the live-testing cycle's type-check effect).
+  | CheckWithSymbols of id: int64 * filePath: string * text: string
+  /// Completion candidates for the caret position; unsorted (SageFs ranks them).
+  | Complete of id: int64 * text: string * caret: int
+  /// The description of one candidate from the most recent Complete (`completionsId` is that request's id).
+  | Describe of id: int64 * completionsId: int64 * index: int
   | Interrupt
   | Shutdown
 
@@ -77,6 +104,10 @@ type Response =
   | FlagResult of id: int64 * reading: FlagReading
   | ValueResult of id: int64 * reading: ValueReading
   | LiveValuesResult of id: int64 * snapshot: LiveValueTree.LiveValueSnapshot
+  | CheckResult of id: int64 * diagnostics: FsiDiagnostic list
+  | SymbolsResult of id: int64 * diagnostics: FsiDiagnostic list * symbols: WireSymbolRef list
+  | CompletionsResult of id: int64 * items: WireCompletion list
+  | DescriptionResult of id: int64 * text: string
   | Output of stream: OutputStream * text: string
 
 /// Why a message could not be encoded/decoded. A typed union (never a bare string) so callers can match on the

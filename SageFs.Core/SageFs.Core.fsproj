@@ -57,6 +57,7 @@
         <EmbeddedResource Include="../SageFs.FsiHost/FsiHost.fsproj" LogicalName="FsiHost/FsiHost.fsproj" />
         <EmbeddedResource Include="Features\LiveValueTree.fs" LogicalName="FsiHost/LiveValueTree.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/FsiProtocol.fs" LogicalName="FsiHost/FsiProtocol.fs" />
+        <EmbeddedResource Include="../SageFs.FsiHost/FcsQueries.fs" LogicalName="FsiHost/FcsQueries.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/Program.fs" LogicalName="FsiHost/Program.fs" />
         <Compile Include="ProjectLoading.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
