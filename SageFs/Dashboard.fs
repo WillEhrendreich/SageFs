@@ -1724,6 +1724,45 @@ let createResetHandler
     | :? System.ObjectDisposedException -> ()
   }
 
+/// Cancel the session's in-flight eval. Cooperative on the worker side (CTS
+/// cancel + thread interrupt — see `DashboardActions.CancelEval`'s doc): this
+/// genuinely stops an eval blocked on I/O or one that checks a cancellation
+/// token, but it CANNOT preempt a tight synchronous CPU loop with no yield
+/// point (e.g. `while true do ()`) — .NET has no safe way to abort a running
+/// thread, so that case is left running until a Hard Reset kills the worker.
+/// Only the eval-result slot is patched here with an immediate acknowledgement;
+/// the still-pending `/dashboard/eval` request (if cancellation actually takes)
+/// resolves on its own and re-renders the full snapshot, clearing $actionLoading.
+let createCancelEvalHandler
+  (cancelEval: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>)
+  : HttpHandler =
+  fun ctx -> task {
+    try
+      let! sessionIdResult = task {
+        try
+          use! doc = readSignalsJsonSized ctx
+          match doc.RootElement.TryGetProperty(Signals.ViewingSessionId) with
+          | true, prop -> return WorkerProtocol.SessionId.validate (prop.GetString())
+          | _ -> return Error "Missing viewingSessionId"
+        with ex ->
+          Log.warn "[Dashboard] Session ID extraction from JSON failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+          return Error "Failed to parse request"
+      }
+      Response.sseStartResponse ctx |> ignore
+      match sessionIdResult with
+      | Error errMsg ->
+        do! ssePatchNode ctx (evalResultError (sprintf "Cancel: %s" errMsg))
+      | Ok sessionId ->
+        let! result = cancelEval sessionId
+        match result with
+        | Ok msg -> do! ssePatchNode ctx (evalResultInfo (sprintf "Cancel: %s" msg))
+        | Error err -> do! ssePatchNode ctx (evalResultError (sprintf "Cancel failed: %s" err))
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
 /// Create the session action handler (switch/stop).
 /// If `teardown` is true (stop/dispose/purge), it:
 ///   - immediately replaces the session's card with "⏳ Stopping session id:[id]..."
@@ -2676,6 +2715,7 @@ let createEndpoints
     yield post "/dashboard/completions" (createCompletionsHandler infra.GetCompletions)
     yield post "/dashboard/reset" (createResetHandler "Reset" a.ResetSession)
     yield post "/dashboard/hard-reset" (createResetHandler "Hard Reset" a.HardResetSession)
+    yield post "/dashboard/cancel-eval" (createCancelEvalHandler a.CancelEval)
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
     yield post "/dashboard/toggle-project" createToggleProjectHandler

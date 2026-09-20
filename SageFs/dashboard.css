@@ -506,6 +506,13 @@ h2 {
   background: var(--fg-red);
 }
 
+/* Cancel: distinct from RESET (green) and HARD_RESET (red) — it requests
+   cancellation of the in-flight eval, it does not destroy the session. */
+.eval-btn-cancel {
+  background: var(--fg-yellow);
+  color: var(--bg-default);
+}
+
 /* Eval action row (EVAL / RESET / HARD_RESET / Load File). */
 .eval-controls {
   display: flex;

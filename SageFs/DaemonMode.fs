@@ -2986,6 +2986,16 @@ let run
       | Ok other -> return Error (sprintf "Unexpected: %A" other)
       | Error e -> return Error (SageFsError.describe e)
     }
+    CancelEval = fun sid -> task {
+      let sidStr = WorkerProtocol.SessionId.value sid
+      let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr WorkerProtocol.WorkerMessage.CancelEval
+      return
+        match result with
+        | Ok (WorkerProtocol.WorkerResponse.EvalCancelled true) -> Ok "Cancellation requested — evaluation cancelled."
+        | Ok (WorkerProtocol.WorkerResponse.EvalCancelled false) -> Ok "No evaluation in progress."
+        | Ok other -> Error (sprintf "Unexpected: %A" other)
+        | Error e -> Error (SageFsError.describe e)
+    }
     ResetSession = fun sid -> task {
       let sidStr = WorkerProtocol.SessionId.value sid
       let! result = proxyToSession getProxyStr notifyWorkerDiedStr sidStr (WorkerProtocol.WorkerMessage.ResetSession "dash")

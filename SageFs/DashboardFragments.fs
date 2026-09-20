@@ -2023,6 +2023,27 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                   [ Elem.span [ Ds.show "$actionLoading" ] [ Text.raw "⏳ " ]
                     Elem.span [ Ds.show "!$actionLoading" ] [ Text.raw "▶ " ]
                     Text.raw "[EVAL]" ]
+                // Cancel appears the moment EVAL/RESET/HARD_RESET goes
+                // in-flight (same $actionLoading signal that disables them) —
+                // it must NOT bind its own `disabled` to that signal, or a
+                // running eval could never be reached to cancel it. Its own
+                // $cancelLoading only guards against double-submitting the
+                // cancel request itself. Best-effort: this cooperatively
+                // cancels (CTS + thread interrupt) — it stops an eval blocked
+                // on I/O, but cannot preempt a tight CPU loop with no yield
+                // point (e.g. `while true do ()`); Hard Reset remains the
+                // guaranteed way out of that case.
+                Elem.button
+                  [ Attr.class' "eval-btn eval-btn-cancel"
+                    testid "cancel-eval"
+                    Attr.create "aria-label" "Cancel — request cancellation of the in-flight evaluation (best-effort; cannot stop a tight loop with no I/O)"
+                    Ds.show "$actionLoading"
+                    Ds.indicator Signals.CancelLoading
+                    Ds.attr' ("disabled", "$cancelLoading")
+                    Ds.onClick (Ds.post "/dashboard/cancel-eval") ]
+                  [ Elem.span [ Ds.show "$cancelLoading" ] [ Text.raw "⏳ " ]
+                    Elem.span [ Ds.show "!$cancelLoading" ] [ Text.raw "⛔ " ]
+                    Text.raw "[CANCEL]" ]
                 Elem.button
                   [ Attr.class' "eval-btn eval-btn-reset"
                     testid "reset"

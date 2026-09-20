@@ -81,6 +81,12 @@ module Signals =
   /// Single in-flight signal shared by the eval-actions row (EVAL / RESET /
   /// HARD_RESET) so every control is disabled while ANY action is running.
   let [<Literal>] ActionLoading = "actionLoading"
+  /// The Cancel button's OWN in-flight indicator — deliberately separate from
+  /// ActionLoading. Cancel must stay clickable (and visible) for exactly the
+  /// duration ActionLoading is true; binding its own `disabled` to
+  /// ActionLoading would make it dead on arrival. This signal only guards
+  /// against double-submitting the cancel request itself.
+  let [<Literal>] CancelLoading = "cancelLoading"
   let [<Literal>] ConfigLoading = "configLoading"
   /// In-flight indicator for a Settings panel save/reset (Phase B2).
   let [<Literal>] SettingsSaving = "settingsSaving"
@@ -833,6 +839,13 @@ type DashboardWorkerCache = {
 /// Commands that mutate session state.
 type DashboardActions = {
   EvalCode: WorkerProtocol.SessionId -> string -> Threading.Tasks.Task<Result<string, string>>
+  /// Cooperative cancel of the session's in-flight eval (CTS cancel + thread
+  /// interrupt on the worker). Genuinely stops an eval blocked on I/O or one
+  /// that checks a cancellation token; it CANNOT preempt a tight synchronous
+  /// CPU loop with no yield point (e.g. `while true do ()`) — .NET has no
+  /// safe way to abort a running thread. `Ok` here means "cancel requested",
+  /// not "the eval definitely stopped" — hard-reset remains the escape hatch.
+  CancelEval: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   ResetSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   HardResetSession: WorkerProtocol.SessionId -> Threading.Tasks.Task<Result<string, string>>
   Dispatch: SageFsMsg -> unit
