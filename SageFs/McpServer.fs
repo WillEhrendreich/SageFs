@@ -1966,6 +1966,22 @@ let resolveSessionStatusLabel
       return fallbackSessionStatusLabel session.Status
   }
 
+/// `healthy` for `GET /health`. A daemon with zero sessions is the normal
+/// state right after startup — the daemon answering this endpoint at all IS
+/// the health signal, and a new user has not created a session yet. Whether a
+/// session exists (and its own status) is reported separately via this same
+/// payload's `sessionCount`/`status` fields, never folded into `healthy`.
+/// When sessions DO exist, `healthy` still reflects whether at least one of
+/// them is in a live-and-working state (Ready/Evaluating).
+let healthyForSessions (sessions: SageFs.Features.SessionHealthSummary list) : bool =
+  match sessions with
+  | [] -> true
+  | _ ->
+    match SageFs.Features.DaemonHealth.primarySessionStatus sessions with
+    | Some SageFs.Features.SessionHealthStatus.Ready
+    | Some SageFs.Features.SessionHealthStatus.Evaluating -> true
+    | _ -> false
+
 let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
@@ -2034,11 +2050,7 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
           MemoryMB = int (daemonProcess.WorkingSet64 / 1024L / 1024L) }
       let sessionStatus =
         SageFs.Features.DaemonHealth.primarySessionStatusLabel healthSnapshot.SessionSummaries
-      let healthy =
-        match SageFs.Features.DaemonHealth.primarySessionStatus healthSnapshot.SessionSummaries with
-        | Some SageFs.Features.SessionHealthStatus.Ready
-        | Some SageFs.Features.SessionHealthStatus.Evaluating -> true
-        | _ -> false
+      let healthy = healthyForSessions healthSnapshot.SessionSummaries
       let diagnosticSummary = SageFs.Features.DaemonHealth.diagnosticSummary healthSnapshot
       // Structured error for the Faulted/Stopped case: the VS Code client
       // branches on `error` and shows { message, suggestedAction } with an
