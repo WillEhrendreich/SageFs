@@ -808,55 +808,68 @@ module SessionManager =
             reply.Reply(Error (SageFsError.DuplicateSession (SessionId.value existingId, workingDir)))
             return state
           | None ->
-            let sessionId = SessionId.newId()
-            let span = Instrumentation.startSpan Instrumentation.sessionSource "session.create"
-                         [("session.id", box sessionId); ("session.projects", box (String.concat "," projects)); ("session.working_dir", box workingDir)]
-            let onExited workerPid exitCode =
-              inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
-            match runtime.StartWorkerProcess sessionId projects workingDir autoOpenNamespaces workflow onExited with
-            | Ok spawned ->
-              let proc = spawned.Process
-              // Register session immediately with pending proxy — don't block
-              let info : SessionInfo = {
-                Id = sessionId
-                Name = None
-                Projects = projects
-                WorkingDirectory = workingDir
-                SolutionRoot = SessionInfo.findSolutionRoot workingDir
-                CreatedAt = DateTime.UtcNow
-                LastActivity = DateTime.UtcNow
-                Status = SessionLifecycleStatus.Starting { Pid = proc.Id; Port = None }
-                Workflow = workflow
-                ActiveProject = None
-                ProjectRoles = []
-                App = AppRun.AppRunState.NotRunning
-              }
-              let managed = {
-                Info = info
-                Process = proc
-                Proxy = pendingProxy
-                WorkerBaseUrl = ""
-                Projects = projects
-                WorkingDir = workingDir
-                AutoOpenNamespaces = autoOpenNamespaces
-                Workflow = workflow
-                RestartState = RestartPolicy.emptyState
-                AppGeneration = AppRun.AppSlot.initial.Generation
-                ProjectRoles = []
-                AdoptedCore = spawned.AdoptedCore
-              }
-              let newState = ManagerState.addSession sessionId managed state
-              reply.Reply(Ok info)
-              Instrumentation.sessionsCreated.Add(1L)
-              Instrumentation.activeSessions.Add(1L)
-              Instrumentation.succeedSpan span
-              // Port discovery runs off the agent loop
-              runtime.AwaitWorkerPort sessionId proc inbox ct
-              return newState
-            | Error err ->
-              reply.Reply(Error err)
-              Instrumentation.failSpan span (sprintf "%A" err)
+            // Refuse a project SageFs's FSI host cannot load — e.g. .NET
+            // Framework — HERE, at the single owner of session creation, so
+            // every on-ramp (MCP, HTTP, dashboard) inherits the refusal for
+            // free instead of spawning a worker doomed to a misleading
+            // "not built" / "names no framework version" RuntimeCompat error.
+            // Conservative by construction: ProjectCompatibility.findUnhostable
+            // only returns Some for a CONFIDENTLY unhostable project; anything
+            // unreadable or unrecognised is None and falls through unchanged.
+            match ProjectCompatibility.findUnhostable projects with
+            | Some(project, targetFrameworks, reason) ->
+              reply.Reply(Error(SageFsError.ProjectFrameworkNotHostable(project, targetFrameworks, reason)))
               return state
+            | None ->
+              let sessionId = SessionId.newId()
+              let span = Instrumentation.startSpan Instrumentation.sessionSource "session.create"
+                           [("session.id", box sessionId); ("session.projects", box (String.concat "," projects)); ("session.working_dir", box workingDir)]
+              let onExited workerPid exitCode =
+                inbox.Post(SessionCommand.WorkerExited(sessionId, workerPid, exitCode))
+              match runtime.StartWorkerProcess sessionId projects workingDir autoOpenNamespaces workflow onExited with
+              | Ok spawned ->
+                let proc = spawned.Process
+                // Register session immediately with pending proxy — don't block
+                let info : SessionInfo = {
+                  Id = sessionId
+                  Name = None
+                  Projects = projects
+                  WorkingDirectory = workingDir
+                  SolutionRoot = SessionInfo.findSolutionRoot workingDir
+                  CreatedAt = DateTime.UtcNow
+                  LastActivity = DateTime.UtcNow
+                  Status = SessionLifecycleStatus.Starting { Pid = proc.Id; Port = None }
+                  Workflow = workflow
+                  ActiveProject = None
+                  ProjectRoles = []
+                  App = AppRun.AppRunState.NotRunning
+                }
+                let managed = {
+                  Info = info
+                  Process = proc
+                  Proxy = pendingProxy
+                  WorkerBaseUrl = ""
+                  Projects = projects
+                  WorkingDir = workingDir
+                  AutoOpenNamespaces = autoOpenNamespaces
+                  Workflow = workflow
+                  RestartState = RestartPolicy.emptyState
+                  AppGeneration = AppRun.AppSlot.initial.Generation
+                  ProjectRoles = []
+                  AdoptedCore = spawned.AdoptedCore
+                }
+                let newState = ManagerState.addSession sessionId managed state
+                reply.Reply(Ok info)
+                Instrumentation.sessionsCreated.Add(1L)
+                Instrumentation.activeSessions.Add(1L)
+                Instrumentation.succeedSpan span
+                // Port discovery runs off the agent loop
+                runtime.AwaitWorkerPort sessionId proc inbox ct
+                return newState
+              | Error err ->
+                reply.Reply(Error err)
+                Instrumentation.failSpan span (sprintf "%A" err)
+                return state
 
         | SessionCommand.StopSession(id, reply) ->
           let span = Instrumentation.startSpan Instrumentation.sessionSource "session.stop" [("session.id", box id)]

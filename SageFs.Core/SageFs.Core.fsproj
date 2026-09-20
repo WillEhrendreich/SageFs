@@ -169,6 +169,8 @@
         <Compile Include="Features\ObservedFriction.fs" />
         <Compile Include="FsiRewrite.fs" />
         <Compile Include="SessionState.fs" />
+        <!-- Before SageFsError: ProjectFrameworkNotHostable carries its UnsupportedTfmReason. -->
+        <Compile Include="ProjectCompatibility.fs" />
         <Compile Include="SageFsError.fs" />
         <!-- After SageFsError: F#-aware compile-order insight over BuildDiagnostic (roast UX-4). -->
         <Compile Include="CompileOrderInsight.fs" />

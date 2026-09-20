@@ -29,6 +29,7 @@ let private buildAllCases () =
         | t when t = typeof<string list> -> box ([ "a"; "b" ] : string list)
         | t when t = typeof<SessionState> -> box SessionState.Ready
         | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
+        | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
         | _ -> failwithf "Unhandled field type %s in case %s" f.PropertyType.Name case.Name)
     case, FSharpValue.MakeUnion(case, fields) :?> SageFsError)
 

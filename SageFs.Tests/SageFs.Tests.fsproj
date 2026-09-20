@@ -25,7 +25,6 @@
         <Compile Include="McpLlmInteropTests.fs" />
         <Compile Include="ManualProjectParseTests.fs" />
         <Compile Include="LoadedProjectReportingTests.fs" />
-        <Compile Include="McpProjectLoadingUxTests.fs" />
         <Compile Include="SharedGenerators.fs" />
         <Compile Include="McpFormatterPropertyTests.fs" />
         <Compile Include="CompExprSimplifierTests.fs" />
@@ -259,6 +258,7 @@
         <Compile Include="CompilationContextPropertyTests.fs" />
         <Compile Include="SageFsErrorClassificationTests.fs" />
         <Compile Include="SageFsErrorJsonTests.fs" />
+        <Compile Include="ProjectCompatibilityTests.fs" />
         <Compile Include="SageFsErrorPropertyTests.fs" />
         <Compile Include="CompileOrderInsightTests.fs" />
         <Compile Include="ErrorAlgebraHardeningTests.fs" />

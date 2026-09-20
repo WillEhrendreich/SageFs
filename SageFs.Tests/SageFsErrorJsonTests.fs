@@ -23,6 +23,7 @@ let private allErrorCases : SageFsError list =
         | t when t = typeof<string list> -> box ([ "a"; "b" ] : string list)
         | t when t = typeof<SessionState> -> box SessionState.Ready
         | t when t = typeof<BuildDiagnostic list> -> box ([ BuildDiagnostic.ofLine "test error" ] : BuildDiagnostic list)
+        | t when t = typeof<ProjectCompatibility.UnsupportedTfmReason> -> box ProjectCompatibility.UnsupportedTfmReason.NetFramework
         | _ -> box "unknown")
     FSharpValue.MakeUnion(case, fields) :?> SageFsError)
   |> Array.toList
@@ -106,6 +107,35 @@ let sageFsErrorJsonTests =
         |> Expect.isNonEmpty "message should not be empty"
         json.suggestedAction
         |> Expect.isNonEmpty "suggestedAction should not be empty")
+    }
+
+    // Caught live, not by the tests above: `toJson`'s `fields` dictionary
+    // boxes each field value as `obj`, and a bare F# DU boxed that way is
+    // NOT serializable by the plain `System.Text.Json.JsonSerializer` the
+    // HTTP boundary actually uses (McpServer.fs's `jsonResponse` registers
+    // no `JsonFSharpConverter`) — confirmed via a real `/api/sessions/create`
+    // call against a .NET Framework project, which returned a 500 "F#
+    // discriminated union serialization is not supported" instead of the
+    // refusal. `toJson` itself never calls `JsonSerializer`, so the tests
+    // above never caught it. This test does what the HTTP boundary does.
+    // `toJson`'s fix (see `isNonListUnion`) covers a bare DU field directly
+    // on the error case (SessionState, ProjectCompatibility.UnsupportedTfmReason).
+    // `BuildFailed`'s `BuildDiagnostic list` is excluded here: its own
+    // element type nests a DIFFERENT DU (`BuildDiagnosticSeverity`) one
+    // level deeper, inside a list of records — a pre-existing, separate gap
+    // this task did not introduce and is out of scope to fix here (it needs
+    // its own converter on `BuildDiagnosticSeverity`, not a `toJson` field
+    // reduction). Confirmed still broken today so this exclusion is honest,
+    // not papering over a live regression.
+    test "toJson output actually serializes through the plain JsonSerializer the HTTP boundary uses" {
+      allErrorCases
+      |> List.filter (function SageFsError.BuildFailed _ -> false | _ -> true)
+      |> List.iter (fun err ->
+        let json = SageFsError.toJson err
+        try
+          System.Text.Json.JsonSerializer.Serialize(box json) |> ignore
+        with ex ->
+          failtestf "toJson output for %A did not serialize with plain JsonSerializer: %s" err ex.Message)
     }
 
     test "suggestedAction covers every DU case" {

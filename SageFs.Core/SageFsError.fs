@@ -89,6 +89,21 @@ type SageFsError =
   /// `DashboardTypes.resolveSessionProjects` already applies on the
   /// dashboard's own session-create path — sagefs-roast.md Finding #13).
   | UnsafeSessionPath of path: string * reason: string
+  /// A session-create request named a project whose target framework the
+  /// FSI host cannot load — the classic case is .NET Framework (net48,
+  /// net472, ...). Computed once, at the single owner of session creation
+  /// (SessionManager's CreateSession handling), from
+  /// `ProjectCompatibility.findUnhostable` — every on-ramp (MCP, HTTP,
+  /// dashboard) inherits the refusal for free instead of each one guessing
+  /// from a build-detection failure the way RuntimeCompat's "no bin/
+  /// directory" message used to be for .NET Framework projects, which was
+  /// false: the project builds fine, it just produces output the FSI host
+  /// cannot load. `targetFrameworks` keeps every declared TFM (not just the
+  /// unsupported one) so multi-targeting isn't hidden from the message.
+  | ProjectFrameworkNotHostable of
+      project: string *
+      targetFrameworks: string list *
+      reason: ProjectCompatibility.UnsupportedTfmReason
   | SessionStopFailed of sessionId: string * reason: string
   | SessionSwitchFailed of sessionId: string * reason: string
   /// The target session could not be routed to at all — gone, still warming
@@ -161,6 +176,8 @@ module SageFsError =
       sprintf "A session for this project already exists (session %s, working directory %s). Use switch_session to select it instead of creating a duplicate." existingId dir
     | SageFsError.UnsafeSessionPath(path, reason) ->
       sprintf "Refused session path '%s': %s" path reason
+    | SageFsError.ProjectFrameworkNotHostable(project, targetFrameworks, reason) ->
+      ProjectCompatibility.describeUnhostable project targetFrameworks reason
     | SageFsError.SessionStopFailed(id, reason) ->
       sprintf "Failed to stop session '%s': %s" id reason
     | SageFsError.SessionSwitchFailed(id, reason) ->
@@ -237,6 +254,7 @@ module SageFsError =
     | SageFsError.SessionCreationFailed _ -> LogLevel.Error
     | SageFsError.DuplicateSession _ -> LogLevel.Information
     | SageFsError.UnsafeSessionPath _ -> LogLevel.Warning
+    | SageFsError.ProjectFrameworkNotHostable _ -> LogLevel.Information
     | SageFsError.EvalFailed _ -> LogLevel.Error
     | SageFsError.ResetFailed _ -> LogLevel.Error
     | SageFsError.HardResetFailed _ -> LogLevel.Error
@@ -277,6 +295,7 @@ module SageFsError =
     | SageFsError.JsonParseError _ -> 400
     | SageFsError.ToolNotAvailable _ -> 400
     | SageFsError.UnsafeSessionPath _ -> 400
+    | SageFsError.ProjectFrameworkNotHostable _ -> 400
     // A cohort command invalid for the current cohort state/authority (not the
     // holder, not the conductor, scope already claimed, stale fence). 400 not
     // 409: 409 is reserved here for infrastructure conflicts (isInfraError).
@@ -324,6 +343,7 @@ module SageFsError =
     | SageFsError.JsonParseError _ -> true
     | SageFsError.ToolNotAvailable _ -> true
     | SageFsError.UnsafeSessionPath _ -> true
+    | SageFsError.ProjectFrameworkNotHostable _ -> true
     | SageFsError.CohortActionFailed _ -> true
     | SageFsError.AppRunFailed _
     | SageFsError.DuplicateSession _
@@ -378,6 +398,7 @@ module SageFsError =
     | SageFsError.CohortActionFailed _
     | SageFsError.ToolNotAvailable _
     | SageFsError.UnsafeSessionPath _
+    | SageFsError.ProjectFrameworkNotHostable _
     | SageFsError.SessionNotFound _
     | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
@@ -406,6 +427,7 @@ module SageFsError =
     | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
     | SageFsError.UnsafeSessionPath _
+    | SageFsError.ProjectFrameworkNotHostable _
     | SageFsError.SessionNotFound _
     | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
@@ -443,6 +465,7 @@ module SageFsError =
     | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
     | SageFsError.UnsafeSessionPath _
+    | SageFsError.ProjectFrameworkNotHostable _
     | SageFsError.SessionNotFound _
     | SageFsError.SessionNotRoutable _
     | SageFsError.NoActiveSessions
@@ -483,6 +506,7 @@ module SageFsError =
     | SageFsError.SessionCreationFailed _ -> "Check the project path and run 'dotnet build'"
     | SageFsError.DuplicateSession _ -> "Run switch_session to select the existing session"
     | SageFsError.UnsafeSessionPath _ -> "Use an existing directory and keep project paths inside it — no UNC paths or '..' escapes"
+    | SageFsError.ProjectFrameworkNotHostable _ -> "Point SageFs at a .NET (Core) project (net5.0 or newer) instead — SageFs does not support .NET Framework projects"
     | SageFsError.SessionStopFailed _ -> "Try hard_reset_fsi_session"
     | SageFsError.SessionSwitchFailed _ -> "Run list_sessions to check available sessions"
     | SageFsError.SessionNotRoutable _ -> "Run get_fsi_status or list_sessions to check session state"
@@ -519,6 +543,16 @@ module SageFsError =
   let describeForAgent (err: SageFsError) =
     sprintf "%s → Next: %s" (describe err) (suggestedAction err)
 
+  /// True for a genuine F# union type that is NOT a list. F# lists
+  /// (`'a list`) are themselves unions (Cons/Nil) at the CLR level but
+  /// serialize fine as themselves; a "real" union like `SessionState` or
+  /// `ProjectCompatibility.UnsupportedTfmReason` does not, without the
+  /// `JsonFSharpConverter` the HTTP boundary's plain `JsonSerializer`
+  /// doesn't register.
+  let private isNonListUnion (t: System.Type) =
+    FSharpType.IsUnion t
+    && not (t.IsGenericType && t.GetGenericTypeDefinition() = typedefof<int list>)
+
   /// Serialize a SageFsError to a JSON-friendly anonymous record.
   /// Returns { case, fields, message, suggestedAction }.
   let toJson (err: SageFsError) =
@@ -529,6 +563,21 @@ module SageFsError =
     |> Array.iter (fun (fi, v) ->
       match v with
       | :? exn as ex -> fieldMap.[fi.Name] <- box ex.Message
+      // A bare F# DU boxed as `obj` (e.g. ToolNotAvailable's SessionState,
+      // or ProjectFrameworkNotHostable's UnsupportedTfmReason) is NOT
+      // serializable by the plain `JsonSerializer.Serialize` the HTTP
+      // boundary uses (McpServer.fs's jsonResponse has no
+      // JsonFSharpConverter registered) — confirmed live via a real
+      // `/api/sessions/create` call, which returned an "F# discriminated
+      // union serialization is not supported" 500 instead of the intended
+      // refusal. Reduce it to its case name, the same shape `case` above
+      // already uses to expose a DU's identity over JSON. `string list`/
+      // `BuildDiagnostic list` fields are also technically unions (F# lists
+      // are Cons/Nil) but must NOT hit this branch — they serialize fine as
+      // themselves — so `isNonListUnion` scopes this to non-list unions.
+      | _ when isNonListUnion fi.PropertyType ->
+        let caseInfo, _ = FSharpValue.GetUnionFields(v, fi.PropertyType)
+        fieldMap.[fi.Name] <- box caseInfo.Name
       | _ -> fieldMap.[fi.Name] <- v)
     {| case = info.Name
        fields = fieldMap :> System.Collections.Generic.IDictionary<string, obj>
