@@ -4,6 +4,7 @@ open System
 open Expecto
 open Expecto.Flip
 open FsCheck
+open SageFs
 open SageFs.Features.LiveTesting
 
 // --- Helpers ---
@@ -209,6 +210,69 @@ let propertyTests = testList "Quarantine properties" [
   )
 ]
 
+// --- Production wiring ---
+// QuarantineLogic.evaluate/apply/isQuarantined/filterQuarantined were complete,
+// correct, and property-tested above with ZERO non-test callers: a test could
+// be classified flaky and the product would never demote it. This drives the
+// REAL fold (SageFsUpdate.update, via applyBufferedTestResults's
+// recordResult fold) and the REAL affected-test selection path
+// (TuiEvent.AffectedTestsComputed), not QuarantineLogic directly.
+let wiredIntoProductionTests = testList "QuarantineLogic wired into production" [
+  test "a quarantined test is excluded from the next selection" {
+    let flakyId = tid "FlakyTest"
+    let flakyCase = mkTestCase "FlakyTest"
+
+    // Seed FlakyHistory with two prior outcomes (Pass, Fail) so the batch's
+    // next result completes a 3-sample window with 2 flips (Pass-Fail,
+    // Fail-Pass) — enough to classify Environmental per FlakyDefaults
+    // (minSamples=3, flipThreshold=2), which QuarantineLogic.evaluate
+    // quarantines.
+    let seededHistory =
+      ResultWindow.create FlakyDefaults.windowSize
+      |> ResultWindow.add TestOutcome.Pass
+      |> ResultWindow.add TestOutcome.Fail
+
+    let baseModel = SageFsModel.initial ()
+    let seededState =
+      { baseModel.LiveTesting.TestState with
+          Activation = LiveTestingActivation.Active
+          DiscoveredTests = [| flakyCase |]
+          FlakyHistory = Map.ofList [ flakyId, seededHistory ] }
+    let model =
+      { baseModel with
+          LiveTesting = { baseModel.LiveTesting with TestState = seededState } }
+
+    let batchResult : TestRunResult =
+      { TestId = flakyId
+        TestName = "FlakyTest"
+        Result = TestResult.Passed (TimeSpan.FromMilliseconds 5.0)
+        Timestamp = now
+        Output = None }
+
+    // act: run the production result-merge path, then the production
+    // affected-test selection path.
+    let modelAfterResult, _ =
+      SageFsUpdate.update
+        (SageFsMsg.Event (TuiEvent.TestResultsBatch (None, [| batchResult |])))
+        model
+    let _, effects =
+      SageFsUpdate.update
+        (SageFsMsg.Event (TuiEvent.AffectedTestsComputed ([| flakyId |], [])))
+        modelAfterResult
+
+    let selected =
+      effects
+      |> List.collect (function
+        | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests req) ->
+          req.Tests |> Array.toList |> List.map (fun tc -> tc.Id)
+        | _ -> [])
+
+    selected
+    |> List.contains flakyId
+    |> Expect.isFalse "a quarantined test must not be selected"
+  }
+]
+
 [<Tests>]
 let allQuarantineTests = testList "Quarantine" [
   evaluateTests
@@ -216,4 +280,5 @@ let allQuarantineTests = testList "Quarantine" [
   filterTests
   isQuarantinedTests
   propertyTests
+  wiredIntoProductionTests
 ]
