@@ -291,6 +291,7 @@
         <Compile Include="EvalActorSimTests.fs" />
         <Compile Include="FileReloadRoutingSimTests.fs" />
         <Compile Include="DstFaultInjectionTests.fs" />
+        <Compile Include="SseGoldenFixtureGenerationTests.fs" />
         <Compile Include="SupervisorSimTests.fs" />
         <Compile Include="DstCoverageTests.fs" />
         <Compile Include="DstShrinkTests.fs" />
