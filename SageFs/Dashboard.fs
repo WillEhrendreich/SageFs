@@ -2108,11 +2108,22 @@ let createToggleProjectHandler : HttpHandler =
         | _ -> ""
       use! doc = readSignalsJsonSized ctx
       let current = getSignalString doc "manualProjects" "manual-projects"
+      let dir = getSignalString doc "newSessionDir" "new-session-dir"
       Response.sseStartResponse ctx |> ignore
       match String.IsNullOrWhiteSpace path with
       | true -> ()
       | false ->
-        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ManualProjects) (toggleManualProject current path)
+        let updated = toggleManualProject current path
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ManualProjects) updated
+        // Re-state the load plan for the NEW selection. Without this the preview
+        // keeps describing the auto-detect result — measured: after clicking
+        // SageFs.Demos the field said "SageFs.Demos/SageFs.Demos.fsproj" while the
+        // preview still read "Will load SageFs.slnx (the whole solution)", i.e. the
+        // preview contradicted what Create would do, which is the exact defect the
+        // plan text was added to fix.
+        match String.IsNullOrWhiteSpace dir with
+        | true -> ()
+        | false -> do! pushDiscoverResults ctx dir updated
     with
     | :? RequestTooLargeException -> ()
     | :? System.IO.IOException -> ()
