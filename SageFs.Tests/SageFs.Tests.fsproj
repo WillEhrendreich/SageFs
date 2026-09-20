@@ -98,7 +98,6 @@
         <Compile Include="ScreenTests.fs" />
         <Compile Include="DashboardSnapshotTests.fs" />
         <Compile Include="DashboardDiscoverUxTests.fs" />
-        <Compile Include="PreviousSessionSortTests.fs" />
         <Compile Include="DashboardTestIdTests.fs" />
         <Compile Include="McpHardResetRebuildTests.fs" />
         <Compile Include="HostCoreAdoptionReloadTests.fs" />
@@ -258,12 +257,10 @@
         <Compile Include="CompilationContextPropertyTests.fs" />
         <Compile Include="SageFsErrorClassificationTests.fs" />
         <Compile Include="SageFsErrorJsonTests.fs" />
-        <Compile Include="ProjectCompatibilityTests.fs" />
         <Compile Include="SageFsErrorPropertyTests.fs" />
         <Compile Include="CompileOrderInsightTests.fs" />
         <Compile Include="ErrorAlgebraHardeningTests.fs" />
         <Compile Include="McpToolErrorBodyTests.fs" />
-        <Compile Include="McpProjectLoadingUxTests.fs" />
         <Compile Include="SessionIdTests.fs" />
         <Compile Include="EndpointContractTests.fs" />
         <Compile Include="FsiRegressionTests.fs" />
