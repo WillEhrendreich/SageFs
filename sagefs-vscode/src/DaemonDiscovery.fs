@@ -91,16 +91,15 @@ let tryParseDaemonJsonMcpPort (json: string) =
   |> Option.orElseWith (fun () -> tryParseUrlPort "Url" compact)
   |> Option.orElseWith (fun () -> tryParseUrlPort "url" compact)
 
-let buildDaemonStartArgs (projectOrSln: string) (mcpPort: int) =
-  let flag =
-    match
-      projectOrSln.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
-      || projectOrSln.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
-    with
-    | true -> "--sln"
-    | false -> "--proj"
-
-  [| flag
-     projectOrSln
-     "--mcp-port"
+/// The daemon always starts BARE — it has not loaded a project at startup for a long
+/// time, and a session is created afterwards (from here, an MCP client, or the
+/// dashboard). It now REFUSES to start when handed `--proj`/`--sln`, exiting 2 with
+/// "accepted for recognition but not implemented", rather than accepting a flag and
+/// silently ignoring it. Passing the project here therefore stopped "Start Daemon"
+/// from starting anything at all.
+///
+/// `projectOrSln` is kept in the signature because the caller has it and the daemon
+/// may one day take a workspace hint; it is deliberately not passed on today.
+let buildDaemonStartArgs (_projectOrSln: string) (mcpPort: int) =
+  [| "--mcp-port"
      string mcpPort |]

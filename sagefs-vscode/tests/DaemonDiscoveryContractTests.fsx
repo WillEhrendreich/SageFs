@@ -64,9 +64,20 @@ let tests =
       parsedFromUrl |> Expect.equal "url payload should yield mcp port" (Some 38123)
       parsedFromPort |> Expect.equal "mcpPort payload should yield mcp port" (Some 38124)
 
-    testCase "daemon start arguments carry the authoritative mcp port" <| fun _ ->
+    // WHY — the daemon REFUSES to start when given --proj/--sln (it exits 2 with
+    // "accepted for recognition but not implemented"). It has not loaded a project at
+    // startup for a long time: it always starts bare and a session is created
+    // afterwards. Emitting those flags here therefore meant "Start Daemon" could not
+    // start a daemon at all. Only flags the daemon actually accepts may appear.
+    testCase "daemon start arguments carry the mcp port and nothing the daemon would refuse" <| fun _ ->
       buildDaemonStartArgs @"C:\repo\App.slnx" 38123
-      |> Expect.equal "start arguments should include the configured mcp port" [| "--sln"; @"C:\repo\App.slnx"; "--mcp-port"; "38123" |]
+      |> Expect.equal "only the port" [| "--mcp-port"; "38123" |]
+
+    testCase "a project path is never passed to the daemon, because it refuses --proj" <| fun _ ->
+      let args = buildDaemonStartArgs @"C:\repo\App.fsproj" 38124
+      Expect.isFalse "no --proj" (args |> Array.contains "--proj")
+      Expect.isFalse "no --sln" (args |> Array.contains "--sln")
+      Expect.isFalse "and not the path either" (args |> Array.exists (fun a -> a.Contains "App.fsproj"))
   ]
 
 Expecto.Tests.runTestsWithCLIArgs [] [||] tests
