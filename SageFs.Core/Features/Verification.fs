@@ -335,24 +335,53 @@ module TargetedVerification =
       Plan = plan
       Evidence = evidence }
 
+  /// A real sentence with a remedy for every way verification can be blocked —
+  /// whether the block was decided up front (`VerificationPlan.Blocked`) or only
+  /// surfaced once evidence was gathered (`VerificationEvidence.Blocked`, e.g. a
+  /// report with no evidence at all, or a snippet and an exact test that
+  /// disagree). Never `%A` a DU at a user or agent — that is a debug dump, not
+  /// an answer.
+  let private describeBlocker (blocker: VerificationBlocker) =
+    match blocker with
+    | VerificationBlocker.SessionNotTrustworthy (SessionTrust.Ambiguous sessionIds) ->
+      sprintf "Blocked: multiple sessions could prove this behavior (%s). Pin one session before trusting results." (String.concat ", " sessionIds)
+    | VerificationBlocker.SessionNotTrustworthy (SessionTrust.WarmingUp sessionId) ->
+      sprintf "Blocked: session '%s' is still warming up, so verification would be premature." sessionId
+    | VerificationBlocker.SessionNotTrustworthy (SessionTrust.Unavailable (sessionId, status)) ->
+      sprintf "Blocked: session '%s' is not trustworthy right now (%s). Recover or choose another session." sessionId status
+    | VerificationBlocker.SessionNotTrustworthy (SessionTrust.TypeIdentityCompromised diagnostic) ->
+      sprintf "Blocked: type identity is compromised (%s). Recover the session before claiming green." diagnostic
+    | VerificationBlocker.SessionNotTrustworthy (SessionTrust.StaleDefinitions filePath) ->
+      sprintf "Blocked: session still carries stale definitions for '%s'. Reload or recreate the session before verifying." filePath
+    | VerificationBlocker.SessionNotTrustworthy SessionTrust.Missing ->
+      "Blocked: there is no trustworthy session to prove this behavior yet."
+    | VerificationBlocker.SessionNotTrustworthy (SessionTrust.Trusted sessionId) ->
+      // Structurally representable (SessionNotTrustworthy wraps the full
+      // SessionTrust type) but never produced by SessionTrust.classify or
+      // VerificationPlanner.plan — a Trusted session never yields this
+      // blocker. Reported loudly rather than swallowed, per the "fail
+      // closed, never silent" doctrine.
+      sprintf "Blocked: internal inconsistency — session '%s' was reported trusted but flagged as not trustworthy. Please report this." sessionId
+    | VerificationBlocker.LoadedCodeNotCurrent (LoadedDefinitionState.ConfirmedStale (diskArtifact, loadedArtifact)) ->
+      sprintf "Blocked: disk says '%s' but the live session still has '%s'. SageFs should not claim green yet." diskArtifact loadedArtifact
+    | VerificationBlocker.LoadedCodeNotCurrent (LoadedDefinitionState.UnknownLoadState reason) ->
+      sprintf "Blocked: SageFs cannot prove what code is loaded (%s)." reason
+    | VerificationBlocker.LoadedCodeNotCurrent (LoadedDefinitionState.ConfirmedCurrent artifact) ->
+      // Structurally representable but never produced — LoadedCodeNotCurrent
+      // only wraps the non-current cases (see VerificationPlanner's
+      // requireCurrentDefinitions). Reported loudly rather than swallowed.
+      sprintf "Blocked: internal inconsistency — loaded artifact '%s' was reported current but flagged as not current. Please report this." artifact
+    | VerificationBlocker.ConflictingEvidence summary ->
+      sprintf "Blocked: the snippet and the exact test disagree (%s). Reconcile the conflict before trusting either result." summary
+    | VerificationBlocker.MissingEvidence reason ->
+      sprintf "Blocked: %s Run the snippet or exact test this plan calls for, then verify again." reason
+
   let summarize (report: TargetedVerificationReport) =
     match report.Plan, report.Evidence with
-    | VerificationPlan.Blocked (VerificationBlocker.SessionNotTrustworthy (SessionTrust.Ambiguous sessionIds)), _ ->
-      sprintf "Blocked: multiple sessions could prove this behavior (%s). Pin one session before trusting results." (String.concat ", " sessionIds)
-    | VerificationPlan.Blocked (VerificationBlocker.SessionNotTrustworthy (SessionTrust.WarmingUp sessionId)), _ ->
-      sprintf "Blocked: session '%s' is still warming up, so verification would be premature." sessionId
-    | VerificationPlan.Blocked (VerificationBlocker.SessionNotTrustworthy (SessionTrust.Unavailable (sessionId, status))), _ ->
-      sprintf "Blocked: session '%s' is not trustworthy right now (%s). Recover or choose another session." sessionId status
-    | VerificationPlan.Blocked (VerificationBlocker.SessionNotTrustworthy (SessionTrust.TypeIdentityCompromised diagnostic)), _ ->
-      sprintf "Blocked: type identity is compromised (%s). Recover the session before claiming green." diagnostic
-    | VerificationPlan.Blocked (VerificationBlocker.SessionNotTrustworthy (SessionTrust.StaleDefinitions filePath)), _ ->
-      sprintf "Blocked: session still carries stale definitions for '%s'. Reload or recreate the session before verifying." filePath
-    | VerificationPlan.Blocked (VerificationBlocker.SessionNotTrustworthy SessionTrust.Missing), _ ->
-      "Blocked: there is no trustworthy session to prove this behavior yet."
-    | VerificationPlan.Blocked (VerificationBlocker.LoadedCodeNotCurrent (LoadedDefinitionState.ConfirmedStale (diskArtifact, loadedArtifact))), _ ->
-      sprintf "Blocked: disk says '%s' but the live session still has '%s'. SageFs should not claim green yet." diskArtifact loadedArtifact
-    | VerificationPlan.Blocked (VerificationBlocker.LoadedCodeNotCurrent (LoadedDefinitionState.UnknownLoadState reason)), _ ->
-      sprintf "Blocked: SageFs cannot prove what code is loaded (%s)." reason
+    | VerificationPlan.Blocked blocker, _ ->
+      describeBlocker blocker
+    | _, Some (VerificationEvidence.Blocked blocker) ->
+      describeBlocker blocker
     | VerificationPlan.Perform VerificationMode.SnippetFirst, _ ->
       "Plan: verify the changed behavior locally with a snippet before waking broader test machinery."
     | VerificationPlan.Perform (VerificationMode.ExactTestOnly exact), _ ->
@@ -361,7 +390,3 @@ module TargetedVerification =
       sprintf "Plan: prove the behavior locally first, then run the exact guard '%s'." (ExactTestRef.value exact)
     | VerificationPlan.Perform VerificationMode.BroaderConfidenceRun, _ ->
       "Plan: broader confidence is justified; run more than a single local proof."
-    | _, Some (VerificationEvidence.Blocked blocker) ->
-      sprintf "Blocked: %A" blocker
-    | _, _ ->
-      "Verification report ready."

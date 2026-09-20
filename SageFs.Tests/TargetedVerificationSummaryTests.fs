@@ -36,4 +36,27 @@ let tests =
           Evidence = None }
       TargetedVerification.summarize report
       |> Expect.stringContains "should mention inability to prove loaded code" "cannot prove"
+
+    testCase "a report with no evidence must say so, not a plan sentence" <| fun _ ->
+      let request : TargetedVerificationRequest =
+        { Intent = VerificationIntent.ExploreBehavior "behavior"
+          NamedGuard = None
+          SessionObservation =
+            { MatchingSessionIds = [ "session-1" ]
+              SessionStatus = Some (SageFs.WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1234; Port = Some 5000 })
+              LoadedState = Some (LoadedDefinitionState.ConfirmedCurrent "artifact-v1")
+              TypeIdentityDiagnostic = None }
+          LoadedState = LoadedDefinitionState.ConfirmedCurrent "artifact-v1" }
+      let report = TargetedVerification.createReport request None None
+      TargetedVerification.summarize report
+      |> Expect.stringContains "a report with no evidence must say so" "No snippet or exact-test evidence"
+
+    testCase "conflicting snippet and exact-test evidence is reported as blocked, not as a plan" <| fun _ ->
+      let guard = exact "Tests.UserPreferences.guard"
+      let report =
+        { Trust = SessionTrust.Trusted "session-1"
+          Plan = VerificationPlan.Perform (VerificationMode.SnippetThenExactTest guard)
+          Evidence = Some (VerificationEvidence.Blocked (VerificationBlocker.ConflictingEvidence "snippet passed but the exact test failed")) }
+      TargetedVerification.summarize report
+      |> Expect.stringContains "should say the evidence conflicts, not restate the plan" "disagree"
   ]
