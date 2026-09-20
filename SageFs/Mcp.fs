@@ -1843,18 +1843,29 @@ module McpTools =
       | None -> None
     | WorkflowTypes.SessionWorkflow.HotReload _ -> None
 
-  /// Read PackageReference Include values from a .fsproj file.
+  /// Read classification markers from a .fsproj: its PackageReference Include
+  /// values, PLUS the SDK attribute and FrameworkReference includes that
+  /// `WorkflowTypes.ProjectFileMarkers` extracts.
+  ///
+  /// The project-file markers are what let this see a plain ASP.NET Core /
+  /// Minimal API / Oxpecker project at all — those reach ASP.NET through
+  /// `Sdk="Microsoft.NET.Sdk.Web"` and a FrameworkReference and have no web
+  /// PackageReference, so a package-only read reported them as non-web and the
+  /// user was never offered the hot-reload workflow.
+  ///
   /// Returns [] on any IO or parse error (non-blocking best-effort).
   let private readFsprojPackageRefs (path: string) : string list =
-    try
-      let doc = XDocument.Load(path)
-      doc.Descendants(XName.Get("PackageReference"))
-      |> Seq.choose (fun el ->
-        match el.Attribute(XName.Get("Include")) with
-        | null -> None
-        | a -> Some a.Value)
-      |> Seq.toList
-    with _ -> []
+    let packageRefs =
+      try
+        let doc = XDocument.Load(path)
+        doc.Descendants(XName.Get("PackageReference"))
+        |> Seq.choose (fun el ->
+          match el.Attribute(XName.Get("Include")) with
+          | null -> None
+          | a -> Some a.Value)
+        |> Seq.toList
+      with _ -> []
+    packageRefs @ WorkflowTypes.ProjectFileMarkers.read path
 
   /// Create a new session and bind it to the requesting agent.
   let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflowRaw: string) : Task<string> =

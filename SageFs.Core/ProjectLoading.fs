@@ -458,8 +458,15 @@ let classifyProject (proj: ProjectOptions) : ClassifiedProject =
     Role = role
     // Package refs plus active desktop-UI property markers (UseWPF/…), so a
     // WPF/WinForms/MAUI/WinUI project — whose UI framework is a property, not a
-    // package — still classifies as native-GUI.
-    PackageRefs = packageRefs @ activeUiPropertyMarkers proj }
+    // package — still classifies as native-GUI; plus the .fsproj's own SDK and
+    // FrameworkReference markers, so a plain ASP.NET Core / Minimal API project
+    // — which reaches ASP.NET through `Sdk="Microsoft.NET.Sdk.Web"` and a
+    // FrameworkReference, and carries NO web PackageReference — still
+    // classifies as web instead of falling through to Console.
+    PackageRefs =
+      packageRefs
+      @ activeUiPropertyMarkers proj
+      @ WorkflowTypes.ProjectFileMarkers.read proj.ProjectFileName }
 
 /// Classify all projects in a solution, returning a map of path to classification.
 let classifyProjects (projects: ProjectOptions list) : ClassifiedProject list =
@@ -498,7 +505,13 @@ let private readFallbackProjectProps (projPath: string) : FallbackProjectProps =
         match propValue prop with
         | Some v -> String.Equals(v, "true", StringComparison.OrdinalIgnoreCase)
         | None -> false)
-    { OutputType = outputType; IsTestProject = isTestProjectProp; PackageRefs = packageRefs @ uiMarkers }
+    // Same SDK/FrameworkReference markers the Ionide path gets, from the same
+    // single reader — so the fallback path cannot classify a Minimal API
+    // project differently from the normal one.
+    let projectFileMarkers = WorkflowTypes.ProjectFileMarkers.read projPath
+    { OutputType = outputType
+      IsTestProject = isTestProjectProp
+      PackageRefs = packageRefs @ uiMarkers @ projectFileMarkers }
   with _ ->
     { OutputType = None; IsTestProject = None; PackageRefs = [] }
 

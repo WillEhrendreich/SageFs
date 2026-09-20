@@ -9,6 +9,116 @@
 /// illegal states (hot reload + full REPL) are unrepresentable.
 module SageFs.WorkflowTypes
 
+open System
+
+// ─── Web markers — the single source of truth ───────────────
+
+/// Every token that means "this project serves HTTP", in ONE list.
+///
+/// Why one list: this used to be two — `ProjectKind.classify`'s private
+/// `webPackages` and `WorkflowDetection.suggest`'s own private near-copy. Two
+/// lists that had to agree, with nothing forcing them to, and they had already
+/// drifted: `StarFederation.Datastar` existed only in the detection copy (and
+/// was misspelled `Starfederation.Datastar`, so with the ordinal, case-SENSITIVE
+/// `String.Contains` it never matched the real package id
+/// `StarFederation.Datastar.FSharp` either). Both paths now read this module,
+/// and `ProjectClassificationTests` iterates `all` so a marker added here is
+/// automatically required to behave identically on both paths.
+module WebMarkers =
+
+  /// SSE/hypermedia packages. These are web markers like any other AND they
+  /// additionally change the WORDING of the workflow suggestion, which is the
+  /// only reason they are named separately.
+  let datastar = [ "Falco.Datastar"; "StarFederation.Datastar" ]
+
+  /// F# / ASP.NET Core server-side web frameworks.
+  ///
+  /// `Microsoft.AspNetCore` covers both an explicit `Microsoft.AspNetCore.*`
+  /// package AND the `Microsoft.AspNetCore.App` FrameworkReference marker that
+  /// `ProjectFileMarkers` contributes, by substring.
+  let serverFrameworks =
+    [ "Falco"; "Giraffe"; "Saturn"; "Oxpecker"; "Microsoft.AspNetCore" ]
+
+  /// Markers that come from the `.fsproj` XML rather than any package — see
+  /// `ProjectFileMarkers`. A modern ASP.NET Core / Minimal API project reaches
+  /// ASP.NET through the Web SDK and a FrameworkReference and carries no web
+  /// `<PackageReference>` at all, so without these it classified as Console.
+  let projectFile = [ "Microsoft.NET.Sdk.Web" ]
+
+  /// The whole vocabulary. Order is irrelevant — matching is substring.
+  let all = serverFrameworks @ datastar @ projectFile |> List.distinct
+
+  /// Substring match, case-INSENSITIVE. Package ids are not case-normalised by
+  /// NuGet in a way anyone should depend on, and the case-sensitive version of
+  /// this check is exactly what silently broke the Datastar marker.
+  let private containsCI (needle: string) (haystack: string) =
+    haystack.Contains(needle, StringComparison.OrdinalIgnoreCase)
+
+  /// The references that matched any of `markers`.
+  let findMatches (markers: string list) (refs: string list) =
+    refs |> List.filter (fun r -> markers |> List.exists (fun m -> containsCI m r))
+
+  /// Whether any reference matched any of `markers`.
+  let matchesAny (markers: string list) (refs: string list) =
+    refs |> List.exists (fun r -> markers |> List.exists (fun m -> containsCI m r))
+
+// ─── Project-file markers ───────────────────────────────────
+
+/// Classification markers that live in the `.fsproj` XML itself rather than in
+/// any `<PackageReference>`: the `Sdk` attribute on `<Project>`, and
+/// `<FrameworkReference Include="..." />`.
+///
+/// This exists because package references alone cannot see a plain ASP.NET Core
+/// or Minimal API project. Verified against this repo's own
+/// `SageFs.Tests/fixtures/WebAppFixture/WebAppFixture.fsproj`: `Sdk =
+/// "Microsoft.NET.Sdk.Web"`, zero `<PackageReference>` elements, and the live
+/// daemon reports it as `PackageRefs: []`. Every such project — plain ASP.NET,
+/// Minimal API, Oxpecker, Giraffe-via-framework-ref — classified as Console and
+/// was therefore never offered the hot-reload workflow.
+///
+/// Markers are raw strings so they compose with package references in the
+/// single `string list` both classification paths already take — the same
+/// pattern `ProjectLoading.activeUiPropertyMarkers` uses for `UseWPF`.
+module ProjectFileMarkers =
+
+  open System.Xml.Linq
+
+  /// Parse markers out of raw `.fsproj` XML. Pure — no IO.
+  ///
+  /// Best-effort by construction: malformed or empty XML yields `[]` rather
+  /// than throwing. A marker we cannot read costs at most a workflow
+  /// suggestion; it must never cost the session.
+  let parse (fsprojXml: string) : string list =
+    match String.IsNullOrWhiteSpace fsprojXml with
+    | true -> []
+    | false ->
+      try
+        let doc = XDocument.Parse fsprojXml
+        let sdkAttr =
+          doc.Root
+          |> Option.ofObj
+          |> Option.bind (fun root -> root.Attribute(XName.Get "Sdk") |> Option.ofObj)
+          |> Option.map (fun a -> a.Value.Trim())
+          |> Option.filter (fun v -> v <> "")
+          |> Option.toList
+        let frameworkRefs =
+          doc.Descendants(XName.Get "FrameworkReference")
+          |> Seq.choose (fun el ->
+            el.Attribute(XName.Get "Include")
+            |> Option.ofObj
+            |> Option.map (fun a -> a.Value.Trim()))
+          |> Seq.filter (fun v -> v <> "")
+          |> Seq.toList
+        sdkAttr @ frameworkRefs |> List.distinct
+      with _ -> []
+
+  /// The one IO edge. Any failure to read the file yields `[]`, never an
+  /// exception — see `parse`.
+  let read (projPath: string) : string list =
+    try
+      parse (IO.File.ReadAllText projPath)
+    with _ -> []
+
 // ─── Browser refresh configuration ──────────────────────────
 
 /// Configuration for the browser hot-reload pipeline.
@@ -54,9 +164,6 @@ module ProjectKind =
       "Microsoft.WinUI"; "Uno.UI"; "Uno.WinUI"
       "UseWPF"; "UseWindowsForms"; "UseMaui"; "UseWinUI" ]       // desktop-UI MSBuild property markers
 
-  /// Web frameworks whose presence means a web app.
-  let private webPackages = [ "Falco"; "Giraffe"; "Saturn"; "Microsoft.AspNetCore" ]
-
   /// Classify a project by its package references. NativeGui wins over Web wins
   /// over Console: a native game/desktop-UI library dominates the runtime shape,
   /// then a web framework, else a plain console/headless app.
@@ -66,11 +173,16 @@ module ProjectKind =
   /// regression: the web DevReload patch is inert for a WPF app (it never calls
   /// WebApplication.Run) and reload still works through the method detour — so
   /// existing Windows/WPF users are unaffected.
+  /// `packageRefs` is the project's package references PLUS any non-package
+  /// classification markers the loader surfaced for it — `UseWPF` and friends
+  /// from `ProjectLoading.activeUiPropertyMarkers`, and the Web SDK /
+  /// FrameworkReference markers from `ProjectFileMarkers`.
   let classify (packageRefs: string list) : ProjectKind =
-    let has (names: string list) =
-      packageRefs |> List.exists (fun ref -> names |> List.exists ref.Contains)
-    if has nativeGuiPackages then ProjectKind.NativeGui
-    elif has webPackages then ProjectKind.Web BrowserRefreshConfig.defaults
+    let hasNativeGui =
+      packageRefs |> List.exists (fun ref -> nativeGuiPackages |> List.exists ref.Contains)
+    if hasNativeGui then ProjectKind.NativeGui
+    elif WebMarkers.matchesAny WebMarkers.all packageRefs then
+      ProjectKind.Web BrowserRefreshConfig.defaults
     else ProjectKind.Console
 
   /// Short user-facing label.
@@ -149,15 +261,16 @@ module ReloadStrategy =
   /// Whether to install the web DevReload middleware (the WebApplication.Run/
   /// RunAsync Harmony patch plus browser SSE refresh).
   ///
-  /// Installed for a web app, AND for the method-detour (console) case — because
-  /// a plain ASP.NET app that references the AspNetCore FRAMEWORK rather than a
-  /// web package cannot be told apart from a console app by package refs alone,
-  /// and the patch is inert for a genuine console app (it never calls
-  /// WebApplication.Run), so installing it defensively is correct and never a
-  /// regression. A native game is the one kind we are certain has no
-  /// WebApplication, so it — and non-reloading Interactive — skip it.
-  /// (A precise console-vs-framework-web split would need per-project framework
-  /// references, which the loader does not surface yet.)
+  /// Installed for a web app, AND for the method-detour (console) case. The
+  /// console case is now a genuine belt-and-braces rather than a workaround:
+  /// `ProjectFileMarkers` DOES surface the Web SDK attribute and the ASP.NET
+  /// FrameworkReference, so a plain ASP.NET / Minimal API project classifies as
+  /// `Web` on its own merits. It is still installed for `MethodDetourOnly`
+  /// because the patch is inert for a genuine console app — it never calls
+  /// WebApplication.Run — so a project that reaches ASP.NET by some route we
+  /// have not enumerated still gets browser reload, and nothing else pays for
+  /// it. A native game is the one kind we are certain has no WebApplication, so
+  /// it — and non-reloading Interactive — skip it.
   let installsWebDevReload = function
     | ReloadStrategy.WebReload _      -> true
     | ReloadStrategy.MethodDetourOnly -> true
@@ -373,24 +486,15 @@ type WorkflowSuggestion = {
 
 module WorkflowDetection =
 
-  let private datastarPackages =
-    [ "Falco.Datastar"; "Starfederation.Datastar" ]
-
-  let private webPackages =
-    [ "Falco"; "Falco.Htmx"; "Giraffe"; "Saturn"
-      "Microsoft.AspNetCore" ]
-
-  let private findMatches (knownPackages: string list) (projectRefs: string list) =
-    projectRefs
-    |> List.filter (fun ref ->
-      knownPackages |> List.exists (fun known -> ref.Contains(known)))
-
   /// Suggest a workflow based on project package references.
   /// Returns None for non-web projects (default to Interactive).
   /// NEVER auto-applies — the UI presents this as a one-time suggestion.
+  /// Reads the SAME `WebMarkers` vocabulary `ProjectKind.classify` reads, so
+  /// the two can no longer disagree about what "web" means. The only thing
+  /// special-cased here is Datastar, and only to change the WORDING.
   let suggest (packageRefs: string list) : WorkflowSuggestion option =
-    let datastarHits = findMatches datastarPackages packageRefs
-    let webHits = findMatches webPackages packageRefs
+    let datastarHits = WebMarkers.findMatches WebMarkers.datastar packageRefs
+    let webHits = WebMarkers.findMatches WebMarkers.all packageRefs
     match datastarHits, webHits with
     | _ :: _, _ ->
       Some {
