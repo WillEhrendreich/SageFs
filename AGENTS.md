@@ -72,6 +72,37 @@ The Visual Studio extension (`sagefs-vs/`) is deprecated and no longer built, te
 - Run tests via the SageFs REPL, not `dotnet test`
 - Property-based tests (FsCheck) are preferred over example-based tests
 
+#### Filters: `--filter-test-list` matches LISTS, `--filter-test-case` matches LEAVES
+
+Expecto exposes three filter flags and they do **not** mean the same thing:
+
+| Flag | Matches against |
+|---|---|
+| `--filter <path>` | a slash-separated hierarchy prefix |
+| `--filter-test-list <substring>` | **`testList` names only** |
+| `--filter-test-case <substring>` | **leaf case names only** |
+
+If the token you are filtering on lives in the `testList` name and not in any leaf
+case name, `--filter-test-case` matches **nothing** — and the run still prints
+`Failed: 0, Errored: 0` and **exits 0**. This has already happened here: an agent ran
+`--filter-test-case "roast-8"` against a list literally named for `roast-8` whose eight
+cases all begin `"WHY — "`, read the green result, and concluded the behaviour was
+covered. Nothing had executed. Exit 0 means *nothing that ran failed*; it says nothing
+about what was excluded.
+
+Consequences, in order of importance:
+
+1. **A filtered run is never the acceptance check.** A gate is done when its own test
+   name appears in the output of a real, **unfiltered** run — `dotnet {testDll} --summary`,
+   or the relevant whole-suite entry point. Filters are for the inner loop only.
+2. **Never add a gate that is only reachable by a name filter.** Put it in the default
+   suite as a plain `[<Tests>]` value, or select it structurally through the
+   `Integration` registry in `TestInfrastructure.fs` (reference-based exclusion, which a
+   typo cannot defeat). CI itself uses no filter expressions — every stage runs a whole
+   suite. Keep it that way.
+3. **Do not put tracking tokens (`roast-N`, bug ids) in `testList` names.** Put them on
+   the leaf cases where a case filter can see them, or leave them out entirely.
+
 ## Project Structure
 
 ```

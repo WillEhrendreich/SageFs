@@ -28,7 +28,9 @@ Raylib application and game projects remain supported. The demos in `samples/dem
 
 ## Live Testing
 
-Live testing works but is still being stabilized, with rough edges around session switching and test discovery timing. Expecto has the best coverage; xUnit (including v3), NUnit, MSTest, and TUnit are also detected.
+Live testing is the most thoroughly proven capability here: a CI integration test boots a real daemon and a real session, edits a source file on disk, and asserts the affected test flips to failing without anyone asking for a rerun. Rough edges remain around session switching and test discovery timing. Expecto has the best coverage; xUnit (including v3), NUnit, MSTest, and TUnit are also detected.
+
+Live testing is also a workflow, not only a toggle — see [Workflow Modes](workflow-modes.md).
 
 | Feature | VS Code | Neovim | Web Dashboard | MCP |
 |:--------|:-------:|:------:|:-------------:|:---:|
@@ -49,11 +51,13 @@ Live testing works but is still being stabilized, with rough edges around sessio
 | Dependency and coverage queries | Shared | Shared | Supported | Supported |
 | Domain model and pipeline analysis | Shared | Shared | Partial | Supported |
 
-Completions and CodeLens are editor features backed by FSharp.Compiler.Service; they are not MCP tools.
+Completions and CodeLens are editor features backed by FSharp.Compiler.Service; they are not MCP tools. Neither is the type explorer, the call graph, the test-run policy control, or the test trace — those are HTTP endpoints the editors and the dashboard call (`GET /api/dependency-graph`, `POST /api/live-testing/policy`, `GET /api/live-testing/test-trace`). The `get_completions` and `explore_type` members in `SageFs/McpTools.fs` carry a `[<Description>]` but no `[<McpServerTool>]` attribute, so they are not part of the advertised tool surface at all. [`LIVE_TESTING_GUIDE.md`](LIVE_TESTING_GUIDE.md) is the authoritative list of what is and is not an MCP tool.
 
 ## Hot Reload and Health
 
-Hot reload watches `.fs` files and runs the full pipeline (watch, `#load`/FSI eval, Harmony patch, SSE refresh). Browser auto-refresh works. Propagating a change into a running module-declared app is still being completed.
+Hot reload watches `.fs` files, emits the functions that changed, and uses Harmony to re-point those methods in the already-running process — including apps whose route table was built once at startup (the `module App.Program` + `let routes = [...]` pattern). Browser auto-refresh works.
+
+Because it re-points **methods**, a handler that is *called* per request reloads, and a handler whose output was *computed once* at startup cannot — prefer `let getHome (ctx: HttpContext) = ...` over `let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. `let mutable` state, changed signatures, and changed types restart the app instead. [Hot Reload](hot-reload.md) carries the full what-reloads / what-restarts table, each row pinned by an executable test; this page deliberately does not duplicate it.
 
 | Feature | VS Code | Neovim | Web Dashboard | MCP |
 |:--------|:-------:|:------:|:-------------:|:---:|
@@ -76,14 +80,17 @@ Hot reload watches `.fs` files and runs the full pipeline (watch, `#load`/FSI ev
 
 | Action | VS Code | Neovim |
 |:-------|:--------|:-------|
-| Evaluate selection/cell | `Alt+Enter` | `<leader>se` |
-| Evaluate file | `Alt+Shift+Enter` | `<leader>sf` |
-| Cancel evaluation | `Ctrl+Shift+C` | `<leader>sc` |
-| Reset session | Command palette | `:SageFsResetSession` |
+| Evaluate selection/cell | `Alt+Enter` | `<Alt-Enter>` (or `<leader>re`) |
+| Evaluate file | `Alt+Shift+Enter` | `<leader>rf` |
+| Cancel evaluation | `Ctrl+Shift+C` | `<leader>rx` |
+| Reset session | Command palette | `:SageFsReset` |
 | Hard reset | Command palette | `:SageFsHardReset` |
 | Switch project | Command palette | `:SageFsSwitchProject` |
-| Toggle live testing | Command palette | `:SageFsToggleLiveTesting` |
+| Enable / disable live testing | Command palette | `:SageFsEnableTesting` / `:SageFsDisableTesting` |
+| Switch workflow | Command palette | `:SageFsWorkflow live\|repl` |
 | Open dashboard | Command palette | `:SageFsDashboard` |
+
+> The Neovim column is a copy of the plugin's own keymaps, which live in the separate [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim#keymaps) repository — that README is authoritative, and nothing in this repo verifies it. This table previously listed `<leader>se` / `<leader>sf` / `<leader>sc`, which the plugin does not bind: it puts everything under `<leader>r` precisely because LazyVim reserves `<leader>s` for Search. It also listed `:SageFsResetSession` and `:SageFsToggleLiveTesting`, neither of which exists.
 
 ## MCP
 

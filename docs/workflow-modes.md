@@ -1,36 +1,51 @@
 # Understanding SageFs Workflow Modes
 
-SageFs has **two workflow modes** and **one independent feature** that people often mistake for a third mode. This guide sorts them out.
+SageFs has **three workflow modes**, and live testing is *also* an independent feature that works in all of them. That double life is the thing people trip over, so this guide sorts it out.
+
+The set is closed and lives in one place — [`SageFs.Core/WorkflowTypes.fs`](../SageFs.Core/WorkflowTypes.fs):
+
+```fsharp
+type SessionWorkflow =
+  | Interactive                              // "REPL"
+  | LiveTesting                              // "Live Testing"
+  | HotReload of BrowserRefreshConfig        // "Hot Reload"
+```
+
+> **This page used to say there were two.** It claimed live testing "isn't a third mode" and that SageFs "has two workflow modes." `LiveTesting` has been a real workflow case since commit `90d8721a`; `switch_workflow target='livetesting'` has always selected it. The statement was wrong, and the correction is below.
 
 ## The 30-Second Version
 
 ```
-+----------------------------------------------------------+
-|                   YOUR SAGEFS SESSION                    |
-|                                                          |
-|  Pick ONE workflow:                                      |
-|  +------------------+         +------------------+       |
-|  |  REPL Mode       |  <swap> |  Live Mode       |       |
-|  |  (default)       |         |  (WebLive)       |       |
-|  |                  |         |                  |       |
-|  |  [Y] Redefine    |         |  [N] No redefine |       |
-|  |      types       |         |      (FS0037)    |       |
-|  |  [N] No browser  |         |  [Y] Browser hot |       |
-|  |      hot reload  |         |      reload      |       |
-|  +------------------+         +------------------+       |
-|                                                          |
-|  Then toggle features independently:                     |
-|  [x] Live Testing  <-- works in BOTH modes               |
-|  [x] Coverage      <-- works in BOTH modes               |
-|  [x] Diagnostics   <-- works in BOTH modes               |
-+----------------------------------------------------------+
++----------------------------------------------------------------------+
+|                        YOUR SAGEFS SESSION                           |
+|                                                                      |
+|  Pick ONE workflow:                                                  |
+|  +---------------+   +-----------------+   +---------------------+   |
+|  | REPL          |   | Live Testing    |   | Hot Reload          |   |
+|  | (Interactive, |   | (LiveTesting)   |   | (HotReload; also    |   |
+|  |  the default) |   |                 |   |  spelled "live")    |   |
+|  |               |   |                 |   |                     |   |
+|  | [Y] Redefine  |   | [Y] Redefine    |   | [N] No redefine     |   |
+|  |     types     |   |     types       |   |     (FS0037)        |   |
+|  | [N] No browser|   | [N] No browser  |   | [Y] Browser hot     |   |
+|  |     hot reload|   |     hot reload  |   |     reload          |   |
+|  | [ ] Live test |   | [x] Live test   |   | [ ] Live testing    |   |
+|  |     off until |   |     ARMED for   |   |     off until you   |   |
+|  |     you ask   |   |     as you type |   |     ask             |   |
+|  +---------------+   +-----------------+   +---------------------+   |
+|                                                                      |
+|  Features you toggle independently, in ANY workflow:                 |
+|  [x] Live Testing  <-- POST /api/live-testing/enable                 |
+|  [x] Coverage                                                        |
+|  [x] Diagnostics                                                     |
++----------------------------------------------------------------------+
 ```
 
-**Live testing is not a mode.** It's a feature you turn on or off regardless of which workflow you're in. Everything in the "features" row works identically in both REPL and Live mode.
+**Live testing is both a workflow and a feature, and that is not a contradiction.** The *feature* is a per-session on/off switch that works in every workflow. The *workflow* is the shortcut: choosing `LiveTesting` makes the daemon arm that switch for you the moment the session reaches Ready ([`SageFs/DaemonMode.fs`](../SageFs/DaemonMode.fs), the `onSessionReadyExtra` hook), and the loop is driven by debounced keystrokes rather than by saves. If you never pick the workflow, you can still turn the feature on by hand and get everything except the automatic arming.
 
 ---
 
-## The Two Workflows, Explained
+## The Three Workflows, Explained
 
 ### REPL Mode (Interactive) — The Default
 
@@ -52,19 +67,40 @@ SageFs has **two workflow modes** and **one independent feature** that people of
 - You're working in `.fsx` scripts
 - You're not building a web app (or don't mind manual browser refresh)
 
-### Live Mode (WebLive) — For Web Developers
+### Live Testing Mode — For Red-Green Loops
+
+**What it feels like:** the same full REPL as above, except the test loop is already running when you arrive. You type; affected tests re-run against the buffer you are typing into.
+
+**What you can do:**
+- Everything REPL mode can do — redefine types freely, full interactive exploration. The workflow adds no FSI flags ([`SessionWorkflow.fsiArgs`](../SageFs.Core/WorkflowTypes.fs) returns `[]` for it, exactly as for `Interactive`), because running tests never patches a running app, so the single-assembly constraint below does not apply.
+- Live testing comes on automatically when the session is ready — you do not call Enable.
+- Reruns are keystroke-driven, not save-driven: editors post the live buffer to `POST /api/sessions/{sid}/buffer-changed`.
+
+**What you give up:**
+- Nothing relative to REPL mode. It is REPL mode with the test loop armed.
+- Still no browser hot reload — that is the third workflow.
+
+**Who should use it:**
+- You're doing TDD and want the red-green loop without arming it every session
+- You want test feedback on code that does not compile yet
+
+**Select it with:** `switch_workflow target='livetesting'` (aliases: `live-testing`, `testing`, `test`). Note the trap: plain **`live` means Hot Reload**, not live testing — see the alias table at the bottom.
+
+### Hot Reload Mode (also spelled "Live" / "WebLive") — For Web Developers
 
 **What it feels like:** Save a file and the browser refreshes on its own. No rebuild, no restart, no manual F5.
 
 **What you can do:**
-- Edit function bodies, let bindings, and expressions; save triggers `#load` + a Harmony patch + an SSE browser refresh
+- Edit **function bodies**; saving re-emits the changed functions, Harmony re-points those methods in the running process, and an SSE refresh reaches the browser. This works even when the route table was captured once at startup, because the captured route still dispatches to the handler's method entry point.
 - SageFs auto-injects dev-reload middleware into your ASP.NET pipeline, no config
 - The same MCP tool surface as REPL mode (calls are gated by session state, not by workflow — see [MCP Tools](mcp-tools.md))
 
-> **Caveat:** Browser auto-refresh works today. Propagating a saved change into a
-> *running* app is still being finished for the common module-declared,
-> route-captured pattern (`module App.Program` + `let routes = [...]`). See
-> [Hot Reload](hot-reload.md) for current status.
+> **Not everything is patchable.** A change to a function *body* reaches the running
+> process; anything that takes effect at startup (a value binding the route captured, a
+> `let mutable` read compiled to a field load, a changed signature or type) needs a
+> restart, and SageFs restarts the app rather than pretending. [Hot Reload](hot-reload.md)
+> is the authority — it carries the full shape matrix, each row pinned by an executable
+> test. This page deliberately does not restate it.
 
 **What you give up:**
 - You **cannot redefine types**. Trying to redefine a `type` in the REPL produces `FS0037: Duplicate definition of type`. This is a CLR constraint, not a SageFs bug (more on this below).
@@ -80,25 +116,27 @@ SageFs has **two workflow modes** and **one independent feature** that people of
 ## Decision Tree
 
 ```
-Are you building a web app?
-├── YES → Do you need instant browser refresh on save?
-│         ├── YES → Use LIVE mode
-│         └── NO  → Use REPL mode (you can switch later)
-└── NO  → Use REPL mode (the default)
+Do you need the browser to refresh on save?
+├── YES → Use HOT RELOAD (target='live')
+│         ...and accept that you cannot redefine types (FS0037)
+└── NO  → Do you want the test loop running as you type?
+          ├── YES → Use LIVE TESTING (target='livetesting')
+          └── NO  → Use REPL (the default)
 
 Are you frequently changing type definitions?
-├── YES → Use REPL mode (Live mode blocks type redefinition)
-└── NO  → Either mode works — pick based on browser needs
+├── YES → REPL or Live Testing — both keep full type redefinition.
+│         Hot Reload blocks it.
+└── NO  → Any of the three works — pick on browser vs. test-loop needs
 
 Not sure?
-└── Start with REPL mode. Switch to Live when you want browser hot reload.
+└── Start with REPL. Switching later costs one session restart.
 ```
 
 ---
 
-## Why Can't I Have Both?
+## Why Can't I Have Hot Reload *and* Type Redefinition?
 
-Because of a hard constraint in the .NET runtime.
+Because of a hard constraint in the .NET runtime. (This section is only about Hot Reload. REPL and Live Testing both keep full type redefinition — neither passes `--multiemit-`.)
 
 **The chain of constraints:**
 
@@ -117,12 +155,24 @@ This is a CLR constraint, not a SageFs design choice. If FSI changes how it emit
 
 ## Switching Between Modes
 
-| Editor | Command |
+| Client | Command |
 |:---|:---|
 | **Neovim** | `:SageFsWorkflow live` or `:SageFsWorkflow repl` |
 | **VS Code** | Command Palette → `SageFs: Switch Workflow` |
-| **Web dashboard** | Use the session workflow controls |
-| **MCP tool** | `switch_workflow(target='live')` or `switch_workflow(target='repl')` |
+| **Web dashboard** | **Not supported yet.** The dashboard renders the session's workflow as a read-only badge; there is no switch route in `SageFs/Dashboard.fs` and no control that calls one. Use an editor or MCP. |
+| **MCP tool** | `switch_workflow(target='repl' \| 'livetesting' \| 'live')` |
+
+### Target spellings
+
+One alias table drives every surface — `SessionWorkflow.tryOfString` in [`WorkflowTypes.fs`](../SageFs.Core/WorkflowTypes.fs) — so the CLI, the HTTP API and MCP accept exactly the same spellings. `switch_workflow` calls it directly and **rejects** an unrecognised target; the convenience wrapper `ofString`, used where there is no one to report an error to (env vars, config), falls back to `Interactive` instead.
+
+| Workflow | Accepted targets |
+|:---|:---|
+| REPL | `interactive`, `repl`, `normal` |
+| Live Testing | `livetesting`, `live-testing`, `testing`, `test` |
+| Hot Reload | `hotreload`, `weblive`, `live`, `web` |
+
+⚠️ **`live` means Hot Reload, not Live Testing.** The workflow was once labelled "Live", and the alias is kept for backward compatibility. If you want the test loop, ask for `livetesting`.
 
 ### What happens when you switch
 
@@ -144,47 +194,49 @@ switch_workflow(target='live', dryRun=true)
 
 ### Auto-detection
 
-When SageFs detects web-oriented packages in your project, it suggests Live mode:
+When SageFs detects web-oriented packages in your project, it suggests the Hot Reload workflow:
 
 | Package | Suggestion |
 |:---|:---|
-| Falco.Datastar, Starfederation.Datastar | "Datastar project detected — Live mode enables SSE-driven DOM morphing" |
-| Falco, Falco.Htmx, Giraffe, Saturn, Microsoft.AspNetCore | "Web project detected — Live mode enables browser hot reload" |
+| Falco.Datastar, Starfederation.Datastar | "Datastar project detected — Hot Reload enables SSE-driven DOM morphing" |
+| Falco, Falco.Htmx, Giraffe, Saturn, Microsoft.AspNetCore | "Web project detected — Hot Reload enables browser hot reload" |
 
-The suggestion is a one-time prompt. SageFs never auto-switches — you always choose.
+The suggestion arrives as text in a tool response. SageFs never auto-switches — you always choose.
 
 ---
 
-## Live Testing — A Feature, Not a Mode
+## Live Testing — a Workflow *and* a Feature
 
-This is the most common confusion. **Live testing works in both REPL and Live mode.** It is an independent feature you toggle on or off.
+This is the most common confusion, and the reason is that both things are real.
+
+**The feature** is a per-session on/off switch. It works in every workflow, including Hot Reload. Turning it on does not change how FSI works, does not affect type redefinition, and does not touch hot reload.
+
+**The workflow** (`SessionWorkflow.LiveTesting`) is the shortcut. Choosing it makes the daemon flip that switch for you as soon as the session is ready, and it declares your intent to drive the loop from keystrokes rather than saves.
+
+So: *"is live testing on?"* and *"which workflow am I in?"* are two different questions with two different answers, and you can have live testing on in any of the three.
 
 ### What live testing does
 
 When enabled, SageFs watches which functions your tests call (via a dependency graph). When you change a function, it automatically re-runs only the tests that cover that function. Results appear inline in your editor — green gutter marks for passing, red for failing, with failure details shown right next to the code.
 
-### How to enable it
-
-Turn it on from your editor or the dashboard:
+### How to turn the feature on
 
 - **VS Code**: Command Palette → `SageFs: Enable Live Testing`
-- **Neovim**: `:SageFsEnableLiveTesting`
-- **Web dashboard**: the live-testing control on the session
+- **Neovim**: `:SageFsEnableTesting` (and `:SageFsDisableTesting`)
+- **Web dashboard**: the live-testing control on the session card
 
-Editors and the dashboard drive this through the daemon HTTP API
-(`POST /api/live-testing/enable`). There is no `enable_live_testing` MCP tool —
-the MCP testing tools are `list_tests`, `targeted_verify`, and `explain_test_failure`.
+All three drive the daemon HTTP API (`POST /api/live-testing/enable`). There is no `enable_live_testing` MCP tool — the MCP testing tools are `list_tests`, `targeted_verify`, and `explain_test_failure`. See [`LIVE_TESTING_GUIDE.md`](LIVE_TESTING_GUIDE.md) for the full list of what is and is not an MCP tool.
 
-### Why it's not a mode
+### How to pick the workflow instead
 
-Live testing doesn't change how FSI works. It doesn't affect type redefinition or hot reload. It's a layer that watches your eval results and runs tests. You can enable it in REPL mode while prototyping types. You can enable it in Live mode while building a web app. Both work identically.
+`switch_workflow(target='livetesting')`, `:SageFsWorkflow` in Neovim, or `SageFs: Switch Workflow` in VS Code. This restarts the session — see [What happens when you switch](#what-happens-when-you-switch).
 
-| Feature | REPL Mode | Live Mode |
-|:---|:---|:---|
-| Live testing | ✅ Works | ✅ Works |
-| Coverage tracking | ✅ Works | ✅ Works |
-| Failure narratives | ✅ Works | ✅ Works |
-| Test source navigation | ✅ Works | ✅ Works |
+| Feature | REPL | Live Testing | Hot Reload |
+|:---|:---|:---|:---|
+| Live testing available | ✅ Turn it on | ✅ Already on | ✅ Turn it on |
+| Coverage tracking | ✅ Works | ✅ Works | ✅ Works |
+| Failure narratives | ✅ Works | ✅ Works | ✅ Works |
+| Test source navigation | ✅ Works | ✅ Works | ✅ Works |
 
 ---
 
@@ -200,11 +252,11 @@ type Order = { Items: Item list; Status: OrderStatus }  // v1
 type Order = { Lines: OrderLine list; Status: OrderStatus; PlacedAt: DateTimeOffset }  // v2
 ```
 
-REPL mode lets you redefine `Order` as many times as you need. Turn on live testing to get instant feedback as your tests catch up with each design change.
+REPL mode lets you redefine `Order` as many times as you need. Turn on live testing to get feedback as your tests catch up with each design change — or start the session in the **Live Testing** workflow so it is already on.
 
 ### Scenario 2: "I'm building a Falco web app with Datastar"
 
-**Use Live mode.** Your types are defined in `.fs` files and are stable. You're iterating on handlers, views, and behavior:
+**Use Hot Reload mode** (`target='live'`). Your types are defined in `.fs` files and are stable. You're iterating on handlers, views, and behavior:
 
 ```fsharp
 let dashboardView model =
@@ -214,35 +266,43 @@ let dashboardView model =
   ]
 ```
 
-Save the file → Harmony patches the method → SSE pushes to the browser → you see the change. Live testing runs your endpoint tests automatically.
+Save the file → Harmony re-points the method → SSE pushes to the browser → you see the change. (`dashboardView` is a function taking a parameter, which is what makes it patchable — see the shape matrix in [Hot Reload](hot-reload.md).) Turn live testing on to have your endpoint tests re-run too.
 
 ### Scenario 3: "I started in REPL mode but now I want browser hot reload"
 
-Switch with `:SageFsWorkflow live` in Neovim, **SageFs: Switch Workflow** in VS Code, the dashboard workflow controls, or the corresponding MCP tool.
+Switch with `:SageFsWorkflow live` in Neovim, **SageFs: Switch Workflow** in VS Code, or `switch_workflow(target='live')` over MCP. The web dashboard cannot do this yet.
 
-Your REPL definitions are gone, but your `.fs` files reload automatically. The new Live session picks up right where your persisted code left off.
+Your REPL definitions are gone, but your `.fs` files reload automatically. The new Hot Reload session picks up right where your persisted code left off.
 
 ### Scenario 4: "I got FS0037: Duplicate definition of type"
 
-You're in **Live mode** and tried to redefine a type in the REPL. You have two options:
+You're in **Hot Reload mode** and tried to redefine a type in the REPL. You have two options:
 
-1. **Switch to REPL mode** if you need to reshape the type (for example, `:SageFsWorkflow repl` in Neovim)
-2. **Edit the `.fs` file instead** — in Live mode, file-level type changes trigger a full reload that handles the redefinition correctly. It's REPL-level redefinition that's blocked.
+1. **Switch to REPL or Live Testing** if you need to reshape the type (for example, `:SageFsWorkflow repl` in Neovim). Both keep full type redefinition.
+2. **Edit the `.fs` file instead** — file-level type changes trigger a full reload that handles the redefinition correctly. It's REPL-level redefinition that's blocked.
 
-SageFs already adds a hint to the FS0037 error message when you're in Live mode:
-> 🔄 Type redefinition is not available in Live mode (single-assembly FSI). Switch to REPL mode for full type redefinition.
+SageFs appends its own explanation to the FS0037 message when the session's REPL is
+expression-only ([`SageFs.Core/WorkflowErrorContext.fs`](../SageFs.Core/WorkflowErrorContext.fs)):
+
+> 🔄 Type redefinition is not available in Live mode (single-assembly FSI).
+>    Switch to REPL mode for full type redefinition: use switch_workflow tool or Ctrl+W in TUI.
+
+(That hint still says "Ctrl+W in TUI". The TUI is deprecated, so treat the `switch_workflow`
+half as the live advice.)
 
 ---
 
 ## Quick Reference
 
-| | REPL Mode (default) | Live Mode |
-|:---|:---|:---|
-| **Type redefinition** | ✅ Full | ❌ FS0037 |
-| **Browser hot reload** | ❌ Manual refresh | ✅ Automatic |
-| **Live testing** | ✅ Full | ✅ Full |
-| **Coverage & diagnostics** | ✅ Full | ✅ Full |
-| **Best for** | Prototyping, exploration, scripts | Web apps, UI iteration |
-| **FSI flag** | (default) | `--multiemit-` |
-| **Switch to** | Editor, dashboard, or MCP workflow command | Editor, dashboard, or MCP workflow command |
-| **Switch cost** | New session, REPL state lost | New session, REPL state lost |
+| | REPL (default) | Live Testing | Hot Reload |
+|:---|:---|:---|:---|
+| **`SessionWorkflow` case** | `Interactive` | `LiveTesting` | `HotReload` |
+| **Type redefinition** | ✅ Full | ✅ Full | ❌ FS0037 |
+| **Browser hot reload** | ❌ Manual refresh | ❌ Manual refresh | ✅ Automatic (see caveat) |
+| **Live testing** | ✅ Available, off by default | ✅ Armed automatically | ✅ Available, off by default |
+| **Rerun trigger** | n/a | Debounced keystrokes | n/a |
+| **Coverage & diagnostics** | ✅ Full | ✅ Full | ✅ Full |
+| **Best for** | Prototyping, exploration, scripts | TDD, red-green loops | Web apps, UI iteration |
+| **FSI flag** | (default) | (default) | `--multiemit-` |
+| **Switch target** | `repl` | `livetesting` | `live` |
+| **Switch cost** | New session, REPL state lost | New session, REPL state lost | New session, REPL state lost |

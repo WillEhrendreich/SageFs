@@ -6,21 +6,21 @@ If you really need to get ahold of me, the most reliable way is on discord, so y
 
 # SageFs
 
-### You save. Tests pass. Browser updates. Under a second.
+### You save. The affected tests re-run. The running app serves the new code.
 
 A live F# engine with hot reload, live testing, and AI-agent support — for any editor, free.
 
 [![NuGet](https://img.shields.io/nuget/v/SageFs?style=flat-square&logo=nuget&color=004880)](https://www.nuget.org/packages/SageFs/)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-8044+-22c55e?style=flat-square)]()
-[![Save → Green](https://img.shields.io/badge/save→green-<500ms-f59e0b?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-8406+-22c55e?style=flat-square)]()
+[![Live testing](https://img.shields.io/badge/live%20testing-edit%20→%20affected%20tests%20rerun-f59e0b?style=flat-square)]()
 
 </div>
 
 ## What is SageFs?
 
-SageFs is a live F# development engine. Start it once, then connect from VS Code, Neovim, the web dashboard, or an MCP client, and you get feedback as you work: inline eval results in under 500ms, live test markers that re-run the affected tests against your edits (saved or not), hot reload, and agent access. It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients can all share live state at the same time.
+SageFs is a live F# development engine. Start it once, then connect from VS Code, Neovim, the web dashboard, or an MCP client, and you get feedback as you work: inline eval results, live test markers that re-run the affected tests against your edits (saved or not), hot reload, and agent access. It runs as a daemon with isolated session workers, so editors, dashboard tabs, and MCP clients can all share live state at the same time.
 
 **How is SageFs different from Ionide?** Ionide provides IntelliSense, diagnostics, and project support through the F# Compiler Service. SageFs adds live execution: eval any expression and see results inline, continuous test feedback on every save, and hot reload that patches your running app. Use both together — Ionide for editing, SageFs for running.
 
@@ -32,7 +32,7 @@ SageFs is a live F# development engine. Start it once, then connect from VS Code
 
 - [Key Features](#key-features)
 - [Get Started](#get-started)
-- [Two Workflows: REPL vs Live](#two-workflows-repl-vs-live)
+- [Three Workflows: REPL, Live Testing, and Hot Reload](#three-workflows-repl-live-testing-and-hot-reload)
 - [How SageFs Works](#how-sagefs-works)
 - [What You Get in Each Editor](#what-you-get-in-each-editor)
 - [Keybindings](#%EF%B8%8F-keybindings-across-editors)
@@ -59,9 +59,11 @@ SageFs is a live F# development engine. Start it once, then connect from VS Code
 
 ### ⚡ Hot Reload
 
-> **🚧 Status: In progress** — the reload pipeline (watch → eval → SSE refresh) is live, but propagating changes into a *running* app is still being completed for module-declared apps. See [docs/hot-reload.md](docs/hot-reload.md) for the current status.
+Save a `.fs` file and SageFs emits the functions that changed and uses [Harmony](https://github.com/pardeike/Harmony) to re-point those methods in the already-running process — no rebuild, no restart, including apps whose route table was built once at startup. Connected browsers refresh automatically over SSE.
 
-Save a `.fs` file and SageFs reloads it in about 100ms using [Harmony](https://github.com/pardeike/Harmony) runtime patching — no rebuild, no restart. Connected browsers refresh automatically over SSE.
+Because it re-points **methods**, not everything is patchable: a handler that is *called* per request reloads, a handler whose output was *computed once* at startup cannot. Prefer `let getHome (ctx: HttpContext) = ...` over `let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. `let mutable` state, changed signatures and changed types restart the app instead.
+
+> **[docs/hot-reload.md](docs/hot-reload.md) is the authority** — it carries the full what-reloads / what-restarts table, each row pinned by an executable test. This README deliberately does not duplicate it, so the two cannot drift apart. (No test measures reload latency, so no figure is quoted here.)
 
 ### 🤖 AI Agent Support
 
@@ -121,7 +123,7 @@ SageFs runs in the foreground, streaming daemon logs to that terminal — it's n
 
 ### 4. Connect your editor
 
-**VS Code** — Install **SageFs** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) or [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs) (or the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases)), open an F# file, and press `Alt+Enter` on any expression. The result appears inline in under 500ms.
+**VS Code** — Install **SageFs** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=willehrendreich.sagefs) or [Open VSX](https://open-vsx.org/extension/willehrendreich/sagefs) (or the `.vsix` from [Releases](https://github.com/WillEhrendreich/SageFs/releases)), open an F# file, and press `Alt+Enter` on any expression. The result appears inline.
 
 **Neovim** — Add `"WillEhrendreich/sagefs.nvim"` to your plugin manager. Press `Alt+Enter` to evaluate. See [Neovim setup](https://github.com/WillEhrendreich/sagefs.nvim).
 
@@ -170,44 +172,48 @@ dotnet tool install --global SageFs --add-source ./nupkg --no-cache
 
 ---
 
-## Two Workflows: REPL vs Live
+## Three Workflows: REPL, Live Testing, and Hot Reload
 
-> 📖 **[Full guide: Understanding Workflow Modes](docs/workflow-modes.md)** — decision tree, diagrams, real-world scenarios, troubleshooting, and why live testing isn't a third mode.
+> 📖 **[Full guide: Understanding Workflow Modes](docs/workflow-modes.md)** — decision tree, diagrams, real-world scenarios, troubleshooting, and how the Live Testing *workflow* differs from the live-testing *toggle*.
 
-SageFs sessions run in one of two modes. The tradeoff between them comes from a physical constraint of the .NET runtime, not from a SageFs limitation.
+A session runs in exactly one workflow, and the set is closed: [`SessionWorkflow`](SageFs.Core/WorkflowTypes.fs) is `Interactive | LiveTesting | HotReload`. The tradeoff between the first two and the third comes from a physical constraint of the .NET runtime, not from a SageFs limitation.
 
-**REPL mode** (default) gives you a full interactive F# session. You can redefine types, experiment freely, and iterate on designs. This is what you want when you're prototyping domain types, exploring APIs, or working through a problem interactively.
+**REPL** (`Interactive`, the default) gives you a full interactive F# session. You can redefine types, experiment freely, and iterate on designs. This is what you want when you're prototyping domain types, exploring APIs, or working through a problem interactively.
 
-**Live mode** enables browser hot reload — save a `.fs` file and connected browsers update instantly via SSE, with no manual refresh. To make this work, SageFs uses runtime patching to inject code changes into the running app. That patching requires a single-assembly FSI mode, which means you **cannot redefine types** (you'll get FS0037 errors). Expressions, function bodies, and let bindings work fine.
+**Live Testing** (`LiveTesting`) is the same full REPL, plus SageFs turns live testing on for you the moment the session is ready, and affected tests re-run on debounced keystrokes rather than on save. Pick it when you're doing TDD and want the test loop running without arming it by hand.
 
-> **🚧 Hot reload is in progress** — the pipeline runs, but changes may not yet propagate into a running module-declared app. See [docs/hot-reload.md](docs/hot-reload.md).
+**Hot Reload** (`HotReload`, also spelled `live` / `weblive` / `web` on the command line, for historical reasons) enables browser hot reload — save a `.fs` file and connected browsers update via SSE, with no manual refresh. To make this work, SageFs uses runtime patching to inject code changes into the running app. That patching requires a single-assembly FSI mode, which means you **cannot redefine types** (you'll get FS0037 errors). Expressions, function bodies, and let bindings work fine.
 
-| | REPL (default) | Live |
-|:---|:---|:---|
-| **Type redefinition** | ✅ Full — redefine types freely | ❌ FS0037 — expression-level changes only |
-| **Browser hot reload** | ❌ Manual refresh required | 🚧 In progress — pipeline live, app propagation being completed |
-| **Live testing** | ⚠️ Available in both — still stabilizing | ⚠️ Available in both — still stabilizing |
-| **Best for** | Prototyping, domain modeling, exploration | Web apps with Falco, Datastar, ASP.NET |
+| | REPL (default) | Live Testing | Hot Reload |
+|:---|:---|:---|:---|
+| **Type redefinition** | ✅ Full — redefine types freely | ✅ Full | ❌ FS0037 — expression-level changes only |
+| **Browser hot reload** | ❌ Manual refresh required | ❌ Manual refresh required | ✅ — see [docs/hot-reload.md](docs/hot-reload.md) for which code shapes patch and which need a restart |
+| **Live testing** | ✅ Available — you turn it on | ✅ On automatically when the session is ready | ✅ Available — you turn it on |
+| **Best for** | Prototyping, domain modeling, exploration | TDD, red-green loops | Web apps with Falco, Datastar, ASP.NET |
 
-### Choosing the right mode
+Live testing is *also* a per-session toggle that works in any of the three workflows (`POST /api/live-testing/enable`, or your editor's Enable Live Testing command). The `LiveTesting` workflow is the shortcut that arms it for you and drives it from keystrokes instead of saves — so "which workflow" and "is live testing on" are two different questions.
 
-- **Building a web app** with Falco.Datastar, Giraffe, or any ASP.NET pipeline? Use **Live** — you want save-and-see-it feedback in the browser.
-- **Exploring types**, designing domain models, writing tests, or working in `.fsx` scripts? Use **REPL** — you need the freedom to reshape types as you go.
-- **Not sure?** Start with REPL. Switch to Live when you need browser hot reload.
+### Choosing the right workflow
 
-### Switching modes
+- **Building a web app** with Falco.Datastar, Giraffe, or any ASP.NET pipeline? Use **Hot Reload** — you want save-and-see-it feedback in the browser.
+- **Writing tests first?** Use **Live Testing** — the loop is armed for you and runs as you type.
+- **Exploring types**, designing domain models, or working in `.fsx` scripts? Use **REPL** — you need the freedom to reshape types as you go.
+- **Not sure?** Start with REPL. Switch when you need the browser or the test loop.
+
+### Switching workflows
 
 Use your editor's command to switch workflows:
 
-- **Neovim**: `:SageFsWorkflow live` or `:SageFsWorkflow repl`
+- **Neovim**: `:SageFsWorkflow live` or `:SageFsWorkflow repl` — the plugin's command documents only those two, so reach for MCP if you want `livetesting`
 - **VS Code**: Command Palette → `SageFs: Switch Workflow`
-- **MCP**: use the session workflow tools exposed for the current state
+- **MCP**: `switch_workflow` with `target` = `repl` | `livetesting` | `live` (⚠️ `live` means Hot Reload, not live testing — the alias predates the third workflow)
+- **Web dashboard**: not yet — the dashboard renders the session's workflow as a read-only badge and has no switch route
 
-When you switch, SageFs creates a new session in the target mode and stops the old one. Any REPL-defined bindings are lost — persisted files are unaffected.
+When you switch, SageFs creates a new session in the target workflow and stops the old one. Any REPL-defined bindings are lost — persisted files are unaffected.
 
 ### Auto-detection
 
-When SageFs detects web-oriented packages in your project (Falco.Datastar, Giraffe, Saturn, etc.), it suggests switching to Live mode. You can accept or dismiss the suggestion.
+When SageFs detects web-oriented packages in your project (Falco.Datastar, Giraffe, Saturn, etc.), it suggests switching to the Hot Reload workflow. It is a suggestion in the tool's response text — SageFs never switches on its own.
 
 ---
 
@@ -269,20 +275,20 @@ Every frontend connects to the same daemon. Open several at once — they all se
 | Live diagnostics (SSE) | ✅ | ✅ | ✅ | ✅ |
 | Hot reload controls | ✅ | ✅ | ✅ | ✅ |
 | Session management | ✅ | ✅ | ✅ | ✅ |
-| Code completion | ✅ | ✅ | — | ✅ |
+| Code completion | ✅ | ✅ | — | — |
 | CodeLens | ✅ | ✅ | — | — |
 | **Live test gutters** | ✅ | ✅ | — | — |
 | **Coverage gutters** | ✅ | ✅ | — | — |
 | **Failure narratives** | ✅ | ✅ | ✅ | ✅ |
 | **Test source-jump** | ✅ | ✅ | — | — |
 | Test panel | ✅ | ✅ | ✅ | ✅ |
-| Test policy controls | ✅ | ✅ | ✅ | ✅ |
-| Type explorer | ✅ | ✅ | — | ✅ |
-| Call graph | ✅ | ✅ | — | ✅ |
+| Test policy controls | ✅ | ✅ | ✅ | — |
+| Type explorer | ✅ | ✅ | — | — |
+| Call graph | ✅ | ✅ | — | — |
 | History browser | ✅ | ✅ | ✅ | ✅ |
-| Test trace | ✅ | ✅ | ✅ | ✅ |
+| Test trace | ✅ | ✅ | ✅ | — |
 
-> ¹ Server-side data ready. Editor UI integration pending (VS SDK limitations or work-in-progress).
+**On the MCP column.** A ✅ there means a tool in the [50-tool surface](docs/mcp-tools.md) does it. Five rows used to claim ✅ and did not have one: completions and the type explorer are FSharp.Compiler.Service features the editors call over HTTP (the `get_completions` / `explore_type` members in `SageFs/McpTools.fs` carry a `[<Description>]` but no `[<McpServerTool>]`, so they are not exposed at all); the call graph is `GET /api/dependency-graph` — the MCP `plan_ripple` / `get_cell_dependencies` tools graph FSI *cells*, not source symbols; run policy is `POST /api/live-testing/policy` only; and there is no test-trace tool — [`docs/LIVE_TESTING_GUIDE.md`](docs/LIVE_TESTING_GUIDE.md) says so in as many words. The columns other than MCP are a statement about what is wired, not about what is tested: most of the editor-side rendering (gutters, CodeLens, decorations, tree views) currently has no automated coverage in either client.
 
 <details>
 <summary><strong>Editor setup guides</strong></summary>
@@ -334,9 +340,11 @@ SageFs exposes about 50 MCP tools — from `send_fsharp_code` to `targeted_verif
 #### Web Dashboard / Jupyter
 
 ```bash
-sagefs --jupyter conn.json  # Run as a Jupyter kernel
+sagefs --jupyter conn.json  # Run as a Jupyter kernel (experimental)
 # Dashboard auto-starts at http://localhost:37750/dashboard
 ```
+
+> **The Jupyter kernel is experimental.** Its wire-protocol message shapes and HMAC signing are unit-tested, but nothing in the suite opens a ZMQ socket or launches `sagefs --jupyter`, so the transport (`SageFs/JupyterTransport.fs`, NetMQ) is unproven end to end. The dashboard is not experimental — it has real browser journeys in CI.
 
 </details>
 
@@ -346,17 +354,17 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel
 
 | Action | VS Code | Neovim |
 |--------|---------|--------|
-| Evaluate selection/cell | `Alt+Enter` | `<M-CR>` |
+| Evaluate selection/cell | `Alt+Enter` | `<M-CR>` (or `<leader>re`) |
 | Evaluate entire file | `Alt+Shift+Enter` | `<leader>rf` |
+| Cancel evaluation | `Ctrl+Shift+C` | `<leader>rx` |
 | Clear inline results | Command Palette | `<leader>rc` |
 | Run all tests | Command Palette | `<leader>rT` |
 | Toggle test panel | Command Palette | `:SageFsTestPanel` |
 | Jump to test source | Click test in explorer | `<CR>` in telescope |
 | Show failure narrative | Hover on red marker | `<C-d>` in test panel |
-| Mark all stale | Command Palette | `<leader>rS` |
 | Session picker | Command Palette | `<leader>rs` |
 
-> **Full keybinding references**: [VS Code](sagefs-vscode/README.md) · [Neovim](https://github.com/WillEhrendreich/sagefs.nvim#keymaps)
+> **Full keybinding references**: [VS Code](sagefs-vscode/README.md) · [Neovim](https://github.com/WillEhrendreich/sagefs.nvim#keymaps). The Neovim plugin lives in its own repository, so this table is a copy — its keymaps are authoritative there, and nothing in this repo verifies them. (Neovim maps everything under `<leader>r`, not `<leader>s`, which LazyVim reserves for Search.)
 
 ---
 
@@ -380,11 +388,11 @@ sagefs --jupyter conn.json  # Run as a Jupyter kernel
 
 Visual Studio Enterprise charges about $250/month per seat for Live Unit Testing — $3,000/year per developer. It only works in Visual Studio, it only supports 3 frameworks, it takes 5-30 seconds, and it requires your code to compile first.
 
-SageFs delivers that loop with a REPL-centered architecture, and goes past it: an unsaved edit evals into the session and re-runs only the *affected* tests against your new code in a couple seconds — no save, no full rebuild, and it works on incomplete code. Visual Studio's Live Unit Testing barely supports F# at all; SageFs is F#-first and works across VS Code and Neovim. Client polish still varies, but the engine, SSE, and coverage are solid.
+SageFs delivers that loop with a REPL-centered architecture, and goes past it: an unsaved edit evals into the session and re-runs only the *affected* tests against your new code — no save, no full rebuild, and it works on incomplete code. (Editors post the live buffer to `POST /api/sessions/{sid}/buffer-changed`; the automated gates all write to disk first, so the unsaved path is wired but not yet covered by a test.) Visual Studio's Live Unit Testing barely supports F# at all; SageFs is F#-first and works across VS Code and Neovim. Client polish still varies, but the engine, SSE, and coverage are solid.
 
 | | VS Enterprise Live Testing | **SageFs** |
 |:---|:---|:---|
-| **Speed** | 5–30 sec (MSBuild rebuild) | **300–800ms typical** on the current FSI-driven hot path |
+| **Speed** | 5–30 sec (MSBuild rebuild) | **No MSBuild rebuild** — affected tests re-run through the warm FSI session. Sub-second in practice; unmeasured, see the pipeline note below |
 | **Broken code** | ✗ Must compile first | **✓ Tree-sitter works on incomplete code** |
 | **Editors** | Visual Studio only | **VS Code · Neovim · Web dashboard · MCP clients** |
 | **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
@@ -395,11 +403,13 @@ SageFs delivers that loop with a REPL-centered architecture, and goes past it: a
 
 <br />
 
-1. **~50ms** — Tree-sitter detects test attributes in broken/incomplete code → immediate gutter markers
-2. **~350ms** — F# Compiler Service type-checks → dependency graph, reachability annotations
-3. **~500ms** — Affected-test execution via hot-eval → ✓/✗ results inline
+1. **Tree-sitter** detects test attributes in broken/incomplete code → immediate gutter markers
+2. **F# Compiler Service** type-checks → dependency graph, reachability annotations
+3. **Affected-test execution** via hot-eval → ✓/✗ results inline
 
-Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 695 property-based tests exercise the binary format, state machines, and event folds against generated inputs (`grep -rho -E "\b[pf]?testProperty(WithConfig)?\b" SageFs.Tests` across all `*.fs` files, the same regex `SageFs.Tests/TestCountBadge.fs` uses to restamp this line — restamp with `dotnet run --project SageFs.Tests -- --update-badge` rather than hand-editing it).
+Each stage is progressively slower and progressively more certain, so you get a marker before you get a verdict. The per-stage millisecond figures that used to sit here were not measured: no test in this repo times the real save→green path, and the only latency budgets that exist (`CoverageViewTests.fs`, `LiveTestingCycleTests.fs`) measure pure functions with no FSI, no compiler and no test run in the loop — and they are `[Benchmark]`-tagged, which the default suite filters out and no CI stage runs. Treat any speed number you see about SageFs as an anecdote until something gates it.
+
+Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 702 property-based tests exercise the binary format, state machines, and event folds against generated inputs (`grep -rho -E "\b[pf]?testProperty(WithConfig)?\b" SageFs.Tests` across all `*.fs` files, the same regex `SageFs.Tests/TestCountBadge.fs` uses to restamp this line — restamp with `dotnet run --project SageFs.Tests -- --update-badge` rather than hand-editing it).
 
 </details>
 
@@ -407,7 +417,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 
 ## Under the Hood
 
-**Hot Reload** — File changes are detected, sent to FSI via `#load`, and [Harmony](https://github.com/pardeike/Harmony) patches method pointers at runtime. Connected browsers auto-refresh via SSE. *Status: in progress — see [docs/hot-reload.md](docs/hot-reload.md).* [Full details →](docs/hot-reload.md)
+**Hot Reload** — File changes are detected, the changed functions are re-emitted into FSI, and [Harmony](https://github.com/pardeike/Harmony) re-points those method pointers at runtime. Connected browsers auto-refresh via SSE. [Which shapes patch, and which need a restart →](docs/hot-reload.md)
 
 **Multi-Session** — Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
@@ -421,14 +431,18 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 
 - `SageFs.Core/` — shared engine and runtime logic: session management, MCP/session operations, live testing, persistence, and shared rendering primitives
 - `SageFs/` — CLI entrypoint, daemon host, MCP server, dashboard, and worker HTTP transport; deprecated terminal client source is retained for historical context
+- `SageFs.Host/` — the worker process the daemon spawns per session: it owns the FSI session, the Harmony detours, and the worker HTTP transport the daemon talks to
+- `SageFs.FsiHost/` — the isolated FSI host, built and launched per session by `SageFs.Core/IsolatedFsiSession.fs`. Sessions run in it by default; it deliberately links no SageFs assembly and no Harmony, so a project's own dependency versions never collide with the daemon's
+- `SageFs.Simulation/` — deterministic simulation (DST) models that fold the real cores: file-reload routing, worker lifecycle, supervision, the manifest
 - `SageFs.Gui/` — deprecated Raylib product frontend retained as legacy source; it is separate from supported Raylib application and game projects
-- `SageFs.Tests/` — main Expecto test suite
+- `SageFs.Tests/` — the Expecto suite: unit tests, property tests, snapshot tests, the DST drivers, and every real-daemon integration and browser journey
 - `sagefs-vscode/` — VS Code extension (F# via Fable → JavaScript)
 - `sagefs-vs/` — deprecated Visual Studio extension, retained as legacy source
 - `docs/` — user docs, architecture notes, troubleshooting, and feature references
+- `quality/` — the release Definition-of-Done matrix the publish workflow gates on
 - `samples/` — runnable sample apps and language-onramp projects
-- `tests/` — Playwright/browser scenarios for dashboard and editor-facing UX flows
 - `scripts/` — repo helper scripts and smoke/integration utilities
+- `ci-pipeline.fsx` — CI is one Fun.Build pipeline; the GitHub workflows just invoke it
 
 `SageFs.slnx` covers the core tool, retained legacy projects, tests, and samples. The VS Code integration lives alongside it in `sagefs-vscode/` because it uses its own packaging toolchain and release flow.
 
@@ -594,15 +608,17 @@ A full CRUD todo app in about 100 lines of F#. Edit a handler and save — the b
 
 **→ [`samples/demos/webapp-datastar.fsx`](samples/demos/webapp-datastar.fsx)**
 
+> **The two Raylib demos below are unverified for hot reload.** Hot reload itself works (see [docs/hot-reload.md](docs/hot-reload.md)), but no automated test of any kind drives a Raylib window through a save, so the "updates live" claims here rest on nothing executable. Note also that the reload rules apply: a frame loop reading a `let mutable` picks up nothing, because a mutable read compiles to a direct field load that no method detour can rewire — so `starMaxSpeed`-style tweaks need to be read through a function to reload.
+
 #### 🎨 GPU Window — Raylib Hello World with hot reload
 
-A Raylib window that hot-patches on save. Change the color, the text, or the animation, save, and it updates live in the running window — no restart, no flicker.
+A Raylib window intended to hot-patch on save: change the color, the text, or the animation, save, and it should update in the running window — no restart, no flicker.
 
 **→ [`samples/demos/raylib-hello.fsx`](samples/demos/raylib-hello.fsx)**
 
 #### 🕹️ Interactive Game — live-tweakable physics
 
-A playable star-catcher game. Edit `starMaxSpeed`, `playerWidth`, and `starColors` in the source file, save, and the changes apply to the running game without interrupting play.
+A playable star-catcher game. Editing `starMaxSpeed`, `playerWidth`, and `starColors` in the source file and saving is meant to apply to the running game without interrupting play.
 
 **→ [`samples/demos/raylib-game.fsx`](samples/demos/raylib-game.fsx)**
 

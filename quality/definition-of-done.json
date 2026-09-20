@@ -1,15 +1,130 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "statuses": ["verified", "deferred", "not-applicable"],
+  "evidenceKinds": ["ci", "external"],
+  "externalClients": ["neovim"],
+  "externalClientsNote": "A client listed here is one this repository structurally cannot execute (its source lives in another repository), so its evidence can only ever be an attestation pinned to a foreign commit — never something the gate re-runs. The list is deliberately short and structural: any client whose tests CAN run from this checkout must use kind 'ci', whose every field the gate resolves against ci-pipeline.fsx, SageFs.Tests/Program.fs, SageFs.Tests.fsproj and the cited files on disk.",
   "rows": [
-    { "id": "HR-DASH-E2E", "capability": "hot-reload", "layer": "real-client-e2e", "client": "dashboard", "status": "verified", "evidence": "HotReloadBrowserTests.fs — CI dashboard-browser-e2e 'F# hot-reload browser journeys' green at d3647cf" },
-    { "id": "HR-VSC-E2E", "capability": "hot-reload", "layer": "real-client-e2e", "client": "vscode", "status": "verified", "evidence": "VscodeCommandProofTests.fs — sagefs.hotReloadWatchAll/hotReloadUnwatchAll invoked via vscode.commands.executeCommand inside a real @vscode/test-electron extension host, proven against the real daemon's GET /api/sessions/{sid}/hotreload (watchedCount transitions 0 -> N -> 0); passed in CI: main build run 34678882241 (integration-host job, commit bd67825d); issue #133 closed." },
-    { "id": "HR-NVIM-E2E", "capability": "hot-reload", "layer": "real-client-e2e", "client": "neovim", "status": "verified", "evidence": "sagefs.nvim spec/e2e/e2e_realdaemon_spec.lua — 13/13 real-daemon journeys passing; sagefs.nvim commit ce2f615aef7d1edcb9d6007020aa7f10d26ec341" },
-    { "id": "LT-DASH-E2E", "capability": "live-testing", "layer": "real-client-e2e", "client": "dashboard", "status": "verified", "evidence": "LiveTestingBrowserTests.fs — CI dashboard-browser-e2e 'F# live-testing browser journeys' green at d3647cf" },
-    { "id": "LT-VSC-E2E", "capability": "live-testing", "layer": "real-client-e2e", "client": "vscode", "status": "verified", "evidence": "VscodeCommandProofTests.fs — sagefs.enableLiveTesting/disableLiveTesting invoked via vscode.commands.executeCommand inside a real @vscode/test-electron extension host, proven against the real daemon's GET /api/live-testing/status (Enabled true/false transitions, real test discovery: 11 tests, 1 genuinely failing on the sample); passed in CI: main build run 34678882241 (integration-host job, commit bd67825d); issue #133 closed." },
-    { "id": "LT-NVIM-E2E", "capability": "live-testing", "layer": "real-client-e2e", "client": "neovim", "status": "verified", "evidence": "sagefs.nvim spec/e2e/e2e_realdaemon_spec.lua — 13/13 real-daemon journeys passing; sagefs.nvim commit ce2f615aef7d1edcb9d6007020aa7f10d26ec341" },
-    { "id": "FR-DASH-E2E", "capability": "friction", "layer": "real-client-e2e", "client": "dashboard", "status": "verified", "evidence": "DashboardBrowserTests.fs FR journeys — CI dashboard-browser-e2e 'F# dashboard browser journeys' green at c26220c" },
-    { "id": "FR-VSC-E2E", "capability": "friction", "layer": "real-client-e2e", "client": "vscode", "status": "not-applicable", "reason": "No friction-reporting surface in sagefs-vscode (grep: no report_friction UI/command); friction is recorded agent/MCP-side into the daemon's local store and viewed in the dashboard (FR-DASH-E2E verified)." },
-    { "id": "FR-NVIM-E2E", "capability": "friction", "layer": "real-client-e2e", "client": "neovim", "status": "verified", "evidence": "sagefs.nvim spec/e2e/e2e_realdaemon_spec.lua — 13/13 real-daemon journeys passing; sagefs.nvim commit ce2f615aef7d1edcb9d6007020aa7f10d26ec341" }
+    {
+      "id": "HR-DASH-E2E",
+      "capability": "hot-reload",
+      "layer": "real-client-e2e",
+      "client": "dashboard",
+      "status": "deferred",
+      "issue": 127,
+      "expires": "2026-11-30",
+      "reason": "The row claimed 'verified' citing CI job 'dashboard-browser-e2e', which was deleted in d99c2fd4 (2026-09-13) — unbacked for a week, and the old evidence-is-any-non-empty-string gate could not notice. A 'hot-reload browser journeys' stage running --integration-hr now exists in ci-pipeline.fsx, so the remaining gap is narrow but real: no CI run has executed it yet, so there is no run id or commit anyone else can open. To re-verify, replace this row with kind 'ci' evidence naming tests SageFs.Tests/HotReloadBrowserTests.fs, runner --integration-hr, stage 'hot-reload browser journeys', and the run id of the first green main build that executed it."
+    },
+    {
+      "id": "HR-VSC-E2E",
+      "capability": "hot-reload",
+      "layer": "real-client-e2e",
+      "client": "vscode",
+      "status": "verified",
+      "evidence": {
+        "kind": "ci",
+        "tests": ["SageFs.Tests/VscodeCommandProofTests.fs"],
+        "runner": "--integration-host",
+        "stage": "integration host",
+        "run": "35523239725",
+        "commit": "88991359",
+        "summary": "sagefs.hotReloadWatchAll / sagefs.hotReloadUnwatchAll invoked via vscode.commands.executeCommand inside a real @vscode/test-electron extension host, proven against the real daemon's GET /api/sessions/{sid}/hotreload (watchedCount 0 -> N -> 0). Issue #133 closed."
+      }
+    },
+    {
+      "id": "HR-NVIM-E2E",
+      "capability": "hot-reload",
+      "layer": "real-client-e2e",
+      "client": "neovim",
+      "status": "verified",
+      "evidence": {
+        "kind": "external",
+        "repo": "WillEhrendreich/sagefs.nvim",
+        "tests": ["spec/e2e/e2e_realdaemon_spec.lua"],
+        "commit": "ce2f615aef7d1edcb9d6007020aa7f10d26ec341",
+        "attestedAt": "2026-09-04",
+        "summary": "13/13 real-daemon journeys passing in sagefs.nvim at the pinned commit. ATTESTATION, NOT VERIFICATION: this repository cannot execute the plugin, so nothing here re-runs it."
+      }
+    },
+    {
+      "id": "LT-DASH-E2E",
+      "capability": "live-testing",
+      "layer": "real-client-e2e",
+      "client": "dashboard",
+      "status": "deferred",
+      "issue": 128,
+      "expires": "2026-11-30",
+      "reason": "The row claimed 'verified' citing CI job 'dashboard-browser-e2e', which was deleted in d99c2fd4 (2026-09-13) — unbacked for a week, and the old evidence-is-any-non-empty-string gate could not notice. A 'live-testing browser journeys' stage running --integration-lt now exists in ci-pipeline.fsx, but no CI run has executed it yet, so there is no run id or commit anyone else can open. Note the live-testing FEATURE is separately and strongly gated by HttpApiIntegrationTests.fs under --integration-host (real edit -> affected rerun -> pass/fail flip); what is unproven is specifically the DASHBOARD journey. To re-verify, replace this row with kind 'ci' evidence naming tests SageFs.Tests/LiveTestingBrowserTests.fs, runner --integration-lt, stage 'live-testing browser journeys', and the run id of the first green main build that executed it."
+    },
+    {
+      "id": "LT-VSC-E2E",
+      "capability": "live-testing",
+      "layer": "real-client-e2e",
+      "client": "vscode",
+      "status": "verified",
+      "evidence": {
+        "kind": "ci",
+        "tests": ["SageFs.Tests/VscodeCommandProofTests.fs"],
+        "runner": "--integration-host",
+        "stage": "integration host",
+        "run": "35523239725",
+        "commit": "88991359",
+        "summary": "sagefs.enableLiveTesting / sagefs.disableLiveTesting invoked via vscode.commands.executeCommand inside a real @vscode/test-electron extension host, proven against the real daemon's GET /api/live-testing/status (Enabled true/false transitions, real discovery: 11 tests, 1 genuinely failing on the sample). Issue #133 closed."
+      }
+    },
+    {
+      "id": "LT-NVIM-E2E",
+      "capability": "live-testing",
+      "layer": "real-client-e2e",
+      "client": "neovim",
+      "status": "verified",
+      "evidence": {
+        "kind": "external",
+        "repo": "WillEhrendreich/sagefs.nvim",
+        "tests": ["spec/e2e/e2e_realdaemon_spec.lua"],
+        "commit": "ce2f615aef7d1edcb9d6007020aa7f10d26ec341",
+        "attestedAt": "2026-09-04",
+        "summary": "13/13 real-daemon journeys passing in sagefs.nvim at the pinned commit. ATTESTATION, NOT VERIFICATION: this repository cannot execute the plugin, so nothing here re-runs it."
+      }
+    },
+    {
+      "id": "FR-DASH-E2E",
+      "capability": "friction",
+      "layer": "real-client-e2e",
+      "client": "dashboard",
+      "status": "verified",
+      "evidence": {
+        "kind": "ci",
+        "tests": ["SageFs.Tests/DashboardBrowserTests.fs"],
+        "runner": "--integration-browser",
+        "stage": "dashboard browser journeys",
+        "run": "35523239725",
+        "commit": "88991359",
+        "summary": "FR journeys in the real-browser dashboard suite: recorded feedback reflects in the friction panel, and the send path validates honestly. Landed as c26220cf; the citation names the live pipeline stage rather than the deleted dashboard-browser-e2e.yml job."
+      }
+    },
+    {
+      "id": "FR-VSC-E2E",
+      "capability": "friction",
+      "layer": "real-client-e2e",
+      "client": "vscode",
+      "status": "not-applicable",
+      "reason": "No friction-reporting surface in sagefs-vscode (grep: no report_friction UI/command); friction is recorded agent/MCP-side into the daemon's local store and viewed in the dashboard (FR-DASH-E2E verified)."
+    },
+    {
+      "id": "FR-NVIM-E2E",
+      "capability": "friction",
+      "layer": "real-client-e2e",
+      "client": "neovim",
+      "status": "verified",
+      "evidence": {
+        "kind": "external",
+        "repo": "WillEhrendreich/sagefs.nvim",
+        "tests": ["spec/e2e/e2e_realdaemon_spec.lua"],
+        "commit": "ce2f615aef7d1edcb9d6007020aa7f10d26ec341",
+        "attestedAt": "2026-09-04",
+        "summary": "13/13 real-daemon journeys passing in sagefs.nvim at the pinned commit. ATTESTATION, NOT VERIFICATION: this repository cannot execute the plugin, so nothing here re-runs it."
+      }
+    }
   ]
 }
