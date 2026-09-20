@@ -361,6 +361,9 @@ let tests =
     // Guard against a vacuous pass: the collapsed sidebar can only scroll a
     // few dozen px, so a target well above that distinguishes a reset.
     Expect.isTrue (scrolledTo > 100.0) (sprintf "expanded sidebar must overflow enough to detect a reset (scrolled to %f)" scrolledTo)
+    // What the sidebar's panels measured before the eval, so a scroll shift can be attributed to the panel that resized.
+    let! textBefore = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0]) + ' => ' + c.innerText.replace(/\\s+/g, ' ').slice(0, 400)).join(' || ')")
+    let! sizesBefore = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0] || c.tagName) + ':' + Math.round(c.getBoundingClientRect().height)).join(' ')")
     // `__pushes` counts morph mutations anywhere under #main (proof a push
     // landed). `__classStripped` counts #main class mutations whose previous
     // value lacked `expanded` — i.e. the client-owned class was observed
@@ -389,9 +392,11 @@ let tests =
     // viewport can only push it up via scroll anchoring. The sidebar's content may also legitimately get SHORTER while the
     // eval settles (observed on CI: 80px), and the browser then clamps scrollTop to the new maximum. That is not the bug, so
     // the position may fall only as far as the new maximum, never below it.
+    let! textAfter = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0]) + ' => ' + c.innerText.replace(/\\s+/g, ' ').slice(0, 400)).join(' || ')")
+    let! sizesAfter = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0] || c.tagName) + ':' + Math.round(c.getBoundingClientRect().height)).join(' ')")
     let! maxAfter = page.EvaluateAsync<float>("() => { var el = document.querySelector('.sidebar-inner'); return el.scrollHeight - el.clientHeight; }")
     let floor = (min scrolledTo maxAfter) - 20.0
-    Expect.isTrue (after > floor) (sprintf "sidebar scrollTop must not snap back across SSE morphs (was %f, now %f, new maximum %f)" scrolledTo after maxAfter)
+    Expect.isTrue (after > floor) (sprintf "sidebar scrollTop must not snap back across SSE morphs (was %f, now %f, new maximum %f)\nsidebar panels before: %s\nsidebar panels after:  %s\ntext before: %s\ntext after:  %s" scrolledTo after maxAfter sizesBefore sizesAfter textBefore textAfter)
   })
 
   playwrightTest "session status renders with state" (fun page -> task {
