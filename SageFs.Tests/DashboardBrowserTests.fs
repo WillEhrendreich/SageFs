@@ -385,9 +385,13 @@ let tests =
     let! stripped = page.EvaluateAsync<int>("() => window.__classStripped")
     Expect.equal stripped 0 "the SSE morph must never strip and re-add the client-owned `expanded` class on #main"
     let! after = page.EvaluateAsync<float>("() => document.querySelector('.sidebar-inner').scrollTop")
-    // A reset drops scrollTop to the collapsed maximum (well under the target);
-    // content growing above the viewport can only push it up via scroll anchoring.
-    Expect.isTrue (after > scrolledTo - 20.0) (sprintf "sidebar scrollTop must not snap back across SSE morphs (was %f, now %f)" scrolledTo after)
+    // A reset drops scrollTop to the collapsed maximum (a few dozen px, well under the target); content growing above the
+    // viewport can only push it up via scroll anchoring. The sidebar's content may also legitimately get SHORTER while the
+    // eval settles (observed on CI: 80px), and the browser then clamps scrollTop to the new maximum. That is not the bug, so
+    // the position may fall only as far as the new maximum, never below it.
+    let! maxAfter = page.EvaluateAsync<float>("() => { var el = document.querySelector('.sidebar-inner'); return el.scrollHeight - el.clientHeight; }")
+    let floor = (min scrolledTo maxAfter) - 20.0
+    Expect.isTrue (after > floor) (sprintf "sidebar scrollTop must not snap back across SSE morphs (was %f, now %f, new maximum %f)" scrolledTo after maxAfter)
   })
 
   playwrightTest "session status renders with state" (fun page -> task {
