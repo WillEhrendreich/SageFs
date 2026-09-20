@@ -99,6 +99,7 @@
         <Compile Include="DashboardSnapshotTests.fs" />
         <Compile Include="DashboardDiscoverUxTests.fs" />
         <Compile Include="DashboardTestIdTests.fs" />
+        <Compile Include="PreviousSessionSortTests.fs" />
         <Compile Include="McpHardResetRebuildTests.fs" />
         <Compile Include="HostCoreAdoptionReloadTests.fs" />
         <Compile Include="DashboardEscapingTests.fs" />
