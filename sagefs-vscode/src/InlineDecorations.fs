@@ -3,6 +3,7 @@ module SageFs.Vscode.InlineDecorations
 open Fable.Core.JsInterop
 open Vscode
 open SageFs.Vscode.JsHelpers
+open SageFs.Vscode.InlineDecorationsPure
 
 // ── Configuration ──────────────────────────────────────────────
 
@@ -65,9 +66,10 @@ let clearCellHighlight () =
 
 // ── Helpers ────────────────────────────────────────────────────
 
-let formatDuration (ms: float) =
-  if ms < 1000.0 then sprintf "%dms" (int ms)
-  else sprintf "%.1fs" (ms / 1000.0)
+/// `123ms` / `1.2s` — the decision itself lives in `InlineDecorationsPure`,
+/// tested there; this is the same function, re-exported so existing callers
+/// (`Extension.fs`) do not need to change.
+let formatDuration (ms: float) = InlineDecorationsPure.formatDuration ms
 
 // ── Core functions ─────────────────────────────────────────────
 
@@ -98,6 +100,27 @@ let clearAllDecorations () =
   evalInProgressDecorations <- Map.empty
   clearBindingValueDecorations ()
 
+/// Build a VS Code decoration-options object from a zero-based line/column
+/// pair, an "after" ghost-text label, and (unlike the label) the FULL,
+/// untruncated hover text — so whatever the label summarised away is still
+/// reachable by hovering. The one place a zero-based `Range` for this
+/// module's decorations is built.
+let private ghostTextDeco (line: int) (endCol: int) (color: string) (contentText: string) (hoverText: string) =
+  let opts = createObj [
+    "after" ==> createObj [
+      "contentText" ==> contentText
+      "color" ==> newThemeColor color
+      "fontStyle" ==> "italic"
+    ]
+  ]
+  let deco = Window.createTextEditorDecorationType opts
+  let range = newRange line endCol line endCol
+  let rangeWithHover = createObj [
+    "range" ==> box range
+    "hoverMessage" ==> hoverText
+  ]
+  deco, rangeWithHover
+
 /// Show an "⏳ evaluating…" ghost-text suffix at the end of the given (0-based) line.
 /// Uses a separate decoration type from result/stale markers so it can be cleared independently.
 let showEvalInProgress (editor: TextEditor) (line: int) : unit =
@@ -108,7 +131,7 @@ let showEvalInProgress (editor: TextEditor) (line: int) : unit =
   | None -> ()
   let opts = createObj [
     "after" ==> createObj [
-      "contentText" ==> "  // ⏳ evaluating…"
+      "contentText" ==> InlineDecorationsPure.evalInProgressLabel None
       "color" ==> newThemeColor "sagefs.staleForeground"
       "fontStyle" ==> "italic"
     ]
@@ -133,11 +156,9 @@ let updateEvalInProgressElapsed (editor: TextEditor) (line: int) (elapsedMs: int
   | Some existing ->
     existing.dispose () |> ignore
     evalInProgressDecorations <- Map.remove line evalInProgressDecorations
-    let secs = float elapsedMs / 1000.0
-    let label = sprintf "  // ⏳ evaluating… %.1fs" secs
     let opts = createObj [
       "after" ==> createObj [
-        "contentText" ==> label
+        "contentText" ==> InlineDecorationsPure.evalInProgressLabel (Some elapsedMs)
         "color" ==> newThemeColor "sagefs.staleForeground"
         "fontStyle" ==> "italic"
       ]
@@ -151,26 +172,28 @@ let updateEvalInProgressElapsed (editor: TextEditor) (line: int) (elapsedMs: int
 
 let markDecorationsStale (editor: TextEditor) =
   let lines = blockDecorations |> Map.toList |> List.map fst
+  let alreadyStale = staleDecorations |> Map.toList |> List.map fst |> Set.ofList
+  let newlyStale = InlineDecorationsPure.staleTransition lines alreadyStale |> Set.ofList
   for line in lines do
     match Map.tryFind line blockDecorations with
     | Some deco ->
       deco.dispose () |> ignore
       blockDecorations <- Map.remove line blockDecorations
-      if not (Map.containsKey line staleDecorations) then
-        let staleOpts = createObj [
-          "after" ==> createObj [
-            "contentText" ==> "  // ⏸ stale"
-            "color" ==> newThemeColor "sagefs.staleForeground"
-            "fontStyle" ==> "italic"
-          ]
-        ]
-        let staleDeco = Window.createTextEditorDecorationType staleOpts
-        let lineText = editor.document.lineAt(float line).text
-        let endCol = lineText.Length
-        let range = newRange line endCol line endCol
-        editor.setDecorations(staleDeco, ResizeArray [| box range |])
-        staleDecorations <- Map.add line staleDeco staleDecorations
     | None -> ()
+    if Set.contains line newlyStale then
+      let staleOpts = createObj [
+        "after" ==> createObj [
+          "contentText" ==> "  // ⏸ stale"
+          "color" ==> newThemeColor "sagefs.staleForeground"
+          "fontStyle" ==> "italic"
+        ]
+      ]
+      let staleDeco = Window.createTextEditorDecorationType staleOpts
+      let lineText = editor.document.lineAt(float line).text
+      let endCol = lineText.Length
+      let range = newRange line endCol line endCol
+      editor.setDecorations(staleDeco, ResizeArray [| box range |])
+      staleDecorations <- Map.add line staleDeco staleDecorations
 
 /// Get the line number for inline decoration placement.
 let private getEditorLine (editor: TextEditor) =
@@ -191,40 +214,21 @@ let flashEvalRange (editor: TextEditor) (startLine: int) (endLine: int) =
   editor.setDecorations(deco, ranges)
   jsSetTimeout (fun () -> deco.dispose () |> ignore) 300 |> ignore
 
+/// Show an eval result's ghost text at `atLine` (or the current selection's
+/// line). The summarised/truncated form comes from `renderInlineResult`;
+/// the full result is attached as `hoverMessage` so a multi-line or
+/// truncated result is always fully reachable, not only its summary.
 let showInlineResult (editor: TextEditor) (text: string) (durationMs: float option) (atLine: int option) =
-  let trimmed = text.Trim()
-  match trimmed with
-  | "" -> ()
-  | _ ->
+  match InlineDecorationsPure.renderInlineResult durationMs text with
+  | None -> ()
+  | Some rendered ->
     let line = atLine |> Option.defaultWith (fun () -> getEditorLine editor)
     clearBlockDecoration line
-    let lines = trimmed.Split('\n')
-    let firstLine = match lines.Length with 0 -> "" | _ -> lines.[0]
-    let durSuffix =
-      match durationMs with
-      | Some ms -> sprintf "  %s" (formatDuration ms)
-      | None -> ""
-    let contentText =
-      match lines.Length with
-      | 0 | 1 ->
-        sprintf "  // → %s%s" firstLine durSuffix
-      | n ->
-        let summary =
-          if n <= 4 then lines |> String.concat "  │  "
-          else sprintf "%s  │  ... (%d lines)" firstLine n
-        sprintf "  // → %s%s" summary durSuffix
-    let opts = createObj [
-      "after" ==> createObj [
-        "contentText" ==> contentText
-        "color" ==> newThemeColor "sagefs.successForeground"
-        "fontStyle" ==> "italic"
-      ]
-    ]
-    let deco = Window.createTextEditorDecorationType opts
     let lineText = editor.document.lineAt(float line).text
     let endCol = lineText.Length
-    let range = newRange line endCol line endCol
-    editor.setDecorations(deco, ResizeArray [| box range |])
+    let deco, rangeWithHover =
+      ghostTextDeco line endCol "sagefs.successForeground" rendered.ContentText rendered.HoverText
+    editor.setDecorations(deco, ResizeArray [| box rangeWithHover |])
     blockDecorations <- Map.add line deco blockDecorations
     autoClearAfter line
 
@@ -241,8 +245,7 @@ let showBindingValues
   clearBindingValueDecorations ()
   let visible =
     bindingValues
-    |> List.filter (fun bv ->
-      not bv.IsFunctionValue && bv.SourceLine > 0)
+    |> List.filter (fun bv -> InlineDecorationsPure.isVisibleBinding bv.IsFunctionValue bv.SourceLine)
   match visible with
   | [] -> ()
   | _ ->
@@ -254,13 +257,12 @@ let showBindingValues
     ]
     let deco = Window.createTextEditorDecorationType opts
     bindingValueDecorationType <- Some deco
+    let lineCount = int editor.document.lineCount
     let ranges = ResizeArray<obj>()
     for bv in visible do
-      let lineIdx = blockStartLine + bv.SourceLine - 1
-      let lineCount = editor.document.lineCount
-      match lineIdx >= 0 && float lineIdx < lineCount with
-      | false -> ()
-      | true ->
+      match InlineDecorationsPure.bindingTargetLine blockStartLine bv.SourceLine lineCount with
+      | None -> ()
+      | Some lineIdx ->
         let lineText = editor.document.lineAt(float lineIdx).text
         let endCol = lineText.Length
         let contentText = sprintf "  %s" (SageFs.Vscode.FeatureTypes.toGhostText bv)
@@ -275,26 +277,20 @@ let showBindingValues
         ranges.Add(box rangeWithText)
     editor.setDecorations(deco, ranges)
 
+/// Show a diagnostic's ghost text at `atLine` (or the current selection's
+/// line). Only the first line renders inline; the full diagnostic text is
+/// attached as `hoverMessage` so a multi-line error message is always fully
+/// reachable, not only its first line.
 let showInlineDiagnostic (editor: TextEditor) (text: string) (atLine: int option) =
-  let firstLine =
-    let parts = text.Split('\n')
-    match parts.Length with 0 -> "" | _ -> parts.[0].Trim()
-  match firstLine with
-  | "" -> ()
-  | _ ->
+  match InlineDecorationsPure.renderInlineDiagnostic text with
+  | None -> ()
+  | Some rendered ->
     let line = atLine |> Option.defaultWith (fun () -> getEditorLine editor)
     clearBlockDecoration line
-    let opts = createObj [
-      "after" ==> createObj [
-        "contentText" ==> sprintf "  // ❌ %s" firstLine
-        "color" ==> newThemeColor "sagefs.errorForeground"
-        "fontStyle" ==> "italic"
-      ]
-    ]
-    let deco = Window.createTextEditorDecorationType opts
     let lineText = editor.document.lineAt(float line).text
     let endCol = lineText.Length
-    let range = newRange line endCol line endCol
-    editor.setDecorations(deco, ResizeArray [| box range |])
+    let deco, rangeWithHover =
+      ghostTextDeco line endCol "sagefs.errorForeground" rendered.ContentText rendered.HoverText
+    editor.setDecorations(deco, ResizeArray [| box rangeWithHover |])
     blockDecorations <- Map.add line deco blockDecorations
     autoClearAfter line

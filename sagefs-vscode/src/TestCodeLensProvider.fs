@@ -40,22 +40,13 @@ let updateDiagnosis (failures: LiveTestingTypes.VscDiagnosisFailure array) =
     |> Map.ofArray
   refresh ()
 
-/// Format a test result as a CodeLens title
+/// Format a test result as a CodeLens title. The decision itself is
+/// `SageFs.Vscode.InlineDecorationsPure.formatCodeLensTitle`, tested there —
+/// this was a second, independently-hand-rolled copy of the same
+/// outcome-to-text decision `TestDecorationsPure.bucketForOutcome` already
+/// made once, with its own untested truncation quirk (`msg.[..59]`).
 let formatTitle (result: LiveTestingTypes.VscTestResult) =
-  match result.Outcome with
-  | LiveTestingTypes.VscTestOutcome.Passed ->
-    match result.DurationMs with
-    | Some ms -> sprintf "✓ Passed (%.0fms)" ms
-    | None -> "✓ Passed"
-  | LiveTestingTypes.VscTestOutcome.Failed msg ->
-    let short = match msg.Length > 60 with true -> msg.[..59] + "…" | false -> msg
-    sprintf "✗ Failed: %s" short
-  | LiveTestingTypes.VscTestOutcome.Running -> "● Running…"
-  | LiveTestingTypes.VscTestOutcome.Skipped reason -> sprintf "⊘ Skipped: %s" reason
-  | LiveTestingTypes.VscTestOutcome.Errored msg -> sprintf "✗ Error: %s" msg
-  | LiveTestingTypes.VscTestOutcome.Stale -> "◌ Stale"
-  | LiveTestingTypes.VscTestOutcome.PolicyDisabled -> "⊘ Disabled"
-  | LiveTestingTypes.VscTestOutcome.NotYetRun -> "◆ Not yet run"
+  SageFs.Vscode.InlineDecorationsPure.formatCodeLensTitle result.DurationMs result.Outcome
 
 /// Creates a CodeLens provider for test results
 let create () =
