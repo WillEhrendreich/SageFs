@@ -126,14 +126,6 @@ type AppRunHandlers = {
   AwaitChange: string -> Async<AppRun.AppRunState>
 }
 
-/// How a saved source file reaches the worker.
-[<RequireQualifiedAccess>]
-type private ReloadRoute =
-  /// The file belongs to the running app: patch its functions in place, bound to
-  /// the compiled types and state, or restart the app.
-  | PatchRunningApp of baseline: Features.ReloadPlanning.FileDecls
-  | ReevaluateFile
-
 /// For hosts that do not run apps (test harnesses).
 let noAppRuns : AppRunHandlers = {
   Run = fun project _ -> async { return Error (SageFsError.AppRunFailed (project, "This host does not run apps.")) }
@@ -687,24 +679,44 @@ let run (sessionId: string) (port: int) = async {
         DevReload.broadcastCompilationFailed summary diagnostics
         Log.warn "Reload failed for %s: %s\n%s" fileName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       let routeFor (filePath: string) =
-        match AppRunner.state appRunner, reloadBaselines.TryGetValue(IO.Path.GetFullPath filePath) with
-        | AppRun.AppRunState.Running _, (true, baseline) -> ReloadRoute.PatchRunningApp baseline
-        | _ -> ReloadRoute.ReevaluateFile
-      let requireRestart (fileName: string) first rest = async {
-        Log.info "Run App: %s — %s; restarting the app" fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
-        let! _ = AppRunner.requireRestart appRunner first rest |> Async.AwaitTask
-        () }
-      // Patch the running app in place when only function bodies changed; anything
-      // that takes effect at startup restarts it (see ReloadPlanning).
-      let reloadRunningApp (filePath: string) (baseline: Features.ReloadPlanning.FileDecls) = async {
+        Features.ReloadPlanning.routeFor
+          (fun path ->
+            match reloadBaselines.TryGetValue(IO.Path.GetFullPath path) with
+            | true, baseline -> Some baseline
+            | _ -> None)
+          filePath
+      // A change that only takes effect at startup restarts the app when SageFs
+      // is the one running it. When the app was started some other way (an init
+      // script, or by hand in the REPL) there is nothing to restart, so the save
+      // falls back to the whole-file re-evaluation — the caller's `false`.
+      let restartOrFallBack (fileName: string) first rest = async {
+        match AppRunner.state appRunner with
+        | AppRun.AppRunState.Running _ ->
+          Log.info "Run App: %s — %s; restarting the app" fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
+          let! _ = AppRunner.requireRestart appRunner first rest |> Async.AwaitTask
+          return true
+        | _ ->
+          Log.info "Hot reload: %s — %s; no app is running under SageFs, so the whole file is re-evaluated instead"
+            fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
+          return false }
+      // Patch the process in place when only function bodies changed; anything
+      // that takes effect at startup restarts the app (see ReloadPlanning).
+      // Answers whether the save was handled: `false` asks the caller for the
+      // whole-file fallback.
+      let reloadRunningApp (filePath: string) (baseline: Features.ReloadPlanning.FileDecls) : Async<bool> = async {
         let fileName = IO.Path.GetFileName filePath
         match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText filePath) with
         | Error reason ->
           DevReload.broadcastCompilationFailed (sprintf "Parse failed for %s: %s" fileName reason) []
+          return true
         | Ok current ->
           match Features.ReloadPlanning.planReload baseline current with
           | Features.ReloadPlanning.ReloadPlan.PatchFunctions [] ->
-            Log.info "Run App: %s saved with no function change — nothing to reload" fileName
+            Log.info "Hot reload: %s saved with no function change — nothing to reload" fileName
+            // Nothing moved, so nothing will refresh the browser: close the
+            // Compiling→(Reload|CompilationFailed) contract ourselves.
+            DevReload.broadcastReload ()
+            return true
           | Features.ReloadPlanning.ReloadPlan.PatchFunctions functions ->
             DevReload.broadcastCompiling (Some fileName)
             let patch = Middleware.CompilationContext.emitStableIdentity filePath current functions
@@ -712,7 +724,9 @@ let run (sessionId: string) (port: int) = async {
             use localCts = new CancellationTokenSource()
             let! response = actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
             match response.EvaluationResult with
-            | Error ex -> broadcastEvalFailure filePath patch.LineOffset response ex
+            | Error ex ->
+              broadcastEvalFailure filePath patch.LineOffset response ex
+              return true
             | Ok _ ->
               let reloaded = reloadedMethodsOf response
               match Features.ReloadPlanning.confirmPatch baseline functions reloaded with
@@ -722,11 +736,12 @@ let run (sessionId: string) (port: int) = async {
                 match reloaded with
                 | [] -> DevReload.broadcastReload ()
                 | _ -> ()
-                Log.info "Run App: hot reloaded %s: %s" fileName (functions |> List.map _.Name |> String.concat ", ")
+                Log.info "Hot reload: patched %s in place: %s" fileName (functions |> List.map _.Name |> String.concat ", ")
+                return true
               | Features.ReloadPlanning.PatchOutcome.RestartNeeded (first, rest) ->
-                do! requireRestart fileName first rest
+                return! restartOrFallBack fileName first rest
           | Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest) ->
-            do! requireRestart fileName first rest }
+            return! restartOrFallBack fileName first rest }
       let onFileChanged (change: FileWatcher.FileChange) =
         let ext = IO.Path.GetExtension(change.FilePath)
         let kind = match change.Kind with
@@ -768,9 +783,13 @@ let run (sessionId: string) (port: int) = async {
                   Log.debug "File changed but not in hot-reload watch set: %s (watched: %d files)"
                     (IO.Path.GetFileName filePath) (HotReloadState.watchedCount !result.HotReloadStateRef)
                 | true ->
-                match routeFor filePath with
-                | ReloadRoute.PatchRunningApp baseline -> do! reloadRunningApp filePath baseline
-                | ReloadRoute.ReevaluateFile ->
+                let! handled =
+                  match routeFor filePath with
+                  | Features.ReloadPlanning.ReloadRoute.PatchInPlace baseline -> reloadRunningApp filePath baseline
+                  | Features.ReloadPlanning.ReloadRoute.ReevaluateWholeFile -> async { return false }
+                match handled with
+                | true -> ()
+                | false ->
                 Log.debug "[DevReload] Reloading watched file: %s" (IO.Path.GetFileName filePath)
                 DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))
                 // Chesterton's fence: read file and preprocess through CompilationContext
@@ -822,6 +841,12 @@ let run (sessionId: string) (port: int) = async {
                   actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
                 match response.EvaluationResult with
                 | Ok _ ->
+                  // The file the session now holds IS the file on disk, so it is
+                  // the baseline the NEXT save is diffed against. Without this the
+                  // same startup-only change is re-reported on every later save.
+                  match Features.ReloadPlanning.extractDecls fileContent with
+                  | Ok decls -> reloadBaselines.[IO.Path.GetFullPath filePath] <- decls
+                  | Error _ -> reloadBaselines.TryRemove(IO.Path.GetFullPath filePath) |> ignore
                   // Capture RunTest from hot-reload discovery
                   match response.Metadata |> Map.tryFind "liveTestRunTest" with
                   | Some (:? (Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>) as runTest) ->
@@ -862,36 +887,61 @@ let run (sessionId: string) (port: int) = async {
         })
       Some (FileWatcher.start config DevReload.DevReloadConfig.defaults onFileChanged)
 
+  /// Record the source each loaded project's assembly was built from. That baseline
+  /// is what makes a save patchable in place (see ReloadPlanning.routeFor): without
+  /// it the save falls back to re-evaluating the whole file, which re-declares the
+  /// file's own types and so can never re-point a handler the app captured at
+  /// startup. Seeded for EVERY loaded project when the session starts, not just for
+  /// a project `run_app` launched — a user who starts their app from an init script
+  /// or by hand in the REPL gets the same hot reload.
+  let seedReloadBaselines (projectDir: string) (assemblyPath: string) (sources: string array) =
+    // Fail closed: if the assembly's write time can't be read, treat every source
+    // file as untrustworthy rather than risk silently baking an unbuilt edit into
+    // the baseline (see ReloadPlanning.baselineIsTrustworthy).
+    let assemblyWriteTimeUtc =
+      try IO.File.GetLastWriteTimeUtc assemblyPath
+      with _ -> DateTime.MinValue
+    for source in sources do
+      let sourceWriteTimeUtc =
+        try IO.File.GetLastWriteTimeUtc source
+        with _ -> DateTime.MaxValue
+      match Features.ReloadPlanning.baselineIsTrustworthy assemblyWriteTimeUtc sourceWriteTimeUtc with
+      | false ->
+        Log.warn "Hot reload: %s was modified after the build — it will be fully re-evaluated (not diff-patched) on its next save. → Rebuild the project so saves can be patched into the running process." source
+      | true ->
+        match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText source) with
+        | Ok decls -> reloadBaselines.TryAdd(IO.Path.GetFullPath source, decls) |> ignore
+        | Error reason -> Log.warn "Hot reload: %s cannot be patched in place (%s)" source reason
+    Log.debug "Hot reload: baselined %d source file(s) in %s" sources.Length projectDir
+
+  let projectSources (projectDir: string) =
+    IO.Directory.GetFiles(projectDir, "*.fs", IO.SearchOption.AllDirectories)
+    |> Array.filter (fun f ->
+      let n = f.Replace('\\', '/')
+      not (n.Contains("/obj/") || n.Contains("/bin/")))
+
   let watchForHotReload (projectPath: string) (assemblyPath: string) =
     match workerConfig.Workflow, IO.Path.GetDirectoryName(IO.Path.GetFullPath projectPath) with
     | WorkflowTypes.SessionWorkflow.HotReload _, (NonNull projectDir) ->
-      let sources =
-        IO.Directory.GetFiles(projectDir, "*.fs", IO.SearchOption.AllDirectories)
-        |> Array.filter (fun f ->
-          let n = f.Replace('\\', '/')
-          not (n.Contains("/obj/") || n.Contains("/bin/")))
+      let sources = projectSources projectDir
       result.HotReloadStateRef.Value <- HotReloadState.watchByDirectory projectDir sources result.HotReloadStateRef.Value
-      // The baseline must be the source the loaded assembly was actually built
-      // from. Fail closed: if the assembly's write time can't be read, treat
-      // every source file as untrustworthy rather than risk silently baking
-      // an unbuild edit into the baseline (see ReloadPlanning.baselineIsTrustworthy).
-      let assemblyWriteTimeUtc =
-        try IO.File.GetLastWriteTimeUtc assemblyPath
-        with _ -> DateTime.MinValue
-      for source in sources do
-        let sourceWriteTimeUtc =
-          try IO.File.GetLastWriteTimeUtc source
-          with _ -> DateTime.MaxValue
-        match Features.ReloadPlanning.baselineIsTrustworthy assemblyWriteTimeUtc sourceWriteTimeUtc with
-        | false ->
-          Log.warn "Run App: %s was modified after the build — it will be fully re-evaluated (not diff-patched) on its next save" source
-        | true ->
-          match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText source) with
-          | Ok decls -> reloadBaselines.TryAdd(IO.Path.GetFullPath source, decls) |> ignore
-          | Error reason -> Log.warn "Run App: %s cannot be patched in place (%s)" source reason
+      seedReloadBaselines projectDir assemblyPath sources
       Log.info "Run App: watching %d source file(s) in %s for hot reload"
         (HotReloadState.watchedInDirectory projectDir result.HotReloadStateRef.Value).Length projectDir
     | _ -> ()
+
+  // Every loaded project gets its baseline at session start, so a save can be
+  // patched in place however the user started their app. `run_app` re-seeds for
+  // the project it launched (TryAdd, so this wins) and additionally opts that
+  // project's files into the hot-reload watch set.
+  match workerConfig.Workflow with
+  | WorkflowTypes.SessionWorkflow.HotReload _ ->
+    for projectPath, assemblyPath in result.ProjectTargets do
+      match IO.Path.GetDirectoryName(IO.Path.GetFullPath projectPath) with
+      | NonNull projectDir -> seedReloadBaselines projectDir assemblyPath (projectSources projectDir)
+      | _ -> ()
+  | _ -> ()
+
   let appRuns : AppRunHandlers = {
     Run = fun project previous -> async {
       let prepared =

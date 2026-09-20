@@ -551,3 +551,38 @@ let confirmPatch (before: FileDecls) (patched: SourceDecl list) (reloadedMethods
   match notDetoured with
   | first :: rest -> PatchOutcome.RestartNeeded (first, rest)
   | [] -> PatchOutcome.Applied
+
+/// How a saved source file reaches the process that is running the user's code.
+[<RequireQualifiedAccess>]
+type ReloadRoute =
+  /// The file has a baseline — the source the loaded assembly was built from —
+  /// so only the functions that changed are re-emitted, against the COMPILED
+  /// module's own identity (`emitStableIdentity`).
+  | PatchInPlace of baseline: FileDecls
+  /// No trustworthy baseline (the file is not part of a loaded project, was
+  /// edited after the build, or does not parse): re-evaluate the whole file.
+  | ReevaluateWholeFile
+
+/// Chesterton's fence — this is THE hot-reload propagation decision, and routing
+/// it on "is an app running under AppRunner" instead of "do we have a baseline"
+/// was the P0 gap that made hot reload useless for every real web app.
+///
+/// Re-evaluating a WHOLE file re-declares the types the file itself defines. A
+/// handler whose signature mentions one of them (`todoListView (items: TodoItem
+/// list)`) then has a parameter type from the FSI assembly while the compiled
+/// method's parameter type is the project assembly's — so the detour matcher's
+/// parameter-type equality fails, no detour is applied, and the running app
+/// keeps calling the old body forever. The browser still refreshes, so it looks
+/// like it worked. That is exactly what users saw with Falco/Giraffe/Saturn/
+/// Oxpecker route tables and minimal-API endpoints, all of which capture their
+/// handlers at startup.
+///
+/// Emitting ONLY the changed functions against the compiled module keeps every
+/// parameter type identical, so the pairing succeeds and the captured handler's
+/// entry point is re-pointed. That is correct whether the app was started by
+/// `run_app`, by an init script, or by hand in the REPL — so the route depends
+/// on the baseline alone.
+let routeFor (baselineOf: string -> FileDecls option) (filePath: string) : ReloadRoute =
+  match baselineOf filePath with
+  | Some baseline -> ReloadRoute.PatchInPlace baseline
+  | None -> ReloadRoute.ReevaluateWholeFile
