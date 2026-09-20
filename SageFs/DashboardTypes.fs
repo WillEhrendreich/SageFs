@@ -89,6 +89,11 @@ module Signals =
   let [<Literal>] LiveTestingLoading = "liveTestingLoading"
   let [<Literal>] TempLoading = "tempLoading"
   let [<Literal>] Theme = "theme"
+  /// The "Resume Previous" list's chosen sort order (`PreviousSessionSort`,
+  /// `DashboardFragments.fs`) — re-seeded on every picker render so
+  /// Datastar's data-bind can never leave the `<select>` showing an order
+  /// the server didn't choose, mirroring `Signals.Theme`.
+  let [<Literal>] PreviousSort = "previousSort"
   let [<Literal>] CursorPos = "cursorPos"
   let [<Literal>] TestFilter = "testFilter"
   let [<Literal>] ExpandedDashboard = "expandedDashboard"

@@ -616,18 +616,40 @@ h2 {
   overflow-y: auto;
 }
 
+/* The "Resume Previous" sort control — width 100% so it can never widen the
+   .picker-previous card it sits in; reuses .theme-select's look for the
+   <select> itself. */
+.picker-previous-sort {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+/* A real <button> now (not a div+onclick — roast follow-up, same fix as
+   .discovered-project-row in fe8e1f4b), so the usual button-reset properties
+   are needed to keep the row's existing look. */
 .picker-session-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
   padding: 0.5rem 0.75rem;
+  border: none;
   border-bottom: 1px solid var(--border-normal);
-  cursor: pointer;
   border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   transition: background 0.1s;
 
   &:hover {
     background: var(--bg-focus);
+  }
+
+  &:focus-visible {
+    outline: 1px solid var(--fg-blue);
+    outline-offset: -1px;
   }
 }
 

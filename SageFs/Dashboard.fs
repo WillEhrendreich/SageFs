@@ -418,6 +418,11 @@ let private buildOutputPanelsFrom
     let sessionsPanel = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) cards creating
     let sessionPicker =
       match cards.IsEmpty && not creating with
+      // This is a rare defensive fallback (a specific session was requested
+      // but zero live sessions exist), not the primary "no session" landing
+      // — that's buildNoSessionSnapshotWithSessions below, which threads the
+      // real per-connection sort choice. No clientId is available here, so
+      // this path always renders the default order.
       | true -> renderSessionPicker previous
       | false -> renderSessionPickerEmpty
     // Build a meaningful placeholder so the output panel always shows SOMETHING
@@ -732,6 +737,19 @@ let private applyCohortViewing
             renderCohortLanesPanel prefixLedger
           ] }
 
+/// This CONNECTION's "Resume Previous" sort choice, keyed by page client id
+/// — the same per-tab convention as `currentSessionOpt`/`ConnectionChannels`
+/// (a sort choice belongs to one browser tab, never a daemon global). Unlike
+/// the cohort scrubber's per-tab state, this needs no push-loop command: the
+/// stream loop already knows its own `clientId` and can read this shared
+/// dictionary directly on its next tick, so a change made by the POST
+/// handler below is picked up naturally without a forced re-render — the
+/// POST's own response morph already shows it immediately. Removed when the
+/// connection closes (`createStreamHandler`'s `finally`), same as
+/// `ConnectionChannels`.
+let private previousSessionSortByClient =
+  Collections.Concurrent.ConcurrentDictionary<string, PreviousSessionSort>()
+
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
 /// and each SSE push. Returns the snapshot, the resolved session ID, and the
@@ -962,10 +980,18 @@ let buildDashboardSnapshot
 /// reason as `buildDashboardSnapshotWithSessions`: the SSE push loop already
 /// fetched a fresh list this tick to reconcile the viewed session, and must
 /// not pay for a second `GetAllSessions` read to build the sidebar cards.
-let buildNoSessionSnapshotWithSessions
+///
+/// `previousSort` is this CONNECTION's chosen "Resume Previous" order —
+/// read by the caller from `previousSessionSortByClient` (keyed by page
+/// client id, same convention as `currentSessionOpt`/`ConnectionChannels`),
+/// never a daemon global, so one tab's sort choice can never leak into
+/// another tab's picker. `buildNoSessionSnapshotWithSessions` below is the
+/// Recent-default compat entry point for callers with no such choice.
+let buildNoSessionSnapshotWithSessionsSorted
   (q: DashboardQueries)
   (infra: DashboardInfra)
   (sessions: WorkerProtocol.SessionInfo list)
+  (previousSort: PreviousSessionSort)
   : System.Threading.Tasks.Task<DashboardSnapshot> =
   task {
     let! previous = q.GetPreviousSessions ()
@@ -1025,7 +1051,7 @@ let buildNoSessionSnapshotWithSessions
       // in play" landing — Quick Start / Open Directory / Resume Previous),
       // while the sidebar lists the live sessions so any of them is one click
       // away. It stays visible even when sessions exist but none is selected.
-      SessionPicker = renderSessionPicker previous
+      SessionPicker = renderSessionPickerSorted previousSort previous
       ThemePicker = renderThemePicker defaultThemeName
       ThemeVars = renderThemeVars defaultThemeName
       BindingsPanel = renderBindingsPanel None
@@ -1042,9 +1068,22 @@ let buildNoSessionSnapshotWithSessions
     return snap
   }
 
+/// Compat entry point for callers with no per-connection "Resume Previous"
+/// sort choice to thread through — defaults to `Recent`. The live push loop
+/// and teardown-to-picker path, which DO have a connection's remembered
+/// choice, call `buildNoSessionSnapshotWithSessionsSorted` directly.
+let buildNoSessionSnapshotWithSessions
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  (sessions: WorkerProtocol.SessionInfo list)
+  : System.Threading.Tasks.Task<DashboardSnapshot> =
+  buildNoSessionSnapshotWithSessionsSorted q infra sessions PreviousSessionSort.Recent
+
 /// Standalone entry point for callers that do not already have a fresh
 /// session list in hand — fetches once, then delegates to
-/// `buildNoSessionSnapshotWithSessions`.
+/// `buildNoSessionSnapshotWithSessions`. Only called from the initial GET
+/// render, which always mints a brand-new client id (no prior sort choice
+/// can exist for it yet), so it always renders the default order.
 let buildNoSessionSnapshot
   (q: DashboardQueries)
   (infra: DashboardInfra)
@@ -1196,7 +1235,10 @@ let createStreamHandler
         // the no-change guard compares like-for-like full-shell HTML.
         // liveSessions was already fetched above for reconciliation — reuse
         // it here instead of paying for a second GetAllSessions read.
-        let! snapRaw = buildNoSessionSnapshotWithSessions q infra liveSessions
+        // This connection's own "Resume Previous" sort choice, if it has
+        // ever made one — defaults to Recent for a tab that hasn't.
+        let previousSort = previousSessionSortByClient.GetOrAdd(clientId, PreviousSessionSort.Recent)
+        let! snapRaw = buildNoSessionSnapshotWithSessionsSorted q infra liveSessions previousSort
         let snap = applyCohortViewing infra currentCohortViewingSeq snapRaw
         match SnapshotRenderGuard.decide renderMemory snap with
         | SnapshotRenderGuard.Decision.Skip -> () // unchanged tick — renderMainContent/renderNode never run
@@ -1437,6 +1479,7 @@ let createStreamHandler
       |> Option.iter (fun tracker ->
         AgentActivityTracker.forget tracker (MemberTable.MemberId.display (MemberTable.MemberId.Browser clientId)))
       infra.ConnectionChannels.TryRemove(clientId) |> ignore
+      previousSessionSortByClient.TryRemove(clientId) |> ignore
   }
 
 /// Create the eval POST handler.
@@ -1862,10 +1905,12 @@ let createSessionActionHandler
         let switchedDir = q.GetSessionWorkingDir nextSession
         do! ssePatchNode ctx (renderStatuslineLeft stateLabel switchedDir)
       | None when teardown && Result.isOk result ->
-        // No sessions remain — show the session picker (with Resume Previous).
+        // No sessions remain — show the session picker (with Resume Previous),
+        // honoring this same connection's earlier sort choice if it made one.
         retargetStream infra channelClientId None
         let! previous = q.GetPreviousSessions ()
-        do! ssePatchNode ctx (renderSessionPicker previous)
+        let previousSort = previousSessionSortByClient.GetOrAdd(channelClientId, PreviousSessionSort.Recent)
+        do! ssePatchNode ctx (renderSessionPickerSorted previousSort previous)
         do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ViewingSessionId) ""
       | None ->
         // Switch path (or failed teardown): eval form targets the requested session.
@@ -2693,6 +2738,43 @@ let createEndpoints
       | :? RequestTooLargeException -> ()
       | ex ->
         Log.warn "[dashboard] /dashboard/set-theme failed: %s" ex.Message
+        ctx.Response.StatusCode <- 400
+        do! ctx.Response.WriteAsJsonAsync({| error = "Request failed" |})
+    })
+    // Change the "Resume Previous" list's sort order — server-authoritative,
+    // same shape as /dashboard/set-theme: read the chosen key, remember it
+    // for THIS connection (previousSessionSortByClient, keyed by client id —
+    // never a daemon global), and morph the picker back with the new order
+    // already applied and its <option selected> reflecting it. The
+    // persistent SSE stream picks the same choice up on its own next tick
+    // (it reads the same dictionary by its own clientId), so the order
+    // survives subsequent pushes instead of resetting on the next unrelated
+    // state change.
+    yield post "/dashboard/session-picker/sort" (fun ctx -> task {
+      try
+        use! doc = readSignalsJsonSized ctx
+        let sortKey =
+          match ctx.Request.Query.ContainsKey "sort" with
+          | true -> ctx.Request.Query.["sort"].ToString()
+          | false ->
+            match doc.RootElement.TryGetProperty("sort") with
+            | true, prop -> prop.GetString()
+            | _ -> ""
+        let order = PreviousSessionSort.ofKey sortKey
+        let clientId = clientIdFromSignals doc
+        match clientId with
+        | "" -> ()
+        | id -> previousSessionSortByClient.[id] <- order
+        let! previous = q.GetPreviousSessions ()
+        Response.sseStartResponse ctx |> ignore
+        do! ssePatchNode ctx (renderSessionPickerSorted order previous)
+        // Patch the signal so data-bind matches the server-rendered
+        // <option selected>, same reasoning as set-theme.
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.PreviousSort) (PreviousSessionSort.toKey order)
+      with
+      | :? RequestTooLargeException -> ()
+      | ex ->
+        Log.warn "[dashboard] /dashboard/session-picker/sort failed: %s" ex.Message
         ctx.Response.StatusCode <- 400
         do! ctx.Response.WriteAsJsonAsync({| error = "Request failed" |})
     })

@@ -752,8 +752,180 @@ let renderDiagnostics (diags: Diagnostic list) =
   ]
 
 
+/// How the "Resume Previous" list is ordered. A closed set of choices becomes
+/// a DU with one exhaustive to-string/of-string pair (AGENTS.md: no magic
+/// strings), never a raw sort-key string threaded through the wire.
+/// `Recent` is the default and MUST stay the default — it is what a
+/// returning user wants ("the thing I was working on yesterday").
+///
+/// Deliberately NOT a richer executable/library/test classification: that
+/// needs the `.fsproj` read from disk, the project may no longer exist for a
+/// stopped session, and a `*.Tests` name heuristic would be a guess presented
+/// as fact. Solution-vs-project (`Kind`) is knowable from the path alone, so
+/// that is where it stops.
+[<RequireQualifiedAccess>]
+type PreviousSessionSort =
+  | Recent
+  | ProjectName
+  | Directory
+  | Kind
+
+module PreviousSessionSort =
+  /// The one place this DU becomes a wire string — round-trips with `ofKey`.
+  let toKey (order: PreviousSessionSort) : string =
+    match order with
+    | PreviousSessionSort.Recent -> "recent"
+    | PreviousSessionSort.ProjectName -> "project"
+    | PreviousSessionSort.Directory -> "directory"
+    | PreviousSessionSort.Kind -> "kind"
+
+  /// Inverse of `toKey`. An unrecognized or missing key resolves to the
+  /// default (`Recent`) rather than failing — a stale signal from an older
+  /// page version, or a scripted client sending garbage, must never break
+  /// the picker.
+  let ofKey (key: string) : PreviousSessionSort =
+    match key with
+    | "project" -> PreviousSessionSort.ProjectName
+    | "directory" -> PreviousSessionSort.Directory
+    | "kind" -> PreviousSessionSort.Kind
+    | _ -> PreviousSessionSort.Recent
+
+  /// Human label for the <option> text.
+  let label (order: PreviousSessionSort) : string =
+    match order with
+    | PreviousSessionSort.Recent -> "Recent first"
+    | PreviousSessionSort.ProjectName -> "Project name (A-Z)"
+    | PreviousSessionSort.Directory -> "Directory (A-Z)"
+    | PreviousSessionSort.Kind -> "Kind (solutions first)"
+
+  /// Every order, in the <select>'s display order.
+  let all : PreviousSessionSort list =
+    [ PreviousSessionSort.Recent
+      PreviousSessionSort.ProjectName
+      PreviousSessionSort.Directory
+      PreviousSessionSort.Kind ]
+
+/// The display name a "Resume Previous" row is identified by: the first
+/// project's file name without its extension, or `None` when the session has
+/// no project (a bare working directory). Shared by the sort orders
+/// (`ProjectName`/`Kind`) and the row's own headline so the two can never
+/// disagree about what a session is "named". Keyed on the FIRST project only
+/// — a session that loaded several projects is identified by the one it was
+/// opened on, not by whichever happens to sort first.
+let previousSessionProjectName (s: PreviousSession) : string option =
+  match s.Projects with
+  | [] -> None
+  | first :: _ ->
+    match Path.GetFileNameWithoutExtension(first) with
+    | "" -> None
+    | name -> Some name
+
+/// Solution before project before "no project at all" — knowable from the
+/// path alone (`.sln`/`.slnx` vs anything else). See `PreviousSessionSort`'s
+/// doc comment for why this stops here instead of a richer classification.
+let private previousSessionKindRank (s: PreviousSession) : int =
+  match s.Projects with
+  | [] -> 2
+  | first :: _ ->
+    match Path.GetExtension(first).ToLowerInvariant() with
+    | ".sln" | ".slnx" -> 0
+    | "" -> 2
+    | _ -> 1
+
+/// The tie-break every sort order falls back to: `LastSeen` descending, then
+/// `Id` — total and stable, so the list never reshuffles between renders for
+/// no reason.
+let private compareRecentThenId (a: PreviousSession) (b: PreviousSession) : int =
+  match compare b.LastSeen a.LastSeen with
+  | 0 -> String.CompareOrdinal(a.Id, b.Id)
+  | c -> c
+
+/// Compare by project display name (case-insensitive), ties broken by
+/// `compareRecentThenId`. A session with no project (`None`) always sorts
+/// AFTER one that has a project — never first.
+let private compareByProjectName (a: PreviousSession) (b: PreviousSession) : int =
+  match previousSessionProjectName a, previousSessionProjectName b with
+  | None, None -> compareRecentThenId a b
+  | None, Some _ -> 1
+  | Some _, None -> -1
+  | Some na, Some nb ->
+    match String.Compare(na, nb, StringComparison.OrdinalIgnoreCase) with
+    | 0 -> compareRecentThenId a b
+    | c -> c
+
+/// Sort the "Resume Previous" list. Total and stable for every order: two
+/// sessions that compare equal on the chosen key always fall back to
+/// `LastSeen` descending, then `Id`.
+let sortPreviousSessions (order: PreviousSessionSort) (sessions: PreviousSession list) : PreviousSession list =
+  let cmp : PreviousSession -> PreviousSession -> int =
+    match order with
+    | PreviousSessionSort.Recent -> compareRecentThenId
+    | PreviousSessionSort.ProjectName -> compareByProjectName
+    | PreviousSessionSort.Directory ->
+      fun a b ->
+        match String.Compare(a.WorkingDir, b.WorkingDir, StringComparison.OrdinalIgnoreCase) with
+        | 0 -> compareRecentThenId a b
+        | c -> c
+    | PreviousSessionSort.Kind ->
+      fun a b ->
+        match compare (previousSessionKindRank a) (previousSessionKindRank b) with
+        | 0 -> compareByProjectName a b
+        | c -> c
+  sessions |> List.sortWith cmp
+
+/// The label a "Resume Previous" row leads with — the work being resumed,
+/// not the session's bookkeeping id. Falls back to the working directory's
+/// own name, then a generic label, so the headline is never blank.
+let previousSessionHeadline (s: PreviousSession) : string =
+  match previousSessionProjectName s with
+  | Some name -> name
+  | None ->
+    match s.WorkingDir.Length > 0 with
+    | true ->
+      match Path.GetFileName(s.WorkingDir.TrimEnd('/', '\\')) with
+      | "" -> s.WorkingDir
+      | dirName -> dirName
+    | false -> "Session"
+
+/// The "Resume Previous" sort control — server-rendered `<option selected>`
+/// mirroring `renderThemePicker`'s shape (the worked example this follows):
+/// the signal is re-seeded on every render so Datastar's data-bind can never
+/// leave the picker showing an order the server didn't choose. Only rendered
+/// by the caller when there is more than one entry to sort.
+let private renderPreviousSessionSortSelect (selected: PreviousSessionSort) =
+  Elem.div [ Attr.class' "picker-previous-sort" ] [
+    Elem.label
+      [ Attr.class' "meta"
+        Attr.for' "previous-sort-select"
+        Attr.style "display: block; margin-bottom: 2px;" ]
+      [ Text.raw "Sort" ]
+    Elem.select
+      [ Attr.id "previous-sort-select"
+        Attr.class' "theme-select"
+        Attr.create "aria-label" "Sort the Resume Previous list"
+        Attr.create "title" "Sort the Resume Previous list"
+        Ds.signal (Signals.PreviousSort, PreviousSessionSort.toKey selected)
+        Ds.bind Signals.PreviousSort
+        // Read the freshly-selected value directly (not the signal, which
+        // data-bind updates asynchronously) — same reasoning as
+        // renderThemePicker's onchange handler.
+        Ds.onEvent ("change", "var s=event.target.value; @post('/dashboard/session-picker/sort', {sort: s})") ]
+      (PreviousSessionSort.all
+       |> List.map (fun order ->
+         Elem.option
+           ([ Attr.value (PreviousSessionSort.toKey order) ]
+            @ (match order = selected with
+               | true -> [ Attr.create "selected" "selected" ]
+               | false -> []))
+           [ textEnc (PreviousSessionSort.label order) ]))
+  ]
+
 /// Render the session picker — shown in the main area when no sessions exist.
-let renderSessionPicker (previous: PreviousSession list) =
+/// Takes the "Resume Previous" list's chosen sort order explicitly; use this
+/// when a specific order is in play (a connection's own remembered choice).
+/// `renderSessionPicker` below is the Recent-default compat entry point for
+/// callers with no such choice to thread through.
+let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: PreviousSession list) =
   Elem.div [ Attr.id DomIds.SessionPicker ] [
     Elem.div [ Attr.class' "picker-container" ] [
       Elem.h2 [] [ Text.raw "Start a Session" ]
@@ -819,6 +991,7 @@ let renderSessionPicker (previous: PreviousSession list) =
       ]
       match previous.IsEmpty with
       | false ->
+        let ordered = sortPreviousSessions sortOrder previous
         Elem.div [ Attr.class' "picker-previous" ] [
           Elem.h3 [ Attr.style "color: var(--fg-blue); margin-bottom: 0.5rem;" ] [
             Text.raw "📋 Resume Previous"
@@ -830,7 +1003,13 @@ let renderSessionPicker (previous: PreviousSession list) =
             // exists in SettingsCatalog. A running session is never pruned by age at all.
             Text.raw "Stopped sessions are kept for 7 days."
           ]
-          yield! previous |> List.map (fun s ->
+          // Only rendered when there is more than one entry — with zero or
+          // one row, there is nothing a sort order can do (matches the
+          // session card's own project picker, which hides the same way).
+          match previous.Length > 1 with
+          | true -> renderPreviousSessionSortSelect sortOrder
+          | false -> ()
+          yield! ordered |> List.map (fun s ->
             let age =
               let span = DateTime.UtcNow - s.LastSeen
               match span.TotalDays >= 1.0 with
@@ -839,13 +1018,22 @@ let renderSessionPicker (previous: PreviousSession list) =
                 match span.TotalHours >= 1.0 with
                 | true -> sprintf "%.0fh ago" span.TotalHours
                 | false -> sprintf "%.0fm ago" span.TotalMinutes
-            Elem.div
+            // Headline is the work being resumed (project or directory name),
+            // not the session's bookkeeping id — the id stays visible (it is
+            // how the user correlates with logs and the API) but no longer
+            // leads the row. A real <button> (not a div+onclick) so the row
+            // is keyboard-reachable, Enter/Space-activatable, and gets a
+            // focus ring for free — same fix already applied to the Discover
+            // results (commit fe8e1f4b).
+            let headline = previousSessionHeadline s
+            Elem.button
               [ Attr.class' "picker-session-row"
+                Attr.create "aria-label" (attrEnc (sprintf "Resume session: %s (id %s, %s)" headline s.Id age))
+                Attr.create "title" (attrEnc (sprintf "Resume session: %s (id %s, %s)" headline s.Id age))
                 Ds.onClick (Ds.post (sprintf "/dashboard/session/resume/%s" s.Id)) ]
-              [ Elem.div [ Attr.style "flex: 1; min-width: 0;" ] [
+              [ Elem.div [ Attr.style "flex: 1; min-width: 0; text-align: left;" ] [
                   Elem.div [ Attr.class' "flex-row"; Attr.style "gap: 0.5rem;" ] [
-                    Elem.span [ Attr.style "font-weight: bold;" ] [ textEnc s.Id ]
-                    Elem.span [ Attr.class' "meta" ] [ textEnc age ]
+                    Elem.span [ Attr.style "font-weight: bold;" ] [ textEnc headline ]
                   ]
                   match s.WorkingDir.Length > 0 with
                   | true ->
@@ -863,6 +1051,11 @@ let renderSessionPicker (previous: PreviousSession list) =
                           [ textEnc (Path.GetFileName p) ])
                     ]
                   | true -> ()
+                  // Bookkeeping — still visible (log/API correlation), no
+                  // longer the row's headline.
+                  Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 2px; font-size: 0.7rem;" ] [
+                    textEnc (sprintf "%s · %s" s.Id age)
+                  ]
                 ]
                 Elem.span [ Attr.style "color: var(--fg-blue); font-size: 0.85rem;" ] [ Text.raw "▶" ]
               ])
@@ -870,6 +1063,13 @@ let renderSessionPicker (previous: PreviousSession list) =
       | true -> ()
     ]
   ]
+
+/// Compat entry point for callers with no per-connection "Resume Previous"
+/// sort choice to thread through — defaults to `Recent` (the default order).
+/// Dashboard.fs's live push/teardown paths, which DO have a connection's
+/// remembered choice, call `renderSessionPickerSorted` directly.
+let renderSessionPicker (previous: PreviousSession list) =
+  renderSessionPickerSorted PreviousSessionSort.Recent previous
 
 /// Render an empty session picker (hidden — sessions exist).
 let renderSessionPickerEmpty =
