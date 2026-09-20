@@ -231,9 +231,29 @@ let dotnetRoot =
   | root -> root
 
 let aspVerDir =
-  Directory.EnumerateDirectories(Path.Combine(dotnetRoot, "shared", "Microsoft.AspNetCore.App"))
-  |> Seq.sortDescending
-  |> Seq.head
+  // WHY match the running FSI worker's OWN runtime major version rather than
+  // just taking the newest shared-framework dir: a plain descending SORT
+  // BY NAME picks a co-installed preview ahead of the stable release the
+  // project actually targets — e.g. "11.0.0-rc.1.26425.128" string-sorts
+  // ABOVE "10.0.12" — so a machine with both a stable and a preview SDK
+  // installed silently loads the wrong major version's ASP.NET Core refs
+  // into a net10.0 fixture. Prefer the dir whose version starts with this
+  // process's own runtime major (matching the fixture's TargetFramework,
+  // since the isolated FSI host is built for the project's own TFM); fall
+  // back to the newest-by-name only when nothing matches, so a single-SDK
+  // machine keeps its previous behavior exactly.
+  let dirs =
+    Directory.EnumerateDirectories(Path.Combine(dotnetRoot, "shared", "Microsoft.AspNetCore.App"))
+    |> Seq.toList
+  let currentMajorPrefix = sprintf "%d." Environment.Version.Major
+  let matchesRuntime (dir: string) =
+    Path.GetFileName(dir).StartsWith(currentMajorPrefix)
+  match dirs |> List.filter matchesRuntime |> List.sortDescending with
+  | best :: _ -> best
+  | [] ->
+    match dirs |> List.sortDescending with
+    | best :: _ -> best
+    | [] -> failwithf "No Microsoft.AspNetCore.App shared framework found under %s" dotnetRoot
 
 let refsPath = Path.Combine(Environment.CurrentDirectory, "asp-refs.generated.fsx")
 let refsLines =
@@ -274,8 +294,22 @@ let prepareHotReloadFixture (repoRoot: string) : string =
   let dest =
     Path.Combine(Path.GetTempPath(), "sagefs-hr", Guid.NewGuid().ToString("N"))
   Directory.CreateDirectory(Path.Combine(dest, ".SageFs")) |> ignore
-  for file in [ "Greeting.fs"; "App.fs"; "Program.fs"; "WebAppFixture.fsproj" ] do
-    File.Copy(Path.Combine(fixtureSrc, file), Path.Combine(dest, file))
+  // WHY every top-level *.fs/*.fsproj rather than a hardcoded list: a
+  // hardcoded [ "Greeting.fs"; "App.fs"; "Program.fs"; "WebAppFixture.fsproj" ]
+  // silently stopped copying the fixture the moment a new source file (e.g.
+  // Shapes.fs, the shape-matrix fixture) was added and referenced by the
+  // .fsproj — the temp copy's build then failed with "Source file ... could
+  // not be found" for a file that plainly exists in fixtureSrc. Copying every
+  // file the directory actually has means adding a fixture file never
+  // requires touching this runner again.
+  // Filter by an exact extension match (not a "*.fs" glob, which can also
+  // match "*.fsproj"/"*.fsx" on some globbing implementations) so the
+  // .fsproj is enumerated exactly once.
+  let fixtureFiles =
+    Directory.EnumerateFiles(fixtureSrc, "*", SearchOption.TopDirectoryOnly)
+    |> Seq.filter (fun f -> let e = Path.GetExtension f in e = ".fs" || e = ".fsproj")
+  for file in fixtureFiles do
+    File.Copy(file, Path.Combine(dest, Path.GetFileName file))
   File.WriteAllText(Path.Combine(dest, ".SageFs", "init.fsx"), hotReloadInitProfile)
   // Pre-build the temp copy (Debug is fine — the daemon's config fallback
   // resolves Debug<->Release at the same TFM). Fail loudly with the build log
@@ -725,6 +759,64 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
           dumpDaemonLogs ()
           exitWith 1
         else
+          // Pre-settle live testing over the daemon's own HTTP API BEFORE
+          // handing off to the browser journeys — mirroring the settle-then-
+          // baseline sequence HttpApiIntegrationTests.fs already proves works
+          // (:1020-1090: enable -> policy -> wait ready_with_tests -> wait
+          // Running=0 -> run baseline if needed -> wait 11-green). The
+          // browser journey's own UI wait for "11✓" previously had to cover
+          // enable+discovery+build+baseline in one 60s window and timed out
+          // under CI load; by the time Playwright opens the dashboard here,
+          // a server-authoritative GET render already reflects the finished
+          // baseline with no SSE round-trip needed, so that wait resolves
+          // near-instantly instead of racing the whole pipeline. Best-effort:
+          // logged, not fatal — the journey's own (generous) waits remain the
+          // authority on pass/fail.
+          let getLiveTestingSummary () =
+            try
+              let body = syncGetString "/api/live-testing/status"
+              use doc = System.Text.Json.JsonDocument.Parse(body)
+              let root = doc.RootElement
+              let summary = root.GetProperty("Summary")
+              Some
+                {| DiscoveryState = root.GetProperty("DiscoveryState").GetString()
+                   Total = summary.GetProperty("Total").GetInt32()
+                   Passed = summary.GetProperty("Passed").GetInt32()
+                   Failed = summary.GetProperty("Failed").GetInt32()
+                   Running = summary.GetProperty("Running").GetInt32() |}
+            with _ -> None
+          let waitForLiveTesting (deadlineSeconds: float) predicate =
+            let deadline = DateTime.UtcNow.AddSeconds(deadlineSeconds)
+            let mutable matched = false
+            while not matched && DateTime.UtcNow < deadline do
+              match getLiveTestingSummary () with
+              | Some snap when predicate snap -> matched <- true
+              | _ -> Threading.Thread.Sleep(250)
+            matched
+          syncPost "/api/live-testing/enable" "{}" |> ignore
+          syncPost "/api/live-testing/policy" """{"category":"unit","policy":"every"}""" |> ignore
+          let discovered =
+            waitForLiveTesting 90.0 (fun s -> s.DiscoveryState = "ready_with_tests" && s.Total >= 11)
+          let settled =
+            discovered && waitForLiveTesting 90.0 (fun s -> s.Total >= 11 && s.Running = 0)
+          let baseline =
+            settled
+            && (match getLiveTestingSummary () with
+                | Some s when s.Total >= 11 && s.Passed >= 11 && s.Failed = 0 && s.Running = 0 -> true
+                | _ ->
+                  syncPost "/api/live-testing/run" """{"pattern":"","category":""}""" |> ignore
+                  waitForLiveTesting 90.0 (fun s ->
+                    s.Total >= 11 && s.Passed >= 11 && s.Failed = 0 && s.Running = 0))
+          if not baseline then
+            eprintfn "LT runner: live testing did not settle to an 11-green baseline before the browser journeys started (continuing — the journey's own waits are authoritative)"
+            match getLiveTestingSummary () with
+            | Some s ->
+              eprintfn
+                "--- /api/live-testing/status (last) --- Total=%d Passed=%d Failed=%d Running=%d DiscoveryState=%s"
+                s.Total s.Passed s.Failed s.Running s.DiscoveryState
+            | None -> eprintfn "--- /api/live-testing/status (last) --- unavailable"
+            dumpDaemonLogs ()
+
           try
             Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
             Environment.SetEnvironmentVariable("SAGEFS_LT_FIXTURE_DIR", sampleDir)

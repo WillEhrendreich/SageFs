@@ -203,6 +203,41 @@ let main argv =
   // like every other real-daemon [Integration] suite; no separate CLI flag
   // or runner is needed.
 
+  // Run the [Integration] dashboard disconnect-indicator browser journeys
+  // (Playwright.NET): the daemon dying mid-stream must surface a visible
+  // banner, including under client/server clock skew. This suite owns its
+  // own isolated daemon end to end (never touches ports 37749/37750), so the
+  // entry point is a direct call, unlike the HR/LT/browser runners above. CI
+  // invokes this via `SageFs.Tests.dll --integration-disconnect` after a
+  // Release build. Previously registered as Integration.Dedicated but never
+  // dispatched here (outcome-gate-sweep.md §2.2/Fact 2 dark-gate class) —
+  // DashboardDisconnectIndicatorBrowserTests.fs's own header used to say so.
+  let isIntegrationDisconnect = argv |> Array.exists (fun a -> a = "--integration-disconnect")
+  match isIntegrationDisconnect with
+  | true ->
+    let result = SageFs.Tests.DashboardDisconnectIndicatorBrowserTests.runDisconnectIndicatorJourney argv
+    Environment.Exit result
+    result
+  | false ->
+
+  // Fail closed the other direction from unregisteredTagged above: a suite
+  // registered as Integration.Dedicated "--some-flag" but never given a
+  // dispatch branch in this file would otherwise run NOWHERE — in CI or
+  // locally — while its own file's header comment claims a CI entry point
+  // invokes it. This is the dark-gate class outcome-gate-sweep.md §2.2/Fact 2
+  // documents; a suite that only LOOKS wired is worth exactly as much as no
+  // suite. Entry points that are deliberately reached only via --all (an
+  // on-demand suite whose payload is a human-readable note, not a bare CLI
+  // flag) are exempt — see Integration.isBareFlagEntryPoint.
+  let knownDedicatedEntryPoints =
+    [ "--integration-browser"; "--integration-hr"; "--integration-lt"; "--integration-disconnect" ]
+  match SageFs.Tests.TestInfrastructure.Integration.unwiredDedicated knownDedicatedEntryPoints with
+  | [] -> ()
+  | unwired ->
+    eprintfn "Integration.Dedicated suites registered with no Program.fs dispatch branch (fail-closed — outcome-gate-sweep.md §2.2):"
+    unwired |> List.iter (eprintfn "  %s")
+    Environment.Exit 1
+
   // Harness-root Verify configuration (snapshot directory, unique-prefix
   // setting, CRLF scrubber) — owned by TestInfrastructure.Snapshots, never by
   // individual snapshot test files.

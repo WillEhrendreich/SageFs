@@ -178,6 +178,36 @@ module Integration =
     |> List.map (fun flat -> String.concat "/" flat.name)
     |> List.filter (fun name -> name.Contains "[Integration]")
 
+  /// Every distinct `Dedicated` entry point currently registered (in
+  /// registration order).
+  let dedicatedEntryPoints () =
+    registered ()
+    |> List.choose (fun (runner, _) -> match runner with Dedicated ep -> Some ep | Host -> None)
+    |> List.distinct
+
+  /// A `Dedicated` payload that names a real, single-token CLI flag (e.g.
+  /// "--integration-hr") rather than a documented on-demand suite whose
+  /// payload is a human-readable note (e.g. VscodeExtensionTests.fs's
+  /// "--all (on demand: VS Code + a daemon already running on 37749)").
+  /// Only bare-flag entry points are expected to have a Program.fs dispatch
+  /// branch; an on-demand suite is intentionally reached only via --all,
+  /// which runs the whole discovered assembly unfiltered.
+  let isBareFlagEntryPoint (entryPoint: string) =
+    entryPoint.StartsWith "--" && not (entryPoint.Contains " ")
+
+  /// Bare-flag `Dedicated` entry points with no matching dispatch branch in
+  /// `knownEntryPoints` — the same fail-closed discipline `unregisteredTagged`
+  /// already applies in the other direction (a suite that bypassed the
+  /// registry). Without this, a suite registered as
+  /// `Integration.Dedicated "--some-flag"` but never given a Program.fs
+  /// dispatch branch would run NOWHERE — not in CI, not locally — while
+  /// looking wired from the test file's own header comment (the exact dark-
+  /// gate class documented in outcome-gate-sweep.md §2.2/Fact 2).
+  let unwiredDedicated (knownEntryPoints: string list) =
+    dedicatedEntryPoints ()
+    |> List.filter isBareFlagEntryPoint
+    |> List.filter (fun ep -> not (List.contains ep knownEntryPoints))
+
   /// The tree a plain default run (`--summary`, no `--all`/`--integration`)
   /// actually executes: every [<Tests>] value in this assembly, minus the
   /// registered Integration suites and the [Benchmark]-tagged wall-clock perf

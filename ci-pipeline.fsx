@@ -23,9 +23,14 @@
 //
 // Stage selection:
 //   * unconditional — restore, build, format, unit suite, samples, VS Code
-//     extension compile + test-electron host, and the integration-host suites.
+//     extension compile + test-electron host + client contract tests
+//     (npm run test:golden + every sagefs-vscode/tests/*.fsx), and the
+//     integration-host suites.
 //   * whenCmdArg "ci"      — the mutation-score gate (too slow for the fast local
-//                            loop AGENTS.md asks for).
+//                            loop AGENTS.md asks for) and every real-browser
+//                            journey (dashboard, hot-reload, live-testing,
+//                            disconnect-indicator) — CI-gated so the fast
+//                            local loop never fetches a browser.
 //   * whenCmdArg "release" — pack the shippable bundle + write release-manifest.
 //
 // Cross-platform packing is safe: every per-RID tree-sitter native is committed
@@ -254,6 +259,27 @@ pipeline "sagefs" {
     run "npm run compile:test-electron"
   }
 
+  stage "vscode client contract tests" {
+    // Real gates that existed but ran nowhere (outcome-gate-sweep.md Gap
+    // B.4): the golden server->client SSE round trip (loads the REAL
+    // fable-out/LiveTestingListener.js built by "vscode extension compile"
+    // above and feeds it the committed fixtures) plus every standalone
+    // sagefs-vscode/tests/*.fsx contract test. Structural, not an enumerated
+    // list, so a new *.fsx contract test is picked up here by construction —
+    // the same "join CI by construction" discipline TestInfrastructure.
+    // Integration.hostList applies on the .NET side.
+    workingDir vscodeDir
+    timeoutForStep 300
+    run "npm run test:golden"
+    run (fun ctx ->
+      async {
+        let fsxFiles =
+          Directory.GetFiles(Path.Combine(vscodeDir, "tests"), "*.fsx")
+          |> Array.sort
+        return! runSteps ctx.RunCommand [ for f in fsxFiles -> $"dotnet fsi \"{f}\"" ]
+      })
+  }
+
   stage "integration host" {
     // Every [Integration] suite registered as Host: real FSI sessions, real
     // SageFs.Host spawns, Harmony detours, real daemons on isolated data dirs,
@@ -275,17 +301,58 @@ pipeline "sagefs" {
     // Playwright driver — no pwsh dependency. CI-gated so the fast local loop
     // never fetches a browser (run it locally with `-- ci`).
     //
-    // NOTE: only the dashboard journey folded — --integration-hr and
-    // --integration-lt did not port to Linux (the WebLive init profile never
-    // writes app-url.txt under the HR runner; the LT runner times out on the
-    // 11-green baseline). Those FEATURES stay covered by the integration-host
-    // suite (HttpApiIntegrationTests live-testing; HotReloadTests /
-    // WebAppHotReloadVerificationTests); only their windows-only *browser*
-    // journeys were dropped with the windows leg.
+    // The HR/LT/disconnect journeys below reuse this stage's Chromium install
+    // rather than repeating it — this stage must run first among the four.
     whenCmdArg "ci"
     timeoutForStep 900
     run $"{testBinDir}/.playwright/node/linux-x64/node {testBinDir}/.playwright/package/cli.js install chromium"
     run $"dotnet {testDll} --integration-browser --summary"
+  }
+
+  stage "hot-reload browser journeys" {
+    // HR-DASH: real save -> the SAME running app serves new code, observed
+    // from the dashboard page. Was written and registered
+    // (Integration.Dedicated "--integration-hr", Program.fs dispatches it)
+    // but no pipeline stage ever invoked it (outcome-gate-sweep.md Gap B.1) —
+    // ci-pipeline.fsx used to claim "did not port to Linux" (app-url.txt
+    // never written), which a real Linux run under this exact HEAD did NOT
+    // reproduce: the runner reaches Ready, writes app-url.txt, and launches
+    // the browser suite. Chromium is already installed by the "dashboard
+    // browser journeys" stage above (same testBinDir), so this stage does
+    // not reinstall it. CI-gated for the same reason as that stage: the fast
+    // local loop never fetches a browser.
+    whenCmdArg "ci"
+    timeoutForStep 1200
+    run $"dotnet {testDll} --integration-hr --summary"
+  }
+
+  stage "live-testing browser journeys" {
+    // LT-DASH: enable -> discover -> a real edit surfaces the failing test
+    // live in the panel -> revert -> green again. Registered
+    // (Integration.Dedicated "--integration-lt", Program.fs dispatches it)
+    // but no pipeline stage ever invoked it (outcome-gate-sweep.md Gap B.2).
+    // DashboardBrowserRunner.runLiveTestingBrowserJourneys now pre-settles
+    // live testing to an 11-green baseline over the daemon's own HTTP API
+    // (the same settle-then-baseline sequence HttpApiIntegrationTests.fs
+    // already proves works) before handing off to the browser journeys, so
+    // the panel's own UI wait no longer has to race enable+discovery+build+
+    // baseline inside one window.
+    whenCmdArg "ci"
+    timeoutForStep 900
+    run $"dotnet {testDll} --integration-lt --summary"
+  }
+
+  stage "dashboard disconnect-indicator browser journeys" {
+    // The daemon dying mid-stream (redeploy, crash, SIGTERM) must show a
+    // visible banner, including under client/server clock skew. Registered
+    // (Integration.Dedicated "--integration-disconnect") but never dispatched
+    // anywhere — Program.fs now dispatches it to
+    // DashboardDisconnectIndicatorBrowserTests.runDisconnectIndicatorJourney,
+    // which owns its own isolated daemon end to end on non-default ports
+    // (never 37749/37750) — outcome-gate-sweep.md Gap B.3.
+    whenCmdArg "ci"
+    timeoutForStep 900
+    run $"dotnet {testDll} --integration-disconnect --summary"
   }
 
   stage "package vscode extension" {

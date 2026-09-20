@@ -65,7 +65,14 @@ let private sampleMushroomKingdomFact () =
 
 [<Tests>]
 let extractOpensStillCapturesBothShapesTests =
-  testList "extractOpensFromLines (roast-8 shapes are scraped verbatim — dropping happens later, not here)" [
+  // WHY no tracking token in this list name (outcome-gate-sweep.md §2.3): the
+  // token "roast-8" used to live only here, in the LIST name — invisible to
+  // `--filter-test-case`, which matches leaf case names only. Every leaf below
+  // is named "WHY — ...", so a case-filter selecting for "roast-8" silently
+  // matched zero of the eight, exited 0, and reported "Failed: 0, Errored: 0".
+  // Dropping the token from the list name (rather than duplicating it onto
+  // every case) is the simpler of the two fixes the sweep offers.
+  testList "extractOpensFromLines (shapes are scraped verbatim — dropping happens later, not here)" [
     test "WHY — a bare open of a nested PUBLIC module is captured verbatim, same as any other open" {
       [| "module SageFs.Samples.Koans.AboutModules"; ""; "module MushroomKingdom ="; "  let x = 1"; ""; "open MushroomKingdom" |]
       |> extractOpensFromLines
