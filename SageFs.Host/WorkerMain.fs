@@ -754,7 +754,10 @@ let run (sessionId: string) (port: int) = async {
       // detail: taking credit for a restart that did not happen, and asking a
       // user to restart something SageFs already restarted, are both lies.
       let restartOrFallBack (fileName: string) first rest = async {
-        let reasons = Features.ReloadBroadcast.reasonsOf first rest
+        // The planner owns the change → reason translation
+        // (`ReloadChange.restartReasons`); this pipeline only decides who acts
+        // on it.
+        let reasons = Features.ReloadPlanning.ReloadChange.restartReasons first rest
         match AppRunner.state appRunner with
         | AppRun.AppRunState.Running _ ->
           Log.info "Run App: %s — %s; restarting the app" fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
@@ -810,16 +813,19 @@ let run (sessionId: string) (port: int) = async {
                 match Features.ReloadPlanning.confirmPatch baseline functions reloaded with
                 | Features.ReloadPlanning.PatchOutcome.Applied ->
                   reloadBaselines.[IO.Path.GetFullPath filePath] <- current
-                  // `Applied` means every function that already existed was
-                  // detoured onto its new body, so the running process serves
-                  // all of them. The count is the user's own changed
-                  // definitions — never the incidental methods that happened
-                  // to match, which is what the old "any detour ⇒ reload" rule
-                  // counted.
-                  let changed = List.length functions
-                  Features.ReloadBroadcast.broadcastOutcome
-                    (Features.ReloadOutcome.ReloadOutcome.ofPatchCounts changed changed [])
-                  Log.info "Hot reload: patched %s in place: %s" fileName (functions |> List.map _.Name |> String.concat ", ")
+                  // The counts come from the planner, not from a tally invented
+                  // here: `confirmPatchAsOutcome` pairs the functions the user
+                  // actually changed against the methods that were genuinely
+                  // re-pointed, and names anything that was planned and did not
+                  // land (a declined or torn binding shows up here as a missed
+                  // patch with its own reason). The old rule counted incidental
+                  // methods that happened to match, which is the bug.
+                  let outcome = Features.ReloadPlanning.confirmPatchAsOutcome baseline functions reloaded
+                  Features.ReloadBroadcast.broadcastOutcome outcome
+                  Log.info "Hot reload: %s — %s (%s)"
+                    fileName
+                    (Features.ReloadOutcome.ReloadOutcome.describe outcome)
+                    (functions |> List.map _.Name |> String.concat ", ")
                   return SaveHandling.Reported
                 | Features.ReloadPlanning.PatchOutcome.RestartNeeded (first, rest) ->
                   return! restartOrFallBack fileName first rest
