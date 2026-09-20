@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The isolated FSI host. NOT part of the SageFs solution: SageFs.Core embeds these three files and
+       FsiHostBuild copies them into a cache directory and builds them with the PROJECT'S OWN SDK, so this
+       program is compiled by that SDK's fsc against that SDK's FSharp.Compiler.Service and FSharp.Core.
+       Nothing from SageFs is referenced, so nothing from SageFs can conflict with the user's packages. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net$(BundledNETCoreAppTargetFrameworkVersion)</TargetFramework>
+    <AssemblyName>FsiHost</AssemblyName>
+    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
+    <DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder>
+    <RestoreEnableSdkReferences>false</RestoreEnableSdkReferences>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- MSBuildExtensionsPath has a trailing slash on SDK 10 but not on SDK 11: normalise it. -->
+    <FSharpSdkDir>$([MSBuild]::EnsureTrailingSlash('$(MSBuildExtensionsPath)'))FSharp/</FSharpSdkDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="FsiProtocol.fs" />
+    <Compile Include="Program.fs" />
+    <Reference Include="FSharp.Core"><HintPath>$(FSharpSdkDir)FSharp.Core.dll</HintPath></Reference>
+    <Reference Include="FSharp.Compiler.Service"><HintPath>$(FSharpSdkDir)FSharp.Compiler.Service.dll</HintPath></Reference>
+    <Reference Include="FSharp.DependencyManager.Nuget"><HintPath>$(FSharpSdkDir)FSharp.DependencyManager.Nuget.dll</HintPath></Reference>
+  </ItemGroup>
+
+</Project>
