@@ -487,6 +487,59 @@ let architectureTests =
             (sprintf "Core must still define %s (seam test must not pass vacuously)" expected)
     ]
 
+    testList "Documentation site" [
+
+      // The GitHub Pages site at willehrendreich.github.io/SageFs was a DIFFERENT,
+      // older product: it linked to none of the current docs, said "Visual Studio"
+      // four times, claimed 30 MCP tools when there were 50, documented CLI
+      // subcommands that do not exist, capitalised the binary as `SageFs` (which does
+      // not run on Linux/macOS), and served docs/internal/** publicly — raw working
+      // notes with local Windows paths in them. Nothing validated any of it, so it
+      // drifted silently while the product moved. It has been taken down; the
+      // documentation site is sagetech.dev/sagefs.
+      //
+      // This guard exists because a dead URL comes back the moment someone writes a
+      // "docs" link from memory.
+      testCase "WHY — no tracked file references the retired GitHub Pages docs site, because a link to it sends users to a different product" <| fun _ ->
+        let offenders =
+          System.Diagnostics.Process.Start(
+            System.Diagnostics.ProcessStartInfo(
+              FileName = "git",
+              Arguments = "ls-files",
+              WorkingDirectory = repoRoot,
+              RedirectStandardOutput = true,
+              UseShellExecute = false))
+          |> fun p ->
+            let out = p.StandardOutput.ReadToEnd()
+            p.WaitForExit()
+            out.Split('\n')
+          |> Array.map (fun f -> f.Trim())
+          |> Array.filter (fun f -> f.Length > 0)
+          // The guard names the URL itself, so exclude this file from its own scan.
+          |> Array.filter (fun f -> not (f.EndsWith "ArchitectureTests.fs"))
+          |> Array.choose (fun relative ->
+            let full = System.IO.Path.Combine(repoRoot, relative)
+            match System.IO.File.Exists full with
+            | false -> None
+            | true ->
+              try
+                let text = System.IO.File.ReadAllText full
+                match text.Contains "github.io/SageFs" with
+                | true -> Some relative
+                | false -> None
+              with _ -> None)
+        offenders
+        |> Expect.isEmpty
+          (sprintf
+            "these tracked files link to the retired GitHub Pages docs site — use https://sagetech.dev/sagefs instead: %s"
+            (String.concat ", " offenders))
+
+      testCase "WHY — the site's own HTML is gone, so it cannot be republished by re-enabling Pages" <| fun _ ->
+        [ "docs/index.html"; "docs/documentation.html"; "docs/architecture-graph.html" ]
+        |> List.filter (fun f -> System.IO.File.Exists(System.IO.Path.Combine(repoRoot, f)))
+        |> Expect.isEmpty "the retired docs-site HTML must stay deleted"
+    ]
+
     testList "Cohort command/effect wiring (roast-7 §5/§6 — dead-limb detection)" [
 
       // Cases with no production construction site today. Each entry names

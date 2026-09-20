@@ -164,7 +164,9 @@ dotnet tool install --global SageFs --add-source ./nupkg --no-cache
 
 </details>
 
-📚 **[Full Documentation](docs/README.md)** — Guides, deep dives, technical reference, and contributor docs.
+📚 **[Documentation — sagetech.dev/sagefs](https://sagetech.dev/sagefs)** — the documentation site.
+
+📁 **[Docs in this repo](docs/README.md)** — the same guides and technical reference, alongside the code.
 
 ---
 
