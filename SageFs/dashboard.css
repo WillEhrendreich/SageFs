@@ -1203,6 +1203,53 @@ h2 {
 }
 @keyframes tip-fade-in { to { opacity: 1; } }
 
+/* The rule above can only ever render the tip ABOVE the control, as an absolutely
+   positioned child of it. That fails two ways on this page:
+
+     1. Clipping. A dozen panels here set `overflow: hidden`, and an absolutely
+        positioned descendant is clipped by them no matter how high its z-index.
+     2. Overflow. A control near the top of the viewport (the header row, the eval
+        perf toggle) puts its tip above the top edge, where it cannot be read.
+
+   CSS anchor positioning fixes both without touching the markup, which keeps the
+   server-rendered, one-attribute, morph-safe design intact:
+
+     - `position: fixed` escapes every `overflow: hidden` ancestor. That is only
+       true while no ancestor establishes a containing block, so nothing in this
+       stylesheet may set transform/filter/backdrop-filter/contain/perspective/
+       will-change on a tooltip ancestor. Today the only `transform` in this file
+       is the fallback rule's own, which this block overrides.
+     - No `anchor-name` is needed: a pseudo-element is implicitly anchored to its
+       originating element. That matters here, because the selector matches many
+       controls — a shared anchor name would bind every tip to whichever element
+       came last in source order.
+     - `position-try-fallbacks` re-places the tip when the preferred spot does not
+       fit: below when there is no room above, edge-aligned when it would overflow
+       the left or right edge.
+
+   Guarded by @supports so browsers without anchor positioning (Baseline as of
+   September 2026; Chrome/Edge 128+, Firefox 147+) keep the fallback above. */
+@supports (position-try-fallbacks: flip-block) {
+  [aria-label]:not(input):not(textarea):hover::after,
+  [aria-label]:not(input):not(textarea):focus-visible::after {
+    position: fixed;
+    position-area: block-start span-all;
+    position-try-fallbacks:
+      block-end span-all,
+      block-start span-inline-end,
+      block-start span-inline-start,
+      block-end span-inline-end,
+      block-end span-inline-start;
+    /* Neutralise the fallback rule's manual placement so it cannot fight
+       position-area, and re-express its 6px gap as a margin that applies
+       whichever side the tip is finally placed on. */
+    bottom: auto;
+    left: auto;
+    transform: none;
+    margin: 6px;
+  }
+}
+
 /* Perf-stats reveal toggle (📊) — count stays; the detail hides behind it. */
 .perf-toggle-btn {
   background: none;
