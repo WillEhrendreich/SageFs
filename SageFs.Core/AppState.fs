@@ -683,39 +683,69 @@ let private discoverWarmupReplayPlan
         (Seq.toList discoveryWarnings)
   }
 
+/// An eval as the (Choice, diagnostics) pair the warm-up code was written against.
+let private evalAsChoice (session: FsiSession.IFsiSession) (code: string) (ct: CancellationToken) : Choice<unit, exn> * Diagnostics.Diagnostic array =
+  let evaluation = session.Eval(code, ct)
+  let outcome =
+    match evaluation.Outcome with
+    | FsiSession.FsiSucceeded -> Choice1Of2()
+    | FsiSession.FsiFailed ex -> Choice2Of2 ex
+    | FsiSession.FsiInterrupted -> Choice2Of2(OperationCanceledException "the evaluation was interrupted" :> exn)
+  outcome, evaluation.Diagnostics
+
 /// Creates a fresh FSI session with warm-up: loads startup files and opens namespaces.
 /// The CancellationToken is passed through to FSI EvalInteraction calls so that
 /// warm-up can be cancelled if it takes too long (e.g. a stuck module initializer).
-let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (originalSln: Solution) (sln: Solution) (autoOpenNamespaces: bool) (hotReload: bool) (ct: CancellationToken) (onProgress: (int * int * string) -> unit) =
+let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (originalSln: Solution) (sln: Solution) (autoOpenNamespaces: bool) (hotReload: bool) (ct: CancellationToken) (onProgress: (int * int * string) -> unit) =
   async {
     let warmupStartedAt = System.DateTimeOffset.UtcNow
     let sw = System.Diagnostics.Stopwatch.StartNew()
-    let fsiConfig = FsiEvaluationSession.GetDefaultConfiguration()
     let args = solutionToFsiArgs logger useAsp hotReload sln
     let replayArgs = solutionToFsiArgs logger useAsp hotReload originalSln
     let recorder = new TextWriterRecorder(outStream)
 
-    logger.LogInfo (sprintf "  Creating FSI session with %d args..." (Array.length args))
+    logger.LogInfo (sprintf "  Creating FSI session (%A) with %d args..." kind (Array.length args))
     let fsiErrorWriter = new System.IO.StringWriter()
-    let fsiSession =
-      try
-        FsiEvaluationSession.Create(fsiConfig, args, new StreamReader(Stream.Null), recorder, fsiErrorWriter, collectible = true)
-      with ex ->
-        let fsiErrors = fsiErrorWriter.ToString()
-        match fsiErrors.Length > 0 with
-        | true -> logger.LogError (sprintf "  FSI stderr: %s" fsiErrors)
-        | false -> ()
-        logger.LogError (sprintf "  ❌ FsiEvaluationSession.Create failed: %s" ex.Message)
-        match isNull ex.InnerException with
-        | false -> logger.LogError (sprintf "    Inner: %s" ex.InnerException.Message)
-        | true -> ()
-        raise ex
-    let fsiInitErrors = fsiErrorWriter.ToString()
-    match fsiInitErrors.Length > 0 with
-    | true -> logger.LogWarning (sprintf "  FSI init warnings: %s" fsiInitErrors)
-    | false -> ()
+    // The session is behind the port from here on: everything below (base.fsx, startup files, the namespace
+    // warm-up) is identical whether FSI lives in this process or in an isolated host.
+    let! fsiSession =
+      match kind with
+      | SessionKinds.InProcess ->
+        async {
+          let fsiConfig = FsiEvaluationSession.GetDefaultConfiguration()
+          let raw =
+            try
+              FsiEvaluationSession.Create(fsiConfig, args, new StreamReader(Stream.Null), recorder, fsiErrorWriter, collectible = true)
+            with ex ->
+              let fsiErrors = fsiErrorWriter.ToString()
+              match fsiErrors.Length > 0 with
+              | true -> logger.LogError (sprintf "  FSI stderr: %s" fsiErrors)
+              | false -> ()
+              logger.LogError (sprintf "  ❌ FsiEvaluationSession.Create failed: %s" ex.Message)
+              match isNull ex.InnerException with
+              | false -> logger.LogError (sprintf "    Inner: %s" ex.InnerException.Message)
+              | true -> ()
+              raise ex
+          let fsiInitErrors = fsiErrorWriter.ToString()
+          match fsiInitErrors.Length > 0 with
+          | true -> logger.LogWarning (sprintf "  FSI init warnings: %s" fsiInitErrors)
+          | false -> ()
+          return (new FsiSession.InProcessFsiSession(raw) :> FsiSession.IFsiSession)
+        }
+      | SessionKinds.Isolated ->
+        async {
+          logger.LogWarning "  Isolated FSI session: hot reload and live testing are not available in it yet (they need the host agent)."
+          let projects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
+          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects with
+          | Ok session -> return session
+          | Error reason ->
+            let message = IsolatedFsiSession.describeStartError reason
+            logger.LogError (sprintf "  ❌ Isolated FSI host failed to start: %s" message)
+            return failwith message
+        }
     logger.LogInfo (sprintf "  FSI session created in %dms, loading startup files..." sw.ElapsedMilliseconds)
     onProgress(1, 4, "FSI session created")
+
 
     // Chesterton's fence: evaluate the embedded base.fsx FIRST so the
     // feature-gate flags (_SageFsHotReload, _SageFsCompExpr) are bound before
@@ -737,7 +767,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
     | _ ->
       logger.LogInfo "  Loading embedded base.fsx (feature gates)"
       try
-        fsiSession.EvalInteraction(baseConfig, ct)
+        FsiSession.evalOrThrow fsiSession baseConfig ct
       with ex ->
         logger.LogWarning (sprintf "  base.fsx eval failed (continuing): %s" ex.Message)
 
@@ -754,7 +784,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
         logger.LogInfo $"   Rewrote {beforeCount - afterCount} 'use' statements to 'let'"
       | false -> ()
       try
-        fsiSession.EvalInteraction(compatibleContents, ct)
+        FsiSession.evalOrThrow fsiSession compatibleContents ct
       with ex ->
         logger.LogError (sprintf "  ❌ Startup file %s failed: %s" fileName ex.Message)
         raise ex
@@ -790,25 +820,23 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
     | false -> onProgress(3, 4, "Scanned assemblies, auto-open disabled")
     // Phase 3: Open all collected names with rich diagnostics via iterative retry
     let mutable openCount = 0
-    let toWarmupDiagnostics (diagnostics: FSharpDiagnostic array) : WarmupFcsDiagnostic list =
+    let toWarmupDiagnostics (diagnostics: Diagnostics.Diagnostic array) : WarmupFcsDiagnostic list =
       diagnostics
       |> Array.map (fun d ->
         { Message = d.Message
           Severity =
             match d.Severity with
-            | FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error -> "error"
-            | FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Warning -> "warning"
-            | _ -> "info"
+            | Diagnostics.DiagnosticSeverity.Error -> "error"
+            | Diagnostics.DiagnosticSeverity.Warning -> "warning"
+            | Diagnostics.DiagnosticSeverity.Info
+            | Diagnostics.DiagnosticSeverity.Hidden -> "info"
           ErrorNumber = d.ErrorNumber
-          FileName =
-            match d.FileName with
-            | null
-            | "" -> None
-            | fileName -> Some fileName
-          StartLine = d.StartLine
-          EndLine = d.EndLine
-          StartColumn = d.StartColumn
-          EndColumn = d.EndColumn })
+          // The session port does not carry a file name; warm-up opens are evaluated from stdin anyway.
+          FileName = None
+          StartLine = d.Range.StartLine
+          EndLine = d.Range.EndLine
+          StartColumn = d.Range.StartColumn
+          EndColumn = d.Range.EndColumn })
       |> Array.toList
     let reportOpenSuccess name elapsed =
       openCount <- openCount + 1
@@ -824,7 +852,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
       let label = OpenableKind.label kind
       logger.LogDebug (sprintf "Opening %s: %s" label name)
       let openSw = System.Diagnostics.Stopwatch.StartNew()
-      let result, diagnostics = fsiSession.EvalInteractionNonThrowing(sprintf "open %s;;" name, ct)
+      let result, diagnostics = evalAsChoice fsiSession (sprintf "open %s;;" name) ct
       let elapsed = openSw.Elapsed.TotalMilliseconds
       match result with
       | Choice1Of2 _ ->
@@ -856,7 +884,7 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
           |> String.concat Environment.NewLine
           |> fun body -> body + Environment.NewLine + ";;"
         let openSw = System.Diagnostics.Stopwatch.StartNew()
-        let result, diagnostics = fsiSession.EvalInteractionNonThrowing(script, ct)
+        let result, diagnostics = evalAsChoice fsiSession script ct
         let elapsed = openSw.Elapsed.TotalMilliseconds
         match result with
         | Choice1Of2 _ ->
@@ -971,11 +999,11 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
       logger.LogDebug "Restoring core F# operators after warm-up boundary."
       // Restore core F# after warm-up opens. User project libraries like FSharpPlus shadow
       // min/max with SRTP-generic versions and replace the async CE builder.
-      fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.Operators;;", ct) |> ignore
-      fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.ExtraTopLevelOperators;;", ct) |> ignore
+      evalAsChoice fsiSession "open Microsoft.FSharp.Core.Operators;;" ct |> ignore
+      evalAsChoice fsiSession "open Microsoft.FSharp.Core.ExtraTopLevelOperators;;" ct |> ignore
     | false -> ()
 
-    return (new FsiSession.InProcessFsiSession(fsiSession) :> FsiSession.IFsiSession), recorder, args, failed, warmupCtx
+    return fsiSession, recorder, args, failed, warmupCtx
   }
 
 /// Pipeline builder: takes middleware list + core eval function, returns composed pipeline.
@@ -983,6 +1011,8 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
 type PipelineBuildFn = Middleware list -> MiddlewareNext -> MiddlewareNext
 
 let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) =
+  // Where this worker's FSI sessions live: in this process, or (opt-in) in an isolated host process.
+  let sessionKind = SessionKinds.fromEnvironmentWith Environment.GetEnvironmentVariable
   let diagnosticsChangedEvent = Event<Features.DiagnosticsStore.T>()
   let emit evt = try onEvent evt with ex -> logger.LogWarning (sprintf "Event emission failed: %s" ex.Message)
 
@@ -1361,6 +1391,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
               | None -> sln, originalSln
             let! newSession, newRecorder, _, warmupFailures, warmupCtx =
               createFsiSession
+                sessionKind
                 logger
                 outStream
                 useAsp
@@ -1626,6 +1657,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
                 try
                   Async.RunSynchronously(
                     createFsiSession
+                      sessionKind
                       logger
                       outStream
                       useAsp
@@ -1735,6 +1767,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
             publishPhase (Initializing (Some (sprintf "[%d/%d] %s" s t msg))) Affordances.EvalStats.empty
           let! fsiSession, recorder, args, warmupFailures, warmupCtx =
             createFsiSession
+              sessionKind
               logger
               outStream
               useAsp

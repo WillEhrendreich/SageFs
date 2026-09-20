@@ -80,6 +80,22 @@ let toCompletion (item: DeclarationListItem) : WireCompletion =
     ReplacementText = item.NameInCode
     Glyph = glyphName item.Glyph }
 
+/// The plain text of a tooltip's main description. THE ONE API-drift seam of this file: the property's type changed
+/// between SDKs (a TaggedText[] on SDK 10, a RichText on SDK 11), and both expose a `Text` — so it is read through
+/// that, by shape, and the same source compiles against every SDK's FSharp.Compiler.Service.
+let private textOf (description: obj) : string =
+  let textProperty (value: obj) =
+    match value.GetType().GetProperty "Text" with
+    | null -> ""
+    | property ->
+      match property.GetValue value with
+      | :? string as text -> text
+      | _ -> ""
+  match description with
+  | null -> ""
+  | :? System.Collections.IEnumerable as parts -> parts |> Seq.cast<obj> |> Seq.map textProperty |> String.concat ""
+  | single -> textProperty single
+
 /// The first description group's main text, as plain text.
 let describe (item: DeclarationListItem) : string =
   item.Description
@@ -88,5 +104,5 @@ let describe (item: DeclarationListItem) : string =
     | ToolTipElement.Group group -> group
     | _ -> [])
   |> Seq.tryHead
-  |> Option.map (fun element -> element.MainDescription |> Array.map (fun tagged -> tagged.Text) |> String.concat "")
+  |> Option.map (fun element -> textOf (box element.MainDescription))
   |> Option.defaultValue ""

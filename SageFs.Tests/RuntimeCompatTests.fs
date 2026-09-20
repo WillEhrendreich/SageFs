@@ -111,4 +111,30 @@ let tests =
         | Result.Ok name -> System.Version.Parse(name.Split('-').[0]).Major = major
         | Error _ -> true
     ]
+
+    testList "SessionKinds (the isolated-FSI opt-in)" [
+      testCase "the opt-in variable selects Isolated for 1 and true" <| fun _ ->
+        for value in [ "1"; "true" ] do
+          SageFs.SessionKinds.fromEnvironmentWith (fun _ -> value)
+          |> Expect.equal (sprintf "'%s' opts in" value) SageFs.SessionKinds.Isolated
+
+      testCase "unset selects InProcess, the default" <| fun _ ->
+        SageFs.SessionKinds.fromEnvironmentWith (fun _ -> null)
+        |> Expect.equal "default" SageFs.SessionKinds.InProcess
+
+      testProperty "any other value stays InProcess: nothing opts in by accident"
+      <| fun (value: string) ->
+        match value with
+        | "1"
+        | "true" -> true
+        | other -> SageFs.SessionKinds.fromEnvironmentWith (fun _ -> other) = SageFs.SessionKinds.InProcess
+
+      testCase "the switch reads exactly the documented variable" <| fun _ ->
+        let mutable asked = ""
+        SageFs.SessionKinds.fromEnvironmentWith (fun name ->
+          asked <- name
+          null)
+        |> ignore
+        Expect.equal "variable name" SageFs.SessionKinds.EnvironmentVariable asked
+    ]
   ]

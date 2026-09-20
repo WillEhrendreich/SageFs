@@ -78,7 +78,31 @@ let tests =
           Expect.equal "embedded == source" onDisk (found |> List.find (fun (name, _) -> name = "FsiProtocol.fs") |> snd)
     ]
 
+    testList "parseSdkList" [
+      testCase "reads the version at the start of each line" <| fun _ ->
+        parseSdkList "10.0.401 [/home/will/.dotnet/sdk]\n11.0.100-rc.1.26425.128 [/home/will/.dotnet/sdk]\n"
+        |> Expect.equal "both versions" [ "10.0.401"; "11.0.100-rc.1.26425.128" ]
+
+      testCase "ignores blank and non-version lines" <| fun _ ->
+        parseSdkList "\n  \nWARNING: nothing here\n9.0.300 [/x]\r\n"
+        |> Expect.equal "only the version" [ "9.0.300" ]
+    ]
+
     Integration.hostList "ensureBuilt (real SDK build)" [
+      // FCS's API differs between SDKs (SDK 11 changed a tooltip type), so the ONE host source must compile with
+      // EVERY installed SDK. A build that fails on any of them is a real bug, not an environment quirk.
+      testCase "the host builds with every installed SDK" <| fun _ ->
+        withTempCache (fun cache ->
+          let sdks =
+            match installedSdkVersions dotnet with
+            | Result.Ok sdks -> sdks
+            | Result.Error reason -> failtest (describeBuildError reason)
+          Expect.isNonEmpty "at least one SDK is installed" sdks
+          for sdk in sdks do
+            match ensureBuilt dotnet sdk cache with
+            | Result.Ok _ -> ()
+            | Result.Error reason -> failtestf "the host does not build with SDK %s:\n%s" sdk (describeBuildError reason))
+
       testCase "builds the host once, then reuses it from the cache" <| fun _ ->
         withTempCache (fun cache ->
           let sdk =

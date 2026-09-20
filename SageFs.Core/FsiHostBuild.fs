@@ -122,6 +122,22 @@ let resolveSdkVersion (dotnet: string) (workingDir: string) : Result<string, Hos
   |> Result.map (fun output -> output.Trim())
   |> Result.mapError (fun failure -> SdkUnavailable(workingDir, failure))
 
+/// Pure: the SDK versions in `dotnet --list-sdks` output ("10.0.401 [/home/x/.dotnet/sdk]" per line).
+let parseSdkList (output: string) : string list =
+  output.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+  |> Array.choose (fun line ->
+    let version = line.Trim().Split(' ').[0]
+    match version.Length > 0 && Char.IsDigit version.[0] with
+    | true -> Some version
+    | false -> None)
+  |> Array.toList
+
+/// Every SDK installed on this machine. The host must build with each of them: FCS's API differs between SDKs.
+let installedSdkVersions (dotnet: string) : Result<string list, HostBuildError> =
+  runCapture dotnet [ "--list-sdks" ] (Path.GetTempPath()) 30_000
+  |> Result.map parseSdkList
+  |> Result.mapError (fun failure -> SdkUnavailable(Path.GetTempPath(), failure))
+
 /// Cross-process lock so two sessions starting together build a given host once. Held for the whole build.
 let private withBuildLock (lockPath: string) (timeoutMs: int) (work: unit -> Result<'a, HostBuildError>) : Result<'a, HostBuildError> =
   let deadline = DateTime.UtcNow.AddMilliseconds(float timeoutMs)

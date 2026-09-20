@@ -44,6 +44,8 @@
         <Compile Include="EndpointContracts.fs" />
         <Compile Include="ResilientActor.fs" />
         <Compile Include="RuntimeCompat.fs" />
+        <Compile Include="RuntimeSelection.fs" />
+        <Compile Include="SessionKinds.fs" />
         <!-- One source file, compiled into BOTH this assembly and the per-SDK generated FSI host: the wire
              protocol cannot drift because there is only one definition of it. -->
         <!-- LiveValueTree has no dependencies and is also compiled into the host, so the protocol can carry its
@@ -202,6 +204,7 @@
         <Compile Include="EvalActorDecision.fs" />
         <Compile Include="FsiSession.fs" />
         <Compile Include="RemoteFsiSession.fs" />
+        <Compile Include="IsolatedFsiSession.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />
