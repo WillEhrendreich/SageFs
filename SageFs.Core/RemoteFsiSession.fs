@@ -66,11 +66,9 @@ let private toCompletionItem (host: FsiHostSession) (completionsId: int64) (inde
         | Answered _
         | HostGone _ -> [||]) }
 
-let private notYetAgent = "the isolated host has no agent yet"
-
 /// A session whose FSI lives in an isolated host process.
 [<Sealed; AllowNullLiteral>]
-type RemoteFsiSession(host: FsiHostSession) =
+type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
   // The port is synchronous (in-process evals are), and its callers run on dedicated eval/actor threads, so the
   // remote calls block those threads rather than the thread pool at large. This is the one sync-over-async seam.
   let wait (call: Async<'a>) : 'a = Async.RunSynchronously call
@@ -135,14 +133,43 @@ type RemoteFsiSession(host: FsiHostSession) =
         { Diagnostics.TypeCheckWithSymbolsResult.Diagnostics = [||]
           SymbolRefs = [] }
 
-    // The host agent (hot reload and live testing, which act on the user's assemblies IN the user's process) is not
-    // wired to the host yet: say so explicitly rather than answering with an empty report.
-    member _.AgentStarted = HostAgent.AgentUnavailable notYetAgent
+    // Hot reload and live testing act on the user's assemblies, so they run in the host, beside the user's code. A lost
+    // host is AgentUnavailable with its reason: never an empty report standing in for "nothing found".
+    member _.AgentStarted = HostAgent.AgentAnswered started
 
-    member _.AfterEval(_request) = HostAgent.AgentUnavailable notYetAgent
+    member _.AfterEval(request) =
+      match wait (host.AgentAfterEval request) with
+      | Answered report -> HostAgent.AgentAnswered report
+      | HostGone reason -> HostAgent.AgentUnavailable reason
 
-    member _.DiscoverLoaded() = HostAgent.AgentUnavailable notYetAgent
+    member _.DiscoverLoaded() =
+      match wait (host.AgentDiscoverLoaded()) with
+      | Answered discovery -> HostAgent.AgentAnswered discovery
+      | HostGone reason -> HostAgent.AgentUnavailable reason
 
-    member _.RunTest(_test) = async { return HostAgent.AgentUnavailable notYetAgent }
+    member _.RunTest(test) =
+      async {
+        match! host.AgentRunTest test with
+        | Answered result -> return HostAgent.AgentAnswered result
+        | HostGone reason -> return HostAgent.AgentUnavailable reason
+      }
 
     member _.Dispose() = (host :> IDisposable).Dispose()
+
+/// Why a session could not be attached to a running host.
+type AttachError = AgentDidNotStart of reason: string
+
+let describeAttachError (error: AttachError) : string =
+  match error with
+  | AgentDidNotStart reason -> sprintf "the isolated FSI host is running but its hot reload / live testing agent did not start: %s" reason
+
+/// Attach a session to a running host. The agent is started FIRST, so a session never exists without one; if it cannot
+/// start, the host is disposed rather than left running.
+let attach (host: FsiHostSession) (init: HostAgent.AgentInit) : Async<Result<RemoteFsiSession, AttachError>> =
+  async {
+    match! host.AgentStart init with
+    | Answered started -> return Result.Ok(new RemoteFsiSession(host, started))
+    | HostGone reason ->
+      (host :> IDisposable).Dispose()
+      return Result.Error(AgentDidNotStart reason)
+  }

@@ -62,7 +62,10 @@ let private newRemote () : Async<IFsiSession> =
         OnLog = ignore
         StartupTimeoutMs = 60_000 }
     match! start options with
-    | Result.Ok host -> return new RemoteFsiSession(host) :> IFsiSession
+    | Result.Ok host ->
+      match! attach host { Projects = []; ResolveFrom = [] } with
+      | Result.Ok session -> return session :> IFsiSession
+      | Result.Error reason -> return failtest (describeAttachError reason)
     | Result.Error reason -> return failtest (describeStartError reason)
   }
 
@@ -257,9 +260,38 @@ let tests =
 
     ]
 
+    Integration.hostList "isolated host session: isolation from SageFs" [
+      testAsync "the host process loads no SageFs assembly and no 0Harmony" {
+        do!
+          withSession newRemote (fun session ->
+            mustSucceed session "let loaded = System.AppDomain.CurrentDomain.GetAssemblies() |> Array.map (fun a -> a.GetName().Name) |> Array.sort |> String.concat \",\""
+            let names = (string (session.BoundValue "loaded")).Split ','
+            Expect.isFalse "no 0Harmony" (names |> Array.contains "0Harmony")
+            let sageFs = names |> Array.filter (fun n -> n.StartsWith "SageFs" && n <> SageFs.FsiHostBuild.HostHarmonyName)
+            Expect.isEmpty "no SageFs assembly" sageFs)
+      }
+
+      testAsync "a project's own Lib.Harmony loads beside the agent's, and the agent still works" {
+        do!
+          withSessionAsync newRemote (fun session ->
+            async {
+              // The user's Harmony (identity 0Harmony) is the very thing that used to collide with SageFs's.
+              mustSucceed session (sprintf "#r @\"%s\"" (typeof<HarmonyLib.Harmony>.Assembly.Location))
+              mustSucceed session "let ownHarmonyId = HarmonyLib.Harmony(\"the-projects-own\").Id"
+              Expect.equal "the user's Harmony works" "the-projects-own" (string (session.BoundValue "ownHarmonyId"))
+              let version (delta: int) = sprintf "module Reload =\n  let addOne (x: int) = x + %d" delta
+              mustSucceed session (version 1)
+              afterEval session (version 1) DetourPolicy.ApplyDetours DiscoveryPolicy.WhenChanged |> ignore
+              mustSucceed session (version 100)
+              let report = afterEval session (version 100) DetourPolicy.ApplyDetours DiscoveryPolicy.WhenChanged
+              Expect.isTrue "the agent detoured beside it" (report.UpdatedMethods |> List.exists (fun name -> name.EndsWith "addOne"))
+            })
+      }
+    ]
+
     Integration.hostList "isolated host session" [
-      // Capabilities the isolated host does not have yet are listed here (each becomes a running case when
-      // implemented). The host agent (hot reload + live testing) is being built: pending until then.
-      contract "RemoteFsiSession" newRemote [ HotReload; LiveTesting ]
+      // Capabilities the isolated host does not have yet would be listed here (each becomes a running case when
+      // implemented). The list is empty: the whole contract runs, agent included.
+      contract "RemoteFsiSession" newRemote []
     ]
   ]

@@ -109,6 +109,15 @@ type Request =
   | Complete of id: int64 * text: string * caret: int
   /// The description of one candidate from the most recent Complete (`completionsId` is that request's id).
   | Describe of id: int64 * completionsId: int64 * index: int
+  /// Start the agent (hot reload + live testing) that lives beside the user's code: load the projects, register the
+  /// resolver. Answered with what could not be loaded. Every other agent request needs this first.
+  | AgentStart of id: int64 * init: HostAgent.AgentInit
+  /// The agent's work after an eval: register or detour the redefined methods, then look for tests.
+  | AgentAfterEval of id: int64 * request: HostAgent.AfterEval
+  /// Scan what the process has loaded for tests.
+  | AgentDiscoverLoaded of id: int64
+  /// Run one test. Runs beside the session thread, so a long test never blocks evals or completions.
+  | AgentRunTest of id: int64 * test: LiveTesting.TestCase
   | Interrupt
   | Shutdown
 
@@ -123,6 +132,12 @@ type Response =
   | CompletionsResult of id: int64 * items: WireCompletion list
   | DescriptionResult of id: int64 * text: string
   | ConfigResult of id: int64 * outcome: ConfigOutcome
+  | AgentStartResult of id: int64 * started: HostAgent.AgentStarted
+  | AgentAfterEvalResult of id: int64 * report: HostAgent.AfterEvalReport
+  | AgentDiscoveryResult of id: int64 * discovery: HostAgent.Discovery
+  | AgentTestResult of id: int64 * result: LiveTesting.TestResult
+  /// An agent request the host cannot serve (it was not started, or the request failed): the reason, never a guess.
+  | AgentRefused of id: int64 * reason: string
   | Output of stream: OutputStream * text: string
 
 /// Why a message could not be encoded/decoded. A typed union (never a bare string) so callers can match on the
@@ -167,8 +182,9 @@ let rec private isSupported (seen: Set<string>) (t: Type) : Result<unit, Protoco
     let seen = seen.Add(string t)
     let all (types: Type seq) =
       types |> Seq.fold (fun acc next -> acc |> Result.bind (fun () -> isSupported seen next)) (Result.Ok())
-    if t = typeof<string> || t = typeof<int> || t = typeof<int64> || t = typeof<bool> || t = typeof<DateTimeOffset> then Result.Ok()
+    if t = typeof<string> || t = typeof<int> || t = typeof<int64> || t = typeof<bool> || t = typeof<DateTimeOffset> || t = typeof<TimeSpan> then Result.Ok()
     elif isFSharpList t then isSupported seen (t.GetGenericArguments().[0])
+    elif t.IsArray && t.GetArrayRank() = 1 then isSupported seen (t.GetElementType())
     elif FSharpType.IsRecord t then FSharpType.GetRecordFields t |> Seq.map (fun f -> f.PropertyType) |> all
     elif FSharpType.IsUnion t then
       FSharpType.GetUnionCases t
@@ -189,8 +205,16 @@ let rec private writeValue (writer: Utf8JsonWriter) (t: Type) (value: obj) : uni
   // The round-trip ("O") format keeps every tick and the offset.
   elif t = typeof<DateTimeOffset> then
     writer.WriteStringValue((value :?> DateTimeOffset).ToString("O", System.Globalization.CultureInfo.InvariantCulture))
+  // A TimeSpan travels as its tick count: exact, and independent of culture.
+  elif t = typeof<TimeSpan> then writer.WriteNumberValue((value :?> TimeSpan).Ticks)
   elif isFSharpList t then
     let elementType = t.GetGenericArguments().[0]
+    writer.WriteStartArray()
+    for item in (value :?> System.Collections.IEnumerable) do
+      writeValue writer elementType item
+    writer.WriteEndArray()
+  elif t.IsArray && t.GetArrayRank() = 1 then
+    let elementType = t.GetElementType()
     writer.WriteStartArray()
     for item in (value :?> System.Collections.IEnumerable) do
       writeValue writer elementType item
@@ -278,6 +302,13 @@ let rec private readValue (t: Type) (element: JsonElement) : Result<obj, Protoco
       | true, moment -> Result.Ok(box moment)
       | false, _ -> wrong "an ISO 8601 date-time"
     | _ -> wrong "an ISO 8601 date-time"
+  elif t = typeof<TimeSpan> then
+    match element.ValueKind with
+    | JsonValueKind.Number ->
+      match element.TryGetInt64() with
+      | true, ticks -> Result.Ok(box (TimeSpan.FromTicks ticks))
+      | false, _ -> wrong "a tick count"
+    | _ -> wrong "a tick count"
   elif isFSharpList t then
     match element.ValueKind with
     | JsonValueKind.Array ->
@@ -285,6 +316,17 @@ let rec private readValue (t: Type) (element: JsonElement) : Result<obj, Protoco
       element.EnumerateArray()
       |> readAll (readValue elementType)
       |> Result.map (makeList elementType)
+    | _ -> wrong "an array"
+  elif t.IsArray && t.GetArrayRank() = 1 then
+    match element.ValueKind with
+    | JsonValueKind.Array ->
+      let elementType = t.GetElementType()
+      element.EnumerateArray()
+      |> readAll (readValue elementType)
+      |> Result.map (fun items ->
+        let array = Array.CreateInstance(elementType, List.length items)
+        items |> List.iteri (fun index item -> array.SetValue(item, index))
+        box array)
     | _ -> wrong "an array"
   elif FSharpType.IsRecord t then
     let fields = FSharpType.GetRecordFields t

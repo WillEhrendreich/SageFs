@@ -78,6 +78,18 @@ let tests =
           Expect.equal "embedded == source" onDisk (found |> List.find (fun (name, _) -> name = "FsiProtocol.fs") |> snd)
     ]
 
+    testList "the host's Harmony" [
+      testCase "renameAssembly re-identifies the assembly and leaves its types alone" <| fun _ ->
+        let source = File.ReadAllBytes(typeof<HarmonyLib.Harmony>.Assembly.Location)
+        use renamed = new MemoryStream(renameAssembly "Renamed.Harmony" source)
+        use assembly = Mono.Cecil.AssemblyDefinition.ReadAssembly renamed
+        Expect.equal "the new identity" "Renamed.Harmony" assembly.Name.Name
+        Expect.isNotNull "HarmonyLib.Harmony is still there, so source compiled against it is unchanged" (assembly.MainModule.GetType "HarmonyLib.Harmony")
+
+      testCase "the host's Harmony is never called 0Harmony, so a project's own Lib.Harmony cannot collide with it" <| fun _ ->
+        Expect.notEqual "identity" "0Harmony" HostHarmonyName
+    ]
+
     testList "parseSdkList" [
       testCase "reads the version at the start of each line" <| fun _ ->
         parseSdkList "10.0.401 [/home/will/.dotnet/sdk]\n11.0.100-rc.1.26425.128 [/home/will/.dotnet/sdk]\n"
@@ -102,6 +114,17 @@ let tests =
             match ensureBuilt dotnet sdk cache with
             | Result.Ok _ -> ()
             | Result.Error reason -> failtestf "the host does not build with SDK %s:\n%s" sdk (describeBuildError reason))
+
+      testCase "a built host directory holds the agent's Harmony under its own name, and no 0Harmony and no SageFs assembly" <| fun _ ->
+        withTempCache (fun cache ->
+          let files = Directory.GetFiles(Path.GetDirectoryName(builtDll cache)) |> Array.map Path.GetFileName
+          Expect.contains "the renamed Harmony ships with the host" (HostHarmonyName + ".dll") files
+          Expect.isFalse "no 0Harmony" (files |> Array.contains "0Harmony.dll")
+          let foreign =
+            files
+            |> Array.filter (fun name -> name.StartsWith("SageFs", StringComparison.OrdinalIgnoreCase) && name.EndsWith ".dll")
+            |> Array.filter (fun name -> name <> HostHarmonyName + ".dll")
+          Expect.isEmpty "no other SageFs assembly can reach the user's process" foreign)
 
       testCase "builds the host once, then reuses it from the cache" <| fun _ ->
         withTempCache (fun cache ->
@@ -129,7 +152,11 @@ let tests =
           let assemblies =
             Directory.GetFiles(Path.GetDirectoryName dll |> string, "*.dll")
             |> Array.map (fun path -> Path.GetFileName(path: string) |> string)
-          let offenders = assemblies |> Array.filter (fun name -> owned |> List.exists (fun o -> name.Contains o))
+          // The one exception is the agent's own Harmony, which ships under a name no user package can share.
+          let offenders =
+            assemblies
+            |> Array.filter (fun name -> name <> HostHarmonyName + ".dll")
+            |> Array.filter (fun name -> owned |> List.exists (fun o -> name.Contains o))
           Expect.isEmpty (sprintf "SageFs-owned assemblies in the host: %A" offenders) offenders)
     ]
   ]

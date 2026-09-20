@@ -57,9 +57,20 @@
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
         <EmbeddedResource Include="../SageFs.FsiHost/FsiHost.fsproj" LogicalName="FsiHost/FsiHost.fsproj" />
+        <EmbeddedResource Include="Measures.fs" LogicalName="FsiHost/Measures.fs" />
+        <EmbeddedResource Include="Utils.fs" LogicalName="FsiHost/Utils.fs" />
+        <EmbeddedResource Include="Timeouts.fs" LogicalName="FsiHost/Timeouts.fs" />
+        <EmbeddedResource Include="Instrumentation.fs" LogicalName="FsiHost/Instrumentation.fs" />
         <EmbeddedResource Include="DirectoryConfigTypes.fs" LogicalName="FsiHost/DirectoryConfigTypes.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/ConfigDsl.fs" LogicalName="FsiHost/ConfigDsl.fs" />
         <EmbeddedResource Include="Features\LiveValueTree.fs" LogicalName="FsiHost/LiveValueTree.fs" />
+        <EmbeddedResource Include="Features\LiveTestingTypes.fs" LogicalName="FsiHost/LiveTestingTypes.fs" />
+        <EmbeddedResource Include="Features\LiveTestingInstrumentation.fs" LogicalName="FsiHost/LiveTestingInstrumentation.fs" />
+        <EmbeddedResource Include="Features\ReflectionDiscovery.fs" LogicalName="FsiHost/ReflectionDiscovery.fs" />
+        <EmbeddedResource Include="Features\LiveTestingExecutors.fs" LogicalName="FsiHost/LiveTestingExecutors.fs" />
+        <EmbeddedResource Include="DevReload.fs" LogicalName="FsiHost/DevReload.fs" />
+        <EmbeddedResource Include="Middleware\HotReloadCore.fs" LogicalName="FsiHost/HotReloadCore.fs" />
+        <EmbeddedResource Include="HostAgent.fs" LogicalName="FsiHost/HostAgent.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/FsiProtocol.fs" LogicalName="FsiHost/FsiProtocol.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/FcsQueries.fs" LogicalName="FsiHost/FcsQueries.fs" />
         <EmbeddedResource Include="../SageFs.FsiHost/Program.fs" LogicalName="FsiHost/Program.fs" />

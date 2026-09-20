@@ -17,6 +17,7 @@ open System.Text
 open System.Threading
 open FSharp.Compiler.EditorServices
 open FSharp.Compiler.Interactive.Shell
+open SageFs
 open SageFs.Features
 open SageFs.FsiHost.FsiProtocol
 
@@ -56,6 +57,14 @@ type private Work =
   | RunComplete of id: int64 * text: string * caret: int
   | RunDescribe of id: int64 * completionsId: int64 * index: int
   | RunEvalConfig of id: int64 * content: string
+  | RunAgentStart of id: int64 * init: HostAgent.AgentInit
+  | RunAgentAfterEval of id: int64 * request: HostAgent.AfterEval
+  | RunAgentDiscover of id: int64
+
+/// Whether the agent has been started. A DU, so "asked before started" is a case to handle, not a null to trip over.
+type private AgentState =
+  | AgentNotStarted
+  | AgentRunning of HostAgent.Agent
 
 let private typeNameOf (value: FsiValue) =
   match value.ReflectionType with
@@ -149,6 +158,16 @@ let private run (argsFile: string) : int =
   let lastCompletions = ref (0L, ([||]: DeclarationListItem[]))
   let runningLock = obj ()
   let mutable running: Running option = None
+  // The agent (hot reload + live testing) that lives beside the user's code. Written on the session thread, read by test runs.
+  let agentState = ref AgentNotStarted
+  let refuse (id: int64) (reason: string) = send (AgentRefused(id, reason))
+  /// Run agent work that needs a started agent; a failure is reported as a refusal, never a crash of the host.
+  let withAgent (id: int64) (work: HostAgent.Agent -> unit) =
+    match Volatile.Read(&agentState.contents) with
+    | AgentNotStarted -> refuse id "the agent was not started: send AgentStart first"
+    | AgentRunning agent ->
+      try work agent
+      with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
 
   let evalLoop () =
     let mutable alive = true
@@ -177,6 +196,17 @@ let private run (argsFile: string) : int =
             | false -> "" // a newer Complete replaced the list this index referred to
           send (DescriptionResult(id, text))
         | RunEvalConfig(id, content) -> send (ConfigResult(id, FcsQueries.evalConfig session content))
+        | RunAgentStart(id, init) ->
+          match Volatile.Read(&agentState.contents) with
+          | AgentRunning _ -> refuse id "the agent is already started"
+          | AgentNotStarted ->
+            try
+              let agent = HostAgent.Agent(init, HostAgent.currentProcess (fun () -> session.DynamicAssemblies))
+              Volatile.Write(&agentState.contents, AgentRunning agent)
+              send (AgentStartResult(id, agent.Started))
+            with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+        | RunAgentAfterEval(id, request) -> withAgent id (fun agent -> send (AgentAfterEvalResult(id, agent.AfterEval request)))
+        | RunAgentDiscover id -> withAgent id (fun agent -> send (AgentDiscoveryResult(id, agent.DiscoverLoaded())))
         | RunEval(id, code) ->
           use cancel = new CancellationTokenSource()
           lock runningLock (fun () -> running <- Some { Cancel = cancel; Thread = Thread.CurrentThread })
@@ -219,6 +249,22 @@ let private run (argsFile: string) : int =
       | Result.Ok(Complete(id, text, caret)) -> requests.Add(RunComplete(id, text, caret))
       | Result.Ok(Describe(id, completionsId, index)) -> requests.Add(RunDescribe(id, completionsId, index))
       | Result.Ok(EvalConfig(id, content)) -> requests.Add(RunEvalConfig(id, content))
+      | Result.Ok(AgentStart(id, init)) -> requests.Add(RunAgentStart(id, init))
+      | Result.Ok(AgentAfterEval(id, request)) -> requests.Add(RunAgentAfterEval(id, request))
+      | Result.Ok(AgentDiscoverLoaded id) -> requests.Add(RunAgentDiscover id)
+      | Result.Ok(AgentRunTest(id, test)) ->
+        // Beside the session thread, not on it: a long test must never freeze evals, checks or completions.
+        match Volatile.Read(&agentState.contents) with
+        | AgentNotStarted -> refuse id "the agent was not started: send AgentStart first"
+        | AgentRunning agent ->
+          Async.Start(
+            async {
+              try
+                let! result = agent.RunTest test
+                send (AgentTestResult(id, result))
+              with ex -> refuse id (sprintf "%s: %s" (ex.GetType().Name) ex.Message)
+            }
+          )
       | Result.Ok Interrupt ->
         lock runningLock (fun () ->
           match running with

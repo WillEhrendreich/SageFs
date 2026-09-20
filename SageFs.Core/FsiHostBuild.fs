@@ -17,9 +17,20 @@ open System.Threading
 /// The files that make up the host project, in the order they are written.
 let hostSourceNames =
   [ "FsiHost.fsproj"
+    "Measures.fs"
+    "Utils.fs"
+    "Timeouts.fs"
+    "Instrumentation.fs"
     "DirectoryConfigTypes.fs"
     "ConfigDsl.fs"
     "LiveValueTree.fs"
+    "LiveTestingTypes.fs"
+    "LiveTestingInstrumentation.fs"
+    "ReflectionDiscovery.fs"
+    "LiveTestingExecutors.fs"
+    "DevReload.fs"
+    "HotReloadCore.fs"
+    "HostAgent.fs"
     "FsiProtocol.fs"
     "FcsQueries.fs"
     "Program.fs" ]
@@ -48,6 +59,7 @@ type HostBuildError =
   | BuildLockUnavailable of path: string * detail: string
   | BuildFailed of sdkVersion: string * failure: ProcessFailure
   | BuildOutputMissing of dll: string
+  | HarmonyUnavailable of path: string * detail: string
 
 /// The one place a build error becomes text; every case says what to do about it where the user can act.
 let describeBuildError (error: HostBuildError) : string =
@@ -62,6 +74,8 @@ let describeBuildError (error: HostBuildError) : string =
   | BuildFailed(sdkVersion, failure) ->
     sprintf "Building the FSI host with .NET SDK %s failed. Make sure that SDK is installed.\n%s" sdkVersion (describeProcessFailure failure)
   | BuildOutputMissing dll -> sprintf "the FSI host build succeeded but %s is missing" dll
+  | HarmonyUnavailable(path, detail) ->
+    sprintf "the FSI host's agent needs SageFs's Harmony (%s), which could not be prepared: %s (a broken SageFs install: reinstall the tool)" path detail
 
 /// Pure: the cache directory name for an SDK version and the exact host sources. Any change to either changes it.
 let cacheKey (sdkVersion: string) (sources: (string * string) list) : string =
@@ -76,6 +90,31 @@ let cacheKey (sdkVersion: string) (sources: (string * string) list) : string =
 /// Pure: the global.json that pins the build to exactly one SDK (no roll-forward, previews allowed).
 let globalJson (sdkVersion: string) : string =
   sprintf """{"sdk":{"version":"%s","rollForward":"disable","allowPrerelease":true}}""" sdkVersion
+
+/// The assembly identity the host's Harmony carries. It is NOT `0Harmony`: a project that references Lib.Harmony must never
+/// collide with the agent's own copy, so the agent's is a differently-named assembly of the same build.
+[<Literal>]
+let HostHarmonyName = "SageFs.HostHarmony"
+
+/// Pure over bytes: the same assembly under another simple name. Types and namespaces are untouched (`HarmonyLib.*`), so
+/// source compiled against it is identical; only the identity the loader binds by changes.
+let renameAssembly (newName: string) (source: byte[]) : byte[] =
+  use input = new MemoryStream(source)
+  use assembly = Mono.Cecil.AssemblyDefinition.ReadAssembly input
+  assembly.Name.Name <- newName
+  assembly.MainModule.Name <- newName + ".dll"
+  use output = new MemoryStream()
+  assembly.Write output
+  output.ToArray()
+
+/// SageFs's Harmony, renamed for the host: (its bytes, a hash that identifies them for the cache key).
+let hostHarmony () : Result<byte[] * string, HostBuildError> =
+  let path = typeof<HarmonyLib.Harmony>.Assembly.Location
+  try
+    let renamed = renameAssembly HostHarmonyName (File.ReadAllBytes path)
+    Ok(renamed, Convert.ToHexString(SHA256.HashData renamed).ToLowerInvariant())
+  with ex ->
+    Error(HarmonyUnavailable(path, ex.Message))
 
 let private readEmbedded (name: string) : Result<string, HostBuildError> =
   match Assembly.GetExecutingAssembly().GetManifestResourceStream("FsiHost/" + name) with
@@ -166,7 +205,10 @@ let private withBuildLock (lockPath: string) (timeoutMs: int) (work: unit -> Res
 let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Result<HostBuild, HostBuildError> =
   embeddedSources ()
   |> Result.bind (fun sources ->
-    let directory = Path.Combine(cacheRoot, cacheKey sdkVersion sources)
+    hostHarmony ()
+    |> Result.bind (fun (harmonyBytes, harmonyHash) ->
+    // The renamed Harmony is part of what the host is built from, so it is part of the key.
+    let directory = Path.Combine(cacheRoot, cacheKey sdkVersion ((HostHarmonyName + ".dll", harmonyHash) :: sources))
     let dll = Path.Combine(directory, "bin", "FsiHost.dll")
     let stamp = Path.Combine(directory, ".built")
     let isBuilt () = File.Exists stamp && File.Exists dll
@@ -183,6 +225,7 @@ let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Resu
           Directory.CreateDirectory source |> ignore
           for name, content in sources do
             File.WriteAllText(Path.Combine(source, name), content)
+          File.WriteAllBytes(Path.Combine(source, HostHarmonyName + ".dll"), harmonyBytes)
           File.WriteAllText(Path.Combine(source, "global.json"), globalJson sdkVersion)
           runCapture dotnet [ "build"; "FsiHost.fsproj"; "-c"; "Release"; "-o"; Path.Combine(directory, "bin"); "--nologo"; "-v"; "q" ] source 300_000
           |> Result.mapError (fun failure -> BuildFailed(sdkVersion, failure))
@@ -191,4 +234,4 @@ let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Resu
             | false -> Error(BuildOutputMissing dll)
             | true ->
               File.WriteAllText(stamp, sdkVersion)
-              Ok(Built dll))))
+              Ok(Built dll)))))

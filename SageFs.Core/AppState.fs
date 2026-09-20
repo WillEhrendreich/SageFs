@@ -734,9 +734,8 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
         }
       | SessionKinds.Isolated ->
         async {
-          logger.LogWarning "  Isolated FSI session: hot reload and live testing are not available in it yet (they need the host agent)."
           let projects = sln.Projects |> List.map (fun p -> p.ProjectFileName)
-          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects with
+          match! IsolatedFsiSession.start logger recorder (Array.toList args) System.Environment.CurrentDirectory projects (SessionAgent.agentInitOf sln) with
           | Ok session -> return session
           | Error reason ->
             let message = IsolatedFsiSession.describeStartError reason

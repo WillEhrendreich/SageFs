@@ -20,6 +20,7 @@ type IsolatedStartError =
   | HostBuildFailed of HostBuildError
   | RuntimeNotInstalled of instructions: string
   | HostStartFailed of StartError
+  | AgentAttachFailed of AttachError
 
 /// Every case says what happened and, where the user can act, what to do.
 let describeStartError (error: IsolatedStartError) : string =
@@ -28,6 +29,7 @@ let describeStartError (error: IsolatedStartError) : string =
   | HostBuildFailed reason -> describeBuildError reason
   | RuntimeNotInstalled instructions -> instructions
   | HostStartFailed reason -> SageFs.FsiHostClient.describeStartError reason
+  | AgentAttachFailed reason -> describeAttachError reason
 
 /// The dotnet muxer: DOTNET_HOST_PATH, else the one next to the running runtime.
 let dotnetPath () : string =
@@ -50,6 +52,7 @@ let start
   (fsiArgs: string list)
   (workingDir: string)
   (projects: string list)
+  (agent: HostAgent.AgentInit)
   : Async<Result<IFsiSession, IsolatedStartError>> =
   async {
     let dotnet = dotnetPath ()
@@ -89,6 +92,8 @@ let start
           match! start options with
           | Ok host ->
             logger.LogInfo(sprintf "  Isolated FSI host started: %s, FSharp.Core %s (pid %d)" host.Runtime host.FSharpCoreVersion host.ProcessId)
-            return Ok(new RemoteFsiSession(host) :> IFsiSession)
+            match! attach host agent with
+            | Result.Ok session -> return Ok(session :> IFsiSession)
+            | Result.Error reason -> return Error(AgentAttachFailed reason)
           | Error reason -> return Error(HostStartFailed reason)
   }

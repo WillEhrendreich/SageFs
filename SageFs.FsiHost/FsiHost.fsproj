@@ -19,15 +19,30 @@
   </PropertyGroup>
 
   <ItemGroup>
+      <!-- The agent (hot reload + live testing) that lives beside the user's code. Same source files SageFs.Core compiles. -->
+    <Compile Include="Measures.fs" />
+    <Compile Include="Utils.fs" />
+    <Compile Include="Timeouts.fs" />
+    <Compile Include="Instrumentation.fs" />
     <Compile Include="DirectoryConfigTypes.fs" />
     <Compile Include="ConfigDsl.fs" />
     <Compile Include="LiveValueTree.fs" />
+    <Compile Include="LiveTestingTypes.fs" />
+    <Compile Include="LiveTestingInstrumentation.fs" />
+    <Compile Include="ReflectionDiscovery.fs" />
+    <Compile Include="LiveTestingExecutors.fs" />
+    <Compile Include="DevReload.fs" />
+    <Compile Include="HotReloadCore.fs" />
+    <Compile Include="HostAgent.fs" />
     <Compile Include="FsiProtocol.fs" />
     <Compile Include="FcsQueries.fs" />
     <Compile Include="Program.fs" />
     <Reference Include="FSharp.Core"><HintPath>$(FSharpSdkDir)FSharp.Core.dll</HintPath></Reference>
     <Reference Include="FSharp.Compiler.Service"><HintPath>$(FSharpSdkDir)FSharp.Compiler.Service.dll</HintPath></Reference>
     <Reference Include="FSharp.DependencyManager.Nuget"><HintPath>$(FSharpSdkDir)FSharp.DependencyManager.Nuget.dll</HintPath></Reference>
+    <!-- SageFs's Harmony fork under its OWN assembly identity (FsiHostBuild renames it): a project that references
+         Lib.Harmony (assembly 0Harmony) must never collide with the agent's copy. -->
+    <Reference Include="SageFs.HostHarmony"><HintPath>SageFs.HostHarmony.dll</HintPath></Reference>
   </ItemGroup>
 
 </Project>

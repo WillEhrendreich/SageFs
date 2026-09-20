@@ -124,6 +124,11 @@ type FsiHostSession
           | Result.Ok(CompletionsResult(id, _) as answer) -> complete id answer
           | Result.Ok(DescriptionResult(id, _) as answer) -> complete id answer
           | Result.Ok(ConfigResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentStartResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentAfterEvalResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentDiscoveryResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentTestResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentRefused(id, _) as answer) -> complete id answer
     with ex ->
       onLog (sprintf "[fsihost] read loop ended: %s" ex.Message)
     // Give the process a moment to report its exit code, then fail everything still waiting.
@@ -253,6 +258,46 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> EvalConfig(id, content)) with
       | Got(ConfigResult(_, outcome)) -> return Answered outcome
       | Got other -> return HostGone(unexpected "config" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Start the agent (hot reload and live testing) beside the user's code, and learn which projects it could not load.
+  member _.AgentStart(init: SageFs.HostAgent.AgentInit) : Async<HostCall<SageFs.HostAgent.AgentStarted>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentStart(id, init)) with
+      | Got(AgentStartResult(_, started)) -> return Answered started
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent start" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// The agent's work after an eval: methods redefined (detoured when asked) and the tests found.
+  member _.AgentAfterEval(request: SageFs.HostAgent.AfterEval) : Async<HostCall<SageFs.HostAgent.AfterEvalReport>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentAfterEval(id, request)) with
+      | Got(AgentAfterEvalResult(_, report)) -> return Answered report
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent after-eval" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Scan what the host process has loaded for tests.
+  member _.AgentDiscoverLoaded() : Async<HostCall<SageFs.HostAgent.Discovery>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentDiscoverLoaded id) with
+      | Got(AgentDiscoveryResult(_, discovery)) -> return Answered discovery
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent discovery" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Run one test in the host, beside the session thread.
+  member _.AgentRunTest(test: SageFs.Features.LiveTesting.TestCase) : Async<HostCall<SageFs.Features.LiveTesting.TestResult>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentRunTest(id, test)) with
+      | Got(AgentTestResult(_, result)) -> return Answered result
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent run-test" other)
       | Gone reason -> return HostGone reason
     }
 
