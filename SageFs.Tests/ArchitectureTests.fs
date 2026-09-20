@@ -985,7 +985,15 @@ let fileSizeBudgets =
       // silent accretion. Ratchet back DOWN when this file is split; never
       // bump to paper over drift.
       "SageFs/Mcp.fs", 4270
-      "SageFs/McpAdapter.fs", 850
+      // 850 -> 830: ratcheted DOWN (never up) after moving the
+      // session-path-containment validator (resolveRealSessionPath/
+      // isUncPath/validateSessionCreateRequest) out into its own
+      // SessionPathValidation.fs module, shared by Mcp.fs's create_session
+      // MCP tool and McpServer.fs's /api/sessions/create route (one rule,
+      // one implementation — sagefs-roast.md Finding #1/#13). File dropped
+      // to 821 lines; budget set just above that, not left at the old
+      // ceiling.
+      "SageFs/McpAdapter.fs", 830
       // 5100 -> 5160: a one-time bump for the live-testing-asyoutype-plan.md
       // Brief 4 keystone (EvalThenRunRequest, TestCycleEffect.
       // EvalBufferThenRunAffected, TestCycleEffects.redirectToEvalBuffer,

@@ -1109,7 +1109,7 @@ module McpTools =
             {| state = "NoSession"
                message =
                  match sessionCount with
-                 | 0 -> "No sessions exist. Create one with create_session (args are snake_case): working_directory=<dir> projects=[\"<path>.fsproj\"] to load a project, or projects=[] for a bare scratch REPL (pure F#, no project). Use get_available_projects to discover .fsproj files (pass working_directory to narrow a large tree)."
+                 | 0 -> "No sessions exist. Create one with create_session (args are snake_case): working_directory=<dir> projects=[\"<path>.fsproj\"] to load a specific project, or projects=[] to let the worker auto-discover whatever project/solution sits directly in working_directory (this is NOT a guaranteed-empty REPL — it only comes out empty if the directory has nothing to discover). Use get_available_projects to discover .fsproj files (pass working_directory to narrow a large tree)."
                  | _ -> sprintf "%d session(s) exist but none matched the working directory. Use list_sessions to see them, or switch_session to select one." sessionCount
                available = availableTools |})
       | WarmingUp (sid, status) | Unroutable (sid, status) ->
@@ -1836,29 +1836,35 @@ module McpTools =
     with _ -> []
 
   /// Create a new session and bind it to the requesting agent.
-  let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflow: WorkflowTypes.SessionWorkflow) : Task<string> =
+  let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflowRaw: string) : Task<string> =
     task {
-      // Guard: warn if a session for the same project(s) already exists.
-      // Compare full normalized paths so different repos with the same project
-      // filename (e.g. two separate "Tests.fsproj" files) don't collide.
+      // Reject an unsafe working directory / escaping project path with the
+      // SAME rule `/api/sessions/create` enforces (SessionPathValidation.validateSessionCreateRequest)
+      // — before this, the MCP tool applied no path validation at all while
+      // the HTTP route did (sagefs-roast.md Finding #1).
+      match SessionPathValidation.validateSessionCreateRequest workingDir projects with
+      | Error err -> return SageFsError.describeForAgent err
+      | Ok () ->
+      // Reject an unrecognized workflow instead of silently defaulting
+      // (Finding #6) — before checking for duplicates, since a bad
+      // workflow argument is a request error independent of what sessions
+      // already exist.
+      match CreateSessionUx.parseCreateSessionWorkflow workflowRaw with
+      | Error msg -> return msg
+      | Ok workflow ->
+      // Guard: warn if a session for the SAME project set and working
+      // directory already exists — using the exact rule the manager
+      // enforces at the single owner, not a broader "any overlap" rule
+      // (Finding #7).
       let! existing = ctx.SessionOps.GetAllSessions()
-      let normalizedProjects =
-        projects
-        |> List.map (fun p -> normalizePath (System.IO.Path.GetFullPath(p, workingDir)))
-        |> Set.ofList
       let duplicates =
         existing
-        |> List.filter (fun s ->
-          let sessionProjects =
-            s.Projects
-            |> List.map (fun p -> normalizePath (System.IO.Path.GetFullPath(p, s.WorkingDirectory)))
-            |> Set.ofList
-          Set.intersect normalizedProjects sessionProjects |> Set.isEmpty |> not)
+        |> List.filter (fun s -> CreateSessionUx.isExactDuplicateSession projects workingDir s.Projects s.WorkingDirectory)
       match duplicates with
       | dup :: _ ->
         let sid = WorkerProtocol.SessionId.value dup.Id
         let status = WorkerProtocol.SessionLifecycleStatus.label dup.Status
-        return sprintf "⚠️ A session for this project already exists (session '%s', status: %s). Use switch_session to target it instead of creating a duplicate. Creating duplicate sessions causes resource starvation. If the existing session is stuck, use stop_session to remove it first, then retry create_session." sid status
+        return sprintf "⚠️ A session with this exact project set and working directory already exists (session '%s', status: %s) — the daemon would refuse an identical create_session request anyway. Use switch_session to target it instead. If the existing session is stuck, use stop_session to remove it first, then retry create_session." sid status
       | [] ->
       let! result = ctx.SessionOps.CreateSession projects workingDir workflow
       // Refresh Elm model so dashboard SSE pushes updated session list
@@ -1871,9 +1877,8 @@ module McpTools =
           projects
           |> List.map readFsprojPackageRefs
           |> WorkflowTypes.WorkflowDetection.extractPackageNames
-        match formatDetectionHint packageRefs workflow with
-        | Some hint -> return sprintf "%s\n\n%s" sid hint
-        | None -> return sid
+        let hint = formatDetectionHint packageRefs workflow
+        return CreateSessionUx.formatCreateSessionReply sid projects hint
       | Result.Error err -> return SageFsError.describeForAgent err
     }
 
@@ -1950,7 +1955,7 @@ module McpTools =
       let targetOpt = WorkflowTypes.SessionWorkflow.tryOfString targetStr
       match targetOpt with
       | None ->
-        return sprintf "Error: unknown workflow '%s'. Valid values: 'interactive' (REPL), 'livetesting' (Live Testing), 'hotreload' (Hot Reload)" targetStr
+        return CreateSessionUx.formatUnknownWorkflowError targetStr
       | Some target ->
       // 2. Resolve session from working directory
       let! resolution = resolveSessionId ctx agent None workingDirectory

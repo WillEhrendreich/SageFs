@@ -39,6 +39,7 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   | SageFs.SageFsError.SessionCreationFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.DuplicateSession _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   | SageFs.SageFsError.UnsafeSessionPath _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
+  | SageFs.SageFsError.ProjectFrameworkNotHostable _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   | SageFs.SageFsError.SessionStopFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.SessionSwitchFailed _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   // SessionNotRoutable is the generic "not ready right now" case used while
@@ -639,7 +640,8 @@ KEY SIGNALS IN OUTPUT:
   - Ready = safe to submit code.
   - Evaluating = worker is alive but busy (this also covers worker-side 'Building (...)' states).
   - Faulted = investigate warmup/runtime errors before proceeding.
-- Projects: the loaded .fsproj files for this session.
+- Projects: what the session was REQUESTED with — can be empty even when something loaded, because `projects=[]` still auto-discovers.
+- Loaded: what the worker actually resolved and loaded (from its own project classification) — this is the field to trust for "did my project load," not Projects. Can read as not-yet-resolved if the session only just reached Ready.
 - Available: which MCP tools/affordances are currently active for this session.
 - Session: the stable session ID shown at the start of the response.
 
@@ -689,7 +691,7 @@ WHEN TO USE:
 
 NOTE: This does NOT load any projects — it only lists what is available on disk. Use create_session or hard_reset_fsi_session with rebuild=true to actually load a project.""")>]
     member _.get_available_projects(
-        [<Description("Working directory of the MCP client. When provided, routes to the matching session if exactly one session uses this directory. If multiple sessions share the directory, you must call switch_session first (or pass session_id explicitly) — the daemon will not guess.")>]
+        [<Description("Directory to scan for .fsproj/.sln/.slnx files. This tool does NOT route to any session — it only walks this directory on disk. Defaults to the working directory of your one active session if you have exactly one, otherwise the current directory.")>]
         [<Optional; DefaultParameterValue("")>]
         working_directory: string
     ) : Task<string> =
@@ -1124,22 +1126,23 @@ AFTER CREATION:
 
 WORKTREES: a session's working directory is checkout-aware. If working_directory sits inside a git worktree (e.g. `.claude/worktrees/agent-x`), the session is bound to THAT worktree, not to the main checkout, and list_sessions/the dashboard show its branch. A request from inside a worktree never silently routes into the main checkout's session — create a session for the worktree instead of assuming one exists.
 
-projects: A JSON array of .fsproj paths — projects=["path/to/Foo.fsproj"] — or a comma-separated list; pass [] (or "") for a bare scratch REPL with no project. Both absolute and relative paths work.""")>]
+projects: A JSON array of .fsproj paths — projects=["path/to/Foo.fsproj"] — or a comma-separated list. Passing [] (or "") does NOT guarantee an empty REPL: the worker still auto-discovers and loads whatever project/solution sits directly in working_directory, if one exists there (verified: a lone .fsproj in the working directory IS loaded and its types ARE usable, even though the session's reported `projects` stays []). You get a genuinely empty scratch REPL only when the working directory itself has nothing directly in it to discover. Check get_fsi_status's 'Loaded:' field after creation to see what was actually resolved. Both absolute and relative paths work.
+
+workflow: an unrecognized value (anything other than the aliases listed below, case-insensitive) is REJECTED with an error — it is never silently defaulted to interactive.""")>]
     member _.create_session(
-        [<Description("Projects to load: a JSON array like [\"Foo.fsproj\"], or a comma-separated list, or [] for a bare scratch REPL")>] projects: string,
+        [<Description("Projects to load: a JSON array like [\"Foo.fsproj\"], or a comma-separated list. [] does not force an empty REPL — the worker still auto-discovers a project/solution sitting directly in working_directory, if one exists.")>] projects: string,
         [<Description("Working directory for the session")>] working_directory: string,
         [<Description("Your agent or model name (e.g. 'claude', 'copilot', 'cursor'). Used for session routing and multi-agent coordination. Defaults to 'mcp' if omitted.")>]
         [<Optional; DefaultParameterValue("")>]
         agentName: string,
-        [<Description("Session mode (case-insensitive): 'interactive' (default) for a full REPL; 'livetesting' for a full REPL that also re-runs the affected tests as you type (debounced keystrokes streamed from the editor, not save-driven — no hot reload); or 'hotreload'/'live' for a web/app session with hot reload (browser auto-refresh on save; the REPL is restricted to expressions).")>]
+        [<Description("Session mode (case-insensitive): 'interactive' (default) for a full REPL; 'livetesting' for a full REPL that also re-runs the affected tests as you type (debounced keystrokes streamed from the editor, not save-driven — no hot reload); or 'hotreload'/'live' for a web/app session with hot reload (browser auto-refresh on save; the REPL is restricted to expressions). Anything unrecognized is rejected with an error, not silently defaulted.")>]
         [<Optional; DefaultParameterValue("")>]
         workflow: string
     ) : Task<string> =
         let agent = match System.String.IsNullOrWhiteSpace agentName with | true -> "mcp" | false -> agentName
-        let sessionWorkflow = SageFs.WorkflowTypes.SessionWorkflow.ofString workflow
-        logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}, agent={Agent}, workflow={Workflow}", projects, working_directory, agent, SageFs.WorkflowTypes.SessionWorkflow.label sessionWorkflow)
+        logger.LogDebug("MCP-TOOL: create_session called: projects={Projects}, dir={Dir}, agent={Agent}, workflow={Workflow}", projects, working_directory, agent, workflow)
         let projectList = SageFs.McpAdapter.parseProjectsArg projects
-        createSession ctx agent projectList working_directory sessionWorkflow |> withEcho ctx "create_session"
+        createSession ctx agent projectList working_directory workflow |> withEcho ctx "create_session"
 
     [<McpServerTool>]
     [<Description("""List all active FSI sessions with their metadata: session ID, project names, current status, working directory, and last activity timestamp.

@@ -17,7 +17,8 @@ KEY SIGNALS IN OUTPUT:
   - Ready = safe to submit code.
   - Evaluating = worker is alive but busy (this also covers worker-side 'Building (...)' states).
   - Faulted = investigate warmup/runtime errors before proceeding.
-- Projects: the loaded .fsproj files for this session.
+- Projects: what the session was REQUESTED with — can be empty even when something loaded, because `projects=[]` still auto-discovers.
+- Loaded: what the worker actually resolved and loaded (from its own project classification) — this is the field to trust for "did my project load," not Projects. Can read as not-yet-resolved if the session only just reached Ready.
 - Available: which MCP tools/affordances are currently active for this session.
 - Session: the stable session ID shown at the start of the response.
 

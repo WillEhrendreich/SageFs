@@ -57,7 +57,10 @@ module McpAdapter =
   /// (`.Split(',')` finds no comma), so no project loaded and the session still
   /// reached a vacuous Ready. This accepts BOTH forms — JSON array (the
   /// documented shape), comma-separated (the legacy shape), or a single path —
-  /// and drops empties so `[]`/`""` mean "bare scratch REPL, no project". Pure
+  /// and drops empties so `[]`/`""` mean "no EXPLICIT project requested" —
+  /// NOT a guaranteed-empty REPL: the worker still auto-discovers whatever
+  /// project/solution sits directly in the working directory when the
+  /// caller names none (sagefs-roast.md Finding #2; verified live). Pure
   /// and testable. Found by dogfooding: self-hosting a SageFs.Core session.
   let parseProjectsArg (raw: string) : string list =
     match System.String.IsNullOrWhiteSpace raw with
@@ -105,7 +108,10 @@ module McpAdapter =
       match Array.isEmpty solutions with
       | true -> "  (none found)"
       | false -> solutions |> Array.map (sprintf "  - %s") |> String.concat "\n"
-    sprintf "Available Projects/Solutions in %s:\n\n📦 F# Projects (.fsproj):\n%s%s\n\n📂 Solutions (.sln/.slnx):\n%s\n\n💡 Start the daemon with: SageFs\n💡 Then create a session for ProjectName.fsproj or SolutionName.slnx via create_session\n💡 Sessions can also be created from connected editors or the dashboard" workingDir projectList moreNote solutionList
+    // NOTE: no longer says "Start the daemon with: SageFs" — that hint can
+    // never be true at the moment this text is printed: it is a tool call
+    // the running daemon just served (sagefs-roast.md Finding #5).
+    sprintf "Available Projects/Solutions in %s:\n\n📦 F# Projects (.fsproj):\n%s%s\n\n📂 Solutions (.sln/.slnx):\n%s\n\n💡 Create a session for ProjectName.fsproj or SolutionName.slnx via create_session\n💡 Sessions can also be created from connected editors or the dashboard" workingDir projectList moreNote solutionList
 
   let formatStartupBanner (version: string) (mcpPort: int option) =
     match mcpPort with
@@ -680,6 +686,20 @@ Available: %s%s%s""" sessionId eventCount (SessionState.label state) projectsStr
     sprintf """{"sessionId":"%s","eventCount":%d,"state":"%s","projects":%s,"tools":[%s]%s%s}"""
       (escapeJson sessionId) eventCount (SessionState.label state) projectsJson toolsJson statsJson startupJson
 
+  /// What the worker ACTUALLY resolved and loaded, as opposed to what a
+  /// session was declared with — the two can legitimately differ, most
+  /// visibly with `projects=[]`, which still auto-discovers whatever
+  /// solution/project sits directly in the working directory
+  /// (sagefs-roast.md Finding #2/#3). `formatProxyStatus`'s `Projects:`
+  /// field reports the DECLARED list; this reports what `ProjectRoles` says
+  /// was actually loaded, so "my project silently didn't load" — or "an
+  /// unrequested project silently DID load" — is visible at the call site
+  /// instead of requiring a separate investigation.
+  let formatLoadedProjectsLine (roles: SageFs.ProjectLoading.ClassifiedProject list) : string =
+    match roles with
+    | [] -> "(none resolved yet — session may still be warming up, or nothing was found to load)"
+    | rs -> rs |> List.map (fun p -> Path.GetFileName p.Path) |> String.concat ", "
+
   /// Format status from a worker proxy's StatusSnapshot + SessionInfo.
   let formatProxyStatus
     (sessionId: string)
@@ -693,6 +713,7 @@ Available: %s%s%s""" sessionId eventCount (SessionState.label state) projectsStr
       match info.Projects.IsEmpty with
       | true -> "None"
       | false -> String.concat ", " (info.Projects |> List.map Path.GetFileName)
+    let loadedStr = formatLoadedProjectsLine info.ProjectRoles
     let statsSection =
       match snapshot.EvalCount > 0 with
       | true ->
@@ -701,12 +722,12 @@ Available: %s%s%s""" sessionId eventCount (SessionState.label state) projectsStr
       | false -> ""
     let tools = Affordances.availableTools state |> String.concat ", "
     let modeLabel = WorkflowTypes.SessionWorkflow.label info.Workflow
-    sprintf """Session: %s | Mode: %s | Events: %d | State: %s | Projects: %s
+    sprintf """Session: %s | Mode: %s | Events: %d | State: %s | Projects: %s | Loaded: %s
 Available: %s%s
 
 📋 Startup Information:
 - Working Directory: %s
-- MCP Port: %d""" sessionId modeLabel eventCount (SessionState.label state) projectsStr tools statsSection info.WorkingDirectory mcpPort
+- MCP Port: %d""" sessionId modeLabel eventCount (SessionState.label state) projectsStr loadedStr tools statsSection info.WorkingDirectory mcpPort
 
   /// Diagnostics as JSON array *items* (no enclosing brackets — callers
   /// interpolate into their own `"diagnostics":[%s]` field), spans included
