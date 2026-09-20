@@ -699,12 +699,16 @@ let handleNewAsmFromReplGatingTests =
         LiveTestInit = LiveTestInit.Pending
       }
       // Act: call with hotReloadEnabled=false
-      let _, updatedMethods =
+      let _, report =
         handleNewAsmFromRepl (Log.asILogger()) false asm emptyState
       // Assert: no methods should be reported as "updated" (no replacement pairs)
-      updatedMethods
+      report.Redirected
       |> Flip.Expect.isEmpty
         "hotReloadEnabled=false must never produce replacement pairs — ParameterType access causes TypeLoadException on stale FSI types"
+      report.Bindings
+      |> Flip.Expect.isEmpty "hotReloadEnabled=false must never plan or apply a mutable-binding detour either"
+      report.Declined
+      |> Flip.Expect.isEmpty "hotReloadEnabled=false must never decline a binding it never considered"
     }
 
     test "WHY — hotReloadEnabled=false still merges methods for live testing discovery" {
