@@ -22,23 +22,52 @@ open SageFs
 // Property-based tests (FsCheck) — intent-surfacing
 // ============================================================================
 
-/// Generator for DevReloadEvent — covers all three DU cases
+// A refresh is no longer a bare `Reload`: every terminal event names what it
+// did to the running process and carries the count, so "patched nothing" can
+// never be put on the wire as a refresh. These fixtures stand in for the
+// reports the real pipeline builds (see ReloadBroadcastTests for that).
+let private patchReport =
+  { ReloadReport.none with
+      Outcome = "Patched"
+      Patched = 1
+      Considered = 1
+      Message = "Hot reloaded 1 of 1 changed definition(s)" }
+
+let private failureReport (summary: string) =
+  { ReloadReport.none with
+      Outcome = "CompileFailed"
+      Message = summary
+      SuggestedAction = "Fix the compile error; the app reloads automatically once it builds." }
+
+/// The successful-reload event these tests assert on.
+let private aReload = Patched patchReport
+
+let private broadcastReload () = broadcastPatched patchReport
+
+let private broadcastCompilationFailed (summary: string) (diagnostics: DevReloadDiagnostic list) =
+  DevReload.broadcastCompilationFailed summary (failureReport summary) diagnostics
+
+/// Generator for DevReloadEvent — covers every DU case
 let private genDevReloadEvent =
   Gen.oneof [
     Gen.constant (Compiling None)
     Gen.elements [ "App.fs"; "Handlers.fs"; "Domain.fs"; "Views.fs" ]
     |> Gen.map (fun s -> Compiling (Some s))
-    Gen.constant Reload
+    Gen.constant aReload
+    Gen.constant (Restarted { ReloadReport.none with Outcome = "Restarted"; Message = "Restarted the app" })
+    Gen.constant (NotApplied { ReloadReport.none with Outcome = "NoEffect"; Considered = 3; Message = "No effect: 0 of 3" })
     Gen.elements [ "FS0001: type mismatch"; "FS0010: unexpected"; "FS0039: undefined" ]
-    |> Gen.map (fun s -> CompilationFailed(s, []))
+    |> Gen.map (fun s -> CompilationFailed(s, failureReport s, []))
   ]
 
 /// Helper to broadcast any DevReloadEvent via the public API
 let private broadcastAny (evt: DevReloadEvent) =
   match evt with
   | Compiling fileName -> broadcastCompiling fileName
-  | Reload -> broadcastReload ()
-  | CompilationFailed(err, diags) -> broadcastCompilationFailed err diags
+  | Patched report -> broadcastPatched report
+  | Restarted report -> broadcastRestarted report
+  | NotApplied report -> broadcastNotApplied report
+  | CompilationFailed(err, report, diags) -> DevReload.broadcastCompilationFailed err report diags
 
 let propertyTests = testSequenced <| testList "DevReload.Properties" [
 
@@ -52,7 +81,7 @@ let propertyTests = testSequenced <| testList "DevReload.Properties" [
       let allCorrect =
         readers |> List.forall (fun (_, reader) ->
           let received = ResizeArray()
-          let mutable evt = Reload
+          let mutable evt = aReload
           while reader.TryRead(&evt) do received.Add(evt)
           received.Count = events.Length)
       for id in ids do unregisterClient id
@@ -65,7 +94,7 @@ let propertyTests = testSequenced <| testList "DevReload.Properties" [
       let reader = registerClient id
       for evt in events do broadcastAny evt
       let received = ResizeArray()
-      let mutable evt = Reload
+      let mutable evt = aReload
       while reader.TryRead(&evt) do received.Add(evt)
       unregisterClient id
       Seq.toList received = events)
@@ -86,7 +115,7 @@ let propertyTests = testSequenced <| testList "DevReload.Properties" [
       let r2 = registerClient id
       for evt in events do broadcastAny evt
       let received = ResizeArray()
-      let mutable evt = Reload
+      let mutable evt = aReload
       while r2.TryRead(&evt) do received.Add(evt)
       unregisterClient id
       received.Count = events.Length)
@@ -98,15 +127,27 @@ let propertyTests = testSequenced <| testList "DevReload.Properties" [
       true)
 
   testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 50 }
-    "DU exhaustiveness: exactly 3 lifecycle cases (documentary)" <|
-    // Documentary test — verifies the DU has exactly 3 cases by pattern matching
-    // without a wildcard. If a 4th case is added, this fails to compile.
-    // The lifecycle is: Compiling → (Reload | CompilationFailed).
+    "DU exhaustiveness: every lifecycle case is accounted for (documentary)" <|
+    // Documentary test — pattern matches without a wildcard, so a new case
+    // fails to compile here and is noticed rather than silently unhandled.
+    // The lifecycle is: Compiling → one of the four terminal outcomes.
     Prop.forAll (Arb.fromGen genDevReloadEvent) (fun evt ->
       match evt with
       | Compiling _ -> true
-      | Reload -> true
+      | Patched _ -> true
+      | Restarted _ -> true
+      | NotApplied _ -> true
       | CompilationFailed _ -> true)
+
+  testPropertyWithConfig { FsCheckConfig.defaultConfig with maxTest = 50 }
+    "only an event that changed the running process asks a page to refresh" <|
+    Prop.forAll (Arb.fromGen genDevReloadEvent) (fun evt ->
+      match evt with
+      | Patched report -> DevReloadEvent.refreshes evt && report.Patched > 0
+      | Restarted _ -> DevReloadEvent.refreshes evt
+      | Compiling _
+      | NotApplied _
+      | CompilationFailed _ -> not (DevReloadEvent.refreshes evt))
 ]
 
 // ============================================================================
@@ -131,7 +172,7 @@ let signalingTests = testSequenced <| testList "DevReload.Signaling" [
     ok2 |> Expect.isTrue "r2 should have data"
     let mutable evt1 = Compiling None
     r1.TryRead(&evt1) |> ignore
-    evt1 |> Expect.equal "should be Reload" Reload
+    evt1 |> Expect.equal "should be a patch, not a bare refresh" aReload
     unregisterClient "trigger-a"
     unregisterClient "trigger-b"
   }
@@ -152,7 +193,7 @@ let signalingTests = testSequenced <| testList "DevReload.Signaling" [
     broadcastCompiling (Some "Handlers.fs")
     let! ok = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     ok |> Expect.isTrue "should have data"
-    let mutable evt = Reload
+    let mutable evt = aReload
     reader.TryRead(&evt) |> ignore
     evt |> Expect.equal "should be Compiling with filename" (Compiling (Some "Handlers.fs"))
     unregisterClient "compile-test"
@@ -163,7 +204,7 @@ let signalingTests = testSequenced <| testList "DevReload.Signaling" [
     broadcastCompiling None
     let! ok = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     ok |> Expect.isTrue "should have data"
-    let mutable evt = Reload
+    let mutable evt = aReload
     reader.TryRead(&evt) |> ignore
     evt |> Expect.equal "should be Compiling None" (Compiling None)
     unregisterClient "compile-none"
@@ -174,9 +215,9 @@ let signalingTests = testSequenced <| testList "DevReload.Signaling" [
     broadcastCompilationFailed "FS0001: type mismatch" []
     let! ok = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     ok |> Expect.isTrue "should have data"
-    let mutable evt = Reload
+    let mutable evt = aReload
     reader.TryRead(&evt) |> ignore
-    evt |> Expect.equal "should be CompilationFailed" (CompilationFailed("FS0001: type mismatch", []))
+    evt |> Expect.equal "should be CompilationFailed" (CompilationFailed("FS0001: type mismatch", failureReport "FS0001: type mismatch", []))
     unregisterClient "fail-test"
   }
 
@@ -184,13 +225,13 @@ let signalingTests = testSequenced <| testList "DevReload.Signaling" [
     let reader = registerClient "lifecycle-fail"
     broadcastCompiling (Some "Broken.fs")
     broadcastCompilationFailed "Broken.fs: FS0010: Unexpected symbol" []
-    let mutable evt1 = Reload
-    let mutable evt2 = Reload
+    let mutable evt1 = aReload
+    let mutable evt2 = aReload
     let! _ = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     reader.TryRead(&evt1) |> ignore
     reader.TryRead(&evt2) |> ignore
     evt1 |> Expect.equal "first should be Compiling" (Compiling (Some "Broken.fs"))
-    evt2 |> Expect.equal "second should be CompilationFailed" (CompilationFailed("Broken.fs: FS0010: Unexpected symbol", []))
+    evt2 |> Expect.equal "second should be CompilationFailed" (CompilationFailed("Broken.fs: FS0010: Unexpected symbol", failureReport "Broken.fs: FS0010: Unexpected symbol", []))
     unregisterClient "lifecycle-fail"
   }
 
@@ -198,13 +239,13 @@ let signalingTests = testSequenced <| testList "DevReload.Signaling" [
     let reader = registerClient "lifecycle-ok"
     broadcastCompiling (Some "Handlers.fs")
     broadcastReload ()
-    let mutable evt1 = Reload
+    let mutable evt1 = aReload
     let mutable evt2 = Compiling None
     let! _ = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     reader.TryRead(&evt1) |> ignore
     reader.TryRead(&evt2) |> ignore
     evt1 |> Expect.equal "first should be Compiling" (Compiling (Some "Handlers.fs"))
-    evt2 |> Expect.equal "second should be Reload" Reload
+    evt2 |> Expect.equal "second should be the patch" aReload
     unregisterClient "lifecycle-ok"
   }
 
@@ -215,9 +256,9 @@ let signalingTests = testSequenced <| testList "DevReload.Signaling" [
     let mutable evt = Compiling None
     let! _ = reader.WaitToReadAsync(CancellationToken.None).AsTask()
     reader.TryRead(&evt) |> ignore
-    evt |> Expect.equal "first should be Reload" Reload
+    evt |> Expect.equal "first should be the patch" aReload
     reader.TryRead(&evt) |> ignore
-    evt |> Expect.equal "second should be Reload" Reload
+    evt |> Expect.equal "second should be the patch" aReload
     unregisterClient "multi-reload"
   }
 ]
@@ -711,7 +752,7 @@ let e2eSignalPathTests = testSequenced <| testList "DevReload E2E signal path" [
     match reader.TryRead() with
     | true, evt ->
       match evt with
-      | Reload -> received <- true
+      | Patched _ -> received <- true
       | _ -> ()
     | _ -> ()
     unregisterClient "e2e-test-1"
@@ -735,7 +776,7 @@ let e2eSignalPathTests = testSequenced <| testList "DevReload E2E signal path" [
     let reader = registerClient "e2e-test-3"
     broadcastCompilationFailed "1 error" [diag]
     match reader.TryRead() with
-    | true, CompilationFailed("1 error", [d]) ->
+    | true, CompilationFailed("1 error", _, [d]) ->
       d.File |> Expect.equal "diagnostic file" "App.fs"
       d.Line |> Expect.equal "diagnostic line" 10
       d.Message |> Expect.equal "diagnostic message" "Type mismatch"
@@ -750,7 +791,7 @@ let e2eSignalPathTests = testSequenced <| testList "DevReload E2E signal path" [
     broadcastReload ()
     let check (r: System.Threading.Channels.ChannelReader<DevReloadEvent>) =
       match r.TryRead() with
-      | true, Reload -> true
+      | true, Patched _ -> true
       | _ -> false
     let results = [check r1; check r2; check r3]
     unregisterClient "e2e-multi-1"
@@ -763,7 +804,7 @@ let e2eSignalPathTests = testSequenced <| testList "DevReload E2E signal path" [
     unregisterClient "e2e-unreg"
     broadcastReload ()
     match reader.TryRead() with
-    | true, Reload -> failwith "should not receive after unregister"
+    | true, Patched _ -> failwith "should not receive after unregister"
     | _ -> ()
 ]
 

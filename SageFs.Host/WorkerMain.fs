@@ -403,8 +403,44 @@ let mkLiveTestEvalSupport
 
   getInitialDiscovery, evalLiveTestFile
 
+/// Make this process's stdout line-unbuffered for the rest of its life.
+///
+/// Chesterton's fence: .NET block-buffers stdout as soon as it is REDIRECTED
+/// (which it always is — the daemon spawns the worker with a redirected pipe,
+/// and anyone diagnosing a worker by hand redirects it to a file). The single
+/// explicit `Console.Out.Flush()` after the `WORKER_PORT=` handshake therefore
+/// gets the port out, and then the log goes silent mid-stream for kilobytes at
+/// a time. That silence has twice been read as "the file watcher is dead" and
+/// cost real debugging time on a worker that was working fine. Autoflush pays
+/// for itself the next time anyone looks at a worker log.
+///
+/// Called before anything writes, so no writer captures the buffered stream.
+let enableStdoutAutoFlush () =
+  try
+    let stdout = new IO.StreamWriter(Console.OpenStandardOutput())
+    stdout.AutoFlush <- true
+    Console.SetOut stdout
+  with ex ->
+    // A worker that cannot reconfigure its own stdout still has to run; the
+    // consequence is only a lazier log.
+    Log.warn "[WorkerMain] Could not enable stdout autoflush: %s" ex.Message
+
+/// What a save still needs after the in-place patch route has had its turn.
+/// A DU rather than a bare flag because the fallback has to carry WHY it is
+/// falling back: the reasons are what the whole-file route reports when its
+/// re-evaluation cannot reach the running app either.
+[<RequireQualifiedAccess>]
+type SaveHandling =
+  /// The outcome was decided and broadcast. Nothing further to do.
+  | Reported
+  /// Patching in place was not possible and SageFs does not own the app's
+  /// lifetime, so the whole file is re-evaluated — carrying the reasons the
+  /// patch route refused, because they are still true afterwards.
+  | FallBackWholeFile of reasons: Features.ReloadOutcome.RestartReason list
+
 /// Run the worker process: create actor, start HTTP server, handle messages.
 let run (sessionId: string) (port: int) = async {
+  enableStdoutAutoFlush ()
   let workerConfig = Args.WorkerConfig.fromEnvironment sessionId port
   // Tell DevReload Harmony patches which port to inject into user scripts.
   // Set BEFORE warmup/init: init scripts may start the user's WebApplication,
@@ -676,7 +712,7 @@ let run (sessionId: string) (port: int) = async {
                SourceContextStartLine = None } : DevReload.DevReloadDiagnostic)
             |> DevReload.DevReloadDiagnostic.addSourceContext)
           |> Array.toList
-        DevReload.broadcastCompilationFailed summary diagnostics
+        Features.ReloadBroadcast.broadcastCompileFailure summary diagnostics
         Log.warn "Reload failed for %s: %s\n%s" fileName ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
       let routeFor (filePath: string) =
         Features.ReloadPlanning.routeFor
@@ -685,61 +721,108 @@ let run (sessionId: string) (port: int) = async {
             | true, baseline -> Some baseline
             | _ -> None)
           filePath
+      /// One save's re-evaluation, bounded.
+      ///
+      /// Chesterton's fence: this budget is what guarantees `compilationLock`
+      /// is handed back. The eval is posted with a token nothing else cancels,
+      /// so without a deadline a single wedged submission owned the compiler
+      /// for the rest of the session and every later save queued behind it
+      /// forever. `PostAndTryAsyncReply` bounds the WAIT (so this workflow
+      /// always reaches its `finally` and releases) and the linked CTS asks the
+      /// eval itself to stop. Reports the budget it blew rather than an
+      /// `Option`, so the caller has something to tell the user.
+      let evalWithinBudget (request: EvalRequest) : Async<Result<EvalResponse, TimeSpan>> = async {
+        let budget = TimeSpan.FromMilliseconds(float DevReload.DevReloadConfig.defaults.CompileBudgetMs)
+        let localCts = new CancellationTokenSource(budget)
+        match! actor.PostAndTryAsyncReply((fun rc -> Eval(request, localCts.Token, rc)), int budget.TotalMilliseconds) with
+        | Some response ->
+          localCts.Dispose()
+          return Ok response
+        | None ->
+          // Deliberately NOT disposed: the abandoned eval still holds this
+          // token, and disposing a source another thread is observing throws.
+          // It releases itself when the budget fires.
+          Log.warn "Hot reload: an eval did not finish within %.0fs — abandoning it so the next save can compile"
+            budget.TotalSeconds
+          return Error budget }
       // A change that only takes effect at startup restarts the app when SageFs
       // is the one running it. When the app was started some other way (an init
-      // script, or by hand in the REPL) there is nothing to restart, so the save
-      // falls back to the whole-file re-evaluation — the caller's `false`.
+      // script, or by hand in the REPL) there is nothing SageFs can restart, so
+      // the save falls back to the whole-file re-evaluation.
+      //
+      // The distinction is the honesty requirement, not an implementation
+      // detail: taking credit for a restart that did not happen, and asking a
+      // user to restart something SageFs already restarted, are both lies.
       let restartOrFallBack (fileName: string) first rest = async {
+        let reasons = Features.ReloadBroadcast.reasonsOf first rest
         match AppRunner.state appRunner with
         | AppRun.AppRunState.Running _ ->
           Log.info "Run App: %s — %s; restarting the app" fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
+          // `requireRestart` ends the run with AppRunState.RestartRequired,
+          // which the daemon's run-ended handler turns straight into a rebuild
+          // and relaunch (AppRun.endRun → RunEnd.RebuildForChanges). SageFs
+          // started this app, so SageFs brings it back: the user is told what
+          // happened, not asked to do anything.
           let! _ = AppRunner.requireRestart appRunner first rest |> Async.AwaitTask
-          return true
+          Features.ReloadBroadcast.broadcastOutcome (Features.ReloadOutcome.ReloadOutcome.Restarted reasons)
+          return SaveHandling.Reported
         | _ ->
           Log.info "Hot reload: %s — %s; no app is running under SageFs, so the whole file is re-evaluated instead"
             fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
-          return false }
+          return SaveHandling.FallBackWholeFile reasons }
       // Patch the process in place when only function bodies changed; anything
       // that takes effect at startup restarts the app (see ReloadPlanning).
-      // Answers whether the save was handled: `false` asks the caller for the
-      // whole-file fallback.
-      let reloadRunningApp (filePath: string) (baseline: Features.ReloadPlanning.FileDecls) : Async<bool> = async {
+      // Every exit reports exactly one terminal outcome, so a Compiling overlay
+      // can never be left open and a refresh can never be sent for a save the
+      // running process did not take.
+      let reloadRunningApp (filePath: string) (baseline: Features.ReloadPlanning.FileDecls) : Async<SaveHandling> = async {
         let fileName = IO.Path.GetFileName filePath
         match Features.ReloadPlanning.extractDecls (IO.File.ReadAllText filePath) with
         | Error reason ->
-          DevReload.broadcastCompilationFailed (sprintf "Parse failed for %s: %s" fileName reason) []
-          return true
+          Features.ReloadBroadcast.broadcastOutcome
+            (Features.ReloadOutcome.ReloadOutcome.CompileFailed (sprintf "%s does not parse: %s" fileName reason))
+          return SaveHandling.Reported
         | Ok current ->
           match Features.ReloadPlanning.planReload baseline current with
           | Features.ReloadPlanning.ReloadPlan.PatchFunctions [] ->
-            Log.info "Hot reload: %s saved with no function change — nothing to reload" fileName
-            // Nothing moved, so nothing will refresh the browser: close the
-            // Compiling→(Reload|CompilationFailed) contract ourselves.
-            DevReload.broadcastReload ()
-            return true
+            // The file's declarations are byte-identical to the running build.
+            // Nothing to fetch and nothing to do, so this is reported as the
+            // non-event it is — the old code broadcast a browser reload here,
+            // which is the byte-identical refresh users read as breakage.
+            Log.info "Hot reload: %s saved with no declaration change — the running app is already current" fileName
+            Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.unchanged fileName)
+            return SaveHandling.Reported
           | Features.ReloadPlanning.ReloadPlan.PatchFunctions functions ->
             DevReload.broadcastCompiling (Some fileName)
             let patch = Middleware.CompilationContext.emitStableIdentity filePath current functions
             let request = { Code = patch.Code; Args = Map.ofList ["hotReload", box true] }
-            use localCts = new CancellationTokenSource()
-            let! response = actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
-            match response.EvaluationResult with
-            | Error ex ->
-              broadcastEvalFailure filePath patch.LineOffset response ex
-              return true
-            | Ok _ ->
-              let reloaded = reloadedMethodsOf response
-              match Features.ReloadPlanning.confirmPatch baseline functions reloaded with
-              | Features.ReloadPlanning.PatchOutcome.Applied ->
-                reloadBaselines.[IO.Path.GetFullPath filePath] <- current
-                // The detour middleware already refreshed the browser when a method moved.
-                match reloaded with
-                | [] -> DevReload.broadcastReload ()
-                | _ -> ()
-                Log.info "Hot reload: patched %s in place: %s" fileName (functions |> List.map _.Name |> String.concat ", ")
-                return true
-              | Features.ReloadPlanning.PatchOutcome.RestartNeeded (first, rest) ->
-                return! restartOrFallBack fileName first rest
+            match! evalWithinBudget request with
+            | Error budget ->
+              Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.evalTimedOut fileName budget)
+              return SaveHandling.Reported
+            | Ok response ->
+              match response.EvaluationResult with
+              | Error ex ->
+                broadcastEvalFailure filePath patch.LineOffset response ex
+                return SaveHandling.Reported
+              | Ok _ ->
+                let reloaded = reloadedMethodsOf response
+                match Features.ReloadPlanning.confirmPatch baseline functions reloaded with
+                | Features.ReloadPlanning.PatchOutcome.Applied ->
+                  reloadBaselines.[IO.Path.GetFullPath filePath] <- current
+                  // `Applied` means every function that already existed was
+                  // detoured onto its new body, so the running process serves
+                  // all of them. The count is the user's own changed
+                  // definitions — never the incidental methods that happened
+                  // to match, which is what the old "any detour ⇒ reload" rule
+                  // counted.
+                  let changed = List.length functions
+                  Features.ReloadBroadcast.broadcastOutcome
+                    (Features.ReloadOutcome.ReloadOutcome.ofPatchCounts changed changed [])
+                  Log.info "Hot reload: patched %s in place: %s" fileName (functions |> List.map _.Name |> String.concat ", ")
+                  return SaveHandling.Reported
+                | Features.ReloadPlanning.PatchOutcome.RestartNeeded (first, rest) ->
+                  return! restartOrFallBack fileName first rest
           | Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest) ->
             return! restartOrFallBack fileName first rest }
       let onFileChanged (change: FileWatcher.FileChange) =
@@ -772,7 +855,37 @@ let run (sessionId: string) (port: int) = async {
         |> ignore
         let ct = newCts.Token
         Async.Start(async {
-          do! compilationLock.WaitAsync(ct) |> Async.AwaitTask
+          // Chesterton's fence: the wait for the compiler is BOUNDED, and the
+          // timeout is REPORTED. An unbounded wait here was the subsystem's
+          // worst failure mode: `ct` is cancelled only by a newer change to
+          // THIS file, so one wedged eval held the semaphore and silently
+          // disabled hot reload for every other file for the rest of the
+          // session — no log, no SSE, no signal at all. An agent debugging it
+          // concluded the file watcher was dead. The eval itself is now bounded
+          // too (evalWithinBudget), which is what makes the holder always hand
+          // the compiler back; this bound is what makes the wait visible in the
+          // meantime instead of silent.
+          let queueWait = TimeSpan.FromMilliseconds(float DevReload.DevReloadConfig.defaults.CompileQueueWaitMs)
+          let! acquired = async {
+            try return! compilationLock.WaitAsync(queueWait, ct) |> Async.AwaitTask
+            with :? OperationCanceledException -> return false }
+          match acquired with
+          | false ->
+            match ct.IsCancellationRequested with
+            | true ->
+              // Superseded by a newer save of the same file — the normal,
+              // healthy case, and the newer save reports for both.
+              Log.debug "File change cancelled while queued (superseded by newer save): %s"
+                (IO.Path.GetFileName change.FilePath)
+            | false ->
+              let fileName = IO.Path.GetFileName change.FilePath
+              Log.warn
+                "Hot reload: %s waited %.0fs for the compiler and gave up — a previous compile is still holding it"
+                fileName queueWait.TotalSeconds
+              DevReload.DevReloadHealthTracker.transition
+                (DevReload.Degraded (sprintf "a hot-reload compile has held the compiler for over %.0fs" queueWait.TotalSeconds))
+              Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.compilerBusy fileName queueWait)
+          | true ->
           try
             try
               ct.ThrowIfCancellationRequested()
@@ -783,13 +896,14 @@ let run (sessionId: string) (port: int) = async {
                   Log.debug "File changed but not in hot-reload watch set: %s (watched: %d files)"
                     (IO.Path.GetFileName filePath) (HotReloadState.watchedCount !result.HotReloadStateRef)
                 | true ->
-                let! handled =
+                let! handling =
                   match routeFor filePath with
                   | Features.ReloadPlanning.ReloadRoute.PatchInPlace baseline -> reloadRunningApp filePath baseline
-                  | Features.ReloadPlanning.ReloadRoute.ReevaluateWholeFile -> async { return false }
-                match handled with
-                | true -> ()
-                | false ->
+                  | Features.ReloadPlanning.ReloadRoute.ReevaluateWholeFile ->
+                    async { return SaveHandling.FallBackWholeFile [] }
+                match handling with
+                | SaveHandling.Reported -> ()
+                | SaveHandling.FallBackWholeFile restartReasons ->
                 Log.debug "[DevReload] Reloading watched file: %s" (IO.Path.GetFileName filePath)
                 DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))
                 // Chesterton's fence: read file and preprocess through CompilationContext
@@ -815,8 +929,9 @@ let run (sessionId: string) (port: int) = async {
                     // the reload. The user sees the error, fixes the file, saves again.
                     Log.warn "CompilationContext parse failed for %s — file not reloaded: %s"
                       filePath exn.Message
-                    DevReload.broadcastCompilationFailed
-                      (sprintf "Parse failed for %s: %s" (IO.Path.GetFileName filePath) exn.Message) []
+                    Features.ReloadBroadcast.broadcastOutcome
+                      (Features.ReloadOutcome.ReloadOutcome.CompileFailed
+                        (sprintf "%s does not parse: %s" (IO.Path.GetFileName filePath) exn.Message))
                     return None, compilationState.FileCache
                 }
                 match fileStructure with
@@ -836,15 +951,18 @@ let run (sessionId: string) (port: int) = async {
                       FileCache = updatedCache }
                 let code = preprocessed.Code
                 let request = { Code = code; Args = Map.ofList ["hotReload", box true] }
-                use localCts = new CancellationTokenSource()
-                let! response =
-                  actor.PostAndAsyncReply(fun rc -> Eval(request, localCts.Token, rc))
+                match! evalWithinBudget request with
+                | Error budget ->
+                  Features.ReloadBroadcast.broadcastEvent
+                    (Features.ReloadBroadcast.evalTimedOut (IO.Path.GetFileName filePath) budget)
+                | Ok response ->
                 match response.EvaluationResult with
                 | Ok _ ->
                   // The file the session now holds IS the file on disk, so it is
                   // the baseline the NEXT save is diffed against. Without this the
                   // same startup-only change is re-reported on every later save.
-                  match Features.ReloadPlanning.extractDecls fileContent with
+                  let declsOnDisk = Features.ReloadPlanning.extractDecls fileContent
+                  match declsOnDisk with
                   | Ok decls -> reloadBaselines.[IO.Path.GetFullPath filePath] <- decls
                   | Error _ -> reloadBaselines.TryRemove(IO.Path.GetFullPath filePath) |> ignore
                   // Capture RunTest from hot-reload discovery
@@ -854,17 +972,36 @@ let run (sessionId: string) (port: int) = async {
                   | _ -> ()
                   let reloaded = reloadedMethodsOf response
                   let fileName = IO.Path.GetFileName filePath
-                  match List.isEmpty reloaded with
-                  | false ->
-                    Log.info "Hot reloaded %s: %s" fileName (String.Join(", ", reloaded))
-                  | true ->
-                    // Chesterton's fence: broadcastReload even when no methods were detouring.
-                    // When a file adds NEW types/functions (not modifying existing ones),
-                    // Harmony finds no methods to detour, so triggerReload() in HotReloading.fs
-                    // is never called. Without this, the browser stays stuck on "⟳ Recompiling..."
-                    // forever — violating the Compiling→(Reload|CompilationFailed) contract.
-                    DevReload.broadcastReload ()
-                    Log.info "Reloaded %s (new types/functions, no methods detouring)" fileName
+                  // How many definitions this save put in front of the process —
+                  // the denominator of "N of M", so a zero numerator is visible
+                  // as the non-event it is rather than reported as success.
+                  let considered =
+                    match declsOnDisk with
+                    | Ok decls -> List.length decls.Decls
+                    | Error _ -> List.length reloaded
+                  // THE fix. This is where the shipped bug lived: the code here
+                  // logged "Hot reloaded <file>" whenever ANY method had been
+                  // detoured and left the detour middleware to refresh the
+                  // browser. A whole-file re-evaluation re-declares the file's
+                  // own types, so the handlers the user edited fail the detour
+                  // matcher's parameter-type check while a few incidental
+                  // BCL-signature helpers match — "reloaded" was reported, the
+                  // page refreshed, and it served the old code.
+                  //
+                  // `restartReasons` is non-empty exactly when the planner
+                  // already established that the user's change takes effect at
+                  // startup. No number of incidental detours makes that change
+                  // live, so the outcome is RestartRequired regardless: SageFs
+                  // did not start this app (that is why this path was taken at
+                  // all), so the message carries the remedy instead of claiming
+                  // a restart that never happened.
+                  let outcome =
+                    match restartReasons with
+                    | [] ->
+                      Features.ReloadOutcome.ReloadOutcome.ofPatchCounts (List.length reloaded) considered []
+                    | reasons -> Features.ReloadOutcome.ReloadOutcome.RestartRequired reasons
+                  Features.ReloadBroadcast.broadcastOutcome outcome
+                  Log.info "Hot reload: %s — %s" fileName (Features.ReloadOutcome.ReloadOutcome.describe outcome)
                 | Error ex -> broadcastEvalFailure filePath preprocessed.LineOffset response ex
               | FileWatcher.FileChangeAction.SoftReset ->
                 Log.info "Project file changed — soft reset needed"
@@ -876,11 +1013,11 @@ let run (sessionId: string) (port: int) = async {
               Log.debug "File change cancelled (superseded by newer save): %s"
                 (IO.Path.GetFileName change.FilePath)
             | ex ->
-              // Chesterton's fence: if the actor mailbox crashes or PostAndAsyncReply
-              // throws, we must still close the Compiling→(Reload|CompilationFailed)
-              // lifecycle. Without this catch-all, an unhandled exception leaves the
+              // Chesterton's fence: if the actor mailbox crashes or the reply
+              // throws, we must still close the Compiling→terminal lifecycle.
+              // Without this catch-all, an unhandled exception leaves the
               // browser stuck on "⟳ Recompiling..." with no recovery path.
-              DevReload.broadcastCompilationFailed (sprintf "Internal error: %s" ex.Message) []
+              Features.ReloadBroadcast.broadcastCompileFailure (sprintf "Internal error: %s" ex.Message) []
               Log.error "File watcher async failed: %s" (ex.ToString())
           finally
             compilationLock.Release() |> ignore

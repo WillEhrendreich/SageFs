@@ -30,6 +30,20 @@ type DevReloadConfig = {
   AutoReloadThresholdMs: int
   /// Compile timer turns amber after this many ms. Default: 5000
   LongCompileWarningMs: int
+  /// How long one save waits for the previous save's compile before giving up
+  /// and REPORTING that it did (ms). Default: 60000.
+  ///
+  /// Chesterton's fence: this wait used to be unbounded, which made one wedged
+  /// eval silently disable hot reload for every other file for the rest of the
+  /// session. Bounded, a stuck compiler is visible instead of invisible.
+  CompileQueueWaitMs: int
+  /// Ceiling on ONE save's re-evaluation (ms). Default: 300000 (5 min).
+  ///
+  /// This is the self-heal: the eval is posted with a token nothing else
+  /// cancels, so without a deadline a single wedged submission owns the
+  /// compiler forever. With one, the compiler is always handed back and the
+  /// next save goes through.
+  CompileBudgetMs: int
 }
 
 module DevReloadConfig =
@@ -44,6 +58,8 @@ module DevReloadConfig =
     CompileTimerUpdateMs = 200
     AutoReloadThresholdMs = 3000
     LongCompileWarningMs = 5000
+    CompileQueueWaitMs = 60_000
+    CompileBudgetMs = 300_000
   }
 
 /// Health status of the DevReload system. Queryable by any component
@@ -121,14 +137,148 @@ module DevReloadDiagnostic =
             SourceContextStartLine = Some (startIdx + 1) }
     with _ -> diag
 
-/// Events that flow to browser clients over the long-lived SSE connection.
-/// The lifecycle is: Idle → Compiling → (Reload | CompilationFailed).
-/// Three cases ensure the browser can never get stuck in "Compiling" state —
-/// every Compiling event is eventually followed by Reload or CompilationFailed.
+/// One refusal, already rendered into the two strings a client needs.
+///
+/// A client must never re-derive this wording. Re-deriving the REFRESH decision
+/// from a method count is how the shipped bug happened; re-deriving the MESSAGE
+/// from an outcome kind is the same mistake one layer up, and it guarantees
+/// every client words the same failure differently.
+type ReloadRefusal = {
+  /// The `RestartReason` case name — a stable token to branch on or grep for,
+  /// as opposed to prose that changes when the wording improves.
+  Case: string
+  /// `RestartReason.describe`: what happened, in terms of the user's own code.
+  Message: string
+  /// `RestartReason.remedy`: what to do about it.
+  ///
+  /// Named for the field SageFs's structured errors already use
+  /// (`SageFsError.toJson`), deliberately: clients that learn to read
+  /// `suggestedAction` then read every surface at once, instead of each
+  /// surface inventing a name no client knows.
+  SuggestedAction: string
+}
+
+/// Everything a client needs to report a save without re-deriving anything.
+///
+/// Every field exists because some client could not do its job without it: the
+/// counts so "0 of 448" reads as the non-event it is, `Outcome` so a client can
+/// branch on the case rather than parse prose, `Reasons` so an editor can list
+/// what blocked the reload, and `Message`/`SuggestedAction` so nobody has to
+/// reconstruct the wording.
+type ReloadReport = {
+  /// The `ReloadOutcome` case name: Patched | Restarted | NoEffect |
+  /// RestartRequired | CompileFailed.
+  Outcome: string
+  /// How many of the definitions this save changed are now live in the running
+  /// process. Zero is meaningful and is never reported as a refresh.
+  Patched: int
+  /// How many definitions the save put in front of the process. Flutter prints
+  /// "Reloaded 1 of 448 libraries" precisely so "0 of 448" is visible.
+  Considered: int
+  /// `ReloadOutcome.describeForUser` — what happened AND what to do, in one
+  /// string. It deliberately repeats `SuggestedAction` because every client
+  /// audited reads `message` and none reads `suggestedAction`; the remedy has
+  /// to survive in the field clients actually look at.
+  Message: string
+  /// `ReloadOutcome.remedy`, or "" when the outcome is already resolved and the
+  /// user needs to do nothing.
+  SuggestedAction: string
+  /// Why the save could not be applied, innermost first. Empty for a success.
+  Reasons: ReloadRefusal list
+}
+
+/// Events that flow to clients (browser overlay, editors) over the long-lived
+/// SSE connection.
+///
+/// The lifecycle is: Idle → Compiling → one terminal event, so a client can
+/// never get stuck in "Compiling".
+///
+/// There is deliberately NO bare `Reload`. A page refreshing into byte-identical
+/// code is the failure users read as "the tool is broken", and a case that says
+/// only "refresh" cannot distinguish it from a real one. Every terminal case
+/// names what happened to the RUNNING PROCESS and carries the whole report, so
+/// "succeeded, changed nothing" is not something a caller can express as a
+/// refresh: that is `NotApplied`, and `broadcastPatched` enforces it even for a
+/// caller that tries.
 type DevReloadEvent =
   | Compiling of fileName: string option
-  | Reload
-  | CompilationFailed of errorSummary: string * diagnostics: DevReloadDiagnostic list
+  /// Definitions were re-pointed into the running process, so the bytes a page
+  /// would fetch are genuinely new.
+  | Patched of report: ReloadReport
+  /// SageFs restarted the app it started. The process IS current; the user is
+  /// told what happened rather than asked to do anything.
+  | Restarted of report: ReloadReport
+  /// The save was processed and NOTHING in the running process changed. This is
+  /// the case that used to be broadcast as a plain reload.
+  | NotApplied of report: ReloadReport
+  /// The file did not compile. The app is untouched and still serving the last
+  /// code that did — which is a feature, and the report says so.
+  | CompilationFailed of errorSummary: string * report: ReloadReport * diagnostics: DevReloadDiagnostic list
+
+module ReloadReport =
+  /// The report for an event that carries no outcome of its own.
+  let none = { Outcome = ""; Patched = 0; Considered = 0; Message = ""; SuggestedAction = ""; Reasons = [] }
+
+module DevReloadEvent =
+
+  /// Will the page fetch different bytes than it already has? The single
+  /// question every surface has, answered once — re-deriving it from a method
+  /// count is exactly how the shipped bug happened.
+  let refreshes =
+    function
+    | Patched _
+    | Restarted _ -> true
+    | Compiling _
+    | NotApplied _
+    | CompilationFailed _ -> false
+
+  /// The outcome a client renders. `Compiling` has none — it is not terminal.
+  let report =
+    function
+    | Patched r
+    | Restarted r
+    | NotApplied r
+    | CompilationFailed(_, r, _) -> r
+    | Compiling _ -> ReloadReport.none
+
+  let private json (value: obj) = System.Text.Json.JsonSerializer.Serialize value
+
+  let private refusalJson (r: ReloadRefusal) =
+    sprintf """{"case":%s,"message":%s,"suggestedAction":%s}""" (json r.Case) (json r.Message) (json r.SuggestedAction)
+
+  let private reportFields (r: ReloadReport) =
+    sprintf
+      """"outcome":%s,"patched":%d,"considered":%d,"message":%s,"suggestedAction":%s,"reasons":[%s]"""
+      (json r.Outcome)
+      r.Patched
+      r.Considered
+      (json r.Message)
+      (json r.SuggestedAction)
+      (r.Reasons |> List.map refusalJson |> String.concat ",")
+
+  /// One SSE `data:` frame. Every string is JSON-serialised, so a filename, a
+  /// multi-line message or a compiler diagnostic can never break the frame it
+  /// travels in — an embedded newline would split one event into two and a
+  /// client would parse half a message.
+  ///
+  /// `type` is the cue the browser overlay switches on; the rest is the full
+  /// report, so a non-browser client (the Neovim plugin, an editor extension)
+  /// can render the outcome without re-deriving a thing.
+  let sseData (evt: DevReloadEvent) : string =
+    let payload =
+      match evt with
+      | Compiling None -> """{"type":"compiling"}"""
+      | Compiling (Some file) -> sprintf """{"type":"compiling","file":%s}""" (json file)
+      | Patched r -> sprintf """{"type":"reload",%s}""" (reportFields r)
+      | Restarted r -> sprintf """{"type":"restarted",%s}""" (reportFields r)
+      | NotApplied r -> sprintf """{"type":"noeffect",%s}""" (reportFields r)
+      | CompilationFailed(summary, r, diagnostics) ->
+        // Chesterton's fence: send "error" (legacy string) alongside
+        // "diagnostics" (structured array) and the report. The browser script
+        // checks for diagnostics first and falls back to the error string —
+        // backward compatible with older injected scripts.
+        sprintf """{"type":"failed","error":%s,%s,"diagnostics":%s}""" (json summary) (reportFields r) (json diagnostics)
+    "data: " + payload + "\n\n"
 
 // Pure broadcaster — no ASP.NET dependency.
 // The ASP.NET middleware lives in SageFs/DevReloadMiddleware.fs.
@@ -160,7 +310,9 @@ let private eventLabel (evt: DevReloadEvent) =
   match evt with
   | Compiling None -> "Compiling"
   | Compiling (Some f) -> sprintf "Compiling(%s)" f
-  | Reload -> "Reload"
+  | Patched r -> sprintf "Patched(%d of %d)" r.Patched r.Considered
+  | Restarted _ -> "Restarted"
+  | NotApplied r -> sprintf "NotApplied(0 of %d)" r.Considered
   | CompilationFailed _ -> "CompilationFailed"
 
 let private broadcast (evt: DevReloadEvent) =
@@ -179,19 +331,40 @@ let private broadcast (evt: DevReloadEvent) =
 /// Pass the filename for richer UI: "⟳ Recompiling Handlers.fs..."
 let broadcastCompiling (fileName: string option) = broadcast (Compiling fileName)
 
-/// Signal all browsers that hot-reload is complete — time to refresh.
-let broadcastReload () = broadcast Reload
+/// Signal every client that the running process now serves new code.
+///
+/// Chesterton's fence — the demotion below is the whole point of this function.
+/// The shipped bug was a caller that had re-pointed nothing (or only incidental
+/// helpers) still telling every page to refresh, so the browser fetched the old
+/// code while the tool reported success. A refresh is honest only when the bytes
+/// are new, so "patched nothing" is turned into the outcome it actually is
+/// rather than trusted. That makes the lie impossible at the lowest layer, not
+/// merely discouraged at the highest.
+let broadcastPatched (report: ReloadReport) =
+  match report.Patched > 0 with
+  | true -> broadcast (Patched report)
+  | false ->
+    Log.warn
+      "[DevReload] Refusing to refresh clients for a save that patched nothing (0 of %d): %s"
+      report.Considered report.Message
+    broadcast (NotApplied report)
 
-/// Signal all browsers that compilation failed — show the error in the browser.
+/// Signal every client that SageFs restarted the app it started. The page waits
+/// for the app to come back and then refetches — the process IS current.
+let broadcastRestarted (report: ReloadReport) = broadcast (Restarted report)
+
+/// Signal every client that the save was processed and nothing in the running
+/// process changed. Closes the Compiling overlay WITHOUT a refresh, and carries
+/// what happened plus what to do about it.
+let broadcastNotApplied (report: ReloadReport) = broadcast (NotApplied report)
+
+/// Signal every client that compilation failed — show the error in the browser.
 /// This prevents the "stuck Recompiling..." overlay that occurs when FSI eval
 /// fails without sending any completion event.
 /// Carries structured diagnostics with source-mapped line numbers for rich
 /// error display. The errorSummary is kept for backward-compatible display.
-let broadcastCompilationFailed (errorSummary: string) (diagnostics: DevReloadDiagnostic list) =
-  broadcast (CompilationFailed(errorSummary, diagnostics))
-
-/// Legacy alias — fires a Reload event to all clients.
-let triggerReload () = broadcastReload ()
+let broadcastCompilationFailed (errorSummary: string) (report: ReloadReport) (diagnostics: DevReloadDiagnostic list) =
+  broadcast (CompilationFailed(errorSummary, report, diagnostics))
 
 /// Register a new SSE client. Returns the ChannelReader for reading events.
 /// Also transitions health to Active with current client count.

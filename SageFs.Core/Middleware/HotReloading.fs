@@ -258,9 +258,30 @@ let hotReloadingMiddleware next (request, st: AppState) =
         Log.warn "[HotReloading] the session's agent is unavailable, so this eval was not reloaded or scanned for tests: %s" reason
         response, st
       | SageFs.HostAgent.AgentAnswered report ->
-        match shouldTriggerReload request.Args && not (List.isEmpty report.UpdatedMethods) with
-        | true -> triggerReload()
-        | false -> ()
+        // Who tells the browser what this eval did.
+        //
+        // Chesterton's fence — this is where the shipped bug lived. It used to
+        // read "any method was detoured ⇒ broadcast a reload", which is a
+        // count this middleware is in no position to interpret: a whole-file
+        // re-evaluation detours whatever happens to match, so a save that
+        // re-pointed a handful of incidental BCL-signature helpers and none of
+        // the handlers the user edited still refreshed the page into the old
+        // code.
+        //
+        // A save carries `hotReload` in its args because it came through the
+        // file-watcher pipeline, and that pipeline knows what the user actually
+        // changed (SageFs.Features.ReloadPlanning) — so it reports its own
+        // outcome and this middleware stays quiet. An interactive eval has no
+        // such pipeline, and for it "the methods this submission redefined" IS
+        // the whole truth, so it is reported here, through the same
+        // ReloadOutcome gate every other surface uses.
+        match Map.containsKey "hotReload" request.Args, hotReloadFlagEnabled with
+        | true, _ -> ()
+        | false, false -> ()
+        | false, true ->
+          let updated = List.length report.UpdatedMethods
+          SageFs.Features.ReloadBroadcast.broadcastOutcome
+            (SageFs.Features.ReloadOutcome.ReloadOutcome.ofPatchCounts updated updated [])
 
         // Tests run where they live: the runner asks the session's agent, which tries interactively defined tests
         // first and the project's after.

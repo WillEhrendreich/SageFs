@@ -664,8 +664,7 @@ module WorkerHttpTransport =
       // that's a long-lived allocation pattern worth eliminating.
       let heartbeatBytes = Text.Encoding.UTF8.GetBytes(": heartbeat\n\n")
       let connectedBytes = Text.Encoding.UTF8.GetBytes(": connected\n\nretry: 1000\n\n")
-      let compilingBytes = Text.Encoding.UTF8.GetBytes("""data: {"type":"compiling"}""" + "\n\n")
-      let reloadBytes = Text.Encoding.UTF8.GetBytes("""data: {"type":"reload"}""" + "\n\n")
+      let compilingBytes = Text.Encoding.UTF8.GetBytes(DevReload.DevReloadEvent.sseData (DevReload.Compiling None))
 
       map Routes.devReload (Func<HttpContext, Task>(fun ctx -> task {
         ctx.Response.ContentType <- "text/event-stream"
@@ -695,7 +694,7 @@ module WorkerHttpTransport =
         try
           let ct = ctx.RequestAborted
           while not ct.IsCancellationRequested do
-            let mutable evt = DevReload.DevReloadEvent.Reload
+            let mutable evt = DevReload.Compiling None
             let! hasEvent =
               task {
                 try
@@ -708,23 +707,14 @@ module WorkerHttpTransport =
             match hasEvent with
             | true ->
               while reader.TryRead(&evt) do
+                // The wire format lives with the event type (DevReload.fs), so
+                // adding a terminal outcome can never leave a transport behind
+                // rendering a stale shape. Only the bare "compiling" frame is
+                // pre-allocated — it is the one payload with no dynamic part.
                 let bytes =
                   match evt with
-                  | DevReload.DevReloadEvent.Compiling None -> compilingBytes
-                  | DevReload.DevReloadEvent.Compiling (Some file) ->
-                    // Dynamic payload with filename — can't pre-allocate.
-                    // Use JsonSerializer.Serialize for proper escaping of control chars,
-                    // Unicode, and special characters in filenames.
-                    Text.Encoding.UTF8.GetBytes(
-                      sprintf """data: {"type":"compiling","file":%s}""" (System.Text.Json.JsonSerializer.Serialize(file)) + "\n\n")
-                  | DevReload.DevReloadEvent.Reload -> reloadBytes
-                  | DevReload.DevReloadEvent.CompilationFailed(summary, diagnostics) ->
-                    // Chesterton's fence: send both "error" (legacy string) and "diagnostics"
-                    // (structured array). Browser script checks for diagnostics first and falls
-                    // back to error string — backward compatible with older injected scripts.
-                    let diagJson = System.Text.Json.JsonSerializer.Serialize(diagnostics)
-                    Text.Encoding.UTF8.GetBytes(
-                      sprintf """data: {"type":"failed","error":%s,"diagnostics":%s}""" (System.Text.Json.JsonSerializer.Serialize(summary)) diagJson + "\n\n")
+                  | DevReload.Compiling None -> compilingBytes
+                  | other -> Text.Encoding.UTF8.GetBytes(DevReload.DevReloadEvent.sseData other)
                 do! ctx.Response.Body.WriteAsync(ReadOnlyMemory bytes)
                 do! ctx.Response.Body.FlushAsync()
             | false ->

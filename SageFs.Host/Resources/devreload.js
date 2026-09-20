@@ -180,11 +180,63 @@
             d.textContent = compilingLabel + ' (' + elapsedSec + 's) — taking longer than usual';
           }
         }, {{COMPILE_TIMER_MS}});
+      } else if (msg.type === 'noeffect') {
+        // The save was processed and NOTHING in the running process changed.
+        // Refreshing here would fetch byte-identical code and report success —
+        // the exact failure users read as "the tool is broken". So: no reload.
+        // The panel stays up and dismissable, because it carries a remedy the
+        // user has to read ("→ Restart the app to pick it up. To make 'routes'
+        // reloadable, ...").
+        clearInterval(compilingTimer);
+        compilingStart = null;
+        document.title = originalTitle;
+        d.id = 'sagefs-reload-indicator';
+        d.setAttribute('role', 'status');
+        d.setAttribute('aria-live', 'polite');
+        d.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483647;padding:8px 16px;border-radius:8px;font:13px/1.5 system-ui,sans-serif;color:#fff;background:#b45309;opacity:1;pointer-events:auto;transition:opacity .2s;box-shadow:0 2px 12px rgba(0,0,0,.2);max-width:480px;white-space:pre-wrap;word-break:break-word';
+        d.style.animation = '';
+        const counts = (typeof msg.considered === 'number' && msg.considered > 0)
+          ? ' (0 of ' + msg.considered + ')' : '';
+        d.textContent = '● ' + (msg.message || 'Saved, but nothing reached the running app.') + counts;
+        d.onclick = dismissPanel;
+        console.info('[SageFs] No effect:', msg.outcome, msg.message, msg.reasons);
+      } else if (msg.type === 'restarted') {
+        // SageFs restarted the app it started. The process IS current, so the
+        // page must refetch — but not before the app is listening again, or the
+        // user gets a connection error instead of their change.
+        clearInterval(compilingTimer);
+        failureCount = 0;
+        document.title = originalTitle;
+        d.id = 'sagefs-reload-indicator';
+        d.setAttribute('role', 'status');
+        d.setAttribute('aria-live', 'polite');
+        d.style.cssText = 'position:fixed;top:8px;right:8px;z-index:2147483647;padding:8px 16px;border-radius:8px;font:13px/1.5 system-ui,sans-serif;color:#fff;background:#2563eb;opacity:1;pointer-events:none;transition:opacity .2s;box-shadow:0 2px 12px rgba(0,0,0,.2);max-width:480px;white-space:pre-wrap;word-break:break-word';
+        d.style.animation = '';
+        d.textContent = '⟳ ' + (msg.message || 'Restarted the app') + ' — waiting for it to come back...';
+        console.info('[SageFs] Restarted:', msg.message, msg.reasons);
+        let waitTries = 0;
+        const waitForApp = function() {
+          waitTries++;
+          fetch(location.href, { method: 'HEAD', cache: 'no-store' })
+            .then(function() { saveFormState(); safeReload(); })
+            .catch(function() {
+              if (waitTries < 60) { setTimeout(waitForApp, 1000); return; }
+              d.style.background = '#dc2626';
+              d.style.pointerEvents = 'auto';
+              d.textContent = '⚠ The app did not come back after the restart.\n→ Check the SageFs dashboard for the app\'s state.';
+              d.onclick = dismissPanel;
+            });
+        };
+        setTimeout(waitForApp, 500);
       } else if (msg.type === 'reload') {
         clearInterval(compilingTimer);
         failureCount = 0;
         const durMs = compilingStart ? (Date.now() - compilingStart) : 0;
         const durText = durMs ? ' in ' + (durMs / 1000).toFixed(1) + 's' : '';
+        // "Updated 1 of 3" — a partial reload reads as partial, never as
+        // unqualified success.
+        const patchText = (typeof msg.patched === 'number' && typeof msg.considered === 'number' && msg.considered > 0)
+          ? ' ' + msg.patched + ' of ' + msg.considered : '';
         d.id = 'sagefs-reload-indicator';
         d.setAttribute('role', 'status');
         d.setAttribute('aria-live', 'polite');
@@ -193,12 +245,12 @@
         document.title = originalTitle;
         if (msg.warnings && msg.warnings.length) {
           d.style.pointerEvents = 'auto';
-          d.innerHTML = '✓ Updated' + durText + ' <span style="color:#fbbf24;font-size:12px">⚠ ' + msg.warnings.length + ' warning' + (msg.warnings.length > 1 ? 's' : '') + '</span>';
+          d.innerHTML = '✓ Updated' + patchText + durText + ' <span style="color:#fbbf24;font-size:12px">⚠ ' + msg.warnings.length + ' warning' + (msg.warnings.length > 1 ? 's' : '') + '</span>';
           setTimeout(function(){ saveFormState(); safeReload(); }, 1500);
         } else if (durMs > autoReloadThresholdMs) {
           d.style.pointerEvents = 'auto';
           d.style.cursor = 'pointer';
-          d.textContent = '✓ Ready' + durText + ' — click to reload';
+          d.textContent = '✓ Ready' + patchText + durText + ' — click to reload';
           d.onclick = function() {
             d.onclick = null;
             d.style.cursor = '';
@@ -206,7 +258,7 @@
             safeReload();
           };
         } else {
-          d.textContent = '✓ Updated' + durText;
+          d.textContent = '✓ Updated' + patchText + durText;
           saveFormState();
           safeReload();
         }
