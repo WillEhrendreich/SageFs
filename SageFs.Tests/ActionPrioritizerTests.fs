@@ -27,6 +27,18 @@ let private mkImpactReport recommendation cellId p95 downstream =
       P95Ms = p95
       DownstreamCellCount = downstream }
 
+let private emptyGraph : CellGraph = { Cells = Map.empty; Edges = [] }
+
+/// A single producer/consumer chain: `producerId` produces a binding
+/// `consumerId` consumes, so `transitiveStale graph producerId = [consumerId]`.
+let private mkChainGraph (producerId: CellId) (consumerId: CellId) : CellGraph =
+  let binding = sprintf "v%d" producerId
+  let producer : CellInfo =
+    { Id = producerId; Source = sprintf "let %s = 1" binding; Produces = [ binding ]; Consumes = [] }
+  let consumer : CellInfo =
+    { Id = consumerId; Source = sprintf "let w%d = %s + 1" consumerId binding; Produces = [ sprintf "w%d" consumerId ]; Consumes = [ binding ] }
+  buildGraph [ producer; consumer ]
+
 // ── Actions from coverage tests ──────────────────────────────
 
 [<Tests>]
@@ -134,9 +146,12 @@ let composeTests =
     testCase "mixed inputs → sorted by priority" <| fun _ ->
       let coverageReports = [ mkCoverageReport DiagnosticBlindSpot 1 "t1" ]
       let impactReports = [ mkImpactReport ImpactRecommendation.Refactor 1 3000.0 20 ]
-      let staleCells = [ mkCellId 5 ]
+      // cell 5 was just edited; cell 6 consumes its binding, so it (and only
+      // it) is transitively stale.
+      let graph = mkChainGraph 5 6
+      let changedCellIds = Set.ofList [ mkCellId 5 ]
 
-      let report = ActionPrioritizer.compose coverageReports impactReports staleCells
+      let report = ActionPrioritizer.compose graph coverageReports impactReports changedCellIds []
 
       // Should have: 1 failure + 1 blind spot + 1 perf + 1 stale = 4
       report.Actions |> Expect.hasLength "4 actions" 4
@@ -145,7 +160,7 @@ let composeTests =
       |> Expect.isTrue "sorted by priority"
 
     testCase "empty inputs → empty queue, Healthy" <| fun _ ->
-      let report = ActionPrioritizer.compose [] [] []
+      let report = ActionPrioritizer.compose emptyGraph [] [] Set.empty []
       report.Actions |> Expect.isEmpty "no actions"
       report.HealthGrade |> Expect.equal "Healthy" SessionHealthGrade.Healthy
 
@@ -156,7 +171,7 @@ let composeTests =
       ]
       let impactReports = [ mkImpactReport ImpactRecommendation.Refactor 1 5000.0 30 ]
 
-      let report = ActionPrioritizer.compose coverageReports impactReports []
+      let report = ActionPrioritizer.compose emptyGraph coverageReports impactReports Set.empty []
 
       report.TotalFailures |> Expect.equal "2 failures" 2
       report.TotalBlindSpots |> Expect.equal "3 blind spots" 3
@@ -211,9 +226,15 @@ let propertyTests =
         mkCoverageReport WellCovered 0 "t2"
       ]
       let impactReports = [ mkImpactReport ImpactRecommendation.Investigate 1 700.0 8 ]
-      let staleCells = [ mkCellId 1; mkCellId 2 ]
+      // Two independent producer/consumer chains: cells 1 and 2 were edited,
+      // making cells 3 and 4 (respectively) transitively stale.
+      let graph1 = mkChainGraph 1 3
+      let graph2 = mkChainGraph 2 4
+      let graph = { Cells = Map.fold (fun m k v -> Map.add k v m) graph1.Cells graph2.Cells
+                    Edges = graph1.Edges @ graph2.Edges }
+      let changedCellIds = Set.ofList [ mkCellId 1; mkCellId 2 ]
 
-      let report = ActionPrioritizer.compose coverageReports impactReports staleCells
+      let report = ActionPrioritizer.compose graph coverageReports impactReports changedCellIds []
       let priorities = report.Actions |> List.map (fun a -> a.Priority)
       let sorted = priorities |> List.sort
       priorities |> Expect.equal "should be sorted" sorted

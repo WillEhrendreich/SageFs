@@ -5,6 +5,27 @@ open SageFs.Features.CellDependencyGraph
 open SageFs.Features.CoverageIntel
 open SageFs.Features.ImpactForecast
 
+/// A friction signal projected into exactly what the prioritizer needs to
+/// rank and explain an action: a stable id, how much evidence backed it,
+/// and a human-readable window. Deliberately decoupled from
+/// `SageFs.Features.ObservedFrictionTypes.DetectedSignal` — this file
+/// compiles in `SageFs.Core.fsproj` BEFORE `ObservedFrictionTypes.fs`/
+/// `ObservedFriction.fs` (see `SageFs/McpFrictionRecorder.fs`'s own
+/// compile-order note on `FrictionReportWithSignals`), so it cannot
+/// reference that type without reordering Core's whole compile graph.
+/// `SageFs/Mcp.fs`, which compiles after all of Core, projects
+/// `DetectedSignal list -> FrictionSignalReport list` at the `compose`
+/// call site instead.
+type FrictionSignalReport = {
+  /// Stable signal id, e.g. "observed.reset-thrash" (`FrictionSignal.id`).
+  SignalId: string
+  /// How many events supported this signal. A rationale of "friction
+  /// detected" with no count attached is unactionable.
+  EvidenceCount: int
+  /// Human-readable evidence window/context for the rationale text.
+  WindowDescription: string
+}
+
 /// What kind of action should the developer take?
 [<RequireQualifiedAccess>]
 type ActionKind =
@@ -18,6 +39,8 @@ type ActionKind =
   | InvestigatePerformance of CellId
   /// Run affected tests
   | RunTests
+  /// Address an observed friction signal (e.g. reset-thrash, excessive polling)
+  | AddressFriction of signalId: string
 
 /// A single prioritized developer action.
 type PrioritizedAction = {
@@ -61,6 +84,7 @@ module ActionPrioritizer =
   /// Priority weights (lower number = higher priority)
   let [<Literal>] FailurePriority = 10
   let [<Literal>] BlindSpotPriority = 30
+  let [<Literal>] FrictionPriority = 40
   let [<Literal>] PerformancePriority = 50
   let [<Literal>] StaleReevalPriority = 70
   let [<Literal>] RunTestsPriority = 90
@@ -109,13 +133,34 @@ module ActionPrioritizer =
                           report.CellId report.P95Ms }
       | ImpactRecommendation.Acceptable -> None)
 
-  /// Generate actions from stale cell IDs.
-  let actionsFromStaleCells (staleCellIds: CellId list) : PrioritizedAction list =
-    staleCellIds
+  /// Generate actions for cells made stale by a recent change. Only cells
+  /// TRANSITIVELY DOWNSTREAM of `changedCellIds` are stale — a changed cell
+  /// itself was just re-evaluated (fresh), and a cell with no changed
+  /// ancestor never needs re-evaluation. Previously this took every cell id
+  /// in the whole graph (`graph.Cells |> Map.toList |> List.map fst`),
+  /// marking the entire session stale on every tick — noise, not signal.
+  let actionsFromStaleCells (graph: CellGraph) (changedCellIds: Set<CellId>) : PrioritizedAction list =
+    changedCellIds
+    |> Set.toList
+    |> List.collect (transitiveStale graph)
+    |> List.distinct
     |> List.map (fun cellId ->
       { Kind = ActionKind.ReEvaluateCell cellId
         Priority = StaleReevalPriority
         Reason = sprintf "Cell %A is stale — re-evaluate to propagate changes" cellId })
+
+  /// Generate actions from observed friction signals (roast: `ObservedFriction.
+  /// detectAll` was computed and shown in read-model tools, but nothing fed it
+  /// into the action queue). Each rationale names the signal kind, its evidence
+  /// count, and the window it was observed over — "friction detected" alone is
+  /// unactionable.
+  let actionsFromFriction (reports: FrictionSignalReport list) : PrioritizedAction list =
+    reports
+    |> List.map (fun r ->
+      { Kind = ActionKind.AddressFriction r.SignalId
+        Priority = FrictionPriority
+        Reason = sprintf "Friction signal '%s' seen %d time%s (%s) — investigate the workflow gap"
+                   r.SignalId r.EvidenceCount (match r.EvidenceCount with 1 -> "" | _ -> "s") r.WindowDescription })
 
   /// Classify session health based on issue counts.
   let classifyHealth (failureCount: int) (blindSpotCount: int) (regressionCount: int) : SessionHealthGrade =
@@ -130,16 +175,19 @@ module ActionPrioritizer =
 
   /// Compose all inputs into a ranked action queue.
   let compose
+    (graph: CellGraph)
     (coverageReports: CoverageIntelReport list)
     (impactReports: ImpactForecastReport list)
-    (staleCellIds: CellId list)
+    (changedCellIds: Set<CellId>)
+    (frictionSignalReports: FrictionSignalReport list)
     : ActionQueueReport =
     let coverageActions = actionsFromCoverage coverageReports
     let impactActions = actionsFromImpact impactReports
-    let staleActions = actionsFromStaleCells staleCellIds
+    let staleActions = actionsFromStaleCells graph changedCellIds
+    let frictionActions = actionsFromFriction frictionSignalReports
 
     let allActions =
-      coverageActions @ impactActions @ staleActions
+      coverageActions @ impactActions @ staleActions @ frictionActions
       |> List.sortBy (fun a -> a.Priority)
 
     let totalFailures = coverageReports.Length

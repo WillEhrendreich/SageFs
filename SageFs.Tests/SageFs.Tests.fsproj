@@ -17,6 +17,7 @@
         <Compile Include="DaemonModeProxyTests.fs" />
         <Compile Include="FalcoTests.fs" />
         <Compile Include="PushEventTests.fs" />
+        <Compile Include="FrictionSignalLoopTests.fs" />
         <Compile Include="McpAdapterTests.fs" />
         <Compile Include="McpServerE2ETests.fs" />
         <Compile Include="McpServerOversizedRequestTests.fs" />
@@ -147,6 +148,7 @@
         <Compile Include="AffordancesMutationTests.fs" />
         <Compile Include="BinaryPrimitivesMutationTests.fs" />
         <Compile Include="TestCachePersistenceMutationTests.fs" />
+        <Compile Include="FlakyPersistenceTests.fs" />
         <Compile Include="EvalStoreMutationTests.fs" />
         <Compile Include="SessionDisplayMutationTests.fs" />
         <Compile Include="ReloadPlanningDecisionMutationTests.fs" />

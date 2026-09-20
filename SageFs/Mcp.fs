@@ -3478,30 +3478,30 @@ module McpTools =
         let allMaps =
           cycleState.InstrumentationMaps
           |> Map.values |> Seq.collect id |> Seq.toArray
-
         let coverageReports =
           Features.CoverageIntel.CoverageIntel.compose
             failuresWithNarratives
             (fun _ -> [])
             allMaps testState.TestCoverageBitmaps cycleState.DepGraph
 
-        // Build impact forecast reports
+        // Real per-cell durations from EvalTimeline (was `[]` for every cell).
         let graph = buildCellGraphFromState state
+        let stats = Features.EvalTimeline.timelineStats 20 state.CachedTimeline
+        let p50, p95 = stats.P50Ms |> Option.defaultValue 0.0, stats.P95Ms |> Option.defaultValue 0.0
         let impactReports =
           graph.Cells |> Map.toList |> List.map (fun (cellId, _) ->
-            let downstream = Features.CellDependencyGraph.transitiveStale graph cellId
-            let stats = Features.EvalTimeline.timelineStats 20 state.CachedTimeline
-            let p50 = stats.P50Ms |> Option.defaultValue 0.0
-            let p95 = stats.P95Ms |> Option.defaultValue 0.0
-            Features.ImpactForecast.ImpactForecast.analyzeCell cellId p50 p95 [] downstream)
-
-        // Stale cells: any cell in the graph (all are candidates for the action queue)
-        let staleCellIds = graph.Cells |> Map.toList |> List.map fst
-
+            let ds = state.CachedTimeline.Entries |> List.filter (fun e -> e.CellId = cellId)
+            let durations = ds |> List.truncate 10 |> List.map (fun e -> float e.DurationMs)
+            Features.ImpactForecast.ImpactForecast.analyzeCell cellId p50 p95 durations
+              (Features.CellDependencyGraph.transitiveStale graph cellId))
+        // Changed cells = the most recently evaluated cell (roast: was EVERY cell, always stale).
+        let changedCellIds =
+          state.CachedTimeline.Entries |> List.tryHead
+          |> Option.map (fun e -> e.CellId) |> Option.toList |> Set.ofList
+        let frictionSignalReports = Features.McpFrictionRecorder.Recorder.computeFrictionSignalReports ctx.FrictionStore
         let report =
           Features.ActionPrioritizer.ActionPrioritizer.compose
-            coverageReports impactReports staleCellIds
-
+            graph coverageReports impactReports changedCellIds frictionSignalReports
         let jsonData =
           {| HealthGrade = report.HealthGrade.ToString()
              TotalFailures = report.TotalFailures

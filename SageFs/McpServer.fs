@@ -1340,6 +1340,39 @@ let wrapLiveSnapshotSinkForSse
       sessionEventBroadcast.Trigger(
         SageFs.SseWriter.formatLiveBindingsEvent sseJsonOpts (Some sid) snap))
 
+// ── Action queue push: ActionQueueReady, wired for real ─────────────────────
+
+/// Push-decision + accumulation for the ranked action queue (roast §3: the
+/// gap-report tools computed `ActionPrioritizer.compose`/`ObservedFriction.
+/// detectAll` on demand, but `PushEvent.ActionQueueReady`/`ImpactAlert` were
+/// constructed ONLY in tests — nothing in the daemon ever pushed one).
+/// Mirrors the no-change-suppression discipline this repo requires on every
+/// push path (dashboard SSE, `wireSessionHealthSubscription`'s `lastKnown`
+/// dedup): a Healthy queue is not pushed (nothing to act on), and the SAME
+/// report is never pushed twice in a row — `ModelChanged` fires on every
+/// unrelated tick too.
+module ActionQueuePush =
+  let shouldPush
+    (previous: SageFs.Features.ActionPrioritizer.ActionQueueReport option)
+    (report: SageFs.Features.ActionPrioritizer.ActionQueueReport) : bool =
+    match report.HealthGrade with
+    | SageFs.Features.ActionPrioritizer.SessionHealthGrade.Healthy -> false
+    | _ -> previous <> Some report
+
+  /// Push `report` via the SAME `AccumulateEvent` path `DiagnosisReady`
+  /// already uses when `shouldPush` says so, and update `lastPushed` so the
+  /// next call sees this report as the new baseline.
+  let pushIfActionable
+    (tracker: McpServerTracker)
+    (sessionId: string option)
+    (lastPushed: SageFs.Features.ActionPrioritizer.ActionQueueReport option ref)
+    (report: SageFs.Features.ActionPrioritizer.ActionQueueReport) =
+    match shouldPush lastPushed.Value report with
+    | true ->
+      lastPushed.Value <- Some report
+      tracker.AccumulateEvent(sessionId, PushEvent.ActionQueueReady report)
+    | false -> ()
+
 // ── Model change handlers: state change → SSE + MCP notifications ──
 
 /// Wire SseEvent.ModelChanged events to the handler pipeline.
@@ -1352,8 +1385,13 @@ let wireModelChangeHandlers
   (featurePushState: SageFs.Features.FeatureHooks.FeaturePushState ref)
   (lastFeatureOutputCount: int ref)
   (sharedBindingScope: SageFs.Features.BindingExplorer.BindingScopeSnapshot option ref)
-  (lastEvalContext: (string * int) option ref) =
+  (lastEvalContext: (string * int) option ref)
+  (frictionStore: SageFs.Features.FrictionSqlite.FrictionStore option) =
   let modelChangeState = ref ModelChangeState.empty
+  // Baseline for the action-queue no-change suppression (roast: `ActionQueueReady`/
+  // `ImpactAlert` were constructed only in tests). `ModelChanged` fires on every
+  // unrelated tick too, so an unchanged report must never re-push.
+  let lastActionQueue : SageFs.Features.ActionPrioritizer.ActionQueueReport option ref = ref None
 
   let handleDiagnosticsChange diagCount =
     SseContext.withModel ctx (fun model ->
@@ -1625,6 +1663,39 @@ let wireModelChangeHandlers
           ctx.TestEventBroadcast.Trigger(
             SageFs.SseWriter.formatDiagnosisReadyEvent ctx.SseJsonOpts (Some activeId) report)
         | false -> ()
+
+        // Action queue, alongside the diagnosis above — reuses the SAME
+        // graph/causal-cells/timeline the diagnosis just computed rather
+        // than taking a second pass over the model.
+        let allMaps =
+          model.LiveTesting.InstrumentationMaps
+          |> Map.values |> Seq.collect id |> Seq.toArray
+        let coverageReports =
+          SageFs.Features.CoverageIntel.CoverageIntel.compose
+            failuresWithNarratives (fun _ -> []) allMaps lt.TestCoverageBitmaps model.LiveTesting.DepGraph
+        let changedCellIds =
+          report.Failures |> List.collect (fun f -> f.CausalCells) |> Set.ofList
+        let impactReports =
+          changedCellIds
+          |> Set.toList
+          |> List.collect (fun cid -> cid :: SageFs.Features.CellDependencyGraph.transitiveStale graph cid)
+          |> List.distinct
+          |> List.map (fun cellId ->
+            let downstream = SageFs.Features.CellDependencyGraph.transitiveStale graph cellId
+            let stats = SageFs.Features.EvalTimeline.timelineStats 20 state.CachedTimeline
+            let p50 = stats.P50Ms |> Option.defaultValue 0.0
+            let p95 = stats.P95Ms |> Option.defaultValue 0.0
+            let durations =
+              state.CachedTimeline.Entries
+              |> List.filter (fun e -> e.CellId = cellId)
+              |> List.truncate 10
+              |> List.map (fun e -> float e.DurationMs)
+            SageFs.Features.ImpactForecast.ImpactForecast.analyzeCell cellId p50 p95 durations downstream)
+        let frictionSignalReports = SageFs.Features.McpFrictionRecorder.Recorder.computeFrictionSignalReports frictionStore
+        let actionReport =
+          SageFs.Features.ActionPrioritizer.ActionPrioritizer.compose
+            graph coverageReports impactReports changedCellIds frictionSignalReports
+        ActionQueuePush.pushIfActionable ctx.ServerTracker (SseContext.activeSessionId ctx) lastActionQueue actionReport
       | false -> ())
 
   stateChanged.Subscribe(fun change ->
@@ -3175,7 +3246,7 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
 
       let _stateSub =
         cfg.StateChanged |> Option.map (fun evt ->
-          wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount cfg.SharedBindingScope lastEvalContext)
+          wireModelChangeHandlers evt sseCtx fsiBindings featurePushState lastFeatureOutputCount cfg.SharedBindingScope lastEvalContext cfg.FrictionStore)
 
       logStartup app cfg.Port logPath otelConfigured
       do! runUntilCancelled app stopping

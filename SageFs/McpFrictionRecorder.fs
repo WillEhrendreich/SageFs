@@ -381,3 +381,76 @@ module Recorder =
           Ok ({ Report = report; ObservedSignals = observedSignals } : FrictionReportWithSignals)
         | Error err -> Error (sprintf "Friction store read failed: %s" err)
     }
+
+  // ── Friction signals -> action queue (roast §1/§3: `ObservedFriction.
+  // detectAll` was computed and shown by read-model tools, but nothing fed
+  // it into `ActionPrioritizer`'s ranked queue) ──────────────────────────
+
+  /// The prefix `McpServer.fs`'s `recordToolFailure` stamps when a tool
+  /// call's argument parsing fails BEFORE the tool name resolves (e.g.
+  /// "unknown (missing argument)") — `ObservedFrictionUnattributed` already
+  /// turns that exact class into its own `UnattributedFailure` signal
+  /// (Strong confidence, carries no fabricated tool identity). A
+  /// TOOL-KEYED signal (ExcessivePolling / InvalidStateCall / RetryLoop /
+  /// Abandonment) that still carries an "unknown"-prefixed tool name would
+  /// double-count the same failure under a made-up tool identity, so those
+  /// are EXCLUDED here rather than surfaced as an action against a tool
+  /// that was never really named. `UnattributedFailure` itself is never
+  /// filtered — it is the correct, already-honest home for that evidence.
+  let private isUnattributedToolName (name: string) =
+    name.StartsWith("unknown", System.StringComparison.Ordinal)
+
+  /// Project one detected friction signal (`ObservedFriction.detectAll`'s
+  /// output) into what `ActionPrioritizer.compose` needs. Lives here — not
+  /// in `ActionPrioritizer.fs` — because that file compiles BEFORE
+  /// `ObservedFrictionTypes.fs` in `SageFs.Core.fsproj` (see
+  /// `FrictionSignalReport`'s own doc comment); this file compiles after
+  /// all of Core, so `DetectedSignal` is fully available here.
+  let tryProjectFrictionSignal (detected: DetectedSignal) : SageFs.Features.ActionPrioritizer.FrictionSignalReport option =
+    let signalId = FrictionSignal.id detected.Signal
+    let windowText (w: EvidenceWindow) =
+      sprintf "%s .. %s" (w.FirstAtUtc.ToString("O")) (w.LastAtUtc.ToString("O"))
+    let mk evidenceCount windowDescription : SageFs.Features.ActionPrioritizer.FrictionSignalReport option =
+      Some { SignalId = signalId; EvidenceCount = evidenceCount; WindowDescription = windowDescription }
+    let mkForTool tool evidenceCount windowDescription =
+      match isUnattributedToolName (ToolName.value tool) with
+      | true -> None
+      | false -> mk evidenceCount windowDescription
+    match detected.Signal with
+    | FrictionSignal.ExcessivePolling(tool, calls, _successes, window) ->
+      mkForTool tool calls (windowText window)
+    | FrictionSignal.ResetThrash(resets, window) ->
+      mk resets (windowText window)
+    | FrictionSignal.HardResetAfterCreate gap ->
+      mk 1 (sprintf "%dms after create" (DurationMs.value gap))
+    | FrictionSignal.UnattributedFailure(rawTool, count) ->
+      mk count rawTool
+    | FrictionSignal.InvalidStateCall(tool, blocked) ->
+      mkForTool tool blocked ""
+    | FrictionSignal.RepeatedSameError(blocker, run) ->
+      mk run (string blocker)
+    | FrictionSignal.RetryLoop(tool, attempts) ->
+      mkForTool tool attempts ""
+    | FrictionSignal.Abandonment(tool, lastBlocker) ->
+      mkForTool tool 1 (string lastBlocker)
+    | FrictionSignal.SlowTimeToFirstSuccess(elapsed, failedBefore) ->
+      mk (max 1 failedBefore) (sprintf "%dms elapsed" (DurationMs.value elapsed))
+
+  /// Read + detect + project observed friction signals for the action
+  /// queue. `FrictionStore.ReadEvents` is already synchronous (a plain
+  /// SQLite call — Task-wrapped elsewhere only to match an async-shaped
+  /// interface), version-scoped via `filterByVersion` so a signal can never
+  /// straddle an upgrade boundary. Shared by `Mcp.fs`'s `suggest_next_action`
+  /// tool and `McpServer.fs`'s `ModelChanged` push-notification subscription.
+  let computeFrictionSignalReports (frictionStore: FrictionSqlite.FrictionStore option) =
+    match frictionStore with
+    | None -> []
+    | Some store ->
+      match store.ReadEvents() with
+      | Error _ -> []
+      | Ok events ->
+        let currentVersion = SageFsVersion.current ()
+        let filtered =
+          filterByVersion (Some currentVersion) ({ Events = events; Feedback = [] } : FrictionEnvelope)
+        ObservedFriction.detectAll DetectorConfig.defaults filtered.Events
+        |> List.choose tryProjectFrictionSignal
