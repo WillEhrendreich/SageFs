@@ -409,16 +409,24 @@ let loadSolution (logger: ILogger) (config: Args.ProjectLoadConfig) =
         OtherArgs = []
       }
 
+/// Package names that mark a project as a test project (Expecto, xUnit,
+/// NUnit, MSTest, or the .NET test SDK). Shared by the Ionide `ProjectOptions`
+/// path (`isTestProject`, matching `PackageReferences`) and the manual-parse
+/// fallback path (`classifyFallbackProject`, matching raw
+/// `<PackageReference Include="...">` names read straight from the fsproj
+/// XML) so the two paths can never drift on what counts as a test package.
+let private testPackageNames = [ "Expecto"; "xunit"; "xunit.v3"; "NUnit"; "MSTest.TestFramework"; "Microsoft.NET.Test.Sdk" ]
+
+let private isTestPackageName (name: string) =
+  testPackageNames |> List.exists (fun tp -> name.StartsWith(tp, StringComparison.OrdinalIgnoreCase))
+
 /// Detect if a project is a test project via MSBuild property or package references.
 let isTestProject (proj: ProjectOptions) : bool =
   match proj.AllProperties.TryFind "IsTestProject" with
   | Some vals when vals |> Set.exists (fun v -> String.Equals(v, "true", StringComparison.OrdinalIgnoreCase)) -> true
   | _ ->
-    let testPackages = [ "Expecto"; "xunit"; "xunit.v3"; "NUnit"; "MSTest.TestFramework"; "Microsoft.NET.Test.Sdk" ]
     proj.PackageReferences
-    |> List.exists (fun pr ->
-      let name = Path.GetFileNameWithoutExtension(pr.FullPath)
-      testPackages |> List.exists (fun tp -> name.StartsWith(tp, StringComparison.OrdinalIgnoreCase)))
+    |> List.exists (fun pr -> isTestPackageName (Path.GetFileNameWithoutExtension(pr.FullPath)))
 
 /// Filter a solution's projects to only test projects.
 let discoverTestProjects (projects: ProjectOptions list) : ProjectOptions list =
@@ -456,6 +464,112 @@ let classifyProject (proj: ProjectOptions) : ClassifiedProject =
 /// Classify all projects in a solution, returning a map of path to classification.
 let classifyProjects (projects: ProjectOptions list) : ClassifiedProject list =
   projects |> List.map classifyProject
+
+/// Classification-relevant properties read directly from an .fsproj's XML —
+/// used only for the manual-parse fallback path, whose `FSharpProjectOptions`
+/// carry no Ionide `AllProperties`/`PackageReferences` to read `classifyProject`
+/// from. Best-effort: a read/parse failure yields all-unknown rather than
+/// throwing — this only degrades UI classification, never the eval path the
+/// fallback exists to keep alive.
+type private FallbackProjectProps = {
+  OutputType: string option
+  IsTestProject: bool option
+  PackageRefs: string list
+}
+
+let private readFallbackProjectProps (projPath: string) : FallbackProjectProps =
+  try
+    let doc = XDocument.Load (Path.GetFullPath projPath)
+    let propValue (name: string) =
+      doc.Descendants(XName.Get name) |> Seq.tryHead |> Option.map (fun e -> e.Value.Trim())
+    let outputType = propValue "OutputType"
+    let isTestProjectProp =
+      propValue "IsTestProject"
+      |> Option.map (fun v -> String.Equals(v, "true", StringComparison.OrdinalIgnoreCase))
+    let packageRefs =
+      doc.Descendants(XName.Get "PackageReference")
+      |> Seq.choose (fun el -> el.Attribute(XName.Get "Include") |> Option.ofObj |> Option.map (fun a -> a.Value))
+      |> Seq.toList
+    // Same desktop-UI markers as activeUiPropertyMarkers, read straight from
+    // the XML since there is no ProjectOptions.AllProperties here.
+    let uiMarkers =
+      [ "UseWPF"; "UseWindowsForms"; "UseMaui"; "UseWinUI" ]
+      |> List.filter (fun prop ->
+        match propValue prop with
+        | Some v -> String.Equals(v, "true", StringComparison.OrdinalIgnoreCase)
+        | None -> false)
+    { OutputType = outputType; IsTestProject = isTestProjectProp; PackageRefs = packageRefs @ uiMarkers }
+  with _ ->
+    { OutputType = None; IsTestProject = None; PackageRefs = [] }
+
+/// Classify a manual-parse fallback project (`FSharpProjectOptions` — no
+/// Ionide `AllProperties`/`PackageReferences`) by reading its .fsproj XML
+/// directly. Conservative by construction: `OutputType = Exe` is the ONLY
+/// signal that can ever produce `Executable` — when it is absent, unreadable,
+/// or anything else, the project is classified `Library` rather than guessed.
+/// A wrongly-`Executable` fallback project would put a Run button on
+/// something that cannot run; that is a worse lie than reporting Library on
+/// something that happens to be runnable.
+let classifyFallbackProject (fp: FSharpProjectOptions) : ClassifiedProject =
+  let props = readFallbackProjectProps fp.ProjectFileName
+  let role =
+    match props.OutputType with
+    | Some v when String.Equals(v, "Exe", StringComparison.OrdinalIgnoreCase) -> ProjectRole.Executable
+    | _ ->
+      match props.IsTestProject with
+      | Some true -> ProjectRole.Test
+      | _ when props.PackageRefs |> List.exists isTestPackageName -> ProjectRole.Test
+      | _ -> ProjectRole.Library
+  { Path = fp.ProjectFileName
+    Role = role
+    PackageRefs = props.PackageRefs }
+
+/// Classify every project a Solution actually loaded — covering BOTH the
+/// normal Ionide path (`Projects`) and the manual-parse fallback path
+/// (`FsProjects` only) that `loadSolution` falls back to when Ionide's
+/// workspace loader silently returns zero projects. Before this function,
+/// `ProjectRoles` (ActorCreation.fs) read `sln.Projects` alone, so a fallback
+/// session — which WORKS, `FsProjects` carries real source files — reported
+/// `loadedProjects: []` everywhere: `/api/sessions`, the VS Code tree, and the
+/// dashboard's project picker/Run button. Every caller must derive from this
+/// one function so neither half of a Solution can be read alone again —
+/// mirroring `projectDirectories` above, which already merges both sources
+/// for the file watcher. Deduped by project path: a project present in both
+/// (the normal case) is classified once, from the richer Ionide data.
+let classifiedProjectsOf (sln: Solution) : ClassifiedProject list =
+  let normal = classifyProjects sln.Projects
+  let normalPaths = normal |> List.map (fun cp -> cp.Path) |> Set.ofList
+  let fallback =
+    sln.FsProjects
+    |> List.filter (fun fp -> not (normalPaths.Contains fp.ProjectFileName))
+    |> List.map classifyFallbackProject
+  normal @ fallback
+
+/// Best-effort target assembly for a fallback project: the manual fallback
+/// never builds, so there is no per-project TargetPath — only the flat DLL
+/// list `ManualProjectParse.collectBinReferences` gathered from every
+/// project's bin dir. Match by expected output filename (`<ProjectName>.dll`).
+/// When no match exists, the project has no known target — omitted rather
+/// than pointing `run_app` at a guessed, possibly wrong, assembly.
+let private fallbackProjectTarget (references: DllName list) (fp: FSharpProjectOptions) : (string * string) option =
+  let expectedName = Path.GetFileNameWithoutExtension(fp.ProjectFileName) + ".dll"
+  references
+  |> List.tryFind (fun dll -> String.Equals(Path.GetFileName dll, expectedName, StringComparison.OrdinalIgnoreCase))
+  |> Option.map (fun target -> fp.ProjectFileName, target)
+
+/// Each loaded project paired with the assembly path the session actually
+/// runs from — covering both the normal Ionide path (`Projects.TargetPath`)
+/// and the manual-parse fallback path (best-effort, see
+/// `fallbackProjectTarget`). See `classifiedProjectsOf` for why both sources
+/// must be merged by one function.
+let projectTargetsOf (sln: Solution) : (string * string) list =
+  let normal = sln.Projects |> List.map (fun po -> po.ProjectFileName, po.TargetPath)
+  let normalPaths = normal |> List.map fst |> Set.ofList
+  let fallback =
+    sln.FsProjects
+    |> List.filter (fun fp -> not (normalPaths.Contains fp.ProjectFileName))
+    |> List.choose (fallbackProjectTarget sln.References)
+  normal @ fallback
 
 /// Orders projects so every project appears AFTER all of its own project
 /// references (a dependency-first topological sort by `ReferencedProjects`).
