@@ -31,6 +31,7 @@
     <Compile Include="SessionsTreeProvider.fs" />
     <Compile Include="TypeExplorerProvider.fs" />
     <Compile Include="TestControllerAdapter.fs" />
+    <Compile Include="TestDecorationsPure.fs" />
     <Compile Include="TestDecorations.fs" />
     <Compile Include="TestCodeLensProvider.fs" />
     <Compile Include="CoverageViewCodeLensProvider.fs" />

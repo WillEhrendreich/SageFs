@@ -5,6 +5,7 @@ open Fable.Core.JsInterop
 open Vscode
 
 open SageFs.Vscode.LiveTestingTypes
+open SageFs.Vscode.TestDecorationsPure
 
 // ── Decoration types ────────────────────────────────────────────
 
@@ -91,104 +92,38 @@ let initialize () =
 
 // ── Decoration application ──────────────────────────────────────
 
-/// Build decoration options for a test at a specific line with hover message
-let decorationRange (line: int) (hoverText: string) : obj =
-  let range = newRange (line - 1) 0 (line - 1) 0
+/// Build VS Code decoration options from a decoration already computed by
+/// `TestDecorationsPure` — the only place a zero-based `Range` is built.
+let private toRangeOption (zeroBasedLine: int) (hoverText: string) : obj =
+  let range = newRange zeroBasedLine 0 zeroBasedLine 0
   createObj [
     "range" ==> range
     "hoverMessage" ==> hoverText
   ]
 
+let private toRanges (entries: DecorationEntry list) : ResizeArray<obj> =
+  ResizeArray<obj>(entries |> List.map (fun e -> toRangeOption e.ZeroBasedLine e.HoverText))
+
+let private toCoverageRanges (entries: CoverageEntry list) : ResizeArray<obj> =
+  ResizeArray<obj>(entries |> List.map (fun e -> toRangeOption e.ZeroBasedLine e.HoverText))
+
 /// Apply test decorations to a single text editor based on current test state
 let applyToEditor (state: VscLiveTestState) (editor: TextEditor) =
   let filePath = editor.document.fileName
-  let testsInFile = VscLiveTestState.testsForFile filePath state
+  let decorations = decorationsForFile state filePath
 
-  let mutable passedRanges = ResizeArray<obj>()
-  let mutable failedRanges = ResizeArray<obj>()
-  let mutable runningRanges = ResizeArray<obj>()
-
-  for test in testsInFile do
-    match test.Line with
-    | Some line ->
-      let result = VscLiveTestState.resultFor test.Id state
-      match result with
-      | Some r ->
-        match r.Outcome with
-        | VscTestOutcome.Passed ->
-          let durationText =
-            match r.DurationMs with
-            | Some ms -> sprintf "✓ %s (%.0fms)" test.DisplayName ms
-            | None -> sprintf "✓ %s" test.DisplayName
-          passedRanges.Add(decorationRange line durationText)
-        | VscTestOutcome.Failed msg ->
-          let causalText =
-            VscLiveTestState.narrativeFor (VscTestId.value test.Id) state
-            |> Option.map renderNarrativeText
-            |> Option.defaultValue ""
-          let text = sprintf "✗ %s: %s%s" test.DisplayName msg causalText
-          failedRanges.Add(decorationRange line text)
-        | VscTestOutcome.Errored msg ->
-          let causalText =
-            VscLiveTestState.narrativeFor (VscTestId.value test.Id) state
-            |> Option.map renderNarrativeText
-            |> Option.defaultValue ""
-          let text = sprintf "✗ %s: %s%s" test.DisplayName msg causalText
-          failedRanges.Add(decorationRange line text)
-        | VscTestOutcome.Running ->
-          runningRanges.Add(decorationRange line (sprintf "● Running: %s" test.DisplayName))
-        | VscTestOutcome.Skipped reason ->
-          passedRanges.Add(decorationRange line (sprintf "⊘ Skipped: %s — %s" test.DisplayName reason))
-        | VscTestOutcome.Stale ->
-          let reason =
-            match state.Freshness with
-            | VscResultFreshness.StaleCodeEdited -> "code edited since last run"
-            | VscResultFreshness.StaleWrongGeneration -> "generation mismatch"
-            | VscResultFreshness.Fresh -> "needs re-run"
-          runningRanges.Add(decorationRange line (sprintf "◌ %s (stale — %s)" test.DisplayName reason))
-        | VscTestOutcome.PolicyDisabled ->
-          passedRanges.Add(decorationRange line (sprintf "⊘ %s (disabled by policy)" test.DisplayName))
-        | VscTestOutcome.NotYetRun ->
-          runningRanges.Add(decorationRange line (sprintf "◆ %s (not yet run)" test.DisplayName))
-      | None ->
-        runningRanges.Add(decorationRange line (sprintf "◆ %s (not yet run)" test.DisplayName))
-    | None -> ()
-
-  passedType |> Option.iter (fun dt -> editor.setDecorations(dt, passedRanges))
-  failedType |> Option.iter (fun dt -> editor.setDecorations(dt, failedRanges))
-  runningType |> Option.iter (fun dt -> editor.setDecorations(dt, runningRanges))
+  passedType |> Option.iter (fun dt -> editor.setDecorations(dt, toRanges decorations.Passed))
+  failedType |> Option.iter (fun dt -> editor.setDecorations(dt, toRanges decorations.Failed))
+  runningType |> Option.iter (fun dt -> editor.setDecorations(dt, toRanges decorations.Running))
 
 /// Apply coverage decorations to a single text editor
 let applyCoverageToEditor (state: VscLiveTestState) (editor: TextEditor) =
   let filePath = editor.document.fileName
-  match Map.tryFind filePath state.Coverage with
-  | None ->
-    coveredPassingType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
-    coveredFailingType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
-    notCoveredType |> Option.iter (fun dt -> editor.setDecorations(dt, ResizeArray<obj>()))
-  | Some fileCov ->
-    let covPassRanges = ResizeArray<obj>()
-    let covFailRanges = ResizeArray<obj>()
-    let notCovRanges = ResizeArray<obj>()
-    for kvp in fileCov.LineCoverage do
-      let line = kvp.Key
-      match kvp.Value with
-      | VscLineCoverage.Covered (testCount, health) ->
-        let hoverText =
-          match health with
-          | VscLineCoverageHealth.AllPassing -> sprintf "▸ Covered by %d test(s), all passing" testCount
-          | VscLineCoverageHealth.SomeFailing -> sprintf "▸ Covered by %d test(s), some failing" testCount
-        match health with
-        | VscLineCoverageHealth.AllPassing ->
-          covPassRanges.Add(decorationRange line hoverText)
-        | VscLineCoverageHealth.SomeFailing ->
-          covFailRanges.Add(decorationRange line hoverText)
-      | VscLineCoverage.NotCovered ->
-        notCovRanges.Add(decorationRange line "○ Not covered by any test")
-      | VscLineCoverage.Pending -> ()
-    coveredPassingType |> Option.iter (fun dt -> editor.setDecorations(dt, covPassRanges))
-    coveredFailingType |> Option.iter (fun dt -> editor.setDecorations(dt, covFailRanges))
-    notCoveredType |> Option.iter (fun dt -> editor.setDecorations(dt, notCovRanges))
+  let decorations = coverageDecorationsForFile state filePath
+
+  coveredPassingType |> Option.iter (fun dt -> editor.setDecorations(dt, toCoverageRanges decorations.Passing))
+  coveredFailingType |> Option.iter (fun dt -> editor.setDecorations(dt, toCoverageRanges decorations.Failing))
+  notCoveredType |> Option.iter (fun dt -> editor.setDecorations(dt, toCoverageRanges decorations.NotCovered))
 
 /// Apply coverage decorations to all visible editors
 let applyCoverageToAllEditors (state: VscLiveTestState) =
@@ -231,7 +166,8 @@ let updateDiagnostics (state: VscLiveTestState) =
       let uri = uriFile filePath
       let diagnostics = ResizeArray<Diagnostic>()
       for (_, line, testName, msg) in failures do
-        let range = newRange (line - 1) 0 (line - 1) 100
+        let zeroBasedLine = toZeroBasedLine line
+        let range = newRange zeroBasedLine 0 zeroBasedLine 100
         let diagnostic = newDiagnostic range (sprintf "%s: %s" testName msg) VDiagnosticSeverity.Error
         diagnostics.Add diagnostic
       dc.set(uri, diagnostics)
