@@ -23,6 +23,7 @@ open System.IO
 open System.Text
 open System.Text.Json
 open Microsoft.FSharp.Reflection
+open SageFs
 open SageFs.Features
 
 type DiagnosticSeverity =
@@ -81,8 +82,21 @@ type WireCompletion =
     ReplacementText: string
     Glyph: string }
 
+/// Why a config.fsx expression did not produce a DirectoryConfig.
+type ConfigFailure =
+  | ConfigDoesNotCompile of diagnostics: FsiDiagnostic list
+  | ConfigWrongType of typeName: string
+  | ConfigNoValue
+  | ConfigThrew of message: string
+
+type ConfigOutcome =
+  | ConfigEvaluated of config: DirectoryConfig
+  | ConfigRejected of failure: ConfigFailure
+
 type Request =
   | Eval of id: int64 * code: string
+  /// Evaluate a config.fsx expression (in the host, never in the daemon) and answer with the DirectoryConfig it builds.
+  | EvalConfig of id: int64 * content: string
   | ReadFlag of id: int64 * name: string
   | ReadValue of id: int64 * name: string
   /// The session's bound values as an expanded, bounded tree (the dashboard's watch window). The client picks the generation.
@@ -108,6 +122,7 @@ type Response =
   | SymbolsResult of id: int64 * diagnostics: FsiDiagnostic list * symbols: WireSymbolRef list
   | CompletionsResult of id: int64 * items: WireCompletion list
   | DescriptionResult of id: int64 * text: string
+  | ConfigResult of id: int64 * outcome: ConfigOutcome
   | Output of stream: OutputStream * text: string
 
 /// Why a message could not be encoded/decoded. A typed union (never a bare string) so callers can match on the

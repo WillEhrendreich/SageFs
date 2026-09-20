@@ -5,6 +5,7 @@ open System.IO
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.Tests.TestInfrastructure
 open SageFs.Server.Dashboard
 open SageFs.Server.DashboardTypes
 
@@ -176,7 +177,7 @@ let tests = testSequenced <| testList "Session Creation" [
           |> Expect.stringContains "should be the inside project" "Inside.fsproj")
   ]
 
-  testList "DirectoryConfig.evaluate" [
+  Integration.hostList "DirectoryConfig.evaluate" [
 
     testCase "evaluates NoLoad" <| fun _ ->
       DirectoryConfig.evaluate """{ DirectoryConfig.empty with Load = NoLoad }"""

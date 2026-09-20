@@ -5,6 +5,7 @@ open System.IO
 open Expecto
 open Expecto.Flip
 open SageFs
+open SageFs.Tests.TestInfrastructure
 
 /// Helper to evaluate config and unwrap the Ok result.
 let evalOk content =
@@ -13,7 +14,7 @@ let evalOk content =
   | Error msg -> failwithf "Config evaluation failed: %s" msg
 
 [<Tests>]
-let evaluateTests = testSequenced <| testList "DirectoryConfig.evaluate" [
+let evaluateTests = Integration.hostList "DirectoryConfig.evaluate" [
   testCase "loads solution strategy" (fun () ->
     let config = evalOk """{ DirectoryConfig.empty with Load = Solution "MyApp.sln" }"""
     config.Load |> Expect.equal "should parse solution" (Solution "MyApp.sln"))
@@ -81,7 +82,7 @@ let evaluateTests = testSequenced <| testList "DirectoryConfig.evaluate" [
 ]
 
 [<Tests>]
-let loadTests = testSequenced <| testList "DirectoryConfig.load" [
+let loadTests = Integration.hostList "DirectoryConfig.load" [
   testCase "returns None when no config dir" (fun () ->
     let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())
     Directory.CreateDirectory(tempDir) |> ignore
@@ -126,7 +127,7 @@ let loadTests = testSequenced <| testList "DirectoryConfig.load" [
 ]
 
 [<Tests>]
-let ensureAutoOpenOptOutTests = testSequenced <| testList "DirectoryConfig.ensureAutoOpenNamespacesOptOut" [
+let ensureAutoOpenOptOutTests = Integration.hostList "DirectoryConfig.ensureAutoOpenNamespacesOptOut" [
   testCase "creates config when missing" (fun () ->
     let tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())
     Directory.CreateDirectory(tempDir) |> ignore
@@ -176,3 +177,48 @@ let ensureAutoOpenOptOutTests = testSequenced <| testList "DirectoryConfig.ensur
     finally
       Directory.Delete(tempDir, true))
 ]
+
+/// The isolated-host evaluation of config.fsx: what comes back for each way a script can go right or wrong.
+[<Tests>]
+let configHostTests =
+  Integration.hostList "ConfigHost (config.fsx is evaluated in an isolated host, never in the daemon)" [
+    testCase "a script that does not compile is ScriptRejected with the compiler's diagnostics" (fun () ->
+      match ConfigHost.evaluate Environment.CurrentDirectory "this is not valid F#" with
+      | Error(ConfigHost.ScriptRejected(SageFs.FsiHost.FsiProtocol.ConfigDoesNotCompile diagnostics)) ->
+        diagnostics |> Expect.isNonEmpty "carries the diagnostics"
+      | other -> failtestf "expected ConfigDoesNotCompile, got %A" other)
+
+    testCase "an expression of the wrong type is ConfigWrongType naming it" (fun () ->
+      ConfigHost.evaluate Environment.CurrentDirectory "42"
+      |> Expect.equal "typed" (Error(ConfigHost.ScriptRejected(SageFs.FsiHost.FsiProtocol.ConfigWrongType "Int32"))))
+
+    testCase "a script that throws is ConfigThrew carrying the message" (fun () ->
+      match ConfigHost.evaluate Environment.CurrentDirectory "(failwith \"nope\" : DirectoryConfig)" with
+      | Error(ConfigHost.ScriptRejected(SageFs.FsiHost.FsiProtocol.ConfigThrew message)) ->
+        message |> Expect.stringContains "the exception message" "nope"
+      | other -> failtestf "expected ConfigThrew, got %A" other)
+
+    testCase "the full record round-trips: every field reaches the daemon" (fun () ->
+      let script =
+        """{ DirectoryConfig.empty with Load = Projects ["A.fsproj"]; InitScript = Some "init.fsx"; DefaultArgs = ["--x"]; AutoOpenNamespaces = false; IsRoot = true; SessionName = Some "demo" }"""
+      match ConfigHost.evaluate Environment.CurrentDirectory script with
+      | Ok config ->
+        config
+        |> Expect.equal
+             "all fields"
+             { Load = Projects [ "A.fsproj" ]
+               InitScript = Some "init.fsx"
+               DefaultArgs = [ "--x" ]
+               AutoOpenNamespaces = false
+               IsRoot = true
+               SessionName = Some "demo" }
+      | Error error -> failtest (ConfigHost.describeError error))
+
+    testCase "the same script text is evaluated once: the second answer is cached and identical" (fun () ->
+      let script = """{ DirectoryConfig.empty with SessionName = Some "cached-demo" }"""
+      let first = ConfigHost.evaluate Environment.CurrentDirectory script
+      let stopwatch = Diagnostics.Stopwatch.StartNew()
+      let second = ConfigHost.evaluate Environment.CurrentDirectory script
+      second |> Expect.equal "same result" first
+      Expect.isLessThan "no second host was started" (stopwatch.ElapsedMilliseconds, 100L))
+  ]

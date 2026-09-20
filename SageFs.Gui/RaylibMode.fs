@@ -193,13 +193,8 @@ module RaylibMode =
 
   /// Run the Raylib GUI window connected to daemon.
   let run () =
-    // Load keybindings from config, merge with defaults
-    let keyMap =
-      let cwd = System.IO.Directory.GetCurrentDirectory()
-      match DirectoryConfig.load cwd with
-      | Some cfg when not cfg.Keybindings.IsEmpty ->
-        KeyMap.merge cfg.Keybindings KeyMap.defaults
-      | _ -> KeyMap.defaults
+    // Keybindings are no longer configurable through config.fsx (they belonged to the deprecated TUI): defaults only.
+    let keyMap = KeyMap.defaults
     let mapKey = mapKeyWith keyMap
 
     // Discover daemon

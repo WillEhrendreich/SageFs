@@ -55,6 +55,7 @@ type private Work =
   | RunCheckWithSymbols of id: int64 * filePath: string * text: string
   | RunComplete of id: int64 * text: string * caret: int
   | RunDescribe of id: int64 * completionsId: int64 * index: int
+  | RunEvalConfig of id: int64 * content: string
 
 let private typeNameOf (value: FsiValue) =
   match value.ReflectionType with
@@ -175,6 +176,7 @@ let private run (argsFile: string) : int =
             | true -> (try FcsQueries.describe items.[index] with _ -> "")
             | false -> "" // a newer Complete replaced the list this index referred to
           send (DescriptionResult(id, text))
+        | RunEvalConfig(id, content) -> send (ConfigResult(id, FcsQueries.evalConfig session content))
         | RunEval(id, code) ->
           use cancel = new CancellationTokenSource()
           lock runningLock (fun () -> running <- Some { Cancel = cancel; Thread = Thread.CurrentThread })
@@ -216,6 +218,7 @@ let private run (argsFile: string) : int =
       | Result.Ok(CheckWithSymbols(id, filePath, text)) -> requests.Add(RunCheckWithSymbols(id, filePath, text))
       | Result.Ok(Complete(id, text, caret)) -> requests.Add(RunComplete(id, text, caret))
       | Result.Ok(Describe(id, completionsId, index)) -> requests.Add(RunDescribe(id, completionsId, index))
+      | Result.Ok(EvalConfig(id, content)) -> requests.Add(RunEvalConfig(id, content))
       | Result.Ok Interrupt ->
         lock runningLock (fun () ->
           match running with

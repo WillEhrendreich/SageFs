@@ -9,6 +9,7 @@ open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.EditorServices
 open FSharp.Compiler.Interactive.Shell
 open Microsoft.FSharp.Reflection
+open SageFs
 open SageFs.FsiHost.FsiProtocol
 
 let private severityOf (severity: FSharpDiagnosticSeverity) : DiagnosticSeverity =
@@ -63,6 +64,27 @@ let checkWithSymbols (session: FsiEvaluationSession) (filePath: string) (text: s
               Line = symbolUse.Range.StartLine })
       |> Seq.toList
   diagnostics, symbols
+
+/// Evaluate a config.fsx expression in this session and hand back the DirectoryConfig it builds. The script's
+/// `DirectoryConfig.empty` / `LoadStrategy` come from this host's own assembly (ConfigDsl.fs), so the value is the
+/// real thing, and the daemon never runs the user's script.
+let evalConfig (session: FsiEvaluationSession) (content: string) : ConfigOutcome =
+  try
+    session.EvalInteractionNonThrowing "open SageFs;;" |> ignore
+    let result, diagnostics = session.EvalExpressionNonThrowing content
+    let errors = diagnostics |> Array.filter (fun d -> d.Severity = FSharpDiagnosticSeverity.Error)
+    match errors.Length > 0 with
+    | true -> ConfigRejected(ConfigDoesNotCompile(errors |> Array.map toWire |> Array.toList))
+    | false ->
+      match result with
+      | Choice1Of2(Some value) ->
+        match value.ReflectionValue with
+        | :? DirectoryConfig as config -> ConfigEvaluated config
+        | null -> ConfigRejected(ConfigWrongType "null")
+        | other -> ConfigRejected(ConfigWrongType(other.GetType().Name))
+      | Choice1Of2 None -> ConfigRejected ConfigNoValue
+      | Choice2Of2 ex -> ConfigRejected(ConfigThrew ex.Message)
+  with ex -> ConfigRejected(ConfigThrew ex.Message)
 
 /// The completion candidates at the caret, kept as FCS items so a description can be produced on demand.
 let candidates (session: FsiEvaluationSession) (text: string) (caret: int) : DeclarationListItem[] =

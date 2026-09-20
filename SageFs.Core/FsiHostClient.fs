@@ -123,6 +123,7 @@ type FsiHostSession
           | Result.Ok(SymbolsResult(id, _, _) as answer) -> complete id answer
           | Result.Ok(CompletionsResult(id, _) as answer) -> complete id answer
           | Result.Ok(DescriptionResult(id, _) as answer) -> complete id answer
+          | Result.Ok(ConfigResult(id, _) as answer) -> complete id answer
     with ex ->
       onLog (sprintf "[fsihost] read loop ended: %s" ex.Message)
     // Give the process a moment to report its exit code, then fail everything still waiting.
@@ -243,6 +244,15 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> Describe(id, completionsId, index)) with
       | Got(DescriptionResult(_, text)) -> return Answered text
       | Got other -> return HostGone(unexpected "describe" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// Evaluate a config.fsx expression in the host and get the DirectoryConfig it builds (or why it does not).
+  member _.EvalConfig(content: string) : Async<HostCall<ConfigOutcome>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> EvalConfig(id, content)) with
+      | Got(ConfigResult(_, outcome)) -> return Answered outcome
+      | Got other -> return HostGone(unexpected "config" other)
       | Gone reason -> return HostGone reason
     }
 

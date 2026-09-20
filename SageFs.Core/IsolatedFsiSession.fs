@@ -30,7 +30,7 @@ let describeStartError (error: IsolatedStartError) : string =
   | HostStartFailed reason -> SageFs.FsiHostClient.describeStartError reason
 
 /// The dotnet muxer: DOTNET_HOST_PATH, else the one next to the running runtime.
-let private dotnetPath () : string =
+let dotnetPath () : string =
   match Environment.GetEnvironmentVariable "DOTNET_HOST_PATH" with
   | null
   | "" ->
