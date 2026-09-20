@@ -41,8 +41,20 @@ let dotnetPath () : string =
       (OperatingSystem.IsWindows())
   | path -> path
 
-/// Where built hosts are cached (under the SageFs data dir, so tests with an isolated data dir stay isolated).
-let hostCacheRoot () : string = Path.Combine(DaemonState.SageFsDir, "hosts")
+/// Overrides where built hosts are cached. A host is content-addressed (SDK version + exact sources + its Harmony), so
+/// sharing one cache between daemons is safe; a test harness whose daemons each get a fresh data dir uses this to build the
+/// host once instead of once per daemon.
+[<Literal>]
+let HostCacheEnvironmentVariable = "SAGEFS_HOST_CACHE_DIR"
+
+/// Where built hosts are cached: the override, else under the SageFs data dir.
+let hostCacheRootWith (getEnv: string -> string | null) (sageFsDir: string) : string =
+  match getEnv HostCacheEnvironmentVariable with
+  | null -> Path.Combine(sageFsDir, "hosts")
+  | value when String.IsNullOrWhiteSpace value -> Path.Combine(sageFsDir, "hosts")
+  | value -> value
+
+let hostCacheRoot () : string = hostCacheRootWith Environment.GetEnvironmentVariable DaemonState.SageFsDir
 
 /// Start an isolated FSI session for `projects`, run from `workingDir`. `recorder` receives everything the user's
 /// code and FSI write to stdout (so per-eval output capture works exactly as it does in-process).

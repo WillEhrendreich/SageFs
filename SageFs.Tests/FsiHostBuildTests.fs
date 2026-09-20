@@ -78,6 +78,25 @@ let tests =
           Expect.equal "embedded == source" onDisk (found |> List.find (fun (name, _) -> name = "FsiProtocol.fs") |> snd)
     ]
 
+    testList "hostCacheRoot" [
+      testCase "defaults to hosts/ under the data dir" <| fun _ ->
+        SageFs.IsolatedFsiSession.hostCacheRootWith (fun _ -> null) "/data"
+        |> Expect.equal "default" (Path.Combine("/data", "hosts"))
+
+      testCase "an explicit cache dir wins, so daemons with isolated data dirs can share content-addressed hosts" <| fun _ ->
+        SageFs.IsolatedFsiSession.hostCacheRootWith (fun _ -> "/shared/hosts") "/data"
+        |> Expect.equal "override" "/shared/hosts"
+
+      testCase "a blank value is ignored, not treated as a path" <| fun _ ->
+        SageFs.IsolatedFsiSession.hostCacheRootWith (fun _ -> "  ") "/data"
+        |> Expect.equal "default" (Path.Combine("/data", "hosts"))
+
+      testCase "reads exactly the documented variable" <| fun _ ->
+        let mutable asked = ""
+        SageFs.IsolatedFsiSession.hostCacheRootWith (fun name -> asked <- name; null) "/data" |> ignore
+        Expect.equal "variable" SageFs.IsolatedFsiSession.HostCacheEnvironmentVariable asked
+    ]
+
     testList "the host's Harmony" [
       testCase "renameAssembly re-identifies the assembly and leaves its types alone" <| fun _ ->
         let source = File.ReadAllBytes(typeof<HarmonyLib.Harmony>.Assembly.Location)

@@ -313,9 +313,12 @@ let private startDaemonWithWebLiveSession () : Fixture =
   let mutable ready = false
   let mutable faulted = false
   let mutable sessionId = ""
+  // What the daemon last said about its sessions: a timeout that reports only "never Ready" cannot be diagnosed on CI.
+  let mutable lastSessions = "(no /api/sessions response)"
   while not ready && not faulted && DateTime.UtcNow < readyDeadline do
     try
       let body = client.GetStringAsync("/api/sessions").GetAwaiter().GetResult()
+      lastSessions <- body
       use doc = JsonDocument.Parse(body)
       let sessions = doc.RootElement.GetProperty("sessions").EnumerateArray() |> Seq.toList
       faulted <- sessions |> List.exists (fun s -> s.GetProperty("status").GetString() = "Faulted")
@@ -326,8 +329,8 @@ let private startDaemonWithWebLiveSession () : Fixture =
       | None -> ()
     with _ -> Threading.Thread.Sleep(1000)
   match faulted, ready with
-  | true, _ -> failwith "session Faulted during warmup"
-  | _, false -> failwith "session never reached Ready within 300s"
+  | true, _ -> failwithf "session Faulted during warmup. Sessions: %s" lastSessions
+  | _, false -> failwithf "session never reached Ready within 300s. Last /api/sessions: %s" lastSessions
   | _, true -> ()
 
   let userDataDir =

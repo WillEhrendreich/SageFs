@@ -130,6 +130,20 @@ let main argv =
   match isIntegrationHost with
   | true ->
     let hostArgv = argv |> Array.filter (fun a -> a <> "--integration-host")
+    // Every daemon these suites spawn gets a fresh data dir (so it never touches real state), which used to mean a fresh
+    // host cache and a from-scratch host build per daemon. Hosts are content-addressed, so one shared cache is safe: point
+    // every child at it (they inherit this environment) and build the host for the repo's SDK ONCE, up front, so no test
+    // pays the cold build inside its own deadline.
+    let sharedHostCache = Path.Combine(Path.GetTempPath(), "sagefs-fsihost-test-cache")
+    match Environment.GetEnvironmentVariable SageFs.IsolatedFsiSession.HostCacheEnvironmentVariable with
+    | null | "" -> Environment.SetEnvironmentVariable(SageFs.IsolatedFsiSession.HostCacheEnvironmentVariable, sharedHostCache)
+    | _ -> ()
+    let cache = SageFs.IsolatedFsiSession.hostCacheRoot ()
+    let dotnet = SageFs.IsolatedFsiSession.dotnetPath ()
+    let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+    match SageFs.FsiHostBuild.resolveSdkVersion dotnet repoRoot |> Result.bind (fun sdk -> SageFs.FsiHostBuild.ensureBuilt dotnet sdk cache) with
+    | Result.Ok _ -> ()
+    | Result.Error reason -> eprintfn "warning: could not pre-build the FSI host: %s" (SageFs.FsiHostBuild.describeBuildError reason)
     // Sequenced: these suites share process-global state — the one
     // TestInfrastructure.globalActorResult FSI actor (which the reset suites
     // reset), Harmony patches, environment variables. Run in parallel, a reset

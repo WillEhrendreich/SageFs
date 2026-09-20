@@ -528,7 +528,19 @@ let tests =
           // testCase below. The git-ref wait above already proves the landing
           // genuinely completed, so no synchronization was lost by dropping
           // the redundant wait.)
-          let! statusAfterAliceLanding = getCohortStatus alice
+          // The branch ref moves BEFORE the landing's own state advances to Landed (the git fast-forward is the effect; the
+          // FastForwardCompleted transition follows it), so wait for the state the assertions below are about, not for the
+          // ref alone: a single read right after the ref moved raced the transition on a slow runner (observed: Verifying).
+          let landedStatus = ref ""
+          do!
+            waitUntil (landingSettleTimeoutMs ())
+              (fun () -> sprintf "alice's landing to show state=Landed, last status:\n%s" landedStatus.Value)
+              (fun () -> task {
+                let! status = getCohortStatus alice
+                landedStatus.Value <- status
+                return status.Contains "state=Landed"
+              })
+          let statusAfterAliceLanding = landedStatus.Value
           // The gap this test used to document is closed: get_cohort_status
           // now surfaces the landing directly (Cohort.fs's CohortFrame gained
           // Landings/IntegrationHead fields, sourced from the same
