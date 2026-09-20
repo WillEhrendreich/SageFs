@@ -824,7 +824,11 @@ let renderSessionPicker (previous: PreviousSession list) =
             Text.raw "📋 Resume Previous"
           ]
           Elem.p [ Attr.class' "meta"; Attr.style "margin-bottom: 0.5rem;" ] [
-            Text.raw "Sessions from the last 90 days. Retention is configurable."
+            // Both halves of the old copy ("last 90 days", "configurable") were untrue:
+            // stopped sessions are pruned after 7 days (ManifestPersistence.toManifestState,
+            // measured from StoppedAt), the cutoff is hardcoded, and no retention setting
+            // exists in SettingsCatalog. A running session is never pruned by age at all.
+            Text.raw "Stopped sessions are kept for 7 days."
           ]
           yield! previous |> List.map (fun s ->
             let age =
