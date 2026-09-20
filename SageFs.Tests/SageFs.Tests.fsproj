@@ -145,13 +145,16 @@
         <Compile Include="EvalStoreMutationTests.fs" />
         <Compile Include="SessionDisplayMutationTests.fs" />
         <Compile Include="ReloadPlanningDecisionMutationTests.fs" />
+        <Compile Include="ReloadPlanningOutcomeRegressionTests.fs" />
         <Compile Include="HotReloadStateCorrespondenceTests.fs" />
         <Compile Include="SageFsIOTests.fs" />
         <Compile Include="HotReloadBrowserTests.fs" />
         <Compile Include="LiveTestingBrowserTests.fs" />
         <Compile Include="HotReloadEndpointTests.fs" />
         <Compile Include="DevReloadTests.fs" />
+        <Compile Include="DevReloadLastOutcomeTests.fs" />
         <Compile Include="WorkerHttpTransportTests.fs" />
+        <Compile Include="WorkerHttpTransportLastOutcomeTests.fs" />
         <Compile Include="WorkerHttpGuardTests.fs" />
         <Compile Include="SessionIsolationTests.fs" />
         <Compile Include="ShutdownLifecycleTests.fs" />

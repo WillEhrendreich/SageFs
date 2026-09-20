@@ -531,4 +531,74 @@ let webAppHotReloadVerificationTests =
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
+
+    // WHY — sagefs-ux-roast.md §11 Island C: "nobody has confirmed a real
+    // client reading the wire can distinguish a no-op from a real reload."
+    // Everything above proves the running PROCESS behaves correctly; this
+    // proves the WIRE a client actually reads (the `/__sagefs__/reload` SSE
+    // payload) carries the difference — same real host, same real file save,
+    // no synthetic ReloadOutcome values anywhere in this test.
+    Integration.hostCase "a real reload and a real no-op save produce SSE payloads a client can tell apart" <| fun () ->
+      let fDir = fixtureDir ()
+      let appSource = Path.Combine(fDir, "Greeting.fs")
+      let original = File.ReadAllText(appSource)
+
+      let sessionId = sprintf "webapp-distinguish-%s" (Guid.NewGuid().ToString("N"))
+      let hostLog = StringBuilder()
+      let proc, baseUrl, proxy = spawnHost sessionId hostLog
+      try
+        waitReady proxy hostLog
+        let appFile = Path.Combine(fDir, "App.fs")
+        evalOk proxy (sprintf "#load @\"%s\"" appSource) |> ignore
+        evalOk proxy (sprintf "#load @\"%s\"" appFile) |> ignore
+        let port = freePort ()
+        evalOk proxy (sprintf "let appTask = WebAppFixture.App.run %d" port) |> ignore
+        httpGet port "/" |> ignore
+
+        watchAllFiles baseUrl
+        waitForWatched baseUrl 10000
+
+        let edited =
+          original.Replace(
+            "let greeting () = \"hello from sagefs\"",
+            "let greeting () = \"hello from hot reload (value B)\"")
+
+        // 1. A REAL reload: the payload must announce it landed, with counts.
+        let reloadPayload =
+          use sseReader = openSseStream baseUrl
+          writeFixtureFile appSource edited
+          try readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"reload\""))
+          with ex ->
+            failwithf "%s\nHost log:\n%s" ex.Message (hostLog.ToString())
+        Expect.stringContains "a landed reload names its own case" "\"outcome\":\"Patched\"" reloadPayload
+        Expect.isFalse "a landed reload never claims zero patched" (reloadPayload.Contains("\"patched\":0"))
+        httpGet port "/"
+        |> Expect.stringContains "the running process must actually serve the new code" "hello from hot reload (value B)"
+
+        // 2. A REAL no-op: saving the SAME content again changes no
+        //    declaration, so the wire must announce NOTHING landed — the
+        //    exact distinction a client needs to stop rendering a save as a
+        //    silent success when it changed nothing.
+        let noopPayload =
+          use sseReader = openSseStream baseUrl
+          writeFixtureFile appSource edited
+          try readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"noeffect\""))
+          with ex ->
+            failwithf "a byte-identical resave must report noeffect, not silently re-announce reload: %s\nHost log:\n%s" ex.Message (hostLog.ToString())
+        Expect.stringContains "a no-op save never claims the Patched case" "\"outcome\":\"Unchanged\"" noopPayload
+
+        // 3. The two payloads must actually differ where a client looks:
+        //    the type a client switches on, and the outcome case it renders.
+        Expect.isFalse "the reload and no-op payloads must carry different wire types" (reloadPayload.Contains("\"type\":\"noeffect\""))
+        Expect.isFalse "the no-op payload must never carry the refresh cue" (noopPayload.Contains("\"type\":\"reload\""))
+        reloadPayload = noopPayload
+        |> Expect.isFalse "the two payloads must not be byte-identical — that is the whole bug this wire exists to prevent"
+
+        // The running process is unaffected by the no-op save — still B.
+        httpGet port "/"
+        |> Expect.stringContains "a no-op save must not disturb the running process" "hello from hot reload (value B)"
+      finally
+        writeFixtureFile appSource original
+        try proc.Kill(entireProcessTree = true) with _ -> ()
+        try proc.Dispose() with _ -> ()
   ]

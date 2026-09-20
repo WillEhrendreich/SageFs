@@ -256,29 +256,76 @@ module DevReloadEvent =
       (json r.SuggestedAction)
       (r.Reasons |> List.map refusalJson |> String.concat ",")
 
-  /// One SSE `data:` frame. Every string is JSON-serialised, so a filename, a
-  /// multi-line message or a compiler diagnostic can never break the frame it
-  /// travels in — an embedded newline would split one event into two and a
-  /// client would parse half a message.
+  /// The bare JSON payload for one event — no SSE framing. `sseData` wraps
+  /// this into a `data: ...\n\n` frame for the long-lived stream; `LastReload`
+  /// (below) hands the SAME string to a client that polls over plain HTTP
+  /// instead — one function, so the pushed and the polled shape can never
+  /// drift apart.
   ///
   /// `type` is the cue the browser overlay switches on; the rest is the full
   /// report, so a non-browser client (the Neovim plugin, an editor extension)
   /// can render the outcome without re-deriving a thing.
+  let payloadJson (evt: DevReloadEvent) : string =
+    match evt with
+    | Compiling None -> """{"type":"compiling"}"""
+    | Compiling (Some file) -> sprintf """{"type":"compiling","file":%s}""" (json file)
+    | Patched r -> sprintf """{"type":"reload",%s}""" (reportFields r)
+    | Restarted r -> sprintf """{"type":"restarted",%s}""" (reportFields r)
+    | NotApplied r -> sprintf """{"type":"noeffect",%s}""" (reportFields r)
+    | CompilationFailed(summary, r, diagnostics) ->
+      // Chesterton's fence: send "error" (legacy string) alongside
+      // "diagnostics" (structured array) and the report. The browser script
+      // checks for diagnostics first and falls back to the error string —
+      // backward compatible with older injected scripts.
+      sprintf """{"type":"failed","error":%s,%s,"diagnostics":%s}""" (json summary) (reportFields r) (json diagnostics)
+
+  /// One SSE `data:` frame. Every string is JSON-serialised, so a filename, a
+  /// multi-line message or a compiler diagnostic can never break the frame it
+  /// travels in — an embedded newline would split one event into two and a
+  /// client would parse half a message.
   let sseData (evt: DevReloadEvent) : string =
-    let payload =
-      match evt with
-      | Compiling None -> """{"type":"compiling"}"""
-      | Compiling (Some file) -> sprintf """{"type":"compiling","file":%s}""" (json file)
-      | Patched r -> sprintf """{"type":"reload",%s}""" (reportFields r)
-      | Restarted r -> sprintf """{"type":"restarted",%s}""" (reportFields r)
-      | NotApplied r -> sprintf """{"type":"noeffect",%s}""" (reportFields r)
-      | CompilationFailed(summary, r, diagnostics) ->
-        // Chesterton's fence: send "error" (legacy string) alongside
-        // "diagnostics" (structured array) and the report. The browser script
-        // checks for diagnostics first and falls back to the error string —
-        // backward compatible with older injected scripts.
-        sprintf """{"type":"failed","error":%s,%s,"diagnostics":%s}""" (json summary) (reportFields r) (json diagnostics)
-    "data: " + payload + "\n\n"
+    "data: " + payloadJson evt + "\n\n"
+
+/// The most recent TERMINAL outcome, for a client that reaches the worker
+/// over plain HTTP instead of holding the long-lived `/__sagefs__/reload`
+/// stream open — a dashboard poll, a health check, or an editor extension
+/// with no standing SSE connection to this port (roast: "Carry ReloadOutcome
+/// past the server boundary" — this is that boundary). `Compiling` is never
+/// recorded here: a poller must never be able to observe a phase that is
+/// guaranteed to resolve into a terminal one, only the last outcome that
+/// already did, so a request racing a save either sees the PREVIOUS save's
+/// verdict or the new one once it lands — never a stuck "compiling".
+module LastReload =
+  // Chesterton's fence: same AppDomain-shared-state technique as `getChannels`
+  // below, but storing the rendered JSON STRING rather than the
+  // `DevReloadEvent` value itself. The host process and FSI-evaluated user
+  // code can each hold their own shadow copy of SageFs.Core.dll, and a
+  // broadcast from one copy must be readable from a poll against another —
+  // a `System.String` has stable identity across copies of the same
+  // assembly; a boxed DU value from one copy is not guaranteed to downcast
+  // cleanly against another copy's type token, so the string sidesteps that
+  // question entirely rather than relying on it working out.
+  let private domainKey = "SageFs.DevReload.lastTerminalPayloadJson"
+
+  /// Record the payload for the most recent terminal event. Called from the
+  /// single `broadcast` choke point, so every `broadcastXxx` function updates
+  /// this the same way it notifies live SSE subscribers.
+  let record (evt: DevReloadEvent) =
+    match evt with
+    | Compiling _ -> ()
+    | terminal ->
+      let interned = String.Intern(domainKey)
+      lock interned (fun () -> AppDomain.CurrentDomain.SetData(domainKey, DevReloadEvent.payloadJson terminal))
+
+  /// The exact JSON a live SSE subscriber would have received for the last
+  /// terminal event — `{outcome, patched, considered, message,
+  /// suggestedAction, reasons}` alongside its `type`, so a polling client
+  /// renders `ReloadOutcome.describeForUser` verbatim instead of
+  /// re-deriving it. `{"type":"none"}` before the first save resolves.
+  let json () : string =
+    match AppDomain.CurrentDomain.GetData(domainKey) with
+    | :? string as payload -> payload
+    | _ -> """{"type":"none"}"""
 
 // Pure broadcaster — no ASP.NET dependency.
 // The ASP.NET middleware lives in SageFs/DevReloadMiddleware.fs.
@@ -316,6 +363,7 @@ let private eventLabel (evt: DevReloadEvent) =
   | CompilationFailed _ -> "CompilationFailed"
 
 let private broadcast (evt: DevReloadEvent) =
+  LastReload.record evt
   let channels = getChannels ()
   let count = channels.Count
   match count with

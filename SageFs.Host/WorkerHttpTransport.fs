@@ -149,6 +149,15 @@ module WorkerHttpTransport =
     let stopApp = WorkerRoute.Post "/stop-app"
     let awaitAppChange = WorkerRoute.Post "/await-app-change"
     let devReload = WorkerRoute.Get ("/__sagefs__/reload", GetAccess.CrossOriginStream)
+    /// The last terminal `ReloadOutcome`, past the server boundary, for a
+    /// client that cannot hold the `devReload` SSE stream open — a dashboard
+    /// poll, a health check, an editor extension with no standing connection
+    /// to this port. Same JSON shape a live SSE subscriber gets
+    /// (DevReload.LastReload.json); loopback-only like every other read
+    /// (not the DevReload stream's cross-origin carve-out, since this is a
+    /// plain same-origin poll, not the user's dev app reading its own
+    /// reload channel).
+    let hotReloadLastOutcome = WorkerRoute.Get ("/hotreload/last-outcome", GetAccess.ReadOnly)
 
   let routes : WorkerRoute list = [
     Routes.diagThreadpool; Routes.status; Routes.liveValues; Routes.eval; Routes.check
@@ -160,7 +169,7 @@ module WorkerHttpTransport =
     Routes.hotReloadWatchProject; Routes.hotReloadUnwatchProject
     Routes.hotReloadWatchDirectory; Routes.hotReloadUnwatchDirectory
     Routes.runApp; Routes.stopApp; Routes.awaitAppChange
-    Routes.devReload
+    Routes.devReload; Routes.hotReloadLastOutcome
   ]
 
   /// Declared access of every GET route, matched the way ASP.NET routing
@@ -653,6 +662,14 @@ module WorkerHttpTransport =
         hotReloadStateRef.Value <- HotReloadState.unwatchByDirectory dir !hotReloadStateRef
         ctx.Response.ContentType <- "application/json"
         do! ctx.Response.WriteAsync(Serialization.serialize {| directory = dir; watchedCount = HotReloadState.watchedCount !hotReloadStateRef |})
+      })) |> ignore
+
+      // Past the server boundary (roast: "Carry ReloadOutcome past the server
+      // boundary"): the same payload a live DevReload SSE subscriber gets for
+      // the last terminal save, for a client that only polls plain HTTP.
+      map Routes.hotReloadLastOutcome (Func<HttpContext, Task>(fun ctx -> task {
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(DevReload.LastReload.json ())
       })) |> ignore
 
       // DevReload SSE endpoint — browsers connect here for hot-reload notifications.
