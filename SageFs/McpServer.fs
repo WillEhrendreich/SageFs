@@ -724,6 +724,23 @@ let tryGetJsonStringAliases (root: System.Text.Json.JsonElement) (names: string 
       | _ -> prop.ToString() |> normalize
     | false, _ -> None)
 
+/// Read the `workflow` string from a `POST /api/sessions/{sid}/workflow`
+/// body. Aliases mirror `create_session`'s own `workflow` argument so the
+/// two surfaces that request a workflow never need different field names.
+/// A missing, empty, or unparseable body reads as `None` — the caller
+/// decides what an absent workflow means; this only isolates the JSON read
+/// (same shape as `tryReadTargetSessionId` below).
+let tryReadWorkflowRequest (ctx: Microsoft.AspNetCore.Http.HttpContext) = task {
+  match ctx.Request.ContentLength with
+  | contentLength when not contentLength.HasValue || contentLength.Value <= 0L -> return None
+  | _ ->
+    try
+      use! doc = readJsonBody ctx
+      return tryGetJsonStringAliases doc.RootElement [ "workflow"; "targetWorkflow"; "target_workflow" ]
+    with _ ->
+      return None
+}
+
 let tryGetJsonIntAliases (root: System.Text.Json.JsonElement) (names: string list) =
   names
   |> List.tryPick (fun name ->
@@ -1938,32 +1955,72 @@ let fallbackSessionStatusLabel (status: SageFs.WorkerProtocol.SessionLifecycleSt
   | SageFs.WorkerProtocol.SessionLifecycleStatus.Stopped -> "Stopped"
   | _ -> "Disconnected"
 
-let resolveSessionStatusLabel
-  (sessionOps: SageFs.SessionManagementOps)
+/// Typed conversion from the worker's own live `SessionStatus` to `/health`'s
+/// `SessionHealthStatus` vocabulary — exhaustive over the DU, no string
+/// round-trip. Replaces `toSessionHealthStatus`, which re-derived the DU by
+/// pattern-matching the FORMATTED LABEL of this same value (including a
+/// `StartsWith("Building")` probe and a silent wildcard catch-all), one
+/// level removed from the typed data the daemon already held
+/// (sagefs-ux-roast.md §1.3/§11 Island B item 3).
+let sessionHealthStatusOfWorkerStatus (status: SageFs.WorkerProtocol.SessionStatus) : SageFs.Features.SessionHealthStatus =
+  match status with
+  | SageFs.WorkerProtocol.SessionStatus.Ready -> SageFs.Features.SessionHealthStatus.Ready
+  | SageFs.WorkerProtocol.SessionStatus.Evaluating
+  | SageFs.WorkerProtocol.SessionStatus.Building _ -> SageFs.Features.SessionHealthStatus.Evaluating
+  | SageFs.WorkerProtocol.SessionStatus.Starting
+  | SageFs.WorkerProtocol.SessionStatus.Restarting -> SageFs.Features.SessionHealthStatus.WarmingUp
+  | SageFs.WorkerProtocol.SessionStatus.Faulted -> SageFs.Features.SessionHealthStatus.Faulted
+  | SageFs.WorkerProtocol.SessionStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
+
+/// Same vocabulary, for when no worker answered at all (no proxy, an HTTP
+/// failure, a timeout, or an unexpected reply) — derived from the daemon's
+/// own `SessionLifecycleStatus` instead of re-parsing the "Disconnected"
+/// label `fallbackSessionStatusLabel` produces for display. A daemon-side
+/// Ready/Evaluating/Building with no live worker answer means the daemon
+/// still expects the worker to come back, which is WarmingUp's meaning here
+/// — not a silent default.
+let sessionHealthStatusOfLifecycleFallback (status: SageFs.WorkerProtocol.SessionLifecycleStatus) : SageFs.Features.SessionHealthStatus =
+  match status with
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted _ -> SageFs.Features.SessionHealthStatus.Faulted
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Starting _
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Restarting _
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Ready _
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Evaluating _
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Building _ -> SageFs.Features.SessionHealthStatus.WarmingUp
+
+/// A session's display label AND its typed `SessionHealthStatus`, resolved
+/// together from the SAME worker answer (or the same fallback) — so the two
+/// can never disagree the way a label-then-reparse pipeline could. Takes an
+/// already-resolved `proxy` instead of fetching its own, so callers that
+/// already needed the proxy for another reason (e.g. to decide whether to
+/// call this at all) do not pay for a second `GetProxy` round-trip.
+let resolveSessionStatus
   (routeName: string)
-  (session: SageFs.WorkerProtocol.SessionInfo) =
+  (session: SageFs.WorkerProtocol.SessionInfo)
+  (proxy: SageFs.WorkerProtocol.SessionProxy option)
+  : Task<string * SageFs.Features.SessionHealthStatus> =
   task {
-    let! proxy = sessionOps.GetProxy session.Id
     match proxy with
     | Some send ->
       try
         let! resp = send (SageFs.WorkerProtocol.WorkerMessage.GetStatus routeName) |> Async.StartAsTask
         match resp with
         | SageFs.WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
-          return SageFs.WorkerProtocol.SessionStatus.label snap.Status
+          return SageFs.WorkerProtocol.SessionStatus.label snap.Status, sessionHealthStatusOfWorkerStatus snap.Status
         | SageFs.WorkerProtocol.WorkerResponse.WorkerError _ ->
-          return fallbackSessionStatusLabel session.Status
+          return fallbackSessionStatusLabel session.Status, sessionHealthStatusOfLifecycleFallback session.Status
         | _ ->
-          return fallbackSessionStatusLabel session.Status
+          return fallbackSessionStatusLabel session.Status, sessionHealthStatusOfLifecycleFallback session.Status
       with
       | :? System.Net.Http.HttpRequestException ->
-        return fallbackSessionStatusLabel session.Status
+        return fallbackSessionStatusLabel session.Status, sessionHealthStatusOfLifecycleFallback session.Status
       | :? System.Threading.Tasks.TaskCanceledException ->
-        return fallbackSessionStatusLabel session.Status
+        return fallbackSessionStatusLabel session.Status, sessionHealthStatusOfLifecycleFallback session.Status
       | _ ->
-        return fallbackSessionStatusLabel session.Status
+        return fallbackSessionStatusLabel session.Status, sessionHealthStatusOfLifecycleFallback session.Status
     | None ->
-      return fallbackSessionStatusLabel session.Status
+      return fallbackSessionStatusLabel session.Status, sessionHealthStatusOfLifecycleFallback session.Status
   }
 
 /// `healthy` for `GET /health`. A daemon with zero sessions is the normal
@@ -1986,17 +2043,6 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/health", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
     task {
       let! allSessions = rctx.Config.SessionOps.GetAllSessions()
-      let toSessionHealthStatus = function
-        | "Ready" -> SageFs.Features.SessionHealthStatus.Ready
-        | "Evaluating" -> SageFs.Features.SessionHealthStatus.Evaluating
-        | status when status.StartsWith("Building") -> SageFs.Features.SessionHealthStatus.Evaluating
-        | "Starting"
-        | "Restarting"
-        | "Disconnected" -> SageFs.Features.SessionHealthStatus.WarmingUp
-        | "Faulted"
-        | "Error" -> SageFs.Features.SessionHealthStatus.Faulted
-        | "Stopped" -> SageFs.Features.SessionHealthStatus.Stopped
-        | _ -> SageFs.Features.SessionHealthStatus.WarmingUp
       let asm = System.Reflection.Assembly.GetExecutingAssembly()
       let version =
         asm.GetName().Version
@@ -2009,11 +2055,17 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
         |> Seq.map (fun sess ->
           task {
             let! proxy = rctx.Config.SessionOps.GetProxy sess.Id
-            let! statusLabel = task {
-              match proxy with
-              | Some _ -> return! resolveSessionStatusLabel rctx.Config.SessionOps "health" sess
-              | None -> return fallbackSessionStatusLabel sess.Status
-            }
+            let! statusLabel, healthStatus = resolveSessionStatus "health" sess proxy
+            // The user-meaningful usability verdict (distinct from the
+            // worker-liveness `healthStatus` above) — the SAME classifier
+            // `/api/sessions` already calls, so `/health` (what VS Code's
+            // status bar actually polls) stops being the one surface this
+            // verdict never reaches (sagefs-ux-roast.md §1.3).
+            let! warmupOpt =
+              match rctx.Config.GetWarmupContext with
+              | Some getCtx -> getCtx (SageFs.WorkerProtocol.SessionId.value sess.Id)
+              | None -> Task.FromResult None
+            let health = SageFs.SessionHealth.classify sess.Status sess.ProjectRoles warmupOpt
             let projectName =
               sess.Projects
               |> List.tryHead
@@ -2023,13 +2075,14 @@ let mapHealthRoutes (app: WebApplication) (rctx: RouteContext) =
             let summary : SageFs.Features.SessionHealthSummary =
               { SessionId = SageFs.WorkerProtocol.SessionId.value sess.Id
                 ProjectName = projectName
-                Status = toSessionHealthStatus statusLabel
+                Status = healthStatus
                 EvalCount = 0
                 LastActivity = lastActivity }
             let payload =
               {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
                  projectName = projectName
                  status = statusLabel
+                 health = SageFs.SessionHealth.toJson health
                  faultReason = SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status
                  workingDirectory = sess.WorkingDirectory
                  workerPid = SageFs.WorkerProtocol.SessionLifecycleStatus.workerPid sess.Status
@@ -2582,6 +2635,51 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
         match result with
         | Ok state -> do! jsonResponse ctx 200 (SageFs.AppRun.toView state)
         | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (SageFsError.toJson err)
+    } :> Task
+  ) |> ignore
+  // The dashboard and VS Code have no way to read OR change a session's
+  // workflow — every existing switch path is MCP-only (`switch_workflow`).
+  // This is the REST route Island A's dashboard badge and Island D's VS Code
+  // picker fix both need (sagefs-ux-roast.md §4.1/§4.2/§11 Island B item 4).
+  //
+  // Deliberately reuses `SessionOps.SwitchWorkflow` — the SessionManager
+  // command `AppRunOrchestration.fs` already calls to auto-switch a session
+  // into HotReload when `run_app` needs it — rather than the MCP tool's
+  // create-new-session-and-stop-the-old-one dance (`Mcp.fs`'s
+  // `switchWorkflow`). `SwitchWorkflow` restarts the SAME session id
+  // spawn-first into the target workflow (`SessionManager.fs:1637-1654`):
+  // no new session is created, so there is no window where two sessions
+  // exist for one working directory (the exact "Multiple sessions match
+  // workingDirectory" condition §4.2 calls out) and no orphaned old session
+  // to separately stop. The new workflow is recorded only if the
+  // replacement worker spawns successfully.
+  app.MapPost("/api/sessions/{sid}/workflow", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let raw = ctx.Request.RouteValues.["sid"] |> string
+      match SageFs.WorkerProtocol.SessionId.validate raw with
+      | Error msg ->
+        do! jsonResponse ctx 400 {| success = false; error = msg |}
+      | Ok sid ->
+        let! workflowRaw = tryReadWorkflowRequest ctx
+        let requested = workflowRaw |> Option.defaultValue ""
+        match SageFs.WorkflowTypes.SessionWorkflow.tryOfString requested with
+        | None ->
+          do! jsonResponse ctx 400
+                {| success = false
+                   error = SageFs.CreateSessionUx.formatUnknownWorkflowError requested |}
+        | Some target ->
+          let! result = rctx.Config.SessionOps.SwitchWorkflow (SageFs.WorkerProtocol.SessionId.value sid) target
+          match rctx.Dispatch with
+          | Some d -> d (SageFs.SageFsMsg.Editor SageFs.EditorAction.ListSessions)
+          | None -> ()
+          match result with
+          | Ok message ->
+            do! jsonResponse ctx 200
+                  {| success = true
+                     message = message
+                     sessionId = SageFs.WorkerProtocol.SessionId.value sid
+                     workflow = SageFs.WorkflowTypes.SessionWorkflow.label target |}
+          | Error err -> do! jsonResponse ctx (SageFsError.toHttpStatus err) (SageFsError.toJson err)
     } :> Task
   ) |> ignore
 

@@ -67,6 +67,8 @@
         <Compile Include="AppRunnerTests.fs" />
         <Compile Include="AppRunOrchestrationTests.fs" />
         <Compile Include="SessionAppRoutesHttpTests.fs" />
+        <Compile Include="WorkflowRouteHttpTests.fs" />
+        <Compile Include="EvalStatsWorkerReadTests.fs" />
         <Compile Include="HotReloadDetourPlanTests.fs" />
         <Compile Include="DaemonStateTests.fs" />
         <Compile Include="HttpOriginGuardTests.fs" />

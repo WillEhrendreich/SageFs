@@ -582,46 +582,82 @@ let getSessionWorkingDirFromSnapshot (readSnapshot: unit -> SessionManager.Query
 let getStatusMsgFromSnapshot (readSnapshot: unit -> SessionManager.QuerySnapshot) (sid: WorkerProtocol.SessionId) =
   readSnapshot().WarmupProgress |> Map.tryFind sid
 
-/// Fetch eval stats from worker HTTP endpoint.
-let getEvalStatsFromWorker
-  (httpClient: Net.Http.HttpClient)
-  (readSnapshot: unit -> SessionManager.QuerySnapshot)
-  (sid: WorkerProtocol.SessionId) = task {
-  let snapshot = readSnapshot()
-  match Map.tryFind sid snapshot.WorkerBaseUrls with
-  | Some baseUrl when baseUrl.Length > 0 ->
+/// Whether an eval-stats read reflects the worker's actual answer, or the
+/// daemon's own inability to obtain one. Collapsing both into
+/// `EvalStats.empty` (the old behaviour) made "no evals yet" and "worker
+/// unreachable" indistinguishable to every reader — the same defect class
+/// as the parse bug above, one level up (sagefs-ux-roast.md §3.1/§11 Island
+/// B item 2). `Live EvalStats.empty` (zero evals, worker answered) and
+/// `Unreachable _` (no answer at all) are now different values; a caller
+/// that only wants a number still gets one via `toEvalStats`.
+[<RequireQualifiedAccess>]
+type EvalStatsReading =
+  | Live of Affordances.EvalStats
+  | Unreachable of reason: string
+
+module EvalStatsReading =
+  let toEvalStats (reading: EvalStatsReading) : Affordances.EvalStats =
+    match reading with
+    | EvalStatsReading.Live stats -> stats
+    | EvalStatsReading.Unreachable _ -> Affordances.EvalStats.empty
+
+/// Fetch eval stats from the worker via the SAME typed daemon<->worker proxy
+/// `/api/sessions` uses (`McpServer.fs`'s `mapSessionRoutes`:
+/// `WorkerMessage.GetStatus` / `WorkerResponse.StatusResult`) instead of a
+/// second, hand-rolled JSON parse of the worker's raw `/status` body. The
+/// old parse read `evalCount`/`avgDurationMs`/`minDurationMs`/
+/// `maxDurationMs` off the response envelope's ROOT; the worker's actual
+/// reply nests them one level down inside the envelope's `value` — a
+/// `StatusResult(replyId, snapshot)` — so `JsonElement.TryGetProperty`
+/// silently returned `getInt`/`getLong`'s `0`/`0L` default on EVERY read,
+/// and the dashboard's entire eval-performance readout (count, avg/min/max,
+/// P50/P95, the sparkline) was permanently zero for every user
+/// (sagefs-ux-roast.md §3.1/§11 Island B item 1).
+let getEvalStatsReadingFromWorker
+  (getProxy: WorkerProtocol.SessionId -> Threading.Tasks.Task<WorkerProtocol.SessionProxy option>)
+  (sid: WorkerProtocol.SessionId)
+  : Threading.Tasks.Task<EvalStatsReading> = task {
+  let! proxy = getProxy sid
+  match proxy with
+  | None -> return EvalStatsReading.Unreachable "no worker is registered for this session"
+  | Some send ->
     try
-      use cts = new Threading.CancellationTokenSource(Timeouts.healthCheck)
-      let! resp = httpClient.GetStringAsync(sprintf "%s/status?replyId=dash-stats" baseUrl, cts.Token)
-      use doc = Text.Json.JsonDocument.Parse(resp)
-      let root = doc.RootElement
-      let getInt (name: string) def =
-        match root.TryGetProperty(name) with
-        | true, v -> v.GetInt32()
-        | false, _ -> def
-      let getLong (name: string) def =
-        match root.TryGetProperty(name) with
-        | true, v -> v.GetInt64()
-        | false, _ -> def
-      let evalCount = getInt "evalCount" 0
-      let avgMs = getLong "avgDurationMs" 0L
-      let minMs = getLong "minDurationMs" 0L
-      let maxMs = getLong "maxDurationMs" 0L
-      return
-        { EvalCount = evalCount
-          TotalDuration = TimeSpan.FromMilliseconds(float avgMs * float evalCount)
-          MinDuration = TimeSpan.FromMilliseconds(float minMs)
-          MaxDuration = TimeSpan.FromMilliseconds(float maxMs) }
-        : Affordances.EvalStats
+      let! resp = send (WorkerProtocol.WorkerMessage.GetStatus "dash-stats") |> Async.StartAsTask
+      match resp with
+      | WorkerProtocol.WorkerResponse.StatusResult(_, snap) ->
+        return
+          EvalStatsReading.Live
+            { EvalCount = snap.EvalCount
+              TotalDuration = TimeSpan.FromMilliseconds(float snap.AvgDurationMs * float snap.EvalCount)
+              MinDuration = TimeSpan.FromMilliseconds(float snap.MinDurationMs)
+              MaxDuration = TimeSpan.FromMilliseconds(float snap.MaxDurationMs) }
+      | WorkerProtocol.WorkerResponse.WorkerError err ->
+        return EvalStatsReading.Unreachable (sprintf "worker reported an error: %s" (SageFsError.describe err))
+      | other ->
+        return EvalStatsReading.Unreachable (sprintf "worker replied with an unexpected message (%s)" (other.GetType().Name))
     with
-    | :? Net.Http.HttpRequestException | :? Threading.Tasks.TaskCanceledException -> return Affordances.EvalStats.empty
-    | :? Text.Json.JsonException as ex ->
-      Log.error "[getEvalStats] JSON parse error for %s: %s\n%s" (WorkerProtocol.SessionId.value sid) ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-      return Affordances.EvalStats.empty
+    | :? Net.Http.HttpRequestException as ex ->
+      Log.warn "[getEvalStats] Worker unreachable for %s: %s" (WorkerProtocol.SessionId.value sid) ex.Message
+      return EvalStatsReading.Unreachable (sprintf "worker unreachable: %s" ex.Message)
+    | :? Threading.Tasks.TaskCanceledException ->
+      Log.warn "[getEvalStats] Timed out reaching worker for %s" (WorkerProtocol.SessionId.value sid)
+      return EvalStatsReading.Unreachable "timed out waiting for the worker"
     | ex ->
       Log.error "[getEvalStats] Unexpected error for %s: %s (%s)\n%s" (WorkerProtocol.SessionId.value sid) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-      return Affordances.EvalStats.empty
-  | _ -> return Affordances.EvalStats.empty
+      return EvalStatsReading.Unreachable (sprintf "unexpected error: %s" ex.Message)
+}
+
+/// Backward-compatible entry point for `DashboardQueries.GetEvalStats`
+/// (`Task<Affordances.EvalStats>`) — collapses `Unreachable` to `.empty` for
+/// callers that only render a number. Anything that needs to tell "couldn't
+/// look" from "nothing there" should call `getEvalStatsReadingFromWorker`
+/// directly instead.
+let getEvalStatsFromWorker
+  (getProxy: WorkerProtocol.SessionId -> Threading.Tasks.Task<WorkerProtocol.SessionProxy option>)
+  (sid: WorkerProtocol.SessionId)
+  : Threading.Tasks.Task<Affordances.EvalStats> = task {
+  let! reading = getEvalStatsReadingFromWorker getProxy sid
+  return EvalStatsReading.toEvalStats reading
 }
 
 /// Create hot-reload proxy HTTP endpoints that forward to worker servers.
@@ -2671,7 +2707,7 @@ let run
 
   // Dashboard status helpers — partially applied module-level functions
   let getSessionState = getSessionStateFromSnapshot readSnapshot
-  let getEvalStatsAsync = getEvalStatsFromWorker httpClient readSnapshot
+  let getEvalStatsAsync = getEvalStatsFromWorker sessionOps.GetProxy
   let getSessionWorkingDir = getSessionWorkingDirFromSnapshot readSnapshot
   let getStatusMsg = getStatusMsgFromSnapshot readSnapshot
 
