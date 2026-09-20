@@ -213,13 +213,20 @@ let reloadBroadcastTests =
         | other -> failtestf "%A must not be reported as a refresh, got %A" change other
     }
 
-    test "reasonsOf keeps every reason the planner found, in order" {
-      Broadcast.reasonsOf
-        (Planning.ReloadChange.ValueChanged "routes")
-        [ Planning.ReloadChange.TypeChanged "TodoItem" ]
-      |> Expect.equal
-           "a save that broke two ways must say both"
-           [ RestartReason.StartupComputedValue "routes"; RestartReason.TypeShapeChanged "TodoItem" ]
+    test "a save that broke two ways reaches the client saying both" {
+      let outcome =
+        ReloadOutcome.RestartRequired
+          (Planning.ReloadChange.restartReasons
+            (Planning.ReloadChange.ValueChanged "routes")
+            [ Planning.ReloadChange.TypeChanged "TodoItem" ])
+      match Broadcast.eventOf outcome with
+      | DevReloadEvent.NotApplied report ->
+        report.Reasons |> List.map _.Case
+        |> Expect.equal
+             "both refusals travel, in the order the planner found them"
+             [ "StartupComputedValue"; "TypeShapeChanged" ]
+        report.Considered |> Expect.equal "one count per definition that did not land" 2
+      | other -> failtestf "a required restart must be NotApplied, got %A" other
     }
 
     // WHY — a save whose declarations are identical to the running build is not

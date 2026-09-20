@@ -22,12 +22,10 @@ open SageFs.Features.ReloadOutcome
 /// get an unambiguous abbreviation rather than a resolution coin-flip.
 module Outcome = SageFs.Features.ReloadOutcome.ReloadOutcome
 
-/// Planner refusal → the shape of the change the user made. The planner owns
-/// that translation (`ReloadPlanning.ReloadChange.restartReason`) and this
-/// module deliberately does not repeat it: two mappings would be two
-/// vocabularies for one refusal, which is the class of bug this whole
-/// subsystem exists to stop.
-let reasonsOf = ReloadPlanning.ReloadChange.restartReasons
+// Planner refusal → the shape of the change the user made is NOT translated
+// here. `ReloadPlanning.ReloadChange.restartReason` owns it, and callers use
+// that directly: two mappings would be two vocabularies for one refusal, which
+// is the class of bug this whole subsystem exists to stop.
 
 /// The count a restart-shaped outcome reports: one per reason, because each
 /// reason is one changed definition that did not reach the running process.
