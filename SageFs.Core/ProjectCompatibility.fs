@@ -37,7 +37,14 @@ type UnsupportedTfmReason =
 let describeUnsupportedReason =
   function
   | UnsupportedTfmReason.NetFramework ->
-    "SageFs's FSI host runs on modern .NET (Core) and cannot load .NET Framework assemblies"
+    "SageFs's FSI host runs on modern .NET (Core), which cannot load .NET Framework assemblies"
+
+/// Where a user can follow — and push on — support for a framework SageFs
+/// cannot host yet. Per-reason, so a second `UnsupportedTfmReason` cannot
+/// quietly inherit a pointer that says nothing about it.
+let trackingIssue =
+  function
+  | UnsupportedTfmReason.NetFramework -> "https://github.com/WillEhrendreich/SageFs/issues/135"
 
 /// The verdict for ONE target framework moniker string.
 [<RequireQualifiedAccess>]
@@ -198,15 +205,18 @@ let classifyProjectFile (path: string) : ProjectHostability =
   with ex ->
     ProjectHostability.Indeterminate(sprintf "could not read '%s': %s" path ex.Message)
 
-/// The exact, actionable message for a project SageFs has refused to host.
-/// Names the project, the target framework(s) found, and why — never
-/// speculates about future support, never blames the user's build.
+/// The exact, actionable message for a project SageFs cannot host today.
+/// Names the project, the target framework(s) found, why, and where the
+/// support is tracked. It never blames the user's build, and it is careful
+/// to say "yet": this is the state of the current host, not a decision that
+/// SageFs will never target the framework in question.
 let describeUnhostable (project: string) (targetFrameworks: string list) (reason: UnsupportedTfmReason) : string =
   sprintf
-    "%s targets %s. %s, so it cannot host this project."
+    "%s targets %s. %s, so SageFs cannot host this project yet — support is tracked at %s."
     project
     (targetFrameworks |> String.concat ", ")
     (describeUnsupportedReason reason)
+    (trackingIssue reason)
 
 /// Scan a session-create request's projects for the first one SageFs is
 /// CONFIDENTLY unable to host. `None` means proceed — every project is

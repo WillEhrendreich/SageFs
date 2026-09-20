@@ -108,9 +108,29 @@ let tests =
       findUnhostable [ "/nonexistent/does-not-exist/Foo.fsproj" ]
       |> Expect.isNone "an unreadable project must not be blocked"
 
-    testCase "WHY — describeUnhostable names the project, the TFM found, and why, without speculating or blaming the user" <| fun () ->
+    testCase "WHY — describeUnhostable names the project, the TFM found, and why, without blaming the user" <| fun () ->
       let message = describeUnhostable "/src/Legacy.fsproj" [ "net48" ] UnsupportedTfmReason.NetFramework
       message |> Expect.stringContains "should name the project" "/src/Legacy.fsproj"
       message |> Expect.stringContains "should name the TFM found" "net48"
       message |> Expect.stringContains "should explain the FSI host constraint" "cannot load .NET Framework assemblies"
+
+    // WHY — this refusal describes the CURRENT host, not a product decision. It was
+    // shipped reading "SageFs does not support .NET Framework projects", which is a flat
+    // denial of something users have asked for and been told is coming. A refusal a user
+    // cannot act on and cannot follow is a dead end; this one has to be bounded in time
+    // and carry somewhere to go.
+    testCase "WHY — an unhostable framework reads as 'not yet' and points at where it is tracked" <| fun () ->
+      let message = describeUnhostable "/src/Legacy.fsproj" [ "net48" ] UnsupportedTfmReason.NetFramework
+      message |> Expect.stringContains "should be bounded in time, not a permanent refusal" "yet"
+      message
+      |> Expect.stringContains
+        "should tell the user where support is tracked"
+        (trackingIssue UnsupportedTfmReason.NetFramework)
+
+    testCase "WHY — every unsupported reason has a tracking issue a user can actually open" <| fun () ->
+      // One case today; a second one must not inherit an empty or borrowed pointer.
+      for reason in [ UnsupportedTfmReason.NetFramework ] do
+        let url = trackingIssue reason
+        url
+        |> Expect.stringStarts (sprintf "%A should point at a real issue URL" reason) "https://github.com/"
   ]

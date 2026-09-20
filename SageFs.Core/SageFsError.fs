@@ -506,7 +506,7 @@ module SageFsError =
     | SageFsError.SessionCreationFailed _ -> "Check the project path and run 'dotnet build'"
     | SageFsError.DuplicateSession _ -> "Run switch_session to select the existing session"
     | SageFsError.UnsafeSessionPath _ -> "Use an existing directory and keep project paths inside it — no UNC paths or '..' escapes"
-    | SageFsError.ProjectFrameworkNotHostable _ -> "Point SageFs at a .NET (Core) project (net5.0 or newer) instead — SageFs does not support .NET Framework projects"
+    | SageFsError.ProjectFrameworkNotHostable _ -> "Point SageFs at a .NET (Core) project (net5.0 or newer) for now — .NET Framework support is not shipped yet, and the message names the issue tracking it"
     | SageFsError.SessionStopFailed _ -> "Try hard_reset_fsi_session"
     | SageFsError.SessionSwitchFailed _ -> "Run list_sessions to check available sessions"
     | SageFsError.SessionNotRoutable _ -> "Run get_fsi_status or list_sessions to check session state"
