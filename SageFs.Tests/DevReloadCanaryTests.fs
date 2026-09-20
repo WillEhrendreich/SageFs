@@ -7,6 +7,7 @@ open Expecto
 open Expecto.Flip
 open HarmonyLib
 open SageFs.Middleware.HotReloading
+open SageFs.Middleware.HotReloadCore
 
 // ============================================================================
 // Unique test helper types for DevReload prefix-patch canary tests.

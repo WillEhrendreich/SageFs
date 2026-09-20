@@ -101,7 +101,7 @@ let appStateCustomTests =
       let state = makeState Map.empty
       let files = mkFiles []
       let updated = AppStateCustom.set openedFileKey files state
-      (AppStateCustom.tryGetFeature<SageFs.Middleware.HotReloading.State> openedFileKey updated) |> Expect.isNone "wrong type returns None"
+      (AppStateCustom.tryGetFeature<SageFs.Middleware.HotReloadCore.State> openedFileKey updated) |> Expect.isNone "wrong type returns None"
   ]
 
 [<Tests>]

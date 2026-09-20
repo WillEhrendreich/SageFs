@@ -6,6 +6,7 @@ open Expecto
 open SageFs.FileWatcher
 open SageFs.AppState
 open SageFs.Middleware.HotReloading
+open SageFs.Middleware.HotReloadCore
 open SageFs.Utils
 
 let private makeState () : AppState =

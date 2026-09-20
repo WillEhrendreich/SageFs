@@ -5,6 +5,7 @@ open Expecto.Flip
 open FsCheck
 open FSharp.Compiler.EditorServices
 open SageFs.Middleware.HotReloading
+open SageFs.Middleware.HotReloadCore
 open SageFs.Features.AutoCompletion
 open SageFs.AppState
 open SageFs.FileWatcher

@@ -112,7 +112,7 @@ type AppState = {
 ///
 /// REGISTERED KEYS (update this list when adding a key):
 ///   "openedFiles"  | OpenDirective.OpenedFiles  | SageFs.Middleware.Directives.OpenDirective
-///   "hotReload"    | HotReloading.State          | SageFs.Middleware.HotReloading
+///   "hotReload"    | HotReloadCore.State         | SageFs.Middleware.HotReloadCore
 ///
 /// CONVENTION FOR NEW KEYS:
 ///   1. Define [<Literal>] key constant in the owning module.

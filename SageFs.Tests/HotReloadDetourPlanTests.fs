@@ -4,6 +4,7 @@ open System
 open Expecto
 open Expecto.Flip
 open SageFs.Middleware.HotReloading
+open SageFs.Middleware.HotReloadCore
 
 // Distinct overloads of one Math method share a Name but not an identity —
 // the same shape as two FSI copies of one re-evaluated definition.

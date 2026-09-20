@@ -5,6 +5,7 @@ open Expecto.Flip
 open FsCheck
 open FsCheck.FSharp
 open SageFs.Middleware.HotReloading
+open SageFs.Middleware.HotReloadCore
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 

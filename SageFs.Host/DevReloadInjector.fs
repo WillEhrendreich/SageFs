@@ -8,6 +8,7 @@ open Microsoft.AspNetCore.Http
 open System.Threading
 open SageFs.Utils
 open SageFs.Middleware.HotReloading
+open SageFs.Middleware.HotReloadCore
 
 /// Worker HTTP port — set after the worker server starts.
 let mutable private workerPort = 0
