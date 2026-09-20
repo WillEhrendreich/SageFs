@@ -43,6 +43,7 @@
         <Compile Include="FeatureParity.fs" />
         <Compile Include="EndpointContracts.fs" />
         <Compile Include="ResilientActor.fs" />
+        <Compile Include="RuntimeCompat.fs" />
         <Compile Include="ProjectLoading.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
         <Compile Include="ShadowCopy.fs" />

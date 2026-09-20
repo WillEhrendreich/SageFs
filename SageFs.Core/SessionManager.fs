@@ -305,6 +305,54 @@ module SessionManager =
     | false, false -> sprintf "%s reported ready without a valid proxy" transportKind
     | false, true -> sprintf "%s reported ready with a valid transport" transportKind
 
+  /// IO edge for RuntimeCompat: the runtime a project needs, from the newest
+  /// `<project>.runtimeconfig.json` its build left under bin/ (an unbuilt project has none).
+  let private projectRuntimeRequirement (projectPath: string) : Result<RuntimeCompat.RuntimeRequirement, string> =
+    let binDir = Path.Combine(Path.GetDirectoryName projectPath, "bin")
+    let configName = Path.GetFileNameWithoutExtension projectPath + ".runtimeconfig.json"
+    match Directory.Exists binDir with
+    | false -> Error (sprintf "%s has not been built (no bin/ directory)" (Path.GetFileName projectPath))
+    | true ->
+      let newest =
+        Directory.EnumerateFiles(binDir, configName, SearchOption.AllDirectories)
+        |> Seq.sortByDescending File.GetLastWriteTimeUtc
+        |> Seq.tryHead
+      match newest with
+      | None -> Error (sprintf "no %s under %s (project not built?)" configName binDir)
+      | Some configPath ->
+        try RuntimeCompat.parseRuntimeRequirement (File.ReadAllText configPath)
+        with ex -> Error (sprintf "could not read %s: %s" configPath ex.Message)
+
+  /// The runtime majors installed next to the runtime this process is running on.
+  let private installedRuntimeMajors () : int list =
+    let runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory().TrimEnd(Path.DirectorySeparatorChar)
+    let sharedDir = Path.GetDirectoryName runtimeDir
+    match Directory.Exists sharedDir with
+    | false -> [ Environment.Version.Major ]
+    | true ->
+      Directory.EnumerateDirectories sharedDir
+      |> Seq.choose (fun dir ->
+        match Version.TryParse((Path.GetFileName dir).Split('-').[0]) with
+        | true, version -> Some version.Major
+        | false, _ -> None)
+      |> Seq.distinct
+      |> Seq.toList
+
+  /// How the worker for these projects should be launched with respect to the .NET runtime:
+  /// the highest requirement across the projects, decided against what this machine has.
+  let private resolveRuntimeChoice (projects: string list) : RuntimeCompat.RuntimeChoice =
+    let requirements = projects |> List.map projectRuntimeRequirement
+    let known = requirements |> List.choose (function Ok r -> Some r | Error _ -> None)
+    let requirement =
+      match known with
+      | [] ->
+        match requirements with
+        | Error reason :: _ -> Error reason
+        | _ -> Error "the session has no projects"
+      | _ ->
+        Ok (known |> List.maxBy (fun r -> r.Major, (match r.Stability with RuntimeCompat.Stable -> 0 | RuntimeCompat.Prerelease -> 1)))
+    RuntimeCompat.decide Environment.Version.Major (installedRuntimeMajors ()) requirement
+
   /// Start a worker OS process. Returns immediately with the Process
   /// (does NOT wait for the worker to report its port).
   let startWorkerProcess
@@ -316,6 +364,16 @@ module SessionManager =
     (onExited: int -> int -> unit)
     : Result<SpawnedWorker, SageFsError> =
     let args, envVars = Args.buildWorkerSpawnConfig (SessionId.value sessionId) projects false false autoOpenNamespaces workflow
+    // A project built for a newer runtime than the worker host's needs that runtime (roll-forward);
+    // one that needs a runtime nobody installed is refused with what to install, not left to fail
+    // warmup with a bare "assembly not referenced".
+    let runtimeChoice = resolveRuntimeChoice projects
+    match runtimeChoice with
+    | RuntimeCompat.RuntimeMissing _ -> Error (SageFsError.WorkerSpawnFailed (RuntimeCompat.describe runtimeChoice))
+    | _ ->
+    (match runtimeChoice with
+     | RuntimeCompat.RollForward _ -> Log.info "[SessionManager] session %s: %s" (SessionId.value sessionId) (RuntimeCompat.describe runtimeChoice)
+     | _ -> ())
     // Spawn the FSI HOST (separate minimal-closure process), resolved relative
     // to the daemon's own location (see plan: fsi-host-supervisor).
     let dotnetMuxer =
@@ -369,6 +427,8 @@ module SessionManager =
 
     // Propagate session config as env vars so worker startup stays independent of daemon CLI flags
     for (key, value) in envVars do
+      psi.Environment.[key] <- value
+    for (key, value) in RuntimeCompat.rollForwardEnv runtimeChoice do
       psi.Environment.[key] <- value
 
     let proc = new Process()

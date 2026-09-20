@@ -130,20 +130,22 @@ module ManualProjectParse =
               // ../../../ = dotnet root
               let runtimeDir = Path.GetDirectoryName(typeof<obj>.Assembly.Location)
               Path.GetFullPath(Path.Combine(runtimeDir, "..", "..", "..")))
-          // Newest-version *.dll of a shared framework under the dotnet root, or []
-          // when that framework is not installed. A FrameworkReference normally adds
-          // these; the manual fallback must add them or FSI fails with "type ... is
-          // defined in an assembly that is not referenced".
+          // *.dll of the shared framework version that matches the runtime THIS process
+          // is running on (see RuntimeCompat.selectFrameworkDir), or [] when that
+          // framework is not installed. A FrameworkReference normally adds these; the
+          // manual fallback must add them or FSI fails with "type ... is defined in an
+          // assembly that is not referenced". Taking the "newest" directory instead
+          // handed a net10 worker net11's reference assemblies on a box with both.
           let sharedFrameworkDlls (frameworkName: string) =
             let dir = Path.Combine(dotnetRoot, "shared", frameworkName)
             match Directory.Exists dir with
             | false -> []
             | true ->
-              Directory.EnumerateDirectories dir
-              |> Seq.sortDescending
-              |> Seq.tryHead
-              |> Option.map (fun verDir -> Directory.EnumerateFiles(verDir, "*.dll", SearchOption.TopDirectoryOnly) |> Seq.toList)
-              |> Option.defaultValue []
+              let versionDirs = Directory.EnumerateDirectories dir |> Seq.toList
+              match RuntimeCompat.selectFrameworkDir Environment.Version (versionDirs |> List.map Path.GetFileName) with
+              | Error _ -> []
+              | Ok chosen ->
+                Directory.EnumerateFiles(Path.Combine(dir, chosen), "*.dll", SearchOption.TopDirectoryOnly) |> Seq.toList
           let aspNetShared = sharedFrameworkDlls "Microsoft.AspNetCore.App"
           // WPF/WinForms assemblies come from the Microsoft.WindowsDesktop.App shared
           // framework (Windows only), exactly the way ASP.NET Core does. The directory
