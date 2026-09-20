@@ -422,6 +422,34 @@ let renderAutoOpenToggleButton (enabled: bool) (style: string) =
       Elem.span [ Ds.show "!$configLoading" ] [ Text.raw "⚙ " ]
       label ]
 
+/// Render the one TRUE, user-meaningful usability verdict for the viewed
+/// session (`SessionHealth.classify`) — distinct from the process-liveness
+/// bar above it, and distinct from the per-session card badge in the
+/// sidebar (same verdict, different surface). Quiet by design for
+/// Starting/Healthy — `SessionHealth.describeForAgent` returns `None` for
+/// both, matching the DU's own "the common case must stay quiet" doctrine
+/// (SageFs.Core/SessionHealth.fs). Degraded/Failed render the FULL reason
+/// text inline, unconditionally — no `<details>`, no `⊕` disclosure to open:
+/// this is the exact fix for sagefs-ux-roast.md §1 ("the only surface
+/// telling the truth was a collapsed summary hidden behind an unlabeled
+/// glyph"). Reuses `describeForAgent`'s own wording verbatim so the
+/// dashboard and `get_fsi_status` can never disagree about the same session.
+let renderSessionHealthLine (health: SessionHealth) =
+  match SessionHealth.describeForAgent health with
+  | None -> Elem.div [ Attr.id DomIds.SessionHealthLine ] []
+  | Some line ->
+    let color =
+      match health with
+      | SessionHealth.Failed _ -> "var(--fg-red)"
+      | _ -> "var(--fg-yellow)"
+    Elem.div
+      [ Attr.id DomIds.SessionHealthLine
+        Attr.class' "session-health-line meta"
+        Attr.style (sprintf "font-weight: bold; color: %s; padding: 2px 12px; overflow-wrap: anywhere;" color)
+        Attr.create "role" "status"
+        Attr.create "aria-label" (attrEnc line) ]
+      [ textEnc line ]
+
 /// Render daemon health as an HTML panel — shows status, uptime, memory, sessions, and tests.
 let renderDaemonHealth (view: DaemonHealthView) =
   let emoji = Features.DaemonHealth.healthEmoji view.OverallHealth
@@ -714,8 +742,23 @@ let private renderFoldableOutputLines (lines: OutputLine list) : XmlNode list =
       ])
 
 /// Render output lines as an HTML fragment.
+///
+/// The leading banner is the in-flight eval signal AT THE POINT OF
+/// ATTENTION (sagefs-ux-roast.md §3.5 — during a 20-second eval the header
+/// badge, statusline and card all kept reading "Ready" and the only signal
+/// anywhere was [CANCEL] appearing in the bottom button row). It shares
+/// `$actionLoading` — the same signal that already greys EVAL/RESET/HARD_RESET
+/// and reveals [CANCEL] — so it needs no new server round trip or signal wiring,
+/// and can never disagree with those controls about whether an eval is running.
 let renderOutputForSession (sessionId: string) (lines: OutputLine list) (placeholder: string) =
   Elem.div [ Attr.id DomIds.OutputPanel; testid "session-output"; Attr.create "data-session-id" (attrEnc sessionId) ] [
+    Elem.div
+      [ Attr.class' "eval-in-progress-banner meta"
+        Attr.style "padding: 2px 0 6px; color: var(--fg-yellow); font-weight: bold;"
+        Attr.create "role" "status"
+        Attr.create "aria-label" "Evaluation in progress"
+        Ds.show (sprintf "$%s" Signals.ActionLoading) ]
+      [ Text.raw "⏳ Evaluating…" ]
     match lines.IsEmpty with
     | true ->
       Elem.span [ Attr.class' "meta" ] [ textEnc placeholder ]
@@ -933,12 +976,22 @@ let renderSessionPickerSorted (sortOrder: PreviousSessionSort) (previous: Previo
         Text.raw "Choose how to get started. You can create a new session or resume a previous one."
       ]
       Elem.div [ Attr.class' "picker-options" ] [
-        // Option 1: Create in temp directory
+        // Option 1: Create in temp directory. This is the single most
+        // important control on the first screen a new user sees — it must
+        // be a real, keyboard-reachable, screen-reader-visible button, not a
+        // bare clickable <div> (sagefs-ux-roast.md §2.1). role="button" +
+        // tabindex give it a place in the tab order and the a11y tree; the
+        // keydown handler fires the exact same @post the click does, on
+        // Enter or Space, matching native <button> activation keys.
         Elem.div
           [ Attr.class' "picker-card"
             testid "quick-start"
+            Attr.create "role" "button"
+            Attr.create "tabindex" "0"
+            Attr.create "aria-label" "Quick Start — create a new session in a temporary directory"
             Ds.indicator Signals.TempLoading
-            Ds.onClick (Ds.post "/dashboard/session/create-temp") ]
+            Ds.onClick (Ds.post "/dashboard/session/create-temp")
+            Ds.onEvent ("keydown", sprintf "if(event.key==='Enter'||event.key===' '){event.preventDefault();%s}" (Ds.post "/dashboard/session/create-temp")) ]
           [ Elem.h3 [] [
               Elem.span [ Ds.show "$tempLoading" ] [ Text.raw "⏳ " ]
               Elem.span [ Ds.show "!$tempLoading" ] [ Text.raw "⚡ " ]
@@ -1417,6 +1470,25 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 Elem.span
                   [ Attr.class' (sprintf "status badge %s" statusClass) ]
                   [ textEnc (SessionDisplayStatus.label s.Status) ]
+                // The one TRUE usability verdict (SessionHealth.classify),
+                // distinct from the worker-liveness badge above it — visible
+                // on the card WITHOUT expanding anything (sagefs-ux-roast.md
+                // §1: "Degraded must be visible without expanding"). Quiet
+                // for Starting/Healthy, matching the DU's own doctrine that
+                // the common case must stay quiet.
+                match s.Health with
+                | SessionHealth.Healthy | SessionHealth.Starting -> ()
+                | SessionHealth.Degraded _ | SessionHealth.Failed _ ->
+                  let glyph, color =
+                    match s.Health with
+                    | SessionHealth.Failed _ -> "❌", "var(--fg-red)"
+                    | _ -> "⚠", "var(--fg-yellow)"
+                  Elem.span
+                    [ Attr.class' "status badge session-health-badge"
+                      Attr.style (sprintf "background: transparent; color: %s; border: 1px solid %s;" color color)
+                      Attr.create "aria-label"
+                        (attrEnc (SessionHealth.describeForAgent s.Health |> Option.defaultValue (SessionHealth.label s.Health))) ]
+                    [ textEnc (sprintf "%s %s" glyph (SessionHealth.label s.Health)) ]
                 match isViewing with
                 | true ->
                   Elem.span [ Attr.style "color: var(--fg-green);" ] [ Text.raw "● selected" ]
@@ -1449,6 +1521,21 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   [ Attr.class' "status-msg"
                     Attr.style "font-size: 0.7rem; color: var(--fg-yellow); font-style: italic;" ]
                   [ textEnc (sprintf "⏳ %s" msg) ]
+              | None -> ()
+              // The health badge above names WHAT (Degraded/Failed); this
+              // line is WHY — "the reason is the whole point of the DU"
+              // (SessionHealth.fs's own doc comment). Reuses
+              // describeForAgent's exact wording so the card and
+              // get_fsi_status/`/api/sessions` never say different things
+              // about the same session. Its own line, unconditionally
+              // visible — never behind a hover title or a <details>.
+              match SessionHealth.describeForAgent s.Health with
+              | Some line ->
+                let color = match s.Health with SessionHealth.Failed _ -> "var(--fg-red)" | _ -> "var(--fg-yellow)"
+                Elem.div
+                  [ Attr.class' "session-health-reason"
+                    Attr.style (sprintf "font-size: 0.7rem; font-weight: bold; overflow-wrap: anywhere; margin-top: 2px; color: %s;" color) ]
+                  [ textEnc line ]
               | None -> ()
               // Self-host staleness (F5b): this session adopted its own
               // SageFs.Core build and a newer one has since landed on disk —
@@ -1720,11 +1807,18 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Attr.create "title" "Dispose — stop the session (no separate saved-memory file remains; purge removes the manifest entry)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/dispose/%s" sid)) ]
                 [ Text.raw "⌫" ]
+              // Purge is the irreversible teardown level — it deletes binaries
+              // AND the manifest entry, not just the running session — and it
+              // sits 28px from Stop with no other affordance distinguishing
+              // it. It read as destructive (danger-red, explicit label) but
+              // fired on a single unconfirmed click; a native confirm() gate
+              // now sits between the click and the request, matching the
+              // severity the label already claims.
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.create "aria-label""Purge — dispose and delete binaries + manifest entry (corrupt state)"
                   Attr.create "title" "Purge — dispose and delete binaries + manifest entry (corrupt state)"
-                  Ds.onClick (Ds.post (sprintf "/dashboard/session/purge/%s" sid)) ]
+                  Ds.onEvent ("click", sprintf "if(confirm('Purge session %s? This deletes its saved binaries and manifest entry. This cannot be undone.')){%s}" sid (Ds.post (sprintf "/dashboard/session/purge/%s" sid))) ]
                 [ Text.raw "✖" ]
             ]
             // Collapsible test treemap (WizTree-style: area = test duration)
@@ -1909,10 +2003,33 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
           Elem.span [ Attr.class' (sprintf "status %s" (DashboardConnectionState.statusBadgeCssClass snap.ConnectionState)); Attr.style "border-radius:0;" ] [
             textEnc (DashboardConnectionState.statusBadgeLabel snap.SessionState snap.ConnectionState) ]
         ]
-        Elem.div [ Attr.class' "tabline-info"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:12px;white-space:nowrap;" ] [
+        // min-width:0 + overflow:hidden + text-overflow:ellipsis let this
+        // shrink instead of overflowing onto the right-side theme picker at
+        // phone width (sagefs-ux-roast.md §7.2 — a measured 130px collision
+        // between this block and .tabline-right at 400px). The workflow
+        // label rides along here (read-only, honest — §4.1's "the dashboard
+        // cannot see the workflow at all") rather than as its own flex
+        // child, so it never adds a second overflow surface.
+        Elem.div
+          [ Attr.class' "tabline-info"
+            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;border-right:1px solid var(--border-normal);color:var(--fg-dim);font-size:12px;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;" ] [
           textEnc (sprintf "Session: %s" snap.SessionId)
+          match snap.SessionId.Length > 0 with
+          | true ->
+            Elem.span
+              [ Attr.class' "badge"
+                Attr.style "margin-left:6px;font-size:10px;"
+                Attr.create "aria-label" (attrEnc (sprintf "Workflow: %s (read-only)" snap.WorkflowLabel)) ]
+              [ textEnc snap.WorkflowLabel ]
+          | false -> ()
         ]
-        Elem.div [ Attr.id DomIds.EvalStats; Attr.class' "tabline-info"; Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:12px;" ] [ renderEvalStats snap.EvalStats ]
+        // The duplicate #eval-stats id (this wrapper AND renderEvalStats's own
+        // root both used to carry it — an invalid-HTML morph-target hazard in
+        // an app whose whole render model is "one #main, one morph") is fixed
+        // by leaving the id off this wrapper; renderEvalStats owns it.
+        Elem.div
+          [ Attr.class' "tabline-info"
+            Attr.style "display:flex;align-items:center;height:100%;padding:0 12px;color:var(--fg-dim);font-size:12px;min-width:0;overflow:hidden;flex-shrink:1;" ] [ renderEvalStats snap.EvalStats ]
       ]
       // Right side — expand toggle, theme picker
       Elem.div [ Attr.class' "tabline-right"; Attr.style "display:flex;align-items:center;height:100%;margin-left:auto;" ] [
@@ -2273,22 +2390,36 @@ let renderHotReloadPanel (sessionId: string) (files: {| path: string; watched: b
     Elem.div [ Attr.class' "meta"; Attr.style "margin-bottom: 0.5rem; font-size: 0.8rem;" ] [
       textEnc (sprintf "%d of %d files watched" watchedCount total)
     ]
-    Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
-      Elem.button
-        ([ Attr.class' "eval-btn"
-           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
-           Attr.create "aria-label" "Watch All — hot-reload every discovered source file" ]
-         @ indicatorAttrs hotReloadWatchAllLoading
-         @ [ Ds.onClick (hotReloadClick "" "watch-all") ])
-        [ loadingSpan hotReloadWatchAllLoading; Text.raw "Watch All" ]
-      Elem.button
-        ([ Attr.class' "eval-btn"
-           Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
-           Attr.create "aria-label" "Unwatch All — stop hot-reloading every discovered source file" ]
-         @ indicatorAttrs hotReloadUnwatchAllLoading
-         @ [ Ds.onClick (hotReloadClick "" "unwatch-all") ])
-        [ loadingSpan hotReloadUnwatchAllLoading; Text.raw "Unwatch All" ]
-    ]
+    // With zero discovered files, Watch All/Unwatch All were previously
+    // enabled, clickable, and silently did nothing — no toast, no change,
+    // no explanation (sagefs-ux-roast.md §4.3). Say so instead of offering
+    // dead buttons: the message names the actual reasons ("check the
+    // project builds and has .fs files outside its own bin/obj") since a
+    // healthy single-entry-point project can legitimately have nothing to
+    // discover here.
+    match total with
+    | 0 ->
+      Elem.div
+        [ Attr.class' "meta"
+          Attr.style "margin-bottom: 0.5rem; font-size: 0.75rem; color: var(--fg-yellow);" ]
+        [ Text.raw "⚠ No source files were discovered for hot reload — nothing to watch. Check that the project builds and that it has .fs files outside bin/obj." ]
+    | _ ->
+      Elem.div [ Attr.style "display: flex; gap: 4px; margin-bottom: 0.5rem;" ] [
+        Elem.button
+          ([ Attr.class' "eval-btn"
+             Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+             Attr.create "aria-label" "Watch All — hot-reload every discovered source file" ]
+           @ indicatorAttrs hotReloadWatchAllLoading
+           @ [ Ds.onClick (hotReloadClick "" "watch-all") ])
+          [ loadingSpan hotReloadWatchAllLoading; Text.raw "Watch All" ]
+        Elem.button
+          ([ Attr.class' "eval-btn"
+             Attr.style "flex: 1; height: 1.5rem; padding: 0 0.5rem; font-size: 0.7rem;"
+             Attr.create "aria-label" "Unwatch All — stop hot-reloading every discovered source file" ]
+           @ indicatorAttrs hotReloadUnwatchAllLoading
+           @ [ Ds.onClick (hotReloadClick "" "unwatch-all") ])
+          [ loadingSpan hotReloadUnwatchAllLoading; Text.raw "Unwatch All" ]
+      ]
     signalDetails Signals.HotReloadFilesOpen [] [
       Elem.summary [ Attr.style "cursor: pointer; font-size: 0.75rem; color: var(--fg-dim); user-select: none;" ] [
         Text.raw "📁 "

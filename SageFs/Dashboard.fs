@@ -383,8 +383,22 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
 /// caller that already has a fresh list — the SSE push loop fetches one
 /// every tick to reconcile the viewed session — never pays for a second,
 /// redundant `GetAllSessions` read building the sidebar cards.
-let buildSessionCardsFrom (q: DashboardQueries) (sessions: WorkerProtocol.SessionInfo list) : ParsedSession list =
-  liveSessionCards DateTime.UtcNow q.GetStatusMsg (q.GetSessionEvalCounts ()) sessions
+///
+/// `viewedContext` carries the currently-viewed session's id and its
+/// already-fetched `WarmupContext` (when the caller has one in hand), reused
+/// to compute that ONE card's real `SessionHealth` verdict for free. Every
+/// other card classifies with `warmup = None` rather than pay a worker HTTP
+/// round trip per session per push — see `liveSessionCards`'s doc comment.
+let buildSessionCardsFrom
+  (q: DashboardQueries)
+  (viewedContext: (WorkerProtocol.SessionId * WarmupContext option) option)
+  (sessions: WorkerProtocol.SessionInfo list)
+  : ParsedSession list =
+  let warmupContextFor sid =
+    match viewedContext with
+    | Some (viewedId, ctx) when viewedId = sid -> ctx
+    | _ -> None
+  liveSessionCards DateTime.UtcNow q.GetStatusMsg (q.GetSessionEvalCounts ()) warmupContextFor sessions
   |> List.map (fun card ->
     { card with
         TestSummary = q.GetSessionTestSummary card.Id
@@ -398,10 +412,12 @@ let buildSessionCardsFrom (q: DashboardQueries) (sessions: WorkerProtocol.Sessio
 
 /// Standalone entry point for callers that do not already have a fresh
 /// session list in hand — fetches once, then delegates to `buildSessionCardsFrom`.
+/// No viewed session is known here, so every card classifies conservatively
+/// (`warmup = None`).
 let buildSessionCards (q: DashboardQueries) : System.Threading.Tasks.Task<ParsedSession list> =
   task {
     let! sessions = q.GetAllSessions ()
-    return buildSessionCardsFrom q sessions
+    return buildSessionCardsFrom q None sessions
   }
 
 let private buildOutputPanelsFrom
@@ -410,10 +426,11 @@ let private buildOutputPanelsFrom
   (sessionId: WorkerProtocol.SessionId)
   (sessionState: string)
   (warmupProgress: string)
+  (wCtx: WarmupContext option)
   : System.Threading.Tasks.Task<XmlNode * XmlNode * XmlNode> =
   task {
     let! previous = q.GetPreviousSessions ()
-    let cards = buildSessionCardsFrom q sessions
+    let cards = buildSessionCardsFrom q (Some (sessionId, wCtx)) sessions
     let creating = q.IsCreatingSession ()
     let sessionsPanel = renderSessionsForSession (WorkerProtocol.SessionId.value sessionId) cards creating
     let sessionPicker =
@@ -801,10 +818,23 @@ let buildDashboardSnapshotWithSessions
     let timelineStats = q.GetEvalTimeline()
     let evalStatsView = EvalStatsView.fromStats stats timelineStats
     let daemonHealth = q.GetDaemonHealth()
+    // The one true, user-meaningful usability verdict for the VIEWED session
+    // (SessionHealth.classify) — computed from the same facts get_fsi_status
+    // and /api/sessions use, reusing the wCtx already fetched above for the
+    // session-context panel so this costs no extra worker round trip. Never
+    // hidden behind the ⊕ disclosure: Degraded/Failed render inline, right
+    // under the process-liveness health bar (sagefs-ux-roast.md §1, §1.4 —
+    // "the fix that reached no human").
+    let viewedHealth =
+      match sessions |> List.tryFind (fun s -> s.Id = sessionId) with
+      | Some info -> SessionHealth.classify info.Status info.ProjectRoles wCtx
+      | None -> SessionHealth.Starting
     let daemonHealthPanel =
-      match daemonHealth with
-      | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
-      | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
+      let processLivenessPanel =
+        match daemonHealth with
+        | Some snap -> renderDaemonHealth (DaemonHealthView.fromSnapshot snap)
+        | None -> Elem.div [ Attr.id DomIds.DaemonHealth; Attr.class' "meta" ] []
+      Elem.div [] [ processLivenessPanel; renderSessionHealthLine viewedHealth ]
     let failureNarrativesPanel =
       let pairs = q.GetFailureNarratives()
       renderFailureNarratives (FailureNarrativesPanelView.fromNarratives pairs)
@@ -869,7 +899,7 @@ let buildDashboardSnapshotWithSessions
     let liveTestingPanel = renderLiveTestingPanel (q.GetLiveTestActivity (WorkerProtocol.SessionId.value sessionId))
     let alarmPanel = renderAlarmBanner (infra.SystemAlarmBuffer.Value)
     let warmupProgress = q.GetWarmupProgress sessionId
-    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanelsFrom q sessions sessionId stateStr warmupProgress
+    let! outputPanel, sessionsPanel, sessionPicker = buildOutputPanelsFrom q sessions sessionId stateStr warmupProgress wCtx
     // Friction review panel — local store only. Built server-side so the
     // client never assembles raw telemetry. The read is synchronous SQLite;
     // an SSE stream reuses its last-built panel within the worker-data TTL
@@ -999,7 +1029,9 @@ let buildNoSessionSnapshotWithSessionsSorted
     // viewing the picker is clickable without a page reload), mirroring the
     // enrichment buildOutputPanelsFrom applies to the session view's sidebar.
     // The same typed cards the session view lists (Stopped filtered out).
-    let liveRows = buildSessionCardsFrom q sessions
+    // No session is in play here, so there is nothing to classify — every
+    // card is best-effort (warmup = None), same as buildSessionCards.
+    let liveRows = buildSessionCardsFrom q None sessions
     let daemonHealth = q.GetDaemonHealth()
     let daemonHealthPanel =
       match daemonHealth with
@@ -2166,7 +2198,7 @@ let createDiscoverHandler : HttpHandler =
         do! ssePatchNode ctx (
           Elem.div [ Attr.id DomIds.DiscoveredProjects ] [
             Elem.span [ Attr.class' "output-line output-error" ] [
-              textEnc (sprintf "Directory not found: %s" dir)
+              textEnc (sprintf "Directory not found: %s — check the path for typos, or create the directory first." dir)
             ]])
       | false, true ->
         do! pushDiscoverResults ctx dir manualProjects
@@ -2254,7 +2286,7 @@ let createCreateSessionHandler
       | true, _ ->
         do! ssePatchNode ctx (sessionCreateResultError "Working directory is required")
       | false, false ->
-        do! ssePatchNode ctx (sessionCreateResultError (sprintf "Directory not found: %s" dir))
+        do! ssePatchNode ctx (sessionCreateResultError (sprintf "Directory not found: %s — check the path for typos, or create the directory first." dir))
       | false, true ->
         match resolveSessionProjects dir manualProjects with
         | Error err ->
@@ -2330,7 +2362,7 @@ let createToggleWarmupAutoOpenHandler
       | true, _ ->
         do! ssePatchNode ctx (evalResultError "Working directory is required")
       | false, false ->
-        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
+        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s — check the path for typos, or create the directory first." dir))
       | false, true ->
         // 1) Write the config so FUTURE sessions pick up the setting.
         let configWrite : Result<unit, string> =
@@ -2623,6 +2655,17 @@ let createEndpoints
   (infra: DashboardInfra)
   : HttpEndpoint list =
   [
+    // The `<link rel="icon">` data URI in renderShell stops most browsers
+    // from ever asking, but Chromium (and others) still probe /favicon.ico
+    // unconditionally as a legacy fallback — the roast measured this exact
+    // 404 console error on every page load in headless Chromium despite the
+    // inline icon already being in place. Serve the SAME icon bytes here
+    // so that fallback probe gets a real 200 instead of a console error.
+    yield get "/favicon.ico" (fun ctx -> task {
+      ctx.Response.ContentType <- "image/svg+xml"
+      ctx.Response.Headers.["Cache-Control"] <- Microsoft.Extensions.Primitives.StringValues "public, max-age=86400"
+      do! ctx.Response.WriteAsync("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🧙</text></svg>""")
+    })
     // Static CSS — served from embedded resource. No immutable caching so
     // dashboard.css changes propagate without requiring a browser hard-refresh.
     yield get "/dashboard/dashboard.css" (fun ctx -> task {

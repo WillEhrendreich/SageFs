@@ -19,7 +19,7 @@ let private mkCardSession (id: string) (projects: (string * ProjectLoading.Proje
       projects
       |> List.map (fun (path, role) -> { ProjectLoading.ClassifiedProject.Path = path; Role = role; PackageRefs = [] })
     App = AppRun.AppRunState.NotRunning
-    WorkerRssBytes = None; SelfHostStaleness = None }
+    WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
 
 let private render viewing sessions =
   renderSessionsForSession viewing sessions false |> renderNode

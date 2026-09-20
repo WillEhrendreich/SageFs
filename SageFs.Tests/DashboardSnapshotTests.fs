@@ -104,7 +104,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
       { Id = WorkerProtocol.SessionId.validate "0a2b3c4e" |> Result.defaultValue (WorkerProtocol.SessionId.newId ())
         Status = SessionDisplayStatus.Stopped
         StatusMessage = None
@@ -116,7 +116,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
     ]
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions" html
@@ -431,7 +431,7 @@ let edgeCaseSnapshotTests = testList "edge case snapshots" [
         TestSummary = None
         CoverageSummary = None
         TestTreemapEntries = [||]; CoverageTreemap = None; BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
     ]
     let html = renderSessionsForSession "0a2b3c4d" sessions false |> renderNode
     do! verifyDashboard "dashboard_sessions_singleActive" html
@@ -631,13 +631,13 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
         Uptime = "1m"; WorkingDir = "/a"; LastActivity = "A"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
       { Id = sessionB; Status = SessionDisplayStatus.Running; StatusMessage = None
         ProjectsText = "(B.fsproj)"; EvalCount = 1
         Uptime = "1m"; WorkingDir = "/b"; LastActivity = "B"
         TestSummary = None; CoverageSummary = None; TestTreemapEntries = [||]; CoverageTreemap = None
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
-        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None }
+        ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning; WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
     ]
     let snap =
       { mkSnap "0.0.0" with
@@ -1254,7 +1254,7 @@ let snapshotCompletenessTests = testList "Snapshot field completeness (synthesis
         BindingEntries = [||]; AgentBadges = []; GuidanceCssClass = ""
         ActiveProject = None; ProjectRoles = []
         App = AppRun.AppRunState.NotRunning
-        WorkerRssBytes = None; SelfHostStaleness = None }
+        WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
     let html = renderSessionsForSession "0a2b3c4e" [ s ] false |> renderNode
     html |> Expect.stringContains "working dir should appear on the card" @"C:\MyProject\Src"
   }

@@ -60,6 +60,10 @@ module DomIds =
   let [<Literal>] CohortTerritory = "cohort-territory"
   let [<Literal>] CohortLanes = "cohort-lanes"
   let [<Literal>] CohortScrubber = "cohort-scrubber"
+  /// The viewed session's true `SessionHealth` verdict, rendered under the
+  /// process-liveness daemon health bar — quiet for Starting/Healthy, the
+  /// full reason inline for Degraded/Failed. Never hidden behind a disclosure.
+  let [<Literal>] SessionHealthLine = "session-health-line"
 
 /// Datastar signal names — shared between Ds.signal init and Ds.bind/Ds.show refs.
 [<RequireQualifiedAccess>]
@@ -584,6 +588,19 @@ type ParsedSession = {
   /// its own SageFs.Core build, when a newer build has since landed on disk;
   /// None for a non-self-hosting or up-to-date session.
   SelfHostStaleness: string option
+  /// The one true, user-meaningful usability verdict for this session
+  /// (`SessionHealth.classify`) — distinct from `Status` above, which only
+  /// reflects worker-process liveness ("Ready" means "the worker is alive,"
+  /// not "my project loaded and I can evaluate"). Computed from the same
+  /// facts get_fsi_status and /api/sessions use, so the card can never
+  /// disagree with the MCP/HTTP surfaces about the same session (roast:
+  /// sagefs-ux-roast.md §1 — "the fix that reached no human"). Best-effort
+  /// for cards other than the one being viewed: computing it accurately
+  /// requires the session's warmup context, which costs a worker HTTP round
+  /// trip, so only the viewed session's real context is threaded through —
+  /// other cards classify with `warmup = None`, which `SessionHealth.classify`
+  /// itself defines as "nothing to be suspicious about" (quiet, not a lie).
+  Health: SessionHealth
 }
 
 /// Best-effort live RSS of a worker process, by pid. Never throws: a pid
@@ -617,6 +634,7 @@ let sessionCardOf
   (now: DateTime)
   (warmupProgress: string option)
   (evalCount: int)
+  (health: SessionHealth)
   (info: WorkerProtocol.SessionInfo)
   : ParsedSession =
   // info carries the real SessionLifecycleStatus, so the fault reason (if
@@ -661,21 +679,33 @@ let sessionCardOf
       |> Option.bind tryGetWorkerRssBytes
     // Enriched (like TestSummary etc.) by buildSessionCardsFrom via a
     // DashboardQueries lookup; the base card carries no staleness.
-    SelfHostStaleness = None }
+    SelfHostStaleness = None
+    Health = health }
 
 /// Every session the sidebar lists — all but Stopped — in registry order (the
 /// same order the initial page and viewing reconciliation use).
+///
+/// `warmupContextFor` is best-effort: it need only answer for sessions whose
+/// warmup context is already in hand for free (the currently-viewed session
+/// reuses the context `buildDashboardSnapshotWithSessions` already fetched
+/// for its own panels) and should return `None` for every other session
+/// rather than trigger a worker HTTP round trip per card per push — the same
+/// "cheap local reads only" discipline every other per-card enrichment
+/// follows. `SessionHealth.classify` treats `None` as "nothing to be
+/// suspicious about," so an unfetched card renders quietly rather than lying.
 let liveSessionCards
   (now: DateTime)
   (warmupProgress: WorkerProtocol.SessionId -> string option)
   (evalCounts: Map<WorkerProtocol.SessionId, int>)
+  (warmupContextFor: WorkerProtocol.SessionId -> WarmupContext option)
   (sessions: WorkerProtocol.SessionInfo list)
   : ParsedSession list =
   sessions
   |> List.filter (fun s -> s.Status <> WorkerProtocol.SessionLifecycleStatus.Stopped)
   |> List.map (fun s ->
     let evals = evalCounts |> Map.tryFind s.Id |> Option.defaultValue 0
-    sessionCardOf now (warmupProgress s.Id) evals s)
+    let health = SessionHealth.classify s.Status s.ProjectRoles (warmupContextFor s.Id)
+    sessionCardOf now (warmupProgress s.Id) evals health s)
 
 /// A previously-known session that can be resumed.
 type PreviousSession = {

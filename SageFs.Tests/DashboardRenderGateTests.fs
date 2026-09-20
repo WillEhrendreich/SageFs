@@ -104,7 +104,7 @@ let tests = testList "Dashboard render gate — no redundant GetAllSessions per 
   testTask "WHY — buildSessionCardsFrom takes the session list directly and never calls GetAllSessions" {
     let counter = ref 0
     let queries = mkQueries counter []
-    buildSessionCardsFrom queries [] |> ignore
+    buildSessionCardsFrom queries None [] |> ignore
     counter.Value |> Expect.equal "must not fetch sessions — they were passed in" 0
   }
 

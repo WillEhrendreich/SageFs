@@ -133,7 +133,7 @@ module SidebarCards =
       Workflow = WorkflowTypes.SessionWorkflow.Interactive
       ActiveProject = None; ProjectRoles = []; App = SageFs.AppRun.AppRunState.NotRunning }
 
-  let card (session: WorkerProtocol.SessionInfo) = sessionCardOf now None 0 session
+  let card (session: WorkerProtocol.SessionInfo) = sessionCardOf now None 0 SessionHealth.Healthy session
 
 [<Tests>]
 let sidebarCardTests =
@@ -158,7 +158,7 @@ let sidebarCardTests =
       (SidebarCards.card recovered).StatusMessage |> Expect.isNone "no message on a running card")
 
     testCase "a starting session shows its warmup progress" (fun () ->
-      let c = sessionCardOf SidebarCards.now (Some "[3/10] open System") 0 (info "0a2b3c4d" WorkerProtocol.SessionStatus.Starting [])
+      let c = sessionCardOf SidebarCards.now (Some "[3/10] open System") 0 SessionHealth.Starting (info "0a2b3c4d" WorkerProtocol.SessionStatus.Starting [])
       c.Status |> Expect.equal "Starting = starting" SessionDisplayStatus.Starting
       c.StatusMessage |> Expect.equal "warmup progress is the message" (Some "[3/10] open System"))
 
@@ -306,7 +306,7 @@ let stoppedSessionFilterTests =
   testList "Stopped session filtering" [
     testCase "stopped sessions are left out; the rest keep registry order" (fun () ->
       let cards =
-        liveSessionCards SidebarCards.now (fun _ -> None) Map.empty
+        liveSessionCards SidebarCards.now (fun _ -> None) Map.empty (fun _ -> None)
           [ info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
             info "0a2b3c4e" WorkerProtocol.SessionStatus.Stopped []
             info "0a2b3c4f" WorkerProtocol.SessionStatus.Starting [] ]
@@ -314,14 +314,14 @@ let stoppedSessionFilterTests =
 
     testCase "faulted sessions stay visible so the user can restart them" (fun () ->
       let cards =
-        liveSessionCards SidebarCards.now (fun _ -> None) Map.empty
+        liveSessionCards SidebarCards.now (fun _ -> None) Map.empty (fun _ -> None)
           [ info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
             info "0a2b3c4e" WorkerProtocol.SessionStatus.Faulted [] ]
       (ids cards) |> Expect.equal "faulted session stays visible" [ "0a2b3c4d"; "0a2b3c4e" ])
 
     testCase "each card carries its session's eval count" (fun () ->
       let a = info "0a2b3c4d" WorkerProtocol.SessionStatus.Ready []
-      let cards = liveSessionCards SidebarCards.now (fun _ -> None) (Map.ofList [ a.Id, 7 ]) [ a ]
+      let cards = liveSessionCards SidebarCards.now (fun _ -> None) (Map.ofList [ a.Id, 7 ]) (fun _ -> None) [ a ]
       (cards |> List.map _.EvalCount) |> Expect.equal "eval count from the typed registry" [ 7 ])
   ]
 
@@ -363,7 +363,7 @@ let perSessionTestSummaryTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None }
+          WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -389,7 +389,7 @@ let perSessionTestSummaryTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None }
+          WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -423,7 +423,7 @@ let perSessionCoverageTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None }
+          WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
@@ -449,7 +449,7 @@ let perSessionCoverageTests =
           ActiveProject = None
           ProjectRoles = []
           App = SageFs.AppRun.AppRunState.NotRunning
-          WorkerRssBytes = None; SelfHostStaleness = None }
+          WorkerRssBytes = None; SelfHostStaleness = None; Health = SessionHealth.Healthy }
       let html =
         renderSessionsForSession "" [session] false
         |> renderNode
