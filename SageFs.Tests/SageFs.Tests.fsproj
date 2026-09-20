@@ -466,7 +466,7 @@
         <PackageReference Include="FsCheck" />
         <PackageReference Include="YoloDev.Expecto.TestSdk" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" />
-        <PackageReference Include="Lib.Harmony" />
+        <PackageReference Include="SageFs.Harmony" />
         <PackageReference Include="Fantomas.Core" />
         <PackageReference Include="Falco" />
         <PackageReference Include="Falco.Markup" />

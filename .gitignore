@@ -32,6 +32,10 @@ analyzers/community
 mcp-sdk-nupkg/*
 !mcp-sdk-nupkg/.gitkeep
 mcp-sdk/
+# Same for the patched Harmony fork (LibHarmony): cloned + packed by ci-pipeline.fsx, referenced via nuget.config.
+harmony-nupkg/*
+!harmony-nupkg/.gitkeep
+harmony-fork/
 *.log
 aspire-traces.png
 otel-*.png

@@ -240,7 +240,7 @@
         <PackageReference Include="TreeSitter.DotNet" />
 
         <PackageReference Include="FuzzySharp" />
-        <PackageReference Include="Lib.Harmony" />
+        <PackageReference Include="SageFs.Harmony" />
         <PackageReference Include="Ionide.ProjInfo" />
         <PackageReference Include="Ionide.ProjInfo.FCS" />
         <PackageReference Include="System.Configuration.ConfigurationManager" />

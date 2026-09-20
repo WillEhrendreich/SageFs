@@ -43,7 +43,11 @@
     <PackageVersion Include="FuzzySharp" Version="2.0.2" />
     <PackageVersion Include="Ionide.ProjInfo" Version="0.74.1" />
     <PackageVersion Include="Ionide.ProjInfo.FCS" Version="0.74.1" />
-    <PackageVersion Include="Lib.Harmony" Version="2.4.2" />
+    <!-- SageFs.Harmony = WillEhrendreich/LibHarmony: upstream Harmony (same HarmonyLib API) built on our
+         patched MonoMod fork so detours work on CoreCLR 11. Not on any feed: ci-pipeline.fsx's
+         "restore harmony fork" stage clones the pinned commit and packs it into harmony-nupkg/. The version
+         suffix is the pack's SageFsBuild number; bump it together with harmonyCommit/harmonyBuild there. -->
+    <PackageVersion Include="SageFs.Harmony" Version="2.4.2-sagefs.1" />
     <PackageVersion Include="Microsoft.Bcl.Memory" Version="10.0.5" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="9.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.1" />

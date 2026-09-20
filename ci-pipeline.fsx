@@ -50,6 +50,13 @@ open Fun.Build.Github
 let rootDir = __SOURCE_DIRECTORY__
 let mcpSdkDir = Path.Combine(rootDir, "mcp-sdk")
 let mcpNupkgDir = Path.Combine(rootDir, "mcp-sdk-nupkg")
+let harmonyDir = Path.Combine(rootDir, "harmony-fork")
+let harmonyNupkgDir = Path.Combine(rootDir, "harmony-nupkg")
+let harmonyRepoUrl = "https://github.com/WillEhrendreich/LibHarmony.git"
+// Pinned fork commit + the pack's SageFsBuild number; keep in sync with SageFs.Harmony's version in Directory.Packages.props.
+let harmonyCommit = "ffb6e9cabd1b83d4a51ef02fcaa914bf1269e51d"
+let harmonyBuild = "1"
+let harmonyNupkg = Path.Combine(harmonyNupkgDir, $"SageFs.Harmony.2.4.2-sagefs.{harmonyBuild}.nupkg")
 let mcpSdkRepoUrl = "https://github.com/WillEhrendreich/ModelContextProtocolSdk.git"
 let mcpSdkProjectDir name = Path.Combine(mcpSdkDir, "src", name)
 let mcpSdkCoreDir = mcpSdkProjectDir "ModelContextProtocol.Core"
@@ -137,6 +144,17 @@ let writeReleaseManifest () =
 
 // ---- the pipeline ------------------------------------------------------------
 
+/// Run shell steps in order, stopping at the first failure.
+let rec runSteps (ctx: StageContext) (steps: string list) =
+  async {
+    match steps with
+    | [] -> return Ok()
+    | step :: rest ->
+      match! ctx.RunCommand step with
+      | Ok () -> return! runSteps ctx rest
+      | Error e -> return Error e
+  }
+
 pipeline "sagefs" {
   description
     "SageFs CI as one typed F# pipeline: restore the forked MCP SDK, build once \
@@ -163,6 +181,29 @@ pipeline "sagefs" {
     run $"dotnet pack \"{mcpSdkCoreDir}\" -o \"{mcpNupkgDir}\" -c Release -p:NuGetAudit=false"
     run $"dotnet pack \"{mcpSdkClientDir}\" -o \"{mcpNupkgDir}\" -c Release -p:NuGetAudit=false"
     run $"dotnet pack \"{mcpSdkAspNetCoreDir}\" -o \"{mcpNupkgDir}\" -c Release -p:NuGetAudit=false"
+  }
+
+  stage "restore harmony fork" {
+    timeoutForStep 900
+    // LibHarmony is cloned INSIDE this repo, which is safe because it carries its own
+    // Directory.Packages.props that opts out of this repo's central package management.
+    run (fun ctx ->
+      async {
+        match File.Exists harmonyNupkg with
+        | true -> return Ok()
+        | false ->
+          return!
+            runSteps ctx [
+              if not (Directory.Exists harmonyDir) then $"git clone --no-checkout {harmonyRepoUrl} \"{harmonyDir}\""
+              $"git -C \"{harmonyDir}\" fetch --depth 1 origin {harmonyCommit}"
+              $"git -C \"{harmonyDir}\" checkout --force {harmonyCommit}"
+              $"git -C \"{harmonyDir}\" submodule update --init --recursive --depth 1"
+              // build, THEN pack --no-build: a combined `dotnet pack` skips the ILRepack step that
+              // produces the merged 0Harmony.dll (LibHarmony's own pipeline uses the same two steps).
+              $"dotnet build \"{harmonyDir}/Lib.Harmony/Lib.Harmony.csproj\" -c Release -p:SageFsBuild={harmonyBuild}"
+              $"dotnet pack \"{harmonyDir}/Lib.Harmony/Lib.Harmony.csproj\" -c Release --no-build -o \"{harmonyNupkgDir}\" -p:SageFsBuild={harmonyBuild}"
+            ]
+      })
   }
 
   stage "build" {
