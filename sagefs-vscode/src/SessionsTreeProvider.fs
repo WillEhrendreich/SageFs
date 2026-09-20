@@ -32,7 +32,8 @@ let private rowFor (s: Client.SessionInfo) (isActive: bool) : SessionsTreePure.S
       LoadedProjects = paths s.loadedProjects
       EvalCount = s.evalCount
       WorkingDirectory = s.workingDirectory
-      IsActive = isActive }
+      IsActive = isActive
+      Health = s.health }
 
 // ── TreeDataProvider ─────────────────────────────────────────────
 

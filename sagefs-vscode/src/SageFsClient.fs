@@ -63,7 +63,11 @@ type SessionInfo =
     /// a project is loaded).
     loadedProjects: string array
     evalCount: int
-    workflowLabel: string }
+    workflowLabel: string
+    /// The daemon's own usability verdict (`SageFs.Core/SessionHealth.fs`),
+    /// as sent on `/api/sessions`. Every client-side health rendering reads
+    /// THIS — no surface re-derives a verdict of its own.
+    health: SessionsTreePure.SessionHealth }
 
 type LoadedAssemblyInfo =
   { Name: string
@@ -289,7 +293,17 @@ let parseSessions (parsed: obj) =
       // the declared list rather than inventing one.
       loadedProjects = fieldStringArray "loadedProjects" s |> Option.defaultValue [||]
       evalCount = fieldInt "evalCount" s |> Option.defaultValue 0
-      workflowLabel = fieldString "workflowLabel" s |> Option.defaultValue "REPL" })
+      workflowLabel = fieldString "workflowLabel" s |> Option.defaultValue "REPL"
+      // `health` is `{status, reason}` — a nested object, absent on a daemon
+      // older than SessionHealth. Absent parses to `Unknown`, which every
+      // renderer treats as "no verdict", never as a verdict of its own.
+      health =
+        match fieldObj "health" s with
+        | None -> SessionsTreePure.SessionHealth.Unknown
+        | Some h ->
+          SessionsTreePure.SessionHealth.ofWire
+            (fieldString "status" h |> Option.defaultValue "")
+            (fieldString "reason" h |> Option.defaultValue "") })
 
 let listSessions (c: Client) =
   promise {

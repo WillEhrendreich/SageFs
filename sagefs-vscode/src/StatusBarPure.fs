@@ -18,9 +18,15 @@
 /// (tests/StatusBarContractTests.fsx).
 module SageFs.Vscode.StatusBarPure
 
+open SageFs.Vscode.SessionsTreePure
+
 /// What the status bar needs to know about the active session.
 /// `ProjectLabel` is expected to come from `SessionsTreePure.label` — this
 /// module does not re-derive it from the session's project lists.
+/// `Health` is the daemon's verdict (`SessionsTreePure.SessionHealth`), for
+/// the same reason the tree takes it: the status bar is the one SageFs surface
+/// a user glances at constantly, and a `$(zap)` on a session that loaded
+/// nothing is the lie the verdict exists to kill.
 type SessionStatusBarInput = {
   ProjectLabel: string
   WorkflowLabel: string
@@ -28,6 +34,7 @@ type SessionStatusBarInput = {
   Supervised: bool
   RestartCount: int
   SessionCount: int
+  Health: SessionHealth
 }
 
 type StatusBarView = {
@@ -50,14 +57,33 @@ let private restartSuffix (restartCount: int) =
   | 0 -> ""
   | n -> sprintf " %d↻" n
 
+/// The icon slot — the one place in `Text` where a codicon token expands.
+/// Total over the daemon's verdict; `Unknown` (no verdict on the wire) keeps
+/// the historical bolt rather than inventing a warning.
+let private healthIcon (health: SessionHealth) =
+  match health with
+  | SessionHealth.Healthy
+  | SessionHealth.Unknown -> "$(zap)"
+  | SessionHealth.Degraded _ -> "$(warning)"
+  | SessionHealth.Failed _ -> "$(error)"
+  | SessionHealth.Starting -> "$(loading~spin)"
+
+/// The reason the daemon attached, appended to the tooltip so the remedy is
+/// one hover away instead of nowhere. Plain words only — no codicon tokens.
+let private healthTooltipSuffix (health: SessionHealth) =
+  match SessionHealth.reason health with
+  | Some r -> sprintf " — %s: %s" (SessionHealth.label health) r
+  | None -> ""
+
 /// The status bar for the currently-selected session.
 let sessionView (input: SessionStatusBarInput) : StatusBarView =
   { Text =
-      sprintf "$(zap) SageFs: %s [%s]%s%s%s"
-        input.ProjectLabel input.WorkflowLabel
+      sprintf "%s SageFs: %s [%s]%s%s%s"
+        (healthIcon input.Health) input.ProjectLabel input.WorkflowLabel
         (evalSuffix input.EvalCount) (supervisedSuffix input.Supervised) (restartSuffix input.RestartCount)
     Tooltip =
-      sprintf "SageFs: %s — %d session(s) — click for session menu" input.ProjectLabel input.SessionCount }
+      sprintf "SageFs: %s — %d session(s) — click for session menu%s"
+        input.ProjectLabel input.SessionCount (healthTooltipSuffix input.Health) }
 
 /// The status bar when the daemon is ready but no session is selected.
 let noSessionView (supervised: bool) (restartCount: int) : StatusBarView =

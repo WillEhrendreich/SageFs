@@ -14,6 +14,9 @@ open Expecto
 open Expecto.Flip
 open SageFs.Vscode.SessionsTreePure
 
+/// Default health for the label/description cases below is whatever the
+/// daemon would actually say about a live worker: Healthy. The health-specific
+/// cases override it explicitly.
 let private session id status projects loaded evals : SessionRowInput =
   { Id = id
     Status = status
@@ -21,7 +24,14 @@ let private session id status projects loaded evals : SessionRowInput =
     LoadedProjects = loaded
     EvalCount = evals
     WorkingDirectory = "/w"
-    IsActive = false }
+    IsActive = false
+    Health =
+      match status with
+      | "Ready" | "Evaluating" -> SessionHealth.Healthy
+      | "Starting" | "Restarting" -> SessionHealth.Starting
+      | "Faulted" -> SessionHealth.Failed "boom"
+      | "Stopped" -> SessionHealth.Failed "Session is stopped."
+      | _ -> SessionHealth.Unknown }
 
 let tests =
   testList "VS Code Sessions tree - pure row shaping" [
@@ -33,7 +43,7 @@ let tests =
       Expect.isFalse "icon id is bare, not a $(..) token" (row.Icon.Contains "$(")
 
     testCase "WHY - status rides the icon slot, which is the one place VS Code renders it" <| fun _ ->
-      // A loaded session: the healthy case. (Ready-with-nothing is a warning — see below.)
+      // A loaded session: the healthy case. (Ready-but-Degraded is a warning — see below.)
       (renderRow (session "a" "Ready" [| "/w/A.fsproj" |] [||] 0)).Icon |> Expect.equal "ready" "zap"
       (renderRow (session "a" "Starting" [||] [||] 0)).Icon |> Expect.equal "starting" "loading~spin"
       (renderRow (session "a" "Faulted" [||] [||] 0)).Icon |> Expect.equal "faulted" "error"
@@ -81,10 +91,61 @@ let tests =
       let row = renderRow { session "a" "Ready" [| "/w/A.fsproj" |] [||] 0 with IsActive = true }
       row.Description |> Expect.stringContains "says active" "active"
 
-    testCase "WHY - a Ready session that loaded nothing is NOT reported as healthy" <| fun _ ->
-      // Ready means "a worker process is alive", not "your code is loaded".
-      let row = renderRow (session "a" "Ready" [||] [||] 0)
+    // ── The daemon's verdict, and the two directions the old guess was wrong ──
+    //
+    // WHY these five: `icon` used to be derived from `Array.isEmpty
+    // (effectiveProjects input)`, which is inverted relative to
+    // SageFs.Core/SessionHealth.fs in BOTH directions. These pin the corrected
+    // mapping against the classifier's own stated rules
+    // (SessionHealth.fs:95-96 and :118-121).
+
+    testCase "WHY - a bare REPL session is Healthy, and must NOT wear a warning triangle" <| fun _ ->
+      // SessionHealth.fs:95-96 — `projectRoles = []` that loaded nothing is
+      // explicitly NOT degraded: nothing was expected, so nothing is wrong.
+      // The deleted heuristic put "warning" here, on the most ordinary session
+      // in the product.
+      let row = renderRow { session "a" "Ready" [||] [||] 0 with Health = SessionHealth.Healthy }
+      row.Icon |> Expect.equal "green bolt for a healthy bare session" "zap"
+      row.Description |> Expect.equal "no health noise on the common case" "Ready"
+
+    testCase "WHY - a Ready session the daemon calls Degraded wears the warning, whatever it loaded" <| fun _ ->
+      // SessionHealth.fs:118-121 — Degraded requires projectRoles NON-empty,
+      // which under the deleted heuristic meant `effectiveProjects` non-empty,
+      // which rendered "zap". Exactly the case the icon exists to catch, shown
+      // green.
+      let row =
+        renderRow
+          { session "a" "Ready" [||] [| "/w/A.fsproj" |] 0 with
+              Health = SessionHealth.Degraded "0 assemblies loaded; run dotnet build" }
       row.Icon |> Expect.equal "warned, not zapped" "warning"
+      row.Description |> Expect.stringContains "the verdict is visible without hovering" "Degraded"
+      row.Description |> Expect.stringContains "the worker status is still shown beside it" "Ready"
+
+    testCase "WHY - the Degraded reason reaches the user, because it is why the case carries one" <| fun _ ->
+      (renderRow
+        { session "a" "Ready" [||] [| "/w/A.fsproj" |] 0 with
+            Health = SessionHealth.Degraded "run `dotnet build` on it, then hard_reset_fsi_session" }).Tooltip
+      |> Expect.stringContains "remedy in the tooltip" "then hard_reset_fsi_session"
+
+    testCase "WHY - a Failed session's reason is shown too, not swallowed into a bare error glyph" <| fun _ ->
+      let row = renderRow { session "a" "Faulted" [||] [||] 0 with Health = SessionHealth.Failed "worker exited 139" }
+      row.Icon |> Expect.equal "error" "error"
+      row.Tooltip |> Expect.stringContains "reason" "worker exited 139"
+
+    testCase "WHY - no verdict on the wire is rendered as no verdict, not as a guess" <| fun _ ->
+      // An older daemon sends no `health` field. Claiming either "healthy" or
+      // "degraded" for it would be inventing the fact this whole change exists
+      // to stop inventing.
+      let row = renderRow { session "a" "Ready" [||] [||] 0 with Health = SessionHealth.Unknown }
+      row.Icon |> Expect.equal "falls back to the lifecycle status" "zap"
+      row.Description |> Expect.equal "silent about health it does not know" "Ready"
+
+    testCase "WHY - ofWire is total, and an unrecognised status is Unknown rather than a verdict" <| fun _ ->
+      SessionHealth.ofWire "Healthy" "" |> Expect.equal "healthy" SessionHealth.Healthy
+      SessionHealth.ofWire "Starting" "" |> Expect.equal "starting" SessionHealth.Starting
+      SessionHealth.ofWire "Degraded" "why" |> Expect.equal "degraded carries the reason" (SessionHealth.Degraded "why")
+      SessionHealth.ofWire "Failed" "why" |> Expect.equal "failed carries the reason" (SessionHealth.Failed "why")
+      SessionHealth.ofWire "SomethingNew" "x" |> Expect.equal "unknown, not guessed" SessionHealth.Unknown
 
     testCase "WHY - the tooltip carries the working directory, the one field that explains a wrong-project session" <| fun _ ->
       let row = renderRow { session "a" "Ready" [| "/w/A.fsproj" |] [||] 2 with WorkingDirectory = "/home/me/repo" }

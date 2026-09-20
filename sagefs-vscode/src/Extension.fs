@@ -769,7 +769,8 @@ let refreshStatus () =
                 LoadedProjects = notNullPaths s.loadedProjects
                 EvalCount = s.evalCount
                 WorkingDirectory = s.workingDirectory
-                IsActive = true }
+                IsActive = true
+                Health = s.health }
             currentWorkflowLabel <- s.workflowLabel
             let view =
               StatusBarPure.sessionView
@@ -778,7 +779,8 @@ let refreshStatus () =
                   EvalCount = s.evalCount
                   Supervised = supervisedFlag
                   RestartCount = restartCount
-                  SessionCount = sessions.Length }
+                  SessionCount = sessions.Length
+                  Health = s.health }
             sb.text <- view.Text
             sb.tooltip <- Some view.Tooltip
             // `$(zap)` renders as a glyph in `text` but its NAME leaks into the
