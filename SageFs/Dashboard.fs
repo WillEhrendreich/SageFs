@@ -2706,6 +2706,54 @@ let createEndpoints
     yield mapPostRaw "/dashboard/session/switch/{id}"
       (routeValue "id")
       (fun sid -> createSessionActionHandler q infra a.SwitchSession false (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))
+    // Load a different project into a session. There is no in-place "swap the
+    // project" in the worker — the project set is fixed when FSI starts — so this
+    // is honestly a recreate: new session on the chosen project, then stop the old
+    // one. The button that posts here says so (the REPL's bindings go with the old
+    // worker). Project comes from the route, so it is never interpolated into markup.
+    // The project rides the QUERY STRING, not a path segment: a project path
+    // contains '/', and an encoded %2F inside a route parameter does not round-trip
+    // through ASP.NET's route matching (observed: the request never reached the
+    // handler and the SSE response died as ERR_INCOMPLETE_CHUNKED_ENCODING).
+    yield mapPostRaw "/dashboard/session/set-project/{id}"
+      (fun ctx ->
+        let project =
+          match ctx.Request.Query.TryGetValue "project" with
+          | true, v -> string v
+          | _ -> ""
+        routeValue "id" ctx, project)
+      (fun (sid, project) -> fun ctx -> task {
+        Response.sseStartResponse ctx |> ignore
+        let say (text: string) =
+          ssePatchNode ctx (
+            Elem.div [ Attr.id DomIds.EvalResult ] [
+              Elem.pre
+                [ Attr.class' "output-line output-result"
+                  Attr.style "margin-top: 0.5rem; white-space: pre-wrap;" ]
+                [ textEnc text ] ])
+        match WorkerProtocol.SessionId.validate sid with
+        | Error _ -> do! say (sprintf "Not a session id: %s" sid)
+        | Ok sessionId ->
+          let! sessions = q.GetAllSessions ()
+          match sessions |> List.tryFind (fun s -> s.Id = sessionId) with
+          | None -> do! say (sprintf "Session '%s' is no longer running." sid)
+          | Some existing ->
+            let dir = existing.WorkingDirectory
+            // Same containment discipline as every other session-create path: a
+            // project must resolve inside the session's own directory.
+            match DashboardTypes.resolveSessionProjects dir project with
+            | Error err -> do! say (SageFsError.describe err)
+            | Ok resolved ->
+              do! say (sprintf "Loading %s… (the previous session's REPL bindings are discarded)" project)
+              let! created = a.CreateSession resolved dir
+              match created with
+              | Error err -> do! say (sprintf "Could not load %s: %s" project err)
+              | Ok newId ->
+                let! _ = a.StopSession sessionId
+                let! _ = a.SwitchSession newId
+                a.Dispatch (SageFsMsg.Editor EditorAction.ListSessions)
+                do! say (sprintf "Session '%s' loaded %s." (WorkerProtocol.SessionId.value newId) project)
+      })
     yield mapPostRaw "/dashboard/session/stop/{id}"
       (routeValue "id")
       (fun sid -> createSessionActionHandler q infra a.StopSession true (WorkerProtocol.SessionId.validate sid |> Result.defaultValue (WorkerProtocol.SessionId.newId ())))

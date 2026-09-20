@@ -58,6 +58,10 @@ type SessionInfo =
     workingDirectory: string
     status: string
     projects: string array
+    /// The projects the worker actually loaded. Authoritative over `projects`,
+    /// which is only what the session was created with (and can be empty while
+    /// a project is loaded).
+    loadedProjects: string array
     evalCount: int
     workflowLabel: string }
 
@@ -281,6 +285,9 @@ let parseSessions (parsed: obj) =
       workingDirectory = fieldString "workingDirectory" s |> Option.defaultValue ""
       status = fieldString "status" s |> Option.defaultValue "unknown"
       projects = fieldStringArray "projects" s |> Option.defaultValue [||]
+      // Absent on an older daemon: falls back to empty, and the tree then shows
+      // the declared list rather than inventing one.
+      loadedProjects = fieldStringArray "loadedProjects" s |> Option.defaultValue [||]
       evalCount = fieldInt "evalCount" s |> Option.defaultValue 0
       workflowLabel = fieldString "workflowLabel" s |> Option.defaultValue "REPL" })
 

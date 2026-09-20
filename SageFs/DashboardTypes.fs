@@ -447,11 +447,25 @@ type DiscoveredProjects = {
   Projects: string list
 }
 
+/// Path segments that are never a project a user wants to load: build output,
+/// VCS/tooling state, package caches, and sibling git worktrees. THE canonical
+/// list — `McpAdapter.projectNoiseSegments` delegates here so discovery cannot
+/// mean two different things on two surfaces (it used to: the dashboard offered
+/// `.worktrees/*` copies of the repo's own projects, the MCP walk did not).
+let projectNoiseSegments : Set<string> =
+  Set.ofList [ "bin"; "obj"; ".git"; ".claude"; ".vs"; ".idea"; "node_modules"; "packages"; ".fable"; ".fake"; ".worktrees" ]
+
+/// True if any path segment is build/worktree/tooling noise.
+let isNoiseProjectPath (path: string) : bool =
+  path.Split([| '/'; '\\' |]) |> Array.exists projectNoiseSegments.Contains
+
 let discoverProjects (workingDir: string) : DiscoveredProjects =
   let projects =
     try
       Directory.EnumerateFiles(workingDir, "*.fsproj", SearchOption.AllDirectories)
       |> Seq.map (fun p -> Path.GetRelativePath(workingDir, p))
+      |> Seq.filter (isNoiseProjectPath >> not)
+      |> Seq.sortBy (fun p -> (p.Split([| '/'; '\\' |]).Length, p.ToLowerInvariant()))
       |> Seq.toList
     with ex ->
       Log.warn "[Discovery] Project enumeration failed in %s: %s (%s)\n%s" workingDir ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")

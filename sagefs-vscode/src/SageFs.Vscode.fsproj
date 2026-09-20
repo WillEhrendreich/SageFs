@@ -17,6 +17,8 @@
     <Compile Include="FileAnnotationsListener.fs" />
     <Compile Include="LiveTestingListener.fs" />
     <Compile Include="AppRunPure.fs" />
+    <Compile Include="SessionsTreePure.fs" />
+    <Compile Include="ProjectPickPure.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsListener.fs" />
     <Compile Include="CodeBlocks.fs" />

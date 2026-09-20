@@ -459,41 +459,89 @@ let getWorkingDirectory () =
 
 let mutable activeProjectPath: string option = None
 
+/// The scan cap. High enough that a real repo is listed in full (this one has
+/// 30+ projects); `ProjectPickPure.isTruncated` tells the user when it is hit
+/// rather than silently showing a partial list.
+[<Literal>]
+let projectScanLimit = 200
+
 let scanForProjects () =
   promise {
-    let! slnFiles = Workspace.findFiles "**/*.{sln,slnx}" "**/node_modules/**" 5
-    let! projFiles = Workspace.findFiles "**/*.fsproj" "**/node_modules/**" 10
+    let! slnFiles = Workspace.findFiles "**/*.{sln,slnx}" "**/node_modules/**" projectScanLimit
+    let! projFiles = Workspace.findFiles "**/*.fsproj" "**/{node_modules,bin,obj,.git,.worktrees}/**" projectScanLimit
     let solutions = slnFiles |> Array.map (fun f -> Workspace.asRelativePath f)
     let projects = projFiles |> Array.map (fun f -> Workspace.asRelativePath f)
     return Array.append solutions projects
   }
 
+let private workspaceFolderPaths () =
+  match Workspace.workspaceFolders () with
+  | Some fs -> fs |> Array.map (fun f -> f.uri.fsPath)
+  | None -> [||]
+
+/// Persist to the WORKSPACE, not globally. Writing this setting globally meant
+/// a project chosen in one folder was reused in every other F# folder on the
+/// machine — the cause of "it scanned irrelevant projects in other dirs".
 let persistProjectChoice (projectPath: string) =
   let config = Workspace.getConfiguration "sagefs"
-  config.update("projectPath", box projectPath, 1.) |> ignore
+  let target = match workspaceFolderPaths () with | [||] -> 1. | _ -> 2.
+  config.update("projectPath", box projectPath, target) |> ignore
   activeProjectPath <- Some projectPath
 
-let findProject () =
+/// Clear a `sagefs.projectPath` that belongs to a different workspace, wherever
+/// it was written. Global is cleared too, since that is where the old build put it.
+let private clearStaleProjectChoice () =
+  let config = Workspace.getConfiguration "sagefs"
+  config.update("projectPath", box "", 1.) |> ignore
+  match workspaceFolderPaths () with
+  | [||] -> ()
+  | _ -> config.update("projectPath", box "", 2.) |> ignore
+  activeProjectPath <- None
+
+let rec findProject () : JS.Promise<string option> =
   promise {
     let config = Workspace.getConfiguration "sagefs"
-    let configured = config.get("projectPath", "")
-    match configured with
-    | c when c <> "" ->
+    let! all = scanForProjects ()
+    match ProjectPickPure.chooseConfigured (workspaceFolderPaths ()) all (config.get("projectPath", "")) with
+    | ProjectPickPure.UseConfigured c ->
       activeProjectPath <- Some c
       return Some c
-    | _ ->
-      let! all = scanForProjects ()
+    | ProjectPickPure.IgnoreStale(path, reason) ->
+      // Loud, not silent: the user is about to be asked to pick again and
+      // deserves to know why their saved choice was dropped.
+      (getOutput()).appendLine (sprintf "[SageFs] Ignoring saved project '%s': %s" path reason)
+      Window.showWarningMessage
+        (sprintf "SageFs ignored the saved project '%s' — %s. Pick a project for this workspace." path reason)
+        [||]
+      |> ignore
+      clearStaleProjectChoice ()
+      return! findProject ()
+    | ProjectPickPure.NotConfigured ->
       match all with
       | [||] -> return None
       | [| single |] ->
         activeProjectPath <- Some single
         return Some single
       | _ ->
-        let! picked = Window.showQuickPick all "Select a solution or project for SageFs"
+        let truncated = ProjectPickPure.isTruncated projectScanLimit all.Length
+        let prompt =
+          match truncated with
+          | true -> sprintf "Select a project for SageFs (showing the first %d — use Browse for others)" all.Length
+          | false -> sprintf "Select a project for SageFs (%d in this workspace)" all.Length
+        let! picked = Window.showQuickPick (ProjectPickPure.pickRows all) prompt
         match picked with
-        | Some p -> persistProjectChoice p
-        | None -> ()
-        return picked
+        | Some p when p = ProjectPickPure.BrowseRow ->
+          let filters = createObj [ "F# Projects" ==> [| "fsproj"; "sln"; "slnx" |] ]
+          let! uris = Window.showOpenDialog filters false "Select Project"
+          match uris with
+          | Some arr when arr.Length > 0 ->
+            persistProjectChoice arr.[0].fsPath
+            return Some arr.[0].fsPath
+          | _ -> return None
+        | Some p ->
+          persistProjectChoice p
+          return Some p
+        | None -> return None
   }
 
 let hasSemiSemiDelimiters = Blocks.hasSemiSemiDelimiters
@@ -512,9 +560,9 @@ let browseForProject () =
     let! uris = Window.showOpenDialog filters false "Select Project"
     match uris with
     | Some arr when arr.Length > 0 ->
-      let uri = arr.[0]
-      let config = Workspace.getConfiguration "sagefs"
-      do! config.update ("projectPath", uri.fsPath, 1.0)
+      // Workspace scope, like every other write of this setting — a global pin
+      // leaks the choice into every other F# folder on the machine.
+      persistProjectChoice arr.[0].fsPath
       Commands.executeCommand "sagefs.start" |> ignore
     | _ -> ()
   }

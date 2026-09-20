@@ -117,6 +117,7 @@
         <Compile Include="ExplorationTests.fs" />
         <Compile Include="HotReloadTests.fs" />
         <Compile Include="HostAgentTests.fs" />
+        <Compile Include="SessionProjectPickerTests.fs" />
         <Compile Include="HotReloadingDiscoveryGateTests.fs" />
         <Compile Include="WorkerLiveTestEvalTests.fs" />
         <Compile Include="HotReloadStateTests.fs" />

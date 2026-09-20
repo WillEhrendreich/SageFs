@@ -2405,6 +2405,11 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
              status = status
              faultReason = SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status
              projects = sess.Projects
+             // What the worker ACTUALLY resolved and loaded, which is not always what
+             // was declared: a session created with `projects=[]` still loads whatever
+             // the worker discovers in its directory. Clients that render "no project"
+             // from `projects` alone were telling the user the opposite of the truth.
+             loadedProjects = (sess.ProjectRoles |> List.map (fun p -> p.Path))
              workingDirectory = sess.WorkingDirectory
              evalCount = evalCount
              avgDurationMs = avgMs

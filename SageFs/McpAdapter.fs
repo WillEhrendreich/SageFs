@@ -28,12 +28,14 @@ module McpAdapter =
   /// `.claude/worktrees`, each a full repo checkout that multiplies every
   /// `.fsproj`. A recursive scan that does not prune these returned 1,600+ paths
   /// and overflowed the calling agent's context.
-  let projectNoiseSegments : Set<string> =
-    Set.ofList [ "bin"; "obj"; ".git"; ".claude"; ".vs"; ".idea"; "node_modules"; "packages"; ".fable"; ".fake"; ".worktrees" ]
+  ///
+  /// One ignore list for the whole product — defined next to `discoverProjects`
+  /// in DashboardTypes, re-exported here so MCP and the dashboard can never
+  /// disagree about what counts as a project.
+  let projectNoiseSegments : Set<string> = SageFs.Server.DashboardTypes.projectNoiseSegments
 
   /// True if any path segment is build/worktree/tooling noise.
-  let isNoiseProjectPath (path: string) : bool =
-    path.Split([| '/'; '\\' |]) |> Array.exists projectNoiseSegments.Contains
+  let isNoiseProjectPath (path: string) : bool = SageFs.Server.DashboardTypes.isNoiseProjectPath path
 
   /// Bound the available-projects list for an agent's context window: drop noise
   /// paths, sort deterministically, and cap. Returns the shown paths plus the

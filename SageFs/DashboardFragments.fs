@@ -275,6 +275,40 @@ let renderAlarmBanner (alarms: SystemAlarmEntry list) =
       ]
     ]
 
+/// The options for a session card's project picker: every project in the
+/// session's root (noise-filtered and depth-sorted by `discoverProjects`), plus
+/// the solution when one exists, with the session's loaded project marked
+/// selected. Pure over its inputs so the selection rule is testable.
+///
+/// Returns `(value, displayText, isSelected)`. An empty list means "nothing to
+/// choose between" and the card renders no picker at all.
+let projectChoices
+  (discovered: SageFs.Server.DashboardTypes.DiscoveredProjects)
+  (loaded: string list)
+  : (string * string * bool) list =
+  let loadedNames =
+    loaded
+    |> List.map (fun p -> IO.Path.GetFileName(p).ToLowerInvariant())
+    |> Set.ofList
+  let isLoaded (relative: string) = loadedNames.Contains(IO.Path.GetFileName(relative).ToLowerInvariant())
+  let solutions = discovered.Solutions |> List.map (fun s -> s, sprintf "%s (whole solution)" s)
+  let projects = discovered.Projects |> List.map (fun p -> p, p)
+  let all = solutions @ projects
+  // EXACTLY ONE option may carry `selected`: a session that loaded a project and
+  // its project references marks several as "loaded", and a single-select then
+  // shows whichever the browser picked last — the wrong one. The first match wins.
+  let selectedValue = all |> List.map fst |> List.tryFind isLoaded
+  let choices =
+    all |> List.map (fun (value, label) -> value, label, (Some value = selectedValue))
+  match choices with
+  // One choice that is already loaded is not a choice — don't clutter the card.
+  | [ (_, _, true) ] -> []
+  | _ -> choices
+
+/// `projectChoices` against the live filesystem, for a session card.
+let renderProjectChoices (workingDir: string) (roles: SageFs.ProjectLoading.ClassifiedProject list) =
+  projectChoices (SageFs.Server.DashboardTypes.discoverProjects workingDir) (roles |> List.map (fun r -> r.Path))
+
 /// Small color-coded auto-open state icon for a session card.
 /// Green = auto-open ON (namespaces/modules will be opened during warmup),
 /// dim/red = OFF (skipped). The tooltip spells out the state and action;
@@ -1250,6 +1284,53 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     [ textEnc (AppRun.describeState app) ]
               ]
             ]
+            // Which project this session is on, and a way to change it. A session
+            // card used to show only a working directory, so "which project is
+            // loaded?" — the single most common question — had no answer on screen,
+            // and a root holding several projects offered no way to switch between
+            // them. One <select> of the root's projects, server-rendered with the
+            // loaded one selected, mirroring the run-target picker's shape.
+            match s.WorkingDir with
+            | "" -> ()
+            | dir ->
+              match renderProjectChoices dir s.ProjectRoles with
+              | [] -> ()
+              | choices ->
+                 let selectId = sprintf "project-select-%s" sid
+                 Elem.div [ Attr.class' "session-card-projects" ] [
+                   Elem.label
+                     [ Attr.class' "session-projects-label"; Attr.for' selectId ]
+                     [ textEnc "Project" ]
+                   Elem.select
+                     [ Attr.id selectId
+                       Attr.class' "session-project-select"
+                       Attr.create "aria-label" "Switch this session to another project in this directory"
+                       // Recreating the session is destructive (the REPL's bindings go
+                       // with the old worker), so it is an explicit button, never an
+                       // on-change surprise.
+                       Ds.onEvent
+                         ("change",
+                          sprintf "document.getElementById('%s').removeAttribute('disabled')" (sprintf "project-apply-%s" sid)) ]
+                     (choices
+                      |> List.map (fun (value, text, isSelected) ->
+                        Elem.option
+                          ([ Attr.value (attrEnc value) ]
+                           @ (match isSelected with
+                              | true -> [ Attr.create "selected" "selected" ]
+                              | false -> []))
+                          [ textEnc text ]))
+                   Elem.button
+                     [ Attr.id (sprintf "project-apply-%s" sid)
+                       Attr.class' "session-btn"
+                       Attr.disabled
+                       Attr.create "aria-label" "Load the selected project — restarts this session, losing its REPL bindings"
+                       Ds.onEvent
+                         ("click",
+                          sprintf
+                            "@post('/dashboard/session/set-project/%s?project=' + encodeURIComponent(document.getElementById('%s').value))"
+                            sid selectId) ]
+                     [ Text.raw "⏎" ]
+                 ]
             Elem.div [ Attr.class' "session-card-actions" ] [
               // Warmup auto-open state icon (color-coded on/off, tooltip explains, click toggles)
               (match s.WorkingDir.Length with

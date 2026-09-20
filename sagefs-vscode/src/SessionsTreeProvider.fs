@@ -17,31 +17,22 @@ let mutable refreshEmitter: EventEmitter<obj> option = None
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-let private stripExt (name: string) =
-  match name with
-  | n when n.EndsWith(".fsproj") -> n.[..n.Length - 8]
-  | n when n.EndsWith(".slnx") -> n.[..n.Length - 6]
-  | n when n.EndsWith(".sln") -> n.[..n.Length - 5]
-  | n -> n
-
-let private projectLabel (s: Client.SessionInfo) =
-  match s.projects with
-  | [||] -> "no project"
-  | ps ->
-    ps
-    |> Array.choose (fun p ->
-      match jsIsNullOrUndefined (box p) with
-      | true -> None
-      | false -> p.Split([|'/'; '\\'|]) |> Array.last |> stripExt |> Some)
-    |> String.concat ", "
-
-let private statusIcon (status: string) =
-  match status with
-  | "Ready" | "Evaluating" -> "$(zap)"
-  | "Starting" | "Restarting" -> "$(loading~spin)"
-  | "Faulted" -> "$(error)"
-  | "Stopped" -> "$(circle-slash)"
-  | _ -> "$(question)"
+/// Shape one session into a row. All the decisions live in SessionsTreePure so
+/// they are tested under `dotnet fsi` (tests/SessionsTreeContractTests.fsx);
+/// this only adapts the wire type and guards against JS nulls.
+let private rowFor (s: Client.SessionInfo) (isActive: bool) : SessionsTreePure.SessionRow =
+  let paths (arr: string array) =
+    match jsIsNullOrUndefined (box arr) with
+    | true -> [||]
+    | false -> arr |> Array.filter (fun p -> not (jsIsNullOrUndefined (box p)))
+  SessionsTreePure.renderRow
+    { Id = s.id
+      Status = s.status
+      DeclaredProjects = paths s.projects
+      LoadedProjects = paths s.loadedProjects
+      EvalCount = s.evalCount
+      WorkingDirectory = s.workingDirectory
+      IsActive = isActive }
 
 // ── TreeDataProvider ─────────────────────────────────────────────
 
@@ -61,25 +52,15 @@ let getChildren (_element: obj option) : JS.Promise<obj array> =
             match activeId with
             | Some id -> id = s.id
             | None -> false
-          let label = sprintf "%s %s" (statusIcon s.status) (projectLabel s)
-          let item = newTreeItem label TreeItemCollapsibleState.None
-          item.description <-
-            match s.evalCount with
-            | 0 -> s.status
-            | n -> sprintf "%s [%d evals]" s.status n
-          item.iconPath <-
-            match isActive with
-            | true -> Vscode.newThemeIcon "star-full"
-            | false -> Vscode.newThemeIcon "terminal"
-          item.contextValue <-
-            match isActive, s.status with
-            | true, "Ready" -> "session-active-ready"
-            | true, _ -> "session-active"
-            | false, "Stopped" -> "session-stopped"
-            | false, _ -> "session-inactive"
-          item.tooltip <-
-            sprintf "ID: %s\nStatus: %s\nProject: %s\nEvals: %d"
-              s.id s.status (projectLabel s) s.evalCount
+          let row = rowFor s isActive
+          let item = newTreeItem row.Label TreeItemCollapsibleState.None
+          item.description <- row.Description
+          // The status lives in the icon slot — VS Code prints `$(zap)` literally
+          // in a label, which is what produced "$(zap) no projectReady".
+          item.iconPath <- Vscode.newThemeIcon row.Icon
+          item.contextValue <- row.ContextValue
+          item.tooltip <- row.Tooltip
+          item?accessibilityInformation <- createObj [ "label" ==> row.AccessibleName ]
           // Store session id for command args (custom property, not in VS Code API)
           item?sessionId <- s.id
           item :> obj)
