@@ -1065,7 +1065,16 @@ let fileSizeBudgets =
       // into WorkerMessage.EvalLiveTestFile) — a deliberate, reviewed
       // feature, not silent accretion. Ratchet back DOWN when this file is
       // split; never bump to paper over drift.
-      "SageFs/SageFsApp.fs", 3060
+      // 3060 -> 3130: a one-time bump for wiring QuarantineLogic into
+      // production (sagefs-roast.md: the module was complete, correct, and
+      // property-tested with ZERO non-test callers). evaluateQuarantineForBatch
+      // now folds every result's flaky classification through
+      // QuarantineLogic.evaluate/apply in the same fold that already updates
+      // FlakyHistory, and AffectedTestsComputed excludes a quarantined test
+      // from the next RunAffectedTests selection — a deliberate, reviewed
+      // correctness fix, not silent accretion. Ratchet back DOWN when this
+      // file is split; never bump to paper over drift.
+      "SageFs/SageFsApp.fs", 3130
       "SageFs.Core/AppState.fs", 2000
       // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
       // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,
