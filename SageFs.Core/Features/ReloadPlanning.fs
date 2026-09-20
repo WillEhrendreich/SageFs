@@ -6,11 +6,19 @@ module SageFs.Features.ReloadPlanning
 open System
 open Fantomas.FCS.Syntax
 open Fantomas.FCS.Text
+open SageFs.Features.ReloadOutcome
 
 [<RequireQualifiedAccess>]
 type DeclKind =
   | TypeDecl
   | ValueDecl
+  /// A module-level `let mutable`. Kept apart from `ValueDecl` because the two
+  /// fail for opposite reasons and the user acts on each differently: an
+  /// immutable value was COMPUTED once at startup and the app captured the
+  /// result, while a mutable one is live DATA whose current value is the
+  /// running app's state. Telling someone their request counter "is built at
+  /// startup" is true of neither the problem nor the fix.
+  | MutableValueDecl
   | FunctionDecl
   | EntryPointDecl
   | NestedModuleDecl
@@ -53,11 +61,17 @@ type FileDecls = {
 type ReloadChange =
   | TypeChanged of name: string
   | ValueChanged of name: string
+  /// A module-level `let mutable` whose declaration text changed. Its value is
+  /// the running app's live state, not code.
+  | MutableStateChanged of name: string
   | SignatureChanged of name: string
   | EntryPointChanged
   | ModuleChanged of name: string
   | StartupCodeChanged
   | DeclarationRemoved of name: string
+  /// A declaration the running build never had. There is no original to
+  /// re-point, which is a different thing from one that changed.
+  | DeclarationAdded of name: string
   | UsesNonPublicMember of fn: string * memberName: string
 
 [<RequireQualifiedAccess>]
@@ -71,16 +85,55 @@ module ReloadChange =
     match change with
     | ReloadChange.TypeChanged name -> sprintf "type %s changed" name
     | ReloadChange.ValueChanged name -> sprintf "%s changed (it is built at startup)" name
+    | ReloadChange.MutableStateChanged name -> sprintf "%s changed (it is mutable module state)" name
     | ReloadChange.SignatureChanged name -> sprintf "the signature of %s changed" name
     | ReloadChange.EntryPointChanged -> "the entry point changed"
     | ReloadChange.ModuleChanged name -> sprintf "module %s changed" name
     | ReloadChange.StartupCodeChanged -> "startup code changed"
     | ReloadChange.DeclarationRemoved name -> sprintf "%s was removed" name
+    | ReloadChange.DeclarationAdded name -> sprintf "%s was added" name
     | ReloadChange.UsesNonPublicMember (fn, memberName) ->
       sprintf "%s uses %s, which is not public, so it cannot be patched in place" fn memberName
 
   let describeAll (first: ReloadChange) (rest: ReloadChange list) : string =
     first :: rest |> List.map describe |> String.concat "; "
+
+  /// A refusal restated as the SHAPE of the change the user made, which is the
+  /// only vocabulary they can act on. `ReloadChange` names what the diff found;
+  /// `RestartReason` names what it means for the running process. This is the
+  /// one translation between them — every surface that reports a refusal reads
+  /// it from here rather than inventing its own wording.
+  let restartReason (change: ReloadChange) : RestartReason =
+    match change with
+    // Live objects in the running process were laid out by the old definition.
+    | ReloadChange.TypeChanged name -> RestartReason.TypeShapeChanged name
+    // The case users actually hit: `let routes = [ get "/" home ]`, or
+    // `let getHome : HttpHandler = Response.ofHtml (...)`. The value was
+    // computed during module initialisation and the app captured the result.
+    | ReloadChange.ValueChanged name -> RestartReason.StartupComputedValue name
+    // Its value is the app's live state. SageFs refuses to guess between
+    // carrying it forward (which ignores the edit) and resetting it (which
+    // destroys the state) — `MutableModuleState`'s remedy says exactly that.
+    | ReloadChange.MutableStateChanged name -> RestartReason.MutableModuleState name
+    | ReloadChange.SignatureChanged name -> RestartReason.SignatureChanged name
+    // `main` ran once, at process start, and composed everything now serving.
+    | ReloadChange.EntryPointChanged -> RestartReason.StartupComputedValue "[<EntryPoint>] main"
+    // A bare module-level expression runs during module initialisation, same as
+    // a computed value, and its effects are already in the running process.
+    | ReloadChange.StartupCodeChanged -> RestartReason.StartupComputedValue "the module's startup code"
+    // Unimplemented rather than impossible: the planner does not descend into
+    // nested modules yet, so it refuses the whole module.
+    | ReloadChange.ModuleChanged name -> RestartReason.NotYetSupported (sprintf "a change inside module '%s'" name)
+    | ReloadChange.DeclarationRemoved name -> RestartReason.NotYetSupported (sprintf "a removed declaration ('%s')" name)
+    | ReloadChange.DeclarationAdded name -> RestartReason.NewDeclaration name
+    // A patch is compiled in FSI, outside the app's assembly, so it cannot see
+    // the file's own private/internal members. Solvable (InternalsVisibleTo,
+    // re-emitting the member alongside the patch) — unimplemented, not physics.
+    | ReloadChange.UsesNonPublicMember (fn, memberName) ->
+      RestartReason.NotYetSupported (sprintf "'%s', because it uses the non-public '%s'" fn memberName)
+
+  let restartReasons (first: ReloadChange) (rest: ReloadChange list) : RestartReason list =
+    first :: rest |> List.map restartReason
 
 /// A binding whose head takes arguments compiles to a method; anything else is a value.
 let isFunctionHead (pat: SynPat) =
@@ -145,7 +198,7 @@ let private accessOf (access: SynAccess option) : DeclAccess =
   | _ -> DeclAccess.Public
 
 let private bindingDecl (lines: string array) (binding: SynBinding) : SourceDecl =
-  let (SynBinding(attributes = attributes; headPat = pat; trivia = trivia)) = binding
+  let (SynBinding(attributes = attributes; isMutable = isMutable; headPat = pat; trivia = trivia)) = binding
   let keyword = trivia.LeadingKeyword.Range
   let start =
     match attributes with
@@ -156,11 +209,15 @@ let private bindingDecl (lines: string array) (binding: SynBinding) : SourceDecl
     match trivia.EqualsRange with
     | Some eq -> slice lines (keyword.StartLine, keyword.StartColumn) (eq.StartLine, eq.StartColumn)
     | None -> rangeText lines whole
+  // `isMutable` comes from the compiler's own parse, not from the text: a
+  // `let mutable` is not spotted by looking for the word, and a binding that
+  // merely mentions `mutable` in a comment is not one.
   let kind =
-    match isEntryPoint attributes, isFunctionHead pat with
-    | true, _ -> DeclKind.EntryPointDecl
-    | false, true -> DeclKind.FunctionDecl
-    | false, false -> DeclKind.ValueDecl
+    match isEntryPoint attributes, isFunctionHead pat, isMutable with
+    | true, _, _ -> DeclKind.EntryPointDecl
+    | false, true, _ -> DeclKind.FunctionDecl
+    | false, false, true -> DeclKind.MutableValueDecl
+    | false, false, false -> DeclKind.ValueDecl
   { Name = patName lines pat
     Kind = kind
     Access = accessOf (patAccess pat)
@@ -242,6 +299,7 @@ let private changeFor (decl: SourceDecl) =
   match decl.Kind with
   | DeclKind.TypeDecl -> ReloadChange.TypeChanged decl.Name
   | DeclKind.ValueDecl -> ReloadChange.ValueChanged decl.Name
+  | DeclKind.MutableValueDecl -> ReloadChange.MutableStateChanged decl.Name
   | DeclKind.FunctionDecl -> ReloadChange.SignatureChanged decl.Name
   | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
   | DeclKind.NestedModuleDecl -> ReloadChange.ModuleChanged decl.Name
@@ -253,8 +311,22 @@ let private removalFor (decl: SourceDecl) =
   | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
   | DeclKind.TypeDecl
   | DeclKind.ValueDecl
+  | DeclKind.MutableValueDecl
   | DeclKind.FunctionDecl
   | DeclKind.NestedModuleDecl -> ReloadChange.DeclarationRemoved decl.Name
+
+/// A declaration the running build never had. Reported as an ADDITION rather
+/// than as a change, because "type Cfg changed" for a type that did not exist
+/// sends the user looking for a change they never made.
+let private additionFor (decl: SourceDecl) =
+  match decl.Kind with
+  | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
+  | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
+  | DeclKind.TypeDecl
+  | DeclKind.ValueDecl
+  | DeclKind.MutableValueDecl
+  | DeclKind.FunctionDecl
+  | DeclKind.NestedModuleDecl -> ReloadChange.DeclarationAdded decl.Name
 
 [<RequireQualifiedAccess>]
 type private DeclOutcome =
@@ -274,7 +346,7 @@ let private keyed (decls: SourceDecl list) =
 let private outcomeOf (baseline: Map<DeclKind * string * int, SourceDecl>) (key, current: SourceDecl) =
   match Map.tryFind key baseline, current.Kind with
   | None, DeclKind.FunctionDecl -> DeclOutcome.Patch current
-  | None, _ -> DeclOutcome.Restart (changeFor current)
+  | None, _ -> DeclOutcome.Restart (additionFor current)
   | Some before, _ when normalize before.Text = normalize current.Text -> DeclOutcome.Unchanged
   | Some before, DeclKind.FunctionDecl ->
     match normalize before.Header = normalize current.Header with
@@ -551,6 +623,42 @@ let confirmPatch (before: FileDecls) (patched: SourceDecl list) (reloadedMethods
   match notDetoured with
   | first :: rest -> PatchOutcome.RestartNeeded (first, rest)
   | [] -> PatchOutcome.Applied
+
+/// The same confirmation, reported as what it did to the RUNNING PROCESS.
+///
+/// `PatchOutcome.Applied` carries no count, so "applied" was indistinguishable
+/// from "applied nothing" — a patch list of zero, or a patch list none of whose
+/// functions was actually detoured, both read as success, and the browser was
+/// told to refresh into byte-identical code. `ReloadOutcome.ofPatchCounts` is
+/// the only constructor and it routes a count of zero to `NoEffect`, so that
+/// particular lie is no longer expressible.
+///
+/// Every function that did not reach the running process is classified by WHY:
+/// one that existed in the running build and was not re-pointed had its compiled
+/// signature change; one that never existed there has no original to re-point at
+/// all, which is a different problem with a different remedy.
+let confirmPatchAsOutcome (before: FileDecls) (patched: SourceDecl list) (reloadedMethods: string list) : ReloadOutcome =
+  let existed (f: SourceDecl) =
+    before.Decls |> List.exists (fun d -> d.Kind = DeclKind.FunctionDecl && d.Name = f.Name)
+  let detoured (f: SourceDecl) =
+    reloadedMethods |> List.exists (fun m -> m = f.Name || m.EndsWith("." + f.Name, StringComparison.Ordinal))
+  let landed, missed = patched |> List.partition detoured
+  let reasons =
+    missed
+    |> List.map (fun f ->
+      match existed f with
+      | true -> RestartReason.SignatureChanged f.Name
+      | false -> RestartReason.NewDeclaration f.Name)
+  ReloadOutcome.ofPatchCounts (List.length landed) (List.length patched) reasons
+
+/// A plan that refused before any patch was attempted, reported in the same
+/// vocabulary. SageFs does not own the app's lifetime here, so the user is the
+/// one who has to act — which is exactly what `RestartRequired` means.
+/// The outcome type and its companion module share a name, and `open`ing the
+/// namespace-shaped module puts the MODULE in scope for value lookups — so the
+/// union case needs the type spelled out rather than a resolution coin-flip.
+let restartOutcome (first: ReloadChange) (rest: ReloadChange list) : ReloadOutcome =
+  SageFs.Features.ReloadOutcome.ReloadOutcome.RestartRequired (ReloadChange.restartReasons first rest)
 
 /// How a saved source file reaches the process that is running the user's code.
 [<RequireQualifiedAccess>]

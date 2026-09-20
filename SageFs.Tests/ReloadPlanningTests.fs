@@ -65,7 +65,7 @@ let extractDeclsTests =
       |> List.map (fun d -> d.Name, d.Kind)
       |> Expect.equal "kinds in source order"
         [ "TodoItem", DeclKind.TypeDecl
-          "todos", DeclKind.ValueDecl
+          "todos", DeclKind.MutableValueDecl
           "render", DeclKind.FunctionDecl
           "getHome", DeclKind.ValueDecl
           "main", DeclKind.EntryPointDecl ]
@@ -296,7 +296,7 @@ let exactSymbolResolutionTests =
 let private namePool = [ "alpha"; "beta"; "gamma"; "delta"; "epsilon"; "zeta"; "eta"; "theta" ]
 
 let private allKinds =
-  [ DeclKind.TypeDecl; DeclKind.ValueDecl; DeclKind.FunctionDecl
+  [ DeclKind.TypeDecl; DeclKind.ValueDecl; DeclKind.MutableValueDecl; DeclKind.FunctionDecl
     DeclKind.EntryPointDecl; DeclKind.NestedModuleDecl; DeclKind.StartupCode ]
 
 /// A body that may mention other declarations by name, so the
@@ -319,6 +319,7 @@ let private mkDecl (name: string) (kind: DeclKind) (access: DeclAccess) (body: s
     match kind with
     | DeclKind.FunctionDecl -> sprintf "let %s%s x" accessText name, sprintf "let %s%s x = %s" accessText name body
     | DeclKind.ValueDecl -> sprintf "let %s%s" accessText name, sprintf "let %s%s = %s" accessText name body
+    | DeclKind.MutableValueDecl -> sprintf "let mutable %s%s" accessText name, sprintf "let mutable %s%s = %s" accessText name body
     | DeclKind.EntryPointDecl -> sprintf "let %s args" name, sprintf "[<EntryPoint>]\nlet %s args = %s" name body
     | DeclKind.TypeDecl -> "", sprintf "type %s%s = { Value: int } // %s" accessText name body
     | DeclKind.NestedModuleDecl -> "", sprintf "module %s%s =\n  let inner = %s" accessText name body
@@ -373,6 +374,7 @@ let private expectedChangeFor (d: SourceDecl) =
   match d.Kind with
   | DeclKind.TypeDecl -> ReloadChange.TypeChanged d.Name
   | DeclKind.ValueDecl -> ReloadChange.ValueChanged d.Name
+  | DeclKind.MutableValueDecl -> ReloadChange.MutableStateChanged d.Name
   | DeclKind.FunctionDecl -> ReloadChange.SignatureChanged d.Name
   | DeclKind.EntryPointDecl -> ReloadChange.EntryPointChanged
   | DeclKind.NestedModuleDecl -> ReloadChange.ModuleChanged d.Name
@@ -385,6 +387,7 @@ let private expectedRemovalFor (d: SourceDecl) =
   | DeclKind.StartupCode -> ReloadChange.StartupCodeChanged
   | DeclKind.TypeDecl
   | DeclKind.ValueDecl
+  | DeclKind.MutableValueDecl
   | DeclKind.FunctionDecl
   | DeclKind.NestedModuleDecl -> ReloadChange.DeclarationRemoved d.Name
 

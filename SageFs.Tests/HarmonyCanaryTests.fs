@@ -87,7 +87,7 @@ let integrationTests = testList "HarmonyCanary integration" [
     // Reset health tracker so we can observe transitions
     DevReloadHealthTracker.reset()
     try
-      detourMethod logger original replacement
+      detourMethod logger original replacement |> ignore
     with
     | :? InvalidProgramException as ex ->
       skiptest (

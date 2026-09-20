@@ -199,7 +199,27 @@ let validateDetourCanary (jitAddr: nativeint) (preBytes: byte[]) : CanaryResult 
   with ex ->
     CanaryError ex
 
-let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase) =
+/// What one call to `detourMethod` actually did to the running process.
+///
+/// It used to return `unit`, so a detour that threw was indistinguishable from
+/// one that landed, and the caller reported BOTH as "reloaded". That is the same
+/// class of lie `ReloadOutcome` exists to stop, one layer down.
+[<RequireQualifiedAccess>]
+type DetourApplied =
+  /// The entry point now jumps to the new code.
+  | Redirected
+  /// Harmony accepted the patch but the native code bytes did not change. The
+  /// method is still counted as redirected (the canary is a warning signal, not
+  /// a verdict) but the reason is carried so a caller can say so.
+  | Ineffective of reason: string
+  /// The old copy is unreachable anyway — a stale FSI compilation unit whose
+  /// type will not load, or one whose initializer already failed. The new
+  /// definition supersedes it, so no detour is needed and none is missing.
+  | Superseded of reason: string
+  /// The detour did not happen and the old code is still live.
+  | Failed of reason: string
+
+let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase) : DetourApplied =
   try
     // Snapshot pre-detour observable state for canary validation
     let preSnapshot = snapshotMethodState method
@@ -218,6 +238,7 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
       match validateDetourCanary jitAddr preBytes with
       | DetourConfirmed ->
         logger.LogDebug (sprintf "Canary confirmed: detour for %s is active" method.Name)
+        DetourApplied.Redirected
       | BytesUnchanged ->
         let msg =
           sprintf "Canary warning: native code unchanged after detour for %s — patch may be ineffective"
@@ -225,10 +246,13 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
         logger.LogWarning msg
         DevReloadHealthTracker.transition
           (DevReloadHealth.Degraded (sprintf "Canary: bytes unchanged for %s" method.Name))
+        DetourApplied.Ineffective (sprintf "native code unchanged after the detour for %s" method.Name)
       | CanaryError ex ->
         logger.LogWarning (sprintf "Canary validation error for %s: %s" method.Name ex.Message)
+        DetourApplied.Redirected
     | None ->
       logger.LogDebug (sprintf "Canary skipped: could not snapshot pre-detour bytes for %s" method.Name)
+      DetourApplied.Redirected
   with
   | :? TargetInvocationException as ex when
     (ex.InnerException :? PlatformNotSupportedException) ->
@@ -236,15 +260,24 @@ let detourMethod (logger: ILogger) (method: MethodBase) (replacement: MethodBase
     let msg = sprintf "Hot-reload detour failed: PlatformNotSupportedException for %s. MonoMod may not support this runtime." method.Name
     logger.LogWarning msg
     DevReloadHealthTracker.transition (DevReloadHealth.Degraded "MonoMod PlatformNotSupportedException")
+    DetourApplied.Failed (sprintf "MonoMod cannot patch %s on this runtime" method.Name)
   | :? TargetInvocationException as ex when
     (ex.InnerException :? TypeLoadException) ->
     // FSI compilation units can become unloadable when types are redefined across
     // eval boundaries (FSI_0020 etc). This is benign — the new definition supersedes
     // the old one, so the detour is unnecessary. Log and continue.
     logger.LogDebug (sprintf "Hot-reload detour skipped (stale FSI type): %s — %s" method.Name ex.InnerException.Message)
+    DetourApplied.Superseded (sprintf "stale FSI type for %s" method.Name)
   | :? TargetInvocationException as ex when
     (ex.InnerException :? TypeInitializationException) ->
     logger.LogDebug (sprintf "Hot-reload detour skipped (type init failure): %s — %s" method.Name ex.InnerException.Message)
+    DetourApplied.Superseded (sprintf "type initializer for %s already failed" method.Name)
+  | ex ->
+    // Chesterton's fence, inverted: there was NO catch-all here, so an unexpected
+    // failure propagated out of the per-method loop and took the whole eval's
+    // remaining detours with it — leaving the app half-reloaded with no report.
+    logger.LogWarning (sprintf "Hot-reload detour failed for %s: %s" method.Name ex.Message)
+    DetourApplied.Failed (sprintf "%s: %s" method.Name ex.Message)
 
 /// Pairs each older method with a same-named, compatible method offered by the
 /// evaluated assembly: the older entry point gets detoured onto the newer one.
@@ -271,6 +304,327 @@ let planDetours
       candidates
       |> List.filter (fun old -> old.MethodInfo <> newMethod.MethodInfo && compatible old newMethod)
       |> List.map (fun old -> old, newMethod))
+
+// ── Accessor pairs ────────────────────────────────────────────────────────────
+//
+// A module-level `let mutable x` does NOT compile to a field load at the use
+// site: F# emits a `get_x`/`set_x` pair of static methods over a backing field
+// on a separate synthetic type, and every ordinary read and write in user code —
+// including inside a closure captured into a startup route table — goes through
+// them. That is why a detour reaches mutable module state at all.
+//
+// It is also why half a redirect is worse than none. MEASURED on this machine
+// (net10.0 linux-x64, Debug, 400k warming iterations, the same
+// PatchTools.DetourMethod used below), re-pointing one leg at a re-evaluated
+// copy of the module:
+//
+//   both legs     read NEW field, write NEW field   — coherent
+//   getter only   read NEW field, write OLD field   — every write is LOST
+//   setter only   read OLD field, write NEW field   — every write is LOST
+//
+// Nothing throws, nothing logs, and the value simply refuses to change. So the
+// plan is built so a half-moved binding cannot be expressed: the getter and the
+// setter of one binding live in ONE record that cannot hold a getter without a
+// setter, and a binding that could not form a complete pair is declined by name.
+
+/// Which leg of a binding's accessor pair a method is, named by the QUALIFIED
+/// binding (`Demo.App.Config.port`) so two modules' same-named bindings are
+/// never confused for each other.
+[<RequireQualifiedAccess>]
+type AccessorRole =
+  | Getter of binding: string
+  | Setter of binding: string
+  | Plain
+
+let accessorRole (m: Method) : AccessorRole =
+  let name = m.MethodInfo.Name
+  let qualify (bare: string) =
+    match m.FullName.LastIndexOf '.' with
+    | -1 -> bare
+    | dot -> m.FullName.Substring(0, dot + 1) + bare
+  match name.StartsWith("get_", StringComparison.Ordinal), name.StartsWith("set_", StringComparison.Ordinal) with
+  | true, _ -> AccessorRole.Getter(qualify (name.Substring 4))
+  | _, true -> AccessorRole.Setter(qualify (name.Substring 4))
+  | _ -> AccessorRole.Plain
+
+/// The qualified bindings the RUNNING code can write to. It is the running
+/// code's setters that matter: those are the writes that would start landing in
+/// a field nobody reads.
+let settableBindingsOf (existing: Map<string, Method list>) : Set<string> =
+  existing
+  |> Map.toSeq
+  |> Seq.collect snd
+  |> Seq.choose (fun m ->
+    match accessorRole m with
+    | AccessorRole.Setter binding -> Some binding
+    | AccessorRole.Getter _
+    | AccessorRole.Plain -> None)
+  |> Set.ofSeq
+
+/// Which leg was left without a partner. Both directions tear identically; the
+/// distinction is kept because it tells the user what changed about their code
+/// (a `let mutable` that became a `let`, or the reverse).
+[<RequireQualifiedAccess>]
+type OrphanedLeg =
+  | GetterWithoutSetter
+  | SetterWithoutGetter
+
+type DeclinedBinding = {
+  Binding: string
+  Orphan: OrphanedLeg
+}
+
+module OrphanedLeg =
+  let describe =
+    function
+    | OrphanedLeg.GetterWithoutSetter ->
+      "only its getter could be re-pointed; its setter had no counterpart in the new code"
+    | OrphanedLeg.SetterWithoutGetter ->
+      "only its setter could be re-pointed; its getter had no counterpart in the new code"
+
+/// Both legs of one mutable binding, and never fewer. The head-and-rest shape is
+/// the point: there is no way to construct this record with an empty getter list
+/// or an empty setter list, so "redirected the getter but not the setter" is not
+/// a state the planner can hand to the applier.
+type AccessorPairDetour = {
+  Binding: string
+  FirstGetter: Method * Method
+  MoreGetters: (Method * Method) list
+  FirstSetter: Method * Method
+  MoreSetters: (Method * Method) list
+} with
+
+  member this.Getters = this.FirstGetter :: this.MoreGetters
+  member this.Setters = this.FirstSetter :: this.MoreSetters
+  /// Every (older, newer) pair this binding must move as one.
+  member this.Legs = this.Getters @ this.Setters
+
+/// Everything one eval will do to the running process, separated so the applier
+/// cannot treat an accessor as an ordinary method by accident.
+type DetourPlan = {
+  Functions: (Method * Method) list
+  MutableBindings: AccessorPairDetour list
+  Declined: DeclinedBinding list
+}
+
+[<RequireQualifiedAccess>]
+type private PairRole =
+  | MutableGetter of binding: string
+  | MutableSetter of binding: string
+  | PlainFunction
+
+/// Groups raw `planDetours` pairs so that every accessor of a settable binding
+/// is either part of a complete pair or declined — never applied alone.
+///
+/// A getter whose binding has no setter in the running code is an ordinary
+/// value accessor (`let x = ...`): there is no writer anywhere, so there is
+/// nothing to tear, and it is redirected like any other method.
+let planDetourUnits (settable: Set<string>) (pairs: (Method * Method) list) : DetourPlan =
+  let roleOf (older: Method, _) =
+    match accessorRole older with
+    | AccessorRole.Getter binding when Set.contains binding settable -> PairRole.MutableGetter binding
+    | AccessorRole.Setter binding when Set.contains binding settable -> PairRole.MutableSetter binding
+    | AccessorRole.Getter _
+    | AccessorRole.Setter _
+    | AccessorRole.Plain -> PairRole.PlainFunction
+
+  let tagged = pairs |> List.map (fun pair -> roleOf pair, pair)
+
+  let functions =
+    tagged
+    |> List.choose (function
+      | PairRole.PlainFunction, pair -> Some pair
+      | _ -> None)
+
+  let legs role =
+    tagged
+    |> List.choose (fun (r, pair) ->
+      match role r with
+      | Some binding -> Some(binding, pair)
+      | None -> None)
+
+  let getters =
+    legs (function
+      | PairRole.MutableGetter b -> Some b
+      | _ -> None)
+
+  let setters =
+    legs (function
+      | PairRole.MutableSetter b -> Some b
+      | _ -> None)
+
+  let forBinding (xs: (string * (Method * Method)) list) binding =
+    xs |> List.filter (fst >> (=) binding) |> List.map snd
+
+  let units, declined =
+    (getters @ setters)
+    |> List.map fst
+    |> List.distinct
+    |> List.fold
+      (fun (units, declined) binding ->
+        match forBinding getters binding, forBinding setters binding with
+        | g :: gs, s :: ss ->
+          units
+          @ [ { Binding = binding
+                FirstGetter = g
+                MoreGetters = gs
+                FirstSetter = s
+                MoreSetters = ss } ],
+          declined
+        | _ :: _, [] -> units, declined @ [ { Binding = binding; Orphan = OrphanedLeg.GetterWithoutSetter } ]
+        | [], _ :: _ -> units, declined @ [ { Binding = binding; Orphan = OrphanedLeg.SetterWithoutGetter } ]
+        | [], [] -> units, declined)
+      ([], [])
+
+  { Functions = functions
+    MutableBindings = units
+    Declined = declined }
+
+/// What applying one mutable binding's pair did.
+[<RequireQualifiedAccess>]
+type BindingOutcome =
+  /// Reads and writes both moved. The running process is coherent.
+  | BothLegsRedirected of binding: string
+  /// Neither leg was touched, so the running process still reads and writes the
+  /// SAME field it always did. Nothing is lost; the edit just did not land.
+  | NeitherLegRedirected of binding: string * reason: string
+  /// One leg moved and another did not. This is the state the whole design
+  /// exists to prevent, so it is reported as loudly as it can be rather than
+  /// swallowed: from here on, writes to this binding disappear.
+  | Torn of binding: string * reason: string
+
+/// Everything one eval did, in the vocabulary a user-facing outcome needs.
+type DetourReport = {
+  /// Full names of the older methods whose entry points now jump to new code.
+  Redirected: string list
+  Bindings: BindingOutcome list
+  Declined: DeclinedBinding list
+  /// Detours that were planned and did not happen.
+  Failures: string list
+}
+
+/// Forces everything a detour will touch to resolve BEFORE any leg is written:
+/// the parameter and return types (which throw `TypeLoadException` for a stale
+/// FSI compilation unit) and the JIT-compiled body. A binding that is going to
+/// fail should fail here, where declining is still free — once one leg is
+/// written there is no way back.
+let private preflight (m: Method) : Result<unit, string> =
+  try
+    m.MethodInfo.GetParameters() |> Array.iter (fun p -> p.ParameterType |> ignore)
+    m.MethodInfo.ReturnType |> ignore
+    RuntimeHelpers.PrepareMethod m.MethodInfo.MethodHandle
+    Ok()
+  with ex ->
+    Error(sprintf "%s is not patchable (%s: %s)" m.FullName (ex.GetType().Name) ex.Message)
+
+let private applyBindingDetour (logger: ILogger) (unit: AccessorPairDetour) : BindingOutcome =
+  let preflightFailures =
+    unit.Legs
+    |> List.collect (fun (older, newer) -> [ preflight older; preflight newer ])
+    |> List.choose (function
+      | Error reason -> Some reason
+      | Ok() -> None)
+
+  match preflightFailures with
+  | reason :: _ -> BindingOutcome.NeitherLegRedirected(unit.Binding, reason)
+  | [] ->
+    let applied =
+      unit.Legs
+      |> List.map (fun (older, newer) ->
+        logger.LogDebug("Updating accessor " + older.FullName)
+        detourMethod logger older.MethodInfo newer.MethodInfo)
+
+    let failures =
+      applied
+      |> List.choose (function
+        | DetourApplied.Failed reason -> Some reason
+        | DetourApplied.Redirected
+        | DetourApplied.Ineffective _
+        | DetourApplied.Superseded _ -> None)
+
+    let anyLanded =
+      applied
+      |> List.exists (function
+        | DetourApplied.Failed _ -> false
+        | DetourApplied.Redirected
+        | DetourApplied.Ineffective _
+        | DetourApplied.Superseded _ -> true)
+
+    match failures, anyLanded with
+    | [], _ -> BindingOutcome.BothLegsRedirected unit.Binding
+    | reason :: _, false -> BindingOutcome.NeitherLegRedirected(unit.Binding, reason)
+    | reason :: _, true -> BindingOutcome.Torn(unit.Binding, reason)
+
+let applyDetourPlan (logger: ILogger) (plan: DetourPlan) : DetourReport =
+  let functionResults =
+    plan.Functions
+    |> List.map (fun (older, newer) ->
+      logger.LogDebug("Updating method " + older.FullName)
+      older, detourMethod logger older.MethodInfo newer.MethodInfo)
+
+  let redirectedFunctions =
+    functionResults
+    |> List.choose (fun (older, applied) ->
+      match applied with
+      | DetourApplied.Redirected
+      | DetourApplied.Ineffective _
+      | DetourApplied.Superseded _ -> Some older.FullName
+      | DetourApplied.Failed _ -> None)
+
+  let functionFailures =
+    functionResults
+    |> List.choose (fun (_, applied) ->
+      match applied with
+      | DetourApplied.Failed reason -> Some reason
+      | _ -> None)
+
+  let outcomes = plan.MutableBindings |> List.map (applyBindingDetour logger)
+
+  let redirectedBindings =
+    List.zip plan.MutableBindings outcomes
+    |> List.collect (fun (unit, outcome) ->
+      match outcome with
+      | BindingOutcome.BothLegsRedirected _ -> unit.Legs |> List.map (fun (older, _) -> older.FullName)
+      | BindingOutcome.NeitherLegRedirected _
+      | BindingOutcome.Torn _ -> [])
+
+  for outcome in outcomes do
+    match outcome with
+    | BindingOutcome.BothLegsRedirected binding ->
+      logger.LogDebug(sprintf "Hot reload re-pointed both accessors of %s" binding)
+    | BindingOutcome.NeitherLegRedirected(binding, reason) ->
+      logger.LogWarning(
+        sprintf
+          "Hot reload left '%s' alone: %s. Re-pointing one accessor of a mutable binding without the other silently discards every later write, so neither was re-pointed. Restart the app to pick this change up."
+          binding
+          reason)
+    | BindingOutcome.Torn(binding, reason) ->
+      logger.LogError(
+        sprintf
+          "Hot reload TORE '%s': %s. One accessor was re-pointed and another was not, so writes to '%s' now land in a field nothing reads. Restart the app."
+          binding
+          reason
+          binding)
+      DevReloadHealthTracker.transition (DevReloadHealth.Degraded(sprintf "Torn accessor pair for %s" binding))
+
+  for declined in plan.Declined do
+    logger.LogWarning(
+      sprintf
+        "Hot reload declined '%s': %s. Re-pointing one accessor of a mutable binding without the other silently discards every later write, so neither was re-pointed. Restart the app to pick this change up."
+        declined.Binding
+        (OrphanedLeg.describe declined.Orphan))
+
+  let bindingFailures =
+    outcomes
+    |> List.choose (function
+      | BindingOutcome.BothLegsRedirected _ -> None
+      | BindingOutcome.NeitherLegRedirected(binding, reason)
+      | BindingOutcome.Torn(binding, reason) -> Some(sprintf "%s: %s" binding reason))
+
+  { Redirected = redirectedFunctions @ redirectedBindings
+    Bindings = outcomes
+    Declined = plan.Declined
+    Failures = functionFailures @ bindingFailures }
 
 let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newMethod: Method) =
   // Chesterton's fence: .ParameterType/.ReturnType can throw
@@ -342,21 +696,29 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
     // reference types from older FSI compilation units that were redefined.
     // This MUST be gated behind hotReloadEnabled. Without this gate, every normal
     // REPL eval (define type in block 1, use it in block 2) triggers the exception.
-    let replacementPairs =
+    let detourPlan =
       match hotReloadEnabled with
-      | false -> []
+      | false ->
+        { Functions = []
+          MutableBindings = []
+          Declined = [] }
       | true ->
         let known =
           Collections.Generic.HashSet<MethodInfo>(st.Methods |> Map.toSeq |> Seq.collect snd |> Seq.map _.MethodInfo)
+
         planDetours (fun m -> not (known.Contains m.MethodInfo)) (compatibleForDetour logger) newMethods st.Methods
+        |> planDetourUnits (settableBindingsOf st.Methods)
 
-    // Apply Harmony detours — already gated by replacementPairs being [] when disabled.
-    for methodToReplace, newMethod in replacementPairs do
-      logger.LogDebug <| "Updating method " + methodToReplace.FullName
-      detourMethod logger methodToReplace.MethodInfo newMethod.MethodInfo
+    // Apply Harmony detours — already gated by an empty plan when disabled. Only
+    // the detours that ACTUALLY landed are reported: a method that threw on the
+    // way in used to be listed as reloaded, which made `confirmPatch` confirm a
+    // patch that never reached the running process.
+    let report = applyDetourPlan logger detourPlan
 
-    { st with LastAssembly = Some asm; Methods = mergedMethods },
-    List.map (fst >> _.FullName) replacementPairs
+    { st with
+        LastAssembly = Some asm
+        Methods = mergedMethods },
+    report.Redirected
 
 let getOpenModules (replCode: string) st =
   let modules =

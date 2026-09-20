@@ -143,7 +143,7 @@ let resilienceTests = testList "detour resilience" [
     // the canary + error handling don't crash on normal inputs.
     let m = typeof<SnapshotOnlyTarget>.GetMethod("Execute")
     try
-      detourMethod nullLogger m m
+      detourMethod nullLogger m m |> ignore
     with ex ->
       failwithf "detourMethod should not propagate: %s" ex.Message
 ]
