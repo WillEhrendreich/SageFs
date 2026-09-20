@@ -142,6 +142,16 @@ type RemoteFsiSession(host: FsiHostSession, started: HostAgent.AgentStarted) =
       | Answered report -> HostAgent.AgentAnswered report
       | HostGone reason -> HostAgent.AgentUnavailable reason
 
+    member _.TakeCoverage() =
+      match wait (host.AgentTakeCoverage()) with
+      | Answered coverage -> HostAgent.AgentAnswered coverage
+      | HostGone reason -> HostAgent.AgentUnavailable reason
+
+    member _.LoadedAssemblyNames() =
+      match wait (host.AgentLoadedAssemblies()) with
+      | Answered names -> HostAgent.AgentAnswered names
+      | HostGone reason -> HostAgent.AgentUnavailable reason
+
     member _.DiscoverLoaded() =
       match wait (host.AgentDiscoverLoaded()) with
       | Answered discovery -> HostAgent.AgentAnswered discovery

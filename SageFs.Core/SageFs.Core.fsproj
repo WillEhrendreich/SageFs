@@ -65,6 +65,7 @@
         <EmbeddedResource Include="../SageFs.FsiHost/ConfigDsl.fs" LogicalName="FsiHost/ConfigDsl.fs" />
         <EmbeddedResource Include="Features\LiveValueTree.fs" LogicalName="FsiHost/LiveValueTree.fs" />
         <EmbeddedResource Include="Features\LiveTestingTypes.fs" LogicalName="FsiHost/LiveTestingTypes.fs" />
+        <EmbeddedResource Include="Features\CoverageProbes.fs" LogicalName="FsiHost/CoverageProbes.fs" />
         <EmbeddedResource Include="Features\LiveTestingInstrumentation.fs" LogicalName="FsiHost/LiveTestingInstrumentation.fs" />
         <EmbeddedResource Include="Features\ReflectionDiscovery.fs" LogicalName="FsiHost/ReflectionDiscovery.fs" />
         <EmbeddedResource Include="Features\LiveTestingExecutors.fs" LogicalName="FsiHost/LiveTestingExecutors.fs" />
@@ -88,6 +89,7 @@
         <Compile Include="Features\LandingCache.fs" />
         <Compile Include="Features\LiveTestActivity.fs" />
         <Compile Include="Features\TestCachePersistence.fs" />
+        <Compile Include="Features\CoverageProbes.fs" />
         <Compile Include="Features\CoverageInstrumenter.fs" />
         <Compile Include="Features\LiveTestingInstrumentation.fs" />
         <Compile Include="Features\ReflectionDiscovery.fs" />

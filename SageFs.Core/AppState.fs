@@ -937,10 +937,14 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
       sln.Projects
       |> List.map (fun p -> Path.GetFileNameWithoutExtension p.TargetPath)
       |> List.distinct
+    // The user's assemblies live in the session's process (the isolated host, normally), not necessarily in this one.
     let loadedAssemblyNames =
-      System.AppDomain.CurrentDomain.GetAssemblies()
-      |> Array.map (fun a -> a.GetName().Name)
-      |> Array.toList
+      match fsiSession.LoadedAssemblyNames() with
+      | HostAgent.AgentAnswered names -> names
+      | HostAgent.AgentUnavailable reason ->
+        let msg = sprintf "Warmup verification failed: the session could not report what it loaded: %s" reason
+        logger.LogError (sprintf "  ❌ %s" msg)
+        failwith msg
     match WarmUp.classifyAssemblyLoad expectedAssemblies loadedAssemblyNames with
     | WarmUp.AllExpectedLoaded -> ()
     | WarmUp.PartiallyLoaded missing ->
@@ -1009,9 +1013,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
 /// Default is `buildPipeline`. Tracing module provides an instrumented alternative.
 type PipelineBuildFn = Middleware list -> MiddlewareNext -> MiddlewareNext
 
-let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) =
-  // Where this worker's FSI sessions live: in this process, or (opt-in) in an isolated host process.
-  let sessionKind = SessionKinds.fromEnvironmentWith Environment.GetEnvironmentVariable
+let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) =
   let diagnosticsChangedEvent = Event<Features.DiagnosticsStore.T>()
   let emit evt = try onEvent evt with ex -> logger.LogWarning (sprintf "Event emission failed: %s" ex.Message)
 
@@ -1978,19 +1980,12 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
   let getStatusMessage () =
     let snap = System.Threading.Volatile.Read(&latestSnapshot)
     SessionPhase.statusMessage snap.Phase
-  // The session's agent scans the process its user's code lives in; a session that is not active has none to ask.
-  let inactive = HostAgent.AgentUnavailable "the session is not active"
-  let sessionAgent : SessionAgent.SessionAgent =
-    { DiscoverLoaded =
-        fun () ->
-          match (System.Threading.Volatile.Read(&latestSnapshot)).Phase with
-          | Active (st, _) when not (isNull (box st.Session)) -> st.Session.DiscoverLoaded()
-          | _ -> inactive
-      RunTest =
-        fun test ->
-          match (System.Threading.Volatile.Read(&latestSnapshot)).Phase with
-          | Active (st, _) when not (isNull (box st.Session)) -> st.Session.RunTest test
-          | _ -> async { return inactive } }
+  // The session's agent lives where its user's code lives; a session that is not active has none to ask.
+  let sessionAgent =
+    SessionAgent.ofCurrentSession (fun () ->
+      match (System.Threading.Volatile.Read(&latestSnapshot)).Phase with
+      | Active (st, _) -> st.Session
+      | _ -> null)
   let cancelCurrentEval () =
     actor.PostAndAsyncReply(fun reply -> CancelEval reply)
     |> Async.StartAsTask

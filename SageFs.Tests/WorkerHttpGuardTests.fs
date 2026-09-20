@@ -38,6 +38,7 @@ let private startTestServer (executed: int ref) : Task<WorkerHttpTransport.HttpW
     WorkerHttpTransport.startServer
       handler stateRef projectFiles (fun () -> WarmupContext.empty)
       (fun () -> fun _tc -> async { return Features.LiveTesting.TestResult.NotRun })
+      (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage)
       0
   return server
 }
@@ -57,6 +58,7 @@ let private startCountingServer (reached: int ref) : Task<WorkerHttpTransport.Ht
     WorkerHttpTransport.startServer
       handler (ref HotReloadState.empty) [] (fun () -> WarmupContext.empty)
       (fun () -> fun _tc -> async { return Features.LiveTesting.TestResult.NotRun })
+      (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage)
       0
   return server
 }

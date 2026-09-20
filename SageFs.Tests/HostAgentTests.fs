@@ -68,6 +68,29 @@ let tests =
       }
     ]
 
+    testList "TakeCoverage" [
+      testCase "a process with nothing instrumented has no coverage to take" <| fun _ ->
+        Expect.equal "none" NoCoverage (Agent(emptyInit, nothingLoaded).TakeCoverage())
+
+      testCase "assemblies without the coverage tracker report none, and taking twice changes nothing" <| fun _ ->
+        let agent = Agent(emptyInit, { nothingLoaded with Loaded = fun () -> [| typeof<string>.Assembly |] })
+        Expect.equal "none" NoCoverage (agent.TakeCoverage())
+        Expect.equal "still none" NoCoverage (agent.TakeCoverage())
+    ]
+
+    testList "LoadedAssemblyNames" [
+      testCase "names exactly the assemblies the process has loaded, sorted and without duplicates" <| fun _ ->
+        let assemblies = [| typeof<string>.Assembly; typeof<Expecto.TestCode>.Assembly; typeof<string>.Assembly |]
+        let agent = Agent(emptyInit, { nothingLoaded with Loaded = fun () -> assemblies })
+        let names = agent.LoadedAssemblyNames()
+        Expect.contains "Expecto is named" "Expecto" names
+        Expect.equal "sorted" (List.sort names) names
+        Expect.equal "distinct" (List.distinct names) names
+
+      testCase "a process that has loaded nothing names nothing" <| fun _ ->
+        Expect.isEmpty "none" (Agent(emptyInit, nothingLoaded).LoadedAssemblyNames())
+    ]
+
     testList "DiscoverLoaded" [
       testCase "a process with no test framework loaded discovers nothing" <| fun _ ->
         let agent = Agent(emptyInit, nothingLoaded)

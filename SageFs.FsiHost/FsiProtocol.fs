@@ -116,6 +116,10 @@ type Request =
   | AgentAfterEval of id: int64 * request: HostAgent.AfterEval
   /// Scan what the process has loaded for tests.
   | AgentDiscoverLoaded of id: int64
+  /// The simple names of the assemblies the process has loaded.
+  | AgentLoadedAssemblies of id: int64
+  /// The coverage recorded since the last take (resets it).
+  | AgentTakeCoverage of id: int64
   /// Run one test. Runs beside the session thread, so a long test never blocks evals or completions.
   | AgentRunTest of id: int64 * test: LiveTesting.TestCase
   | Interrupt
@@ -136,6 +140,8 @@ type Response =
   | AgentAfterEvalResult of id: int64 * report: HostAgent.AfterEvalReport
   | AgentDiscoveryResult of id: int64 * discovery: HostAgent.Discovery
   | AgentTestResult of id: int64 * result: LiveTesting.TestResult
+  | AgentLoadedAssembliesResult of id: int64 * names: string list
+  | AgentCoverageResult of id: int64 * coverage: HostAgent.CoverageReading
   /// An agent request the host cannot serve (it was not started, or the request failed): the reason, never a guess.
   | AgentRefused of id: int64 * reason: string
   | Output of stream: OutputStream * text: string

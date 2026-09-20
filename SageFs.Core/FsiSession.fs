@@ -48,6 +48,10 @@ type IFsiSession =
   /// The agent's work after an eval: redefined methods (detoured when asked) and the tests found. The agent runs where
   /// the user's code runs, so this is an in-process call or a message to the isolated host.
   abstract AfterEval: AfterEval -> AgentReply<AfterEvalReport>
+  /// The coverage the instrumented assemblies recorded since the last take (and reset it).
+  abstract TakeCoverage: unit -> AgentReply<CoverageReading>
+  /// The simple names of the assemblies the session's process has loaded.
+  abstract LoadedAssemblyNames: unit -> AgentReply<string list>
   /// Scan what the session's process has loaded for tests.
   abstract DiscoverLoaded: unit -> AgentReply<Discovery>
   /// Run one discovered test where it lives.
@@ -131,6 +135,10 @@ type InProcessFsiSession(session: FsiEvaluationSession, init: AgentInit) =
     member _.AgentStarted = AgentAnswered agent.Started
 
     member _.AfterEval(request) = AgentAnswered(agent.AfterEval request)
+
+    member _.TakeCoverage() = AgentAnswered(agent.TakeCoverage())
+
+    member _.LoadedAssemblyNames() = AgentAnswered(agent.LoadedAssemblyNames())
 
     member _.DiscoverLoaded() = AgentAnswered(agent.DiscoverLoaded())
 

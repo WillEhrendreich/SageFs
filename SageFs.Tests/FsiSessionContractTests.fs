@@ -82,6 +82,8 @@ type Capability =
   | Disposal
   | HotReload
   | LiveTesting
+  | LoadedAssemblies
+  | Coverage
 
 let private eval (session: IFsiSession) (code: string) = session.Eval(code, CancellationToken.None)
 
@@ -225,6 +227,18 @@ let contract (label: string) (create: unit -> Async<IFsiSession>) (notYet: Capab
         | SageFs.Features.LiveTesting.TestResult.Failed _ -> ()
         | other -> failtestf "expected fails to fail, got %A" other
       })
+
+    case Coverage "a session with nothing instrumented has no coverage to take" (fun session ->
+      match session.TakeCoverage() with
+      | AgentAnswered reading -> Expect.equal "nothing instrumented" NoCoverage reading
+      | AgentUnavailable reason -> failtestf "the agent was unavailable: %s" reason)
+
+    case LoadedAssemblies "LoadedAssemblyNames sees an assembly the session referenced" (fun session ->
+      mustSucceed session (sprintf "#r @\"%s\"" expectoPath)
+      mustSucceed session "open Expecto\nlet touched = testList \"t\" []"
+      match session.LoadedAssemblyNames() with
+      | AgentAnswered names -> Expect.contains "Expecto was loaded into the session's process" "Expecto" names
+      | AgentUnavailable reason -> failtestf "the agent was unavailable: %s" reason)
 
     caseAsync LiveTesting "an expression-only eval discovers nothing new unless asked to look" (fun session ->
       async {

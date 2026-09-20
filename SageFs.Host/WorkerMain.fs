@@ -536,6 +536,7 @@ let run (sessionId: string) (port: int) = async {
   let actorArgs : ActorCreation.ActorArgs = {
     Middleware = ActorCreation.commonMiddleware
     InitFunctions = ActorCreation.commonInitFunctions
+    FsiKind = SessionKinds.fromEnvironmentWith System.Environment.GetEnvironmentVariable
     Logger = logger
     OutStream = IO.TextWriter.Null
     UseAsp = false
@@ -986,7 +987,7 @@ let run (sessionId: string) (port: int) = async {
     | _ ->
       Log.info "Hot reload: off by default (0 files watched)"
     let! server =
-      WorkerHttpTransport.startServer readyHandler result.HotReloadStateRef projectFiles result.GetWarmupContext getRunTest port
+      WorkerHttpTransport.startServer readyHandler result.HotReloadStateRef projectFiles result.GetWarmupContext getRunTest result.Agent.TakeCoverage port
       |> Async.AwaitTask
     // Print actual port to stdout so daemon can discover it
     printfn "WORKER_PORT=%s" server.BaseUrl

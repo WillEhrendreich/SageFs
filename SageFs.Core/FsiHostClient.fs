@@ -128,6 +128,8 @@ type FsiHostSession
           | Result.Ok(AgentAfterEvalResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentDiscoveryResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentTestResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentLoadedAssembliesResult(id, _) as answer) -> complete id answer
+          | Result.Ok(AgentCoverageResult(id, _) as answer) -> complete id answer
           | Result.Ok(AgentRefused(id, _) as answer) -> complete id answer
     with ex ->
       onLog (sprintf "[fsihost] read loop ended: %s" ex.Message)
@@ -288,6 +290,26 @@ type FsiHostSession
       | Got(AgentDiscoveryResult(_, discovery)) -> return Answered discovery
       | Got(AgentRefused(_, reason)) -> return HostGone reason
       | Got other -> return HostGone(unexpected "agent discovery" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// The coverage the host process recorded since the last take.
+  member _.AgentTakeCoverage() : Async<HostCall<SageFs.HostAgent.CoverageReading>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentTakeCoverage id) with
+      | Got(AgentCoverageResult(_, coverage)) -> return Answered coverage
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent coverage" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// The simple names of the assemblies the host process has loaded.
+  member _.AgentLoadedAssemblies() : Async<HostCall<string list>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> AgentLoadedAssemblies id) with
+      | Got(AgentLoadedAssembliesResult(_, names)) -> return Answered names
+      | Got(AgentRefused(_, reason)) -> return HostGone reason
+      | Got other -> return HostGone(unexpected "agent loaded-assemblies" other)
       | Gone reason -> return HostGone reason
     }
 

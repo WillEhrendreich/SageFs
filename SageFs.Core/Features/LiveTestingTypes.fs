@@ -983,7 +983,7 @@ module RunGeneration =
 type TestRunPhase =
   | Idle
   | Running of generation: RunGeneration
-  | RunningButEdited of generation: RunGeneration
+  | RunningButEdited of editedGeneration: RunGeneration
 
 /// Why did results arrive the way they did?
 [<Struct>]

@@ -105,12 +105,11 @@ let dogfoodReplTests =
         | Error err -> failtestf "eval failed: %s" (SageFsError.describe err)
         | Ok output ->
           let normalized = output.Replace('\\', '/')
-          // Evidence that HostCoreAdoption.materialize actually ran: the
-          // REPL's SageFs.Core resolves out of the per-session private host
-          // directory the daemon materializes for a project that ships its
-          // own build, not out of the shared/original host closure.
-          normalized.Contains "sagefs-host-adopt-"
-          |> Expect.isTrue (sprintf "SageFs.Core must resolve to the per-session materialized private host copy (see HostCoreAdoption), got: %s" output))
+          // Sessions are isolated by default: the FSI host contains no SageFs assembly at all, so the ONLY SageFs.Core
+          // the REPL can see is the project's own build, loaded from the session's shadow copy of it. (The daemon's
+          // own copy, and a private host copy of the old in-process design, cannot be what resolves.)
+          (normalized.Contains "sagefs-shadow-" && normalized.Contains "SageFs.Core.dll")
+          |> Expect.isTrue (sprintf "SageFs.Core must resolve to the project's own (shadow-copied) build, got: %s" output))
 
     testCase "WHY — the SageFs.Tests namespace is reachable by name, because warmup auto-open must never let a referenced assembly's union case (PaneId.Tests) shadow a namespace of the project being developed (roast-4 #0)" <| fun _ ->
       withDogfoodSession (fun proxy ->

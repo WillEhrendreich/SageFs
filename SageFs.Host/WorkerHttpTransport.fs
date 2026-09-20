@@ -283,6 +283,7 @@ module WorkerHttpTransport =
     (projectFiles: string list)
     (getWarmupContext: unit -> WarmupContext)
     (getRunTest: unit -> Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>)
+    (takeCoverage: unit -> HostAgent.AgentReply<HostAgent.CoverageReading>)
     (port: int)
     : Task<HttpWorkerServer> =
     task {
@@ -504,28 +505,18 @@ module WorkerHttpTransport =
 
         let doneBytes = Text.Encoding.UTF8.GetBytes("event: done\ndata: {}\n\n")
 
-        // Collect IL coverage hits from instrumented assemblies
-        let loadedAssemblies =
-          System.AppDomain.CurrentDomain.GetAssemblies()
-          |> Array.filter (fun a ->
-            try not a.IsDynamic && not (isNull a.Location) && a.Location <> ""
-            with _ -> false)
-        match Features.LiveTesting.CoverageInstrumenter.discoverAndCollectHits loadedAssemblies with
-        | Some hits ->
+        // Coverage is recorded by the instrumented assemblies IN the process that ran the tests: ask its agent.
+        match takeCoverage () with
+        | HostAgent.AgentAnswered(HostAgent.CoverageTaken(count, words)) ->
           // Packed base64 words on the wire, not one JSON bool per probe —
           // see CoverageBitmap.toBase64 for the size rationale.
-          let bitmap = Features.LiveTesting.CoverageBitmap.ofBoolArray hits
-          let coverageJson =
-            Serialization.serialize
-              {| count = bitmap.Count
-                 words = Features.LiveTesting.CoverageBitmap.toBase64 bitmap |}
+          let coverageJson = Serialization.serialize {| count = count; words = words |}
           let coverageLine = sprintf "event: coverage\ndata: %s\n\n" coverageJson
           let coverageBytes = Text.Encoding.UTF8.GetBytes(coverageLine)
           do! writer.WriteAsync(coverageBytes, 0, coverageBytes.Length)
           do! writer.FlushAsync()
-          // Reset hits for next test run
-          Features.LiveTesting.CoverageInstrumenter.discoverAndResetHits loadedAssemblies
-        | None -> ()
+        | HostAgent.AgentAnswered HostAgent.NoCoverage -> ()
+        | HostAgent.AgentUnavailable reason -> Log.warn "[WorkerHttpTransport] no coverage for this run: %s" reason
 
         do! writer.WriteAsync(doneBytes, 0, doneBytes.Length)
         do! writer.FlushAsync()

@@ -19,6 +19,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The user's code runs in THIS process, so this process must have every shared framework the user's code may need. The
+         worker it replaces was itself a web app, so web projects (Microsoft.AspNetCore.*) worked in it; without this line their
+         references resolve to the reference pack, which cannot be loaded for execution. Bundled with every SDK, loaded lazily. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
       <!-- The agent (hot reload + live testing) that lives beside the user's code. Same source files SageFs.Core compiles. -->
     <Compile Include="Measures.fs" />
     <Compile Include="Utils.fs" />
@@ -28,6 +35,7 @@
     <Compile Include="ConfigDsl.fs" />
     <Compile Include="LiveValueTree.fs" />
     <Compile Include="LiveTestingTypes.fs" />
+    <Compile Include="CoverageProbes.fs" />
     <Compile Include="LiveTestingInstrumentation.fs" />
     <Compile Include="ReflectionDiscovery.fs" />
     <Compile Include="LiveTestingExecutors.fs" />

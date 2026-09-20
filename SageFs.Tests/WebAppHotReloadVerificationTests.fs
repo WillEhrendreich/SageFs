@@ -109,7 +109,8 @@ let private spawnHost (sessionId: string) (hostLog: StringBuilder) =
 let private evalOk (proxy: WorkerProtocol.SessionProxy) (code: string) =
   match proxy (WorkerProtocol.WorkerMessage.EvalCode(code, Guid.NewGuid().ToString("N"))) |> Async.RunSynchronously with
   | WorkerProtocol.WorkerResponse.EvalResult (_, Ok result, _, _) -> result
-  | WorkerProtocol.WorkerResponse.EvalResult (_, Error err, _, _) -> failwithf "eval failed: %A" err
+  // The compiler diagnostics say WHY (FSI's own message is just "earlier error"), so a red run explains itself.
+  | WorkerProtocol.WorkerResponse.EvalResult (_, Error err, diagnostics, _) -> failwithf "eval failed: %A\nDiagnostics: %A\nCode: %s" err diagnostics code
   | other -> failwithf "unexpected response: %A" other
 
 let private waitReady (proxy: WorkerProtocol.SessionProxy) (hostLog: StringBuilder) =

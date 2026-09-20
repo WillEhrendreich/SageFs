@@ -51,6 +51,9 @@ type ActorArgs = {
   AutoOpenNamespaces: bool
   OnEvent: Features.Events.SageFsEvent -> unit
   Workflow: WorkflowTypes.SessionWorkflow
+  /// Where the sessions' FSI lives. Production reads it from the environment (isolated by default); the test constructor
+  /// pins the in-process reference implementation.
+  FsiKind: SessionKinds.FsiSessionKind
 }
   with
     /// Backward-compatible accessor.
@@ -132,7 +135,7 @@ let createActorImmediate a =
           { Tracing.NamedMiddleware.Name = name; Middleware = mw })
       Tracing.buildTracedPipeline named "CoreEval" evalFn
   let appActor, diagnosticsChanged, cancelEval, getSessionState, getEvalStats, getWarmupFailures, getWarmupContext, getStartupConfig, getStatusMessage, sessionAgent =
-    mkAppStateActor a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled a.OnEvent tracedBuild sln
+    mkAppStateActor a.FsiKind a.Logger customData a.OutStream a.UseAsp originalSln shadowDir a.AutoOpenNamespaces a.HotReloadEnabled a.OnEvent tracedBuild sln
   let projDirs = projectDirectories originalSln
   let hotReloadStateRef = ref HotReloadState.empty
   { Actor = appActor; DiagnosticsChanged = diagnosticsChanged; CancelEval = cancelEval; GetSessionState = getSessionState; GetEvalStats = getEvalStats; GetWarmupFailures = getWarmupFailures; GetWarmupContext = getWarmupContext; GetStartupConfig = getStartupConfig; GetStatusMessage = getStatusMessage; Agent = sessionAgent; ProjectDirectories = projDirs; HotReloadStateRef = hotReloadStateRef; InstrumentationMaps = instrumentationMaps; ProjectTargets = sln.Projects |> List.map (fun po -> po.ProjectFileName, po.TargetPath); ProjectRoles = SageFs.ProjectLoading.classifyProjects sln.Projects }
@@ -161,4 +164,5 @@ let mkCommonActorArgs logger useAsp (onEvent: Features.Events.SageFsEvent -> uni
   Logger = logger
   OnEvent = onEvent
   Workflow = WorkflowTypes.SessionWorkflow.Interactive
+  FsiKind = SessionKinds.InProcess
 }

@@ -65,6 +65,12 @@ type AgentReply<'a> =
   | AgentAnswered of 'a
   | AgentUnavailable of reason: string
 
+/// The coverage the instrumented assemblies of a process recorded since it was last taken: the probe count and the packed
+/// hit bitmap (base64 words, see CoverageBitmap.toBase64).
+type CoverageReading =
+  | NoCoverage
+  | CoverageTaken of count: int * words: string
+
 /// Where the agent looks for assemblies. Injected so the agent can be driven without a real process.
 type AssemblySources =
   { /// The assemblies FSI has emitted so far (the last is the newest).
@@ -214,6 +220,28 @@ type Agent(init: AgentInit, sources: AssemblySources, executors: TestExecutor li
         { UpdatedMethods = step.UpdatedMethods
           LiveTest = LiveTestHookResultDto.fromResult step.Hook
           AssemblyLoadErrors = step.State.AssemblyLoadErrors })
+
+  /// Take the coverage the instrumented assemblies recorded, and reset it for the next run. Coverage lives in the process
+  /// that ran the tests, so only its agent can read it.
+  member _.TakeCoverage() : CoverageReading =
+    let instrumentable =
+      sources.Loaded()
+      |> Array.filter (fun a -> try not a.IsDynamic && not (isNull a.Location) && a.Location <> "" with _ -> false)
+    match CoverageProbes.discoverAndCollectHits instrumentable with
+    | None -> NoCoverage
+    | Some hits ->
+      let bitmap = CoverageBitmap.ofBoolArray hits
+      CoverageProbes.discoverAndResetHits instrumentable
+      CoverageTaken(bitmap.Count, CoverageBitmap.toBase64 bitmap)
+
+  /// The simple names of every assembly the process has loaded, sorted and distinct: what a warmup check asks, since only
+  /// the process the user's code runs in knows.
+  member _.LoadedAssemblyNames() : string list =
+    sources.Loaded()
+    |> Array.choose (fun a -> try Some(a.GetName().Name) with _ -> None)
+    |> Array.toList
+    |> List.distinct
+    |> List.sort
 
   /// Scan the assemblies the process has loaded (the project's own, referencing a test framework) for tests, and keep
   /// the runner for them.
