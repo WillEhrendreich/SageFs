@@ -7,6 +7,14 @@ open SageFs.ProjectLoading
 open SageFs.AppState
 
 let commonMiddleware: AppState.Middleware list = [
+  // Must run FIRST: it never rewrites code, only ever short-circuits a
+  // submission that has nothing for FSI to run (a bare module/namespace
+  // header, or blank/comments only) — see EvaluableSubmission.fs. Every
+  // Executable submission passes through it unmodified, so ordering it
+  // ahead of the rewriting middleware below costs nothing on the normal
+  // path and saves wasted rewrite work (plus a guaranteed FSI compile
+  // error) on the "nothing to evaluate" path.
+  EvaluableSubmission.nothingToEvaluateMiddleware
   FsiCompatibility.fsiCompatibilityMiddleware
   Directives.viBindMiddleware
   Directives.OpenDirective.openDirectiveMiddleware

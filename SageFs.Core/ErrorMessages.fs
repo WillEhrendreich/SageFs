@@ -69,9 +69,21 @@ module ErrorMessages =
       "hard_reset_fsi_session with rebuild=true as a last resort. " +
       "Other causes: (2) Redefining a type that collides with a project DLL type — fix 'open' collisions or rename your type."
     | ErrorCategory.EarlierError ->
-      "⚠️ This 'earlier error' means a PREVIOUS statement had a compile error, so its definitions were never created. " +
-      "The session is NOT corrupted — all successfully evaluated statements are still valid. " +
-      "Fix the original error and re-submit that code, then retry. Do NOT reset the session."
+      // Roast-measured false lecture (2026-09): FSI's own "earlier error" wording is
+      // overloaded — it fires both when a genuinely PREVIOUS session statement failed
+      // (leaving names unbound) AND when something earlier IN THIS SAME submission
+      // failed to compile (e.g. FSI can't accept a bare module/namespace header as a
+      // standalone submission — see EvaluableSubmission.fs, which now intercepts that
+      // specific case before it ever reaches FSI). This function has no session
+      // history to consult — only the ErrorCategory — so it must not assert which of
+      // the two actually happened; asserting "a PREVIOUS statement" as fact was false
+      // on a session's very first eval. Point at the real evidence (the Diagnostics
+      // below, which carry the actual line/column) instead of fabricating a cause.
+      "⚠️ FSI reported 'earlier error' — something it just tried to compile failed before the rest of " +
+      "this submission could run. That can be a previous statement in this session, or an earlier part " +
+      "of what you just sent in one submission. Check the Diagnostics below for the real line/column and " +
+      "message — that is the actual cause. Fix that and resubmit. The session itself is NOT corrupted; " +
+      "Do NOT reset it just because of this message."
     | ErrorCategory.NameError ->
       "💡 Tip: A name is not defined. Check: did you open the right namespace? Is there a typo? " +
       "Did a previous submission fail (leaving the definition unbound)? Fix your code and resubmit."

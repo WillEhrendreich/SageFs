@@ -1,4 +1,4 @@
 ﻿Error: Operation could not be completed due to earlier error
-⚠️ This 'earlier error' means a PREVIOUS statement had a compile error, so its definitions were never created. The session is NOT corrupted — all successfully evaluated statements are still valid. Fix the original error and re-submit that code, then retry. Do NOT reset the session.
+⚠️ FSI reported 'earlier error' — something it just tried to compile failed before the rest of this submission could run. That can be a previous statement in this session, or an earlier part of what you just sent in one submission. Check the Diagnostics below for the real line/column and message — that is the actual cause. Fix that and resubmit. The session itself is NOT corrupted; Do NOT reset it just because of this message.
 Diagnostics:
   [error] The value or constructor 'nonExistent' is not defined.
