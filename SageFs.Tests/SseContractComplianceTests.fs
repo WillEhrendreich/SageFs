@@ -13,7 +13,6 @@ open SageFs.Features.EvalDiff
 open SageFs.Features.CellDependencyGraph
 open SageFs.Features.BindingExplorer
 open SageFs.Features.EvalTimeline
-open SageFs.Features.DomainModelViz
 open SageFs.Features.Diagnostician
 open SageFs.Features.FsiOutputParser
 open SageFs.Features.EvalProvenance
@@ -131,10 +130,6 @@ let private mkFailureNarratives () : Map<TestId, FailureNarrative> =
 let private mkTestSourceLocations () : TestSourceLocation list =
   [ { CellId = 0; TestName = "test1"; FilePath = "Test.fs"; StartLine = 10; EndLine = 15 } ]
 
-let private mkAnnotatedTransitions () : AnnotatedTransition list =
-  [ { FromState = "S0"; ToState = "S1"; FunctionName = Some "fn1"
-      IsErrorBranch = false; Health = TransitionHealth.Passing } ]
-
 let private mkBindingValues () : BindingValue list =
   [ { Name = "x"; TypeSig = "int"; DisplayValue = "42"; IsTruncated = false
       IsFunctionValue = false; CellIndex = 0; EvalDurationMs = 1.5; SourceLine = 1 } ]
@@ -238,9 +233,9 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
   // ── Group 1: Registry exhaustiveness ──
 
   testList "registry exhaustiveness" [
-    testCase "allSseEventTypes has exactly 23 items" <| fun () ->
+    testCase "allSseEventTypes has exactly 22 items" <| fun () ->
       allSseEventTypes |> List.length
-      |> Expect.equal "should have exactly 23 event types" 23
+      |> Expect.equal "should have exactly 22 event types (domain_model deleted, roast-8 §2: zero production callers of the emitter or its data source)" 22
 
     testCase "allSseEventTypes has no duplicates" <| fun () ->
       let distinct = allSseEventTypes |> List.distinct
@@ -259,7 +254,7 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
           m.Name.Substring("format".Length, m.Name.Length - "format".Length - "Event".Length)
           |> toSnakeCase)
       (formatMethods |> Array.length, 0)
-      |> Expect.isGreaterThan "should find at least 23 format functions"
+      |> Expect.isGreaterThan "should find at least 22 format functions"
       for derivedName in formatMethods do
         allSseEventTypes |> List.contains derivedName
         |> Expect.isTrue (sprintf "'%s' derived from formatter should exist in registry" derivedName)
@@ -398,11 +393,6 @@ let sseContractComplianceTests = testList "SSE contract compliance" [
       |> extractDataPayload
       |> assertJsonProperties "eval_timeline"
         [ "count"; "p50Ms"; "p95Ms"; "p99Ms"; "meanMs"; "sparkline" ]
-
-    testCase "domain_model has expected properties" <| fun () ->
-      formatDomainModelEvent jsonOpts None (mkAnnotatedTransitions ())
-      |> extractDataPayload
-      |> assertJsonProperties "domain_model" [ "transitions" ]
 
     testCase "diagnosis_ready has expected properties" <| fun () ->
       formatDiagnosisReadyEvent jsonOpts None (mkDiagnosticReport ())

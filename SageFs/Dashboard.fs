@@ -553,7 +553,8 @@ let invalidatesWorkerData (change: SseEvent) =
   | SseEvent.SessionCreated _
   | SseEvent.SessionStopped _
   | SseEvent.WorkflowSwitching _
-  | SseEvent.WorkflowSwitched _ -> false
+  | SseEvent.WorkflowSwitched _
+  | SseEvent.SessionHealthChanged _ -> false
 
 /// Whether a coalesced burst of stream commands asked this connection to view
 /// another session.

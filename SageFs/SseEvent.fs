@@ -42,6 +42,14 @@ type SseEvent =
   | SessionStopped of sessionId: string
   | WorkflowSwitching of sessionId: string * fromLabel: string * toLabel: string
   | WorkflowSwitched of sessionId: string * label: string * replCapability: string * hotReloadActive: bool
+  /// A session's `SessionHealth` verdict (`SageFs.SessionHealth.classify`)
+  /// changed since the last one pushed for it — the SSE half of roast-8 §1:
+  /// `/health` and `/api/sessions` compute this verdict on every GET, but
+  /// nothing pushed it, so a session going Healthy -> Degraded mid-session
+  /// was invisible to every connected client until an unrelated refetch.
+  /// Session-scoped like `WarmupContextSnapshot`/`HotReloadSnapshot`, so it
+  /// rides the "session" channel and gets the same connect-time replay.
+  | SessionHealthChanged of sessionId: string * health: SessionHealth
 
 module SseEvent =
   /// Which SSE channel a case rides on. Exhaustive — a new case must be
@@ -64,7 +72,8 @@ module SseEvent =
     | SessionCreated _
     | SessionStopped _
     | WorkflowSwitching _
-    | WorkflowSwitched _ -> SseChannel.Session
+    | WorkflowSwitched _
+    | SessionHealthChanged _ -> SseChannel.Session
 
   let channelName = function
     | SseChannel.State -> "state"
@@ -85,6 +94,14 @@ module SseEvent =
     o
 
   let private sid (s: WorkerProtocol.SessionId) = WorkerProtocol.SessionId.value s
+
+  /// `jsonOpts` here has no F# converter registered (only
+  /// `DefaultIgnoreCondition`), so an `Option` field must be converted to a
+  /// nullable `obj` before serializing — same discipline as `diagnosticJson`'s
+  /// `FileName |> Option.toObj` below.
+  let private sessionHealthJson (health: SessionHealth) =
+    {| status = SessionHealth.label health
+       reason = SessionHealth.reason health |> Option.toObj |}
 
   let private diagnosticJson (d: WarmUp.WarmupFcsDiagnostic) =
     {| message = d.Message
@@ -182,6 +199,9 @@ module SseEvent =
            workflowLabel = label
            replCapability = replCapability
            hotReloadActive = hotReloadActive |}, jsonOpts)
+    | SessionHealthChanged (s, health) ->
+      JsonSerializer.Serialize(
+        {| ``type`` = "session_health_changed"; sessionId = s; health = sessionHealthJson health |}, jsonOpts)
 
   /// Format a complete SSE frame (`event: ...\ndata: ...\n\n`) for an event.
   let format (evt: SseEvent) : string =

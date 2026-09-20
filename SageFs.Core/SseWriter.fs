@@ -411,21 +411,6 @@ let formatEvalTimelineEvent (opts: JsonSerializerOptions) (sessionId: string opt
   let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
   formatSseEvent "eval_timeline" json
 
-/// Format annotated domain model transitions as an SSE event string.
-/// Each transition carries health status (Passing/Failing/Stale/Untested/NotImplemented).
-let formatDomainModelEvent (opts: JsonSerializerOptions) (sessionId: string option) (annotations: Features.DomainModelViz.AnnotatedTransition list) : string =
-  let payload =
-    {| Transitions =
-         annotations |> List.map (fun a ->
-           {| FromState = a.FromState
-              ToState = a.ToState
-              FunctionName = a.FunctionName
-              IsErrorBranch = a.IsErrorBranch
-              Health = sprintf "%A" a.Health |})
-         |> List.toArray |}
-  let json = JsonSerializer.Serialize(payload, opts) |> injectSessionId sessionId
-  formatSseEvent "domain_model" json
-
 /// Format a DiagnosticReport as an SSE event string.
 /// Includes per-failure testName + causalSymbols so clients can render repair CodeLens.
 let formatDiagnosisReadyEvent (opts: JsonSerializerOptions) (sessionId: string option) (report: Features.Diagnostician.DiagnosticReport) : string =
@@ -691,7 +676,6 @@ let allSseEventTypes : string list = [
   "cell_dependencies"
   "binding_scope_map"
   "eval_timeline"
-  "domain_model"
   "diagnosis_ready"
   "coverage_view"
   "cohort_matrix"

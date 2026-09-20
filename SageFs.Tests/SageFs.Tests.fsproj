@@ -246,7 +246,8 @@
         <Compile Include="EvalTimelineTests.fs" />
         <Compile Include="NotebookExportTests.fs" />
         <Compile Include="SseFeatureFormatTests.fs" />
-        <Compile Include="DomainModelSseTests.fs" />
+        <Compile Include="SessionHealthSseTests.fs" />
+        <Compile Include="LiveBindingsSseWiringTests.fs" />
         <Compile Include="EvalStoreTests.fs" />
         <Compile Include="FeatureHookTests.fs" />
         <Compile Include="AlgebraicPropertyTests.fs" />

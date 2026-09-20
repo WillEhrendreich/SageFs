@@ -46,9 +46,10 @@ open SageFs
 // ── Authoritative daemon event list ─────────────────────────────────────────
 
 /// All SSE events the daemon can emit on /events.
-/// Composed from SseWriter.allSseEventTypes (23 formatters — item 15a added
+/// Composed from SseWriter.allSseEventTypes (22 formatters — item 15a added
 /// cohort_matrix/claim_changed/landing_changed; the cohort claim
-/// early-warning item added save_observed)
+/// early-warning item added save_observed; roast-8 §2 deleted domain_model,
+/// which had zero production callers for the emitter OR its data source)
 /// + the unified SseEvent vocabulary's two channel names (roast-5 §1
 /// merged the former SessionEvents.sessionEventType and
 /// DaemonStateChange.sseEventType into one classifier).
@@ -157,7 +158,6 @@ let neovimHandledEvents : Set<string> =
     "test_source_locations"
     "state"
     "session"
-    "domain_model"
     "diagnosis_ready"
     "live_bindings"
     "coverage_view"
@@ -176,14 +176,14 @@ let neovimHandledEvents : Set<string> =
 [<Tests>]
 let sseParityTests = testList "SSE Parity" [
 
-  test "allDaemonSseEvents contains 25 entries (23 SseWriter + session + state)" {
+  test "allDaemonSseEvents contains 24 entries (22 SseWriter + session + state)" {
     allDaemonSseEvents
-    |> Expect.hasLength "should have 25 daemon SSE event types" 25
+    |> Expect.hasLength "should have 24 daemon SSE event types" 24
   }
 
-  test "SseWriter.allSseEventTypes contains exactly 23 formatter event types" {
+  test "SseWriter.allSseEventTypes contains exactly 22 formatter event types" {
     SseWriter.allSseEventTypes
-    |> Expect.hasLength "SseWriter exposes 23 event type names" 23
+    |> Expect.hasLength "SseWriter exposes 22 event type names" 22
   }
 
   test "no duplicate entries in allDaemonSseEvents" {
@@ -256,6 +256,6 @@ let sseParityTests = testList "SSE Parity" [
     allDaemonSseEvents.Length
     |> Expect.equal
          "if this fails, you added a daemon SSE event - update vscodeHandledEvents, neovimHandledEvents, and this test"
-         25
+         24
   }
 ]

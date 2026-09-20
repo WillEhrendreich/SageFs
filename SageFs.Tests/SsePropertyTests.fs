@@ -12,7 +12,6 @@ open SageFs.Features.EvalDiff
 open SageFs.Features.CellDependencyGraph
 open SageFs.Features.BindingExplorer
 open SageFs.Features.EvalTimeline
-open SageFs.Features.DomainModelViz
 
 // ── JSON options matching daemon configuration ──
 
@@ -141,21 +140,6 @@ let private mkSourceLocations n =
         StartLine = i * 10
         EndLine = i * 10 + 5 } ]
 
-let private mkTransitions n =
-  let count = max 0 (min (abs n) 10)
-  [ for i in 0 .. count - 1 do
-      { FromState = sprintf "S%d" i
-        ToState = sprintf "S%d" (i + 1)
-        FunctionName = Some (sprintf "fn_%d" i)
-        IsErrorBranch = i % 2 = 0
-        Health =
-          match i % 5 with
-          | 0 -> TransitionHealth.Passing
-          | 1 -> TransitionHealth.Failing
-          | 2 -> TransitionHealth.Stale
-          | 3 -> TransitionHealth.Untested
-          | _ -> TransitionHealth.NotImplemented } ]
-
 // ── Tests ──
 
 [<Tests>]
@@ -179,8 +163,7 @@ let ssePropertyTests =
               formatBindingScopeMapEvent jsonOpts None (mkBindingScope n.Get)
               formatEvalTimelineEvent jsonOpts None (mkTimeline n.Get)
               formatFailureNarrativesEvent jsonOpts None (mkNarratives n.Get)
-              formatTestSourceLocationsEvent jsonOpts None (mkSourceLocations n.Get)
-              formatDomainModelEvent jsonOpts None (mkTransitions n.Get) ]
+              formatTestSourceLocationsEvent jsonOpts None (mkSourceLocations n.Get) ]
           events |> List.forall (fun e ->
             startsWithEventPrefix e && hasNonEmptyEventType e)
 
@@ -195,8 +178,7 @@ let ssePropertyTests =
               formatEvalDiffEvent jsonOpts None (mkDiffSummary [ "a" ] [ "b" ])
               formatCellDependenciesEvent jsonOpts None (mkCellGraph n.Get)
               formatBindingScopeMapEvent jsonOpts None (mkBindingScope n.Get)
-              formatEvalTimelineEvent jsonOpts None (mkTimeline n.Get)
-              formatDomainModelEvent jsonOpts None (mkTransitions n.Get) ]
+              formatEvalTimelineEvent jsonOpts None (mkTimeline n.Get) ]
           events |> List.forall (fun e -> countDataLines e = 1)
 
       testPropertyWithConfig propConfig
@@ -212,8 +194,7 @@ let ssePropertyTests =
               formatBindingScopeMapEvent jsonOpts None (mkBindingScope n.Get)
               formatEvalTimelineEvent jsonOpts None (mkTimeline n.Get)
               formatFailureNarrativesEvent jsonOpts None (mkNarratives n.Get)
-              formatTestSourceLocationsEvent jsonOpts None (mkSourceLocations n.Get)
-              formatDomainModelEvent jsonOpts None (mkTransitions n.Get) ]
+              formatTestSourceLocationsEvent jsonOpts None (mkSourceLocations n.Get) ]
           events |> List.forall endsWithDoubleNewline
 
       testPropertyWithConfig propConfig
@@ -229,8 +210,7 @@ let ssePropertyTests =
               formatBindingScopeMapEvent jsonOpts None (mkBindingScope n.Get)
               formatEvalTimelineEvent jsonOpts None (mkTimeline n.Get)
               formatFailureNarrativesEvent jsonOpts None (mkNarratives n.Get)
-              formatTestSourceLocationsEvent jsonOpts None (mkSourceLocations n.Get)
-              formatDomainModelEvent jsonOpts None (mkTransitions n.Get) ]
+              formatTestSourceLocationsEvent jsonOpts None (mkSourceLocations n.Get) ]
           events |> List.forall (fun e ->
             extractDataPayload e |> isValidJson)
     ]

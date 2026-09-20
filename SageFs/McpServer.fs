@@ -1001,6 +1001,33 @@ let replayCohortMatrix (ctx: SseContext) (body: System.IO.Stream) =
     }
   | None -> task { () }
 
+/// Replay the CURRENT `SessionHealth` verdict for every known session to a
+/// newly-connected client (roast-8 §1). Without this, a client that connects
+/// while a session is already Degraded/Failed only learns so on the NEXT
+/// transition — which may never come if the session is stuck. Uses the exact
+/// same `SessionHealth.classify` inputs `/health`/`/api/sessions` use (worker
+/// lifecycle status, loaded project roles, warmup context), so what a fresh
+/// connection sees here always agrees with a GET made at the same instant.
+let replayHealthSnapshot
+  (ctx: SseContext)
+  (getAllSessions: unit -> Task<SageFs.WorkerProtocol.SessionInfo list>)
+  (body: System.IO.Stream) =
+  task {
+    try
+      let! sessions = getAllSessions ()
+      for sess in sessions do
+        let sid = SageFs.WorkerProtocol.SessionId.value sess.Id
+        let! warmupOpt =
+          match ctx.GetWarmupContext with
+          | Some getCtx -> getCtx sid
+          | None -> Task.FromResult None
+        let health = SageFs.SessionHealth.classify sess.Status sess.ProjectRoles warmupOpt
+        do! SseEvent.SessionHealthChanged(sid, health) |> SseEvent.format |> writeSseFrame body
+    with
+    | :? System.IO.IOException | :? ObjectDisposedException -> ()
+    | ex -> Log.error "[SSE] Health snapshot replay error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+  }
+
 // ── Session event subscription: push HotReload/SessionReady via SSE ──
 
 /// Subscribe to SseEvent events and push session-level SSE events
@@ -1103,7 +1130,8 @@ let wireSessionEventSubscription
       | SseEvent.SessionCreated _
       | SseEvent.SessionStopped _
       | SseEvent.WorkflowSwitching _
-      | SseEvent.WorkflowSwitched _ -> ()) |> ignore
+      | SseEvent.WorkflowSwitched _
+      | SseEvent.SessionHealthChanged _ -> ()) |> ignore
   | _ -> ()
 
 // ── Cohort event subscription: push claim_changed/landing_changed/cohort_matrix via SSE ──
@@ -1239,6 +1267,78 @@ let wireSessionsResourceSubscription
         | false -> ())
       |> ignore
     | _ -> ())
+
+// ── Session health SSE push (roast-8 §1) ────────────────────────────────────
+
+/// Subscribe to the EXISTING `stateChanged` signal and push a
+/// `SessionHealthChanged` (session channel) event to every connected client
+/// whenever a session's classified `SessionHealth` actually differs from the
+/// last one pushed for it. Reacts to EVERY `stateChanged` occurrence rather
+/// than one specific case — warmup progress, session-ready, faulted,
+/// model-changed, ... can each flip a session's usability — and relies
+/// entirely on the per-session `lastKnown` cache below to gate the push down
+/// to real transitions: an unrelated or repeated tick that reclassifies to
+/// the SAME verdict pushes nothing. `getAllSessions` and
+/// `ctx.GetWarmupContext` are the same two inputs `/health`/`/api/sessions`
+/// already call `SessionHealth.classify` with, so a pushed verdict never
+/// disagrees with what a GET would return at that instant.
+let wireSessionHealthSubscription
+  (stateChanged: IEvent<SseEvent>)
+  (ctx: SseContext)
+  (getAllSessions: unit -> Task<SageFs.WorkerProtocol.SessionInfo list>) : IDisposable =
+  let lastKnown = ConcurrentDictionary<string, SageFs.SessionHealth>()
+  stateChanged.Subscribe(fun _ ->
+    task {
+      try
+        let! sessions = getAllSessions ()
+        for sess in sessions do
+          let sid = SageFs.WorkerProtocol.SessionId.value sess.Id
+          let! warmupOpt =
+            match ctx.GetWarmupContext with
+            | Some getCtx -> getCtx sid
+            | None -> Task.FromResult None
+          let health = SageFs.SessionHealth.classify sess.Status sess.ProjectRoles warmupOpt
+          let changed =
+            match lastKnown.TryGetValue sid with
+            | true, prev -> prev <> health
+            | false, _ -> true
+          match changed with
+          | true ->
+            lastKnown.[sid] <- health
+            ctx.SessionEventBroadcast.Trigger(SseEvent.format (SseEvent.SessionHealthChanged(sid, health)))
+          | false -> ()
+      with
+      | :? System.IO.IOException | :? ObjectDisposedException -> ()
+      | ex -> Log.error "[SSE] Session health push error: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+    }
+    |> fun t -> t.ContinueWith(fun (t: Threading.Tasks.Task) ->
+      match t.IsFaulted with
+      | true -> Log.error "[SSE] Session health push fault: %s" t.Exception.InnerException.Message
+      | false -> ())
+    |> ignore)
+
+// ── Live bindings SSE push (roast-8 §2) ─────────────────────────────────────
+
+/// Wrap a `LiveSnapshotSink` so that, in addition to feeding whatever
+/// consumer it already has (the dashboard's `LiveBindingsAdaptive` store),
+/// every fresh `LiveValueSnapshot` is ALSO pushed as a `live_bindings` SSE
+/// event on the session channel — closing the gap where the per-eval
+/// reflection walk (`Features.LiveValueTree.buildSnapshot`, pulled via
+/// `GetLiveValues` after every successful eval) computed this snapshot and
+/// handed it to nobody outside the dashboard. `None` in, `None` out — no new
+/// behavior when the caller wires no sink. The wrapped closure calls the
+/// inner sink FIRST so an exception pushing the SSE frame can never suppress
+/// the dashboard's own update.
+let wrapLiveSnapshotSinkForSse
+  (sessionEventBroadcast: Event<string>)
+  (sseJsonOpts: JsonSerializerOptions)
+  (inner: (string -> SageFs.Features.LiveValueTree.LiveValueSnapshot -> unit) option)
+  : (string -> SageFs.Features.LiveValueTree.LiveValueSnapshot -> unit) option =
+  inner |> Option.map (fun sink ->
+    fun sid snap ->
+      sink sid snap
+      sessionEventBroadcast.Trigger(
+        SageFs.SseWriter.formatLiveBindingsEvent sseJsonOpts (Some sid) snap))
 
 // ── Model change handlers: state change → SSE + MCP notifications ──
 
@@ -1588,7 +1688,8 @@ let wireModelChangeHandlers
     | SseEvent.SessionCreated _
     | SseEvent.SessionStopped _
     | SseEvent.WorkflowSwitching _
-    | SseEvent.WorkflowSwitched _ -> ())
+    | SseEvent.WorkflowSwitched _
+    | SseEvent.SessionHealthChanged _ -> ())
 
 
 // Start MCP server in background
@@ -2221,6 +2322,7 @@ let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
         do! replaySessionSnapshot rctx.SseContext ctx.Response.Body
         do! replayCachedTestState rctx.SseContext ctx.Response.Body
         do! replayCohortMatrix rctx.SseContext ctx.Response.Body
+        do! replayHealthSnapshot rctx.SseContext rctx.Config.SessionOps.GetAllSessions ctx.Response.Body
         match rctx.FsiBindings.Value.Count, SseContext.activeSessionId rctx.SseContext with
         | count, Some sid when count > 0 ->
           let frame =
@@ -2993,6 +3095,18 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
           bridge.Publish)
       let featurePushState =
         cfg.SharedFeatureState |> Option.defaultWith (fun () -> ref SageFs.Features.FeatureHooks.FeaturePushState.empty)
+      // Hoisted ahead of `mkContext` (they used to be created further down,
+      // after the MCP context) so `sessionEventBroadcast`/`sseJsonOpts` exist
+      // in time to wrap `cfg.LiveSnapshotSink` below — neither has any
+      // dependency on `app`/`mcpContext`/`serverTracker`.
+      let testEventBroadcast = Event<string>()
+      let sessionEventBroadcast = Event<string>()
+      let sseJsonOpts = JsonSerializerOptions()
+      sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
+      // Every fresh LiveValueSnapshot now ALSO reaches editor clients over SSE
+      // (roast-8 §2), not just the dashboard's own adaptive store — the inner
+      // sink (when wired) still runs first and unchanged.
+      let cfg = { cfg with LiveSnapshotSink = wrapLiveSnapshotSinkForSse sessionEventBroadcast sseJsonOpts cfg.LiveSnapshotSink }
       let mcpContext =
         mkContext cfg stateChangedStr
           (Some (fun () -> featurePushState.Value))
@@ -3001,8 +3115,6 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
           // get_recent_fsi_events/filmstrip/impact_forecast see them (roast-7 §2/§3).
           (Some (fun code result ms -> featurePushState.Value <- SageFs.Features.FeatureHooks.recordEval code result ms featurePushState.Value))
       let serverTracker = McpServerTracker()
-      let sseJsonOpts = JsonSerializerOptions()
-      sseJsonOpts.Converters.Add(System.Text.Json.Serialization.JsonFSharpConverter())
       configureMcpProtocol builder mcpContext serverTracker
 
       let app = builder.Build()
@@ -3017,8 +3129,6 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
       let fsiBindings = ref (Map.empty: Map<string, SageFs.SseWriter.FsiBinding>)
       let lastFeatureOutputCount = ref 0
       let lastEvalContext = ref (None: (string * int) option)
-      let testEventBroadcast = Event<string>()
-      let sessionEventBroadcast = Event<string>()
       let sseCtx: SseContext = {
         GetElmModel = cfg.ElmRuntime |> Option.map (fun r -> r.GetModel)
         GetWarmupContext = cfg.GetWarmupContext
@@ -3050,6 +3160,9 @@ let startMcpServer (cfg: McpServerConfig) (stopping: System.Threading.Cancellati
 
       let _sessionsResourceSub =
         cfg.StateChanged |> Option.map (fun evt -> wireSessionsResourceSubscription evt sseCtx cfg.SessionOps.GetAllSessions)
+
+      let _sessionHealthSub =
+        cfg.StateChanged |> Option.map (fun evt -> wireSessionHealthSubscription evt sseCtx cfg.SessionOps.GetAllSessions)
 
       mapExecutionRoutes app rctx
       mapHealthRoutes app rctx
