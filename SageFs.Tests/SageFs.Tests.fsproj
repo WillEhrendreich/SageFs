@@ -471,6 +471,7 @@
         <Compile Include="AffectedTestsTests.fs" />
         <Compile Include="CohortIntegrationScopeTests.fs" />
         <Compile Include="CohortLinearizabilityTests.fs" />
+        <Compile Include="UsabilityFixesTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 
