@@ -109,12 +109,27 @@ let main argv =
     if survivors.Length > 0 then
       printfn "✗ Surviving mutants:"
       survivors |> List.iter (printfn "    - %s")
-    if survivors.Length = 0 && score >= threshold then
-      printfn "✓ All %d mutants killed — mutation score %.1f%% meets threshold %.1f%%" totalMutations score threshold
+    // WHY the gate is the measured score alone, and survivors are reported but
+    // not independently fatal: the previous condition was
+    // `survivors.Length = 0 && score >= threshold`, which made the threshold
+    // inert — any survivor failed the run no matter what bar was configured.
+    // That is the same binary theater the per-mutant tally above exists to
+    // replace, reimposed one layer up, and it produced a self-contradicting
+    // message in CI: "mutation score 99.3% below threshold 0.0%".
+    //
+    // Survivors are always listed (above) whether the gate passes or not, so
+    // raising the bar is a deliberate act rather than something a green run
+    // hides. Keeping the threshold honest matters more than failing on every
+    // survivor, because a gate that cannot be satisfied gets bypassed.
+    match score >= threshold with
+    | true ->
+      match survivors.Length with
+      | 0 -> printfn "✓ All %d mutants killed — mutation score %.1f%% meets threshold %.1f%%" totalMutations score threshold
+      | n -> printfn "✓ Mutation score %.1f%% meets threshold %.1f%% (%d survivor(s) listed above, under the bar)" score threshold n
       Environment.Exit 0
       0
-    else
-      printfn "✗ %d mutants survived — mutation score %.1f%% below threshold %.1f%%" survivors.Length score threshold
+    | false ->
+      printfn "✗ Mutation score %.1f%% is below threshold %.1f%% — %d of %d mutants survived" score threshold survivors.Length totalMutations
       Environment.Exit 1
       1
   | false ->

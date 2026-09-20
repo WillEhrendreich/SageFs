@@ -35,20 +35,27 @@ let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision muta
     | ReloadPlan.PatchFunctions fs -> fs |> List.map (fun d -> d.Name) |> Expect.equal "the new function b must be the only patch" ["b"]
     | ReloadPlan.RestartRequired (first, rest) -> failtestf "adding a function must patch, not restart: %A" (first :: rest)
 
+  // WHY these two say DeclarationAdded rather than ValueChanged/TypeChanged:
+  // `outcomeOf`'s None branch used to report an ADDED declaration as *Changed*,
+  // which sent the user hunting for an edit they never made — the thing was new,
+  // not modified. `DeclarationAdded` was introduced to say what actually
+  // happened, and maps to `RestartReason.NewDeclaration` ("did not exist when the
+  // app started, so there is nothing running to re-point"). The restart verdict is
+  // unchanged and still the point of these cases; only the description is honest now.
   testCase "WHY — new_value_in_edited_file_is_Restart_not_Patch — a new value is built at startup and cannot be patched in" <| fun () ->
     let before = declsOf "module M\nlet a () = 1\n"
     let after = declsOf "module M\nlet a () = 1\nlet v = 42\n"
     match planReload before after with
     | ReloadPlan.RestartRequired (first, rest) ->
-      (first :: rest) |> Expect.equal "a brand-new value must require a restart, described as ValueChanged" [ReloadChange.ValueChanged "v"]
+      (first :: rest) |> Expect.equal "a brand-new value must restart, described as an ADDED declaration, not a changed one" [ReloadChange.DeclarationAdded "v"]
     | ReloadPlan.PatchFunctions fs -> failtestf "a new value must restart, not patch: %A" (fs |> List.map (fun d -> d.Name))
 
-  testCase "WHY — new_type_in_edited_file_is_Restart — a brand-new type must restart, described as TypeChanged" <| fun () ->
+  testCase "WHY — new_type_in_edited_file_is_Restart — a brand-new type must restart, described as an addition" <| fun () ->
     let before = declsOf "module M\nlet a () = 1\n"
     let after = declsOf "module M\nlet a () = 1\ntype T = { X: int }\n"
     match planReload before after with
     | ReloadPlan.RestartRequired (first, rest) ->
-      (first :: rest) |> Expect.equal "a brand-new type must restart, described as TypeChanged \"T\"" [ReloadChange.TypeChanged "T"]
+      (first :: rest) |> Expect.equal "a brand-new type must restart, described as an ADDED declaration, not a changed one" [ReloadChange.DeclarationAdded "T"]
     | ReloadPlan.PatchFunctions fs -> failtestf "a new type must restart, not patch: %A" (fs |> List.map (fun d -> d.Name))
 
   // ── Removed declarations ─────────────────────────────────────────────────
