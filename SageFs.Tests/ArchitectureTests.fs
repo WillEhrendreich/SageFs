@@ -451,7 +451,9 @@ let architectureTests =
           || n = "SageFs.AnsiEmitter"
           || n = "SageFs.EditorState"
           || n = "SageFs.TestsPane"
-          || n = "SageFs.DirectoryConfig"
+          // The DirectoryConfig record itself is session-engine data (the isolated host evaluates config.fsx into it,
+          // and it no longer carries keybindings or themes); only the daemon's loading module stays out of Core.
+          || n = "SageFs.DirectoryConfigModule"
           || n = "SageFs.ConnectionTracker"
           || n = "SageFs.DaemonClient")
         |> Expect.isFalse
