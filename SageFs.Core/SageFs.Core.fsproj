@@ -192,6 +192,7 @@
         <Compile Include="HostManifest.fs" />
         <Compile Include="VariantSelector.fs" />
         <Compile Include="HostAdaptation.fs" />
+        <Compile Include="OrphanTempDirSweep.fs" />
         <Compile Include="HostCoreAdoption.fs" />
         <Compile Include="Supervisor.fs" />
         <Compile Include="RestartPolicy.fs" />
@@ -212,6 +213,10 @@
         <Compile Include="HotReloadState.fs" />
         <Compile Include="HttpOriginGuard.fs" />
         <Compile Include="DevReload.fs" />
+        <!-- Needs both ReloadOutcome/ReloadPlanning (above) and DevReload, so it lands here rather than beside
+             the other Features/ files. Deliberately NOT embedded into the isolated FSI host: DevReload.fs is,
+             and keeping that closure free of the planner is why the translation lives in its own module. -->
+        <Compile Include="Features\ReloadBroadcast.fs" />
         <Compile Include="Middleware\HotReloadCore.fs" />
         <Compile Include="HostAgent.fs" />
         <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />

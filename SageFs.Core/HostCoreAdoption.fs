@@ -40,6 +40,15 @@ module HostCoreAdoption =
 
   let assemblyName = "SageFs.Core"
 
+  /// Every private launch root `resolveLaunchRoot` materializes is named
+  /// with this prefix (see below) — used both to build a fresh root's name
+  /// and, at sweep time, to recognize candidates under the OS temp root.
+  let adoptedRootPrefix = "sagefs-host-adopt-"
+
+  /// The marker file `sweepStaleAdoptedRoots` proves liveness against — see
+  /// `markAdoptedRootOwner` and `SageFs.OrphanTempDirSweep`.
+  let adoptedRootOwnerMarkerFileName = "owner.pid"
+
   /// Why the daemon did or did not adopt a session project's own build of
   /// SageFs.Core for the worker it is about to spawn.
   [<RequireQualifiedAccess>]
@@ -185,12 +194,38 @@ module HostCoreAdoption =
           let privateRoot =
             Path.Combine(
               Path.GetTempPath(),
-              sprintf "sagefs-host-adopt-%s-%s" sessionId (Guid.NewGuid().ToString("N").[..7]))
+              sprintf "%s%s-%s" adoptedRootPrefix sessionId (Guid.NewGuid().ToString("N").[..7]))
           materialize sharedHostDir privateRoot path
           let adopted = (candidateVersion.ToString(), File.GetLastWriteTimeUtc path)
           Ok { LaunchRoot = privateRoot; Cleanup = Some(fun () -> cleanup privateRoot); AdoptedCore = Some adopted }
       with ex ->
         Error(sprintf "Could not verify the session project's SageFs.Core build at %s: %s" best ex.Message)
+
+  /// Record the worker process that owns a materialized private launch
+  /// root, as soon as its pid is known. The directory itself was already
+  /// materialized by `resolveLaunchRoot`, before the worker process
+  /// existed — the caller (`SessionManager.startWorkerProcess`) calls this
+  /// immediately after `Process.Start` succeeds. This is the ground truth
+  /// `sweepStaleAdoptedRoots` proves liveness against: a root with no
+  /// marker (the worker hasn't started yet, or predates this fix) is never
+  /// swept.
+  let markAdoptedRootOwner (privateRoot: string) (workerPid: int) : unit =
+    OrphanTempDirSweep.writeOwnerPid adoptedRootOwnerMarkerFileName privateRoot workerPid
+
+  /// Reclaims `sagefs-host-adopt-*` private launch roots under `tempDir`
+  /// whose owning worker process is provably gone (see
+  /// `OrphanTempDirSweep.stale`). This is the backstop for a daemon (or its
+  /// worker) that was hard-killed before its own `Process.Exited` handler
+  /// ever ran: run at daemon startup so ANY daemon starting after a
+  /// hard-killed one reclaims its mess, and again periodically so a single
+  /// long-lived daemon does not sit next to another dead process's leak for
+  /// its whole uptime. Returns `(path, reclaimedBytes)` for every root
+  /// actually removed, for log visibility.
+  let sweepStaleAdoptedRootsIn (tempDir: string) (liveness: int -> ShadowCopy.OwnerLiveness) : (string * int64) list =
+    OrphanTempDirSweep.sweep tempDir (adoptedRootPrefix + "*") adoptedRootOwnerMarkerFileName liveness
+
+  let sweepStaleAdoptedRoots () : (string * int64) list =
+    sweepStaleAdoptedRootsIn (Path.GetTempPath()) ShadowCopy.processLiveness
 
   /// How the currently-loaded SageFs.Core build compares to the newest
   /// build found on disk — the F5b Phase 1 self-hosting signal: a loaded

@@ -234,6 +234,7 @@
         <Compile Include="CellDependencyGraphTests.fs" />
         <Compile Include="TestSourceResolverTests.fs" />
         <Compile Include="ReloadOutcomeTests.fs" />
+        <Compile Include="ReloadBroadcastTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />
         <Compile Include="IdentifierScanTests.fs" />
         <Compile Include="EvalTimelineTests.fs" />
@@ -429,6 +430,9 @@
         <Compile Include="HostAdaptationTests.fs" />
         <Compile Include="HostCoreAdoptionTests.fs" />
         <Compile Include="HostCoreAdoptionStalenessTests.fs" />
+        <Compile Include="OrphanTempDirSweepTests.fs" />
+        <Compile Include="HostCoreAdoptionMarkerTests.fs" />
+        <Compile Include="HostCoreAdoptionOrphanSweepTests.fs" />
         <Compile Include="SettingsTests.fs" />
         <Compile Include="SettingsPanelTests.fs" />
         <Compile Include="SupervisorPortHandshakeTests.fs" />
@@ -483,6 +487,7 @@
         <Compile Include="CohortIntegrationScopeTests.fs" />
         <Compile Include="CohortLinearizabilityTests.fs" />
         <Compile Include="UsabilityFixesTests.fs" />
+        <Compile Include="SessionBuildOptimizationGateTests.fs" />
         <Compile Include="Program.fs" />
     </ItemGroup>
 

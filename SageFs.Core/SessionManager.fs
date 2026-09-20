@@ -358,6 +358,15 @@ module SessionManager =
     | Ok launchPlan ->
     let launchRoot = launchPlan.LaunchRoot
     let hostCleanup = launchPlan.Cleanup
+    // Visibility (roast: a materialized private launch root costs 680-835MB
+    // of /tmp per self-hosting session — worth logging as it happens, not
+    // just when a startup/periodic sweep later finds it abandoned).
+    hostCleanup
+    |> Option.iter (fun _ ->
+      let sizeMb = float (OrphanTempDirSweep.directorySizeBytes launchRoot) / 1024.0 / 1024.0
+      Log.info
+        "[SessionManager] session %s: adopted a private SageFs.Core build into %s (%.0fMB)"
+        (SessionId.value sessionId) launchRoot sizeMb)
     match Args.resolveHostLaunch launchRoot (OperatingSystem.IsWindows()) dotnetMuxer File.Exists with
     | Error reason ->
       hostCleanup |> Option.iter (fun cleanup -> try cleanup () with _ -> ())
@@ -398,6 +407,14 @@ module SessionManager =
       Error (SageFsError.WorkerSpawnFailed "Failed to start worker process")
     | true ->
       let workerPid = proc.Id
+      // Record this worker as the owner of its private launch root (when one
+      // was materialized) as soon as its pid is known — BEFORE anything else
+      // touches the directory. This is what lets a startup or periodic sweep
+      // run by any OTHER SageFs process (including one that starts long
+      // after this daemon is hard-killed and never gets to run the
+      // `Exited` handler below) prove the root is orphaned instead of
+      // guessing. See HostCoreAdoption.sweepStaleAdoptedRoots.
+      hostCleanup |> Option.iter (fun _ -> HostCoreAdoption.markAdoptedRootOwner launchRoot workerPid)
       proc.Exited.Add(fun _ ->
         try
           onExited workerPid proc.ExitCode

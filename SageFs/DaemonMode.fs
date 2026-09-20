@@ -135,6 +135,54 @@ let cohortMembersToRenew
     | SageFs.Cohort.MemberPresence.Present when isActive m -> Some m
     | _ -> None)
 
+/// Marker written into every daemon's own data dir recording the daemon's
+/// own pid — the ground truth `sweepOrphanedTempDirs` proves an isolated
+/// test data dir's owner is gone against. Harmless on a real `~/.SageFs`
+/// (a normal daemon's own dir is never a sweep target — only
+/// `<tmp>/sagefs-test/*` is scanned below).
+let private dataDirOwnerMarkerFileName = "daemon.pid"
+
+let private testDataDirRoot () =
+  IO.Path.Combine(IO.Path.GetTempPath(), "sagefs-test")
+
+/// Reclaims temp-root directories any SageFs process may have leaked when it
+/// died before its own `finally`/`Exited` handler could run: private
+/// self-host launch roots (`sagefs-host-adopt-*`, ~680-835MB each) and
+/// isolated test data dirs (`sagefs-test/<guid>`, one per test-spawned
+/// daemon's `SAGEFS_DATA_DIR`) — the exact two families that took a machine
+/// down by filling a 32GB /tmp tmpfs (13 launch roots ≈ 9.5GB, plus 449
+/// stale test data dirs). Fail-closed like `ShadowCopy.cleanupStaleDirs`:
+/// only a directory whose recorded owner pid is provably gone is ever
+/// removed; a directory with no marker, a live owner, or an owner whose
+/// liveness cannot be determined is always left alone.
+///
+/// Run once at startup — so ANY daemon starting after a hard-killed one
+/// reclaims its mess, without depending on that daemon ever running code
+/// again — and re-run periodically, so a single long-lived daemon does not
+/// sit next to another dead process's leak for its whole uptime.
+let sweepOrphanedTempDirs (log: ILogger) : unit =
+  try
+    match HostCoreAdoption.sweepStaleAdoptedRoots () with
+    | [] -> ()
+    | removed ->
+      log.LogInformation(
+        "Swept {Count} orphaned self-host launch root(s) from prior runs, reclaiming {Bytes} bytes: {Dirs}",
+        List.length removed,
+        removed |> List.sumBy snd,
+        removed |> List.map fst |> String.concat ", ")
+  with ex ->
+    log.LogWarning("Self-host launch root sweep failed: {Error}", ex.Message)
+  try
+    match OrphanTempDirSweep.sweep (testDataDirRoot ()) "*" dataDirOwnerMarkerFileName ShadowCopy.processLiveness with
+    | [] -> ()
+    | removed ->
+      log.LogInformation(
+        "Swept {Count} orphaned isolated test data dir(s) from prior runs, reclaiming {Bytes} bytes",
+        List.length removed,
+        removed |> List.sumBy snd)
+  with ex ->
+    log.LogWarning("Isolated test data dir sweep failed: {Error}", ex.Message)
+
 let createDaemonInfrastructure () : DaemonInfra =
   let otelConfigured = DaemonInfo.otelConfigured
   let loggerFactory =
@@ -170,6 +218,10 @@ let createDaemonInfrastructure () : DaemonInfra =
   with ex ->
     log.LogWarning("Shadow-copy sweep on startup failed: {Error}", ex.Message)
 
+  // Same treatment for sagefs-host-adopt-* private launch roots and
+  // sagefs-test/<guid> isolated data dirs — see sweepOrphanedTempDirs.
+  sweepOrphanedTempDirs log
+
   // Ensure adequate thread pool for concurrent SSE/MCP/effects
   let minWorker, minIO = System.Threading.ThreadPool.GetMinThreads()
   let desiredMin = max 32 (System.Environment.ProcessorCount * 4)
@@ -186,6 +238,12 @@ let createDaemonInfrastructure () : DaemonInfra =
       // Creates the dir if missing AND hardens it to owner-only on Unix, even if
       // another writer created it first (roast-9 §8).
       DaemonState.ensureDataDir ()
+      // Record this daemon as the owner of its own data dir — the ground
+      // truth a LATER daemon's sweepOrphanedTempDirs proves liveness
+      // against when `dir` is an isolated `sagefs-test/<guid>` throwaway
+      // (SAGEFS_DATA_DIR). Harmless (and never a sweep target) on a real
+      // ~/.SageFs.
+      OrphanTempDirSweep.writeOwnerPid dataDirOwnerMarkerFileName dir Environment.ProcessId
       let dbPath = System.IO.Path.Combine(dir, "friction.db")
       let connStr = sprintf "Data Source=%s" dbPath
       let store = SageFs.Features.FrictionSqlite.Store.create connStr
@@ -2432,6 +2490,31 @@ let run
     activityCleanupTimerRef <- t
     t
 
+  // Periodic orphaned-temp-dir re-sweep — the cross-process backstop for the
+  // sagefs-host-adopt-*/sagefs-test/* leak (see sweepOrphanedTempDirs): the
+  // startup sweep above only reclaims another process's mess when THIS
+  // daemon happens to (re)start. A single daemon that stays up for hours (the
+  // actual /tmp-exhaustion incident) would otherwise sit next to a leak from
+  // some OTHER process that died during its own uptime until its own next
+  // restart. One-shot timer pattern (same as cache save / activity cleanup)
+  // to prevent reentrancy; a generous 15-minute period because this walks
+  // the OS temp directory and every sweep is otherwise a no-op.
+  let orphanTempDirSweepIntervalMs = 15 * 60 * 1000
+  let mutable orphanTempDirSweepTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  let orphanTempDirSweepCallback _ =
+    try
+      sweepOrphanedTempDirs log
+    finally
+      if not (isNull orphanTempDirSweepTimerRef) then
+        try orphanTempDirSweepTimerRef.Change(orphanTempDirSweepIntervalMs, System.Threading.Timeout.Infinite) |> ignore
+        with :? System.ObjectDisposedException -> ()
+  let orphanTempDirSweepTimer =
+    let t = new System.Threading.Timer(
+      System.Threading.TimerCallback(orphanTempDirSweepCallback),
+      null, orphanTempDirSweepIntervalMs, System.Threading.Timeout.Infinite)
+    orphanTempDirSweepTimerRef <- t
+    t
+
   // Cohort lease reaper (roast-7 §5) — makes the 30-minute lease actually cost
   // silence. Every 60s: renew the lease of each Present member seen active in
   // the last 2 minutes (a window shorter than the 5-min tracker eviction, so an
@@ -3280,6 +3363,9 @@ let run
   | TimerStop.Joined -> ()
   // Dispose activity cleanup timer (best-effort, no wait needed — cleanup is idempotent)
   try activityCleanupTimer.Dispose()
+  with :? System.ObjectDisposedException -> ()
+  // Dispose the orphaned-temp-dir sweep timer (best-effort — the sweep itself is idempotent)
+  try orphanTempDirSweepTimer.Dispose()
   with :? System.ObjectDisposedException -> ()
   // Dispose the cohort lease reaper (best-effort — Tick/RenewLease are idempotent)
   try cohortReaperTimer.Dispose()
