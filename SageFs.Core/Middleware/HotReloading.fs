@@ -744,8 +744,8 @@ let hotReloadingMiddleware next (request, st: AppState) =
   let hotReloadFlagEnabled =
     match sessionAvailable with
     | true ->
-      match st.Session.TryFindBoundValue "_SageFsHotReload" with
-      | Some fsiBoundValue when fsiBoundValue.Value.ReflectionValue = true -> true
+      match st.Session.ReadFlag "_SageFsHotReload" with
+      | SageFs.FsiSession.FlagBound true -> true
       | _ -> false
     | false -> false
 

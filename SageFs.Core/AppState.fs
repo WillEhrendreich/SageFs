@@ -95,7 +95,8 @@ type AppState = {
   OriginalSolution: Solution
   ShadowDir: string option
   Logger: ILogger
-  Session: FsiEvaluationSession
+  /// The FSI session behind the port: in this process today, an isolated host process next.
+  Session: FsiSession.IFsiSession
   OutStream: TextWriterRecorder
   StartupConfig: StartupConfig option
   Custom: Map<string, obj>
@@ -365,12 +366,12 @@ let evalFn (token: CancellationToken) =
     st.OutStream.StartRecording()
     let thread = Thread.CurrentThread
     token.Register(fun () -> thread.Interrupt()) |> ignore
-    let evalRes, diagnostics = st.Session.EvalInteractionNonThrowing(code, token)
-    let diagnostics = diagnostics |> Array.map Diagnostics.Diagnostic.mkDiagnostic
+    let evaluation = st.Session.Eval(code, token)
+    let diagnostics = evaluation.Diagnostics
 
     let evalRes =
-      match evalRes with
-      | Choice1Of2 _ ->
+      match evaluation.Outcome with
+      | FsiSession.FsiSucceeded ->
         let fsiOutput = st.OutStream.StopRecording()
         let stdout = stdoutCapture.ToString() |> cleanStdout
         let combined =
@@ -378,7 +379,8 @@ let evalFn (token: CancellationToken) =
           | true -> fsiOutput
           | false -> sprintf "%s\n%s" fsiOutput stdout
         Ok combined
-      | Choice2Of2 ex -> Error <| ex
+      | FsiSession.FsiFailed ex -> Error <| ex
+      | FsiSession.FsiInterrupted -> Error <| (OperationCanceledException("the evaluation was interrupted") :> exn)
 
     st.OutStream.StopRecording() |> ignore
     Console.SetOut(originalOut)
@@ -973,42 +975,12 @@ let createFsiSession (logger: ILogger) (outStream: TextWriter) (useAsp: bool) (o
       fsiSession.EvalInteractionNonThrowing("open Microsoft.FSharp.Core.ExtraTopLevelOperators;;", ct) |> ignore
     | false -> ()
 
-    return fsiSession, recorder, args, failed, warmupCtx
+    return (new FsiSession.InProcessFsiSession(fsiSession) :> FsiSession.IFsiSession), recorder, args, failed, warmupCtx
   }
 
 /// Pipeline builder: takes middleware list + core eval function, returns composed pipeline.
 /// Default is `buildPipeline`. Tracing module provides an instrumented alternative.
 type PipelineBuildFn = Middleware list -> MiddlewareNext -> MiddlewareNext
-
-/// Reflection-walk an FSI session's bound values into a JSON-serialized
-/// Features.LiveValueTree.LiveValueSnapshot, for the dashboard's watch
-/// window. Pulled on demand (Command.GetLiveValues / EvalCommand.EvalGetLiveValues)
-/// AFTER an eval reply, never attached to it — the walk used to sit between
-/// the eval finishing and the caller getting its result (roast-4 #2).
-let captureLiveValueSnapshotJson (session: FsiEvaluationSession) (generationRef: int64 ref) : string =
-  try
-    let boundValues =
-      session.GetBoundValues()
-      |> List.map (fun bv ->
-        let value =
-          try bv.Value.ReflectionValue
-          with _ -> null
-        let typeSig =
-          try
-            match bv.Value.ReflectionType with
-            | null -> ""
-            | t -> t.Name
-          with _ -> ""
-        (bv.Name, typeSig, value))
-    let generation = System.Threading.Interlocked.Increment(&generationRef.contents)
-    let snap = Features.LiveValueTree.buildSnapshot "" generation boundValues
-    // Use WorkerProtocol.Serialization (FSharp.SystemTextJson) so the
-    // NodeKind DU and other F# types serialize correctly.
-    WorkerProtocol.Serialization.serialize snap
-  with ex ->
-    Log.warn "[AppState] Live value snapshot capture failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-    let generation = System.Threading.Interlocked.Increment(&generationRef.contents)
-    WorkerProtocol.Serialization.serialize (Features.LiveValueTree.buildSnapshot "" generation [])
 
 let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStream useAsp (originalSln: Solution) (shadowDir: string option) (autoOpenNamespaces: bool) (hotReload: bool) (onEvent: Events.SageFsEvent -> unit) (pipelineBuildFn: PipelineBuildFn) (sln: Solution) =
   let diagnosticsChangedEvent = Event<Features.DiagnosticsStore.T>()
@@ -1060,7 +1032,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
         | QueryAutocomplete(text, caret, word, reply) ->
           match snapshot.Phase with
           | Active (st, _) ->
-            let res = AutoCompletion.getCompletions st.Session text caret word
+            let res = st.Session.Completions(text, caret, word)
             reply.Reply res
             return snapshot
           | _ ->
@@ -1069,7 +1041,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
         | QueryGetDiagnostics(text, reply) ->
           match snapshot.Phase with
           | Active (st, activity) ->
-            let res = Diagnostics.getDiagnostics st.Session text
+            let res = st.Session.Diagnose text
             reply.Reply res
             let newSt = { st with Diagnostics = Features.DiagnosticsStore.add text res st.Diagnostics }
             diagnosticsChangedEvent.Trigger(newSt.Diagnostics)
@@ -1085,7 +1057,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
         | QueryGetTypeCheckWithSymbols(text, filePath, reply) ->
           match snapshot.Phase with
           | Active (st, _) ->
-            let res = Diagnostics.getTypeCheckWithSymbols st.Session filePath text
+            let res = st.Session.TypeCheckWithSymbols(filePath, text)
             reply.Reply res
             return snapshot
           | _ ->
@@ -1094,11 +1066,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
         | QueryGetBoundValue(name, reply) ->
           match snapshot.Phase with
           | Active (st, _) ->
-            st.Session.GetBoundValues()
-            |> List.tryFind (fun x -> x.Name = name)
-            |> Option.map (fun v -> v.Value.ReflectionValue)
-            |> Option.bind Option.ofObj
-            |> reply.Reply
+            st.Session.BoundValue name |> Option.ofObj |> reply.Reply
             return snapshot
           | _ ->
             reply.Reply None
@@ -1327,7 +1295,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           // the caller already has its eval result (roast-4 #2).
           match phase with
           | Active (st, _) ->
-            reply.Reply (captureLiveValueSnapshotJson st.Session liveValueGeneration)
+            reply.Reply (st.Session.LiveValuesJson liveValueGeneration)
           | Initializing _ | Faulted _ ->
             reply.Reply (WorkerProtocol.Serialization.serialize (Features.LiveValueTree.buildSnapshot "" 0L []))
           return (phase, middleware, evalStats)
@@ -1791,7 +1759,7 @@ let mkAppStateActor (logger: ILogger) (initCustomData: Map<string, obj>) outStre
           let startupProfileResult =
             let workingDir = System.Environment.CurrentDirectory
             let evalFn code =
-              fsiSession.EvalInteraction(code, CancellationToken.None)
+              FsiSession.evalOrThrow fsiSession code CancellationToken.None
             let logFn msg = logger.LogInfo msg
             let outcome = StartupProfile.applyIfPresent workingDir evalFn logFn
 

@@ -249,8 +249,8 @@ let compExprMiddleware next (request, st: AppState) =
   let compExprFlagEnabled =
     match sessionAvailable with
     | true ->
-      match st.Session.TryFindBoundValue "_SageFsCompExpr" with
-      | Some fsiBoundValue when fsiBoundValue.Value.ReflectionValue = true -> true
+      match st.Session.ReadFlag "_SageFsCompExpr" with
+      | FsiSession.FlagBound true -> true
       | _ -> false
     | false -> false
 

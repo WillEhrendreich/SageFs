@@ -196,6 +196,7 @@
              fold, instead of ratcheting AppState.fs over its line budget
              (see EvalActorDecision.fs's header for why it can't be nested). -->
         <Compile Include="EvalActorDecision.fs" />
+        <Compile Include="FsiSession.fs" />
         <Compile Include="AppState.fs" />
         <Compile Include="Middleware\FsiCompatibility.fs" />
         <Compile Include="Middleware\ComputationExpression.fs" />
