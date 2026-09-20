@@ -284,11 +284,12 @@ You're in **Hot Reload mode** and tried to redefine a type in the REPL. You have
 SageFs appends its own explanation to the FS0037 message when the session's REPL is
 expression-only ([`SageFs.Core/WorkflowErrorContext.fs`](../SageFs.Core/WorkflowErrorContext.fs)):
 
-> 🔄 Type redefinition is not available in Live mode (single-assembly FSI).
->    Switch to REPL mode for full type redefinition: use switch_workflow tool or Ctrl+W in TUI.
+> 🔄 Type redefinition is not available in the Hot Reload workflow (single-assembly FSI).
+>    Switch to the REPL workflow for full type redefinition: the switch_workflow MCP tool, or 'SageFs: Switch Workflow' in VS Code.
 
-(That hint still says "Ctrl+W in TUI". The TUI is deprecated, so treat the `switch_workflow`
-half as the live advice.)
+Only the clients that can actually perform the switch are named. The dashboard shows the
+workflow but has no switch route yet, and Neovim's `:SageFsWorkflow` reports the current
+workflow without changing it — so neither appears in the hint.
 
 ---
 

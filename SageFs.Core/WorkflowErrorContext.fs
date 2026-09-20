@@ -32,5 +32,15 @@ module WorkflowErrorContext =
     (suggestion: string) =
     match WorkflowTypes.SessionWorkflow.replCapability workflow with
     | WorkflowTypes.ReplCapability.ExpressionOnly when isTypeRedefinitionError errorText ->
-      sprintf "%s\n\n🔄 Type redefinition is not available in Live mode (single-assembly FSI).\n   Switch to REPL mode for full type redefinition: use switch_workflow tool or Ctrl+W in TUI." suggestion
+      // WHY the wording is specific: this is the last user-facing reference to the
+      // deprecated TUI, and it named a keystroke (Ctrl+W) in a client that no longer
+      // ships — so the one actionable half of the hint pointed at nothing. It also
+      // said "Live mode", which is the old name; the workflow is HotReload, and
+      // "live" is an alias trap that means Hot Reload rather than live testing.
+      // Only the two clients that can actually perform the switch are named: the
+      // dashboard has no switch route yet and Neovim's :SageFsWorkflow is
+      // status-only, so promising either would be a remedy the user cannot follow.
+      sprintf
+        "%s\n\n🔄 Type redefinition is not available in the Hot Reload workflow (single-assembly FSI).\n   Switch to the REPL workflow for full type redefinition: the switch_workflow MCP tool, or 'SageFs: Switch Workflow' in VS Code."
+        suggestion
     | _ -> suggestion
