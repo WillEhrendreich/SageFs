@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.671",
+  "version": "0.6.672",
   "publisher": "willehrendreich",
   "license": "MIT",
   "icon": "icon.png",
@@ -461,15 +461,15 @@
         },
         {
           "command": "sagefs.switchWorkflow",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.resetSession",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.hardReset",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.createSession",
@@ -477,83 +477,83 @@
         },
         {
           "command": "sagefs.switchSession",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.stopSession",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.hotReloadToggle",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.hotReloadWatchAll",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.hotReloadUnwatchAll",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.hotReloadRefresh",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.hotReloadToggleDirectory",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.sessionContextRefresh",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.enableLiveTesting",
-          "when": "sagefs:daemonRunning && !sagefs:liveTestingEnabled"
+          "when": "sagefs:daemonRunning && sagefs:hasSession && !sagefs:liveTestingEnabled"
         },
         {
           "command": "sagefs.disableLiveTesting",
-          "when": "sagefs:daemonRunning && sagefs:liveTestingEnabled"
+          "when": "sagefs:daemonRunning && sagefs:hasSession && sagefs:liveTestingEnabled"
         },
         {
           "command": "sagefs.runTests",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.setRunPolicy",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.showHistory",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.showCallGraph",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.showBindings",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.showTestTrace",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.explainTestFailure",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.suggestRepair",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.exportSession",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.sessionMenu",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.sessionsRefresh",
@@ -561,31 +561,31 @@
         },
         {
           "command": "sagefs.switchToSession",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.stopSessionInline",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.resetSessionInline",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.runApp",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.stopApp",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.nextFailingTest",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         },
         {
           "command": "sagefs.prevFailingTest",
-          "when": "sagefs:daemonRunning"
+          "when": "sagefs:daemonRunning && sagefs:hasSession"
         }
       ],
       "view/title": [
