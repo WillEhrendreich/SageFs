@@ -40,10 +40,11 @@ let getChildren (_element: obj option) : JS.Promise<obj array> =
   promise {
     match cachedSessions with
     | [||] ->
-      let item = newTreeItem "No sessions" TreeItemCollapsibleState.None
-      item.description <- "Create one with $(add) above"
-      item.iconPath <- Vscode.newThemeIcon "info"
-      return [| item :> obj |]
+      // An empty array — not a synthesized placeholder row — is what lets
+      // VS Code show `viewsWelcome` instead: a static "No sessions" row here
+      // used to mask the state-aware welcome content (Start SageFs / Create
+      // Session / no F# project) entirely, in every state.
+      return [||]
     | sessions ->
       return
         sessions

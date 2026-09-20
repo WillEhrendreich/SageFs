@@ -2,7 +2,7 @@
   "name": "sagefs",
   "displayName": "SageFs — Live F# Development",
   "description": "Send F# code to SageFs for instant evaluation, type-checking, and hot reload.",
-  "version": "0.6.670",
+  "version": "0.6.671",
   "publisher": "willehrendreich",
   "license": "MIT",
   "icon": "icon.png",
@@ -75,6 +75,11 @@
         "command": "sagefs.switchProject",
         "title": "SageFs: Switch Project",
         "icon": "$(folder-library)"
+      },
+      {
+        "command": "sagefs.browseForProject",
+        "title": "SageFs: Browse for Project",
+        "icon": "$(folder-opened)"
       },
       {
         "command": "sagefs.switchWorkflow",
@@ -409,6 +414,180 @@
       ]
     },
     "menus": {
+      "commandPalette": [
+        {
+          "command": "sagefs.eval",
+          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+        },
+        {
+          "command": "sagefs.evalFile",
+          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+        },
+        {
+          "command": "sagefs.evalRange",
+          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+        },
+        {
+          "command": "sagefs.evalAdvance",
+          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+        },
+        {
+          "command": "sagefs.evalAllBlocks",
+          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+        },
+        {
+          "command": "sagefs.cancelEval",
+          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+        },
+        {
+          "command": "sagefs.loadScript",
+          "when": "sagefs:daemonRunning && editorLangId == fsharp"
+        },
+        {
+          "command": "sagefs.nextBlock",
+          "when": "editorLangId == fsharp"
+        },
+        {
+          "command": "sagefs.prevBlock",
+          "when": "editorLangId == fsharp"
+        },
+        {
+          "command": "sagefs.stop",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.restart",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.switchWorkflow",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.resetSession",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.hardReset",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.createSession",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.switchSession",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.stopSession",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.hotReloadToggle",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.hotReloadWatchAll",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.hotReloadUnwatchAll",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.hotReloadRefresh",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.hotReloadToggleDirectory",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.sessionContextRefresh",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.enableLiveTesting",
+          "when": "sagefs:daemonRunning && !sagefs:liveTestingEnabled"
+        },
+        {
+          "command": "sagefs.disableLiveTesting",
+          "when": "sagefs:daemonRunning && sagefs:liveTestingEnabled"
+        },
+        {
+          "command": "sagefs.runTests",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.setRunPolicy",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.showHistory",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.showCallGraph",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.showBindings",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.showTestTrace",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.explainTestFailure",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.suggestRepair",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.exportSession",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.sessionMenu",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.sessionsRefresh",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.switchToSession",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.stopSessionInline",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.resetSessionInline",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.runApp",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.stopApp",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.nextFailingTest",
+          "when": "sagefs:daemonRunning"
+        },
+        {
+          "command": "sagefs.prevFailingTest",
+          "when": "sagefs:daemonRunning"
+        }
+      ],
       "view/title": [
         {
           "command": "sagefs.hotReloadWatchAll",
@@ -648,15 +827,38 @@
     "viewsWelcome": [
       {
         "view": "sagefs-sessions",
-        "contents": "No SageFs sessions yet.\n[Start SageFs](command:sagefs.start)\n\nOpen an F# project and start SageFs to begin."
+        "when": "!sagefs:hasFsharpProject",
+        "contents": "No F# project or solution found in this workspace.\n[Browse for a Project](command:sagefs.browseForProject)\n\nOpen a folder containing a .fsproj, .sln, or .slnx file, or browse to one."
+      },
+      {
+        "view": "sagefs-sessions",
+        "when": "sagefs:hasFsharpProject && !sagefs:daemonRunning",
+        "contents": "SageFs isn't running.\n[Start SageFs](command:sagefs.start)"
+      },
+      {
+        "view": "sagefs-sessions",
+        "when": "sagefs:hasFsharpProject && sagefs:daemonRunning && !sagefs:hasSession",
+        "contents": "SageFs is running with no active session.\n[Create Session](command:sagefs.createSession)"
       },
       {
         "view": "sagefs-hotReload",
-        "contents": "No files watched yet.\n[Start SageFs](command:sagefs.start)\n\nSageFs automatically discovers F# files for hot reload when the daemon is running."
+        "when": "!sagefs:daemonRunning",
+        "contents": "SageFs isn't running.\n[Start SageFs](command:sagefs.start)"
+      },
+      {
+        "view": "sagefs-hotReload",
+        "when": "sagefs:daemonRunning && !sagefs:hasSession",
+        "contents": "No active session.\n[Create Session](command:sagefs.createSession)\n\nHot reload files appear once a session is running."
       },
       {
         "view": "sagefs-sessionContext",
-        "contents": "No session context yet.\n[Start SageFs](command:sagefs.start)\n\nSession context shows bindings and types from your active FSI session."
+        "when": "!sagefs:daemonRunning",
+        "contents": "SageFs isn't running.\n[Start SageFs](command:sagefs.start)"
+      },
+      {
+        "view": "sagefs-sessionContext",
+        "when": "sagefs:daemonRunning && !sagefs:hasSession",
+        "contents": "No active session.\n[Create Session](command:sagefs.createSession)\n\nSession context shows bindings and types once a session is running."
       }
     ]
   },

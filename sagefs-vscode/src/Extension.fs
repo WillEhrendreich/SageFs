@@ -29,9 +29,28 @@ module Blocks = SageFs.Vscode.CodeBlocks
 module Discovery = SageFs.Vscode.DaemonDiscovery
 module BufferBridge = SageFs.Vscode.BufferBridge
 module DebugRects = SageFs.Vscode.DebugRects
+module SessionsTreePure = SageFs.Vscode.SessionsTreePure
+module StatusBarPure = SageFs.Vscode.StatusBarPure
+module ContextKeysPure = SageFs.Vscode.ContextKeysPure
 
 open SageFs.Vscode.LiveTestingTypes
 open SageFs.Vscode.FeatureTypes
+
+// ── VS Code context keys ────────────────────────────────────────
+//
+// `contributes.menus.commandPalette` and `contributes.viewsWelcome` in
+// package.json gate on `sagefs:*` context keys. VS Code has no way to derive
+// these itself — they exist only because we call `setContext` here whenever
+// the underlying state changes. A key nobody sets is worse than no gating at
+// all (a `when` clause that always reads false/undefined just hides the
+// command forever), so every key this module can reference is set from at
+// least one place below, and the daemon-offline path resets all of them —
+// a stale key is a bug: if the daemon dies, the gates must open again.
+[<Emit("$0.executeCommand('setContext', $1, $2)")>]
+let private executeSetContext (c: obj) (key: string) (value: bool) : JS.Promise<obj> = jsNative
+
+let setContext (key: string) (value: bool) : unit =
+  executeSetContext commandsExports key value |> ignore
 
 // ── Mutable state ──────────────────────────────────────────────
 
@@ -471,7 +490,12 @@ let scanForProjects () =
     let! projFiles = Workspace.findFiles "**/*.fsproj" "**/{node_modules,bin,obj,.git,.worktrees}/**" projectScanLimit
     let solutions = slnFiles |> Array.map (fun f -> Workspace.asRelativePath f)
     let projects = projFiles |> Array.map (fun f -> Workspace.asRelativePath f)
-    return Array.append solutions projects
+    let all = Array.append solutions projects
+    // `sagefs:hasFsharpProject` backs the Sessions view's "no F# project
+    // found" welcome content — every scan (not just the one at activation)
+    // keeps it current, e.g. after a folder is added to the workspace.
+    setContext "sagefs:hasFsharpProject" (ContextKeysPure.hasFsharpProjectContext all.Length)
+    return all
   }
 
 let private workspaceFolderPaths () =
@@ -633,6 +657,11 @@ let describeTestStatusBarTooltip (summary: VscTestSummary) =
   (VscTestSummary.statusBarView summary).Tooltip
 
 let updateTestStatusBar (summary: VscTestSummary) =
+  // The summary is the one signal that is guaranteed to arrive on every
+  // connect/reconnect (not just on a toggle transition), so it is the
+  // authoritative source for `sagefs:liveTestingEnabled`'s RESTING value —
+  // see ContextKeysPure.liveTestingEnabledFromDiscoveryState.
+  setContext "sagefs:liveTestingEnabled" (ContextKeysPure.liveTestingEnabledFromDiscoveryState summary.DiscoveryState)
   match testStatusBarItem with
   | None -> ()
   | Some sb ->
@@ -692,6 +721,8 @@ let refreshStatus () =
         | false -> ()
         wasRunning <- false
         sb.text <- "$(circle-slash) SageFs: offline"
+        sb.tooltip <- Some "SageFs is not running — click for session menu"
+        sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: offline" ]
         sb.backgroundColor <- None
         sb.show ()
         activeSessionId <- None
@@ -701,29 +732,23 @@ let refreshStatus () =
         HotReload.setSession c None
         SessionCtx.setSession c None
         Sessions.setSession c None
+        setContext "sagefs:daemonRunning" false
+        setContext "sagefs:hasSession" false
+        setContext "sagefs:liveTestingEnabled" false
       | true ->
         wasRunning <- true
         crashPromptShown <- false
+        setContext "sagefs:daemonRunning" true
         let! sys = Client.getSystemStatus c
-        let supervised =
-          match sys with Some s when s.supervised -> " $(shield)" | _ -> ""
-        let restarts =
-          match sys with Some s when s.restartCount > 0 -> sprintf " %d↻" s.restartCount | _ -> ""
-        let stripExt (name: string) =
-          match jsIsNullOrUndefined (box name) with
-          | true -> ""
-          | false ->
-          match name with
-          | n when n.EndsWith(".fsproj") -> n.[..n.Length - 8]
-          | n when n.EndsWith(".slnx") -> n.[..n.Length - 6]
-          | n when n.EndsWith(".sln") -> n.[..n.Length - 5]
-          | n -> n
+        let supervisedFlag = match sys with Some s -> s.supervised | None -> false
+        let restartCount = match sys with Some s -> s.restartCount | None -> 0
         match status.status with
         | Some "Ready" | Some "Evaluating" ->
           warmupPhase <- None
           warmupDetail <- None
           let! sessions = Client.listSessions c
           knownSessions <- sessions
+          setContext "sagefs:hasSession" (ContextKeysPure.hasSessionContext sessions.Length)
           let session =
             match activeSessionId with
             | Some id -> sessions |> Array.tryFind (fun s -> s.id = id)
@@ -733,45 +758,41 @@ let refreshStatus () =
             activeSessionId <- Some s.id
             activeSessionWorkingDirectory <- Some s.workingDirectory
             liveTestListener |> Option.iter (fun l -> l.SetSessionFilter (Some s.id))
-            let projLabel =
-              match s.projects with
-              | [||] -> "session"
-              | ps ->
-                ps
-                |> Array.choose (fun p ->
-                  match jsIsNullOrUndefined (box p) with
-                  | true -> None
-                  | false -> p.Split([|'/'; '\\'|]) |> Array.last |> stripExt |> Some)
-                |> String.concat ","
-                |> fun s -> match s with "" -> "session" | x -> x
-            let projFile =
-              match activeProjectPath with
-              | Some p -> p.Split([|'/'; '\\'|]) |> Array.last
-              | None ->
-                match s.projects with
-                | [||] -> ""
-                | ps ->
-                  ps
-                  |> Array.choose (fun p ->
-                    match jsIsNullOrUndefined (box p) with
-                    | true -> None
-                    | false -> p.Split([|'/'; '\\'|]) |> Array.last |> Some)
-                  |> Array.tryHead |> Option.defaultValue ""
-            let sessionCount = sessions.Length
-            let evalLabel = match s.evalCount with 0 -> "" | n -> sprintf " [%d]" n
+            let notNullPaths (arr: string array) =
+              match jsIsNullOrUndefined (box arr) with
+              | true -> [||]
+              | false -> arr |> Array.filter (fun p -> not (jsIsNullOrUndefined (box p)))
+            let row: SessionsTreePure.SessionRowInput =
+              { Id = s.id
+                Status = s.status
+                DeclaredProjects = notNullPaths s.projects
+                LoadedProjects = notNullPaths s.loadedProjects
+                EvalCount = s.evalCount
+                WorkingDirectory = s.workingDirectory
+                IsActive = true }
             currentWorkflowLabel <- s.workflowLabel
-            let workflowTag = sprintf " [%s]" currentWorkflowLabel
-            sb.text <- sprintf "$(zap) SageFs: %s%s%s%s%s" projLabel workflowTag evalLabel supervised restarts
-            let tooltipText =
-              match projFile with
-              | "" -> sprintf "SageFs — %d session(s) — click for session menu" sessionCount
-              | f -> sprintf "SageFs: %s — %d session(s) — click for session menu" f sessionCount
-            sb.tooltip <- Some tooltipText
+            let view =
+              StatusBarPure.sessionView
+                { ProjectLabel = SessionsTreePure.label row
+                  WorkflowLabel = currentWorkflowLabel
+                  EvalCount = s.evalCount
+                  Supervised = supervisedFlag
+                  RestartCount = restartCount
+                  SessionCount = sessions.Length }
+            sb.text <- view.Text
+            sb.tooltip <- Some view.Tooltip
+            // `$(zap)` renders as a glyph in `text` but its NAME leaks into the
+            // accessible name unless it is overridden — screen readers were
+            // reading the status bar as "zap SageFs: ...".
+            sb?accessibilityInformation <- createObj [ "label" ==> view.Tooltip ]
           | None ->
             activeSessionId <- None
             activeSessionWorkingDirectory <- None
             liveTestListener |> Option.iter (fun l -> l.SetSessionFilter None)
-            sb.text <- sprintf "$(zap) SageFs: ready (no session)%s%s" supervised restarts
+            let view = StatusBarPure.noSessionView supervisedFlag restartCount
+            sb.text <- view.Text
+            sb.tooltip <- Some view.Tooltip
+            sb?accessibilityInformation <- createObj [ "label" ==> view.Tooltip ]
           sb.backgroundColor <- None
           let activeId = activeSessionId
           HotReload.setSession c activeId
@@ -779,6 +800,7 @@ let refreshStatus () =
           Sessions.setSession c activeId
           TypeExpl.setClient (Some c)
         | Some "Starting" | Some "Restarting" | Some "Warming Up" ->
+          setContext "sagefs:hasSession" false
           match warmupPhase with
           | Some phase ->
             let phaseLabel =
@@ -793,14 +815,20 @@ let refreshStatus () =
               | "finalizing" -> "Finalizing..."
               | _ -> "Warming up..."
             sb.text <- sprintf "$(loading~spin) SageFs: %s" phaseLabel
+            sb.tooltip <- Some (sprintf "SageFs: %s" phaseLabel)
+            sb?accessibilityInformation <- createObj [ "label" ==> sprintf "SageFs: %s" phaseLabel ]
           | None ->
             sb.text <- "$(loading~spin) SageFs: warming up..."
+            sb.tooltip <- Some "SageFs: warming up..."
+            sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: warming up" ]
           sb.backgroundColor <- None
         | Some "Faulted" | Some "Stopped" | Some "error" ->
+          setContext "sagefs:hasSession" false
           match status.error with
           | Some err ->
             sb.text <- "$(error) SageFs: session error"
             sb.tooltip <- Some err.message
+            sb?accessibilityInformation <- createObj [ "label" ==> sprintf "SageFs: session error — %s" err.message ]
             let! choice =
               Window.showErrorMessage
                 err.message
@@ -812,18 +840,30 @@ let refreshStatus () =
             | _ -> ()
           | None ->
             sb.text <- "$(error) SageFs: session error"
+            sb.tooltip <- Some "SageFs: session error"
+            sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: session error" ]
           sb.backgroundColor <-
             Some (newThemeColor "statusBarItem.errorBackground")
         | Some "no session" ->
+          setContext "sagefs:hasSession" false
           sb.text <- "$(circle-slash) SageFs: no session"
+          sb.tooltip <- Some "SageFs: no session — click for session menu"
+          sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: no session" ]
           sb.backgroundColor <- None
         | _ ->
           sb.text <- "$(loading~spin) SageFs: starting..."
+          sb.tooltip <- Some "SageFs: starting..."
+          sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: starting" ]
         sb.show ()
     with ex ->
       c.log (sprintf "[warn] refreshStatus: %O" ex)
       sb.text <- "$(circle-slash) SageFs: offline"
+      sb.tooltip <- Some "SageFs: offline — click for session menu"
+      sb?accessibilityInformation <- createObj [ "label" ==> "SageFs: offline" ]
       sb.show ()
+      setContext "sagefs:daemonRunning" false
+      setContext "sagefs:hasSession" false
+      setContext "sagefs:liveTestingEnabled" false
     | _ -> ()
   } |> promiseIgnoreLog (fun msg -> (getOutput()).appendLine msg)
 
@@ -1959,6 +1999,14 @@ let activate (context: ExtensionContext) =
   let c = Client.create mcpPort dashboardPort (fun msg -> (getOutput()).appendLine msg)
   client <- Some c
 
+  // Fail-closed defaults for every `sagefs:*` context key package.json gates
+  // on, set before anything else can race the palette/viewsWelcome checks.
+  setContext "sagefs:daemonRunning" false
+  setContext "sagefs:hasSession" false
+  setContext "sagefs:liveTestingEnabled" false
+  setContext "sagefs:hasFsharpProject" false
+  scanForProjects () |> promiseIgnore
+
   currentDensity <- densityFromString (config.get("density", "full"))
 
   let out = Window.createOutputChannel "SageFs"
@@ -2087,6 +2135,7 @@ let activate (context: ExtensionContext) =
     } |> promiseIgnoreLog logToOutput)
   reg "sagefs.openDashboard" (fun _ -> openDashboard () |> promiseIgnoreLog logToOutput)
   reg "sagefs.switchProject" (fun _ -> switchProject () |> promiseIgnoreLog logToOutput)
+  reg "sagefs.browseForProject" (fun _ -> browseForProject () |> promiseIgnoreLog logToOutput)
   reg "sagefs.checkHealth" (fun _ -> checkHealth () |> promiseIgnoreLog logToOutput)
   // sagefs.debug.rectFor (demo-actors-plan.md §2.1): a value-returning
   // registration (`Commands.registerCommand` above is `unit`-returning) so
@@ -2527,6 +2576,13 @@ let activate (context: ExtensionContext) =
         let state = refreshAllDecorations ()
         TestDeco.updateDiagnostics state
         TestLens.updateState state
+        // `sagefs:liveTestingEnabled` — a live transition is the immediate
+        // path; updateTestStatusBar's summary is the resting-state fallback.
+        changes |> List.iter (fun c ->
+          match c with
+          | VscStateChange.EnabledChanged enabled ->
+            setContext "sagefs:liveTestingEnabled" (ContextKeysPure.liveTestingEnabledContext enabled)
+          | _ -> ())
         // Auto-focus output on test failure
         let hasFailure =
           changes |> List.exists (fun c ->

@@ -55,14 +55,17 @@ let getChildren (element: obj option) : JS.Promise<obj array> =
     | None ->
       match isLoading with
       | true ->
-        let item = newTreeItem "$(loading~spin) Loading..." TreeItemCollapsibleState.None
+        // A codicon token in TreeItem.label renders literally — VS Code only
+        // expands `$(...)` in iconPath (or a MarkdownString/status bar text).
+        let item = newTreeItem "Loading..." TreeItemCollapsibleState.None
+        item.iconPath <- Vscode.newThemeIcon "loading~spin"
         return [| item :> obj |]
       | false ->
       match cachedContext with
       | None ->
-        let item = newTreeItem "No session context" TreeItemCollapsibleState.None
-        item.description <- "Waiting for session..."
-        return [| item :> obj |]
+        // Empty, not a synthesized placeholder row — lets `viewsWelcome`
+        // (gated on sagefs:daemonRunning / sagefs:hasSession) show instead.
+        return [||]
       | Some ctx ->
         return [| summaryItem ctx :> obj |]
     | Some el ->

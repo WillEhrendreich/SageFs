@@ -10,6 +10,7 @@
     <Compile Include="JsHelpers.fs" />
     <Compile Include="BufferBridge.fs" />
     <Compile Include="LiveTestingTypes.fs" />
+    <Compile Include="ContextKeysPure.fs" />
     <Compile Include="CoverageViewPure.fs" />
     <Compile Include="CoverageView.fs" />
     <Compile Include="FeatureTypes.fs" />
@@ -19,6 +20,7 @@
     <Compile Include="AppRunPure.fs" />
     <Compile Include="SessionsTreePure.fs" />
     <Compile Include="ProjectPickPure.fs" />
+    <Compile Include="StatusBarPure.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsListener.fs" />
     <Compile Include="CodeBlocks.fs" />
