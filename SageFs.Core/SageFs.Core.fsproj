@@ -44,6 +44,9 @@
         <Compile Include="EndpointContracts.fs" />
         <Compile Include="ResilientActor.fs" />
         <Compile Include="RuntimeCompat.fs" />
+        <!-- One source file, compiled into BOTH this assembly and the per-SDK generated FSI host: the wire
+             protocol cannot drift because there is only one definition of it. -->
+        <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />
         <Compile Include="ProjectLoading.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
         <Compile Include="ShadowCopy.fs" />

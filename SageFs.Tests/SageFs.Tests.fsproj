@@ -155,6 +155,7 @@
         <Compile Include="PluginContractTests.fs" />
         <Compile Include="ProjectLoadingTests.fs" />
         <Compile Include="RuntimeCompatTests.fs" />
+        <Compile Include="FsiProtocolTests.fs" />
         <Compile Include="McpWireProtocolTests.fs" />
          <Compile Include="HttpApiIntegrationTests.fs" />
          <Compile Include="WarmupContextTests.fs" />
