@@ -233,6 +233,7 @@
         <Compile Include="EvalDiffTests.fs" />
         <Compile Include="CellDependencyGraphTests.fs" />
         <Compile Include="TestSourceResolverTests.fs" />
+        <Compile Include="ReloadOutcomeTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />
         <Compile Include="IdentifierScanTests.fs" />
         <Compile Include="EvalTimelineTests.fs" />
@@ -293,7 +294,10 @@
         <Compile Include="DstFaultInjectionTests.fs" />
         <Compile Include="SseGoldenFixtureGenerationTests.fs" />
         <Compile Include="SupervisorSimTests.fs" />
+        <Compile Include="WorkflowSwitchSimTests.fs" />
         <Compile Include="DstCoverageTests.fs" />
+        <Compile Include="McpToolOutcomeTests.fs" />
+        <Compile Include="McpAppRunOutcomeTests.fs" />
         <Compile Include="DstShrinkTests.fs" />
         <Compile Include="OriginGuardOutcomeTests.fs" />
         <Compile Include="SessionBindingIsolationOutcomeTests.fs" />
