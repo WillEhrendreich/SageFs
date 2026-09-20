@@ -35,6 +35,9 @@ mcp-sdk/
 # Same for the patched Harmony fork (LibHarmony): cloned + packed by ci-pipeline.fsx, referenced via nuget.config.
 harmony-nupkg/*
 !harmony-nupkg/.gitkeep
+# The packed nupkg IS committed: LibHarmony builds are not byte-reproducible, and packages.lock.json pins the
+# package's content hash, so a locked-mode restore needs one fixed artifact (see Directory.Packages.props).
+!harmony-nupkg/SageFs.Harmony.*.nupkg
 harmony-fork/
 *.log
 aspire-traces.png

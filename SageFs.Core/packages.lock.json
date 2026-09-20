@@ -76,12 +76,6 @@
           "Ionide.ProjInfo": "0.74.1"
         }
       },
-      "Lib.Harmony": {
-        "type": "Direct",
-        "requested": "[2.4.2, )",
-        "resolved": "2.4.2",
-        "contentHash": "D2X9ojVjqbqdqWVK3VQETrEb56yVoXxtEp6tP5UvW0PP+bA4uJiswqOxF8GhH02ECwyevUa9vwhwdLzyXfksbw=="
-      },
       "Microsoft.Extensions.Logging.Abstractions": {
         "type": "Direct",
         "requested": "[9.0.1, )",
@@ -96,6 +90,12 @@
         "requested": "[0.11.6, )",
         "resolved": "0.11.6",
         "contentHash": "f33RkDtZO8VlGXCtmQIviOtxgnUdym9xx/b1p9h91CRGOsJFxCFOFK1FDbVt1OCf1aWwYejUFa2MOQyFWTFjbA=="
+      },
+      "SageFs.Harmony": {
+        "type": "Direct",
+        "requested": "[2.4.2-sagefs.1, )",
+        "resolved": "2.4.2-sagefs.1",
+        "contentHash": "wGKMz4zOP0cJt3K4F58SFuoBL791agMFnKbFPol0CUqqTRey0J/htwYEHwgtBzrsRaZpEoR+dx6mzI5+oQyHuQ=="
       },
       "System.Configuration.ConfigurationManager": {
         "type": "Direct",

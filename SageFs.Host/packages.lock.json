@@ -36,8 +36,8 @@
           "FuzzySharp": "[2.0.2, )",
           "Ionide.ProjInfo": "[0.74.1, )",
           "Ionide.ProjInfo.FCS": "[0.74.1, )",
-          "Lib.Harmony": "[2.4.2, )",
           "Mono.Cecil": "[0.11.6, )",
+          "SageFs.Harmony": "[2.4.2-sagefs.1, )",
           "System.Configuration.ConfigurationManager": "[10.0.3, )",
           "TreeSitter.DotNet": "[1.3.0, )"
         }
@@ -122,17 +122,17 @@
           "Ionide.ProjInfo": "0.74.1"
         }
       },
-      "Lib.Harmony": {
-        "type": "CentralTransitive",
-        "requested": "[2.4.2, )",
-        "resolved": "2.4.2",
-        "contentHash": "D2X9ojVjqbqdqWVK3VQETrEb56yVoXxtEp6tP5UvW0PP+bA4uJiswqOxF8GhH02ECwyevUa9vwhwdLzyXfksbw=="
-      },
       "Mono.Cecil": {
         "type": "CentralTransitive",
         "requested": "[0.11.6, )",
         "resolved": "0.11.6",
         "contentHash": "f33RkDtZO8VlGXCtmQIviOtxgnUdym9xx/b1p9h91CRGOsJFxCFOFK1FDbVt1OCf1aWwYejUFa2MOQyFWTFjbA=="
+      },
+      "SageFs.Harmony": {
+        "type": "CentralTransitive",
+        "requested": "[2.4.2-sagefs.1, )",
+        "resolved": "2.4.2-sagefs.1",
+        "contentHash": "wGKMz4zOP0cJt3K4F58SFuoBL791agMFnKbFPol0CUqqTRey0J/htwYEHwgtBzrsRaZpEoR+dx6mzI5+oQyHuQ=="
       },
       "System.Configuration.ConfigurationManager": {
         "type": "CentralTransitive",

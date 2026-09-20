@@ -46,7 +46,11 @@
     <!-- SageFs.Harmony = WillEhrendreich/LibHarmony: upstream Harmony (same HarmonyLib API) built on our
          patched MonoMod fork so detours work on CoreCLR 11. Not on any feed: ci-pipeline.fsx's
          "restore harmony fork" stage clones the pinned commit and packs it into harmony-nupkg/. The version
-         suffix is the pack's SageFsBuild number; bump it together with harmonyCommit/harmonyBuild there. -->
+         suffix is the pack's SageFsBuild number; bump it together with harmonyCommit/harmonyBuild there.
+         The packed nupkg is COMMITTED (harmony-nupkg/): the fork's build is not byte-reproducible (even the ILRepack-merged
+         DLL differs between clean builds), and packages.lock.json pins the package's content hash, so a package packed
+         fresh in CI would fail a locked-mode restore. To bump: delete the nupkg, let the stage repack, refresh the locks,
+         commit the new nupkg. -->
     <PackageVersion Include="SageFs.Harmony" Version="2.4.2-sagefs.1" />
     <PackageVersion Include="Microsoft.Bcl.Memory" Version="10.0.5" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="9.0.1" />
