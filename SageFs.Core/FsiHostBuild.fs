@@ -22,6 +22,40 @@ type HostBuild =
   | Built of dll: string
   | Reused of dll: string
 
+/// Why running an external process failed.
+type ProcessFailure =
+  | CouldNotStart of file: string * detail: string
+  | TimedOut of command: string * timeoutMs: int
+  | ExitedWith of command: string * exitCode: int * output: string
+
+let describeProcessFailure (failure: ProcessFailure) : string =
+  match failure with
+  | CouldNotStart(file, detail) -> sprintf "could not run `%s`: %s" file detail
+  | TimedOut(command, timeoutMs) -> sprintf "`%s` did not finish within %d ms" command timeoutMs
+  | ExitedWith(command, exitCode, output) -> sprintf "`%s` exited with %d:\n%s" command exitCode output
+
+/// Why a host could not be built or found.
+type HostBuildError =
+  | EmbeddedSourceMissing of name: string
+  | SdkUnavailable of workingDir: string * failure: ProcessFailure
+  | BuildLockUnavailable of path: string * detail: string
+  | BuildFailed of sdkVersion: string * failure: ProcessFailure
+  | BuildOutputMissing of dll: string
+
+/// The one place a build error becomes text; every case says what to do about it where the user can act.
+let describeBuildError (error: HostBuildError) : string =
+  match error with
+  | EmbeddedSourceMissing name -> sprintf "the FSI host source '%s' is not embedded in SageFs.Core (a broken SageFs build)" name
+  | SdkUnavailable(workingDir, failure) ->
+    sprintf
+      "Could not determine the .NET SDK for %s: %s\nInstall the .NET SDK from https://dotnet.microsoft.com/download or fix the SDK version in global.json."
+      workingDir
+      (describeProcessFailure failure)
+  | BuildLockUnavailable(path, detail) -> sprintf "could not take the FSI host build lock %s: %s" path detail
+  | BuildFailed(sdkVersion, failure) ->
+    sprintf "Building the FSI host with .NET SDK %s failed. Make sure that SDK is installed.\n%s" sdkVersion (describeProcessFailure failure)
+  | BuildOutputMissing dll -> sprintf "the FSI host build succeeded but %s is missing" dll
+
 /// Pure: the cache directory name for an SDK version and the exact host sources. Any change to either changes it.
 let cacheKey (sdkVersion: string) (sources: (string * string) list) : string =
   let material =
@@ -36,25 +70,25 @@ let cacheKey (sdkVersion: string) (sources: (string * string) list) : string =
 let globalJson (sdkVersion: string) : string =
   sprintf """{"sdk":{"version":"%s","rollForward":"disable","allowPrerelease":true}}""" sdkVersion
 
-let private readEmbedded (name: string) : Result<string, string> =
-  let assembly = Assembly.GetExecutingAssembly()
-  match assembly.GetManifestResourceStream("FsiHost/" + name) with
-  | null -> Result.Error(sprintf "the FSI host source '%s' is not embedded in %s" name (assembly.GetName().Name |> string))
+let private readEmbedded (name: string) : Result<string, HostBuildError> =
+  match Assembly.GetExecutingAssembly().GetManifestResourceStream("FsiHost/" + name) with
+  | null -> Error(EmbeddedSourceMissing name)
   | stream ->
     use stream = stream
     use reader = new StreamReader(stream, Encoding.UTF8)
-    Result.Ok(reader.ReadToEnd())
+    Ok(reader.ReadToEnd())
 
 /// The embedded host sources as (file name, content).
-let embeddedSources () : Result<(string * string) list, string> =
+let embeddedSources () : Result<(string * string) list, HostBuildError> =
   hostSourceNames
   |> List.fold
        (fun acc name ->
          acc |> Result.bind (fun sources -> readEmbedded name |> Result.map (fun content -> (name, content) :: sources)))
-       (Result.Ok [])
+       (Ok [])
   |> Result.map List.rev
 
-let private runCapture (file: string) (arguments: string list) (workingDir: string) (timeoutMs: int) : Result<string, string> =
+let private runCapture (file: string) (arguments: string list) (workingDir: string) (timeoutMs: int) : Result<string, ProcessFailure> =
+  let command = file + " " + String.concat " " arguments
   let psi = ProcessStartInfo(file)
   for argument in arguments do
     psi.ArgumentList.Add argument
@@ -73,44 +107,40 @@ let private runCapture (file: string) (arguments: string list) (workingDir: stri
     match proc.WaitForExit timeoutMs with
     | false ->
       (try proc.Kill true with _ -> ())
-      Result.Error(sprintf "`%s %s` did not finish within %d ms" file (String.concat " " arguments) timeoutMs)
+      Error(TimedOut(command, timeoutMs))
     | true ->
       let output = stdout'.Result + stderr'.Result
       match proc.ExitCode with
-      | 0 -> Result.Ok output
-      | code -> Result.Error(sprintf "`%s %s` exited with %d:\n%s" file (String.concat " " arguments) code output)
+      | 0 -> Ok output
+      | code -> Error(ExitedWith(command, code, output))
   with ex ->
-    Result.Error(sprintf "could not run `%s`: %s" file ex.Message)
+    Error(CouldNotStart(file, ex.Message))
 
 /// The SDK version `dotnet` would use in `workingDir` (honouring global.json).
-let resolveSdkVersion (dotnet: string) (workingDir: string) : Result<string, string> =
+let resolveSdkVersion (dotnet: string) (workingDir: string) : Result<string, HostBuildError> =
   runCapture dotnet [ "--version" ] workingDir 30_000
   |> Result.map (fun output -> output.Trim())
-  |> Result.mapError (fun reason ->
-    sprintf
-      "Could not determine the .NET SDK for %s: %s\nInstall the .NET SDK from https://dotnet.microsoft.com/download or fix the SDK version in global.json."
-      workingDir
-      reason)
+  |> Result.mapError (fun failure -> SdkUnavailable(workingDir, failure))
 
 /// Cross-process lock so two sessions starting together build a given host once. Held for the whole build.
-let private withBuildLock (lockPath: string) (timeoutMs: int) (work: unit -> Result<'a, string>) : Result<'a, string> =
+let private withBuildLock (lockPath: string) (timeoutMs: int) (work: unit -> Result<'a, HostBuildError>) : Result<'a, HostBuildError> =
   let deadline = DateTime.UtcNow.AddMilliseconds(float timeoutMs)
   let rec acquire () =
     try
-      Result.Ok(new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+      Ok(new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
     with
     | :? IOException when DateTime.UtcNow < deadline ->
       Thread.Sleep 200
       acquire ()
-    | ex -> Result.Error(sprintf "could not take the FSI host build lock %s: %s" lockPath ex.Message)
+    | ex -> Error(BuildLockUnavailable(lockPath, ex.Message))
   match acquire () with
-  | Result.Error reason -> Result.Error reason
-  | Result.Ok handle ->
+  | Error reason -> Error reason
+  | Ok handle ->
     use _ = handle
     work ()
 
 /// Ensure a host built by the SDK `sdkVersion` exists under `cacheRoot`, building it if not.
-let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Result<HostBuild, string> =
+let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Result<HostBuild, HostBuildError> =
   embeddedSources ()
   |> Result.bind (fun sources ->
     let directory = Path.Combine(cacheRoot, cacheKey sdkVersion sources)
@@ -118,13 +148,13 @@ let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Resu
     let stamp = Path.Combine(directory, ".built")
     let isBuilt () = File.Exists stamp && File.Exists dll
     match isBuilt () with
-    | true -> Result.Ok(Reused dll)
+    | true -> Ok(Reused dll)
     | false ->
       Directory.CreateDirectory directory |> ignore
       withBuildLock (Path.Combine(directory, ".lock")) 300_000 (fun () ->
         // Another session may have finished the build while we waited for the lock.
         match isBuilt () with
-        | true -> Result.Ok(Reused dll)
+        | true -> Ok(Reused dll)
         | false ->
           let source = Path.Combine(directory, "src")
           Directory.CreateDirectory source |> ignore
@@ -132,11 +162,10 @@ let ensureBuilt (dotnet: string) (sdkVersion: string) (cacheRoot: string) : Resu
             File.WriteAllText(Path.Combine(source, name), content)
           File.WriteAllText(Path.Combine(source, "global.json"), globalJson sdkVersion)
           runCapture dotnet [ "build"; "FsiHost.fsproj"; "-c"; "Release"; "-o"; Path.Combine(directory, "bin"); "--nologo"; "-v"; "q" ] source 300_000
-          |> Result.mapError (fun reason ->
-            sprintf "Building the FSI host with .NET SDK %s failed. Make sure that SDK is installed.\n%s" sdkVersion reason)
+          |> Result.mapError (fun failure -> BuildFailed(sdkVersion, failure))
           |> Result.bind (fun _ ->
             match File.Exists dll with
-            | false -> Result.Error(sprintf "the FSI host build succeeded but %s is missing" dll)
+            | false -> Error(BuildOutputMissing dll)
             | true ->
               File.WriteAllText(stamp, sdkVersion)
-              Result.Ok(Built dll))))
+              Ok(Built dll))))

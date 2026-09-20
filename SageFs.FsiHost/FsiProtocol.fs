@@ -59,6 +59,23 @@ type Response =
   | EvalResult of id: int64 * outcome: EvalOutcome * diagnostics: FsiDiagnostic list
   | Output of stream: OutputStream * text: string
 
+/// Why a message could not be encoded/decoded. A typed union (never a bare string) so callers can match on the
+/// reason; `describeError` is the one place that turns it into text.
+type ProtocolError =
+  | NotJson of message: string
+  | MissingField of field: string
+  | WrongShape of expected: string * found: string
+  | UnknownCase of typeName: string * caseName: string
+  | NotRepresentable of typeName: string
+
+let describeError (error: ProtocolError) : string =
+  match error with
+  | NotJson message -> sprintf "not valid JSON: %s" message
+  | MissingField field -> sprintf "missing field '%s'" field
+  | WrongShape(expected, found) -> sprintf "expected %s but found %s" expected found
+  | UnknownCase(typeName, caseName) -> sprintf "unknown case '%s' of %s" caseName typeName
+  | NotRepresentable typeName -> sprintf "protocol type %s is not representable on the wire" typeName
+
 // ---- generic codec -------------------------------------------------------------------------
 
 /// Builds an F# list of a runtime-known element type from boxed items. Reached through a generic class behind
@@ -76,7 +93,7 @@ let private makeList (elementType: Type) (items: obj list) : obj =
 
 let private isFSharpList (t: Type) = t.IsGenericType && t.GetGenericTypeDefinition() = typedefof<list<_>>
 
-let rec private isSupported (seen: Set<string>) (t: Type) : Result<unit, string> =
+let rec private isSupported (seen: Set<string>) (t: Type) : Result<unit, ProtocolError> =
   // System.Type is not comparable, so key the visited set by its display name.
   match seen.Contains(string t) with
   | true -> Result.Ok()
@@ -91,10 +108,10 @@ let rec private isSupported (seen: Set<string>) (t: Type) : Result<unit, string>
       FSharpType.GetUnionCases t
       |> Seq.collect (fun case -> case.GetFields() |> Seq.map (fun f -> f.PropertyType))
       |> all
-    else Result.Error(sprintf "protocol type %s is not representable on the wire" t.FullName)
+    else Result.Error(NotRepresentable(string t))
 
 /// Proves every type the protocol mentions is representable by the codec. Run at host start and in tests.
-let checkSupported () : Result<unit, string> =
+let checkSupported () : Result<unit, ProtocolError> =
   [ typeof<Request>; typeof<Response> ]
   |> List.fold (fun acc t -> acc |> Result.bind (fun () -> isSupported Set.empty t)) (Result.Ok())
 
@@ -138,10 +155,10 @@ let private encode<'T> (value: 'T) : string =
   writer.Flush()
   Encoding.UTF8.GetString(stream.ToArray())
 
-let private bind (f: 'a -> Result<'b, string>) (r: Result<'a, string>) = Result.bind f r
+let private bind (f: 'a -> Result<'b, ProtocolError>) (r: Result<'a, ProtocolError>) = Result.bind f r
 
 /// Read every element of `items` with `read`, stopping at the first Error.
-let private readAll (read: 'a -> Result<obj, string>) (items: 'a seq) : Result<obj list, string> =
+let private readAll (read: 'a -> Result<obj, ProtocolError>) (items: 'a seq) : Result<obj list, ProtocolError> =
   items
   |> Seq.fold
        (fun acc item ->
@@ -149,21 +166,21 @@ let private readAll (read: 'a -> Result<obj, string>) (items: 'a seq) : Result<o
        (Result.Ok [])
   |> Result.map List.rev
 
-let private objectProperty (element: JsonElement) (name: string) : Result<JsonElement, string> =
+let private objectProperty (element: JsonElement) (name: string) : Result<JsonElement, ProtocolError> =
   match element.ValueKind with
   | JsonValueKind.Object ->
     match element.TryGetProperty name with
     | true, value -> Result.Ok value
-    | false, _ -> Result.Error(sprintf "missing field '%s'" name)
-  | kind -> Result.Error(sprintf "expected an object with field '%s' but found %A" name kind)
+    | false, _ -> Result.Error(MissingField name)
+  | kind -> Result.Error(WrongShape("an object", string kind))
 
-let rec private readValue (t: Type) (element: JsonElement) : Result<obj, string> =
-  let wrong (expected: string) = Result.Error(sprintf "expected %s for %s but found %A" expected t.Name element.ValueKind)
+let rec private readValue (t: Type) (element: JsonElement) : Result<obj, ProtocolError> =
+  let wrong (expected: string) = Result.Error(WrongShape(expected, string element.ValueKind))
   if t = typeof<string> then
     match element.ValueKind with
     | JsonValueKind.String ->
       match element.GetString() with
-      | null -> Result.Error "string value is null"
+      | null -> wrong "a string"
       | text -> Result.Ok(box text)
     | _ -> wrong "a string"
   elif t = typeof<int> then
@@ -201,7 +218,7 @@ let rec private readValue (t: Type) (element: JsonElement) : Result<obj, string>
   elif FSharpType.IsUnion t then
     objectProperty element "case" |> bind (readValue typeof<string>) |> bind (fun caseName ->
       match FSharpType.GetUnionCases t |> Array.tryFind (fun case -> case.Name = string caseName) with
-      | None -> Result.Error(sprintf "unknown case '%s' of %s" (string caseName) t.Name)
+      | None -> Result.Error(UnknownCase(t.Name, string caseName))
       | Some case ->
         let fields = case.GetFields()
         match fields.Length with
@@ -212,19 +229,19 @@ let rec private readValue (t: Type) (element: JsonElement) : Result<obj, string>
             |> readAll (fun field -> objectProperty fieldsElement field.Name |> bind (readValue field.PropertyType))
             |> Result.map (fun values -> FSharpValue.MakeUnion(case, List.toArray values))))
   else
-    Result.Error(sprintf "protocol type %s is not representable on the wire" t.FullName)
+    Result.Error(NotRepresentable(string t))
 
-let private decode<'T> (line: string) : Result<'T, string> =
+let private decode<'T> (line: string) : Result<'T, ProtocolError> =
   try
     use document = JsonDocument.Parse line
     readValue typeof<'T> document.RootElement |> Result.map (fun value -> value :?> 'T)
   with :? JsonException as ex ->
-    Result.Error(sprintf "not valid JSON: %s" ex.Message)
+    Result.Error(NotJson ex.Message)
 
 let encodeRequest (request: Request) : string = encode request
 
-let decodeRequest (line: string) : Result<Request, string> = decode line
+let decodeRequest (line: string) : Result<Request, ProtocolError> = decode line
 
 let encodeResponse (response: Response) : string = encode response
 
-let decodeResponse (line: string) : Result<Response, string> = decode line
+let decodeResponse (line: string) : Result<Response, ProtocolError> = decode line

@@ -28,12 +28,17 @@ let tests =
         parseRuntimeRequirement net10
         |> Expect.equal "net10" (Result.Ok { Major = 10; Stability = Stable })
 
-      testCase "malformed json is an Error, never an exception" <| fun _ ->
-        parseRuntimeRequirement "{nope"
-        |> Expect.isError "malformed"
+      testCase "malformed json is a typed Error, never an exception" <| fun _ ->
+        match parseRuntimeRequirement "{nope" with
+        | Result.Error(NotJsonRuntimeConfig _) -> ()
+        | other -> failtestf "expected NotJsonRuntimeConfig, got %A" other
 
-      testCase "a runtimeconfig that names no framework is an Error" <| fun _ ->
-        parseRuntimeRequirement "{}" |> Expect.isError "no framework"
+      testCase "a runtimeconfig that names no framework is NoFrameworkVersion" <| fun _ ->
+        parseRuntimeRequirement "{}" |> Expect.equal "no framework" (Result.Error NoFrameworkVersion)
+
+      testCase "an unparseable framework version is named in the error" <| fun _ ->
+        parseRuntimeRequirement """{"runtimeOptions":{"framework":{"name":"x","version":"banana"}}}"""
+        |> Expect.equal "named" (Result.Error(UnrecognisedFrameworkVersion "banana"))
     ]
 
     testList "decide" [
@@ -50,8 +55,8 @@ let tests =
         |> Expect.equal "fits" HostFits
 
       testCase "an unreadable requirement keeps the default launch and carries the reason" <| fun _ ->
-        decide 10 [ 10 ] (Error "no runtimeconfig")
-        |> Expect.equal "unknown" (Unknown "no runtimeconfig")
+        decide 10 [ 10 ] (Error(ProjectNotBuilt "Sample.fsproj"))
+        |> Expect.equal "unknown" (Unknown(ProjectNotBuilt "Sample.fsproj"))
 
       testProperty "rolls forward only for a strictly newer requirement, and only then sets the environment"
       <| fun (hostRaw: byte) (installedRaw: byte list) (requiredRaw: byte) (isPreview: bool) (readable: bool) ->
@@ -59,7 +64,7 @@ let tests =
         let installed = installedRaw |> List.map majorOf
         let stability = if isPreview then Prerelease else Stable
         let requirement =
-          if readable then Result.Ok { Major = majorOf requiredRaw; Stability = stability } else Error "unreadable"
+          if readable then Result.Ok { Major = majorOf requiredRaw; Stability = stability } else Error NoFrameworkVersion
         let choice = decide host installed requirement
         let sets = not (List.isEmpty (rollForwardEnv choice))
         match choice, requirement with
@@ -96,7 +101,8 @@ let tests =
         selectFrameworkDir (System.Version(10, 0, 3)) frameworkDirs |> Expect.equal "same major" (Result.Ok "10.0.12")
 
       testCase "no directory of the running major is an Error, not a guess from another major" <| fun _ ->
-        selectFrameworkDir (System.Version(8, 0, 1)) frameworkDirs |> Expect.isError "no 8.x"
+        selectFrameworkDir (System.Version(8, 0, 1)) frameworkDirs
+        |> Expect.equal "typed error carries the major and what was available" (Result.Error(NoFrameworkForMajor(8, frameworkDirs)))
 
       testProperty "never returns a directory of a different major than the running runtime"
       <| fun (majorRaw: byte) (minor: byte) (patch: byte) ->

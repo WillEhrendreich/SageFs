@@ -48,6 +48,7 @@
              protocol cannot drift because there is only one definition of it. -->
         <Compile Include="../SageFs.FsiHost/FsiProtocol.fs" Link="FsiProtocol.fs" />
         <Compile Include="FsiHostBuild.fs" />
+        <Compile Include="FsiHostClient.fs" />
         <!-- The isolated FSI host's project + sources ship inside this assembly; FsiHostBuild writes them to a
              cache directory and builds them with the project's own SDK. -->
         <EmbeddedResource Include="../SageFs.FsiHost/FsiHost.fsproj" LogicalName="FsiHost/FsiHost.fsproj" />

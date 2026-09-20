@@ -104,13 +104,18 @@ let tests =
         | Result.Error _ -> ()
         | Result.Ok request -> failtestf "%s decoded as %A" json request)
 
-    testCase "an unknown case is an Error naming it" <| fun _ ->
-      match decodeRequest """{"case":"dance"}""" with
-      | Result.Error message -> Expect.stringContains message "dance" "names the case"
-      | Result.Ok _ -> failtest "expected an error"
+    testCase "an unknown case is UnknownCase carrying the type and case" <| fun _ ->
+      Expect.equal (decodeRequest """{"case":"dance"}""") (Result.Error(UnknownCase("Request", "dance"))) "typed"
 
-    testCase "a missing field is an Error naming it" <| fun _ ->
-      match decodeRequest """{"case":"Eval","fields":{"id":1}}""" with
-      | Result.Error message -> Expect.stringContains message "code" "names the field"
-      | Result.Ok _ -> failtest "expected an error"
+    testCase "a missing field is MissingField carrying the field name" <| fun _ ->
+      Expect.equal (decodeRequest """{"case":"Eval","fields":{"id":1}}""") (Result.Error(MissingField "code")) "typed"
+
+    testCase "invalid JSON is NotJson" <| fun _ ->
+      match decodeRequest "{nope" with
+      | Result.Error(NotJson _) -> ()
+      | other -> failtestf "expected NotJson, got %A" other
+
+    testCase "every ProtocolError case has a non-empty description" <| fun _ ->
+      [ NotJson "x"; MissingField "f"; WrongShape("an int", "String"); UnknownCase("T", "c"); NotRepresentable "T" ]
+      |> List.iter (fun error -> Expect.isFalse (System.String.IsNullOrWhiteSpace(describeError error)) "described")
   ]

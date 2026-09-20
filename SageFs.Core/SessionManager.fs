@@ -307,21 +307,21 @@ module SessionManager =
 
   /// IO edge for RuntimeCompat: the runtime a project needs, from the newest
   /// `<project>.runtimeconfig.json` its build left under bin/ (an unbuilt project has none).
-  let private projectRuntimeRequirement (projectPath: string) : Result<RuntimeCompat.RuntimeRequirement, string> =
+  let private projectRuntimeRequirement (projectPath: string) : Result<RuntimeCompat.RuntimeRequirement, RuntimeCompat.RuntimeConfigError> =
     let binDir = Path.Combine(Path.GetDirectoryName projectPath, "bin")
     let configName = Path.GetFileNameWithoutExtension projectPath + ".runtimeconfig.json"
     match Directory.Exists binDir with
-    | false -> Error (sprintf "%s has not been built (no bin/ directory)" (Path.GetFileName projectPath))
+    | false -> Error (RuntimeCompat.ProjectNotBuilt (Path.GetFileName projectPath))
     | true ->
       let newest =
         Directory.EnumerateFiles(binDir, configName, SearchOption.AllDirectories)
         |> Seq.sortByDescending File.GetLastWriteTimeUtc
         |> Seq.tryHead
       match newest with
-      | None -> Error (sprintf "no %s under %s (project not built?)" configName binDir)
+      | None -> Error (RuntimeCompat.RuntimeConfigNotFound(configName, binDir))
       | Some configPath ->
         try RuntimeCompat.parseRuntimeRequirement (File.ReadAllText configPath)
-        with ex -> Error (sprintf "could not read %s: %s" configPath ex.Message)
+        with ex -> Error (RuntimeCompat.RuntimeConfigUnreadable(configPath, ex.Message))
 
   /// The runtime majors installed next to the runtime this process is running on.
   let private installedRuntimeMajors () : int list =
@@ -348,7 +348,7 @@ module SessionManager =
       | [] ->
         match requirements with
         | Error reason :: _ -> Error reason
-        | _ -> Error "the session has no projects"
+        | _ -> Error RuntimeCompat.NoProjects
       | _ ->
         Ok (known |> List.maxBy (fun r -> r.Major, (match r.Stability with RuntimeCompat.Stable -> 0 | RuntimeCompat.Prerelease -> 1)))
     RuntimeCompat.decide Environment.Version.Major (installedRuntimeMajors ()) requirement

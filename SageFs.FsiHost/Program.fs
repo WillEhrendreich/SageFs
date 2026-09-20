@@ -141,7 +141,7 @@ let private run (argsFile: string) : int =
     | null -> serving <- false // the parent went away: exit with it
     | line ->
       match decodeRequest line with
-      | Result.Error reason -> send (Output(StdErr, sprintf "[fsihost] rejected a request: %s\n" reason))
+      | Result.Error reason -> send (Output(StdErr, sprintf "[fsihost] rejected a request: %s\n" (describeError reason)))
       | Result.Ok(Eval(id, code)) -> requests.Add((id, code))
       | Result.Ok Interrupt ->
         lock runningLock (fun () ->
@@ -159,7 +159,7 @@ let private run (argsFile: string) : int =
 let main argv =
   match checkSupported (), argv with
   | Result.Error reason, _ ->
-    eprintfn "fsihost: protocol check failed: %s" reason
+    eprintfn "fsihost: protocol check failed: %s" (describeError reason)
     3
   | Result.Ok(), [| "--args-file"; argsFile |] -> run argsFile
   | Result.Ok(), _ ->

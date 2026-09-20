@@ -29,7 +29,7 @@ let private builtDll (cache: string) : string =
   match resolveSdkVersion dotnet repoRoot |> Result.bind (fun sdk -> ensureBuilt dotnet sdk cache) with
   | Result.Ok(Built dll)
   | Result.Ok(Reused dll) -> dll
-  | Result.Error reason -> failtest reason
+  | Result.Error reason -> failtest (describeBuildError reason)
 
 [<Tests>]
 let tests =
@@ -64,7 +64,7 @@ let tests =
     testList "embedded sources" [
       testCase "every host source is embedded and non-empty" <| fun _ ->
         match embeddedSources () with
-        | Result.Error reason -> failtest reason
+        | Result.Error reason -> failtest (describeBuildError reason)
         | Result.Ok found ->
           Expect.equal "all host files, in order" hostSourceNames (found |> List.map fst)
           for name, content in found do
@@ -73,7 +73,7 @@ let tests =
       testCase "the embedded protocol is the file the tests were built from" <| fun _ ->
         let onDisk = File.ReadAllText(Path.Combine(repoRoot, "SageFs.FsiHost", "FsiProtocol.fs"))
         match embeddedSources () with
-        | Result.Error reason -> failtest reason
+        | Result.Error reason -> failtest (describeBuildError reason)
         | Result.Ok found ->
           Expect.equal "embedded == source" onDisk (found |> List.find (fun (name, _) -> name = "FsiProtocol.fs") |> snd)
     ]
@@ -84,7 +84,7 @@ let tests =
           let sdk =
             match resolveSdkVersion dotnet repoRoot with
             | Result.Ok sdk -> sdk
-            | Result.Error reason -> failtest reason
+            | Result.Error reason -> failtest (describeBuildError reason)
           let dll =
             match ensureBuilt dotnet sdk cache with
             | Result.Ok(Built dll) -> dll
