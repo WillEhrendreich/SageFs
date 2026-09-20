@@ -113,6 +113,26 @@ module CliCommand =
       | false -> ShowHelp
     | _ -> Daemon args
 
+/// Human guidance for why an unimplemented daemon-startup flag was refused,
+/// and what to do instead. This is CLI presentation text, kept separate from
+/// `Args.UnimplementedFlag` (SageFs.Core), which only carries the closed set
+/// of flags and detects their presence.
+let private unimplementedFlagGuidance =
+  function
+  | Args.UnimplementedFlag.Proj
+  | Args.UnimplementedFlag.Sln ->
+    "The daemon no longer loads a project at startup — it always starts bare. Start `sagefs`, then create a session for your project from your editor, an MCP client, or the dashboard (http://localhost:37750/dashboard)."
+  | Args.UnimplementedFlag.NoWatch ->
+    "File watching has no daemon-startup or session-creation control today — every worker is spawned with watching on, and no client (MCP, dashboard, editors) can request otherwise yet. This flag is accepted for recognition but does nothing."
+
+/// `sagefs <unimplemented flags>` must refuse rather than silently start a
+/// daemon that ignored what was asked of it. Pure decision over the raw args:
+/// which unimplemented flags (if any) block startup, paired with the message
+/// to show for each.
+let unimplementedFlagRejection (args: string array) : (Args.UnimplementedFlag * string) list =
+  Args.UnimplementedFlag.detectAll (Array.toList args)
+  |> List.map (fun f -> f, unimplementedFlagGuidance f)
+
 /// Ownership rule 2 (multi-agent vision §3.1/§10 item 2): resolve
 /// `--owner-pid`/`--owner-start`/`--ttl` off the raw args, applying the
 /// nested-checkout default (a daemon started inside another checkout, with
@@ -340,7 +360,6 @@ let main args =
     printfn "  --mcp-port PORT        Set custom MCP server port (default: 37749)"
     printfn "  --jupyter FILE         Run as Jupyter kernel with given connection file"
     printfn "  --supervised           Run under watchdog supervisor (auto-restart on crash)"
-    printfn "  --no-watch             Disable file watching — no automatic #load on changes"
     printfn "  --no-resume            Skip restoring previous sessions on daemon startup"
     printfn "  --prune                Mark all stale sessions as stopped and exit"
     printfn "  --owner-pid PID        Exit when the process at PID exits (fenced by --owner-start"
@@ -349,6 +368,14 @@ let main args =
     printfn "                         --owner-pid to close the pid-reuse race."
     printfn "  --ttl DURATION         Self-terminate after DURATION (e.g. 30m, 1h, 90s) with no"
     printfn "                         live sessions and no MCP/SSE clients."
+    printfn ""
+    printfn "  A small number of legacy or not-yet-wired flags are still recognized but"
+    printfn "  are refused with an explanation instead of being silently accepted — pass"
+    printfn "  one and read the error for what to do instead."
+    printfn ""
+    printfn "Exit codes:"
+    printfn "  sagefs check   0 = every check passed          1 = at least one check failed"
+    printfn "  sagefs stop    0 = a running daemon was stopped 1 = there was nothing to stop"
     printfn ""
     printfn "Environment Variables:"
     printfn "  SAGEFS_MCP_PORT           Override MCP server port (same as --mcp-port)"
@@ -367,10 +394,13 @@ let main args =
     printfn "  If a daemon is already running, `sagefs` reports its dashboard URL."
     printfn ""
     printfn "Quick Start:"
-    printfn "  1. sagefs                            Start the bare daemon"
-    printfn "  2. Open your editor (VS Code, Neovim, Visual Studio)"
-    printfn "  3. Create a session for your project from the editor, MCP client, or dashboard"
-    printfn "  4. Edit an F# file and save — live test results appear automatically"
+    printfn "  1. sagefs check                      Verify your environment (SDK, ports, fsi)"
+    printfn "  2. sagefs                            Start the daemon — it starts BARE, with no"
+    printfn "                                        project loaded and no session created yet"
+    printfn "  3. Open your editor (VS Code or Neovim), or visit the dashboard"
+    printfn "  4. Create a session for your project — this is the concrete next step; the"
+    printfn "                                        daemon does not do it for you"
+    printfn "  5. Edit an F# file and save — live test results appear automatically"
     printfn "  Or visit http://localhost:37750/dashboard in your browser."
     printfn ""
     printfn "Examples:"
@@ -499,6 +529,13 @@ let main args =
           0
 
   | Daemon _ ->
+    match unimplementedFlagRejection args with
+    | (_ :: _) as rejected ->
+      for (flag, guidance) in rejected do
+        eprintfn "sagefs: %s is accepted for recognition but not implemented — refusing to start." (Args.UnimplementedFlag.text flag)
+        eprintfn "  -> %s" guidance
+      2
+    | [] ->
     let mcpPort = parseMcpPort args
     let forceDedicatedDaemon = explicitDaemonInvocationUsesAlternatePort args
     match forceDedicatedDaemon, decideDaemonLaunch DaemonState.readOnPort mcpPort with

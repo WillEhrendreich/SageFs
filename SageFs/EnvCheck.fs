@@ -374,14 +374,29 @@ let checkFsiAvailable () =
   with ex ->
     checkFsiFromProbe (FsiFailedToStart ex.Message)
 
+// This check is intentionally NOT recursive (TopDirectoryOnly) — it only
+// looks directly in `dir`. Other surfaces (Mcp.getAvailableProjects,
+// DashboardTypes' project resolver) search all subdirectories; this check
+// says so explicitly rather than implying it looked everywhere.
 let checkFsproj (dir: string) =
   match findFsproj dir with
   | [] ->
-    warn ".fsproj files" (sprintf "None found in %s" dir)
-          "Start `sagefs`, then create a session for the project you want to load from your client or the dashboard"
+    warn ".fsproj files" (sprintf "None found directly in %s (this check does not search subdirectories)" dir)
+          "Start `sagefs`, then create a session for the project you want to load from your client or the dashboard. If your .fsproj lives in a subdirectory, point the session at that subdirectory."
   | files ->
     let names = files |> List.map Path.GetFileName |> String.concat ", "
-    pass ".fsproj files" (sprintf "%d found: %s" files.Length names)
+    pass ".fsproj files" (sprintf "%d found directly in %s (not recursive): %s" files.Length dir names)
+
+/// `.SageFs/config.fsx` existence only — NOT evaluation. Evaluating it means
+/// running arbitrary user F# in an isolated FSI host (SageFs.ConfigHost),
+/// which is neither cheap nor safe to do from a preflight check. Presence is
+/// informational either way: the file is optional, so both outcomes Pass.
+let checkDirectoryConfig (dir: string) =
+  let label = ".SageFs/config.fsx"
+  let path = DirectoryConfig.configPath dir
+  match File.Exists path with
+  | true -> pass label (sprintf "Found %s (existence only — this check does not evaluate it)" path)
+  | false -> pass label (sprintf "Not found at %s (optional — only used for solution/project auto-detection or a startup profile)" path)
 
 let checkPort (label: string) (port: int) =
   match isPortFree port with
@@ -486,6 +501,7 @@ let runAll (dir: string) (mcpPort: int) (dashPort: int) =
   [ checkDotnetSdk ()
     checkFsiAvailable ()
     checkFsproj dir
+    checkDirectoryConfig dir
     checkBindHost ()
     checkPort "MCP port"       mcpPort
     checkPort "Dashboard port" dashPort

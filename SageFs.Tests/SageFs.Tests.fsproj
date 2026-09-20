@@ -260,6 +260,7 @@
         <Compile Include="CompileOrderInsightTests.fs" />
         <Compile Include="ErrorAlgebraHardeningTests.fs" />
         <Compile Include="McpToolErrorBodyTests.fs" />
+        <Compile Include="McpProjectLoadingUxTests.fs" />
         <Compile Include="SessionIdTests.fs" />
         <Compile Include="EndpointContractTests.fs" />
         <Compile Include="FsiRegressionTests.fs" />
@@ -397,6 +398,7 @@
         <Compile Include="TimeoutsTests.fs" />
         <Compile Include="EnvCheckTests.fs" />
         <Compile Include="CliStopExitCodeTests.fs" />
+        <Compile Include="CliFirstRunTests.fs" />
         <Compile Include="FsiOutputParserTests.fs" />
         <Compile Include="SseReplayTests.fs" />
         <Compile Include="PerfTests.fs" />

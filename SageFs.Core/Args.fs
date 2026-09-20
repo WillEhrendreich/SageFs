@@ -34,6 +34,41 @@ module DaemonFlags =
       | _ :: rest -> loop acc rest
     loop defaults args
 
+/// A daemon-startup flag that `DaemonFlags.parse` still recognizes (for
+/// backward-compatible argument shapes) but that has NO effect on the
+/// running daemon:
+///   - `--proj`/`--sln` — the daemon no longer auto-loads a project at
+///     startup (it is always bare); these flags used to seed
+///     `DaemonFlags.Projects` and now just fall on the floor.
+///   - `--no-watch` — parsed into `DaemonFlags.NoWatch`, but nothing reads
+///     that field: `SessionManager.startWorkerProcess` hardcodes `noWatch =
+///     false` for every worker it spawns, and no session-creation surface
+///     (MCP, dashboard, editors) exposes a way to request it either.
+/// Accepting one of these silently would let a user believe their flag did
+/// something. The CLI must refuse with guidance instead of starting a
+/// daemon that quietly ignored what was asked of it.
+[<RequireQualifiedAccess>]
+type UnimplementedFlag =
+  | Proj
+  | Sln
+  | NoWatch
+
+module UnimplementedFlag =
+  /// The exact flag text as a user would type it.
+  let text =
+    function
+    | UnimplementedFlag.Proj -> "--proj"
+    | UnimplementedFlag.Sln -> "--sln"
+    | UnimplementedFlag.NoWatch -> "--no-watch"
+
+  /// Detect every unimplemented flag present in the raw argument list, in a
+  /// stable order. Presence-only (position- and value-independent) — this
+  /// mirrors how `DaemonFlags.parse` itself recognizes these flags.
+  let detectAll (args: string list) : UnimplementedFlag list =
+    [ if List.contains "--proj" args then UnimplementedFlag.Proj
+      if List.contains "--sln" args then UnimplementedFlag.Sln
+      if List.contains "--no-watch" args then UnimplementedFlag.NoWatch ]
+
 /// What a worker process needs — comes entirely from env vars.
 /// Uses dependency rejection: pure core reads from a function,
 /// impure shell passes Environment.GetEnvironmentVariable.
