@@ -462,6 +462,13 @@ module Env =
   let _openExternal (e: obj) (uri: Uri) : JS.Promise<bool> = jsNative
   let openExternal (uri: Uri) = _openExternal envExports uri
 
+  /// A "here is the command to fix this" dialog is only actionable if the
+  /// command can be taken somewhere. Without this the CLI-not-found dialog
+  /// could only print a line the user had to retype.
+  [<Emit("$0.clipboard.writeText($1)")>]
+  let _writeClipboard (e: obj) (text: string) : JS.Promise<unit> = jsNative
+  let writeClipboard (text: string) = _writeClipboard envExports text
+
 // ── Constructors ────────────────────────────────────────────────
 
 [<ImportAll("vscode")>]

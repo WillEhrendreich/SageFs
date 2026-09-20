@@ -8,6 +8,7 @@ open SageFs.Vscode.SafeInterop
 
 module Client = SageFs.Vscode.SageFsClient
 module AppRunPure = SageFs.Vscode.AppRunPure
+module ErrorPresentationPure = SageFs.Vscode.ErrorPresentationPure
 module Diag = SageFs.Vscode.DiagnosticsListener
 module Lens = SageFs.Vscode.CodeLensProvider
 module Completion = SageFs.Vscode.CompletionProvider
@@ -76,6 +77,29 @@ let mutable typeExplorer: TypeExpl.TypeExplorer option = None
 // Crash detection: track connected→offline transitions
 let mutable wasRunning = false
 let mutable crashPromptShown = false
+
+/// Adapt the client's wire shape to the pure presentation module, so every
+/// dialog in this file composes "what happened → what to do" the same way.
+let structuredError (e: Client.HealthError) : ErrorPresentationPure.StructuredError =
+  { Case = e.case; Message = e.message; SuggestedAction = e.suggestedAction }
+
+/// The message body for a structured server error: what happened, then the
+/// remedy the daemon attached. Never the button caption.
+let describeSessionError (e: Client.HealthError) = ErrorPresentationPure.describe (structuredError e)
+
+/// The same facts on one line, for a status bar or an accessible name.
+let describeSessionErrorInline (e: Client.HealthError) =
+  ErrorPresentationPure.describeInline (structuredError e)
+
+/// The session-error dialog is EDGE-triggered, not level-triggered.
+/// `refreshStatus` polls every 15 seconds, and the faulted/stopped branch used
+/// to pop a modal error every single time — so a session that faulted and
+/// stayed faulted (the normal case: it stays faulted until you fix it) threw an
+/// error notification at the user every fifteen seconds, forever. The daemon
+/// CRASH path next to it was already guarded by `crashPromptShown`; this one
+/// was not. Cleared when the session comes back, so the next genuine fault
+/// still announces itself.
+let mutable sessionErrorPromptShown = false
 let mutable staleDebounceTimer: obj option = None
 
 // Daemon stderr capture for startup failure diagnostics
@@ -595,10 +619,29 @@ let browseForProject () =
 let openWorkspace () =
   Commands.executeCommand "vscode.openFolder" |> ignore
 
+/// The one command that fixes a missing CLI. Named once so the dialog, the
+/// install action and the clipboard action can never drift apart.
+let installCliCommand = "dotnet tool install --global SageFs"
+
 let checkInstallation () =
   let term = Window.createTerminal "SageFs Version Check"
   terminalShow term
   terminalSendText term "sagefs --version"
+
+/// Actually run the install, in a terminal the user can watch. The
+/// CLI-not-found dialog used to have NO buttons at all
+/// (sagefs-ux-roast.md §2.2) even though this is three lines of work, and the
+/// `[Check Installation]` action it offered elsewhere reproduces
+/// `command not found` and diagnoses nothing.
+let installCli () =
+  let term = Window.createTerminal "SageFs Install"
+  terminalShow term
+  terminalSendText term installCliCommand
+
+let copyInstallCommand () =
+  Env.writeClipboard installCliCommand
+  |> Promise.map (fun () -> Window.showInformationMessage (sprintf "Copied: %s" installCliCommand) [||] |> ignore)
+  |> promiseIgnore
 
 let openQuickFile () =
   Commands.executeCommand "workbench.action.quickOpen" |> ignore
@@ -750,6 +793,9 @@ let refreshStatus () =
         | Some "Ready" | Some "Evaluating" ->
           warmupPhase <- None
           warmupDetail <- None
+          // Re-arm the fault dialog: the session recovered, so the NEXT
+          // genuine fault deserves to announce itself.
+          sessionErrorPromptShown <- false
           let! sessions = Client.listSessions c
           knownSessions <- sessions
           setContext "sagefs:hasSession" (ContextKeysPure.hasSessionContext sessions.Length)
@@ -833,17 +879,27 @@ let refreshStatus () =
           match status.error with
           | Some err ->
             sb.text <- "$(error) SageFs: session error"
-            sb.tooltip <- Some err.message
+            sb.tooltip <- Some (describeSessionError err)
             sb?accessibilityInformation <- createObj [ "label" ==> sprintf "SageFs: session error — %s" err.message ]
-            let! choice =
-              Window.showErrorMessage
-                err.message
-                [| err.suggestedAction; "Show Output" |]
-            match choice with
-            | Some action when action = err.suggestedAction ->
-              (getOutput()).appendLine (sprintf "[SageFs] Suggested action: %s" err.suggestedAction)
-            | Some "Show Output" -> showOutputPanel ()
-            | _ -> ()
+            match sessionErrorPromptShown with
+            | true -> ()
+            | false ->
+              sessionErrorPromptShown <- true
+              // `suggestedAction` is a SENTENCE of remedy from
+              // `SageFsError.suggestedAction` ("Check the SageFs log for
+              // details"). It used to be the BUTTON CAPTION — VS Code
+              // truncates those — and pressing it appended the same sentence
+              // to an output channel the user was not looking at. The remedy
+              // text was present; the remedy was not. It now goes in the
+              // message body, where it is read, and the buttons carry verbs.
+              let! choice =
+                Window.showErrorMessage
+                  (describeSessionError err)
+                  [| "Restart Session"; "Show Output" |]
+              match choice with
+              | Some "Restart Session" -> Commands.executeCommand "sagefs.hardReset" |> ignore
+              | Some "Show Output" -> showOutputPanel ()
+              | _ -> ()
           | None ->
             sb.text <- "$(error) SageFs: session error"
             sb.tooltip <- Some "SageFs: session error"
@@ -923,9 +979,55 @@ let rec startDaemon () =
           let sb = getStatusBar ()
           sb.text <- "$(error) SageFs: spawn failed"
         )
+        // FAIL FAST. `spawn` runs through a shell ("shell" ==> true above), so
+        // a missing `sagefs` binary does NOT raise onProcError — the shell
+        // starts fine, writes `command not found`, and exits 127. This handler
+        // is the only place that learns about it, and it used to be unable to
+        // stop the spinner because `intervalId` was declared SIXTEEN LINES
+        // BELOW it: there was no structural path from the exit handler to the
+        // poll. The result was 120 seconds of `SageFs starting... (Ns)` for the
+        // single most common first-run failure, when the stderr needed to
+        // diagnose it was already captured at spawn time.
+        //
+        // `intervalId` is now hoisted above this handler, so the poll can be
+        // cleared the moment the process dies.
+        let mutable intervalId: obj option = None
+        let mutable startupSettled = false
         onProcExit proc (fun code _signal ->
           out.appendLine (sprintf "[SageFs] process exited (code %d)" code)
           isStarting <- false
+          match startupSettled with
+          | true -> ()   // a normal shutdown of a daemon that DID start
+          | false ->
+            startupSettled <- true
+            intervalId |> Option.iter jsClearInterval
+            let sb = getStatusBar ()
+            sb.text <- "$(error) SageFs: offline"
+            sb.show ()
+            let stderrSnippet =
+              match daemonStderr.Trim() with
+              | "" -> ""
+              | s -> sprintf "\n\n%s" (if s.Length > 500 then s.Substring(0, 500) + "…" else s)
+            // Exit 127 is the shell's "command not found" — the one failure
+            // whose remedy is an install, not a retry.
+            let body, actions =
+              match code with
+              | 127 ->
+                sprintf "The `sagefs` CLI was not found on your PATH.\n→ Install it with: dotnet tool install --global SageFs%s" stderrSnippet,
+                [| "Install SageFs"; "Copy Install Command"; "Show Output" |]
+              | c ->
+                sprintf "The SageFs daemon exited immediately (code %d).\n→ Check the daemon output below, then retry.%s" c stderrSnippet,
+                [| "Retry"; "Show Output" |]
+            out.appendLine body
+            Window.showErrorMessage body actions
+            |> Promise.map (fun choice ->
+              match choice with
+              | Some "Install SageFs" -> installCli ()
+              | Some "Copy Install Command" -> copyInstallCommand ()
+              | Some "Retry" -> Commands.executeCommand "sagefs.start" |> ignore
+              | Some "Show Output" -> showOutputPanel ()
+              | _ -> ())
+            |> promiseIgnoreLog (fun msg -> out.appendLine msg)
         )
         let stderr = procStderr proc
         stderr |> tryOfObj |> Option.iter (fun s -> onData s (fun chunk ->
@@ -939,7 +1041,6 @@ let rec startDaemon () =
         sb.text <- "$(loading~spin) SageFs starting..."
         sb.show ()
         let mutable attempts = 0
-        let mutable intervalId: obj option = None
         let id =
           jsSetInterval (fun () ->
             attempts <- attempts + 1
@@ -947,12 +1048,14 @@ let rec startDaemon () =
             promise {
               let! ready = Client.isRunning c
               if ready then
+                startupSettled <- true
                 intervalId |> Option.iter jsClearInterval
                 isStarting <- false
                 out.appendLine "SageFs daemon is ready."
                 onDaemonReady |> Option.iter (fun f -> f c)
                 refreshStatus ()
               elif attempts > 120 then
+                startupSettled <- true
                 intervalId |> Option.iter jsClearInterval
                 isStarting <- false
                 let stderrSnippet =
@@ -961,11 +1064,15 @@ let rec startDaemon () =
                   | s -> sprintf "\n\nDaemon output:\n%s" (if s.Length > 500 then s.Substring(0, 500) + "…" else s)
                 out.appendLine (sprintf "Timed out waiting for SageFs daemon after 120s.%s" stderrSnippet)
                 out.show false
-                let! choice = Window.showErrorMessage (sprintf "SageFs daemon failed to start after 120s.%s" stderrSnippet) [| "Retry"; "Show Full Output"; "Check Installation" |]
+                // `[Check Installation]` used to run `sagefs --version` in a
+                // terminal, which in the CLI-missing case just reproduces
+                // `command not found` and diagnoses nothing. Offer the actual
+                // remedy instead.
+                let! choice = Window.showErrorMessage (sprintf "SageFs daemon failed to start after 120s.%s" stderrSnippet) [| "Retry"; "Show Full Output"; "Reinstall SageFs" |]
                 match choice with
                 | Some "Retry" -> Commands.executeCommand "sagefs.restart" |> ignore
                 | Some "Show Full Output" -> showOutputPanel ()
-                | Some "Check Installation" -> checkInstallation ()
+                | Some "Reinstall SageFs" -> installCli ()
                 | _ -> ()
                 sb.text <- "$(error) SageFs: offline"
             } |> promiseIgnoreLog (fun msg -> out.appendLine msg)
@@ -1149,7 +1256,44 @@ let getEvalCode (ed: TextEditor) =
     let code = if raw.TrimEnd().EndsWith(";;") then raw else raw.TrimEnd() + ";;"
     Some (code, blockStartLine, blockEndLine)
 
-let evalSelection () =
+/// Where `sagefs.eval` takes its code from. It is reachable two ways and they
+/// need DIFFERENT anchors: a keybinding means "what I have selected / where my
+/// caret is", but a CodeLens click does not move the caret — so "▶ Eval" above
+/// block 5, pressed with the caret in block 1, silently evaluated block 1 and
+/// dropped the result decoration there. The lens has always passed its block's
+/// start line; the handler discarded it (`fun _ -> evalSelection ()`).
+type EvalAnchor =
+  /// The editor's selection, or the block around the caret.
+  | AtCursor
+  /// The block starting at this 0-based document line — what a CodeLens click means.
+  | AtBlockStartingOnLine of line: int
+
+/// Recover the anchor from a command argument. VS Code hands CodeLens
+/// `arguments` through as the command's parameters; anything else (palette,
+/// keybinding) arrives as undefined and means "at the cursor".
+let evalAnchorOfArgs (args: obj) : EvalAnchor =
+  match tryCastInt args with
+  | Some line when line >= 0 -> AtBlockStartingOnLine line
+  | _ -> AtCursor
+
+let private codeForAnchor (ed: TextEditor) (anchor: EvalAnchor) =
+  match anchor with
+  | AtCursor -> getEvalCode ed
+  | AtBlockStartingOnLine line ->
+    let doc = ed.document
+    match line < int doc.lineCount with
+    | false -> getEvalCode ed
+    | true ->
+      let startLine, endLine = Blocks.getBlockBounds doc line
+      let range = newRange startLine 0 endLine (int (doc.lineAt(float endLine).text.Length))
+      let raw = doc.getTextRange range
+      match raw.Trim() with
+      | "" -> None
+      | _ ->
+        let code = if raw.TrimEnd().EndsWith(";;") then raw else raw.TrimEnd() + ";;"
+        Some (code, startLine, endLine)
+
+let evalSelection (anchor: EvalAnchor) =
   promise {
     match Window.getActiveTextEditor () with
     | None ->
@@ -1159,7 +1303,7 @@ let evalSelection () =
       | _ -> ()
     | Some ed ->
       let! ok = ensureRunning ()
-      match ok, getEvalCode ed with
+      match ok, codeForAnchor ed anchor with
       | false, _ | _, None -> ()
       | true, Some (code, blockStart, blockEnd) ->
         let filePath = Some ed.document.fileName
@@ -1310,7 +1454,9 @@ let updateAppStatusBar (outcome: Client.AppRunOutcome) =
         sb.hide ()
     | Client.AppRunError err ->
       sb.text <- sprintf "⚠ %s" err.message
-      sb.tooltip <- Some err.suggestedAction
+      // The remedy belongs in the DIALOG (see runAppCmd/stopAppCmd below); it
+      // stays on the tooltip too, but it is no longer the only place it lives.
+      sb.tooltip <- Some (describeSessionErrorInline err)
       sb.command <- Some "sagefs.runApp"
       sb.show ()
 
@@ -1331,7 +1477,13 @@ let runAppCmd () =
         let! outcome = Client.runApp sid project c
         updateAppStatusBar outcome
         match outcome with
-        | Client.AppRunError err -> Window.showErrorMessage (sprintf "SageFs: %s" err.message) [||] |> ignore
+        // The dialog used to show err.message with NO buttons while
+        // err.suggestedAction went to a status-bar tooltip — the actionable
+        // half on a hover, the dead end in the modal. Both now land here.
+        | Client.AppRunError err ->
+          Window.showErrorMessage (describeSessionError err) [| "Show Output" |]
+          |> Promise.map (function Some "Show Output" -> showOutputPanel () | _ -> ())
+          |> promiseIgnoreLog (fun m -> (getOutput()).appendLine m)
         | Client.AppState _ -> ()
     })
 
@@ -1345,7 +1497,13 @@ let stopAppCmd () =
         let! outcome = Client.stopApp sid c
         updateAppStatusBar outcome
         match outcome with
-        | Client.AppRunError err -> Window.showErrorMessage (sprintf "SageFs: %s" err.message) [||] |> ignore
+        // The dialog used to show err.message with NO buttons while
+        // err.suggestedAction went to a status-bar tooltip — the actionable
+        // half on a hover, the dead end in the modal. Both now land here.
+        | Client.AppRunError err ->
+          Window.showErrorMessage (describeSessionError err) [| "Show Output" |]
+          |> Promise.map (function Some "Show Output" -> showOutputPanel () | _ -> ())
+          |> promiseIgnoreLog (fun m -> (getOutput()).appendLine m)
         | Client.AppState _ -> ()
     })
 
@@ -1849,10 +2007,18 @@ let checkHealth () =
       let trimmed = version.Trim()
       Window.showInformationMessage (sprintf "SageFs CLI found: %s" trimmed) [||] |> ignore
     with _ ->
-      Window.showErrorMessage
-        "SageFs CLI not found. Install it with: dotnet tool install --global SageFs"
-        [||]
-      |> ignore
+      // This dialog's ENTIRE JOB is unblocking an installation, and it shipped
+      // with an empty action array — the remedy printed as prose the user had
+      // to retype. `installCli` and `copyInstallCommand` were three lines away.
+      let! choice =
+        Window.showErrorMessage
+          (sprintf "The `sagefs` CLI was not found on your PATH.\n→ Install it with: %s" installCliCommand)
+          [| "Install SageFs"; "Copy Command"; "Open Docs" |]
+      match choice with
+      | Some "Install SageFs" -> installCli ()
+      | Some "Copy Command" -> copyInstallCommand ()
+      | Some "Open Docs" -> Env.openExternal (uriParse "https://sagetech.dev/sagefs") |> promiseIgnore
+      | _ -> ()
   }
 
 // ── sagefs.debug.rectFor (demo-actors-plan.md §2.1, roast H5) ───
@@ -2185,7 +2351,9 @@ let activate (context: ExtensionContext) =
     context.subscriptions.Add (Commands.registerCommand cmd handler)
   let logToOutput msg = (getOutput()).appendLine msg
 
-  reg "sagefs.eval" (fun _ -> evalSelection () |> promiseIgnoreLog logToOutput)
+  // The argument is the CodeLens's block start line. Discarding it is what
+  // made "▶ Eval" above one block evaluate a different one.
+  reg "sagefs.eval" (fun args -> evalSelection (evalAnchorOfArgs args) |> promiseIgnoreLog logToOutput)
   reg "sagefs.evalFile" (fun _ -> evalFile () |> promiseIgnoreLog logToOutput)
   reg "sagefs.evalRange" (fun args -> evalRange args |> promiseIgnoreLog logToOutput)
   reg "sagefs.evalAdvance" (fun _ -> evalAdvance () |> promiseIgnoreLog logToOutput)

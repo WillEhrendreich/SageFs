@@ -21,6 +21,7 @@
     <Compile Include="SessionsTreePure.fs" />
     <Compile Include="ProjectPickPure.fs" />
     <Compile Include="WorkflowPickPure.fs" />
+    <Compile Include="ErrorPresentationPure.fs" />
     <Compile Include="StatusBarPure.fs" />
     <Compile Include="SageFsClient.fs" />
     <Compile Include="DiagnosticsListener.fs" />
