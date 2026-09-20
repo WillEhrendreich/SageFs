@@ -89,7 +89,17 @@ let tests =
       output |> Expect.stringContains "should explain stale session state" "stale definitions"
     }
 
-    testCaseTask "targeted_verify plans exact guard when one is named" <| fun () -> task {
+    // Was "targeted_verify plans exact guard when one is named," asserting the
+    // guard name appeared in a "Plan: ..." sentence. That passed only because
+    // `TargetedVerification.summarize` swallowed a Blocked-evidence outcome
+    // behind the Perform-plan arms (sagefs-roast.md §10 / gap 2) — this call
+    // site (`targetedVerify` in Mcp.fs) always passes `createReport` no
+    // snippet/exact-test evidence, so the honest report is "no evidence was
+    // collected," not a plan that names the guard. Naming the guard in the
+    // response is real follow-on work (wiring actual evidence collection into
+    // the Mcp.fs call site) — out of scope here; this test now asserts the
+    // corrected, honest behavior instead of the bug it used to ride on.
+    testCaseTask "targeted_verify reports missing evidence honestly even when an exact guard is named" <| fun () -> task {
       let sessionInfo = mkSessionInfo SessionStatus.Ready
       let sid = SessionId.value sessionInfo.Id
       let ctx =
@@ -102,6 +112,6 @@ let tests =
           (Some @"C:\Code\Repos\SageFs")
           "UserPreferences.loadFromFile"
           (Some "Tests.UserPreferences.guard")
-      output |> Expect.stringContains "should mention exact guard" "Tests.UserPreferences.guard"
+      output |> Expect.stringContains "should say no evidence was collected, not a plan sentence" "No snippet or exact-test evidence"
     }
   ]
