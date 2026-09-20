@@ -535,7 +535,7 @@ let run (sessionId: string) (port: int) = async {
 
   let actorArgs : ActorCreation.ActorArgs = {
     Middleware = ActorCreation.commonMiddleware
-    InitFunctions = ActorCreation.commonInitFunctions
+    InitFunctions = ActorCreation.initFunctionsFor (SessionKinds.fromEnvironmentWith System.Environment.GetEnvironmentVariable)
     Logger = logger
     OutStream = IO.TextWriter.Null
     UseAsp = false

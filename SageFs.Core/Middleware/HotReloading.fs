@@ -277,21 +277,28 @@ let mkReloadingState (sln: SageFs.ProjectLoading.Solution) =
     LiveTestInit = LiveTestInit.Pending
   }
 
+/// The hot-reload state of a session that has loaded nothing.
+let emptyReloadingState : State =
+  { Methods = Map.empty
+    LastOpenModules = []
+    LastAssembly = None
+    ProjectAssemblies = []
+    AssemblyLoadErrors = []
+    LiveTestInit = LiveTestInit.Pending }
+
 let hotReloadingInitFunction (sln: SageFs.ProjectLoading.Solution) : string * obj =
   try
     "hotReload", box (mkReloadingState sln)
   with ex ->
     Log.logWarn $"HotReloading initialization failed: %s{ex.Message}"
+    "hotReload", box emptyReloadingState
 
-    "hotReload",
-    box {
-      Methods = Map.empty
-      LastOpenModules = []
-      LastAssembly = None
-      ProjectAssemblies = []
-      AssemblyLoadErrors = []
-      LiveTestInit = LiveTestInit.Pending
-    }
+/// The init for an ISOLATED session. The user's code runs in the FSI host, so the worker must load nothing of the
+/// user's: no project assemblies (mkReloadingState would load every project's output into this process) and no
+/// AssemblyResolve handler over the user's package directories. Loading those here is precisely the conflict
+/// surface isolation exists to remove. Hot reload and live testing get their state from the host agent instead.
+let isolatedInitFunction (_solution: SageFs.ProjectLoading.Solution) : string * obj =
+  "hotReload", box emptyReloadingState
 
 [<Literal>]
 let hotReloadKey = "hotReload"

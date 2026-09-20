@@ -17,6 +17,13 @@ let commonMiddleware: AppState.Middleware list = [
 
 let commonInitFunctions = [ HotReloading.hotReloadingInitFunction ]
 
+/// The init functions for a worker whose sessions live in `kind`. An isolated session must not have the worker load
+/// the user's assemblies (see HotReloading.isolatedInitFunction).
+let initFunctionsFor (kind: SessionKinds.FsiSessionKind) : (Solution -> string * obj) list =
+  match kind with
+  | SessionKinds.InProcess -> commonInitFunctions
+  | SessionKinds.Isolated -> [ HotReloading.isolatedInitFunction ]
+
 open System
 open System.IO
 
