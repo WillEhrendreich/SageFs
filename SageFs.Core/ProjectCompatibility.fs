@@ -218,6 +218,61 @@ let describeUnhostable (project: string) (targetFrameworks: string list) (reason
     (describeUnsupportedReason reason)
     (trackingIssue reason)
 
+// ─── Toolchain fit (Fable / browser projects) ───────────────
+
+/// What a project's TOOLCHAIN means for what SageFs can do with it — a
+/// separate axis from `ProjectHostability`, which is about the target
+/// framework. A Fable client project is perfectly hostable by the target-
+/// framework rule (it targets net8.0/net10.0 like anything else) and it
+/// genuinely builds, so it must never be refused. It just cannot do the one
+/// thing its author came for.
+///
+/// Measured, not assumed. A Fable client project:
+///   * restores and `dotnet build`s with zero warnings — every Fable package
+///     ships a real `lib/netstandard2.0/*.dll`, none injects MSBuild targets;
+///   * does NOT poison a solution — a Server/Shared/Client SAFE-shaped
+///     solution builds clean, and the Client produces a real `Client.dll`;
+///   * only fails when its browser bindings are EVALUATED, with three
+///     different messages depending on the package.
+///
+/// So there is nothing to detect at build time and nothing to refuse. The
+/// honest thing SageFs can do is say, at session creation, which half of the
+/// project it can actually help with.
+[<RequireQualifiedAccess>]
+type ToolchainFit =
+  /// An ordinary .NET project: everything SageFs does applies.
+  | DotNet
+  /// A Fable client project — F# compiled to JavaScript, whose real runtime is
+  /// a browser. `markers` are the references that said so.
+  | FableClient of markers: string list
+
+/// Classify a project's toolchain from its package references. Anything with
+/// no browser-only Fable reference is `DotNet` — the conservative default, and
+/// the same "don't claim what you can't see" rule the TFM classifier follows.
+let classifyToolchain (packageRefs: string list) : ToolchainFit =
+  match WorkflowTypes.FableMarkers.findMatches packageRefs with
+  | [] -> ToolchainFit.DotNet
+  | markers -> ToolchainFit.FableClient markers
+
+/// The truthful answer for a Fable client project: what SageFs does for it,
+/// what it does not, and WHY — stated as a different machine rather than a
+/// missing feature, because that is what it is.
+///
+/// Deliberately not a refusal and deliberately not silent. The project works;
+/// the user just needs to know which parts of it SageFs is the right tool for.
+let describeFableClient (project: string) (markers: string list) : string =
+  sprintf
+    "%s references %s, so it is a Fable client project — its real runtime is JavaScript in a browser. \
+     It builds and loads here, and its plain .NET code (domain types, MVU update functions, anything not \
+     touching the browser) evaluates and hot-reloads normally. What will NOT work is evaluating the browser \
+     bindings: Fable.Core's JS/JsInterop throw \"You've hit dummy code used for Fable bindings\", Browser.Dom \
+     throws \"JS only\", and Feliz view builders throw InvalidCastException. That is not a missing feature — \
+     SageFs hot reload patches .NET method bodies in a live CLR process, and there is no CLR method behind a \
+     Fable view. → Point SageFs at your server and shared projects for the full REPL, hot reload and live \
+     testing, and let Vite's HMR handle the client."
+    project
+    (markers |> String.concat ", ")
+
 /// Scan a session-create request's projects for the first one SageFs is
 /// CONFIDENTLY unable to host. `None` means proceed — every project is
 /// either Hostable or Indeterminate (the conservative default when in

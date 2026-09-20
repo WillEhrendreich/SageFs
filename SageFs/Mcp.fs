@@ -1865,7 +1865,27 @@ module McpTools =
           | a -> Some a.Value)
         |> Seq.toList
       with _ -> []
-    packageRefs @ WorkflowTypes.ProjectFileMarkers.read path
+    // Paket-managed projects (the SAFE stack template among them) carry no
+    // <PackageReference> at all — their packages live in a sibling
+    // paket.references — so a package-element-only read sees nothing.
+    packageRefs
+    @ WorkflowTypes.PaketReferences.readForProject path
+    @ WorkflowTypes.ProjectFileMarkers.read path
+
+  /// One advisory line per project whose TOOLCHAIN means SageFs can only help
+  /// with part of it — today, a Fable client, whose real runtime is a browser.
+  ///
+  /// Advisory, never a refusal: a Fable client project genuinely builds and
+  /// loads, and a Fable project sitting in a solution does not break a session
+  /// on the rest of it. The user is simply told which half of their project
+  /// SageFs is the right tool for. Pure — callers supply the references.
+  let formatToolchainAdvisories (projectRefs: (string * string list) list) : string list =
+    projectRefs
+    |> List.choose (fun (project, refs) ->
+      match ProjectCompatibility.classifyToolchain refs with
+      | ProjectCompatibility.ToolchainFit.DotNet -> None
+      | ProjectCompatibility.ToolchainFit.FableClient markers ->
+        Some(sprintf "ℹ️ %s" (ProjectCompatibility.describeFableClient (Path.GetFileName project) markers)))
 
   /// Create a new session and bind it to the requesting agent.
   let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflowRaw: string) : Task<string> =
@@ -1905,11 +1925,20 @@ module McpTools =
       | Result.Ok sid ->
         setActiveSessionId ctx agent sid
         // Surface workflow detection hint (non-blocking, informational only).
+        let perProject = projects |> List.map (fun p -> p, readFsprojPackageRefs p)
         let packageRefs =
-          projects
-          |> List.map readFsprojPackageRefs
+          perProject
+          |> List.map snd
           |> WorkflowTypes.WorkflowDetection.extractPackageNames
-        let hint = formatDetectionHint packageRefs workflow
+        // The hot-reload nudge, plus a truthful note for any project whose
+        // toolchain means only part of it is SageFs's job (a Fable client).
+        let lines =
+          Option.toList (formatDetectionHint packageRefs workflow)
+          @ formatToolchainAdvisories perProject
+        let hint =
+          match lines with
+          | [] -> None
+          | ls -> Some(String.concat "\n\n" ls)
         return CreateSessionUx.formatCreateSessionReply sid projects hint
       | Result.Error err -> return SageFsError.describeForAgent err
     }

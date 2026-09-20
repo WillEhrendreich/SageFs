@@ -62,6 +62,72 @@ module WebMarkers =
   let matchesAny (markers: string list) (refs: string list) =
     refs |> List.exists (fun r -> markers |> List.exists (fun m -> containsCI m r))
 
+// ─── Fable (browser) markers ────────────────────────────────
+
+/// Packages whose real runtime is a browser, not the CLR.
+///
+/// Two jobs. First, precision for `WebMarkers`: `Oxpecker.Solid` is a
+/// Fable/Solid.js CLIENT library (its nuspec reads "F# web framework built on
+/// top of Solid.js" and it depends on Fable.Core and Fable.Browser.Dom), so
+/// substring-matching `Oxpecker` would advertise browser hot reload for a
+/// project that has no ASP.NET server in it at all. Second, this is the list
+/// `ProjectCompatibility` uses to tell a user, truthfully, what SageFs can and
+/// cannot do with a Fable client project.
+///
+/// Every entry below was checked against the real package: `dotnet build`
+/// SUCCEEDS for all of them (they ship a real `lib/netstandard2.0/*.dll`), so
+/// there is nothing to detect at build time — the stubs only throw when
+/// EVALUATED.
+module FableMarkers =
+
+  /// Package-id prefixes whose members are browser/JS stubs on .NET.
+  let jsOnly =
+    [ "Fable.Core"           // JS/JsInterop: "You've hit dummy code used for Fable bindings"
+      "Fable.Browser."       // Browser.Dom etc: "JS only"
+      "Feliz"                // React view builders: InvalidCastException
+      "Fable.React"
+      "Fable.Elmish.React"
+      "Fable.Elmish.Browser"
+      "Fable.Elmish.HMR"
+      "Fable.Remoting.Client"
+      "Fable.Promise"
+      "Fable.Fetch"
+      "Fable.Lit"
+      "Sutil"
+      "Oxpecker.Solid"       // Solid.js client, NOT the Oxpecker ASP.NET server
+      "Partas.Solid" ]
+
+  /// Exact package ids that LOOK like the prefixes above but are ordinary .NET
+  /// libraries, so they must never be treated as browser-only. Measured, not
+  /// assumed: `Fable.Elmish`'s MVU core genuinely runs on .NET —
+  /// `Program.mkSimple ... |> Program.run` executes its update/view loop in a
+  /// plain console app. `Feliz.ViewEngine` renders HTML server-side. Checked
+  /// BEFORE `jsOnly`, and by exact id, so the longer `Fable.Elmish.React`
+  /// prefix still matches.
+  let dotNetDespiteName =
+    [ "Fable.Elmish"
+      "Feliz.ViewEngine"
+      "Fable.Remoting.Server"
+      "Fable.Remoting.Giraffe"
+      "Fable.Remoting.Suave"
+      "Fable.Remoting.AspNetCore"
+      "Fable.Remoting.Json" ]
+
+  /// Whether ONE reference is a browser-only Fable package.
+  let isJsOnly (reference: string) =
+    let r = reference.Trim()
+    let isAllowed =
+      dotNetDespiteName
+      |> List.exists (fun allowed -> String.Equals(r, allowed, StringComparison.OrdinalIgnoreCase))
+    match isAllowed with
+    | true -> false
+    | false ->
+      jsOnly
+      |> List.exists (fun prefix -> r.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+
+  /// The references that are browser-only Fable packages.
+  let findMatches (refs: string list) = refs |> List.filter isJsOnly
+
 // ─── Project-file markers ───────────────────────────────────
 
 /// Classification markers that live in the `.fsproj` XML itself rather than in
@@ -83,6 +149,13 @@ module ProjectFileMarkers =
 
   open System.Xml.Linq
 
+  /// The default SDK. It is what a project says when it has nothing to say, so
+  /// it is not a marker — emitting it would put `Microsoft.NET.Sdk` in the
+  /// user-visible `PackageRefs` of every project in the repo for no
+  /// information. Every OTHER SDK (`.Web`, `.Razor`, `.BlazorWebAssembly`, …)
+  /// genuinely narrows what the project is.
+  let private defaultSdk = "Microsoft.NET.Sdk"
+
   /// Parse markers out of raw `.fsproj` XML. Pure — no IO.
   ///
   /// Best-effort by construction: malformed or empty XML yields `[]` rather
@@ -99,7 +172,8 @@ module ProjectFileMarkers =
           |> Option.ofObj
           |> Option.bind (fun root -> root.Attribute(XName.Get "Sdk") |> Option.ofObj)
           |> Option.map (fun a -> a.Value.Trim())
-          |> Option.filter (fun v -> v <> "")
+          |> Option.filter (fun v ->
+            v <> "" && not (String.Equals(v, defaultSdk, StringComparison.OrdinalIgnoreCase)))
           |> Option.toList
         let frameworkRefs =
           doc.Descendants(XName.Get "FrameworkReference")
@@ -117,6 +191,52 @@ module ProjectFileMarkers =
   let read (projPath: string) : string list =
     try
       parse (IO.File.ReadAllText projPath)
+    with _ -> []
+
+// ─── Paket references ───────────────────────────────────────
+
+/// A Paket-managed project lists its packages in a sibling `paket.references`
+/// file and carries NO `<PackageReference>` in the .fsproj at all.
+///
+/// This matters more than it looks: the SAFE stack template — by far the most
+/// common Fable/full-stack F# layout — is Paket-managed, so a
+/// `<PackageReference>`-only reader sees an empty package list for its Client
+/// project and can say nothing useful about it. Ionide's resolved view does see
+/// them, but the MCP `create_session` hint runs before any worker has loaded
+/// anything and has only the files on disk.
+module PaketReferences =
+
+  /// Parse package ids out of `paket.references` text. One id per line;
+  /// `group <name>` headers, comments and framework-restriction suffixes are
+  /// dropped. Pure — no IO.
+  let parse (text: string) : string list =
+    match String.IsNullOrWhiteSpace text with
+    | true -> []
+    | false ->
+      text.Split([| '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+      |> Array.map (fun line -> line.Trim())
+      |> Array.filter (fun line ->
+        line <> ""
+        && not (line.StartsWith("#", StringComparison.Ordinal))
+        && not (line.StartsWith("//", StringComparison.Ordinal))
+        && not (line.StartsWith("group ", StringComparison.OrdinalIgnoreCase)))
+      // `Foo.Bar framework: net10.0` → `Foo.Bar`
+      |> Array.map (fun line -> line.Split([| ' '; '\t' |], StringSplitOptions.RemoveEmptyEntries).[0])
+      |> Array.distinct
+      |> Array.toList
+
+  /// Read the `paket.references` sitting next to a project file, if any. The
+  /// one IO edge; a missing or unreadable file yields `[]`, never an exception.
+  let readForProject (projPath: string) : string list =
+    try
+      let dir = IO.Path.GetDirectoryName(projPath: string)
+      match String.IsNullOrEmpty dir with
+      | true -> []
+      | false ->
+        let path = IO.Path.Combine(dir, "paket.references")
+        match IO.File.Exists path with
+        | false -> []
+        | true -> parse (IO.File.ReadAllText path)
     with _ -> []
 
 // ─── Browser refresh configuration ──────────────────────────
@@ -180,8 +300,14 @@ module ProjectKind =
   let classify (packageRefs: string list) : ProjectKind =
     let hasNativeGui =
       packageRefs |> List.exists (fun ref -> nativeGuiPackages |> List.exists ref.Contains)
+    // A browser-only Fable package can never be the evidence that a project is
+    // an ASP.NET web app. Without this, `Oxpecker.Solid` — a Fable/Solid.js
+    // CLIENT library — would match the `Oxpecker` server marker by substring
+    // and a pure browser project would be offered browser hot reload it cannot
+    // possibly use.
+    let webEvidence = packageRefs |> List.filter (FableMarkers.isJsOnly >> not)
     if hasNativeGui then ProjectKind.NativeGui
-    elif WebMarkers.matchesAny WebMarkers.all packageRefs then
+    elif WebMarkers.matchesAny WebMarkers.all webEvidence then
       ProjectKind.Web BrowserRefreshConfig.defaults
     else ProjectKind.Console
 
@@ -493,8 +619,11 @@ module WorkflowDetection =
   /// the two can no longer disagree about what "web" means. The only thing
   /// special-cased here is Datastar, and only to change the WORDING.
   let suggest (packageRefs: string list) : WorkflowSuggestion option =
-    let datastarHits = WebMarkers.findMatches WebMarkers.datastar packageRefs
-    let webHits = WebMarkers.findMatches WebMarkers.all packageRefs
+    // Same browser-only exclusion `ProjectKind.classify` applies, for the same
+    // reason and from the same list — the two must not disagree.
+    let webEvidence = packageRefs |> List.filter (FableMarkers.isJsOnly >> not)
+    let datastarHits = WebMarkers.findMatches WebMarkers.datastar webEvidence
+    let webHits = WebMarkers.findMatches WebMarkers.all webEvidence
     match datastarHits, webHits with
     | _ :: _, _ ->
       Some {

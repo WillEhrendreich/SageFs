@@ -15,6 +15,7 @@
 - **[Why F#?](why-fsharp.md)** — language rationale
 
 ## Reference
+- **[Can I use SageFs with…?](ecosystem-compatibility.md)** — Falco, Giraffe, Saturn, Oxpecker, plain ASP.NET, Fable/SAFE, React/Vue/Angular, Native AOT, .NET Framework
 - **[Feature Matrix](FEATURE_MATRIX.md)** — capabilities across VS Code, Neovim, the web dashboard, and MCP
 - **[MCP Tools](mcp-tools.md)** — the ~50 affordance-gated tools and per-client config
 - **[SSE Events](sse-events.md)** — wire format for the events editors consume
