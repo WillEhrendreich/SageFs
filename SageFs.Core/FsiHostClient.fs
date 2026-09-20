@@ -118,6 +118,7 @@ type FsiHostSession
           | Result.Ok(EvalResult(id, _, _) as answer) -> complete id answer
           | Result.Ok(FlagResult(id, _) as answer) -> complete id answer
           | Result.Ok(ValueResult(id, _) as answer) -> complete id answer
+          | Result.Ok(LiveValuesResult(id, _) as answer) -> complete id answer
     with ex ->
       onLog (sprintf "[fsihost] read loop ended: %s" ex.Message)
     // Give the process a moment to report its exit code, then fail everything still waiting.
@@ -193,6 +194,15 @@ type FsiHostSession
       match! roundTrip CancellationToken.None (fun id -> ReadValue(id, name)) with
       | Got(ValueResult(_, reading)) -> return Answered reading
       | Got other -> return HostGone(unexpected "value" other)
+      | Gone reason -> return HostGone reason
+    }
+
+  /// The session's bound values as the bounded watch-window tree; the caller supplies the generation.
+  member _.ReadLiveValues(generation: int64) : Async<HostCall<SageFs.Features.LiveValueTree.LiveValueSnapshot>> =
+    async {
+      match! roundTrip CancellationToken.None (fun id -> ReadLiveValues(id, generation)) with
+      | Got(LiveValuesResult(_, snapshot)) -> return Answered snapshot
+      | Got other -> return HostGone(unexpected "live values" other)
       | Gone reason -> return HostGone reason
     }
 

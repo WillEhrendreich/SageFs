@@ -17,6 +17,7 @@ open System.Text
 open System.Threading
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Interactive.Shell
+open SageFs.Features
 open SageFs.FsiHost.FsiProtocol
 
 /// A TextWriter that forwards what is written as Output messages (flushed per line and on Flush).
@@ -66,6 +67,7 @@ type private Work =
   | RunEval of id: int64 * code: string
   | RunReadFlag of id: int64 * name: string
   | RunReadValue of id: int64 * name: string
+  | RunReadLiveValues of id: int64 * generation: int64
 
 let private typeNameOf (value: FsiValue) =
   match value.ReflectionType with
@@ -94,6 +96,23 @@ let private readValue (session: FsiEvaluationSession) (name: string) : ValueRead
       with ex -> sprintf "<%s while reading the value>" (ex.GetType().Name)
     let text = if text.Length > maxValueText then text.Substring(0, maxValueText) + "…" else text
     ValueText(typeNameOf bound.Value, text)
+
+/// The session's bound values walked into the bounded tree the dashboard renders. A failed walk yields an empty
+/// snapshot rather than an error: the watch window degrades, the session does not.
+let private liveValues (session: FsiEvaluationSession) (generation: int64) : LiveValueTree.LiveValueSnapshot =
+  try
+    let boundValues =
+      session.GetBoundValues()
+      |> List.map (fun bound ->
+        let value =
+          try bound.Value.ReflectionValue
+          with _ -> null
+        let typeSignature =
+          try typeNameOf bound.Value
+          with _ -> ""
+        (bound.Name, typeSignature, value))
+    LiveValueTree.buildSnapshot "" generation boundValues
+  with _ -> LiveValueTree.buildSnapshot "" generation []
 
 /// The eval currently running, so Interrupt can reach it.
 type private Running =
@@ -148,6 +167,7 @@ let private run (argsFile: string) : int =
         match requests.Take() with
         | RunReadFlag(id, name) -> send (FlagResult(id, readFlag session name))
         | RunReadValue(id, name) -> send (ValueResult(id, readValue session name))
+        | RunReadLiveValues(id, generation) -> send (LiveValuesResult(id, liveValues session generation))
         | RunEval(id, code) ->
           use cancel = new CancellationTokenSource()
           lock runningLock (fun () -> running <- Some { Cancel = cancel; Thread = Thread.CurrentThread })
@@ -184,6 +204,7 @@ let private run (argsFile: string) : int =
       | Result.Ok(Eval(id, code)) -> requests.Add(RunEval(id, code))
       | Result.Ok(ReadFlag(id, name)) -> requests.Add(RunReadFlag(id, name))
       | Result.Ok(ReadValue(id, name)) -> requests.Add(RunReadValue(id, name))
+      | Result.Ok(ReadLiveValues(id, generation)) -> requests.Add(RunReadLiveValues(id, generation))
       | Result.Ok Interrupt ->
         lock runningLock (fun () ->
           match running with

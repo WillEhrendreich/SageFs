@@ -15,7 +15,7 @@ open System.Text
 open System.Threading
 
 /// The files that make up the host project, in the order they are written.
-let hostSourceNames = [ "FsiHost.fsproj"; "FsiProtocol.fs"; "Program.fs" ]
+let hostSourceNames = [ "FsiHost.fsproj"; "LiveValueTree.fs"; "FsiProtocol.fs"; "Program.fs" ]
 
 /// Whether a host had to be built now or was already in the cache. The path is the host's entry assembly.
 type HostBuild =

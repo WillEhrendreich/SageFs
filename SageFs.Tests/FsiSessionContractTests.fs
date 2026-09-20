@@ -172,6 +172,6 @@ let tests =
 
     Integration.hostList "isolated host session" [
       // Everything the isolated host does not do YET is listed here; each becomes a running case when implemented.
-      contract "RemoteFsiSession" newRemote [ LiveValues; Completions; Diagnostics ]
+      contract "RemoteFsiSession" newRemote [ Completions; Diagnostics ]
     ]
   ]

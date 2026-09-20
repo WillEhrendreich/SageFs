@@ -23,6 +23,7 @@ open System.IO
 open System.Text
 open System.Text.Json
 open Microsoft.FSharp.Reflection
+open SageFs.Features
 
 type DiagnosticSeverity =
   | DiagHidden
@@ -65,6 +66,8 @@ type Request =
   | Eval of id: int64 * code: string
   | ReadFlag of id: int64 * name: string
   | ReadValue of id: int64 * name: string
+  /// The session's bound values as an expanded, bounded tree (the dashboard's watch window). The client picks the generation.
+  | ReadLiveValues of id: int64 * generation: int64
   | Interrupt
   | Shutdown
 
@@ -73,6 +76,7 @@ type Response =
   | EvalResult of id: int64 * outcome: EvalOutcome * diagnostics: FsiDiagnostic list
   | FlagResult of id: int64 * reading: FlagReading
   | ValueResult of id: int64 * reading: ValueReading
+  | LiveValuesResult of id: int64 * snapshot: LiveValueTree.LiveValueSnapshot
   | Output of stream: OutputStream * text: string
 
 /// Why a message could not be encoded/decoded. A typed union (never a bare string) so callers can match on the
@@ -117,7 +121,7 @@ let rec private isSupported (seen: Set<string>) (t: Type) : Result<unit, Protoco
     let seen = seen.Add(string t)
     let all (types: Type seq) =
       types |> Seq.fold (fun acc next -> acc |> Result.bind (fun () -> isSupported seen next)) (Result.Ok())
-    if t = typeof<string> || t = typeof<int> || t = typeof<int64> || t = typeof<bool> then Result.Ok()
+    if t = typeof<string> || t = typeof<int> || t = typeof<int64> || t = typeof<bool> || t = typeof<DateTimeOffset> then Result.Ok()
     elif isFSharpList t then isSupported seen (t.GetGenericArguments().[0])
     elif FSharpType.IsRecord t then FSharpType.GetRecordFields t |> Seq.map (fun f -> f.PropertyType) |> all
     elif FSharpType.IsUnion t then
@@ -136,6 +140,9 @@ let rec private writeValue (writer: Utf8JsonWriter) (t: Type) (value: obj) : uni
   elif t = typeof<int> then writer.WriteNumberValue(value :?> int)
   elif t = typeof<int64> then writer.WriteNumberValue(value :?> int64)
   elif t = typeof<bool> then writer.WriteBooleanValue(value :?> bool)
+  // The round-trip ("O") format keeps every tick and the offset.
+  elif t = typeof<DateTimeOffset> then
+    writer.WriteStringValue((value :?> DateTimeOffset).ToString("O", System.Globalization.CultureInfo.InvariantCulture))
   elif isFSharpList t then
     let elementType = t.GetGenericArguments().[0]
     writer.WriteStartArray()
@@ -218,6 +225,13 @@ let rec private readValue (t: Type) (element: JsonElement) : Result<obj, Protoco
     | JsonValueKind.True -> Result.Ok(box true)
     | JsonValueKind.False -> Result.Ok(box false)
     | _ -> wrong "a bool"
+  elif t = typeof<DateTimeOffset> then
+    match element.ValueKind with
+    | JsonValueKind.String ->
+      match element.TryGetDateTimeOffset() with
+      | true, moment -> Result.Ok(box moment)
+      | false, _ -> wrong "an ISO 8601 date-time"
+    | _ -> wrong "an ISO 8601 date-time"
   elif isFSharpList t then
     match element.ValueKind with
     | JsonValueKind.Array ->

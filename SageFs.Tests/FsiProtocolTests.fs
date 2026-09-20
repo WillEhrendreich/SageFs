@@ -3,6 +3,7 @@ module SageFs.Tests.FsiProtocolTests
 open Expecto
 open FsCheck
 open FsCheck.FSharp
+open SageFs.Features
 open SageFs.FsiHost.FsiProtocol
 
 /// Adversarial text: empty, newlines (the framing delimiter!), quotes, backslashes, control chars, unicode, random.
@@ -47,7 +48,46 @@ let private genDiagnosticsAndText =
     return text, diagnostics
   }
 
-let private config = { FsCheckConfig.defaultConfig with maxTest = 300 }
+/// Every fieldless case of NodeKind, taken from the type so a new case is generated without editing this file.
+let private allNodeKinds : LiveValueTree.NodeKind list =
+  Microsoft.FSharp.Reflection.FSharpType.GetUnionCases typeof<LiveValueTree.NodeKind>
+  |> Array.map (fun case -> Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, [||]) :?> LiveValueTree.NodeKind)
+  |> Array.toList
+
+/// LiveValueNode is recursive (Children: LiveValueNode list); FsCheck's reflective generator recurses without
+/// bound on it, so generate it with an explicit depth budget.
+let rec private genNode (depth: int) : Gen<LiveValueTree.LiveValueNode> =
+  gen {
+    let! label = genText
+    let! typeName = genText
+    let! preview = genText
+    let! kind = Gen.elements allNodeKinds
+    let! bestEffort = Gen.elements [ true; false ]
+    let! nodeDepth = Gen.choose (0, 6)
+    let! children =
+      match depth <= 0 with
+      | true -> Gen.constant []
+      | false -> Gen.choose (0, 3) |> Gen.bind (fun count -> Gen.listOfLength count (genNode (depth - 1)))
+    return
+      { LiveValueTree.LiveValueNode.Label = label
+        TypeName = typeName
+        Preview = preview
+        Kind = kind
+        Children = children
+        BestEffort = bestEffort
+        Depth = nodeDepth }
+  }
+
+type BoundedGenerators =
+  static member LiveValueNode() : Arbitrary<LiveValueTree.LiveValueNode> = Arb.fromGen (genNode 3)
+
+let private config =
+  { FsCheckConfig.defaultConfig with
+      maxTest = 300
+      arbitrary = [ typeof<BoundedGenerators> ] }
+
+/// FsCheck's default generators plus the bounded one, for sampling outside a property.
+let private arbMap = ArbMap.defaults |> ArbMap.mergeArb (BoundedGenerators.LiveValueNode())
 
 /// Every union case name of a protocol type, straight from the type — a new case shows up here automatically.
 let private caseNames (t: System.Type) =
@@ -89,8 +129,8 @@ let tests =
     testCase "the generators reach every case of Request and Response" <| fun _ ->
       let sample (generator: Gen<'a>) =
         Gen.sample 3000 generator |> Array.map (fun value -> caseNameOf (box value)) |> Set.ofArray
-      Expect.equal (sample (ArbMap.defaults |> ArbMap.generate<Request>)) (caseNames typeof<Request>) "every request case"
-      Expect.equal (sample (ArbMap.defaults |> ArbMap.generate<Response>)) (caseNames typeof<Response>) "every response case"
+      Expect.equal (sample (arbMap |> ArbMap.generate<Request>)) (caseNames typeof<Request>) "every request case"
+      Expect.equal (sample (arbMap |> ArbMap.generate<Response>)) (caseNames typeof<Response>) "every response case"
 
     testPropertyWithConfig config "decoding arbitrary text never throws, it returns Ok or Error"
     <| Prop.forAll (Arb.fromGen genText) (fun text ->

@@ -2,8 +2,8 @@
 /// type: the user's code runs in the host, next to nothing of SageFs.
 ///
 /// Capability status (kept honest, and mirrored by which contract tests run for this implementation):
-///   implemented: Eval, ReadFlag, BoundValue (display text), Dispose
-///   not yet in the host (return neutral empties): Completions, Diagnose, TypeCheckWithSymbols, LiveValuesJson
+///   implemented: Eval, ReadFlag, BoundValue (display text), LiveValuesJson (typed snapshot over the wire), Dispose
+///   not yet in the host (return neutral empties): Completions, Diagnose, TypeCheckWithSymbols
 ///   in-process by nature until the host agent exists: DynamicAssemblies (hot reload / live testing) -> empty
 module SageFs.RemoteFsiSession
 
@@ -70,11 +70,14 @@ type RemoteFsiSession(host: FsiHostSession) =
       | Answered ValueUnbound
       | HostGone _ -> null
 
-    // ---- not in the isolated host yet: neutral results, each a pending case in the contract tests ----
     member _.LiveValuesJson(generation) =
       let next = Interlocked.Increment(&generation.contents)
-      WorkerProtocol.Serialization.serialize (LiveValueTree.buildSnapshot "" next [])
+      match wait (host.ReadLiveValues next) with
+      | Answered snapshot -> WorkerProtocol.Serialization.serialize snapshot
+      // A lost host has no values: an empty snapshot, exactly what a session with no bindings reports.
+      | HostGone _ -> WorkerProtocol.Serialization.serialize (LiveValueTree.buildSnapshot "" next [])
 
+    // ---- not in the isolated host yet: neutral results, each a pending case in the contract tests ----
     member _.Completions(_text, _caret, _word) = []
 
     member _.Diagnose(_text) = [||]
