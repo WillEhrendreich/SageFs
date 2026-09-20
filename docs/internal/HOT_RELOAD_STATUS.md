@@ -1,23 +1,53 @@
 # SageFs Hot Reload Status
 
-> ## 🚧 Status: In Progress
+> ## ✅ Status: Working for function-body changes
 >
-> Hot reload is **not yet fully working end-to-end**. The pipeline (file watch →
-> preprocess → FSI eval → SSE broadcast) is proven live, but changes do **not**
-> yet propagate into the running app for **module-declared, route-captured apps**
-> (the common Falco/ASP.NET pattern: `module App.Program` + `let routes = [...]`
-> captured by value at startup). Re-eval'ing the file creates new FSI functions,
-> but the running route table still points at the old closures — the Harmony
-> detour matching finds no name match because CompilationContext strips the
-> module declaration, so the re-eval'd functions land in a different FSI module.
+> A save propagates into the running app for **module-declared, route-captured
+> apps** — the Falco/Giraffe/Saturn/Oxpecker pattern (`module App.Program` +
+> `let routes = [...]` captured by value at startup). Verified live against
+> `samples/demos/SageFs.Samples.WebappDatastar`: the same running process served
+> the new text after a save, with no restart, including for a handler whose
+> parameter type is declared in the same file.
 >
-> **Current status:**
-> - ✅ Works: file watcher, CompilationContext preprocessing, FSI eval (returns Ok), SSE reload broadcast, DevReload script injection into served HTML
-> - ❌ Not working: the detoured methods do not rewire the running app's captured handlers — the served content is unchanged after a save
-> - 🔧 The fix is being worked: make detour name matching find the module-stripped functions (or record the init-loaded methods so re-evals can match them)
+> **What changed.** The worker used to route a save to the in-place patch path
+> only when the app had been started by `run_app`. Everything else fell back to
+> re-evaluating the WHOLE file. A whole-file re-evaluation re-declares the types
+> the file itself defines, so a handler like `todoListView (items: TodoItem
+> list)` ended up with a parameter type from the FSI assembly while the compiled
+> method's came from the project assembly. `HotReloadCore.compatibleForDetour`
+> compares parameter types for equality, rejected the pair, and applied no
+> detour — while still reporting the handlers that happened to have BCL-only
+> signatures as "hot reloaded" and refreshing the browser. That is why the page
+> reloaded with the old code.
 >
-> Until this is resolved, treat hot reload as **experimental**. The REPL,
-> live testing, and all other SageFs features are unaffected.
+> The route now depends on whether the file has a **baseline** (the source its
+> loaded assembly was built from), not on how the app was started:
+> `ReloadPlanning.routeFor`. With a baseline, only the CHANGED functions are
+> emitted against the compiled module's identity
+> (`CompilationContext.emitStableIdentity`), so every parameter type is
+> identical and the pairing succeeds.
+>
+> **Genuine remaining limitations** (each pinned by a matrix cell, see below):
+> value bindings, eagerly-computed handlers, mutable fields, and signature/type
+> changes take effect at startup and cannot be patched into a process that
+> already started. SageFs restarts the app when it is the one running it;
+> otherwise it logs that a restart is needed and re-evaluates the file.
+
+## The shape matrix (the gate)
+
+`SageFs.Tests/WebAppHotReloadVerificationTests.fs` holds `ShapeMatrix.cells`.
+Every cell starts a real app whose handler table is captured at startup, saves a
+real source file, and asserts what the SAME process serves afterwards — never
+"the pipeline ran", never "a detour was planned".
+
+The fixture's call shape is itself a matrix dimension. It has to be: the earlier
+gate (`fixtures/WebAppFixture/Greeting.fs`) was a `namespace`-declared
+`[<MethodImpl(NoInlining)>]` function that the route CALLED at request time —
+the one shape a detour has always been able to rewire. It was genuinely green,
+ran in CI, and was the exact complement of the bug users hit. The matrix fixture
+is `fixtures/WebAppFixture/Shapes.fs`: a dotted module-declared file, handlers
+captured by value, no `NoInlining` anywhere, and the un-patchable shapes present
+as explicit `RestartOnly` cells with their reason.
 
 ## ✅ What Works
 
@@ -122,6 +152,32 @@ These design decisions exist for specific reasons. Before changing them, underst
 
 ## ⚠️ Known Limitations
 
+### Changes that take effect at startup
+
+A running process cannot be given a new module initialisation. These shapes are
+`RestartOnly` cells in the matrix, each with its reason:
+
+| Shape | Why a detour cannot reach it |
+|---|---|
+| `let h : HttpHandler = Response.ofHtml (pageLayout [])` | the value was computed once at module init and captured by the route |
+| `let h : HttpHandler = fun ctx -> ...` | `ReloadPlanning` classifies a parameterless binding as a value, so the whole file is treated as a startup change. The IL would allow it (F# emits a static method plus a closure that calls it) — reclassifying syntactic-lambda value bindings as functions is an open improvement |
+| `let mutable state = ...` | the field was assigned at startup; a reader compiles to a direct field load (`ldfld`) |
+| a changed signature, a new/removed declaration, a changed type | the compiled assembly's shape no longer matches |
+
+Note what is NOT a limitation: `[<MethodImpl(MethodImplOptions.NoInlining)>]`
+is **not** required on the user's own source. The `tiny` matrix cell is a
+one-line function with no attribute and it reloads. SageFs injects `NoInlining`
+on the code it emits (`HotReloading.injectNoInlining`); the compiled side does
+not need it.
+
+### The baseline must match the build
+
+Patching in place is only offered for a file whose source was not touched after
+the build that produced the loaded assembly
+(`ReloadPlanning.baselineIsTrustworthy`). A file edited after its last build is
+re-evaluated whole instead, and the worker logs that it is doing so. Build
+before starting the session.
+
 ### Content Security Policy (CSP)
 
 DevReload injects an inline `<script>` tag into HTML responses. If your app uses a
@@ -208,6 +264,9 @@ SageFs --no-watch
 | `SageFs.Core/Middleware/HotReloading.fs` | Harmony method detouring |
 | `SageFs.Core/Middleware/CompilationContext.fs` | File preprocessing, module detection, line offset mapping |
 | `SageFs.Core/ActorCreation.fs` | Registers middleware pipeline |
+| `SageFs.Core/Features/ReloadPlanning.fs` | `routeFor` (patch in place vs re-evaluate whole file), `planReload`, `confirmPatch`, `baselineIsTrustworthy` |
+| `SageFs.Tests/fixtures/WebAppFixture/Shapes.fs` | The shape-matrix fixture: handlers captured by value at startup, no `NoInlining`, un-patchable shapes included |
+| `SageFs.Tests/WebAppHotReloadVerificationTests.fs` | `ShapeMatrix.cells` + the outcome gates (real app, real save, real HTTP) |
 | `SageFs.Tests/DevReloadMiddlewareTests.fs` | 40 tests: CSP nonce, encoding, embedded JS, 13 UX features |
 | `SageFs.Tests/DevReloadTests.fs` | 31 tests: 6 FsCheck property + 25 unit (lifecycle, middleware, SSE) |
 | `SageFs.Tests/HotReloadingPropertyTests.fs` | Property-based tests for HotReloading pipeline |
@@ -216,15 +275,13 @@ SageFs --no-watch
 
 ## ✨ Summary
 
-> **⚠️ In progress — see the banner at the top of this file.**
-
 The system:
 - Watches project directories for `.fs`/`.fsx`/`.fsproj` changes
 - Debounces (500ms) to avoid thrashing
-- Sends `#load` with `hotReload=true` to FSI
-- Harmony library detours method pointers at runtime
+- Diffs the saved file against the source its loaded assembly was built from
+- Emits only the changed functions, against the compiled module's own identity
+- Harmony re-points those methods at runtime
 - No restart, no manual intervention — just edit and save
 
-**However:** the detour propagation into running apps is not complete for
-module-declared apps (see the status banner). Work is ongoing to make it
-fully live.
+Changes that take effect at startup (values, mutable fields, types, signatures)
+restart the app instead; see the banner at the top of this file.

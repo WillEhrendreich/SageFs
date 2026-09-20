@@ -214,6 +214,92 @@ let private writeFixtureFile (path: string) (content: string) =
   if not written then
     failwithf "could not write fixture file %s within 15s (locked by a previous host?)" path
 
+/// The hot-reload shape matrix.
+///
+/// WHY it is a matrix and not one case: the older gate below proves ONE shape —
+/// a `namespace`-declared `[<MethodImpl(NoInlining)>]` function the route CALLS
+/// at request time. That is the one shape a method detour has always been able
+/// to rewire, so a genuinely green outcome gate coexisted for months with a
+/// feature that was broken for every real web app. The fixture's call shape is
+/// therefore a DIMENSION of this matrix, not an implementation detail: each cell
+/// names the binding shape it drives, and the set deliberately includes the
+/// shapes the mechanism CANNOT handle so they are asserted as limitations rather
+/// than quietly left out.
+///
+/// Each cell's assertion is the same user-visible fact: the app is running, its
+/// handler table was captured at startup, a source file is saved, and the SAME
+/// process either serves the new code or is required to still serve the old one
+/// because that shape genuinely cannot be patched.
+module ShapeMatrix =
+
+  type Verdict =
+    /// The save must reach the running app.
+    | Reloads
+    /// The shape cannot be patched in place; the running app must still serve
+    /// the pre-edit value, and the reason is stated here.
+    | RestartOnly of reason: string
+
+  type Cell = {
+    /// The route segment: GET /shape/<Name>.
+    Name: string
+    /// What the cell drives, in one line, for the failure message.
+    Why: string
+    /// Unique source text to replace, and its replacement.
+    Find: string
+    Replace: string
+    Expected: Verdict
+  }
+
+  let cells : Cell list = [
+    { Name = "localType"
+      Why = "a module-level FUNCTION whose parameter type is declared in the SAME file — the shape that broke Falco/Giraffe/Saturn/Oxpecker route tables, because a whole-file re-evaluation re-declares that type and the detour matcher then rejects the pair on parameter types"
+      Find = "let localTypeHandler (reply: Reply) : string = \"A\" + reply.Body"
+      Replace = "let localTypeHandler (reply: Reply) : string = \"B\" + reply.Body"
+      Expected = Reloads }
+
+    { Name = "plain"
+      Why = "a module-level FUNCTION with a BCL-only signature, captured by value into the table at startup"
+      Find = "let plainHandler (who: string) : string = \"A\" + who"
+      Replace = "let plainHandler (who: string) : string = \"B\" + who"
+      Expected = Reloads }
+
+    { Name = "tiny"
+      Why = "a FUNCTION small enough for the JIT to want to inline into its caller, with NO [<MethodImpl(NoInlining)>] — a real user never writes that attribute, so hot reload has to hold without it"
+      Find = "let tinyHandler () : string = \"A\""
+      Replace = "let tinyHandler () : string = \"B\""
+      Expected = Reloads }
+
+    { Name = "member"
+      Why = "a static TYPE MEMBER rather than a module-level function"
+      Find = "  static member Render() : string = \"A\""
+      Replace = "  static member Render() : string = \"B\""
+      Expected = Reloads }
+
+    { Name = "lambda"
+      Why = "a VALUE binding holding a lambda (`let h : HttpHandler = fun ctx -> ...`)"
+      Find = "let lambdaHandler : string -> string = fun who -> \"A\" + who"
+      Replace = "let lambdaHandler : string -> string = fun who -> \"B\" + who"
+      Expected =
+        RestartOnly
+          "a value binding is re-run by module initialisation, which already happened; the table captured the closure the startup run produced" }
+
+    { Name = "eager"
+      Why = "a handler whose output is computed ONCE at module initialisation and closed over — `let getHome : HttpHandler = Response.ofHtml (pageLayout [])` in Falco terms"
+      Find = "let private computeEager () = \"A\""
+      Replace = "let private computeEager () = \"B\""
+      Expected =
+        RestartOnly
+          "nothing is called at request time, so there is no method entry point to re-point: the value was baked into the captured closure at startup" }
+
+    { Name = "mutable"
+      Why = "a MUTABLE module-level field read by the handler"
+      Find = "let mutable mutableField = \"A\""
+      Replace = "let mutable mutableField = \"B\""
+      Expected =
+        RestartOnly
+          "module initialisation already assigned the field, and a reader compiles to a direct field load (ldfld) that no method detour can rewire" }
+  ]
+
 /// The fixture's App.fs is the file we edit on disk. This test is the plan's
 /// required RED test: a real module-declared Falco/ASP.NET fixture whose route
 /// closes over a function. Start the app through a SageFs Live-workflow
@@ -375,6 +461,73 @@ let webAppHotReloadVerificationTests =
             "hello from hot reload (value B)" bodyB
         finally
           writeFixtureFile appSource original
+      finally
+        try proc.Kill(entireProcessTree = true) with _ -> ()
+        try proc.Dispose() with _ -> ()
+
+    Integration.hostCase "hot-reload shape matrix: a startup-captured handler table, one cell per F# binding shape" <| fun () ->
+      let fDir = fixtureDir ()
+      let shapesSource = Path.Combine(fDir, "Shapes.fs")
+      Expect.isTrue "fixture Shapes.fs should exist" (File.Exists shapesSource)
+      let original = File.ReadAllText shapesSource
+      // Every cell's edit must be unique text, so a cell can never silently
+      // rewrite another cell's source and report the wrong verdict.
+      for cell in ShapeMatrix.cells do
+        let occurrences =
+          original.Split([| cell.Find |], StringSplitOptions.None).Length - 1
+        Expect.equal
+          (sprintf "%s: its edit anchor must appear exactly once in Shapes.fs" cell.Name)
+          1 occurrences
+
+      let sessionId = sprintf "shape-matrix-%s" (Guid.NewGuid().ToString("N"))
+      let hostLog = StringBuilder()
+      let proc, baseUrl, proxy = spawnHost sessionId hostLog
+      try
+        waitReady proxy hostLog
+
+        // The REAL user path: the project is loaded by the session, its sources
+        // are baselined at session start, and the app runs from the COMPILED
+        // assembly. No `#load` anywhere — a `#load` would put an FSI copy of the
+        // module in front of the compiled one and hide exactly the bug this
+        // matrix exists to catch.
+        let port = freePort ()
+        evalOk proxy (sprintf "WebAppFixture.App.run %d" port) |> ignore
+        let shape (name: string) = httpGet port ("/shape/" + name)
+
+        for cell in ShapeMatrix.cells do
+          Expect.equal
+            (sprintf "%s: the running app should serve the pre-edit value" cell.Name)
+            "A" (shape cell.Name)
+
+        watchAllFiles baseUrl
+        waitForWatched baseUrl 10000
+
+        try
+          for cell in ShapeMatrix.cells do
+            let before = File.ReadAllText shapesSource
+            use sseReader = openSseStream baseUrl
+            writeFixtureFile shapesSource (before.Replace(cell.Find, cell.Replace))
+            // Every save must close the Compiling -> (Reload | CompilationFailed)
+            // contract: a cell that cannot be patched still has to answer.
+            readSseUntil sseReader 60000 (fun payload ->
+              payload.Contains("\"type\":\"reload\"") || payload.Contains("\"type\":\"failed\""))
+            |> ignore
+            let served = shape cell.Name
+            match cell.Expected with
+            | ShapeMatrix.Reloads ->
+              Expect.equal
+                (sprintf
+                  "%s — %s\nThe running app must serve the new code after the save, with no restart.\nHost log:\n%s"
+                  cell.Name cell.Why (hostLog.ToString()))
+                "B" served
+            | ShapeMatrix.RestartOnly reason ->
+              Expect.equal
+                (sprintf
+                  "%s — this shape CANNOT be patched in place (%s), so the running app must still serve the pre-edit value. If this now serves the new value the limitation is gone: move the cell to Reloads and update docs/hot-reload.md.\nHost log:\n%s"
+                  cell.Name reason (hostLog.ToString()))
+                "A" served
+        finally
+          writeFixtureFile shapesSource original
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()

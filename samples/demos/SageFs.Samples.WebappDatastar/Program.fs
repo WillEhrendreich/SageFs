@@ -21,6 +21,7 @@ open Falco.Routing
 open Falco.Markup
 open Falco.Datastar
 open Microsoft.AspNetCore.Builder
+open Microsoft.AspNetCore.Http
 
 // ── Domain model — pure F# ──
 type TodoItem = {
@@ -100,21 +101,33 @@ let pageLayout (content: XmlNode list) =
   ]
 
 // ── Route handlers — pure functions, no controller classes ──
+//
+// NOTE the shape: each handler TAKES the HttpContext.
+//
+//   let getHome (ctx: HttpContext) = ...        ← reloads on save
+//   let getHome : HttpHandler = Response.ofHtml (pageLayout [])   ← does NOT
+//
+// The second form is a value: its HTML is built once, when the module is
+// initialised, and the route list below captures that finished value. There is
+// nothing left to call per request, so no amount of patching can change what it
+// serves — you would have to restart. Written with a parameter, the handler is
+// a method the running app calls on every request, so SageFs can re-point it
+// while the server keeps running. See docs/hot-reload.md.
 
-let getHome : HttpHandler =
-  Response.ofHtml (pageLayout [])
+let getHome (ctx: HttpContext) =
+  Response.ofHtml (pageLayout []) ctx
 
-let getTodoList : HttpHandler =
-  Response.ofHtml (todoListView todos)
+let getTodoList (ctx: HttpContext) =
+  Response.ofHtml (todoListView todos) ctx
 
 // ┌─ HOT RELOAD DEMO: edit the text below, save, watch the page change ─┐
-let getStats : HttpHandler =
+let getStats (ctx: HttpContext) =
   let pending   = todos |> List.filter (fun t -> not t.Completed) |> List.length
   let completed = todos |> List.filter (fun t -> t.Completed) |> List.length
   Response.ofHtml (
     Elem.div [ Attr.id "stats" ] [
       Text.rawf "📋 %d pending · ✅ %d done" pending completed
-    ])
+    ]) ctx
 // └─────────────────────────────────────────────────────────────────────┘
 
 let postAddTodo : HttpHandler = fun ctx -> task {

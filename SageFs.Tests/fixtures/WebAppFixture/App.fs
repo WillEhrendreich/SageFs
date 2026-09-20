@@ -18,6 +18,15 @@ module App =
       ctx.Response.ContentType <- "text/plain"
       ctx.Response.WriteAsync(sprintf "<h1>%s</h1>" (Greeting.greeting ())))
     ) |> ignore
+    // The shape matrix. The handler table is read ONCE, here, at startup — the
+    // Falco/Giraffe/Saturn/Oxpecker shape — so each route serves whatever
+    // closure it captured, never a fresh lookup. Saving Shapes.fs must change
+    // what these serve without restarting anything.
+    let captured = Shapes.handlers
+    for name, handler in captured do
+      app.MapGet("/shape/" + name, Func<_, _>(fun (ctx: HttpContext) ->
+        ctx.Response.ContentType <- "text/plain"
+        ctx.Response.WriteAsync(handler ()))) |> ignore
     let _serverTask =
       app.RunAsync(sprintf "http://127.0.0.1:%d" port)
       |> Async.AwaitTask
