@@ -96,6 +96,7 @@
         <Compile Include="CellGridTests.fs" />
         <Compile Include="ScreenTests.fs" />
         <Compile Include="DashboardSnapshotTests.fs" />
+        <Compile Include="DashboardDiscoverUxTests.fs" />
         <Compile Include="DashboardTestIdTests.fs" />
         <Compile Include="McpHardResetRebuildTests.fs" />
         <Compile Include="HostCoreAdoptionReloadTests.fs" />
@@ -197,6 +198,7 @@
          <Compile Include="SseDedupKeyTests.fs" />
          <Compile Include="ThemeTests.fs" />
          <Compile Include="ErrorMessagesTests.fs" />
+         <Compile Include="EvalSubmissionTests.fs" />
          <Compile Include="RetryPolicyTests.fs" />
          <Compile Include="FsiRewriteTests.fs" />
          <Compile Include="LiveTestingTypesTests.fs" />

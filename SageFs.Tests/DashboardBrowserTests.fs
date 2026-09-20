@@ -388,15 +388,28 @@ let tests =
     let! stripped = page.EvaluateAsync<int>("() => window.__classStripped")
     Expect.equal stripped 0 "the SSE morph must never strip and re-add the client-owned `expanded` class on #main"
     let! after = page.EvaluateAsync<float>("() => document.querySelector('.sidebar-inner').scrollTop")
-    // A reset drops scrollTop to the collapsed maximum (a few dozen px, well under the target); content growing above the
-    // viewport can only push it up via scroll anchoring. The sidebar's content may also legitimately get SHORTER while the
-    // eval settles (observed on CI: 80px), and the browser then clamps scrollTop to the new maximum. That is not the bug, so
-    // the position may fall only as far as the new maximum, never below it.
+    // NOT an exact-position assertion, and NOT `maxAfter`-relative either: the eval this
+    // test performs creates live bindings, which grows `.expanded-only` (measured on CI:
+    // 469 -> 526px), and the browser's scroll anchoring resolves that growth to a
+    // DIFFERENT final scrollTop per renderer — 594 -> 651 measured locally, 594 -> 514
+    // measured on the CI runner, for the identical content change. A bound built from
+    // `maxAfter` co-varies with that same growth/anchoring, so it can silently pass on a
+    // renderer where anchoring lands low. The bug this test exists to catch is a full
+    // RESET, not a smaller anchoring offset: the client-owned `expanded` class gets
+    // stripped, `.expanded-only` collapses to near nothing, and the browser clamps
+    // scrollTop to the tiny COLLAPSED maximum — "a few dozen px", the same ceiling the
+    // `scrolledTo > 100.0` guard above already uses to define that collapsed state. A
+    // fixed floor of 200px sits comfortably above that collapse ceiling and comfortably
+    // below every anchoring outcome observed so far (514-651 locally and on CI), so it
+    // still fails for the actual defect (collapse-then-clamp) while tolerating
+    // environment-sensitive anchoring jitter that is not the defect. `__classStripped = 0`
+    // above is the crisp, direct check for the mechanism itself; this is the
+    // belt-and-suspenders "and we did not end up back near the top" check.
+    let floor = 200.0
     let! textAfter = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0]) + ' => ' + c.innerText.replace(/\\s+/g, ' ').slice(0, 400)).join(' || ')")
     let! sizesAfter = page.EvaluateAsync<string>("() => Array.from(document.querySelector('.sidebar-inner').children).map(c => (c.id || c.className.toString().split(' ')[0] || c.tagName) + ':' + Math.round(c.getBoundingClientRect().height)).join(' ')")
     let! maxAfter = page.EvaluateAsync<float>("() => { var el = document.querySelector('.sidebar-inner'); return el.scrollHeight - el.clientHeight; }")
-    let floor = (min scrolledTo maxAfter) - 20.0
-    Expect.isTrue (after > floor) (sprintf "sidebar scrollTop must not snap back across SSE morphs (was %f, now %f, new maximum %f)\nsidebar panels before: %s\nsidebar panels after:  %s\ntext before: %s\ntext after:  %s" scrolledTo after maxAfter sizesBefore sizesAfter textBefore textAfter)
+    Expect.isTrue (after > floor) (sprintf "sidebar scrollTop must not collapse toward the top across SSE morphs (was %f, now %f, floor %f, new maximum %f)\nsidebar panels before: %s\nsidebar panels after:  %s\ntext before: %s\ntext after:  %s" scrolledTo after floor maxAfter sizesBefore sizesAfter textBefore textAfter)
   })
 
   playwrightTest "session status renders with state" (fun page -> task {

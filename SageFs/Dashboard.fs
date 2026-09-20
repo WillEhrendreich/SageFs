@@ -2066,6 +2066,10 @@ let createDiscoverHandler : HttpHandler =
     try
       use! doc = readSignalsJsonSized ctx
       let dir = getSignalString doc "newSessionDir" "new-session-dir"
+      // The Projects field's current value — the preview must reflect what
+      // Create will ACTUALLY do for what the user has typed right now, not
+      // just the untouched auto-detect case (roast-9 #2).
+      let manualProjects = getSignalString doc "manualProjects" "manual-projects"
       Response.sseStartResponse ctx |> ignore
       match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
       | true, _ ->
@@ -2081,7 +2085,34 @@ let createDiscoverHandler : HttpHandler =
               textEnc (sprintf "Directory not found: %s" dir)
             ]])
       | false, true ->
-        do! pushDiscoverResults ctx dir
+        do! pushDiscoverResults ctx dir manualProjects
+    with
+    | :? RequestTooLargeException -> ()
+    | :? System.IO.IOException -> ()
+    | :? System.ObjectDisposedException -> ()
+  }
+
+/// Toggle a discovered project/solution path into (or out of) the New
+/// Session form's Projects field — clicking a Discover result selects it
+/// instead of making the user read it off the screen and retype it
+/// (roast-9 #4). The path rides the query string (not a route segment): a
+/// relative project path contains '/', and an encoded %2F does not round-trip
+/// through ASP.NET route matching (see the set-project handler below for the
+/// same lesson).
+let createToggleProjectHandler : HttpHandler =
+  fun ctx -> task {
+    try
+      let path =
+        match ctx.Request.Query.TryGetValue "path" with
+        | true, v -> string v
+        | _ -> ""
+      use! doc = readSignalsJsonSized ctx
+      let current = getSignalString doc "manualProjects" "manual-projects"
+      Response.sseStartResponse ctx |> ignore
+      match String.IsNullOrWhiteSpace path with
+      | true -> ()
+      | false ->
+        do! Response.ssePatchSignal ctx (SignalPath.sp Signals.ManualProjects) (toggleManualProject current path)
     with
     | :? RequestTooLargeException -> ()
     | :? System.IO.IOException -> ()
@@ -2117,21 +2148,28 @@ let createCreateSessionHandler
       let manualProjects = getSignalString doc "manualProjects" "manual-projects"
       let channelClientId = clientIdFromSignals doc
       Response.sseStartResponse ctx |> ignore
+      // Feedback patches into #discovered-projects, NOT #eval-result: that
+      // node lives inside the Evaluate accordion (closed by default), so a
+      // validation error patched there is real DOM the user never sees — a
+      // click on Create with a blank directory used to measure as a
+      // byte-identical #main, i.e. a dead button (roast-9 #1). The reactive
+      // `disabled` on the button (DashboardFragments) covers the common
+      // case; this is the backstop for every other rejection.
       match String.IsNullOrWhiteSpace dir, Directory.Exists dir with
       | true, _ ->
-        do! ssePatchNode ctx (evalResultError "Working directory is required")
+        do! ssePatchNode ctx (sessionCreateResultError "Working directory is required")
       | false, false ->
-        do! ssePatchNode ctx (evalResultError (sprintf "Directory not found: %s" dir))
+        do! ssePatchNode ctx (sessionCreateResultError (sprintf "Directory not found: %s" dir))
       | false, true ->
         match resolveSessionProjects dir manualProjects with
         | Error err ->
           // A named project escaped the working directory — refuse loudly
           // instead of quietly creating a session missing a project.
-          do! ssePatchNode ctx (evalResultError (SageFs.SageFsError.describe err))
+          do! ssePatchNode ctx (sessionCreateResultError (SageFs.SageFsError.describe err))
         | Ok projects ->
           match projects.IsEmpty with
           | true ->
-            do! ssePatchNode ctx (evalResultError "No projects found. Enter paths manually or check the directory.")
+            do! ssePatchNode ctx (sessionCreateResultError "No projects found. Enter paths manually or check the directory.")
           | false ->
             // Immediate feedback: show the in-flight state before the
             // 15-30s warmup resolves — mirrors the teardown path's
@@ -2139,7 +2177,7 @@ let createCreateSessionHandler
             // create showed nothing until warmup finished).
             let! preCards = buildSessionCards q
             do! ssePatchNode ctx (renderSessionsForSession "" preCards true)
-            do! ssePatchNode ctx (evalResultInfo (sprintf "Creating session in %s… (warmup can take up to 30s)" dir))
+            do! ssePatchNode ctx (sessionCreateResultInfo (sprintf "Creating session in %s… (warmup can take up to 30s)" dir))
             let! result = createSession projects dir
             match result with
             | Ok newSessionId ->
@@ -2156,9 +2194,12 @@ let createCreateSessionHandler
                     textEnc (sprintf "Session '%s' created. Switched to it." (WorkerProtocol.SessionId.value newSessionId))
                   ]
                 ])
+              // Clear the Discover slot only on SUCCESS — clearing it
+              // unconditionally used to wipe out the Error branch's own
+              // message the instant it was patched into the same slot.
+              do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.DiscoveredProjects ] [])
             | Error msg ->
-              do! ssePatchNode ctx (evalResultError (sprintf "Failed: %s" msg))
-            do! ssePatchNode ctx (Elem.div [ Attr.id DomIds.DiscoveredProjects ] [])
+              do! ssePatchNode ctx (sessionCreateResultError (sprintf "Failed: %s" msg))
     with
     | :? RequestTooLargeException -> ()
     | :? System.IO.IOException -> ()
@@ -2238,7 +2279,7 @@ let createToggleWarmupAutoOpenHandler
             do! ssePatchNode ctx (configResultNode message "output-result")
           | Error msg ->
             do! ssePatchNode ctx (evalResultError (sprintf "Failed to re-init session: %s" msg))
-        do! pushDiscoverResults ctx dir
+        do! pushDiscoverResults ctx dir ""
     with
     | :? RequestTooLargeException -> ()
     | :? System.IO.IOException -> ()
@@ -2581,6 +2622,7 @@ let createEndpoints
     yield post "/dashboard/hard-reset" (createResetHandler "Hard Reset" a.HardResetSession)
     yield post "/dashboard/clear-output" createClearOutputHandler
     yield post "/dashboard/discover-projects" createDiscoverHandler
+    yield post "/dashboard/toggle-project" createToggleProjectHandler
     yield post "/dashboard/dir-suggest" createDirSuggestHandler
     yield post "/dashboard/friction/send" (createFrictionSendHandler q)
     // Dismiss all system alarms — clears the shared buffer and re-triggers SSE push.

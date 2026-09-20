@@ -133,7 +133,13 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
       Solutions = [ "MyProj.sln" ]
       Projects = [ "MyProj.fsproj"; "Tests.fsproj" ]
     }
-    let html = renderDiscoveredProjects discovered |> renderNode
+    // planText is server-computed by describeSessionLoadPlan against a REAL
+    // resolution (roast-9 #2) — the renderer itself does no IO, so here we
+    // supply the same resolution resolveSessionProjects would produce for
+    // this discovered set (auto-detect prefers the solution).
+    let resolved = Ok [ System.IO.Path.Combine(discovered.WorkingDir, "MyProj.sln") ]
+    let planText = describeSessionLoadPlan discovered resolved
+    let html = renderDiscoveredProjects discovered planText |> renderNode
     do! verifyDashboard "dashboard_discoveredProjects" html
   }
 
@@ -149,7 +155,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
         AutoOpenNamespaces = false
     }
 
-    let html = renderDiscoveredProjectsWithConfig (Some dirConfig) discovered |> renderNode
+    let html = renderDiscoveredProjectsWithConfig (Some dirConfig) discovered "" |> renderNode
     (html.Contains ".SageFs/config.fsx") |> Expect.isTrue "should mention the config path"
     (html.Contains "warmup auto-open disabled") |> Expect.isTrue "should mention the warmup auto-open opt-out"
   }
@@ -160,7 +166,7 @@ let dashboardRenderSnapshotTests = testList "Dashboard render snapshots" [
       Solutions = []
       Projects = []
     }
-    let html = renderDiscoveredProjects discovered |> renderNode
+    let html = renderDiscoveredProjects discovered "" |> renderNode
     do! verifyDashboard "dashboard_discoveredProjects_empty" html
   }
 ]

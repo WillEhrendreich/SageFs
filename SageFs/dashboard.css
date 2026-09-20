@@ -342,6 +342,49 @@ h2 {
   color: var(--fg-dim);
 }
 
+/* Discover results (roast-9 #5) — bounded and scrollable so a big repo's
+   scan (30+ .fsproj files) can never push the New Session card wider or run
+   the page off the bottom. Never widens: width 100% + box-sizing border-box
+   keeps it inside whichever card (picker or sidebar) it renders in. */
+.discovered-projects-list {
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* One clickable Discover result (roast-9 #4) — a real <button> so it is
+   keyboard-reachable and Enter/Space-activatable with no extra a11y
+   plumbing, styled to read as an output line rather than a normal button. */
+.discovered-project-row {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 1px 0.5rem 1px 1rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--bg-focus);
+    color: var(--fg-blue);
+  }
+
+  &:focus-visible {
+    outline: 1px solid var(--fg-blue);
+    outline-offset: -1px;
+  }
+}
+
 /* Promoted output lines — the Expecto assertion and the user's own source
    frame (roast UX-5) — stand out from the framework-frame wall around them. */
 .output-line-promoted {

@@ -309,6 +309,72 @@ let projectChoices
 let renderProjectChoices (workingDir: string) (roles: SageFs.ProjectLoading.ClassifiedProject list) =
   projectChoices (SageFs.Server.DashboardTypes.discoverProjects workingDir) (roles |> List.map (fun r -> r.Path))
 
+/// The New Session working-directory placeholder, in the convention of the
+/// platform this daemon is actually running on. roast-9 #6: the main picker
+/// card showed `C:\path\to\project` while the sidebar form showed
+/// `/path/to/project` — same page, same machine, two conventions.
+let workingDirPlaceholderFor (isWindows: bool) : string =
+  match isWindows with
+  | true -> @"C:\path\to\project"
+  | false -> "/path/to/project"
+
+let workingDirPlaceholder : string = workingDirPlaceholderFor (OperatingSystem.IsWindows())
+
+/// True when a discovered/resolved path is a solution file, not a project.
+let private isSolutionPath (path: string) : bool =
+  match Path.GetExtension(path).ToLowerInvariant() with
+  | ".sln" | ".slnx" -> true
+  | _ -> false
+
+/// What the New Session form's preview says Create will actually do —
+/// computed from the SAME resolution `resolveSessionProjects` uses, not the
+/// raw recursive directory scan. roast-9 #2: Discover rendered every
+/// `.fsproj`/`.sln` under the directory (30+ files) and claimed "Will load
+/// all projects", while Create resolved through `resolveSessionProjects`,
+/// which prefers the first solution and discards every standalone project —
+/// loading exactly one file. The preview must never claim something the
+/// commit path won't do.
+let describeSessionLoadPlan
+  (discovered: DiscoveredProjects)
+  (resolved: Result<string list, SageFsError>)
+  : string =
+  match resolved with
+  | Error err -> SageFsError.describe err
+  | Ok [] -> "No projects found. Enter paths manually or check the directory."
+  | Ok [ path ] when isSolutionPath path ->
+    let name = Path.GetFileName path
+    match discovered.Projects.Length with
+    | 0 -> sprintf "Will load %s (the whole solution). Click 'Create' to proceed." name
+    | n ->
+      sprintf
+        "Will load %s (the whole solution — %d project%s found %s part of it). Click 'Create' to proceed."
+        name n (if n = 1 then "" else "s") (if n = 1 then "is" else "are")
+  | Ok paths ->
+    let names = paths |> List.map Path.GetFileNameWithoutExtension
+    sprintf
+      "Will load %d project%s: %s. Click 'Create' to proceed."
+      paths.Length (if paths.Length = 1 then "" else "s") (String.Join(", ", names))
+
+/// Add or remove `path` from the comma-separated manual-projects field.
+/// Pure toggle: clicking a Discover result once selects it, clicking again
+/// deselects it — the user never has to read a path off the screen and
+/// retype it (roast-9 #4). Whitespace-tolerant and de-duplicating so
+/// re-clicking, or an already-typed entry, behaves the same way.
+let toggleManualProject (current: string) (path: string) : string =
+  let existing =
+    current.Split(',')
+    |> Array.map (fun s -> s.Trim())
+    |> Array.filter (fun s -> s.Length > 0)
+    |> Array.toList
+  // Ordinal, not OrdinalIgnoreCase: paths are case-sensitive on Linux/macOS,
+  // and the value round-trips exactly as the server rendered it — folding
+  // case here would wrongly merge two distinct files on a case-sensitive
+  // filesystem.
+  let isMatch (e: string) = String.Equals(e, path, StringComparison.Ordinal)
+  match existing |> List.exists isMatch with
+  | true -> existing |> List.filter (isMatch >> not) |> String.concat ", "
+  | false -> existing @ [ path ] |> String.concat ", "
+
 /// Small color-coded auto-open state icon for a session card.
 /// Green = auto-open ON (namespaces/modules will be opened during warmup),
 /// dim/red = OFF (skipped). The tooltip spells out the state and action;
@@ -329,6 +395,7 @@ let renderAutoOpenToggleIcon (enabled: bool) =
   Elem.button
     [ Attr.class' "session-btn session-btn-autoopen"
       Attr.create "aria-label"tooltip
+      Attr.create "title" (attrEnc tooltip)
       Attr.style (sprintf "color: %s;" color)
       Ds.onClick (Ds.post endpoint) ]
     [ textEnc glyph ]
@@ -714,12 +781,13 @@ let renderSessionPicker (previous: PreviousSession list) =
               [ Attr.class' "eval-input"
                 Attr.style "min-height: auto; height: 2rem;"
                 Ds.bind Signals.NewSessionDir
-                Attr.create "placeholder" @"C:\path\to\project" ]
+                Attr.create "placeholder" workingDirPlaceholder ]
             Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
               Elem.button
                 [ Attr.class' "eval-btn"
                   Attr.style "flex: 1; font-size: 0.8rem;"
                   Attr.create "aria-label" "Discover — scan this directory for projects"
+                  Attr.create "title" "Discover — scan this directory for projects"
                   Ds.indicator Signals.DiscoverLoading
                   Ds.attr' ("disabled", "$discoverLoading")
                   Ds.onClick (Ds.post "/dashboard/discover-projects") ]
@@ -730,8 +798,16 @@ let renderSessionPicker (previous: PreviousSession list) =
                 [ Attr.class' "eval-btn"
                   Attr.style "flex: 1; font-size: 0.8rem;"
                   Attr.create "aria-label" "Create — start a new session in this directory"
+                  // A disabled control that explains itself beats a dead one:
+                  // clicking Create with a blank directory used to patch its
+                  // "Working directory is required" error into #eval-result,
+                  // which lives inside the Evaluate accordion (closed by
+                  // default) — invisible, so the click looked like a dead
+                  // button (roast-9 #1). Disable instead; the handler's own
+                  // validation is kept as a backstop below.
+                  Attr.create "title" "Create — start a new session in this directory (enter a working directory first)"
                   Ds.indicator Signals.CreateLoading
-                  Ds.attr' ("disabled", "$createLoading")
+                  Ds.attr' ("disabled", "$createLoading || !$newSessionDir.trim()")
                   Ds.onClick (Ds.post "/dashboard/session/create") ]
                 [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ " ]
                   Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ " ]
@@ -1305,6 +1381,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                      [ Attr.id selectId
                        Attr.class' "session-project-select"
                        Attr.create "aria-label" "Switch this session to another project in this directory"
+                       Attr.create "title" "Switch this session to another project in this directory"
                        // Recreating the session is destructive (the REPL's bindings go
                        // with the old worker), so it is an explicit button, never an
                        // on-change surprise.
@@ -1324,6 +1401,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                        Attr.class' "session-btn"
                        Attr.disabled
                        Attr.create "aria-label" "Load the selected project — restarts this session, losing its REPL bindings"
+                       Attr.create "title" "Load the selected project — restarts this session, losing its REPL bindings"
                        Ds.onEvent
                          ("click",
                           sprintf
@@ -1341,6 +1419,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                 Elem.button
                   [ Attr.class' "session-btn"
                     Attr.create "aria-label""Switch — show this session's output here"
+                    Attr.create "title" "Switch — show this session's output here"
                     Ds.onClick (Ds.post (sprintf "/dashboard/session/switch/%s" sid)) ]
                   [ Text.raw "⇄" ]
               | true -> ()
@@ -1365,26 +1444,30 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                       Attr.href (attrEnc url)
                       Attr.target "_blank"
                       Attr.rel "noopener"
-                      Attr.create "aria-label"(attrEnc (sprintf "Open %s — save a source file to hot reload it" url)) ]
+                      Attr.create "aria-label"(attrEnc (sprintf "Open %s — save a source file to hot reload it" url))
+                      Attr.create "title" (attrEnc (sprintf "Open %s — save a source file to hot reload it" url)) ]
                     [ Text.raw "🌐" ]
                 | AppRun.AppEndpoint.NoServer -> ()
                 Elem.button
                   [ Attr.class' "session-btn session-btn-success"
                     testid "stop-app"
                     Attr.create "aria-label"(attrEnc (sprintf "Stop App — %s" (AppRun.describeState s.App)))
+                    Attr.create "title" (attrEnc (sprintf "Stop App — %s" (AppRun.describeState s.App)))
                     Ds.onClick (Ds.post (sprintf "/dashboard/stop-app/%s" sid)) ]
                   [ Text.raw "■" ]
               | _, AppRun.AppRunState.Starting _ ->
                 Elem.button
                   [ Attr.class' "session-btn"
                     Attr.disabled
-                    Attr.create "aria-label"(attrEnc (AppRun.describeState s.App)) ]
+                    Attr.create "aria-label"(attrEnc (AppRun.describeState s.App))
+                    Attr.create "title" (attrEnc (AppRun.describeState s.App)) ]
                   [ Text.raw "⏳" ]
               | [ project ], _ ->
                 Elem.button
                   [ Attr.class' "session-btn session-btn-primary"
                     testid "run-app"
                     Attr.create "aria-label"(attrEnc (runTitle (AppRun.projectName project.Path)))
+                    Attr.create "title" (attrEnc (runTitle (AppRun.projectName project.Path)))
                     Ds.onClick (Ds.post (sprintf "/dashboard/run-app/%s" sid)) ]
                   [ Text.raw "▶" ]
               | projects, _ ->
@@ -1407,7 +1490,8 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                   Elem.select
                     [ Attr.id selectId
                       Attr.class' "session-run-select"
-                      Attr.create "aria-label""Choose which executable to run with hot reload" ]
+                      Attr.create "aria-label""Choose which executable to run with hot reload"
+                      Attr.create "title" "Choose which executable to run with hot reload" ]
                     (names |> List.map (fun n ->
                       Elem.option
                         ([ Attr.value (attrEnc n) ] @ (match n = defaultName with | true -> [ Attr.create "selected" "selected" ] | false -> []))
@@ -1416,22 +1500,26 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
                     [ Attr.class' "session-btn session-btn-primary"
                       testid "run-app"
                       Attr.create "aria-label""Run the selected project with hot reload"
+                      Attr.create "title" "Run the selected project with hot reload"
                       Ds.onEvent ("click", sprintf "@post('/dashboard/run-app/%s/' + encodeURIComponent(document.getElementById('%s').value))" sid selectId) ]
                     [ Text.raw "▶" ]
                 ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.create "aria-label""Stop — unload the session (saved memory kept)"
+                  Attr.create "title" "Stop — unload the session (saved memory kept)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/stop/%s" sid)) ]
                 [ Text.raw "■" ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-warn"
                   Attr.create "aria-label""Dispose — stop the session (no separate saved-memory file remains; purge removes the manifest entry)"
+                  Attr.create "title" "Dispose — stop the session (no separate saved-memory file remains; purge removes the manifest entry)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/dispose/%s" sid)) ]
                 [ Text.raw "⌫" ]
               Elem.button
                 [ Attr.class' "session-btn session-btn-danger"
                   Attr.create "aria-label""Purge — dispose and delete binaries + manifest entry (corrupt state)"
+                  Attr.create "title" "Purge — dispose and delete binaries + manifest entry (corrupt state)"
                   Ds.onClick (Ds.post (sprintf "/dashboard/session/purge/%s" sid)) ]
                 [ Text.raw "✖" ]
             ]
@@ -1471,24 +1559,26 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
             // (Bound-values explorer removed from the session card — bindings
             // are not a per-card concern; they live in the Bindings panel.)
           ])
-    // The action legend only makes sense when there are sessions to act on.
-    match sessions.IsEmpty with
-    | true -> ()
-    | false ->
+    // A positional legend ("⇄ switch · ■ stop · ⌫ dispose · ✖ purge") went
+    // stale the moment a new button (◎/◌ auto-open) was added first in the
+    // row without updating it — the FIRST glyph and its labeled meaning had
+    // already drifted out of sync (roast-9 #7). Every button now carries its
+    // own `aria-label` AND hover `title`, which cannot drift out of position
+    // because it lives ON the control it describes — so the legend is
+    // dropped rather than re-synced by hand a second time.
+    match sessions.Length > 1 with
+    | false -> ()
+    | true ->
       Elem.div
-        [ Attr.style "display: flex; justify-content: space-between; align-items: center; font-size: 0.7rem; color: var(--fg-dim); padding: 4px 0; margin-top: 4px;" ]
+        [ Attr.style "display: flex; justify-content: flex-end; align-items: center; padding: 4px 0; margin-top: 4px;" ]
         [
-          Elem.span [] [
-            Text.raw "⇄ switch · ■ stop · ⌫ dispose · ✖ purge"
-          ]
-          match sessions.Length > 1 with
-          | true ->
-            Elem.button
-              [ Attr.class' "session-btn session-btn-danger"
-                Attr.style "font-size: 0.65rem; padding: 1px 6px;"
-                Ds.onClick (Ds.post "/dashboard/session/stop-others") ]
-              [ Text.raw "■ stop others" ]
-          | false -> ()
+          Elem.button
+            [ Attr.class' "session-btn session-btn-danger"
+              Attr.style "font-size: 0.65rem; padding: 1px 6px; width: auto;"
+              Attr.create "aria-label" "Stop Others — unload every session except the one you are viewing"
+              Attr.create "title" "Stop Others — unload every session except the one you are viewing"
+              Ds.onClick (Ds.post "/dashboard/session/stop-others") ]
+            [ Text.raw "■ stop others" ]
         ]
   ]
 
@@ -1822,13 +1912,14 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                     // morphed by /dashboard/dir-suggest as the user types.
                     Attr.create "list" DomIds.DirSuggestions
                     Ds.onEvent ("input.debounce_250ms", "@post('/dashboard/dir-suggest')")
-                    Attr.create "placeholder" "/path/to/project" ]
+                    Attr.create "placeholder" workingDirPlaceholder ]
                 renderDirSuggestions []
                 Elem.div [ Attr.style "display: flex; gap: 4px; margin-top: 0.5rem;" ] [
                   Elem.button
                     [ Attr.class' "eval-btn"
                       Attr.style "flex: 1; font-size: 0.8rem;"
                       Attr.create "aria-label" "Discover — scan this directory for projects"
+                      Attr.create "title" "Discover — scan this directory for projects"
                       Ds.indicator Signals.DiscoverLoading
                       Ds.attr' ("disabled", "$discoverLoading")
                       Ds.onClick (Ds.post "/dashboard/discover-projects") ]
@@ -1850,8 +1941,9 @@ let renderMainContent (snap: DashboardSnapshot) : XmlNode =
                     Attr.style "margin-top: 0.5rem; width: 100%; font-size: 0.8rem;"
                     testid "new-session"
                     Attr.create "aria-label" "Create — start a new session in this directory"
+                    Attr.create "title" "Create — start a new session in this directory (enter a working directory first)"
                     Ds.indicator Signals.CreateLoading
-                    Ds.attr' ("disabled", "$createLoading")
+                    Ds.attr' ("disabled", "$createLoading || !$newSessionDir.trim()")
                     Ds.onClick (Ds.post "/dashboard/session/create") ]
                   [ Elem.span [ Ds.show "$createLoading" ] [ Text.raw "⏳ Creating... " ]
                     Elem.span [ Ds.show "!$createLoading" ] [ Text.raw "➕ Create" ] ]
@@ -2939,7 +3031,23 @@ let renderLiveBindingsPanel (snapshot: SageFs.Features.LiveValueTree.LiveValueSn
 
 /// Create the SSE stream handler that pushes Elm state to the browser.
 
-let private renderDiscoveredProjectsBody (discovered: DiscoveredProjects) = [
+/// One clickable Discover result row. Selecting fills the Projects field
+/// instead of making the user read a path off the screen and retype it
+/// (roast-9 #4) — a real `<button>` so it is reachable and activatable
+/// (Enter/Space) from the keyboard with no extra role/tabindex plumbing.
+let private renderDiscoveredResultRow (glyph: string) (label: string) (selectPath: string) =
+  Elem.button
+    [ Attr.class' "discovered-project-row"
+      Attr.create "aria-label" (attrEnc (sprintf "Select %s — fills the Projects field" label))
+      Attr.create "title" (attrEnc (sprintf "Select %s" label))
+      Ds.onClick (Ds.post (sprintf "/dashboard/toggle-project?path=%s" (Uri.EscapeDataString selectPath))) ]
+    // glyph is always one of two fixed literals from the call sites below,
+    // but textEnc (not Text.raw) either way — the source-escaping policy
+    // test requires every Text.raw argument to itself be a literal.
+    [ textEnc glyph
+      textEnc label ]
+
+let private renderDiscoveredProjectsBody (discovered: DiscoveredProjects) (planText: string) = [
   match discovered.Solutions.IsEmpty && discovered.Projects.IsEmpty with
   | true ->
     Elem.div [ Attr.class' "output-line output-error" ] [
@@ -2949,26 +3057,27 @@ let private renderDiscoveredProjectsBody (discovered: DiscoveredProjects) = [
     Elem.div [ Attr.class' "output-line output-result" ] [
       textEnc (sprintf "Found in %s:" discovered.WorkingDir)
     ]
-    match discovered.Solutions.IsEmpty with
-    | false ->
-      yield! discovered.Solutions |> List.map (fun s ->
-        Elem.div [ Attr.class' "output-line output-info"; Attr.style "padding-left: 1rem;" ] [
-          Text.raw "📁 "
-          textEnc (sprintf "%s (solution)" s)
-        ])
-    | true -> ()
-    yield! discovered.Projects |> List.map (fun p ->
-      Elem.div [ Attr.class' "output-line"; Attr.style "padding-left: 1rem;" ] [
-        Text.raw "📄 "
-        textEnc p
-      ])
-    Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 4px;" ] [
+    // Bounded, scrollable — a big repo's scan (30+ files) must never push the
+    // card wider or run the page off the bottom (roast-9 #5).
+    Elem.div [ Attr.class' "discovered-projects-list" ] [
       match discovered.Solutions.IsEmpty with
       | false ->
-        Text.raw "Will use solution file. Click 'Create Session' to proceed."
-      | true ->
-        Text.raw "Will load all projects. Click 'Create Session' to proceed."
+        yield! discovered.Solutions |> List.map (fun s ->
+          renderDiscoveredResultRow "📁 " (sprintf "%s (solution)" s) s)
+      | true -> ()
+      yield! discovered.Projects |> List.map (fun p ->
+        renderDiscoveredResultRow "📄 " p p)
     ]
+    match planText.Length with
+    | 0 -> ()
+    | _ ->
+      Elem.div [ Attr.class' "meta"; Attr.style "margin-top: 4px;" ] [
+        // planText is server-composed from file names and a fixed sentence
+        // shape (describeSessionLoadPlan) — no external/user input reaches it
+        // unescaped, but it still goes through textEnc like every other
+        // output line.
+        textEnc planText
+      ]
 ]
 
 let private renderDiscoverConfigNotes (dirConfig: DirectoryConfig option) =
@@ -3001,22 +3110,30 @@ let private renderDiscoverConfigNotes (dirConfig: DirectoryConfig option) =
     ]
   | None -> []
 
-let renderDiscoveredProjects (discovered: DiscoveredProjects) =
+/// `planText` is the preview sentence `describeSessionLoadPlan` computed
+/// against a real resolution — this renderer does no IO of its own, so it
+/// can never disagree with the resolution its caller already ran (roast-9
+/// #2: two code paths computing the same thing was exactly the bug).
+let renderDiscoveredProjects (discovered: DiscoveredProjects) (planText: string) =
   Elem.div [ Attr.id DomIds.DiscoveredProjects; Attr.style "margin-top: 0.5rem;" ] (
-    renderDiscoveredProjectsBody discovered
+    renderDiscoveredProjectsBody discovered planText
   )
 
-let renderDiscoveredProjectsWithConfig (dirConfig: DirectoryConfig option) (discovered: DiscoveredProjects) =
+let renderDiscoveredProjectsWithConfig (dirConfig: DirectoryConfig option) (discovered: DiscoveredProjects) (planText: string) =
   Elem.div [ Attr.id DomIds.DiscoveredProjects; Attr.style "margin-top: 0.5rem;" ] [
     yield! renderDiscoverConfigNotes dirConfig
-    yield! renderDiscoveredProjectsBody discovered
+    yield! renderDiscoveredProjectsBody discovered planText
   ]
 
-/// Push discover results for a directory via SSE.
-let pushDiscoverResults (ctx: HttpContext) (dir: string) = task {
+/// Push discover results for a directory via SSE. `manualProjects` is the
+/// New Session form's CURRENT Projects field value — the preview must
+/// reflect what Create will do for what the user has typed right now, not
+/// just the untouched auto-detect case (roast-9 #2).
+let pushDiscoverResults (ctx: HttpContext) (dir: string) (manualProjects: string) = task {
   let dirConfig = DirectoryConfig.load dir
   let discovered = discoverProjects dir
-  do! ssePatchNode ctx (renderDiscoveredProjectsWithConfig dirConfig discovered)
+  let planText = describeSessionLoadPlan discovered (resolveSessionProjects dir manualProjects)
+  do! ssePatchNode ctx (renderDiscoveredProjectsWithConfig dirConfig discovered planText)
 }
 
 /// Helper: render an eval-result error fragment.
@@ -3039,6 +3156,26 @@ let evalResultInfo (msg: string) =
     Elem.pre [ Attr.class' "output-line output-info"; Attr.style "margin-top: 0.5rem;" ] [
       textEnc msg
     ]
+  ]
+
+/// Feedback for the New Session form (Working directory required, directory
+/// not found, unsafe path, no projects found, create failed) — patched into
+/// the SAME slot Discover results use, directly under the Create button in
+/// both the picker card and the sidebar panel. NOT #eval-result: that node
+/// lives inside the Evaluate accordion, closed by default, so a validation
+/// error patched there is real DOM the user never sees — a click on Create
+/// with an empty directory measured as a no-op even though the server had
+/// responded correctly (roast-9 #1).
+let sessionCreateResultError (msg: string) =
+  Elem.div [ Attr.id DomIds.DiscoveredProjects; Attr.style "margin-top: 0.5rem;" ] [
+    Elem.div [ Attr.class' "output-line output-error" ] [ textEnc msg ]
+  ]
+
+/// Same slot as `sessionCreateResultError`, for in-progress feedback
+/// ("Creating session in …").
+let sessionCreateResultInfo (msg: string) =
+  Elem.div [ Attr.id DomIds.DiscoveredProjects; Attr.style "margin-top: 0.5rem;" ] [
+    Elem.div [ Attr.class' "output-line output-info" ] [ textEnc msg ]
   ]
 
 
