@@ -158,8 +158,8 @@ This is a CLR constraint, not a SageFs design choice. If FSI changes how it emit
 | Client | Command |
 |:---|:---|
 | **Neovim** | `:SageFsWorkflow live` or `:SageFsWorkflow repl` |
-| **VS Code** | Command Palette → `SageFs: Switch Workflow` |
-| **Web dashboard** | **Not supported yet.** The dashboard renders the session's workflow as a read-only badge; there is no switch route in `SageFs/Dashboard.fs` and no control that calls one. Use an editor or MCP. |
+| **VS Code** | Command Palette → `SageFs: Switch Workflow` — picker offers all three workflows and marks which one you're in |
+| **Web dashboard** | **No control yet.** The daemon now has a route (`POST /api/sessions/{sid}/workflow`, the same one VS Code uses), but the dashboard UI still only renders the workflow as a read-only badge and has no button that calls it. Use an editor or MCP. |
 | **MCP tool** | `switch_workflow(target='repl' \| 'livetesting' \| 'live')` |
 
 ### Target spellings
@@ -176,10 +176,12 @@ One alias table drives every surface — `SessionWorkflow.tryOfString` in [`Work
 
 ### What happens when you switch
 
-1. SageFs creates a **new session** in the target mode
-2. The old session is stopped
-3. Any definitions you made in the REPL are **lost** (they lived in the old session's memory)
-4. Your `.fs` files on disk are **untouched** — they reload into the new session automatically
+The mechanics now differ by client:
+
+- **VS Code and the dashboard's own route** (`POST /api/sessions/{sid}/workflow`) restart the **same session id** into the target workflow, spawn-first — there is no fork and never a moment where two sessions exist for one working directory.
+- **The MCP tool** `switch_workflow` still creates a **new session** in the target mode and stops the old one, so the session id changes.
+
+Either way, any definitions you made in the REPL are **lost** (they lived in the stopped process's memory), and your `.fs` files on disk are **untouched** — they reload into the replacement session automatically.
 
 **Tip:** If you have important REPL work, persist it to a `.fsx` file before switching. Use the `export_session_transcript` MCP tool to save your session as a runnable script.
 
@@ -288,8 +290,7 @@ expression-only ([`SageFs.Core/WorkflowErrorContext.fs`](../SageFs.Core/Workflow
 >    Switch to the REPL workflow for full type redefinition: the switch_workflow MCP tool, or 'SageFs: Switch Workflow' in VS Code.
 
 Only the clients that can actually perform the switch are named. The dashboard shows the
-workflow but has no switch route yet, and Neovim's `:SageFsWorkflow` reports the current
-workflow without changing it — so neither appears in the hint.
+workflow but has no button wired to the switch route yet, so it does not appear in the hint.
 
 ---
 
@@ -306,4 +307,4 @@ workflow without changing it — so neither appears in the hint.
 | **Best for** | Prototyping, exploration, scripts | TDD, red-green loops | Web apps, UI iteration |
 | **FSI flag** | (default) | (default) | `--multiemit-` |
 | **Switch target** | `repl` | `livetesting` | `live` |
-| **Switch cost** | New session, REPL state lost | New session, REPL state lost | New session, REPL state lost |
+| **Switch cost** | REPL state lost; same session id from VS Code/dashboard, a new session id via the MCP tool | REPL state lost; same session id from VS Code/dashboard, a new session id via the MCP tool | REPL state lost; same session id from VS Code/dashboard, a new session id via the MCP tool |

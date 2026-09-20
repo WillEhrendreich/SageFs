@@ -40,7 +40,7 @@ The full advertised set is about 50 tools, grouped below. This is separate from 
 | `hard_reset_fsi_session` | Full reset — rebuild the project, reload, start fresh. Needed after `.fsproj` or package changes. |
 | `get_available_projects` | Discover `.fsproj` / `.sln` / `.slnx` files under a directory. |
 | `list_runnable_projects` | List the session's projects and which ones `run_app` can run (`OutputType=Exe`). |
-| `switch_workflow` | Switch the session between REPL and Live (WebLive) workflows. |
+| `switch_workflow` | Switch the session's workflow: `repl` (Interactive), `livetesting` (Live Testing), or `live` (Hot Reload — aliases `hotreload`/`weblive`/`web`). Creates a new session in the target workflow and stops the old one; VS Code and the dashboard's own `POST /api/sessions/{sid}/workflow` route restart the same session id in place instead. |
 
 ## Hot reload and running apps
 
@@ -48,14 +48,14 @@ The full advertised set is about 50 tools, grouped below. This is separate from 
 |:---|:---|
 | `enable_hot_reload` | Turn on file watching and hot reload for the session. |
 | `disable_hot_reload` | Turn it off. |
-| `run_app` | Run the session's executable project the way `dotnet run` would, with hot reload. Applies `launchSettings.json` (first "Project" profile) and picks a free loopback port when the project sets no URL. Restarts an Interactive session into WebLive first, so REPL bindings are lost. Saving source then hot-patches the running app. |
+| `run_app` | Run the session's executable project the way `dotnet run` would, with hot reload. Applies `launchSettings.json` (first "Project" profile) and picks a free loopback port when the project sets no URL. Restarts an Interactive session into the Hot Reload workflow first, so REPL bindings are lost. Saving source then hot-patches the running app — including a route table built once at startup. |
 | `stop_app` | Stop the app started by `run_app`. Its web host stops and frees its port; the session keeps running. |
 
 ## Testing and verification
 
 | Tool | What it does |
 |:---|:---|
-| `list_tests` | List discovered tests, grouped by file with source locations. Optional pattern or file filter. |
+| `list_tests` | List discovered tests, grouped by file with source locations. A compiled-project session's tests are ReflectionOnly and carry no file/line, so those come back under a separate `WithoutSourceLocation` field instead of being dropped. Optional pattern or file filter. |
 | `targeted_verify` | Plan a trustworthy verification pass for one changed behavior. Refuses to claim green when session trust is ambiguous or loaded code is stale. It does not run tests itself — it returns the next trustworthy move. |
 | `explain_test_failure` | Enriched failure context for a test that recently went from passing to failing. |
 

@@ -51,25 +51,33 @@ as explicit `RestartOnly` cells with their reason.
 
 ## ✅ What Works
 
-### 6. Browser Auto-Refresh via DevReload (v0.5.579+)
+### 6. Browser Auto-Refresh via DevReload
 - **`SageFs.DevReload`** — pure broadcaster in `SageFs.Core` with zero ASP.NET dependency
 - **`SageFs.DevReloadMiddleware`** — ASP.NET Core middleware in `SageFs` project
 - **`SageFs.DevReloadInjector`** — Harmony auto-injection into `WebApplication.Run/RunAsync`
 - Injects a tiny `<script>` before `</body>` in all `text/html` responses
 - Script opens SSE connection to `/__sagefs__/reload`
-- When Harmony detours fire after a hot reload, `DevReload.broadcastReload()` signals all connected browsers
-- Browser auto-refreshes — **no manual F5 needed**
 - **Zero configuration** — works automatically for any ASP.NET Core app loaded in SageFs
 
 #### DevReload Event Lifecycle
+
+`DevReloadEvent` (`SageFs.Core/DevReload.fs`) has one non-terminal case and four
+terminal outcomes — deliberately no bare "Reload" case, because a save can do more
+than one thing to a running app:
+
 ```
-Compiling(fileName) → Reload        (success: hot reload applied, browser refreshes)
-Compiling(fileName) → CompilationFailed(error)  (failure: error shown in browser overlay)
+Compiling(fileName)  → Patched(report)            (one or more functions re-pointed; browser refreshes)
+Compiling(fileName)  → Restarted(report)           (SageFs itself restarted the app; browser refreshes once it's back up)
+Compiling(fileName)  → NotApplied(report)          (no-op save, or a change that needs a restart SageFs isn't driving; browser does NOT refresh)
+Compiling(fileName)  → CompilationFailed(error, report, diagnostics)  (browser shows the error overlay, no refresh)
 ```
-Three events ensure the browser **never** gets stuck showing "Recompiling...":
-- `Compiling` — shows overlay indicator
-- `Reload` — green flash, then page refresh
-- `CompilationFailed` — red overlay with error text, no reload
+
+`report` is the `ReloadOutcome` translated into `{ Outcome, Patched, Considered, Message,
+SuggestedAction, Reasons }` (`SageFs.Core/Features/ReloadBroadcast.fs`) — the same values
+every client (browser overlay, VS Code, an editor extension) reads, so they cannot disagree
+about what a save did. `DevReloadEvent.refreshes` is the single place that decides whether
+the browser refreshes; only `Patched` and `Restarted` return `true` — a save that patched
+nothing, or a save that needs a restart SageFs isn't driving, does not send a refresh.
 
 #### Safety Features
 - **Infinite-reload guard**: sessionStorage counter — if >3 reloads in 5s, pauses with red warning
@@ -78,21 +86,27 @@ Three events ensure the browser **never** gets stuck showing "Recompiling...":
 - **Kill switch**: Set `SAGEFS_DEVRELOAD=false` or `0` to disable entirely
 - **SSE retry**: `retry: 1000` header ensures automatic reconnection after network hiccups
 
-### 1. Automatic File Watching (NEW in 0.4.18)
+### 1. Automatic File Watching
 - **Worker processes automatically watch project directories** for `.fs`, `.fsx`, `.fsproj` changes
-- On `.fs`/`.fsx` change: debounced `#load` + Harmony method detouring — live-patches running code
+- On `.fs`/`.fsx` change: `ReloadPlanning.routeFor` picks patch-in-place (diff against the
+  build-time baseline, emit only the changed functions) or whole-file re-evaluation, then
+  Harmony re-points methods for the patch path
 - On `.fsproj` change: triggers soft reset to pick up new references
-- Configurable via `--no-watch` flag to disable
 - 500ms debounce prevents thrashing on rapid saves
+- **`--no-watch` does not disable this.** It is parsed but not wired to anything —
+  `SessionManager.startWorkerProcess` always spawns workers with watching on — and
+  `sagefs`'s CLI refuses the flag with a message saying so (`SageFs.Core/Args.fs`,
+  `SageFs/Program.fs`). There is currently no daemon-startup or session-creation
+  control to turn file watching off.
 
 ### 2. Hot Reload with Harmony Method Detouring
-- **PROVEN WORKING** with `test-hot-reload.fsx` example
-- Handlers can be updated in real-time — no restart needed
-- File-change-triggered `#load` now carries `hotReload=true` in Args
-- This ensures the Harmony detouring middleware fires on both:
+- Handlers can be updated in real-time — no restart needed, proven by
+  `SageFs.Tests/WebAppHotReloadVerificationTests.fs`'s shape matrix against a real
+  running process (see the banner at the top of this file)
+- This works for both:
   - REPL-typed code (interactive)
   - File-change-triggered reloads (automatic)
-- Changes appear instantly in browser
+- Changes appear live in the browser via DevReload once the detour succeeds
 
 ### 3. FSI Compatibility Middleware  
 - Automatically rewrites `use` → `let` for indented use statements
@@ -117,20 +131,31 @@ Three events ensure the browser **never** gets stuck showing "Recompiling...":
 ## 🔥 How Hot Reload Works End-to-End
 
 1. **File change detected** → FileWatcher debounces (500ms)
-2. **Action decided** → `fileChangeAction` routes `.fs` → Reload, `.fsproj` → SoftReset
-3. **DevReload broadcasts** → `broadcastCompiling (Some "Handlers.fs")` → browser shows overlay
-4. **Code sent to FSI** → `#load @"path/to/file.fs"` with `hotReload=true` in Args
-5. **FSI evaluates** → generates new dynamic assembly with updated method bodies
-6. **On success**: Harmony middleware fires → fuzzy-matches methods → detours applied → `broadcastReload()` → browser refreshes
-7. **On failure**: `broadcastCompilationFailed "FS0001: ..."` → browser shows error overlay (red)
-8. **No restart needed** → next HTTP request uses the new code automatically
+2. **Action decided** → `.fs`/`.fsx` → `ReloadPlanning.routeFor` picks `PatchInPlace baseline`
+   (there's a build-time baseline for this file) or `ReevaluateWholeFile` (there isn't, or the
+   source was edited after the build — the whole file is re-evaluated instead of diff-patched);
+   `.fsproj` → SoftReset
+3. **DevReload broadcasts `Compiling`** → browser shows the recompiling overlay
+4. **On the patch path**: only the changed functions are emitted against the compiled
+   module's own identity (`CompilationContext.emitStableIdentity`), so their parameter types
+   match the compiled method's exactly
+5. **On success**: Harmony re-points the changed methods' native entry points
+   (`HotReloadCore.detourMethod`, exact parameter-type matching, not fuzzy) →
+   `ReloadOutcome.Patched(patched, considered)` → `DevReload.broadcastPatched` → browser
+   refreshes. A save that changed nothing patchable reports `NoEffect` with a reason and a
+   remedy, and does **not** refresh the browser.
+6. **On a startup-only change** (a value binding, `let mutable` state, a changed signature or
+   type): SageFs restarts the app itself when it is the one running it (`Restarted`), or falls
+   back to re-evaluating the whole file and tells you a restart is needed (`RestartRequired`)
+7. **On failure**: `CompilationFailed` → browser shows the error overlay (red), no refresh
+8. **No restart needed for a patch** → the next HTTP request uses the new code automatically
 
 ## 🏗️ Architecture Decisions (Chesterton's Fences)
 
 These design decisions exist for specific reasons. Before changing them, understand why they're there.
 
 ### AppDomain.CurrentDomain for shared state
-**Why**: `DevReload.getChannels()` stores the ConcurrentDictionary in `AppDomain.CurrentDomain.GetData()` instead of a static field. This is because Harmony's auto-injection causes SageFs.Core.dll to be loaded multiple times in the same process (host copy + FSI shadow copy). A static field would create two separate dictionaries — the browser's SSE client registers against the shadow-copy DLL, while `broadcastReload()` runs in the host DLL. AppDomain storage is shared across all assembly loads, solving this mismatch.
+**Why**: `DevReload.getChannels()` stores the ConcurrentDictionary in `AppDomain.CurrentDomain.GetData()` instead of a static field. This is because Harmony's auto-injection causes SageFs.Core.dll to be loaded multiple times in the same process (host copy + FSI shadow copy). A static field would create two separate dictionaries — the browser's SSE client registers against the shadow-copy DLL, while the broadcast functions (`DevReload.broadcastPatched`, `broadcastRestarted`, `broadcastNotApplied`, `broadcastCompilationFailed`) run in the host DLL. AppDomain storage is shared across all assembly loads, solving this mismatch.
 
 ### Channel-per-client (not shared Channel)
 **Why**: Each SSE client gets its own `Channel<DevReloadEvent>`. A shared channel with multiple readers would require fan-out logic and risk one slow reader blocking others. Per-client channels provide natural backpressure isolation — if one browser tab is slow, others aren't affected. The ConcurrentDictionary keyed by connection ID supports this cleanly.
@@ -224,42 +249,34 @@ When the daemon is running bare and a client creates a session for `MyProject.fs
 
 ## 🎯 How to Use Hot Reload
 
-### Automatic (File Watcher — Recommended)
-```powershell
-# Start SageFs bare — file watching is ON by default once a session is created
-SageFs
+The daemon is headless — there is no `--use <script>` script-launch mode and no
+`--no-watch` (see the note under "Automatic File Watching" above). File watching turns on
+automatically once a session is created:
 
-# Start your web server from the REPL, then just edit .fs files
-# Changes are picked up automatically!
-# Look for 🔥 or 📄 messages in the SageFs console
+```bash
+sagefs                       # start the daemon bare, waits for clients
 ```
 
-### Manual (REPL — For Experimentation)
-```powershell
-cd C:\Code\Repos\SageFs
-SageFs --use test-hot-reload.fsx
-```
+Create a session for your project from an editor, MCP, or the dashboard
+(`http://localhost:37750/dashboard`), start your app in it — either you run it yourself
+in the REPL, or `run_app` runs it for you — then just edit `.fs` files and save. Look for
+`[DevReload]`/`[HotReload]` log lines in the daemon console.
 
-Wait for "Starting web server..." message, then:
-1. Open browser to http://localhost:5555
-2. In FSI, send updated handler code
-3. Refresh browser → see changes instantly!
-
-### Disabling File Watching
-```powershell
-SageFs --no-watch
-```
+Set `SAGEFS_DEVRELOAD=0` (or `false`) to disable the browser-refresh injection specifically;
+there is currently no way to disable file watching itself.
 
 ## 📁 Key Files
 
 | File | Purpose |
 |------|---------|
-| `SageFs.Core/DevReload.fs` | Pure broadcaster: 4-event DU, Channel-per-client, AppDomain shared state, diagnostic logging |
-| `SageFs/Resources/devreload.js` | Browser-side JS: WCAG AA error panel, smart auto-reload, editor links, ARIA |
-| `SageFs/DevReloadMiddleware.fs` | ASP.NET middleware: body-swap injection, CSP nonce, template placeholders |
-| `SageFs/DevReloadInjector.fs` | Harmony auto-injection: patches WebApplication.Run/RunAsync |
-| `SageFs/WorkerHttpTransport.fs` | SSE endpoint: pre-allocated bytes, diagnostic logging, hardened exception handling |
-| `SageFs/WorkerMain.fs` | Starts file watcher, routes changes to CompilationContext → FSI, wires error path |
+| `SageFs.Core/DevReload.fs` | Pure broadcaster: `Compiling` + 4 terminal outcomes (`Patched`/`Restarted`/`NotApplied`/`CompilationFailed`), Channel-per-client, AppDomain shared state, diagnostic logging |
+| `SageFs.Core/Features/ReloadOutcome.fs` | `ReloadOutcome` (`Patched`/`NoEffect`/`Restarted`/`RestartRequired`/`CompileFailed`) and `RestartReason`, each with a `describe` and a `remedy` |
+| `SageFs.Core/Features/ReloadBroadcast.fs` | Translates a `ReloadOutcome` into the one `DevReloadEvent`/`ReloadReport` every client reads |
+| `SageFs.Host/Resources/devreload.js` | Browser-side JS: WCAG AA error panel, smart auto-reload, editor links, ARIA |
+| `SageFs.Host/DevReloadMiddleware.fs` | ASP.NET middleware: body-swap injection, CSP nonce, template placeholders |
+| `SageFs.Host/DevReloadInjector.fs` | Harmony auto-injection: patches WebApplication.Run/RunAsync |
+| `SageFs.Host/WorkerHttpTransport.fs` | SSE endpoint: pre-allocated bytes, diagnostic logging, hardened exception handling |
+| `SageFs.Host/WorkerMain.fs` | Starts file watcher, routes changes through `ReloadPlanning` → FSI, wires error path |
 | `SageFs.Core/FileWatcher.fs` | Pure file watching with debounce, diagnostic logging |
 | `SageFs.Core/Middleware/HotReloading.fs` | Harmony method detouring |
 | `SageFs.Core/Middleware/CompilationContext.fs` | File preprocessing, module detection, line offset mapping |

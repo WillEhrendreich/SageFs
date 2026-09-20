@@ -133,7 +133,7 @@ SageFs runs in the foreground, streaming daemon logs to that terminal — it's n
 
 ### 5. Enable live testing
 
-> **Live testing runs as you type, not just on save.** SageFs evals your edited buffer into the session and re-runs only the *affected* tests against the new code — an unsaved edit flips a failing test red in a couple seconds and back to green when you fix it, without ever touching the file on disk. Results stream inline with source-mapped gutter markers and coverage. All five frameworks — Expecto, xUnit (v2 and v3), NUnit, MSTest, TUnit — discover, run, and report with framework-specific messages.
+> **Live testing runs as you type, not just on save.** SageFs evals your edited buffer into the session and re-runs only the *affected* tests against the new code — an unsaved edit flips a failing test red and back to green when you fix it, without ever touching the file on disk. Results stream inline with source-mapped gutter markers and coverage. All five frameworks — Expecto, xUnit (v2 and v3), NUnit, MSTest, TUnit — discover, run, and report with framework-specific messages.
 
 When live testing is enabled and a project is loaded, edits — saved or unsaved — re-run the affected tests automatically and update gutter state. The engine, SSE events, coverage, and editor integrations work today across VS Code and Neovim.
 
@@ -409,7 +409,7 @@ SageFs delivers that loop with a REPL-centered architecture, and goes past it: a
 
 Each stage is progressively slower and progressively more certain, so you get a marker before you get a verdict. The per-stage millisecond figures that used to sit here were not measured: no test in this repo times the real save→green path, and the only latency budgets that exist (`CoverageViewTests.fs`, `LiveTestingCycleTests.fs`) measure pure functions with no FSI, no compiler and no test run in the loop — and they are `[Benchmark]`-tagged, which the default suite filters out and no CI stage runs. Treat any speed number you see about SageFs as an anecdote until something gates it.
 
-Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 702 property-based tests exercise the binary format, state machines, and event folds against generated inputs (`grep -rho -E "\b[pf]?testProperty(WithConfig)?\b" SageFs.Tests` across all `*.fs` files, the same regex `SageFs.Tests/TestCountBadge.fs` uses to restamp this line — restamp with `dotnet run --project SageFs.Tests -- --update-badge` rather than hand-editing it).
+Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 707 property-based tests exercise the binary format, state machines, and event folds against generated inputs (`grep -rho -E "\b[pf]?testProperty(WithConfig)?\b" SageFs.Tests` across all `*.fs` files, the same regex `SageFs.Tests/TestCountBadge.fs` uses to restamp this line — restamp with `dotnet run --project SageFs.Tests -- --update-badge` rather than hand-editing it).
 
 </details>
 

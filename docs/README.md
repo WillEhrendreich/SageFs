@@ -2,7 +2,7 @@
 
 ## Start here
 - **[Get Started](../Readme.md#get-started)** — install, check your environment, start the daemon, connect an editor
-- **[Workflow Modes](workflow-modes.md)** — REPL vs Live, when to use which, and why live testing isn't a third mode
+- **[Workflow Modes](workflow-modes.md)** — REPL, Live Testing, and Hot Reload: when to use which, and how the Live Testing *workflow* differs from the live-testing *toggle*
 - **[What you get in each editor](../Readme.md#what-you-get-in-each-editor)** — VS Code, Neovim, the web dashboard, and MCP
 - **[Gutter icons](../Readme.md#-gutter-icons)** — what the colored markers mean
 - **[Coming from another language](../Readme.md#coming-from-another-language)** — Python, Jupyter, C#, Java, JS/TS, Rust, or F# koans

@@ -68,7 +68,8 @@ The active project is shown in the status bar.
   crashed, restart via your editor's "Start Daemon" command.
 - **SSE connection dropped**: The status bar shows connection state. If
   disconnected, most editors auto-reconnect. You can also trigger reconnect
-  manually (VS Code: restart extension, Neovim: `:SageFsReconnect`).
+  manually (VS Code: Command Palette → `SageFs: Reconnect to Daemon`, Neovim:
+  `:SageFsReconnect`).
 - **Long-running eval**: Some evaluations genuinely take time (large
   compilations, network calls). Check the daemon console for progress.
 
