@@ -40,7 +40,7 @@ SageFs has **two workflow modes** and **one independent feature** that people of
 - Redefine types (`type Order = ...`) as many times as you want
 - Redefine modules, DUs, records, classes — everything
 - Full interactive exploration with instant feedback
-- The same MCP tool surface as Live mode (tools are gated by session state, not by workflow)
+- The same MCP tool surface as Live mode (calls are gated by session state, not by workflow — see [MCP Tools](mcp-tools.md))
 
 **What you give up:**
 - No automatic browser refresh. If you're running a web app, you'll need to refresh the browser manually after editing `.fs` files.
@@ -59,7 +59,7 @@ SageFs has **two workflow modes** and **one independent feature** that people of
 **What you can do:**
 - Edit function bodies, let bindings, and expressions; save triggers `#load` + a Harmony patch + an SSE browser refresh
 - SageFs auto-injects dev-reload middleware into your ASP.NET pipeline, no config
-- The same MCP tool surface as REPL mode (tools are gated by session state, not by workflow)
+- The same MCP tool surface as REPL mode (calls are gated by session state, not by workflow — see [MCP Tools](mcp-tools.md))
 
 > **Caveat:** Browser auto-refresh works today. Propagating a saved change into a
 > *running* app is still being finished for the common module-declared,

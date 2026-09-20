@@ -1,8 +1,10 @@
 # SageFs Feature Modules Survey
 
+> **Stale — historical snapshot.** `SageFs.Core/Features/` has grown to 80 `.fs` files as of 2026-09-20 (`ls SageFs.Core/Features/*.fs | wc -l`), not the 33 below, and the MCP tool inventory in the Wiring Summary references tools (`load_fsharp_script`, `get_startup_info`) that are no longer registered `[<McpServerTool>]` methods. For the current MCP tool list, see [MCP Tools](mcp-tools.md); for the current module count, check the directory directly. This document is kept for historical context, not as a live reference.
+
 ## Summary
 
-Total Feature Modules: **33** in SageFs.Core/Features/
+Total Feature Modules: **33** in SageFs.Core/Features/ (as of this survey's last update — see stale-data note above)
 Plus **2** root-level SageFs.Core modules with feature characteristics
 
 ---

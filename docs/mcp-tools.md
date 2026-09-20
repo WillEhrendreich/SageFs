@@ -2,7 +2,7 @@
 
 SageFs runs a Model Context Protocol server on port 37749. Any MCP client — GitHub Copilot, Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode — can connect and drive an F# session: run code, type-check it, list and verify tests, and read live status.
 
-The tool surface is **affordance-gated**. An agent only sees the tools that are valid for the current session state, so it never has to guess which call will work. In a warming-up session, for example, `send_fsharp_code` is not offered yet. Call `get_fsi_status` to see what is available right now.
+The tool surface is **affordance-gated at call time, not at list time**. The full catalog below is always advertised through `tools/list` — SageFs does not filter which tools an MCP client sees. What's gated is *calling* one: a call to a tool that doesn't apply to the current session state is rejected with a structured error (`SageFs/Mcp.fs:614`, `enforceToolCallGate`), instead of a raw failure. Call `get_fsi_status` to see which tools currently apply — in a warming-up session, for example, it reports `send_fsharp_code` as not yet available, even though the tool is still listed.
 
 The full advertised set is about 50 tools, grouped below. This is separate from the daemon's HTTP API (`/api/...`), which the editors and dashboard use for completions, coverage bitmaps, run policies, and event history. Those HTTP endpoints are not MCP tools.
 

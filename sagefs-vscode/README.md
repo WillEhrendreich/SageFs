@@ -43,6 +43,8 @@ That's it for evaluation. Live testing is available, but it does not auto-enable
 | Cancel running evaluation | `Ctrl+Shift+C` | SageFs: Cancel Evaluation |
 | Next `;;` code block | `Ctrl+Down` | SageFs: Next Code Block |
 | Previous `;;` code block | `Ctrl+Up` | SageFs: Previous Code Block |
+| Next failing test | `Alt+Shift+]` | SageFs: Next Failing Test |
+| Previous failing test | `Alt+Shift+[` | SageFs: Previous Failing Test |
 | Clear inline results | — | SageFs: Clear Inline Results |
 | Run all tests | — | SageFs: Run All Tests |
 | Toggle live testing | — | SageFs: Enable / Disable Live Testing |
@@ -196,10 +198,14 @@ code --install-extension sagefs-*.vsix
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `sagefs.mcpPort` | `37749` | SageFs MCP server port |
-| `sagefs.dashboardPort` | `37750` | SageFs dashboard port |
+| `sagefs.dashboardPort` | `37750` | Legacy fallback dashboard port. SageFs normally discovers the daemon and derives the dashboard port from the MCP port. |
 | `sagefs.autoStart` | `true` | Automatically start SageFs when opening F# projects |
 | `sagefs.projectPath` | `""` | Explicit `.fsproj` path (auto-detect if empty) |
-| `sagefs.logLevel` | `"info"` | Output channel verbosity (`debug`, `info`, `warn`, `error`) |
+| `sagefs.logLevel` | `"info"` | Output channel verbosity (`debug`, `info`, `error` — no `warn` level) |
+| `sagefs.inlineResultTimeout` | `30000` | How long (ms) inline eval results stay visible before auto-clearing. `0` keeps them forever. |
+| `sagefs.cellHighlight` | `true` | Highlight the current code cell (block) the cursor is in |
+| `sagefs.density` | `"full"` | Visual annotation level: `full` (all decorations), `normal` (inline results and test signs), `minimal` (inline results only) |
+| `sagefs.typeExplorerRoot` | `""` | Root namespace for the Type Explorer tree (empty shows all top-level namespaces) |
 
 ---
 
@@ -218,7 +224,7 @@ code --install-extension sagefs-*.vsix
 | SageFs: Next Code Block | `Ctrl+Down` | Jump cursor to next `;;` block |
 | SageFs: Previous Code Block | `Ctrl+Up` | Jump cursor to previous `;;` block |
 | SageFs: Clear Inline Results | — | Remove all inline result decorations |
-| SageFs: Cycle Density | — | Toggle Full → Normal → Minimal inline display |
+| SageFs: Cycle Density (Full → Normal → Minimal) | — | Toggle Full → Normal → Minimal inline display |
 | SageFs: Load Current Script | — | Load the active `.fsx` file into the session |
 
 ### Daemon & Session
@@ -229,8 +235,12 @@ code --install-extension sagefs-*.vsix
 | SageFs: Stop Daemon | — | Stop the SageFs daemon |
 | SageFs: Restart Daemon | — | Restart the SageFs daemon |
 | SageFs: Open Dashboard | — | Open web dashboard in VS Code |
+| SageFs: Check Health | — | Run the extension's health check |
 | SageFs: Create Session | — | Create a new FSI session |
 | SageFs: Switch Session | — | Switch to a different session |
+| SageFs: Switch Project | — | Change which `.fsproj`/`.sln` the session loads |
+| SageFs: Browse for Project | — | Pick a project file from a file dialog |
+| SageFs: Switch Workflow | — | Switch the session between REPL and Live |
 | SageFs: Stop Session | — | Stop the active session |
 | SageFs: Reset Session | — | Soft reset (clear definitions, keep session) |
 | SageFs: Hard Reset (Rebuild) | — | Full rebuild and reload |
@@ -238,6 +248,13 @@ code --install-extension sagefs-*.vsix
 | SageFs: Export Session as .fsx | — | Save session state to a script file |
 | SageFs: Show FSI Bindings | — | Browse current FSI bindings |
 | SageFs: Configure Warmup Auto-Open | — | Create or open `.SageFs/config.fsx` |
+| SageFs: Refresh Sessions | — | Refresh the Sessions sidebar |
+| SageFs: Refresh Session Context | — | Refresh the Session Context sidebar |
+| SageFs: Run App | — | Run the session's executable project, with hot reload |
+| SageFs: Stop App | — | Stop the app started by Run App |
+| SageFs: Open Getting Started Sample | — | Open the bundled getting-started `.fsx` |
+
+The Sessions sidebar also has inline per-row actions (Switch To, Stop, Reset) — click the icons on a session row instead of going through the command palette.
 
 ### Hot Reload
 
@@ -260,6 +277,10 @@ code --install-extension sagefs-*.vsix
 | SageFs: Show Test Call Graph | — | Visualize test dependency graph |
 | SageFs: Show Test Trace | — | Browse test cycle events |
 | SageFs: Show Recent Events | — | Browse pipeline event history |
+| SageFs: Explain Test Failure | — | Enriched failure context for the test at cursor |
+| SageFs: Suggest Repair for Failed Test | — | Trace causal changes and suggest a fix |
+| SageFs: Next Failing Test | `Alt+Shift+]` | Jump to the next failing test |
+| SageFs: Previous Failing Test | `Alt+Shift+[` | Jump to the previous failing test |
 
 ### Sidebar Views
 
@@ -268,6 +289,7 @@ code --install-extension sagefs-*.vsix
 | Hot Reload Files | Activity Bar | File tree with watch toggles |
 | Session Context | Activity Bar | Assemblies, namespaces, warmup details |
 | Sessions | Activity Bar | All sessions with inline switch/stop/reset |
+| API Browser | Activity Bar | Browse .NET types and namespaces (the Type Explorer) |
 
 ---
 

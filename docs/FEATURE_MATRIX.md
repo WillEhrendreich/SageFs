@@ -77,8 +77,8 @@ Hot reload watches `.fs` files and runs the full pipeline (watch, `#load`/FSI ev
 | Action | VS Code | Neovim |
 |:-------|:--------|:-------|
 | Evaluate selection/cell | `Alt+Enter` | `<leader>se` |
-| Evaluate file | `Ctrl+Alt+Enter` | `<leader>sf` |
-| Cancel evaluation | `Ctrl+Alt+C` | `<leader>sc` |
+| Evaluate file | `Alt+Shift+Enter` | `<leader>sf` |
+| Cancel evaluation | `Ctrl+Shift+C` | `<leader>sc` |
 | Reset session | Command palette | `:SageFsResetSession` |
 | Hard reset | Command palette | `:SageFsHardReset` |
 | Switch project | Command palette | `:SageFsSwitchProject` |
@@ -87,4 +87,4 @@ Hot reload watches `.fs` files and runs the full pipeline (watch, `#load`/FSI ev
 
 ## MCP
 
-MCP gives programmatic access for session-aware F# evaluation, test discovery and execution, failure explanation, targeted verification, and diagnostics. The daemon advertises 50 tools, and which ones a client sees depends on session state (the affordance gate). Check the tools exposed by the running daemon rather than relying on a fixed list.
+MCP gives programmatic access for session-aware F# evaluation, test discovery and execution, failure explanation, targeted verification, and diagnostics. The daemon advertises all ~50 tools regardless of session state; calling one that doesn't apply yet is rejected with a structured error instead of the tool being hidden. Call `get_fsi_status` to see which tools currently apply.

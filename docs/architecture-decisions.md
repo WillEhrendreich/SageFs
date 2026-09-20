@@ -128,16 +128,22 @@ positioning. This limitation is accepted for the sake of parity, and Raylib-only
 
 ## ADR-6: MCP as the AI Interface
 
-**Decision**: SageFs exposes 50 tools via [Model Context Protocol](https://modelcontextprotocol.io/).
-A state machine tracks which tools are valid for the current session state, so AI agents
-only see tools that apply right now.
+**Decision**: SageFs exposes about 50 tools via [Model Context Protocol](https://modelcontextprotocol.io/).
+A state machine decides which tools are valid to *call* in the current session state.
 
 **Why**: AI agents (Copilot, Claude, and others) need structured interfaces instead of
-parsing CLI output. MCP provides tool discovery with typed schemas, session-aware state
-(agents get tools relevant to their current context), and no need for terminal emulation.
+parsing CLI output. MCP provides tool discovery with typed schemas and no need for
+terminal emulation.
 
-The state machine matters: an agent with no active session sees `create_session` but not
-`run_tests`. This cuts down on wasted tokens and invalid tool calls.
+**Current status — call-time gate, not a filtered list**: the `tools/list` response is
+static and unfiltered — an agent always sees the full ~50-tool catalog, in every session
+state. What the state machine actually gates is *calling* a tool: `enforceToolCallGate`
+rejects a call to a tool that doesn't apply to the current state with a structured error
+([`SageFs/Mcp.fs:614`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/Mcp.fs#L614),
+wired in [`SageFs/McpServer.fs:433`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/McpServer.fs#L433)).
+`get_fsi_status` reports which tools currently apply, but that's a self-service hint an
+agent has to read — not an enforced visibility filter. There is no `AddListToolsFilter`
+wired anywhere in the codebase. See [MCP Tools](mcp-tools.md) for the accurate framing.
 
 **Tradeoff**: MCP is relatively new, so significant protocol changes will require updates
 on our side. To limit that risk, MCP is kept as a thin wrapper over the same HTTP+SSE

@@ -65,7 +65,7 @@ Save a `.fs` file and SageFs reloads it in about 100ms using [Harmony](https://g
 
 ### 🤖 AI Agent Support
 
-SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an affordance-driven state machine and a deliberately small tool surface: AI agents only see the tools valid for the current session state, so they don't waste tokens guessing. The core MCP path focuses on session trust, F# evaluation, exact test execution, and failure explanation. Copilot, Claude, and any MCP client can execute F# code, type-check it, verify a changed behavior, and run tests against your real project.
+SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an affordance-driven state machine: the full tool catalog is always listed, but calling a tool that doesn't apply to the current session state is rejected with a structured error instead of a raw failure, and `get_fsi_status` reports which tools currently apply. The core MCP path focuses on session trust, F# evaluation, exact test execution, and failure explanation. Copilot, Claude, and any MCP client can execute F# code, type-check it, verify a changed behavior, and run tests against your real project.
 
 ### 🖥️ One Daemon, Every Client
 
@@ -115,7 +115,7 @@ Validates .NET SDK, FSI, project files, port availability, and daemon state. Act
 sagefs
 ```
 
-SageFs opens an interactive terminal. Then create a session for `YourProject.fsproj` from your editor, MCP client, or the dashboard.
+SageFs runs in the foreground, streaming daemon logs to that terminal — it's not an F# REPL by itself. Leave it running, then create a session for `YourProject.fsproj` from your editor, MCP client, or the dashboard.
 
 > No project? Just run `sagefs` with no arguments — the daemon starts bare and waits for clients. Your editor will create sessions on demand.
 
@@ -304,7 +304,7 @@ Features: Cell eval, inline results, gutter signs, SSE live updates, live test p
 
 #### AI Agent (MCP)
 
-SageFs exposes about 50 MCP tools — from `send_fsharp_code` to `targeted_verify` to `list_tests` — gated by session state, so an agent only sees the ones valid right now. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
+SageFs exposes about 50 MCP tools — from `send_fsharp_code` to `targeted_verify` to `list_tests`. All of them are listed all the time; calling one that doesn't apply to the current session state is rejected with a structured error rather than being hidden. `get_fsi_status` reports which tools apply right now. Any MCP client can connect. See the [full MCP Tools Reference](docs/mcp-tools.md) for the complete list and per-client configuration examples.
 
 **Streamable HTTP** (recommended — auto-reconnects, no session drops):
 ```json
@@ -397,7 +397,7 @@ SageFs delivers that loop with a REPL-centered architecture, and goes past it: a
 2. **~350ms** — F# Compiler Service type-checks → dependency graph, reachability annotations
 3. **~500ms** — Affected-test execution via hot-eval → ✓/✗ results inline
 
-Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 666 property-based tests exercise the binary format, state machines, and event folds against generated inputs (this count is derived from source, not hand-maintained).
+Tests are automatically categorized (Unit, Integration, Browser, Property, Benchmark, Architecture), each with its own run policy: unit and property tests run automatically by default, integration/browser/architecture run on demand by default, and benchmarks stay disabled until you turn them on. All of this is configurable. SageFs's own suite leans hard on property-based testing — 695 property-based tests exercise the binary format, state machines, and event folds against generated inputs (`grep -rho -E "\b[pf]?testProperty(WithConfig)?\b" SageFs.Tests` across all `*.fs` files, the same regex `SageFs.Tests/TestCountBadge.fs` uses to restamp this line — restamp with `dotnet run --project SageFs.Tests -- --update-badge` rather than hand-editing it).
 
 </details>
 
@@ -409,7 +409,7 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 
 **Multi-Session** — Run multiple isolated F# sessions simultaneously, each in its own worker sub-process with independent FSI, project, and file watcher. [Full details →](docs/multi-session.md)
 
-**MCP Tools** — about 50 tools for session trust, code execution, test listing and verification, failure explanation, analysis, and local friction reporting. They are affordance-gated: agents see only the tools valid for the current session state. [Full reference →](docs/mcp-tools.md)
+**MCP Tools** — about 50 tools for session trust, code execution, test listing and verification, failure explanation, analysis, and local friction reporting. They are affordance-gated at call time: the list is always complete, but a call to a tool that doesn't apply to the current session state is rejected with a structured error. [Full reference →](docs/mcp-tools.md)
 
 **SSE Events** — All editors receive `test_source_locations`, `file_annotations`, and `failure_narratives` events tagged with `SessionId`. [Full reference →](docs/sse-events.md)
 
@@ -487,6 +487,8 @@ Usage: sagefs [options]                Start daemon (bare by default)
        sagefs check                    Check environment before first run
        sagefs stop                     Stop running daemon
        sagefs status                   Show daemon info
+       sagefs sweep [--kill]           Reap daemons whose owner process is gone
+       sagefs play <ledger.jsonl>      Replay a portable cohort ledger file offline
 
 Daemon options:
   --no-resume            Skip restoring previous sessions on startup
@@ -494,6 +496,8 @@ Daemon options:
   --prune                Mark all stale sessions as stopped, then exit
   --supervised           Auto-restart on crash (exponential backoff)
   --mcp-port PORT        Custom MCP port (default: 37749). The dashboard runs on this port + 1.
+  --ttl DURATION         Self-terminate after DURATION (e.g. 30m, 1h, 90s) with no
+                         live sessions and no MCP/SSE clients.
 ```
 
 The daemon starts bare and waits for clients to create or connect to sessions.
@@ -507,21 +511,23 @@ Full options: `sagefs --help`
 
 <br />
 
-**Per-directory config** — `.SageFs/config.fsx`:
+**Per-directory config** — `.SageFs/config.fsx`, evaluated as real F# by an isolated FSI host, never by the daemon itself ([`SageFs.Core/ConfigHost.fs`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs.Core/ConfigHost.fs)):
 
 ```fsharp
 { DirectoryConfig.empty with
     Load = Projects ["src/MyApp.fsproj"; "tests/MyApp.Tests.fsproj"]
-    AutoOpenNamespaces = false
-    InitScript = Some "setup.fsx" }
+    AutoOpenNamespaces = false }
 ```
 
-Set `AutoOpenNamespaces = false` to skip warmup auto-opening of namespaces and modules. Because sessions inherit `.SageFs/config.fsx` from the working directory, this opt-out applies across VS Code, Neovim, dashboard, and MCP session creation flows.
+The `DirectoryConfig` record also has `InitScript`, `DefaultArgs`, `IsRoot`, and `SessionName` fields ([`SageFs.Core/DirectoryConfigTypes.fs`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs.Core/DirectoryConfigTypes.fs)), but today only two of the six fields do anything:
 
-Built-in ways to create or edit that config:
+- `AutoOpenNamespaces = false` skips warmup auto-opening of namespaces and modules. This is honored everywhere, because every client's session-creation path bottoms out in the one place that reads it ([`SageFs/DaemonMode.fs:297`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/DaemonMode.fs#L297)).
+- `Load` picks which projects or solution a session loads — but **only the web dashboard's own Create-session flow reads it** ([`SageFs/DashboardTypes.fs:1119`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs/DashboardTypes.fs#L1119)). MCP's `create_session` and the HTTP API that VS Code (and Neovim) use both take an explicit project list and never consult this file, so `Load` has no effect on sessions created from an editor or an agent.
+- `InitScript`, `DefaultArgs`, `IsRoot`, and `SessionName` are parsed and stored but **not wired to anything yet** — setting them has no effect today.
+
+Built-in ways to create or edit the auto-open setting:
 
 - **Dashboard** — enter a working directory, then click **Disable Warmup Auto-Open**
-- **MCP** — edit the per-directory config through the shared workspace
 - **VS Code** — run **SageFs: Configure Warmup Auto-Open**
 - **Neovim** — run `:SageFsConfig`
 
@@ -535,9 +541,9 @@ If `.SageFs/config.fsx` does not exist, these affordances create it with:
 
 If the config already exists, SageFs opens or points you at the file instead of overwriting your existing settings.
 
-**Startup profile** — `~/.SageFs/init.fsx` auto-loads on every session start.
+**Startup profile** — not the `InitScript` field above, and not global. At the end of a session's warmup, SageFs looks for `.SageFs/init.fsx` or `.SageFsrc` **in that session's own working directory** and evaluates it if found ([`SageFs.Core/StartupProfile.fs`](https://github.com/WillEhrendreich/SageFs/blob/073bd7f3f1324233b747bd7cb31c343dc318021c/SageFs.Core/StartupProfile.fs)). There is no `~/.SageFs/init.fsx` home-directory startup profile — no code path looks there.
 
-**Precedence:** Per-directory config > auto-discovery from working directory.
+**Precedence:** Inside the dashboard's Create-session flow only: an explicit project list you type wins, then `.SageFs/config.fsx`'s `Load`, then auto-discovery from the working directory. MCP and the HTTP API (VS Code, Neovim) don't read the config file on session creation at all, so there's no precedence to speak of there — whatever project list the client sends is used as-is.
 
 </details>
 

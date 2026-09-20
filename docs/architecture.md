@@ -4,7 +4,7 @@ One SageFs daemon runs per machine. It starts with no project loaded and creates
 
 The daemon listens on port 37749 for MCP (streamable HTTP at `/`, legacy SSE at `/sse`) and the editor state stream (`/events`). The web dashboard runs on port 37750 at `/dashboard`. Target framework is net10.0; the solution file is `SageFs.slnx`.
 
-The test suite uses Expecto unit tests, FsCheck property-based state-machine tests, Verify snapshots, and binary-persistence property tests. The current test count is auto-derived into the README badge.
+The test suite uses Expecto unit tests, FsCheck property-based state-machine tests, Verify snapshots, and binary-persistence property tests. The README's test-count badge and property-test count are derived from source, never hand-typed, but restamping is an explicit step (`dotnet run --project SageFs.Tests -- --update-badge`, see `SageFs.Tests/TestCountBadge.fs`) — not something CI or a normal test run does automatically, so the numbers can lag between restamps.
 
 ## Project Structure
 
