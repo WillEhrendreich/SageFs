@@ -127,6 +127,16 @@ type [<AllowNullLiteral>] EventEmitter<'T> =
 
 type [<AllowNullLiteral>] TreeView<'T> =
   abstract dispose: unit -> unit
+  /// Fires when the user ticks or unticks a row's checkbox. The native VS Code
+  /// affordance for "this row has an on/off state" — which is what the
+  /// hot-reload watch flag is. Binding that state to `TreeItem.command`
+  /// instead meant there was no way to LOOK at a file row without changing it.
+  abstract onDidChangeCheckboxState: listener: (obj -> unit) -> Disposable
+
+/// `TreeItemCheckboxState` — VS Code's own enum values.
+module TreeItemCheckboxState =
+  let Unchecked = 0
+  let Checked = 1
 
 type [<AllowNullLiteral>] ExtensionContext =
   abstract subscriptions: ResizeArray<Disposable>
@@ -456,6 +466,17 @@ module Tests =
 
 [<Import("env", "vscode")>]
 let envExports: obj = jsNative
+
+/// `setContext`, hoisted here so a TREE PROVIDER can publish its own
+/// data-arrived key. `viewsWelcome` `when` clauses can only read context keys,
+/// so "the session exists but this view has no data yet" — the state every
+/// session spends its first 15-30 seconds in — was unexpressible, and those
+/// panels rendered completely blank with no text and no action.
+[<Emit("$0.executeCommand('setContext', $1, $2)")>]
+let private _setContext (c: obj) (key: string) (value: bool) : JS.Promise<obj> = jsNative
+
+let setContextKey (key: string) (value: bool) : unit =
+  _setContext commandsExports key value |> ignore
 
 module Env =
   [<Emit("$0.openExternal($1)")>]

@@ -162,6 +162,10 @@ let refresh () =
       let! ctx = Client.getWarmupContext sid c
       cachedContext <- ctx
       isLoading <- false
+      // Publish "this view has data" so viewsWelcome can distinguish
+      // "warming up, nothing yet" from "nothing at all". Without it this panel
+      // is blank — no text, no action — for the whole 15-30s warmup.
+      Vscode.setContextKey "sagefs:sessionContextLoaded" ctx.IsSome
       match refreshEmitter with
       | Some e -> e.fire null
       | None -> ()
@@ -169,6 +173,7 @@ let refresh () =
   | _ ->
     isLoading <- false
     cachedContext <- None
+    Vscode.setContextKey "sagefs:sessionContextLoaded" false
     match refreshEmitter with
     | Some e -> e.fire null
     | None -> ()

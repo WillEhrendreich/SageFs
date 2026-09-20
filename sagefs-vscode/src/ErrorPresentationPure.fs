@@ -53,6 +53,50 @@ let describe (e: StructuredError) : string =
 let describeInline (e: StructuredError) : string =
   (describe e).Replace("\n→ ", " — ")
 
+/// `sagefs.logLevel` — declared with a three-value enum since the setting
+/// shipped, and read by nothing: everything logged unconditionally
+/// (sagefs-ux-roast.md §4.3). A declared-and-ignored setting is a control that
+/// lies about having an effect.
+///
+/// The extension's existing convention is a `[level]` prefix on the line
+/// (`c.log "[warn] refreshStatus: ..."`), so the filter reads the prefix. A
+/// line with no prefix is INFO — never dropped silently just for being
+/// unlabelled.
+[<RequireQualifiedAccess>]
+type LogLevel =
+  | Error
+  | Info
+  | Debug
+
+module LogLevel =
+
+  /// Parse the setting. An unrecognised value is `Info`, the documented
+  /// default — never "log nothing", which would hide the diagnostics a user
+  /// is most likely reaching for when they touch this setting at all.
+  let ofSetting (s: string) : LogLevel =
+    match (s |> Option.ofObj |> Option.defaultValue "").Trim().ToLowerInvariant() with
+    | "error" -> LogLevel.Error
+    | "debug" -> LogLevel.Debug
+    | _ -> LogLevel.Info
+
+  let private rank = function
+    | LogLevel.Error -> 0
+    | LogLevel.Info -> 1
+    | LogLevel.Debug -> 2
+
+  /// The level a log line declares through its `[prefix]`.
+  let lineLevel (line: string) : LogLevel =
+    let t = (line |> Option.ofObj |> Option.defaultValue "").TrimStart()
+    match t with
+    | _ when t.StartsWith "[error]" || t.StartsWith "[err]" -> LogLevel.Error
+    | _ when t.StartsWith "[warn]" -> LogLevel.Error
+    | _ when t.StartsWith "[debug]" || t.StartsWith "[trace]" -> LogLevel.Debug
+    | _ -> LogLevel.Info
+
+  /// Whether a line survives the configured level.
+  let shouldLog (configured: LogLevel) (line: string) : bool =
+    rank (lineLevel line) <= rank configured
+
 /// True when a string is prose rather than a control label — the test this
 /// module exists to make possible. A remedy sentence is long and/or ends in a
 /// full stop; a button caption is a short verb phrase. Used by the contract

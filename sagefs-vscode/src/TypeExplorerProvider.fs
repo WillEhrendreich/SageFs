@@ -109,15 +109,34 @@ let private commonRoots =
 
 // ── TreeDataProvider ─────────────────────────────────────────────
 
+/// The roots to show. `sagefs.typeExplorerRoot` was declared, documented, and
+/// read by NOTHING — the tree always rendered the same seven hardcoded
+/// namespaces, so the setting's documented behaviour was simply false. A
+/// non-empty setting now pins the tree to that namespace.
+let private rootsToShow () =
+  let configured = (Workspace.getConfiguration "sagefs").get("typeExplorerRoot", "")
+  match (configured |> Option.ofObj |> Option.defaultValue "").Trim() with
+  | "" -> commonRoots
+  | root -> [| root |]
+
 let getChildren (element: obj option) : JS.Promise<obj array> =
   promise {
     match element, currentClient with
-    | None, _ ->
-      let roots =
-        commonRoots
-        |> Array.map (fun ns ->
-          expandableItem ns "" "symbol-namespace" (sprintf "explore:%s" ns) :> obj)
-      return roots
+    // WHY the empty array: this view used to render seven populated-looking
+    // namespace rows WITHOUT consulting the client at all. With no daemon, no
+    // session and no F# project it looked fully populated, and expanding
+    // anything reached a dead "Not connected" leaf with no button. An empty
+    // array is what lets `viewsWelcome` show a state-aware message instead.
+    | None, None -> return [||]
+    | None, Some _ ->
+      match getSessionId () with
+      | None -> return [||]
+      | Some _ ->
+        let roots =
+          rootsToShow ()
+          |> Array.map (fun ns ->
+            expandableItem ns "" "symbol-namespace" (sprintf "explore:%s" ns) :> obj)
+        return roots
     | Some el, Some c ->
       let ctx = fieldString "contextValue" el |> Option.defaultValue ""
       match ctx with

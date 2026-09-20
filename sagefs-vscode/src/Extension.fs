@@ -720,6 +720,14 @@ let updateTestStatusBar (summary: VscTestSummary) =
       | VscStatusTone.Warning -> Some (newThemeColor "statusBarItem.warningBackground")
       | VscStatusTone.Plain -> None
     sb.tooltip <- Some view.Tooltip
+    // The command was set ONCE at activation to `sagefs.enableLiveTesting` and
+    // never touched again, so clicking the live-testing status bar WHILE LIVE
+    // TESTING WAS ON re-issued enable. `AppRunPure.statusBarText`'s app bar is
+    // the model: a state-reflecting control flips its own command.
+    sb.command <-
+      match ContextKeysPure.liveTestingEnabledFromDiscoveryState summary.DiscoveryState with
+      | true -> Some "sagefs.disableLiveTesting"
+      | false -> Some "sagefs.enableLiveTesting"
     sb.show ()
 
 let updateEvalPerfBar (stats: VscTimelineStats) =
@@ -2233,7 +2241,16 @@ let activate (context: ExtensionContext) =
   let mcpPort = config.get("mcpPort", 37749)
   let dashboardPort = config.get("dashboardPort", 37750)
 
-  let c = Client.create mcpPort dashboardPort (fun msg -> (getOutput()).appendLine msg)
+  // `sagefs.logLevel` was declared with a three-value enum and read by
+  // nothing. It is now the filter on every line this channel takes — re-read
+  // per line so changing the setting takes effect without a reload.
+  let c =
+    Client.create mcpPort dashboardPort (fun msg ->
+      let configured =
+        ErrorPresentationPure.LogLevel.ofSetting ((Workspace.getConfiguration "sagefs").get("logLevel", "info"))
+      match ErrorPresentationPure.LogLevel.shouldLog configured msg with
+      | true -> (getOutput()).appendLine msg
+      | false -> ())
   client <- Some c
 
   // Fail-closed defaults for every `sagefs:*` context key package.json gates

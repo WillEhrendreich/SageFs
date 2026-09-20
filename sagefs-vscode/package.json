@@ -124,7 +124,8 @@
       },
       {
         "command": "sagefs.hotReloadToggle",
-        "title": "SageFs: Toggle Hot Reload for File"
+        "title": "SageFs: Toggle Hot Reload for File",
+        "icon": "$(eye)"
       },
       {
         "command": "sagefs.hotReloadWatchAll",
@@ -143,7 +144,8 @@
       },
       {
         "command": "sagefs.hotReloadToggleDirectory",
-        "title": "SageFs: Toggle Directory Hot Reload"
+        "title": "SageFs: Toggle Directory Hot Reload",
+        "icon": "$(eye)"
       },
       {
         "command": "sagefs.sessionContextRefresh",
@@ -385,7 +387,7 @@
         "sagefs.typeExplorerRoot": {
           "type": "string",
           "default": "",
-          "description": "Root namespace for the Type Explorer tree. Empty string shows all top-level namespaces."
+          "description": "Pin the API Browser tree to a single root namespace (e.g. \"MyApp.Domain\"). Empty string shows the default set of common .NET and F# namespaces."
         }
       }
     },
@@ -666,6 +668,16 @@
           "command": "sagefs.stopApp",
           "when": "view == sagefs-sessions && viewItem =~ /session-active/",
           "group": "inline"
+        },
+        {
+          "command": "sagefs.hotReloadToggleDirectory",
+          "when": "view == sagefs-hotReload && viewItem == directory",
+          "group": "inline"
+        },
+        {
+          "command": "sagefs.hotReloadToggle",
+          "when": "view == sagefs-hotReload && viewItem =~ /(watched|unwatched)File/",
+          "group": "inline"
         }
       ]
     },
@@ -872,6 +884,11 @@
         "contents": "No active session.\n[Create Session](command:sagefs.createSession)\n\nHot reload files appear once a session is running."
       },
       {
+        "view": "sagefs-hotReload",
+        "when": "sagefs:daemonRunning && sagefs:hasSession && !sagefs:hotReloadLoaded",
+        "contents": "No hot-reloadable files yet.\n\nWarmup lists a session's source files, which takes 15-30 seconds. If it stays empty, the project may not have been built.\n[Refresh](command:sagefs.hotReloadRefresh)\n[Rebuild Session](command:sagefs.hardReset)"
+      },
+      {
         "view": "sagefs-sessionContext",
         "when": "!sagefs:daemonRunning",
         "contents": "SageFs isn't running.\n[Start SageFs](command:sagefs.start)"
@@ -880,6 +897,21 @@
         "view": "sagefs-sessionContext",
         "when": "sagefs:daemonRunning && !sagefs:hasSession",
         "contents": "No active session.\n[Create Session](command:sagefs.createSession)\n\nSession context shows bindings and types once a session is running."
+      },
+      {
+        "view": "sagefs-sessionContext",
+        "when": "sagefs:daemonRunning && sagefs:hasSession && !sagefs:sessionContextLoaded",
+        "contents": "Warming up.\n\nA session loads its projects before it can report what it holds; this usually takes 15-30 seconds.\n[Refresh](command:sagefs.sessionContextRefresh)"
+      },
+      {
+        "view": "sagefs-types",
+        "when": "!sagefs:daemonRunning",
+        "contents": "SageFs isn't running.\n[Start SageFs](command:sagefs.start)\n\nThe API Browser queries the live session, so it needs a running daemon."
+      },
+      {
+        "view": "sagefs-types",
+        "when": "sagefs:daemonRunning && !sagefs:hasSession",
+        "contents": "No active session.\n[Create Session](command:sagefs.createSession)\n\nThe API Browser lists the namespaces and types your session can actually see."
       }
     ]
   },
