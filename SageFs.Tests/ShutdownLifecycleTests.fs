@@ -9,17 +9,52 @@ open SageFs
 open SageFs.SessionManager
 open SageFs.Tests.TestInfrastructure
 
+/// How this platform spawns a child that simply lives for a while.
+/// A DU rather than a flag: the two arms carry different programs and
+/// different argument shapes, and the choice is exhaustive by construction.
+type private LongRunningProgram =
+  /// `cmd.exe /c ping -n N 127.0.0.1` — Windows has no `sleep` binary.
+  | WindowsPing of seconds: int
+  /// `/bin/sh -c "sleep N"` — POSIX-guaranteed on Linux and macOS.
+  | PosixSleep of seconds: int
+
+module private LongRunningProgram =
+
+  let forThisPlatform (seconds: int) =
+    match OperatingSystem.IsWindows() with
+    | true -> WindowsPing seconds
+    | false -> PosixSleep seconds
+
+  /// Executable + argument list (never a single Arguments string — the shell
+  /// quoting rules differ per platform and ArgumentList sidesteps them).
+  let command (program: LongRunningProgram) : string * string list =
+    match program with
+    // `ping -n N` sends N echoes one second apart, so it lives ~N-1 seconds.
+    | WindowsPing seconds -> "cmd.exe", [ "/c"; sprintf "ping -n %d 127.0.0.1 > nul" (seconds + 1) ]
+    | PosixSleep seconds -> "/bin/sh", [ "-c"; sprintf "sleep %d" seconds ]
+
 /// Spawn a real, long-running child process that the tests can kill.
-/// Uses `cmd /c ping -n N 127.0.0.1` which lives for roughly N-1 seconds.
-/// Windows-only: cmd.exe does not exist on Linux/macOS (the tests error there).
+///
+/// WHY this is not OS-guarded: this file holds the repo's only tests that
+/// spawn real child processes and kill them through the daemon's own
+/// `stopWorker` / `killWorkerPids` sweep. It used to open with
+/// `if not (OperatingSystem.IsWindows()) then skiptest ...` while CI runs on
+/// Linux only, so the one real process-cleanup outcome gate executed on no CI
+/// run at all — and `skiptest` reports pending, not failing, so nothing ever
+/// surfaced it (outcome-gate-sweep.md §2.5). The child is chosen per platform
+/// instead of skipped, so the gate runs everywhere.
 let spawnLongRunning (label: string) =
-  if not (OperatingSystem.IsWindows()) then
-    skiptest "Windows-only: spawns cmd.exe /c ping"
+  let fileName, args =
+    LongRunningProgram.command (LongRunningProgram.forThisPlatform 30)
   let psi = ProcessStartInfo()
-  psi.FileName <- "cmd.exe"
-  psi.Arguments <- "/c ping -n 30 127.0.0.1 > nul"
+  psi.FileName <- fileName
+  for arg in args do
+    psi.ArgumentList.Add(arg)
   psi.UseShellExecute <- false
   psi.CreateNoWindow <- true
+  // Neither child writes to stdout/stderr (ping redirects to nul, sleep is
+  // silent), so these redirected pipes are never filled and cannot deadlock
+  // the child; they exist only so no stray output reaches the test console.
   psi.RedirectStandardOutput <- true
   psi.RedirectStandardError <- true
   let proc = new Process()
@@ -28,6 +63,18 @@ let spawnLongRunning (label: string) =
   match proc.Start() with
   | true -> proc
   | false -> failwithf "%s: failed to spawn test process" label
+
+/// True once `pid` names no live process. On Linux a just-killed child can
+/// still have a /proc entry for the moment between SIGKILL and the runtime's
+/// child reaper waiting on it, so "dead" is polled to a short ceiling rather
+/// than sampled once.
+let private isDead (pid: int) =
+  try
+    use running = Process.GetProcessById(pid)
+    running.HasExited
+  with
+  | :? ArgumentException -> true
+  | :? InvalidOperationException -> true
 
 let mkHangingSession (proc: Process) =
   { Info =
@@ -76,13 +123,9 @@ let shutdownLifecycleTests =
         |> Expect.isTrue
           (sprintf "stopWorker must return within a bound even when the Shutdown proxy hangs (pid %d)" pid)
         do! stop
-        let hasExited =
-          try
-            use running = Process.GetProcessById(pid)
-            running.HasExited
-          with :? ArgumentException -> true
-        hasExited
-        |> Expect.isTrue "the hung worker process must be dead after stopWorker"
+        let! dead = awaitCondition 5000 (fun () -> isDead pid)
+        dead
+        |> Expect.isTrue (sprintf "the hung worker process (pid %d) must be dead after stopWorker" pid)
       finally
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
