@@ -169,6 +169,7 @@
          <Compile Include="WarmupContextTests.fs" />
          <Compile Include="WarmupReplayCacheTests.fs" />
          <Compile Include="WarmupInitBoundaryTests.fs" />
+         <Compile Include="SessionHealthTests.fs" />
          <Compile Include="WarmupBatchedOpenTests.fs" />
          <Compile Include="WarmupProgressContractTests.fs" />
         <Compile Include="VscodeExtensionTests.fs" />

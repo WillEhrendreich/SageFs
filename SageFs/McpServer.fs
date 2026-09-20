@@ -2336,11 +2336,22 @@ let mapSessionRoutes (app: WebApplication) (rctx: RouteContext) =
               return 0, 0.0, fallbackSessionStatusLabel sess.Status
           | None -> return 0, 0.0, fallbackSessionStatusLabel sess.Status
         }
+        // Derived, user-meaningful health verdict — distinct from `status`
+        // above, which is only the worker's lifecycle label ("Ready" means
+        // "the worker process is alive," not "my project is loaded and I can
+        // evaluate"). Computed from the SAME facts as get_fsi_status
+        // (SageFs.Mcp.getStatus) so the two surfaces never disagree.
+        let! warmupOpt =
+          match rctx.Config.GetWarmupContext with
+          | Some getCtx -> getCtx (SageFs.WorkerProtocol.SessionId.value sess.Id)
+          | None -> Task.FromResult None
+        let health = SageFs.SessionHealth.classify sess.Status sess.ProjectRoles warmupOpt
         let appView = SageFs.AppRun.toView sess.App
         results.Add(
           {| id = SageFs.WorkerProtocol.SessionId.value sess.Id
              status = status
              faultReason = SageFs.WorkerProtocol.SessionLifecycleStatus.faultReason sess.Status
+             health = SageFs.SessionHealth.toJson health
              projects = sess.Projects
              // What the worker ACTUALLY resolved and loaded, which is not always what
              // was declared: a session created with `projects=[]` still loads whatever

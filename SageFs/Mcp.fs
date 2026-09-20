@@ -1188,7 +1188,28 @@ module McpTools =
               |> Option.map (fun line -> "\n" + line)
               |> Option.defaultValue ""
             | _ -> ""
-          return enriched + rebuildLine + selfHostLine
+          // Derived, user-meaningful health verdict — computed from the SAME
+          // three facts (worker lifecycle status, ProjectRoles, WarmupContext)
+          // that /api/sessions uses, so the two surfaces never disagree.
+          // "Ready" alone only ever meant "the worker process is alive";
+          // this is what tells an agent whether the session is actually usable.
+          let! healthLine =
+            task {
+              match info with
+              | None -> return ""
+              | Some sessionInfo ->
+                let effectiveStatus = reconciled |> Option.defaultValue sessionInfo.Status
+                let! warmupOpt =
+                  match ctx.GetWarmupContext with
+                  | Some getCtx -> getCtx sid
+                  | None -> Task.FromResult None
+                let health = SessionHealth.classify effectiveStatus sessionInfo.ProjectRoles warmupOpt
+                return
+                  SessionHealth.describeForAgent health
+                  |> Option.map (fun line -> "\n" + line)
+                  |> Option.defaultValue ""
+            }
+          return enriched + rebuildLine + selfHostLine + healthLine
         | Ok other ->
           return sprintf "Unexpected response: %A" other
         | Error (RestartInProgress msg) ->
