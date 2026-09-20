@@ -84,6 +84,26 @@ let isAlive (getProcessById: int -> Process option) (owner: Owner) : bool =
 /// Poll interval between owner liveness checks.
 let pollIntervalMs = 2000
 
+/// A generic fail-safe threshold for any periodic self-check whose own
+/// success is a precondition for a liveness/lifetime decision — the daemon
+/// `--ttl` idle-check (`SageFs.DaemonOwnership`/`DaemonMode`) is the first
+/// caller: it must read session and activity state on every tick, and a
+/// daemon that can never successfully do that has failed the one job `--ttl`
+/// gives it. A single failure is almost certainly transient and is retried
+/// on the next tick; `giveUpAfterFailures` consecutive failures means the
+/// check itself is unable to determine the process's own state at all. The
+/// fail-safe answer mirrors `isAlive`'s own `with _ -> false`: a check that
+/// cannot be trusted is treated as "cannot determine the deadline", never as
+/// "keep running forever by default".
+let giveUpAfterFailures = 5
+
+/// Whether a periodic self-check that has failed `consecutiveFailures` times
+/// in a row should be treated as unable to determine its own answer — the
+/// caller should fail safe (exit, logging why) rather than keep retrying
+/// forever on the strength of hope alone.
+let hasGivenUp (consecutiveFailures: int) : bool =
+  consecutiveFailures >= giveUpAfterFailures
+
 /// Run the monitor loop. Cancels the provided CTS once the owner is gone
 /// (exited, missing, or a pid-reuse mismatch against the fence).
 let run

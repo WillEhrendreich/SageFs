@@ -75,8 +75,29 @@ let createShadowDir () : string =
   Directory.CreateDirectory dir |> ignore
   dir
 
+/// The sidecar path recording a shadow-copied file's ORIGINAL (pre-shadow)
+/// directory — see `tryReadOriginDir`. ".origin" is never a real project
+/// output extension, so it can never collide with an actual build artifact.
+let originSidecarPath (shadowedFilePath: string) : string =
+  shadowedFilePath + ".origin"
+
 /// Copies a DLL (and companion .pdb) to the shadow directory.
 /// Returns the new path if copied, or the original path if source doesn't exist.
+///
+/// Also records the source directory in a `.origin` sidecar next to the copy.
+/// Dependency/reference DLLs (NuGet packages, other project references) are
+/// deliberately NEVER shadow-copied (see `shadowCopySolution`) — they must
+/// stay resolvable from where the build actually put them, because shadowing
+/// them would break FSI's own `#load`/project-reference resolution. That is
+/// correct for the FSI session, but a consumer that needs to run the
+/// shadow-copied assembly OUTSIDE of FSI (`SageFs.AppRunner`, via
+/// `Assembly.LoadFrom` + reflection-invoke) has no other way to find those
+/// sibling dependencies — .NET's `Assembly.LoadFrom` only probes the
+/// directory it loaded FROM, which for a shadow copy contains just the one
+/// file. The sidecar is how `AppRunner.ManagedDependencyResolution` finds its
+/// way back to the original build output directory (where every dependency
+/// the build actually needs was copied) without threading a new parameter
+/// through every caller of this function.
 let shadowCopyFile (shadowDir: string) (sourcePath: string) : string =
   match File.Exists sourcePath with
   | false -> sourcePath
@@ -90,7 +111,36 @@ let shadowCopyFile (shadowDir: string) (sourcePath: string) : string =
       let pdbDest = Path.ChangeExtension(destPath, ".pdb")
       File.Copy(pdbSource, pdbDest, true)
     | false -> ()
+    (try
+       let originDir =
+         match Path.GetDirectoryName(Path.GetFullPath sourcePath) with
+         | null -> ""
+         | dir -> dir
+       match String.IsNullOrEmpty originDir with
+       | true -> ()
+       | false -> File.WriteAllText(originSidecarPath destPath, originDir)
+     with _ ->
+       // Best-effort: a missing sidecar only means AppRunner can't find this
+       // one project's sibling dependencies later — never a reason to fail
+       // the shadow copy the FSI session actually needs to start.
+       ())
     destPath
+
+/// The original (pre-shadow) directory recorded for a shadow-copied file by
+/// `shadowCopyFile`, if any. `None` when no sidecar was written (an older
+/// SageFs, the file was never shadow-copied, or the sidecar could not be
+/// read) — fails closed so a caller falls back to today's behavior (probe
+/// nothing extra) rather than trusting a corrupt or partial read.
+let tryReadOriginDir (shadowedFilePath: string) : string option =
+  try
+    let sidecar = originSidecarPath shadowedFilePath
+    match File.Exists sidecar with
+    | false -> None
+    | true ->
+      match File.ReadAllText(sidecar).Trim() with
+      | "" -> None
+      | dir -> Some dir
+  with _ -> None
 
 /// Rewrites a Solution's project TargetPaths to point at shadow copies.
 /// References (dependency DLLs) are intentionally left in place — see below.

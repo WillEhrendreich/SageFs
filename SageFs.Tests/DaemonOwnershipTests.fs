@@ -167,6 +167,84 @@ let shouldSelfTerminateTests = testList "shouldSelfTerminate" [
     |> Expect.isTrue "the boundary itself counts as past the ttl"
 ]
 
+// ─── ttlClientActivityWindow ───────────────────────────────────────────────
+// Bug: the daemon's TTL idle-check used to pass `ttl` itself as the
+// "is a client still around" freshness window (SageFs/DaemonMode.fs's
+// ttlCallback), so a single MCP call stayed "fresh" for a full extra `ttl`
+// and kept re-stamping the idle clock on every tick it did — a daemon with
+// ANY past activity effectively never went idle. These tests pin the fixed
+// window: a small constant, never the raw ttl.
+
+[<Tests>]
+let ttlClientActivityWindowTests = testList "ttlClientActivityWindow" [
+
+  testCase "WHY — a long ttl (60m, the reported bug's exact value) is capped at 2 minutes, not reused whole" <| fun _ ->
+    ttlClientActivityWindow (TimeSpan.FromMinutes 60.0)
+    |> Expect.equal "capped, never the raw (bug-reproducing) ttl" (TimeSpan.FromMinutes 2.0)
+
+  testCase "WHY — a short ttl (30s) is never inflated past the ttl itself" <| fun _ ->
+    ttlClientActivityWindow (TimeSpan.FromSeconds 30.0)
+    |> Expect.equal "capped at the ttl, not the 2-minute default" (TimeSpan.FromSeconds 30.0)
+
+  testCase "WHY — the window can never exceed the ttl it serves" <| fun _ ->
+    [ TimeSpan.FromSeconds 1.0; TimeSpan.FromMinutes 1.0; TimeSpan.FromMinutes 2.0
+      TimeSpan.FromMinutes 5.0; TimeSpan.FromHours 1.0; TimeSpan.FromHours 24.0 ]
+    |> List.forall (fun ttl -> ttlClientActivityWindow ttl <= ttl)
+    |> Expect.isTrue "window <= ttl for every ttl, however large"
+
+  testCase "the bug itself: the raw ttl would NOT equal the fixed window for a large ttl" <| fun _ ->
+    // Proves this test has teeth: the pre-fix code (window = ttl) would fail
+    // this exact assertion for any ttl above the 2-minute cap.
+    ttlClientActivityWindow (TimeSpan.FromMinutes 60.0)
+    |> Expect.notEqual "a broken 'window = ttl' implementation would equal 60m here" (TimeSpan.FromMinutes 60.0)
+]
+
+// ─── isUsableSessionStatus ──────────────────────────────────────────────────
+// Bug: the daemon's TTL idle-check counted ANY registered session as "live"
+// (SessionManager.QuerySnapshot.allSessions |> List.isEmpty |> not), including
+// a `Faulted` tombstone SessionManager deliberately keeps registered after a
+// worker crashes and exhausts its restart budget. One permanently-dead
+// session then blocked a TTL-governed daemon from EVER going idle.
+
+[<Tests>]
+let isUsableSessionStatusTests = testList "isUsableSessionStatus" [
+
+  testCase "WHY — a Faulted session is NOT usable (the exact bug: a dead tombstone must not block TTL)" <| fun _ ->
+    SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted (Some "worker exited")
+    |> isUsableSessionStatus
+    |> Expect.isFalse "a faulted, permanently-dead session must not count as live"
+
+  testCase "WHY — a Faulted session with no reason is also NOT usable" <| fun _ ->
+    SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted None
+    |> isUsableSessionStatus
+    |> Expect.isFalse "faulted is faulted regardless of whether a reason was recorded"
+
+  testCase "a Stopped session is NOT usable" <| fun _ ->
+    SageFs.WorkerProtocol.SessionLifecycleStatus.Stopped
+    |> isUsableSessionStatus
+    |> Expect.isFalse "a stopped session is not live"
+
+  testCase "a Ready session IS usable" <| fun _ ->
+    SageFs.WorkerProtocol.SessionLifecycleStatus.Ready { Pid = 1; Port = Some 1234 }
+    |> isUsableSessionStatus
+    |> Expect.isTrue "a ready worker is genuinely live"
+
+  testCase "a Starting session IS usable" <| fun _ ->
+    SageFs.WorkerProtocol.SessionLifecycleStatus.Starting { Pid = 1; Port = None }
+    |> isUsableSessionStatus
+    |> Expect.isTrue "a session still starting up is not yet dead"
+
+  testCase "an Evaluating session IS usable" <| fun _ ->
+    SageFs.WorkerProtocol.SessionLifecycleStatus.Evaluating { Pid = 1; Port = Some 1234 }
+    |> isUsableSessionStatus
+    |> Expect.isTrue "actively evaluating is definitely live"
+
+  testCase "a Restarting session IS usable" <| fun _ ->
+    SageFs.WorkerProtocol.SessionLifecycleStatus.Restarting (Some 1)
+    |> isUsableSessionStatus
+    |> Expect.isTrue "a restart in flight is not a dead end"
+]
+
 // ─── DaemonInfoFile ────────────────────────────────────────────────────────
 
 [<Tests>]

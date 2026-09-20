@@ -167,3 +167,34 @@ let runTests = testList "OwnerMonitor.run" [
       cts.Dispose()
   }
 ]
+
+/// The generic fail-safe give-up threshold: a periodic self-check (the
+/// daemon `--ttl` idle-check is the first caller — SageFs.DaemonMode's
+/// ttlCallback) that keeps throwing on every tick was, before this fix,
+/// logged as a warning and silently retried forever — the opposite of
+/// fail-safe. `hasGivenUp` is the pure decision a caller consults to know
+/// when to stop hoping and exit instead.
+[<Tests>]
+let giveUpTests = testList "OwnerMonitor.hasGivenUp" [
+
+  testCase "zero failures has not given up" <| fun _ ->
+    hasGivenUp 0 |> Expect.isFalse "no failures yet is not a reason to give up"
+
+  testCase "one failure has not given up (almost certainly transient)" <| fun _ ->
+    hasGivenUp 1 |> Expect.isFalse "a single failure is retried, not fatal"
+
+  testCase "one failure short of the threshold has not given up" <| fun _ ->
+    hasGivenUp (giveUpAfterFailures - 1) |> Expect.isFalse "still below the threshold"
+
+  testCase "WHY — reaching the threshold gives up (fail-safe: exit rather than run forever)" <| fun _ ->
+    hasGivenUp giveUpAfterFailures |> Expect.isTrue "the threshold itself must trigger give-up"
+
+  testCase "past the threshold has given up" <| fun _ ->
+    hasGivenUp (giveUpAfterFailures + 100) |> Expect.isTrue "more failures never un-gives-up"
+
+  testCase "the bug this proves: an unbounded 'always retry' policy never gives up, but this one must" <| fun _ ->
+    // Proves the test has teeth: a broken `hasGivenUp _ = false` (the old
+    // fail-open behavior — log and keep retrying forever) would fail this.
+    [ 5; 6; 10; 1000 ] |> List.forall hasGivenUp
+    |> Expect.isTrue "every failure count at or above the threshold must give up"
+]

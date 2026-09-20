@@ -2667,7 +2667,30 @@ let run
   // activity (AgentActivityTracker) — rather than a new connection count.
   // One-shot timer, same reschedule-after-completion idiom as the other
   // periodic checks above.
+  //
+  // Two daemons observed live (--ttl 60m / --ttl 30m) outlived their TTL by
+  // 4+ hours before being killed manually. Root-caused to two bugs in what
+  // this callback fed `DaemonOwnership.shouldSelfTerminate` (the pure
+  // decision itself was already correct and tested):
+  //   1. `hasClients` used `ttl` ITSELF as the "still around" freshness
+  //      window, so a single MCP call stayed "fresh" for a full extra `ttl`
+  //      — and every tick that saw it re-stamped `ttlLastActiveAt` to `now`
+  //      while it did, pushing genuine idle-out to roughly 2x`ttl` after the
+  //      last real activity, worse with each subsequent call. Fixed:
+  //      `DaemonOwnership.ttlClientActivityWindow` — a small, capped window.
+  //   2. `hasLiveSessions` counted ANY registered session, including a
+  //      `Faulted` tombstone SessionManager deliberately keeps registered
+  //      after a worker crashes and exhausts its restart budget — one
+  //      permanently-dead session blocked idle-out forever. Fixed:
+  //      `DaemonOwnership.isUsableSessionStatus` excludes Faulted/Stopped.
+  // A third, structural gap: on any exception this callback logged a
+  // warning and kept retrying forever — fail-OPEN, the opposite of what a
+  // daemon that "cannot determine its own deadline" must do. Fixed with
+  // `OwnerMonitor.hasGivenUp`: after enough CONSECUTIVE failures to rule out
+  // a transient blip, the daemon fails safe and exits rather than running
+  // unbounded.
   let mutable ttlLastActiveAt = DateTime.UtcNow
+  let mutable ttlConsecutiveFailures = 0
   let mutable ttlTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
   let ttlTimer : System.Threading.Timer option =
     match ownership.Ttl with
@@ -2680,20 +2703,33 @@ let run
           try
             let now = DateTime.UtcNow
             let hasLiveSessions =
-              SessionManager.QuerySnapshot.allSessions (readSnapshot()) |> List.isEmpty |> not
+              SessionManager.QuerySnapshot.allSessions (readSnapshot())
+              |> List.exists (fun si -> DaemonOwnership.isUsableSessionStatus si.Status)
+            let activityWindow = DaemonOwnership.ttlClientActivityWindow ttl
             let hasClients =
               connectionTracker.GetAllCounts().Browsers > 0
-              || not (AgentActivityTracker.getActivePresences activityTracker None ttl now |> List.isEmpty)
+              || not (AgentActivityTracker.getActivePresences activityTracker None activityWindow now |> List.isEmpty)
             match hasLiveSessions || hasClients with
             | true -> ttlLastActiveAt <- now
             | false -> ()
+            ttlConsecutiveFailures <- 0
             match DaemonOwnership.shouldSelfTerminate now ttl ttlLastActiveAt hasLiveSessions hasClients with
             | true ->
               log.LogWarning("Daemon idle for --ttl {Ttl} with no live sessions and no clients — self-terminating", ttl)
               try cts.Cancel() with :? ObjectDisposedException -> ()
             | false -> ()
           with ex ->
-            log.LogWarning("TTL idle-check callback threw unexpectedly: {Error}", ex.Message)
+            ttlConsecutiveFailures <- ttlConsecutiveFailures + 1
+            log.LogWarning(
+              "TTL idle-check callback threw unexpectedly ({Count}/{Max} consecutive): {Error}",
+              ttlConsecutiveFailures, OwnerMonitor.giveUpAfterFailures, ex.Message)
+            match OwnerMonitor.hasGivenUp ttlConsecutiveFailures with
+            | true ->
+              log.LogWarning(
+                "TTL idle-check has failed {Count} times in a row — this daemon cannot determine its own deadline; self-terminating (fail-safe) rather than running unbounded",
+                ttlConsecutiveFailures)
+              try cts.Cancel() with :? ObjectDisposedException -> ()
+            | false -> ()
         finally
           if not (isNull ttlTimerRef) then
             try ttlTimerRef.Change(ttlCheckIntervalMs, System.Threading.Timeout.Infinite) |> ignore

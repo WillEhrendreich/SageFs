@@ -143,6 +143,37 @@ let shouldSelfTerminate
   : bool =
   not hasLiveSessions && not hasClients && (now - lastActiveAt) >= ttl
 
+/// The window `hasClients` uses to decide "is any MCP/SSE client still
+/// around". This must be a small, fixed span — never `ttl` itself. Using
+/// `ttl` as the freshness window (the bug this closes) means a SINGLE tool
+/// call stays "fresh" for a full `ttl` after it happened, and the idle-check
+/// callback re-stamps `lastActiveAt` to "now" on every tick while it does —
+/// so a daemon never goes idle in less than roughly 2×`ttl` after its last
+/// real activity, and each subsequent call within that window pushes the
+/// goalposts out again. Capped at the same 2-minute convention already used
+/// for "is this cohort member still around" (`DaemonMode.cohortReaperRenewWindow`,
+/// itself kept under `AgentActivityTracker`'s own 5-minute hard eviction) —
+/// and at `ttl` itself for a shorter custom TTL (e.g. tests), so the window
+/// can never exceed the bound it is meant to serve.
+let ttlClientActivityWindow (ttl: TimeSpan) : TimeSpan =
+  min ttl (TimeSpan.FromMinutes 2.0)
+
+/// Whether a session's own status still represents something genuinely
+/// usable — i.e. NOT a terminal, unusable state (`Faulted`: a worker that
+/// crashed and gave up retrying; `Stopped`). `SessionManager` keeps a
+/// `Faulted` tombstone registered (so a caller can see WHY a session died)
+/// rather than removing it outright, so counting ANY registered session as
+/// "live" would let one permanently-dead session block a TTL-governed
+/// daemon from ever going idle — the exact bug this closes. Exposed here
+/// (ownership rule 2's own concern) rather than in `SessionManager` so the
+/// TTL idle-check's notion of "live" stays independent of the session/worker
+/// model's internals.
+let isUsableSessionStatus (status: SageFs.WorkerProtocol.SessionLifecycleStatus) : bool =
+  match status with
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Faulted _
+  | SageFs.WorkerProtocol.SessionLifecycleStatus.Stopped -> false
+  | _ -> true
+
 // ─── Daemon-info file ─────────────────────────────────────────────────────
 
 /// Written into a daemon's own `SAGEFS_DATA_DIR` at startup. The HTTP

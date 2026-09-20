@@ -7,6 +7,7 @@ open System.Collections.Generic
 open System.Diagnostics
 open System.IO
 open System.Reflection
+open System.Runtime.Loader
 open System.Threading
 open System.Threading.Tasks
 open Microsoft.AspNetCore.Hosting.Server
@@ -14,6 +15,97 @@ open Microsoft.AspNetCore.Hosting.Server.Features
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.Hosting
 open SageFs.AppRun
+
+/// Resolves a hosted project's MANAGED dependencies when it is run in-process
+/// via `Assembly.LoadFrom` + reflection-invoke (see `resolveProjectAssembly`).
+///
+/// Why this exists: `SageFs.ShadowCopy.shadowCopySolution` deliberately
+/// shadow-copies ONLY each project's own top-level assembly — dependency and
+/// reference DLLs (NuGet packages, other project references) are left in
+/// their original build-output directory, because shadowing them would break
+/// FSI's own `#load`/project-reference resolution (see `ShadowCopy.fs`).
+/// That is correct for the FSI session. But `run_app` loads the shadow copy
+/// with `Assembly.LoadFrom` and invokes its entry point IN-PROCESS, and
+/// .NET's `Assembly.LoadFrom` resolves a loaded assembly's own dependencies
+/// by probing only the directory it was loaded from (plus whatever the
+/// worker's OWN process already has resolvable) — never a sibling
+/// assembly's ORIGINAL build output. A project with any NuGet or
+/// project-reference dependency (almost all of them — this is the exact
+/// shape of the documented Falco demo) then fails with a
+/// `FileNotFoundException` for its first non-framework dependency, even
+/// though that dependency sits right beside the original, unshadowed build
+/// output `ShadowCopy.tryReadOriginDir` can find.
+///
+/// Same idiom as `SageFs.NativeResolution` (the analogous fix for UNMANAGED
+/// P/Invoke dependencies): a process-global, thread-safe, growable set of
+/// directories to probe, installed once on
+/// `AssemblyLoadContext.Default.Resolving`, fail-closed — any miss or error
+/// returns `null`, deferring to the runtime's own (unchanged) default
+/// failure, never a new failure of its own.
+[<RequireQualifiedAccess>]
+module ManagedDependencyResolution =
+
+  /// The absolute candidate path for a requested assembly name under one
+  /// probe root — pure, so the policy is testable without touching the
+  /// loader or the filesystem.
+  let candidatePath (root: string) (assemblyName: string) : string =
+    Path.GetFullPath(Path.Combine(root, assemblyName + ".dll"))
+
+  let private rootsLock = obj ()
+  let mutable private searchRoots : string list = []
+  let private registered = ref 0
+
+  /// Add directories to probe for a hosted app's own dependencies (idempotent,
+  /// de-duplicated) — the ORIGINAL, pre-shadow build output directories
+  /// `ShadowCopy.tryReadOriginDir` recorded.
+  let addRoots (dirs: string seq) : unit =
+    lock rootsLock (fun () ->
+      let existing = Set.ofList searchRoots
+      let added =
+        dirs
+        |> Seq.choose (fun d ->
+          match String.IsNullOrWhiteSpace d with
+          | true -> None
+          | false ->
+            let full = try Path.GetFullPath d with _ -> d
+            match existing.Contains full with
+            | true -> None
+            | false -> Some full)
+        |> Seq.toList
+      searchRoots <- searchRoots @ (added |> List.distinct))
+
+  let private currentRoots () : string list =
+    lock rootsLock (fun () -> searchRoots)
+
+  /// Install the managed-assembly resolver on the default load context
+  /// (once — idempotent). Safe to call on every `run_app`: only the first
+  /// call actually registers the handler.
+  let install (log: string -> unit) : unit =
+    match Interlocked.CompareExchange(registered, 1, 0) = 0 with
+    | false -> ()
+    | true ->
+      let handler =
+        Func<AssemblyLoadContext, AssemblyName, Assembly>(fun ctx name ->
+          try
+            match name.Name with
+            | null | "" -> null
+            | assemblyName ->
+              currentRoots ()
+              |> List.tryPick (fun root ->
+                let candidate = candidatePath root assemblyName
+                match File.Exists candidate with
+                | true -> Some candidate
+                | false -> None)
+              |> function
+                 | Some path ->
+                   log (sprintf "[ManagedDependencyResolution] resolved '%s' -> %s" assemblyName path)
+                   ctx.LoadFromAssemblyPath path
+                 | None -> null
+          with ex ->
+            // Fail closed: never let the resolver itself become the crash.
+            log (sprintf "[ManagedDependencyResolution] resolver error for '%s': %s" name.Name ex.Message)
+            null)
+      AssemblyLoadContext.Default.add_Resolving handler
 
 type EntryPoint = {
   Name: string
@@ -93,6 +185,15 @@ let resolveProjectAssembly (projectTargets: (string * string) list) (projectPath
     | Some asm, _ -> Ok asm
     | None, false -> Error (sprintf "The built assembly %s is missing. → Build the project (dotnet build), then hard-reset the session." target)
     | None, true ->
+      // `target` is the shadow copy (see ShadowCopy.shadowCopySolution) —
+      // its sibling dependencies live only in the ORIGINAL build output.
+      // Make them resolvable before loading, so a project with any NuGet or
+      // project-reference dependency can actually run (see
+      // `ManagedDependencyResolution`'s doc comment for the full story).
+      ManagedDependencyResolution.install (fun msg -> SageFs.Utils.Log.warn "%s" msg)
+      match SageFs.ShadowCopy.tryReadOriginDir target with
+      | Some originDir -> ManagedDependencyResolution.addRoots [ originDir ]
+      | None -> ()
       try Ok (Assembly.LoadFrom target)
       with ex -> Error (sprintf "Could not load %s: %s" target ex.Message)
 

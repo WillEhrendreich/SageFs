@@ -112,6 +112,88 @@ let tests =
         safeDelete shadowDir
         safeDelete srcDir
 
+    // ─── origin sidecar (run_app's missing-dependency fix) ─────────────────
+    // Bug: `run_app`'s `Assembly.LoadFrom` on a shadow copy fails with
+    // FileNotFoundException for the project's first NuGet/project-reference
+    // dependency, because the shadow dir (by design — see the doc comment
+    // above `shadowCopyFile`) contains ONLY the entry assembly. The sidecar
+    // is how `AppRunner.ManagedDependencyResolution` finds its way back to
+    // the original build output directory, where every real dependency lives.
+
+    testCase "WHY — shadowCopyFile records the original directory in a .origin sidecar" <| fun _ ->
+      let shadowDir = SageFs.ShadowCopy.createShadowDir ()
+      let srcDir = createTestDir ()
+      try
+        let srcDll = Path.Combine(srcDir, "App.dll")
+        File.WriteAllText(srcDll, "app-dll")
+        let dest = SageFs.ShadowCopy.shadowCopyFile shadowDir srcDll
+        File.Exists (SageFs.ShadowCopy.originSidecarPath dest)
+        |> Expect.isTrue "a .origin sidecar must exist next to the shadow copy"
+      finally
+        safeDelete shadowDir
+        safeDelete srcDir
+
+    testCase "WHY — tryReadOriginDir round-trips exactly what shadowCopyFile recorded" <| fun _ ->
+      let shadowDir = SageFs.ShadowCopy.createShadowDir ()
+      let srcDir = createTestDir ()
+      try
+        let srcDll = Path.Combine(srcDir, "App.dll")
+        File.WriteAllText(srcDll, "app-dll")
+        let dest = SageFs.ShadowCopy.shadowCopyFile shadowDir srcDll
+        SageFs.ShadowCopy.tryReadOriginDir dest
+        |> Expect.equal "the recorded origin is the source directory, not the shadow dir" (Some (Path.GetFullPath srcDir))
+      finally
+        safeDelete shadowDir
+        safeDelete srcDir
+
+    testCase "the bug itself: the origin must NOT be the shadow directory" <| fun _ ->
+      // Proves the test has teeth — a broken implementation that recorded
+      // (or fell back to) the SHADOW dir would defeat the whole fix, since
+      // the shadow dir is exactly where the missing dependency is NOT.
+      let shadowDir = SageFs.ShadowCopy.createShadowDir ()
+      let srcDir = createTestDir ()
+      try
+        let srcDll = Path.Combine(srcDir, "App.dll")
+        File.WriteAllText(srcDll, "app-dll")
+        let dest = SageFs.ShadowCopy.shadowCopyFile shadowDir srcDll
+        SageFs.ShadowCopy.tryReadOriginDir dest
+        |> Expect.notEqual "must not equal the shadow dir itself" (Some (Path.GetFullPath shadowDir))
+      finally
+        safeDelete shadowDir
+        safeDelete srcDir
+
+    testCase "tryReadOriginDir is None when no sidecar was ever written" <| fun _ ->
+      let fakeShadowedPath = Path.Combine(Path.GetTempPath(), sprintf "sagefs-no-sidecar-%s.dll" (Guid.NewGuid().ToString("N").[..7]))
+      SageFs.ShadowCopy.tryReadOriginDir fakeShadowedPath
+      |> Expect.equal "no sidecar, no origin" None
+
+    testCase "shadowCopyFile with a missing source writes no sidecar" <| fun _ ->
+      let shadowDir = SageFs.ShadowCopy.createShadowDir ()
+      try
+        let fakePath = Path.Combine(Path.GetTempPath(), "nonexistent-sidecar-42.dll")
+        let result = SageFs.ShadowCopy.shadowCopyFile shadowDir fakePath
+        File.Exists (SageFs.ShadowCopy.originSidecarPath result)
+        |> Expect.isFalse "the early-return (no copy) path must not fabricate a sidecar"
+      finally
+        safeDelete shadowDir
+
+    testCase "shadowCopySolution's rewritten TargetPath also carries an origin sidecar" <| fun _ ->
+      let shadowDir = SageFs.ShadowCopy.createShadowDir ()
+      let srcDir = createTestDir ()
+      try
+        let dllPath = Path.Combine(srcDir, "Proj.dll")
+        File.WriteAllText(dllPath, "proj-dll")
+        let sln: Solution =
+          { emptySolution with
+              Projects = [ mkProjectOptions dllPath ] }
+        let result = SageFs.ShadowCopy.shadowCopySolution shadowDir sln
+        let shadowedTarget = (result.Projects |> List.head).TargetPath
+        SageFs.ShadowCopy.tryReadOriginDir shadowedTarget
+        |> Expect.equal "AppRunner must be able to find this project's original build output" (Some (Path.GetFullPath srcDir))
+      finally
+        safeDelete shadowDir
+        safeDelete srcDir
+
     testCase "shadowCopyFile returns original path when source doesn't exist" <| fun _ ->
       let shadowDir = SageFs.ShadowCopy.createShadowDir ()
       try
