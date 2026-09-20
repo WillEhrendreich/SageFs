@@ -79,6 +79,45 @@ let extractOpensStillCapturesBothShapesTests =
       |> Array.toList
       |> Expect.equal "captures the bare nested open verbatim" [ "WaitForGraph" ]
     }
+
+    // WHY — `open type X` (F# 6+, e.g. `open type System.Math`) is a DIFFERENT
+    // directive: it opens a type's static members, and its name sits one token
+    // further along. Splitting on whitespace and taking token 1 yielded the
+    // literal name "type", which warmup then replayed as the malformed
+    // `open type` — producing exactly the FS0039 noise class this file exists
+    // to eliminate, for any project that uses the directive. The name must be
+    // carried WITH its `type` qualifier so replay re-emits the directive the
+    // user actually wrote, rather than `open System.Math` (different meaning)
+    // or nothing at all (silently losing the open).
+    test "WHY — open type carries its qualifier so replay re-emits the same directive" {
+      [| "open type System.Math" |]
+      |> extractOpensFromLines
+      |> Array.toList
+      |> Expect.equal "keeps the type qualifier with the name" [ "type System.Math" ]
+    }
+
+    test "WHY — extra whitespace around open type does not change what is captured" {
+      [| "  open  type  Foo.Bar" |]
+      |> extractOpensFromLines
+      |> Array.toList
+      |> Expect.equal "normalises to a single directive form" [ "type Foo.Bar" ]
+    }
+
+    test "WHY — a plain open is unaffected by the open-type handling" {
+      [| "open System.Text"; "open type System.Math"; "open Foo" |]
+      |> extractOpensFromLines
+      |> Array.toList
+      |> Expect.equal "plain opens keep their bare names" [ "System.Text"; "type System.Math"; "Foo" ]
+    }
+
+    // A bare `open type` with nothing after it is not a name at all; capturing
+    // "type" from it would reintroduce the bug in its purest form.
+    test "WHY — a malformed bare 'open type' captures nothing" {
+      [| "open type" |]
+      |> extractOpensFromLines
+      |> Array.toList
+      |> Expect.equal "nothing to open" []
+    }
   ]
 
 [<Tests>]

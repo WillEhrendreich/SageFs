@@ -21,9 +21,18 @@ let extractOpensFromLines (lines: string[]) : string[] =
     | false -> None
     | true ->
       let parts = trimmed.Split([|' '; '\t'|], StringSplitOptions.RemoveEmptyEntries)
-      match parts.Length >= 2 with
-       | true -> Some (parts.[1].TrimEnd(';'))
-       | false -> None)
+      // `open type X` (F# 6+, e.g. `open type System.Math`) opens a TYPE's
+      // static members, and its name sits one token further along. Taking
+      // parts.[1] blindly captured the literal name "type", which warmup then
+      // replayed as the malformed `open type` — the same FS0039 noise class
+      // this module exists to eliminate. Carry the qualifier WITH the name so
+      // replay re-emits the directive the user wrote: `open System.Math` means
+      // something different, and dropping it would silently lose the open.
+      match parts with
+      | [| _; "type" |] -> None
+      | [| _; "type"; name |] -> Some ("type " + name.TrimEnd(';'))
+      | _ when parts.Length >= 2 -> Some (parts.[1].TrimEnd(';'))
+      | _ -> None)
   |> Array.distinct
 
 /// The full names of the INTERNAL top-level F# modules among `types` (e.g.
