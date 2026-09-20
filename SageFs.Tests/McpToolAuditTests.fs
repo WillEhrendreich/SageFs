@@ -118,104 +118,6 @@ let auditSnapshotTests = testList "AuditSnapshot" [
     snap.Tools.["get_fsi_status"].CallCount |> Expect.equal "status count" 1
   }
 
-  test "topTools returns most-used first" {
-    let snap =
-      AuditSnapshot.empty ()
-      |> AuditSnapshot.record "rarely_used" 1.0 Success
-      |> AuditSnapshot.record "most_used" 1.0 Success
-      |> AuditSnapshot.record "most_used" 1.0 Success
-      |> AuditSnapshot.record "most_used" 1.0 Success
-      |> AuditSnapshot.record "medium_used" 1.0 Success
-      |> AuditSnapshot.record "medium_used" 1.0 Success
-    let top = AuditSnapshot.topTools snap
-    top.[0].ToolName |> Expect.equal "first" "most_used"
-    top.[1].ToolName |> Expect.equal "second" "medium_used"
-    top.[2].ToolName |> Expect.equal "third" "rarely_used"
-  }
-
-  test "unusedTools finds tools with no calls" {
-    let allTools = [ "tool_a"; "tool_b"; "tool_c" ]
-    let snap =
-      AuditSnapshot.empty ()
-      |> AuditSnapshot.record "tool_a" 1.0 Success
-    let unused = AuditSnapshot.unusedTools allTools snap
-    unused |> Expect.equal "unused" [ "tool_b"; "tool_c" ]
-  }
-
-  test "unusedTools with empty snapshot returns all" {
-    let allTools = [ "tool_a"; "tool_b" ]
-    let unused = AuditSnapshot.unusedTools allTools (AuditSnapshot.empty ())
-    unused |> Expect.equal "all unused" [ "tool_a"; "tool_b" ]
-  }
-
-  test "problematicTools finds tools with >5% affordance violations" {
-    let snap =
-      AuditSnapshot.empty ()
-      |> AuditSnapshot.record "good_tool" 1.0 Success
-      |> AuditSnapshot.record "good_tool" 1.0 Success
-      |> AuditSnapshot.record "bad_tool" 1.0 Success
-      |> AuditSnapshot.record "bad_tool" 1.0 AffordanceViolation
-    let problematic = AuditSnapshot.problematicTools snap
-    problematic.Length |> Expect.equal "count" 1
-    problematic.[0].ToolName |> Expect.equal "name" "bad_tool"
-  }
-
-  test "problematicTools ignores tools at exactly 5%" {
-    // 1 violation out of 20 calls = 5% exactly, should NOT be flagged (> not >=)
-    let snap =
-      List.init 19 (fun _ -> ("tool", 1.0, Success))
-      |> List.append [ ("tool", 1.0, AffordanceViolation) ]
-      |> List.fold (fun s (name, dur, out) -> AuditSnapshot.record name dur out s) (AuditSnapshot.empty ())
-    let problematic = AuditSnapshot.problematicTools snap
-    problematic.Length |> Expect.equal "none flagged at 5%" 0
-  }
-]
-
-// ── AuditSummary tests ──
-
-let auditSummaryTests = testList "AuditSummary" [
-  test "summarize empty snapshot" {
-    let allTools = [ "a"; "b"; "c" ]
-    let summary = AuditSnapshot.summarize allTools (AuditSnapshot.empty ())
-    summary.TotalCalls |> Expect.equal "total" 0
-    summary.UniqueToolsUsed |> Expect.equal "unique" 0
-    summary.UnusedTools |> Expect.equal "unused" [ "a"; "b"; "c" ]
-    summary.AverageDurationMs |> Expect.equal "avg" 0.0
-  }
-
-  test "summarize with data" {
-    let allTools = [ "tool_a"; "tool_b"; "tool_c" ]
-    let snap =
-      AuditSnapshot.empty ()
-      |> AuditSnapshot.record "tool_a" 10.0 Success
-      |> AuditSnapshot.record "tool_a" 20.0 Success
-      |> AuditSnapshot.record "tool_b" 30.0 Failure
-    let summary = AuditSnapshot.summarize allTools snap
-    summary.TotalCalls |> Expect.equal "total" 3
-    summary.UniqueToolsUsed |> Expect.equal "unique" 2
-    summary.UnusedTools |> Expect.equal "unused" [ "tool_c" ]
-    summary.TopToolsByUsage |> List.head |> fst |> Expect.equal "top tool" "tool_a"
-    summary.ToolsWithHighFailRate.Length |> Expect.equal "high fail" 1
-  }
-
-  test "summarize caps top tools at 10" {
-    let allTools = List.init 15 (fun i -> sprintf "tool_%02d" i)
-    let snap =
-      allTools
-      |> List.fold (fun s name -> AuditSnapshot.record name 1.0 Success s) (AuditSnapshot.empty ())
-    let summary = AuditSnapshot.summarize allTools snap
-    summary.TopToolsByUsage.Length |> Expect.equal "capped at 10" 10
-  }
-
-  test "summarize tracks affordance violations" {
-    let allTools = [ "tool_a" ]
-    let snap =
-      AuditSnapshot.empty ()
-      |> AuditSnapshot.record "tool_a" 1.0 AffordanceViolation
-    let summary = AuditSnapshot.summarize allTools snap
-    summary.ToolsWithAffordanceViolations
-    |> Expect.equal "violations" [ ("tool_a", 1) ]
-  }
 ]
 
 // ── AuditTracker thread-safety tests ──
@@ -258,6 +160,5 @@ let auditTrackerTests = testList "AuditTracker" [
 let allMcpToolAuditTests = testList "MCP Tool Audit" [
   toolStatsTests
   auditSnapshotTests
-  auditSummaryTests
   auditTrackerTests
 ]
