@@ -47,6 +47,56 @@ module SessionBuild =
       |> List.map BuildDiagnostic.ofLine
     | found -> found |> List.truncate 10 |> List.map BuildDiagnostic.ofLine
 
+  /// Optimizations MUST stay off for every session build. This is not a style
+  /// preference or an incidental side effect of never passing `-c Release` —
+  /// it is a hot-reload correctness precondition, and it is passed explicitly
+  /// so it can never again be "accidentally Debug." See
+  /// `hot-reload-reach-options.md` (repo root) §1.4/§1.7 for the full
+  /// research; the short version, reproduced independently against this SDK
+  /// (net10.0, dotnet 10.0.401) before this comment was written:
+  ///
+  ///  1. **FSC's own Release optimizer is the dominant inliner.** It bakes
+  ///     function bodies into closures *in the IL on disk* — e.g. a route
+  ///     table's captured handlers — where no runtime knob can reach them.
+  ///     A hot-reload detour that targets the original method never fires,
+  ///     because the call to it was never emitted.
+  ///  2. **The CoreCLR JIT folds reads of `initonly` static fields into
+  ///     constants once the assembly is built optimized** (most F#
+  ///     module-level `let` bindings compile to exactly such a field).
+  ///     Measured directly: a Release-built reader, once promoted past
+  ///     tier-0, freezes on whatever value existed at JIT time — a
+  ///     hot-reload write after that lands in the field (reflection confirms
+  ///     it) but the reader returns the OLD value forever. `-p:Optimize=false`
+  ///     (even under `-c Release`) makes every write visible immediately,
+  ///     because it flips the assembly's `DebuggableAttribute` from
+  ///     `(3)` to `(259)` = `DisableOptimizations`, which the JIT's own
+  ///     static-readonly-folding check (`impImportStaticReadOnlyField`) is
+  ///     gated on. `DOTNET_JitNoInline=1` does NOT fix this — it stops
+  ///     inlining, not constant folding — and neither does keeping
+  ///     `--crossoptimize-`/`--nooptimizationdata` while leaving
+  ///     `--optimize+`: measured, the assembly still carries
+  ///     `DebuggableAttribute(3)` and the freeze still reproduces. Only
+  ///     `-p:Optimize=false` (which drives FSC's `--optimize-` AND flips the
+  ///     JIT-visible attribute) closes both walls at once.
+  ///
+  /// `-p:Optimize=false` is passed as an MSBuild command-line property, which
+  /// MSBuild treats as a GLOBAL property: a project's own
+  /// `Directory.Build.props`/`.fsproj` (even an unconditional
+  /// `<Optimize>true</Optimize>`) cannot reassign it during evaluation — this
+  /// was verified empirically against exactly that override, and the built
+  /// assembly still carried `DebuggableAttribute(259)`. So this is a
+  /// structural guarantee, not a convention a user's own build config could
+  /// silently defeat, PROVIDED the build actually goes through this
+  /// function — a pre-built assembly the daemon never rebuilds (e.g. the
+  /// user built Release by hand outside SageFs) is not covered by this and
+  /// needs the runtime `DOTNET_JITMinOpts=1` fallback described in the
+  /// research doc instead.
+  ///
+  /// DO NOT remove this flag to "clean up" or because a future Release
+  /// pipeline wants a faster build — see `SessionBuildOptimizationGateTests`
+  /// for the regression test guarding it.
+  let optimizationDisablingProperty = "-p:Optimize=false"
+
   /// The `dotnet` arguments of a session rebuild. Incremental on purpose: a
   /// clean build deletes the last good output before compiling, so one compile
   /// error would leave the project with nothing to run until built by hand.
@@ -55,10 +105,13 @@ module SessionBuild =
   /// project has a `project.assets.json`. `restore = true` drops `--no-restore`
   /// so `dotnet build` restores first, which a never-restored project (fresh
   /// .fsproj → NETSDK1004) or a project whose package list just changed needs.
+  ///
+  /// Both paths always carry `optimizationDisablingProperty` — see its doc
+  /// comment for why hot reload depends on it structurally.
   let buildArguments (restore: bool) (buildProject: string) : string list =
     match restore with
-    | false -> [ "build"; buildProject; "--no-restore" ]
-    | true  -> [ "build"; buildProject ]
+    | false -> [ "build"; buildProject; "--no-restore"; optimizationDisablingProperty ]
+    | true  -> [ "build"; buildProject; optimizationDisablingProperty ]
 
   /// Whether a failed build's output says a NuGet restore is required, so the
   /// build is worth retrying WITH a restore instead of being reported as a

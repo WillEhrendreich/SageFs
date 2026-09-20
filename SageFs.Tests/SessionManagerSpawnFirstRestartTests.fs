@@ -672,11 +672,11 @@ let buildArgumentsTests =
   testList "SessionManager rebuild arguments" [
     testCase "WHY — buildArguments false — the fast path skips restore (incremental, --no-restore) because a clean build deletes the last good output first and one typo would leave nothing to run" <| fun _ ->
       buildArguments false "/src/Web/Web.fsproj"
-      |> Expect.equal "fast rebuild is incremental and skips restore" [ "build"; "/src/Web/Web.fsproj"; "--no-restore" ]
+      |> Expect.equal "fast rebuild is incremental, skips restore, and keeps optimizations off for hot reload" [ "build"; "/src/Web/Web.fsproj"; "--no-restore"; SessionBuild.optimizationDisablingProperty ]
 
     testCase "WHY — buildArguments true — the restore path drops --no-restore so a never-restored project (NETSDK1004) or a changed package list gets its NuGet restore" <| fun _ ->
       buildArguments true "/src/Web/Web.fsproj"
-      |> Expect.equal "restore rebuild lets dotnet build restore first" [ "build"; "/src/Web/Web.fsproj" ]
+      |> Expect.equal "restore rebuild lets dotnet build restore first, and keeps optimizations off for hot reload" [ "build"; "/src/Web/Web.fsproj"; SessionBuild.optimizationDisablingProperty ]
 
     testCase "WHY — buildOutputNeedsRestore — NETSDK1004 (fresh .fsproj, no project.assets.json) means retry WITH restore, not report a compile failure" <| fun _ ->
       buildOutputNeedsRestore
