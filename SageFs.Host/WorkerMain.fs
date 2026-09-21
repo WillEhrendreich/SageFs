@@ -1084,6 +1084,30 @@ let run (sessionId: string) (port: int) = async {
                     async { return SaveHandling.FallBackWholeFile [] }
                 match handling with
                 | SaveHandling.Reported -> ()
+                // A mutable's own value changed. Do NOT re-evaluate the whole
+                // file: that re-declares every `let mutable` in it, and the
+                // accessor-pair machinery then moves each getter AND setter onto
+                // the fresh backing field — coherent (it cannot tear), but the
+                // running app's LIVE value is replaced by the edited initializer.
+                // Measured against a real host: the shape matrix's `mutable`
+                // cell served the new initializer while this path reported
+                // "Restart needed" — state silently reset behind a message that
+                // said nothing had happened. `RestartReason.MutableModuleState`
+                // already promises the opposite ("SageFs will not carry the old
+                // value forward or reset it, because both silently lose
+                // something"), so the running process is left exactly as it was
+                // and the restart it needs is reported. The baseline is NOT
+                // advanced, so the change stays pending until that restart.
+                | SaveHandling.FallBackWholeFile restartReasons
+                    when restartReasons
+                         |> List.exists (function
+                           | Features.ReloadOutcome.RestartReason.MutableModuleState _ -> true
+                           | _ -> false) ->
+                  let outcome = Features.ReloadOutcome.ReloadOutcome.RestartRequired restartReasons
+                  Features.ReloadBroadcast.broadcastOutcome outcome
+                  Log.info "Hot reload: %s — %s (live state left untouched)"
+                    (IO.Path.GetFileName filePath)
+                    (Features.ReloadOutcome.ReloadOutcome.describe outcome)
                 | SaveHandling.FallBackWholeFile restartReasons ->
                 Log.debug "[DevReload] Reloading watched file: %s" (IO.Path.GetFileName filePath)
                 DevReload.broadcastCompiling (Some (IO.Path.GetFileName filePath))

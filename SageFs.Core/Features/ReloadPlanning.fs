@@ -228,8 +228,23 @@ let private accessOf (access: SynAccess option) : DeclAccess =
   | Some a when a.IsInternal -> DeclAccess.Internal
   | _ -> DeclAccess.Public
 
+/// A module-level value bound DIRECTLY to a lambda — `let f : a -> b = fun x
+/// -> ...` — compiles to a METHOD, exactly like `let f x = ...`. Read out of the
+/// IL, not assumed: the shape-matrix fixture's `lambdaHandler` closure calls
+/// `Shapes.lambdaHandler` by name, and re-pointing that method changes what the
+/// running app serves. Classifying it as a value reported a restart for an edit
+/// that was actually patchable. Anything else on the right-hand side — a
+/// computed value, a partial application, a lambda built inside a `let` —
+/// stays a value, because then the method does not exist.
+let rec private isLambdaBody (expr: SynExpr) =
+  match expr with
+  | SynExpr.Lambda _ -> true
+  | SynExpr.Typed(expr = inner)
+  | SynExpr.Paren(expr = inner) -> isLambdaBody inner
+  | _ -> false
+
 let private bindingDecl (lines: string array) (container: string list) (binding: SynBinding) : SourceDecl =
-  let (SynBinding(attributes = attributes; isMutable = isMutable; headPat = pat; trivia = trivia)) = binding
+  let (SynBinding(attributes = attributes; isMutable = isMutable; headPat = pat; expr = body; trivia = trivia)) = binding
   let keyword = trivia.LeadingKeyword.Range
   let start =
     match attributes with
@@ -244,7 +259,7 @@ let private bindingDecl (lines: string array) (container: string list) (binding:
   // `let mutable` is not spotted by looking for the word, and a binding that
   // merely mentions `mutable` in a comment is not one.
   let kind =
-    match isEntryPoint attributes, isFunctionHead pat, isMutable with
+    match isEntryPoint attributes, isFunctionHead pat || (not isMutable && isLambdaBody body), isMutable with
     | true, _, _ -> DeclKind.EntryPointDecl
     | false, true, _ -> DeclKind.FunctionDecl
     | false, false, true -> DeclKind.MutableValueDecl
@@ -257,6 +272,38 @@ let private bindingDecl (lines: string array) (container: string list) (binding:
     Text = slice lines (start.Line, start.Column) (whole.EndLine, whole.EndColumn)
     StartLine = start.Line
     EndLine = whole.EndLine }
+
+/// A type's SHAPE: its source with every member BODY cut out, leaving the
+/// member signatures, fields and union cases. It is stored in `Header`, which
+/// for every declaration means "the part that must be unchanged for a patch" —
+/// a function's signature, a type's shape.
+///
+/// Without it, ANY edit inside a type read as `TypeChanged`, a restart. Editing
+/// `static member Render() = "A"` to `"B"` changes a body, not a layout: the
+/// running app demonstrably picks it up once the type is re-evaluated (measured
+/// against a real host — the shape matrix's `member` cell served "B" while the
+/// worker reported RestartRequired, "the shape of type 'Renderer' changed").
+/// A type whose fields or members are added, removed or re-typed still has a
+/// different shape and still restarts; live instances were laid out by the old
+/// definition, and no re-point can reach that.
+let private typeShape (lines: string array) (defn: SynTypeDefn) : string =
+  let (SynTypeDefn(typeRepr = repr; members = augmentation)) = defn
+  let declared =
+    match repr with
+    | SynTypeDefnRepr.ObjectModel(members = ms) -> ms
+    | _ -> []
+  let bodies =
+    declared @ augmentation
+    |> List.choose (function
+      | SynMemberDefn.Member(memberDefn = SynBinding(expr = body)) -> Some body.Range
+      | _ -> None)
+    |> List.sortBy (fun b -> b.StartLine, b.StartColumn)
+  let r = defn.Range
+  let gapStarts = (r.StartLine, r.StartColumn) :: (bodies |> List.map (fun b -> b.EndLine, b.EndColumn))
+  let gapEnds = (bodies |> List.map (fun b -> b.StartLine, b.StartColumn)) @ [ (r.EndLine, r.EndColumn) ]
+  List.zip gapStarts gapEnds
+  |> List.map (fun (a, b) -> slice lines a b)
+  |> String.concat " … "
 
 let private simpleDecl (lines: string array) (container: string list) (name: string) (kind: DeclKind) (access: DeclAccess) (r: range) : SourceDecl =
   { Name = name
@@ -307,7 +354,8 @@ let rec private declsIn
       let types =
         defns
         |> List.map (fun (SynTypeDefn(typeInfo = SynComponentInfo(longId = ids; accessibility = access)) as defn) ->
-          simpleDecl lines container (identText ids) DeclKind.TypeDecl (accessOf access) defn.Range)
+          { simpleDecl lines container (identText ids) DeclKind.TypeDecl (accessOf access) defn.Range with
+              Header = typeShape lines defn })
       opens, found @ types, startups
     | SynModuleDecl.Exception(range = r) ->
       opens,
@@ -414,6 +462,10 @@ let private outcomeOf (baseline: Map<DeclKind * string list * string * int, Sour
     match normalize before.Header = normalize current.Header with
     | true -> DeclOutcome.Patch current
     | false -> DeclOutcome.Restart (ReloadChange.SignatureChanged current.Name)
+  // Same SHAPE (see `typeShape`), different text: only member bodies moved, so
+  // re-evaluating the type re-points its members instead of needing a restart.
+  | Some before, DeclKind.TypeDecl when normalize before.Header = normalize current.Header ->
+    DeclOutcome.Patch current
   | Some _, _ -> DeclOutcome.Restart (changeFor current)
 
 /// A source file is a trustworthy hot-reload baseline only if it was not
@@ -673,11 +725,25 @@ type PatchOutcome =
 /// A patched function that already existed must have been detoured onto its new
 /// copy (reloadedMethods are the full names of the methods that were detoured);
 /// one that was not had its compiled signature changed, so the app must restart.
+/// Whether any re-pointed method BELONGS to this declaration. A function is its
+/// own method (`…Shapes.render`); a type's members are methods nested UNDER it
+/// (`…Shapes.Renderer.Render`), which do not end with the type's name — so a
+/// type patch needs its own test or every member-body reload reads as missed.
+let private reachedBy (names: string list) (f: SourceDecl) =
+  match f.Kind with
+  | DeclKind.TypeDecl ->
+    names
+    |> List.exists (fun m ->
+      m.StartsWith(f.Name + ".", StringComparison.Ordinal) || m.Contains("." + f.Name + "."))
+  | _ -> names |> List.exists (fun m -> m = f.Name || m.EndsWith("." + f.Name, StringComparison.Ordinal))
+
+/// Whether the running build already had this declaration, of the same kind.
+let private existedIn (before: FileDecls) (f: SourceDecl) =
+  before.Decls |> List.exists (fun d -> d.Kind = f.Kind && d.Name = f.Name)
+
 let confirmPatch (before: FileDecls) (patched: SourceDecl list) (reloadedMethods: string list) : PatchOutcome =
-  let existed (f: SourceDecl) =
-    before.Decls |> List.exists (fun d -> d.Kind = DeclKind.FunctionDecl && d.Name = f.Name)
-  let detoured (f: SourceDecl) =
-    reloadedMethods |> List.exists (fun m -> m = f.Name || m.EndsWith("." + f.Name, StringComparison.Ordinal))
+  let existed = existedIn before
+  let detoured = reachedBy reloadedMethods
   let notDetoured =
     patched
     |> List.filter (fun f -> existed f && not (detoured f))
@@ -719,10 +785,8 @@ let confirmPatchAsOutcome
   (reloadedMethods: string list)
   (reachedRunningProcess: string list)
   : ReloadOutcome =
-  let nameMatches (names: string list) (f: SourceDecl) =
-    names |> List.exists (fun m -> m = f.Name || m.EndsWith("." + f.Name, StringComparison.Ordinal))
-  let existed (f: SourceDecl) =
-    before.Decls |> List.exists (fun d -> d.Kind = DeclKind.FunctionDecl && d.Name = f.Name)
+  let nameMatches = reachedBy
+  let existed = existedIn before
   // A declaration that did NOT exist in the running build has no compiled entry
   // point to reach by definition, so for it the FSI copy IS what everything
   // calls and a redirect onto it is genuinely effective. Only a declaration the

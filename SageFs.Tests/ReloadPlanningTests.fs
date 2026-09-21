@@ -166,6 +166,43 @@ let companionModuleTests =
       |> patchedNames |> Expect.equal "the companion module's own function" [ "label" ]
   ]
 
+/// What a type edit and a lambda-bound value are, against REAL F# source.
+///
+/// Both used to read as restarts. A static member's body edit was
+/// `TypeChanged`, because any text change inside a type was; and
+/// `let f : a -> b = fun x -> ...` was a value, because its head takes no
+/// arguments. Measured against a real host, both edits reach the running app —
+/// the shape matrix's `member` and `lambda` cells served the new body — so the
+/// restart was a false refusal. The negative cases pin that a REAL shape or
+/// signature change still restarts: live instances were laid out by the old
+/// definition, and no re-point reaches that.
+[<Tests>]
+let typeShapeAndLambdaTests =
+  let source =
+    "module Demo.Shapes\n\ntype Reply = { Body: string }\n\ntype Renderer() =\n  static member Render() : string = \"A\"\n\nlet lambdaHandler : string -> string = fun who -> \"A\" + who\n\nlet private computeEager () = \"A\"\nlet eagerHandler : unit -> string =\n  let computedAtStartup = computeEager ()\n  fun () -> computedAtStartup\n"
+  let planFor find repl = planReload (declsOf source) (declsOf (replace find repl source))
+  testList "ReloadPlanning type shape and lambda values" [
+    testCase "WHY — ReloadPlanning.planReload — a static member's BODY edit patches its type, because the type's shape did not change" <| fun _ ->
+      planFor "static member Render() : string = \"A\"" "static member Render() : string = \"B\""
+      |> patchedNames |> Expect.equal "the type whose member body moved" [ "Renderer" ]
+
+    testCase "WHY — ReloadPlanning.planReload — a static member's SIGNATURE edit still restarts, because the type's shape changed" <| fun _ ->
+      planFor "static member Render() : string" "static member Render(x: int) : string"
+      |> restartChanges |> Expect.equal "a shape change" [ ReloadChange.TypeChanged "Renderer" ]
+
+    testCase "WHY — ReloadPlanning.planReload — adding a record field still restarts, because live instances have the old layout" <| fun _ ->
+      planFor "type Reply = { Body: string }" "type Reply = { Body: string; Extra: int }"
+      |> restartChanges |> Expect.equal "a shape change" [ ReloadChange.TypeChanged "Reply" ]
+
+    testCase "WHY — ReloadPlanning.planReload — a value bound directly to a lambda patches, because F# compiles it to a method" <| fun _ ->
+      planFor "fun who -> \"A\" + who" "fun who -> \"B\" + who"
+      |> patchedNames |> Expect.equal "the lambda-bound value" [ "lambdaHandler" ]
+
+    testCase "WHY — ReloadPlanning.planReload — a value whose closure is built inside a let still restarts, because the captured result was computed at startup" <| fun _ ->
+      planFor "  fun () -> computedAtStartup" "  fun () -> computedAtStartup + \"!\""
+      |> restartChanges |> Expect.equal "a startup-computed value" [ ReloadChange.ValueChanged "eagerHandler" ]
+  ]
+
 [<Tests>]
 let changeWordingTests =
   testList "ReloadPlanning change wording" [
@@ -373,7 +410,16 @@ let private genFileWithRepeats =
   }
 
 /// A genuine edit to a declaration's code; a function keeps its header.
-let private edit (d: SourceDecl) = { d with Text = d.Text + " + 7" }
+/// An edit of the kind each property means. A function's edit is BODY-only
+/// (its Header, the signature, is untouched — changing it is a different
+/// case, SignatureChanged). A type's edit changes its SHAPE, because a type's
+/// Header is now its shape with member bodies cut out (`typeShape`): a Text-only
+/// edit to a type is a member-body change, which patches, and would no longer
+/// model the startup-only change these properties are about.
+let private edit (d: SourceDecl) =
+  match d.Kind with
+  | DeclKind.TypeDecl -> { d with Text = d.Text + " + 7"; Header = d.Header + " | Extra of int" }
+  | _ -> { d with Text = d.Text + " + 7" }
 
 let private reasonsOf (plan: ReloadPlan) =
   match plan with

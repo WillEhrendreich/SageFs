@@ -331,9 +331,16 @@ module ShapeMatrix =
       Why = "a VALUE binding holding a lambda (`let h : HttpHandler = fun ctx -> ...`)"
       Find = "let lambdaHandler : string -> string = fun who -> \"A\" + who"
       Replace = "let lambdaHandler : string -> string = fun who -> \"B\" + who"
-      Expected =
-        RestartOnly
-          "a value binding is re-run by module initialisation, which already happened; the table captured the closure the startup run produced" }
+      // Was RestartOnly ("a value binding is re-run by module initialisation").
+      // That was the PLANNER's belief, not the compiler's: F# compiles a
+      // module-level value bound DIRECTLY to a lambda as a METHOD, and the
+      // captured closure calls it by name — read out of the fixture's IL, where
+      // `handlers@72-3` calls `Shapes.lambdaHandler`. Once the planner stopped
+      // classifying it as a value (`ReloadPlanning.isLambdaBody`), the save
+      // re-points that method, the app serves the new body, and the wire says
+      // Patched 1 of 1 — the honesty check above confirms the two agree. The
+      // limitation is gone, so the cell moved, as its own failure message asks.
+      Expected = Reloads }
 
     { Name = "eager"
       Why = "a handler whose output is computed ONCE at module initialisation and closed over — `let getHome : HttpHandler = Response.ofHtml (pageLayout [])` in Falco terms"

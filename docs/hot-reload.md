@@ -34,24 +34,38 @@ A change reaches the running app when it is a change to a **function body**:
 | Shape | Reloads |
 |---|---|
 | `let handler (ctx: HttpContext) = ...` | yes |
+| `let handler : HttpHandler = fun ctx -> ...` — a value bound **directly** to a lambda | yes — F# compiles it to a method, exactly like the line above |
 | a handler whose parameter type is declared in the same file | yes |
-| `static member Render x = ...` on a type | yes |
+| the **body** of a `static member Render x = ...` on a type | yes |
 | a small function with no `[<MethodImpl(NoInlining)>]` | yes |
 
 Anything that takes effect at **startup** cannot be patched into a process that
 already started, and SageFs restarts the app instead (or, if SageFs is not the
-one running your app, says so and re-evaluates the file):
+one running your app, tells you a restart is needed):
 
 | Shape | Why not |
 |---|---|
 | `let getHome : HttpHandler = Response.ofHtml (pageLayout [])` | the HTML is computed once at module initialisation and captured by the route; nothing is called per request |
-| `let handler : HttpHandler = fun ctx -> ...` (value binding) | module initialisation already ran; the route captured that run's closure |
-| `let mutable state = ...` | the field was assigned at startup, and a reader compiles to a direct field load |
-| a changed function signature, a new/removed declaration, a changed type | the compiled assembly's shape no longer matches |
+| a value whose closure is built inside a `let` — `let h = let x = compute () in fun () -> x` | `compute ()` ran at startup and the closure captured its result |
+| `let mutable state = ...` whose value you changed | its value is your app's live data. SageFs will neither carry the old value forward (that ignores your edit) nor reset it (that destroys live state), so it leaves the running app exactly as it was and says a restart is needed |
+| a changed function or member **signature**, a new/removed declaration, a type whose fields, cases or members were added, removed or re-typed | the compiled assembly's shape no longer matches, and live instances were laid out by the old definition |
 
-If you want a handler to pick up edits, give it parameters —
-`let getHome (ctx: HttpContext) = ...` rather than
-`let getHome : HttpHandler = ...`.
+If a handler is not picking up edits, check whether its value is **computed**
+rather than **a function**: `let getHome : HttpHandler = fun ctx -> ...` and
+`let getHome (ctx: HttpContext) = ...` both reload;
+`let getHome : HttpHandler = Response.ofHtml (...)` is built once.
+
+### Build without optimizations
+
+Hot reload re-points **methods**. The F# compiler's Release optimizer inlines
+small functions into their callers — including into the closures a route table
+captures at startup — so in an optimized build there is often no call left to
+re-point: the patch lands on a method nothing calls any more. SageFs builds your
+project with `-p:Optimize=false` for exactly this reason, so a session SageFs
+built is covered. **If you build Release by hand after starting the session**,
+that optimized assembly is what gets loaded and edits to inlined functions will
+not reach the running app — rebuild through SageFs (`hard_reset` with
+`rebuild: true`, or the dashboard's HARD_RESET).
 
 Every row above is pinned by an executable cell in the hot-reload shape matrix
 (`SageFs.Tests/WebAppHotReloadVerificationTests.fs`), which starts a real app,
