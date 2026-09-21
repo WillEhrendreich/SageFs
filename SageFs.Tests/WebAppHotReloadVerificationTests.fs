@@ -562,23 +562,71 @@ let webAppHotReloadVerificationTests =
             // gives is `noeffect`/`restarted`, not `reload`/`failed`. Waiting
             // only for the latter two made every RestartOnly cell burn the full
             // 60s budget on a verdict the worker had already sent.
-            readSseUntil sseReader 60000 (fun payload ->
-              [ "reload"; "failed"; "noeffect"; "restarted" ]
-              |> List.exists (fun t -> payload.Contains(sprintf "\"type\":\"%s\"" t)))
-            |> ignore
-            let served = shape cell.Name
+            let verdict =
+              readSseUntil sseReader 60000 (fun payload ->
+                [ "reload"; "failed"; "noeffect"; "restarted" ]
+                |> List.exists (fun t -> payload.Contains(sprintf "\"type\":\"%s\"" t)))
+
+            // Settle before reading, and say WHY this is not a sleep-poll
+            // standing in for a missing signal. The verdict and the HTTP read
+            // travel different channels: the worker broadcasts once
+            // `confirmPatch` reports Applied, and the app is asked over its own
+            // socket afterwards. Sampling once raced that and produced a
+            // NON-DETERMINISTIC matrix — the same cell served the new value on
+            // one run and the old one on the next, with the wire saying
+            // `Patched 1 of 1` both times. Settling to a stable answer makes a
+            // failure mean "the patch did not take effect", not "the read was
+            // early", which is the difference between a real finding and a
+            // flake. If the value never flips, this costs the budget once.
+            let servedSettled (name: string) (want: string) =
+              let sw = Stopwatch.StartNew()
+              let mutable v = shape name
+              while v <> want && sw.ElapsedMilliseconds < 5000L do
+                Thread.Sleep 100
+                v <- shape name
+              v
+            let served =
+              match cell.Expected with
+              | ShapeMatrix.Reloads -> servedSettled cell.Name "B"
+              | ShapeMatrix.RestartOnly _ -> shape cell.Name
+
+            // ── The honesty invariant, asserted BEFORE the per-cell verdict ──
+            //
+            // The matrix used to read only the served value and throw the wire
+            // payload away. That cannot tell an honest in-place patch apart
+            // from a whole-file fallback that moved the value while reporting
+            // that nothing was patched — and "the counts do not reflect
+            // reality" is the exact failure `ReloadOutcome` exists to stop
+            // (see SageFs.Core/Features/ReloadOutcome.fs: a save that patched
+            // nothing but broadcast `Reload` anyway is why that type was
+            // written). A cell can therefore go green on behaviour while the
+            // agent and the dashboard are being told something false.
+            //
+            // `ReloadOutcome.processChanged` is the ONE place that answers
+            // "did the running process change?", so the wire has to agree with
+            // what the process actually serves, whatever the cell expects.
+            let claimedChange =
+              [ "\"type\":\"reload\""; "\"type\":\"restarted\"" ]
+              |> List.exists verdict.Contains
+            let observedChange = served = "B"
+            Expect.equal
+              (sprintf
+                "%s: the wire and the running app must agree about whether anything changed. The app serves %s, so the process %s changed; the worker sent:\n  %s\nA save that moves behaviour while reporting no effect (or reports a patch that did not land) is the dishonest-count failure ReloadOutcome was built to prevent.\nHost log:\n%s"
+                cell.Name served (if observedChange then "DID" else "did NOT") verdict (hostLog.ToString()))
+              observedChange claimedChange
+
             match cell.Expected with
             | ShapeMatrix.Reloads ->
               Expect.equal
                 (sprintf
-                  "%s — %s\nThe running app must serve the new code after the save, with no restart.\nHost log:\n%s"
-                  cell.Name cell.Why (hostLog.ToString()))
+                  "%s — %s\nThe running app must serve the new code after the save, with no restart.\nWorker said: %s\nHost log:\n%s"
+                  cell.Name cell.Why verdict (hostLog.ToString()))
                 "B" served
             | ShapeMatrix.RestartOnly reason ->
               Expect.equal
                 (sprintf
-                  "%s — this shape CANNOT be patched in place (%s), so the running app must still serve the pre-edit value. If this now serves the new value the limitation is gone: move the cell to Reloads and update docs/hot-reload.md.\nHost log:\n%s"
-                  cell.Name reason (hostLog.ToString()))
+                  "%s — this shape CANNOT be patched in place (%s), so the running app must still serve the pre-edit value. If this now serves the new value the limitation is gone: move the cell to Reloads and update docs/hot-reload.md.\nWorker said: %s\nHost log:\n%s"
+                  cell.Name reason verdict (hostLog.ToString()))
                 "A" served
         finally
           writeFixtureFile shapesSource original
