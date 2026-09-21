@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Refuse to push master to a commit that has not passed scripts/local-gate on
+# this machine. The check is only a file lookup, so pushing a gated commit is
+# instant. To gate and push in one step, run scripts/ship.
+#
+# Emergency override (logged, never silent): SAGEFS_SKIP_GATE=1 git push ...
+# The self-hosted "main build" job still runs the full gate on an ungated
+# commit before promoting anything, so the override skips only the local wait.
+STATE=${SAGEFS_GATE_HOME:-$HOME/.local/share/sagefs-gate}
+zero=0000000000000000000000000000000000000000
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$remote_ref" = "refs/heads/master" ] || continue
+  [ "$local_sha" = "$zero" ] && continue
+  [ -f "$STATE/passed/$local_sha/ok" ] && continue
+  if [ "${SAGEFS_SKIP_GATE:-}" = "1" ]; then
+    echo "pre-push: WARNING pushing ungated ${local_sha:0:8} (SAGEFS_SKIP_GATE=1); the runner will gate it" >&2
+    echo "$(date -Iseconds) skip-gate ${local_sha}" >> "$STATE/overrides.log"
+    continue
+  fi
+  echo "pre-push: ${local_sha:0:8} has not passed the local gate." >&2
+  echo "          run: scripts/ship        (gate + push)" >&2
+  echo "          or:  scripts/local-gate ${local_sha:0:8} && git push" >&2
+  status=1
+done
+exit $status

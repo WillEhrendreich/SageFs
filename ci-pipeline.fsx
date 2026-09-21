@@ -22,17 +22,19 @@
 // extensions/benchmarks/release jobs each from a clean checkout.
 //
 // Stage selection:
-//   * unconditional — restore, build, format, unit suite, samples, VS Code
-//     extension compile + test-electron host + client contract tests
-//     (npm run test:golden + every sagefs-vscode/tests/*.fsx), and the
-//     integration-host suites.
-//   * whenCmdArg "ci"      — the mutation-score gate (too slow for the fast local
-//                            loop AGENTS.md asks for) and every real-browser
+//   * unconditional — restore, build, format, samples, VS Code extension
+//     compile + test-electron host + client contract tests (npm run
+//     test:golden + every sagefs-vscode/tests/*.fsx), then "test tiers": the
+//     default suite and the integration-host suites.
+//   * `ci` adds to "test tiers" — the mutation-score gate and every real-browser
 //                            journey (dashboard, hot-reload, live-testing,
 //                            disconnect-indicator) — CI-gated so the fast
 //                            local loop never fetches a browser.
-//   * always, after every test stage — the "trust report": one table of every
-//     tier's registered/ran/verdict; the one place a red test tier fails the run.
+//   * "test tiers" runs every tier regardless of the others; concurrently, each
+//     in a private copy-on-write clone, where the machine supports it (see the
+//     tier scheduler section and build/TierPlan.fs).
+//   * always, after the tiers — the "trust report": one table of every tier's
+//     registered/ran/verdict; the one place a red test tier fails the run.
 //   * whenCmdArg "release" — pack the shippable bundle + write release-manifest.
 //
 // Cross-platform packing is safe: every per-RID tree-sitter native is committed
@@ -149,59 +151,241 @@ let writeReleaseManifest () =
   File.WriteAllText(Path.Combine(releaseDir, "release-manifest.json"), json)
   printfn "Wrote release-manifest.json for %s (%d files)" manifest.version files.Length
 
-// ---- the trust ledger ----------------------------------------------------------
+// ---- the trust ledger and the tier scheduler -----------------------------------
 //
-// Every test tier runs through `testTier`. Two things used to lose information:
+// Every test tier is declared with `testTier` and run by `runTiers`. Things that
+// used to lose information or time:
 //  * the pipeline stopped at the FIRST red test stage, so every later tier went
 //    unrun and unreported — `integration host` stayed red for a day while two
 //    later tiers were broken the whole time and nobody could see it;
 //  * a stage's exit code was the only signal, and Expecto exits 0 for a run
-//    that executed nothing.
-// Now each test stage continues past failure, the test process writes one
-// registered/ran/verdict row per tier to the ledger (SageFs.Tests
-// TestInfrastructure.TrustSignal), `testTier` records whether the step itself
-// succeeded, and the "trust report" stage joins the two into ONE table and
-// fails the pipeline on any tier that is not Trusted — including a tier whose
-// process died before it could report. `TrustSignalTests` fails the fast suite
-// if a registered tier is not invoked here, or if a test run bypasses
-// `testTier`.
+//    that executed nothing;
+//  * tiers ran one after another, so the gate took the SUM of every tier.
+// Now every tier runs regardless of the others, each writes one registered/ran/
+// verdict row to the ledger (SageFs.Tests TestInfrastructure.TrustSignal), and
+// the "trust report" stage joins those rows with each tier's exit into ONE table
+// and fails the pipeline on any tier that is not Trusted — including a tier whose
+// process died before it could report. Where the filesystem can clone
+// copy-on-write, tiers run CONCURRENTLY, each in a private clone of the built
+// checkout mounted at the checkout's own path (build/TierPlan.fs explains why
+// the mount is required), longest-expected tier first. `TrustSignalTests` fails
+// the fast suite if a registered tier is not declared here, or if a test run
+// bypasses `testTier`.
+
+#load "build/TierPlan.fs"
+open SageFs.Build
 
 let trustLedger = Path.Combine(rootDir, "test-results", "trust-ledger.jsonl")
 Directory.CreateDirectory(Path.GetDirectoryName trustLedger) |> ignore
 if File.Exists trustLedger then File.Delete trustLedger
-Environment.SetEnvironmentVariable("SAGEFS_TRUST_LEDGER", trustLedger)
 
-/// (tier, args, did the step exit 0) for every tier this pipeline invoked.
+/// (tier, args, did the tier's process exit 0) for every tier this pipeline ran.
 let invokedTiers = Collections.Generic.List<string * string * bool>()
 
-let tierNameOf (args: string) =
-  match args.Split(' ').[0] with
-  | "--summary" -> "default"
-  | flag -> flag
+let tierNameOf = TierPlan.nameOfArgs
 
-/// Run `prelude` commands, then the test assembly as one tier, and record the
-/// outcome against the tier either way. A prelude (e.g. the Chromium install)
-/// lives INSIDE the ledgered step on purpose: as a separate step, its failure
-/// would skip the test step, the tier would never be recorded as invoked, and
-/// it would silently vanish from the report instead of showing red.
-let testTierAfter (prelude: string list) (args: string) =
-  fun (ctx: Internal.StageContext) ->
-    async {
-      let rec go commands =
+/// Declare a test tier: one `dotnet SageFs.Tests.dll <args>` invocation.
+let testTier (args: string) = TierPlan.tier args
+
+/// Per-tier scratch, OUTSIDE the checkout: inside a tier's mount namespace the
+/// checkout path shows that tier's clone, so anything the parent must read back
+/// (ledger rows, logs) has to live elsewhere.
+let tierWork = Path.Combine(Path.GetDirectoryName rootDir, Path.GetFileName rootDir + ".tiers")
+
+/// Recorded per-tier durations, for longest-first ordering. The local gate
+/// points this at its persistent state; elsewhere it lives with the results.
+let durationsFile =
+  match Environment.GetEnvironmentVariable "SAGEFS_TIER_HISTORY" with
+  | null | "" -> Path.Combine(rootDir, "test-results", "tier-durations.json")
+  | path -> path
+
+/// Recorded per-SUITE seconds for the sharded host tier (TierPlan.assign).
+let suiteDurationsFile =
+  match Environment.GetEnvironmentVariable "SAGEFS_SUITE_HISTORY" with
+  | null | "" -> Path.Combine(tierWork, "suite-durations.json")
+  | path -> path
+
+/// One FSI host cache for every tier, prebuilt once before any tier starts.
+let sharedHostCache = Path.Combine(tierWork, "fsihost-cache")
+
+let readJsonMap (path: string) : Map<string, float> =
+  try JsonSerializer.Deserialize<Map<string, float>>(File.ReadAllText path)
+  with _ -> Map.empty
+
+let readDurations () = readJsonMap durationsFile
+
+/// Run argv to completion with output drained to `log` (files cannot deadlock
+/// a child the way an undrained pipe can). Returns the exit code.
+let execToLog (workingDir: string) (env: (string * string) list) (log: string) (argv: string list) =
+  async {
+    let psi = Diagnostics.ProcessStartInfo(List.head argv)
+    List.tail argv |> List.iter psi.ArgumentList.Add
+    psi.WorkingDirectory <- workingDir
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    for (k, v) in env do psi.Environment[k] <- v
+    use writer = new StreamWriter(log, false)
+    let gate = obj ()
+    let write (line: string) = if not (isNull line) then lock gate (fun () -> writer.WriteLine line)
+    use p = new Diagnostics.Process(StartInfo = psi)
+    p.OutputDataReceived.Add(fun e -> write e.Data)
+    p.ErrorDataReceived.Add(fun e -> write e.Data)
+    p.Start() |> ignore
+    p.BeginOutputReadLine()
+    p.BeginErrorReadLine()
+    do! p.WaitForExitAsync() |> Async.AwaitTask
+    p.WaitForExit() // flush the async readers
+    return p.ExitCode
+  }
+
+let private exitOf (argv: string list) =
+  try
+    let psi = Diagnostics.ProcessStartInfo(List.head argv)
+    List.tail argv |> List.iter psi.ArgumentList.Add
+    psi.RedirectStandardOutput <- true
+    psi.RedirectStandardError <- true
+    use p = Diagnostics.Process.Start psi
+    p.WaitForExit()
+    p.ExitCode
+  with _ -> -1
+
+/// CopyOnWrite only when BOTH a reflink clone and a rootless mount namespace
+/// actually work here — probed, never assumed. Anything else runs serially.
+let detectIsolation () =
+  try
+    Directory.CreateDirectory tierWork |> ignore
+    let probe = Path.Combine(tierWork, ".reflink-probe")
+    File.WriteAllText(probe, "probe")
+    let reflink = exitOf [ "cp"; "--reflink=always"; probe; probe + ".clone" ] = 0
+    let userns = exitOf [ "unshare"; "--user"; "--map-root-user"; "--mount"; "--"; "true" ] = 0
+    for f in [ probe; probe + ".clone" ] do (try File.Delete f with _ -> ())
+    // A checkout under /tmp would be hidden by the tier's private /tmp mount.
+    let checkoutOutsideTmp = not (rootDir.StartsWith "/tmp/")
+    match reflink && userns && checkoutOutsideTmp with
+    | true -> TierPlan.CopyOnWrite
+    | false -> TierPlan.Shared
+  with _ -> TierPlan.Shared
+
+let private procId (field: string) =
+  File.ReadAllLines "/proc/self/status"
+  |> Array.find (fun l -> l.StartsWith(field + ":"))
+  |> fun l -> int (l.Split([| '\t'; ' ' |], StringSplitOptions.RemoveEmptyEntries).[1])
+
+/// Run one tier (in its own clone when isolated) and record its outcome.
+let runTier (isolation: TierPlan.Isolation) (t: TierPlan.Tier) =
+  async {
+    let safe = TierPlan.fileNameOf t.Name
+    let clone = Path.Combine(tierWork, safe)
+    let log = Path.Combine(tierWork, safe + ".log")
+    let ledger = Path.Combine(tierWork, safe + ".jsonl")
+    let dataDir = Path.Combine(tierWork, safe + ".data")
+    let tmpDir = Path.Combine(tierWork, safe + ".tmp")
+    for d in [ clone; dataDir; tmpDir ] do
+      if Directory.Exists d then Directory.Delete(d, true)
+    if File.Exists ledger then File.Delete ledger
+    Directory.CreateDirectory dataDir |> ignore
+    Directory.CreateDirectory tmpDir |> ignore
+    let env =
+      [ "SAGEFS_TRUST_LEDGER", ledger
+        "SAGEFS_DATA_DIR", dataDir
+        "TMPDIR", tmpDir
+        "SAGEFS_HOST_CACHE_DIR", sharedHostCache
+        // A build node that outlives its tier could serve the next tier's build
+        // from the wrong filesystem view; the private /tmp already hides it, and
+        // this stops tiers leaving nodes behind at all.
+        "MSBUILDDISABLENODEREUSE", "1"
+        "SAGEFS_SUITE_DURATIONS", suiteDurationsFile
+        "SAGEFS_SUITE_TIMINGS_OUT", Path.Combine(tierWork, safe + ".suites.json") ]
+    let command = $"dotnet {testDll} {t.Args}"
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let! code =
+      match isolation with
+      | TierPlan.Shared -> execToLog rootDir env log [ "sh"; "-c"; command ]
+      | TierPlan.CopyOnWrite ->
         async {
-          match commands with
-          | [] -> return Ok()
-          | command :: rest ->
-            match! ctx.RunCommand command with
-            | Ok () -> return! go rest
-            | Error e -> return Error e
+          match exitOf [ "cp"; "-a"; "--reflink=always"; rootDir; clone ] with
+          | 0 ->
+            let argv = TierPlan.isolatedArgv (procId "Uid") (procId "Gid") rootDir clone tmpDir command
+            return! execToLog rootDir env log argv
+          | failed ->
+            File.WriteAllText(log, sprintf "could not clone the checkout for this tier (cp exit %d)" failed)
+            return failed
         }
-      let! result = go (prelude @ [ $"dotnet {testDll} {args}" ])
-      lock invokedTiers (fun () -> invokedTiers.Add((tierNameOf args, args, Result.isOk result)))
-      return result
-    }
+    let seconds = sw.Elapsed.TotalSeconds
+    lock invokedTiers (fun () -> invokedTiers.Add((t.Name, t.Args, (code = 0))))
+    let tail =
+      match code with
+      | 0 -> ""
+      | _ ->
+        File.ReadAllLines log
+        |> Array.map (fun l -> Text.RegularExpressions.Regex.Replace(l, "\x1b\\[[0-9;?]*[A-Za-z]", ""))
+        |> fun lines -> lines[max 0 (lines.Length - 60) ..]
+        |> String.concat "\n"
+    lock invokedTiers (fun () ->
+      printfn "── tier %-28s exit=%d in %.0fs  (log: %s)" t.Name code seconds log
+      if tail <> "" then printfn "%s\n── end of %s" tail t.Name)
+    // A passing tier's clone is only scratch; a failing one is kept to inspect.
+    if code = 0 && Directory.Exists clone then
+      try Directory.Delete(clone, true) with _ -> ()
+    return t.Name, seconds
+  }
 
-let testTier (args: string) = testTierAfter [] args
+/// Run every tier, `slots` at a time, longest-expected first, then merge the
+/// per-tier ledger rows into the one ledger the trust report reads.
+let runTiers (tiers: TierPlan.Tier list) =
+  async {
+    let isolation = detectIsolation ()
+    // Build the FSI host ONCE into the shared cache, before any tier starts, so
+    // no shard pays a cold host build inside its own time.
+    Directory.CreateDirectory sharedHostCache |> ignore
+    let! prebuilt =
+      execToLog rootDir [ "SAGEFS_HOST_CACHE_DIR", sharedHostCache ] (Path.Combine(tierWork, "prebuild-host.log"))
+        [ "dotnet"; testDll; "--prebuild-host" ]
+    printfn "FSI host prebuild: exit %d" prebuilt
+    let requested =
+      match Int32.TryParse(Environment.GetEnvironmentVariable "SAGEFS_TIER_PARALLEL") with
+      | true, n -> Some n
+      | _ -> None
+    let slots = TierPlan.parallelism isolation Environment.ProcessorCount requested
+    let durations = readDurations ()
+    let ordered = TierPlan.order durations tiers
+    let estimate (t: TierPlan.Tier) = durations.TryFind t.Name |> Option.defaultValue 0.0
+    let serial = ordered |> List.sumBy estimate
+    printfn "Tiers: %d, %d at a time (%A), order: %s" tiers.Length slots isolation
+      (ordered |> List.map (fun t -> t.Name) |> String.concat ", ")
+    if serial > 0.0 then
+      printfn "Expected wall clock %.0fs (serial would be %.0fs), from recorded durations"
+        (TierPlan.makespan slots estimate ordered) serial
+    let queue = Collections.Concurrent.ConcurrentQueue<TierPlan.Tier>(ordered)
+    let worker () =
+      async {
+        let results = ResizeArray()
+        let mutable next = Unchecked.defaultof<TierPlan.Tier>
+        while queue.TryDequeue(&next) do
+          let! r = runTier isolation next
+          results.Add r
+        return List.ofSeq results
+      }
+    let! measured = List.init slots (fun _ -> worker ()) |> Async.Parallel
+    // Merge ledgers (per-tier files: separate processes never share a writer).
+    for t in tiers do
+      let ledger = Path.Combine(tierWork, TierPlan.fileNameOf t.Name + ".jsonl")
+      if File.Exists ledger then File.AppendAllText(trustLedger, File.ReadAllText ledger)
+    // Per-suite timings from every shard feed the next run's balancing.
+    let suiteTimings =
+      tiers
+      |> List.map (fun t -> Path.Combine(tierWork, TierPlan.fileNameOf t.Name + ".suites.json"))
+      |> List.filter File.Exists
+      |> List.fold (fun (acc: Map<string, float>) f ->
+        readJsonMap f |> Map.fold (fun (m: Map<string, float>) k v -> m.Add(k, v)) acc) (readJsonMap suiteDurationsFile)
+    try File.WriteAllText(suiteDurationsFile, JsonSerializer.Serialize suiteTimings) with _ -> ()
+    let updated =
+      measured |> Seq.concat |> Seq.fold (fun (m: Map<string, float>) (n, s) -> m.Add(n, s)) durations
+    try
+      Directory.CreateDirectory(Path.GetDirectoryName durationsFile) |> ignore
+      File.WriteAllText(durationsFile, JsonSerializer.Serialize updated)
+    with _ -> ()
+  }
 
 type TrustLine =
   { Tier: string
@@ -342,25 +526,6 @@ pipeline "sagefs" {
     run "dotnet format --verify-no-changes --verbosity minimal"
   }
 
-  stage "unit tests" {
-    // The default Expecto suite, reusing the Release build.
-    // Expecto exit codes: 0 = passed, 1 = a test FAILED, 2 = a test ERRORED;
-    // Fun.Build's default acceptExitCodes = [0], so 1 and 2 both fail the stage.
-    timeoutForStep 600
-    // A red tier must not hide the tiers after it — the trust report fails the run.
-    continueStageOnFailure
-    run (testTier "--summary")
-  }
-
-  stage "mutation score gate" {
-    // CI only (a full mutation pass is too slow for the fast local loop).
-    whenCmdArg "ci"
-    timeoutForStep 300
-    // A red tier must not hide the tiers after it — the trust report fails the run.
-    continueStageOnFailure
-    run (testTier "--mutation-score")
-  }
-
   stage "build samples for integration suites" {
     // The HTTP API integration suites create real sessions on these samples.
     //
@@ -413,91 +578,58 @@ pipeline "sagefs" {
       })
   }
 
-  stage "integration host" {
-    // Every [Integration] suite registered as Host: real FSI sessions, real
-    // SageFs.Host spawns, Harmony detours, real daemons on isolated data dirs,
-    // the HTTP API against the samples, and the VS Code command-proof suite.
-    // Runs on Linux: Args.resolveHostLaunch launches the host via the dotnet
-    // muxer on non-Windows, and the command-proof self-provisions its harness
-    // and a Linux VS Code under xvfb (verified: 128 host tests + the proof all
-    // green on Linux). VS Code Electron needs a display, so the workflow makes
-    // one available via xvfb.
-    timeoutForStep 2100
-    // A red tier must not hide the tiers after it — the trust report fails the run.
-    continueStageOnFailure
-    run (testTier "--integration-host --summary")
-  }
-
-  stage "dashboard browser journeys" {
-    // Real-browser dashboard journeys (Playwright.NET Chromium) via the suite's
-    // own --integration-browser entry point, off the same Release build. Formerly
-    // the separate dashboard-browser-e2e.yml (windows-latest); consolidated here
-    // on Linux (verified green). Chromium is fetched through the bundled .NET
-    // Playwright driver — no pwsh dependency. CI-gated so the fast local loop
-    // never fetches a browser (run it locally with `-- ci`).
+  stage "test tiers" {
+    // EVERY test tier, each once, whatever happens to the others — scheduled by
+    // runTiers (longest expected first; concurrently in private copy-on-write
+    // clones when this machine supports it, else one at a time). Judged by the
+    // "trust report" stage below, not by this step's exit: a red tier must
+    // never hide the tiers after it.
     //
-    // The HR/LT/disconnect journeys below reuse this stage's Chromium install
-    // rather than repeating it — this stage must run first among the four.
-    whenCmdArg "ci"
-    timeoutForStep 900
-    // A red tier must not hide the tiers after it — the trust report fails the run.
-    continueStageOnFailure
-    run (
-      testTierAfter
-        [ $"{testBinDir}/.playwright/node/linux-x64/node {testBinDir}/.playwright/package/cli.js install chromium" ]
-        "--integration-browser --summary")
-  }
-
-  stage "hot-reload browser journeys" {
-    // HR-DASH: real save -> the SAME running app serves new code, observed
-    // from the dashboard page. Was written and registered
-    // (Integration.Dedicated "--integration-hr", Program.fs dispatches it)
-    // but no pipeline stage ever invoked it (outcome-gate-sweep.md Gap B.1) —
-    // ci-pipeline.fsx used to claim "did not port to Linux" (app-url.txt
-    // never written), which a real Linux run under this exact HEAD did NOT
-    // reproduce: the runner reaches Ready, writes app-url.txt, and launches
-    // the browser suite. Chromium is already installed by the "dashboard
-    // browser journeys" stage above (same testBinDir), so this stage does
-    // not reinstall it. CI-gated for the same reason as that stage: the fast
-    // local loop never fetches a browser.
-    whenCmdArg "ci"
-    timeoutForStep 1200
-    // A red tier must not hide the tiers after it — the trust report fails the run.
-    continueStageOnFailure
-    run (testTier "--integration-hr --summary")
-  }
-
-  stage "live-testing browser journeys" {
-    // LT-DASH: enable -> discover -> a real edit surfaces the failing test
-    // live in the panel -> revert -> green again. Registered
-    // (Integration.Dedicated "--integration-lt", Program.fs dispatches it)
-    // but no pipeline stage ever invoked it (outcome-gate-sweep.md Gap B.2).
-    // DashboardBrowserRunner.runLiveTestingBrowserJourneys now pre-settles
-    // live testing to an 11-green baseline over the daemon's own HTTP API
-    // (the same settle-then-baseline sequence HttpApiIntegrationTests.fs
-    // already proves works) before handing off to the browser journeys, so
-    // the panel's own UI wait no longer has to race enable+discovery+build+
-    // baseline inside one window.
-    whenCmdArg "ci"
-    timeoutForStep 900
-    // A red tier must not hide the tiers after it — the trust report fails the run.
-    continueStageOnFailure
-    run (testTier "--integration-lt --summary")
-  }
-
-  stage "dashboard disconnect-indicator browser journeys" {
-    // The daemon dying mid-stream (redeploy, crash, SIGTERM) must show a
-    // visible banner, including under client/server clock skew. Registered
-    // (Integration.Dedicated "--integration-disconnect") but never dispatched
-    // anywhere — Program.fs now dispatches it to
-    // DashboardDisconnectIndicatorBrowserTests.runDisconnectIndicatorJourney,
-    // which owns its own isolated daemon end to end on non-default ports
-    // (never 37749/37750) — outcome-gate-sweep.md Gap B.3.
-    whenCmdArg "ci"
-    timeoutForStep 900
-    // A red tier must not hide the tiers after it — the trust report fails the run.
-    continueStageOnFailure
-    run (testTier "--integration-disconnect --summary")
+    //   always:   the default suite and the integration-host suites (real FSI
+    //             sessions, real hosts, real daemons, the VS Code command-proof).
+    //   `ci`:     the mutation-score gate and every real-browser journey —
+    //             CI-gated so the fast local loop never fetches a browser.
+    timeoutForStep 5400
+    run (fun ctx ->
+      async {
+        let ci = fsi.CommandLineArgs |> Array.contains "ci"
+        // The host tier is sharded: its suites are sequenced WITHIN a process
+        // (shared in-process state), not across processes, so each shard is its
+        // own concurrent tier. SAGEFS_HOST_SHARDS overrides the count.
+        let hostShards =
+          match Int32.TryParse(Environment.GetEnvironmentVariable "SAGEFS_HOST_SHARDS") with
+          | true, n when n >= 1 -> n
+          | _ -> 5
+        let always =
+          testTier "--summary"
+          :: [ for k in 1 .. hostShards -> testTier $"--integration-host --shard {k}/{hostShards} --summary" ]
+        let ciOnly =
+          [ testTier "--mutation-score"
+            testTier "--integration-browser --summary"
+            testTier "--integration-hr --summary"
+            testTier "--integration-lt --summary"
+            testTier "--integration-disconnect --summary" ]
+        let browserTiers = ciOnly |> List.filter (fun t -> t.Name <> "--mutation-score")
+        // Chromium is installed ONCE, before any browser tier starts (they run
+        // concurrently). If it fails, those tiers are recorded as failed — never
+        // silently dropped from the report.
+        let! chromium =
+          match ci with
+          | false -> async { return Ok() }
+          | true ->
+            ctx.RunCommand $"{testBinDir}/.playwright/node/linux-x64/node {testBinDir}/.playwright/package/cli.js install chromium"
+        let runnable =
+          match ci, chromium with
+          | false, _ -> always
+          | true, Ok () -> always @ ciOnly
+          | true, Error e ->
+            printfn "Chromium install failed (%s): the browser tiers cannot run" e
+            for t in browserTiers do
+              lock invokedTiers (fun () -> invokedTiers.Add((t.Name, t.Args, false)))
+            always @ [ List.head ciOnly ]
+        do! runTiers runnable
+        return Ok()
+      })
   }
 
   stage "trust report" {
@@ -510,6 +642,8 @@ pipeline "sagefs" {
         let lines = trustLines ()
         let table = renderTrustTable lines
         printfn "%s" table
+        // Kept beside the ledger so a local gate can record it with the pass.
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName trustLedger, "trust-report.md"), table + "\n")
         match Environment.GetEnvironmentVariable "GITHUB_STEP_SUMMARY" with
         | null | "" -> ()
         | summary -> File.AppendAllText(summary, table + "\n")

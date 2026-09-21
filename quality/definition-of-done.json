@@ -25,7 +25,7 @@
         "kind": "ci",
         "tests": ["SageFs.Tests/VscodeCommandProofTests.fs"],
         "runner": "--integration-host",
-        "stage": "integration host",
+        "stage": "test tiers",
         "run": "35523239725",
         "commit": "88991359",
         "summary": "sagefs.hotReloadWatchAll / sagefs.hotReloadUnwatchAll invoked via vscode.commands.executeCommand inside a real @vscode/test-electron extension host, proven against the real daemon's GET /api/sessions/{sid}/hotreload (watchedCount 0 -> N -> 0). Issue #133 closed."
@@ -66,7 +66,7 @@
         "kind": "ci",
         "tests": ["SageFs.Tests/VscodeCommandProofTests.fs"],
         "runner": "--integration-host",
-        "stage": "integration host",
+        "stage": "test tiers",
         "run": "35523239725",
         "commit": "88991359",
         "summary": "sagefs.enableLiveTesting / sagefs.disableLiveTesting invoked via vscode.commands.executeCommand inside a real @vscode/test-electron extension host, proven against the real daemon's GET /api/live-testing/status (Enabled true/false transitions, real discovery: 11 tests, 1 genuinely failing on the sample). Issue #133 closed."
@@ -97,7 +97,7 @@
         "kind": "ci",
         "tests": ["SageFs.Tests/DashboardBrowserTests.fs"],
         "runner": "--integration-browser",
-        "stage": "dashboard browser journeys",
+        "stage": "test tiers",
         "run": "35523239725",
         "commit": "88991359",
         "summary": "FR journeys in the real-browser dashboard suite: recorded feedback reflects in the friction panel, and the send path validates honestly. Landed as c26220cf; the citation names the live pipeline stage rather than the deleted dashboard-browser-e2e.yml job."

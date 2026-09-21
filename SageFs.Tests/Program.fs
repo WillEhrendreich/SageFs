@@ -158,21 +158,12 @@ let main argv =
       1
   | false ->
 
-  // Run EVERY self-contained [Integration] suite — real FSI sessions, real
-  // SageFs.Host spawns, Harmony detours, real daemons on reserved ports with
-  // isolated SAGEFS_DATA_DIRs, the HTTP API against the samples. The set is
-  // structural: every suite registered as `Integration.Host`
-  // (TestInfrastructure.Integration), so a new host suite runs here by
-  // construction. Suites that need a browser or VS Code are registered against
-  // their own entry points (--integration-browser/-hr/-lt/-vsc below).
-  let isIntegrationHost = argv |> Array.exists (fun a -> a = "--integration-host")
-  match isIntegrationHost with
-  | true ->
-    let hostArgv = argv |> Array.filter (fun a -> a <> "--integration-host")
-    // Every daemon these suites spawn gets a fresh data dir (so it never touches real state), which used to mean a fresh
-    // host cache and a from-scratch host build per daemon. Hosts are content-addressed, so one shared cache is safe: point
-    // every child at it (they inherit this environment) and build the host for the repo's SDK ONCE, up front, so no test
-    // pays the cold build inside its own deadline.
+  // Build the FSI host into the shared host cache and exit. The pipeline runs
+  // this ONCE before the test tiers start, then points every tier (every host
+  // shard, every browser runner's daemon) at the same cache, so no shard pays
+  // a cold host build. Concurrent readers are safe: FsiHostBuild.ensureBuilt
+  // builds under a file lock and re-checks after waiting.
+  let ensureHostPrebuilt () =
     let sharedHostCache = Path.Combine(Path.GetTempPath(), "sagefs-fsihost-test-cache")
     match Environment.GetEnvironmentVariable SageFs.IsolatedFsiSession.HostCacheEnvironmentVariable with
     | null | "" -> Environment.SetEnvironmentVariable(SageFs.IsolatedFsiSession.HostCacheEnvironmentVariable, sharedHostCache)
@@ -180,18 +171,92 @@ let main argv =
     let cache = SageFs.IsolatedFsiSession.hostCacheRoot ()
     let dotnet = SageFs.IsolatedFsiSession.dotnetPath ()
     let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
-    match SageFs.FsiHostBuild.resolveSdkVersion dotnet repoRoot |> Result.bind (fun sdk -> SageFs.FsiHostBuild.ensureBuilt dotnet sdk cache) with
+    SageFs.FsiHostBuild.resolveSdkVersion dotnet repoRoot
+    |> Result.bind (fun sdk -> SageFs.FsiHostBuild.ensureBuilt dotnet sdk cache)
+    |> Result.mapError SageFs.FsiHostBuild.describeBuildError
+
+  match argv |> Array.contains "--prebuild-host" with
+  | true ->
+    match ensureHostPrebuilt () with
+    | Result.Ok _ ->
+      printfn "FSI host prebuilt into %s" (SageFs.IsolatedFsiSession.hostCacheRoot ())
+      Environment.Exit 0
+      0
+    | Result.Error reason ->
+      eprintfn "could not pre-build the FSI host: %s" reason
+      Environment.Exit 1
+      1
+  | false ->
+
+  // Run EVERY self-contained [Integration] suite — real FSI sessions, real
+  // SageFs.Host spawns, Harmony detours, real daemons on reserved ports with
+  // isolated SAGEFS_DATA_DIRs, the HTTP API against the samples. The set is
+  // structural: every suite registered as `Integration.Host`
+  // (TestInfrastructure.Integration), so a new host suite runs here by
+  // construction. Suites that need a browser or VS Code are registered against
+  // their own entry points (--integration-browser/-hr/-lt below).
+  //
+  // `--shard k/n` runs only this process's share. The suites are sequenced
+  // WITHIN a process because they share in-process state (below); that reason
+  // ends at the process boundary, so n shard processes run concurrently. Every
+  // shard computes the same balanced partition (TierPlan.assign) from the same
+  // recorded per-suite durations (SAGEFS_SUITE_DURATIONS), so together they run
+  // each suite exactly once with no coordination. Measured per-suite seconds go
+  // to SAGEFS_SUITE_TIMINGS_OUT for the next run's balancing.
+  let isIntegrationHost = argv |> Array.exists (fun a -> a = "--integration-host")
+  match isIntegrationHost with
+  | true ->
+    let shard = SageFs.Build.TierPlan.shardOfArgs argv
+    let hostArgv =
+      match shard with
+      | Some s -> argv |> Array.filter (fun a -> a <> "--integration-host" && a <> "--shard" && a <> sprintf "%d/%d" s.Index s.Count)
+      | None -> argv |> Array.filter (fun a -> a <> "--integration-host")
+    match ensureHostPrebuilt () with
     | Result.Ok _ -> ()
-    | Result.Error reason -> eprintfn "warning: could not pre-build the FSI host: %s" (SageFs.FsiHostBuild.describeBuildError reason)
+    | Result.Error reason -> eprintfn "warning: could not pre-build the FSI host: %s" reason
+    let suiteName (i: int) (t: Expecto.Test) =
+      match t with
+      | Expecto.TestLabel (name, _, _) -> name
+      | _ -> sprintf "host suite #%d" i
+    let allSuites = SageFs.Tests.TestInfrastructure.Integration.hostSuites () |> List.mapi (fun i t -> suiteName i t, t)
+    let readDurations (var: string) : Map<string, float> =
+      match Environment.GetEnvironmentVariable var with
+      | null | "" -> Map.empty
+      | path ->
+        try System.Text.Json.JsonSerializer.Deserialize<Map<string, float>>(File.ReadAllText path)
+        with _ -> Map.empty
+    let mine, tierName =
+      match shard with
+      | None -> allSuites, "--integration-host"
+      | Some s ->
+        let plan =
+          SageFs.Build.TierPlan.assign s.Count (readDurations "SAGEFS_SUITE_DURATIONS") (allSuites |> List.map fst)
+        allSuites |> List.filter (fun (name, _) -> plan[name] = s.Index),
+        sprintf "--integration-host[%d/%d]" s.Index s.Count
     // Sequenced: these suites share process-global state — the one
     // TestInfrastructure.globalActorResult FSI actor (which the reset suites
     // reset), Harmony patches, environment variables. Run in parallel, a reset
     // in one suite lands mid-eval in another (observed: "State: WarmingUp",
     // "Expected Active phase, got Initializing" in suites that pass alone).
     let hostIntegrationTests =
-      testSequenced (
-        testList "Integration (host)" (SageFs.Tests.TestInfrastructure.Integration.hostSuites ()))
-    let result = SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-host" hostArgv hostIntegrationTests
+      testSequenced (testList "Integration (host)" (mine |> List.map snd))
+    let recordSuiteTimings (s: Expecto.Impl.TestRunSummary) =
+      match Environment.GetEnvironmentVariable "SAGEFS_SUITE_TIMINGS_OUT" with
+      | null | "" -> ()
+      | path ->
+        let timings =
+          s.passed @ s.failed @ s.errored @ s.ignored
+          |> List.choose (fun (flat, summary) ->
+            match flat.name with
+            | _ :: suite :: _ -> Some (suite, summary.duration.TotalSeconds)
+            | _ -> None)
+          |> List.groupBy fst
+          |> List.map (fun (suite, xs) -> suite, xs |> List.sumBy snd)
+          |> Map.ofList
+        try File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize timings) with _ -> ()
+    let result =
+      SageFs.Tests.TestInfrastructure.TrustSignal.runObserved
+        SageFs.Tests.TestInfrastructure.TrustSignal.record recordSuiteTimings tierName hostArgv hostIntegrationTests
     Environment.Exit result
     result
   | false ->

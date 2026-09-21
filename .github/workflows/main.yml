@@ -5,6 +5,7 @@ on:
   push:
     branches:
     - master
+  workflow_dispatch:
 
 # The ENTIRE build/test/integration/pack/release-bundle pipeline lives in
 # ci-pipeline.fsx as one typed F# Fun.Build pipeline. GitHub Actions supplies
@@ -29,9 +30,63 @@ on:
 # issue ever surfaces, add a scheduled windows smoke back.
 
 jobs:
-  build:
+  # ── Pushes to master: THIS machine, via the self-hosted runner. ──────────
+  #
+  # Nothing is rebuilt or re-tested here when the commit already passed
+  # scripts/local-gate on this machine. The pre-push hook refuses to push master
+  # otherwise, so normally the job only PROMOTES that gate's release bundle, in
+  # seconds. If a commit arrives ungated (SAGEFS_SKIP_GATE, a push from
+  # elsewhere), the job runs the same gate first. Either way there is one gate
+  # (the whole ci-pipeline.fsx on a clean checkout of exactly this commit) and
+  # one definition of "passed".
+  #
+  # SECURITY: this repo is public. A pull_request job runs the PR's OWN copy of
+  # this file, so a self-hosted job reachable from pull_request would let a
+  # fork run code in this machine's home directory. This job excludes
+  # pull_request, and "Self-hosted runner safety" in TrustSignalTests fails the
+  # fast suite if any self-hosted job stops doing so. Fork PR workflows also
+  # need maintainer approval (repo setting: all_external_contributors).
+  local:
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, sagefs-local]
+    timeout-minutes: 120
+    concurrency:
+      group: sagefs-local-${{ github.sha }}
+      cancel-in-progress: false
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Local gate (instant when this commit already passed on this machine)
+      shell: bash
+      env:
+        SOURCE_RUN_ID: ${{ github.run_id }}
+        SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: scripts/local-gate "$GITHUB_SHA"
+
+    - name: Promote the gated release bundle
+      shell: bash
+      run: scripts/local-gate --promote "$GITHUB_SHA" release
+
+    # publish.yml (workflow_run on this build's success) downloads exactly this
+    # `release-assets` bundle and ships it. It is the bundle the gate built and
+    # checksummed, not a rebuild.
+    - name: Upload release bundle
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-assets
+        path: release/*
+        if-no-files-found: error
+        retention-days: 1
+
+  # ── Pull requests: GitHub-hosted only, never this machine. ──────────────
+  # The same pipeline without `release`, so an outside PR still gets a real
+  # check without its code ever running on the maintainer's desktop.
+  pr:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
     - uses: actions/checkout@v5
@@ -56,28 +111,9 @@ jobs:
     - name: Install xvfb
       run: sudo apt-get update && sudo apt-get install -y xvfb
 
-    # The whole pipeline. `ci` enables the mutation-score gate; `release` (master
-    # push only) packs the shippable bundle.
     - name: Run pipeline
       shell: bash
-      env:
-        SOURCE_SHA: ${{ github.sha }}
-        SOURCE_RUN_ID: ${{ github.run_id }}
-        SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
-      run: >-
-        dotnet fsi ci-pipeline.fsx -- ci${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') && ' release' || '' }}
-
-    # Build once, promote — publish.yml (workflow_run on this build's success)
-    # downloads exactly this `release-assets` bundle (nupkg + vsix +
-    # release-manifest.json) and ships it. No separate job rebuilds it.
-    - name: Upload release bundle
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-assets
-        path: release/*
-        if-no-files-found: error
-        retention-days: 1
+      run: dotnet fsi ci-pipeline.fsx -- ci
 
   # vscode-journeys (HR-VSC-E2E, LT-VSC-E2E) was removed 2026-09-12: it never
   # passed since being wired in. The real bug it caught (executeCommand typing

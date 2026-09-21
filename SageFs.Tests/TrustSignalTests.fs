@@ -111,5 +111,53 @@ let ciWiringTests =
       |> Expect.equal "a raw `run $\"dotnet {testDll} ...\"` bypasses the trust ledger and stops the pipeline on red" 0
   ]
 
+/// The repo is PUBLIC and main build runs on this developer machine through a
+/// self-hosted runner. A `pull_request` job is executed from the PR's OWN copy
+/// of the workflow, so a fork PR reaching a self-hosted job would run arbitrary
+/// code in this machine's home directory (tokens, keys, the daemon). The
+/// invariant: every job that targets the self-hosted runner excludes
+/// pull_request, and pull requests run only on GitHub-hosted runners.
+let selfHostedSafetyTests =
+  let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
+  let workflow = lazy (File.ReadAllText(Path.Combine(repoRoot, ".github", "workflows", "main.yml")))
+
+  /// (job name, its `runs-on:` line, its `if:` line) for every job under
+  /// `jobs:`. Only the job's own keys at job-body indentation count — comment
+  /// text that merely MENTIONS "self-hosted" must never decide anything.
+  let jobs () =
+    let lines = workflow.Value.Replace("\r\n", "\n").Split('\n')
+    let jobsAt = lines |> Array.findIndex (fun l -> l = "jobs:")
+    let jobKey = Regex("^  ([A-Za-z0-9_-]+):\\s*$")
+    let keyLine (prefix: string) (body: string list) =
+      body |> List.tryFind (fun l -> l.StartsWith prefix) |> Option.defaultValue ""
+    lines[jobsAt + 1 ..]
+    |> Array.fold (fun (acc: (string * string list) list) line ->
+      match jobKey.Match line with
+      | m when m.Success -> (m.Groups[1].Value, []) :: acc
+      | _ ->
+        match acc with
+        | (name, body) :: rest -> (name, line :: body) :: rest
+        | [] -> acc) []
+    |> List.rev
+    |> List.map (fun (name, body) ->
+      let body = List.rev body
+      name, keyLine "    runs-on:" body, keyLine "    if:" body)
+
+  let selfHosted (_, runsOn: string, _) = runsOn.Contains "self-hosted"
+
+  testList "Self-hosted runner safety" [
+    testCase "every self-hosted job refuses pull_request events" <| fun _ ->
+      jobs ()
+      |> List.filter selfHosted
+      |> List.filter (fun (_, _, guard) -> not (guard.Contains "github.event_name != 'pull_request'"))
+      |> List.map (fun (name, _, _) -> name)
+      |> Expect.isEmpty "self-hosted jobs reachable from a pull_request (a fork PR would run on this machine)"
+
+    testCase "some job targets the self-hosted runner, so the rule above is not vacuous" <| fun _ ->
+      jobs ()
+      |> List.exists selfHosted
+      |> Expect.isTrue "main build should run on this machine's self-hosted runner"
+  ]
+
 [<Tests>]
-let tests = testList "TrustSignal" [ verdictTests; ciWiringTests ]
+let tests = testList "TrustSignal" [ verdictTests; ciWiringTests; selfHostedSafetyTests ]

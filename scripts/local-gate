@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# scripts/local-gate [<commit>]        gate a commit (default HEAD) on this machine
+# scripts/local-gate --force <commit>  re-gate even if it already passed
+# scripts/local-gate --promote <commit> <dir>
+#                                      copy a passed commit's release bundle into <dir>
+#                                      (used by the self-hosted "main build" job)
+#
+# THE gate is the pipeline itself: `dotnet fsi ci-pipeline.fsx -- ci release`,
+# run on a CLEAN checkout of exactly one commit. Nothing here re-derives or
+# re-lists stages, so the gate can never drift from what CI means. Running it
+# on a clean checkout (never the working tree) is what answers "does THIS
+# COMMIT pass" rather than "does my tree pass". Local dev state (Debug
+# outputs, stray files, another agent's uncommitted edits) has masked real
+# failures here more than once.
+#
+# A pass is recorded under $SAGEFS_GATE_HOME/passed/<sha>/: the trust ledger,
+# the trust report table and the release bundle. The pre-push hook refuses
+# to push master to a commit with no pass. The self-hosted "main build" job
+# promotes that bundle instead of rebuilding it; with no pass (someone
+# bypassed the hook) it runs this same gate first. There is one gate and one
+# definition of "passed", and nothing waits on a GitHub-hosted runner.
+set -uo pipefail
+
+STATE=${SAGEFS_GATE_HOME:-$HOME/.local/share/sagefs-gate}
+REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel) || exit 9
+mkdir -p "$STATE/passed" "$STATE/logs"
+
+passed_dir() { echo "$STATE/passed/$1"; }
+
+if [ "${1:-}" = "--promote" ]; then
+  sha=$(git -C "$REPO" rev-parse "$2") || exit 9
+  out=$3
+  [ -f "$(passed_dir "$sha")/ok" ] || { echo "local-gate: $sha has no pass to promote"; exit 1; }
+  mkdir -p "$out"
+  cp "$(passed_dir "$sha")"/release/* "$out"/
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f "$(passed_dir "$sha")/trust-report.md" ]; then
+    cat "$(passed_dir "$sha")/trust-report.md" >> "$GITHUB_STEP_SUMMARY"
+  fi
+  echo "local-gate: promoted the gated bundle for $sha"
+  ls -la "$out"
+  exit 0
+fi
+
+force=0
+if [ "${1:-}" = "--force" ]; then force=1; shift; fi
+sha=$(git -C "$REPO" rev-parse "${1:-HEAD}^{commit}") || exit 9
+short=${sha:0:8}
+
+if [ $force = 0 ] && [ -f "$(passed_dir "$sha")/ok" ]; then
+  echo "local-gate: $short already passed ($(cat "$(passed_dir "$sha")/ok"))"
+  exit 0
+fi
+
+# One gate at a time on this machine. A manual gate and the runner's fallback
+# must never share the checkout, the build output or the test ports.
+exec 9>"$STATE/lock"
+if ! flock -n 9; then
+  echo "local-gate: another gate is running; waiting for it..."
+  flock 9
+  # It may have been gating this very commit.
+  if [ $force = 0 ] && [ -f "$(passed_dir "$sha")/ok" ]; then
+    echo "local-gate: $short passed while waiting"
+    exit 0
+  fi
+fi
+
+# A persistent clean checkout per source repo, on real disk (a Release build is
+# several GB and the integration suites write temp dirs; a tmpfs has filled
+# and hung this before). Persistent means bin/obj, node_modules, the MCP SDK
+# clone and the Harmony nupkg stay warm between runs. git clean without -x
+# keeps ignored build output while removing every untracked source file.
+WT="$STATE/checkout-$(echo -n "$REPO" | sha1sum | cut -c1-8)"
+if [ ! -d "$WT/.git" ] && [ ! -f "$WT/.git" ]; then
+  git -C "$REPO" worktree add --detach "$WT" "$sha" -q || exit 9
+fi
+cd "$WT" || exit 9
+git checkout --detach -q "$sha" || exit 9
+git reset --hard -q
+git clean -fdq
+
+export SAGEFS_DATA_DIR="$STATE/data"   # never the user's real ~/.SageFs
+export TMPDIR="$STATE/tmp"
+rm -rf "$SAGEFS_DATA_DIR" "$TMPDIR"; mkdir -p "$SAGEFS_DATA_DIR" "$TMPDIR"
+export SOURCE_SHA="$sha"
+# Recorded tier durations persist across gates, so longest-first ordering
+# learns from every run.
+export SAGEFS_TIER_HISTORY="$STATE/tier-durations.json"
+# Per-suite seconds, for balancing the sharded host tier (TierPlan.assign).
+export SAGEFS_SUITE_HISTORY="$STATE/suite-durations.json"
+log="$STATE/logs/$short.log"
+
+echo "=== local gate: $(git log --oneline -1) ==="
+echo "    log: $log"
+start=$(date +%s)
+# Full output to the log; progress (stage boundaries, one line per finished
+# tier, failures) to the console as it happens.
+dotnet fsi ci-pipeline.fsx -- ci release 2>&1 | tee "$log" \
+  | grep --line-buffered -aE '^── tier|STAGE #|^Tiers:|^Expected wall|trust report:|^\| |error' \
+  | sed -u 's/\x1b\[[0-9;]*[A-Za-z]//g'
+code=${PIPESTATUS[0]}
+elapsed=$(( $(date +%s) - start ))
+
+report="$WT/test-results/trust-report.md"
+echo
+if [ $code -ne 0 ]; then
+  echo "=== local gate FAILED for $short after $((elapsed / 60))m$((elapsed % 60))s (exit $code) ==="
+  grep -aE '^\s*(──|::error)|STAGE .* (failed|finished)|error ' "$log" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | tail -15
+  exit $code
+fi
+
+dest=$(passed_dir "$sha")
+rm -rf "$dest"; mkdir -p "$dest/release"
+cp release/* "$dest/release/"
+cp test-results/trust-ledger.jsonl "$dest/" 2>/dev/null
+cp "$report" "$dest/" 2>/dev/null
+echo "$(date -Iseconds) in $((elapsed / 60))m$((elapsed % 60))s" > "$dest/ok"
+echo "=== local gate PASSED for $short in $((elapsed / 60))m$((elapsed % 60))s ==="

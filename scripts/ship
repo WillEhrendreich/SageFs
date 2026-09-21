@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# scripts/ship [<commit>]   gate a commit on this machine, then push exactly it to master.
+#
+# Pushes the GATED sha, never a moving HEAD: other agents may commit while
+# the gate runs, and their commits were not gated. Publish follows from the
+# self-hosted "main build" job, which promotes this gate's release bundle.
+set -euo pipefail
+REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+sha=$(git -C "$REPO" rev-parse "${1:-HEAD}^{commit}")
+"$REPO/scripts/local-gate" "$sha"
+git -C "$REPO" push origin "$sha:refs/heads/master"
+echo "ship: pushed ${sha:0:8}; the self-hosted runner promotes its bundle to publish"
