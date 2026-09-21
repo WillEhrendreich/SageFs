@@ -109,6 +109,40 @@ let makespan (slots: int) (durationOf: Tier -> float) (ordered: Tier list) =
     free[i] <- free[i] + durationOf t
   Array.max free
 
+/// Concurrent tiers share ONE network namespace (mount namespaces isolate
+/// files, never ports), and every real-daemon-spawning test harness reserves
+/// a port by binding it, reading it back, then RELEASING it before the
+/// daemon itself binds — a window another tier's daemon can win in. Below,
+/// the pool every tier's daemon ports are scanned from, and the disjoint
+/// slice of it handed to one concurrently-running slot, so that race can
+/// never cross a tier boundary: two tiers scanning disjoint slices cannot
+/// both land on the same pair no matter how the race falls.
+///
+/// The pool sits entirely below `testPortPoolHigh` (32000): comfortably under
+/// the Linux ephemeral-port floor observed on this machine (32768, from
+/// `/proc/sys/net/ipv4/ip_local_port_range`) — so a client connection's own
+/// randomly-assigned outbound port can never collide with a port a tier is
+/// deliberately trying to bind — and nowhere near the user's own live daemon
+/// (37749/37750). Both exclusions fall out of the bound; neither needs its
+/// own case.
+let testPortPoolLow = 20000
+let testPortPoolHigh = 32000
+
+/// The `slotIndex`-th (0-based) of `slots` equal-width, contiguous, disjoint
+/// slices of the port pool — one per concurrently-running tier process (not
+/// one per tier BY NAME: `runTiers` reuses a slot for every tier it pulls off
+/// the queue for that slot, so the slot index is what a port range is keyed
+/// to). Integer division may leave a remainder; the LAST slice absorbs it, so
+/// the slices tile the whole pool with no gaps and no overlap for any
+/// `slots >= 1`.
+let portRangeOf (slots: int) (slotIndex: int) : int * int =
+  let slots = max 1 slots
+  let slotIndex = ((slotIndex % slots) + slots) % slots
+  let width = (testPortPoolHigh - testPortPoolLow) / slots
+  let start = testPortPoolLow + slotIndex * width
+  let stop = if slotIndex = slots - 1 then testPortPoolHigh else start + width
+  start, stop
+
 /// The argv that runs `command` with `clone` mounted over `checkout` AND
 /// `privateTmp` mounted over /tmp, visible only to that process tree, as the
 /// calling user rather than root.

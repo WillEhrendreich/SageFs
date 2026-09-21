@@ -41,27 +41,13 @@ module Infra = SageFs.Tests.TestInfrastructure
 
 // ─── The daemon under test ──────────────────────────────────────────────────
 
-/// The daemon binds the MCP port AND the dashboard on port+1, so a port is
-/// only usable when BOTH are free — `reserveLoopbackPort` proves one.
-let private bothFree (port: int) =
-  try
-    use a = new TcpListener(IPAddress.Loopback, port)
-    a.Start()
-    use b = new TcpListener(IPAddress.Loopback, port + 1)
-    b.Start()
-    true
-  with :? SocketException -> false
-
-let private reserveDaemonPort () =
-  let rec attempt (left: int) =
-    let candidate = Harness.reserveLoopbackPort (Some (39100 + Random.Shared.Next 300))
-    match bothFree candidate, left with
-    | true, _ -> candidate
-    | false, 0 -> failwith "OriginGuardOutcomeTests: no free (port, port+1) pair on loopback"
-    | false, n -> attempt (n - 1)
-  attempt 20
-
-let private mcpPort = reserveDaemonPort ()
+/// The daemon binds the MCP port AND the dashboard on port+1 — both proven
+/// free right now by `Harness.reserveLoopbackPort` (`TestPorts.reservePair`
+/// underneath), scanning only this tier's assigned SAGEFS_TEST_PORT_RANGE
+/// when ci-pipeline.fsx runs several tiers concurrently, so a
+/// concurrently-running tier's daemon can never win the reserve-then-bind
+/// race for this pair.
+let private mcpPort = Harness.reserveLoopbackPort ()
 let private dashboardPort = mcpPort + 1
 
 /// A directory the "attacker" would point a session at. Real and readable, so

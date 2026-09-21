@@ -24,28 +24,12 @@ let runBrowserJourneys (cliArgs: string array) : int =
 
   let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
-  // Reserve an MCP port up front; the dashboard port is mcp+1 (SageFs binds
-  // both). Reserving via port 0 would pick an unrelated port, so instead let
-  // the daemon bind --mcp-port on a free port we probe for.
-  let pickFreePort () =
-    use l = new TcpListener(IPAddress.Loopback, 0)
-    l.Start()
-    (l.LocalEndpoint :?> IPEndPoint).Port
-
-  let rec findPortPair attempts =
-    let mcp = pickFreePort ()
-    let dash = mcp + 1
-    // Confirm the dashboard port is also free before committing.
-    try
-      use probe = new TcpListener(IPAddress.Loopback, dash)
-      probe.Start()
-      mcp
-    with
-    | :? SocketException when attempts > 0 -> findPortPair (attempts - 1)
-    | :? SocketException -> failwith "Browser runner: could not find a free port pair"
-
-  let mcpPort = findPortPair 5
-  let dashboardPort = mcpPort + 1
+  // SageFs binds the MCP port it is given AND the dashboard at that port + 1
+  // — TestPorts.reservePair proves both are free right now, scanning only
+  // this tier's assigned SAGEFS_TEST_PORT_RANGE when one is set, so a
+  // concurrently-running tier's daemon can never win the reserve-then-bind
+  // race for the same pair.
+  let mcpPort, dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
 
   let dataDir =
     Path.Combine(Path.GetTempPath(), "sagefs-browser", Guid.NewGuid().ToString("N"))
@@ -361,24 +345,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
 
   let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
-  let pickFreePort () =
-    use l = new TcpListener(IPAddress.Loopback, 0)
-    l.Start()
-    (l.LocalEndpoint :?> IPEndPoint).Port
-
-  let rec findPortPair attempts =
-    let mcp = pickFreePort ()
-    let dash = mcp + 1
-    try
-      use probe = new TcpListener(IPAddress.Loopback, dash)
-      probe.Start()
-      mcp
-    with
-    | :? SocketException when attempts > 0 -> findPortPair (attempts - 1)
-    | :? SocketException -> failwith "HR runner: could not find a free port pair"
-
-  let mcpPort = findPortPair 5
-  let dashboardPort = mcpPort + 1
+  let mcpPort, dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
   let dataDir =
     Path.Combine(Path.GetTempPath(), "sagefs-hr", Guid.NewGuid().ToString("N"))
   Directory.CreateDirectory(dataDir) |> ignore
@@ -576,24 +543,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
 
   let exe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
-  let pickFreePort () =
-    use l = new TcpListener(IPAddress.Loopback, 0)
-    l.Start()
-    (l.LocalEndpoint :?> IPEndPoint).Port
-
-  let rec findPortPair attempts =
-    let mcp = pickFreePort ()
-    let dash = mcp + 1
-    try
-      use probe = new TcpListener(IPAddress.Loopback, dash)
-      probe.Start()
-      mcp
-    with
-    | :? SocketException when attempts > 0 -> findPortPair (attempts - 1)
-    | :? SocketException -> failwith "LT runner: could not find a free port pair"
-
-  let mcpPort = findPortPair 5
-  let dashboardPort = mcpPort + 1
+  let mcpPort, dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
   let dataDir =
     Path.Combine(Path.GetTempPath(), "sagefs-lt", Guid.NewGuid().ToString("N"))
   Directory.CreateDirectory(dataDir) |> ignore

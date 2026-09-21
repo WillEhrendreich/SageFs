@@ -418,7 +418,7 @@ let private runToolOutcomeGate () : Task<unit> =
       File.WriteAllText(samplePath, baselineSample, Http.utf8NoBom)
       Http.runProcessExpectSuccess "dotnet" fixtureDir [ "build"; fixtureProject; "--nologo"; "-v:q" ]
 
-      let port = Http.reserveLoopbackPort (Some (38900 + Random().Next(100)))
+      let port = Http.reserveLoopbackPort ()
       let! proc, httpClient = Http.startDaemonWithArgs port fixtureDir [ "--no-resume" ]
       let! client = connect port
 

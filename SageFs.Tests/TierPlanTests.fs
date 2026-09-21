@@ -94,6 +94,40 @@ let planTests =
     testCase "nameOfArgs names the default run and keeps flags" <| fun _ ->
       nameOfArgs "--summary" |> Expect.equal "default run" "default"
       nameOfArgs "--integration-host --summary" |> Expect.equal "flag tier" "--integration-host"
+
+    // ── port ranges: the fix for cross-tier daemon-port collisions ──
+    testProperty "portRangeOf partitions the pool: in bounds, disjoint, and clear of the live daemon" <|
+      fun (PositiveInt slotsArg) ->
+        let slots = min slotsArg 32
+        let ranges = [ 0 .. slots - 1 ] |> List.map (portRangeOf slots)
+        let inBounds =
+          ranges |> List.forall (fun (lo, hi) -> lo >= testPortPoolLow && hi <= testPortPoolHigh && lo < hi)
+        let disjoint =
+          List.allPairs [ 0 .. slots - 1 ] [ 0 .. slots - 1 ]
+          |> List.forall (fun (i, j) ->
+            i = j ||
+            (let (aLo, aHi), (bLo, bHi) = ranges[i], ranges[j] in aHi <= bLo || bHi <= aLo))
+        // The live user daemon (37749/37750) is above the whole pool, so
+        // clearance falls out of `inBounds` — asserted explicitly anyway,
+        // since this is the property that matters most.
+        let clearOfLiveDaemon = ranges |> List.forall (fun (_, hi) -> hi <= 37749)
+        inBounds && disjoint && clearOfLiveDaemon
+
+    testProperty "portRangeOf tiles the whole pool with no gaps" <|
+      fun (PositiveInt slotsArg) ->
+        let slots = min slotsArg 32
+        let ranges = [ 0 .. slots - 1 ] |> List.map (portRangeOf slots)
+        fst ranges.Head = testPortPoolLow
+        && snd (List.last ranges) = testPortPoolHigh
+        && (ranges |> List.pairwise |> List.forall (fun ((_, hi), (lo2, _)) -> hi = lo2))
+
+    testProperty "portRangeOf is deterministic: the same (slots, slotIndex) always yields the same range" <|
+      fun (PositiveInt slotsArg) (index: int) ->
+        let slots = min slotsArg 32
+        portRangeOf slots index = portRangeOf slots index
+
+    testCase "portRangeOf with one slot is the whole pool" <| fun _ ->
+      portRangeOf 1 0 |> Expect.equal "one slot, whole pool" (testPortPoolLow, testPortPoolHigh)
   ]
 
 /// The isolation itself, for real: a process run through isolatedArgv sees

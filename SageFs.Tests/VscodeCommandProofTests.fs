@@ -263,22 +263,6 @@ let private needsVirtualDisplay () : bool =
       || not (String.IsNullOrEmpty(Environment.GetEnvironmentVariable "WAYLAND_DISPLAY"))
       || Environment.GetEnvironmentVariable "XDG_SESSION_TYPE" = "wayland")
 
-let private pickFreePort () =
-  use l = new TcpListener(IPAddress.Loopback, 0)
-  l.Start()
-  (l.LocalEndpoint :?> IPEndPoint).Port
-
-let rec private findPortPair attempts =
-  let mcp = pickFreePort ()
-  let dash = mcp + 1
-  try
-    use probe = new TcpListener(IPAddress.Loopback, dash)
-    probe.Start()
-    mcp
-  with
-  | :? SocketException when attempts > 0 -> findPortPair (attempts - 1)
-  | :? SocketException -> failwith "could not find a free port pair"
-
 /// Everything a proof-suite run needs, torn down together in `finally`.
 type private Fixture = {
   DaemonProcess: Process
@@ -290,8 +274,10 @@ type private Fixture = {
 }
 
 let private startDaemonWithWebLiveSession () : Fixture =
-  let mcpPort = findPortPair 5
-  let dashboardPort = mcpPort + 1
+  // TestPorts.reservePair scans only this tier's assigned
+  // SAGEFS_TEST_PORT_RANGE when one is set, so a concurrently-running tier's
+  // daemon can never win the reserve-then-bind race for this pair.
+  let mcpPort, dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
   let dataDir =
     Path.Combine(Path.GetTempPath(), "sagefs-vsc-proof", Guid.NewGuid().ToString("N"))
   Directory.CreateDirectory(dataDir) |> ignore

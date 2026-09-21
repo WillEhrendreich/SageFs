@@ -58,34 +58,22 @@ let private daemonStartupHealthMaxAttempts =
   int (Math.Ceiling(daemonStartupHealthTimeout.TotalMilliseconds / daemonStartupHealthPollInterval.TotalMilliseconds))
 
 /// A daemon binds TWO ports: the MCP port it is given, and the dashboard at
-/// that port + 1. Reserving only the first let a daemon start whose dashboard
-/// bind then failed, so both are checked together, while both are held.
+/// that port + 1. Both are released before the daemon starts — a
+/// check-then-use window that cannot be closed without handing a bound
+/// socket to another process. `startDaemonWithArgs` therefore does not trust
+/// the port afterwards: it proves the daemon that answers is the one it
+/// spawned.
 ///
-/// Both listeners are released before the daemon starts — a check-then-use
-/// window that cannot be closed without handing a bound socket to another
-/// process. `startDaemonWithArgs` therefore does not trust the port afterwards:
-/// it proves the daemon that answers is the one it spawned.
-let private tryReserveLoopbackPort (port: int) =
-  try
-    use mcp = new TcpListener(IPAddress.Loopback, port)
-    mcp.Start()
-    let bound = (mcp.LocalEndpoint :?> IPEndPoint).Port
-    use dashboard = new TcpListener(IPAddress.Loopback, bound + 1)
-    dashboard.Start()
-    Some bound
-  with
-  | :? SocketException -> None
-
-let reserveLoopbackPort (preferredPort: int option) =
-  match preferredPort |> Option.bind tryReserveLoopbackPort with
-  | Some port -> port
-  | None ->
-    // An OS-assigned port is free, but its +1 neighbour (the dashboard) may not
-    // be, so a few fresh draws are expected rather than exceptional.
-    Seq.init 20 (fun _ -> tryReserveLoopbackPort 0)
-    |> Seq.tryPick id
-    |> Option.defaultWith (fun () ->
-      failwith "Unable to reserve a free loopback port pair (MCP + dashboard) for HTTP integration tests.")
+/// Delegates to the ONE shared allocator (TestInfrastructure.TestPorts) so
+/// this suite's daemons scan only this tier's assigned
+/// SAGEFS_TEST_PORT_RANGE when ci-pipeline.fsx runs several tiers
+/// concurrently — a concurrently-running tier's daemon can never win the
+/// reserve-then-bind race for the same pair. Every call site here used to
+/// pass its own hardcoded "preferred" literal (`38700 + Random().Next 100`,
+/// ...) purely to avoid the OTHER literals in this SAME file; the shared
+/// allocator's real bind-and-verify makes that convention unnecessary.
+let reserveLoopbackPort () =
+  fst (SageFs.Tests.TestInfrastructure.TestPorts.reservePair ())
 
 let runProcessExpectSuccess (fileName: string) (workingDir: string) (args: string list) =
   let psi = ProcessStartInfo()
@@ -152,8 +140,8 @@ let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = t
   // Ready means OUR daemon answers — not "something answers on this port".
   //
   // This used to accept any /health response. The port is released before the
-  // daemon binds it (see `tryReserveLoopbackPort`), and integration suites run
-  // in parallel from narrow port ranges, so a neighbouring suite's daemon could
+  // daemon binds it (see `TestInfrastructure.TestPorts.reservePair`), and
+  // integration suites run concurrently, so a neighbouring suite's daemon could
   // take the port first: ours failed to bind and exited, the neighbour's /health
   // answered, this returned "ready", and the test failed seconds later with
   // `Connection refused` once the neighbour shut down — passing every time in
@@ -361,15 +349,12 @@ let httpApiHarnessTests =
       daemonStartupHealthTimeout
       |> Expect.equal "startup wait should match documented 60 seconds" (TimeSpan.FromSeconds(60.0))
 
-    testCase "reserveLoopbackPort skips an occupied preferred port" <| fun _ ->
-      use occupied = new TcpListener(IPAddress.Loopback, 0)
-      occupied.Start()
-
-      let occupiedPort = (occupied.LocalEndpoint :?> IPEndPoint).Port
-      let reserved = reserveLoopbackPort (Some occupiedPort)
-
-      (reserved = occupiedPort)
-      |> Expect.isFalse "occupied preferred port should not be reused"
+    testCase "reserveLoopbackPort returns a genuinely free, bindable port" <| fun _ ->
+      // The "skips an occupied preferred port" contract this test used to
+      // name moved to TestPortsTests.fs, which exercises the shared
+      // allocator directly (including under an assigned SAGEFS_TEST_PORT_RANGE) —
+      // this is a thin smoke check that this file's wrapper still reaches it.
+      let reserved = reserveLoopbackPort ()
 
       (reserved, 0)
       |> Expect.isGreaterThan "reserved port should be positive"
@@ -382,7 +367,7 @@ let httpApiHarnessTests =
 // One daemon shared across all integration tests (saves ~170s of startup).
 // Tests run sequenced since they share daemon state.
 
-let private sharedPort = reserveLoopbackPort (Some 38500)
+let private sharedPort = reserveLoopbackPort ()
 
 let private sharedDaemon =
   lazy (startDaemon sharedPort |> Async.AwaitTask |> Async.RunSynchronously) // lazy one-time startup, acceptable
@@ -856,7 +841,7 @@ let integrationTests =
 let httpApiRoutingTests =
   Integration.hostList "HTTP API routing" [
     testTask "POST /api/sessions/{sid}/buffer-changed accepts unsaved buffer content" {
-      let port = reserveLoopbackPort (Some (38800 + (Random().Next(100))))
+      let port = reserveLoopbackPort ()
       let! proc, client =
         startDaemonWithArgs port repoRoot []
       try
@@ -891,7 +876,7 @@ let httpApiRoutingTests =
     }
 
     testTask "POST /api/sessions/{sid}/buffer-changed returns 404 for unknown session" {
-      let port = reserveLoopbackPort (Some (38900 + (Random().Next(100))))
+      let port = reserveLoopbackPort ()
       let! proc, client =
         startDaemonWithArgs port repoRoot []
       try
@@ -912,7 +897,7 @@ let httpApiRoutingTests =
     }
 
     testTask "POST /api/completions uses workingDirectory for startup session routing" {
-      let port = reserveLoopbackPort (Some (38600 + (Random().Next(100))))
+      let port = reserveLoopbackPort ()
       let! proc, client =
         startDaemonWithArgs port repoRoot []
       try
@@ -947,7 +932,7 @@ let httpApiRoutingTests =
     }
 
     testTask "POST /api/completions accepts snake_case cursor_position" {
-      let port = reserveLoopbackPort (Some (38700 + (Random().Next(100))))
+      let port = reserveLoopbackPort ()
       let! proc, client =
         startDaemonWithArgs port repoRoot []
       try
@@ -982,7 +967,7 @@ let httpApiRoutingTests =
     }
 
     testTask "WHY — POST /api/completions — a cursor past end-of-string is clamped instead of silently returning zero items because editors and agents routinely send end-relative offsets (smoke-test failure 2026-08)" {
-      let port = reserveLoopbackPort (Some (38700 + (Random().Next(100))))
+      let port = reserveLoopbackPort ()
       let! proc, client =
         startDaemonWithArgs port repoRoot []
       try
@@ -1028,7 +1013,7 @@ let httpApiRoutingTests =
     // "Multiple sessions match workingDirectory" failure mode the route was
     // chosen to avoid.
     testTask "POST /api/sessions/{sid}/workflow switches Interactive to HotReload on the SAME session, spawn-first" {
-      let port = reserveLoopbackPort (Some (39000 + (Random().Next(100))))
+      let port = reserveLoopbackPort ()
       let! proc, client =
         startDaemonWithArgs port repoRoot []
       try
@@ -1128,7 +1113,7 @@ let httpApiLiveTestingCompiledProjectTests =
           "--nologo"
           "-v:q" ]
 
-      let port = reserveLoopbackPort (Some (38800 + (Random().Next(100))))
+      let port = reserveLoopbackPort ()
       let! proc, client =
         startDaemonWithArgs port repoRoot [ "--no-resume" ]
 
@@ -1250,7 +1235,7 @@ let httpApiLiveTestingCompiledProjectTests =
 let daemonStartupSmokeTest =
   Integration.hostList "Daemon startup smoke" [
     testCase "Daemon starts on fresh port and /health responds" <| fun _ ->
-      let port = reserveLoopbackPort (Some (38100 + (Random().Next(100))))
+      let port = reserveLoopbackPort ()
       let proc, client = startDaemon port |> Async.AwaitTask |> Async.RunSynchronously
       try
         let status, body = getJson client "/health" |> Async.AwaitTask |> Async.RunSynchronously

@@ -86,6 +86,101 @@ module DaemonIdentity =
       doc.RootElement.GetProperty("pid").GetInt32() = pid
     with _ -> false
 
+/// The one port allocator every real-daemon-spawning test harness goes
+/// through. A daemon binds two ports — the MCP port it is given, and the
+/// dashboard at that port + 1 — so "free" means both are free, proven by
+/// binding real loopback listeners and releasing them immediately (the
+/// resulting reserve-then-release window is why every caller that actually
+/// spawns a daemon re-verifies the answering daemon's own pid afterwards —
+/// see `DaemonIdentity` above).
+///
+/// `ci-pipeline.fsx` runs several test tiers CONCURRENTLY, each in its own
+/// checkout clone and its own /tmp, but every tier shares ONE network
+/// namespace — mount namespaces do not isolate ports. Before this module
+/// existed, every harness that needed a daemon port picked its own
+/// "preferred" literal plus a small random offset (`38700 + Random().Next
+/// 100`, `39100 + Random.Shared.Next 300`, ...), spread out only enough to
+/// avoid the OTHER literals in the SAME process — never another tier's
+/// process. Two tiers whose literal ranges overlapped could both
+/// reserve-then-release the identical pair in the same instant; the daemon
+/// that lost that race kept running and logged "ready" anyway (fixed
+/// alongside this module in SageFs/DaemonMode.fs — a failed required bind is
+/// now a fatal, non-zero-exit startup failure), and the test that spawned it
+/// spent its whole timeout waiting on a port nobody would ever answer on.
+///
+/// `SAGEFS_TEST_PORT_RANGE=<lo>-<hi>` (set by ci-pipeline.fsx, one disjoint
+/// slice of the pool per concurrently-running tier — see build/TierPlan.fs's
+/// `portRangeOf`) makes that cross-tier collision structurally impossible:
+/// every harness that spawns a daemon scans ONLY inside its own tier's
+/// slice. Outside the pipeline (a developer running one tier by hand, the
+/// env var absent) scanning falls back to the OS's own ephemeral-port
+/// assignment — the pre-existing behaviour.
+module TestPorts =
+  open System
+  open System.Net
+  open System.Net.Sockets
+
+  let private rangeEnvVar = "SAGEFS_TEST_PORT_RANGE"
+
+  /// Attempts scanning a caller-assigned range before giving up — wide enough
+  /// that a handful of daemons reserving ports at the same moment inside one
+  /// tier essentially never exhausts it by chance.
+  let private maxRangeAttempts = 200
+
+  /// Attempts asking the OS for an ephemeral port before giving up — mirrors
+  /// the pre-existing `HttpApiIntegrationTests.reserveLoopbackPort` fallback:
+  /// the port itself is always free (the OS just handed it out), so only its
+  /// +1 dashboard neighbour can be taken, which is uncommon.
+  let private maxEphemeralAttempts = 20
+
+  let private parseRange (raw: string) =
+    match raw.Split('-') with
+    | [| lo; hi |] ->
+      match Int32.TryParse lo, Int32.TryParse hi with
+      | (true, lo), (true, hi) when hi > lo -> Some(lo, hi)
+      | _ -> None
+    | _ -> None
+
+  /// This tier's assigned slice, or None outside the pipeline.
+  let private assignedRange () =
+    match Environment.GetEnvironmentVariable rangeEnvVar with
+    | null | "" -> None
+    | raw -> parseRange raw
+
+  /// Both the mcp port and its dashboard neighbour (port + 1) bind — held
+  /// only long enough to prove they are free right now, then released so the
+  /// daemon can bind them itself.
+  let private tryReservePair (port: int) =
+    try
+      use mcp = new TcpListener(IPAddress.Loopback, port)
+      mcp.Start()
+      let bound = (mcp.LocalEndpoint :?> IPEndPoint).Port
+      use dashboard = new TcpListener(IPAddress.Loopback, bound + 1)
+      dashboard.Start()
+      Some bound
+    with :? SocketException -> None
+
+  /// One (mcpPort, dashboardPort) pair, free right now.
+  let reservePair () : int * int =
+    let mcpPort =
+      match assignedRange () with
+      | Some(lo, hi) ->
+        // `hi` is exclusive: a candidate at hi - 1 would push the dashboard
+        // neighbour (candidate + 1) to hi — one port past this tier's slice,
+        // and, at a slice boundary, into the next tier's.
+        let span = max 1 (hi - lo - 1)
+        Seq.init maxRangeAttempts (fun _ -> lo + Random.Shared.Next span)
+        |> Seq.choose tryReservePair
+        |> Seq.tryHead
+        |> Option.defaultWith (fun () ->
+          failwithf "TestPorts.reservePair: no free port pair in the assigned range %d-%d (%s)" lo hi rangeEnvVar)
+      | None ->
+        Seq.init maxEphemeralAttempts (fun _ -> tryReservePair 0)
+        |> Seq.tryPick id
+        |> Option.defaultWith (fun () ->
+          failwith "TestPorts.reservePair: unable to reserve a free ephemeral loopback port pair")
+    mcpPort, mcpPort + 1
+
 /// Structural registry of [Integration] suites. Every integration suite is
 /// registered here together with the runner that owns it, so:
 ///  - the default run excludes registered suites by the IDENTITY of their test

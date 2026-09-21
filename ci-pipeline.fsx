@@ -272,7 +272,13 @@ let private procId (field: string) =
   |> fun l -> int (l.Split([| '\t'; ' ' |], StringSplitOptions.RemoveEmptyEntries).[1])
 
 /// Run one tier (in its own clone when isolated) and record its outcome.
-let runTier (isolation: TierPlan.Isolation) (t: TierPlan.Tier) =
+/// `slotIndex` is which of the `slots` concurrently-running workers is
+/// running it (see `runTiers`) — NOT the tier's own index, since one slot
+/// runs many tiers over the run, one after another, off the shared queue.
+/// The port range is keyed to the slot for exactly that reason: whichever
+/// tier a slot is running at a given moment is the only one using that
+/// slot's range at that moment.
+let runTier (isolation: TierPlan.Isolation) (slots: int) (slotIndex: int) (t: TierPlan.Tier) =
   async {
     let safe = TierPlan.fileNameOf t.Name
     let clone = Path.Combine(tierWork, safe)
@@ -285,6 +291,7 @@ let runTier (isolation: TierPlan.Isolation) (t: TierPlan.Tier) =
     if File.Exists ledger then File.Delete ledger
     Directory.CreateDirectory dataDir |> ignore
     Directory.CreateDirectory tmpDir |> ignore
+    let portLo, portHi = TierPlan.portRangeOf slots slotIndex
     let env =
       [ "SAGEFS_TRUST_LEDGER", ledger
         "SAGEFS_DATA_DIR", dataDir
@@ -295,7 +302,12 @@ let runTier (isolation: TierPlan.Isolation) (t: TierPlan.Tier) =
         // this stops tiers leaving nodes behind at all.
         "MSBUILDDISABLENODEREUSE", "1"
         "SAGEFS_SUITE_DURATIONS", suiteDurationsFile
-        "SAGEFS_SUITE_TIMINGS_OUT", Path.Combine(tierWork, safe + ".suites.json") ]
+        "SAGEFS_SUITE_TIMINGS_OUT", Path.Combine(tierWork, safe + ".suites.json")
+        // Every harness that spawns a real daemon reserves its ports through
+        // TestPorts.reservePair(), which scans ONLY inside this range — see
+        // build/TierPlan.fs `portRangeOf` for why disjoint-per-slot ranges
+        // make a cross-tier port collision structurally impossible.
+        "SAGEFS_TEST_PORT_RANGE", $"{portLo}-{portHi}" ]
     let command = $"dotnet {testDll} {t.Args}"
     let sw = Diagnostics.Stopwatch.StartNew()
     let! code =
@@ -357,16 +369,16 @@ let runTiers (tiers: TierPlan.Tier list) =
       printfn "Expected wall clock %.0fs (serial would be %.0fs), from recorded durations"
         (TierPlan.makespan slots estimate ordered) serial
     let queue = Collections.Concurrent.ConcurrentQueue<TierPlan.Tier>(ordered)
-    let worker () =
+    let worker (slotIndex: int) =
       async {
         let results = ResizeArray()
         let mutable next = Unchecked.defaultof<TierPlan.Tier>
         while queue.TryDequeue(&next) do
-          let! r = runTier isolation next
+          let! r = runTier isolation slots slotIndex next
           results.Add r
         return List.ofSeq results
       }
-    let! measured = List.init slots (fun _ -> worker ()) |> Async.Parallel
+    let! measured = List.init slots worker |> Async.Parallel
     // Merge ledgers (per-tier files: separate processes never share a writer).
     for t in tiers do
       let ledger = Path.Combine(tierWork, TierPlan.fileNameOf t.Name + ".jsonl")

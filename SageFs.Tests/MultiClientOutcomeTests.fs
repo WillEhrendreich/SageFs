@@ -37,7 +37,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 // ─── One daemon, one session, two independent clients ───────────────────────
 
-let private daemonPort = Harness.reserveLoopbackPort (Some (39800 + Random.Shared.Next 150))
+let private daemonPort = Harness.reserveLoopbackPort ()
 
 let private sharedDir = IO.Directory.CreateTempSubdirectory("sagefs-multiclient-").FullName
 

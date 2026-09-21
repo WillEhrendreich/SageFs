@@ -186,18 +186,17 @@ let private writeAndCommit (dir: string) (relPath: string) (content: string) (me
     return! git dir [ "rev-parse"; "HEAD" ]
   }
 
-let private reserveLoopbackPort () =
-  use listener = new TcpListener(IPAddress.Loopback, 0)
-  listener.Start()
-  (listener.LocalEndpoint :?> IPEndPoint).Port
-
 /// Spawn an isolated daemon rooted at `workingDir` (a throwaway temp git
 /// repo, NEVER this repo, NEVER the user's live checkout) with its own
 /// port and its own `SAGEFS_DATA_DIR`. Owned by this test process
 /// (--owner-pid/--owner-start) plus a --ttl belt-and-braces, exactly
 /// `CohortMcpToolsIntegrationTests.fs`'s `startIsolatedDaemon`.
 let private startIsolatedDaemon (workingDir: string) (dataDir: string) : Task<Process * int> = task {
-  let port = reserveLoopbackPort ()
+  // TestPorts.reservePair scans only this tier's assigned
+  // SAGEFS_TEST_PORT_RANGE when one is set, so a concurrently-running
+  // tier's daemon can never win the reserve-then-bind race for this pair
+  // (this daemon's dashboard is unused, but SageFs always binds it too).
+  let port, _dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
   let psi = ProcessStartInfo()
   psi.FileName <- sageFsExe
   psi.UseShellExecute <- false

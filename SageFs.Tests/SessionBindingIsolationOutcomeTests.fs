@@ -39,7 +39,7 @@ module Integration = SageFs.Tests.TestInfrastructure.Integration
 
 // ─── One daemon, two bare sessions in two directories ───────────────────────
 
-let private daemonPort = Harness.reserveLoopbackPort (Some (39500 + Random.Shared.Next 200))
+let private daemonPort = Harness.reserveLoopbackPort ()
 
 /// Two sessions for the SAME directory are one session by design (the owner
 /// rejects the duplicate), so each gets its own temp directory. Bare: no

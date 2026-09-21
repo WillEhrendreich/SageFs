@@ -109,22 +109,6 @@ type private IsolatedDaemon =
     ErrLog: string }
 
 module private IsolatedDaemon =
-  let private pickFreePort () =
-    use l = new TcpListener(IPAddress.Loopback, 0)
-    l.Start()
-    (l.LocalEndpoint :?> IPEndPoint).Port
-
-  let rec private findPortPair attempts =
-    let mcp = pickFreePort ()
-    let dash = mcp + 1
-    try
-      use probe = new TcpListener(IPAddress.Loopback, dash)
-      probe.Start()
-      mcp
-    with
-    | :? SocketException when attempts > 0 -> findPortPair (attempts - 1)
-    | :? SocketException -> failwith "Disconnect-indicator runner: could not find a free port pair"
-
   let private drain (stream: StreamReader) (path: string) =
     let writer = new StreamWriter(path, append = true)
     let rec loop () =
@@ -169,8 +153,10 @@ module private IsolatedDaemon =
 
   /// Spawn a brand-new isolated daemon on a freshly-picked, free port pair.
   let start (repoRoot: string) : IsolatedDaemon =
-    let mcpPort = findPortPair 5
-    let dashPort = mcpPort + 1
+    // TestPorts.reservePair scans only this tier's assigned
+    // SAGEFS_TEST_PORT_RANGE when one is set, so a concurrently-running
+    // tier's daemon can never win the reserve-then-bind race for this pair.
+    let mcpPort, dashPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
     let dataDir = Path.Combine(Path.GetTempPath(), "sagefs-disconnect", Guid.NewGuid().ToString("N"))
     Directory.CreateDirectory(dataDir) |> ignore
     let proc = spawnOn repoRoot dataDir mcpPort

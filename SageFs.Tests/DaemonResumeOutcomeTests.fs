@@ -188,7 +188,7 @@ let daemonResumeOutcomeTests =
 
       try
         // ── Daemon 1: create a session ──────────────────────────────────────
-        let portOne = Harness.reserveLoopbackPort (Some (40100 + Random.Shared.Next 150))
+        let portOne = Harness.reserveLoopbackPort ()
         let! proc1, client1 =
           startDaemonOnDataDir portOne dataDir
             [ "SAGEFS_MANIFEST_SAVE_INTERVAL_SECONDS", fastManifestSaveIntervalSeconds ] []
@@ -235,7 +235,7 @@ let daemonResumeOutcomeTests =
         firstClient <- null
 
         // ── Daemon 2: a DIFFERENT process, a DIFFERENT port, the same dir ───
-        let portTwo = Harness.reserveLoopbackPort (Some (40300 + Random.Shared.Next 150))
+        let portTwo = Harness.reserveLoopbackPort ()
         portTwo |> Expect.notEqual "the second daemon must not reuse the first port" portOne
         let! proc2, client2 = startDaemonOnDataDir portTwo dataDir [] []
         second <- proc2
