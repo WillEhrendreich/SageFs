@@ -414,6 +414,26 @@ module TrustSignal =
       let verdict = judge (scopeOf argv) registered tally
       let exitCode = Verdict.exitCode expectoExit verdict
       report (rowOf tier registered tally verdict exitCode)
+      // Where this tier's time went, in every log, so the next speed-up is
+      // chosen from data: the slowest single tests, and the heaviest top-level
+      // lists (the unit a shard or a split would move).
+      match summary.Value with
+      | Some s ->
+        let timed = s.passed @ s.failed @ s.errored
+        printfn "SLOWEST tests in %s:" tier
+        timed
+        |> List.sortByDescending (fun (_, t) -> t.duration)
+        |> List.truncate 15
+        |> List.iter (fun (flat, t) ->
+          printfn "  %7.1fs  %s" t.duration.TotalSeconds (String.concat " / " flat.name))
+        printfn "HEAVIEST lists in %s:" tier
+        timed
+        |> List.groupBy (fun (flat, _) -> match flat.name with root :: _ -> root | [] -> "")
+        |> List.map (fun (root, xs) -> root, xs |> List.sumBy (fun (_, t) -> t.duration.TotalSeconds), xs.Length)
+        |> List.sortByDescending (fun (_, seconds, _) -> seconds)
+        |> List.truncate 10
+        |> List.iter (fun (root, seconds, n) -> printfn "  %7.1fs  %4d tests  %s" seconds n root)
+      | None -> ()
       exitCode
 
   /// The argument strings of every `testTier "<args>"` / `testTierAfter [..]
