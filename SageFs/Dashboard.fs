@@ -209,14 +209,37 @@ module private ConnMonitor =
   [<Literal>]
   let LastSeenSignal = "dsLastSeenAt"
 
-/// The reactive `data-effect` expression: reads `HeartbeatSignal` (creating
-/// the dependency Datastar's effect tracking needs) purely to detect that it
-/// changed, then stamps `LastSeenSignal` with the BROWSER's own `Date.now()`.
-/// Fires once immediately on page load (so `LastSeenSignal` is fresh before
-/// the first `Ds.onInterval` tick even runs) and again every time the server
-/// patches a new heartbeat value in.
+  /// The last `HeartbeatSignal` VALUE this page actually observed. It exists so
+  /// that stamping `LastSeenSignal` is idempotent — see
+  /// `heartbeatArrivalEffectExpr` for the failure it closes.
+  [<Literal>]
+  let LastBeatSignal = "dsLastBeatAt"
+
+/// The reactive `data-effect` expression: stamps `LastSeenSignal` with the
+/// BROWSER's own `Date.now()` — but ONLY when `HeartbeatSignal` holds a value
+/// this page has not seen before.
+///
+/// It used to stamp unconditionally, `$dsLastSeenAt = ($dsHeartbeatAt,
+/// Date.now())`, trusting the effect to run only when the heartbeat changed.
+/// It does not. Observed in a real browser with the daemon killed: the
+/// heartbeat froze, correctly, but `dsLastSeenAt` kept advancing (Datastar
+/// serialises every signal into each SSE reconnect URL, which is how it was
+/// seen: 590270 → 592270 → 596270 → 604270 with `dsHeartbeatAt` fixed at
+/// 588344). A reactive framework is free to re-evaluate an effect for reasons
+/// other than its dependency changing, and every such re-run counted as a
+/// sighting, so the page was refreshed by the very outage it existed to
+/// detect: `data-connected` stayed "true" and the banner never appeared.
+///
+/// Comparing against the last value SEEN makes the stamp a function of what
+/// arrived rather than of when the effect happened to run, so a spurious re-run
+/// does nothing. It keeps the clock-skew fix intact: both sides of the
+/// staleness comparison are still the browser's own `Date.now()`.
 let private heartbeatArrivalEffectExpr () =
-  sprintf "$%s = ($%s, Date.now())" ConnMonitor.LastSeenSignal ConnMonitor.HeartbeatSignal
+  sprintf
+    "$%s !== $%s && ($%s = $%s, $%s = Date.now())"
+    ConnMonitor.LastBeatSignal ConnMonitor.HeartbeatSignal
+    ConnMonitor.LastBeatSignal ConnMonitor.HeartbeatSignal
+    ConnMonitor.LastSeenSignal
 
 /// The reactive `data-on-interval` expression: every `dashboardHeartbeat`
 /// tick, compare "now" against `LastSeenSignal` — the browser's OWN
@@ -356,6 +379,9 @@ let renderShell (version: string) (clientId: string) (initialSessionId: string) 
                 // `Ds.onInterval` tick can ever run, so this seed value is never
                 // actually read for a staleness decision.
                 Ds.signal (ConnMonitor.LastSeenSignal, 0L);
+                // No heartbeat value observed yet, so the first effect run on
+                // page load always stamps `LastSeenSignal` fresh.
+                Ds.signal (ConnMonitor.LastBeatSignal, 0L);
                 // Stamps `LastSeenSignal` with the BROWSER's own `Date.now()`
                 // every time `HeartbeatSignal` changes — the client-local-arrival
                 // half of the clock-skew fix (see `ConnMonitor` module doc).

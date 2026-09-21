@@ -617,7 +617,14 @@ let shellStructureTests = testList "shell structure (replaces browser existence 
     // change token, not a compared clock. All wired through renderShell.
     let html = renderShell "0.0.0" "test-id" "" "" (Elem.div [] []) |> renderNode
     html |> Expect.stringContains "wrapper div carries the client-side staleness check on a bounded interval" "data-on-interval__duration."
-    html |> Expect.stringContains "an effect records the LOCAL arrival time when the heartbeat token changes" "$dsLastSeenAt = ($dsHeartbeatAt, Date.now())"
+    // The stamp must be IDEMPOTENT: guarded on the heartbeat VALUE differing
+    // from the last one seen, not merely on the effect running. The previous
+    // unconditional form (`$dsLastSeenAt = ($dsHeartbeatAt, Date.now())`) was
+    // re-run by reconnect attempts with the daemon already dead, so
+    // `dsLastSeenAt` kept advancing and the page never went stale — the banner
+    // never appeared (all three disconnect journeys, including both clock-skew
+    // variants, failed on it).
+    html |> Expect.stringContains "an effect records the LOCAL arrival time only when a NEW heartbeat value arrives" "$dsLastBeatAt !== $dsHeartbeatAt && ($dsLastBeatAt = $dsHeartbeatAt, $dsLastSeenAt = Date.now())"
     html |> Expect.stringContains "staleness check compares the client's OWN clock against the local arrival time (no cross-clock skew)" "$connected = (Date.now() - $dsLastSeenAt)"
     html |> Expect.stringContains "staleness check mirrors the literal string onto body[data-connected]" "document.body.setAttribute('data-connected', $connected ? 'true' : 'false')"
   }
