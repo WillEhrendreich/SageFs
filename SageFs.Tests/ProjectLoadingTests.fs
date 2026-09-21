@@ -10,6 +10,7 @@ open SageFs.WorkflowTypes
 open SageFs.Server.DaemonMode
 open SageFs.WorkerProtocol
 open SageFs.Tests.SharedGenerators
+open Ionide.ProjInfo.Types
 
 [<Tests>]
 let tests =
@@ -312,6 +313,106 @@ let releaseOnlyReferenceTests =
           with ex -> Some ex.Message
         error |> Expect.isSome "a missing reference is reported before FSI starts"
         error.Value |> Expect.stringContains "the message names the missing assembly" "Gone.dll"
+      finally
+        Directory.Delete(root, true)
+    }
+  ]
+
+/// roast-4 #0(b). The pure SageFs DECISION behind `DogfoodReplTests.fs`'s
+/// "the SageFs.Tests namespace is reachable by name" case:
+/// `ProjectLoading.topoSortByProjectReferences` (private — exercised here
+/// through the public `solutionToFsiArgs`, the only way it is ever called)
+/// orders every project AFTER all of its own project references before
+/// their assemblies become FSI `-r:` flags.
+///
+/// WHY this matters: Ionide's WorkspaceLoader returns the explicitly-
+/// requested project FIRST, then its transitive references in DISCOVERY
+/// order — not dependency order. Verified live: with `SageFs.Tests.dll`
+/// (declaring namespace `SageFs.Tests`) referenced before `SageFs.dll`
+/// (declaring `[<RequireQualifiedAccess>] PaneId`, a union type living
+/// directly in namespace `SageFs` with a case named `Tests`), resolving
+/// `SageFs.Tests.EvalTimelineTests` failed with "the union case 'Tests' ...
+/// requires the union type name ('PaneId')" instead of finding the sibling
+/// namespace (`ProjectLoading.fs:590-603`).
+///
+/// The genuine FCS name-resolution fact — that the WRONG order makes FCS
+/// prefer the union case — is only observable in a real FSI session, and
+/// stays proven live by `DogfoodReplTests.fs`. What belongs here, fast, is
+/// the ordering DECISION itself: whatever order Ionide hands the daemon,
+/// every project ends up after its own dependencies in the `-r:` list.
+let private mkProjectRef (projectFileName: string) : ProjectReference =
+  { RelativePath = projectFileName
+    ProjectFileName = projectFileName
+    TargetFramework = "net10.0" }
+
+let private mkNamedProject (projectFileName: string) (targetPath: string) (referencedProjects: ProjectReference list) : ProjectOptions =
+  { SageFs.Tests.ShadowCopyTests.mkProjectOptions targetPath with
+      ProjectFileName = projectFileName
+      ReferencedProjects = referencedProjects }
+
+/// All orderings of `[0 .. n-1]` — exhaustive rather than a probabilistic
+/// FsCheck sample, because the whole input space (which order Ionide could
+/// have reported a handful of projects in) is small and fully enumerable;
+/// exhaustive coverage is strictly stronger than a random sample of it.
+let rec private permutationsOfIndices (indices: int list) : int list seq =
+  match indices with
+  | [] -> Seq.singleton []
+  | _ ->
+    indices
+    |> Seq.collect (fun i ->
+      let rest = indices |> List.filter (fun j -> j <> i)
+      permutationsOfIndices rest |> Seq.map (fun perm -> i :: perm))
+
+[<Tests>]
+let projectReferenceOrderingTests =
+  testList "solutionToFsiArgs orders references dependency-first (roast-4 #0(b))" [
+
+    test "WHY — solutionToFsiArgs — the exact live shape: SageFs.Tests referenced before SageFs (its own dependency) is reordered so SageFs comes first, the fix for FCS resolving SageFs.Tests.EvalTimelineTests as PaneId.Tests" {
+      let root = Directory.CreateTempSubdirectory("sagefs-toposort-").FullName
+      try
+        let write (relPath: string) =
+          let path = Path.Combine(root, relPath)
+          Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
+          File.WriteAllText(path, "x")
+          path
+        let sageFsDll = write (Path.Combine("SageFs", "bin", "Debug", "net10.0", "SageFs.dll"))
+        let sageFsTestsDll = write (Path.Combine("SageFs.Tests", "bin", "Debug", "net10.0", "SageFs.Tests.dll"))
+        let sageFsProj = mkNamedProject "SageFs.fsproj" sageFsDll []
+        let sageFsTestsProj = mkNamedProject "SageFs.Tests.fsproj" sageFsTestsDll [ mkProjectRef "SageFs.fsproj" ]
+        // Ionide reports the explicitly-requested project (SageFs.Tests)
+        // FIRST, then its transitive reference (SageFs) — the exact wrong
+        // order that broke resolution live.
+        let sln = { emptySolution with Projects = [ sageFsTestsProj; sageFsProj ] }
+        let args = solutionToFsiArgs SageFs.Tests.TestInfrastructure.quietLogger false false sln
+        let indexOf dll = args |> Array.findIndex (fun a -> a = "-r:" + dll)
+        (indexOf sageFsDll, indexOf sageFsTestsDll)
+        |> Expect.isLessThan "SageFs.dll (the dependency) is referenced before SageFs.Tests.dll (the dependent), regardless of Ionide's discovery order"
+      finally
+        Directory.Delete(root, true)
+    }
+
+    test "WHY — solutionToFsiArgs — every project in a reference chain is ordered after all of its transitive references, for EVERY discovery order Ionide could report" {
+      let root = Directory.CreateTempSubdirectory("sagefs-toposort-chain-").FullName
+      try
+        let chainLength = 5
+        let dlls =
+          [| for i in 0 .. chainLength - 1 ->
+               let path = Path.Combine(root, sprintf "P%d.dll" i)
+               File.WriteAllText(path, "x")
+               path |]
+        // P(i) references P(i-1): a straight-line dependency chain.
+        let projects =
+          [| for i in 0 .. chainLength - 1 ->
+               let refs = if i = 0 then [] else [ mkProjectRef (sprintf "P%d.fsproj" (i - 1)) ]
+               mkNamedProject (sprintf "P%d.fsproj" i) dlls.[i] refs |]
+        for order in permutationsOfIndices [ 0 .. chainLength - 1 ] do
+          let sln = { emptySolution with Projects = order |> List.map (fun i -> projects.[i]) }
+          let args = solutionToFsiArgs SageFs.Tests.TestInfrastructure.quietLogger false false sln
+          let indexOf dll = args |> Array.findIndex (fun a -> a = "-r:" + dll)
+          for i in 1 .. chainLength - 1 do
+            (indexOf dlls.[i - 1], indexOf dlls.[i])
+            |> Expect.isLessThan
+                 (sprintf "P%d must be referenced before P%d (its dependent) under discovery order %A" (i - 1) i order)
       finally
         Directory.Delete(root, true)
     }
