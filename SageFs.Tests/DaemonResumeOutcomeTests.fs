@@ -31,17 +31,31 @@ module SageFs.Tests.DaemonResumeOutcomeTests
 /// gate is named for is the crash/kill case, and that is what it reproduces.
 ///
 /// WHAT THE COST BUYS, HONESTLY STATED: the daemon writes the manifest from a
-/// 60-second periodic timer (`DaemonMode.fs` — `cacheSaveTimer`, first tick at
-/// start+60s); session creation itself commits nothing. So the observable
-/// durability boundary is up to a minute wide, and this gate waits on the real
-/// file through the real `DaemonPersistence.loadManifest` rather than pretending
-/// otherwise. That wait IS the measurement: if a future change makes creation
-/// durable immediately, this gate gets faster and stays correct.
+/// periodic timer (`DaemonMode.fs` — `cacheSaveTimer`, first tick at
+/// start+`Timeouts.manifestSaveInterval`, production default 60s); session
+/// creation itself commits nothing. So the observable durability boundary is
+/// as wide as that interval, and this gate waits on the real file through the
+/// real `DaemonPersistence.loadManifest` rather than pretending otherwise.
+/// That wait IS the measurement: if a future change makes creation durable
+/// immediately, this gate gets faster and stays correct.
+///
+/// Daemon 1 (the only one whose manifest write this gate waits on) is started
+/// with `SAGEFS_MANIFEST_SAVE_INTERVAL_SECONDS` set small — the interval is a
+/// daemon-startup env var read once into `Timeouts.manifestSaveInterval`, so
+/// shrinking it changes only how SOON the real periodic save fires, not
+/// whether it fires or what it writes. `manifestDurabilityCeiling` stays a
+/// generous ceiling (a safety net for a slow CI runner, not a target), and
+/// `Infra.waitForAsync` still polls the actual on-disk condition, so a
+/// regression that stopped the timer firing entirely would still time out and
+/// fail loudly instead of being masked by a shorter fixed sleep.
 ///
 /// COST: two sequential daemons (never concurrent), one bare session each
-/// side, no project load. Measured wall clock: ~90s, dominated by the 60s
-/// manifest timer. This is the most expensive gate in Island E and nothing
-/// cheaper crosses a process boundary.
+/// side, no project load. Measured wall clock: 17.4s (was 66.1s waiting on
+/// the production 60s interval — a real `--integration-host --filter-test-list
+/// "Daemon resume outcome" --summary` run before/after this change) —
+/// dominated now by daemon start/warmup and a couple of 2s manifest-save
+/// ticks, not the fixed periodic timer. This is the most expensive gate in
+/// Island E and nothing cheaper crosses a process boundary.
 
 open System
 open System.Diagnostics
@@ -63,6 +77,14 @@ let private manifestDurabilityCeiling = TimeSpan.FromSeconds 150.0
 /// How long the second daemon may take to rebuild the session.
 let private resumeCeiling = TimeSpan.FromSeconds 150.0
 
+/// Daemon 1's manifest-save cadence for this gate: small enough that the real
+/// periodic save fires in seconds rather than the production 60s default, so
+/// the durability wait below is bounded by warmup + a couple of save ticks
+/// instead of a fixed one-minute timer. Only daemon 1 needs it shrunk — the
+/// gate's expensive wait is for daemon 1's write to land on disk before
+/// daemon 1 is killed; daemon 2 never runs long enough to hit its own tick.
+let private fastManifestSaveIntervalSeconds = "2"
+
 /// Start a daemon bound to an EXPLICIT data directory — the one thing the
 /// shared harness cannot do, because it allocates a fresh isolated
 /// SAGEFS_DATA_DIR per call and resume needs two daemons to share one.
@@ -70,7 +92,7 @@ let private resumeCeiling = TimeSpan.FromSeconds 150.0
 /// reserved loopback port, `--owner-pid`/`--owner-start` watchdog so a killed
 /// test runner can never leak this daemon, `--ttl 10m` on top of that, and a
 /// bounded health poll before the client is handed back.
-let private startDaemonOnDataDir (port: int) (dataDir: string) (args: string list) = task {
+let private startDaemonOnDataDir (port: int) (dataDir: string) (envOverrides: (string * string) list) (args: string list) = task {
   let psi = ProcessStartInfo()
   psi.FileName <- Infra.SageFsBinary.path ()
   psi.UseShellExecute <- false
@@ -88,6 +110,8 @@ let private startDaemonOnDataDir (port: int) (dataDir: string) (args: string lis
   psi.ArgumentList.Add("--ttl")
   psi.ArgumentList.Add("10m")
   psi.Environment["SAGEFS_DATA_DIR"] <- dataDir
+  for name, value in envOverrides do
+    psi.Environment[name] <- value
 
   let proc = Process.Start(psi)
   let client = new HttpClient()
@@ -165,7 +189,9 @@ let daemonResumeOutcomeTests =
       try
         // ── Daemon 1: create a session ──────────────────────────────────────
         let portOne = Harness.reserveLoopbackPort (Some (40100 + Random.Shared.Next 150))
-        let! proc1, client1 = startDaemonOnDataDir portOne dataDir []
+        let! proc1, client1 =
+          startDaemonOnDataDir portOne dataDir
+            [ "SAGEFS_MANIFEST_SAVE_INTERVAL_SECONDS", fastManifestSaveIntervalSeconds ] []
         first <- proc1
         firstClient <- client1
 
@@ -211,7 +237,7 @@ let daemonResumeOutcomeTests =
         // ── Daemon 2: a DIFFERENT process, a DIFFERENT port, the same dir ───
         let portTwo = Harness.reserveLoopbackPort (Some (40300 + Random.Shared.Next 150))
         portTwo |> Expect.notEqual "the second daemon must not reuse the first port" portOne
-        let! proc2, client2 = startDaemonOnDataDir portTwo dataDir []
+        let! proc2, client2 = startDaemonOnDataDir portTwo dataDir [] []
         second <- proc2
         secondClient <- client2
 
