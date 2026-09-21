@@ -57,9 +57,12 @@ let integrationRegistryTests =
       // NB: "Actor split", "Eval cancellation" and "StartupConfig type and storage" are no
       // longer Host suites — the first two are now DST invariants (EvalActorSim) in the default
       // suite, the third is a pure default-suite testList after re-homing.
+      // "MCP session isolation" and "Reset isolation" left this list too: every
+      // op they route through is a stub, and the shared FSI actor they forced
+      // was only ever borrowed for an event handle. They run in the default suite.
       [ "Daemon CLI subcommands"; "Daemon lifecycle"; "SessionManager lifecycle"
         "HTTP API"; "MCP Server Integration tests"
-        "MCP session isolation"; "Reset isolation"; "Session reset"; "Falco web application tests"
+        "Session reset"; "Falco web application tests"
         "Package/Namespace Explorer"; "checkFSharpCode backing function" ]
       |> List.filter (fun suite ->
         not (hostNames |> List.exists (fun n -> n.Contains("[Integration] " + suite))))

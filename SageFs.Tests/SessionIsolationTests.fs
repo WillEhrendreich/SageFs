@@ -1,4 +1,4 @@
-﻿module SageFs.Tests.SessionIsolationTests
+module SageFs.Tests.SessionIsolationTests
 
 open System
 open System.IO
@@ -85,9 +85,9 @@ module McpSessionIsolation =
   // reason this list ever touched the shared FSI actor was to borrow its
   // DiagnosticsChanged handle, replaced above with a bare Event<_>, so
   // --integration-host no longer pays for a real actor warmup here
-  // (fsi-mechanism-extraction.md R7). Still registered as Host: kept here
-  // by IntegrationRegistryTests's pinned Host-suite-name contract.
-  let tests = testSequenced <| Integration.hostList "MCP session isolation" [
+  // (fsi-mechanism-extraction.md R7). With no real process left, it runs in
+  // the default suite.
+  let tests = testSequenced <| testList "MCP session isolation" [
 
     testTask "switchSession updates only the given context's SessionMap for that agent" {
       let ctx1, _ = ctxWithTracking "aaaaaa01"
@@ -704,9 +704,9 @@ module ResetIsolation =
   // (fixed responses or None). globalActorResult was forced only to borrow
   // its DiagnosticsChanged handle, replaced above/below with bare Event<_>
   // values, so --integration-host no longer pays for a real actor warmup
-  // here (fsi-mechanism-extraction.md R7). Still registered as Host: kept
-  // here by IntegrationRegistryTests's pinned Host-suite-name contract.
-  let tests = Integration.hostList "Reset isolation" [
+  // here (fsi-mechanism-extraction.md R7). With no real process left, it
+  // runs in the default suite.
+  let tests = testList "Reset isolation" [
     testTask "hardResetSession with rebuild only restarts the targeted session" {
       let ctx, restartLog, _ = mkTrackingCtx ()
 
