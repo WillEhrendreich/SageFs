@@ -84,14 +84,22 @@ let main argv =
     let outcomes =
       mutants
       |> List.map (fun (caseName, caseTest) ->
-          // Run the single mutant in isolation; Expecto's ``filter-test-case``
-          // is a substring match and the case names are unique.
-          let exitCode = Tests.runTestsWithCLIArgs [] [| "--filter-test-case"; caseName |] caseTest
-          // A mutant is killed only when ITS case passes (exit 0). Any other
-          // exit code (including 2 = no test matched, the case never ran) is a
-          // survivor — fail-closed: an unverified mutant cannot inflate the
-          // score.
-          caseName, (exitCode = 0))
+          // `caseTest` IS the single mutant, so it runs as-is. It used to be
+          // selected with --filter-test-case, whose comment claimed "no test
+          // matched" exits 2 and counts as a survivor. Measured: a filter that
+          // matches nothing exits 0 having run zero tests — so a mutant that
+          // never executed would have been scored KILLED.
+          let summary = ref None
+          let handler =
+            CLIArguments.Append_Summary_Handler(Tests.SummaryHandler(fun s -> summary.Value <- Some s))
+          let exitCode = Tests.runTestsWithCLIArgs [ handler ] [||] caseTest
+          // Killed only when exactly this one case executed and passed —
+          // fail-closed: an unexecuted mutant cannot inflate the score.
+          let ranAndPassed =
+            match summary.Value with
+            | Some s -> s.passed.Length = 1 && s.failed.IsEmpty && s.errored.IsEmpty
+            | None -> false
+          caseName, (exitCode = 0 && ranAndPassed))
     let killed = outcomes |> List.filter snd |> List.length
     let survivors =
       outcomes |> List.filter (fun (_, isKilled) -> not isKilled) |> List.map fst
@@ -121,6 +129,22 @@ let main argv =
     // raising the bar is a deliberate act rather than something a green run
     // hides. Keeping the threshold honest matters more than failing on every
     // survivor, because a gate that cannot be satisfied gets bypassed.
+    let mutationTally : SageFs.Tests.TestInfrastructure.TrustSignal.Tally =
+      { Passed = killed; Failed = 0; Errored = 0; Ignored = 0 }
+    let mutationVerdict =
+      match score >= threshold, survivors.Length, outcomes.Length with
+      | _, _, 0 -> SageFs.Tests.TestInfrastructure.TrustSignal.NothingRan
+      | true, 0, _ -> SageFs.Tests.TestInfrastructure.TrustSignal.Trusted
+      | true, n, _ -> SageFs.Tests.TestInfrastructure.TrustSignal.SurvivorsUnderBar n
+      | false, n, _ -> SageFs.Tests.TestInfrastructure.TrustSignal.TestsFailed (n, 0)
+    let mutationExit =
+      SageFs.Tests.TestInfrastructure.TrustSignal.Verdict.exitCode
+        (match score >= threshold with true -> 0 | false -> 1) mutationVerdict
+    SageFs.Tests.TestInfrastructure.TrustSignal.record
+      { SageFs.Tests.TestInfrastructure.TrustSignal.rowOf
+          "--mutation-score" totalMutations mutationTally mutationVerdict mutationExit with
+          Ran = outcomes.Length
+          Failed = survivors.Length }
     match score >= threshold with
     | true ->
       match survivors.Length with
@@ -167,7 +191,7 @@ let main argv =
     let hostIntegrationTests =
       testSequenced (
         testList "Integration (host)" (SageFs.Tests.TestInfrastructure.Integration.hostSuites ()))
-    let result = Tests.runTestsWithCLIArgs [] hostArgv hostIntegrationTests
+    let result = SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-host" hostArgv hostIntegrationTests
     Environment.Exit result
     result
   | false ->
@@ -235,12 +259,10 @@ let main argv =
     result
   | false ->
 
-  // Run the hot-reload SHAPE MATRIX. It is its own entry point rather than a
-  // `--integration-host` suite because 4 of its 7 cells currently fail against
-  // a real host — see the block comment above the case in
-  // WebAppHotReloadVerificationTests.fs for the per-cell measurement. It is a
-  // standing, runnable proof of an open capability gap, kept out of the gating
-  // pipeline WITHOUT being weakened or silently skipped.
+  // Run the hot-reload SHAPE MATRIX. Its own entry point because it builds a
+  // dedicated fixture the way SageFs builds it; it was once kept out of the
+  // pipeline while 4 of its 7 cells failed. All 7 now reload, so CI invokes it
+  // like every other tier (the "every tier is invoked by CI" test enforces that).
   let isIntegrationShapes = argv |> Array.exists (fun a -> a = "--integration-shapes")
   match isIntegrationShapes with
   | true ->
@@ -254,7 +276,7 @@ let main argv =
              match runner with
              | SageFs.Tests.TestInfrastructure.Integration.Runner.Dedicated "--integration-shapes" -> Some test
              | _ -> None)))
-    let result = Tests.runTestsWithCLIArgs [] shapesArgv shapeTests
+    let result = SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-shapes" shapesArgv shapeTests
     Environment.Exit result
     result
   | false ->
@@ -268,10 +290,10 @@ let main argv =
   // suite. Entry points that are deliberately reached only via --all (an
   // on-demand suite whose payload is a human-readable note, not a bare CLI
   // flag) are exempt — see Integration.isBareFlagEntryPoint.
-  let knownDedicatedEntryPoints =
-    [ "--integration-browser"; "--integration-hr"; "--integration-lt"; "--integration-disconnect"
-      "--integration-shapes" ]
-  match SageFs.Tests.TestInfrastructure.Integration.unwiredDedicated knownDedicatedEntryPoints with
+  match
+    SageFs.Tests.TestInfrastructure.Integration.unwiredDedicated
+      SageFs.Tests.TestInfrastructure.Integration.dispatchedEntryPoints
+  with
   | [] -> ()
   | unwired ->
     eprintfn "Integration.Dedicated suites registered with no Program.fs dispatch branch (fail-closed — outcome-gate-sweep.md §2.2):"
@@ -328,7 +350,7 @@ let main argv =
       // Fail closed: an "[Integration]"-tagged test that bypassed the registry
       // would silently join the fast default run.
       match SageFs.Tests.TestInfrastructure.Integration.unregisteredTagged tests with
-      | [] -> Tests.runTestsWithCLIArgs [] filteredArgv tests
+      | [] -> SageFs.Tests.TestInfrastructure.TrustSignal.run "default" filteredArgv tests
       | leaked ->
         eprintfn "Integration tests are not registered — build them with Integration.hostList/hostCase or Integration.register in TestInfrastructure:"
         leaked |> List.iter (eprintfn "  %s")

@@ -217,6 +217,14 @@ module Integration =
     |> List.filter isBareFlagEntryPoint
     |> List.filter (fun ep -> not (List.contains ep knownEntryPoints))
 
+  /// The `Dedicated` entry points Program.fs has a dispatch branch for. ONE
+  /// list, read by Program.fs's fail-closed `unwiredDedicated` check and by the
+  /// "every tier is invoked by CI" structural test — so "dispatched" and
+  /// "invoked" are checked against the same set rather than two hand copies.
+  let dispatchedEntryPoints =
+    [ "--integration-browser"; "--integration-hr"; "--integration-lt"; "--integration-disconnect"
+      "--integration-shapes" ]
+
   /// The tree a plain default run (`--summary`, no `--all`/`--integration`)
   /// actually executes: every [<Tests>] value in this assembly, minus the
   /// registered Integration suites and the [Benchmark]-tagged wall-clock perf
@@ -234,6 +242,178 @@ module Integration =
     |> Expecto.Test.filter
          Expecto.Tests.defaultConfig.joinWith.asString
          (fun z -> not ((Expecto.Tests.defaultConfig.joinWith.format z).Contains "[Benchmark]"))
+
+/// One trust signal for every test tier (default, host, each dedicated entry
+/// point, mutation).
+///
+/// An exit code alone has repeatedly hidden the thing that mattered:
+///  - a filter that matches nothing exits 0 having run nothing (AGENTS.md);
+///  - a runner can execute a different list than the one its suites registered;
+///  - a runner can die in setup before any test ran, which the pipeline then
+///    reads as "that stage failed" while every later stage never ran at all.
+/// So every tier runs through `run`, which captures Expecto's own summary,
+/// compares what RAN against what was REGISTERED, prints one `TRUST` line and
+/// appends one JSON row to the ledger named by SAGEFS_TRUST_LEDGER. The CI
+/// pipeline's final stage renders that ledger as one table and fails on any
+/// row that is not Trusted — or on any tier that wrote no row.
+module TrustSignal =
+  type Tally =
+    { Passed: int; Failed: int; Errored: int; Ignored: int }
+    member t.Ran = t.Passed + t.Failed + t.Errored + t.Ignored
+
+  /// Whether the run was shaped to be an acceptance signal. A filter, a `--run`
+  /// selection or a stress loop narrows or repeats the tree, so its count can
+  /// never be compared against the registered set.
+  type Scope =
+    | Acceptance
+    | Narrowed
+
+  type Verdict =
+    /// Unfiltered, everything registered ran, nothing failed.
+    | Trusted
+    /// Passed, but filtered — an inner-loop result, never an acceptance check.
+    | NarrowedRun
+    | TestsFailed of failed: int * errored: int
+    /// Zero tests executed. Expecto exits 0 for this; we do not.
+    | NothingRan
+    /// Unfiltered, yet the executed count differs from the registered count:
+    /// the runner ran some other tree than the one its suites registered
+    /// (or a focused test silently narrowed it).
+    | CountMismatch of registered: int * ran: int
+    /// Mutation tier only: the score meets its threshold, yet mutants
+    /// survived. Not a failure (Program.fs explains why the bar, not every
+    /// survivor, gates) — but reported as its own verdict so a green table
+    /// can never hide surviving mutants.
+    | SurvivorsUnderBar of survived: int
+
+  module Verdict =
+    let name (v: Verdict) =
+      match v with
+      | Trusted -> "Trusted"
+      | NarrowedRun -> "NarrowedRun"
+      | TestsFailed _ -> "TestsFailed"
+      | NothingRan -> "NothingRan"
+      | CountMismatch _ -> "CountMismatch"
+      | SurvivorsUnderBar _ -> "SurvivorsUnderBar"
+
+    let describe (v: Verdict) =
+      match v with
+      | Trusted -> "every registered test ran and passed"
+      | NarrowedRun -> "passed, but filtered: not an acceptance signal"
+      | TestsFailed (f, e) -> sprintf "%d failed, %d errored" f e
+      | NothingRan -> "zero tests executed"
+      | CountMismatch (r, n) -> sprintf "registered %d but %d ran" r n
+      | SurvivorsUnderBar n -> sprintf "score meets the threshold, but %d mutant(s) survived" n
+
+    /// Exit code for the verdict. `NothingRan` and `CountMismatch` get their
+    /// own code (3) so they are never mistaken for Expecto's 1/2.
+    let exitCode (expectoExit: int) (v: Verdict) =
+      match v with
+      | Trusted | NarrowedRun | SurvivorsUnderBar _ -> expectoExit
+      | TestsFailed _ -> match expectoExit with 0 -> 1 | code -> code
+      | NothingRan | CountMismatch _ -> 3
+
+  let private narrowingFlags =
+    set [ "--filter"; "--filter-test-list"; "--filter-test-case"; "--run"; "--stress" ]
+
+  let scopeOf (argv: string array) =
+    match argv |> Array.exists narrowingFlags.Contains with
+    | true -> Narrowed
+    | false -> Acceptance
+
+  /// Pure: the verdict for a run. A failure outranks everything; an empty run
+  /// is never green, filtered or not; only an acceptance-shaped run can be
+  /// Trusted, and only when it ran exactly what was registered.
+  let judge (scope: Scope) (registered: int) (tally: Tally) : Verdict =
+    match tally with
+    | t when t.Failed > 0 || t.Errored > 0 -> TestsFailed (t.Failed, t.Errored)
+    | t when t.Ran = 0 -> NothingRan
+    | t ->
+      match scope with
+      | Narrowed -> NarrowedRun
+      | Acceptance when t.Ran <> registered -> CountMismatch (registered, t.Ran)
+      | Acceptance -> Trusted
+
+  /// One ledger row. Plain record so the JSON shape is the field list.
+  type Row =
+    { Tier: string
+      Registered: int
+      Ran: int
+      Passed: int
+      Failed: int
+      Errored: int
+      Ignored: int
+      Verdict: string
+      Detail: string
+      ExitCode: int }
+
+  let LedgerEnvironmentVariable = "SAGEFS_TRUST_LEDGER"
+
+  /// Print the row and append it to the ledger (when one is configured).
+  let record (row: Row) =
+    printfn "TRUST tier=%s registered=%d ran=%d passed=%d failed=%d errored=%d ignored=%d verdict=%s (%s)"
+      row.Tier row.Registered row.Ran row.Passed row.Failed row.Errored row.Ignored row.Verdict row.Detail
+    match System.Environment.GetEnvironmentVariable LedgerEnvironmentVariable with
+    | null | "" -> ()
+    | path ->
+      let line = System.Text.Json.JsonSerializer.Serialize row
+      lock LedgerEnvironmentVariable (fun () -> System.IO.File.AppendAllText(path, line + "\n"))
+
+  let rowOf (tier: string) (registered: int) (tally: Tally) (verdict: Verdict) (exitCode: int) =
+    { Tier = tier
+      Registered = registered
+      Ran = tally.Ran
+      Passed = tally.Passed
+      Failed = tally.Failed
+      Errored = tally.Errored
+      Ignored = tally.Ignored
+      Verdict = Verdict.name verdict
+      Detail = Verdict.describe verdict
+      ExitCode = exitCode }
+
+  let registeredCount (tests: Expecto.Test) = tests |> Expecto.Test.toTestCodeList |> List.length
+
+  /// Run `tests` as `tier` and return the exit code the verdict demands.
+  /// `--list-tests` executes nothing by design, so it bypasses judgement.
+  let runReporting (report: Row -> unit) (tier: string) (argv: string array) (tests: Expecto.Test) : int =
+    match argv |> Array.contains "--list-tests" with
+    | true -> Expecto.Tests.runTestsWithCLIArgs [] argv tests
+    | false ->
+      let summary = ref None
+      let handler =
+        Expecto.Tests.CLIArguments.Append_Summary_Handler(
+          Expecto.Tests.SummaryHandler(fun s -> summary.Value <- Some s))
+      let expectoExit = Expecto.Tests.runTestsWithCLIArgs [ handler ] argv tests
+      let tally =
+        match summary.Value with
+        | Some s ->
+          { Passed = s.passed.Length; Failed = s.failed.Length; Errored = s.errored.Length; Ignored = s.ignored.Length }
+        | None -> { Passed = 0; Failed = 0; Errored = 0; Ignored = 0 }
+      let registered = registeredCount tests
+      let verdict = judge (scopeOf argv) registered tally
+      let exitCode = Verdict.exitCode expectoExit verdict
+      report (rowOf tier registered tally verdict exitCode)
+      exitCode
+
+  /// The argument strings of every `testTier "<args>"` / `testTierAfter [..]
+  /// "<args>"` step in ci-pipeline.fsx text. ONE parser, shared by
+  /// TrustSignalTests and the Definition-of-Done probe, so "does CI invoke this
+  /// runner" cannot mean two different things in two places.
+  let pipelineTierArgs (pipelineText: string) : string list =
+    System.Text.RegularExpressions.Regex.Matches(
+      pipelineText, "testTier(?:After\\s*\\[[^\\]]*\\])?\\s*\"([^\"]+)\"")
+    |> Seq.map (fun m -> m.Groups[1].Value)
+    |> List.ofSeq
+
+  /// Tier name of an argument string: its first token, with the bare
+  /// `--summary` default run named "default" (matches the ledger's Tier field).
+  let tierOfArgs (args: string) =
+    match args.Split(' ')[0] with
+    | "--summary" -> "default"
+    | flag -> flag
+
+  /// `runReporting` with the real sink: print the TRUST line and append to the ledger.
+  let run (tier: string) (argv: string array) (tests: Expecto.Test) : int = runReporting record tier argv tests
 
 let quietLogger =
   { new SageFs.Utils.ILogger with

@@ -194,7 +194,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
             cliArgs
             |> Array.filter (fun a -> a <> "--integration-browser")
           let result =
-            Tests.runTestsWithCLIArgs [] browserArgv DashboardBrowserTests.tests
+            SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-browser" browserArgv DashboardBrowserTests.tests
           exitWith result
   with ex ->
     eprintfn "Browser runner: %s" (ex.ToString())
@@ -545,7 +545,7 @@ let runHotReloadBrowserJourneys (cliArgs: string array) : int =
               cliArgs
               |> Array.filter (fun a -> a <> "--integration-hr")
             let result =
-              Tests.runTestsWithCLIArgs [] hrArgv HotReloadBrowserTests.tests
+              SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-hr" hrArgv HotReloadBrowserTests.tests
             exitWith result
   with ex ->
     eprintfn "HR runner: %s" (ex.ToString())
@@ -824,7 +824,7 @@ let runLiveTestingBrowserJourneys (cliArgs: string array) : int =
               cliArgs
               |> Array.filter (fun a -> a <> "--integration-lt")
             let result =
-              Tests.runTestsWithCLIArgs [] ltArgv LiveTestingBrowserTests.tests
+              SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-lt" ltArgv LiveTestingBrowserTests.tests
             exitWith result
           finally
             restoreHello ()

@@ -90,6 +90,26 @@ cases all begin `"WHY — "`, read the green result, and concluded the behaviour
 covered. Nothing had executed. Exit 0 means *nothing that ran failed*; it says nothing
 about what was excluded.
 
+**Now enforced, not just documented.** Every tier (default, `--integration-host`,
+each dedicated entry point, `--mutation-score`) runs through
+`TestInfrastructure.TrustSignal.run`, which reads Expecto's own summary and prints
+one `TRUST tier=… registered=N ran=N … verdict=…` line:
+
+| Verdict | Meaning | Exit |
+|---|---|---|
+| `Trusted` | unfiltered, everything registered ran, nothing failed | 0 |
+| `NarrowedRun` | passed, but a filter/`--run`/`--stress` narrowed it — inner loop only | 0 |
+| `TestsFailed` | something failed or errored | 1/2 |
+| `NothingRan` | zero tests executed (the trap above) — filtered or not | **3** |
+| `CountMismatch` | unfiltered, but ran ≠ registered | **3** |
+
+CI runs every test stage even after one goes red, collects each tier's row in a
+ledger (`SAGEFS_TRUST_LEDGER`), and its final `trust report` stage prints one
+table and fails on any tier that is not Trusted — including a tier whose process
+died before reporting (`NoReport`). `TrustSignalTests` fails the fast suite if a
+registered tier is not invoked by `ci-pipeline.fsx`, or if a test run there
+bypasses the ledgered `testTier` step. Read the table, not a stage colour.
+
 Consequences, in order of importance:
 
 1. **A filtered run is never the acceptance check.** A gate is done when its own test

@@ -412,9 +412,8 @@ let tests =
 
 /// Entry point for a dedicated CLI runner (mirrors
 /// DashboardBrowserRunner.runBrowserJourneys / -HotReload / -LiveTesting).
-/// Not wired into Program.fs by this island (out of file scope) — provided so
-/// a future wiring change (or a direct call, as this island's own
-/// verification used) has a stable, self-contained entry point.
+/// Program.fs dispatches `--integration-disconnect` here; the run reports its
+/// registered/ran counts through TrustSignal like every other tier.
 let runDisconnectIndicatorJourney (cliArgs: string array) : int =
   let argv = cliArgs |> Array.filter (fun a -> a <> "--integration-disconnect")
-  Tests.runTestsWithCLIArgs [] argv tests
+  SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-disconnect" argv tests

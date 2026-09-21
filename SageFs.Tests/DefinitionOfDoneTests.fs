@@ -121,11 +121,13 @@ module RepoProbe =
           || text.Contains "Integration.Host"
         | flag -> text.Contains(sprintf "Integration.Dedicated \"%s\"" flag)
       RunnerDispatched = fun runner -> programFs.Value.Contains(sprintf "\"%s\"" runner)
+      // Every test-assembly invocation in CI is a ledgered `testTier` step
+      // (TrustSignalTests enforces that), so ask the same parser the trust
+      // report's wiring test uses. The old per-line `run ... <flag>` scan broke
+      // the moment a step wrapped onto several lines.
       RunnerInvokedByCi = fun runner ->
-        ciPipeline.Value.Split('\n')
-        |> Array.exists (fun line ->
-          let trimmed = line.Trim()
-          trimmed.StartsWith "run " && trimmed.Contains runner)
+        TestInfrastructure.TrustSignal.pipelineTierArgs ciPipeline.Value
+        |> List.exists (fun args -> TestInfrastructure.TrustSignal.tierOfArgs args = runner)
       StageExists = fun name ->
         ciPipeline.Value.Contains(sprintf "stage \"%s\"" name)
         || workflows.Value.Contains(sprintf "name: %s" name) }

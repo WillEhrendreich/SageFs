@@ -29,8 +29,11 @@
 //   * whenCmdArg "ci"      — the mutation-score gate (too slow for the fast local
 //                            loop AGENTS.md asks for) and every real-browser
 //                            journey (dashboard, hot-reload, live-testing,
-//                            disconnect-indicator) — CI-gated so the fast
-//                            local loop never fetches a browser.
+//                            disconnect-indicator) plus the hot-reload shape
+//                            matrix — CI-gated so the fast local loop never
+//                            fetches a browser.
+//   * always, after every test stage — the "trust report": one table of every
+//     tier's registered/ran/verdict; the one place a red test tier fails the run.
 //   * whenCmdArg "release" — pack the shippable bundle + write release-manifest.
 //
 // Cross-platform packing is safe: every per-RID tree-sitter native is committed
@@ -147,6 +150,124 @@ let writeReleaseManifest () =
   File.WriteAllText(Path.Combine(releaseDir, "release-manifest.json"), json)
   printfn "Wrote release-manifest.json for %s (%d files)" manifest.version files.Length
 
+// ---- the trust ledger ----------------------------------------------------------
+//
+// Every test tier runs through `testTier`. Two things used to lose information:
+//  * the pipeline stopped at the FIRST red test stage, so every later tier went
+//    unrun and unreported — `integration host` stayed red for a day while two
+//    later tiers were broken the whole time and nobody could see it;
+//  * a stage's exit code was the only signal, and Expecto exits 0 for a run
+//    that executed nothing.
+// Now each test stage continues past failure, the test process writes one
+// registered/ran/verdict row per tier to the ledger (SageFs.Tests
+// TestInfrastructure.TrustSignal), `testTier` records whether the step itself
+// succeeded, and the "trust report" stage joins the two into ONE table and
+// fails the pipeline on any tier that is not Trusted — including a tier whose
+// process died before it could report. `TrustSignalTests` fails the fast suite
+// if a registered tier is not invoked here, or if a test run bypasses
+// `testTier`.
+
+let trustLedger = Path.Combine(rootDir, "test-results", "trust-ledger.jsonl")
+Directory.CreateDirectory(Path.GetDirectoryName trustLedger) |> ignore
+if File.Exists trustLedger then File.Delete trustLedger
+Environment.SetEnvironmentVariable("SAGEFS_TRUST_LEDGER", trustLedger)
+
+/// (tier, args, did the step exit 0) for every tier this pipeline invoked.
+let invokedTiers = Collections.Generic.List<string * string * bool>()
+
+let tierNameOf (args: string) =
+  match args.Split(' ').[0] with
+  | "--summary" -> "default"
+  | flag -> flag
+
+/// Run `prelude` commands, then the test assembly as one tier, and record the
+/// outcome against the tier either way. A prelude (e.g. the Chromium install)
+/// lives INSIDE the ledgered step on purpose: as a separate step, its failure
+/// would skip the test step, the tier would never be recorded as invoked, and
+/// it would silently vanish from the report instead of showing red.
+let testTierAfter (prelude: string list) (args: string) =
+  fun (ctx: Internal.StageContext) ->
+    async {
+      let rec go commands =
+        async {
+          match commands with
+          | [] -> return Ok()
+          | command :: rest ->
+            match! ctx.RunCommand command with
+            | Ok () -> return! go rest
+            | Error e -> return Error e
+        }
+      let! result = go (prelude @ [ $"dotnet {testDll} {args}" ])
+      lock invokedTiers (fun () -> invokedTiers.Add((tierNameOf args, args, Result.isOk result)))
+      return result
+    }
+
+let testTier (args: string) = testTierAfter [] args
+
+type TrustLine =
+  { Tier: string
+    Registered: string
+    Ran: string
+    Passed: string
+    Failed: string
+    Errored: string
+    Ignored: string
+    Verdict: string
+    Detail: string
+    Red: bool }
+
+/// Join what the pipeline invoked with what each test process reported.
+let trustLines () =
+  let rows =
+    match File.Exists trustLedger with
+    | false -> []
+    | true ->
+      File.ReadAllLines trustLedger
+      |> Array.filter (fun l -> l.Trim() <> "")
+      |> Array.map (fun l -> JsonDocument.Parse(l).RootElement.Clone())
+      |> Array.toList
+  let str (e: JsonElement) (name: string) =
+    match e.GetProperty(name).ValueKind with
+    | JsonValueKind.Number -> string (e.GetProperty(name).GetInt32())
+    | _ -> e.GetProperty(name).GetString()
+  [ for (tier, _args, stepOk) in List.ofSeq invokedTiers ->
+      match rows |> List.filter (fun r -> str r "Tier" = tier) |> List.tryLast with
+      | None ->
+        { Tier = tier; Registered = "?"; Ran = "?"; Passed = "?"; Failed = "?"; Errored = "?"; Ignored = "?"
+          Verdict = "NoReport"
+          Detail =
+            match stepOk with
+            | true -> "the step passed but the process reported nothing"
+            | false -> "the process failed before reporting (runner setup or crash)"
+          Red = true }
+      | Some r ->
+        let verdict = str r "Verdict"
+        let greenVerdict = verdict = "Trusted" || verdict = "SurvivorsUnderBar"
+        { Tier = tier
+          Registered = str r "Registered"
+          Ran = str r "Ran"
+          Passed = str r "Passed"
+          Failed = str r "Failed"
+          Errored = str r "Errored"
+          Ignored = str r "Ignored"
+          Verdict = match greenVerdict, stepOk with | true, false -> "ExitMismatch" | _ -> verdict
+          Detail =
+            match greenVerdict, stepOk with
+            | true, false -> "reported green, but the process exited non-zero"
+            | _ -> str r "Detail"
+          Red = not (greenVerdict && stepOk) } ]
+
+let renderTrustTable (lines: TrustLine list) =
+  let header =
+    [ "| Tier | Registered | Ran | Passed | Failed | Errored | Ignored | Verdict | Detail |"
+      "|---|---:|---:|---:|---:|---:|---:|---|---|" ]
+  let body =
+    lines
+    |> List.map (fun l ->
+      let mark = match l.Red with true -> "❌" | false -> "✅"
+      $"| {l.Tier} | {l.Registered} | {l.Ran} | {l.Passed} | {l.Failed} | {l.Errored} | {l.Ignored} | {mark} {l.Verdict} | {l.Detail} |")
+  String.concat "\n" ("## Test trust report" :: "" :: header @ body)
+
 // ---- the pipeline ------------------------------------------------------------
 
 /// Run shell steps in order, stopping at the first failure.
@@ -227,14 +348,18 @@ pipeline "sagefs" {
     // Expecto exit codes: 0 = passed, 1 = a test FAILED, 2 = a test ERRORED;
     // Fun.Build's default acceptExitCodes = [0], so 1 and 2 both fail the stage.
     timeoutForStep 600
-    run $"dotnet {testDll} --summary"
+    // A red tier must not hide the tiers after it — the trust report fails the run.
+    continueStageOnFailure
+    run (testTier "--summary")
   }
 
   stage "mutation score gate" {
     // CI only (a full mutation pass is too slow for the fast local loop).
     whenCmdArg "ci"
     timeoutForStep 300
-    run $"dotnet {testDll} --mutation-score"
+    // A red tier must not hide the tiers after it — the trust report fails the run.
+    continueStageOnFailure
+    run (testTier "--mutation-score")
   }
 
   stage "build samples for integration suites" {
@@ -299,7 +424,9 @@ pipeline "sagefs" {
     // green on Linux). VS Code Electron needs a display, so the workflow makes
     // one available via xvfb.
     timeoutForStep 2100
-    run $"dotnet {testDll} --integration-host --summary"
+    // A red tier must not hide the tiers after it — the trust report fails the run.
+    continueStageOnFailure
+    run (testTier "--integration-host --summary")
   }
 
   stage "dashboard browser journeys" {
@@ -314,8 +441,12 @@ pipeline "sagefs" {
     // rather than repeating it — this stage must run first among the four.
     whenCmdArg "ci"
     timeoutForStep 900
-    run $"{testBinDir}/.playwright/node/linux-x64/node {testBinDir}/.playwright/package/cli.js install chromium"
-    run $"dotnet {testDll} --integration-browser --summary"
+    // A red tier must not hide the tiers after it — the trust report fails the run.
+    continueStageOnFailure
+    run (
+      testTierAfter
+        [ $"{testBinDir}/.playwright/node/linux-x64/node {testBinDir}/.playwright/package/cli.js install chromium" ]
+        "--integration-browser --summary")
   }
 
   stage "hot-reload browser journeys" {
@@ -332,7 +463,9 @@ pipeline "sagefs" {
     // local loop never fetches a browser.
     whenCmdArg "ci"
     timeoutForStep 1200
-    run $"dotnet {testDll} --integration-hr --summary"
+    // A red tier must not hide the tiers after it — the trust report fails the run.
+    continueStageOnFailure
+    run (testTier "--integration-hr --summary")
   }
 
   stage "live-testing browser journeys" {
@@ -348,7 +481,9 @@ pipeline "sagefs" {
     // baseline inside one window.
     whenCmdArg "ci"
     timeoutForStep 900
-    run $"dotnet {testDll} --integration-lt --summary"
+    // A red tier must not hide the tiers after it — the trust report fails the run.
+    continueStageOnFailure
+    run (testTier "--integration-lt --summary")
   }
 
   stage "dashboard disconnect-indicator browser journeys" {
@@ -361,7 +496,45 @@ pipeline "sagefs" {
     // (never 37749/37750) — outcome-gate-sweep.md Gap B.3.
     whenCmdArg "ci"
     timeoutForStep 900
-    run $"dotnet {testDll} --integration-disconnect --summary"
+    // A red tier must not hide the tiers after it — the trust report fails the run.
+    continueStageOnFailure
+    run (testTier "--integration-disconnect --summary")
+  }
+
+  stage "hot-reload shape matrix" {
+    // Every declaration shape a user can save (function body, member, lambda
+    // value, mutable, ...) through a real host, asserting the reload CLAIM
+    // matches the OBSERVED change. Registered and dispatched for weeks but
+    // invoked by no stage — `TrustSignal CI wiring` now fails the fast suite
+    // for exactly that.
+    whenCmdArg "ci"
+    timeoutForStep 900
+    continueStageOnFailure
+    run (testTier "--integration-shapes --summary")
+  }
+
+  stage "trust report" {
+    // ONE table for every tier this run invoked: registered vs ran vs result,
+    // plus the verdict. Fails the pipeline if any tier is not Trusted —
+    // failed, errored, ran nothing, ran a different count than it registered,
+    // or never reported at all. Written to the GitHub step summary too.
+    run (fun _ ->
+      async {
+        let lines = trustLines ()
+        let table = renderTrustTable lines
+        printfn "%s" table
+        match Environment.GetEnvironmentVariable "GITHUB_STEP_SUMMARY" with
+        | null | "" -> ()
+        | summary -> File.AppendAllText(summary, table + "\n")
+        match lines |> List.filter (fun l -> l.Red) with
+        | [] when lines.IsEmpty -> return Error "trust report: no test tier ran at all"
+        | [] -> return Ok()
+        | red ->
+          return
+            Error(
+              sprintf "trust report: %d of %d tier(s) not trusted: %s" red.Length lines.Length
+                (red |> List.map (fun l -> $"{l.Tier} ({l.Verdict})") |> String.concat ", "))
+      })
   }
 
   stage "package vscode extension" {

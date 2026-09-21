@@ -394,6 +394,7 @@
         <Compile Include="AppStatePropertyTests.fs" />
         <Compile Include="EditorPropertyTests.fs" />
         <Compile Include="ArchitectureTests.fs" />
+        <Compile Include="TrustSignalTests.fs" />
         <Compile Include="DefinitionOfDoneTests.fs" />
         <Compile Include="TestStatusVocabularyTests.fs" />
         <Compile Include="HotReloadVisibilityTests.fs" />
