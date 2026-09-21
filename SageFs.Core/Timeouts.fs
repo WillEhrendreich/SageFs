@@ -127,7 +127,13 @@ module Timeouts =
   let workerShutdownDelay = TimeSpan.FromSeconds(2.0)
 
   // -- Persistence --
-  let periodicSaveInterval = TimeSpan.FromSeconds(60.0)
+  /// Cadence of the daemon's periodic manifest save (`periodicManifestSave`,
+  /// `DaemonMode.fs` — `cacheSaveTimer`): both the timer's initial due time
+  /// and every reschedule use this value. Default stays 60s in production;
+  /// tests that need the crash/resume durability boundary to arrive sooner
+  /// (rather than waiting on a fixed 60s wall-clock tick) can shrink it via
+  /// the env var. Env-overridable.
+  let manifestSaveInterval = envOrDefault "SAGEFS_MANIFEST_SAVE_INTERVAL_SECONDS" 60.0
 
   // -- Session Lifecycle --
   let sessionDispose = TimeSpan.FromSeconds(10.0)

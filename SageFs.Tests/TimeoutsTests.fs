@@ -108,6 +108,11 @@ let timeoutsTests = testList "Timeouts" [
       Expect.isGreaterThan
         "should be positive"
         (Timeouts.buildCompletion.TotalMinutes, 0.0)
+
+    testCase "manifestSaveInterval is positive" <| fun _ ->
+      Expect.isGreaterThan
+        "should be positive"
+        (Timeouts.manifestSaveInterval.TotalSeconds, 0.0)
   ]
 
   testList "Timeouts module static values" [

@@ -2473,10 +2473,12 @@ let run
     | false -> ()
 
   // Periodic test cache save — crash recovery for test results.
-  // Fires every 60s, only writes when RunGeneration has advanced since last save.
+  // Fires every Timeouts.manifestSaveInterval (default 60s, env-overridable via
+  // SAGEFS_MANIFEST_SAVE_INTERVAL_SECONDS), only writes when RunGeneration has
+  // advanced since last save.
   // W11(R10): Use a one-shot timer that reschedules AFTER completion to prevent reentrancy.
   // A periodic timer with System.Threading.Timer fires on ThreadPool; if the callback takes
-  // >60s, two threads both write to the same .tmp file → corrupt save file.
+  // longer than the interval, two threads both write to the same .tmp file → corrupt save file.
   // One-shot semantics: the next tick is scheduled only after the current tick finishes.
   let lastSavedGeneration = ref 0
   let mutable cacheSaveTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
@@ -2496,12 +2498,12 @@ let run
       // (shutdown race), the Change() call throws ODE. The null check guards the startup window
       // only; the ODE guard handles the shutdown window.
       if not (isNull cacheSaveTimerRef) then
-        try cacheSaveTimerRef.Change(60_000, System.Threading.Timeout.Infinite) |> ignore
+        try cacheSaveTimerRef.Change(int Timeouts.manifestSaveInterval.TotalMilliseconds, System.Threading.Timeout.Infinite) |> ignore
         with :? System.ObjectDisposedException -> ()
   let cacheSaveTimer =
     let t = new System.Threading.Timer(
       System.Threading.TimerCallback(cacheSaveCallback),
-      null, 60_000, System.Threading.Timeout.Infinite)
+      null, int Timeouts.manifestSaveInterval.TotalMilliseconds, System.Threading.Timeout.Infinite)
     cacheSaveTimerRef <- t
     t
 
