@@ -196,12 +196,39 @@ let managerStateTests =
   ]
 
 // ─── DaemonState + CLI subcommand integration ──────────────────────
-
+//
+// THE CLAIM this used to be three real-process tests for: `status`/`stop`
+// exit non-zero with no daemon, and `--help` advertises current flags.
+//
+// Split:
+//   * The DECISION ("no daemon found" -> print "No daemon running", exit 1)
+//     is identical machinery for both subcommands (`DaemonState.readOnPort`
+//     returning `None`) and is exhaustively pure-tested with every daemon
+//     interaction injected: CliStopExitCodeTests.fs (`stopCommand`) and
+//     CliStatusExitCodeTests.fs (`statusCommand`).
+//   * Which subcommand a bare CLI arg routes to (`"status"`/`"stop"` ->
+//     `CliCommand.Status`/`.Stop`) is a pure function of args, unit-tested
+//     directly in CliStatusExitCodeTests.fs
+//     ("Program.CliCommand.parse routes daemon subcommands").
+//   * `--help`'s content (including that it never advertises the legacy
+//     `--proj`/`--sln` flags) never touches daemon state, so it is proven
+//     in-process via `Program.main` directly in CliFirstRunTests.fs
+//     ("sagefs --help documents check and stop exit codes...") — no real
+//     process needed to prove pure stdout content.
+//
+// What NONE of the above proves: that the actual compiled, spawned
+// `SageFs.exe`/`SageFs.dll` binary parses real OS argv, reaches
+// `DaemonState.readOnPort`'s REAL network probe, and propagates the exit
+// code back across a genuine process boundary. That is a wire claim, and
+// `status`'s and `stop`'s no-daemon paths exercise IDENTICAL wiring (both
+// call only `readOnPort`; `stop`'s extra injected functions are never
+// reached when there is no daemon) — so ONE retained smoke proves it for
+// both.
 [<Tests>]
 let daemonCliTests =
   Integration.hostList "Daemon CLI subcommands" [
 
-    testCase "SageFs status returns 1 when no daemon running" <| fun _ ->
+    testCase "SageFs status returns 1 when no daemon running (real binary, real argv, real exit code)" <| fun _ ->
       let psi = ProcessStartInfo()
       psi.FileName <- SageFsExe
       psi.Arguments <- "status --mcp-port 39990"
@@ -216,47 +243,6 @@ let daemonCliTests =
 
       proc.ExitCode |> Expect.equal "exit code 1" 1
       output |> Expect.stringContains "says no daemon" "No daemon running"
-
-    // `sagefs stop` with nothing to stop is a no-op, and a no-op is NOT a
-    // successful stop: it exits 1 so automation can tell them apart
-    // (SageFs/Program.fs `stopCommand`).
-    testCase "SageFs stop returns 1 when no daemon running" <| fun _ ->
-      let psi = ProcessStartInfo()
-      psi.FileName <- SageFsExe
-      psi.Arguments <- "stop --mcp-port 39990"
-      psi.UseShellExecute <- false
-      psi.RedirectStandardOutput <- true
-      psi.CreateNoWindow <- true
-      psi.Environment.["SAGEFS_DATA_DIR"] <- isolatedDataDir ()
-
-      use proc = Process.Start(psi)
-      let output = proc.StandardOutput.ReadToEnd()
-      proc.WaitForExit(5000) |> ignore
-
-      proc.ExitCode |> Expect.equal "a no-op stop exits 1" 1
-      output |> Expect.stringContains "says no daemon" "No daemon running"
-
-    testCase "SageFs --help mentions daemon subcommands" <| fun _ ->
-      let psi = ProcessStartInfo()
-      psi.FileName <- SageFsExe
-      psi.Arguments <- "--help"
-      psi.UseShellExecute <- false
-      psi.RedirectStandardOutput <- true
-      psi.CreateNoWindow <- true
-      psi.Environment.["SAGEFS_DATA_DIR"] <- isolatedDataDir ()
-
-      use proc = Process.Start(psi)
-      let output = proc.StandardOutput.ReadToEnd()
-      proc.WaitForExit(5000) |> ignore
-
-      proc.ExitCode |> Expect.equal "exit code 0" 0
-      output |> Expect.stringContains "mentions daemon" "daemon"
-      output |> Expect.stringContains "mentions stop" "stop"
-      output |> Expect.stringContains "mentions status" "status"
-      (output.Contains "--proj")
-      |> Expect.isFalse "help should not advertise legacy startup project flags"
-      (output.Contains "--sln")
-      |> Expect.isFalse "help should not advertise legacy startup solution flags"
   ]
 
 // ─── Daemon lifecycle: start, status, stop ─────────────────────────

@@ -148,8 +148,13 @@ let mainRejectsUnimplementedFlagsTests =
       Expect.notEqual "0 means success; a refused request is not success" 0 code
 
     // --help: documents its real exit codes, never advertises a flag it
-    // refuses (the legacy --proj/--sln absence is already pinned by
-    // DaemonIntegrationTests.fs's live-process test; this covers what's new).
+    // refuses. `--help` never touches daemon state (readOnPort, a port, a
+    // process) so it is safe to drive through `Program.main` directly, in
+    // process — no real SageFs.exe needs to be spawned to prove this. Used to
+    // be split: this file covered "what's new" and DaemonIntegrationTests.fs's
+    // live-process test separately pinned the legacy --proj/--sln absence.
+    // Folded back together here now that both assertions are equally provable
+    // in-process, so the live-process copy was retired.
     // Kept in this same sequenced list because it also drives main() through
     // the shared Console.Out/Error capture.
     testCase "sagefs --help documents check and stop exit codes and gives a first-run next step" <| fun () ->
@@ -158,8 +163,15 @@ let mainRejectsUnimplementedFlagsTests =
       stdout |> Expect.stringContains "documents check's failing exit code" "1 = at least one check failed"
       stdout |> Expect.stringContains "documents stop's no-op exit code" "1 = there was nothing to stop"
       stdout |> Expect.stringContains "tells a new user the daemon does not create a session" "does not do it for you"
+      stdout |> Expect.stringContains "mentions daemon" "daemon"
+      stdout |> Expect.stringContains "mentions stop" "stop"
+      stdout |> Expect.stringContains "mentions status" "status"
       (stdout.Contains "--no-watch")
       |> Expect.isFalse "must not advertise a flag it refuses to honor"
+      (stdout.Contains "--proj")
+      |> Expect.isFalse "must not advertise the legacy startup-project flag it refuses to honor"
+      (stdout.Contains "--sln")
+      |> Expect.isFalse "must not advertise the legacy startup-solution flag it refuses to honor"
   ]
 
 // ─────────────────────────────────────────────────────────────────────────

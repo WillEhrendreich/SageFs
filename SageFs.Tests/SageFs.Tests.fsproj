@@ -434,6 +434,7 @@
         <Compile Include="TimeoutsTests.fs" />
         <Compile Include="EnvCheckTests.fs" />
         <Compile Include="CliStopExitCodeTests.fs" />
+        <Compile Include="CliStatusExitCodeTests.fs" />
         <Compile Include="CliFirstRunTests.fs" />
         <Compile Include="FsiOutputParserTests.fs" />
         <Compile Include="SseReplayTests.fs" />

@@ -336,6 +336,50 @@ let private stopWaitForExit (pid: int) : StopWait =
   | :? ArgumentException -> StopWait.Exited
   | :? InvalidOperationException -> StopWait.Exited
 
+/// The `sagefs status` command with the daemon lookup and the optional live
+/// session count injected — mirrors `stopCommand`'s shape so the "no daemon
+/// running" exit code/message is testable without touching a real daemon or
+/// a real HTTP call. `fetchSessionCount` returns `None` on any failure to
+/// reach the daemon's own `/api/sessions` (matching the original inline
+/// try/with, which silently omitted the line rather than failing `status`).
+let statusCommand
+  (readOnPort: int -> DaemonInfo option)
+  (fetchSessionCount: DaemonInfo -> int option)
+  (mcpPort: int)
+  =
+  match readOnPort mcpPort with
+  | Some info ->
+    printfn "SageFs daemon running"
+    printfn "  PID:        %d" info.Pid
+    printfn "  Port:       %d" info.Port
+    printfn "  Started:    %s" (info.StartedAt.ToString("o"))
+    printfn "  Directory:  %s" info.WorkingDirectory
+    printfn "  Version:    %s" info.Version
+    printfn "  Dashboard:  http://localhost:%d/dashboard" info.DashboardPort
+    printfn "  MCP (SSE):  http://localhost:%d/sse" info.Port
+    match fetchSessionCount info with
+    | Some count -> printfn "  Sessions:   %d active" count
+    | None -> ()
+    0
+  | None ->
+    printfn "No daemon running"
+    1
+
+/// The real session-count fetch: a real HTTP GET against the daemon's own
+/// `/api/sessions`, exactly as the original inline `Status` branch did.
+let private fetchSessionCountHttp (info: DaemonInfo) : int option =
+  try
+    use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(3.0))
+    let resp = client.GetAsync(sprintf "http://localhost:%d/api/sessions" info.Port).Result
+    match resp.IsSuccessStatusCode with
+    | true ->
+      let json = resp.Content.ReadAsStringAsync().Result
+      let doc = System.Text.Json.JsonDocument.Parse(json)
+      let sessions = doc.RootElement.GetProperty("sessions")
+      Some (sessions.GetArrayLength())
+    | false -> None
+  with _ -> None
+
 [<EntryPoint>]
 let main args =
   // Wrap Console.Out to normalize \n to \r\n on Windows console.
@@ -425,32 +469,7 @@ let main args =
 
   | Status ->
     let mcpPort = parseMcpPort args
-    match DaemonState.readOnPort mcpPort with
-    | Some info ->
-      printfn "SageFs daemon running"
-      printfn "  PID:        %d" info.Pid
-      printfn "  Port:       %d" info.Port
-      printfn "  Started:    %s" (info.StartedAt.ToString("o"))
-      printfn "  Directory:  %s" info.WorkingDirectory
-      printfn "  Version:    %s" info.Version
-      printfn "  Dashboard:  http://localhost:%d/dashboard" info.DashboardPort
-      printfn "  MCP (SSE):  http://localhost:%d/sse" info.Port
-      try
-        use client = new System.Net.Http.HttpClient(Timeout = TimeSpan.FromSeconds(3.0))
-        let resp = client.GetAsync(sprintf "http://localhost:%d/api/sessions" info.Port).Result
-        match resp.IsSuccessStatusCode with
-        | true ->
-          let json = resp.Content.ReadAsStringAsync().Result
-          let doc = System.Text.Json.JsonDocument.Parse(json)
-          let sessions = doc.RootElement.GetProperty("sessions")
-          let count = sessions.GetArrayLength()
-          printfn "  Sessions:   %d active" count
-        | false -> ()
-      with _ -> ()
-      0
-    | None ->
-      printfn "No daemon running"
-      1
+    statusCommand DaemonState.readOnPort fetchSessionCountHttp mcpPort
 
   | Check ->
     let mcpPort  = parseMcpPort args
