@@ -149,6 +149,8 @@
         <Compile Include="BinaryPrimitivesMutationTests.fs" />
         <Compile Include="TestCachePersistenceMutationTests.fs" />
         <Compile Include="FlakyPersistenceTests.fs" />
+        <Compile Include="FsiNamingContractTests.fs" />
+        <Compile Include="FsiDiscoveryIdentitySimTests.fs" />
         <Compile Include="FsiEmitSimTests.fs" />
         <Compile Include="EvalStoreMutationTests.fs" />
         <Compile Include="SessionDisplayMutationTests.fs" />

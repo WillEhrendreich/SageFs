@@ -80,6 +80,8 @@
         <Compile Include="FileReloadRoutingInvariants.fs" />
         <Compile Include="FsiEmitSim.fs" />
         <Compile Include="FsiEmitInvariants.fs" />
+        <Compile Include="FsiDiscoveryIdentitySim.fs" />
+        <Compile Include="FsiDiscoveryIdentityInvariants.fs" />
         <Compile Include="FileReloadRoutingGenerators.fs" />
         <!-- P2: pure linearizability checker (permutation search over the real
              Cohort.decide) for the concurrency keystone (H1 claim exclusivity). -->
