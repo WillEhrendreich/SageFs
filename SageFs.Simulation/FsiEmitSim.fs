@@ -150,6 +150,16 @@ module FsiEmitSim =
       |> List.filter (fun d -> redirectedOrigins |> Map.find d.Name |> List.isEmpty |> not)
       |> List.map (fun d -> d.Name)
 
+    // The evidence a NAME cannot carry: of those redirects, the ones whose old
+    // entry point lived in a COMPILED assembly. `HotReloadCore` reads this off
+    // `MethodInfo.DeclaringType.Assembly.IsDynamic`; the model reads it off the
+    // copy's origin, which is the same fact.
+    let reachedRunningProcess =
+      decls
+      |> List.filter (fun d ->
+        redirectedOrigins |> Map.find d.Name |> List.contains Copy.Compiled)
+      |> List.map (fun d -> d.Name)
+
     // GROUND TRUTH, tracked without consulting the decision under test: the app
     // executes new code for a decl iff the copy IT holds was among the
     // re-pointed ones.
@@ -170,7 +180,7 @@ module FsiEmitSim =
           acc |> Map.add d.Name (newCopy :: older))
         state.Copies
 
-    { state with Copies = copies; NextEval = evalId + 1 }, reloadedMethods, appChanged
+    { state with Copies = copies; NextEval = evalId + 1 }, reloadedMethods, reachedRunningProcess, appChanged
 
   /// The app captures whatever copy is current for each decl.
   let startApp (state: ModelState) : ModelState =
@@ -211,7 +221,7 @@ module FsiEmitSim =
   /// `confirm` is injected so an invariant can run the historical TWIN against
   /// the identical trace and show the difference.
   let runWith
-    (confirm: FileDecls -> SourceDecl list -> string list -> ReloadOutcome)
+    (confirm: FileDecls -> SourceDecl list -> string list -> string list -> ReloadOutcome)
     (scenario: Scenario)
     : Observation list =
     let mutable state = initial scenario.Decls
@@ -221,14 +231,32 @@ module FsiEmitSim =
           state <- startApp state
         | Op.Save(decls, style) ->
           let before = fileDecls scenario.Decls
-          let next, reloaded, appChanged = step state decls style
+          let next, reloaded, reached, appChanged = step state decls style
           state <- next
-          let outcome = confirm before (decls |> List.map (fun d -> sourceDecl d.Name)) reloaded
+          let outcome = confirm before (decls |> List.map (fun d -> sourceDecl d.Name)) reloaded reached
           yield
             { Reported = outcome
               ClaimedChange = ReloadOutcome.processChanged outcome
               ActualChange = not (Set.isEmpty appChanged) } ]
 
-  /// The subject: the REAL decision, exactly as WorkerMain calls it.
+  /// The REAL decision wired exactly as `WorkerMain` wires it TODAY.
+  ///
+  /// The worker cannot tell which copy the running app holds — measured: a
+  /// `#load`ed file's app holds an FSI copy even when a compiled copy also
+  /// exists, so neither "a compiled entry point was re-pointed" nor "...or no
+  /// compiled copy exists" is a sound proxy; both turned working reloads into
+  /// reported no-ops against a real host. So it passes the redirect-set as the
+  /// reached-set, and this over-claims. That is the gap, pinned.
   let run (scenario: Scenario) : Observation list =
+    runWith
+      (fun before patched reloaded _ -> confirmPatchAsOutcome before patched reloaded reloaded)
+      scenario
+
+  /// The same REAL decision GIVEN the evidence it now accepts — what the
+  /// product reports once the app's captured copy is recorded where the handler
+  /// table is BUILT rather than inferred at detour time.
+  ///
+  /// Kept beside `run` so the sim proves the designed fix is correct while the
+  /// product still shows the gap: only the evidence is missing, not the logic.
+  let runWithEvidence (scenario: Scenario) : Observation list =
     runWith confirmPatchAsOutcome scenario

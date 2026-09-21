@@ -24,6 +24,14 @@ open SageFs.Features.ReloadPlanning
 
 module Outcome = SageFs.Features.ReloadOutcome.ReloadOutcome
 
+/// Predates `confirmPatchAsOutcome`'s reached-the-running-process argument.
+/// Every case below describes redirects that DID reach the entry point the
+/// running app calls, so the reached-set is the redirect set. Named rather than
+/// inlined so that assumption is visible instead of looking like a typo'd
+/// duplicate argument.
+let private confirmAllReached before patched reloaded =
+  confirmPatchAsOutcome before patched reloaded reloaded
+
 let private baselineSource = """module Demo.Web.Program
 
 let render (items: int list) =
@@ -53,7 +61,7 @@ let patchedNNResidualTests =
       patched |> List.map _.Name |> Expect.equal "helper is the only patch candidate" [ "helper" ]
       // Nothing was detoured: a brand-new function has no old method in the
       // running process for Harmony to redirect.
-      match confirmPatchAsOutcome before patched [] with
+      match confirmAllReached before patched [] with
       | ReloadOutcome.NoEffect(considered, [ RestartReason.NewDeclaration "helper" ]) ->
         considered |> Expect.equal "one definition was put in front of the process" 1
       | other -> failtestf "adding one declaration must be NoEffect with NewDeclaration, got %A" other
@@ -61,7 +69,7 @@ let patchedNNResidualTests =
     testCase "WHY — the wire must never tell the page to refresh for a declaration it cannot reach" <| fun _ ->
       let before = declsOf baselineSource
       let current = declsOf (baselineSource + "\nlet helper (x: int) = x + 1\n")
-      let outcome = confirmPatchAsOutcome before (patchedDecls before current) []
+      let outcome = confirmAllReached before (patchedDecls before current) []
       Outcome.shouldRefreshBrowser outcome
       |> Expect.isFalse "the running process did not change, so refreshing would serve stale-but-different code"
       Outcome.describe outcome
@@ -82,7 +90,7 @@ let patchedNNResidualTests =
       patched |> List.map _.Name |> List.sort |> Expect.equal "both candidates are queued" [ "helper"; "render" ]
       // Only `render` existed before, and only `render` was actually
       // detoured — Harmony has nothing to redirect `helper` onto.
-      match confirmPatchAsOutcome before patched [ "Demo.Web.Program.render" ] with
+      match confirmAllReached before patched [ "Demo.Web.Program.render" ] with
       | ReloadOutcome.Patched(patchedCount, considered) ->
         patchedCount |> Expect.equal "only the existing, detoured function landed" 1
         considered |> Expect.equal "both candidates were considered" 2

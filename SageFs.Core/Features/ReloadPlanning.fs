@@ -699,18 +699,48 @@ let confirmPatch (before: FileDecls) (patched: SourceDecl list) (reloadedMethods
 /// one that existed in the running build and was not re-pointed had its compiled
 /// signature change; one that never existed there has no original to re-point at
 /// all, which is a different problem with a different remedy.
-let confirmPatchAsOutcome (before: FileDecls) (patched: SourceDecl list) (reloadedMethods: string list) : ReloadOutcome =
+/// `reachedRunningProcess` is the subset of `reloadedMethods` whose re-pointed
+/// OLD entry point is one the RUNNING PROCESS actually calls — in practice, one
+/// that lived in a compiled assembly rather than in FSI's own dynamic assembly.
+///
+/// It has to be passed separately because a NAME cannot carry it. FSI wraps
+/// every submission in an `FSI_NNNN` type and `HotReloadCore.getAllMethods`
+/// strips that prefix so both sides register the same qualified name — which is
+/// what lets the detour matcher pair anything at all, and also what makes the
+/// compiled copy of `M.f` and every prior eval's copy of `M.f` indistinguishable
+/// strings. Under `--multiemit-` the single FSI assembly ACCUMULATES every eval
+/// (fsi.fs:1818-1830), so there is always a growing pile of older same-named
+/// copies to pair with, and pairing one of those re-points code that nothing
+/// outside that eval ever calls. Counting it as landed is how a save was
+/// reported "Hot reloaded 1 of 1" while the app went on serving the old body.
+let confirmPatchAsOutcome
+  (before: FileDecls)
+  (patched: SourceDecl list)
+  (reloadedMethods: string list)
+  (reachedRunningProcess: string list)
+  : ReloadOutcome =
+  let nameMatches (names: string list) (f: SourceDecl) =
+    names |> List.exists (fun m -> m = f.Name || m.EndsWith("." + f.Name, StringComparison.Ordinal))
   let existed (f: SourceDecl) =
     before.Decls |> List.exists (fun d -> d.Kind = DeclKind.FunctionDecl && d.Name = f.Name)
-  let detoured (f: SourceDecl) =
-    reloadedMethods |> List.exists (fun m -> m = f.Name || m.EndsWith("." + f.Name, StringComparison.Ordinal))
-  let landed, missed = patched |> List.partition detoured
+  // A declaration that did NOT exist in the running build has no compiled entry
+  // point to reach by definition, so for it the FSI copy IS what everything
+  // calls and a redirect onto it is genuinely effective. Only a declaration the
+  // running build already had must prove it reached a compiled entry point.
+  let landed, missed =
+    patched
+    |> List.partition (fun f ->
+      nameMatches reloadedMethods f
+      && (nameMatches reachedRunningProcess f || not (existed f)))
   let reasons =
     missed
     |> List.map (fun f ->
-      match existed f with
-      | true -> RestartReason.SignatureChanged f.Name
-      | false -> RestartReason.NewDeclaration f.Name)
+      match existed f, nameMatches reloadedMethods f with
+      // Re-pointed something, but only a previous eval's copy. The running
+      // process is untouched and the user has to restart to see the edit.
+      | true, true -> RestartReason.PatchIneffective f.Name
+      | true, false -> RestartReason.SignatureChanged f.Name
+      | false, _ -> RestartReason.NewDeclaration f.Name)
   ReloadOutcome.ofPatchCounts (List.length landed) (List.length patched) reasons
 
 /// A plan that refused before any patch was attempted, reported in the same

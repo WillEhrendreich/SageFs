@@ -509,6 +509,16 @@ type DetourReport = {
   /// calls those; re-pointing only a previous FSI copy leaves it untouched, and
   /// by name alone the two are indistinguishable.
   RedirectedFromCompiled: string list
+  /// Names for which a COMPILED copy existed among the detour candidates at
+  /// all.
+  ///
+  /// Needed because "a compiled entry point was re-pointed" is the right test
+  /// ONLY when there is a compiled copy to re-point. A file brought in by
+  /// `#load` has no compiled copy anywhere — every copy is an FSI one, so the
+  /// running app necessarily holds an FSI copy and an FSI-to-FSI redirect IS
+  /// what reaches it. Without this, that entirely legitimate reload gets
+  /// reported as no effect.
+  CompiledCandidates: string list
   Bindings: BindingOutcome list
   Declined: DeclinedBinding list
   /// Detours that were planned and did not happen.
@@ -519,7 +529,7 @@ module DetourReport =
   /// The report of an eval that touched nothing — no new assembly, or hot
   /// reload disabled. Named so callers never hand-roll the all-empty record.
   let empty : DetourReport =
-    { Redirected = []; Ineffective = []; RedirectedFromCompiled = []; Bindings = []; Declined = []; Failures = [] }
+    { Redirected = []; Ineffective = []; RedirectedFromCompiled = []; CompiledCandidates = []; Bindings = []; Declined = []; Failures = [] }
 
 /// Forces everything a detour will touch to resolve BEFORE any leg is written:
 /// the parameter and return types (which throw `TypeLoadException` for a stale
@@ -590,24 +600,30 @@ let applyDetourPlan (logger: ILogger) (plan: DetourPlan) : DetourReport =
       logger.LogDebug("Updating method " + older.FullName)
       older, detourMethod logger older.MethodInfo newer.MethodInfo)
 
-  // `Ineffective` is NO LONGER counted as redirected.
+  // `Ineffective` IS still counted as redirected, and the comment on
+  // `DetourApplied.Ineffective` calling the canary "a warning signal, not a
+  // verdict" is load-bearing — MEASURED, after trying the opposite.
   //
-  // It means the canary compared the method's JIT-compiled bytes either side of
-  // the patch and found them IDENTICAL — direct evidence that the running
-  // process did not change. Counting it as landed is what let a save be
-  // reported as "Hot reloaded 1 of 1" while the app kept serving the old body:
-  // the count claims to describe the running process, and the canary is
-  // evidence about exactly that, so it is a verdict and not a warning.
+  // Excluding it looks obviously right: the canary compares the method's
+  // JIT-compiled bytes either side of the patch, so "unchanged" reads as proof
+  // the running process did not move. It is not. Against a real host, the
+  // `real file save hot-reloads a running module-declared app` and
+  // `compile-error save keeps last valid behavior` suites both went red with
+  // "'greeting' was re-pointed but the running code did not change" for reloads
+  // that demonstrably DO change what the app serves. The canary reads the
+  // method's own entry point; a reload can reach the app through a copy it does
+  // not sample, so BytesUnchanged is a false negative often enough to be
+  // useless as a verdict.
   //
-  // `Superseded` stays counted: it means the old copy is unreachable anyway, so
-  // nothing is left executing the stale body — the new definition IS what runs.
+  // It still travels, as `Ineffective`, for anyone who wants the signal — it
+  // just may not decide the count on its own.
   let redirectedFunctions =
     functionResults
     |> List.choose (fun (older, applied) ->
       match applied with
       | DetourApplied.Redirected
-      | DetourApplied.Superseded _ -> Some older.FullName
       | DetourApplied.Ineffective _
+      | DetourApplied.Superseded _ -> Some older.FullName
       | DetourApplied.Failed _ -> None)
 
   /// Re-pointed, and proven by the canary not to have changed the running code.
@@ -619,6 +635,19 @@ let applyDetourPlan (logger: ILogger) (plan: DetourPlan) : DetourReport =
       match applied with
       | DetourApplied.Ineffective _ -> Some older.FullName
       | _ -> None)
+
+  /// Every candidate name for which a COMPILED copy was among the older methods
+  /// considered. When this does NOT contain a name, there is no compiled copy to
+  /// reach and an FSI-to-FSI redirect is what the running app calls.
+  let compiledCandidates =
+    functionResults
+    |> List.choose (fun (older, _) ->
+      let isDynamic =
+        try older.MethodInfo.DeclaringType.Assembly.IsDynamic with _ -> true
+      match isDynamic with
+      | true -> None
+      | false -> Some older.FullName)
+    |> List.distinct
 
   /// Of the redirects that landed, those whose re-pointed OLD entry point lived
   /// in a COMPILED assembly rather than in FSI's own dynamic assembly.
@@ -699,6 +728,7 @@ let applyDetourPlan (logger: ILogger) (plan: DetourPlan) : DetourReport =
   { Redirected = redirectedFunctions @ redirectedBindings
     Ineffective = ineffectiveFunctions
     RedirectedFromCompiled = redirectedFromCompiled
+    CompiledCandidates = compiledCandidates
     Bindings = outcomes
     Declined = plan.Declined
     Failures = functionFailures @ bindingFailures }

@@ -79,19 +79,42 @@ let fsiEmitSimTests =
       |> Expect.equal "the app holds the compiled copy, which neither save re-pointed" [ false; false ]
 
       let violations = observations |> FsiEmitInvariants.honestClaim
-      // PROOF OF BROKEN, pinned deliberately. This asserts the CURRENT
-      // behaviour is wrong, so it FAILS THE DAY THE DEFECT IS FIXED — which is
-      // the point: whoever fixes `confirmPatchAsOutcome` to distinguish the
-      // compiled entry point from a previous eval's copy must come here and
-      // flip this to `Expect.isEmpty`, with the ground-truth assertion above
-      // left exactly as it is.
+      // PROOF OF BROKEN, pinned deliberately — this asserts the CURRENT
+      // behaviour is WRONG, so it fails the day the gap closes.
+      //
+      // `confirmPatchAsOutcome` now TAKES the reached-the-running-process
+      // evidence, but the worker cannot yet supply it honestly, so it passes
+      // the redirect-set and this trace still over-claims. Two narrower rules
+      // were measured against real hosts and both broke a working reload:
+      // requiring a COMPILED entry point fails for a `#load`ed file (the app
+      // holds an FSI copy), and "...or no compiled copy exists" fails too,
+      // because a file can have a compiled copy AND be `#load`ed with the app
+      // holding the FSI one. Assembly kind is not a proxy for what the app
+      // captured.
+      //
+      // Closing this needs the captured copy recorded where the handler table
+      // is BUILT, not inferred at detour time. When that lands, flip this to
+      // `Expect.isEmpty` — do not delete it, and leave the ground-truth
+      // assertion above untouched.
       violations
       |> Expect.isNonEmpty
-        "PROOF OF BROKEN: a name-only confirmation over-claims here, because FSI's FSI_NNNN wrapper is stripped and every copy shares one name. When the decision starts distinguishing them, flip this assertion to isEmpty rather than deleting it"
+        "PROOF OF BROKEN: the save re-points only a previous eval's copy and still reports the running process changed"
 
       violations
       |> List.map (fun v -> v.ClaimedChange, v.ActualChange)
-      |> Expect.contains "the violation is an over-claim: reported changed, actually unchanged" (true, false)
+      |> Expect.contains
+        "the violation is specifically an OVER-claim: reported changed, actually unchanged"
+        (true, false)
+
+      // And the designed fix is CORRECT — only the evidence is missing. Run the
+      // identical trace through the same real decision, given the reached-set it
+      // now accepts, and the over-claim disappears. So the remaining work is
+      // plumbing that fact from where the app captures its copy, not rethinking
+      // the rule.
+      runWithEvidence scenario
+      |> FsiEmitInvariants.all
+      |> Expect.isEmpty
+        "given which copy the app holds, the same decision reports the save honestly"
 
     testCase "a decl with no file-local type pairs the compiled copy even when flattened" <| fun _ ->
       // The control. `plainHandler`'s signature is BCL-only, so a flattened

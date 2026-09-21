@@ -328,6 +328,13 @@ let private fnDecl (name: string) : SourceDecl =
     StartLine = 1
     EndLine = 1 }
 
+/// These cases predate the reached-the-running-process argument and all
+/// describe the case where every redirect DID reach the entry point the app
+/// calls — so the reached-set is the redirect set. Named rather than inlined so
+/// the assumption is visible instead of looking like an argument typo.
+let private confirmAllReached before patched reloaded =
+  confirmPatchAsOutcome before patched reloaded reloaded
+
 let private beforeWith (names: string list) : FileDecls =
   { ModulePath = [ "M" ]; Opens = []; Decls = names |> List.map fnDecl; RawSource = None }
 
@@ -335,28 +342,28 @@ let private beforeWith (names: string list) : FileDecls =
 let confirmPatchOutcomeTests =
   testList "ReloadPlanning confirmPatchAsOutcome" [
     testCase "WHY — ReloadPlanning.confirmPatchAsOutcome — a patch list of zero is NoEffect, never success, because 'applied' with nothing applied is the exact lie that refreshed browsers into identical code" <| fun _ ->
-      confirmPatchAsOutcome (beforeWith [ "f" ]) [] []
+      confirmAllReached (beforeWith [ "f" ]) [] []
       |> Expect.equal "nothing considered, nothing patched" (ReloadOutcome.NoEffect(0, []))
 
     testCase "WHY — ReloadPlanning.confirmPatchAsOutcome — a partial patch reports BOTH numbers because a partial reload must read as partial" <| fun _ ->
-      confirmPatchAsOutcome (beforeWith [ "f"; "g" ]) [ fnDecl "f"; fnDecl "g" ] [ "M.f" ]
+      confirmAllReached (beforeWith [ "f"; "g" ]) [ fnDecl "f"; fnDecl "g" ] [ "M.f" ]
       |> Expect.equal "one of two" (ReloadOutcome.Patched(1, 2))
 
     testCase "WHY — ReloadPlanning.confirmPatchAsOutcome — a function that existed and was not detoured is a SIGNATURE change because that is the only reason the matcher could not pair it" <| fun _ ->
-      confirmPatchAsOutcome (beforeWith [ "f" ]) [ fnDecl "f" ] []
+      confirmAllReached (beforeWith [ "f" ]) [ fnDecl "f" ] []
       |> Expect.equal "no effect, with the reason"
         (ReloadOutcome.NoEffect(1, [ RestartReason.SignatureChanged "f" ]))
 
     testCase "WHY — ReloadPlanning.confirmPatchAsOutcome — a function the running build never had is a NEW declaration because there is no captured closure to re-point" <| fun _ ->
-      confirmPatchAsOutcome (beforeWith []) [ fnDecl "brandNew" ] []
+      confirmAllReached (beforeWith []) [ fnDecl "brandNew" ] []
       |> Expect.equal "no effect, named as new"
         (ReloadOutcome.NoEffect(1, [ RestartReason.NewDeclaration "brandNew" ]))
 
     testCase "WHY — ReloadPlanning.confirmPatchAsOutcome — an outcome that changed nothing must not tell the browser to refresh because refreshing into identical code is what users read as 'hot reload is broken'" <| fun _ ->
-      confirmPatchAsOutcome (beforeWith [ "f" ]) [ fnDecl "f" ] []
+      confirmAllReached (beforeWith [ "f" ]) [ fnDecl "f" ] []
       |> ReloadOutcome.shouldRefreshBrowser
       |> Expect.isFalse "nothing reached the running app"
-      confirmPatchAsOutcome (beforeWith [ "f" ]) [ fnDecl "f" ] [ "M.f" ]
+      confirmAllReached (beforeWith [ "f" ]) [ fnDecl "f" ] [ "M.f" ]
       |> ReloadOutcome.shouldRefreshBrowser
       |> Expect.isTrue "the running app serves new code"
 
@@ -364,7 +371,7 @@ let confirmPatchOutcomeTests =
       let names = detouredFlags |> List.mapi (fun i _ -> sprintf "fn%d" i)
       let decls = names |> List.map fnDecl
       let reloaded = List.zip names detouredFlags |> List.choose (fun (n, d) -> match d with | true -> Some ("M." + n) | false -> None)
-      match confirmPatchAsOutcome (beforeWith names) decls reloaded with
+      match confirmAllReached (beforeWith names) decls reloaded with
       | ReloadOutcome.Patched(patched, considered) ->
         patched > 0 && patched <= considered && considered = List.length decls && patched = List.length reloaded
       | ReloadOutcome.NoEffect(considered, reasons) ->

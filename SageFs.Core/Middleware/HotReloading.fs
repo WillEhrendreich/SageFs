@@ -310,6 +310,7 @@ let hotReloadingMiddleware next (request, st: AppState) =
               // running process ignored.
               .Add("hotReloadIneffectiveMethods", report.DetourReport.Ineffective)
               .Add("hotReloadRedirectedFromCompiled", report.DetourReport.RedirectedFromCompiled)
+              .Add("hotReloadCompiledCandidates", report.DetourReport.CompiledCandidates)
               .Add("hotReloadBindingOutcomes", report.DetourReport.Bindings)
               .Add("hotReloadDeclinedBindings", report.DetourReport.Declined)
           | false -> response.Metadata

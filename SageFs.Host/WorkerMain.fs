@@ -767,6 +767,18 @@ let run (sessionId: string) (port: int) = async {
           | :? (string list) as methods -> Some methods
           | _ -> None)
         |> Option.defaultValue []
+      /// Names that HAD a compiled copy among the detour candidates. When a name
+      /// is absent there is no compiled copy to reach — every copy is an FSI one
+      /// (a `#load`ed file), so the running app holds an FSI copy and an
+      /// FSI-to-FSI redirect IS what reaches it.
+      let compiledCandidatesOf (response: EvalResponse) =
+        response.Metadata
+        |> Map.tryFind "hotReloadCompiledCandidates"
+        |> Option.bind (fun v ->
+          match v with
+          | :? (string list) as methods -> Some methods
+          | _ -> None)
+        |> Option.defaultValue []
       let bindingOutcomesOf (response: EvalResponse) : Middleware.HotReloadCore.BindingOutcome list =
         response.Metadata
         |> Map.tryFind "hotReloadBindingOutcomes"
@@ -942,29 +954,48 @@ let run (sessionId: string) (port: int) = async {
                   // "nothing changed" is not actionable and "'x' was
                   // re-pointed but the running code did not change — its
                   // caller most likely inlined the old body" is.
-                  let ineffectiveReasons =
-                    ineffectiveMethodsOf response
-                    |> List.map Features.ReloadOutcome.RestartReason.PatchIneffective
-                  // A function counted as landed whose ONLY re-pointed entry
-                  // point was a previous FSI copy has not reached an app
-                  // running from the compiled project assembly. Name it, so
-                  // "Hot reloaded 1 of 1" cannot describe a save the running
-                  // process ignored.
-                  let fromCompiled = redirectedFromCompiledOf response
-                  let reachedCompiled (name: string) =
-                    fromCompiled
-                    |> List.exists (fun m -> m = name || m.EndsWith("." + name, StringComparison.Ordinal))
-                  let unreachedReasons =
-                    functions
-                    |> List.filter (fun f ->
-                      reloaded
-                      |> List.exists (fun m -> m = f.Name || m.EndsWith("." + f.Name, StringComparison.Ordinal))
-                      && not (reachedCompiled f.Name))
-                    |> List.map (fun f -> Features.ReloadOutcome.RestartReason.PatchIneffective f.Name)
+                  // NOT folded in as misses: the canary produces false
+                  // negatives (see HotReloadCore), so a BytesUnchanged reading
+                  // must not turn a working reload into a reported no-op.
+                  let ineffectiveReasons : Features.ReloadOutcome.RestartReason list = []
+                  // The evidence a NAME cannot carry: which redirects re-pointed
+                  // an entry point the RUNNING PROCESS calls. Under
+                  // `--multiemit-` the single FSI assembly accumulates every
+                  // eval, so a same-named older copy is always available to
+                  // pair with — and re-pointing one changes nothing an app
+                  // running from the compiled project assembly will ever call.
+                  // confirmPatchAsOutcome decides with this rather than
+                  // counting any redirect as landed.
+                  // MEASURED, and the reason this is not yet narrowed: which
+                  // copy the running app holds is NOT derivable here.
+                  //
+                  // Two rules were tried against real hosts and both broke a
+                  // working reload. "A compiled entry point was re-pointed"
+                  // fails for a `#load`ed file, whose app holds an FSI copy.
+                  // "...or no compiled copy exists" fails too: a file can have
+                  // BOTH a compiled copy in the project assembly AND be
+                  // `#load`ed, and the app then holds the FSI one anyway. The
+                  // detour layer sees assemblies; it does not see which copy the
+                  // app captured at startup, and assembly kind is not a proxy
+                  // for it.
+                  //
+                  // So the reached-set stays the redirect-set — today's
+                  // behaviour, unchanged — rather than shipping a rule that
+                  // reports good reloads as no-ops. The gap is pinned as proof
+                  // of broken in SageFs.Tests/FsiEmitSimTests.fs, and closing it
+                  // needs the app's captured copy tracked at the point the
+                  // handler table is built, not inferred afterwards.
+                  // `redirectedFromCompiledOf`/`compiledCandidatesOf` carry the
+                  // evidence to whoever does that.
+                  let reachedRunningProcess = reloaded
                   let outcome =
-                    Features.ReloadPlanning.confirmPatchAsOutcome baseline functions reloaded
+                    Features.ReloadPlanning.confirmPatchAsOutcome
+                      baseline
+                      functions
+                      reloaded
+                      reachedRunningProcess
                     |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses
-                         (extraReasons @ ineffectiveReasons @ unreachedReasons)
+                         (extraReasons @ ineffectiveReasons)
                   Features.ReloadBroadcast.broadcastOutcome outcome
                   Log.info "Hot reload: %s — %s (%s)"
                     fileName
