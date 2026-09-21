@@ -50,14 +50,33 @@ let private daemonStartupHealthPollInterval = TimeSpan.FromMilliseconds(100.0)
 let private daemonStartupHealthTimeout =
   TimeSpan.FromSeconds(60.0)
 
+/// Does a /api/daemon-info payload identify THIS pid? Kept outside the task
+/// builder so parsing needs no `use` inside a resumable state machine.
+let private reportsPid (body: string) (pid: int) =
+  try
+    use doc = JsonDocument.Parse body
+    doc.RootElement.GetProperty("pid").GetInt32() = pid
+  with _ -> false
+
 let private daemonStartupHealthMaxAttempts =
   int (Math.Ceiling(daemonStartupHealthTimeout.TotalMilliseconds / daemonStartupHealthPollInterval.TotalMilliseconds))
 
+/// A daemon binds TWO ports: the MCP port it is given, and the dashboard at
+/// that port + 1. Reserving only the first let a daemon start whose dashboard
+/// bind then failed, so both are checked together, while both are held.
+///
+/// Both listeners are released before the daemon starts — a check-then-use
+/// window that cannot be closed without handing a bound socket to another
+/// process. `startDaemonWithArgs` therefore does not trust the port afterwards:
+/// it proves the daemon that answers is the one it spawned.
 let private tryReserveLoopbackPort (port: int) =
   try
-    use listener = new TcpListener(IPAddress.Loopback, port)
-    listener.Start()
-    (listener.LocalEndpoint :?> IPEndPoint).Port |> Some
+    use mcp = new TcpListener(IPAddress.Loopback, port)
+    mcp.Start()
+    let bound = (mcp.LocalEndpoint :?> IPEndPoint).Port
+    use dashboard = new TcpListener(IPAddress.Loopback, bound + 1)
+    dashboard.Start()
+    Some bound
   with
   | :? SocketException -> None
 
@@ -65,9 +84,12 @@ let reserveLoopbackPort (preferredPort: int option) =
   match preferredPort |> Option.bind tryReserveLoopbackPort with
   | Some port -> port
   | None ->
-    match tryReserveLoopbackPort 0 with
-    | Some port -> port
-    | None -> failwith "Unable to reserve a loopback port for HTTP integration tests."
+    // An OS-assigned port is free, but its +1 neighbour (the dashboard) may not
+    // be, so a few fresh draws are expected rather than exceptional.
+    Seq.init 20 (fun _ -> tryReserveLoopbackPort 0)
+    |> Seq.tryPick id
+    |> Option.defaultWith (fun () ->
+      failwith "Unable to reserve a free loopback port pair (MCP + dashboard) for HTTP integration tests.")
 
 let runProcessExpectSuccess (fileName: string) (workingDir: string) (args: string list) =
   let psi = ProcessStartInfo()
@@ -131,18 +153,46 @@ let startDaemonWithArgs (port: int) (workingDir: string) (args: string list) = t
   client.BaseAddress <- Uri(sprintf "http://localhost:%d" port)
   client.Timeout <- TimeSpan.FromSeconds(30.0)
 
-  // Poll until /health responds (up to 60s)
+  // Ready means OUR daemon answers — not "something answers on this port".
+  //
+  // This used to accept any /health response. The port is released before the
+  // daemon binds it (see `tryReserveLoopbackPort`), and integration suites run
+  // in parallel from narrow port ranges, so a neighbouring suite's daemon could
+  // take the port first: ours failed to bind and exited, the neighbour's /health
+  // answered, this returned "ready", and the test failed seconds later with
+  // `Connection refused` once the neighbour shut down — passing every time in
+  // isolation and failing under full-suite load. The dashboard's
+  // /api/daemon-info reports the daemon's own pid, so readiness is proven
+  // against the process this call spawned, and an early exit fails fast with a
+  // message that says what happened instead of a misleading error later.
+  use identity = new HttpClient()
+  identity.BaseAddress <- Uri(sprintf "http://localhost:%d" (port + 1))
+  identity.Timeout <- TimeSpan.FromSeconds(5.0)
   let mutable ready = false
+  let mutable exitedEarly = false
   let mutable attempts = 0
-  while not ready && attempts < daemonStartupHealthMaxAttempts do
+  while not ready && not exitedEarly && attempts < daemonStartupHealthMaxAttempts do
     do! Threading.Tasks.Task.Delay(daemonStartupHealthPollInterval)
-    try
-      let! resp = client.GetAsync("/health")
-      if int resp.StatusCode > 0 then ready <- true
-    with _ -> ()
+    match proc.HasExited with
+    | true -> exitedEarly <- true
+    | false ->
+      try
+        let! body = identity.GetStringAsync("/api/daemon-info")
+        ready <- reportsPid body proc.Id
+      with _ -> ()
     attempts <- attempts + 1
 
-  if not ready then
+  match ready, exitedEarly with
+  | true, _ -> ()
+  | false, true ->
+    let code = proc.ExitCode
+    proc.Dispose()
+    client.Dispose()
+    failwith (
+      sprintf
+        "Daemon exited with code %d before becoming ready on port %d — most often the port (or its +1 dashboard port) was taken between reservation and bind by a parallel suite's daemon."
+        code port)
+  | false, false ->
     try proc.Kill() with _ -> ()
     proc.Dispose()
     client.Dispose()
