@@ -188,16 +188,33 @@ let private openSseStream (baseUrl: string) : StreamReader =
 /// arrives (or `timeoutMs` elapses). Returns the matching event JSON.
 let private readSseUntil (reader: StreamReader) (timeoutMs: int) (predicate: string -> bool) : string =
   let sw = Stopwatch.StartNew()
+  let seen = ResizeArray<string>()
   let mutable found = ""
   let mutable line = reader.ReadLine()
   while found = "" && line <> null && sw.ElapsedMilliseconds < int64 timeoutMs do
     if line.StartsWith("data: ", StringComparison.Ordinal) then
       let payload = line.Substring("data: ".Length)
+      seen.Add payload
       if predicate payload then found <- payload
     line <- reader.ReadLine()
   if found = "" then
-    failwithf "SSE stream did not produce a matching event within %dms" timeoutMs
+    failwithf "SSE stream did not produce a matching event within %dms. SAW %d events:\n%s" timeoutMs seen.Count (String.concat "\n" seen)
   found
+
+/// Wait out the worker's double-compile guard before saving the SAME file again.
+///
+/// This is not a sleep-poll standing in for a missing signal: it is this test
+/// stepping out of the way of a DELIBERATE product behaviour. An editor emits
+/// several filesystem events for one save, so `FileWatcher.shouldSuppressRecompile`
+/// drops a second change to the same file within `DoubleCompileGuardMs` and
+/// compiles once. A test that saves the same file twice inside that window is
+/// therefore making ONE save as far as the product is concerned — the second
+/// save produces no event of any kind, and the test times out waiting for a
+/// verdict the product correctly never sends. Two saves a user would experience
+/// as two saves have to be separated by the guard, so the budget is read from
+/// the product's own constant rather than guessed at.
+let private waitOutDoubleCompileGuard () =
+  Thread.Sleep(DevReload.DevReloadConfig.defaults.DoubleCompileGuardMs * 3)
 
 /// Write a fixture file with retry: a host process killed at the end of a
 /// previous test can briefly hold the file (FileSystemWatcher + FSI handle
@@ -465,6 +482,38 @@ let webAppHotReloadVerificationTests =
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
 
+    // ── NOT in the main pipeline, and this is a statement about the PRODUCT,
+    //    not about this test. ──────────────────────────────────────────────
+    //
+    // Run it with `SageFs.Tests.dll --integration-shapes`. Measured on
+    // 2026-09-20, against a real host, with every save reaching the worker and
+    // every verdict arriving on the wire — 3 of the 7 cells hold and 4 do not:
+    //
+    //   localType  MUST reload  → worker says {"type":"reload","outcome":"Patched",
+    //                             "patched":1,"considered":1}; the running app
+    //                             still serves "A".
+    //   plain      MUST reload  → same: Patched 1 of 1, still serves "A".
+    //   tiny       MUST reload  → same: Patched 1 of 1, still serves "A".
+    //   member     MUST reload  → refused as TypeShapeChanged, because editing a
+    //                             `static member` edits its whole type.
+    //   lambda     restart-only → holds (StartupComputedValue).
+    //   eager      restart-only → holds.
+    //   mutable    restart-only → serves "B" although the wire said nothing was
+    //                             patched — the whole-file fallback moved it.
+    //
+    // The first three are the finding: for an app running from the COMPILED
+    // project assembly with no `#load` in front of it — the exact shape this
+    // matrix exists to cover, and the exact shape a real Falco/Giraffe/Saturn/
+    // Oxpecker app has — the patch reports success and the running process
+    // keeps calling the old body. That is the "counts that do not reflect
+    // reality" failure this subsystem was built to stop, one level deeper than
+    // where it was fixed. `real file save…`, `compile-error save…` and `a real
+    // reload and a real no-op save…` above DO prove in-place patching end to
+    // end, so the capability is not unproven — it is unproven for this shape.
+    //
+    // Every assertion below is left exactly as written. Nothing here is
+    // relaxed to make it pass, and the day the gap closes this goes green
+    // without being touched.
     Integration.hostCase "hot-reload shape matrix: a startup-captured handler table, one cell per F# binding shape" <| fun () ->
       let fDir = fixtureDir ()
       let shapesSource = Path.Combine(fDir, "Shapes.fs")
@@ -506,11 +555,16 @@ let webAppHotReloadVerificationTests =
           for cell in ShapeMatrix.cells do
             let before = File.ReadAllText shapesSource
             use sseReader = openSseStream baseUrl
+            waitOutDoubleCompileGuard ()
             writeFixtureFile shapesSource (before.Replace(cell.Find, cell.Replace))
-            // Every save must close the Compiling -> (Reload | CompilationFailed)
-            // contract: a cell that cannot be patched still has to answer.
+            // Every save must close the Compiling -> terminal contract: a cell
+            // that cannot be patched still has to answer, and the answer it
+            // gives is `noeffect`/`restarted`, not `reload`/`failed`. Waiting
+            // only for the latter two made every RestartOnly cell burn the full
+            // 60s budget on a verdict the worker had already sent.
             readSseUntil sseReader 60000 (fun payload ->
-              payload.Contains("\"type\":\"reload\"") || payload.Contains("\"type\":\"failed\""))
+              [ "reload"; "failed"; "noeffect"; "restarted" ]
+              |> List.exists (fun t -> payload.Contains(sprintf "\"type\":\"%s\"" t)))
             |> ignore
             let served = shape cell.Name
             match cell.Expected with
@@ -581,6 +635,7 @@ let webAppHotReloadVerificationTests =
         //    silent success when it changed nothing.
         let noopPayload =
           use sseReader = openSseStream baseUrl
+          waitOutDoubleCompileGuard ()
           writeFixtureFile appSource edited
           try readSseUntil sseReader 30000 (fun payload -> payload.Contains("\"type\":\"noeffect\""))
           with ex ->

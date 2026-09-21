@@ -31,11 +31,24 @@ type DeclAccess =
   | Internal
   | Private
 
-/// One top-level declaration of a file, with its exact source text.
+/// One declaration of a file, with its exact source text.
 type SourceDecl = {
   Name: string
   Kind: DeclKind
   Access: DeclAccess
+  /// The nested modules this declaration sits inside, relative to the file's
+  /// `ModulePath` — `[]` for a declaration at the file's top level, and
+  /// `["Greeting"]` for `let greeting` inside `namespace X` + `module Greeting =`.
+  ///
+  /// WHY this exists: `namespace X` followed by `module Y =` is the ordinary way
+  /// to write an F# file, and the planner used to treat that whole nested module
+  /// as ONE opaque declaration. Every edit inside it — including a plain function
+  /// body — therefore came back as `ModuleChanged`, which refuses the save with
+  /// "SageFs does not re-point a change inside module 'Y' yet". Carrying the
+  /// container per declaration is what lets the planner see the function that
+  /// actually changed, and what lets `emitStableIdentity` re-emit it under the
+  /// module it really lives in so the detour pairs against the compiled method.
+  Container: string list
   /// For functions, the text before `=`: the part callers were compiled against.
   Header: string
   Text: string
@@ -215,7 +228,7 @@ let private accessOf (access: SynAccess option) : DeclAccess =
   | Some a when a.IsInternal -> DeclAccess.Internal
   | _ -> DeclAccess.Public
 
-let private bindingDecl (lines: string array) (binding: SynBinding) : SourceDecl =
+let private bindingDecl (lines: string array) (container: string list) (binding: SynBinding) : SourceDecl =
   let (SynBinding(attributes = attributes; isMutable = isMutable; headPat = pat; trivia = trivia)) = binding
   let keyword = trivia.LeadingKeyword.Range
   let start =
@@ -239,15 +252,17 @@ let private bindingDecl (lines: string array) (binding: SynBinding) : SourceDecl
   { Name = patName lines pat
     Kind = kind
     Access = accessOf (patAccess pat)
+    Container = container
     Header = header.Trim()
     Text = slice lines (start.Line, start.Column) (whole.EndLine, whole.EndColumn)
     StartLine = start.Line
     EndLine = whole.EndLine }
 
-let private simpleDecl (lines: string array) (name: string) (kind: DeclKind) (access: DeclAccess) (r: range) : SourceDecl =
+let private simpleDecl (lines: string array) (container: string list) (name: string) (kind: DeclKind) (access: DeclAccess) (r: range) : SourceDecl =
   { Name = name
     Kind = kind
     Access = access
+    Container = container
     Header = ""
     Text = rangeText lines r
     StartLine = r.StartLine
@@ -258,35 +273,61 @@ let private exceptionName (text: string) =
   | "exception" :: name :: _ -> name
   | _ -> text
 
+/// Flatten a file's declarations, DESCENDING into nested modules.
+///
+/// Chesterton's fence — this used to stop at a nested module and record it as a
+/// single opaque `NestedModuleDecl`. That made `namespace X` + `module Y =` (the
+/// ordinary F# file layout, and the layout of every Falco/Giraffe/Saturn app and
+/// of this repo's own hot-reload fixture) unpatchable: any edit inside `Y`, even
+/// one function body, diffed as `ModuleChanged Y` and was refused with "SageFs
+/// does not re-point a change inside module 'Y' yet". Descending is what lets
+/// the diff name the function that actually changed. `startups` is threaded
+/// through the whole walk so `startup#N` stays unique across the file, and each
+/// declaration records the `container` it was found in so `emitStableIdentity`
+/// can re-emit it under the module it really lives in.
+///
+/// A module ABBREVIATION (`module M = A.B.C`) is still opaque: it declares no
+/// members of its own, so there is nothing inside it to patch.
+let rec private declsIn
+  (lines: string array)
+  (container: string list)
+  (startups: int)
+  (decls: SynModuleDecl list)
+  : string list * SourceDecl list * int =
+  decls
+  |> List.fold (fun (opens, found, startups) decl ->
+    match decl with
+    | SynModuleDecl.Open(target = SynOpenDeclTarget.ModuleOrNamespace(longId = SynLongIdent(id = ids))) ->
+      opens @ [ identText ids ], found, startups
+    | SynModuleDecl.Open(target = target) ->
+      opens @ [ rangeText lines target.Range ], found, startups
+    | SynModuleDecl.Let(bindings = bindings) ->
+      opens, found @ (bindings |> List.map (bindingDecl lines container)), startups
+    | SynModuleDecl.Types(typeDefns = defns) ->
+      let types =
+        defns
+        |> List.map (fun (SynTypeDefn(typeInfo = SynComponentInfo(longId = ids; accessibility = access)) as defn) ->
+          simpleDecl lines container (identText ids) DeclKind.TypeDecl (accessOf access) defn.Range)
+      opens, found @ types, startups
+    | SynModuleDecl.Exception(range = r) ->
+      opens,
+      found @ [ simpleDecl lines container (exceptionName (rangeText lines r)) DeclKind.TypeDecl DeclAccess.Public r ],
+      startups
+    | SynModuleDecl.NestedModule(moduleInfo = SynComponentInfo(longId = ids); decls = inner) ->
+      let name = identText ids
+      let innerOpens, innerDecls, startups = declsIn lines (container @ [ name ]) startups inner
+      opens @ innerOpens, found @ innerDecls, startups
+    | SynModuleDecl.ModuleAbbrev(ident = ident; range = r) ->
+      opens, found @ [ simpleDecl lines container ident.idText DeclKind.NestedModuleDecl DeclAccess.Public r ], startups
+    | SynModuleDecl.Expr(range = r) ->
+      let name = sprintf "startup#%d" (startups + 1)
+      opens, found @ [ simpleDecl lines container name DeclKind.StartupCode DeclAccess.Public r ], startups + 1
+    | SynModuleDecl.HashDirective _
+    | SynModuleDecl.Attributes _
+    | SynModuleDecl.NamespaceFragment _ -> opens, found, startups) ([], [], startups)
+
 let private declsOf (lines: string array) (decls: SynModuleDecl list) : string list * SourceDecl list =
-  let opens, found, _ =
-    decls
-    |> List.fold (fun (opens, found, startups) decl ->
-      match decl with
-      | SynModuleDecl.Open(target = SynOpenDeclTarget.ModuleOrNamespace(longId = SynLongIdent(id = ids))) ->
-        opens @ [ identText ids ], found, startups
-      | SynModuleDecl.Open(target = target) ->
-        opens @ [ rangeText lines target.Range ], found, startups
-      | SynModuleDecl.Let(bindings = bindings) ->
-        opens, found @ (bindings |> List.map (bindingDecl lines)), startups
-      | SynModuleDecl.Types(typeDefns = defns) ->
-        let types =
-          defns
-          |> List.map (fun (SynTypeDefn(typeInfo = SynComponentInfo(longId = ids; accessibility = access)) as defn) ->
-            simpleDecl lines (identText ids) DeclKind.TypeDecl (accessOf access) defn.Range)
-        opens, found @ types, startups
-      | SynModuleDecl.Exception(range = r) ->
-        opens, found @ [ simpleDecl lines (exceptionName (rangeText lines r)) DeclKind.TypeDecl DeclAccess.Public r ], startups
-      | SynModuleDecl.NestedModule(moduleInfo = SynComponentInfo(longId = ids; accessibility = access); range = r) ->
-        opens, found @ [ simpleDecl lines (identText ids) DeclKind.NestedModuleDecl (accessOf access) r ], startups
-      | SynModuleDecl.ModuleAbbrev(ident = ident; range = r) ->
-        opens, found @ [ simpleDecl lines ident.idText DeclKind.NestedModuleDecl DeclAccess.Public r ], startups
-      | SynModuleDecl.Expr(range = r) ->
-        let name = sprintf "startup#%d" (startups + 1)
-        opens, found @ [ simpleDecl lines name DeclKind.StartupCode DeclAccess.Public r ], startups + 1
-      | SynModuleDecl.HashDirective _
-      | SynModuleDecl.Attributes _
-      | SynModuleDecl.NamespaceFragment _ -> opens, found, startups) ([], [], 0)
+  let opens, found, _ = declsIn lines [] 0 decls
   opens, found
 
 let extractDecls (source: string) : Result<FileDecls, string> =
@@ -354,14 +395,17 @@ type private DeclOutcome =
 
 /// A type and its companion module share a name, and a name can be shadowed,
 /// so a declaration is identified by kind, name and occurrence.
+/// The container is part of the key: two nested modules in one file may each
+/// declare `render`, and pairing one against the other would diff two unrelated
+/// functions against each other.
 let private keyed (decls: SourceDecl list) =
   decls
-  |> List.mapFold (fun (seen: Map<DeclKind * string, int>) d ->
-    let n = seen |> Map.tryFind (d.Kind, d.Name) |> Option.defaultValue 0
-    ((d.Kind, d.Name, n), d), Map.add (d.Kind, d.Name) (n + 1) seen) Map.empty
+  |> List.mapFold (fun (seen: Map<DeclKind * string list * string, int>) d ->
+    let n = seen |> Map.tryFind (d.Kind, d.Container, d.Name) |> Option.defaultValue 0
+    ((d.Kind, d.Container, d.Name, n), d), Map.add (d.Kind, d.Container, d.Name) (n + 1) seen) Map.empty
   |> fst
 
-let private outcomeOf (baseline: Map<DeclKind * string * int, SourceDecl>) (key, current: SourceDecl) =
+let private outcomeOf (baseline: Map<DeclKind * string list * string * int, SourceDecl>) (key, current: SourceDecl) =
   match Map.tryFind key baseline, current.Kind with
   | None, DeclKind.FunctionDecl -> DeclOutcome.Patch current
   | None, _ -> DeclOutcome.Restart (additionFor current)

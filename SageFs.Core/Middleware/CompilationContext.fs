@@ -603,26 +603,52 @@ let emitStableIdentity
     : PreprocessResult =
   let path = decls.ModulePath
   let pad depth = String.replicate depth "  "
-  let body = pad path.Length
-  let headers = path |> List.mapi (fun depth part -> sprintf "%smodule %s =" (pad depth) part)
-  let opens = decls.Opens |> List.map (fun o -> sprintf "%sopen %s" body o)
-  let compiledModule =
-    match path with
-    | [] -> []
-    | _ -> [ sprintf "%sopen global.%s" body (String.concat "." path) ]
   let directiveFile = filePath.Replace("\\", "\\\\").Replace("\"", "\\\"")
-  let emitted =
-    functions
-    |> List.collect (fun f ->
-      let text =
-        splitLines f.Text
-        |> Array.map (fun l ->
-          match l.Trim() with
-          | "" -> ""
-          | _ -> body + l)
-        |> Array.toList
-      sprintf "# %d \"%s\"" f.StartLine directiveFile :: text)
-  { Code = headers @ opens @ compiledModule @ emitted |> String.concat "\n"
+
+  let emitDecl (indent: string) (f: SageFs.Features.ReloadPlanning.SourceDecl) =
+    let text =
+      splitLines f.Text
+      |> Array.map (fun l ->
+        match l.Trim() with
+        | "" -> ""
+        | _ -> indent + l)
+      |> Array.toList
+    sprintf "# %d \"%s\"" f.StartLine directiveFile :: text
+
+  // A function declared inside `namespace X` + `module Y =` must be re-emitted
+  // inside `Y`, not flattened into `X`: the compiled method it has to pair with
+  // is `X.Y.f`, and `open global.X.Y` is what makes the types it mentions the
+  // COMPILED ones rather than freshly re-declared FSI copies. Emitting the
+  // whole file's containers as one nested tree (rather than one block per
+  // container) is what keeps `module X =` from being declared twice in a single
+  // submission when two nested modules both changed.
+  let rec emitTree (depth: int) (qualified: string list) (items: (string list * SageFs.Features.ReloadPlanning.SourceDecl) list) =
+    let indent = pad depth
+    let here = items |> List.filter (fst >> List.isEmpty) |> List.map snd
+    let nested =
+      items
+      |> List.filter (fst >> List.isEmpty >> not)
+      |> List.groupBy (fun (container, _) -> List.head container)
+      |> List.map (fun (name, xs) -> name, xs |> List.map (fun (container, d) -> List.tail container, d))
+    let hereLines =
+      match here with
+      | [] -> []
+      | _ ->
+        let opens = decls.Opens |> List.map (fun o -> sprintf "%sopen %s" indent o)
+        let compiledModule =
+          match qualified with
+          | [] -> []
+          | _ -> [ sprintf "%sopen global.%s" indent (String.concat "." qualified) ]
+        opens @ compiledModule @ (here |> List.collect (emitDecl indent))
+    let nestedLines =
+      nested
+      |> List.collect (fun (name, xs) ->
+        sprintf "%smodule %s =" indent name :: emitTree (depth + 1) (qualified @ [ name ]) xs)
+    hereLines @ nestedLines
+
+  let headers = path |> List.mapi (fun depth part -> sprintf "%smodule %s =" (pad depth) part)
+  let body = emitTree path.Length path (functions |> List.map (fun f -> f.Container, f))
+  { Code = headers @ body |> String.concat "\n"
     LineOffset = 0
     ColumnOffset = 2 * path.Length
     OriginalFilePath = Some filePath }

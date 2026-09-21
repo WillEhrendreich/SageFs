@@ -22,7 +22,7 @@ let private declsOf (source: string) =
   | Error reason -> failtestf "extractDecls failed: %s" reason
 
 let private mkDecl name kind : SourceDecl =
-  { Name = name; Kind = kind; Access = DeclAccess.Public; Header = ""; Text = ""; StartLine = 1; EndLine = 1 }
+  { Name = name; Kind = kind; Access = DeclAccess.Public; Container = []; Header = ""; Text = ""; StartLine = 1; EndLine = 1 }
 
 let reloadPlanningDecisionMutationTests = testList "ReloadPlanning decision mutations" [
 

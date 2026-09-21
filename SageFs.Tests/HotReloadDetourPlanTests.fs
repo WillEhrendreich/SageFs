@@ -1,14 +1,12 @@
 module SageFs.Tests.HotReloadDetourPlanTests
 
 open System
-open System.Runtime.CompilerServices
 open Expecto
 open Expecto.Flip
 open SageFs.Middleware.HotReloading
 open SageFs.Middleware.HotReloadCore
 open SageFs.Features.ReloadOutcome
 open SageFs.Features.ReloadPlanning
-open SageFs.Utils
 
 // Distinct overloads of one Math method share a Name but not an identity —
 // the same shape as two FSI copies of one re-evaluated definition.
@@ -324,6 +322,9 @@ let private fnDecl (name: string) : SourceDecl =
     Access = DeclAccess.Public
     Header = sprintf "let %s x" name
     Text = sprintf "let %s x = x" name
+    // Declared directly in the file's own module path, not nested inside a
+    // further `module X =` — see `SourceDecl.Container`.
+    Container = []
     StartLine = 1
     EndLine = 1 }
 
@@ -435,120 +436,69 @@ let mutableBindingTornChangeTests =
       |> Expect.stringContains "says what's wrong" "disagree"
   ]
 
-// ── BindingOutcome.Torn, reached through REAL Harmony detours ────────────────
+// ── BindingOutcome.Torn — reachability, proven at the right seam ────────────
 //
-// Real (process-global) Harmony patches, like HarmonyCanaryTests and
-// MethodPatcherTests — dedicated throwaway methods, and the whole section
-// joins their "sagefs-harmony" sequenced group so it can never race another
-// suite's detours on the same process.
+// `Torn` is produced by `classifyBindingApplication`, given the per-leg
+// verdicts `detourMethod` already returned for that binding's accessors.
+// Constructing a live Torn end-to-end would mean forcing a REAL Harmony call
+// to fail on exactly one leg of a pair while succeeding on the other. Tried
+// live against this repo's own custom Harmony fork (SageFs.Harmony,
+// 2.4.2-sagefs.1 — patched for CoreCLR 11): a method detoured to ITSELF,
+// a signature-mismatched detour, and re-detouring an already-patched method
+// were all EXPECTED to throw (upstream MonoMod's own "from != to" assertion
+// documents the first) and instead all landed silently, both live via the
+// SageFs REPL against the running daemon and in the compiled test binary —
+// this fork's low-level `PatchTools.DetourMethod` is evidently more
+// permissive than upstream about what it will patch. So a live per-leg
+// Harmony failure that this test could force on demand does not exist as a
+// stable, environment-independent fact about this fork; what DOES stay true
+// on every build is `detourMethod`'s own three specifically-caught failure
+// paths (a stale FSI compilation unit's TypeLoadException, an already-failed
+// TypeInitializationException, and net11's PlatformNotSupportedException —
+// each already exercised by its own test elsewhere), any one of which
+// returns `DetourApplied.Failed` for a real, unforced reason in production.
 //
-// `applyBindingDetour` preflights every leg (JIT-prepares it) before writing
-// any of them, so a leg that CANNOT be JIT-compiled is caught before anything
-// moves (NeitherLegRedirected, not Torn — the atomicity guarantee the header
-// comment describes). Torn is reached a layer further in: preflight only
-// proves a leg can be JIT-compiled, not that Harmony's OWN detour will
-// succeed on it. A method detoured to ITSELF preflights cleanly (it is a
-// perfectly ordinary, already-JIT-compiled method) and then fails inside
-// Harmony's PatchTools.DetourMethod with "Cannot detour a method to itself"
-// (confirmed live against this repo's Harmony/MonoMod build) — a distinct,
-// later failure surface preflight cannot see coming. Pairing that with a
-// genuinely different, compatible method for the other leg reproduces Torn
-// through the real path, not a hand-built DU literal.
-// NOT `private`: HarmonyCanaryTests/MethodPatcherTests' own real-detour probe
-// types are all non-private, and a `private` type here reproducibly kept
-// BOTH legs from landing in the compiled test binary (NeitherLegRedirected
-// every time, confirmed across three independent method pairs) even though
-// the identical sequence works from FSI — Harmony/MonoMod's detour machinery
-// on this repo's build evidently needs the ordinary public-type IL shape.
-type TornProbeMethods() =
-  [<MethodImpl(MethodImplOptions.NoInlining)>]
-  static member GetterOld() : int = 1
-
-  [<MethodImpl(MethodImplOptions.NoInlining)>]
-  static member SetterOld1(_x: int) : unit = ()
-  [<MethodImpl(MethodImplOptions.NoInlining)>]
-  static member SetterNew1(_x: int) : unit = ()
-  [<MethodImpl(MethodImplOptions.NoInlining)>]
-  static member SetterOld2(_x: int) : unit = ()
-  [<MethodImpl(MethodImplOptions.NoInlining)>]
-  static member SetterNew2(_x: int) : unit = ()
-  [<MethodImpl(MethodImplOptions.NoInlining)>]
-  static member SetterOld3(_x: int) : unit = ()
-  [<MethodImpl(MethodImplOptions.NoInlining)>]
-  static member SetterNew3(_x: int) : unit = ()
-
-let private tornProbe (name: string) : Method =
-  { MethodInfo = typeof<TornProbeMethods>.GetMethod(name); FullName = "Torn.Config." + name }
-
-/// Three independent setter pairs, tried in turn: real (process-global,
-/// native-code-patching) Harmony detours have shown genuine run-to-run
-/// flakiness on this exact class of test elsewhere in the suite
-/// (HarmonyCanaryTests documents JIT/tiered-compilation and cross-suite
-/// contention as causes) — a landed detour confirmed live via the REPL
-/// (see the module comment) occasionally does not land under the full
-/// suite's parallel load. Each pair is a FRESH, never-before-patched method,
-/// so a retry is a genuinely independent attempt, not a repeat of one that
-/// already failed.
-let private setterPairs =
-  [ "SetterOld1", "SetterNew1"
-    "SetterOld2", "SetterNew2"
-    "SetterOld3", "SetterNew3" ]
-
+// `classifyBindingApplication` is what turns "one leg's `detourMethod` came
+// back Failed, another's didn't" into `Torn`, and it is pure — no Harmony
+// call inside it — so THIS is the seam to test it at: constructed
+// `DetourApplied` lists, matching exactly what `detourMethod` is already
+// proven (by its own test suites) to return for a leg that failed for real.
 [<Tests>]
-let realTornBindingTests =
-  testSequencedGroup "sagefs-harmony" (testList "HotReloadCore applyDetourPlan — a real torn accessor pair" [
-    testCase "WHY — HotReloadCore.applyDetourPlan — one leg self-detoured (fails inside Harmony, not preflight) and the other genuinely redirected is reported Torn, not silently dropped, because the running process now reads the OLD field and writes the NEW one" <| fun _ ->
-      // Reuse the SAME `Method` value for both sides of the pair — calling
-      // `tornProbe "GetterOld"` a second time builds a distinct `Method`
-      // record wrapping a SEPARATE `Type.GetMethod` lookup, and MonoMod's
-      // "Cannot detour a method to itself" guard did not fire against two
-      // such lookups in the compiled test binary (confirmed: it silently
-      // succeeded, landing BothLegsRedirected instead of failing this leg —
-      // reflection does not guarantee `GetMethod` returns the same
-      // `MethodInfo` instance across separate calls). One shared value is
-      // guaranteed to be the self-detour MonoMod actually rejects.
-      let getterOld = tornProbe "GetterOld"
-      let selfDetouredGetter = getterOld, getterOld
-      let attempt (oldName, newName) : DetourReport =
-        let plan : DetourPlan =
-          { Functions = []
-            MutableBindings =
-              [ { Binding = "Torn.Config.probe"
-                  FirstGetter = selfDetouredGetter
-                  MoreGetters = []
-                  FirstSetter = tornProbe oldName, tornProbe newName
-                  MoreSetters = [] } ]
-            Declined = [] }
-        applyDetourPlan (Log.asILogger()) plan
-      let rec tryPairs =
-        function
-        | [] ->
-          // Every independent attempt's "should succeed" leg also failed to
-          // land — an environment limitation (MonoMod/CoreCLR
-          // compatibility or suite-wide contention), not evidence that
-          // applyBindingDetour mishandles a landed+failed pair. Skip rather
-          // than assert a false negative, matching HarmonyCanaryTests'
-          // documented tolerance for the same class of Harmony flakiness.
-          skiptest
-            "could not manufacture a torn pair on this run — every attempt either landed both legs (the atomicity guarantee holding) or failed both. Torn's reporting path is pinned by WorkerMainTests' escalationOf cases, which construct the outcome directly."
-        | pair :: rest ->
-          let report = attempt pair
-          match report.Bindings with
-          | [ BindingOutcome.Torn(binding, reason) ] ->
-            binding |> Expect.equal "names the torn binding" "Torn.Config.probe"
-            reason |> Expect.stringContains "carries why the self-detoured leg failed" "itself"
-            // The whole point: Torn is reported through the SAME channel a
-            // caller reads any other binding outcome from — nothing about
-            // it is swallowed once it exists.
-            report.Failures |> Expect.isNonEmpty "a torn binding's failing leg is still counted as a failure"
-          | [ BindingOutcome.NeitherLegRedirected _ ] -> tryPairs rest
-          // MonoMod's "cannot detour a method to itself" guard did not fire —
-          // the self-detour silently succeeded and BOTH legs landed. That is a
-          // failure to MANUFACTURE a tear, not a defect: the pair applied
-          // atomically, which is the guarantee `AccessorPairDetour` exists to
-          // provide. Try the next pair; if none of them tears, the skip below
-          // says so honestly rather than reporting a green that proved nothing.
-          | [ BindingOutcome.BothLegsRedirected _ ] -> tryPairs rest
-          | other -> failtestf "expected exactly one Torn, NeitherLegRedirected or BothLegsRedirected outcome, got %A" other
-      tryPairs setterPairs
-  ])
+let classifyBindingApplicationTests =
+  testList "HotReloadCore.classifyBindingApplication" [
+    testCase "WHY — HotReloadCore.classifyBindingApplication — both legs landing is coherent, not torn" <| fun _ ->
+      classifyBindingApplication "M.counter" [ DetourApplied.Redirected; DetourApplied.Redirected ]
+      |> Expect.equal "both legs redirected" (BindingOutcome.BothLegsRedirected "M.counter")
+
+    testCase "WHY — HotReloadCore.classifyBindingApplication — Ineffective and Superseded both still count as LANDED, because neither one left the old code running" <| fun _ ->
+      classifyBindingApplication "M.counter" [ DetourApplied.Ineffective "canary"; DetourApplied.Superseded "stale type" ]
+      |> Expect.equal "both count as landed" (BindingOutcome.BothLegsRedirected "M.counter")
+
+    testCase "WHY — HotReloadCore.classifyBindingApplication — both legs failing is a NO-OP, not torn, because nothing moved so nothing disagrees" <| fun _ ->
+      classifyBindingApplication "M.counter" [ DetourApplied.Failed "boom"; DetourApplied.Failed "boom2" ]
+      |> Expect.equal "neither leg redirected, first reason kept" (BindingOutcome.NeitherLegRedirected("M.counter", "boom"))
+
+    testCase "WHY — HotReloadCore.classifyBindingApplication — exactly one leg failing while another lands IS Torn — the reachable, dangerous case this whole type exists to name" <| fun _ ->
+      classifyBindingApplication "M.counter" [ DetourApplied.Failed "TypeLoadException: stale FSI type"; DetourApplied.Redirected ]
+      |> Expect.equal "torn, naming the failing leg's reason"
+        (BindingOutcome.Torn("M.counter", "TypeLoadException: stale FSI type"))
+
+    testCase "WHY — HotReloadCore.classifyBindingApplication — order doesn't matter: a landed leg followed by a failed one is torn too" <| fun _ ->
+      classifyBindingApplication "M.counter" [ DetourApplied.Redirected; DetourApplied.Failed "boom" ]
+      |> Expect.equal "still torn" (BindingOutcome.Torn("M.counter", "boom"))
+
+    testProperty "WHY — HotReloadCore.classifyBindingApplication — Torn is exactly the mixed case, for ANY legs list: some failed AND some did not, never all-or-nothing"
+    <| fun (results: bool list) ->
+      // true = this leg's detourMethod call landed; false = it Failed.
+      let applied =
+        results |> List.map (function true -> DetourApplied.Redirected | false -> DetourApplied.Failed "boom")
+      match applied with
+      | [] -> true // an empty legs list can never occur (AccessorPairDetour always has a getter and a setter); nothing to assert.
+      | _ ->
+        let anyFailed = results |> List.exists not
+        let anyLanded = results |> List.exists id
+        match classifyBindingApplication "M.counter" applied with
+        | BindingOutcome.Torn _ -> anyFailed && anyLanded
+        | BindingOutcome.BothLegsRedirected _ -> not anyFailed
+        | BindingOutcome.NeitherLegRedirected _ -> anyFailed && not anyLanded
+  ]

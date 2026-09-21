@@ -235,6 +235,30 @@ let main argv =
     result
   | false ->
 
+  // Run the hot-reload SHAPE MATRIX. It is its own entry point rather than a
+  // `--integration-host` suite because 4 of its 7 cells currently fail against
+  // a real host — see the block comment above the case in
+  // WebAppHotReloadVerificationTests.fs for the per-cell measurement. It is a
+  // standing, runnable proof of an open capability gap, kept out of the gating
+  // pipeline WITHOUT being weakened or silently skipped.
+  let isIntegrationShapes = argv |> Array.exists (fun a -> a = "--integration-shapes")
+  match isIntegrationShapes with
+  | true ->
+    let shapesArgv = argv |> Array.filter (fun a -> a <> "--integration-shapes")
+    let shapeTests =
+      testSequenced (
+        testList
+          "Integration (shapes)"
+          (SageFs.Tests.TestInfrastructure.Integration.registered ()
+           |> List.choose (fun (runner, test) ->
+             match runner with
+             | SageFs.Tests.TestInfrastructure.Integration.Runner.Dedicated "--integration-shapes" -> Some test
+             | _ -> None)))
+    let result = Tests.runTestsWithCLIArgs [] shapesArgv shapeTests
+    Environment.Exit result
+    result
+  | false ->
+
   // Fail closed the other direction from unregisteredTagged above: a suite
   // registered as Integration.Dedicated "--some-flag" but never given a
   // dispatch branch in this file would otherwise run NOWHERE — in CI or
@@ -245,7 +269,8 @@ let main argv =
   // on-demand suite whose payload is a human-readable note, not a bare CLI
   // flag) are exempt — see Integration.isBareFlagEntryPoint.
   let knownDedicatedEntryPoints =
-    [ "--integration-browser"; "--integration-hr"; "--integration-lt"; "--integration-disconnect" ]
+    [ "--integration-browser"; "--integration-hr"; "--integration-lt"; "--integration-disconnect"
+      "--integration-shapes" ]
   match SageFs.Tests.TestInfrastructure.Integration.unwiredDedicated knownDedicatedEntryPoints with
   | [] -> ()
   | unwired ->

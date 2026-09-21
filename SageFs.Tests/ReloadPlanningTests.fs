@@ -324,7 +324,7 @@ let private mkDecl (name: string) (kind: DeclKind) (access: DeclAccess) (body: s
     | DeclKind.TypeDecl -> "", sprintf "type %s%s = { Value: int } // %s" accessText name body
     | DeclKind.NestedModuleDecl -> "", sprintf "module %s%s =\n  let inner = %s" accessText name body
     | DeclKind.StartupCode -> "", sprintf "printfn \"%%d\" (%s)" body
-  { Name = name; Kind = kind; Access = access; Header = header; Text = text; StartLine = 1; EndLine = 1 }
+  { Name = name; Kind = kind; Access = access; Container = []; Header = header; Text = text; StartLine = 1; EndLine = 1 }
 
 let private genDeclNamed (name: string) =
   gen {

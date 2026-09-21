@@ -110,6 +110,15 @@ module Integration =
   let hostCase (name: string) (body: unit -> unit) =
     Expecto.Tests.testCase (tagged name) body |> register Host
 
+  /// An integration test case whose subject is a capability that does NOT work
+  /// yet, so it cannot gate the main pipeline — but which must stay runnable,
+  /// named, and un-weakened, so the day the capability lands it goes green on
+  /// its own. `entryPoint` is the CLI flag that runs it; Program.fs fails
+  /// closed if no dispatch branch exists for it, which is what keeps this from
+  /// degrading into the silent no-op gate this repo has been bitten by before.
+  let dedicatedCase (entryPoint: string) (name: string) (body: unit -> unit) =
+    Expecto.Tests.testCase (tagged name) body |> register (Dedicated entryPoint)
+
   /// Touch every [<Tests>] value in this assembly so every file's lazy module
   /// initialization — and with it every registration — has run.
   let private discovery =
