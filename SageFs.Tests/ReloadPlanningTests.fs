@@ -149,10 +149,21 @@ let companionModuleTests =
     testCase "WHY — ReloadPlanning.planReload — a type and its same-named companion module plan against themselves as a no-op because sharing a name is not a change" <| fun _ ->
       planReload (declsOf source) (declsOf source) |> patchedNames |> Expect.isEmpty "nothing to patch"
 
-    testCase "WHY — ReloadPlanning.planReload — editing only the companion module reports the module, not the type, because the card must name what really changed" <| fun _ ->
+    // This used to assert a RESTART naming `ModuleChanged "Phase"`, and the
+    // restart was a limitation of the emitter rather than a property of the
+    // change. `CompilationContext.emitStableIdentity` flattened declarations
+    // into the file's top-level module, so a function inside `module Phase =`
+    // could not be re-emitted where its compiled counterpart lives
+    // (`Demo.State.Phase.label`) and the only safe answer was "restart".
+    //
+    // It now re-emits the nested module tree with `open global.Demo.State.Phase`,
+    // so the companion module's function is reachable and gets PATCHED. The
+    // capability moved past what this case documented; the assertion follows it
+    // rather than the emitter being held back to keep an old expectation green.
+    testCase "WHY — ReloadPlanning.planReload — editing only the companion module's function patches it, because the nested-module re-emit can now reach it where the compiled copy lives" <| fun _ ->
       let edited = replace "string p" "sprintf \"%A\" p" source
       planReload (declsOf source) (declsOf edited)
-      |> restartChanges |> Expect.equal "only the module" [ ReloadChange.ModuleChanged "Phase" ]
+      |> patchedNames |> Expect.equal "the companion module's own function" [ "label" ]
   ]
 
 [<Tests>]
