@@ -1,10 +1,22 @@
 # Session Isolation Architecture
 
-> **Status note:** This document records the design that introduced per-client session routing. Current product clients are editor integrations, dashboard tabs, and MCP connections. The built-in TUI was part of the original implementation context but is now deprecated.
+> **Status note:** This document records the design that introduced
+> per-client session routing — I'm keeping it as a design record rather than
+> rewriting it as a live reference, because the "before" bug below is exactly
+> the kind of thing worth remembering how I fixed. What shipped matches this
+> design: the dashboard's SSE stream now tracks a per-connection viewing
+> session driven by a Datastar signal (`viewingSessionId`), not a URL query
+> parameter or a shared global — see `createStreamHandler` in
+> `SageFs/Dashboard.fs` if you want to see the real thing instead of the plan
+> for it. Current product clients are editor integrations, dashboard tabs,
+> and MCP connections. The built-in TUI was part of the original
+> implementation context but is now deprecated.
 
 ## Problem
 
-A single `activeSessionId: string ref` in `DaemonMode.fs` was shared across all clients. When one client switched sessions, other clients could be forced to switch:
+A single `activeSessionId: string ref` in `DaemonMode.fs` was shared across
+all clients. When one client switched sessions, other clients could be
+forced to switch:
 
 ```
 MCP client calls switch_session("agent-session")
@@ -15,19 +27,29 @@ MCP client calls switch_session("agent-session")
   → A user viewing another session in the browser is forced away
 ```
 
+I found this one the annoying way: I'd be watching one session's output in
+the browser and an agent working on something unrelated would yank the view
+out from under me. Not a crash, just rude.
+
 ### Secondary: Dashboard Connectivity
 
-When the daemon goes down (e.g., during pack/install cycle), the dashboard shows no indication of disconnection. The `serverConnected` Datastar signal was set server-side and stays `true` even after the server dies. Users sit wondering why nothing is happening.
+When the daemon goes down (e.g., during pack/install cycle), the dashboard
+showed no indication of disconnection. The `serverConnected` Datastar signal
+was set server-side and stayed `true` even after the server died. Users sat
+wondering why nothing was happening.
 
 ### Secondary: Session Resume Visibility
 
-During startup, sessions resume sequentially but the dashboard only gets the full session list after ALL sessions have finished resuming. Users see an empty session list for several seconds.
+During startup, sessions resume sequentially but the dashboard only got the
+full session list after ALL sessions had finished resuming. Users saw an
+empty session list for several seconds.
 
 ## Design: Per-Client Session Routing
 
 ### Core Principle
 
-**Each client connection maintains its own "active session" independently.** No client's session switch affects another client.
+**Each client connection maintains its own "active session" independently.**
+No client's session switch affects another client.
 
 ### Independent Session Scopes
 
@@ -53,7 +75,9 @@ During startup, sessions resume sequentially but the dashboard only gets the ful
 
 ### MCP: Per-Connection (Already Correct Scope)
 
-Each MCP stdio connection gets its own `McpContext` with its own `ActiveSessionId: string ref`. The fix is to stop `switchSession` from side-effecting the Elm loop:
+Each MCP stdio connection gets its own `McpContext` with its own
+`ActiveSessionId: string ref`. The fix is to stop `switchSession` from
+side-effecting the Elm loop:
 
 **Before** (Mcp.fs:907-924):
 ```fsharp
@@ -87,7 +111,9 @@ let switchSession ctx sessionId = task {
 
 ### Dashboard: Per-SSE-Connection
 
-Each browser tab opens an SSE connection via `/dashboard/stream`. Currently, `pushState()` reads the global `getSessionId()` closure. Fix: maintain a per-connection session ID.
+Each browser tab opens an SSE connection via `/dashboard/stream`. At the
+time this was written, `pushState()` read the global `getSessionId()`
+closure — the fix was a per-connection session ID:
 
 **`createStreamHandler` changes**:
 ```fsharp
@@ -105,18 +131,28 @@ let createStreamHandler ... getDefaultSessionId ... : HttpHandler =
   }
 ```
 
-**Dashboard switch endpoint** (`/dashboard/session/switch/{id}`) needs to communicate which SSE connection to update. Options:
+**Dashboard switch endpoint** (`/dashboard/session/switch/{id}`) needed to
+communicate which SSE connection to update. I weighed three options here:
+
 1. **Cookie-based**: Set a browser cookie with a connection ID, SSE handler reads it
 2. **Signal-based**: Dashboard switch sets a Datastar signal `$activeSession`, SSE reads it from the POST body
 3. **Direct mutation**: SSE handler exposes a thread-safe slot; switch endpoint finds the right connection and mutates it
 
-Option 2 (signal-based) is most natural with Datastar — the switch POST includes the selected session ID, and the SSE handler can observe signal changes.
+Option 2 (signal-based) is the one that actually shipped, and it's the most
+natural fit for Datastar anyway — the switch POST includes the selected
+session ID, and the SSE handler observes signal changes instead of me
+inventing a second identity scheme just for this.
 
 ### Dashboard Eval/Reset Routing
 
-Currently, eval and reset endpoints read `!activeSessionId` to decide which session to route to. They need to route to the *requesting browser's* active session instead.
+Eval and reset endpoints used to read `!activeSessionId` to decide which
+session to route to. They needed to route to the *requesting browser's*
+active session instead.
 
-**Approach**: The eval/reset POST handlers receive the active session from a Datastar signal (`$activeSession`) sent with the request body. The dashboard JS already sends signals with POST requests.
+**Approach**: The eval/reset POST handlers receive the active session from a
+Datastar signal (`$activeSession`) sent with the request body. The dashboard
+JS already sends signals with POST requests, so this was mostly wiring, not
+new mechanism.
 
 ```fsharp
 // Dashboard eval reads session from Datastar signal
@@ -130,15 +166,24 @@ let createEvalHandler evalCodeForSession : HttpHandler =
 
 ### Editor Integrations
 
-Each supported editor integration keeps its selected session in client state and sends that session identity with commands. Switching a session in one editor must not change another editor, dashboard tab, or MCP connection.
+Each supported editor integration keeps its selected session in client
+state and sends that session identity with commands. Switching a session in
+one editor must not change another editor, dashboard tab, or MCP connection
+— that's the whole rule, stated three times in three different subsystems
+because I kept almost breaking it in the fourth.
 
 ## Dashboard Connectivity Banner
 
 ### Problem
-When daemon dies, the `serverConnected` Datastar signal stays `true` (it was set server-side). The `Ds.show "!$serverConnected"` binding keeps the disconnect banner hidden.
+When daemon dies, the `serverConnected` Datastar signal stays `true` (it was
+set server-side). The `Ds.show "!$serverConnected"` binding keeps the
+disconnect banner hidden.
 
 ### Design Principle
-**The banner is ONLY for problems.** When connected, it is invisible — no "✅ Connected" message. Users should never see a "Connected" status; that's the assumed happy state. The banner appears only when something is wrong (disconnected, reconnecting, error).
+**The banner is ONLY for problems.** When connected, it's invisible — no
+"✅ Connected" message. Nobody needs to be told a thing that's supposed to
+work is working; that's just noise. The banner appears only when something
+is wrong (disconnected, reconnecting, error).
 
 ### Fix
 Remove Datastar signal control from the banner. Use pure JS:
@@ -194,7 +239,9 @@ Elem.div [ Attr.id "server-status"; Attr.class' "conn-banner conn-disconnected";
 ## Incremental Session Resume
 
 ### Problem
-`resumeSessions()` runs before `elmRuntime` is defined (line 126 vs 199 in DaemonMode.fs). Can't dispatch `ListSessions` from inside the loop.
+`resumeSessions()` runs before `elmRuntime` is defined (line 126 vs 199 in
+DaemonMode.fs at the time). Couldn't dispatch `ListSessions` from inside the
+loop.
 
 ### Fix
 Pass an optional callback to `resumeSessions`:
@@ -219,6 +266,9 @@ do! resumeSessions (Some (fun () ->
 ```
 
 ## Test Plan
+
+This is the plan I wrote before touching the code — tests first, contracts
+defined before implementation, same as everywhere else in this repo.
 
 ### Unit Tests (Expecto, in SageFs.Tests)
 
@@ -359,3 +409,7 @@ module SessionResumeTests
 | `SageFs/DaemonMode.fs:126` | `resumeSessions` — add callback parameter |
 | `SageFs.Tests/McpSessionIsolationTests.fs` | NEW — MCP isolation tests |
 | `SageFs.Tests/DashboardSessionIsolationTests.fs` | NEW — Dashboard isolation tests |
+
+(File paths and line numbers above are as they were when this was designed
+— `Mcp.fs` in particular has since moved to `SageFs/Mcp.fs`. Treat this
+table as the historical map, not a live index.)

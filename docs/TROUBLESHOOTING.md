@@ -2,7 +2,8 @@
 
 Quick fixes for common issues. If your problem isn't listed here, check the
 [GitHub Issues](https://github.com/WillEhrendreich/SageFs/issues) or run the
-health check in your editor.
+health check in your editor — and if it's genuinely broken, file it. I'd
+rather hear about it than have you quietly work around it.
 
 ## Editor Health Checks (Start Here)
 
@@ -22,10 +23,13 @@ health check in your editor.
 dotnet tool install --global SageFs
 ```
 
-Verify: `sagefs --version` should print the version. If the command isn't found,
-ensure `~/.dotnet/tools` is on your `PATH`.
+Verify: `sagefs --version` should print the version. If the command isn't
+found, make sure `~/.dotnet/tools` is on your `PATH`.
 
-**Requires**: .NET 10 SDK. Check with `dotnet --version`.
+**Requires**: .NET 10 SDK to install SageFs itself. Check with
+`dotnet --version`. Individual sessions can target either .NET 10 or .NET
+11 — each session's host builds with that project's own SDK and runs on
+its own runtime, independent of what SageFs itself is installed with.
 
 ### Daemon won't start / times out
 
@@ -50,8 +54,8 @@ SageFs needs a project file. Either:
 
 ### Wrong project selected (multi-project workspace)
 
-When a workspace has multiple `.fsproj` files, SageFs picks one. If it chose the
-wrong one:
+When a workspace has multiple `.fsproj` files, SageFs picks one. If it chose
+the wrong one:
 - **VS Code**: Run "SageFs: Switch Project" from the command palette
 - **Neovim**: `:SageFsSwitchProject`
 - **CLI / dashboard**: create or switch to a session for `path/to/CorrectProject.fsproj`
@@ -75,7 +79,11 @@ The active project is shown in the status bar.
 
 ### Deprecated frontend commands
 
-The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend are deprecated. Use a supported editor integration, the web dashboard, or MCP instead. Raylib application and game projects remain supported; this deprecation applies only to the SageFs product frontend.
+The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend
+are deprecated. Use a supported editor integration, the web dashboard, or
+MCP instead. Raylib application and game projects remain fully supported;
+the deprecation is only about the old SageFs product frontend, not about
+you shipping a Raylib game.
 
 ### Stale REPL after code changes
 
@@ -101,7 +109,9 @@ Use hard reset to pick up source file changes:
 ### SSE connections dropping
 
 - Set proxy/reverse-proxy timeout ≥ 60 seconds
-- SageFs sends keepalive pings every 15 seconds
+- SageFs sends a keepalive comment on the dashboard's SSE stream every 5
+  seconds by default (`SAGEFS_DASHBOARD_HEARTBEAT_SECONDS`), well inside
+  Kestrel's own keep-alive window
 - Corporate proxies may need explicit WebSocket/SSE passthrough configuration
 
 ### Eval watchdog — detecting daemon crash during eval
@@ -116,8 +126,9 @@ Supported editor integrations include an **eval watchdog**. If the daemon become
 The watchdog uses a monotonic generation ID to prevent race conditions — if you
 start a new eval before the watchdog fires, the old timer is silently cancelled.
 
-**If you see phantom "interrupted" dialogs**, update to v0.6.50+ which includes
-the monotonic ID fix.
+**If you see phantom "interrupted" dialogs**, update to v0.6.50+, which
+included the monotonic ID fix. If you're on anything newer than that and
+still seeing it, that's a regression — file it.
 
 ---
 
@@ -134,6 +145,7 @@ starting SageFs (or in your shell profile).
 | `SAGEFS_BUILD_TIMEOUT_MINUTES` | `10` | Max time for `dotnet build` during hard reset |
 | `SAGEFS_WORKER_HTTP_READ_SECONDS` | `30` | HTTP read timeout for daemon→worker communication |
 | `SAGEFS_WORKER_STARTUP_TIMEOUT_MS` | `120000` | Worker process startup timeout (milliseconds) |
+| `SAGEFS_DASHBOARD_HEARTBEAT_SECONDS` | `5` | Dashboard SSE keepalive/heartbeat cadence |
 | `SAGEFS_BIND_HOST` | `localhost` | Loopback bind address: `localhost`, `127.0.0.1` or `::1`. Any other value stops the daemon at startup (see [Docker / Remote Containers](#docker--remote-containers)) |
 | `SAGEFS_MCP_PORT` | `37749` | MCP server port |
 
@@ -177,12 +189,6 @@ has slow NuGet restores.
 
 ## Platform-Specific Issues
 
-### macOS: "SyntaxHighlight init failed"
-
-Tree-sitter native library not yet bundled for macOS/Linux. Syntax highlighting
-falls back gracefully — all other features work normally.
-See [#17](https://github.com/WillEhrendreich/SageFs/issues/17).
-
 ### macOS: VS Code "cannot read properties of undefined"
 
 Fixed in v0.5.414+. Update the extension. The extension now degrades gracefully
@@ -195,6 +201,9 @@ SageFs only listens on loopback. Its HTTP ports evaluate F# as your user and
 have no authentication, so binding all interfaces (`SAGEFS_BIND_HOST=0.0.0.0`)
 would hand code execution to anyone on the network. The daemon refuses to
 start with a non-loopback `SAGEFS_BIND_HOST`, and `sagefs check` reports it.
+I'm not going to make this configurable just so someone can trade an
+afternoon of convenience for handing out remote code execution — forward the
+ports instead.
 
 To reach a daemon in a container, forward ports 37749 and 37750 to the
 container's loopback instead:
@@ -226,8 +235,8 @@ must be sent as `Content-Type: application/json`.
 
 - **`;;` is required** — every FSI transaction must end with `;;`
 - **"Operation could not be completed due to earlier error"** — a *previous*
-  submission had a compile error. Fix that code and resubmit it. The session is
-  fine — do NOT reset.
+  submission had a compile error. Fix that code and resubmit it. The session
+  is fine — do NOT reset.
 - **Type changes need hard reset** — if you change a type definition (DU, record),
   the old version is cached in FSI. Use hard reset to pick up the new types.
 - **Order matters** — FSI evaluates in submission order. Define types before
@@ -241,4 +250,5 @@ must be sent as `Content-Type: application/json`.
    known problems
 2. Run the health check for your editor (see table at top)
 3. File a new issue with: editor name + version, SageFs version (`sagefs --version`),
-   OS, and the error message or behavior you're seeing
+   OS, and the error message or behavior you're seeing. The more specific,
+   the faster I can actually do something about it.

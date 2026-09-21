@@ -1,10 +1,26 @@
 # MCP Tools Reference
 
-SageFs runs a Model Context Protocol server on port 37749. Any MCP client — GitHub Copilot, Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode — can connect and drive an F# session: run code, type-check it, list and verify tests, and read live status.
+SageFs runs a Model Context Protocol server on port 37749. Any MCP client —
+GitHub Copilot, Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode —
+can connect and drive an F# session: run code, type-check it, list and verify
+tests, and read live status. This is the surface I actually use every day to
+work on SageFs itself, so if it's clunky, I feel it first.
 
-The tool surface is **affordance-gated at call time, not at list time**. The full catalog below is always advertised through `tools/list` — SageFs does not filter which tools an MCP client sees. What's gated is *calling* one: a call to a tool that doesn't apply to the current session state is rejected with a structured error (`SageFs/Mcp.fs:614`, `enforceToolCallGate`), instead of a raw failure. Call `get_fsi_status` to see which tools currently apply — in a warming-up session, for example, it reports `send_fsharp_code` as not yet available, even though the tool is still listed.
+The tool surface is **affordance-gated at call time, not at list time**. The
+full catalog below is always advertised through `tools/list` — SageFs does
+not filter which tools an MCP client sees. What's gated is *calling* one: a
+call to a tool that doesn't apply to the current session state is rejected
+with a structured error (`SageFs/Mcp.fs:686`, `enforceToolCallGate`), instead
+of a raw failure. Call `get_fsi_status` to see which tools currently apply —
+in a warming-up session, for example, it reports `send_fsharp_code` as not
+yet available, even though the tool is still listed. I went back and forth on
+whether to filter the list itself; for now the call-time gate is what's
+actually wired up, so that's what this doc promises.
 
-The full advertised set is about 50 tools, grouped below. This is separate from the daemon's HTTP API (`/api/...`), which the editors and dashboard use for completions, coverage bitmaps, run policies, and event history. Those HTTP endpoints are not MCP tools.
+The full advertised set is about 50 tools, grouped below. This is separate
+from the daemon's HTTP API (`/api/...`), which the editors and dashboard use
+for completions, coverage bitmaps, run policies, and event history. Those
+HTTP endpoints are not MCP tools.
 
 ## Connect
 
@@ -40,7 +56,7 @@ The full advertised set is about 50 tools, grouped below. This is separate from 
 | `hard_reset_fsi_session` | Full reset — rebuild the project, reload, start fresh. Needed after `.fsproj` or package changes. |
 | `get_available_projects` | Discover `.fsproj` / `.sln` / `.slnx` files under a directory. |
 | `list_runnable_projects` | List the session's projects and which ones `run_app` can run (`OutputType=Exe`). |
-| `switch_workflow` | Switch the session's workflow: `repl` (Interactive), `livetesting` (Live Testing), or `live` (Hot Reload — aliases `hotreload`/`weblive`/`web`). Creates a new session in the target workflow and stops the old one; VS Code and the dashboard's own `POST /api/sessions/{sid}/workflow` route restart the same session id in place instead. |
+| `switch_workflow` | Switch the session's workflow: `repl` (Interactive), `livetesting` (Live Testing), or `live` (Hot Reload — aliases `hotreload`/`weblive`/`web`, kept for backward compatibility). Creates a new session in the target workflow and stops the old one; VS Code and the dashboard's own `POST /api/sessions/{sid}/workflow` route restart the same session id in place instead. |
 
 ## Hot reload and running apps
 
@@ -59,7 +75,10 @@ The full advertised set is about 50 tools, grouped below. This is separate from 
 | `targeted_verify` | Plan a trustworthy verification pass for one changed behavior. Refuses to claim green when session trust is ambiguous or loaded code is stale. It does not run tests itself — it returns the next trustworthy move. |
 | `explain_test_failure` | Enriched failure context for a test that recently went from passing to failing. |
 
-There is no `run_tests` MCP tool. Test runs are driven by the live-testing engine (save a file, or use the editor/dashboard run controls); agents read results through `list_tests`, `explain_test_failure`, and `diagnose`.
+There is no `run_tests` MCP tool, and I'm not sorry about it. Test runs are
+driven by the live-testing engine (save a file, or use the editor/dashboard
+run controls); agents read results through `list_tests`, `explain_test_failure`,
+and `diagnose`.
 
 ## Analysis and diagnostics
 
@@ -91,7 +110,9 @@ There is no `run_tests` MCP tool. Test runs are driven by the live-testing engin
 
 ## Friction telemetry (local only)
 
-These read and write a local log. They do not phone home.
+These read and write a local log. They do not phone home — I have zero
+interest in your code or your keystrokes, and building a telemetry pipeline
+sounds like a chore anyway.
 
 | Tool | What it does |
 |:---|:---|
@@ -101,7 +122,11 @@ These read and write a local log. They do not phone home.
 
 ## Cohort and multi-agent coordination
 
-For running several agents against one repo at once. One implicit cohort per daemon; the first agent to join becomes its conductor. Every tool resolves the caller's identity from the MCP connection, not from the `agentName` argument.
+For running several agents against one repo at once. One implicit cohort per
+daemon; the first agent to join becomes its conductor. Every tool resolves
+the caller's identity from the MCP connection, not from the `agentName`
+argument — two connections that pass the same name are still two different
+members.
 
 | Tool | What it does |
 |:---|:---|
@@ -116,7 +141,8 @@ For running several agents against one repo at once. One implicit cohort per dae
 
 ## Per-client config
 
-The `url` is `http://localhost:37749/` for Streamable HTTP, or `http://localhost:37749/sse` for SSE.
+The `url` is `http://localhost:37749/` for Streamable HTTP, or
+`http://localhost:37749/sse` for SSE.
 
 **GitHub Copilot (CLI)** — `~/.copilot/github-copilot/mcp.json`:
 ```json
@@ -138,4 +164,9 @@ The `url` is `http://localhost:37749/` for Streamable HTTP, or `http://localhost
 { "mcp": { "sagefs": { "type": "remote", "url": "http://localhost:37749/sse", "enabled": true } } }
 ```
 
-Works with GitHub Copilot (CLI and VS Code), Claude Code, Claude Desktop, OpenCode, Windsurf, Cursor, and any MCP-compatible tool. With live testing on, agents can edit files, let SageFs re-run the affected tests, and read the result through `list_tests` and `diagnose` — no eval round-trip needed.
+Works with GitHub Copilot (CLI and VS Code), Claude Code, Claude Desktop,
+OpenCode, Windsurf, Cursor, and any MCP-compatible tool. With live testing
+on, agents can edit files, let SageFs re-run the affected tests, and read the
+result through `list_tests` and `diagnose` — no eval round-trip needed. This
+is the whole point of building an MCP server instead of just a REPL: the
+agent gets the same fast feedback loop I do.

@@ -3,9 +3,13 @@ SAGEFS LIVE TESTING & COVERAGE SYSTEM - IMPLEMENTATION GUIDE
 ================================================================================
 
 STATUS: Live testing is functional but still being stabilized. Rough edges
-remain around session switching and test-discovery timing. Expecto has the best
-coverage. This guide describes the internal design; line numbers are approximate
-and drift as the code changes.
+remain around session switching and test-discovery timing. Expecto has the
+best coverage — it's what I test against every day, so it's what gets
+exercised hardest. This guide describes the internal design for people who
+want to go spelunking in the source; line numbers are approximate and drift
+as the code changes, so treat them as "look near here," not "line X exactly."
+I'd rather you find the real thing three lines off than trust a number I
+never re-checked.
 
 QUICK REFERENCE - KEY FILES & FUNCTIONS
 ================================================================================
@@ -13,44 +17,44 @@ QUICK REFERENCE - KEY FILES & FUNCTIONS
 1. Test Discovery & Execution:
    - File: SageFs.Core/Features/LiveTestingExecutors.fs
    - Key Functions:
-     * AttributeDiscovery.discoverInAssembly (lines 67-81): Scan types for test attributes
-     * AttributeDiscovery.discoverWithRunner (lines 86-103): Discovery + execution closures
-     * ReflectionExecutor.executeMethod (lines 109-145): Invoke via MethodInfo.Invoke
-     * ExpectoExecutor (lines 204-400+): Custom reflection-based Expecto runner
+     * AttributeDiscovery.discoverInAssembly: Scan types for test attributes
+     * AttributeDiscovery.discoverWithRunner: Discovery + execution closures
+     * ReflectionExecutor.executeMethod: Invoke via MethodInfo.Invoke
+     * ExpectoExecutor: Custom reflection-based Expecto runner
    - Frameworks Supported: Expecto, xUnit (incl. xUnit v3), NUnit, MSTest, TUnit
    - Key Type: DiscoveryResult { Tests: TestCase list; RunTest: TestCase → Async<TestResult> }
 
 2. Coverage Instrumentation (IL-Level):
    - File: SageFs.Core/Features/CoverageInstrumenter.fs
    - Key Functions:
-     * collectSequencePoints (lines 18-40): Extract all non-hidden IL probes
-     * injectTracker (lines 43-102): Create __SageFsCoverage class
-     * insertProbes (lines 152-174): Inject Hit() calls before sequence points
-     * instrumentAssembly (lines 178-242): Full instrumentation pipeline
-     * collectCoverageHits (lines 268-287): Read coverage data post-test via reflection
+     * collectSequencePoints: Extract all non-hidden IL probes
+     * injectTracker: Create __SageFsCoverage class
+     * insertProbes: Inject Hit() calls before sequence points
+     * instrumentAssembly: Full instrumentation pipeline
+     * collectCoverageHits: Read coverage data post-test via reflection
    - Key Type: InstrumentationMap { Slots: SequencePoint[]; TotalProbes: int }
    - Coverage Bitmap: CoverageBitmap { Bits: uint64[]; Count: int } (8x memory vs bool[])
 
 3. Dependency Graph (Symbol → Test Mapping):
-   - File: SageFs.Core/Features/LiveTestingTypes.fs (lines 1512-1629)
+   - File: SageFs.Core/Features/LiveTestingTypes.fs
    - Key Functions:
-     * TestDependencyGraph.buildFromSymbolUses (lines 1587-1629): Build from FCS extracts
-     * TestDependencyGraph.findAffected (lines 1538-1542): Get tests for changed symbols
-     * TestDependencyGraph.computeTransitiveCoverage (lines 1561-1582): BFS through call graph
+     * TestDependencyGraph.buildFromSymbolUses: Build from FCS extracts
+     * TestDependencyGraph.findAffected: Get tests for changed symbols
+     * TestDependencyGraph.computeTransitiveCoverage: BFS through call graph
    - Key Type: TestDependencyGraph { SymbolToTests; TransitiveCoverage; PerFileIndex; SourceVersion }
 
 4. Flaky Test Classification:
-   - File: SageFs.Core/Features/LiveTestingTypes.fs (lines 791-870)
+   - File: SageFs.Core/Features/LiveTestingTypes.fs
    - Key Functions:
-     * FlakyDetection.classifyFlakiness (lines 851-870): Classify Environmental vs Property
-     * FlakyDetection.isFsCheckFailure (lines 810-821): Extract shrunk counterexample
-   - Key Type: 
+     * FlakyDetection.classifyFlakiness: Classify Environmental vs Property
+     * FlakyDetection.isFsCheckFailure: Extract shrunk counterexample
+   - Key Type:
      * FlakyClassification = Insufficient | Stable | Environmental(int) | PropertyCounterexample(string)
      * ResultWindow (circular buffer): Track last 10 outcomes, count flips
    - Defaults: windowSize=10, flipThreshold=2, minSamples=3
 
 5. Failure Narratives (Causal Analysis):
-   - File: SageFs.Core/Features/LiveTestingTypes.fs (lines 872-950)
+   - File: SageFs.Core/Features/LiveTestingTypes.fs
    - Key Types:
      * FailureNarrative { LastPassedAt; TimeSinceLastPass; CausalChanges; PropertyViolation; Summary }
      * CausalChange = SymbolChanged(string) | FileChanged(string) | Unknown
@@ -58,15 +62,15 @@ QUICK REFERENCE - KEY FILES & FUNCTIONS
    - Algebraic Categories Detected: associativity, commutativity, identity, idempotence, distributivity, inverse, absorption, closure
 
 6. Test Prioritization:
-   - File: SageFs.Core/Features/LiveTestingTypes.fs (lines 2212-2259)
+   - File: SageFs.Core/Features/LiveTestingTypes.fs
    - Key Functions:
-     * TestPrioritization.computeTier (lines 2223-2235): Assign tier (0=failed, 4=notrun)
-     * TestPrioritization.buildSortKey (lines 2239-2246): Lexicographic (tier, -coverage, duration)
+     * TestPrioritization.computeTier: Assign tier (0=failed, 4=notrun)
+     * TestPrioritization.buildSortKey: Lexicographic (tier, -coverage, duration)
    - Tier Rules: Failed(0) → New(1) → Passed(2) → Skipped(3) → NotRun(4)
    - Environmental flaky failures demoted from tier 0 to tier 2
 
 7. Test Explainer & Verification:
-   - File: SageFs.Core/Mcp.fs
+   - File: SageFs/Mcp.fs
    - MCP tools (what agents actually call):
      * explain_test_failure — why a test failed
      * targeted_verify — run and verify specific tests
@@ -80,13 +84,14 @@ QUICK REFERENCE - KEY FILES & FUNCTIONS
    - There is no run_tests, enable_live_testing, get_live_test_status,
      get_test_trace, explain_test_run, or get_file_coverage MCP tool. Live-testing
      enable/disable/status/run are HTTP API endpoints under /api/live-testing/...
-     used by editors and the dashboard.
+     used by editors and the dashboard, on purpose — this is machinery an editor
+     drives, not something an agent should be poking at directly.
 
 8. Per-Line Coverage Data:
-   - File: SageFs.Core/Features/LiveTestingTypes.fs (lines 3031-3230)
+   - File: SageFs.Core/Features/LiveTestingTypes.fs
    - Key Functions:
-     * FileAnnotations.projectWithCoverage (lines 3166-3204): Get per-line coverage
-     * FileAnnotations.resolveFilePath (lines 3208-3230): Resolve partial paths
+     * FileAnnotations.projectWithCoverage: Get per-line coverage
+     * FileAnnotations.resolveFilePath: Resolve partial paths
    - Output: CoverageLineAnnotation { Line; EndLine; EndColumn; Detail; CoveringTestIds; BranchCoverage }
    - BranchCoverage: FullyCovered | PartiallyCovered(covered, total) | NotCovered
 
@@ -248,6 +253,12 @@ To build on top of SageFs live testing:
    → Implement custom FailurePresentation formats
    → Example: Generate HTML reports, integrations with issue tracking
 
+None of these extension points have an actual second implementation behind
+them yet — I've kept the seams open (interfaces, registries, extend-not-edit
+shapes) because I've been burned before by code that assumed it would only
+ever have one test framework, one language, one output format. Nobody's
+built a Pytest bridge. If you do, I'd love to hear about it.
+
 ================================================================================
 
 ## SSE Event Formats
@@ -278,5 +289,5 @@ data: {"SessionId":"<id>", "Narratives": [{"TestId":"string", "TestName":"string
 ## Editor Integrations
 
 - **VS Code**: `FileAnnotationsListener.fs` parses file_annotations. `Extension.fs` renders coverage gutter decorations + inline failures. `TestControllerAdapter.fs` enriches test items with failure narratives.
-- **Visual Studio**: `CoverageGlyphTagger.cs` (MEF pipeline for gutter glyphs). `FileAnnotationTracker.cs` caches coverage + failure data. `TestStateTracker.cs` stores source locations for navigation.
-- **Neovim**: `testing.lua` caches source_locations and failure_narratives. `telescope_picker.lua` jumps to source on `<CR>`. `commands.lua` shows narrative floating window on `<C-d>`.
+- **Neovim**: lives in its own repo, [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) — not in this tree. Its `testing.lua` caches source_locations and failure_narratives, `telescope_picker.lua` jumps to source on `<CR>`, and `commands.lua` shows a narrative floating window on `<C-d>`.
+- **Visual Studio** *(deprecated — kept here as the historical record, not a current target)*: `CoverageGlyphTagger.cs` (MEF pipeline for gutter glyphs). `FileAnnotationTracker.cs` caches coverage + failure data. `TestStateTracker.cs` stores source locations for navigation. The `sagefs-vs/` extension isn't built, tested, or published anymore — don't route new work there.
