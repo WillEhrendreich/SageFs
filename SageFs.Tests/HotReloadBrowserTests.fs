@@ -173,18 +173,28 @@ let tests =
       writeGreeting edited
       try
         // The SAME running process must serve value B (no restart). If the
-        // first save lands while the watcher is mid-cycle (debounce/cancel),
-        // a re-save of the same content kicks the watcher again — mirroring
-        // the repair path that reliably reloads.
+        // first save raced the watch set arming, ONE re-save of the same
+        // content kicks the watcher again.
+        //
+        // Exactly one. A newer save of a file CANCELS that file's in-flight
+        // reload (WorkerMain supersedes by design: last save wins). This used
+        // to re-save every second after 15s — so on a CI runner where one
+        // reload takes longer than that gap, each save cancelled the one
+        // before it and no reload could ever finish. The test starved the very
+        // path it was asserting (CI run 35639568321, green locally where the
+        // first reload lands before 15s and the loop never started).
         let sw = Diagnostics.Stopwatch.StartNew()
         let mutable served = false
+        let mutable resaved = false
         while not served && sw.ElapsedMilliseconds < 60_000L do
           try
             let! body = httpGet HrEnv.appUrl.Value
             if body.Contains("hello from hot reload (value B)") then
               served <- true
             else
-              if sw.ElapsedMilliseconds > 15_000L then writeGreeting edited
+              if not resaved && sw.ElapsedMilliseconds > 15_000L then
+                writeGreeting edited
+                resaved <- true
               do! Task.Delay(1000)
           with _ ->
             do! Task.Delay(1000)
