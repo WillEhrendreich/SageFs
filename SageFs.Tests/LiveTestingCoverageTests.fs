@@ -988,7 +988,7 @@ let runTestsRequestedSessionRoutingTests =
       let tc2 = mkTestCase "ns/t2" (TestFramework.Unknown "x") TestCategory.Unit
       let final, effects =
         SageFsUpdate.update
-          (SageFsMsg.Event (TuiEvent.RunTestsRequested (Some sidBStr, [| tc1; tc2 |])))
+          (SageFsMsg.Event (TuiEvent.RunTestsRequested (Some sidBStr, [| tc1; tc2 |], None)))
           m4
 
       let bAffected = (SageFsModel.cycleForSession sidBStr final).TestState.AffectedTests
@@ -1004,17 +1004,19 @@ let runTestsRequestedSessionRoutingTests =
       let effectSessionIds =
         effects
         |> List.choose (function
-          | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests req) -> Some req.SessionId
+          | SageFsEffect.TestCycle (TestCycleEffect.RunRequestedTests (req, _)) -> Some req.SessionId
           | _ -> None)
+      // A targeted request allocates its run's generation up front and emits
+      // RunRequestedTests (not RunAffectedTests), so the run keeps that identity.
       effectSessionIds
-      |> Expect.equal "the emitted RunAffectedTests effect should be stamped for session B" [ Some sidBStr ]
+      |> Expect.equal "the emitted RunRequestedTests effect should be stamped for session B" [ Some sidBStr ]
     }
 
     test "a run requested with no target session still routes to the Primary cycle (no regression)" {
       let tc = mkTestCase "ns/t1" (TestFramework.Unknown "x") TestCategory.Unit
       let model', effects =
         SageFsUpdate.update
-          (SageFsMsg.Event (TuiEvent.RunTestsRequested (None, [| tc |])))
+          (SageFsMsg.Event (TuiEvent.RunTestsRequested (None, [| tc |], None)))
           (SageFsModel.initial())
 
       model'.LiveTesting.TestState.AffectedTests

@@ -308,6 +308,11 @@ type TuiEvent =
   | LiveDiscoveryMerged of sessionId: string * tests: Features.LiveTesting.TestCase array
   | TestDiscoveryFailed of sessionId: string * reason: string
   | TestRunStarted of testIds: Features.LiveTesting.TestId array * sessionId: string option
+  /// The worker started an explicitly requested run whose generation was
+  /// allocated when it was requested (`RequestedRuns.request`). Unlike
+  /// `TestRunStarted`, this does NOT bump a new generation: the run keeps the
+  /// identity its requester is waiting on.
+  | TestRunStartedAt of testIds: Features.LiveTesting.TestId array * sessionId: string * generation: Features.LiveTesting.RunGeneration
   | TestResultsBatch of sessionId: string option * results: Features.LiveTesting.TestRunResult array
   | TestRunCompleted of sessionId: string option
   | LiveTestingEnabled
@@ -318,7 +323,9 @@ type TuiEvent =
   | RunPolicyChanged of category: Features.LiveTesting.TestCategory * policy: Features.LiveTesting.RunPolicy
   | ProvidersDetected of providers: Features.LiveTesting.ProviderDescription list
   | TestCycleTimingRecorded of timing: Features.LiveTesting.TestCycleTiming
-  | RunTestsRequested of targetSession: string option * tests: Features.LiveTesting.TestCase array
+  /// An explicit run. `requestId`, when given, lets the requester find ITS run
+  /// (generation + status) in `LiveTestState.RunRequests` afterwards.
+  | RunTestsRequested of targetSession: string option * tests: Features.LiveTesting.TestCase array * requestId: Features.LiveTesting.RunRequestId option
   | AssemblyLoadFailed of errors: Features.LiveTesting.AssemblyLoadError list
   | InstrumentationMapsReady of sessionId: string * maps: Features.LiveTesting.InstrumentationMap array
   | TestSourceLocations of locations: Features.LiveTesting.TestSourceLocation list

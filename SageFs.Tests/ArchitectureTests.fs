@@ -1059,7 +1059,12 @@ let fileSizeBudgets =
       // in the FSI host's embedded source closure) moved to
       // Features/TestAnnotations.fs. Set to the file's exact post-split size:
       // the next addition earns a reviewed bump rather than inheriting slack.
-      "SageFs.Core/Features/LiveTestingTypes.fs", 4425
+      // 4425 -> 4380: the requested-run identity (RunRequestId, RequestedRun,
+      // LiveTestState.RunRequests/ResultGenerations) had to live beside
+      // LiveTestState; its lifecycle module (Features/RequestedRuns.fs) and the
+      // unrelated dashboard treemap projection (Features/TestTreemap.fs) moved
+      // out, so the file SHRANK. Exact post-split size, per the rule above.
+      "SageFs.Core/Features/LiveTestingTypes.fs", 4380
       // 2900 -> 2950: a one-time bump for the roast UX-6 keystone (per-session
       // live-testing enable/disable — EnableLiveTestingForSession /
       // DisableLiveTestingForSession, resolveOrCreateLiveTestingTarget) — a
@@ -1080,7 +1085,10 @@ let fileSizeBudgets =
       // from the next RunAffectedTests selection — a deliberate, reviewed
       // correctness fix, not silent accretion. Ratchet back DOWN when this
       // file is split; never bump to paper over drift.
-      "SageFs/SageFsApp.fs", 3130
+      // 3130 -> 3124: requested-run wiring (RunTestsRequested allocates once,
+      // TestRunStartedAt, result stamping) was paid for by splitting the
+      // dispatch-batch reducer out to SageFsDispatchReduction.fs. Exact size.
+      "SageFs/SageFsApp.fs", 3124
       "SageFs.Core/AppState.fs", 2000
       // 1850 -> 1860: a one-time bump for the #82 app-output routing (the
       // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,

@@ -9,10 +9,13 @@
 /// results are in, then answer which of those tests failed.
 ///
 /// This module does not invent a new run mechanism — it reuses the same
-/// `RunTestsRequested` event McpServer.fs dispatches, and correlates the
-/// resulting run via `RunGeneration` (the daemon's own staleness fence,
-/// `LiveTestingTypes.fs` `RunGeneration`/`TestRunPhase`), polling the Elm
-/// model until that generation's run is no longer in flight.
+/// `RunTestsRequested` event McpServer.fs dispatches, tagged with a
+/// `RunRequestId`, and follows THAT request's durable record
+/// (`LiveTestState.RunRequests`: its one generation, allocated at request
+/// time, and its status). The verdict counts only results stamped with that
+/// generation (`RequestedRuns.failingIn`). It used to infer "its" run as "the
+/// next generation" and read `LastResults` unconditionally, which let a
+/// previous run's results decide a landing (CohortLandingVerifyDstTests).
 ///
 /// `RunTestsRequested` now carries an explicit `targetSession` (mirrors
 /// `CoverageBitmapCollected`/`TestRunStarted`'s per-session routing — see
@@ -60,6 +63,70 @@ let failingOf (tests: TestId list) (state: LiveTestState) : TestId list =
     match Map.tryFind testId state.LastResults with
     | Some { Result = TestResult.Passed _ } -> false
     | _ -> true)
+
+/// What the verifier decides from a session's own cycle before dispatching
+/// anything. Pure, so the async primitive below and the deterministic
+/// simulation (CohortLandingVerifyDstTests) decide by the SAME function.
+[<RequireQualifiedAccess>]
+type Preflight =
+  /// Requested tests whose session's discovery is not in the cycle resolved
+  /// for it. Fail-closed: running them would verify some OTHER session's code.
+  | NotAttributed of TestId list
+  /// Attributed, but some requested ids are not among the discovered tests.
+  | NotDiscovered
+  /// Nothing was requested; there is nothing to verify.
+  | NothingToRun
+  /// Run these cases.
+  | Dispatch of cases: TestCase array
+
+/// Attribution is "did `sessionId` discover into this cycle":
+/// `SessionDiscovery |> Map.containsKey sessionId`, NOT
+/// `ownerSessionId = Some sessionId`. `ownerSessionId` is `Map.tryHead`, so a
+/// cycle that legitimately carries `sessionId`'s discovery alongside another
+/// key would be mis-rejected purely by key sort order.
+let preflight (sessionId: string) (tests: TestId list) (testState: LiveTestState) : Preflight =
+  match tests with
+  | [] -> Preflight.NothingToRun
+  | _ ->
+    match testState.SessionDiscovery |> Map.containsKey sessionId with
+    | false -> Preflight.NotAttributed tests
+    | true ->
+      let requestedIds = tests |> Set.ofList
+      let cases = testState.DiscoveredTests |> Array.filter (fun tc -> requestedIds.Contains tc.Id)
+      match cases.Length = tests.Length with
+      | false -> Preflight.NotDiscovered
+      | true -> Preflight.Dispatch cases
+
+/// Where a dispatched verification run stands, read from ITS OWN request
+/// record (`LiveTestState.RunRequests`), which the model keeps durably: a waiter
+/// re-evaluates only on batched model-changed notifications and could miss a
+/// short-lived phase. Identity is the request id, never "the next generation":
+/// an explicit run used to be bumped twice and a verifier could decide on a
+/// previous run's results (found by CohortLandingVerifyDstTests).
+[<RequireQualifiedAccess>]
+type RunProgress =
+  /// Dispatched; the request is not recorded yet, or the worker has not started it.
+  | Pending of requestId: RunRequestId
+  /// The worker started it.
+  | Started of requestId: RunRequestId
+  | Finished of failing: TestId list
+
+let advance (tests: TestId list) (progress: RunProgress) (testState: LiveTestState) : RunProgress =
+  match progress with
+  | RunProgress.Finished _ -> progress
+  | RunProgress.Pending rid
+  | RunProgress.Started rid ->
+    match Map.tryFind rid testState.RunRequests with
+    | Some { RequestedStatus = RequestedRunStatus.Completed; RequestedGeneration = g } ->
+      RunProgress.Finished (RequestedRuns.failingIn g tests testState)
+    | Some { RequestedStatus = RequestedRunStatus.Running } -> RunProgress.Started rid
+    | Some { RequestedStatus = RequestedRunStatus.Pending } -> progress
+    | None ->
+      match progress with
+      // Recorded once, then evicted from the bounded map: it can no longer be
+      // attributed, so every requested test fails closed.
+      | RunProgress.Started _ -> RunProgress.Finished tests
+      | _ -> progress
 
 /// Overall budget for a `runTestsInSession` call: the worker-side per-run
 /// cancellation budget (`Timeouts.globalTestRun`, tunable via
@@ -129,32 +196,16 @@ let runTestsInSession
       return Error (sprintf "Refusing to run tests in session '%s': %s" sessionId (describeUntrustworthy trust))
     | true ->
 
-    match tests with
-    | [] ->
-      return Ok []
-    | _ ->
+    let stateNow () = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
 
-    let testState = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
-
-    // Fail closed on a caller/routing mismatch instead of silently running
-    // a different session's tests. Attribution is "did `sessionId` discover
-    // into this cycle" — `SessionDiscovery |> Map.containsKey sessionId` — NOT
-    // `ownerSessionId = Some sessionId`: `ownerSessionId` is `Map.tryHead`, so
-    // a cycle that legitimately carries `sessionId`'s discovery alongside
-    // another key would be mis-rejected purely by key sort order. containsKey
-    // is the correct, order-independent question.
-    let attributed = testState.SessionDiscovery |> Map.containsKey sessionId
-    let notAttributedToSession =
-      match attributed with
-      | true -> []
-      | false -> tests
-
-    match notAttributedToSession with
-    | _ :: _ ->
-      let names = notAttributedToSession |> List.map TestId.value |> String.concat ", "
+    match preflight sessionId tests (stateNow ()) with
+    | Preflight.NothingToRun -> return Ok []
+    | Preflight.NotAttributed notAttributed ->
+      let names = notAttributed |> List.map TestId.value |> String.concat ", "
       // Self-diagnosing (this was a CI-only flake with no visible state): dump
       // where the session's discovery actually lives at the refusal point.
       let model = elmRuntime.GetModel()
+      let testState = stateNow ()
       let keysOf (s: LiveTestState) = s.SessionDiscovery |> Map.toList |> List.map fst |> String.concat ","
       let diag =
         sprintf
@@ -168,41 +219,42 @@ let runTestsInSession
       return Error (
         sprintf
           "Refusing to run — %d of %d requested test(s) are not attributed to session '%s': %s %s"
-          notAttributedToSession.Length tests.Length sessionId names diag)
-    | [] ->
-
-    let requestedIds = tests |> Set.ofList
-    let testCases =
-      testState.DiscoveredTests
-      |> Array.filter (fun testCase -> requestedIds.Contains testCase.Id)
-
-    match testCases.Length = tests.Length with
-    | false ->
+          notAttributed.Length tests.Length sessionId names diag)
+    | Preflight.NotDiscovered ->
       return Error (
         sprintf
           "Refusing to run — some requested test id(s) are not present in session '%s''s discovered tests."
           sessionId)
-    | true ->
+    | Preflight.Dispatch testCases ->
 
-    let priorGeneration = testState.LastGeneration
     let budget = awaitBudget ()
-    let genNow () = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState.LastGeneration
-    let stateNow () = (SageFsModel.cycleOwnedBySession sessionId (elmRuntime.GetModel())).TestState
+    let requestId = RunRequestId.fresh ()
+    elmRuntime.Dispatch (SageFsMsg.Event (TuiEvent.RunTestsRequested (Some sessionId, testCases, Some requestId)))
 
-    elmRuntime.Dispatch (SageFsMsg.Event (TuiEvent.RunTestsRequested (Some sessionId, testCases)))
-
-    // Event-driven, pure conditions: RunTestsRequested bumps LastGeneration and,
-    // on completion, marks that generation complete — both fire the model-changed
-    // notification, so `awaitCondition` completes the instant each holds, never on
-    // a poll cadence. Wait for the run to START (generation moved off
-    // `priorGeneration`), capture that generation, then wait for it to COMPLETE.
-    let! started = awaitCondition budget (fun () -> genNow () <> priorGeneration)
+    // Event-driven, pure conditions over `advance` — the SAME step function the
+    // deterministic simulation folds, reading this run's own durable request
+    // record. The condition can be evaluated from concurrent model-changed
+    // notifications; the step is serialised so a racing, older observation can
+    // never overwrite a newer progress value.
+    let progress = ref (RunProgress.Pending requestId)
+    let step () =
+      lock progress (fun () ->
+        progress.Value <- advance tests progress.Value (stateNow ())
+        progress.Value)
+    let! started =
+      awaitCondition budget (fun () ->
+        match step () with
+        | RunProgress.Pending _ -> false
+        | _ -> true)
     match started with
     | false -> return Error "Test run timed out before it started."
     | true ->
-      let generation = genNow ()
-      let! completed = awaitCondition budget (fun () -> isGenerationComplete generation (stateNow ()))
-      match completed with
-      | false -> return Error "Test run timed out."
-      | true -> return Ok (failingOf tests (stateNow ()))
+      let! completed =
+        awaitCondition budget (fun () ->
+          match step () with
+          | RunProgress.Finished _ -> true
+          | _ -> false)
+      match completed, progress.Value with
+      | true, RunProgress.Finished failing -> return Ok failing
+      | _ -> return Error "Test run timed out."
   }

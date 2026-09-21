@@ -77,7 +77,7 @@ let private mkFakeRuntime
   let dispatchCount = ref 0
   let dispatch (msg: SageFsMsg) =
     match msg with
-    | SageFsMsg.Event (TuiEvent.RunTestsRequested (_, tests)) ->
+    | SageFsMsg.Event (TuiEvent.RunTestsRequested (_, tests, _)) ->
       System.Threading.Interlocked.Increment dispatchCount |> ignore
       let running = onRunTestsRequested applyState tests modelRef.Value.LiveTesting.TestState
       applyState running
@@ -85,6 +85,56 @@ let private mkFakeRuntime
   let runtime : ElmRuntime<SageFsModel, SageFsMsg, RenderRegion> =
     { Dispatch = dispatch
       GetModel = fun () -> modelRef.Value
+      GetRegions = fun () -> [] }
+  runtime, (fun () -> dispatchCount.Value)
+
+/// An `ElmRuntime` backed by the REAL `SageFsUpdate.update`, with a worker
+/// that answers each run effect ASYNCHRONOUSLY, the way production's performer
+/// does: the start message first (`TestRunStartedAt` for a requested run),
+/// then the results, then the completion. It replaces a hand-written mirror of
+/// the reducer that mirrored the OLD single-bump start: the very assumption
+/// that hid the double-bump false green (see CohortLandingVerifyDstTests).
+let private mkRealRuntime
+  (initial: SageFsModel)
+  (outcomes: Map<TestId, TestResult>)
+  : ElmRuntime<SageFsModel, SageFsMsg, RenderRegion> * (unit -> int) =
+  let modelRef = ref initial
+  let gate = obj ()
+  let dispatchCount = ref 0
+  let rec dispatch (msg: SageFsMsg) =
+    let effects =
+      lock gate (fun () ->
+        let model', effects = SageFsUpdate.update msg modelRef.Value
+        modelRef.Value <- model'
+        effects)
+    for effect in effects do
+      let run =
+        match effect with
+        | SageFsEffect.TestCycle (TestCycleEffect.RunRequestedTests (req, generation)) ->
+          System.Threading.Interlocked.Increment dispatchCount |> ignore
+          let ids = req.Tests |> Array.map (fun tc -> tc.Id)
+          match req.SessionId with
+          | Some sid -> Some (req, TuiEvent.TestRunStartedAt (ids, sid, generation))
+          | None -> Some (req, TuiEvent.TestRunStarted (ids, None))
+        | SageFsEffect.TestCycle (TestCycleEffect.RunAffectedTests req) ->
+          System.Threading.Interlocked.Increment dispatchCount |> ignore
+          Some (req, TuiEvent.TestRunStarted (req.Tests |> Array.map (fun tc -> tc.Id), req.SessionId))
+        | _ -> None
+      match run with
+      | Some (req, startMessage) ->
+        dispatch (SageFsMsg.Event startMessage)
+        async {
+          do! Async.Sleep 20
+          let results =
+            req.Tests
+            |> Array.map (fun tc -> mkResult tc.Id (outcomes |> Map.tryFind tc.Id |> Option.defaultValue (TestResult.Passed TimeSpan.Zero)))
+          dispatch (SageFsMsg.Event (TuiEvent.TestResultsBatch (req.SessionId, results)))
+          dispatch (SageFsMsg.Event (TuiEvent.TestRunCompleted req.SessionId))
+        } |> Async.Start
+      | None -> ()
+  let runtime : ElmRuntime<SageFsModel, SageFsMsg, RenderRegion> =
+    { Dispatch = dispatch
+      GetModel = fun () -> lock gate (fun () -> modelRef.Value)
       GetRegions = fun () -> [] }
   runtime, (fun () -> dispatchCount.Value)
 
@@ -293,36 +343,22 @@ let tests =
       }
     ]
 
-    testList "runTestsInSession — end to end against a fake runtime" [
-      testAsync "awaits the run and reports exactly the failing tests" {
+    testList "runTestsInSession — end to end against the real update" [
+      testAsync "awaits ITS run and reports exactly the failing tests, even after a green baseline" {
         let tc1 = mkTestCase "t1"
         let tc2 = mkTestCase "t2"
-        let initial =
-          { LiveTestState.empty with
-              DiscoveredTests = [| tc1; tc2 |]
-              SessionDiscovery = Map.ofList [ "sess1", DiscoveryProgress.Completed ] }
-        // `onRunTestsRequested` plays the daemon's reducer: it starts the run
-        // synchronously (bumping the generation, marking sess1 Running) and
-        // schedules a background fiber that, shortly after, applies the
-        // "TestRunCompleted" state (phase back to Idle, results recorded) —
-        // exactly mirroring how the real daemon starts a run synchronously
-        // in `update` but only learns of completion later, asynchronously.
-        let onRunTestsRequested (applyState: LiveTestState -> unit) (requested: TestCase array) (state: LiveTestState) =
-          let running = startRunReducer requested state
-          async {
-            do! Async.Sleep 50
-            let completed =
-              completeRunReducer
-                [ tc1.Id, TestResult.Passed TimeSpan.Zero
-                  tc2.Id, TestResult.Failed(TestFailure.AssertionFailed "boom", TimeSpan.Zero) ]
-                requested
-                running
-            applyState completed
-          } |> Async.Start
-          running
-        let runtime, dispatchCount = mkFakeRuntime initial onRunTestsRequested
+        let discovered, _ =
+          SageFsUpdate.update (SageFsMsg.Event (TuiEvent.TestsDiscovered ("sess1", [| tc1; tc2 |]))) (SageFsModel.initial ())
+        // A previous run left both tests green. The old verifier could read
+        // exactly these results as its own verdict.
+        let baseline, _ =
+          SageFsUpdate.update
+            (SageFsMsg.Event (TuiEvent.TestResultsBatch (Some "sess1", [| mkResult tc1.Id (TestResult.Passed TimeSpan.Zero); mkResult tc2.Id (TestResult.Passed TimeSpan.Zero) |])))
+            discovered
+        let runtime, dispatchCount =
+          mkRealRuntime baseline (Map.ofList [ tc2.Id, TestResult.Failed(TestFailure.AssertionFailed "boom", TimeSpan.Zero) ])
         let! result = runTestsInSession runtime testAwait (trustedObservation "sess1") "sess1" [ tc1.Id; tc2.Id ]
-        result |> Expect.equal "t1 passed, t2 failed" (Ok [ tc2.Id ])
+        result |> Expect.equal "t1 passed, t2 failed: this run's results, not the baseline's" (Ok [ tc2.Id ])
         dispatchCount ()
         |> Expect.equal "exactly one run was dispatched" 1
       }

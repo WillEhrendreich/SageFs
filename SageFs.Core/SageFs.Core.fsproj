@@ -86,6 +86,8 @@
         <Compile Include="ErrorMessages.fs" />
         <Compile Include="WorkflowErrorContext.fs" />
         <Compile Include="Features\LiveTestingTypes.fs" />
+        <Compile Include="Features\RequestedRuns.fs" />
+        <Compile Include="Features\TestTreemap.fs" />
         <Compile Include="Features\TestAnnotations.fs" />
         <Compile Include="Features\TestRunKey.fs" />
         <Compile Include="Features\InputHashCoverage.fs" />

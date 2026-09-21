@@ -979,6 +979,35 @@ module RunGeneration =
   let next (RunGeneration n) = RunGeneration (n + 1)
   let value (RunGeneration n) = n
 
+/// Caller-chosen identity for one explicitly requested test run, so a caller
+/// that must know THE result of ITS run (cohort landing verification) can find
+/// it again. Generations are a shared counter, so "the next generation" is
+/// ambiguous under concurrency; a request id is not.
+type RunRequestId = RunRequestId of System.Guid
+
+module RunRequestId =
+  let fresh () = RunRequestId (System.Guid.NewGuid())
+
+/// Where an explicitly requested run stands. Durable in the model, because a
+/// waiter re-evaluates only on (batched) model-changed notifications and can
+/// miss a short-lived phase entirely.
+[<RequireQualifiedAccess>]
+type RequestedRunStatus =
+  /// Generation allocated; the worker has not started this run yet.
+  | Pending
+  /// The worker started this run (`TestRunPhase.Running` on its generation).
+  | Running
+  /// The run's completion arrived.
+  | Completed
+
+/// An explicitly requested run: its one generation, allocated at request time
+/// and carried by the run itself (never re-bumped when the worker starts it),
+/// and its status.
+type RequestedRun =
+  { RequestedSession: string
+    RequestedGeneration: RunGeneration
+    RequestedStatus: RequestedRunStatus }
+
 [<Struct>]
 type TestRunPhase =
   | Idle
@@ -1494,6 +1523,16 @@ type LiveTestState = {
   /// Where each session's test discovery stands; a session missing here was never asked.
   SessionDiscovery: Map<string, DiscoveryProgress>
   LastDecision: LiveTestingDecision option
+  /// Explicitly requested runs by request id (bounded; see
+  /// `LiveTestState.maxTrackedRequests`). The run's generation is allocated
+  /// ONCE, here, at request time.
+  RunRequests: Map<RunRequestId, RequestedRun>
+  /// The generation of the run that produced each test's `LastResults` entry:
+  /// the session's running generation when the result ARRIVED. Absent when the
+  /// result arrived with no run in flight. A result from some other run can
+  /// never be mistaken for this run's, which is what makes a landing verdict
+  /// attributable (roast F17 / cohort landing DST).
+  ResultGenerations: Map<TestId, RunGeneration>
 }
 
 [<RequireQualifiedAccess>]
@@ -1582,6 +1621,8 @@ module LiveTestState =
     |> LiveTestDiscoveryState.hint
 
   let empty = {
+    RunRequests = Map.empty
+    ResultGenerations = Map.empty
     SourceLocations = Array.empty
     DiscoveredTests = Array.empty
     LastResults = Map.empty
@@ -1973,97 +2014,6 @@ type TreemapRect = {
   W: float
   H: float
 }
-
-module TestTreemap =
-  /// Extract treemap entries from test status entries.
-  /// Only includes tests with known durations (Passed/Failed).
-  let fromStatusEntries (entries: TestStatusEntry array) : TestTreemapEntry array =
-    entries
-    |> Array.choose (fun e ->
-      match e.Status with
-      | TestRunStatus.Passed duration ->
-        Some { DisplayName = e.DisplayName; FullName = e.FullName
-               DurationMs = duration.TotalMilliseconds; Status = TreemapStatus.Passed }
-      | TestRunStatus.Failed (_, duration) ->
-        Some { DisplayName = e.DisplayName; FullName = e.FullName
-               DurationMs = duration.TotalMilliseconds; Status = TreemapStatus.Failed }
-      | TestRunStatus.Running ->
-        Some { DisplayName = e.DisplayName; FullName = e.FullName
-               DurationMs = 0.0; Status = TreemapStatus.Running }
-      | TestRunStatus.Skipped _ ->
-        Some { DisplayName = e.DisplayName; FullName = e.FullName
-               DurationMs = 0.0; Status = TreemapStatus.Skipped }
-      | _ -> None)
-    |> Array.sortByDescending (fun e -> e.DurationMs)
-
-  /// Squarified treemap layout algorithm (Bruls, Huizing, van Wijk).
-  /// Packs rectangles into a bounding box with near-square aspect ratios.
-  /// Area of each rect is proportional to DurationMs.
-  let layout (width: float) (height: float) (entries: TestTreemapEntry array) : TreemapRect array =
-    match entries.Length with
-    | 0 -> [||]
-    | _ ->
-      let totalMs = entries |> Array.sumBy (fun e -> max e.DurationMs 0.1)
-      let totalArea = width * height
-      // Normalize: each entry's area = (durationMs / totalMs) * totalArea
-      let areas = entries |> Array.map (fun e -> max e.DurationMs 0.1 / totalMs * totalArea)
-      let result = ResizeArray<TreemapRect>()
-      let mutable x0 = 0.0
-      let mutable y0 = 0.0
-      let mutable w0 = width
-      let mutable h0 = height
-      let mutable idx = 0
-      while idx < entries.Length do
-        // Lay out a strip along the shorter side
-        let isVertical = w0 >= h0
-        let side = match isVertical with | true -> h0 | false -> w0
-        // Greedily add entries to the current strip while aspect ratio improves
-        let mutable stripArea = 0.0
-        let mutable bestWorst = System.Double.MaxValue
-        let mutable stripEnd = idx
-        let mutable improving = true
-        while stripEnd < entries.Length && improving do
-          stripArea <- stripArea + areas.[stripEnd]
-          let stripLen = stripArea / side
-          // Worst aspect ratio in this strip
-          let worstAspect =
-            let mutable worst = 0.0
-            for j in idx .. stripEnd do
-              let cellLen = areas.[j] / stripLen
-              let aspect = max (cellLen / stripLen) (stripLen / cellLen)
-              worst <- max worst aspect
-            worst
-          match worstAspect <= bestWorst with
-          | true ->
-            bestWorst <- worstAspect
-            stripEnd <- stripEnd + 1
-          | false ->
-            // Adding this entry made it worse — back off
-            stripArea <- stripArea - areas.[stripEnd]
-            improving <- false
-        // If we added nothing (shouldn't happen, but safety), take one
-        let stripEnd = match stripEnd = idx with | true -> idx + 1 | false -> stripEnd
-        let stripLen = stripArea / side
-        // Place entries in the strip
-        let mutable offset = 0.0
-        for j in idx .. stripEnd - 1 do
-          let cellLen = areas.[j] / stripLen
-          match isVertical with
-          | true ->
-            result.Add { Entry = entries.[j]; X = x0; Y = y0 + offset; W = stripLen; H = cellLen }
-          | false ->
-            result.Add { Entry = entries.[j]; X = x0 + offset; Y = y0; W = cellLen; H = stripLen }
-          offset <- offset + cellLen
-        // Shrink remaining area
-        match isVertical with
-        | true ->
-          x0 <- x0 + stripLen
-          w0 <- w0 - stripLen
-        | false ->
-          y0 <- y0 + stripLen
-          h0 <- h0 - stripLen
-        idx <- stripEnd
-      result.ToArray()
 
 // --- Enriched SSE Batch Payload ---
 
@@ -3411,6 +3361,11 @@ type TestCycleEffect =
   | ParseTreeSitter of content: string * filePath: string
   | RequestFcsTypeCheck of TypeCheckRequest
   | RunAffectedTests of TestRunRequest
+  /// An explicitly requested run whose generation was allocated at request
+  /// time (`RequestedRuns.request`). The performer starts it WITH that
+  /// generation (`TuiEvent.TestRunStartedAt`) instead of bumping a new one, so
+  /// the run's identity survives from request to results.
+  | RunRequestedTests of request: TestRunRequest * generation: RunGeneration
   /// Identity-preserving eval of the edited buffer, then run of the tests
   /// `Run.Tests` already selected as affected — replaces the compiled-DLL
   /// decision for a compiled `.fs` file on BOTH Keystroke and FileSave (see

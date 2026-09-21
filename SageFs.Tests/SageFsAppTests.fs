@@ -1221,7 +1221,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
 
     let updated, effects =
       SageFsUpdate.update
-        (SageFsMsg.Event (TuiEvent.RunTestsRequested (None, [| discovered.[0] |])))
+        (SageFsMsg.Event (TuiEvent.RunTestsRequested (None, [| discovered.[0] |], None)))
         activeModel
     let updatedEntries = updated.LiveTesting.TestState.StatusIndex.Entries
     let affectedUpdated =
@@ -1233,8 +1233,12 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.isTrue "explicit run requests should preserve unaffected status entry objects"
     affectedUpdated.PreviousStatus
     |> Expect.equal "explicit run requests should remember the prior detected status" TestRunStatus.Detected
+    // Queued, not Running: a request no longer marks its run as started. The
+    // phase moves to Running only when the worker actually starts it, so a
+    // previous run's results still arriving can never be stamped as this
+    // run's (cohort landing verification DST).
     affectedUpdated.Status
-    |> Expect.equal "explicit run requests should transition the targeted test to running" TestRunStatus.Running
+    |> Expect.equal "an explicit run request queues the targeted test until the worker starts it" TestRunStatus.Queued
     List.isEmpty effects
     |> Expect.isFalse "explicit run requests should still emit the run effect"
 

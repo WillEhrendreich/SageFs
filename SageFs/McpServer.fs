@@ -2986,7 +2986,7 @@ let mapLiveTestingRoutes (app: WebApplication) (rctx: RouteContext) =
                     error = sprintf "No discovered tests matched the explicit run filters (%s)." filterSummary
                   |}
               | false ->
-                  dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.RunTestsRequested (targetSession, tests)))
+                  dispatch (SageFs.SageFsMsg.Event (SageFs.TuiEvent.RunTestsRequested (targetSession, tests, None)))
                   do! jsonResponse ctx 200 {|
                     success = true
                     queued = tests.Length

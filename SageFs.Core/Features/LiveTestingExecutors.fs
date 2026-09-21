@@ -1288,6 +1288,7 @@ module TestCycleCancellation =
     | TestCycleEffect.ParseTreeSitter _ -> pc.TreeSitter.next()
     | TestCycleEffect.RequestFcsTypeCheck _ -> pc.Fcs.next()
     | TestCycleEffect.RunAffectedTests _ -> pc.TestRun.next()
+    | TestCycleEffect.RunRequestedTests _ -> pc.TestRun.next()
     // Brief 4 (live-testing-asyoutype-plan.md): the eval-then-affected path
     // still ends in a test run superseding any prior one — same cancellation
     // chain as RunAffectedTests.
