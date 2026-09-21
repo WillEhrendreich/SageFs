@@ -210,18 +210,24 @@ module private IsolatedDaemon =
             lines |> Array.skip (max 0 (lines.Length - 40)) |> Array.iter (eprintfn "%s")
       with _ -> ()
 
+  /// Ready means the DASHBOARD — the page these journeys open — answers
+  /// /api/daemon-info with the pid we spawned. This used to accept any
+  /// response to /health on the MCP port, and the dashboard is a separate
+  /// listener on MCP+1: the "clock far AHEAD" journey then opened the page
+  /// before the dashboard bound and errored with ERR_CONNECTION_REFUSED 1.5s
+  /// in, a failure that came and went between runs. A pid check also rules out
+  /// another suite's daemon answering on a released-then-reused port.
   let waitHealthy (budgetSeconds: float) (d: IsolatedDaemon) : Task<bool> = task {
-    use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.McpPort))
+    use client = new HttpClient(BaseAddress = Uri(sprintf "http://localhost:%d" d.DashboardPort))
     client.Timeout <- TimeSpan.FromSeconds(5.0)
     let deadline = DateTime.UtcNow.AddSeconds(budgetSeconds)
     let mutable healthy = false
-    while not healthy && DateTime.UtcNow < deadline do
+    while not healthy && not d.Process.HasExited && DateTime.UtcNow < deadline do
       try
-        let! resp = client.GetAsync("/health")
-        resp.Dispose()
-        healthy <- true
-      with _ ->
-        do! Task.Delay(250)
+        let! body = client.GetStringAsync("/api/daemon-info")
+        healthy <- SageFs.Tests.TestInfrastructure.DaemonIdentity.reportsPid body d.Process.Id
+      with _ -> ()
+      if not healthy then do! Task.Delay(250)
     return healthy
   }
 

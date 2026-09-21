@@ -52,11 +52,7 @@ let private daemonStartupHealthTimeout =
 
 /// Does a /api/daemon-info payload identify THIS pid? Kept outside the task
 /// builder so parsing needs no `use` inside a resumable state machine.
-let private reportsPid (body: string) (pid: int) =
-  try
-    use doc = JsonDocument.Parse body
-    doc.RootElement.GetProperty("pid").GetInt32() = pid
-  with _ -> false
+let private reportsPid = SageFs.Tests.TestInfrastructure.DaemonIdentity.reportsPid
 
 let private daemonStartupHealthMaxAttempts =
   int (Math.Ceiling(daemonStartupHealthTimeout.TotalMilliseconds / daemonStartupHealthPollInterval.TotalMilliseconds))

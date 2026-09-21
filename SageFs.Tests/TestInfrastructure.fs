@@ -72,6 +72,20 @@ module SageFsBinary =
     |> List.tryHead
     |> Option.defaultValue candidates.Head
 
+/// Readiness for a daemon a test spawned itself. "Something answered on the
+/// port" is not readiness: ports are reserved then released before the daemon
+/// binds, so another suite's daemon can be the one answering, and a daemon
+/// binds its MCP port and its dashboard (MCP+1) separately, so one can answer
+/// before the other listens. Both mistakes have produced flakes here. The rule
+/// is: the dashboard's /api/daemon-info reports the pid we spawned.
+module DaemonIdentity =
+  /// Does a /api/daemon-info body name this pid?
+  let reportsPid (body: string) (pid: int) =
+    try
+      use doc = System.Text.Json.JsonDocument.Parse body
+      doc.RootElement.GetProperty("pid").GetInt32() = pid
+    with _ -> false
+
 /// Structural registry of [Integration] suites. Every integration suite is
 /// registered here together with the runner that owns it, so:
 ///  - the default run excludes registered suites by the IDENTITY of their test
@@ -374,14 +388,22 @@ module TrustSignal =
 
   /// Run `tests` as `tier` and return the exit code the verdict demands.
   /// `--list-tests` executes nothing by design, so it bypasses judgement.
-  let runReporting (report: Row -> unit) (tier: string) (argv: string array) (tests: Expecto.Test) : int =
+  let runObserved
+    (report: Row -> unit)
+    (observe: Expecto.Impl.TestRunSummary -> unit)
+    (tier: string)
+    (argv: string array)
+    (tests: Expecto.Test)
+    : int =
     match argv |> Array.contains "--list-tests" with
     | true -> Expecto.Tests.runTestsWithCLIArgs [] argv tests
     | false ->
       let summary = ref None
       let handler =
         Expecto.Tests.CLIArguments.Append_Summary_Handler(
-          Expecto.Tests.SummaryHandler(fun s -> summary.Value <- Some s))
+          Expecto.Tests.SummaryHandler(fun s ->
+            summary.Value <- Some s
+            observe s))
       let expectoExit = Expecto.Tests.runTestsWithCLIArgs [ handler ] argv tests
       let tally =
         match summary.Value with
@@ -400,7 +422,7 @@ module TrustSignal =
   /// runner" cannot mean two different things in two places.
   let pipelineTierArgs (pipelineText: string) : string list =
     System.Text.RegularExpressions.Regex.Matches(
-      pipelineText, "testTier(?:After\\s*\\[[^\\]]*\\])?\\s*\"([^\"]+)\"")
+      pipelineText, "testTier(?:After\\s*\\[[^\\]]*\\])?\\s*\\$?\"([^\"]+)\"")
     |> Seq.map (fun m -> m.Groups[1].Value)
     |> List.ofSeq
 
@@ -410,6 +432,9 @@ module TrustSignal =
     match args.Split(' ')[0] with
     | "--summary" -> "default"
     | flag -> flag
+
+  let runReporting (report: Row -> unit) (tier: string) (argv: string array) (tests: Expecto.Test) : int =
+    runObserved report ignore tier argv tests
 
   /// `runReporting` with the real sink: print the TRUST line and append to the ledger.
   let run (tier: string) (argv: string array) (tests: Expecto.Test) : int = runReporting record tier argv tests
