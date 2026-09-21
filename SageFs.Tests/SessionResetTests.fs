@@ -76,6 +76,23 @@ let sessionResetTests =
         "2"
     }
 
+    // Moved from "Reset pushback warnings" (fsi-mechanism-extraction.md R4):
+    // unlike its former siblings, this case really does resetSession through
+    // the shared FSI actor, so it belongs alongside the other real resets in
+    // this sequenced suite rather than in the now-default-suite stub list.
+    testTask "soft reset on healthy session includes warning" {
+      let ctx = sharedCtx ()
+      let! result = resetSession ctx "test" None None
+      result
+      |> Expect.stringContains
+        "Should include pushback warning for healthy session"
+        "⚠️ NOTE:"
+      result
+      |> Expect.stringContains
+        "Should still include success message"
+        "reset"
+    }
+
   ]
 
 /// A McpContext whose RestartSession is fully controlled by the test: it
@@ -118,9 +135,15 @@ let private mkPushbackCtx (restartResult: Result<string, SageFsError>) =
       CohortOwner = None }
   ctx, restartCalls, statusEvents
 
+/// Both cases below build `mkPushbackCtx` — a fully stubbed McpContext
+/// (SessionManagementOps.stub, a dummy proxy, a fresh Event<_>). No FSI
+/// actor, no daemon, no worker, no filesystem: `hardResetSession` only ever
+/// calls `ctx.SessionOps.RestartSession`/`GetProxy`, both hand-rolled here,
+/// so this list was misregistered as a slow Integration host suite for zero
+/// real machinery (fsi-mechanism-extraction.md R4).
 [<Tests>]
-let resetPushbackTests =
-  Integration.hostList "Reset pushback warnings" [
+let resetPushbackStubTests =
+  testList "Reset pushback warnings" [
 
     testTask "hard reset on healthy session routes through the owner's restart, preserves its outcome message, and includes the definitions-cleared warning" {
       let sentinel = sprintf "owner-restart-outcome-%O" (System.Guid.NewGuid())
@@ -169,19 +192,6 @@ let resetPushbackTests =
       |> Expect.all
         "no restart failure may be reported as the session becoming Running"
         (fun s -> s <> SessionDisplayStatus.Running)
-    }
-
-    testTask "soft reset on healthy session includes warning" {
-      let ctx = sharedCtx ()
-      let! result = resetSession ctx "test" None None
-      result
-      |> Expect.stringContains
-        "Should include pushback warning for healthy session"
-        "⚠️ NOTE:"
-      result
-      |> Expect.stringContains
-        "Should still include success message"
-        "reset"
     }
 
   ]

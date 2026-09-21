@@ -10,6 +10,7 @@ open SageFs.AppState
 open SageFs.WorkflowTypes
 open SageFs.Features.Events
 open SageFs.McpTools
+open SageFs.WorkerProtocol
 open SageFs.Tests.TestInfrastructure
 
 // Unit tests for TDD of LLM Interop improvements based on SageFs_mcp_improvement_suggestion.md
@@ -66,15 +67,56 @@ module StartupConfigTests =
 // ============================================================================
 
 module GetStartupInfoTests =
-  
+
+  /// getStartupInfo/getStartupInfoJson only ever read the SessionInfo
+  /// SessionOps.GetSessionInfo hands back — a static stub below — and never
+  /// route a message through GetProxy's proxy. globalActorResult was forced
+  /// only for the DiagnosticsChanged handle these tools never touch; a bare
+  /// event replaces it, so this list needs no live FSI actor at all.
+  let private mkFormattingCtx () =
+    let sessionId = SessionId.newId()
+    let sessionMap = System.Collections.Concurrent.ConcurrentDictionary<string, string>()
+    sessionMap.["test"] <- SessionId.value sessionId
+    let sessionInfo : SessionInfo =
+      { Id = sessionId
+        Name = None
+        Projects = []
+        WorkingDirectory = ""
+        SolutionRoot = None
+        Status = SessionLifecycleStatus.Ready { Pid = 1; Port = None }
+        Workflow = SessionWorkflow.Interactive
+        CreatedAt = DateTime.UtcNow
+        LastActivity = DateTime.UtcNow
+        ActiveProject = None
+        ProjectRoles = []
+        App = SageFs.AppRun.AppRunState.NotRunning }
+    let ops : SageFs.SessionManagementOps =
+      { SageFs.SessionManagementOps.stub with
+          GetProxy = fun _ -> Task.FromResult(Some (fun _ -> async { return WorkerResponse.WorkerReady }))
+          GetSessionInfo = fun _ -> Task.FromResult(Some sessionInfo) }
+    { FrictionStore = None
+      DiagnosticsChanged = (Event<Features.DiagnosticsStore.T>()).Publish
+      StateChanged = None
+      SessionOps = ops
+      SessionMap = sessionMap
+      McpPort = 0
+      Dispatch = None
+      GetElmModel = None
+      GetElmRegions = None
+      GetWarmupContext = None
+      GetFeatureState = None; RecordEval = None
+      ActivityTracker = SageFs.AgentActivityTracker.create()
+      LiveSnapshotSink = None
+      CohortOwner = None } : McpContext
+
   let tests =
-    Integration.hostList "get_startup_info tool" [
-      
+    testList "get_startup_info tool" [
+
       testCase "get_startup_info should return structured startup information"
       <| fun _ ->
         task {
-          let ctx = sharedCtx ()
-          
+          let ctx = mkFormattingCtx ()
+
           let! result = getStartupInfo ctx "test" None
           
           // Should include key information from StartupConfig in AppState
@@ -89,7 +131,7 @@ module GetStartupInfoTests =
       testCase "get_startup_info should handle missing startup config gracefully"
       <| fun _ ->
         task {
-          let ctx = sharedCtx ()
+          let ctx = mkFormattingCtx ()
           
           let! result = getStartupInfo ctx "test" None
           
@@ -102,7 +144,7 @@ module GetStartupInfoTests =
       testCase "get_startup_info should return parseable JSON format"
       <| fun _ ->
         task {
-          let ctx = sharedCtx ()
+          let ctx = mkFormattingCtx ()
           
           let! result = getStartupInfoJson ctx "test" None
 
@@ -121,7 +163,7 @@ module GetStartupInfoTests =
       testCase "get_startup_info names the session and its status for LLMs"
       <| fun _ ->
         task {
-          let ctx = sharedCtx ()
+          let ctx = mkFormattingCtx ()
 
           let! result = getStartupInfo ctx "test" None
 

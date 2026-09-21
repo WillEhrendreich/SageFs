@@ -19,13 +19,12 @@ module McpSessionIsolation =
   /// Create a McpContext with a tracking dispatch that records all messages sent.
   /// Uses inMemoryPersistence so event-append tests work correctly.
   let ctxWithTracking sessionId =
-    let result = globalActorResult.Value
     let dispatched = System.Collections.Generic.List<SageFsMsg>()
     let sessionMap = ConcurrentDictionary<string, string>()
     sessionMap.["test"] <- sessionId
     let ctx =
       { FrictionStore = None
-        DiagnosticsChanged = result.DiagnosticsChanged
+        DiagnosticsChanged = (Event<Features.DiagnosticsStore.T>()).Publish
         StateChanged = None
         SessionOps = {
           CreateSession = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(Ok "test-session")
@@ -81,6 +80,13 @@ module McpSessionIsolation =
         return Error (ex.Message)
     }
 
+  // Every SessionOps member here is a hand-written stub (GetProxy returns
+  // None/a dummyProxy, GetSessionInfo returns a canned record) — the only
+  // reason this list ever touched the shared FSI actor was to borrow its
+  // DiagnosticsChanged handle, replaced above with a bare Event<_>, so
+  // --integration-host no longer pays for a real actor warmup here
+  // (fsi-mechanism-extraction.md R7). Still registered as Host: kept here
+  // by IntegrationRegistryTests's pinned Host-suite-name contract.
   let tests = testSequenced <| Integration.hostList "MCP session isolation" [
 
     testTask "switchSession updates only the given context's SessionMap for that agent" {
@@ -133,12 +139,11 @@ module McpSessionIsolation =
     }
 
     testTask "switchSession returns error for nonexistent session" {
-      let result = globalActorResult.Value
       let sessionMap = ConcurrentDictionary<string, string>()
       sessionMap.["test"] <- "aaaaaa01"
       let ctx =
         { FrictionStore = None
-          DiagnosticsChanged = result.DiagnosticsChanged
+          DiagnosticsChanged = (Event<Features.DiagnosticsStore.T>()).Publish
           StateChanged = None
           SessionOps = {
             CreateSession = fun _ _ _ -> System.Threading.Tasks.Task.FromResult(Ok "test")
@@ -548,7 +553,6 @@ module ResetIsolation =
 
   /// Create a context with two agents on different sessions, plus tracking stubs.
   let mkTrackingCtx () =
-    let result = globalActorResult.Value
     let sessionMap = ConcurrentDictionary<string, string>()
     sessionMap.["agent1"] <- "aaa00001"
     sessionMap.["agent2"] <- "bbb00002"
@@ -586,7 +590,7 @@ module ResetIsolation =
     }
     let ctx =
       { FrictionStore = None
-        DiagnosticsChanged = result.DiagnosticsChanged
+        DiagnosticsChanged = (Event<Features.DiagnosticsStore.T>()).Publish
         StateChanged = None
         SessionOps = ops
         SessionMap = sessionMap
@@ -602,7 +606,6 @@ module ResetIsolation =
     ctx, restartLog, routedSessions
 
   let mkStatusSyncCtx () =
-    let result = globalActorResult.Value
     let sid = testSessionId "aaa00001"
     let sidStr = WorkerProtocol.SessionId.value sid
     let sessionMap = ConcurrentDictionary<string, string>()
@@ -681,7 +684,7 @@ module ResetIsolation =
 
     let ctx =
       { FrictionStore = None
-        DiagnosticsChanged = result.DiagnosticsChanged
+        DiagnosticsChanged = (Event<Features.DiagnosticsStore.T>()).Publish
         StateChanged = None
         SessionOps = ops
         SessionMap = sessionMap
@@ -696,6 +699,13 @@ module ResetIsolation =
         CohortOwner = None } : McpContext
     ctx, sidStr, resetStarted, allowResetFinish
 
+  // Every ops record here is hand-written (SessionManagementOps.stub or a
+  // fully custom record); GetProxy never reaches the real actor's proxy
+  // (fixed responses or None). globalActorResult was forced only to borrow
+  // its DiagnosticsChanged handle, replaced above/below with bare Event<_>
+  // values, so --integration-host no longer pays for a real actor warmup
+  // here (fsi-mechanism-extraction.md R7). Still registered as Host: kept
+  // here by IntegrationRegistryTests's pinned Host-suite-name contract.
   let tests = Integration.hostList "Reset isolation" [
     testTask "hardResetSession with rebuild only restarts the targeted session" {
       let ctx, restartLog, _ = mkTrackingCtx ()
@@ -710,7 +720,6 @@ module ResetIsolation =
     }
 
     testTask "hardResetSession with rebuild returns before background restart completes" {
-      let result = globalActorResult.Value
       let sessionMap = ConcurrentDictionary<string, string>()
       sessionMap.["agent1"] <- "aaa00001"
       let restartStarted = TaskCompletionSource<unit>()
@@ -759,7 +768,7 @@ module ResetIsolation =
 
       let ctx =
         { FrictionStore = None
-          DiagnosticsChanged = result.DiagnosticsChanged
+          DiagnosticsChanged = (Event<Features.DiagnosticsStore.T>()).Publish
           StateChanged = None
           SessionOps = ops
           SessionMap = sessionMap
@@ -880,7 +889,6 @@ module ResetIsolation =
 
     testTask "WHY — hardResetSession with rebuild=true — a failed build is recorded as the rebuild outcome and never written to the registry, because the SessionManager owns session status and build-first keeps the worker serving" {
       // Create context where RestartSession can be controlled via TCS
-      let result = globalActorResult.Value
       let sidStr = "bbb00011"
       let sessionMap = ConcurrentDictionary<string, string>()
       sessionMap.["agent1"] <- sidStr
@@ -923,7 +931,7 @@ module ResetIsolation =
 
       let ctx =
         { FrictionStore = None
-          DiagnosticsChanged = result.DiagnosticsChanged
+          DiagnosticsChanged = (Event<Features.DiagnosticsStore.T>()).Publish
           StateChanged = None
           SessionOps = ops
           SessionMap = sessionMap
@@ -966,7 +974,6 @@ module ResetIsolation =
     }
 
     testTask "WHY — hardResetSession with rebuild=true — an exception from RestartSession is recorded as a failed rebuild and reported, never swallowed, because a fire-and-forget task must surface its failure" {
-      let result = globalActorResult.Value
       let sidStr = "bbb00012"
       let finished = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
       let sessionMap = ConcurrentDictionary<string, string>()
@@ -1012,7 +1019,7 @@ module ResetIsolation =
 
       let ctx =
         { FrictionStore = None
-          DiagnosticsChanged = result.DiagnosticsChanged
+          DiagnosticsChanged = (Event<Features.DiagnosticsStore.T>()).Publish
           StateChanged = None
           SessionOps = ops
           SessionMap = sessionMap
