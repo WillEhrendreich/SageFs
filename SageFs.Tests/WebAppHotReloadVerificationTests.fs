@@ -58,6 +58,41 @@ let private repoRoot () =
 let private fixtureDir () =
   Path.Combine(repoRoot (), "SageFs.Tests", "fixtures", "WebAppFixture")
 
+/// Build the fixture EXACTLY the way SageFs builds a session's project —
+/// `SessionBuild.buildArguments`, the product's own command, which always
+/// carries `-p:Optimize=false` — so the host loads what a real user's session
+/// loads.
+///
+/// Without this the shape matrix loaded whatever the TEST SUITE's own build
+/// left on disk, and `ProjectLoading.chooseFreshestConfigOutput` picks the
+/// newest config output. Building SageFs.Tests in Release (CI, the pre-push
+/// gate) builds this fixture Release as a side effect, so that was the one
+/// loaded — an FSC-optimized assembly. Read out of its IL: the Release
+/// `handlers@69` closure calls `String.Concat` directly, because FSC inlined
+/// `localTypeHandler`'s body into it; `handlers@71-2` calls nothing at all. A
+/// detour on `Shapes.localTypeHandler` then lands (the canary confirms it) on a
+/// method nothing calls, and the save is reported "Hot reloaded 1 of 1" while
+/// the app serves the old value. The Debug build of the same closures calls
+/// `Shapes.localTypeHandler` and friends by name.
+///
+/// That is not the path a user is on — SageFs forces `Optimize=false` for
+/// precisely this reason (see `SessionBuild.optimizationDisablingProperty`) —
+/// and which config the test got depended on build ORDER, which is why the
+/// matrix passed on one run and failed on the next. The remaining product gap,
+/// a user who builds Release by hand AFTER SageFs's build, is separate and is
+/// not what this gate claims to prove.
+let private buildFixtureAsSageFsDoes () =
+  let fDir = fixtureDir ()
+  let psi = ProcessStartInfo("dotnet")
+  for a in SessionBuild.buildArguments true (Path.Combine(fDir, "WebAppFixture.fsproj")) do
+    psi.ArgumentList.Add a
+  psi.WorkingDirectory <- fDir
+  psi.UseShellExecute <- false
+  use p = Process.Start psi
+  p.WaitForExit()
+  p.ExitCode
+  |> Expect.equal "the fixture must build with SageFs's own session-build command" 0
+
 /// Spawn the real host, read WORKER_PORT= from stdout, return (proc, baseUrl, proxy).
 /// The fixture project is passed EXPLICITLY via SAGEFS_SESSION_PROJECTS so
 /// the host never walks up to the repo root and loads SageFs.slnx (which
@@ -515,6 +550,7 @@ let webAppHotReloadVerificationTests =
     // relaxed to make it pass, and the day the gap closes this goes green
     // without being touched.
     Integration.hostCase "hot-reload shape matrix: a startup-captured handler table, one cell per F# binding shape" <| fun () ->
+      buildFixtureAsSageFsDoes ()
       let fDir = fixtureDir ()
       let shapesSource = Path.Combine(fDir, "Shapes.fs")
       Expect.isTrue "fixture Shapes.fs should exist" (File.Exists shapesSource)
