@@ -1138,3 +1138,62 @@ let blockingCallBudgets =
         |> Expect.isTrue
           (sprintf "'%s' now appears on %d test lines, over the %d budget — convert a test to testTask/testAsync + awaitable conditions (and ratchet the budget DOWN), never raise it" pattern actual budget)
   ]
+
+[<Tests>]
+let integrationSampleBuildCoverage =
+  // A host-integration suite that creates a real session on a sample project
+  // needs that sample BUILT before the suite runs — ci-pipeline.fsx's
+  // "build samples for integration suites" stage does it.
+  //
+  // Forgetting an entry there does not fail loudly. Warmup cannot find the
+  // DLL, the session faults, and the suite reports "session should reach
+  // Ready ... Actual value was false" — which reads like a product bug, not a
+  // missing build line. That cost a full CI cycle (stage #10, 6 errored) when
+  // McpAppRunOutcomeTests began sessioning on SageFs.Samples.ConsoleTicker
+  // while the stage still listed only WebappDatastar and FromCSharp.
+  //
+  // Deliberately conservative: any `*.fsproj` basename starting with
+  // "SageFs.Samples." named anywhere in a test file that registers a HOST
+  // integration suite must appear in ci-pipeline.fsx. A false positive costs
+  // one build line; a false negative costs a CI cycle, so it fails toward
+  // building. Path.Combine-assembled paths are covered too, because the
+  // `.fsproj` basename is a literal either way.
+  let pipelineText =
+    let path = System.IO.Path.Combine(repoRoot, "ci-pipeline.fsx")
+    match System.IO.File.Exists path with
+    | true -> System.IO.File.ReadAllText path
+    | false -> ""
+
+  /// Test sources that register a real-session host-integration suite.
+  let hostIntegrationTestFiles () =
+    let dir = System.IO.Path.Combine(repoRoot, "SageFs.Tests")
+    match System.IO.Directory.Exists dir with
+    | false -> []
+    | true ->
+      System.IO.Directory.GetFiles(dir, "*.fs", System.IO.SearchOption.TopDirectoryOnly)
+      |> Array.filter (fun p -> System.IO.File.ReadAllText(p).Contains "Integration.hostList")
+      |> Array.toList
+
+  let sampleProjectsNamedIn (path: string) =
+    System.Text.RegularExpressions.Regex.Matches(
+      System.IO.File.ReadAllText path,
+      @"SageFs\.Samples\.[A-Za-z0-9.]+\.fsproj")
+    |> Seq.map (fun m -> m.Value)
+    |> Seq.distinct
+    |> Seq.toList
+
+  testList "Architecture — CI builds every sample an integration suite sessions on" [
+    for file in hostIntegrationTestFiles () do
+      for sample in sampleProjectsNamedIn file do
+        let testFile = System.IO.Path.GetFileName file
+        testCase
+          (sprintf
+            "WHY — %s names %s, so ci-pipeline.fsx must build it or the session silently faults instead of reaching Ready"
+            testFile sample)
+        <| fun _ ->
+          pipelineText.Contains sample
+          |> Expect.isTrue
+            (sprintf
+              "%s creates a host-integration session on %s, but ci-pipeline.fsx's \"build samples for integration suites\" stage never builds it. An unbuilt sample makes warmup fault with \"Not all DLLs are found\" and the suite reports that the session never reached Ready. Add: run \"dotnet build samples/**/%s -c Release --nologo\""
+              testFile sample sample)
+  ]

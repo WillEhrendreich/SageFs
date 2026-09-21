@@ -239,8 +239,17 @@ pipeline "sagefs" {
 
   stage "build samples for integration suites" {
     // The HTTP API integration suites create real sessions on these samples.
+    //
+    // A session on an UNBUILT sample does not fail loudly — it warms up,
+    // cannot find the DLL, and faults, so the test reports "session should
+    // reach Ready ... Actual value was false". That is what a missing entry
+    // here looks like from the outside, and it cost a full CI cycle when
+    // McpAppRunOutcomeTests started sessioning on ConsoleTicker without one.
+    // `Architecture — every sample an integration suite sessions on is built
+    // by CI` now fails the fast local suite instead of waiting for CI.
     run "dotnet build samples/demos/SageFs.Samples.WebappDatastar/SageFs.Samples.WebappDatastar.fsproj -c Release --nologo"
     run "dotnet build samples/from-csharp/SageFs.Samples.FromCSharp/SageFs.Samples.FromCSharp.fsproj -c Release --nologo"
+    run "dotnet build samples/demos/SageFs.Samples.ConsoleTicker/SageFs.Samples.ConsoleTicker.fsproj -c Release --nologo"
   }
 
   stage "vscode extension compile" {
