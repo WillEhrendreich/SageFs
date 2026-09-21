@@ -19,6 +19,7 @@ let hostSourceNames =
   [ "FsiHost.fsproj"
     "Measures.fs"
     "Utils.fs"
+    "FsiNaming.fs"
     "Timeouts.fs"
     "Instrumentation.fs"
     "DirectoryConfigTypes.fs"

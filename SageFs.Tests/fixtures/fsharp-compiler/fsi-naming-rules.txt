@@ -1,0 +1,100 @@
+UPSTREAM: https://github.com/dotnet/fsharp
+COMMIT:   cdb9dc5e5
+LICENSE:  MIT
+
+  Copyright (c) Microsoft Corporation.
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+WHY THIS FILE EXISTS
+  SageFs reads FSI's emitted topology back through reflection and has to answer
+  "is this path segment FSI's submission wrapper?". The compiler has an exact
+  rule for that; SageFs used to have three different string heuristics. The
+  excerpts below are the upstream rules SageFs.Core/FsiNaming.fs MIRRORS, quoted
+  verbatim so the mirror is reviewable and so FsiNamingContractTests can pin the
+  mirror against the text rather than against a comment someone might edit.
+
+  Only the PREFIX CONSTANT is referenced live, out of the FSharp.Compiler.Service
+  package SageFs.Core already depends on
+  (FSharp.Compiler.Syntax.PrettyNaming.FsiDynamicModulePrefix, public in
+  PrettyNaming.fsi). Nothing here is compiled; nothing is bulk-copied.
+
+REFRESH PROCEDURE
+  Re-clone/pull dotnet/fsharp, re-extract the excerpts below at their new line
+  numbers, update COMMIT above, and re-run FsiNamingContractTests. If an excerpt
+  changed meaning, FsiNaming.fs changes with it — never the other way around.
+
+--- BEGIN EXCERPT prefix-constant ---
+src/Compiler/SyntaxTree/PrettyNaming.fs:1096-1097
+
+/// The prefix of the names used for the fake namespace path added to all dynamic code entries in FSI.EXE
+let FsiDynamicModulePrefix = "FSI_"
+--- END EXCERPT prefix-constant ---
+
+--- BEGIN EXCERPT prefix-constant-is-public ---
+src/Compiler/SyntaxTree/PrettyNaming.fsi:272-273
+
+/// The prefix of the names used for the fake namespace path added to all dynamic code entries in FSI.EXE
+val FsiDynamicModulePrefix: string
+--- END EXCERPT prefix-constant-is-public ---
+
+--- BEGIN EXCERPT segment-predicate ---
+src/Compiler/Checking/CheckDeclarations.fs:272-281
+
+/// Try to take the "FSI_NNN" prefix off a namespace path
+let TryStripPrefixPath (g: TcGlobals) (enclosingNamespacePath: Ident list) =
+    match enclosingNamespacePath with
+    | p :: rest when
+        g.isInteractive &&
+        not (isNil rest) &&
+        p.idText.StartsWithOrdinal FsiDynamicModulePrefix &&
+        p.idText[FsiDynamicModulePrefix.Length..] |> String.forall Char.IsDigit
+        -> Some(p, rest)
+    | _ -> None
+--- END EXCERPT segment-predicate ---
+
+--- BEGIN EXCERPT head-only-strip ---
+src/Compiler/Checking/CheckDeclarations.fs:734-740
+
+    let IsPartiallyQualifiedNamespace (modref: ModuleOrNamespaceRef) =
+        let (CompPath(_, _, p)) = modref.CompilationPath
+        // Bug FSharp 1.0 3274: FSI paths don't count when determining this warning
+        let p =
+            match p with
+            | [] -> []
+            | (h, _) :: t -> if h.StartsWithOrdinal FsiDynamicModulePrefix then t else p
+--- END EXCERPT head-only-strip ---
+
+--- BEGIN EXCERPT fragment-format ---
+src/Compiler/Interactive/fsi.fs:2395-2400
+
+    let nextFragmentId () =
+        fragmentId <- fragmentId + 1
+        $"%04d{fragmentId}"
+
+    let mkFragmentPath m fragmentId =
+        [ mkSynId m (FsiDynamicModulePrefix + fragmentId ()) ]
+--- END EXCERPT fragment-format ---
+
+--- BEGIN EXCERPT fragment-format-peek ---
+src/Compiler/Interactive/fsi.fs:3214-3215
+
+    member _.PeekNextFragmentPath() =
+        FsiDynamicModulePrefix + $"%04d{fragmentId + 1}"
+--- END EXCERPT fragment-format-peek ---

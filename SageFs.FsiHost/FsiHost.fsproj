@@ -29,6 +29,12 @@
       <!-- The agent (hot reload + live testing) that lives beside the user's code. Same source files SageFs.Core compiles. -->
     <Compile Include="Measures.fs" />
     <Compile Include="Utils.fs" />
+    <!-- FSI's own naming rules, mirrored from the compiler source. The host's
+         LiveTestingExecutors normalizes a re-eval'd test's reflected type name
+         with these, so this file must stay in the host closure — leaving it out
+         makes the host fail to COMPILE, which surfaces only as
+         `HostUnavailable` and a silent fall back to default config. -->
+    <Compile Include="FsiNaming.fs" />
     <Compile Include="Timeouts.fs" />
     <Compile Include="Instrumentation.fs" />
     <Compile Include="DirectoryConfigTypes.fs" />

@@ -24,6 +24,7 @@
         <Compile Include="ModelSnapshot.fs" />
         <Compile Include="TimeTravel.fs" />
         <Compile Include="Utils.fs" />
+        <Compile Include="FsiNaming.fs" />
         <Compile Include="NativeResolution.fs" />
         <Compile Include="AppOutput.fs" />
         <Compile Include="Checkout.fs" />
@@ -59,6 +60,7 @@
         <EmbeddedResource Include="../SageFs.FsiHost/FsiHost.fsproj" LogicalName="FsiHost/FsiHost.fsproj" />
         <EmbeddedResource Include="Measures.fs" LogicalName="FsiHost/Measures.fs" />
         <EmbeddedResource Include="Utils.fs" LogicalName="FsiHost/Utils.fs" />
+        <EmbeddedResource Include="FsiNaming.fs" LogicalName="FsiHost/FsiNaming.fs" />
         <EmbeddedResource Include="Timeouts.fs" LogicalName="FsiHost/Timeouts.fs" />
         <EmbeddedResource Include="Instrumentation.fs" LogicalName="FsiHost/Instrumentation.fs" />
         <EmbeddedResource Include="DirectoryConfigTypes.fs" LogicalName="FsiHost/DirectoryConfigTypes.fs" />

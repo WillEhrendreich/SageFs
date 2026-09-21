@@ -134,27 +134,51 @@ module AttributeDiscovery =
       |> List.exists (fun testAttr ->
         attrName = testAttr || attrName = sprintf "%sAttribute" testAttr))
 
-  /// FSI wraps a whole-file eval's types in an incrementing `FSI_000N+` container
+  /// FSI wraps a whole-file eval's types in an incrementing `FSI_NNNN` container
   /// and renders the nested-module path with `+` separators, so an FSI-eval'd
-  /// test's `DeclaringType.FullName` (`FSI_5+A+B+C`) never matches the compiled
-  /// assembly's dotted name (`A.B.C`). Normalize both to the same dotted form so
-  /// a re-eval'd test shares identity with its compiled twin and the discovery
-  /// merge overrides instead of double-counting. A compiled name has no `FSI_`
-  /// prefix and no `+`, so this is a no-op there.
+  /// test's `DeclaringType.FullName` (`FSI_0005+A+B+C`) never matches the
+  /// compiled assembly's dotted name (`A.B.C`). Normalize both to the same dotted
+  /// form so a re-eval'd test shares identity with its compiled twin and the
+  /// discovery merge overrides instead of double-counting. A compiled name has no
+  /// wrapper and no `+`, so this is a no-op there.
+  ///
+  /// Chesterton's fence — this delegates to `FsiNaming` and must NOT go back to
+  /// the `Regex "^FSI_\d+\+"` it replaced. That pattern required the wrapper to be
+  /// followed by the NESTED-TYPE separator, which is only how FSI spells a
+  /// `module`-declared file. A `namespace Foo.Bar` file's types come back as
+  /// top-level types named `FSI_0042.Foo.Bar.Greeting` — DOTTED — so the regex
+  /// matched nothing, the wrapper survived normalization, and every test in a
+  /// namespace-declared file got a different `TestId` from its compiled twin:
+  /// `TestDiscoveryMerge.merge` then appended it as dynamic-only instead of
+  /// overriding, and the same test was counted twice. `FsiNaming` uses the
+  /// compiler's own rule (`CheckDeclarations.TryStripPrefixPath`) over BOTH
+  /// separators, so both spellings normalize to the compiled name.
   let normalizeTypeFullName (name: string) : string =
-    match name with
-    | null -> ""
-    | n -> System.Text.RegularExpressions.Regex.Replace(n, @"^FSI_\d+\+", "").Replace("+", ".")
+    SageFs.FsiNaming.normalizeReflectionFullName name
 
-  let toTestCase (framework: TestFramework) (category: TestCategory) (mi: MethodInfo) : TestCase =
-    let fullName = sprintf "%s.%s" (normalizeTypeFullName mi.DeclaringType.FullName) mi.Name
+  /// The PURE core of `toTestCase`: every decision that fixes a discovered
+  /// test's IDENTITY, given only the two strings reflection supplies. Split out
+  /// from the `MethodInfo` so the identity rule can be driven directly over a
+  /// model of FSI's emit topology (`SageFs.Simulation.FsiDiscoveryIdentitySim`)
+  /// instead of only through a real host that has to be spawned, warmed and
+  /// re-evaluated before it can disagree with you.
+  let testCaseOfReflectedName
+    (framework: TestFramework)
+    (category: TestCategory)
+    (declaringTypeFullName: string)
+    (methodName: string)
+    : TestCase =
+    let fullName = sprintf "%s.%s" (normalizeTypeFullName declaringTypeFullName) methodName
     { Id = TestId.create fullName framework
       FullName = fullName
-      DisplayName = mi.Name
+      DisplayName = methodName
       Origin = TestOrigin.ReflectionOnly
       Labels = []
       Framework = framework
       Category = category }
+
+  let toTestCase (framework: TestFramework) (category: TestCategory) (mi: MethodInfo) : TestCase =
+    testCaseOfReflectedName framework category mi.DeclaringType.FullName mi.Name
 
   /// Returns true if the method carries an annotation from the given theory attribute names.
   /// Checks both bare name and "Attribute"-suffixed form (e.g. "Theory" matches "TheoryAttribute").

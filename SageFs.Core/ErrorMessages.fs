@@ -104,12 +104,30 @@ module ErrorMessages =
   /// Path fragments that mark a stack frame as framework/runtime noise rather
   /// than the user's own code — used to find the first USER source frame in a
   /// runtime exception's stack (roast UX-3). Matched case-insensitively.
+  ///
+  /// FSI's own submission wrappers are NOT in this list: they are recognized by
+  /// `FsiNaming.mentionsDynamicModule`, which is the compiler's rule rather than
+  /// a substring. The literal `"fsi_"` that used to sit here matched any text
+  /// containing those four characters in any case — a user's own
+  /// `MyFSI_Helpers.fs` frame was classified as framework noise and the summary
+  /// then reported no user frame at all. `<StartupCode$FSI-ASSEMBLY>` carries no
+  /// digits after the prefix (the single-assembly name FSI uses under
+  /// `--multiemit-`), so that spelling stays here as a literal.
   let private frameworkFrameFragments =
     [| "/src/fsharp/"; "\\src\\fsharp\\"        // FSharp.Core / F# compiler build paths
        "/_work/"; "\\_work\\"; "/_/src/"          // dotnet CI build-machine paths
        "microsoft.fsharp."; "system."; "microsoft."
-       "fsi_"; "startupcode$fsi"                   // FSI dynamic wrappers
+       "startupcode$fsi"                          // FSI's startup-code wrapper type
        "/expecto/"; "\\expecto\\" |]
+
+  /// Is this stack-frame line framework/runtime noise? ONE predicate, so the
+  /// UX-3 summary and the UX-5 output-pane fold can never drift on what counts
+  /// as "the user's own code". `raw` is the untouched line (FSI's wrapper names
+  /// are matched case-sensitively, exactly as the compiler spells them) and
+  /// `lower` its lowercased form (the path fragments are case-insensitive).
+  let private isFrameworkFrame (raw: string) (lower: string) =
+    (frameworkFrameFragments |> Array.exists lower.Contains)
+    || SageFs.FsiNaming.mentionsDynamicModule raw
 
   /// The first "at ... in <file>:line N" frame whose file is the user's own
   /// source (a real .fs/.fsx path, not a framework/FSI frame), formatted as
@@ -125,7 +143,7 @@ module ErrorMessages =
         let lower = line.ToLowerInvariant()
         let looksLikeSourceFrame =
           line.Contains(" in ") && (lower.Contains(".fs:line ") || lower.Contains(".fsx:line "))
-        match looksLikeSourceFrame && not (frameworkFrameFragments |> Array.exists lower.Contains) with
+        match looksLikeSourceFrame && not (isFrameworkFrame line lower) with
         | false -> None
         | true ->
           let afterIn = line.Substring(line.IndexOf(" in ") + 4)
@@ -169,7 +187,7 @@ module ErrorMessages =
 
   /// Classify one line of output text (roast UX-5). A "frame" line is an
   /// `at ... in File.fs:line N` stack-trace line — it is a `FrameworkFrame`
-  /// exactly when it matches `frameworkFrameFragments`, the SAME source of
+  /// exactly when it matches `isFrameworkFrame`, the SAME source of
   /// truth `firstUserSourceFrame` uses, so the fold and the UX-3 summary can
   /// never drift on what counts as "the user's own code"; otherwise it is a
   /// `UserFrame`. Failing that, a line naming Expecto's own assertion
@@ -180,7 +198,7 @@ module ErrorMessages =
     let looksLikeFrame =
       line.Contains(" in ") && (lower.Contains(".fs:line ") || lower.Contains(".fsx:line "))
     match () with
-    | _ when looksLikeFrame && (frameworkFrameFragments |> Array.exists lower.Contains) ->
+    | _ when looksLikeFrame && isFrameworkFrame line lower ->
       OutputFrameKind.FrameworkFrame
     | _ when looksLikeFrame -> OutputFrameKind.UserFrame
     | _ when assertionFragments |> Array.exists lower.Contains -> OutputFrameKind.Assertion
