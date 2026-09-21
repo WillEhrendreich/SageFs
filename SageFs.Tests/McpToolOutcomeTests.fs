@@ -133,27 +133,120 @@ let private hasIntPropertyAtLeast (propertyName: string) (minValue: int) (text: 
     doc.RootElement.GetProperty(propertyName).GetInt32() >= minValue
   with _ -> false
 
-[<Tests>]
-let mcpToolOutcomeTests =
-  Integration.hostList "MCP tool outcome gates" [
-    testTask "WHY — list_tests, explain_test_failure and diagnose report what live testing actually found (Gap D: the documented agent read-path had zero tool-level callers)" {
-      let originalSample = File.ReadAllText samplePath
-      let canonicalSubtract = "let subtract a b = a - b"
-      let brokenSubtract = "let subtract a b = a - b + 1"
-      let baselineSample = originalSample.Replace(brokenSubtract, canonicalSubtract)
-      let editedSample = baselineSample.Replace(canonicalSubtract, brokenSubtract)
+/// The tail of the gate — coverage_intel and suggest_repair.
+///
+/// Split out of `runToolOutcomeBody` at a seam where NOTHING crosses (verified:
+/// no binding from the first half is read here). The split is not cosmetic.
+/// With the whole gate in one `task`, a RELEASE build emitted IL the runtime
+/// rejected — `System.InvalidProgramException` out of `MoveNext`, while Debug
+/// passed the entire time, which is how this test could be written green and
+/// never once pass in the pipeline. Removing the CE's try/finally moved the bad
+/// IL but did not remove it, so the trigger is the SIZE of the generated state
+/// machine. Keep these halves small; do not merge them back.
+let private runToolOutcomeTail
+  (client: McpClient)
+  (httpClient: Net.Http.HttpClient)
+  : Task<unit> =
+  task {
+        // ── coverage_intel: composes failure narratives + IL instrumentation
+        //    bitmaps + the dependency graph into per-failure coverage
+        //    intelligence. The outcome-gate sweep left this ungated because
+        //    it "could not confirm [instrumentation maps] populate for a
+        //    minimal fixture." Live-verified against this EXACT fixture:
+        //    they do — a real 9-branch instrumentation map for Sample.fs,
+        //    reported with a DiagnosticBlindSpot verdict at 0% coverage for
+        //    the test that just failed. Raw observed shape:
+        //    [{"TestName":"subtract computes the difference","Verdict":
+        //    "DiagnosticBlindSpot","CoveragePercent":0,"TotalBranches":9,
+        //    "BlindSpots":[...9 entries...],"CausalSymbols":[...,
+        //    "SageFs.Tests.Fixtures.McpToolOutcome.Sample.subtract",...]}] ──
+        let! coverageRaw =
+          pollToolUntil client "coverage_intel" [] (TimeSpan.FromSeconds 15.0) (fun raw ->
+            try JsonDocument.Parse(raw: string).RootElement.GetArrayLength() > 0
+            with _ -> false)
+        let coverageDoc = JsonDocument.Parse(coverageRaw: string)
+        let coverageReports = coverageDoc.RootElement.EnumerateArray() |> Seq.toList
+        coverageReports
+        |> Expect.isNonEmpty (sprintf "coverage_intel should report coverage for at least the one failing test. Raw: %s" coverageRaw)
 
-      (baselineSample <> editedSample)
-      |> Expect.isTrue "fixture mutation should change Sample.fs"
+        let subtractCoverage =
+          coverageReports
+          |> List.tryFind (fun r -> r.GetProperty("TestName").GetString() = "subtract computes the difference")
+        subtractCoverage
+        |> Expect.isSome (sprintf "coverage_intel should report on the test that just failed. Raw: %s" coverageRaw)
+        let subtractReport = subtractCoverage.Value
 
-      File.WriteAllText(samplePath, baselineSample, Http.utf8NoBom)
-      Http.runProcessExpectSuccess "dotnet" fixtureDir [ "build"; fixtureProject; "--nologo"; "-v:q" ]
+        (subtractReport.GetProperty("TotalBranches").GetInt32(), 0)
+        |> Expect.isGreaterThan "coverage_intel should carry a real IL-instrumented branch count for this compiled fixture, not zero"
 
-      let port = Http.reserveLoopbackPort (Some (38900 + Random().Next(100)))
-      let! proc, httpClient = Http.startDaemonWithArgs port fixtureDir [ "--no-resume" ]
+        subtractReport.GetProperty("BlindSpots").EnumerateArray() |> Seq.toList
+        |> Expect.isNonEmpty "coverage_intel should list uncovered branch locations for a test with 0% coverage"
 
-      try
-        use! client = connect port
+        subtractReport.GetProperty("CausalSymbols").EnumerateArray()
+        |> Seq.map (fun s -> s.GetString())
+        |> Seq.exists (fun s -> s.Contains "subtract")
+        |> Expect.isTrue (sprintf "coverage_intel's causal symbols should name the function that actually changed. Raw: %s" coverageRaw)
+        coverageDoc.Dispose()
+
+        // ── suggest_repair: composes explain_test_failure → causal symbol →
+        //    ripple plan. Live-verified real, non-vacuous output for this
+        //    fixture: TestName, CausalChanges and a Suggestion are always
+        //    populated. RipplePlan, however, is honestly confirmed NULL here
+        //    — not a bug, a documented dependency: it only resolves when the
+        //    primary causal symbol is a live FSI binding
+        //    (`state.EvalHistory` / `scope.ActiveBindings`, Mcp.fs's
+        //    suggestRepair), and this session — created via create_session
+        //    workflow=livetesting against a COMPILED project — never ran
+        //    send_fsharp_code, so it carries no eval history at all. The tool
+        //    correctly falls back to its documented "not in the current
+        //    session bindings, re-evaluate the cell" message instead of
+        //    crashing or returning nothing. Raw observed shape:
+        //    {"TestName":"subtract computes the difference","PrimarySymbol":
+        //    "Expect","RipplePlan":null,"Suggestion":"'Expect' is the likely
+        //    cause, but it's not in the current session bindings. ..."} ──
+        // No polling needed: explain_test_failure/diagnose above already
+        // confirmed (via their own polls) that the failure narrative for
+        // this test exists — suggest_repair reads the SAME cached
+        // narrative, so its data is ready on the first call.
+        let! repairRaw = callTool client "suggest_repair" [ "test_name", box "subtract computes the difference" ]
+        let repairDoc = JsonDocument.Parse(repairRaw: string)
+        let repairRoot = repairDoc.RootElement
+        repairRoot.GetProperty("TestName").GetString()
+        |> Expect.equal (sprintf "suggest_repair should name the test it was asked about. Raw: %s" repairRaw) "subtract computes the difference"
+        repairRoot.GetProperty("CausalChanges").EnumerateArray() |> Seq.toList
+        |> Expect.isNonEmpty (sprintf "suggest_repair should carry the same causal changes explain_test_failure reported. Raw: %s" repairRaw)
+        repairRoot.GetProperty("Suggestion").GetString()
+        |> Expect.isNotEmpty (sprintf "suggest_repair should always produce a human-readable suggestion, even without a ripple plan. Raw: %s" repairRaw)
+        repairRoot.GetProperty("RipplePlan").ValueKind
+        |> Expect.equal
+             "RipplePlan is honestly null for a compiled-project session with no FSI eval history — see this block's header comment"
+             JsonValueKind.Null
+        repairDoc.Dispose()
+  }
+
+/// The gate's assertions, with NO try/finally anywhere in the computation
+/// expression — deliberately.
+///
+/// This test never once passed in the pipeline: under a RELEASE build it died
+/// with `System.InvalidProgramException: Common Language Runtime detected an
+/// invalid program`, while passing in Debug. Every stack trace of it ran
+/// through resumable try/finally compensation — first
+/// `ResumableCode.TryFinallyAsyncDynamic`, and then, after the dynamic
+/// fallback was ruled out by moving off Expecto's builder onto FSharp.Core's,
+/// through the STATIC state machine's own `MoveNext`. An await inside a
+/// `try/finally` is async compensation either way, and that is what the
+/// optimizer miscompiles here.
+///
+/// So the compensation is removed rather than relocated: this function holds
+/// the assertions and nothing else, and `runToolOutcomeGate` does cleanup
+/// unconditionally after observing the outcome through a Task-level
+/// continuation. The cleanup guarantee is identical; only the IL differs.
+let private runToolOutcomeBody
+  (client: McpClient)
+  (httpClient: Net.Http.HttpClient)
+  (editedSample: string)
+  : Task<unit> =
+  task {
 
         // Created via the MCP create_session TOOL, not the REST endpoint,
         // with workflow="livetesting". Verified live and necessary: a
@@ -312,83 +405,53 @@ let mcpToolOutcomeTests =
             "list_tests should report the 3 tests /api/live-testing/status confirms are discovered and passing for this session — CONFIRMED LIVE DEFECT, see this test's header. Raw: %s"
             listAllRaw)
 
-        // ── coverage_intel: composes failure narratives + IL instrumentation
-        //    bitmaps + the dependency graph into per-failure coverage
-        //    intelligence. The outcome-gate sweep left this ungated because
-        //    it "could not confirm [instrumentation maps] populate for a
-        //    minimal fixture." Live-verified against this EXACT fixture:
-        //    they do — a real 9-branch instrumentation map for Sample.fs,
-        //    reported with a DiagnosticBlindSpot verdict at 0% coverage for
-        //    the test that just failed. Raw observed shape:
-        //    [{"TestName":"subtract computes the difference","Verdict":
-        //    "DiagnosticBlindSpot","CoveragePercent":0,"TotalBranches":9,
-        //    "BlindSpots":[...9 entries...],"CausalSymbols":[...,
-        //    "SageFs.Tests.Fixtures.McpToolOutcome.Sample.subtract",...]}] ──
-        let! coverageRaw =
-          pollToolUntil client "coverage_intel" [] (TimeSpan.FromSeconds 15.0) (fun raw ->
-            try JsonDocument.Parse(raw: string).RootElement.GetArrayLength() > 0
-            with _ -> false)
-        let coverageDoc = JsonDocument.Parse(coverageRaw: string)
-        let coverageReports = coverageDoc.RootElement.EnumerateArray() |> Seq.toList
-        coverageReports
-        |> Expect.isNonEmpty (sprintf "coverage_intel should report coverage for at least the one failing test. Raw: %s" coverageRaw)
+        do! runToolOutcomeTail client httpClient
+  }
 
-        let subtractCoverage =
-          coverageReports
-          |> List.tryFind (fun r -> r.GetProperty("TestName").GetString() = "subtract computes the difference")
-        subtractCoverage
-        |> Expect.isSome (sprintf "coverage_intel should report on the test that just failed. Raw: %s" coverageRaw)
-        let subtractReport = subtractCoverage.Value
+let private runToolOutcomeGate () : Task<unit> =
+  task {
+      let originalSample = File.ReadAllText samplePath
+      let canonicalSubtract = "let subtract a b = a - b"
+      let brokenSubtract = "let subtract a b = a - b + 1"
+      let baselineSample = originalSample.Replace(brokenSubtract, canonicalSubtract)
+      let editedSample = baselineSample.Replace(canonicalSubtract, brokenSubtract)
 
-        (subtractReport.GetProperty("TotalBranches").GetInt32(), 0)
-        |> Expect.isGreaterThan "coverage_intel should carry a real IL-instrumented branch count for this compiled fixture, not zero"
+      (baselineSample <> editedSample)
+      |> Expect.isTrue "fixture mutation should change Sample.fs"
 
-        subtractReport.GetProperty("BlindSpots").EnumerateArray() |> Seq.toList
-        |> Expect.isNonEmpty "coverage_intel should list uncovered branch locations for a test with 0% coverage"
+      File.WriteAllText(samplePath, baselineSample, Http.utf8NoBom)
+      Http.runProcessExpectSuccess "dotnet" fixtureDir [ "build"; fixtureProject; "--nologo"; "-v:q" ]
 
-        subtractReport.GetProperty("CausalSymbols").EnumerateArray()
-        |> Seq.map (fun s -> s.GetString())
-        |> Seq.exists (fun s -> s.Contains "subtract")
-        |> Expect.isTrue (sprintf "coverage_intel's causal symbols should name the function that actually changed. Raw: %s" coverageRaw)
-        coverageDoc.Dispose()
+      let port = Http.reserveLoopbackPort (Some (38900 + Random().Next(100)))
+      let! proc, httpClient = Http.startDaemonWithArgs port fixtureDir [ "--no-resume" ]
+      let! client = connect port
 
-        // ── suggest_repair: composes explain_test_failure → causal symbol →
-        //    ripple plan. Live-verified real, non-vacuous output for this
-        //    fixture: TestName, CausalChanges and a Suggestion are always
-        //    populated. RipplePlan, however, is honestly confirmed NULL here
-        //    — not a bug, a documented dependency: it only resolves when the
-        //    primary causal symbol is a live FSI binding
-        //    (`state.EvalHistory` / `scope.ActiveBindings`, Mcp.fs's
-        //    suggestRepair), and this session — created via create_session
-        //    workflow=livetesting against a COMPILED project — never ran
-        //    send_fsharp_code, so it carries no eval history at all. The tool
-        //    correctly falls back to its documented "not in the current
-        //    session bindings, re-evaluate the cell" message instead of
-        //    crashing or returning nothing. Raw observed shape:
-        //    {"TestName":"subtract computes the difference","PrimarySymbol":
-        //    "Expect","RipplePlan":null,"Suggestion":"'Expect' is the likely
-        //    cause, but it's not in the current session bindings. ..."} ──
-        // No polling needed: explain_test_failure/diagnose above already
-        // confirmed (via their own polls) that the failure narrative for
-        // this test exists — suggest_repair reads the SAME cached
-        // narrative, so its data is ready on the first call.
-        let! repairRaw = callTool client "suggest_repair" [ "test_name", box "subtract computes the difference" ]
-        let repairDoc = JsonDocument.Parse(repairRaw: string)
-        let repairRoot = repairDoc.RootElement
-        repairRoot.GetProperty("TestName").GetString()
-        |> Expect.equal (sprintf "suggest_repair should name the test it was asked about. Raw: %s" repairRaw) "subtract computes the difference"
-        repairRoot.GetProperty("CausalChanges").EnumerateArray() |> Seq.toList
-        |> Expect.isNonEmpty (sprintf "suggest_repair should carry the same causal changes explain_test_failure reported. Raw: %s" repairRaw)
-        repairRoot.GetProperty("Suggestion").GetString()
-        |> Expect.isNotEmpty (sprintf "suggest_repair should always produce a human-readable suggestion, even without a ripple plan. Raw: %s" repairRaw)
-        repairRoot.GetProperty("RipplePlan").ValueKind
-        |> Expect.equal
-             "RipplePlan is honestly null for a compiled-project session with no FSI eval history — see this block's header comment"
-             JsonValueKind.Null
-        repairDoc.Dispose()
-      finally
-        try File.WriteAllText(samplePath, originalSample, Http.utf8NoBom) with _ -> ()
-        httpClient.Dispose()
-        Http.killDaemon proc
+      // Observe the outcome WITHOUT a CE-level try/finally (see the comment on
+      // runToolOutcomeBody). ContinueWith never faults, so the cleanup below is
+      // always reached and the original exception is re-raised after it.
+      let! outcome =
+        (runToolOutcomeBody client httpClient editedSample)
+          .ContinueWith(fun (t: Task<unit>) ->
+            match t.IsFaulted with
+            | true -> Error(t.Exception :> exn)
+            | false -> Ok())
+
+      try File.WriteAllText(samplePath, originalSample, Http.utf8NoBom) with _ -> ()
+      // McpClient is IAsyncDisposable only, and killing the daemon on the next
+      // line closes the transport it is attached to; blocking on the ValueTask
+      // here is the banned, ratcheted pattern.
+      try (client :> IAsyncDisposable).DisposeAsync() |> ignore with _ -> ()
+      httpClient.Dispose()
+      Http.killDaemon proc
+
+      match outcome with
+      | Error e -> raise e
+      | Ok() -> ()
+  }
+[<Tests>]
+let mcpToolOutcomeTests =
+  Integration.hostList "MCP tool outcome gates" [
+    testTask "WHY — list_tests, explain_test_failure and diagnose report what live testing actually found (Gap D: the documented agent read-path had zero tool-level callers)" {
+      do! runToolOutcomeGate ()
     }
   ]
