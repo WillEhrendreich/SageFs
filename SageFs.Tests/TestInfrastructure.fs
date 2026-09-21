@@ -222,8 +222,7 @@ module Integration =
   /// "every tier is invoked by CI" structural test — so "dispatched" and
   /// "invoked" are checked against the same set rather than two hand copies.
   let dispatchedEntryPoints =
-    [ "--integration-browser"; "--integration-hr"; "--integration-lt"; "--integration-disconnect"
-      "--integration-shapes" ]
+    [ "--integration-browser"; "--integration-hr"; "--integration-lt"; "--integration-disconnect" ]
 
   /// The tree a plain default run (`--summary`, no `--all`/`--integration`)
   /// actually executes: every [<Tests>] value in this assembly, minus the

@@ -89,6 +89,16 @@ let ciWiringTests =
       |> Set.toList
       |> Expect.isEmpty "registered tiers no CI stage invokes (a dark gate: written, registered, never run)"
 
+    // The reverse dark gate: an entry point that dispatches, and that CI
+    // invokes, but that no suite registers against runs NOTHING. That is what
+    // `--integration-shapes` became once the shape matrix moved into the host
+    // suite — and the first trust-ledger run reported it as NothingRan.
+    testCase "every dispatched entry point has registered suites to run" <| fun _ ->
+      let registered = Integration.dedicatedEntryPoints () |> Set.ofList
+      Set.difference (Set.ofList Integration.dispatchedEntryPoints) registered
+      |> Set.toList
+      |> Expect.isEmpty "dispatched entry points with no registered suite (they would run zero tests)"
+
     testCase "CI invokes no tier the test assembly cannot dispatch" <| fun _ ->
       let dispatchable = Set.union alwaysPresent (Set.ofList Integration.dispatchedEntryPoints)
       Set.difference (invokedTiers ()) dispatchable

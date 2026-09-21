@@ -29,9 +29,8 @@
 //   * whenCmdArg "ci"      — the mutation-score gate (too slow for the fast local
 //                            loop AGENTS.md asks for) and every real-browser
 //                            journey (dashboard, hot-reload, live-testing,
-//                            disconnect-indicator) plus the hot-reload shape
-//                            matrix — CI-gated so the fast local loop never
-//                            fetches a browser.
+//                            disconnect-indicator) — CI-gated so the fast
+//                            local loop never fetches a browser.
 //   * always, after every test stage — the "trust report": one table of every
 //     tier's registered/ran/verdict; the one place a red test tier fails the run.
 //   * whenCmdArg "release" — pack the shippable bundle + write release-manifest.
@@ -499,18 +498,6 @@ pipeline "sagefs" {
     // A red tier must not hide the tiers after it — the trust report fails the run.
     continueStageOnFailure
     run (testTier "--integration-disconnect --summary")
-  }
-
-  stage "hot-reload shape matrix" {
-    // Every declaration shape a user can save (function body, member, lambda
-    // value, mutable, ...) through a real host, asserting the reload CLAIM
-    // matches the OBSERVED change. Registered and dispatched for weeks but
-    // invoked by no stage — `TrustSignal CI wiring` now fails the fast suite
-    // for exactly that.
-    whenCmdArg "ci"
-    timeoutForStep 900
-    continueStageOnFailure
-    run (testTier "--integration-shapes --summary")
   }
 
   stage "trust report" {

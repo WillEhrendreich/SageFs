@@ -259,28 +259,6 @@ let main argv =
     result
   | false ->
 
-  // Run the hot-reload SHAPE MATRIX. Its own entry point because it builds a
-  // dedicated fixture the way SageFs builds it; it was once kept out of the
-  // pipeline while 4 of its 7 cells failed. All 7 now reload, so CI invokes it
-  // like every other tier (the "every tier is invoked by CI" test enforces that).
-  let isIntegrationShapes = argv |> Array.exists (fun a -> a = "--integration-shapes")
-  match isIntegrationShapes with
-  | true ->
-    let shapesArgv = argv |> Array.filter (fun a -> a <> "--integration-shapes")
-    let shapeTests =
-      testSequenced (
-        testList
-          "Integration (shapes)"
-          (SageFs.Tests.TestInfrastructure.Integration.registered ()
-           |> List.choose (fun (runner, test) ->
-             match runner with
-             | SageFs.Tests.TestInfrastructure.Integration.Runner.Dedicated "--integration-shapes" -> Some test
-             | _ -> None)))
-    let result = SageFs.Tests.TestInfrastructure.TrustSignal.run "--integration-shapes" shapesArgv shapeTests
-    Environment.Exit result
-    result
-  | false ->
-
   // Fail closed the other direction from unregisteredTagged above: a suite
   // registered as Integration.Dedicated "--some-flag" but never given a
   // dispatch branch in this file would otherwise run NOWHERE — in CI or

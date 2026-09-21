@@ -524,38 +524,13 @@ let webAppHotReloadVerificationTests =
         try proc.Kill(entireProcessTree = true) with _ -> ()
         try proc.Dispose() with _ -> ()
 
-    // ── NOT in the main pipeline, and this is a statement about the PRODUCT,
-    //    not about this test. ──────────────────────────────────────────────
-    //
-    // Run it with `SageFs.Tests.dll --integration-shapes`. Measured on
-    // 2026-09-20, against a real host, with every save reaching the worker and
-    // every verdict arriving on the wire — 3 of the 7 cells hold and 4 do not:
-    //
-    //   localType  MUST reload  → worker says {"type":"reload","outcome":"Patched",
-    //                             "patched":1,"considered":1}; the running app
-    //                             still serves "A".
-    //   plain      MUST reload  → same: Patched 1 of 1, still serves "A".
-    //   tiny       MUST reload  → same: Patched 1 of 1, still serves "A".
-    //   member     MUST reload  → refused as TypeShapeChanged, because editing a
-    //                             `static member` edits its whole type.
-    //   lambda     restart-only → holds (StartupComputedValue).
-    //   eager      restart-only → holds.
-    //   mutable    restart-only → serves "B" although the wire said nothing was
-    //                             patched — the whole-file fallback moved it.
-    //
-    // The first three are the finding: for an app running from the COMPILED
-    // project assembly with no `#load` in front of it — the exact shape this
-    // matrix exists to cover, and the exact shape a real Falco/Giraffe/Saturn/
-    // Oxpecker app has — the patch reports success and the running process
-    // keeps calling the old body. That is the "counts that do not reflect
-    // reality" failure this subsystem was built to stop, one level deeper than
-    // where it was fixed. `real file save…`, `compile-error save…` and `a real
-    // reload and a real no-op save…` above DO prove in-place patching end to
-    // end, so the capability is not unproven — it is unproven for this shape.
-    //
-    // Every assertion below is left exactly as written. Nothing here is
-    // relaxed to make it pass, and the day the gap closes this goes green
-    // without being touched.
+    // The shape matrix: one cell per F# binding shape a user can save, through a
+    // real host, asserting the reload CLAIM equals the OBSERVED change. It was
+    // once a standalone `--integration-shapes` entry point kept out of the
+    // pipeline while 4 of 7 cells failed ("Patched 1 of 1" while the running
+    // app still served the old body). All 7 now hold, so it runs in the main
+    // pipeline under --integration-host like every other host suite. Every
+    // assertion is exactly as first written; none was relaxed to get here.
     Integration.hostCase "hot-reload shape matrix: a startup-captured handler table, one cell per F# binding shape" <| fun () ->
       buildFixtureAsSageFsDoes ()
       let fDir = fixtureDir ()
