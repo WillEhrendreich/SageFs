@@ -44,9 +44,25 @@ module TestCacheTypes =
     Message: string option
   }
 
+  /// A test's flaky-detection sample window (mirrors
+  /// SageFs.Features.LiveTesting.ResultWindow), serialized bit-for-bit:
+  /// Outcomes carries every window slot (0 = Pass, 1 = Fail), not just the
+  /// Count that are meaningful, so WriteIndex/Count/the full circular buffer
+  /// reconstruct byte-identically on read. A lossy encoding here would
+  /// silently reset flake detection's sample history — exactly the bug this
+  /// section exists to fix.
+  type FlakyEntry = {
+    TestId: string
+    WindowSize: uint32
+    WriteIndex: uint32
+    Count: uint32
+    Outcomes: byte[]
+  }
+
   type StcData = {
     CoverageEntries: CoverageEntry list
     ResultEntries: ResultEntry list
+    FlakyEntries: FlakyEntry list
     ImapGeneration: uint32
     CreatedAtMs: int64
   }
@@ -55,6 +71,7 @@ module TestCacheTypes =
     let empty = {
       CoverageEntries = []
       ResultEntries = []
+      FlakyEntries = []
       ImapGeneration = 0u
       CreatedAtMs = 0L
     }
@@ -98,35 +115,63 @@ module TestCacheWriter =
     bw.Flush()
     ms.ToArray()
 
+  /// FLKY section: one entry per test with a non-empty flaky-detection
+  /// sample window. The full WindowSize outcome bytes are written (not just
+  /// Count of them) so the reader can reconstruct the exact circular buffer.
+  let private writeFlky (entries: FlakyEntry list) : byte[] =
+    use ms = new MemoryStream()
+    use bw = new BinaryWriter(ms)
+    bw.Write(uint32 (List.length entries))
+    for e in entries do
+      BinaryPrimitives.writeLpString bw e.TestId
+      bw.Write(e.WindowSize)
+      bw.Write(e.WriteIndex)
+      bw.Write(e.Count)
+      for b in e.Outcomes do bw.Write(b)
+    bw.Flush()
+    ms.ToArray()
+
   let write (data: StcData) : byte[] =
     let imapPayload = writeImap data.CoverageEntries
     let tcovPayload = writeTcov data.CoverageEntries
     let tresPayload = writeTres data.ResultEntries
+    let flkyPayload = writeFlky data.FlakyEntries
 
-    let sectionCount = 3u
+    let sectionCount = 4u
     let headerSize = 64
     let dirEntrySize = 16
     let dirSize = int sectionCount * dirEntrySize
 
+    // Physical payload order is IMAP, TCOV, FLKY, TRES — TRES stays the
+    // PHYSICALLY LAST section (the file's largest offset) even though its
+    // directory entry stays at index 2 and FLKY's new entry is appended at
+    // index 3. Several existing tests locate TRES's payload as "from its
+    // offset to end of file"; placing FLKY's bytes ahead of TRES instead of
+    // after it keeps that invariant true.
     let imapOffset = uint64 (headerSize + dirSize)
     let tcovOffset = imapOffset + uint64 imapPayload.Length
-    let tresOffset = tcovOffset + uint64 tcovPayload.Length
+    let flkyOffset = tcovOffset + uint64 tcovPayload.Length
+    let tresOffset = flkyOffset + uint64 flkyPayload.Length
     let totalSize = tresOffset + uint64 tresPayload.Length
 
     let imapCrc = Crc32.computeAll imapPayload
     let tcovCrc = Crc32.computeAll tcovPayload
     let tresCrc = Crc32.computeAll tresPayload
+    let flkyCrc = Crc32.computeAll flkyPayload
 
     use ms = new MemoryStream()
     use bw = new BinaryWriter(ms)
 
     // Header (64 bytes) — matches spec §3.2
     bw.Write([| 0x53uy; 0x54uy; 0x43uy; 0x31uy |]) // "STC1"
-    bw.Write(2us)                                     // format_version
-    bw.Write(1us)                                     // min_reader_version — a v1 reader can
-                                                      //   still parse v2 files (bytes 5-7 merely
-                                                      //   refine what byte 1 already meant)
-    bw.Write(sectionCount)                            // section_count (u32)
+    bw.Write(3us)                                     // format_version — bumped for the FLKY
+                                                      //   (flaky-history) section
+    bw.Write(1us)                                     // min_reader_version — unchanged: FLKY is
+                                                      //   additive and the reader treats an
+                                                      //   absent/unknown section as no data, so a
+                                                      //   v1 reader tolerant of extra sections
+                                                      //   still reads IMAP/TRES fine
+    bw.Write(sectionCount)                            // section_count (u32) — now 4
     bw.Write(0u)                                      // flags
     bw.Write(data.CreatedAtMs)                        // created_at_ms
     bw.Write(totalSize)                               // total_file_size
@@ -135,14 +180,16 @@ module TestCacheWriter =
     bw.Write(data.ImapGeneration)                     // imap_generation
     bw.Write(Array.zeroCreate<byte> 20)               // reserved to 64
 
-    // Directory (3 × 16 bytes: tag:u32 + offset:u64 + crc:u32)
+    // Directory (4 × 16 bytes: tag:u32 + offset:u64 + crc:u32)
     bw.Write(0x494D4150u); bw.Write(imapOffset); bw.Write(imapCrc) // IMAP
     bw.Write(0x54434F56u); bw.Write(tcovOffset); bw.Write(tcovCrc) // TCOV
     bw.Write(0x54524553u); bw.Write(tresOffset); bw.Write(tresCrc) // TRES
+    bw.Write(0x464C4B59u); bw.Write(flkyOffset); bw.Write(flkyCrc) // FLKY
 
-    // Payloads
+    // Payloads — physical order matches the offsets above (IMAP, TCOV, FLKY, TRES)
     bw.Write(imapPayload)
     bw.Write(tcovPayload)
+    bw.Write(flkyPayload)
     bw.Write(tresPayload)
     bw.Flush()
 
@@ -233,6 +280,48 @@ module TestCacheReader =
         Ok { TestId = tid; Outcome = outcome; DurationMs = dur; Message = msg })
     with ex -> err (sprintf "TRES parse error: %s" ex.Message)
 
+  /// Tag for the FLKY (flaky-detection history) section. Absent from older
+  /// caches — that decodes to an empty history, never an error (see `read`).
+  let private flkyTag = 0x464C4B59u
+
+  let private parseFlky (payload: byte[]) : Result<FlakyEntry list, string> =
+    try
+      use ms = new MemoryStream(payload)
+      use br = new BinaryReader(ms)
+      let payloadLen = ms.Length
+      // Each FLKY entry needs a tid lp-string (>=4 bytes) + windowSize u32 +
+      // writeIndex u32 + count u32 (>= 0 outcome bytes follow) — floor of 16
+      // bytes per plausible entry.
+      let rawCount = br.ReadUInt32() |> int64
+      let maxPossible = max 0L (payloadLen - 4L) / 16L
+      match rawCount > maxPossible with
+      | true -> err (sprintf "FLKY parse error: count %d exceeds section payload capacity %d" rawCount maxPossible)
+      | false ->
+      let count = int rawCount
+      readItems count [] (fun () ->
+        let tid = BinaryPrimitives.readLpStringBounded br (max 0L (ms.Length - ms.Position))
+        let windowSize = br.ReadUInt32()
+        // Bound-check against what remains of THIS SECTION's slice, never
+        // the whole stream: writeIndex(4) + count(4) + one outcome byte per
+        // window slot must all fit in what parseFlky was actually handed.
+        let remaining = ms.Length - ms.Position
+        match remaining < 8L + int64 windowSize with
+        | true ->
+          Error (sprintf "FLKY parse error: window size %d needs %d more bytes but only %d remain" windowSize (8L + int64 windowSize) remaining)
+        | false ->
+        let writeIndex = br.ReadUInt32()
+        let sampleCount = br.ReadUInt32()
+        match writeIndex > windowSize || sampleCount > windowSize with
+        | true ->
+          Error (sprintf "FLKY parse error: writeIndex %d / count %d exceed window size %d" writeIndex sampleCount windowSize)
+        | false ->
+        let outcomes =
+          match windowSize with
+          | 0u -> [||]
+          | n -> [| for _ in 1u .. n -> br.ReadByte() |]
+        Ok { TestId = tid; WindowSize = windowSize; WriteIndex = writeIndex; Count = sampleCount; Outcomes = outcomes })
+    with ex -> err (sprintf "FLKY parse error: %s" ex.Message)
+
   let read (data: byte[]) : Result<StcData, string> =
     if data.Length < 64 then err "File too short for STC1 header"
     elif data.[0] <> 0x53uy || data.[1] <> 0x54uy || data.[2] <> 0x43uy || data.[3] <> 0x31uy then
@@ -320,9 +409,24 @@ module TestCacheReader =
             match parseTres tresP with
             | Result.Error e -> err e
             | Result.Ok results ->
+            // FLKY is OPTIONAL: absent (older caches, before this section
+            // existed) decodes to an empty flaky history, never an error.
+            // When present its CRC already passed the uniform section-CRC
+            // gate above, same as every other section — a genuinely corrupt
+            // FLKY section fails the whole read exactly like a corrupt
+            // IMAP/TRES/TCOV section would, rather than silently degrading
+            // one section while accepting a tampered file.
+            let flakyResult =
+              match Map.tryFind flkyTag payloadMap with
+              | None -> ok []
+              | Some flkyP -> parseFlky flkyP
+            match flakyResult with
+            | Result.Error e -> err e
+            | Result.Ok flakyEntries ->
             ok {
               CoverageEntries = coverage
               ResultEntries = results
+              FlakyEntries = flakyEntries
               ImapGeneration = imapGen
               CreatedAtMs = createdAtMs
             }
@@ -377,6 +481,41 @@ module TestCacheMapping =
         | false -> TimeSpan.FromSeconds after.TotalSeconds
       Outcome.TimedOut, formatTimeSpan ts
 
+  // ── FlakyHistory <-> FLKY section ────────────────────────────────
+  // ResultWindow.Outcomes is a two-valued TestOutcome; the wire byte just
+  // needs to distinguish the two, so 0/1 round-trips it exactly.
+
+  let private flakyOutcomeToByte (o: TestOutcome) : byte =
+    match o with
+    | TestOutcome.Pass -> 0uy
+    | TestOutcome.Fail -> 1uy
+
+  let private flakyOutcomeOfByte (b: byte) : TestOutcome =
+    match b with
+    | 1uy -> TestOutcome.Fail
+    | _ -> TestOutcome.Pass
+
+  let private flakyEntriesOf (history: Map<TestId, ResultWindow>) : FlakyEntry list =
+    history
+    |> Map.toList
+    |> List.map (fun (TestId.TestId tid, w) ->
+      { TestId = tid
+        WindowSize = uint32 w.WindowSize
+        WriteIndex = uint32 w.WriteIndex
+        Count = uint32 w.Count
+        Outcomes = w.Outcomes |> Array.map flakyOutcomeToByte })
+
+  let private flakyHistoryOf (entries: FlakyEntry list) : Map<TestId, ResultWindow> =
+    entries
+    |> List.map (fun e ->
+      let window : ResultWindow = {
+        Outcomes = e.Outcomes |> Array.map flakyOutcomeOfByte
+        WriteIndex = int e.WriteIndex
+        Count = int e.Count
+        WindowSize = int e.WindowSize }
+      TestId.TestId e.TestId, window)
+    |> Map.ofList
+
   /// Convert LiveTestState coverage/results to binary-serializable StcData.
   let fromLiveTestState (state: LiveTestState) : StcData =
     let coverageEntries =
@@ -419,6 +558,7 @@ module TestCacheMapping =
     { ImapGeneration = generation
       CoverageEntries = coverageEntries
       ResultEntries = resultEntries
+      FlakyEntries = flakyEntriesOf state.FlakyHistory
       CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
 
   /// Restore LiveTestState from deserialized StcData.
@@ -482,7 +622,8 @@ module TestCacheMapping =
     { LiveTestState.empty with
         TestCoverageBitmaps = coverageBitmaps
         LastResults = lastResults
-        LastGeneration = gen }
+        LastGeneration = gen
+        FlakyHistory = flakyHistoryOf data.FlakyEntries }
 
 
 /// File I/O for .sagetc binary cache files.
