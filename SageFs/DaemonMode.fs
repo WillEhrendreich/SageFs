@@ -1647,6 +1647,40 @@ let dispatchOutputAndWait
     return obj.ReferenceEquals(completed, committed.Task) && committed.Task.Result
   }
 
+/// Which required listener(s) never stayed up during the startup window. The
+/// MCP host and the dashboard host each run until the daemon's own
+/// `stopping` token is cancelled (`runUntilCancelled`/`startDashboardServer`)
+/// — completing on their own this early can only mean their bind failed.
+/// Both catch and LOG their own bind exception rather than letting it
+/// propagate (`startMcpServer`, `startDashboardServer`), so a faulted `Task`
+/// never happens here: `IsCompleted` this early is the only signal there is.
+[<RequireQualifiedAccess>]
+type ListenerBindFailure =
+  | Mcp
+  | Dashboard
+  | Both
+
+/// Pure classification of the two host tasks' completion state at the end of
+/// the startup window. `None` is the healthy case: neither task has ever
+/// returned, because neither one is supposed to until shutdown.
+let listenerBindFailureOf (mcpCompletedEarly: bool) (dashboardCompletedEarly: bool) : ListenerBindFailure option =
+  match mcpCompletedEarly, dashboardCompletedEarly with
+  | false, false -> None
+  | true, true -> Some ListenerBindFailure.Both
+  | true, false -> Some ListenerBindFailure.Mcp
+  | false, true -> Some ListenerBindFailure.Dashboard
+
+let describeListenerBindFailure =
+  function
+  | ListenerBindFailure.Mcp -> "the MCP listener"
+  | ListenerBindFailure.Dashboard -> "the dashboard listener"
+  | ListenerBindFailure.Both -> "the MCP and dashboard listeners"
+
+/// Exit code for a startup that never got both required listeners up. Kept
+/// distinct from a bare `1` so log-reading tooling can name this failure mode
+/// specifically; the daemon must never announce "ready" once this fires.
+let listenerBindFailureExitCode = 1
+
 /// Run SageFs as a headless daemon.
 /// MCP server + SessionManager + Dashboard — all frontends are clients.
 /// Every session is a worker sub-process managed by SessionManager.
@@ -3318,6 +3352,20 @@ let run
 
   // Brief yield to let servers bind their ports
   do! System.Threading.Tasks.Task.Delay(200)
+
+  // Both host tasks run until `cts` is cancelled — completing on their own
+  // this early means a required listener's bind failed (each one already
+  // logged why, above). Reporting "ready" over a listener that never bound
+  // left every client/test polling a port nobody would ever answer on until
+  // ITS OWN timeout, instead of a daemon that fails fast and says why.
+  match listenerBindFailureOf mcpRunning.IsCompleted dashboardRunning.IsCompleted with
+  | Some failure ->
+    log.LogError(
+      "SageFs daemon failed to start: {Listener} did not stay up (see the bind error logged above). Exiting.",
+      describeListenerBindFailure failure)
+    Environment.Exit(listenerBindFailureExitCode)
+  | None -> ()
+
   startupSw.Stop()
   Instrumentation.startupDurationMs.Record(startupSw.Elapsed.TotalMilliseconds)
   match isNull startupSpan |> not with

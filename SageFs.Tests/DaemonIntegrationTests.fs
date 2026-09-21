@@ -3,6 +3,8 @@
 open System
 open System.Diagnostics
 open System.IO
+open System.Net
+open System.Net.Sockets
 open System.Threading
 open Expecto
 open Expecto.Flip
@@ -243,6 +245,95 @@ let daemonCliTests =
 
       proc.ExitCode |> Expect.equal "exit code 1" 1
       output |> Expect.stringContains "says no daemon" "No daemon running"
+  ]
+
+// ─── Daemon startup fails closed on a bind failure ──────────────────
+//
+// THE FLAKE THIS PROVES FIXED: ci-pipeline.fsx runs several test tiers
+// concurrently, all sharing one network namespace. Every harness reserves a
+// daemon's ports by binding them, reading them back, then RELEASING them
+// before the daemon itself binds — a window a concurrently-running tier's
+// daemon can win. When that happened here, the daemon logged "Failed to bind
+// to address ...: address already in use", then "Dashboard failed to start"
+// — and then logged "SageFs daemon ready" anyway, before eventually exiting
+// 0. Every test that had spawned it burned its whole readiness timeout
+// polling a port nobody would ever answer on.
+//
+// TestPorts.reservePair (see SageFs.Tests.TestInfrastructure) makes the
+// cross-tier race structurally impossible (disjoint per-tier port ranges).
+// This is the OTHER half of the fix: even when a bind loses a race, the
+// daemon itself must fail fast and say why, rather than announce readiness
+// over a listener nobody can reach.
+let private startupBindFailureCeiling = TimeSpan.FromSeconds 20.0
+
+[<Tests>]
+let daemonStartupFailsClosedTests =
+  Integration.hostList "Daemon startup fails closed" [
+
+    testCase "a taken dashboard port makes the daemon exit non-zero instead of announcing ready" <| fun _ ->
+      let mcpPort, dashboardPort =
+        SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
+
+      // Hold the dashboard's own port for the whole test — exactly what a
+      // losing tier's daemon does to the winner in the real flake.
+      use occupyDashboard = new TcpListener(IPAddress.Loopback, dashboardPort)
+      occupyDashboard.Start()
+
+      let psi = ProcessStartInfo()
+      psi.FileName <- SageFsExe
+      psi.UseShellExecute <- false
+      psi.CreateNoWindow <- true
+      psi.WorkingDirectory <- testProjectDir
+      psi.ArgumentList.Add "--mcp-port"
+      psi.ArgumentList.Add(string mcpPort)
+      psi.ArgumentList.Add "--no-resume"
+      psi.Environment["SAGEFS_DATA_DIR"] <- isolatedDataDir ()
+      // Redirected to FILES (never undrained pipes — see DashboardBrowserRunner
+      // for why a pipe deadlocks the child before it can even log the failure).
+      let dataDirForLogs = Path.Combine(Path.GetTempPath(), "sagefs-test", Guid.NewGuid().ToString("N"))
+      Directory.CreateDirectory dataDirForLogs |> ignore
+      let outLog = Path.Combine(dataDirForLogs, "stdout.log")
+      psi.RedirectStandardOutput <- true
+      psi.RedirectStandardError <- true
+
+      use daemonProc = new Process(StartInfo = psi)
+      use logWriter = new StreamWriter(outLog, append = false)
+      let logLock = obj ()
+      let writeLine (line: string) =
+        if not (isNull line) then lock logLock (fun () -> logWriter.WriteLine line)
+      daemonProc.OutputDataReceived.Add(fun e -> writeLine e.Data)
+      daemonProc.ErrorDataReceived.Add(fun e -> writeLine e.Data)
+      daemonProc.Start() |> ignore
+      daemonProc.BeginOutputReadLine()
+      daemonProc.BeginErrorReadLine()
+
+      try
+        let exited =
+          SageFs.Tests.TestInfrastructure.waitFor
+            (int startupBindFailureCeiling.TotalMilliseconds)
+            (fun () -> daemonProc.HasExited)
+        exited
+        |> Expect.isTrue
+             "the daemon must exit on its own once its dashboard bind fails, instead of hanging around claiming to be ready"
+
+        daemonProc.WaitForExit(1000) |> ignore // flush the async readers
+        lock logLock (fun () -> logWriter.Flush())
+
+        daemonProc.ExitCode
+        |> Expect.notEqual "a failed required bind must be a non-zero exit, not a quiet success" 0
+
+        let logged = File.ReadAllText outLog
+        logged
+        |> Expect.stringContains "the failure is explained, not silent" "did not stay up"
+        logged.Contains "SageFs daemon ready"
+        |> Expect.isFalse "the daemon must never announce ready once a required listener failed to bind"
+      finally
+        try
+          if not daemonProc.HasExited then
+            daemonProc.Kill()
+            daemonProc.WaitForExit(3000) |> ignore
+        with _ -> ()
+        try Directory.Delete(dataDirForLogs, true) with _ -> ()
   ]
 
 // ─── Daemon lifecycle: start, status, stop ─────────────────────────

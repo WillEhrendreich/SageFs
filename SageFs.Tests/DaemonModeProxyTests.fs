@@ -127,3 +127,41 @@ let proxyTests =
       | other -> failtest $"Expected WorkerCommunicationFailed, got {other}"
     }
   ]
+
+// ---------------------------------------------------------------------------
+// listenerBindFailureOf — the pure classification behind the startup fix:
+// a required listener (MCP and/or dashboard) that never stays up must fail
+// the daemon closed rather than let it announce "ready" (roast-class flake:
+// a taken dashboard port logged "Dashboard failed to start" then "SageFs
+// daemon ready" anyway). See DaemonIntegrationTests.fs "Daemon startup fails
+// closed" for the real-process proof.
+// ---------------------------------------------------------------------------
+
+[<Tests>]
+let listenerBindFailureTests =
+  testList "DaemonMode.listenerBindFailureOf" [
+
+    testCase "neither listener completing early is healthy — None" <| fun _ ->
+      listenerBindFailureOf false false
+      |> Expect.isNone "both host tasks are still running, as they should be"
+
+    testCase "only the MCP task completing early names the MCP listener" <| fun _ ->
+      listenerBindFailureOf true false
+      |> Expect.equal "MCP bind failed" (Some ListenerBindFailure.Mcp)
+
+    testCase "only the dashboard task completing early names the dashboard listener" <| fun _ ->
+      listenerBindFailureOf false true
+      |> Expect.equal "dashboard bind failed" (Some ListenerBindFailure.Dashboard)
+
+    testCase "both tasks completing early names both listeners" <| fun _ ->
+      listenerBindFailureOf true true
+      |> Expect.equal "both binds failed" (Some ListenerBindFailure.Both)
+
+    testCase "describeListenerBindFailure names every case" <| fun _ ->
+      describeListenerBindFailure ListenerBindFailure.Mcp
+      |> Expect.equal "names the MCP listener" "the MCP listener"
+      describeListenerBindFailure ListenerBindFailure.Dashboard
+      |> Expect.equal "names the dashboard listener" "the dashboard listener"
+      describeListenerBindFailure ListenerBindFailure.Both
+      |> Expect.equal "names both listeners" "the MCP and dashboard listeners"
+  ]
