@@ -100,7 +100,35 @@ let private npmAvailable =
               | false -> [ "npm" ])
   |> Option.isSome
 
-let private xvfbRunPath = findOnPath [ "xvfb-run" ]
+let private xvfbPath = findOnPath [ "Xvfb" ]
+
+/// Start a private X server and learn its display number FROM THE SERVER.
+///
+/// This used to be `xvfb-run -a`, which picks a display by looking for
+/// /tmp/.X<n>-lock files. That guess is only as good as the /tmp it can see:
+/// under the local gate each tier has a private /tmp, so it saw no locks,
+/// picked :99, and collided with a long-lived Xvfb :99 already on the machine
+/// (X's socket is abstract, shared per network namespace, not per /tmp). The
+/// second server died, VS Code quietly used the other one, and xvfb-run's
+/// cleanup then failed the run. `-displayfd` makes Xvfb itself try displays
+/// until a bind succeeds and report the one it got. No guessing, no race.
+let private startVirtualDisplay (xvfb: string) : Task<Process * string> = task {
+  let psi = ProcessStartInfo(xvfb)
+  for arg in [ "-displayfd"; "1"; "-screen"; "0"; "1600x1000x24"; "-nolisten"; "tcp" ] do
+    psi.ArgumentList.Add arg
+  psi.UseShellExecute <- false
+  psi.RedirectStandardOutput <- true
+  psi.RedirectStandardError <- true
+  let server = Process.Start psi
+  server.ErrorDataReceived.Add ignore
+  server.BeginErrorReadLine()
+  let! line = server.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds 20.0)
+  match Int32.TryParse((line |> Option.ofObj |> Option.defaultValue "").Trim()) with
+  | true, n -> return server, sprintf ":%d" n
+  | _ ->
+    try server.Kill() with _ -> ()
+    return failwithf "Xvfb did not report a display (got %A)" line
+}
 
 /// npm is a shell shim (npm.cmd) on Windows: invoking "npm" directly with
 /// UseShellExecute=false fails to resolve it there. Route every npm call
@@ -365,22 +393,19 @@ let private stopFixture (f: Fixture) =
 let private runProofSuite (f: Fixture) : Task<int * string> = task {
   let psi = ProcessStartInfo()
   let useVirtualDisplay = needsVirtualDisplay ()
-  match useVirtualDisplay, xvfbRunPath with
-  | true, Some xvfb ->
-    psi.FileName <- xvfb
-    psi.ArgumentList.Add("-a")
-    psi.ArgumentList.Add(nodeExe ())
-    psi.ArgumentList.Add(launcherPath)
-  | true, None ->
-    failwith
-      "This session needs a virtual display to launch VS Code/Electron safely \
-       (no usable display, or a Wayland session Electron would otherwise reach \
-       for directly) but `xvfb-run` is not on PATH — install it \
-       (e.g. `apt install xvfb` / `pacman -S xorg-server-xvfb`) so this proof \
-       can run headless without touching a real desktop."
-  | false, _ ->
-    psi.FileName <- nodeExe ()
-    psi.ArgumentList.Add(launcherPath)
+  let! virtualDisplay =
+    match useVirtualDisplay, xvfbPath with
+    | true, Some xvfb -> task { let! d = startVirtualDisplay xvfb in return Some d }
+    | true, None ->
+      failwith
+        "This session needs a virtual display to launch VS Code/Electron safely \
+         (no usable display, or a Wayland session Electron would otherwise reach \
+         for directly) but `Xvfb` is not on PATH — install it \
+         (e.g. `apt install xvfb` / `pacman -S xorg-server-xvfb`) so this proof \
+         can run headless without touching a real desktop."
+    | false, _ -> task { return None }
+  psi.FileName <- nodeExe ()
+  psi.ArgumentList.Add(launcherPath)
   psi.UseShellExecute <- false
   psi.CreateNoWindow <- true
   // @vscode/test-electron caches its downloaded VS Code copy in a
@@ -401,24 +426,32 @@ let private runProofSuite (f: Fixture) : Task<int * string> = task {
   match VscodeExtensionTests.VscodeFixture.codeExePath with
   | Some codePath -> psi.Environment["SAGEFS_TE_VSCODE_PATH"] <- codePath
   | None -> ()
-  match useVirtualDisplay with
-  | true ->
-    // Xvfb supplies its own DISPLAY to this child; remove the Wayland
+  match virtualDisplay with
+  | Some (_, display) ->
+    // Point this child at our private X server, and remove the Wayland
     // session hints so Electron's ozone auto-detect can't reach past it for
     // the real compositor (see needsVirtualDisplay's comment above).
+    psi.Environment["DISPLAY"] <- display
     psi.Environment.Remove("WAYLAND_DISPLAY") |> ignore
     psi.Environment.Remove("XDG_SESSION_TYPE") |> ignore
-  | false -> ()
+  | None -> ()
 
   let output = Text.StringBuilder()
   use proc = new Process(StartInfo = psi)
   proc.OutputDataReceived.Add(fun e -> if not (isNull e.Data) then output.AppendLine(e.Data) |> ignore)
   proc.ErrorDataReceived.Add(fun e -> if not (isNull e.Data) then output.AppendLine(e.Data) |> ignore)
-  proc.Start() |> ignore
-  proc.BeginOutputReadLine()
-  proc.BeginErrorReadLine()
-  do! proc.WaitForExitAsync()
-  return proc.ExitCode, output.ToString()
+  try
+    proc.Start() |> ignore
+    proc.BeginOutputReadLine()
+    proc.BeginErrorReadLine()
+    do! proc.WaitForExitAsync()
+    return proc.ExitCode, output.ToString()
+  finally
+    match virtualDisplay with
+    | Some (server, _) ->
+      try server.Kill() with _ -> ()
+      server.Dispose()
+    | None -> ()
 }
 
 let private proofTestName =
