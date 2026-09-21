@@ -52,8 +52,19 @@ let getAllMethods (asm: Assembly) =
       // FSI_0007.WebAppFixture.Greeting.greeting — a name that never
       // EndsWith-matches the #load'd top-level WebAppFixture.Greeting.greeting,
       // so the route's captured method was never detoured.
+      // `FsiNaming.isDynamicModuleSegment`, not `Contains "FSI_"`.
+      //
+      // `Contains` is the compiler's rule plus collateral damage: it also
+      // swallows any USER type whose name merely contains those four
+      // characters — `MyFSI_Helpers`, `Acme.FSI_Adapters` — dropping that
+      // segment from the detour path. The re-eval's qualified name then never
+      // matches the registered one, no detour fires, and hot reload silently
+      // stops working for that module with no diagnostic at all.
+      // `isDynamicModuleSegment` mirrors `TryStripPrefixPath`
+      // (CheckDeclarations.fs:274-281): the prefix must START the segment and
+      // everything after it must be digits.
       let pathForChildren =
-        match t.Name.Contains "FSI_" with
+        match SageFs.FsiNaming.isDynamicModuleSegment t.Name with
         | true -> currentPath
         | false -> t.Name :: currentPath
 
@@ -129,7 +140,10 @@ let getAllMethods (asm: Assembly) =
     | null | "" -> []
     | ns ->
       ns.Split('.')
-      |> Array.filter (fun seg -> not (seg.Contains "FSI_"))
+      // Same rule, same reason as `pathForChildren` above: a `Contains` here
+      // drops a user namespace segment like `Acme.FSI_Adapters` from the
+      // qualified name and silently disables hot reload for everything in it.
+      |> Array.filter (fun seg -> not (SageFs.FsiNaming.isDynamicModuleSegment seg))
       |> Array.rev
       |> Array.toList
 
