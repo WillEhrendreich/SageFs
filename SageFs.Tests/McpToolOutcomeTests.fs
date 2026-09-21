@@ -165,7 +165,7 @@ let private runToolOutcomeTail
             try JsonDocument.Parse(raw: string).RootElement.GetArrayLength() > 0
             with _ -> false)
         let coverageDoc = JsonDocument.Parse(coverageRaw: string)
-        let coverageReports = coverageDoc.RootElement.EnumerateArray() |> Seq.toList
+        let coverageReports = [ for e in coverageDoc.RootElement.EnumerateArray() -> e ]
         coverageReports
         |> Expect.isNonEmpty (sprintf "coverage_intel should report coverage for at least the one failing test. Raw: %s" coverageRaw)
 
@@ -179,12 +179,11 @@ let private runToolOutcomeTail
         (subtractReport.GetProperty("TotalBranches").GetInt32(), 0)
         |> Expect.isGreaterThan "coverage_intel should carry a real IL-instrumented branch count for this compiled fixture, not zero"
 
-        subtractReport.GetProperty("BlindSpots").EnumerateArray() |> Seq.toList
+        [ for e in subtractReport.GetProperty("BlindSpots").EnumerateArray() -> e ]
         |> Expect.isNonEmpty "coverage_intel should list uncovered branch locations for a test with 0% coverage"
 
-        subtractReport.GetProperty("CausalSymbols").EnumerateArray()
-        |> Seq.map (fun s -> s.GetString())
-        |> Seq.exists (fun s -> s.Contains "subtract")
+        [ for s in subtractReport.GetProperty("CausalSymbols").EnumerateArray() -> s.GetString() ]
+        |> List.exists (fun s -> s.Contains "subtract")
         |> Expect.isTrue (sprintf "coverage_intel's causal symbols should name the function that actually changed. Raw: %s" coverageRaw)
         coverageDoc.Dispose()
 
@@ -213,7 +212,7 @@ let private runToolOutcomeTail
         let repairRoot = repairDoc.RootElement
         repairRoot.GetProperty("TestName").GetString()
         |> Expect.equal (sprintf "suggest_repair should name the test it was asked about. Raw: %s" repairRaw) "subtract computes the difference"
-        repairRoot.GetProperty("CausalChanges").EnumerateArray() |> Seq.toList
+        [ for e in repairRoot.GetProperty("CausalChanges").EnumerateArray() -> e ]
         |> Expect.isNonEmpty (sprintf "suggest_repair should carry the same causal changes explain_test_failure reported. Raw: %s" repairRaw)
         repairRoot.GetProperty("Suggestion").GetString()
         |> Expect.isNotEmpty (sprintf "suggest_repair should always produce a human-readable suggestion, even without a ripple plan. Raw: %s" repairRaw)
@@ -364,15 +363,14 @@ let private runToolOutcomeBody
         let explainDoc = JsonDocument.Parse(explainRaw: string)
         let explainRoot = explainDoc.RootElement
 
-        let narratives = explainRoot.GetProperty("Narratives").EnumerateArray() |> Seq.toList
+        let narratives = [ for e in explainRoot.GetProperty("Narratives").EnumerateArray() -> e ]
         narratives
         |> List.exists (fun n -> n.GetProperty("DisplayName").GetString().Contains "subtract")
         |> Expect.isTrue "explain_test_failure's narrative should name the failing test"
 
         let causalChanges =
-          narratives
-          |> Seq.collect (fun n -> n.GetProperty("CausalChanges").EnumerateArray())
-          |> Seq.toList
+          [ for n in narratives do
+              for c in n.GetProperty("CausalChanges").EnumerateArray() -> c ]
         causalChanges
         |> Expect.isNonEmpty "explain_test_failure should report at least one causal change, not an empty narrative"
 
@@ -388,9 +386,7 @@ let private runToolOutcomeBody
         let diagnoseRoot = diagnoseDoc.RootElement
 
         let diagnoseNames =
-          diagnoseRoot.GetProperty("Failures").EnumerateArray()
-          |> Seq.map (fun f -> f.GetProperty("TestName").GetString())
-          |> Seq.toList
+          [ for f in diagnoseRoot.GetProperty("Failures").EnumerateArray() -> f.GetProperty("TestName").GetString() ]
         diagnoseNames
         |> Expect.contains "diagnose's Failures list should name the same test explain_test_failure narrated" "subtract computes the difference"
 
