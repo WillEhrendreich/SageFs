@@ -48,6 +48,7 @@ let testCachePersistenceMutationTests = testList "TestCachePersistence mutations
       [ { TestId = "test.a"; Outcome = Outcome.Pass; DurationMs = 12u; Message = None }
         { TestId = "test.b"; Outcome = Outcome.AssertionFailed; DurationMs = 34u; Message = Some "expected 1, got 2" }
         { TestId = "test.c"; Outcome = Outcome.TimedOut; DurationMs = 5000u; Message = Some "Timed out after 5s" } ]
+    FlakyEntries = []
     ImapGeneration = 7u
     CreatedAtMs = 1234567890L
   }
