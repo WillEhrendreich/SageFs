@@ -1,14 +1,14 @@
 # Why F#? — Lessons from Building SageFs
 
-SageFs is a live F# development environment: a REPL engine, web dashboard, editor integrations, MCP
-surface, and daemon, built primarily in F#. This document explains why F# was a good fit, with real code
-from the codebase as evidence.
+I built SageFs — a live F# development environment: a REPL engine, web dashboard, editor integrations, an MCP
+surface, and a daemon holding it all together — almost entirely in F#. This isn't a pitch deck. It's what I
+actually learned, with real code from the codebase as the receipts.
 
 ---
 
 ## 1. Discriminated Unions Make Impossible States Unrepresentable
 
-SageFs models session and worker lifecycle with discriminated unions. A simplified example:
+SageFs models session lifecycle with a discriminated union. Here's the real one, unedited:
 
 ```fsharp
 type SessionState =
@@ -19,19 +19,20 @@ type SessionState =
   | Faulted
 ```
 
-There is no `null` session, and no boolean `isReady` that can desync from `isEvaluating`. The compiler
-enforces exhaustive handling: add a new state and every `match` in the codebase fails to compile until you
-handle it. When we added `EvalTraced` to the event DU, the compiler flagged both files that needed updating.
+There is no `null` session, and no boolean `isReady` that can quietly desync from `isEvaluating`. The compiler
+enforces exhaustive handling: add a new case and every `match` in the codebase fails to compile until you handle
+it. That's the whole safety net, and it costs nothing extra to get.
 
-In C# the same code needs an enum plus runtime checks plus defensive `if (state == null)` guards. In F# the
-type system does that work at compile time.
+In C# the same idea needs an enum plus runtime checks plus defensive `if (state == null)` guards scattered
+wherever someone remembered to add them. In F# the type system does that work for you, at compile time, whether
+you remember or not.
 
 ---
 
 ## 2. Railway-Oriented Programming Eliminates Try/Catch Spaghetti
 
 SageFs uses `Result<'T, SageFsError>` throughout. Errors are values, not exceptions.
-The `ResultEx` module provides composable combinators:
+The `ResultEx` module gives you composable combinators:
 
 ```fsharp
 request
@@ -41,19 +42,19 @@ request
 |> Result.mapError (fun e -> e.describe())
 ```
 
-Every function in the chain either succeeds and passes the value forward, or fails and
-short-circuits with a typed error. No hidden control flow. No forgotten catch blocks.
-No `NullReferenceException` three stack frames deep.
+Every function in the chain either succeeds and passes the value forward, or fails and short-circuits with a
+typed error. No hidden control flow. No forgotten catch block. No `NullReferenceException` surfacing three
+stack frames away from where it actually went wrong.
 
-The `SageFsError` DU has cases across four categories (client/server/gateway/infra). Architecture tests
-verify every case has exactly one classification and a valid HTTP status code, so you cannot add a new error
-type without classifying it.
+The `SageFsError` DU has cases across four categories (client/server/gateway/infra). An architecture test
+verifies every case has exactly one classification and a valid HTTP status code, so you cannot add a new error
+case without classifying it — the compiler and the test suite both hold you to it.
 
 ---
 
 ## 3. Immutability by Default Eliminates Entire Bug Categories
 
-SageFs processes state transitions through pure update functions:
+SageFs pushes state transitions through pure update functions:
 
 ```fsharp
 let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
@@ -63,17 +64,22 @@ let update (msg: Msg) (model: Model) : Model * Cmd<Msg> =
   | ...
 ```
 
-The model is a record. Updates produce new records via `{ model with ... }`, keeping daemon and session transitions explicit and testable instead of spreading shared mutable state across clients.
+The model is a record. Updates produce new records via `{ model with ... }`, which keeps daemon and session
+transitions explicit and testable instead of scattering shared mutable state across every client that touches it.
 
-**The CellGrid monoid** formalizes overlay composition with mathematical properties verified
-by FsCheck:
+Because the update functions are pure, I can throw FsCheck at them and trust the result. The worker-restart
+backoff policy, for instance, gets checked against thousands of generated inputs instead of a handful of
+examples I thought to write by hand:
 
 ```fsharp
-// Associativity: (a <+> b) <+> c = a <+> (b <+> c)
-testProperty "overlay is associative" (fun (a, b, c) ->
-  CellGrid.overlay (CellGrid.overlay a b) c =
-  CellGrid.overlay a (CellGrid.overlay b c))
+testPropertyWithConfig propConfig "nextBackoff never exceeds BackoffMax" <|
+  fun (NonNegativeInt count) ->
+    let delay = nextBackoff defaultPolicy count
+    (defaultPolicy.BackoffMax, delay) |> Expect.isGreaterThanOrEqual "capped at max"
 ```
+
+No hand-picked count is going to accidentally prove that property for every possible restart count. FsCheck
+doesn't have that problem.
 
 ---
 
@@ -95,18 +101,18 @@ type CompletedStage = {
 }
 ```
 
-You cannot accidentally add milliseconds to seconds. You cannot pass a raw `float` where
-`float<ms>` is expected. The compiler catches unit mismatches that would be silent runtime
-bugs in any other language.
+You cannot accidentally add milliseconds to seconds. You cannot pass a raw `float` where `float<ms>` is
+expected. The compiler catches unit mismatches that would be silent, "why is this eval taking 1000x longer
+than it should" runtime bugs in any other language.
 
-**Cost: zero.** Units of measure are erased at compile time. No runtime overhead. No boxing.
-Just compile-time safety that prevents an entire class of numerical errors.
+**Cost: zero.** Units of measure are erased at compile time. No runtime overhead, no boxing — just compile-time
+safety for a whole class of numerical mistakes I'd otherwise make eventually.
 
 ---
 
 ## 5. Pattern Matching Replaces If/Else Chains
 
-Every control flow decision in SageFs uses pattern matching:
+Every control-flow decision in SageFs goes through pattern matching:
 
 ```fsharp
 match response.EvaluationResult with
@@ -119,10 +125,10 @@ match response.EvaluationResult with
 Pattern matching is:
 - **Exhaustive**: the compiler warns about missing cases
 - **Decomposing**: you extract data in the same expression that checks the shape
-- **Composable**: nested matches, active patterns, and guard clauses
+- **Composable**: nested matches, active patterns, and guard clauses all stack
 
-Compare this to the C# equivalent with `if (result.IsSuccess)` checks, null guards,
-and `as` casts scattered across the codebase.
+Compare that to the C# version: `if (result.IsSuccess)` checks, null guards, and `as` casts scattered across
+the codebase, each one a place a new case can slip through unnoticed.
 
 ---
 
@@ -139,20 +145,18 @@ let result = pipeline {
 }
 ```
 
-Each `stage` records timing and outcome. The CE automatically short-circuits on failure
-with full trace context. This is the same pattern as `async { }` or `task { }`, but
-domain-specific.
+Each `stage` records timing and outcome. The CE short-circuits on failure automatically, with full trace
+context attached. It's the same pattern as `async { }` or `task { }`, just domain-specific to eval tracing.
 
-**You can build your own control flow abstractions** that look like language features.
-No macros. No code generation. Just the type system.
+**You can build your own control-flow abstractions** that read like language features. No macros, no code
+generation — just the type system doing what it's there for.
 
 ---
 
 ## 7. The Module System Scales Without Ceremony
 
-SageFs.Core has more than 200 top-level modules (tracked by an architecture test with a regression
-ceiling). Each module is a namespace with functions: no class hierarchies, no dependency-injection
-containers, no abstract factory patterns.
+SageFs.Core alone is organized into roughly 190 top-level modules — no class hierarchies, no
+dependency-injection containers, no abstract factory patterns in sight.
 
 ```fsharp
 module SageFs.Middleware.Tracing
@@ -161,14 +165,16 @@ let buildTracedPipeline (middleware: NamedMiddleware list) (evalFn: MiddlewareNe
   // 40 lines of pure pipeline composition
 ```
 
-Functions are the unit of abstraction. Modules are the unit of organization.
-No `ITracingMiddlewareFactory`. No `AbstractPipelineBuilderBase<T>`.
+Functions are the unit of abstraction. Modules are the unit of organization. No `ITracingMiddlewareFactory`.
+No `AbstractPipelineBuilderBase<T>`. That said — 190 files is also a lot of files, and a few of the biggest
+ones in this repo have grown past where I'd like them to be. Modules-not-classes buys you a lot, but it
+doesn't save you from writing a 5,000-line file if you're not paying attention. I'm not.
 
 ---
 
 ## 8. Property-Based Testing Finds Bugs Example Tests Miss
 
-SageFs uses FsCheck to generate thousands of random inputs and verify invariants:
+SageFs uses FsCheck to throw thousands of random inputs at the code and check invariants hold:
 
 ```fsharp
 testProperty "RingBuffer push/toList length ≤ capacity" (fun (items: int list, cap: int) ->
@@ -178,12 +184,12 @@ testProperty "RingBuffer push/toList length ≤ capacity" (fun (items: int list,
   RingBuffer.toList buf |> List.length <= cap')
 ```
 
-This single test replaces dozens of hand-written examples. FsCheck found a `BatchFlusher` race condition
-that no example test caught, by generating rapid concurrent sequences that hit the exact interleaving that
-caused data loss.
+This single test replaces dozens of hand-written examples. FsCheck found a `BatchFlusher` race condition that
+no example test caught, by generating rapid concurrent sequences that happened to hit the exact interleaving
+that caused data loss. I would not have thought to write that example by hand. That's the whole point.
 
-The suite has thousands of tests, with property tests covering the core abstractions. The exact count is
-auto-derived into the README badge.
+The suite has thousands of tests, with property tests numbering in the hundreds across the core abstractions.
+The test-count badge in the README is derived from source, never hand-typed.
 
 ---
 
@@ -203,20 +209,21 @@ PipelineResult<EvalResponse, AppState> pipeline =
     namedMiddleware, "CoreEval", evalFn);
 ```
 
-Same safety. A fraction of the noise.
+Same safety. A fraction of the noise. I'll take it.
 
 ---
 
 ## 10. The Ecosystem Effect
 
-Because SageFs is written in F#, it can:
-- **Hot-reload F# source files** into a live FSI session (the language's REPL is first-class)
-- **Use FSharp.Compiler.Service** for real-time diagnostics, completions, and symbol analysis
+Because SageFs is written in F#, it gets to:
+- **Hot-reload F# source files** into a live FSI session — the language's own REPL is first-class, so I'm not bolting one on
+- **Use FSharp.Compiler.Service** directly for real-time diagnostics, completions, and symbol analysis
 - **Generate Fable JavaScript** for the VS Code extension from the same F# source
 - **Share types** between the CLI, dashboard, editor integrations, and test project with minimal translation
 
-Being written in F# is what lets SageFs hot-reload F# source, use FSharp.Compiler.Service directly, and
-share types end to end.
+None of that is a side effect of choosing F#. It's what made this specific project possible to build the way
+I built it — a language that hot-reloads its own source and compiles to JS for free is doing a lot of the
+heavy lifting so I don't have to.
 
 ---
 
@@ -240,8 +247,9 @@ dotnet tool install --global SageFs
 sagefs
 ```
 
-Then open your editor and create a session for `MyProject.fsproj`. SageFs connects automatically.
+That starts the daemon in the foreground — it's not a REPL by itself, it's the thing your editor, an MCP
+client, or the dashboard talks to. Point one of them at `MyProject.fsproj` and it spins up a session for you.
 
 ---
 
-SageFs is open source.
+SageFs is open source. Tell me I'm wrong about any of this — that can be fun too.

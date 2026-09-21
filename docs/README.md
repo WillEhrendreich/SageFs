@@ -1,5 +1,8 @@
 # SageFs Documentation
 
+Here's where everything lives. If you're just trying to get running, start at the top and work down —
+everything else is reference material you can come back to when you need it.
+
 ## Start here
 - **[Get Started](../Readme.md#get-started)** — install, check your environment, start the daemon, connect an editor
 - **[Workflow Modes](workflow-modes.md)** — REPL, Live Testing, and Hot Reload: when to use which, and how the Live Testing *workflow* differs from the live-testing *toggle*
@@ -12,7 +15,7 @@
 - **[Live Testing As You Type](live-testing-as-you-type.md)** — the three-speed feedback pipeline
 - **[Multi-Session](multi-session.md)** — one daemon, many isolated worker processes
 - **[Session Isolation](session-isolation.md)** — how sessions stay out of each other's way
-- **[Why F#?](why-fsharp.md)** — language rationale
+- **[Why F#?](why-fsharp.md)** — language rationale, from the person who had to live with the decision
 
 ## Reference
 - **[Can I use SageFs with…?](ecosystem-compatibility.md)** — Falco, Giraffe, Saturn, Oxpecker, plain ASP.NET, Fable/SAFE, React/Vue/Angular, Native AOT, .NET Framework
@@ -29,3 +32,5 @@
 - **[Architecture Decision Records](architecture-decisions.md)** — persistence, typed errors, MCP, module composition, and superseded frontend decisions
 - **[Live Testing Guide](LIVE_TESTING_GUIDE.md)** — implementation details of the test pipeline
 - **[Features Survey](FEATURES_SURVEY.md)** — module inventory
+
+Finding something here that's wrong or out of date? Open an issue, or a PR — I'd rather know.

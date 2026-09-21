@@ -1,14 +1,14 @@
 # 🔷 Coming from C#?
 
-Same .NET runtime, same NuGet packages, same `dotnet` CLI. What changes is the code you write: a 3-line concept is 3 lines, not a `public class AbstractRepositoryFactoryImpl`.
+Same .NET runtime, same NuGet packages, same `dotnet` CLI. I didn't build SageFs to get you off .NET — I built it because a 3-line idea kept costing me a `public class AbstractRepositoryFactoryImpl` to express.
 
-No more 50-line classes for small concepts, no more null reference exceptions, no more `dotnet watch` taking ten seconds to rebuild after a typo fix.
+What you get to leave behind: 50-line classes for something that's one record, null reference exceptions, and `dotnet watch` taking ten seconds to notice you fixed the typo.
 
 **What you'll notice right away:**
 - Records are immutable value objects with structural equality, in one line
 - Discriminated unions give you `sealed class + pattern matching` without the ceremony
-- `Result<'T, 'TError>` replaces `try/catch` for expected failure paths
-- SageFs hot reload uses Harmony to patch running code, so many edits apply without a full rebuild or restart
+- `Result<'T, 'TError>` replaces `try/catch` for the failures you actually expect
+- SageFs hot reload uses Harmony to patch running code, so a lot of edits apply without a full rebuild or restart — the edits it can't patch, it tells you so, instead of pretending it worked
 
 **→ [Start here: `samples/from-csharp/hello.fsx`](../samples/from-csharp/hello.fsx)**
 
