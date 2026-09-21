@@ -98,8 +98,6 @@ module Timeouts =
   // by `CohortLandingVerify.awaitBudget()` (globalTestRun + slack) instead.
   /// Poll cadence while waiting on the settle / rediscovery generation signals.
   let cohortLandingPoll = TimeSpan.FromMilliseconds(200.0)
-  /// The debounce a second "Trusted" read must clear to cross the rebuild race.
-  let cohortSettleConfirm = TimeSpan.FromMilliseconds(500.0)
   let processKillVerify = TimeSpan.FromSeconds(2.0)
   let stdioFlush = TimeSpan.FromSeconds(5.0)
 
@@ -154,12 +152,3 @@ module Timeouts =
   /// Deadline for the hot-reload web-app sample to bind its port and report
   /// ready. Replaces the 120.0s literal.
   let webAppPortReady = envOrDefault "SAGEFS_TEST_WEBAPP_PORT_SECONDS" 120.0
-  /// Deadline for the cohort-landing-gate E2E smoke's slower waits: isolated
-  /// daemon boot, real dotnet-build-backed warmup, live-testing discovery,
-  /// and git-ref landing settlement. Wider than the generic
-  /// `integrationDaemonReady` (120s) because this smoke's daemon does a cold
-  /// `dotnet build` of a real Expecto fixture project, which the daemon's
-  /// SessionManager mailbox serializes ahead of every other operation —
-  /// documented flake fix (60s intermittently ERRORed on CI). Replaces the
-  /// bare 180.0s literals in CohortLandingGateIntegrationTests.fs.
-  let cohortLandingGateReady = envOrDefault "SAGEFS_COHORT_LANDING_GATE_READY_SECONDS" 180.0
