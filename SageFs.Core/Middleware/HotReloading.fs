@@ -303,6 +303,13 @@ let hotReloadingMiddleware next (request, st: AppState) =
             // "nothing changed" from "a mutable binding just tore".
             response.Metadata
               .Add("reloadedMethods", report.UpdatedMethods)
+              // Canary-proven ineffective patches travel too, for the same
+              // reason the torn/declined bindings do: without them the file
+              // watcher counts a method the canary already proved unchanged as
+              // landed, and reports "Hot reloaded 1 of 1" for a save the
+              // running process ignored.
+              .Add("hotReloadIneffectiveMethods", report.DetourReport.Ineffective)
+              .Add("hotReloadRedirectedFromCompiled", report.DetourReport.RedirectedFromCompiled)
               .Add("hotReloadBindingOutcomes", report.DetourReport.Bindings)
               .Add("hotReloadDeclinedBindings", report.DetourReport.Declined)
           | false -> response.Metadata

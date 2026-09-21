@@ -497,6 +497,18 @@ type BindingOutcome =
 type DetourReport = {
   /// Full names of the older methods whose entry points now jump to new code.
   Redirected: string list
+  /// Full names of methods Harmony accepted a patch for and whose JIT-compiled
+  /// bytes the canary then found UNCHANGED. Deliberately NOT in `Redirected`:
+  /// the running process demonstrably still executes the old body, so counting
+  /// these as landed is how a save became "Hot reloaded 1 of 1" while the app
+  /// served stale code. Kept as its own list rather than folded into
+  /// `Failures` so a caller can name the declaration the user edited.
+  Ineffective: string list
+  /// The subset of `Redirected` whose re-pointed OLD entry point lived in a
+  /// COMPILED assembly. An app running from the project's own build output
+  /// calls those; re-pointing only a previous FSI copy leaves it untouched, and
+  /// by name alone the two are indistinguishable.
+  RedirectedFromCompiled: string list
   Bindings: BindingOutcome list
   Declined: DeclinedBinding list
   /// Detours that were planned and did not happen.
@@ -507,7 +519,7 @@ module DetourReport =
   /// The report of an eval that touched nothing — no new assembly, or hot
   /// reload disabled. Named so callers never hand-roll the all-empty record.
   let empty : DetourReport =
-    { Redirected = []; Bindings = []; Declined = []; Failures = [] }
+    { Redirected = []; Ineffective = []; RedirectedFromCompiled = []; Bindings = []; Declined = []; Failures = [] }
 
 /// Forces everything a detour will touch to resolve BEFORE any leg is written:
 /// the parameter and return types (which throw `TypeLoadException` for a stale
@@ -523,6 +535,37 @@ let private preflight (m: Method) : Result<unit, string> =
   with ex ->
     Error(sprintf "%s is not patchable (%s: %s)" m.FullName (ex.GetType().Name) ex.Message)
 
+/// What one binding's already-applied legs (`detourMethod`'s own verdicts,
+/// one per accessor) add up to. Pulled out of `applyBindingDetour` as its own
+/// pure function — no Harmony call in it — so the three-way verdict
+/// (coherent / untouched / TORN) is testable directly from a constructed
+/// `DetourApplied list`, independent of whatever makes a real detour actually
+/// fail on a given runtime or Harmony build. `detourMethod` already owns and
+/// is tested for WHEN a leg fails for real (a stale FSI type, an unsupported
+/// runtime, a native failure); this owns what a MIX of those verdicts means
+/// for the binding as a whole.
+let classifyBindingApplication (binding: string) (applied: DetourApplied list) : BindingOutcome =
+  let failures =
+    applied
+    |> List.choose (function
+      | DetourApplied.Failed reason -> Some reason
+      | DetourApplied.Redirected
+      | DetourApplied.Ineffective _
+      | DetourApplied.Superseded _ -> None)
+
+  let anyLanded =
+    applied
+    |> List.exists (function
+      | DetourApplied.Failed _ -> false
+      | DetourApplied.Redirected
+      | DetourApplied.Ineffective _
+      | DetourApplied.Superseded _ -> true)
+
+  match failures, anyLanded with
+  | [], _ -> BindingOutcome.BothLegsRedirected binding
+  | reason :: _, false -> BindingOutcome.NeitherLegRedirected(binding, reason)
+  | reason :: _, true -> BindingOutcome.Torn(binding, reason)
+
 let private applyBindingDetour (logger: ILogger) (unit: AccessorPairDetour) : BindingOutcome =
   let preflightFailures =
     unit.Legs
@@ -534,32 +577,11 @@ let private applyBindingDetour (logger: ILogger) (unit: AccessorPairDetour) : Bi
   match preflightFailures with
   | reason :: _ -> BindingOutcome.NeitherLegRedirected(unit.Binding, reason)
   | [] ->
-    let applied =
-      unit.Legs
-      |> List.map (fun (older, newer) ->
-        logger.LogDebug("Updating accessor " + older.FullName)
-        detourMethod logger older.MethodInfo newer.MethodInfo)
-
-    let failures =
-      applied
-      |> List.choose (function
-        | DetourApplied.Failed reason -> Some reason
-        | DetourApplied.Redirected
-        | DetourApplied.Ineffective _
-        | DetourApplied.Superseded _ -> None)
-
-    let anyLanded =
-      applied
-      |> List.exists (function
-        | DetourApplied.Failed _ -> false
-        | DetourApplied.Redirected
-        | DetourApplied.Ineffective _
-        | DetourApplied.Superseded _ -> true)
-
-    match failures, anyLanded with
-    | [], _ -> BindingOutcome.BothLegsRedirected unit.Binding
-    | reason :: _, false -> BindingOutcome.NeitherLegRedirected(unit.Binding, reason)
-    | reason :: _, true -> BindingOutcome.Torn(unit.Binding, reason)
+    unit.Legs
+    |> List.map (fun (older, newer) ->
+      logger.LogDebug("Updating accessor " + older.FullName)
+      detourMethod logger older.MethodInfo newer.MethodInfo)
+    |> classifyBindingApplication unit.Binding
 
 let applyDetourPlan (logger: ILogger) (plan: DetourPlan) : DetourReport =
   let functionResults =
@@ -568,14 +590,61 @@ let applyDetourPlan (logger: ILogger) (plan: DetourPlan) : DetourReport =
       logger.LogDebug("Updating method " + older.FullName)
       older, detourMethod logger older.MethodInfo newer.MethodInfo)
 
+  // `Ineffective` is NO LONGER counted as redirected.
+  //
+  // It means the canary compared the method's JIT-compiled bytes either side of
+  // the patch and found them IDENTICAL — direct evidence that the running
+  // process did not change. Counting it as landed is what let a save be
+  // reported as "Hot reloaded 1 of 1" while the app kept serving the old body:
+  // the count claims to describe the running process, and the canary is
+  // evidence about exactly that, so it is a verdict and not a warning.
+  //
+  // `Superseded` stays counted: it means the old copy is unreachable anyway, so
+  // nothing is left executing the stale body — the new definition IS what runs.
   let redirectedFunctions =
     functionResults
     |> List.choose (fun (older, applied) ->
       match applied with
       | DetourApplied.Redirected
-      | DetourApplied.Ineffective _
       | DetourApplied.Superseded _ -> Some older.FullName
+      | DetourApplied.Ineffective _
       | DetourApplied.Failed _ -> None)
+
+  /// Re-pointed, and proven by the canary not to have changed the running code.
+  /// Carried separately from `Failures` so a caller can name the DECLARATION
+  /// the user edited rather than only log a sentence about it.
+  let ineffectiveFunctions =
+    functionResults
+    |> List.choose (fun (older, applied) ->
+      match applied with
+      | DetourApplied.Ineffective _ -> Some older.FullName
+      | _ -> None)
+
+  /// Of the redirects that landed, those whose re-pointed OLD entry point lived
+  /// in a COMPILED assembly rather than in FSI's own dynamic assembly.
+  ///
+  /// This distinction is invisible by name. FSI wraps every submission in an
+  /// `FSI_NNNN` type (see FsiDynamicModulePrefix in the compiler), and
+  /// `getAllMethods` strips that prefix so both sides register the same
+  /// qualified name — which is what makes the detour matcher work at all, and
+  /// also what makes "a method with this name was re-pointed" unable to tell
+  /// the compiled entry point apart from a previous eval's copy. In
+  /// `--multiemit-` mode the single FSI assembly ACCUMULATES every eval, so
+  /// there is a growing pile of same-named older copies to pair with, and
+  /// re-pointing one of those changes nothing an app running from the compiled
+  /// project assembly will ever call.
+  let redirectedFromCompiled =
+    functionResults
+    |> List.choose (fun (older, applied) ->
+      match applied with
+      | DetourApplied.Redirected
+      | DetourApplied.Superseded _ ->
+        let declaringAsmIsDynamic =
+          try older.MethodInfo.DeclaringType.Assembly.IsDynamic with _ -> true
+        match declaringAsmIsDynamic with
+        | true -> None
+        | false -> Some older.FullName
+      | _ -> None)
 
   let functionFailures =
     functionResults
@@ -628,6 +697,8 @@ let applyDetourPlan (logger: ILogger) (plan: DetourPlan) : DetourReport =
       | BindingOutcome.Torn(binding, reason) -> Some(sprintf "%s: %s" binding reason))
 
   { Redirected = redirectedFunctions @ redirectedBindings
+    Ineffective = ineffectiveFunctions
+    RedirectedFromCompiled = redirectedFromCompiled
     Bindings = outcomes
     Declined = plan.Declined
     Failures = functionFailures @ bindingFailures }

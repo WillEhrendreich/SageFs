@@ -742,6 +742,31 @@ let run (sessionId: string) (port: int) = async {
       // What HotReloading.fs's middleware forwarded from this eval's
       // DetourReport, straight off the metadata bag it wrote — see
       // `reloadedMethodsOf` above for the same pattern.
+      /// Methods Harmony accepted a patch for and whose JIT-compiled bytes the
+      /// canary then found unchanged. These are NOT in `reloadedMethods`: the
+      /// running process provably still executes the old body, so they are
+      /// misses that must reach the user with a remedy, not silent successes.
+      let ineffectiveMethodsOf (response: EvalResponse) =
+        response.Metadata
+        |> Map.tryFind "hotReloadIneffectiveMethods"
+        |> Option.bind (fun v ->
+          match v with
+          | :? (string list) as methods -> Some methods
+          | _ -> None)
+        |> Option.defaultValue []
+      /// Of the redirects that landed, those whose OLD entry point lived in a
+      /// COMPILED assembly. An app running from the project's build output
+      /// calls those; a redirect that only re-pointed a previous FSI copy
+      /// leaves it running the old body, and the two are indistinguishable by
+      /// name because FSI's `FSI_NNNN` wrapper is stripped on both sides.
+      let redirectedFromCompiledOf (response: EvalResponse) =
+        response.Metadata
+        |> Map.tryFind "hotReloadRedirectedFromCompiled"
+        |> Option.bind (fun v ->
+          match v with
+          | :? (string list) as methods -> Some methods
+          | _ -> None)
+        |> Option.defaultValue []
       let bindingOutcomesOf (response: EvalResponse) : Middleware.HotReloadCore.BindingOutcome list =
         response.Metadata
         |> Map.tryFind "hotReloadBindingOutcomes"
@@ -912,9 +937,34 @@ let run (sessionId: string) (port: int) = async {
                   // cannot see on its own — a declined orphan leg, or an
                   // accessor pair whose preflight/Harmony application failed
                   // outright — so those no longer die in the log unreported.
+                  // A canary-proven ineffective patch is folded in as a MISS
+                  // with its own reason. Its declaration is named, because
+                  // "nothing changed" is not actionable and "'x' was
+                  // re-pointed but the running code did not change — its
+                  // caller most likely inlined the old body" is.
+                  let ineffectiveReasons =
+                    ineffectiveMethodsOf response
+                    |> List.map Features.ReloadOutcome.RestartReason.PatchIneffective
+                  // A function counted as landed whose ONLY re-pointed entry
+                  // point was a previous FSI copy has not reached an app
+                  // running from the compiled project assembly. Name it, so
+                  // "Hot reloaded 1 of 1" cannot describe a save the running
+                  // process ignored.
+                  let fromCompiled = redirectedFromCompiledOf response
+                  let reachedCompiled (name: string) =
+                    fromCompiled
+                    |> List.exists (fun m -> m = name || m.EndsWith("." + name, StringComparison.Ordinal))
+                  let unreachedReasons =
+                    functions
+                    |> List.filter (fun f ->
+                      reloaded
+                      |> List.exists (fun m -> m = f.Name || m.EndsWith("." + f.Name, StringComparison.Ordinal))
+                      && not (reachedCompiled f.Name))
+                    |> List.map (fun f -> Features.ReloadOutcome.RestartReason.PatchIneffective f.Name)
                   let outcome =
                     Features.ReloadPlanning.confirmPatchAsOutcome baseline functions reloaded
-                    |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses extraReasons
+                    |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses
+                         (extraReasons @ ineffectiveReasons @ unreachedReasons)
                   Features.ReloadBroadcast.broadcastOutcome outcome
                   Log.info "Hot reload: %s — %s (%s)"
                     fileName

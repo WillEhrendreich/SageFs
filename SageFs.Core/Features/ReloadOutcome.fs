@@ -52,6 +52,18 @@ type RestartReason =
   /// The Dart VM prefixes exactly this distinction with "Limitation: ", and it
   /// matters: one is a bug report worth filing, the other is physics.
   | NotYetSupported of shape: string
+  /// The detour was ACCEPTED and the running native code did not change: the
+  /// canary compared the method's JIT-compiled bytes either side of the patch
+  /// and found them identical.
+  ///
+  /// This case exists because the canary used to be discarded. `DetourApplied`
+  /// described `Ineffective` as "still counted as redirected (the canary is a
+  /// warning signal, not a verdict)", so a method the canary had already proven
+  /// unchanged was counted as landed — and the save was reported as
+  /// "Hot reloaded 1 of 1" while the running process kept serving the old body.
+  /// The canary is evidence about the running process, which is the only thing
+  /// the count claims to describe, so it is a verdict here.
+  | PatchIneffective of declaration: string
 
 module RestartReason =
 
@@ -71,6 +83,10 @@ module RestartReason =
       sprintf "'%s' did not exist when the app started, so there is nothing running to re-point" name
     | RestartReason.NotYetSupported shape ->
       sprintf "Limitation: SageFs does not re-point %s yet" shape
+    | RestartReason.PatchIneffective decl ->
+      sprintf
+        "'%s' was re-pointed but the running code did not change, so the app is still executing the old body"
+        decl
 
   /// What the user can actually do. Never empty — a refusal a user cannot act
   /// on is a dead end, and this is the field that stops it being one.
@@ -90,6 +106,10 @@ module RestartReason =
       "Restart the app — this change takes effect when the process starts."
     | RestartReason.NotYetSupported _ ->
       "Restart the app to pick this change up. If this shape matters to you, it is worth reporting — it is unimplemented, not impossible."
+    | RestartReason.PatchIneffective decl ->
+      sprintf
+        "Restart the app to pick it up. The usual cause is that '%s' was inlined into its caller before the edit, so the caller holds its own copy of the old body and there is no entry point left to re-point. Marking it [<MethodImpl(MethodImplOptions.NoInlining)>] keeps it reloadable."
+        decl
 
 /// What a save did to the process that is already running.
 ///

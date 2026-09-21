@@ -149,6 +149,7 @@
         <Compile Include="BinaryPrimitivesMutationTests.fs" />
         <Compile Include="TestCachePersistenceMutationTests.fs" />
         <Compile Include="FlakyPersistenceTests.fs" />
+        <Compile Include="FsiEmitSimTests.fs" />
         <Compile Include="EvalStoreMutationTests.fs" />
         <Compile Include="SessionDisplayMutationTests.fs" />
         <Compile Include="ReloadPlanningDecisionMutationTests.fs" />
