@@ -10,10 +10,16 @@
       "capability": "hot-reload",
       "layer": "real-client-e2e",
       "client": "dashboard",
-      "status": "deferred",
-      "issue": 127,
-      "expires": "2026-11-30",
-      "reason": "The row claimed 'verified' citing CI job 'dashboard-browser-e2e', which was deleted in d99c2fd4 (2026-09-13) — unbacked for a week, and the old evidence-is-any-non-empty-string gate could not notice. A 'hot-reload browser journeys' stage running --integration-hr now exists in ci-pipeline.fsx, so the remaining gap is narrow but real: no CI run has executed it yet, so there is no run id or commit anyone else can open. To re-verify, replace this row with kind 'ci' evidence naming tests SageFs.Tests/HotReloadBrowserTests.fs, runner --integration-hr, stage 'hot-reload browser journeys', and the run id of the first green main build that executed it."
+      "status": "verified",
+      "evidence": {
+        "kind": "ci",
+        "tests": ["SageFs.Tests/HotReloadBrowserTests.fs"],
+        "runner": "--integration-hr",
+        "stage": "test tiers",
+        "run": "35656311515",
+        "commit": "200e88b6",
+        "summary": "Real Chromium against a real daemon: Watch All arms the watcher and the panel reflects it; saving Greeting.fs makes the SAME running app serve the new value; a compile-error save keeps the last good value and the repair reloads. The --integration-hr tier ran 3 of 3 registered, 3 passed (TRUST verdict Trusted) in the gate for commit 200e88b6, whose result main build run 35656311515 promoted and published in its job summary's trust report. Closes #127."
+      }
     },
     {
       "id": "HR-VSC-E2E",
@@ -51,10 +57,16 @@
       "capability": "live-testing",
       "layer": "real-client-e2e",
       "client": "dashboard",
-      "status": "deferred",
-      "issue": 128,
-      "expires": "2026-11-30",
-      "reason": "The row claimed 'verified' citing CI job 'dashboard-browser-e2e', which was deleted in d99c2fd4 (2026-09-13) — unbacked for a week, and the old evidence-is-any-non-empty-string gate could not notice. A 'live-testing browser journeys' stage running --integration-lt now exists in ci-pipeline.fsx, but no CI run has executed it yet, so there is no run id or commit anyone else can open. Note the live-testing FEATURE is separately and strongly gated by HttpApiIntegrationTests.fs under --integration-host (real edit -> affected rerun -> pass/fail flip); what is unproven is specifically the DASHBOARD journey. To re-verify, replace this row with kind 'ci' evidence naming tests SageFs.Tests/LiveTestingBrowserTests.fs, runner --integration-lt, stage 'live-testing browser journeys', and the run id of the first green main build that executed it."
+      "status": "verified",
+      "evidence": {
+        "kind": "ci",
+        "tests": ["SageFs.Tests/LiveTestingBrowserTests.fs"],
+        "runner": "--integration-lt",
+        "stage": "test tiers",
+        "run": "35656311515",
+        "commit": "200e88b6",
+        "summary": "Real Chromium against a real daemon on the FromCSharp sample: enabling live testing discovers the tests, a real edit to Hello.fs shows the failing test live in the panel, and reverting returns it to green. The --integration-lt tier ran 2 of 2 registered, 2 passed (TRUST verdict Trusted) in the gate for commit 200e88b6, whose result main build run 35656311515 promoted and published in its job summary's trust report. Closes #128."
+      }
     },
     {
       "id": "LT-VSC-E2E",
