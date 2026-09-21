@@ -86,5 +86,9 @@ module FsiEmitInvariants =
     (before: SageFs.Features.ReloadPlanning.FileDecls)
     (patched: SageFs.Features.ReloadPlanning.SourceDecl list)
     (reloadedMethods: string list)
+    (_reachedRunningProcess: string list)
     : ReloadOutcome =
-    SageFs.Features.ReloadPlanning.confirmPatchAsOutcome before patched reloadedMethods
+    // The historical shape: ignore the evidence entirely and go by NAME alone,
+    // which is what shipped. Passing `reloadedMethods` as its own
+    // reached-set reproduces "any redirect counts as reaching the process".
+    SageFs.Features.ReloadPlanning.confirmPatchAsOutcome before patched reloadedMethods reloadedMethods
