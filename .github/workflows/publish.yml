@@ -50,7 +50,6 @@ jobs:
       contents: write
     env:
       SOURCE_RUN_ID: ${{ github.event_name == 'workflow_call' && inputs.source_run_id || github.event_name == 'workflow_dispatch' && github.event.inputs.source_run_id || github.event.workflow_run.id }}
-      VS_MARKETPLACE_PUBLISHER: willehrendreich
 
     steps:
     # Checkout FIRST so the workspace is a git repo with full history (the
@@ -93,7 +92,10 @@ jobs:
         node-version: 20
 
     - name: Install marketplace CLIs
-      run: npm install -g @vscode/vsce tfx-cli ovsx
+      # VS Code only: vsce (VS Code Marketplace) + ovsx (Open VSX). The Visual
+      # Studio extension is deprecated and no longer published, so its
+      # publisher CLI (tfx-cli) and publisher id are gone.
+      run: npm install -g @vscode/vsce ovsx
 
     - name: Download release bundle
       uses: actions/download-artifact@v4
