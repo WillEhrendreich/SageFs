@@ -19,6 +19,25 @@ let testProjectDir =
   Path.GetFullPath(
     Path.Combine(__SOURCE_DIRECTORY__, "..", "SageFs.Tests"))
 
+/// A small, standalone, CI-built sample — NOT this repo's own SageFs.Tests.fsproj
+/// (300+ files, the whole solution's package closure). `sessionManagerLifecycleTests`
+/// below sessions on this instead of `testProjectDir`: with no explicit `projects`
+/// list, `ProjectLoading.loadSolution` auto-discovers every `*.fsproj` in the given
+/// working directory and runs it through Ionide's real MSBuild `WorkspaceLoader` —
+/// pointed at `testProjectDir` (= SageFs.Tests itself), that was a full MSBuild
+/// evaluation of the repo's largest project on every session create, dominating
+/// both tests' wall clock (~65s for two sessions, measured) even though the claim
+/// under test (worker routing / restart-onto-a-new-pid) does not depend on which
+/// project is loaded. Switching to this sample cut it to ~23s. Duplicated here
+/// rather than shared with `HttpApiIntegrationTests.smokeSampleProjectDir` (same
+/// fsproj) because this file compiles earlier in SageFs.Tests.fsproj — the
+/// isolation this repo's own integration fixtures already duplicate rather than
+/// share (see CohortLandingGate's former header). CI builds it in "build samples
+/// for integration suites" (ci-pipeline.fsx), same as the HttpApi suite's copy.
+let sampleProjectDir =
+  Path.GetFullPath(
+    Path.Combine(__SOURCE_DIRECTORY__, "..", "samples", "from-csharp", "SageFs.Samples.FromCSharp"))
+
 let SageFsExe = SageFs.Tests.TestInfrastructure.SageFsBinary.path ()
 
 /// A fresh, throwaway SAGEFS_DATA_DIR so CLI subcommands and daemons spawned
@@ -344,6 +363,11 @@ let cleanupSession
 let sessionManagerLifecycleTests =
   Integration.hostList "SessionManager lifecycle" [
 
+    // THE CLAIM: the mailbox actually routes to a REAL worker process — create
+    // spawns it, the proxy it hands back reaches the real worker's real HTTP
+    // eval endpoint once Ready, status genuinely accumulates eval count, and
+    // stop genuinely tears the worker down. This is a WIRE claim (real process,
+    // real HTTP), not a decision: nothing here is a candidate for DST.
     testTask "create session, eval code, stop session" {
       let cts = new CancellationTokenSource(int Timeouts.integrationDaemonReady.TotalMilliseconds)
       let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
@@ -351,7 +375,7 @@ let sessionManagerLifecycleTests =
       let! createResult =
         mgr.PostAndAsyncReply(fun reply ->
           SageFs.SessionManager.SessionCommand.CreateSession(
-            [], testProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
+            [], sampleProjectDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
         |> Async.StartAsTask
 
       match createResult with
@@ -426,11 +450,18 @@ let sessionManagerLifecycleTests =
     // and the session is restarted on a new worker" + "multiple sessions are
     // independent"). The DECISIONS those tests asserted — restart-on-crash
     // policy and session-routing independence — are already property-tested
-    // by the pure DST sims (WorkerLifecycleSim + RestartPolicy +
-    // WorkerEventGuard). What only a real-process test can prove is the WIRE:
-    // two real OS worker processes are independently routable, and killing
-    // one real process is observed as a genuine restart onto a new pid while
-    // the other session is undisturbed. This is the minimal union of both.
+    // by the pure DST sims, folding the REAL extracted decision functions:
+    //   * WorkerLifecycleSimTests.fs — "no-stale-pid-applied" holds when
+    //     traces are folded through the real `WorkerEventGuard.classify*`
+    //     functions (the exact pid-blind-restart-race decision this test's
+    //     name refers to), and is VIOLATED under the pre-fix pidBlind twin.
+    //   * SimulationTests.fs — `Invariants.all` holds when traces are folded
+    //     through the real `RestartPolicy`/`SessionLifecycle` backoff/restart
+    //     decision, over 300 generated seeds per property.
+    // What only a real-process test can prove is the WIRE: two real OS worker
+    // processes are independently routable, and killing one real process is
+    // observed as a genuine restart onto a new pid while the other session is
+    // undisturbed. This is the minimal union of both.
     testTask "two independent sessions stay routable, and a killed worker restarts on a new pid" {
       let cts = new CancellationTokenSource(int Timeouts.integrationDaemonReady.TotalMilliseconds)
       let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
@@ -444,7 +475,7 @@ let sessionManagerLifecycleTests =
             [], dir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
         |> Async.StartAsTask
 
-      let result1 = create testProjectDir
+      let result1 = create sampleProjectDir
       let result2 = create otherDir
 
       let! result1 = result1
