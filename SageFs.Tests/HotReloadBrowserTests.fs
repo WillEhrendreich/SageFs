@@ -10,6 +10,27 @@ open SageFs.Tests.DashboardBrowserTests
 
 module Integration = SageFs.Tests.TestInfrastructure.Integration
 
+/// The hot-reload panel's Watch All button, found by the accessibility rule the
+/// markup actually follows rather than an exact-name match it never promised.
+///
+/// The button's visible text is "Watch All", and it carries
+/// `aria-label="Watch All — hot-reload every discovered source file"` because
+/// the dashboard's tooltips are drawn from `[aria-label]` (dashboard.css).
+/// An aria-label REPLACES the accessible name, so `Name = "Watch All", Exact =
+/// true` stopped matching the day the tooltip text was added (fe31252b) — and
+/// nobody saw, because the `integration host` stage ahead of this one was red
+/// and the pipeline never reached it. All three journeys errored with the same
+/// 30s locator timeout on their first CI run afterwards.
+///
+/// WCAG 2.5.3 (Label in Name) requires the accessible name to CONTAIN the
+/// visible label; it starts with it here. Anchoring on that start is exact
+/// enough to keep "Unwatch All — ..." out, and stays true however the tooltip
+/// wording evolves.
+let private watchAllButton (panel: ILocator) =
+  panel.GetByRole(
+    AriaRole.Button,
+    LocatorGetByRoleOptions(NameRegex = System.Text.RegularExpressions.Regex("^Watch All\\b")))
+
 /// HR-DASH browser journeys — real save -> changed running app through the
 /// live dashboard. These run under `--integration-hr` (HotReloadBrowserRunner
 /// owns the daemon + a HotReload session on a temp WebAppFixture copy whose app
@@ -114,7 +135,7 @@ let tests =
       do! PlaywrightExpect.waitForText 10_000 panel "Hot Reload: OFF"
       // Click Watch All.
       let watchAll =
-        panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Watch All", Exact = true))
+        watchAllButton panel
       do! watchAll.ClickAsync()
       // The panel header flips to ON with a watched count > 0.
       do! PlaywrightExpect.waitForText 30_000 panel "Hot Reload: ON"
@@ -138,7 +159,7 @@ let tests =
       let panel = page.Locator("#hot-reload-panel")
       do! PlaywrightExpect.isVisibleAsync panel "hot reload panel visible"
       let watchAll =
-        panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Watch All", Exact = true))
+        watchAllButton panel
       do! watchAll.ClickAsync()
       do! PlaywrightExpect.waitForText 30_000 panel "Hot Reload: ON"
       // Give the watcher a moment to arm before the edit (a save racing the
@@ -184,7 +205,7 @@ let tests =
       let panel = page.Locator("#hot-reload-panel")
       do! PlaywrightExpect.isVisibleAsync panel "hot reload panel visible"
       let watchAll =
-        panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Watch All", Exact = true))
+        watchAllButton panel
       do! watchAll.ClickAsync()
       do! PlaywrightExpect.waitForText 30_000 panel "Hot Reload: ON"
       do! page.WaitForTimeoutAsync(1500.0f)
