@@ -123,12 +123,24 @@ let mutable detourProbeAlpha = 0
 
 let mutable detourProbeBeta = 0
 
+/// Every static method in this assembly by name, first declaration winning —
+/// built ONCE. This used to rescan every type in the test assembly (tens of
+/// thousands, closures included) on each lookup; the "for ANY pair set"
+/// property below looks up two methods per generated accessor leg, and those
+/// scans alone made it a 248s test, the slowest in the default suite by 7x.
+let private staticMethodsByName =
+  lazy (
+    let index = System.Collections.Generic.Dictionary<string, System.Reflection.MethodInfo>()
+    for t in System.Reflection.Assembly.GetExecutingAssembly().GetTypes() do
+      for m in t.GetMethods(System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Static) do
+        index.TryAdd(m.Name, m) |> ignore
+    index)
+
 let private probeMethod (name: string) : Method =
   let m =
-    System.Reflection.Assembly.GetExecutingAssembly().GetTypes()
-    |> Array.collect (fun t ->
-      t.GetMethods(System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Static))
-    |> Array.find (fun m -> m.Name = name)
+    match staticMethodsByName.Value.TryGetValue name with
+    | true, m -> m
+    | false, _ -> failwithf "no static method named %s in the test assembly" name
   { MethodInfo = m; FullName = "App.Config." + name }
 
 /// The same accessor seen as an OLDER copy: a different FullName prefix, the way
