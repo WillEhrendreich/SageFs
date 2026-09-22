@@ -21,9 +21,17 @@
 /// `SessionPhase` down to it.
 module SageFs.EvalActorDecision
 
-/// Whether the active session is idle or currently evaluating code. Only
+/// Whether the active session is idle, currently evaluating code, or
+/// cancelling an eval whose thread hasn't confirmed it stopped. Only
 /// meaningful when the session is Active — not a top-level lifecycle state.
-type SessionActivity = Idle | Evaluating
+/// `Cancelling` exists because `cancel_eval` is cooperative (a
+/// `CancellationTokenSource.Cancel()` plus a `Thread.Interrupt()`, see
+/// AppState.fs): a loop with no cancellation checkpoint and nothing to
+/// interrupt into can outlive the cancel request entirely. Without this
+/// case the eval actor had no way to remember "a cancel is outstanding and
+/// unconfirmed", so a second Submit was accepted onto the SAME live FSI
+/// session as the still-running orphan — two threads racing one session.
+type SessionActivity = Idle | Evaluating | Cancelling
 
 /// Which incarnation of the FSI session an eval ran against. Every reset
 /// (soft or hard) replaces the session and advances the generation, so a
@@ -68,6 +76,12 @@ type EvalDecision =
   | RunEval
   | RejectEval of SageFsError
   | ServeQuery
+  /// A Cancel was acknowledged. Unlike `ServeQuery` this can carry a state
+  /// effect (Evaluating -> Cancelling) — the applying code decides that from
+  /// the CURRENT activity, since a Cancel with nothing running is a no-op.
+  /// Kept distinct from `ServeQuery` so the log/invariants can tell a Cancel
+  /// apart from a Query even though both are always answered immediately.
+  | AckCancel
   | ApplyFinished
   | DropSupersededFinished
   | AdvanceGenerationAndReset
@@ -81,9 +95,11 @@ type EvalDecision =
 /// loop variable, which reported WarmingUp (gate passed) while the reset
 /// was mid-flight — a queued eval could have run against a session being
 /// torn down. Faulted carries no AppState at all, so recovery is via
-/// reset. `Active` gates identically whether Idle or already Evaluating —
-/// this mirrors production exactly (a second Submit while Evaluating is
+/// reset. `Active Idle` and `Active Evaluating` gate identically — this
+/// mirrors production exactly (a second Submit while Evaluating is
 /// accepted today; that quirk is out of scope here and left unchanged).
+/// `Active Cancelling` is the one activity that gates differently — see
+/// below.
 ///
 /// Query and Cancel are ALWAYS served immediately, regardless of phase or
 /// activity — this is query-liveness. In production this is realized by
@@ -91,7 +107,16 @@ type EvalDecision =
 /// from Submit/Finished/Reset (the eval actor) — `decide` states the
 /// routing rule that makes that split correct rather than incidental, and
 /// the DST harness's single-actor twin (which instead blocks Query while
-/// Evaluating) proves the invariant has teeth.
+/// Evaluating) proves the invariant has teeth. "Served immediately" is
+/// about the REPLY never blocking on the eval actor — it says nothing
+/// about whether the cancel changes state, which `AckCancel`'s apply step
+/// does separately (see `SessionActivity.Cancelling`'s doc).
+///
+/// A Submit while the session is `Cancelling` is rejected: a prior cancel
+/// hasn't been confirmed, so the FSI session underneath may still be owned
+/// by the orphaned eval thread. Running a second eval there would be two
+/// threads driving one FSI session at once. The gate clears the moment a
+/// `Finished` (the orphan actually returns) or a `Reset` supersedes it.
 ///
 /// A `Finished` stamped with a superseded generation is dropped rather
 /// than applied: the eval thread that produced it can outlive a Reset
@@ -105,11 +130,26 @@ let decide (generation: SessionGeneration) (phase: EvalPhase) (input: EvalInput)
       EvalDecision.RejectEval(SageFsError.EvalFailed "Session is faulted. Run hard_reset_fsi_session to recover.")
     | EvalPhase.Initializing ->
       EvalDecision.RejectEval(SageFsError.EvalFailed "Session is resetting. Wait for reset to complete before evaluating.")
+    | EvalPhase.Active SessionActivity.Cancelling ->
+      EvalDecision.RejectEval(
+        SageFsError.EvalFailed
+          "A previous eval was cancelled but hasn't confirmed it stopped — likely a loop with no cancellation checkpoint. \
+           New evals are blocked on this session until it does, or you run hard_reset_fsi_session to recover.")
     | EvalPhase.Active _ -> EvalDecision.RunEval
-  | EvalInput.Cancel
   | EvalInput.Query -> EvalDecision.ServeQuery
+  | EvalInput.Cancel -> EvalDecision.AckCancel
   | EvalInput.Finished forGeneration ->
     match forGeneration = generation with
     | true -> EvalDecision.ApplyFinished
     | false -> EvalDecision.DropSupersededFinished
   | EvalInput.Reset -> EvalDecision.AdvanceGenerationAndReset
+
+/// The activity effect of an acknowledged Cancel (`EvalDecision.AckCancel`):
+/// only `Evaluating` moves to `Cancelling` — a cancel with nothing new in
+/// flight (`Idle`/already `Cancelling`) is a no-op. Kept here, not inlined
+/// at each call site, so AppState.fs's `EvalMarkCancelling` handler and the
+/// DST's `applyDecision` both apply the SAME rule.
+let applyCancelAck (activity: SessionActivity) : SessionActivity =
+  match activity with
+  | Evaluating -> Cancelling
+  | Idle | Cancelling -> activity

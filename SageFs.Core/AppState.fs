@@ -169,11 +169,12 @@ module SessionPhase =
     | Faulted reason -> Some reason
     | Active _ -> None
 
-  /// Derive the legacy SessionState for external consumers (MCP, dashboard, etc.)
+  /// Derive the legacy SessionState for external consumers. Cancelling->Faulted keeps hard_reset reachable via Affordances's gate (see SessionActivity.Cancelling doc).
   let toSessionState = function
     | Initializing _ -> SessionState.WarmingUp
     | Active (_, Idle) -> SessionState.Ready
     | Active (_, Evaluating) -> SessionState.Evaluating
+    | Active (_, Cancelling) -> SessionState.Faulted
     | Faulted _ -> SessionState.Faulted
 
   /// Extract the AppState when active, None otherwise.
@@ -244,6 +245,8 @@ type internal EvalCommand =
   /// values must not race a concurrent eval/reset — but it is no longer on
   /// the eval reply path, so it costs no eval its latency (roast-4 #2).
   | EvalGetLiveValues of AsyncReplyChannel<string>
+  /// Posted after a cancel signal to record it outstanding (SessionActivity.Cancelling); no reply.
+  | EvalMarkCancelling
 
 /// Test-only fault-injection seam for the eval-actor resilience tests
 /// (SageFs.Tests/EvalActorResilienceTests.fs). When set, the eval actor's
@@ -369,7 +372,7 @@ let evalFn (token: CancellationToken) =
     let evaluation = st.Session.Eval(code, token)
     let diagnostics = evaluation.Diagnostics
 
-    let evalRes =
+    let evalRes, resultMetadata =
       match evaluation.Outcome with
       | FsiSession.FsiSucceeded ->
         let fsiOutput = st.OutStream.StopRecording()
@@ -378,9 +381,11 @@ let evalFn (token: CancellationToken) =
           match String.IsNullOrWhiteSpace stdout with
           | true -> fsiOutput
           | false -> sprintf "%s\n%s" fsiOutput stdout
-        Ok combined
-      | FsiSession.FsiFailed ex -> Error <| ex
-      | FsiSession.FsiInterrupted -> Error <| (OperationCanceledException("the evaluation was interrupted") :> exn)
+        // Bound the printed result — see Features/EvalResultSummary.fs.
+        let bounded = Features.EvalResultSummary.bound Features.EvalResultSummary.maxResultChars combined
+        Ok bounded.Text, Features.EvalResultSummary.metadata bounded
+      | FsiSession.FsiFailed ex -> Error <| ex, Map.empty
+      | FsiSession.FsiInterrupted -> Error <| (OperationCanceledException("the evaluation was interrupted") :> exn), Map.empty
 
     st.OutStream.StopRecording() |> ignore
     Console.SetOut(originalOut)
@@ -388,7 +393,7 @@ let evalFn (token: CancellationToken) =
     {
       EvaluationResult = evalRes
       Diagnostics = diagnostics
-      Metadata = Map.empty
+      Metadata = resultMetadata
       EvaluatedCode = code
     },
     st
@@ -1203,14 +1208,9 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             | Active (st, _) ->
               publishSnapshot st Evaluating evalStats
               let sw = System.Diagnostics.Stopwatch.StartNew()
-              // Eval-to-pixel latency chain, stage 1/5 (vision §3.4, §7.4):
-              // starts a new in-flight sample in THIS PROCESS's tracker. This
-              // actor runs inside the FSI worker subprocess, not the daemon
-              // — see EvalLatencyTrace's module doc for why that means this
-              // stamp and the daemon-side ModelChanged/PushReceived/
-              // MorphWritten stamps land in two separate `shared` instances
-              // today, and why ModelChanged starts its own chain rather than
-              // waiting for this one to arrive.
+              // Eval-to-pixel latency chain, stage 1/5 (vision §3.4, §7.4): starts a new in-flight
+              // sample in THIS PROCESS's tracker (the FSI worker, not the daemon) — see
+              // EvalLatencyTrace's module doc for why that's a separate `shared` instance.
               EvalLatencyTrace.shared.StampRequested() |> ignore
               emit (Events.EvalRequested {| Code = request.Code; Source = Events.System |})
               let pipeline = pipelineBuildFn (wrapErrorMiddleware :: middleware) (evalFn cts.Token)
@@ -1230,36 +1230,29 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
               evalThread.Start()
               return (Active (st, Evaluating), middleware, evalStats)
             | Initializing _ | Faulted _ ->
-              // Unreachable: EvalActorDecision.decide's Submit arm only
-              // returns RunEval for EvalPhase.Active — see `decide` above.
-              // Kept exhaustive so the phase match is total.
+              // Unreachable: decide's Submit arm only returns RunEval for Active. Kept exhaustive.
               return (phase, middleware, evalStats)
           | EvalActorDecision.EvalDecision.ServeQuery
+          | EvalActorDecision.EvalDecision.AckCancel
           | EvalActorDecision.EvalDecision.ApplyFinished
           | EvalActorDecision.EvalDecision.DropSupersededFinished
           | EvalActorDecision.EvalDecision.AdvanceGenerationAndReset ->
-            // Unreachable: decide only returns these for Query/Cancel/
-            // Finished/Reset inputs, never Submit. Kept exhaustive.
+            // Unreachable: decide only returns these for Query/Cancel/Finished/Reset, never Submit.
             return (phase, middleware, evalStats)
         | EvalFinished(_, sw, code, reply, generation)
             when EvalActorDecision.decide sessionGeneration.Value (phaseOf phase) (EvalActorDecision.EvalInput.Finished generation)
                  = EvalActorDecision.EvalDecision.DropSupersededFinished ->
-          // Straggler: the eval thread outlived a reset that disposed the
-          // session it ran on and put a fresh one in its place. Its AppState
-          // wraps the disposed session — adopting it would bring that session
-          // back and leak the fresh one — so the result is dropped and the
-          // caller told why. currentEvalCts/Thread are left alone: they belong
-          // to whatever eval runs on the fresh session now.
+          // Straggler: the eval thread outlived a reset that disposed its session and put a fresh one
+          // in its place. Adopting it would resurrect the disposed session and leak the fresh one, so
+          // it's dropped; currentEvalCts/Thread are left alone — they belong to the fresh session now.
           sw.Stop()
           logger.LogWarning (sprintf "Discarding the result of an eval that outlived a reset (session state: %s)" (SessionPhase.toSessionState phase |> SessionState.label))
           reply.Reply (supersededResponse code)
           return (phase, middleware, evalStats)
         | EvalFinished(result, sw, code, reply, _) ->
-          // ApplyFinished: EvalActorDecision.decide's Finished arm returned
-          // ApplyFinished here (the generation matched) — see the guard above.
+          // ApplyFinished: decide's Finished arm matched the generation — see the guard above.
           sw.Stop()
-          // Eval-to-pixel latency chain, stage 2/5: the eval actor received
-          // the eval thread's result back on its own mailbox.
+          // Eval-to-pixel latency chain, stage 2/5: result back on the eval actor's own mailbox.
           EvalLatencyTrace.shared.StampFinished()
           currentEvalCts.Value <- None
           currentEvalThread.Value <- None
@@ -1313,9 +1306,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
               reply.Reply errResponse
               return (Active (st, Idle), middleware, evalStats)
             | Initializing _ | Faulted _ ->
-              // Unreachable: only a reset leaves the Active phase, and every
-              // reset advances the generation, so an EvalFinished from before
-              // it takes the straggler arm above. Kept so the match is total.
+              // Unreachable: a reset advances the generation, so a stale EvalFinished takes the straggler arm above.
               reply.Reply errResponse
               return (phase, middleware, evalStats)
         | EvalAddMiddleware(additionalMiddleware, r) ->
@@ -1331,6 +1322,12 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           | Initializing _ | Faulted _ ->
             reply.Reply (WorkerProtocol.Serialization.serialize (Features.LiveValueTree.buildSnapshot "" 0L []))
           return (phase, middleware, evalStats)
+        | EvalMarkCancelling ->
+          match phase with
+          | Active (st, activity) ->
+            let activity' = EvalActorDecision.applyCancelAck activity
+            publishSnapshot st activity' evalStats; return (Active (st, activity'), middleware, evalStats)
+          | Initializing _ | Faulted _ -> return (phase, middleware, evalStats)
         | EvalReset reply ->
           // decide's Reset arm always returns AdvanceGenerationAndReset,
           // regardless of phase — routed through it anyway so this call site
@@ -1903,7 +1900,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           // the caller issues after its own eval reply, so it never delays one.
           evalActor.Post(EvalGetLiveValues reply)
 
-        // Cancel — cooperative via CTS + thread interrupt for blocked evals
+        // Cancel — cooperative via CTS + thread interrupt, answered synchronously; also posts EvalMarkCancelling since it can't confirm the signal stopped anything.
         | CancelEval reply ->
           let cancelled =
             match currentEvalCts.Value with
@@ -1916,6 +1913,7 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
                 | Some thread ->
                   try thread.Interrupt() with ex -> logger.LogWarning (sprintf "Thread interrupt during cancel failed: %s" ex.Message)
                 | None -> ()
+                evalActor.Post(EvalMarkCancelling)
                 true
               with ex ->
                 logger.LogWarning (sprintf "Eval cancellation failed: %s" ex.Message)

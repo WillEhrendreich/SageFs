@@ -64,7 +64,7 @@ let tests =
         let t = run EvalActorGenerators.doubleCancel
         let cancels = t.Final.Log |> List.filter (fun e -> e.Op = EvalOp.Cancel)
         cancels |> List.length |> Expect.equal "both Cancel ops were logged" 2
-        cancels |> List.forall (fun e -> e.Decision = EvalDecision.ServeQuery) |> Expect.isTrue "both cancels served"
+        cancels |> List.forall (fun e -> e.Decision = EvalDecision.AckCancel) |> Expect.isTrue "both cancels served"
         assertHolds t
 
       testCase "stragglerAfterReset: two generations stale still drops" <| fun _ ->
@@ -78,6 +78,33 @@ let tests =
       testCase "freshFinished: a current-generation Finished is applied, not dropped" <| fun _ ->
         let t = run EvalActorGenerators.freshFinished
         t.Final.Activity |> Expect.equal "activity returned to Idle via ApplyFinished" Activity.Idle
+        assertHolds t
+
+      testCase "cancelBeforeSubmit: a Cancel with nothing running never gates the Submit that follows" <| fun _ ->
+        let t = run EvalActorGenerators.cancelBeforeSubmit
+        let submitDecision = t.Final.Log |> List.rev |> List.last |> fun e -> e.Decision
+        submitDecision |> Expect.equal "the Submit after an idle Cancel is RunEval" EvalDecision.RunEval
+        assertHolds t
+
+      testCase "cancelThenResubmit: the second Submit is rejected while the first eval's cancel is unconfirmed" <| fun _ ->
+        let t = run EvalActorGenerators.cancelThenResubmit
+        let entries = t.Final.Log |> List.rev
+        entries |> List.length |> Expect.equal "all three ops were decided" 3
+        let secondSubmitDecision = entries |> List.last |> fun e -> e.Decision
+        match secondSubmitDecision with
+        | EvalDecision.RejectEval _ -> ()
+        | other -> failtestf "expected the second Submit to be RejectEval, got %A" other
+        t.Final.Activity |> Expect.equal "activity stays Cancelling — nothing ever confirmed the orphan stopped" (Activity.Cancelling SessionGeneration.initial)
+        assertHolds t
+
+      testCase "cancelRacingCompletion: a Finished that wins the race clears Cancelling, and a later Submit is allowed again" <| fun _ ->
+        let t = run EvalActorGenerators.cancelRacingCompletion
+        let entries = t.Final.Log |> List.rev
+        let finishedDecision = entries |> List.item 2 |> fun e -> e.Decision
+        finishedDecision |> Expect.equal "the racing Finished for the current generation is applied" EvalDecision.ApplyFinished
+        let secondSubmitDecision = entries |> List.last |> fun e -> e.Decision
+        secondSubmitDecision |> Expect.equal "a Submit after the confirmed completion is RunEval again" EvalDecision.RunEval
+        t.Final.Activity |> Expect.equal "activity is Evaluating — the second Submit ran" (Activity.Evaluating SessionGeneration.initial)
         assertHolds t
     ]
 
@@ -102,12 +129,20 @@ let tests =
         |> List.map fst
         |> Expect.contains "the loop-survival invariant must fire" "loop-survival"
 
+      testCase "REPRODUCED — no-cancelling-gate twin runs a second eval onto an orphaned session (the live bug this fix closes)" <| fun _ ->
+        let t = runNoCancellingGate EvalActorGenerators.cancelThenResubmit
+        let secondSubmitDecision = t.Final.Log |> List.rev |> List.last |> fun e -> e.Decision
+        secondSubmitDecision |> Expect.equal "the twin runs the second eval instead of rejecting it" EvalDecision.RunEval
+        violations t
+        |> List.map fst
+        |> Expect.contains "the cancel-blocks-resubmit invariant must fire" "cancel-blocks-resubmit"
+
       testPropertyWithConfig simConfig "the invariants have teeth: some seeded scenario violates them under each twin" <|
         fun () ->
           let seeds = [ 1 .. 80 ]
           let anyViolates run' =
             seeds |> List.exists (fun seed -> violations (run' (EvalActorGenerators.fromSeed seed)) |> List.isEmpty |> not)
-          (anyViolates runGenerationBlind || anyViolates runSingleActor || anyViolates runUnwrapped)
+          (anyViolates runGenerationBlind || anyViolates runSingleActor || anyViolates runUnwrapped || anyViolates runNoCancellingGate)
           |> Expect.isTrue "at least one seeded scenario must expose a bug under at least one twin"
     ]
 

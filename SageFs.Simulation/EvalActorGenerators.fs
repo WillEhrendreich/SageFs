@@ -60,3 +60,24 @@ module EvalActorGenerators =
   /// vacuous "everything is dropped" reducer).
   let freshFinished : Scenario =
     { Seed = 6; Ops = [ EvalOp.Submit; EvalOp.StragglerFinished 0 ] }
+
+  /// Cancel before anything was ever submitted — nothing to cancel, and it
+  /// must not gate the Submit that follows.
+  let cancelBeforeSubmit : Scenario =
+    { Seed = 7; Ops = [ EvalOp.Cancel; EvalOp.Submit ] }
+
+  /// THE headline replay for the orphaned-loop bug this fix closes: an eval
+  /// is cancelled and never confirms it stopped (no Finished follows), then
+  /// a second eval is submitted. Live repro that motivated it: cancel an
+  /// unbounded `while true do ()`, then submit a trivial `1+1` — pre-fix,
+  /// the trivial eval hung for the caller's full timeout because the second
+  /// Submit was silently accepted onto the same orphaned session.
+  let cancelThenResubmit : Scenario =
+    { Seed = 8; Ops = [ EvalOp.Submit; EvalOp.Cancel; EvalOp.Submit ] }
+
+  /// A Cancel and the eval's own completion land back to back — the cancel
+  /// request loses the race to a `Finished` for the CURRENT generation.
+  /// Activity must still land on Idle (the completion wins), and a THIRD
+  /// Submit afterward must be allowed again.
+  let cancelRacingCompletion : Scenario =
+    { Seed = 9; Ops = [ EvalOp.Submit; EvalOp.Cancel; EvalOp.StragglerFinished 0; EvalOp.Submit ] }

@@ -61,6 +61,11 @@ module EvalActorSim =
   type Activity =
     | Idle
     | Evaluating of forGeneration: SessionGeneration
+    /// A Cancel was acknowledged while Evaluating and hasn't been resolved
+    /// by a Finished or superseded by a Reset yet — mirrors
+    /// `SessionActivity.Cancelling`. Carries the same generation the eval
+    /// was running under, exactly like `Evaluating` does.
+    | Cancelling of forGeneration: SessionGeneration
     | Reset of forGeneration: SessionGeneration
 
   /// One entry in the fold's decision log: which op, which `EvalInput` it
@@ -101,6 +106,7 @@ module EvalActorSim =
     match activity with
     | Activity.Idle -> EvalPhase.Active SessionActivity.Idle
     | Activity.Evaluating _ -> EvalPhase.Active SessionActivity.Evaluating
+    | Activity.Cancelling _ -> EvalPhase.Active SessionActivity.Cancelling
     | Activity.Reset _ -> EvalPhase.Active SessionActivity.Idle
 
   /// A reducer under test: the shape of `EvalActorDecision.decide`.
@@ -129,6 +135,14 @@ module EvalActorSim =
     | EvalDecision.RunEval -> { state with Activity = Activity.Evaluating state.Generation }
     | EvalDecision.RejectEval _ -> state
     | EvalDecision.ServeQuery -> state
+    | EvalDecision.AckCancel ->
+      // Mirrors AppState's EvalMarkCancelling handler: only Evaluating moves
+      // to Cancelling. Idle, already-Cancelling, and Reset are no-ops here —
+      // there is nothing running (or nothing NEW running) for the cancel to
+      // orphan.
+      match state.Activity with
+      | Activity.Evaluating g -> { state with Activity = Activity.Cancelling g }
+      | Activity.Idle | Activity.Cancelling _ | Activity.Reset _ -> state
     | EvalDecision.ApplyFinished -> { state with Activity = Activity.Idle }
     | EvalDecision.DropSupersededFinished -> state
     | EvalDecision.AdvanceGenerationAndReset ->
@@ -207,6 +221,21 @@ module EvalActorSim =
         EvalDecision.RejectEval(SageFsError.EvalFailed "busy: single-actor mailbox blocked on the in-flight eval")
       | other, p -> decide generation p other
 
+  /// TWIN 3: no-cancelling-gate — a Submit is accepted (`RunEval`) even
+  /// while the session is `Active Cancelling`, exactly like production did
+  /// before this fix: a cancelled-but-unconfirmed eval left the actor
+  /// reporting `Evaluating` forever, so a SECOND Submit was decided
+  /// `RunEval` and spawned a new eval thread onto the SAME live FSI session
+  /// as the still-running orphan. Reproduces the bug live: cancelling an
+  /// unbounded `while true do ()` and then submitting a trivial `1+1`
+  /// left the trivial eval hanging for the caller's full timeout, because
+  /// nothing ever told it the session couldn't safely take a second eval.
+  let private decideNoCancellingGate : Decide =
+    fun generation phase input ->
+      match input, phase with
+      | EvalInput.Submit, EvalPhase.Active SessionActivity.Cancelling -> EvalDecision.RunEval
+      | other, p -> decide generation p other
+
   /// Run through the REAL `EvalActorDecision.decide`, guarded — the subject
   /// under test, in production's own shape.
   let run (scenario: Scenario) : Trace =
@@ -221,6 +250,11 @@ module EvalActorSim =
   /// teeth.
   let runSingleActor (scenario: Scenario) : Trace =
     runGuardedWith "twin-single-actor" decideSingleActor scenario
+
+  /// Run through the no-cancelling-gate twin — used to prove
+  /// `cancel-blocks-resubmit` has teeth (reproduces the live orphan bug).
+  let runNoCancellingGate (scenario: Scenario) : Trace =
+    runGuardedWith "twin-no-cancelling-gate" decideNoCancellingGate scenario
 
   /// Run the REAL decide through the UNGUARDED fold — used to prove
   /// `loop-survival` has teeth (it is the fold guard, not the decision
