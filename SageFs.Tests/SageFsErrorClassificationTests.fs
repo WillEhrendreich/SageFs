@@ -91,6 +91,17 @@ let sageFsErrorClassificationTests =
       }
     ]
 
+    testList "isOverloadError" [
+      test "overload errors map to 503 HTTP status" {
+        allErrorCases
+        |> List.filter SageFsError.isOverloadError
+        |> List.iter (fun e ->
+          SageFsError.toHttpStatus e
+          |> Expect.equal
+            (sprintf "overload error %A should be 503" e) 503)
+      }
+    ]
+
     testList "classification properties" [
       test "every case is in exactly one category" {
         allErrorCases
@@ -99,7 +110,8 @@ let sageFsErrorClassificationTests =
             [ SageFsError.isClientError e
               SageFsError.isServerError e
               SageFsError.isGatewayError e
-              SageFsError.isInfraError e ]
+              SageFsError.isInfraError e
+              SageFsError.isOverloadError e ]
             |> List.filter id
             |> List.length
           categories

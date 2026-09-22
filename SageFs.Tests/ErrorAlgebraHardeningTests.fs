@@ -144,6 +144,11 @@ let private genError =
       return SageFsError.JsonParseError(ctx, r)
     }
     Gen.constant (SageFsError.Unexpected(Exception "test"))
+    gen {
+      let! pending = Gen.choose (0, 1000)
+      let! capacity = Gen.choose (1, 1000)
+      return SageFsError.SupervisorBusy(pending, capacity)
+    }
   ]
 
 let private pick g = (Gen.sample 1 g).[0]
@@ -253,7 +258,8 @@ let errorAlgebraHardeningTests =
             [ SageFsError.isClientError err
               SageFsError.isServerError err
               SageFsError.isGatewayError err
-              SageFsError.isInfraError err ]
+              SageFsError.isInfraError err
+              SageFsError.isOverloadError err ]
             |> List.filter id
             |> List.length
           trueCount = 1

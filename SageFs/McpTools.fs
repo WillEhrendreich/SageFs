@@ -73,6 +73,7 @@ let blockerKindOf : SageFs.SageFsError -> SageFs.Features.FrictionTelemetryTypes
   | SageFs.SageFsError.DaemonNotRunning -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.PortInUse _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.OperationFailed
   | SageFs.SageFsError.SseConnectionError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
+  | SageFs.SageFsError.SupervisorBusy _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.TransportFailure
   | SageFs.SageFsError.JsonParseError _ -> SageFs.Features.FrictionTelemetryTypes.BlockerKind.InvalidRequest
   // A cohort command the caller wasn't permitted to run given the current
   // cohort state/authority (not the claim holder, not the conductor, scope
@@ -1266,14 +1267,19 @@ WHEN TO USE:
 - Multi-project workflows where isolation between session contexts is important.
 
 AFTER CREATION:
-- The session warms up asynchronously (typically 15-30s for test projects).
-- Re-check get_fsi_status until it reports State='Ready'. Before that it may return a warming-up message instead of a full status snapshot. Do NOT create another session while waiting.
+- The session warms up asynchronously (typically 15-30s for a single small project — see the LARGE REPOS note below for anything bigger).
+- Re-check get_fsi_status until it reports State='Ready'. Before that it returns a 'Rebuilding' status carrying elapsedSeconds, boundSeconds, and the worker's own last-reported progress line — use those to tell "still working" from "actually stuck" instead of guessing. Do NOT create another session while waiting.
+- If it reports 'Faulted' with a reason, that reason is real: act on it (usually hard_reset_fsi_session with rebuild=true), don't keep polling hoping it changes.
 - Use the returned session ID with switch_session to route subsequent tool calls to the new session.
 - Use stop_session when finished to free the worker process.
 
+LARGE REPOS: name an explicit project. projects=[] on a repo with dozens of projects (a big solution) makes the worker try to discover and load all of them, which can take minutes. The SAME repo with ONE named project is typically Ready in seconds. Call get_available_projects first and pass the specific .fsproj you need — don't default to projects=[] on anything but a small, single-project directory.
+
 WORKTREES: a session's working directory is checkout-aware. If working_directory sits inside a git worktree (e.g. `.claude/worktrees/agent-x`), the session is bound to THAT worktree, not to the main checkout, and list_sessions/the dashboard show its branch. A request from inside a worktree never silently routes into the main checkout's session — create a session for the worktree instead of assuming one exists.
 
-projects: A JSON array of .fsproj paths — projects=["path/to/Foo.fsproj"] — or a comma-separated list. Passing [] (or "") does NOT guarantee an empty REPL: the worker still auto-discovers and loads whatever project/solution sits directly in working_directory, if one exists there (verified: a lone .fsproj in the working directory IS loaded and its types ARE usable, even though the session's reported `projects` stays []). You get a genuinely empty scratch REPL only when the working directory itself has nothing directly in it to discover. Check get_fsi_status's 'Loaded:' field after creation to see what was actually resolved. Both absolute and relative paths work.
+BUILD TIMING: if warmup faults with "Not all DLLs are found" right after you created the session, the most likely cause is that a build was still running when the worker looked for its output — not a broken project. Confirm the build finished, then recover with hard_reset_fsi_session rebuild=true, which builds and reloads in one step.
+
+projects: A JSON array of .fsproj paths — projects=["path/to/Foo.fsproj"] — or a comma-separated list. Passing [] (or "") does NOT guarantee an empty REPL: the worker still auto-discovers and loads whatever project/solution sits directly in working_directory, if one exists there (verified: a lone .fsproj in the working directory IS loaded and its types ARE usable, even though the session's reported `projects` stays []). You get a genuinely empty scratch REPL only when the working directory itself has nothing directly in it to discover. On a directory with many .fsproj files, create_session's own reply includes a heads-up before you wait on it. Check get_fsi_status's 'Loaded:' field after creation to see what was actually resolved. Both absolute and relative paths work.
 
 workflow: an unrecognized value (anything other than the aliases listed below, case-insensitive) is REJECTED with an error — it is never silently defaulted to interactive.""")>]
     member _.create_session(
@@ -1304,11 +1310,12 @@ WHEN TO USE:
         listSessions ctx |> withEcho ctx "list_sessions"
 
     [<McpServerTool>]
-    [<Description("""Stop an active FSI session by its ID. The worker process is gracefully shut down and its resources are released.
+    [<Description("""Stop an active FSI session by its ID. The worker process is gracefully shut down and its resources are released. Works the same way — and returns just as promptly — whether the session is Ready, still Starting, or already Faulted; a stop is never left waiting on warmup to finish or fail first.
 
 WHEN TO USE:
 - After finishing work in a session created with create_session to free the worker process.
 - When a session is stuck and a hard_reset_fsi_session hasn't helped — stop it and create a fresh one.
+- On a session that faulted during warmup — stopping it does not require it to reach Ready or Faulted first, and does not hang.
 - To clean up sessions that are no longer needed in multi-session workflows.
 
 NOTE: Stopping the last (or only) session will leave no active session. You will need to create_session or restart SageFs. Use list_sessions to see available session IDs before stopping.""")>]

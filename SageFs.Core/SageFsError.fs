@@ -106,6 +106,16 @@ type SageFsError =
       reason: ProjectCompatibility.UnsupportedTfmReason
   | SessionStopFailed of sessionId: string * reason: string
   | SessionSwitchFailed of sessionId: string * reason: string
+  /// The SessionManager mailbox's queue is at or past its admission
+  /// ceiling (`Timeouts.sessionManagerQueueCapacity`) — refused BEFORE
+  /// posting, not left to queue indefinitely behind whatever is already
+  /// backed up. Mirrors ElmLoop's own 256-message high-watermark alarm
+  /// (`ElmLoop.fs`) for the mailbox that didn't have one (observed
+  /// 2026-09-22: no bound at all on `MailboxProcessor<SessionCommand>`'s
+  /// queue, so a burst of concurrent callers had no signal short of the
+  /// caller's own external timeout). `pending`/`capacity` let the caller
+  /// (and the log line) say exactly how overloaded, not just "busy."
+  | SupervisorBusy of pending: int * capacity: int
   /// The target session could not be routed to at all — gone, still warming
   /// up, faulted, or otherwise unroutable. `reason` is the resolution's own
   /// description (SessionResolution/RouteError already computed it; this
@@ -182,6 +192,8 @@ module SageFsError =
       sprintf "Failed to stop session '%s': %s" id reason
     | SageFsError.SessionSwitchFailed(id, reason) ->
       sprintf "Failed to switch to session '%s': %s. Use list_sessions to check available sessions." id reason
+    | SageFsError.SupervisorBusy(pending, capacity) ->
+      sprintf "The session supervisor is overloaded (%d commands pending, capacity %d). Wait a moment and retry." pending capacity
     | SageFsError.SessionNotRoutable reason ->
       sprintf "Session not reachable: %s" reason
     | SageFsError.WorkerCommunicationFailed(id, reason) ->
@@ -267,6 +279,7 @@ module SageFsError =
     // Warning — degraded but recoverable
     | SageFsError.SessionStopFailed _ -> LogLevel.Warning
     | SageFsError.SessionSwitchFailed _ -> LogLevel.Warning
+    | SageFsError.SupervisorBusy _ -> LogLevel.Warning
     | SageFsError.CheckFailed _ -> LogLevel.Warning
     | SageFsError.CompletionFailed _ -> LogLevel.Warning
     | SageFsError.CancelFailed _ -> LogLevel.Warning
@@ -304,6 +317,8 @@ module SageFsError =
     | SageFsError.PortInUse _ -> 409
     | SageFsError.RestartLimitExceeded _ -> 409
     | SageFsError.DuplicateSession _ -> 409
+    // 503 Service Unavailable — overloaded, retry later (not the caller's fault)
+    | SageFsError.SupervisorBusy _ -> 503
     // 504 Gateway Timeout
     | SageFsError.WorkerTimeout _ -> 504
     // 502 Bad Gateway
@@ -372,6 +387,7 @@ module SageFsError =
     | SageFsError.DaemonStartFailed _
     | SageFsError.PortInUse _
     | SageFsError.SseConnectionError _
+    | SageFsError.SupervisorBusy _
     | SageFsError.Unexpected _ -> false
 
   /// Server errors: 500 — internal failures not caused by the client.
@@ -413,7 +429,8 @@ module SageFsError =
     | SageFsError.PipeClosed
     | SageFsError.SseConnectionError _
     | SageFsError.RestartLimitExceeded _
-    | SageFsError.PortInUse _ -> false
+    | SageFsError.PortInUse _
+    | SageFsError.SupervisorBusy _ -> false
 
   /// Gateway errors: 502/504 — the worker (upstream) is unreachable or timed out.
   let isGatewayError = function
@@ -454,6 +471,7 @@ module SageFsError =
     | SageFsError.RestartLimitExceeded _
     | SageFsError.DaemonStartFailed _
     | SageFsError.PortInUse _
+    | SageFsError.SupervisorBusy _
     | SageFsError.Unexpected _ -> false
 
   /// Infrastructure errors: 409 — system-level conflicts (port in use, restart limit, duplicate session).
@@ -461,6 +479,7 @@ module SageFsError =
     | SageFsError.PortInUse _ -> true
     | SageFsError.RestartLimitExceeded _ -> true
     | SageFsError.DuplicateSession _ -> true
+    | SageFsError.SupervisorBusy _ -> false
     | SageFsError.CohortActionFailed _
     | SageFsError.AppRunFailed _
     | SageFsError.ToolNotAvailable _
@@ -497,6 +516,53 @@ module SageFsError =
     | SageFsError.SseConnectionError _
     | SageFsError.Unexpected _ -> false
 
+  /// Overload errors: 503 — a real, bounded capacity limit was hit
+  /// (`SupervisorBusy`, the SessionManager mailbox's admission ceiling).
+  /// Distinct from `isInfraError`'s 409 conflicts: nothing about the
+  /// REQUEST conflicts with anything — the daemon is just handling more
+  /// concurrent work than its configured ceiling right now, and the fix is
+  /// "wait and retry," not "resolve a conflict."
+  let isOverloadError = function
+    | SageFsError.SupervisorBusy _ -> true
+    | SageFsError.ToolNotAvailable _
+    | SageFsError.SessionNotFound _
+    | SageFsError.NoActiveSessions
+    | SageFsError.AmbiguousSessions _
+    | SageFsError.SessionCreationFailed _
+    | SageFsError.DuplicateSession _
+    | SageFsError.UnsafeSessionPath _
+    | SageFsError.ProjectFrameworkNotHostable _
+    | SageFsError.SessionStopFailed _
+    | SageFsError.SessionSwitchFailed _
+    | SageFsError.SessionNotRoutable _
+    | SageFsError.WorkerCommunicationFailed _
+    | SageFsError.WorkerSpawnFailed _
+    | SageFsError.WorkerTimeout _
+    | SageFsError.WorkerHttpError _
+    | SageFsError.PipeClosed
+    | SageFsError.EvalFailed _
+    | SageFsError.ResetFailed _
+    | SageFsError.HardResetFailed _
+    | SageFsError.BuildFailed _
+    | SageFsError.ScriptLoadFailed _
+    | SageFsError.CheckFailed _
+    | SageFsError.CompletionFailed _
+    | SageFsError.CancelFailed _
+    | SageFsError.EvalSupersededByReset
+    | SageFsError.WarmupOpenFailed _
+    | SageFsError.WarmupContextFailed _
+    | SageFsError.HotReloadFailed _
+    | SageFsError.HotReloadStateError _
+    | SageFsError.AppRunFailed _
+    | SageFsError.RestartLimitExceeded _
+    | SageFsError.DaemonStartFailed _
+    | SageFsError.DaemonNotRunning
+    | SageFsError.PortInUse _
+    | SageFsError.SseConnectionError _
+    | SageFsError.JsonParseError _
+    | SageFsError.CohortActionFailed _
+    | SageFsError.Unexpected _ -> false
+
   /// Actionable suggestion for each error case.
   let suggestedAction = function
     | SageFsError.ToolNotAvailable _ -> "Wait for session to reach Ready state"
@@ -508,6 +574,7 @@ module SageFsError =
     | SageFsError.UnsafeSessionPath _ -> "Use an existing directory and keep project paths inside it — no UNC paths or '..' escapes"
     | SageFsError.ProjectFrameworkNotHostable _ -> "Point SageFs at a .NET (Core) project (net5.0 or newer) for now — .NET Framework support is not shipped yet, and the message names the issue tracking it"
     | SageFsError.SessionStopFailed _ -> "Try hard_reset_fsi_session"
+    | SageFsError.SupervisorBusy _ -> "Wait a few seconds and retry — the daemon is handling a burst of concurrent session activity"
     | SageFsError.SessionSwitchFailed _ -> "Run list_sessions to check available sessions"
     | SageFsError.SessionNotRoutable _ -> "Run get_fsi_status or list_sessions to check session state"
     | SageFsError.WorkerCommunicationFailed _ -> "Run hard_reset_fsi_session"
@@ -542,6 +609,16 @@ module SageFsError =
   /// Use at MCP boundary so every error an agent sees ends with an actionable next step.
   let describeForAgent (err: SageFsError) =
     sprintf "%s → Next: %s" (describe err) (suggestedAction err)
+
+  /// Pure admission decision for a bounded mailbox: refuse once `pending`
+  /// reaches `capacity`, otherwise admit. Extracted so the decision itself
+  /// (not the real `MailboxProcessor.CurrentQueueLength` it's checked
+  /// against in production — `DaemonMode.checkMailboxAdmission`) is
+  /// unit-testable without spinning up a real mailbox.
+  let admissionDecision (pending: int) (capacity: int) : Result<unit, SageFsError> =
+    match pending >= capacity with
+    | true -> Result.Error (SageFsError.SupervisorBusy(pending, capacity))
+    | false -> Result.Ok ()
 
   /// True for a genuine F# union type that is NOT a list. F# lists
   /// (`'a list`) are themselves unions (Cons/Nil) at the CLR level but

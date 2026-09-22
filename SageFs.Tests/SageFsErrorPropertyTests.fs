@@ -136,6 +136,11 @@ let private genSageFsError =
       return SageFsError.CohortActionFailed(reason, suggestion)
     }
     Gen.constant (SageFsError.Unexpected(Exception "test"))
+    gen {
+      let! pending = Gen.choose (0, 1000)
+      let! capacity = Gen.choose (1, 1000)
+      return SageFsError.SupervisorBusy(pending, capacity)
+    }
   ]
 
 // ── Reflection helpers ──
@@ -258,6 +263,7 @@ let sageFsErrorPropertyTests =
           SageFsError.isServerError err
           SageFsError.isGatewayError err
           SageFsError.isInfraError err
+          SageFsError.isOverloadError err
         ]
         let trueCount = flags |> List.filter id |> List.length
         trueCount = 1
@@ -270,6 +276,7 @@ let sageFsErrorPropertyTests =
           "isServerError", SageFsError.isServerError err
           "isGatewayError", SageFsError.isGatewayError err
           "isInfraError", SageFsError.isInfraError err
+          "isOverloadError", SageFsError.isOverloadError err
         ]
         let trueOnes = flags |> List.filter snd |> List.map fst
         trueOnes
@@ -280,12 +287,12 @@ let sageFsErrorPropertyTests =
           1)
 
     // 9. DU completeness guard — detect new cases
-    testCase "SageFsError DU has exactly 38 cases" <| fun _ ->
+    testCase "SageFsError DU has exactly 39 cases" <| fun _ ->
       allDuCaseInfos
       |> Array.length
       |> Expect.equal
         "SageFsError case count changed — update generators and property tests"
-        38
+        39
 
     // 10. Unexpected wraps exception message
     testPropertyWithConfig propConfig "Unexpected description contains exception message" <|
@@ -301,4 +308,11 @@ let sageFsErrorPropertyTests =
         let err = pick genSageFsError
         let status = SageFsError.toHttpStatus err
         SageFsError.isInfraError err = (status = 409)
+
+    // ── isOverloadError ↔ toHttpStatus 503 consistency ──
+    testPropertyWithConfig propConfig "isOverloadError is true iff toHttpStatus is 503" <|
+      fun () ->
+        let err = pick genSageFsError
+        let status = SageFsError.toHttpStatus err
+        SageFsError.isOverloadError err = (status = 503)
   ]
