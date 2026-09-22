@@ -89,6 +89,10 @@
              value like a dead local, check once and patch). -->
         <Compile Include="ValueReadSim.fs" />
         <Compile Include="ValueReadInvariants.fs" />
+        <!-- Rule 2 reflection reads, in every mode: the slot that names a
+             rewired caller, reads inside other reflective calls, threads,
+             mode switches. Real ledger and save check, modelled watch. -->
+        <Compile Include="ReflectionReadSim.fs" />
         <Compile Include="FsiDiscoveryIdentitySim.fs" />
         <Compile Include="FsiDiscoveryIdentityInvariants.fs" />
         <Compile Include="FileReloadRoutingGenerators.fs" />
