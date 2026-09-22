@@ -88,3 +88,6 @@ coverage-report/
 # Local output of the ci-pipeline.fsx release stages (nupkg + vsix + manifest);
 # on CI it is uploaded as the release-assets artifact, never committed.
 release/
+
+# Scratch copies the hot-reload state tests build per runtime (HotReloadStateHarness).
+SageFs.Tests/fixtures/HotReloadStateFixture/.runs/

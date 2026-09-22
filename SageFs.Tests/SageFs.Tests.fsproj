@@ -460,6 +460,8 @@
         <Compile Include="SettingsPanelTests.fs" />
         <Compile Include="SupervisorPortHandshakeTests.fs" />
         <Compile Include="WebAppHotReloadVerificationTests.fs" />
+        <Compile Include="HotReloadStateHarness.fs" />
+        <Compile Include="HotReloadStateOutcomeTests.fs" />
         <Compile Include="DaemonStateChangeContractTests.fs" />
         <Compile Include="LiveTestWatcherCoreTests.fs" />
         <Compile Include="FrictionCaptureDurabilityTests.fs" />
