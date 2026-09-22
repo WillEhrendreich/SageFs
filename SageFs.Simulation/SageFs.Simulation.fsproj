@@ -128,6 +128,15 @@
         <Compile Include="WatcherLifecycleSim.fs" />
         <Compile Include="WatcherLifecycleInvariants.fs" />
         <Compile Include="WatcherLifecycleGenerators.fs" />
+        <!-- Streaming-test-proxy cancellation contract DST: models the
+             pre-start / mid-read / racing-completion cancellation ordering
+             races in HttpWorkerClient.fs's streamingTestProxy; a twin
+             reintroduces the double-token race (Async.CancellationToken +
+             a second Async.StartAsTask cancellationToken=ct) that produced
+             a raw TaskCanceledException instead of StreamOutcome.Cancelled. -->
+        <Compile Include="StreamingProxySim.fs" />
+        <Compile Include="StreamingProxyInvariants.fs" />
+        <Compile Include="StreamingProxyGenerators.fs" />
     </ItemGroup>
 
     <ItemGroup>

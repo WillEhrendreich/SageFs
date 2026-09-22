@@ -296,6 +296,7 @@
         <Compile Include="LiveValueTreeTests.fs" />
         <Compile Include="LiveBindingsAdaptiveTests.fs" />
         <Compile Include="StreamingProxyTests.fs" />
+        <Compile Include="StreamingProxySimTests.fs" />
         <Compile Include="McpStateHandlerTests.fs" />
         <Compile Include="CompilationContextTests.fs" />
         <Compile Include="CompilationContextPropertyTests.fs" />
