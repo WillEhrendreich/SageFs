@@ -286,6 +286,47 @@ let tweakLogTests =
         wasTorn |> Expect.isFalse "nothing was torn"
     ]
 
+    testList "fingerprints grade a segment before folding it" [
+
+      testCase "same schema, same fold version, same target: Fine" <| fun _ ->
+        let fp = Fingerprint.current "target-hash-1"
+        Fingerprint.grade fp fp |> Expect.equal "identical fingerprints are Fine" LogGrade.Fine
+
+      testCase "same schema and fold version, different target file: Risky" <| fun _ ->
+        let current = Fingerprint.current "target-hash-NEW"
+        let stored = Fingerprint.current "target-hash-OLD"
+        Fingerprint.grade current stored |> Expect.equal "readable, but about a different target now" LogGrade.Risky
+
+      testCase "same schema, different fold version: Risky" <| fun _ ->
+        let current = { Fingerprint.current "t" with FoldVersion = Fingerprint.current("t").FoldVersion + 1 }
+        let stored = Fingerprint.current "t"
+        Fingerprint.grade current stored |> Expect.equal "the bytes decode, but the fold semantics moved" LogGrade.Risky
+
+      testCase "different schema version: Impossible" <| fun _ ->
+        let current = { Fingerprint.current "t" with SchemaVersion = Fingerprint.current("t").SchemaVersion + 1 }
+        let stored = Fingerprint.current "t"
+        Fingerprint.grade current stored |> Expect.equal "the byte layout itself can't be trusted" LogGrade.Impossible
+
+      testCase "a Fine segment decodes its events" <| fun _ ->
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let fp = Fingerprint.current (contentHash baseSource)
+        let bytes = TweakLogFormat.encodeSegment fp log.Events
+        let decoded = TweakLogFormat.decodeSegment fp bytes |> Expect.wantOk "decodes"
+        decoded.Grade |> Expect.equal "Fine" LogGrade.Fine
+        decoded.Events |> Expect.equal "the events survive" log.Events
+
+      testCase "an Impossible segment is never folded: no events come back, just the grade" <| fun _ ->
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let stored = Fingerprint.current (contentHash baseSource)
+        let bytes = TweakLogFormat.encodeSegment stored log.Events
+        let currentBuild = { stored with SchemaVersion = stored.SchemaVersion + 1 }
+        let decoded = TweakLogFormat.decodeSegment currentBuild bytes |> Expect.wantOk "the header itself still decodes"
+        decoded.Grade |> Expect.equal "Impossible" LogGrade.Impossible
+        decoded.Events |> Expect.isEmpty "never folded, whatever the bytes might have contained"
+    ]
+
     testProperty "PROPERTY, snapshot plus tail always folds to the same projection as the full stream, for every address" <|
       fun () ->
         let log = EventLog.empty
