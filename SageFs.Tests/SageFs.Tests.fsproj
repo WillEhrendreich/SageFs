@@ -501,6 +501,8 @@
         <Compile Include="CohortSseEventsTests.fs" />
         <Compile Include="McpResourcesTests.fs" />
         <Compile Include="AgentGuidanceTests.fs" />
+        <Compile Include="../tools/agent-hooks/ReplGuard.fs" Link="AgentHooks/ReplGuard.fs" />
+        <Compile Include="ReplGuardTests.fs" />
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
         <Compile Include="AgentGuidanceIntegrationTests.fs" />

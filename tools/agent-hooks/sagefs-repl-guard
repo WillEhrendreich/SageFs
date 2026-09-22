@@ -1,0 +1,13 @@
+#!/bin/sh
+# Claude Code PreToolUse hook (Bash): keeps agents on the SageFs REPL loop.
+# The decision lives in sagefs-repl-guard.fsx (and ReplGuard.fs). This wrapper
+# only exists because dotnet fsi takes a couple of seconds to start, and a hook
+# runs before EVERY Bash call. Commands that never mention dotnet exit here
+# without starting it.
+input=$(cat)
+case "$input" in
+  *dotnet*) ;;
+  *) exit 0 ;;
+esac
+cd "$(dirname "$0")" || exit 0
+printf '%s' "$input" | exec dotnet fsi --quiet sagefs-repl-guard.fsx
