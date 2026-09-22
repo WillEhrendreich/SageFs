@@ -53,7 +53,7 @@ let tieredCompilationSetting : SettingDescriptor =
     Scope = RepoOverridable
     Applicability = RestartRequired
     Default =
-      match enumOf (TieringChoice.name TieringChoice.TieringOffWhileWatching) with
+      match enumOf (TieringChoice.name TieringChoice.standard) with
       | Result.Ok v -> v
       | Result.Error _ -> failwith "the default tiering choice must be one of the choices"
     Parse = enumOf
@@ -82,10 +82,10 @@ let reflectionSettingsAt (paths: ConfigPaths) : ReflectionReadSettings =
     | Result.Ok provenance ->
       match TieringChoice.parse (tieredCompilationSetting.Render provenance.Effective) with
       | Result.Ok choice -> choice
-      | Result.Error _ -> TieringChoice.TieringOffWhileWatching
+      | Result.Error _ -> TieringChoice.standard
     | Result.Error why ->
-      Utils.Log.warn "[ValueReads] the tiered compilation setting can't be read (%s); using %s" (ConfigError.describe why) (TieringChoice.name TieringChoice.TieringOffWhileWatching)
-      TieringChoice.TieringOffWhileWatching
+      Utils.Log.warn "[ValueReads] the tiered compilation setting can't be read (%s); using %s" (ConfigError.describe why) (TieringChoice.name TieringChoice.standard)
+      TieringChoice.standard
   { Mode = mode; HotLoop = HotLoopThreshold.standard; Tiering = tiering }
 
 /// The reflection settings for a session started in `workingDir`.

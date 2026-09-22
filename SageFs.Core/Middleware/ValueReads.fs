@@ -586,6 +586,14 @@ type TieringChoice =
 module TieringChoice =
   let all = [ TieringChoice.TieringOffWhileWatching; TieringChoice.KeepTiering ]
 
+  /// Tiering off, because the edit loop restarts the app a lot and rarely
+  /// runs it long. Measured on net11 (read-tracking-costs.md): off started the
+  /// test app 0.7s slower (8.5s vs 7.8s) and served warm requests faster
+  /// (340 µs vs 563 µs), since a short run never finishes tiering up. Keeping
+  /// tiering on only pays off in a long run, and it costs lapses, which cost
+  /// restarts.
+  let standard = TieringChoice.TieringOffWhileWatching
+
   /// The one spelling used by config and the dashboard.
   let name (choice: TieringChoice) : string =
     match choice with
@@ -926,7 +934,7 @@ type ReflectionReadSettings =
     Tiering: TieringChoice }
 
 module ReflectionReadSettings =
-  let standard = { Mode = ReflectionReadMode.standard; HotLoop = HotLoopThreshold.standard; Tiering = TieringChoice.TieringOffWhileWatching }
+  let standard = { Mode = ReflectionReadMode.standard; HotLoop = HotLoopThreshold.standard; Tiering = TieringChoice.standard }
 
 /// Whether the reflection entry points carry SageFs's watch.
 [<RequireQualifiedAccess>]
