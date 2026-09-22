@@ -1,0 +1,23 @@
+<Project>
+
+  <!-- TreeSitter.DotNet ships native grammars for about 30 languages on every
+       platform. SageFs loads exactly one grammar, its own F# one (from
+       runtimes/, see TestTreeSitter.fs), plus tree-sitter's core library. The
+       other grammars used to ride along into every build output, the host
+       folder and the tool package, twice over once SageFs packed for two
+       TFMs. That pushed the nupkg past nuget.org's 250 MB limit. Keep the core,
+       drop the grammars. ci-pipeline.fsx's verifyToolInstallable fails the
+       gate if one sneaks back in. -->
+  <Target Name="SageFsDropUnusedTreeSitterGrammars"
+          AfterTargets="ResolvePackageAssets"
+          Condition="'@(RuntimeTargetsCopyLocalItems)' != '' or '@(NativeCopyLocalItems)' != ''">
+    <ItemGroup>
+      <_SageFsUnusedGrammar Include="@(RuntimeTargetsCopyLocalItems);@(NativeCopyLocalItems)"
+                            Condition="'%(NuGetPackageId)' == 'TreeSitter.DotNet'
+                                       and ('%(Filename)' != 'tree-sitter' and '%(Filename)' != 'libtree-sitter')" />
+      <RuntimeTargetsCopyLocalItems Remove="@(_SageFsUnusedGrammar)" />
+      <NativeCopyLocalItems Remove="@(_SageFsUnusedGrammar)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

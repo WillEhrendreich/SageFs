@@ -133,6 +133,29 @@ let verifyToolInstallable () =
       |> Seq.map (fun n -> (n.Split('/')).[1])
       |> Seq.distinct
       |> Seq.toList
+    // nuget.org refuses anything over 250 MB with a 413, and that only shows up
+    // at the publish step, after the VS Code marketplaces already took the
+    // release. Catch it here. The margin leaves room for ordinary growth.
+    let nugetLimitBytes = 250L * 1024L * 1024L
+    let size = FileInfo(nupkg).Length
+    match size < nugetLimitBytes * 9L / 10L with
+    | false ->
+      failwithf "%s is %d MB. nuget.org rejects packages over 250 MB, and this gate wants 10%% headroom." (Path.GetFileName nupkg) (size / 1048576L)
+    | true -> ()
+    // SageFs loads exactly one tree-sitter grammar, its own F# one. Any other
+    // grammar in the package is dead weight that got copied in from
+    // TreeSitter.DotNet (Directory.Build.targets strips them).
+    let strayGrammars =
+      zip.Entries
+      |> Seq.map (fun e -> Path.GetFileName e.FullName)
+      |> Seq.filter (fun f ->
+        (f.StartsWith "tree-sitter-" || f.StartsWith "libtree-sitter-")
+        && not (f.Contains "tree-sitter-fsharp"))
+      |> Seq.distinct
+      |> Seq.toList
+    match strayGrammars with
+    | [] -> ()
+    | stray -> failwithf "%s bundles tree-sitter grammars SageFs never loads: %s" (Path.GetFileName nupkg) (String.concat ", " stray)
     let missing = requiredToolTfms |> List.filter (fun t -> not (List.contains t tfms))
     let unexpected = tfms |> List.filter (fun t -> not (List.contains t requiredToolTfms))
     match missing, unexpected with
