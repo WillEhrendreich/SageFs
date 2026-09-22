@@ -67,7 +67,7 @@ Because it re-points **methods**, not everything is patchable: a handler that's 
 
 SageFs exposes a [Model Context Protocol](https://modelcontextprotocol.io/) server with an affordance-driven state machine: the full tool catalog is always listed, but calling a tool that doesn't apply to the current session state gets rejected with a structured error instead of a raw failure, and `get_fsi_status` reports which tools currently apply. The core MCP path is session trust, F# evaluation, exact test execution, and failure explanation. Copilot, Claude, and any MCP client can execute F# code, type-check it, verify a changed behavior, and run tests against your real project.
 
-Ai seems to love complexity. It's wrong about that. A fast, type-safe REPL with tests re-running on every change keeps it honest, same as it keeps me honest.
+Agents left alone will happily pile on complexity. Give one a fast, type-checked REPL with tests re-running on every change and it gets caught the same way I do, right away.
 
 ### 🖥️ One Daemon, Every Client
 
