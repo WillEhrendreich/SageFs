@@ -215,8 +215,36 @@ let private addressOf (e: TweakLogEvent) : TweakAddress option =
   | TweakLogEvent.HotReloadObserved _
   | TweakLogEvent.RolledBack _ -> None
 
+/// The address, before and after of any mutating event ANYWHERE in
+/// `events`, resolved by id, RECURSIVELY: a `RolledBack targetId` is
+/// itself a state transition (it moved the address from the target's
+/// `after` back to its `before`), so its own effect is the target's
+/// effect FLIPPED. This is what makes redo possible with no new event
+/// case: redoing an undo is rolling back the ROLLBACK, and `effectOf`
+/// tells `rollback` what that means without it needing to know how many
+/// levels of undo/redo came before.
+///
+/// Scope limit, stated plainly (same shape as `whyKept`'s): this walks
+/// `events` as given. Called with `log.Events` (the whole in-memory log,
+/// what `rollback`/`performUndo`/`performRedo` always have), multi-level
+/// undo/redo resolves correctly. A `RolledBack` in a POST-COMPACTION tail
+/// whose target crossed the snapshot boundary only resolves one level
+/// (via `Snapshot.Origins`, address+before only) — a second undo/redo
+/// cycle on something already compacted away is not this pass's problem
+/// to solve.
+let rec private effectOf (events: LoggedEvent list) (id: int) : (TweakAddress * string * string) option =
+  events
+  |> List.tryFind (fun e -> e.Id = id)
+  |> Option.bind (fun e ->
+    match e.Event with
+    | TweakLogEvent.TweakApplied(addr, before, after, _) -> Some(addr, before, after)
+    | TweakLogEvent.TweakSaved(addr, before, after, _, _) -> Some(addr, before, after)
+    | TweakLogEvent.RolledBack targetId -> effectOf events targetId |> Option.map (fun (addr, before, after) -> addr, after, before)
+    | _ -> None)
+
 /// The (address, textBefore) a mutating event recorded, the piece a
-/// `RolledBack eventId` needs from whatever event it targets.
+/// `RolledBack eventId` needs from whatever event it targets. One level
+/// only (see `effectOf` for the recursive version `rollback` itself uses).
 let private originOf (e: TweakLogEvent) : (TweakAddress * string) option =
   match e with
   | TweakLogEvent.TweakApplied(addr, before, _, _) -> Some(addr, before)
@@ -349,21 +377,25 @@ type RollbackError =
 /// Roll back the write `opId` made, against `currentSource` as it is RIGHT
 /// NOW. Only ever applies (or reports a conflict), never guesses, and
 /// refuses outright when the target address already has an open conflict.
+/// Rolls back whatever `opId` did — a `TweakApplied`/`TweakSaved` (an
+/// ordinary undo), OR a `RolledBack` (rolling back a rollback IS redo,
+/// `effectOf` already flips its before/after, so this function does not
+/// need to know which case it's looking at).
 let rollback (log: EventLog) (opId: int) (currentSource: string) : Result<RollbackOutcome, RollbackError> =
   match log.Events |> List.tryFind (fun e -> e.Id = opId) with
   | None -> Error(RollbackError.NoSuchOperation opId)
-  | Some target ->
-    match target.Event with
-    | TweakLogEvent.TweakApplied(addr, before, after, hashAfter)
-    | TweakLogEvent.TweakSaved(addr, before, after, hashAfter, _) ->
+  | Some _ ->
+    match effectOf log.Events opId with
+    | None -> Error(RollbackError.NotAnOperation opId)
+    | Some(addr, before, after) ->
       match hasOpenConflict log addr with
       | true -> Error(RollbackError.BlockedByOpenConflict addr)
       | false ->
         match resolve currentSource addr with
         | Error e -> Error(RollbackError.AddressGone e)
-        | Ok resolved when resolved.Hash = hashAfter -> Ok(RollbackOutcome.Applied(replaceRange currentSource resolved.Range before))
+        | Ok resolved when resolved.Hash = contentHash after ->
+          Ok(RollbackOutcome.Applied(replaceRange currentSource resolved.Range before))
         | Ok resolved -> Ok(RollbackOutcome.Conflict(after, resolved.Text, before))
-    | _ -> Error(RollbackError.NotAnOperation opId)
 
 /// The guard a save has to consult before it writes a `TweakSaved`: refused
 /// while the address has an open, unresolved conflict.
@@ -434,6 +466,48 @@ module UndoCursor =
       | Some i when i + 1 < ids.Length -> UndoCursor.At ids.[i + 1]
       | _ -> UndoCursor.AtHead
     | _ -> cursor
+
+/// Move the cursor back one step AND perform the real rollback: the
+/// compound action Ctrl+Z is, in one call. Storage stays append-only —
+/// this appends exactly one `RolledBack` event, it never rewrites
+/// anything already in the log.
+let performUndo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at: int64) : Result<EventLog * UndoCursor * string, string> =
+  match UndoCursor.undo log cursor with
+  | UndoCursor.AtHead -> Error "nothing to undo"
+  | UndoCursor.Compacted oldest -> Error(sprintf "can't undo past the retained window (oldest available id %d)" oldest)
+  | UndoCursor.At id as newCursor ->
+    match rollback log id currentSource with
+    | Error e -> Error(sprintf "%A" e)
+    | Ok(RollbackOutcome.Conflict(wrote, now, before)) ->
+      Error(sprintf "the address changed since (wrote %s, now %s, before %s)" wrote now before)
+    | Ok(RollbackOutcome.Applied newSource) ->
+      let log', _ = EventLog.append log at (TweakLogEvent.RolledBack id)
+      Ok(log', newCursor, newSource)
+
+/// Move the cursor forward one step AND perform the reapply: the compound
+/// action redo is. Implemented as rolling back the MOST RECENT
+/// `RolledBack` that targeted the op the cursor is currently sitting on —
+/// `effectOf` flips that rollback's own before/after, so "rolling back a
+/// rollback" already means "put the tweak back". Still append-only: this
+/// appends a SECOND `RolledBack`, on top of the first, never edits it.
+let performRedo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at: int64) : Result<EventLog * UndoCursor * string, string> =
+  match cursor with
+  | UndoCursor.At undoneId ->
+    let mostRecentUndoOfIt =
+      log.Events
+      |> List.filter (fun e -> match e.Event with TweakLogEvent.RolledBack t -> t = undoneId | _ -> false)
+      |> List.tryLast
+    match mostRecentUndoOfIt with
+    | None -> Error "nothing to redo"
+    | Some rolledBackEvent ->
+      match rollback log rolledBackEvent.Id currentSource with
+      | Error e -> Error(sprintf "%A" e)
+      | Ok(RollbackOutcome.Conflict(wrote, now, before)) ->
+        Error(sprintf "the address changed since (wrote %s, now %s, before %s)" wrote now before)
+      | Ok(RollbackOutcome.Applied newSource) ->
+        let log', _ = EventLog.append log at (TweakLogEvent.RolledBack rolledBackEvent.Id)
+        Ok(log', UndoCursor.redo log' cursor, newSource)
+  | _ -> Error "nothing to redo"
 
 // ── compaction: bounded growth ──
 
