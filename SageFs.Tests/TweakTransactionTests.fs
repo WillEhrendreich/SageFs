@@ -27,6 +27,7 @@ let private genEvent : Gen<TweakEvent<int>> =
     Gen.map TweakEvent.ApplyFailed (Gen.elements [ "apply threw" ])
     Gen.constant TweakEvent.Journaled
     Gen.map TweakEvent.JournalFailed (Gen.elements [ "disk full" ])
+    Gen.map TweakEvent.MarkStale (Gen.elements [ "evaluation is lagging"; "the expression is incomplete" ])
   ]
 
 type private EventGenerators =
@@ -110,4 +111,33 @@ let tweakTransactionTests =
           trace events |> ignore
           true
         with _ -> false
+
+    testList "Stale, distinct from Failed" [
+
+      testCase "MarkStale from a mid-flight state keeps live and carries the reason" <| fun _ ->
+        let final = run 5 [ TweakEvent.Started "1"; TweakEvent.Parsed; TweakEvent.MarkStale "evaluation is lagging" ]
+        final |> Expect.equal "stale, not failed, and live is untouched" (TweakState.Stale(5, "evaluation is lagging"))
+
+      testCase "MarkStale is valid from Idle too" <| fun _ ->
+        let final = step (initial 5) (TweakEvent.MarkStale "the expression is incomplete")
+        final |> Expect.equal "stale from idle" (TweakState.Stale(5, "the expression is incomplete"))
+
+      testCase "a fresh Started from Stale still restarts the pipeline normally" <| fun _ ->
+        let stale = run 5 [ TweakEvent.Started "1"; TweakEvent.MarkStale "lag" ]
+        let final = step stale (TweakEvent.Started "2")
+        final |> Expect.equal "the newest attempt wins, same as from any other state" (TweakState.Parsing(5, "2"))
+
+      testCase "Stale is not Failed" <| fun _ ->
+        let stale = step (initial 5) (TweakEvent.MarkStale "lag")
+        isFailed stale |> Expect.isFalse "stale must not be reported as a failure"
+
+      testPropertyWithConfig cfg "STALE-NEVER-CHANGES-LIVE, live never moves across a transition into Stale" <|
+        fun (events: TweakEvent<int> list) ->
+          trace events
+          |> List.pairwise
+          |> List.forall (fun (before, after) ->
+            match after with
+            | TweakState.Stale(live, _) -> live = liveOf before
+            | _ -> true)
+    ]
   ]
