@@ -125,6 +125,49 @@ let tweakLogTests =
         replay baseSource ops |> Expect.equal "second write resolves against the post-first-write source" (Ok "module M\nlet x = 100.0\nlet y = 200.0\n")
     ]
 
+    testList "crash recovery offer" [
+
+      testCase "an applied-but-never-saved tweak is offered" <| fun _ ->
+        let log = EventLog.empty
+        let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        recoveryOffer log
+        |> Expect.equal "one recoverable tweak"
+          [ { EventId = applied.Id; Address = addr "x"; TextBefore = "1.0"; TextAfter = "2.0"; WasInFlightAtCrash = true } ]
+
+      testCase "a saved tweak is never offered" <| fun _ ->
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, _ = EventLog.append log 2L (TweakLogEvent.TweakSaved(addr "x", "1.0", "2.0", contentHash "2.0", contentHash baseSource))
+        recoveryOffer log |> Expect.isEmpty "nothing pending"
+
+      testCase "only the MOST RECENT unsaved tweak is flagged as in flight at the crash; earlier ones are not offered at all once superseded" <| fun _ ->
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, second = EventLog.append log 2L (TweakLogEvent.TweakApplied(addr "x", "2.0", "3.0", contentHash "3.0"))
+        recoveryOffer log
+        |> Expect.equal "only the latest tweak on x is recoverable, and it's flagged"
+          [ { EventId = second.Id; Address = addr "x"; TextBefore = "2.0"; TextAfter = "3.0"; WasInFlightAtCrash = true } ]
+
+      testCase "multiple addresses: only ONE is in flight at the crash, the rest are offered unchecked-by-default too but not flagged" <| fun _ ->
+        let log = EventLog.empty
+        let log, x = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, y = EventLog.append log 2L (TweakLogEvent.TweakApplied(addr "y", "5.0", "6.0", contentHash "6.0"))
+        let offer = recoveryOffer log
+        offer |> List.map (fun r -> r.EventId) |> Expect.equal "in log order" [ x.Id; y.Id ]
+        offer |> List.filter (fun r -> r.WasInFlightAtCrash) |> List.map (fun r -> r.EventId) |> Expect.equal "only the LAST one" [ y.Id ]
+
+      testCase "an unsettled drag is never journaled, so it was never a candidate to begin with" <| fun _ ->
+        // Ticks never produce events (ScrubCoalescer), so there is nothing
+        // for recoveryOffer to see until `settle` logs exactly one
+        // TweakApplied — this is the same guarantee, read from the other end.
+        let s = ScrubCoalescer.start (addr "x") "1.0" 0L 2.0 "2.0"
+        let s = ScrubCoalescer.tick s 1L 2.5 "2.5"
+        let s = ScrubCoalescer.tick s 2L 3.0 "3.0"
+        match ScrubCoalescer.settle s with
+        | TweakLogEvent.TweakApplied _ -> ()
+        | other -> failtestf "settle should produce exactly one TweakApplied, got %A" other
+    ]
+
     testList "undo / redo cursor" [
 
       testCase "undo walks back through applied ops, then reports Compacted at the boundary" <| fun _ ->
