@@ -35,11 +35,11 @@ let displayStatusTests = testList "SessionDisplay.displayStatus" [
     SessionDisplay.displayStatus now info
     |> Expect.equal "should be Running" SessionDisplayStatus.Running
 
-  testCase "Ready but stale maps to Stale" <| fun _ ->
-    let staleTime = now.AddMinutes(-15.0)
-    let info = mkInfo (testSessionId "aa000001") SessionStatus.Ready staleTime
+  testCase "Ready but idle maps to Idle" <| fun _ ->
+    let idleTime = now.AddMinutes(-15.0)
+    let info = mkInfo (testSessionId "aa000001") SessionStatus.Ready idleTime
     SessionDisplay.displayStatus now info
-    |> Expect.equal "should be Stale" SessionDisplayStatus.Stale
+    |> Expect.equal "should be Idle" SessionDisplayStatus.Idle
 
   testCase "Starting maps to Starting" <| fun _ ->
     let info = mkInfo (testSessionId "aa000001") SessionStatus.Starting now
@@ -63,23 +63,23 @@ let displayStatusTests = testList "SessionDisplay.displayStatus" [
     SessionDisplay.displayStatus now info
     |> Expect.equal "should be Stopped" SessionDisplayStatus.Stopped
 
-  testCase "Evaluating but stale maps to Stale" <| fun _ ->
-    let staleTime = now.AddMinutes(-15.0)
-    let info = mkInfo (testSessionId "aa000001") SessionStatus.Evaluating staleTime
+  testCase "Evaluating never maps to Idle, however old LastActivity is — busy is never idle" <| fun _ ->
+    let longAgo = now.AddMinutes(-15.0)
+    let info = mkInfo (testSessionId "aa000001") SessionStatus.Evaluating longAgo
     SessionDisplay.displayStatus now info
-    |> Expect.equal "should be Stale" SessionDisplayStatus.Stale
+    |> Expect.equal "should still be Running" SessionDisplayStatus.Running
 
-  testCase "exactly 10min idle is not stale (strict >)" <| fun _ ->
+  testCase "exactly 10min idle is not Idle (strict >)" <| fun _ ->
     let tenMin = now.AddMinutes(-10.0)
     let info = mkInfo (testSessionId "aa000001") SessionStatus.Ready tenMin
     SessionDisplay.displayStatus now info
     |> Expect.equal "should be Running" SessionDisplayStatus.Running
 
-  testCase "10min + 1sec idle is stale" <| fun _ ->
+  testCase "10min + 1sec idle is Idle" <| fun _ ->
     let overTen = now.AddMinutes(-10.0).AddSeconds(-1.0)
     let info = mkInfo (testSessionId "aa000001") SessionStatus.Ready overTen
     SessionDisplay.displayStatus now info
-    |> Expect.equal "should be Stale" SessionDisplayStatus.Stale
+    |> Expect.equal "should be Idle" SessionDisplayStatus.Idle
 ]
 
 [<Tests>]
@@ -185,16 +185,16 @@ let affordanceTests = testList "SessionDisplay.sessionAffordances" [
     |> List.exists (fun a -> a.Label = "Stop")
     |> Expect.isFalse "no Stop for active running session"
 
-  testCase "stale session has Stop even when active" <| fun _ ->
+  testCase "idle session has Stop even when active" <| fun _ ->
     let snap = {
       Id = testSessionId "aa000001"; Name = None; Projects = []
-      Status = SessionDisplayStatus.Stale
+      Status = SessionDisplayStatus.Idle
       LastActivity = now; EvalCount = 0
       UpSince = now; WorkingDirectory = "" }
     let affordances = SessionDisplay.sessionAffordances Map.empty (ActiveSession.Viewing (testSessionId "aa000001")) snap
     affordances
     |> List.exists (fun a -> a.Label = "Stop")
-    |> Expect.isTrue "Stop should show for stale session"
+    |> Expect.isTrue "Stop should show for idle session"
 
   testCase "inactive session has Stop affordance" <| fun _ ->
     let snap = {

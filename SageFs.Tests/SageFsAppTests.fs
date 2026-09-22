@@ -530,7 +530,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     out.[0].SessionId |> Expect.equal "should have session id" "s1"
     effects |> Expect.isEmpty "no effects"
 
-  testCase "SessionStale marks session as stale" <| fun _ ->
+  testCase "SessionStale marks session as idle" <| fun _ ->
     let snap = {
       Id = testSessionId "aa000001"; Name = None; Projects = []; Status = SessionDisplayStatus.Running
       LastActivity = DateTime.UtcNow; EvalCount = 0
@@ -545,7 +545,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) model
     newModel.Sessions.Sessions.[0].Status
-    |> Expect.equal "should be Stale" SessionDisplayStatus.Stale
+    |> Expect.equal "should be Idle" SessionDisplayStatus.Idle
 
   testCase "SessionCycleNext with 0 sessions is no-op" <| fun _ ->
     let model = (SageFsModel.initial())
@@ -2295,7 +2295,7 @@ let sageFsRenderTests = testList "SageFsRender" [
         SessionDisplayStatus.Running
         SessionDisplayStatus.Starting
         SessionDisplayStatus.Stopped
-        SessionDisplayStatus.Stale
+        SessionDisplayStatus.Idle
         SessionDisplayStatus.Restarting |]
       let sessions =
         [ for i in 0..count-1 do

@@ -39,7 +39,7 @@ let sessionDisplayStatusUnificationTests =
         FSharpType.GetUnionCases(typeof<SageFs.SessionDisplayStatus>)
         |> Array.map (fun c -> c.Name)
         |> Set.ofArray
-      let required = set [ "Running"; "Starting"; "Restarting"; "Faulted"; "Lost"; "Stopped"; "Stale" ]
+      let required = set [ "Running"; "Starting"; "Restarting"; "Faulted"; "Lost"; "Stopped"; "Idle" ]
       Set.difference required names
       |> Expect.isEmpty "missing cases"
   ]

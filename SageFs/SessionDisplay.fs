@@ -21,7 +21,10 @@ type SessionDisplayStatus =
   | Lost
   /// Stopped deliberately — the same meaning as the old Suspended case.
   | Stopped
-  | Stale
+  /// Ready, but nobody has used it in a while. It's fine — just quiet.
+  /// Never applies to Evaluating/Building: a session mid-work is never idle,
+  /// however long ago the request that started it landed.
+  | Idle
 
 /// Formatting and derivation for SessionDisplayStatus, kept next to the type
 /// itself (not as a separately, differently-scoped module) so exactly one
@@ -34,7 +37,7 @@ module SessionDisplayStatus =
     | SessionDisplayStatus.Faulted _ -> "faulted"
     | SessionDisplayStatus.Lost -> "lost"
     | SessionDisplayStatus.Stopped -> "stopped"
-    | SessionDisplayStatus.Stale -> "stale"
+    | SessionDisplayStatus.Idle -> "idle"
 
   /// Only for a caller that genuinely has no SessionInfo (and so no fault
   /// reason to carry). Everywhere a SessionInfo is available, derive the
@@ -54,7 +57,7 @@ module SessionDisplayStatus =
     | SessionDisplayStatus.Faulted _ -> "status-faulted"
     | SessionDisplayStatus.Lost -> "status-faulted"
     | SessionDisplayStatus.Stopped -> "status-faulted"
-    | SessionDisplayStatus.Stale -> "status-faulted"
+    | SessionDisplayStatus.Idle -> "status-idle"
 
 /// A point-in-time snapshot of a session for display
 type SessionSnapshot = {
@@ -102,20 +105,24 @@ type SessionRegistryView = {
 
 /// Pure functions to build display state from domain state
 module SessionDisplay =
-  let staleDuration = Timeouts.staleSessionThreshold
+  let idleDuration = Timeouts.idleSessionThreshold
 
   /// A session is active iff the registry's ActiveSessionId views it.
   let isActive (active: ActiveSession) (snap: SessionSnapshot) =
     ActiveSession.isViewing snap.Id active
 
-  /// Map internal SessionStatus to display status
+  /// Map internal SessionStatus to display status.
+  /// Evaluating/Building are never idle, however old LastActivity is — a
+  /// session mid-eval or mid-build is working, not neglected. Only a Ready
+  /// session (nothing in flight) is time-gated against LastActivity.
   let displayStatus (now: DateTime) (info: SessionInfo) : SessionDisplayStatus =
     match info.Status with
-    | SessionLifecycleStatus.Ready _
     | SessionLifecycleStatus.Evaluating _
     | SessionLifecycleStatus.Building _ ->
-      match now - info.LastActivity > staleDuration with
-      | true -> SessionDisplayStatus.Stale
+      SessionDisplayStatus.Running
+    | SessionLifecycleStatus.Ready _ ->
+      match now - info.LastActivity > idleDuration with
+      | true -> SessionDisplayStatus.Idle
       | false -> SessionDisplayStatus.Running
     | SessionLifecycleStatus.Starting _ ->
       SessionDisplayStatus.Starting
@@ -161,7 +168,7 @@ module SessionDisplay =
             match active with
             | ActiveSession.Viewing id when id = snap.Id -> false
             | _ -> true }
-      match snap.Status = SessionDisplayStatus.Stale || not (isActive active snap) with
+      match snap.Status = SessionDisplayStatus.Idle || not (isActive active snap) with
       | true ->
         yield
           { Action = EditorAction.StopSession (SessionId.value snap.Id)
@@ -181,4 +188,4 @@ module SessionDisplay =
       | SessionDisplayStatus.Restarting
       | SessionDisplayStatus.Lost
       | SessionDisplayStatus.Stopped
-      | SessionDisplayStatus.Stale -> () ]
+      | SessionDisplayStatus.Idle -> () ]

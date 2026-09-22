@@ -363,6 +363,48 @@ module WorkerProtocol =
   /// Same signature works for named pipes, HTTP, or in-process.
   type SessionProxy = WorkerMessage -> Async<WorkerResponse>
 
+  /// Which messages count as the session actually being USED, as opposed to
+  /// merely being checked on. `SessionInfo.LastActivity` (and therefore the
+  /// dashboard's idle detection, `SessionDisplay.displayStatus`) is only ever
+  /// as honest as this classification — a `GetStatus` poll must never count,
+  /// or a genuinely idle session could never show idle again.
+  [<RequireQualifiedAccess>]
+  module WorkerMessage =
+    let isActivity = function
+      | WorkerMessage.EvalCode _
+      | WorkerMessage.CheckCode _
+      | WorkerMessage.TypeCheckWithSymbols _
+      | WorkerMessage.GetCompletions _
+      | WorkerMessage.LoadScript _
+      | WorkerMessage.RunTests _
+      | WorkerMessage.EvalLiveTestFile _
+      | WorkerMessage.RunApp _
+      | WorkerMessage.StopApp _ -> true
+      | WorkerMessage.CancelEval
+      | WorkerMessage.ResetSession _
+      | WorkerMessage.HardResetSession _
+      | WorkerMessage.GetStatus _
+      | WorkerMessage.GetLiveValues _
+      | WorkerMessage.GetTestDiscovery _
+      | WorkerMessage.GetInstrumentationMaps _
+      | WorkerMessage.AwaitAppChange _
+      | WorkerMessage.Shutdown -> false
+
+  /// Wrapping helpers for `SessionProxy` — kept next to the type so every
+  /// place that resolves a proxy from worker URLs (`SessionManagementOps.GetProxy`,
+  /// `EffectDeps.GetProxy`) can apply the SAME behavior instead of hand-rolling it.
+  module SessionProxy =
+    /// Wrap a proxy so every activity-bearing message (see `WorkerMessage.isActivity`)
+    /// calls `touch` before being sent. This is the one place `TouchSession`
+    /// gets posted — no route into a worker can forget it, because none of
+    /// them call the worker any other way than through a `SessionProxy`.
+    let touching (touch: unit -> unit) (proxy: SessionProxy) : SessionProxy =
+      fun msg ->
+        match WorkerMessage.isActivity msg with
+        | true -> touch ()
+        | false -> ()
+        proxy msg
+
   /// Metadata for a managed session — displayed in dashboard, stored in persistence.
   type SessionInfo = {
     Id: SessionId

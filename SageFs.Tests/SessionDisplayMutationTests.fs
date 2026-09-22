@@ -39,7 +39,7 @@ let sessionDisplayMutationTests = testList "SessionDisplay mutations" [
 
   // ── displayStatus: per-case mapping ──────────────────────────────────────
 
-  testCase "WHY — ready_fresh_is_Running_not_Stale" <| fun () ->
+  testCase "WHY — ready_fresh_is_Running_not_Idle" <| fun () ->
     let info = mkInfo (SessionLifecycleStatus.Ready handle) now
     SessionDisplay.displayStatus now info
     |> Expect.equal "a fresh Ready session must display Running" SessionDisplayStatus.Running
@@ -53,6 +53,16 @@ let sessionDisplayMutationTests = testList "SessionDisplay mutations" [
     let info = mkInfo (SessionLifecycleStatus.Building ("dotnet build", handle)) now
     SessionDisplay.displayStatus now info
     |> Expect.equal "a fresh Building session must display Running" SessionDisplayStatus.Running
+
+  testCase "WHY — evaluating_never_goes_idle_no_matter_how_old_LastActivity_is — busy is never idle" <| fun () ->
+    let info = mkInfo (SessionLifecycleStatus.Evaluating handle) (now - TimeSpan.FromDays 30.0)
+    SessionDisplay.displayStatus now info
+    |> Expect.equal "a session mid-eval must display Running regardless of LastActivity age" SessionDisplayStatus.Running
+
+  testCase "WHY — building_never_goes_idle_no_matter_how_old_LastActivity_is — busy is never idle" <| fun () ->
+    let info = mkInfo (SessionLifecycleStatus.Building ("dotnet build", handle)) (now - TimeSpan.FromDays 30.0)
+    SessionDisplay.displayStatus now info
+    |> Expect.equal "a session mid-build must display Running regardless of LastActivity age" SessionDisplayStatus.Running
 
   testCase "WHY — starting_is_Starting_regardless_of_activity_age — Starting must never be reclassified as Stale" <| fun () ->
     let info = mkInfo (SessionLifecycleStatus.Starting handle) (now - TimeSpan.FromDays 1.0)
@@ -79,34 +89,43 @@ let sessionDisplayMutationTests = testList "SessionDisplay mutations" [
     SessionDisplay.displayStatus now info
     |> Expect.equal "Stopped must display Stopped, not Faulted" SessionDisplayStatus.Stopped
 
-  // ── displayStatus: staleness boundary on the busy statuses ──────────────
+  // ── displayStatus: idleness boundary on Ready only ───────────────────────
 
-  testCase "WHY — ready_exactly_at_stale_threshold_is_still_running — `>` not `>=`" <| fun () ->
-    let checkAt = now + Timeouts.staleSessionThreshold
+  testCase "WHY — ready_exactly_at_idle_threshold_is_still_running — `>` not `>=`" <| fun () ->
+    let checkAt = now + Timeouts.idleSessionThreshold
     let info = mkInfo (SessionLifecycleStatus.Ready handle) now
     SessionDisplay.displayStatus checkAt info
-    |> Expect.equal "exactly at the stale threshold, elapsed is NOT > threshold, so it must still be Running" SessionDisplayStatus.Running
+    |> Expect.equal "exactly at the idle threshold, elapsed is NOT > threshold, so it must still be Running" SessionDisplayStatus.Running
 
-  testCase "WHY — ready_one_tick_past_stale_threshold_is_Stale" <| fun () ->
-    let checkAt = now + Timeouts.staleSessionThreshold + TimeSpan.FromTicks 1L
+  testCase "WHY — ready_one_tick_past_idle_threshold_is_Idle" <| fun () ->
+    let checkAt = now + Timeouts.idleSessionThreshold + TimeSpan.FromTicks 1L
     let info = mkInfo (SessionLifecycleStatus.Ready handle) now
     SessionDisplay.displayStatus checkAt info
-    |> Expect.equal "one tick past the stale threshold, Ready must become Stale" SessionDisplayStatus.Stale
+    |> Expect.equal "one tick past the idle threshold, Ready must become Idle" SessionDisplayStatus.Idle
+
+  testCase "WHY — a_touch_resets_idleness — the same instant that would read Idle reads Running once LastActivity moves to it" <| fun () ->
+    let wasIdleAt = mkInfo (SessionLifecycleStatus.Ready handle) now
+    let checkAt = now + Timeouts.idleSessionThreshold + TimeSpan.FromTicks 1L
+    SessionDisplay.displayStatus checkAt wasIdleAt
+    |> Expect.equal "before the touch this instant reads Idle" SessionDisplayStatus.Idle
+    let touched = { wasIdleAt with LastActivity = checkAt }
+    SessionDisplay.displayStatus checkAt touched
+    |> Expect.equal "after TouchSession moves LastActivity to now, the SAME instant reads Running" SessionDisplayStatus.Running
 
   // ── label / cssClass: total, distinct mappings ──────────────────────────
 
   testCase "WHY — label_is_distinct_and_lowercase_per_case" <| fun () ->
     [ SessionDisplayStatus.Running; SessionDisplayStatus.Starting; SessionDisplayStatus.Restarting
-      SessionDisplayStatus.Faulted "x"; SessionDisplayStatus.Lost; SessionDisplayStatus.Stopped; SessionDisplayStatus.Stale ]
+      SessionDisplayStatus.Faulted "x"; SessionDisplayStatus.Lost; SessionDisplayStatus.Stopped; SessionDisplayStatus.Idle ]
     |> List.map SessionDisplayStatus.label
-    |> Expect.equal "labels must be exactly running,starting,restarting,faulted,lost,stopped,stale in that order"
-      [ "running"; "starting"; "restarting"; "faulted"; "lost"; "stopped"; "stale" ]
+    |> Expect.equal "labels must be exactly running,starting,restarting,faulted,lost,stopped,idle in that order"
+      [ "running"; "starting"; "restarting"; "faulted"; "lost"; "stopped"; "idle" ]
 
   testCase "WHY — cssClass_running_is_status_ready_others_are_not — only Running gets the ready class" <| fun () ->
-    [ SessionDisplayStatus.Running; SessionDisplayStatus.Starting; SessionDisplayStatus.Faulted "x" ]
+    [ SessionDisplayStatus.Running; SessionDisplayStatus.Starting; SessionDisplayStatus.Faulted "x"; SessionDisplayStatus.Idle ]
     |> List.map SessionDisplayStatus.cssClass
-    |> Expect.equal "Running -> status-ready, Starting -> status-warming, Faulted -> status-faulted"
-      [ "status-ready"; "status-warming"; "status-faulted" ]
+    |> Expect.equal "Running -> status-ready, Starting -> status-warming, Faulted -> status-faulted, Idle -> status-idle"
+      [ "status-ready"; "status-warming"; "status-faulted"; "status-idle" ]
 
   testCase "WHY — cssClass_restarting_shares_warming_class_with_starting" <| fun () ->
     SessionDisplayStatus.cssClass SessionDisplayStatus.Restarting

@@ -685,6 +685,11 @@ h2 {
   color: white;
 }
 
+.status-idle {
+  background: var(--fg-dim);
+  color: var(--bg-default);
+}
+
 .status-disconnected {
   background: var(--fg-red);
   color: white;

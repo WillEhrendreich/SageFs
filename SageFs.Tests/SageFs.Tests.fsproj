@@ -237,6 +237,7 @@
          <Compile Include="SessionManagerSpawnFirstRestartTests.fs" />
          <Compile Include="CreateSessionDedupeTests.fs" />
          <Compile Include="SessionManagerMailboxSupervisionTests.fs" />
+         <Compile Include="SessionActivityTouchTests.fs" />
          <Compile Include="AutoCompletionAndEventsTests.fs" />
          <Compile Include="DrawAndRectPrimitivesTests.fs" />
         <Compile Include="ThemesGutterAndDiagnosticsTests.fs" />

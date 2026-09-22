@@ -39,7 +39,7 @@ let private genSessionDisplayStatus =
     Gen.constant SessionDisplayStatus.Running
     Gen.constant SessionDisplayStatus.Starting
     Gen.constant SessionDisplayStatus.Stopped
-    Gen.constant SessionDisplayStatus.Stale
+    Gen.constant SessionDisplayStatus.Idle
     Gen.constant SessionDisplayStatus.Restarting
     Gen.constant (SessionDisplayStatus.Faulted "test error")
   ]

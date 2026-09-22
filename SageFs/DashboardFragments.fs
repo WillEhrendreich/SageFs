@@ -1484,7 +1484,7 @@ let renderSessionsForSession (viewingSessionId: string) (sessions: ParsedSession
           | SessionDisplayStatus.Running
           | SessionDisplayStatus.Starting
           | SessionDisplayStatus.Restarting
-          | SessionDisplayStatus.Stale
+          | SessionDisplayStatus.Idle
           | SessionDisplayStatus.Stopped -> ""
         let guidanceCls =
           match s.GuidanceCssClass.Length > 0 with

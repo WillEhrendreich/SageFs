@@ -407,10 +407,20 @@ let createSessionOps
         return result
       }
     GetProxy = fun sessionId ->
+      // The one place SessionManagementOps hands out a session's proxy —
+      // every route into a worker (eval, check, load-script, run-tests,
+      // run_app, MCP, dashboard) resolves it here, so wrapping it with
+      // `SessionProxy.touching` is enough to keep LastActivity honest for
+      // all of them without threading a touch call through each call site.
       let snapshot = readSnapshot()
       let sidStr = WorkerProtocol.SessionId.value sessionId
       let urlMap = snapshot.WorkerBaseUrls |> Map.fold (fun acc k v -> Map.add (WorkerProtocol.SessionId.value k) v acc) Map.empty
-      task { return HttpWorkerClient.proxyFromUrls sidStr urlMap }
+      task {
+        return
+          HttpWorkerClient.proxyFromUrls sidStr urlMap
+          |> Option.map (WorkerProtocol.SessionProxy.touching (fun () ->
+            sessionManager.Post(SessionManager.SessionCommand.TouchSession sessionId)))
+      }
     GetSessionInfo = fun sessionId ->
       task { return SessionManager.QuerySnapshot.tryGetSession sessionId (readSnapshot()) }
     GetAllSessions = fun () ->
@@ -3032,7 +3042,9 @@ let run
             | SageFs.SessionDisplayStatus.Faulted _ -> SageFs.Features.SessionHealthStatus.Faulted
             | SageFs.SessionDisplayStatus.Lost -> SageFs.Features.SessionHealthStatus.Faulted
             | SageFs.SessionDisplayStatus.Stopped -> SageFs.Features.SessionHealthStatus.Stopped
-            | SageFs.SessionDisplayStatus.Stale -> SageFs.Features.SessionHealthStatus.Stopped
+            // Idle is a normal, connected, working session that just hasn't
+            // been used in a while — it is Ready, not Stopped.
+            | SageFs.SessionDisplayStatus.Idle -> SageFs.Features.SessionHealthStatus.Ready
           let projectName =
             match s.Projects with
             | p :: _ -> System.IO.Path.GetFileName p

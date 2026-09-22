@@ -720,7 +720,7 @@ let sessionCardOf
       | SessionDisplayStatus.Lost -> WorkerProtocol.SessionLifecycleStatus.faultReason info.Status
       | SessionDisplayStatus.Running
       | SessionDisplayStatus.Restarting
-      | SessionDisplayStatus.Stale
+      | SessionDisplayStatus.Idle
       | SessionDisplayStatus.Stopped -> None
     ProjectsText =
       match info.Projects with

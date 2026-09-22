@@ -586,4 +586,72 @@ let workerProtocolTests =
         path |> Expect.equal "path" "/await-app-change"
         body.Value |> Expect.stringContains "body carries the run id" "run1"
     ]
+
+    // The choke point for a whole bug class: `SessionInfo.LastActivity` (and
+    // therefore the dashboard's idle/busy display) is only ever as honest as
+    // this classification. A `GetStatus` poll must read as NOT activity, or a
+    // genuinely idle session could never show idle; every message a real user
+    // action sends must read as activity, or that action silently never
+    // refreshes idleness (this exact bug — TouchSession existed and had a
+    // handler, but nothing ever posted it).
+    testList "WorkerMessage.isActivity" [
+      let sampleTc: SageFs.Features.LiveTesting.TestCase =
+        { Id = TestId.TestId "abc123"
+          FullName = "M.t"; DisplayName = "t"
+          Origin = TestOrigin.ReflectionOnly; Labels = []
+          Framework = TestFramework.Expecto; Category = TestCategory.Unit }
+
+      testCase "WHY — every activity-bearing message classifies true" <| fun _ ->
+        [ WorkerMessage.EvalCode("1+1", "r1")
+          WorkerMessage.CheckCode("1+1", "r2")
+          WorkerMessage.TypeCheckWithSymbols("1+1", "f.fsx", "r3")
+          WorkerMessage.GetCompletions("System.", 7, "r4")
+          WorkerMessage.LoadScript(@"C:\a.fsx", "r5")
+          WorkerMessage.RunTests([| sampleTc |], 4, "r6")
+          WorkerMessage.EvalLiveTestFile("f.fs", "let x = 1", "r7")
+          WorkerMessage.RunApp("proj.fsproj", SageFs.AppRun.PreviousAddress.NoPreviousAddress, "r8")
+          WorkerMessage.StopApp(SageFs.AppRun.StopScope.OnlyRun "run1", "r9") ]
+        |> List.map WorkerMessage.isActivity
+        |> Expect.equal "all nine must classify as activity" (List.replicate 9 true)
+
+      testCase "WHY — status/read-only/control messages classify false — a poll must never look like activity" <| fun _ ->
+        [ WorkerMessage.CancelEval
+          WorkerMessage.ResetSession "r1"
+          WorkerMessage.HardResetSession(true, "r2")
+          WorkerMessage.GetStatus "r3"
+          WorkerMessage.GetLiveValues "r4"
+          WorkerMessage.GetTestDiscovery "r5"
+          WorkerMessage.GetInstrumentationMaps "r6"
+          WorkerMessage.AwaitAppChange("run1", "r7")
+          WorkerMessage.Shutdown ]
+        |> List.map WorkerMessage.isActivity
+        |> Expect.equal "all nine must classify as NOT activity" (List.replicate 9 false)
+    ]
+
+    testList "SessionProxy.touching" [
+      let echoOn (respond: WorkerMessage -> WorkerResponse) : SessionProxy =
+        fun msg -> async { return respond msg }
+
+      testTask "WHY — touch fires exactly once per activity message, never for GetStatus" {
+        let touches = ref 0
+        let wrapped =
+          SessionProxy.touching (fun () -> touches.Value <- touches.Value + 1)
+            (echoOn (fun _ -> WorkerResponse.WorkerReady))
+        let! _ = wrapped (WorkerMessage.EvalCode("1+1", "r1")) |> Async.StartAsTask
+        let! _ = wrapped (WorkerMessage.GetStatus "r2") |> Async.StartAsTask
+        let! _ = wrapped (WorkerMessage.CheckCode("1+1", "r3")) |> Async.StartAsTask
+        touches.Value |> Expect.equal "two activity messages, one status poll — touch must fire exactly twice" 2
+      }
+
+      testTask "WHY — the wrapped proxy still delivers the message and returns the real response" {
+        let wrapped =
+          SessionProxy.touching ignore
+            (echoOn (function
+              | WorkerMessage.GetStatus replyId -> WorkerResponse.EvalResult(replyId, Ok "ok", [], Map.empty)
+              | other -> failwithf "unexpected message reached the proxy: %A" other))
+        let! response = wrapped (WorkerMessage.GetStatus "r1") |> Async.StartAsTask
+        response
+        |> Expect.equal "the underlying proxy's real response must pass through untouched" (WorkerResponse.EvalResult("r1", Ok "ok", [], Map.empty))
+      }
+    ]
   ]

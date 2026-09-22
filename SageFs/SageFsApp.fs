@@ -1152,7 +1152,7 @@ module SageFsUpdate =
         let isWatcherEligible sessionStatus =
           match sessionStatus with
           | SessionDisplayStatus.Running
-          | SessionDisplayStatus.Stale -> true
+          | SessionDisplayStatus.Idle -> true
           | _ -> false
 
         let watcherEffects =
@@ -1243,7 +1243,7 @@ module SageFsUpdate =
                   model.Sessions.Sessions
                   |> List.map (fun s ->
                     match SessionId.value s.Id = sessionId with
-                    | true -> { s with Status = SessionDisplayStatus.Stale }
+                    | true -> { s with Status = SessionDisplayStatus.Idle }
                     | false -> s) } }, []
 
       | TuiEvent.FileChanged _ -> model, []
@@ -1734,7 +1734,7 @@ module SageFsUpdate =
           |> List.choose (fun session ->
             match session.Status with
             | SessionDisplayStatus.Running
-            | SessionDisplayStatus.Stale -> Some (SessionId.value session.Id)
+            | SessionDisplayStatus.Idle -> Some (SessionId.value session.Id)
             | _ -> None)
           |> Set.ofList
         // Discovery is requested only when no tests are known yet; otherwise they just re-run.
@@ -1764,7 +1764,7 @@ module SageFsUpdate =
           |> List.choose (fun session ->
             match session.Status with
             | SessionDisplayStatus.Running
-            | SessionDisplayStatus.Stale ->
+            | SessionDisplayStatus.Idle ->
               Some (SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.RegisterFileWatcher
                 (SessionId.value session.Id, session.WorkingDirectory)))
             | _ -> None)
@@ -1787,7 +1787,7 @@ module SageFsUpdate =
           |> List.choose (fun session ->
             match session.Status with
             | SessionDisplayStatus.Running
-            | SessionDisplayStatus.Stale ->
+            | SessionDisplayStatus.Idle ->
               Some (SageFsEffect.TestCycle (Features.LiveTesting.TestCycleEffect.DisposeFileWatcher
                 (SessionId.value session.Id, session.WorkingDirectory)))
             | _ -> None)
@@ -2183,7 +2183,7 @@ module SageFsRender =
             | SessionDisplayStatus.Faulted r -> sprintf "error: %s" r
             | SessionDisplayStatus.Lost -> "lost"
             | SessionDisplayStatus.Stopped -> "suspended"
-            | SessionDisplayStatus.Stale -> "stale"
+            | SessionDisplayStatus.Idle -> "idle"
             | SessionDisplayStatus.Restarting -> "restarting"
           let active = match activeId with | ActiveSession.Viewing id when id = s.Id -> " *" | _ -> ""
           let selected = match model.Editor.SelectedSessionIndex = Some i with | true -> ">" | false -> " "

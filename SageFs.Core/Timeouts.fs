@@ -141,7 +141,12 @@ module Timeouts =
 
   // -- Session Lifecycle --
   let sessionDispose = TimeSpan.FromSeconds(10.0)
-  let staleSessionThreshold = TimeSpan.FromMinutes(10.0)
+  /// How long a Ready session can go untouched before the dashboard calls it
+  /// idle instead of running. Only Ready is time-gated this way — Evaluating
+  /// and Building are never idle regardless of age (see SessionDisplay.displayStatus).
+  /// Env-overridable so an integration test can prove the boundary without
+  /// waiting ten real minutes for it.
+  let idleSessionThreshold = envOrDefaultMinutes "SAGEFS_IDLE_SESSION_THRESHOLD_MINUTES" 10.0
   /// Maximum time to poll a worker waiting for Ready status after spawn/restart.
   /// If exceeded, the session is faulted to prevent infinite WarmingUp states.
   let warmupReadyPollMax = envOrDefault "SAGEFS_WARMUP_READY_POLL_SECONDS" 120.0
