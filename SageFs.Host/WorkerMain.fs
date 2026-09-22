@@ -701,6 +701,35 @@ let run (sessionId: string) (port: int) = async {
   // The source each running app's DLL was built from, advanced after every
   // applied patch: what a save is compared with to decide patch vs restart.
   let reloadBaselines = System.Collections.Concurrent.ConcurrentDictionary<string, Features.ReloadPlanning.FileDecls>()
+  // Initializers a save KEPT the live value for (rule 3 of the state spec),
+  // keyed by qualified binding, waiting for someone to reset them.
+  let keptPending = System.Collections.Concurrent.ConcurrentDictionary<string, Features.KeptState.Pending>()
+  // Re-run ONE kept binding's new initializer and write it into the app's
+  // own field. Nothing else in the file runs.
+  let resetKept (binding: string) : Async<Features.KeptState.ResetOutcome> = async {
+    match keptPending.TryGetValue binding with
+    | false, _ -> return Features.KeptState.ResetOutcome.NothingPending binding
+    | true, pending ->
+      match Features.LiveStateEmit.resetCode pending.Decls pending.Decl with
+      | Error reason -> return Features.KeptState.ResetOutcome.ResetFailed(binding, reason)
+      | Ok code ->
+        let budget = DevReload.DevReloadConfig.defaults.CompileBudgetMs
+        let request = { Code = code; Args = Map.ofList [ "hotReload", box true ] }
+        match! actor.PostAndTryAsyncReply((fun rc -> Eval(request, CancellationToken.None, rc)), budget) with
+        | None -> return Features.KeptState.ResetOutcome.ResetFailed(binding, sprintf "the reset didn't finish within %dms" budget)
+        | Some response ->
+          match response.EvaluationResult with
+          | Error ex -> return Features.KeptState.ResetOutcome.ResetFailed(binding, ex.Message)
+          | Ok output ->
+            match Features.LiveStateEmit.parseReset output with
+            | Error reason -> return Features.KeptState.ResetOutcome.ResetFailed(binding, reason)
+            | Ok value ->
+              keptPending.TryRemove binding |> ignore
+              Log.info "Hot reload: reset '%s' to its new initializer, it's %s now" binding value
+              return Features.KeptState.ResetOutcome.Reset(binding, value) }
+  let keptStateAccess : Features.KeptState.Access =
+    { Pending = fun () -> keptPending.Values |> Seq.map _.Value |> Seq.sortBy _.Binding |> Seq.toList
+      Reset = resetKept }
 
   // Start file watcher unless no-watch was set
   let fileWatcher =
@@ -904,6 +933,19 @@ let run (sessionId: string) (port: int) = async {
           Log.info "Hot reload: %s — %s; no app is running under SageFs, so the whole file is re-evaluated instead"
             fileName (Features.ReloadPlanning.ReloadChange.describeAll first rest)
           return SaveHandling.FallBackWholeFile reasons }
+      // What the running app holds for a kept binding, and whether its edited
+      // initializer is still the same type. Reads only: never runs the
+      // initializer, never writes the field.
+      let probeKept (current: Features.ReloadPlanning.FileDecls) (decl: Features.ReloadPlanning.SourceDecl) = async {
+        match Features.LiveStateEmit.probeCode current decl with
+        | Error reason -> return Error reason
+        | Ok code ->
+          match! evalWithinBudget { Code = code; Args = Map.ofList [ "hotReload", box true ] } with
+          | Error budget -> return Error (sprintf "the probe didn't finish within %.0fs" budget.TotalSeconds)
+          | Ok response ->
+            match response.EvaluationResult with
+            | Error ex -> return Error ex.Message
+            | Ok output -> return Features.LiveStateEmit.parseProbe output }
       // Re-emit the changed functions against the compiled module and report
       // what reached the running process. `carried` are the unedited private
       // `let mutable`s those functions use; they get stand-ins bound to the
@@ -915,7 +957,25 @@ let run (sessionId: string) (port: int) = async {
         (current: Features.ReloadPlanning.FileDecls)
         (functions: Features.ReloadPlanning.SourceDecl list)
         (carried: Features.ReloadPlanning.SourceDecl list)
+        (kept: Features.KeptState.Pending list)
         : Async<SaveHandling> = async {
+            let keptValues = kept |> List.map _.Value
+            let recordKept () =
+              for k in kept do
+                keptPending.[k.Value.Binding] <- k
+            match functions with
+            | [] ->
+              // Only initializers of live state changed. Nothing to compile:
+              // the app keeps its values and the save says so.
+              reloadBaselines.[IO.Path.GetFullPath filePath] <- current
+              recordKept ()
+              let outcome =
+                Features.ReloadOutcome.ReloadOutcome.ofPatchCounts 0 0 []
+                |> Features.ReloadOutcome.ReloadOutcome.withKept keptValues
+              Features.ReloadBroadcast.broadcastOutcome outcome
+              Log.info "Hot reload: %s — %s" fileName (Features.ReloadOutcome.ReloadOutcome.describe outcome)
+              return SaveHandling.Reported
+            | _ ->
             match Middleware.CompilationContext.emitPatchCarrying filePath current functions carried with
             | Error (unreachable, reason) ->
               Log.info "Hot reload: %s can't carry '%s' into the patch: %s" fileName unreachable.Name reason
@@ -993,6 +1053,8 @@ let run (sessionId: string) (port: int) = async {
                       reachedRunningProcess
                     |> Features.ReloadOutcome.ReloadOutcome.withExtraMisses
                          (extraReasons @ ineffectiveReasons)
+                    |> Features.ReloadOutcome.ReloadOutcome.withKept keptValues
+                  recordKept ()
                   Features.ReloadBroadcast.broadcastOutcome outcome
                   Log.info "Hot reload: %s — %s (%s)"
                     fileName
@@ -1025,10 +1087,58 @@ let run (sessionId: string) (port: int) = async {
             Features.ReloadBroadcast.broadcastEvent (Features.ReloadBroadcast.unchanged fileName)
             return SaveHandling.Reported
           | Features.ReloadPlanning.ReloadPlan.PatchFunctions functions ->
-            return! patchInPlace fileName filePath baseline current functions []
+            return! patchInPlace fileName filePath baseline current functions [] []
           | Features.ReloadPlanning.ReloadPlan.PatchKeepingState (functions, first, rest) ->
-            let carried = first :: rest |> List.map (function Features.ReloadPlanning.LiveState.Carried d -> d)
-            return! patchInPlace fileName filePath baseline current functions carried
+            let state = first :: rest
+            let carried =
+              state
+              |> List.choose (function
+                | Features.ReloadPlanning.LiveState.Carried d -> Some d
+                | Features.ReloadPlanning.LiveState.Kept _ -> None)
+            let keptDecls =
+              state
+              |> List.choose (function
+                | Features.ReloadPlanning.LiveState.Kept d -> Some d
+                | Features.ReloadPlanning.LiveState.Carried _ -> None)
+            // Ask the running app about each kept binding BEFORE patching
+            // anything: its live value for the notice, and whether the edited
+            // initializer is still the same type. A retype, or a probe that
+            // can't answer, means there's nothing safe to keep.
+            let! probed =
+              keptDecls
+              |> List.map (fun d -> async {
+                let! reading = probeKept current d
+                return d, reading })
+              |> Async.Sequential
+            let refusals =
+              probed
+              |> Array.toList
+              |> List.choose (fun (d, reading) ->
+                match reading with
+                | Ok (Features.LiveStateEmit.ProbeReading.Keeps _) -> None
+                | Ok (Features.LiveStateEmit.ProbeReading.Retyped (was, now)) ->
+                  Some (Features.ReloadPlanning.ReloadChange.MutableStateRetyped (d.Name, was, now))
+                | Error reason ->
+                  Log.warn "Hot reload: couldn't check the live value of '%s', so it isn't kept: %s" d.Name reason
+                  Some (Features.ReloadPlanning.ReloadChange.MutableStateChanged d.Name))
+            match refusals with
+            | r :: rs -> return! restartOrFallBack fileName r rs
+            | [] ->
+              let kept =
+                probed
+                |> Array.toList
+                |> List.choose (fun (d, reading) ->
+                  match reading, Features.LiveStateEmit.initializerOf d with
+                  | Ok (Features.LiveStateEmit.ProbeReading.Keeps preview), Ok init ->
+                    Some
+                      ({ Value =
+                           { Binding = Features.KeptState.Pending.bindingName current d
+                             KeptValue = preview
+                             NewInitializer = init }
+                         Decls = current
+                         Decl = d } : Features.KeptState.Pending)
+                  | _ -> None)
+              return! patchInPlace fileName filePath baseline current functions carried kept
           | Features.ReloadPlanning.ReloadPlan.RestartRequired (first, rest) ->
             return! restartOrFallBack fileName first rest }
       let onFileChanged (change: FileWatcher.FileChange) =
@@ -1126,7 +1236,8 @@ let run (sessionId: string) (port: int) = async {
                 | SaveHandling.FallBackWholeFile restartReasons
                     when restartReasons
                          |> List.exists (function
-                           | Features.ReloadOutcome.RestartReason.MutableModuleState _ -> true
+                           | Features.ReloadOutcome.RestartReason.MutableModuleState _
+                           | Features.ReloadOutcome.RestartReason.MutableStateTypeChanged _ -> true
                            | _ -> false) ->
                   let outcome = Features.ReloadOutcome.ReloadOutcome.RestartRequired restartReasons
                   Features.ReloadBroadcast.broadcastOutcome outcome
@@ -1416,7 +1527,7 @@ let run (sessionId: string) (port: int) = async {
     | _ ->
       Log.info "Hot reload: off by default (0 files watched)"
     let! server =
-      WorkerHttpTransport.startServer readyHandler result.HotReloadStateRef projectFiles result.GetWarmupContext getRunTest result.Agent.TakeCoverage port
+      WorkerHttpTransport.startServer readyHandler result.HotReloadStateRef keptStateAccess projectFiles result.GetWarmupContext getRunTest result.Agent.TakeCoverage port
       |> Async.AwaitTask
     // Print actual port to stdout so daemon can discover it
     printfn "WORKER_PORT=%s" server.BaseUrl

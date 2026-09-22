@@ -20,7 +20,7 @@ let private noopHandler (_: WorkerProtocol.WorkerMessage) : Async<WorkerProtocol
 
 let private startServer () =
   WorkerHttpTransport.startServer
-    noopHandler (ref HotReloadState.empty) []
+    noopHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none []
     (fun () -> WarmupContext.empty)
     (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun })
     (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage)

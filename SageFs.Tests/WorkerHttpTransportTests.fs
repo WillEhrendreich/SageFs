@@ -149,7 +149,7 @@ let disposeServer (server: WorkerHttpTransport.HttpWorkerServer) =
 let httpRoundTripTests =
   testList "WorkerHttpTransport.roundTrip" [
     testTask "GetStatus round-trips through HTTP" {
-      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
         let! resp = proxy (WorkerMessage.GetStatus "s1") |> Async.StartAsTask
@@ -164,7 +164,7 @@ let httpRoundTripTests =
     }
 
     testTask "EvalCode round-trips through HTTP" {
-      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
         let! resp = proxy (WorkerMessage.EvalCode("hello", "e1")) |> Async.StartAsTask
@@ -178,7 +178,7 @@ let httpRoundTripTests =
     }
 
     testTask "CancelEval round-trips through HTTP" {
-      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
         let! resp = proxy WorkerMessage.CancelEval |> Async.StartAsTask
@@ -189,7 +189,7 @@ let httpRoundTripTests =
     }
 
     testTask "Shutdown round-trips through HTTP" {
-      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer testHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
         let! resp = proxy WorkerMessage.Shutdown |> Async.StartAsTask
@@ -206,7 +206,7 @@ let httpRoundTripTests =
 let concurrencyTests =
   testList "WorkerHttpTransport.concurrency" [
     testTask "GetStatus responds instantly during long eval" {
-      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer slowEvalHandler (ref HotReloadState.empty) [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
+      let! (server: WorkerHttpTransport.HttpWorkerServer) = WorkerHttpTransport.startServer slowEvalHandler (ref HotReloadState.empty) SageFs.Features.KeptState.Access.none [] (fun () -> WarmupContext.empty) (fun () -> fun _ -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
       try
         let proxy = WorkerHttpTransport.httpProxy server.BaseUrl
 

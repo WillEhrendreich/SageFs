@@ -303,8 +303,18 @@ let mutableStateClassificationTests =
           "getHome", DeclKind.ValueDecl
           "render", DeclKind.FunctionDecl ]
 
-    testCase "WHY — ReloadPlanning.restartReason — editing a `let mutable` reports MutableModuleState because the remedy is 'restart to re-run the initialiser', not 'make it a function'" <| fun _ ->
+    // Was "editing a `let mutable` reports MutableModuleState". Rule 3 of the
+    // state spec changed that on purpose: an edited initializer keeps the live
+    // value and says so, and only a changed header (what the binding IS) still
+    // restarts as mutable module state.
+    testCase "WHY — ReloadPlanning.planReload — editing a `let mutable`'s initializer keeps the live value because the app's state is data, not code" <| fun _ ->
       let edited = mutableSource.Replace("let mutable requestCount = 0", "let mutable requestCount = 100")
+      match planReload (declsOfSource mutableSource) (declsOfSource edited) with
+      | ReloadPlan.PatchKeepingState ([], LiveState.Kept d, []) -> d.Name |> Expect.equal "kept, not restarted" "requestCount"
+      | other -> failtestf "expected requestCount to be kept, got %A" other
+
+    testCase "WHY — ReloadPlanning.restartReason — changing what a `let mutable` IS (its access) reports MutableModuleState because the remedy is 'restart to re-run the initialiser', not 'make it a function'" <| fun _ ->
+      let edited = mutableSource.Replace("let mutable requestCount = 0", "let mutable internal requestCount = 0")
       planReload (declsOfSource mutableSource) (declsOfSource edited)
       |> reasonsOfPlan
       |> Expect.equal "named as mutable module state" [ RestartReason.MutableModuleState "requestCount" ]

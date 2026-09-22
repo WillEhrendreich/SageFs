@@ -39,6 +39,9 @@ type RestartReason =
   /// destroy the running state, so SageFs refuses to guess (the posture Flutter
   /// and Erlang both take).
   | MutableModuleState of binding: string
+  /// A `let mutable` whose type changed. The live value has the old type, so
+  /// keeping it isn't safe and there's nothing to carry.
+  | MutableStateTypeChanged of binding: string * was: string * now: string
   /// The compiled signature changed, so the old and new methods are not the
   /// same method and no detour can pair them.
   | SignatureChanged of declaration: string
@@ -75,6 +78,8 @@ module RestartReason =
       sprintf "'%s' is computed once when the module loads, so the running app captured the finished value" binding
     | RestartReason.MutableModuleState binding ->
       sprintf "'%s' is mutable module state, which is live data rather than code" binding
+    | RestartReason.MutableStateTypeChanged(binding, was, now) ->
+      sprintf "'%s' changed type from %s to %s, so its live value can't carry over" binding was now
     | RestartReason.SignatureChanged decl ->
       sprintf "'%s' changed signature, so it is no longer the same method the running app calls" decl
     | RestartReason.TypeShapeChanged typeName ->
@@ -100,6 +105,8 @@ module RestartReason =
       sprintf
         "Restart the app to re-run the initialiser for '%s'. SageFs will not carry the old value forward or reset it, because both silently lose something: carrying it forward ignores your edit, resetting it destroys live state."
         binding
+    | RestartReason.MutableStateTypeChanged(binding, _, _) ->
+      sprintf "Restart the app to start '%s' over with its new type. The running app is left exactly as it was until you do." binding
     | RestartReason.SignatureChanged _
     | RestartReason.TypeShapeChanged _
     | RestartReason.NewDeclaration _ ->
@@ -110,6 +117,18 @@ module RestartReason =
       sprintf
         "Restart the app to pick it up. The usual cause is that '%s' was inlined into its caller before the edit, so the caller holds its own copy of the old body and there is no entry point left to re-point. Marking it [<MethodImpl(MethodImplOptions.NoInlining)>] keeps it reloadable."
         decl
+
+/// A `let mutable` whose initializer you edited while the app was running. The
+/// app kept its live value (rule 3 of the state spec), and this is what the
+/// save says about it.
+type KeptValue = {
+  /// The qualified binding, e.g. `StateFixture.State.tuned`.
+  Binding: string
+  /// `%A` of the live value it kept, as the save found it.
+  KeptValue: string
+  /// The edited initializer's source text. It runs on reset, not before.
+  NewInitializer: string
+}
 
 /// What a save did to the process that is already running.
 ///
@@ -135,6 +154,12 @@ type ReloadOutcome =
   /// The file did not compile. The running app is untouched and still serving
   /// the last code that did compile — which is a feature, and worth saying.
   | CompileFailed of summary: string
+  /// You edited the initializer of live state, and the app KEPT the live value
+  /// instead of throwing it away. Anything else the save changed was patched
+  /// as usual (`patched` of `considered`, which counts the kept bindings too).
+  /// Head and rest: there's always at least one kept binding, or this is some
+  /// other outcome.
+  | KeptLiveState of patched: int * considered: int * first: KeptValue * rest: KeptValue list
 
 module ReloadOutcome =
 
@@ -153,6 +178,8 @@ module ReloadOutcome =
     function
     | ReloadOutcome.Patched _
     | ReloadOutcome.Restarted _ -> true
+    // Keeping a value changes nothing the app serves. Only a patch alongside it does.
+    | ReloadOutcome.KeptLiveState(patched, _, _, _) -> patched > 0
     | ReloadOutcome.NoEffect _
     | ReloadOutcome.RestartRequired _
     | ReloadOutcome.CompileFailed _ -> false
@@ -188,6 +215,14 @@ module ReloadOutcome =
       sprintf "Restart needed: %s" why
     | ReloadOutcome.CompileFailed summary ->
       sprintf "Not applied — the file did not compile, so the app is still serving the last good code: %s" summary
+    | ReloadOutcome.KeptLiveState(patched, considered, first, rest) ->
+      let kept =
+        first :: rest
+        |> List.map (fun k -> sprintf "kept '%s' = %s (your new initializer %s applies when you reset it)" k.Binding k.KeptValue k.NewInitializer)
+        |> String.concat "; "
+      match patched with
+      | 0 -> sprintf "Live state kept: %s" kept
+      | n -> sprintf "Hot reloaded %d of %d changed definition(s), and %s" n considered kept
 
   /// What to do next, when there is something to do. `None` means the outcome
   /// is already resolved and the user needs no instruction.
@@ -201,6 +236,8 @@ module ReloadOutcome =
       | [] -> Some "Restart the app to pick this change up."
       | r :: _ -> Some(RestartReason.remedy r)
     | ReloadOutcome.CompileFailed _ -> Some "Fix the compile error; the app reloads automatically once it builds."
+    | ReloadOutcome.KeptLiveState _ ->
+      Some "To run the new initializer, reset it from the Hot Reload panel on the dashboard or with the reset_hot_reload_state MCP tool. Otherwise there's nothing to do, the app kept going."
 
   /// The whole user-facing message: what happened, and what to do about it.
   let describeForUser (outcome: ReloadOutcome) : string =
@@ -228,4 +265,22 @@ module ReloadOutcome =
       | ReloadOutcome.RestartRequired reasons -> ReloadOutcome.RestartRequired(reasons @ extra)
       | ReloadOutcome.Patched _
       | ReloadOutcome.Restarted _
+      | ReloadOutcome.KeptLiveState _
       | ReloadOutcome.CompileFailed _ -> outcome
+
+  /// Folds the bindings a save KEPT into what its patch did. Only outcomes
+  /// where the process is still the one running can keep anything: a patch
+  /// that landed, or a save that patched nothing. A restart or a compile
+  /// failure has nothing to keep, and a partial no-effect keeps its reasons
+  /// (the kept bindings still show up in the worker's pending list).
+  let withKept (kept: KeptValue list) (outcome: ReloadOutcome) : ReloadOutcome =
+    match kept, outcome with
+    | [], _ -> outcome
+    | first :: rest, ReloadOutcome.Patched(patched, considered) ->
+      ReloadOutcome.KeptLiveState(patched, considered + List.length kept, first, rest)
+    | first :: rest, ReloadOutcome.NoEffect(0, []) -> ReloadOutcome.KeptLiveState(0, List.length kept, first, rest)
+    | _ :: _, ReloadOutcome.NoEffect _
+    | _ :: _, ReloadOutcome.Restarted _
+    | _ :: _, ReloadOutcome.RestartRequired _
+    | _ :: _, ReloadOutcome.CompileFailed _
+    | _ :: _, ReloadOutcome.KeptLiveState _ -> outcome

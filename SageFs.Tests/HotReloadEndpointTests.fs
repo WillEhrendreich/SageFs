@@ -17,7 +17,7 @@ let startTestServer () = task {
     @"C:\proj\src\Main.fs"
     @"C:\proj\tests\Tests.fs"
   ]
-  let! server = WorkerHttpTransport.startServer handler stateRef projectFiles (fun () -> WarmupContext.empty) (fun () -> fun _tc -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
+  let! server = WorkerHttpTransport.startServer handler stateRef SageFs.Features.KeptState.Access.none projectFiles (fun () -> WarmupContext.empty) (fun () -> fun _tc -> async { return Features.LiveTesting.TestResult.NotRun }) (fun () -> SageFs.HostAgent.AgentAnswered SageFs.HostAgent.NoCoverage) 0
   return server, stateRef
 }
 

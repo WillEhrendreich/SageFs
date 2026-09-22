@@ -51,16 +51,6 @@ let initializerOf (decl: SourceDecl) : Result<string, string> =
       | "" -> Error(sprintf "the declaration of '%s' has an empty initializer" decl.Name)
       | rhs -> Ok rhs
 
-/// A declared type annotation on a binding's header, e.g. `int` from
-/// `let mutable private hidden : int`.
-let annotationOf (decl: SourceDecl) : string option =
-  match decl.Header.IndexOf(':') with
-  | -1 -> None
-  | colon ->
-    match decl.Header.Substring(colon + 1).Trim() with
-    | "" -> None
-    | t -> Some t
-
 /// Lines of `text` re-indented to start at `indent`, keeping each line's
 /// indentation relative to the others so an offside-sensitive expression still
 /// parses.
@@ -90,17 +80,16 @@ let private handleName (decl: SourceDecl) = sprintf "__sagefsLive_%s" decl.Name
 /// The type whose static property stands in for the binding.
 let private standInTypeName (decl: SourceDecl) = sprintf "SageFsLive_%s" decl.Name
 
-/// A module-level `let` that finds the app's own `PropertyInfo` for `decl` in
-/// the running process. It runs when FSI evaluates the patch, so a binding that
-/// can't be found fails the eval and nothing gets re-pointed at a stand-in that
-/// points nowhere. Fail closed on more than one match too: two loaded copies of
-/// the module means picking one is a guess, and a wrong guess is the silent
-/// state loss this exists to prevent.
-let private locateStorage (indent: string) (moduleSegments: string list) (decl: SourceDecl) : string list =
+/// An expression that finds the app's own `PropertyInfo` for `decl` in the
+/// running process. It throws when the binding can't be found, so the eval
+/// fails and nothing gets pointed at storage that isn't there. It throws on
+/// more than one match too: two loaded copies of the module means picking one
+/// is a guess, and a wrong guess is the silent state loss this exists to
+/// prevent.
+let private locateStorageExpr (indent: string) (moduleSegments: string list) (name: string) : string list =
   let names = typeNameCandidates moduleSegments |> List.map fsharpString |> String.concat "; "
-  let binding = String.concat "." (moduleSegments @ [ decl.Name ])
-  [ sprintf "%slet private %s : System.Reflection.PropertyInfo =" indent (handleName decl)
-    sprintf "%s  let flags = System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Static" indent
+  let binding = String.concat "." (moduleSegments @ [ name ])
+  [ sprintf "%s  let flags = System.Reflection.BindingFlags.Public ||| System.Reflection.BindingFlags.NonPublic ||| System.Reflection.BindingFlags.Static" indent
     sprintf "%s  let names = [ %s ]" indent names
     sprintf "%s  let found =" indent
     sprintf "%s    System.AppDomain.CurrentDomain.GetAssemblies()" indent
@@ -111,7 +100,7 @@ let private locateStorage (indent: string) (moduleSegments: string list) (decl: 
     sprintf "%s        match a.GetType(n, false) with" indent
     sprintf "%s        | null -> None" indent
     sprintf "%s        | t ->" indent
-    sprintf "%s          match t.GetProperty(%s, flags) with" indent (fsharpString decl.Name)
+    sprintf "%s          match t.GetProperty(%s, flags) with" indent (fsharpString name)
     sprintf "%s          | null -> None" indent
     sprintf "%s          | p -> Some p)" indent
     sprintf "%s      |> List.toArray)" indent
@@ -119,6 +108,12 @@ let private locateStorage (indent: string) (moduleSegments: string list) (decl: 
     sprintf "%s  | [| p |] -> p" indent
     sprintf "%s  | [||] -> failwith %s" indent (fsharpString (sprintf "SageFs hot reload: can't find the running app's storage for '%s'" binding))
     sprintf "%s  | many -> failwithf %s many.Length" indent (fsharpString (sprintf "SageFs hot reload: %%d loaded assemblies define '%s', so there's no telling which one the app is using" binding)) ]
+
+/// The same lookup bound to a module-level `let`, which runs when FSI
+/// evaluates the patch.
+let private locateStorage (indent: string) (moduleSegments: string list) (decl: SourceDecl) : string list =
+  sprintf "%slet private %s : System.Reflection.PropertyInfo =" indent (handleName decl)
+  :: locateStorageExpr indent moduleSegments decl.Name
 
 /// The stand-in for an unedited non-public `let mutable` a patch uses: a
 /// private type with a static property of the SAME name, opened with
@@ -153,3 +148,113 @@ let carriedStandIn (indent: string) (moduleSegments: string list) (decl: SourceD
           sprintf "%s      if true then unbox (%s.GetValue(null))" indent handle
           sprintf "%s      else" indent ]
         @ reindent (indent + "        ") ("(" + init + ")")))
+
+// ── Kept state (rule 3): the probe at save time and the reset later ─────────
+
+/// What the probe found about a kept binding in the running app.
+[<RequireQualifiedAccess>]
+type ProbeReading =
+  /// Same type as the edited initializer, so the live value stays. The preview
+  /// is `%A` of the live value, cut short.
+  | Keeps of preview: string
+  /// The edited initializer has a different type from the live value, so
+  /// there's nothing safe to keep.
+  | Retyped of was: string * now: string
+
+/// The longest preview a notice carries. A kept `Dictionary` with a thousand
+/// entries is still one line on the dashboard.
+[<Literal>]
+let PreviewLimit = 120
+
+let private initFunctionName (decl: SourceDecl) = sprintf "__sagefsInit_%s" decl.Name
+
+let private b64Marker = "SAGEFS_LIVE_STATE:"
+
+/// The part of a probe or reset that FSI evaluates as a module: the edited
+/// initializer as a function, in the file's own module path with its opens and
+/// `open global.<compiled module>`, so it compiles exactly like the source did.
+/// Wrapping it in a function is the point: defining it runs nothing.
+let private initializerModule (decls: FileDecls) (decl: SourceDecl) : Result<string list, string> =
+  initializerOf decl
+  |> Result.map (fun init ->
+    let path = decls.ModulePath @ decl.Container
+    let pad depth = String.replicate depth "  "
+    let headers = path |> List.mapi (fun depth part -> sprintf "%smodule %s =" (pad depth) part)
+    let indent = pad path.Length
+    headers
+    @ (decls.Opens |> List.map (sprintf "%sopen %s" indent))
+    @ [ sprintf "%sopen global.%s" indent (String.concat "." path)
+        sprintf "%slet %s () =" indent (initFunctionName decl) ]
+    @ reindent (indent + "  ") ("(" + init + ")"))
+
+let private qualifiedInit (decls: FileDecls) (decl: SourceDecl) =
+  String.concat "." (decls.ModulePath @ decl.Container @ [ initFunctionName decl ])
+
+/// A top-level expression, so FSI reports it as `it` and the detour matcher
+/// leaves it alone. Its value is base64 behind a marker, so no preview text,
+/// however odd, can confuse the parse on the way back.
+let private reportExpression (body: string list) (result: string) : string list =
+  [ "("
+    yield! body
+    sprintf "  %s + System.Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(string (%s)))" (fsharpString b64Marker) result
+    ")" ]
+
+let private previewOf (value: string) =
+  [ sprintf "  let preview (v: obj) ="
+    sprintf "    let s = sprintf \"%%A\" v"
+    sprintf "    if s.Length > %d then s.Substring(0, %d) + \"...\" else s" PreviewLimit (PreviewLimit - 3)
+    sprintf "  let previewText = preview (%s)" value ]
+
+/// The FSI submission that checks a kept binding at save time: is the edited
+/// initializer the same type as the live value, and what IS the live value.
+/// It never runs the initializer and never writes the storage.
+let probeCode (decls: FileDecls) (decl: SourceDecl) : Result<string, string> =
+  initializerModule decls decl
+  |> Result.map (fun moduleLines ->
+    let segments = decls.ModulePath @ decl.Container
+    let body =
+      [ "  let storage ="
+        yield! locateStorageExpr "  " segments decl.Name
+        "  let typeOfResult (_: unit -> 'T) = typeof<'T>"
+        sprintf "  let newType = typeOfResult %s" (qualifiedInit decls decl)
+        yield! previewOf "storage.GetValue(null)"
+        "  let answer ="
+        "    match storage.PropertyType = newType with"
+        "    | true -> \"keeps\\n\" + previewText"
+        "    | false -> \"retyped\\n\" + storage.PropertyType.Name + \"\\n\" + newType.Name" ]
+    moduleLines @ reportExpression body "answer" |> String.concat "\n")
+
+/// The FSI submission behind a reset: run ONLY this binding's new initializer
+/// and store the result in the app's own field. Answers with the new value's
+/// preview.
+let resetCode (decls: FileDecls) (decl: SourceDecl) : Result<string, string> =
+  initializerModule decls decl
+  |> Result.map (fun moduleLines ->
+    let segments = decls.ModulePath @ decl.Container
+    let body =
+      [ "  let storage ="
+        yield! locateStorageExpr "  " segments decl.Name
+        sprintf "  let fresh = %s ()" (qualifiedInit decls decl)
+        "  storage.SetValue(null, box fresh)"
+        yield! previewOf "storage.GetValue(null)" ]
+    moduleLines @ reportExpression body "previewText" |> String.concat "\n")
+
+/// The payload a probe or reset submission reported, out of FSI's echo of it.
+let private reportedText (evalOutput: string) : Result<string, string> =
+  let m = System.Text.RegularExpressions.Regex.Match(evalOutput, System.Text.RegularExpressions.Regex.Escape b64Marker + "([A-Za-z0-9+/=]*)")
+  match m.Success with
+  | false -> Error(sprintf "the running app didn't answer the live-state probe (FSI said: %s)" evalOutput)
+  | true ->
+    try Ok(System.Text.Encoding.UTF8.GetString(Convert.FromBase64String m.Groups.[1].Value))
+    with ex -> Error(sprintf "the live-state probe's answer didn't decode: %s" ex.Message)
+
+let parseProbe (evalOutput: string) : Result<ProbeReading, string> =
+  reportedText evalOutput
+  |> Result.bind (fun text ->
+    match text.Split('\n') |> Array.toList with
+    | "keeps" :: preview -> Ok(ProbeReading.Keeps(String.concat "\n" preview))
+    | [ "retyped"; was; now ] -> Ok(ProbeReading.Retyped(was, now))
+    | _ -> Error(sprintf "the live-state probe answered something I don't understand: %s" text))
+
+/// The new value's preview after a reset.
+let parseReset (evalOutput: string) : Result<string, string> = reportedText evalOutput

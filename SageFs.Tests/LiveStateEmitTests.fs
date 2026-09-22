@@ -52,4 +52,52 @@ let liveStateEmitTests =
         let text = String.concat "\n" lines
         text |> Expect.stringContains "the getter is typed by the annotation" "with get () : int ="
         text.Contains "startCounting" |> Expect.isFalse "the initializer is left out entirely"
+
+    testCase "WHY — LiveStateEmit.parseProbe — reads the probe's answer out of FSI's echo, because that echo is the only thing that comes back from the isolated host" <| fun _ ->
+      let echo (text: string) =
+        sprintf "val it: string = \"SAGEFS_LIVE_STATE:%s\"" (System.Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes text))
+      echo "keeps\n13" |> parseProbe |> Expect.equal "a kept value" (Ok(ProbeReading.Keeps "13"))
+      echo "retyped\nInt32\nString" |> parseProbe |> Expect.equal "a retype" (Ok(ProbeReading.Retyped("Int32", "String")))
+      "val it: unit = ()" |> parseProbe |> Result.isError |> Expect.isTrue "no marker is an error, never a guess"
+
+    testCase "WHY — LiveStateEmit.probeCode — defines the new initializer as a function and never calls it, because a probe must not run it (rule 3)" <| fun _ ->
+      let source = "module M\n\nlet mutable tuned = startCounting ()\n"
+      let decls = match extractDecls source with Ok d -> d | Error e -> failtestf "%s" e
+      match probeCode decls (declOf source "tuned") with
+      | Error reason -> failtestf "expected probe code, got %s" reason
+      | Ok code ->
+        code |> Expect.stringContains "the initializer is wrapped in a function" "let __sagefsInit_tuned () ="
+        code.Contains "__sagefsInit_tuned ()\n" |> Expect.isFalse "and nothing calls it"
+        code.Contains "SetValue" |> Expect.isFalse "a probe never writes the app's field"
+  ]
+
+[<Tests>]
+let keptOutcomeTests =
+  let kept : SageFs.Features.ReloadOutcome.KeptValue =
+    { Binding = "M.tuned"; KeptValue = "13"; NewInitializer = "25" }
+  testList "ReloadOutcome kept live state" [
+    testCase "WHY — ReloadOutcome.withKept — a save that only kept state changed nothing the app serves, so it never refreshes the page" <| fun _ ->
+      let outcome =
+        SageFs.Features.ReloadOutcome.ReloadOutcome.ofPatchCounts 0 0 []
+        |> SageFs.Features.ReloadOutcome.ReloadOutcome.withKept [ kept ]
+      outcome |> Expect.equal "kept, nothing patched" (SageFs.Features.ReloadOutcome.ReloadOutcome.KeptLiveState(0, 1, kept, []))
+      SageFs.Features.ReloadOutcome.ReloadOutcome.shouldRefreshBrowser outcome |> Expect.isFalse "no refresh"
+      SageFs.Features.ReloadBroadcast.eventOf outcome
+      |> SageFs.DevReload.DevReloadEvent.payloadJson
+      |> Expect.stringContains "the payload names what it kept" "\"kept\":[{\"binding\":\"M.tuned\",\"keptValue\":\"13\",\"newInitializer\":\"25\"}]"
+
+    testCase "WHY — ReloadOutcome.withKept — a patch that landed next to a kept value still refreshes, and still says what it kept" <| fun _ ->
+      let outcome =
+        SageFs.Features.ReloadOutcome.ReloadOutcome.ofPatchCounts 1 1 []
+        |> SageFs.Features.ReloadOutcome.ReloadOutcome.withKept [ kept ]
+      outcome |> Expect.equal "patched and kept" (SageFs.Features.ReloadOutcome.ReloadOutcome.KeptLiveState(1, 2, kept, []))
+      SageFs.Features.ReloadOutcome.ReloadOutcome.shouldRefreshBrowser outcome |> Expect.isTrue "the patch refreshes"
+      SageFs.Features.ReloadOutcome.ReloadOutcome.describeForUser outcome
+      |> Expect.stringContains "the notice carries the kept value and the pending initializer" "kept 'M.tuned' = 13 (your new initializer 25 applies when you reset it)"
+
+    testCase "WHY — ReloadOutcome.withKept — a restart has nothing to keep, so kept values never dress up a restart as something gentler" <| fun _ ->
+      let restart = SageFs.Features.ReloadOutcome.ReloadOutcome.RestartRequired [ SageFs.Features.ReloadOutcome.RestartReason.SignatureChanged "f" ]
+      restart
+      |> SageFs.Features.ReloadOutcome.ReloadOutcome.withKept [ kept ]
+      |> Expect.equal "unchanged" restart
   ]

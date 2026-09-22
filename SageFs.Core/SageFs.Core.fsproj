@@ -86,6 +86,7 @@
         <Compile Include="Features\ReloadOutcome.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
         <Compile Include="Features\LiveStateEmit.fs" />
+        <Compile Include="Features\KeptState.fs" />
         <Compile Include="ShadowCopy.fs" />
         <Compile Include="WarmUp.fs" />
         <Compile Include="AspireSetup.fs" />

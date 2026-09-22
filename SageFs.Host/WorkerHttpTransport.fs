@@ -139,6 +139,10 @@ module WorkerHttpTransport =
     let warmupContext = WorkerRoute.Get ("/warmup-context", GetAccess.ReadOnly)
     let hotReload = WorkerRoute.Get ("/hotreload", GetAccess.ReadOnly)
     let hotReloadToggle = WorkerRoute.Post "/hotreload/toggle"
+    /// Run the new initializer of a `let mutable` a save kept (rule 3 of the
+    /// state spec). Writes the app's live state, so it's a POST like every
+    /// other mutating route.
+    let hotReloadResetState = WorkerRoute.Post "/hotreload/reset-state"
     let hotReloadWatchAll = WorkerRoute.Post "/hotreload/watch-all"
     let hotReloadUnwatchAll = WorkerRoute.Post "/hotreload/unwatch-all"
     let hotReloadWatchProject = WorkerRoute.Post "/hotreload/watch-project"
@@ -164,7 +168,7 @@ module WorkerHttpTransport =
     Routes.typecheckSymbols; Routes.completions; Routes.cancel; Routes.loadScript
     Routes.reset; Routes.hardReset; Routes.runTests; Routes.runTestsStream
     Routes.testDiscovery; Routes.evalLiveTestFile; Routes.instrumentationMaps; Routes.shutdown
-    Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle
+    Routes.warmupContext; Routes.hotReload; Routes.hotReloadToggle; Routes.hotReloadResetState
     Routes.hotReloadWatchAll; Routes.hotReloadUnwatchAll
     Routes.hotReloadWatchProject; Routes.hotReloadUnwatchProject
     Routes.hotReloadWatchDirectory; Routes.hotReloadUnwatchDirectory
@@ -289,6 +293,7 @@ module WorkerHttpTransport =
   let startServer
     (handler: WorkerMessage -> Async<WorkerResponse>)
     (hotReloadStateRef: HotReloadState.T ref)
+    (keptState: Features.KeptState.Access)
     (projectFiles: string list)
     (getWarmupContext: unit -> WarmupContext)
     (getRunTest: unit -> Features.LiveTesting.TestCase -> Async<Features.LiveTesting.TestResult>)
@@ -601,8 +606,23 @@ module WorkerHttpTransport =
         let files =
           projectFiles
           |> List.map (fun f -> {| path = f; watched = HotReloadState.isWatched f state |})
+        // `kept` lists the initializers saves have kept waiting for a reset,
+        // so the dashboard can show the notice and the button.
+        let kept =
+          keptState.Pending ()
+          |> List.map (fun k -> {| binding = k.Binding; keptValue = k.KeptValue; newInitializer = k.NewInitializer |})
         ctx.Response.ContentType <- "application/json"
-        do! ctx.Response.WriteAsync(Serialization.serialize {| files = files; watchedCount = HotReloadState.watchedCount state |})
+        do! ctx.Response.WriteAsync(Serialization.serialize {| files = files; watchedCount = HotReloadState.watchedCount state; kept = kept |})
+      })) |> ignore
+
+      map Routes.hotReloadResetState (Func<HttpContext, Task>(fun ctx -> task {
+        let! body = readBody ctx
+        use doc = JsonDocument.Parse(body)
+        let binding = (jsonProp doc "binding").GetString() |> Option.ofObj |> Option.defaultValue ""
+        let! outcome = keptState.Reset binding |> Async.StartAsTask
+        ctx.Response.StatusCode <- Features.KeptState.ResetOutcome.status outcome
+        ctx.Response.ContentType <- "application/json"
+        do! ctx.Response.WriteAsync(Features.KeptState.ResetOutcome.toJson outcome)
       })) |> ignore
 
       map Routes.hotReloadToggle (Func<HttpContext, Task>(fun ctx -> task {

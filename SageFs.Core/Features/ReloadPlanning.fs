@@ -74,9 +74,14 @@ type FileDecls = {
 type ReloadChange =
   | TypeChanged of name: string
   | ValueChanged of name: string
-  /// A module-level `let mutable` whose declaration text changed. Its value is
-  /// the running app's live state, not code.
+  /// A module-level `let mutable` whose HEADER changed (its access, say), so
+  /// its live value can't simply be kept. An edited initializer alone is not
+  /// this: that's `LiveState.Kept`, and the app keeps its value.
   | MutableStateChanged of name: string
+  /// A `let mutable` whose type changed. The app's live value has the old
+  /// type, so there is nothing safe to keep. Found from a declared annotation
+  /// here, or by the runtime probe when there isn't one.
+  | MutableStateRetyped of name: string * was: string * now: string
   | SignatureChanged of name: string
   | EntryPointChanged
   | ModuleChanged of name: string
@@ -106,6 +111,11 @@ type LiveState =
   /// never re-declared, because a re-declaration is a fresh field holding the
   /// initializer and the live value would be gone.
   | Carried of decl: SourceDecl
+  /// An edited `let mutable` whose type didn't change (rule 3). The app keeps
+  /// its live value and the new initializer waits for an explicit reset. The
+  /// save says so, because keeping state quietly is the one thing people
+  /// complain about in Flutter.
+  | Kept of decl: SourceDecl
 
 [<RequireQualifiedAccess>]
 type ReloadPlan =
@@ -123,6 +133,7 @@ module ReloadChange =
     | ReloadChange.TypeChanged name -> sprintf "type %s changed" name
     | ReloadChange.ValueChanged name -> sprintf "%s changed (it is built at startup)" name
     | ReloadChange.MutableStateChanged name -> sprintf "%s changed (it is mutable module state)" name
+    | ReloadChange.MutableStateRetyped (name, was, now) -> sprintf "%s changed type from %s to %s (it is mutable module state)" name was now
     | ReloadChange.SignatureChanged name -> sprintf "the signature of %s changed" name
     | ReloadChange.EntryPointChanged -> "the entry point changed"
     | ReloadChange.ModuleChanged name -> sprintf "module %s changed" name
@@ -156,6 +167,7 @@ module ReloadChange =
     // carrying it forward (which ignores the edit) and resetting it (which
     // destroys the state) — `MutableModuleState`'s remedy says exactly that.
     | ReloadChange.MutableStateChanged name -> RestartReason.MutableModuleState name
+    | ReloadChange.MutableStateRetyped (name, was, now) -> RestartReason.MutableStateTypeChanged (name, was, now)
     | ReloadChange.SignatureChanged name -> RestartReason.SignatureChanged name
     // `main` ran once, at process start, and composed everything now serving.
     | ReloadChange.EntryPointChanged -> RestartReason.StartupComputedValue "[<EntryPoint>] main"
@@ -454,7 +466,18 @@ let private additionFor (decl: SourceDecl) =
 type private DeclOutcome =
   | Unchanged
   | Patch of SourceDecl
+  | Keep of SourceDecl
   | Restart of ReloadChange
+
+/// A declared type annotation in a value binding's header, e.g. `int` from
+/// `let mutable private hidden : int`.
+let annotationOf (decl: SourceDecl) : string option =
+  match decl.Header.IndexOf(':') with
+  | -1 -> None
+  | colon ->
+    match decl.Header.Substring(colon + 1).Trim() with
+    | "" -> None
+    | t -> Some t
 
 /// A type and its companion module share a name, and a name can be shadowed,
 /// so a declaration is identified by kind, name and occurrence.
@@ -481,6 +504,16 @@ let private outcomeOf (baseline: Map<DeclKind * string list * string * int, Sour
   // re-evaluating the type re-points its members instead of needing a restart.
   | Some before, DeclKind.TypeDecl when normalize before.Header = normalize current.Header ->
     DeclOutcome.Patch current
+  // Rule 3: an edited initializer keeps the live value. A changed header is
+  // different: a changed annotation is a changed type, and anything else in
+  // the header (access, say) changes what the binding IS.
+  | Some before, DeclKind.MutableValueDecl ->
+    match normalize before.Header = normalize current.Header, annotationOf before, annotationOf current with
+    | true, _, _ -> DeclOutcome.Keep current
+    | false, was, now when was <> now ->
+      let shown = Option.defaultValue "(inferred)"
+      DeclOutcome.Restart (ReloadChange.MutableStateRetyped (current.Name, shown was, shown now))
+    | false, _, _ -> DeclOutcome.Restart (ReloadChange.MutableStateChanged current.Name)
   | Some _, _ -> DeclOutcome.Restart (changeFor current)
 
 /// A source file is a trustworthy hot-reload baseline only if it was not
@@ -749,10 +782,11 @@ let planReload (baseline: FileDecls) (current: FileDecls) : ReloadPlan =
     |> List.filter isCarryable
     |> List.distinct
     |> List.map LiveState.Carried
+  let kept = outcomes |> List.choose (function DeclOutcome.Keep d -> Some (LiveState.Kept d) | _ -> None)
   let restarts =
     (outcomes |> List.choose (function DeclOutcome.Restart c -> Some c | _ -> None)) @ removed @ unreachable
     |> List.distinct
-  match restarts, carried with
+  match restarts, carried @ kept with
   | first :: rest, _ -> ReloadPlan.RestartRequired (first, rest)
   | [], [] -> ReloadPlan.PatchFunctions patches
   | [], state :: more -> ReloadPlan.PatchKeepingState (patches, state, more)

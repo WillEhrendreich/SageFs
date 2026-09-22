@@ -41,11 +41,13 @@ let private caseName (outcome: ReloadOutcome) =
   | ReloadOutcome.NoEffect _ -> "NoEffect"
   | ReloadOutcome.RestartRequired _ -> "RestartRequired"
   | ReloadOutcome.CompileFailed _ -> "CompileFailed"
+  | ReloadOutcome.KeptLiveState _ -> "KeptLiveState"
 
 let private refusalCaseName (reason: RestartReason) =
   match reason with
   | RestartReason.StartupComputedValue _ -> "StartupComputedValue"
   | RestartReason.MutableModuleState _ -> "MutableModuleState"
+  | RestartReason.MutableStateTypeChanged _ -> "MutableStateTypeChanged"
   | RestartReason.SignatureChanged _ -> "SignatureChanged"
   | RestartReason.TypeShapeChanged _ -> "TypeShapeChanged"
   | RestartReason.NewDeclaration _ -> "NewDeclaration"
@@ -63,6 +65,18 @@ let private reasonsIn (outcome: ReloadOutcome) =
   | ReloadOutcome.Restarted reasons
   | ReloadOutcome.RestartRequired reasons -> reasons
   | ReloadOutcome.Patched _
+  | ReloadOutcome.KeptLiveState _
+  | ReloadOutcome.CompileFailed _ -> []
+
+let private keptIn (outcome: ReloadOutcome) : DevReload.KeptStateReport list =
+  match outcome with
+  | ReloadOutcome.KeptLiveState(_, _, first, rest) ->
+    first :: rest
+    |> List.map (fun k -> ({ Binding = k.Binding; KeptValue = k.KeptValue; NewInitializer = k.NewInitializer } : DevReload.KeptStateReport))
+  | ReloadOutcome.Patched _
+  | ReloadOutcome.NoEffect _
+  | ReloadOutcome.Restarted _
+  | ReloadOutcome.RestartRequired _
   | ReloadOutcome.CompileFailed _ -> []
 
 /// The whole truth about a save, in the shape every client reads. Built here
@@ -76,12 +90,14 @@ let reportOf (outcome: ReloadOutcome) : DevReload.ReloadReport =
     | ReloadOutcome.Restarted reasons
     | ReloadOutcome.RestartRequired reasons -> 0, consideredFor reasons
     | ReloadOutcome.CompileFailed _ -> 0, 0
+    | ReloadOutcome.KeptLiveState(patched, considered, _, _) -> patched, considered
   { Outcome = caseName outcome
     Patched = patched
     Considered = considered
     Message = Outcome.describeForUser outcome
     SuggestedAction = Outcome.remedy outcome |> Option.defaultValue ""
-    Reasons = reasonsIn outcome |> List.map refusalOf }
+    Reasons = reasonsIn outcome |> List.map refusalOf
+    Kept = keptIn outcome }
 
 /// The single translation. `refreshes` on the result always equals
 /// `ReloadOutcome.shouldRefreshBrowser` on the input — that equality is pinned
@@ -97,6 +113,10 @@ let eventOf (outcome: ReloadOutcome) : DevReload.DevReloadEvent =
   // attached by the caller that HAS them (`broadcastEvalFailure` in the worker);
   // an outcome carries only the summary.
   | ReloadOutcome.CompileFailed summary -> DevReload.CompilationFailed(summary, report, [])
+  // A kept value alone changes nothing the page would fetch, so it closes the
+  // overlay without a refresh. With a patch alongside it, the patch refreshes.
+  | ReloadOutcome.KeptLiveState(patched, _, _, _) when patched > 0 -> DevReload.Patched report
+  | ReloadOutcome.KeptLiveState _ -> DevReload.NotApplied report
 
 /// Deliver an event through the broadcast API that matches its case. Every
 /// terminal event a save produces goes through here, so `broadcastPatched`'s
@@ -132,7 +152,8 @@ let private notApplied (case: string) (message: string) (remedy: string) : DevRe
       Considered = 0
       Message = (match remedy with | "" -> message | r -> sprintf "%s\n→ %s" message r)
       SuggestedAction = remedy
-      Reasons = [] }
+      Reasons = []
+      Kept = [] }
 
 /// A save whose declarations are byte-identical to what the running build
 /// already has. Not a reload and not a failure: there is nothing to fetch and

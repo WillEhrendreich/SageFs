@@ -158,6 +158,15 @@ type ReloadRefusal = {
   SuggestedAction: string
 }
 
+/// Live state a save kept instead of resetting (rule 3 of the state spec), in
+/// the shape a client renders: which binding, the value it kept, and the
+/// initializer that waits for a reset.
+type KeptStateReport = {
+  Binding: string
+  KeptValue: string
+  NewInitializer: string
+}
+
 /// Everything a client needs to report a save without re-deriving anything.
 ///
 /// Every field exists because some client could not do its job without it: the
@@ -185,6 +194,9 @@ type ReloadReport = {
   SuggestedAction: string
   /// Why the save could not be applied, innermost first. Empty for a success.
   Reasons: ReloadRefusal list
+  /// Live values the save kept. Empty unless you edited an initializer of
+  /// state the app was holding.
+  Kept: KeptStateReport list
 }
 
 /// Events that flow to clients (browser overlay, editors) over the long-lived
@@ -217,7 +229,7 @@ type DevReloadEvent =
 
 module ReloadReport =
   /// The report for an event that carries no outcome of its own.
-  let none = { Outcome = ""; Patched = 0; Considered = 0; Message = ""; SuggestedAction = ""; Reasons = [] }
+  let none = { Outcome = ""; Patched = 0; Considered = 0; Message = ""; SuggestedAction = ""; Reasons = []; Kept = [] }
 
 module DevReloadEvent =
 
@@ -246,15 +258,25 @@ module DevReloadEvent =
   let private refusalJson (r: ReloadRefusal) =
     sprintf """{"case":%s,"message":%s,"suggestedAction":%s}""" (json r.Case) (json r.Message) (json r.SuggestedAction)
 
+  let private keptJson (k: KeptStateReport) =
+    sprintf """{"binding":%s,"keptValue":%s,"newInitializer":%s}""" (json k.Binding) (json k.KeptValue) (json k.NewInitializer)
+
+  /// `kept` only appears when something was kept, so every payload from before
+  /// rule 3 existed is byte-for-byte what it was.
   let private reportFields (r: ReloadReport) =
+    let kept =
+      match r.Kept with
+      | [] -> ""
+      | ks -> sprintf ""","kept":[%s]""" (ks |> List.map keptJson |> String.concat ",")
     sprintf
-      """"outcome":%s,"patched":%d,"considered":%d,"message":%s,"suggestedAction":%s,"reasons":[%s]"""
+      """"outcome":%s,"patched":%d,"considered":%d,"message":%s,"suggestedAction":%s,"reasons":[%s]%s"""
       (json r.Outcome)
       r.Patched
       r.Considered
       (json r.Message)
       (json r.SuggestedAction)
       (r.Reasons |> List.map refusalJson |> String.concat ",")
+      kept
 
   /// The bare JSON payload for one event — no SSE framing. `sseData` wraps
   /// this into a `data: ...\n\n` frame for the long-lived stream; `LastReload`

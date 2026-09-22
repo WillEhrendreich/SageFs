@@ -111,6 +111,16 @@ let planReloadTests =
       plan (baselineSource + "\nlet helper (x: int) = x + 1\n")
       |> patchedNames |> Expect.equal "helper added" [ "helper" ]
 
+    testCase "WHY — ReloadPlanning.planReload — an edited initializer on a let mutable keeps the live value instead of restarting, because the app's state is data you didn't ask to lose (rule 3)" <| fun _ ->
+      match plan (replace "let mutable todos: TodoItem list = []" "let mutable todos: TodoItem list = [ { Id = 1; Text = \"seed\" } ]" baselineSource) with
+      | ReloadPlan.PatchKeepingState ([], LiveState.Kept d, []) -> d.Name |> Expect.equal "todos is kept" "todos"
+      | other -> failtestf "expected todos to be kept with nothing else to do, got %A" other
+
+    testCase "WHY — ReloadPlanning.planReload — a let mutable whose declared type changed restarts as retyped, because a live value of the old type can't be kept (rule 4)" <| fun _ ->
+      plan (replace "let mutable todos: TodoItem list = []" "let mutable todos: string list = []" baselineSource)
+      |> restartChanges
+      |> Expect.equal "todos changed type" [ ReloadChange.MutableStateRetyped ("todos", "TodoItem list", "string list") ]
+
     testCase "WHY — ReloadPlanning.planReload — every restart reason is reported because the card must say what changed" <| fun _ ->
       baselineSource
       |> replace "Text: string }" "Text: string; Done: bool }"
@@ -292,8 +302,10 @@ let carriedStateTests =
       | ReloadPlan.PatchKeepingState (patched, first, rest) ->
         patched |> List.map _.Name |> Expect.equal "only the edited function is re-emitted" [ "show" ]
         first :: rest
-        |> List.map (function LiveState.Carried d -> d.Name)
-        |> Expect.equal "hits is carried, not re-declared" [ "hits" ]
+        |> List.map (function
+          | LiveState.Carried d -> "carried " + d.Name
+          | LiveState.Kept d -> "kept " + d.Name)
+        |> Expect.equal "hits is carried, not re-declared" [ "carried hits" ]
       | other -> failtestf "expected a patch that carries hits, got %A" other
 
     testCase "WHY — ReloadPlanning.planReload — a patch that also uses a private function still restarts, because FSI needs that function's code and carrying only covers storage" <| fun _ ->
@@ -528,7 +540,13 @@ let planReloadPropertyTests =
              |> List.map _.Name
              |> Set.ofList
            let carriedIn (state: LiveState list) =
-             state |> List.map (function LiveState.Carried d -> d.Name) |> Set.ofList
+             // Only function bodies were edited here, so nothing can be kept;
+             // a Kept entry is tagged so it can never pass for a carried name.
+             state
+             |> List.map (function
+               | LiveState.Carried d -> d.Name
+               | LiveState.Kept d -> "kept:" + d.Name)
+             |> Set.ofList
            match planReload file (fileOf editedDecls), unreachable with
            | ReloadPlan.PatchFunctions patched, [] ->
              Set.isEmpty carried && (patched |> List.map _.Name |> Set.ofList) = editedNames
@@ -543,7 +561,10 @@ let planReloadPropertyTests =
          (Arb.fromGen (gen {
             let! file = genUniqueFile
             // The extra edit targets a declaration that only takes effect at startup.
-            let! targetKind = Gen.elements (allKinds |> List.filter (fun k -> k <> DeclKind.FunctionDecl))
+            // Not a function (patched) and not a `let mutable` either: an edited
+            // initializer on live state is kept, not restarted (rule 3).
+            let! targetKind =
+              Gen.elements (allKinds |> List.filter (fun k -> k <> DeclKind.FunctionDecl && k <> DeclKind.MutableValueDecl))
             let! target = genDeclNamed "omega" |> Gen.map (fun d -> mkDecl d.Name targetKind d.Access "0")
             let! flags = Gen.listOfLength file.Decls.Length (Gen.elements [ true; false ])
             return fileOf (file.Decls @ [ target ]), flags, target }))
