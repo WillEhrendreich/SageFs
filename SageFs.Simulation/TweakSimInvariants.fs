@@ -37,8 +37,8 @@ module TweakSimInvariants =
     List.zip scenario.Events (states |> List.pairwise)
     |> List.indexed
     |> List.choose (fun (i, (ev, (before, after))) ->
-      match ev, before.PendingFailure with
-      | SimEvent.Tweak _, Some _ ->
+      match ev, before.ScheduledFailure with
+      | SimEvent.Tweak _, ScheduledFailure.FailureScheduled _ ->
         match after.Txn with
         | TweakTransaction.TweakState.Applied _ -> violation i "a scheduled forced failure still reached Applied"
         | _ -> None
@@ -66,9 +66,10 @@ module TweakSimInvariants =
     |> List.indexed
     |> List.choose (fun (i, s) ->
       let logSaysDirty = TweakLog.dirtySet s.Log |> Set.contains address
-      match logSaysDirty = s.DirtyGroundTruth with
+      let groundTruthDirty = s.GroundTruth = GroundTruthDirtiness.GroundTruthDirty
+      match logSaysDirty = groundTruthDirty with
       | true -> None
-      | false -> violation i (sprintf "log dirty=%b but ground truth=%b" logSaysDirty s.DirtyGroundTruth))
+      | false -> violation i (sprintf "log dirty=%b but ground truth=%b" logSaysDirty groundTruthDirty))
 
   /// A save's own logged `TweakSaved.textBefore` always matches what was
   /// really at the address the instant before that save landed, the
@@ -95,8 +96,8 @@ module TweakSimInvariants =
     |> List.pairwise
     |> List.indexed
     |> List.choose (fun (i, (before, after)) ->
-      match before.Txn, before.TweakStartHash with
-      | TweakTransaction.TweakState.Applied _, Some expected ->
+      match before.Txn, before.Baseline with
+      | TweakTransaction.TweakState.Applied _, TweakBaseline.BaselineCaptured expected ->
         match TweakAddress.resolve before.Source address with
         | Ok resolved when resolved.Hash <> expected ->
           match justAppended before after with

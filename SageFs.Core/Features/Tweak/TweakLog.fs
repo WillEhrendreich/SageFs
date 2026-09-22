@@ -16,6 +16,28 @@
 /// `ThreeWayMerge` (what a file-level rollback falls back to when the
 /// structural inverse can't apply). Both are function-shaped placeholders,
 /// nothing in this file calls them, so nothing here does IO.
+///
+/// Two things are configurable, both bundled on `TweakLogSettings`, both
+/// with an explicit default rather than a value picked at the call site:
+///   * `CompactionMode` defaults to `OnSessionClose`: a live session stays
+///     fully event-sourced, whatever it costs in bytes, and only folds down
+///     to a `Snapshot` when the session actually closes. `LiveOnBudget` is
+///     the other option, compacting mid-session the moment the log crosses
+///     its byte/count budget, at the cost of a live session no longer being
+///     the full history.
+///   * `ReplayScope` defaults to `SageFsWritesOnly`: `replay`/`replayWholeFile`
+///     only ever promise to reproduce the ranges SageFs itself wrote, a
+///     user's own edits and reformats are observed but their bytes never
+///     stored. `EverythingAsDiffs` is the other option, and it's the one
+///     that costs real bytes: every `UserEditObserved`/`ReformatObserved`
+///     then carries a `FileContent.Recorded` snapshot of the whole file, so
+///     `replayWholeFile` can reproduce it byte for byte, bytes SageFs never
+///     wrote included.
+/// Nothing here stores an `Option` or a `bool` to mean "state, but I forgot
+/// why": absence is always a named DU case (`FileContent.NotRecorded of
+/// scope`, `KnownFileHash.FileHashUnknown`, `UndoCursor.Compacted`, `Snapshot`'s
+/// own `Origins` carrying the full triple an undo/redo needs, not just half
+/// of it), never a bare `None` a reader has to go re-derive the reason for.
 module SageFs.Features.Tweak.TweakLog
 
 open System
@@ -84,8 +106,12 @@ type Fingerprint =
 
 [<RequireQualifiedAccess>]
 module Fingerprint =
-  /// Bump on a byte-layout change to `TweakLogFormat`.
-  let schemaVersion = 1
+  /// Bump on a byte-layout change to `TweakLogFormat`. At 2: the
+  /// UserEditObserved/ReformatObserved snapshot field went from a
+  /// `writeLpStringOption`-shaped `string option` to `writeFileContent`'s
+  /// tagged `FileContent` (0/1 = NotRecorded of each scope, 2 = Recorded
+  /// text), so bytes written under schema 1 no longer decode correctly.
+  let schemaVersion = 2
 
   /// Bump on a change to what `foldEvents`'s rules MEAN, even if no byte
   /// layout changed (the UserEditObserved dirty-preserving rule earlier in
@@ -108,19 +134,49 @@ module Fingerprint =
       | true -> LogGrade.Fine
       | false -> LogGrade.Risky
 
+// ── replay scope: what `replay`/`replayWholeFile` promise to reproduce ──
+
+/// What `replay` promises. `SageFsWritesOnly` (the default): replay
+/// reproduces exactly every range SageFs itself wrote; a user's own edits
+/// and reformats are observed (their hashes, and any conflict they cause)
+/// but their bytes are never stored, so the log stays small and never
+/// records a change SageFs didn't make. `EverythingAsDiffs`: `UserEditObserved`/
+/// `ReformatObserved` also carry the file's full text at that point, so
+/// replay can reproduce the WHOLE file byte for byte, at the cost of those
+/// events counting their full size toward the byte budget like anything
+/// else. Set on `TweakLogSettings.ReplayScope`; see `TweakLogSettings.defaults`.
+[<RequireQualifiedAccess>]
+type ReplayScope =
+  | SageFsWritesOnly
+  | EverythingAsDiffs
+
+/// Whether a `UserEditObserved`/`ReformatObserved` event carries the whole
+/// file's text at the moment it was observed. Not a `string option`: an
+/// unrecorded snapshot is not an absent value, it's a FACT about which
+/// `ReplayScope` was active, worth keeping on the case itself rather than a
+/// bare `None` a reader has to go cross-reference `TweakLogSettings` to
+/// explain. Under the default (`ReplayScope.SageFsWritesOnly`),
+/// `observeUserEdit`/`observeReformat` always produce `NotRecorded
+/// SageFsWritesOnly`; only `ReplayScope.EverythingAsDiffs` ever produces
+/// `Recorded`.
+[<RequireQualifiedAccess>]
+type FileContent =
+  | NotRecorded of scope: ReplayScope
+  | Recorded of text: string
+
 // ── the events ──
 
 [<RequireQualifiedAccess>]
 type TweakLogEvent =
   | TweakApplied of address: TweakAddress * textBefore: string * textAfter: string * hashAfter: string
   | TweakSaved of address: TweakAddress * textBefore: string * textAfter: string * hashAfter: string * fileHashBefore: string
-  /// `fileSnapshot` is `None` under `ReplayScope.SageFsWritesOnly` (the
-  /// default): only the edited ADDRESS's own new text and hash are known,
-  /// never the whole file. Under `EverythingAsDiffs` it carries the whole
-  /// file's text at this point, which `replayWholeFile` needs to reproduce
-  /// bytes SageFs itself never wrote.
-  | UserEditObserved of address: TweakAddress * textNow: string * hashNow: string * fileSnapshot: string option
-  | ReformatObserved of fileHashBefore: string * fileHashAfter: string * fileSnapshot: string option
+  /// `fileContent` is `FileContent.NotRecorded ReplayScope.SageFsWritesOnly`
+  /// under the default scope: only the edited ADDRESS's own new text and
+  /// hash are known, never the whole file. Under `EverythingAsDiffs` it's
+  /// `FileContent.Recorded` of the whole file's text at this point, which
+  /// `replayWholeFile` needs to reproduce bytes SageFs itself never wrote.
+  | UserEditObserved of address: TweakAddress * textNow: string * hashNow: string * fileContent: FileContent
+  | ReformatObserved of fileHashBefore: string * fileHashAfter: string * fileContent: FileContent
   | HotReloadObserved of fileHashBefore: string * fileHashAfter: string
   | ConflictRaised of address: TweakAddress * wrote: string * now: string * before: string
   | ConflictResolved of address: TweakAddress
@@ -185,6 +241,16 @@ module ScrubCoalescer =
 
 // ── projections: pure folds over the stream ──
 
+/// Whether the projection has seen a `ReformatObserved`/`HotReloadObserved`
+/// yet. Not a `string option`: nothing here means "the file has no hash",
+/// it means "this projection hasn't observed one yet", a genuinely
+/// different fact a bare `None` would flatten into the same bit as "checked
+/// and there's nothing there".
+[<RequireQualifiedAccess>]
+type KnownFileHash =
+  | FileHashUnknown
+  | FileHashKnown of hash: string
+
 /// What every projection tracks per address: the text the log currently
 /// believes is live, and the text last confirmed durable on disk. Dirty is
 /// derived (`Known <> Saved`), never stored as its own flag, so it can never
@@ -193,12 +259,12 @@ type Projection =
   { Known: Map<TweakAddress, string>
     Saved: Map<TweakAddress, string>
     OpenConflicts: Set<TweakAddress>
-    LastFileHash: string option }
+    LastFileHash: KnownFileHash }
 
 [<RequireQualifiedAccess>]
 module Projection =
   let empty =
-    { Known = Map.empty; Saved = Map.empty; OpenConflicts = Set.empty; LastFileHash = None }
+    { Known = Map.empty; Saved = Map.empty; OpenConflicts = Set.empty; LastFileHash = KnownFileHash.FileHashUnknown }
 
   let dirtySet (p: Projection) : Set<TweakAddress> =
     p.Known
@@ -269,7 +335,7 @@ let private foldEvents (lookupOrigin: int -> (TweakAddress * string) option) (se
       | TweakLogEvent.TweakApplied(addr, _before, after, _hash) -> { p with Known = p.Known |> Map.add addr after }
       | TweakLogEvent.TweakSaved(addr, _before, after, _hash, _fileHashBefore) ->
         { p with Known = p.Known |> Map.add addr after; Saved = p.Saved |> Map.add addr after }
-      | TweakLogEvent.UserEditObserved(addr, textNow, _hash, _fileSnapshot) ->
+      | TweakLogEvent.UserEditObserved(addr, textNow, _hash, _fileContent) ->
         // A direct edit to the file always moves disk truth (`Saved`). Its
         // effect on `Known` (the log's belief about the LIVE app value)
         // depends on whether there was a pending tweak to protect:
@@ -290,8 +356,8 @@ let private foldEvents (lookupOrigin: int -> (TweakAddress * string) option) (se
         match wasDirty with
         | true -> { p with Saved = p.Saved |> Map.add addr textNow }
         | false -> { p with Known = p.Known |> Map.add addr textNow; Saved = p.Saved |> Map.add addr textNow }
-      | TweakLogEvent.ReformatObserved(_, afterHash, _fileSnapshot) -> { p with LastFileHash = Some afterHash }
-      | TweakLogEvent.HotReloadObserved(_, afterHash) -> { p with LastFileHash = Some afterHash }
+      | TweakLogEvent.ReformatObserved(_, afterHash, _fileContent) -> { p with LastFileHash = KnownFileHash.FileHashKnown afterHash }
+      | TweakLogEvent.HotReloadObserved(_, afterHash) -> { p with LastFileHash = KnownFileHash.FileHashKnown afterHash }
       | TweakLogEvent.ConflictRaised(addr, _, _, _) -> { p with OpenConflicts = p.OpenConflicts |> Set.add addr }
       | TweakLogEvent.ConflictResolved addr -> { p with OpenConflicts = p.OpenConflicts |> Set.remove addr }
       | TweakLogEvent.RolledBack targetId ->
@@ -663,20 +729,6 @@ type CompactionMode =
   | OnSessionClose
   | LiveOnBudget
 
-/// What `replay` promises. `SageFsWritesOnly` (the default): replay
-/// reproduces exactly every range SageFs itself wrote; a user's own edits
-/// and reformats are observed (their hashes, and any conflict they cause)
-/// but their bytes are never stored, so the log stays small and never
-/// records a change SageFs didn't make. `EverythingAsDiffs`: `UserEditObserved`/
-/// `ReformatObserved` also carry the file's full text at that point, so
-/// replay can reproduce the WHOLE file byte for byte, at the cost of those
-/// events counting their full size toward the byte budget like anything
-/// else.
-[<RequireQualifiedAccess>]
-type ReplayScope =
-  | SageFsWritesOnly
-  | EverythingAsDiffs
-
 /// One named place for every tunable this module reads, instead of a
 /// value picked on the spot at each call site.
 type TweakLogSettings =
@@ -723,20 +775,20 @@ let observeUserEdit
   (address: TweakAddress)
   (textNow: string)
   : TweakLogEvent =
-  let snapshot =
+  let content =
     match settings.ReplayScope with
-    | ReplayScope.SageFsWritesOnly -> None
-    | ReplayScope.EverythingAsDiffs -> Some fileAfter
-  TweakLogEvent.UserEditObserved(address, textNow, contentHash textNow, snapshot)
+    | ReplayScope.SageFsWritesOnly -> FileContent.NotRecorded ReplayScope.SageFsWritesOnly
+    | ReplayScope.EverythingAsDiffs -> FileContent.Recorded fileAfter
+  TweakLogEvent.UserEditObserved(address, textNow, contentHash textNow, content)
 
 /// Build the `ReformatObserved` event for a whitespace/comment-only
 /// change, carrying a whole-file snapshot only under `EverythingAsDiffs`.
 let observeReformat (settings: TweakLogSettings) (fileBefore: string) (fileAfter: string) : TweakLogEvent =
-  let snapshot =
+  let content =
     match settings.ReplayScope with
-    | ReplayScope.SageFsWritesOnly -> None
-    | ReplayScope.EverythingAsDiffs -> Some fileAfter
-  TweakLogEvent.ReformatObserved(contentHash fileBefore, contentHash fileAfter, snapshot)
+    | ReplayScope.SageFsWritesOnly -> FileContent.NotRecorded ReplayScope.SageFsWritesOnly
+    | ReplayScope.EverythingAsDiffs -> FileContent.Recorded fileAfter
+  TweakLogEvent.ReformatObserved(contentHash fileBefore, contentHash fileAfter, content)
 
 /// Reproduces the WHOLE file, byte for byte, replaying every mutating
 /// event in order, only available under `ReplayScope.EverythingAsDiffs`:
@@ -782,10 +834,10 @@ let replayWholeFile (baseSource: string) (events: LoggedEvent list) : Result<str
             match resolve src addr with
             | Error err -> Error(WholeFileReplayError.AddressGone(addr, err))
             | Ok resolved -> Ok(replaceRange src resolved.Range after)
-        | TweakLogEvent.UserEditObserved(_, _, _, Some fileAfter) -> Ok fileAfter
-        | TweakLogEvent.ReformatObserved(_, _, Some fileAfter) -> Ok fileAfter
-        | TweakLogEvent.UserEditObserved(addr, _, _, None) -> Error(WholeFileReplayError.NoSnapshot(Some addr))
-        | TweakLogEvent.ReformatObserved(_, _, None) -> Error(WholeFileReplayError.NoSnapshot None)
+        | TweakLogEvent.UserEditObserved(_, _, _, FileContent.Recorded fileAfter) -> Ok fileAfter
+        | TweakLogEvent.ReformatObserved(_, _, FileContent.Recorded fileAfter) -> Ok fileAfter
+        | TweakLogEvent.UserEditObserved(addr, _, _, FileContent.NotRecorded _) -> Error(WholeFileReplayError.NoSnapshot(Some addr))
+        | TweakLogEvent.ReformatObserved(_, _, FileContent.NotRecorded _) -> Error(WholeFileReplayError.NoSnapshot None)
         | _ -> Ok src))
     (Ok baseSource)
 
@@ -904,6 +956,25 @@ module TweakLogFormat =
     let path = [ for _ in 1 .. n -> readPathStep br ]
     { ModulePath = modulePath; BindingName = bindingName; Path = path }
 
+  /// [tag][text if Recorded]. 0 = NotRecorded SageFsWritesOnly, 1 =
+  /// NotRecorded EverythingAsDiffs, 2 = Recorded (a length-prefixed string
+  /// follows). Both NotRecorded cases round-trip with no string payload;
+  /// the scope itself is the only information they ever carried.
+  let private writeFileContent (bw: BinaryWriter) (fc: FileContent) =
+    match fc with
+    | FileContent.NotRecorded ReplayScope.SageFsWritesOnly -> BinaryPrimitives.writeU8 bw 0uy
+    | FileContent.NotRecorded ReplayScope.EverythingAsDiffs -> BinaryPrimitives.writeU8 bw 1uy
+    | FileContent.Recorded text ->
+      BinaryPrimitives.writeU8 bw 2uy
+      BinaryPrimitives.writeLpString bw text
+
+  let private readFileContent (br: BinaryReader) : FileContent =
+    match br.ReadByte() with
+    | 0uy -> FileContent.NotRecorded ReplayScope.SageFsWritesOnly
+    | 1uy -> FileContent.NotRecorded ReplayScope.EverythingAsDiffs
+    | 2uy -> FileContent.Recorded(BinaryPrimitives.readLpString br)
+    | other -> failwithf "unknown FileContent tag %d" other
+
   let private eventTag =
     function
     | TweakLogEvent.TweakApplied _ -> 0uy
@@ -929,15 +1000,15 @@ module TweakLogFormat =
       BinaryPrimitives.writeLpString bw after
       BinaryPrimitives.writeLpString bw hash
       BinaryPrimitives.writeLpString bw fileHashBefore
-    | TweakLogEvent.UserEditObserved(addr, textNow, hashNow, fileSnapshot) ->
+    | TweakLogEvent.UserEditObserved(addr, textNow, hashNow, fileContent) ->
       writeAddress bw addr
       BinaryPrimitives.writeLpString bw textNow
       BinaryPrimitives.writeLpString bw hashNow
-      BinaryPrimitives.writeLpStringOption bw fileSnapshot
-    | TweakLogEvent.ReformatObserved(before, after, fileSnapshot) ->
+      writeFileContent bw fileContent
+    | TweakLogEvent.ReformatObserved(before, after, fileContent) ->
       BinaryPrimitives.writeLpString bw before
       BinaryPrimitives.writeLpString bw after
-      BinaryPrimitives.writeLpStringOption bw fileSnapshot
+      writeFileContent bw fileContent
     | TweakLogEvent.HotReloadObserved(before, after) ->
       BinaryPrimitives.writeLpString bw before
       BinaryPrimitives.writeLpString bw after
@@ -968,13 +1039,13 @@ module TweakLogFormat =
       let addr = readAddress br
       let textNow = BinaryPrimitives.readLpString br
       let hashNow = BinaryPrimitives.readLpString br
-      let fileSnapshot = BinaryPrimitives.readLpStringOption br
-      TweakLogEvent.UserEditObserved(addr, textNow, hashNow, fileSnapshot)
+      let fileContent = readFileContent br
+      TweakLogEvent.UserEditObserved(addr, textNow, hashNow, fileContent)
     | 3uy ->
       let before = BinaryPrimitives.readLpString br
       let after = BinaryPrimitives.readLpString br
-      let fileSnapshot = BinaryPrimitives.readLpStringOption br
-      TweakLogEvent.ReformatObserved(before, after, fileSnapshot)
+      let fileContent = readFileContent br
+      TweakLogEvent.ReformatObserved(before, after, fileContent)
     | 4uy ->
       let before = BinaryPrimitives.readLpString br
       let after = BinaryPrimitives.readLpString br

@@ -103,6 +103,48 @@ module TweakSim =
     /// tweak sitting behind the window is just gone.
     | DropsUnsavedTwin
 
+  /// Whether the simulated editor currently holds unsaved changes to this
+  /// file. Not a `bool`: `OpenEditorDirty`/`CloseEditor` are two distinct
+  /// facts about the world, named as such, so `applySave`'s guard reads as
+  /// "no unsaved editor changes are in the way" rather than a bare `false`.
+  [<RequireQualifiedAccess>]
+  type EditorDirtiness =
+    | NoUnsavedEditorChanges
+    | UnsavedEditorChanges
+
+  /// Whether the NEXT `Tweak` event is scheduled to fail, and at which
+  /// step. Not a `TweakStep option`: `None` would have meant "nothing
+  /// scheduled" only by convention, a `Some` reader would still have to
+  /// remember what the step inside it means. Named cases make both facts
+  /// explicit at the case itself.
+  [<RequireQualifiedAccess>]
+  type ScheduledFailure =
+    | NoFailureScheduled
+    | FailureScheduled of step: TweakTransaction.TweakStep
+
+  /// The address's hash captured as the CURRENT tweak's baseline, the
+  /// moment it started, what `Save` checks the live file against. Not a
+  /// `string option`: "no baseline captured yet" is a different fact than
+  /// "captured, and it's this hash", worth its own case rather than folding
+  /// both into whether a string is present.
+  [<RequireQualifiedAccess>]
+  type TweakBaseline =
+    | NoBaselineCaptured
+    | BaselineCaptured of hash: string
+
+  /// Ground truth, tracked independently of the log: is there an
+  /// applied-but-unsaved tweak right now? Untouched by anything except a
+  /// successful Tweak (moves to Dirty) or a successful Save (moves to
+  /// Clean); a crash, a user edit, a reformat, or a rollback of something
+  /// else entirely must never flip it either way on their own. Not a
+  /// `bool`: this DU exists purely so `dirtySetMatchesGroundTruth` reads as
+  /// a comparison between two named facts, not two bits whose meaning lives
+  /// only in a doc comment.
+  [<RequireQualifiedAccess>]
+  type GroundTruthDirtiness =
+    | GroundTruthClean
+    | GroundTruthDirty
+
   type State =
     { X: int64
       Source: string
@@ -114,18 +156,11 @@ module TweakSim =
       /// part of what any real implementation would keep; a verification
       /// aid, same role `ModelState` plays in `FsiEmitSim`.
       ShadowLog: TweakLog.EventLog
-      EditorDirty: bool
+      Editor: EditorDirtiness
       Txn: TweakTransaction.TweakState<int64>
-      PendingFailure: TweakTransaction.TweakStep option
-      /// The address's hash captured as the CURRENT tweak's baseline, the
-      /// moment it started, what `Save` checks the live file against.
-      TweakStartHash: string option
-      /// Ground truth, tracked independently of the log: is there an
-      /// applied-but-unsaved tweak right now? Untouched by anything except
-      /// a successful Tweak (sets true) or a successful Save (sets false),
-      /// a crash, a user edit, a reformat, or a rollback of something else
-      /// entirely must never flip it either way on their own.
-      DirtyGroundTruth: bool
+      ScheduledFailure: ScheduledFailure
+      Baseline: TweakBaseline
+      GroundTruth: GroundTruthDirtiness
       Settings: TweakLog.TweakLogSettings
       Clock: int64 }
 
@@ -150,11 +185,11 @@ module TweakSim =
       Log = TweakLog.EventLog.empty
       Snapshot = TweakLog.Snapshot.empty
       ShadowLog = TweakLog.EventLog.empty
-      EditorDirty = false
+      Editor = EditorDirtiness.NoUnsavedEditorChanges
       Txn = TweakTransaction.initial x
-      PendingFailure = None
-      TweakStartHash = None
-      DirtyGroundTruth = false
+      ScheduledFailure = ScheduledFailure.NoFailureScheduled
+      Baseline = TweakBaseline.NoBaselineCaptured
+      GroundTruth = GroundTruthDirtiness.GroundTruthClean
       Settings = settings
       Clock = 0L }
 
@@ -194,18 +229,18 @@ module TweakSim =
     let text = string value
     let baselineHash =
       match TweakAddress.resolve s.Source address with
-      | Ok r -> Some r.Hash
-      | Error _ -> None
+      | Ok r -> TweakBaseline.BaselineCaptured r.Hash
+      | Error _ -> TweakBaseline.NoBaselineCaptured
     let started = TweakTransaction.step s.Txn (TweakTransaction.TweakEvent.Started text)
     let parsed = TweakTransaction.step started TweakTransaction.TweakEvent.Parsed
     let typeChecked =
-      match s.PendingFailure with
-      | Some TweakTransaction.TweakStep.TypeCheck ->
+      match s.ScheduledFailure with
+      | ScheduledFailure.FailureScheduled TweakTransaction.TweakStep.TypeCheck ->
         TweakTransaction.step parsed (TweakTransaction.TweakEvent.TypeCheckFailed "chaos: forced type-check failure")
       | _ -> TweakTransaction.step parsed TweakTransaction.TweakEvent.TypeChecked
     let evaluated =
-      match s.PendingFailure with
-      | Some TweakTransaction.TweakStep.Evaluate ->
+      match s.ScheduledFailure with
+      | ScheduledFailure.FailureScheduled TweakTransaction.TweakStep.Evaluate ->
         TweakTransaction.step typeChecked (TweakTransaction.TweakEvent.EvaluateFailed "chaos: forced evaluate failure")
       | _ -> TweakTransaction.step typeChecked (TweakTransaction.TweakEvent.Evaluated value)
     let applied =
@@ -216,19 +251,24 @@ module TweakSim =
     | TweakTransaction.TweakState.Applied(v, _) ->
       let before = TweakAddress.resolve s.Source address |> Result.map _.Text |> Result.defaultValue (string s.X)
       let s = appendEvent s (TweakLog.TweakLogEvent.TweakApplied(address, before, string v, TweakAddress.contentHash (string v)))
-      { s with Txn = applied; X = v; DirtyGroundTruth = true; PendingFailure = None; TweakStartHash = baselineHash }
-    | other -> { s with Txn = other; PendingFailure = None; TweakStartHash = baselineHash }
+      { s with
+          Txn = applied
+          X = v
+          GroundTruth = GroundTruthDirtiness.GroundTruthDirty
+          ScheduledFailure = ScheduledFailure.NoFailureScheduled
+          Baseline = baselineHash }
+    | other -> { s with Txn = other; ScheduledFailure = ScheduledFailure.NoFailureScheduled; Baseline = baselineHash }
 
   let private applySave (behavior: SaveBehavior) (s: State) : State =
-    match s.Txn, s.EditorDirty with
-    | TweakTransaction.TweakState.Applied(v, _), false ->
+    match s.Txn, s.Editor with
+    | TweakTransaction.TweakState.Applied(v, _), EditorDirtiness.NoUnsavedEditorChanges ->
       match TweakAddress.resolve s.Source address with
       | Error _ -> s
       | Ok resolved ->
         let hashChangedUnderneath =
-          match s.TweakStartHash with
-          | Some expected -> expected <> resolved.Hash
-          | None -> false
+          match s.Baseline with
+          | TweakBaseline.BaselineCaptured expected -> expected <> resolved.Hash
+          | TweakBaseline.NoBaselineCaptured -> false
         match behavior, hashChangedUnderneath with
         | SaveBehavior.Real, true ->
           appendEvent s (TweakLog.TweakLogEvent.ConflictRaised(address, string v, resolved.Text, resolved.Text))
@@ -244,7 +284,10 @@ module TweakSim =
             let s =
               appendEvent s
                 (TweakLog.TweakLogEvent.TweakSaved(address, resolved.Text, string v, TweakAddress.contentHash (string v), fileHashBefore))
-            { s with Source = newSource; DirtyGroundTruth = false; Txn = TweakTransaction.step s.Txn TweakTransaction.TweakEvent.Journaled }
+            { s with
+                Source = newSource
+                GroundTruth = GroundTruthDirtiness.GroundTruthClean
+                Txn = TweakTransaction.step s.Txn TweakTransaction.TweakEvent.Journaled }
     | _ -> s
 
   let private applyRollback (behavior: RollbackBehavior) (s: State) : State =
@@ -281,8 +324,8 @@ module TweakSim =
     let s = { s with Clock = s.Clock + 1L }
     let s' =
       match ev with
-      | SimEvent.ForceTypeCheckFail -> { s with PendingFailure = Some TweakTransaction.TweakStep.TypeCheck }
-      | SimEvent.ForceEvaluateFail -> { s with PendingFailure = Some TweakTransaction.TweakStep.Evaluate }
+      | SimEvent.ForceTypeCheckFail -> { s with ScheduledFailure = ScheduledFailure.FailureScheduled TweakTransaction.TweakStep.TypeCheck }
+      | SimEvent.ForceEvaluateFail -> { s with ScheduledFailure = ScheduledFailure.FailureScheduled TweakTransaction.TweakStep.Evaluate }
       | SimEvent.Tweak value -> applyTweak s value
       | SimEvent.Save -> applySave saveBehavior s
       | SimEvent.UserEditsFile value ->
@@ -312,9 +355,9 @@ module TweakSim =
             | true, v -> v
             | false, _ -> s.X
           | Error _ -> s.X
-        { s with X = revivedX; Txn = TweakTransaction.initial revivedX; PendingFailure = None }
-      | SimEvent.OpenEditorDirty -> { s with EditorDirty = true }
-      | SimEvent.CloseEditor -> { s with EditorDirty = false }
+        { s with X = revivedX; Txn = TweakTransaction.initial revivedX; ScheduledFailure = ScheduledFailure.NoFailureScheduled }
+      | SimEvent.OpenEditorDirty -> { s with Editor = EditorDirtiness.UnsavedEditorChanges }
+      | SimEvent.CloseEditor -> { s with Editor = EditorDirtiness.NoUnsavedEditorChanges }
       | SimEvent.ResolveConflict ->
         match TweakLog.hasOpenConflict s.Log address with
         | false -> s
