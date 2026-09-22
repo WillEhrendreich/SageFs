@@ -236,6 +236,7 @@
         <Compile Include="SessionOperations.fs" />
         <Compile Include="AgentActivityTracker.fs" />
         <Compile Include="DaemonState.fs" />
+        <Compile Include="McpBridge.fs" />
         <Compile Include="WarmupContext.fs" />
         <Compile Include="SessionHealth.fs" />
         <Compile Include="WarmupReplayCache.fs" />
