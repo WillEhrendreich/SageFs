@@ -63,14 +63,35 @@ https://github.com/WillEhrendreich/SageFs/blob/master/skills/sagefs/SKILL.md
 - Never stop, restart or reinstall the SageFs daemon without asking.
 ```
 
-## 2. Connect the MCP server
+## 2. Let the agent call SageFs without asking every time
+
+In Claude Code, allow the SageFs tools once, in `.claude/settings.json` (for one
+repo) or `~/.claude/settings.json` (everywhere):
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__sagefs__*"]
+  }
+}
+```
+
+This matters more in auto mode. An allowed tool runs without going past the
+classifier at all, while most `dotnet build`/`test`/`run` shell commands get
+reviewed one at a time. So the REPL route is faster in two ways: the eval is
+milliseconds instead of a build, and there's no approval step in between.
+Details are in Claude Code's
+[permissions](https://code.claude.com/docs/en/permissions.md) and
+[permission modes](https://code.claude.com/docs/en/permission-modes.md) docs.
+
+## 3. Connect the MCP server
 
 Point your agent at `http://localhost:37749/` (streamable HTTP), or
 `http://localhost:37749/sse` for older clients. When an agent connects, SageFs
 sends it a short version of the rules, so even an agent without the skill gets
 the core of it. The skill is the full version, and you want both.
 
-## 3. When the agent drifts
+## 4. When the agent drifts
 
 It'll happen. Usually the agent hits something awkward (a version mismatch, a
 session that isn't ready yet) and quietly goes back to building. Three ways to
@@ -89,7 +110,7 @@ pull it back, from least to most enforced:
   commands are never blocked, and neither is anything when SageFs isn't
   running.
 
-## 4. When the REPL really is broken
+## 5. When the REPL really is broken
 
 Sometimes it is, and that's worth hearing about. The skill tells agents to
 write down the exact error, try the obvious fix once, and only then fall back
