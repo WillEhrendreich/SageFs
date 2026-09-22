@@ -492,6 +492,82 @@ let describeHolder (site: ReadSite) (seen: ReadSeen) : string =
     | ReadSeen.Unobservable why -> sprintf "and SageFs can't tell whether that has run yet, so it assumes it has: %s" why
   sprintf "%s%s %s, %s" site.Reader where what whenText
 
+// ── reflection reads ─────────────────────────────────────────────────────────
+
+/// How a session watches module values read through reflection once the app
+/// has started. A reflective read has no read of the value in the reader's own
+/// IL, so the probes can't see it. During startup the getter watch sees it
+/// either way; this is about everything after that. The costs are measured
+/// (read-tracking-costs.md), on a loaded box, so treat them as orders of
+/// magnitude.
+[<RequireQualifiedAccess>]
+type ReflectionReadMode =
+  /// Every tracked getter keeps its watch for the app's life, and every read of
+  /// it, reflective or not, walks the stack to find who's reading it. Exact
+  /// about who read it and what they did with it. Costs 8 to 16 microseconds
+  /// on EVERY read of a tracked value, plain reads in a hot loop included.
+  | ExactEveryRead
+  /// The first reflective read of a tracked value after startup marks it, and
+  /// editing that value restarts the app. About 20 ns more on every reflective
+  /// call in the process, nothing at all on plain reads. Can't say who read it.
+  | MarkOnReflect
+  /// The first reflective read from each calling method walks the stack once
+  /// and rewires that method's reflection call, so its later reads name it for
+  /// about 40 ns a read. Exact about who read it and what they did with it. A
+  /// call it can't rewire (and a loop that never returns) walks every time,
+  /// about 16 microseconds a read.
+  | ProbeCallers
+
+module ReflectionReadMode =
+  let all = [ ReflectionReadMode.ExactEveryRead; ReflectionReadMode.MarkOnReflect; ReflectionReadMode.ProbeCallers ]
+
+  /// The spike measured ProbeCallers' steady state at about 38 ns a read,
+  /// against 9,000 for a walk per read, and it names the caller. So it's the
+  /// default.
+  let standard = ReflectionReadMode.ProbeCallers
+
+  /// The one spelling used by config, the MCP tool and the dashboard.
+  let name (mode: ReflectionReadMode) : string =
+    match mode with
+    | ReflectionReadMode.ExactEveryRead -> "exact-every-read"
+    | ReflectionReadMode.MarkOnReflect -> "mark-on-reflect"
+    | ReflectionReadMode.ProbeCallers -> "probe-callers"
+
+  let parse (text: string) : Result<ReflectionReadMode, string> =
+    let wanted = text.Trim().ToLowerInvariant()
+    match all |> List.tryFind (fun mode -> name mode = wanted) with
+    | Some mode -> Result.Ok mode
+    | None -> Result.Error(sprintf "'%s' isn't a reflection read mode. Use one of: %s" text (all |> List.map name |> String.concat ", "))
+
+  /// What the mode costs, in one line.
+  let cost (mode: ReflectionReadMode) : string =
+    match mode with
+    | ReflectionReadMode.ExactEveryRead -> "every read of a tracked value walks the stack, about 8 to 16 us a read, plain reads included"
+    | ReflectionReadMode.MarkOnReflect -> "reads stay fast, but a value read through reflection restarts the app when you edit it"
+    | ReflectionReadMode.ProbeCallers -> "about 40 ns a reflective read once each caller is rewired, 16 us a read for a call it can't rewire"
+
+  /// What picking the mode does, in one line.
+  let consequence (mode: ReflectionReadMode) : string =
+    match mode with
+    | ReflectionReadMode.ExactEveryRead -> "exact about who read it, but slows every read of every tracked value"
+    | ReflectionReadMode.MarkOnReflect -> "fastest, but any reflective read means an edit to that value restarts the app"
+    | ReflectionReadMode.ProbeCallers -> "exact about who read it and nearly free after each caller's first read"
+
+/// Who made a reflective read of a value, as far as SageFs knows.
+[<RequireQualifiedAccess>]
+type ReflectiveCaller =
+  /// The method that made the reflection call, the IL offset of that call in
+  /// its body, and what it did with what the call returned.
+  | AtSite of reader: string * offset: int * fate: ReadFate
+  /// SageFs didn't look for the caller (MarkOnReflect), or couldn't read the
+  /// caller's code. Counts as a copy.
+  | Unattributed of why: string
+
+/// A reflective read, and whether it happened while the app was starting.
+type ReflectiveSighting =
+  { Caller: ReflectiveCaller
+    Seen: ReadSeen }
+
 // ── the ledger: which readers have run ───────────────────────────────────────
 
 /// A reader method's identity, stable for the life of the process.
@@ -536,6 +612,9 @@ type LedgerEvent =
   | ReaderRan of reader: ReaderId
   /// The startup window's getter watch saw `caller` read `value`.
   | GetterRead of value: string * caller: Caller
+  /// The reflection watch saw `value` read through reflection (after startup,
+  /// or during it when the getter watch couldn't go on).
+  | ReflectiveRead of value: string * caller: ReflectiveCaller
   | StartupEnded
 
 type Ledger =
@@ -545,7 +624,10 @@ type Ledger =
     Readers: Map<ReaderId, Reader>
     Status: Map<ReaderId, ReaderStatus>
     /// Callers the getter watch saw read a value without a read in their code.
-    UnknownReads: Map<string, string list> }
+    UnknownReads: Map<string, string list>
+    /// Reflective reads the reflection watch caught, per value. One sighting
+    /// per caller: the first one sticks.
+    ReflectiveReads: Map<string, ReflectiveSighting list> }
 
 module Ledger =
   let empty : Ledger =
@@ -554,7 +636,8 @@ module Ledger =
       Untracked = Map.empty
       Readers = Map.empty
       Status = Map.empty
-      UnknownReads = Map.empty }
+      UnknownReads = Map.empty
+      ReflectiveReads = Map.empty }
 
   /// When a reader that just ran was seen: the window being open is what
   /// makes it a startup read.
@@ -597,6 +680,13 @@ module Ledger =
       match List.contains name callers with
       | true -> ledger
       | false -> { ledger with UnknownReads = Map.add value (callers @ [ name ]) ledger.UnknownReads }
+    | LedgerEvent.ReflectiveRead(value, caller) ->
+      let sightings = Map.tryFind value ledger.ReflectiveReads |> Option.defaultValue []
+      match sightings |> List.exists (fun s -> s.Caller = caller) with
+      | true -> ledger
+      | false ->
+        let sighting = { Caller = caller; Seen = seenNow ledger }
+        { ledger with ReflectiveReads = Map.add value (sightings @ [ sighting ]) ledger.ReflectiveReads }
     | LedgerEvent.StartupEnded -> { ledger with Window = StartupWindow.Closed }
 
   /// Everything the ledger knows about one value, read by read.
@@ -629,7 +719,23 @@ module Ledger =
               Where = SiteLocation.NotInItsCode
               Fate = ReadFate.Escaped(Escape.Untraced "it read the value without a read in its own code") },
             ReadSeen.AtStartup))
-      ValueEvidence.Tracked(value, fromReaders @ fromUnknownCallers)
+      let fromReflection =
+        Map.tryFind value ledger.ReflectiveReads
+        |> Option.defaultValue []
+        |> List.map (fun sighting ->
+          match sighting.Caller with
+          | ReflectiveCaller.AtSite(reader, offset, fate) ->
+            let site = { Reader = reader; Where = SiteLocation.ILOffset offset; Fate = fate }
+            match fate with
+            | ReadFate.Discarded -> ValueRead.ThrownAway site
+            | ReadFate.Escaped _ -> ValueRead.Kept(site, sighting.Seen)
+          | ReflectiveCaller.Unattributed why ->
+            ValueRead.Kept(
+              { Reader = "a reflective read"
+                Where = SiteLocation.NotInItsCode
+                Fate = ReadFate.Escaped(Escape.Untraced why) },
+              sighting.Seen))
+      ValueEvidence.Tracked(value, fromReaders @ fromUnknownCallers @ fromReflection)
 
 // ── a save's decision ────────────────────────────────────────────────────────
 
@@ -653,3 +759,98 @@ let checkSave (verdicts: (string * ValueVerdict) list) : SaveCheck =
   match refused with
   | [] -> SaveCheck.AllSafe
   | first :: rest -> SaveCheck.Refused(first, rest)
+
+// ── asking the user about a hot reflective loop ──────────────────────────────
+
+/// When reflective reads of one value count as a hot loop: `Count` reads inside
+/// `Within`, over a sliding window. Named config, not a literal.
+type HotLoopThreshold =
+  { Count: int
+    Within: TimeSpan }
+
+module HotLoopThreshold =
+  /// A thousand reflective reads of one value inside a second is a loop, not
+  /// a startup scan or a request handler.
+  let standard = { Count = 1000; Within = TimeSpan.FromSeconds 1.0 }
+
+/// What the rate of one value's reflective reads looks like right now.
+[<RequireQualifiedAccess>]
+type RateReading =
+  | Quiet
+  | HotLoop of readsPerSecond: int
+
+/// The last `Count` read times of one value, as a ring. Hot when the oldest of
+/// them is no further back than `Within`. Constant work and memory per read.
+/// The clock is the caller's, in ticks, so a test drives it.
+[<Sealed>]
+type ReadRate(threshold: HotLoopThreshold) =
+  let size = max 1 threshold.Count
+  let stamps : int64[] = Array.zeroCreate size
+  let mutable next = 0
+  let mutable filled = 0
+  member _.Observe(now: int64) : RateReading =
+    stamps.[next] <- now
+    next <- (next + 1) % size
+    filled <- min size (filled + 1)
+    match filled = size with
+    | false -> RateReading.Quiet
+    | true ->
+      // After the write, `next` points at the oldest stamp in the ring.
+      let span = now - stamps.[next]
+      match span <= threshold.Within.Ticks with
+      | false -> RateReading.Quiet
+      | true ->
+        let seconds = max (TimeSpan(span).TotalSeconds) (1.0 / float TimeSpan.TicksPerSecond)
+        RateReading.HotLoop(int (min (float Int32.MaxValue) (float size / seconds)))
+
+/// What SageFs tells the user when one value's reflective reads get hot.
+type ReflectionNotice =
+  { Value: string
+    /// The method making the reads, or what SageFs could say about it.
+    Caller: string
+    ReadsPerSecond: int
+    /// The mode the session was in when it got hot.
+    Mode: ReflectionReadMode }
+
+/// Where the question about one value stands.
+[<RequireQualifiedAccess>]
+type NoticeState =
+  | Unasked
+  | Asked of notice: ReflectionNotice
+  | Chosen of notice: ReflectionNotice * mode: ReflectionReadMode
+
+[<RequireQualifiedAccess>]
+type NoticeEvent =
+  | HotLoopSeen of notice: ReflectionNotice
+  | ModeChosen of mode: ReflectionReadMode
+
+module ReflectionNotices =
+  /// One value's question, one event at a time. A value is asked about once.
+  let step (state: NoticeState) (event: NoticeEvent) : NoticeState * ReflectionNotice list =
+    match state, event with
+    | NoticeState.Unasked, NoticeEvent.HotLoopSeen notice -> NoticeState.Asked notice, [ notice ]
+    | NoticeState.Asked notice, NoticeEvent.ModeChosen mode -> NoticeState.Chosen(notice, mode), []
+    | NoticeState.Unasked, NoticeEvent.ModeChosen _
+    | NoticeState.Asked _, NoticeEvent.HotLoopSeen _
+    | NoticeState.Chosen _, _ -> state, []
+
+  /// The notice in words: the value, the caller, the rate, what the current
+  /// mode is costing, and the choices with what each one does.
+  let describe (notice: ReflectionNotice) : string =
+    let choices =
+      ReflectionReadMode.all
+      |> List.map (fun mode ->
+        let current =
+          match mode = notice.Mode with
+          | true -> " (current)"
+          | false -> ""
+        sprintf "  %s%s: %s" (ReflectionReadMode.name mode) current (ReflectionReadMode.consequence mode))
+      |> String.concat "\n"
+    sprintf
+      "'%s' is being read through reflection about %d times a second, by %s.\nIn %s mode that means: %s.\nPick a mode:\n%s"
+      notice.Value
+      notice.ReadsPerSecond
+      notice.Caller
+      (ReflectionReadMode.name notice.Mode)
+      (ReflectionReadMode.cost notice.Mode)
+      choices
