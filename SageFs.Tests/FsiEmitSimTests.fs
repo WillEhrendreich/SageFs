@@ -52,19 +52,13 @@ let fsiEmitSimTests =
       |> FsiEmitInvariants.all
       |> Expect.isEmpty "and the report should say so"
 
-    // ── The one that pins the shipped bug ────────────────────────────────
-    testCase "a SECOND flattened save re-points only the previous eval's copy, which the running app never calls" <| fun _ ->
+    // ── The one that pinned the shipped bug — FIXED ─────────────────────
+    testCase "a SECOND flattened save re-points only the previous eval's copy — the app holds it, so the fix reaches it" <| fun _ ->
       // The save the user actually makes twice. In `--multiemit-` mode FSI
       // accumulates every eval in one assembly (fsi.fs:1818-1830), so by the
       // second save there IS an older FSI copy to pair with — and it pairs,
       // because both copies were re-declared the same way. The compiled copy
       // the app holds still cannot pair.
-      //
-      // `reloadedMethods` therefore contains "localTypeHandler", because FSI's
-      // FSI_NNNN wrapper is stripped and every copy shares that one name. The
-      // real decision counts it as landed and reports Patched 1 of 1, while
-      // the app goes on serving the old body. That is the exact wire payload
-      // observed against a real host.
       let scenario =
         { Decls = [ localTypeDecl; plainDecl ]
           Ops =
@@ -78,43 +72,49 @@ let fsiEmitSimTests =
       |> List.map (fun o -> o.ActualChange)
       |> Expect.equal "the app holds the compiled copy, which neither save re-pointed" [ false; false ]
 
-      let violations = observations |> FsiEmitInvariants.honestClaim
-      // PROOF OF BROKEN, pinned deliberately — this asserts the CURRENT
-      // behaviour is WRONG, so it fails the day the gap closes.
-      //
-      // `confirmPatchAsOutcome` now TAKES the reached-the-running-process
-      // evidence, but the worker cannot yet supply it honestly, so it passes
-      // the redirect-set and this trace still over-claims. Two narrower rules
-      // were measured against real hosts and both broke a working reload:
-      // requiring a COMPILED entry point fails for a `#load`ed file (the app
-      // holds an FSI copy), and "...or no compiled copy exists" fails too,
-      // because a file can have a compiled copy AND be `#load`ed with the app
-      // holding the FSI one. Assembly kind is not a proxy for what the app
-      // captured.
-      //
-      // Closing this needs the captured copy recorded where the handler table
-      // is BUILT, not inferred at detour time. When that lands, flip this to
-      // `Expect.isEmpty` — do not delete it, and leave the ground-truth
-      // assertion above untouched.
-      violations
-      |> Expect.isNonEmpty
-        "PROOF OF BROKEN: the save re-points only a previous eval's copy and still reports the running process changed"
-
-      violations
-      |> List.map (fun v -> v.ClaimedChange, v.ActualChange)
-      |> Expect.contains
-        "the violation is specifically an OVER-claim: reported changed, actually unchanged"
-        (true, false)
-
-      // And the designed fix is CORRECT — only the evidence is missing. Run the
-      // identical trace through the same real decision, given the reached-set it
-      // now accepts, and the over-claim disappears. So the remaining work is
-      // plumbing that fact from where the app captures its copy, not rethinking
-      // the rule.
-      runWithEvidence scenario
+      // FIXED: `AppHolds` recorded Compiled as what `StartApp` captured (no
+      // save has landed on the compiled entry point since — the second save
+      // only ever re-points a previous eval's OWN FSI copy, never Compiled),
+      // so `reachedRunningProcess` correctly comes back empty for both saves
+      // and the decision never over-claims. This assertion used to be
+      // `Expect.isNonEmpty` — it was the deliberately pinned PROOF OF BROKEN,
+      // and it flips the day the fix lands: closing the gap needed the app's
+      // captured copy tracked at the point the handler table is built, not
+      // inferred at detour time. That is `HotReloadCore.State.AppHolds`.
+      observations
       |> FsiEmitInvariants.all
       |> Expect.isEmpty
-        "given which copy the app holds, the same decision reports the save honestly"
+        "given which copy the app holds, the same decision reports both saves honestly"
+
+    // ── The scenario the pinned test above did NOT cover: an app started via
+    //    `#load`, which is what the real host repro actually hit ──────────
+    testCase "an app started via #load holds the loaded copy even though a compiled copy also exists; a later save reaches the LOADED copy" <| fun _ ->
+      // `plainDecl` (no file-local type) mirrors the real bug precisely:
+      // `WebAppFixture.Greeting.greeting` has a BCL-only signature, so even a
+      // Flattened re-emit pairs the compiled copy fine — which is exactly why
+      // the FIRST `#load` (Compiled -> Fragment 1) succeeds and the app, built
+      // by a SECOND `#load` (`App.fs`) that resolves `Greeting.greeting` at
+      // compile time to that just-loaded fragment, captures Fragment 1 rather
+      // than the compiled copy. A save after that must reach FRAGMENT 1
+      // specifically — re-pointing the (unreachable) compiled copy again
+      // proves nothing.
+      let scenario =
+        { Decls = [ plainDecl ]
+          Ops =
+            [ Op.Save([ plainDecl ], EmitStyle.Flattened) // the init script's own #load
+              Op.StartApp // App.fs's #load runs the app, capturing what greeting IS right now
+              Op.Save([ plainDecl ], EmitStyle.Flattened) ] } // the file-edit save
+      let observations = run scenario
+
+      // Ground truth: the app holds Fragment 1 (captured at StartApp, AFTER
+      // the load), and the LAST save's redirect reaches it.
+      observations
+      |> List.map (fun o -> o.ActualChange)
+      |> Expect.equal "the load itself claims nothing (no app running yet); the edit reaches the app" [ false; true ]
+
+      observations
+      |> FsiEmitInvariants.all
+      |> Expect.isEmpty "a #load'ed app's captured copy is reachable by name alone as much as a compiled app's is"
 
     testCase "a decl with no file-local type pairs the compiled copy even when flattened" <| fun _ ->
       // The control. `plainHandler`'s signature is BCL-only, so a flattened
@@ -138,4 +138,46 @@ let fsiEmitSimTests =
       observations
       |> List.map (fun o -> o.ActualChange)
       |> Expect.equal "nothing is running, so nothing changed" [ false ]
+
+    // ── Item 2: reporting Patched without reached-evidence must be
+    //    impossible by construction, not merely avoided by convention ─────
+    testCase "no AppHolds entry for a name means it can never be reported Patched, even though it redirected" <| fun _ ->
+      // Same trace as the pinned test above, but run through the RETIRED
+      // shape (`nameOnlyConfirmTwin`, kept in FsiEmitInvariants precisely so
+      // a regression back to "any redirect counts as reaching the process"
+      // is still catchable) to prove the invariant still has teeth: this is
+      // what shipped, and it over-claims.
+      let scenario =
+        { Decls = [ localTypeDecl; plainDecl ]
+          Ops =
+            [ Op.StartApp
+              Op.Save([ localTypeDecl ], EmitStyle.Flattened)
+              Op.Save([ localTypeDecl ], EmitStyle.Flattened) ] }
+      let broken = runWith FsiEmitInvariants.nameOnlyConfirmTwin scenario
+      broken
+      |> List.map (fun o -> o.ActualChange)
+      |> Expect.equal "ground truth is unchanged by which decision function is asked" [ false; false ]
+      let violations = broken |> FsiEmitInvariants.honestClaim
+      violations
+      |> Expect.isNonEmpty
+        "the retired name-only shape over-claims Patched with zero evidence the app's copy moved"
+      violations
+      |> List.map (fun v -> v.ClaimedChange, v.ActualChange)
+      |> Expect.contains
+        "the violation is specifically an OVER-claim: reported changed, actually unchanged"
+        (true, false)
+
+      // And the FIXED decision, given the identical trace, never does this:
+      // a name absent from `reachedRunningProcess` (no AppHolds evidence)
+      // cannot be counted as landed, so `confirmPatchAsOutcome` routes it to
+      // `NoEffect`/`RestartRequired` — `ofPatchCounts` makes `Patched(0, _)`
+      // unrepresentable, and `landed` can only be non-empty when
+      // `reachedRunningProcess` names the decl (see ReloadPlanning.fs).
+      run scenario
+      |> List.iter (fun o ->
+        match o.Reported with
+        | SageFs.Features.ReloadOutcome.ReloadOutcome.Patched(patched, _) ->
+          (patched > 0)
+          |> Expect.isTrue "Patched(0, _) must be unrepresentable"
+        | _ -> ())
   ]
