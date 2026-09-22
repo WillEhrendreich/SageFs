@@ -118,6 +118,69 @@ Four twins put the naive rules back (ignore reads after startup, treat a stored
 value like a dead local, check once and patch, record the caller after the read)
 and it catches every one.
 
+### Reflection reads
+
+A value read through reflection (`PropertyInfo.GetValue`, `MethodBase.Invoke`,
+`FieldInfo.GetValue`, a delegate made from its getter) has no read of it in
+anyone's IL, so the probes can't see it. While the app starts, the getter's
+own watch catches it. After that, SageFs watches the reflection entry points
+themselves, and how it watches is a choice you make, because every option
+costs something:
+
+| Mode | What a reflective read costs | What an edit to that value does |
+|---|---|---|
+| `probe-callers` (the default) | about 40 ns once the caller's been seen. The first read from each caller walks the stack once (about 16 us) and rewires that caller's reflection calls so later reads name it for free | patched, if the caller threw the value away at that call. Restart, naming the caller, if it kept it |
+| `mark-on-reflect` | about 20 ns more on every reflective call in the process. Plain reads cost nothing | restart. It doesn't look for who read it |
+| `exact-every-read` | 8 to 16 us on EVERY read of a tracked value, plain reads included, for the app's life | patched or restart, like probe-callers, naming the caller |
+
+Measured in the REPL on a loaded box (read-tracking-costs.md has the method and
+the raw numbers), so treat them as orders of magnitude. A plain `let` read
+through its getter is 3 ns, and only `exact-every-read` touches that.
+
+When to pick which:
+
+- **`probe-callers`** almost always. It's the precise one and it's nearly free.
+  It falls back to a walk (16 us) for a reflection call it can't rewire (an API
+  other than the `GetValue`/`Invoke` family, a generic method, a static
+  initializer) and for a loop that never returns: rewiring a method changes its
+  NEXT call, so a `while running do ...` that runs for the app's whole life keeps
+  walking.
+- **`mark-on-reflect`** if the reads are hot and you don't care about editing
+  those values live. It's the cheapest, and it never guesses who read what.
+- **`exact-every-read`** only to chase something down. It also sees reads that
+  don't go through a reflection entry point at all: a compiled expression tree
+  or a function pointer calling the getter directly. The other two modes don't
+  see those.
+
+Set the mode new sessions start in with the `hotreload.reflectionReadMode`
+setting (the dashboard's settings panel, global or per repo). Switch a running
+app from the Hot Reload panel or with the `set_reflection_read_mode` MCP tool.
+Switching takes effect on the next read, with no restart. Moving to
+`exact-every-read` puts the getter watches back on, except on a getter hot
+reload already re-pointed (patching it again would undo that), which the entry
+watch keeps covering.
+
+**When a reflective loop gets hot** (1,000 reads of one value inside a second),
+SageFs asks you, once per value, on the dashboard's Hot Reload panel and in
+`set_reflection_read_mode`: which value, which caller, how fast, what the
+current mode is costing you, and each choice with what it does. Pick one and
+the question's answered.
+
+One thing I found building this that you should know about: on .NET, a patch
+on a runtime method that hasn't been recompiled yet gets thrown away when
+tiered compilation recompiles it, and it doesn't come back. So the process
+running your app (the isolated FSI host) starts with tiered compilation off
+when hot reload is on, and the watch never lapses there. It still checks: a
+canary goes through every entry point at every save. If the watch ever stops
+seeing reads, every value that session tracks restarts on its next edit until
+the app restarts, and the panel says why. A read SageFs might have missed never
+gets a Patched. Pinned by `ReflectionReadTrackingTests` (a real emitted app,
+including a forced lapse), `ReflectionReadSimTests` (DST: 3000 seeded runs of
+reflective reads from many callers, reads inside other reflective calls,
+threads, mode switches and saves, never Patched over a copy and never filing
+a read under the wrong caller) and the real-app rule 2 reflection tests in
+`HotReloadStateOutcomeTests` (net10 + net11).
+
 ### Restarts
 
 Anything that takes effect at **startup** can't be patched into a process
@@ -168,10 +231,11 @@ I'd rather you hear this from me than find it at 11pm.
   restart: the handler returned the value to something SageFs can't follow.
   It never says Patched when it can't prove it, so you lose a restart, not the
   truth.
-- **Reads through reflection are only seen while the app starts.** A value read
-  by reflection after that (no read of it in anyone's IL) isn't seen at all.
-  Module values read by reflection are rare, but if you do it, restart after
-  editing that value.
+- **Some reads through reflection still aren't seen after startup.** The
+  entry points SageFs watches cover `GetValue`, `Invoke` and delegates made
+  from a getter. A compiled expression tree or a function pointer that calls the
+  getter directly isn't one of them, unless you're in `exact-every-read`. See
+  [Reflection reads](#reflection-reads).
 - **Code you eval in the REPL that reads a value usually counts as a copy of it**
   (an eval that runs code counts as having read it), so a
   value you've poked at in the REPL restarts on its next edit.
