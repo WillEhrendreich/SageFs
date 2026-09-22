@@ -343,8 +343,10 @@ let daemonLifecycleTests =
   Integration.hostList "Daemon lifecycle" [
 
     testCase "start daemon, check status, stop" <| fun _ ->
-      // Start daemon in background with a unique port to avoid conflicts
-      let port = 37800 + (Random().Next(100))
+      // Reserved via TestPorts (disjoint per-tier ranges) instead of a fixed
+      // 37800+rand(100) span, which could collide with another
+      // concurrently-running tier's daemon on the self-hosted runner.
+      let port, _dashboardPort = SageFs.Tests.TestInfrastructure.TestPorts.reservePair ()
       let psi = ProcessStartInfo()
       psi.FileName <- SageFsExe
       psi.Arguments <- sprintf "--mcp-port %d" port
