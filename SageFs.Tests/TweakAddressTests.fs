@@ -138,4 +138,37 @@ let tuning =
         match resolve tuningFile address, resolve padded address with
         | Ok a, Ok b -> a.Text = b.Text && a.Hash = b.Hash
         | _ -> false
+
+    testList "relocate, an offer, never auto-taken" [
+
+      testCase "finds the same expression under its new binding name after a rename" <| fun _ ->
+        let original = addrFor "tuning" [ PathStep.RecordField "Gravity" ]
+        let baselineHash = (resolve tuningFile original |> Expect.wantOk "resolves before the rename").Hash
+        let renamed = tuningFile.Replace("let tuning =", "let tuningV2 =")
+        match relocate renamed original baselineHash with
+        | RelocationResult.Relocated candidate ->
+          candidate |> Expect.equal "found under the new name, same path" (addrFor "tuningV2" [ PathStep.RecordField "Gravity" ])
+        | RelocationResult.NoCandidate -> failtest "expected a relocation candidate"
+
+      testCase "never returns the original address as its own candidate" <| fun _ ->
+        let original = addrFor "tuning" [ PathStep.RecordField "Gravity" ]
+        let hash = (resolve tuningFile original |> Expect.wantOk "resolves").Hash
+        // The address still resolves here (nothing renamed) — relocate must
+        // not just hand back the same address as a "candidate".
+        match relocate tuningFile original hash with
+        | RelocationResult.Relocated candidate -> candidate |> Expect.notEqual "never itself" original
+        | RelocationResult.NoCandidate -> ()
+
+      testCase "no candidate when the expression genuinely doesn't exist anywhere else" <| fun _ ->
+        let gone = addrFor "notThere" []
+        relocate tuningFile gone "some-hash-nothing-matches"
+        |> Expect.equal "nothing to offer" RelocationResult.NoCandidate
+
+      testCase "relocate is a pure offer: it never changes the source" <| fun _ ->
+        let original = addrFor "tuning" [ PathStep.RecordField "Gravity" ]
+        let hash = (resolve tuningFile original |> Expect.wantOk "resolves").Hash
+        let renamed = tuningFile.Replace("let tuning =", "let tuningV2 =")
+        relocate renamed original hash |> ignore
+        renamed |> Expect.equal "relocate only reads" (tuningFile.Replace("let tuning =", "let tuningV2 ="))
+    ]
   ]
