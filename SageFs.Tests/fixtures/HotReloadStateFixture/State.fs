@@ -63,6 +63,15 @@ let greet () : string = greeting
 /// can ever reach what the route serves.
 let banner = "A"
 
+// ── rule 2's trap: a value read inside a lazy that's forced later ───────────
+
+let motto = "carpe diem"
+
+/// Reads `motto` the first time something asks for it, then the Lazy keeps
+/// the answer. Forced by the first GET /motto, long after startup, so a patch
+/// of `motto`'s getter can't reach what it cached.
+let lazyMotto = lazy (motto.ToUpper())
+
 // ── the route table, captured BY VALUE at startup like a Falco route list ───
 
 let handlers : (string * (unit -> string)) list =
@@ -75,4 +84,5 @@ let handlers : (string * (unit -> string)) list =
     "tuned", readTuned
     "shape", readShape
     "greet", greet
+    "motto", (fun () -> lazyMotto.Value)
     "banner", (let atStartup = banner in fun () -> atStartup) ]

@@ -157,26 +157,17 @@ let private retypedStateRestarts (runtime: HostRuntime) =
     })
   }
 
-/// Rule 2: an immutable value nobody captured at startup gets its new value,
-/// honestly reported as a patch, and nothing else in the file is disturbed.
+/// Rule 2: an immutable value nobody captured gets its new value, honestly
+/// reported as a patch, and nothing else in the file is disturbed.
 ///
-/// RED, and parked on purpose. Patching `greeting`'s getter is the easy part.
-/// The hard part is knowing nobody copied the old value at startup: a function
-/// that ran once while the app started (`App.run` doing
-/// `let g = State.greeting`) looks exactly like one that runs per request, and
-/// the source can't tell them apart.
-///
-/// Phase 1 landed and doesn't answer it. `HotReloadCore.State.AppHolds` maps a
-/// method NAME to the copy the app holds, seeded with every compiled method, so
-/// it knows which `greet` the app calls, not whether anything kept the string
-/// `greet` returned. The IL doesn't settle it either (measured on this
-/// fixture, Optimize=false): `get_greeting` is `ldstr "hello"; ret`, the
-/// file's static initializer calls it (into a dead local) just like it calls
-/// `get_banner` (which it does capture), and `greet` is reached through an
-/// `FSharpFunc` in the route table that anything could have invoked once at
-/// startup. Without evidence about where copies of the value went, "Patched"
-/// for a value could be a lie, and that's the one thing this work must never
-/// do. So it stays red.
+/// Patching `greeting`'s getter is the easy part. The hard part is knowing
+/// nobody kept a copy of the old value, because a wrong answer is a fake
+/// Patched. On this fixture (Optimize=false) the file's static initializer
+/// reads `greeting` into a local it never uses, exactly like it reads
+/// `banner`, except that `banner` goes on into a closure. `greet` returns it,
+/// but `greet` hasn't run yet when this test saves. So the running app has to
+/// say who read it and what they did with it (see ValueReads.fs and
+/// ValueReadTracking.fs), and that's what makes the Patched honest.
 let private uncapturedValueIsPatched (runtime: HostRuntime) =
   testTask (sprintf "[%s] rule 2: a redefined immutable value nobody captured serves its new value, reported as a patch" (HostRuntime.moniker runtime)) {
     do! withApp runtime (fun app -> task {
@@ -191,11 +182,16 @@ let private uncapturedValueIsPatched (runtime: HostRuntime) =
     })
   }
 
-/// Rule 2's guard: a value startup DID capture is never reported as patched.
-/// Green today (it's a restart); it's here so rule 2's implementation can't
-/// start claiming a patch that the running app never sees.
+/// The first restart reason in a verdict, as (case, message).
+let private firstReason (verdict: string) =
+  match [ for r in (json verdict).GetProperty("reasons").EnumerateArray() -> str r "case", str r "message" ] with
+  | first :: _ -> first
+  | [] -> failtestf "the verdict gives no reason for the restart: %s" verdict
+
+/// Rule 2's guard: a value startup DID capture is never reported as patched,
+/// and the reason says who kept it.
 let private capturedValueIsNeverPatched (runtime: HostRuntime) =
-  testTask (sprintf "[%s] rule 2: a redefined value startup captured is never reported as patched" (HostRuntime.moniker runtime)) {
+  testTask (sprintf "[%s] rule 2: a redefined value startup captured is never reported as patched, and the reason names where it went" (HostRuntime.moniker runtime)) {
     do! withApp runtime (fun app -> task {
       let! verdict = save app "let banner = \"A\"" "let banner = \"B\""
       let! served = get app "banner"
@@ -205,20 +201,46 @@ let private capturedValueIsNeverPatched (runtime: HostRuntime) =
       |> Expect.notEqual (sprintf "reporting a patch here would be a lie.\nVerdict: %s" verdict) "Patched"
       str (json verdict) "type"
       |> Expect.notEqual "and the page must not be told to refresh into the same bytes" "reload"
+      let case, message = firstReason verdict
+      case |> Expect.equal (sprintf "the reason is that the app kept a copy.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "ValueCopiedByApp"
+      message
+      |> Expect.stringContains "and it names the closure the startup code built around the value" "handlers@"
     })
   }
 
-[<Tests>]
-let parkedUntilCaptureTracking =
-  // Not in --integration-host: this is a capability that doesn't exist yet,
-  // so it can't gate the pipeline. It stays named, runnable (--all) and
-  // un-weakened, and it goes green by itself once there's real evidence of
-  // where copies of a value went (see the doc comment above).
-  testList "[Integration] hot reload rule 2 (waits on value capture evidence)" [
-    for runtime in HostRuntime.all do
-      uncapturedValueIsPatched runtime
-  ]
-  |> Integration.register (Integration.Dedicated "--all (on demand: rule 2 needs evidence of where copies of a value went, see docs/hot-reload.md)")
+/// Rule 2's trap: `motto` is read inside a `lazy`, and the lazy is forced by
+/// the first request, long after startup. The Lazy caches what it read, so a
+/// patch of `motto`'s getter can't reach it. A rule that only looked at
+/// startup would call this a patch.
+let private lazyForcedAfterStartupIsNeverPatched (runtime: HostRuntime) =
+  testTask (sprintf "[%s] rule 2: a value a lazy read after startup is never reported as patched, and the reason names the lazy" (HostRuntime.moniker runtime)) {
+    do! withApp runtime (fun app -> task {
+      let! forced = get app "motto"
+      forced |> Expect.equal "the first request forces the lazy" "CARPE DIEM"
+      let! verdict = save app "let motto = \"carpe diem\"" "let motto = \"seize the day\""
+      str (json verdict) "outcome"
+      |> Expect.notEqual (sprintf "the lazy holds the old value, so a patch would be a lie.\nVerdict: %s" verdict) "Patched"
+      let case, message = firstReason verdict
+      case |> Expect.equal (sprintf "the reason is that the app kept a copy.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "ValueCopiedByApp"
+      message |> Expect.stringContains "and it names the lazy's thunk" "lazyMotto@"
+      let! served = get app "motto"
+      served |> Expect.equal "the app still serves what the lazy cached" "CARPE DIEM"
+    })
+  }
+
+/// The same lazy, not forced before the save. Nothing has read `motto` and
+/// kept it, so the patch is honest: the first request forces the lazy, which
+/// reads through the patched getter.
+let private lazyNotYetForcedGetsTheNewValue (runtime: HostRuntime) =
+  testTask (sprintf "[%s] rule 2: a value only an unforced lazy reads is patched, and the lazy picks up the new value" (HostRuntime.moniker runtime)) {
+    do! withApp runtime (fun app -> task {
+      let! verdict = save app "let motto = \"carpe diem\"" "let motto = \"seize the day\""
+      str (json verdict) "outcome"
+      |> Expect.equal (sprintf "nothing kept motto yet, so this is a patch.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
+      let! served = settle app "motto" "SEIZE THE DAY"
+      served |> Expect.equal "the lazy reads the new value when it's first forced" "SEIZE THE DAY"
+    })
+  }
 
 [<Tests>]
 let hotReloadStateOutcomeTests =
@@ -229,5 +251,8 @@ let hotReloadStateOutcomeTests =
       editedInitializerIsKept runtime
       resetRunsTheNewInitializer runtime
       retypedStateRestarts runtime
+      uncapturedValueIsPatched runtime
       capturedValueIsNeverPatched runtime
+      lazyForcedAfterStartupIsNeverPatched runtime
+      lazyNotYetForcedGetsTheNewValue runtime
   ]
