@@ -442,6 +442,22 @@ let tweakLogTests =
         let decoded = TweakLogFormat.decodeSegment currentBuild bytes |> Expect.wantOk "the header itself still decodes"
         decoded.Grade |> Expect.equal "Impossible" LogGrade.Impossible
         decoded.Events |> Expect.isEmpty "never folded, whatever the bytes might have contained"
+
+      testCase "TWIN — a decoder that ignores the grade folds an Impossible segment anyway" <| fun _ ->
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let stored = Fingerprint.current (contentHash baseSource)
+        let bytes = TweakLogFormat.encodeSegment stored log.Events
+        // The real path refuses.
+        let currentBuild = { stored with SchemaVersion = stored.SchemaVersion + 1 }
+        (TweakLogFormat.decodeSegment currentBuild bytes |> Expect.wantOk "decodes").Events
+        |> Expect.isEmpty "the real decoder never folds an Impossible segment"
+        // The twin doesn't check the grade at all, and folds it anyway —
+        // this is exactly the bug "Impossible is never folded" exists to
+        // prevent, kept here only so the DST invariant can be shown to
+        // catch it.
+        TweakLogFormat.decodeSegmentIgnoringGradeTwin bytes
+        |> Expect.isNonEmpty "the twin folds bytes the fingerprint said not to trust"
     ]
 
     testProperty "PROPERTY, snapshot plus tail always folds to the same projection as the full stream, for every address" <|
