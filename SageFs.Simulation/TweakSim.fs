@@ -284,17 +284,18 @@ module TweakSim =
         | Error _ -> s
         | Ok resolved ->
           let newSource = TweakAddress.replaceRange s.Source resolved.Range (string value)
-          let s = appendEvent s (TweakLog.TweakLogEvent.UserEditObserved(address, string value, TweakAddress.contentHash (string value)))
+          let s = appendEvent s (TweakLog.observeUserEdit s.Settings s.Source newSource address (string value))
           { s with Source = newSource }
       | SimEvent.EditOtherBinding value ->
         match TweakAddress.resolve s.Source otherAddress with
         | Error _ -> s
-        | Ok resolved -> { s with Source = TweakAddress.replaceRange s.Source resolved.Range (string value) }
+        | Ok resolved ->
+          let newSource = TweakAddress.replaceRange s.Source resolved.Range (string value)
+          let s = appendEvent s (TweakLog.observeUserEdit s.Settings s.Source newSource otherAddress (string value))
+          { s with Source = newSource }
       | SimEvent.Reformat ->
-        let before = TweakAddress.contentHash s.Source
         let newSource = insertReformatComment s.Source
-        let after = TweakAddress.contentHash newSource
-        let s = appendEvent s (TweakLog.TweakLogEvent.ReformatObserved(before, after))
+        let s = appendEvent s (TweakLog.observeReformat s.Settings s.Source newSource)
         { s with Source = newSource }
       | SimEvent.RollbackLast -> applyRollback rollbackBehavior s
       | SimEvent.Crash ->

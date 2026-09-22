@@ -114,8 +114,13 @@ module Fingerprint =
 type TweakLogEvent =
   | TweakApplied of address: TweakAddress * textBefore: string * textAfter: string * hashAfter: string
   | TweakSaved of address: TweakAddress * textBefore: string * textAfter: string * hashAfter: string * fileHashBefore: string
-  | UserEditObserved of address: TweakAddress * textNow: string * hashNow: string
-  | ReformatObserved of fileHashBefore: string * fileHashAfter: string
+  /// `fileSnapshot` is `None` under `ReplayScope.SageFsWritesOnly` (the
+  /// default): only the edited ADDRESS's own new text and hash are known,
+  /// never the whole file. Under `EverythingAsDiffs` it carries the whole
+  /// file's text at this point, which `replayWholeFile` needs to reproduce
+  /// bytes SageFs itself never wrote.
+  | UserEditObserved of address: TweakAddress * textNow: string * hashNow: string * fileSnapshot: string option
+  | ReformatObserved of fileHashBefore: string * fileHashAfter: string * fileSnapshot: string option
   | HotReloadObserved of fileHashBefore: string * fileHashAfter: string
   | ConflictRaised of address: TweakAddress * wrote: string * now: string * before: string
   | ConflictResolved of address: TweakAddress
@@ -208,7 +213,7 @@ let private addressOf (e: TweakLogEvent) : TweakAddress option =
   match e with
   | TweakLogEvent.TweakApplied(addr, _, _, _) -> Some addr
   | TweakLogEvent.TweakSaved(addr, _, _, _, _) -> Some addr
-  | TweakLogEvent.UserEditObserved(addr, _, _) -> Some addr
+  | TweakLogEvent.UserEditObserved(addr, _, _, _) -> Some addr
   | TweakLogEvent.ConflictRaised(addr, _, _, _) -> Some addr
   | TweakLogEvent.ConflictResolved addr -> Some addr
   | TweakLogEvent.ReformatObserved _
@@ -264,7 +269,7 @@ let private foldEvents (lookupOrigin: int -> (TweakAddress * string) option) (se
       | TweakLogEvent.TweakApplied(addr, _before, after, _hash) -> { p with Known = p.Known |> Map.add addr after }
       | TweakLogEvent.TweakSaved(addr, _before, after, _hash, _fileHashBefore) ->
         { p with Known = p.Known |> Map.add addr after; Saved = p.Saved |> Map.add addr after }
-      | TweakLogEvent.UserEditObserved(addr, textNow, _hash) ->
+      | TweakLogEvent.UserEditObserved(addr, textNow, _hash, _fileSnapshot) ->
         // A direct edit to the file always moves disk truth (`Saved`). Its
         // effect on `Known` (the log's belief about the LIVE app value)
         // depends on whether there was a pending tweak to protect:
@@ -285,7 +290,7 @@ let private foldEvents (lookupOrigin: int -> (TweakAddress * string) option) (se
         match wasDirty with
         | true -> { p with Saved = p.Saved |> Map.add addr textNow }
         | false -> { p with Known = p.Known |> Map.add addr textNow; Saved = p.Saved |> Map.add addr textNow }
-      | TweakLogEvent.ReformatObserved(_, afterHash) -> { p with LastFileHash = Some afterHash }
+      | TweakLogEvent.ReformatObserved(_, afterHash, _fileSnapshot) -> { p with LastFileHash = Some afterHash }
       | TweakLogEvent.HotReloadObserved(_, afterHash) -> { p with LastFileHash = Some afterHash }
       | TweakLogEvent.ConflictRaised(addr, _, _, _) -> { p with OpenConflicts = p.OpenConflicts |> Set.add addr }
       | TweakLogEvent.ConflictResolved addr -> { p with OpenConflicts = p.OpenConflicts |> Set.remove addr }
@@ -697,6 +702,61 @@ let closeSession
   : Snapshot * LoggedEvent list =
   compact snapshot events settings.Retention presetAddresses
 
+// ── observing a change outside SageFs's own writes, scope-aware ──
+
+/// Build the `UserEditObserved` event for a direct edit at `address`,
+/// carrying a whole-file snapshot only when `settings.ReplayScope` asks
+/// for one. Callers never branch on the scope themselves.
+let observeUserEdit
+  (settings: TweakLogSettings)
+  (_fileBefore: string)
+  (fileAfter: string)
+  (address: TweakAddress)
+  (textNow: string)
+  : TweakLogEvent =
+  let snapshot =
+    match settings.ReplayScope with
+    | ReplayScope.SageFsWritesOnly -> None
+    | ReplayScope.EverythingAsDiffs -> Some fileAfter
+  TweakLogEvent.UserEditObserved(address, textNow, contentHash textNow, snapshot)
+
+/// Build the `ReformatObserved` event for a whitespace/comment-only
+/// change, carrying a whole-file snapshot only under `EverythingAsDiffs`.
+let observeReformat (settings: TweakLogSettings) (fileBefore: string) (fileAfter: string) : TweakLogEvent =
+  let snapshot =
+    match settings.ReplayScope with
+    | ReplayScope.SageFsWritesOnly -> None
+    | ReplayScope.EverythingAsDiffs -> Some fileAfter
+  TweakLogEvent.ReformatObserved(contentHash fileBefore, contentHash fileAfter, snapshot)
+
+/// Reproduces the WHOLE file, byte for byte, replaying every mutating
+/// event in order, only available under `ReplayScope.EverythingAsDiffs`:
+/// `TweakApplied`/`TweakSaved` replay the same way `replay` does (re-
+/// resolve the address, splice `after` in), and `UserEditObserved`/
+/// `ReformatObserved` replace the whole file with their carried
+/// `fileSnapshot` outright. Refuses, never guesses, the moment it meets
+/// an event with no snapshot to replay from (the `SageFsWritesOnly` shape).
+let replayWholeFile (baseSource: string) (events: LoggedEvent list) : Result<string, string> =
+  events
+  |> List.fold
+    (fun acc e ->
+      acc
+      |> Result.bind (fun src ->
+        match e.Event with
+        | TweakLogEvent.TweakApplied(addr, _before, after, _)
+        | TweakLogEvent.TweakSaved(addr, _before, after, _, _) ->
+          match resolve src addr with
+          | Error err -> Error(sprintf "replayWholeFile: address no longer resolves (%A): %A" addr err)
+          | Ok resolved -> Ok(replaceRange src resolved.Range after)
+        | TweakLogEvent.UserEditObserved(_, _, _, Some fileAfter) -> Ok fileAfter
+        | TweakLogEvent.ReformatObserved(_, _, Some fileAfter) -> Ok fileAfter
+        | TweakLogEvent.UserEditObserved(addr, _, _, None) ->
+          Error(sprintf "replayWholeFile: UserEditObserved at %A carries no snapshot (ReplayScope.SageFsWritesOnly was active when it was observed)" addr)
+        | TweakLogEvent.ReformatObserved(_, _, None) ->
+          Error "replayWholeFile: ReformatObserved carries no snapshot (ReplayScope.SageFsWritesOnly was active when it was observed)"
+        | _ -> Ok src))
+    (Ok baseSource)
+
 // ── segment model: WHAT to write/delete. Real file IO plugs in behind this. ──
 
 [<RequireQualifiedAccess>]
@@ -836,13 +896,15 @@ module TweakLogFormat =
       BinaryPrimitives.writeLpString bw after
       BinaryPrimitives.writeLpString bw hash
       BinaryPrimitives.writeLpString bw fileHashBefore
-    | TweakLogEvent.UserEditObserved(addr, textNow, hashNow) ->
+    | TweakLogEvent.UserEditObserved(addr, textNow, hashNow, fileSnapshot) ->
       writeAddress bw addr
       BinaryPrimitives.writeLpString bw textNow
       BinaryPrimitives.writeLpString bw hashNow
-    | TweakLogEvent.ReformatObserved(before, after) ->
+      BinaryPrimitives.writeLpStringOption bw fileSnapshot
+    | TweakLogEvent.ReformatObserved(before, after, fileSnapshot) ->
       BinaryPrimitives.writeLpString bw before
       BinaryPrimitives.writeLpString bw after
+      BinaryPrimitives.writeLpStringOption bw fileSnapshot
     | TweakLogEvent.HotReloadObserved(before, after) ->
       BinaryPrimitives.writeLpString bw before
       BinaryPrimitives.writeLpString bw after
@@ -873,11 +935,13 @@ module TweakLogFormat =
       let addr = readAddress br
       let textNow = BinaryPrimitives.readLpString br
       let hashNow = BinaryPrimitives.readLpString br
-      TweakLogEvent.UserEditObserved(addr, textNow, hashNow)
+      let fileSnapshot = BinaryPrimitives.readLpStringOption br
+      TweakLogEvent.UserEditObserved(addr, textNow, hashNow, fileSnapshot)
     | 3uy ->
       let before = BinaryPrimitives.readLpString br
       let after = BinaryPrimitives.readLpString br
-      TweakLogEvent.ReformatObserved(before, after)
+      let fileSnapshot = BinaryPrimitives.readLpStringOption br
+      TweakLogEvent.ReformatObserved(before, after, fileSnapshot)
     | 4uy ->
       let before = BinaryPrimitives.readLpString br
       let after = BinaryPrimitives.readLpString br

@@ -28,7 +28,7 @@ let tweakLogTests =
 
       testCase "a UserEditObserved counts as disk truth, not a pending tweak" <| fun _ ->
         let log = EventLog.empty
-        let log, _ = EventLog.append log 1L (TweakLogEvent.UserEditObserved(addr "x", "3.0", contentHash "3.0"))
+        let log, _ = EventLog.append log 1L (TweakLogEvent.UserEditObserved(addr "x", "3.0", contentHash "3.0", None))
         dirtySet log |> Expect.isEmpty "a direct file edit is never 'dirty against itself'"
 
       testCase "RolledBack restores the projection to what the target op recorded as textBefore" <| fun _ ->
@@ -395,7 +395,7 @@ let tweakLogTests =
       testCase "a clean stream decodes back to the exact events, with no torn tail" <| fun _ ->
         let log = EventLog.empty
         let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
-        let log, _ = EventLog.append log 2L (TweakLogEvent.ReformatObserved(contentHash baseSource, contentHash baseSource))
+        let log, _ = EventLog.append log 2L (TweakLogEvent.ReformatObserved(contentHash baseSource, contentHash baseSource, None))
         let log, _ = EventLog.append log 3L (TweakLogEvent.RolledBack 1)
         let bytes = TweakLogFormat.encodeStream log.Events
         let decoded, wasTorn = TweakLogFormat.decodeStream bytes
