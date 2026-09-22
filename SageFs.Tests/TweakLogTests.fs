@@ -73,6 +73,44 @@ let tweakLogTests =
         | other -> failtestf "expected NoSuchOperation, got %A" other
     ]
 
+    testList "open conflicts are exclusive" [
+
+      testCase "hasOpenConflict is false until ConflictRaised, true after, false again after ConflictResolved" <| fun _ ->
+        let log = EventLog.empty
+        hasOpenConflict log (addr "x") |> Expect.isFalse "nothing raised yet"
+        let log, _ = EventLog.append log 1L (TweakLogEvent.ConflictRaised(addr "x", "2.0", "9.0", "1.0"))
+        hasOpenConflict log (addr "x") |> Expect.isTrue "now open"
+        let log, _ = EventLog.append log 2L (TweakLogEvent.ConflictResolved(addr "x"))
+        hasOpenConflict log (addr "x") |> Expect.isFalse "resolved"
+
+      testCase "rollback refuses an address with an open conflict, even when the hash still matches" <| fun _ ->
+        let source = "module M\nlet x = 2.0\n"
+        let log = EventLog.empty
+        let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, _ = EventLog.append log 2L (TweakLogEvent.ConflictRaised(addr "x", "2.0", "2.0", "1.0"))
+        match rollback log applied.Id source with
+        | Error(RollbackError.BlockedByOpenConflict a) -> a |> Expect.equal "names the blocked address" (addr "x")
+        | other -> failtestf "expected BlockedByOpenConflict, got %A" other
+
+      testCase "rollback on an unrelated, conflict-free address is unaffected" <| fun _ ->
+        let source = "module M\nlet x = 2.0\nlet y = 6.0\n"
+        let log = EventLog.empty
+        let log, appliedX = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, appliedY = EventLog.append log 2L (TweakLogEvent.TweakApplied(addr "y", "5.0", "6.0", contentHash "6.0"))
+        let log, _ = EventLog.append log 3L (TweakLogEvent.ConflictRaised(addr "x", "2.0", "9.0", "1.0"))
+        match rollback log appliedY.Id source with
+        | Ok(RollbackOutcome.Applied _) -> ()
+        | other -> failtestf "expected Applied (y has no open conflict), got %A" other
+
+      testCase "canSave refuses an address with an open conflict" <| fun _ ->
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.ConflictRaised(addr "x", "2.0", "9.0", "1.0"))
+        canSave log (addr "x") |> Expect.isError "blocked while the conflict is open"
+
+      testCase "canSave allows an address with no open conflict" <| fun _ ->
+        canSave EventLog.empty (addr "x") |> Expect.isOk "nothing blocking it"
+    ]
+
     testList "replay" [
 
       testCase "replay reproduces the file byte for byte" <| fun _ ->
