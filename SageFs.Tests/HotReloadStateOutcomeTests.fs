@@ -164,9 +164,19 @@ let private retypedStateRestarts (runtime: HostRuntime) =
 /// The hard part is knowing nobody copied the old value at startup: a function
 /// that ran once while the app started (`App.run` doing
 /// `let g = State.greeting`) looks exactly like one that runs per request, and
-/// the source can't tell them apart. That's phase 1's capture tracking. Without
-/// it, "Patched" for a value could be a lie, and that's the one thing this
-/// work must never do. So this stays red until phase 1 lands.
+/// the source can't tell them apart.
+///
+/// Phase 1 landed and doesn't answer it. `HotReloadCore.State.AppHolds` maps a
+/// method NAME to the copy the app holds, seeded with every compiled method, so
+/// it knows which `greet` the app calls, not whether anything kept the string
+/// `greet` returned. The IL doesn't settle it either (measured on this
+/// fixture, Optimize=false): `get_greeting` is `ldstr "hello"; ret`, the
+/// file's static initializer calls it (into a dead local) just like it calls
+/// `get_banner` (which it does capture), and `greet` is reached through an
+/// `FSharpFunc` in the route table that anything could have invoked once at
+/// startup. Without evidence about where copies of the value went, "Patched"
+/// for a value could be a lie, and that's the one thing this work must never
+/// do. So it stays red.
 let private uncapturedValueIsPatched (runtime: HostRuntime) =
   testTask (sprintf "[%s] rule 2: a redefined immutable value nobody captured serves its new value, reported as a patch" (HostRuntime.moniker runtime)) {
     do! withApp runtime (fun app -> task {
@@ -202,13 +212,13 @@ let private capturedValueIsNeverPatched (runtime: HostRuntime) =
 let parkedUntilCaptureTracking =
   // Not in --integration-host: this is a capability that doesn't exist yet,
   // so it can't gate the pipeline. It stays named, runnable (--all) and
-  // un-weakened, and it goes green by itself when phase 1's capture tracking
-  // lands and rule 2 is built on it.
-  testList "[Integration] hot reload rule 2 (waits on phase 1 capture tracking)" [
+  // un-weakened, and it goes green by itself once there's real evidence of
+  // where copies of a value went (see the doc comment above).
+  testList "[Integration] hot reload rule 2 (waits on value capture evidence)" [
     for runtime in HostRuntime.all do
       uncapturedValueIsPatched runtime
   ]
-  |> Integration.register (Integration.Dedicated "--all (on demand: rule 2 needs phase 1's capture tracking, see hot-reload-state-spec.md)")
+  |> Integration.register (Integration.Dedicated "--all (on demand: rule 2 needs evidence of where copies of a value went, see docs/hot-reload.md)")
 
 [<Tests>]
 let hotReloadStateOutcomeTests =

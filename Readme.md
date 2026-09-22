@@ -59,9 +59,11 @@ This started as an experiment in how far agentic development could go, and it's 
 
 Save a `.fs` file and SageFs figures out which functions changed and uses [Harmony](https://github.com/pardeike/Harmony) to re-point those methods in the process that's already running. No rebuild, no restart, and yes, that includes apps whose route table was only ever built once at startup. Connected browsers refresh automatically over SSE.
 
-Because it re-points **methods**, not everything is patchable: a handler that's *called* per request reloads, a handler whose output was *computed once* at startup can't. Prefer `let getHome (ctx: HttpContext) = ...` over `let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. `let mutable` state, changed signatures, and changed types restart the app instead of pretending to reload.
+Because it re-points **methods**, not everything is patchable: a handler that's *called* per request reloads, a handler whose output was *computed once* at startup can't. Prefer `let getHome (ctx: HttpContext) = ...` over `let getHome : HttpHandler = Response.ofHtml (pageLayout [])`. Changed signatures, changed types, and a `let mutable` whose type changed restart the app instead of pretending to reload.
 
-Apps started by a `.SageFs/init.fsx` that `#load`s your sources patch in place now too, on .NET 10 and .NET 11. SageFs tracks which copy of a function the app is actually holding and patches that one. Next up is state that survives a reload. Untouched mutables keep their value, and if you edit an initializer, the live value stays and SageFs tells you so, with a reset button for when you want it fresh. The details are in [docs/hot-reload.md](docs/hot-reload.md#where-it-falls-short-right-now).
+Apps started by a `.SageFs/init.fsx` that `#load`s your sources patch in place too, on .NET 10 and .NET 11. SageFs tracks which copy of a function the app is actually holding and patches that one.
+
+Your app's live state survives a save. A `let mutable` you didn't touch keeps its value, private ones included. Edit a mutable's initializer and the app keeps its live value, SageFs tells you what it kept, and the dashboard's Hot Reload panel (or the `reset_hot_reload_state` MCP tool) has a Reset for when you want the new initializer to run. Redefining a plain `let` value still restarts. The details are in [docs/hot-reload.md](docs/hot-reload.md#where-it-falls-short-right-now).
 
 > **[docs/hot-reload.md](docs/hot-reload.md) is the authority.** It carries the full what-reloads / what-restarts table, each row pinned by an executable test. This README deliberately doesn't duplicate it, so the two can't drift apart. (No test measures reload latency, so no figure is quoted here.)
 

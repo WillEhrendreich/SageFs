@@ -68,7 +68,7 @@ that way:
 | edit a function, and the file has a `let mutable` you didn't touch | its live value stays. Its initializer never runs again | rule 1, public `let mutable` |
 | edit a function that uses a `let mutable private` | same, the value stays. The patch can't name a private member from FSI, so it gets a stand-in with the same name that reads and writes the app's own field. Nothing gets re-declared | rule 1, `let mutable private` |
 | edit a `let mutable`'s **initializer**, same type (`= 10` to `= 25`) | the app keeps its live value, and the save says so: `kept 'App.State.tuned' = 13 (your new initializer 25 applies when you reset it)`. The page doesn't refresh, because nothing it would fetch changed | rule 3, keep |
-| reset it (the **Reset** button in the dashboard's Hot Reload panel, or the `reset_hot_reload_state` MCP tool) | ONLY that initializer runs, and its value goes into the app's field. Nothing else in the file runs | rule 3, reset |
+| reset it (the **Reset** button in the dashboard's Hot Reload panel, or the `reset_hot_reload_state` MCP tool) | ONLY that initializer runs, and its value goes into the app's field. Nothing else in the file runs | rule 3, reset. The button itself is pinned by a browser journey: an open dashboard shows the kept notice without a reload, Reset is clicked, and the app serves the new value (`HotReloadBrowserTests`, `--integration-hr`, .NET 11) |
 | change a `let mutable`'s **type** (`= 1` to `= "one"`) | restart needed. The live value has the old type, so there's nothing safe to keep, and the running app is left exactly as it was until you restart | rule 4, retype |
 
 I check the type against the running app, not just your annotation. The save
@@ -123,7 +123,8 @@ SageFs logs that it's doing so.
 I'd rather you hear this from me than find it at 11pm.
 
 - **Redefining an immutable value** (`let greeting = "hello"` to `"howdy"`)
-  still needs a restart, even when nothing captured it. See below.
+  still needs a restart, even when nothing captured it. It's reported as a
+  restart, never as a patch. See below for why.
 - **When SageFs isn't the one running your app and a save needs a restart**
   (a signature or type change, say), SageFs re-evaluates the whole file
   instead, and that re-declares every `let mutable` in it. Your live state in
@@ -148,12 +149,19 @@ reports "Patched" when it couldn't find it.
 
 1. **A redefined value gets its new value**, as long as nothing captured it at
    startup. Patching the value's getter is the easy part. Knowing that nothing
-   copied the old value while the app started is the hard part, and the
-   capture tracking above is what makes it possible, because from the source a
-   function that ran once at startup looks exactly like one that runs per
-   request. If something did capture it, you'll get a restart and the reason,
-   never a fake patch. The test for this is written and red on purpose until
-   it lands (`HotReloadStateOutcomeTests`, rule 2, run with `--all`).
+   copied the old value while the app started is the hard part, and I thought
+   the capture tracking above would answer it. It doesn't. It records which
+   copy of each *function* the app holds, which is what a function patch
+   needs, and says nothing about where a *value* went. The compiled code
+   doesn't settle it either: for `let greeting = "hello"` the getter is just
+   the string, the file's own startup code calls that getter too, and a route
+   reaches `greet` through a function value that anything could have called
+   once at startup and kept the answer. Telling "reads it per request" from
+   "copied it at startup" needs evidence about where copies of the value
+   went, and I don't have a way to get that without guessing. Guessing here
+   means a fake patch, so it stays a restart until I do. The test for it is
+   written and red on purpose (`HotReloadStateOutcomeTests`, rule 2, run with
+   `--all`).
 
 It's the same place Flutter, React Fast Refresh and Clojure's `defonce` ended
 up, and I think they got it right. The one thing people complain about in
