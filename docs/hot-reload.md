@@ -93,10 +93,11 @@ I'd rather you hear this from me than find it at 11pm.
 - **Apps started by an init script that `#load`s your sources.** If your
   `.SageFs/init.fsx` does `#load "Greeting.fs"` then `#load "App.fs"` and starts
   the app during warmup, a body edit doesn't patch in place on .NET 10. It comes
-  out as a restart. You get the new code, but your live state is gone. On .NET
-  11 it's worse, and it's the reason .NET 11 isn't the default yet: the patch
-  lands on the compiled copy of the function, the app is calling the copy the
-  init script loaded, and the outcome still says "Patched". It works fine if
+  out as a restart. You get the new code, but your live state is gone. If your
+  project targets .NET 11 it's worse: the patch lands on the compiled copy of
+  the function, the app is calling the copy the init script loaded, and the
+  outcome still says "Patched" even though nothing changed. That's also why
+  SageFs itself doesn't default to .NET 11 yet. It works fine if
   the app runs from your compiled project, or if you `#load` your sources
   into the session yourself and then start the app. The broken path is only the
   one where the init script loads the sources during warmup. There's a test
