@@ -80,10 +80,9 @@ you need the details, use `explain_test_failure`.
 - **A bare `Error` or `Ok` that resolves to the wrong type.** If a match on a
   `Result` fails with "This union case does not take arguments" or names some
   other type, a union case in scope is shadowing `Result.Error` / `Result.Ok`.
-  Write `Result.Error` / `Result.Ok`. SageFs's own types can't do this anymore
-  (every SageFs union with an `Ok`/`Error`/`Some`/`None` case is
-  `RequireQualifiedAccess`, and a test enforces it), but a library you open
-  still might.
+  Write `Result.Error` / `Result.Ok`. SageFs's own types can't do this anymore:
+  no SageFs union has a case named `Ok`, `Error`, `Some` or `None`, and a test
+  enforces that. A library you open still might.
 - **Never `#r` a DLL the session already loaded from the project.** It creates a
   second copy of every type ("type X is not compatible with type X"). `#r` also
   locks the DLL, so a later rebuild can't overwrite it.
