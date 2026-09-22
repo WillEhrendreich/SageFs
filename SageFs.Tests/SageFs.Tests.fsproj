@@ -487,6 +487,7 @@
         <Compile Include="WebAppHotReloadVerificationTests.fs" />
         <Compile Include="HotReloadStateHarness.fs" />
         <Compile Include="HotReloadStateOutcomeTests.fs" />
+        <Compile Include="TieredCompilationCostBenchmark.fs" />
         <Compile Include="HotReloadKeptStateSurfaceTests.fs" />
         <Compile Include="DaemonStateChangeContractTests.fs" />
         <Compile Include="LiveTestWatcherCoreTests.fs" />
