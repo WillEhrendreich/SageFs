@@ -1072,3 +1072,18 @@ module TweakLogFormat =
         let events, tornTail = decodeStream bytes.[headerLength ..]
         Ok { Grade = grade; Fingerprint = fp; Events = events; TornTail = tornTail }
     with ex -> Error ex.Message
+
+  /// TWIN — never wired into any production path. Skips the fingerprint
+  /// header the same way `decodeSegment` does, but decodes the event
+  /// stream regardless of grade: exactly the bug "Impossible is never
+  /// folded" exists to prevent. Kept only so a DST invariant can be shown
+  /// to catch a regression back to it.
+  let decodeSegmentIgnoringGradeTwin (bytes: byte[]) : LoggedEvent list =
+    try
+      use ms = new MemoryStream(bytes)
+      use br = new BinaryReader(ms)
+      readFingerprint br |> ignore
+      let headerLength = int ms.Position
+      let events, _tornTail = decodeStream bytes.[headerLength ..]
+      events
+    with _ -> []
