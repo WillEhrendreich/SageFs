@@ -8,7 +8,7 @@ You leave behind `node_modules` eating your disk, `any` creep in TypeScript, the
 - `Option<'T>` means "might not exist," and the compiler makes you handle it. No runtime surprise three functions later.
 - `|>` pipelines work like `.filter().map().reduce()`, but for any function, not just array methods.
 - No `this` binding bugs. Functions are just functions.
-- Fable compiles F# to JavaScript — the SageFs VS Code extension itself is written in F# and shipped through Fable, so this isn't a demo of the idea, it's the actual product.
+- Fable compiles F# to JavaScript. The SageFs VS Code extension itself is written in F# and shipped through Fable, so this is a real, working example.
 
 **→ [Start here: `samples/from-javascript/hello.fsx`](../samples/from-javascript/hello.fsx)**
 

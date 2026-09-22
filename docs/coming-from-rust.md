@@ -1,6 +1,6 @@
 # 🦀 Coming from Rust?
 
-F# shares Rust's good instincts: `Option`, `Result`, pattern matching, discriminated unions, immutability by default, and no `null`. It runs on .NET instead of compiling to native, so there's no borrow checker — and it adds a REPL, `.fsx` scripting, and hot reload, which Rust doesn't really have an answer for.
+F# shares Rust's good instincts: `Option`, `Result`, pattern matching, discriminated unions, immutability by default, and no `null`. It runs on .NET instead of compiling to native, so there's no borrow checker. And it adds a REPL, `.fsx` scripting, and hot reload, which Rust doesn't really have an answer for.
 
 You leave behind borrow-checker fights over code that isn't actually doing anything unsafe, slow compiles on medium-sized projects, no REPL, and reaching for Python whenever you just want to poke at some data.
 

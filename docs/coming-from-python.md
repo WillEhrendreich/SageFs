@@ -1,6 +1,6 @@
 # 🐍 Coming from Python?
 
-If you live in a Python REPL, F# will feel familiar — the same evaluate-as-you-go rhythm. What you get on top: a compiler that checks types before you run anything, pipelines instead of list comprehensions, and `Option<'T>` so `None` gets handled at compile time instead of blowing up three functions downstream.
+If you live in a Python REPL, F# will feel familiar. Same evaluate-as-you-go rhythm. What you get on top: a compiler that checks types before you run anything, pipelines instead of list comprehensions, and `Option<'T>` so `None` gets handled at compile time instead of blowing up three functions downstream.
 
 No more `AttributeError: 'NoneType' object has no attribute 'foo'`, no more "just run it and see."
 

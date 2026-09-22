@@ -1,6 +1,6 @@
 # 🏗️ Architecture
 
-One SageFs daemon runs per machine. It starts with no project loaded, and creates sessions on demand — I didn't
+One SageFs daemon runs per machine. It starts with no project loaded, and creates sessions on demand. I didn't
 want a daemon that assumes it knows what you're working on before you've told it. Each session is a separate OS
 worker process with its own FSI, loaded project assemblies, and file watcher. VS Code, Neovim, the web
 dashboard, and MCP clients all talk to the daemon through session-scoped HTTP and SSE contracts. See the
@@ -13,7 +13,7 @@ solution file is `SageFs.slnx`.
 The test suite uses Expecto unit tests, FsCheck property-based state-machine tests, Verify snapshots, and
 binary-persistence property tests. The README's test-count badge and property-test count are derived from
 source, never hand-typed, but restamping is an explicit step (`dotnet run --project SageFs.Tests -- --update-badge`,
-see `SageFs.Tests/TestCountBadge.fs`) — not something CI or a normal test run does automatically, so the
+see `SageFs.Tests/TestCountBadge.fs`), and CI or a normal test run doesn't do it for you, so the
 numbers can lag between restamps. If you spot a stale number, that's why.
 
 ## Project Structure
@@ -44,8 +44,8 @@ Editor / Dashboard / MCP command
 The built-in SageTUI client, the legacy TUI, and the `SageFs.Gui` Raylib frontend are deprecated and are not
 current product interfaces; their rendering code stays in the repository as legacy history rather than getting
 deleted outright. Raylib application and game demos are still supported examples of using SageFs with game
-projects, and they don't depend on the deprecated GUI frontend — I kept those because they prove SageFs works
-for real projects, not just web apps.
+projects, and they don't depend on the deprecated GUI frontend. I kept those because they prove SageFs works
+for real projects outside web dev too.
 
 ## Session Lifecycle
 
@@ -65,5 +65,5 @@ session.
 Other FSI behaviors worth knowing: redefining a binding shadows it instead of erroring, each `;;` boundary is
 its own transaction, there's no `[<EntryPoint>]`, and assembly loading is scoped to the session.
 
-Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](../SageFs.Core/FsiRewrite.fs) (26 lines — it's genuinely small).
+Rewrite logic: [`SageFs.Core/FsiRewrite.fs`](../SageFs.Core/FsiRewrite.fs) (26 lines, genuinely small).
 PRs welcome.

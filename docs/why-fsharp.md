@@ -1,8 +1,8 @@
 # Why F#? — Lessons from Building SageFs
 
-I built SageFs — a live F# development environment: a REPL engine, web dashboard, editor integrations, an MCP
-surface, and a daemon holding it all together — almost entirely in F#. This isn't a pitch deck. It's what I
-actually learned, with real code from the codebase as the receipts.
+I built SageFs (a live F# development environment: a REPL engine, web dashboard, editor integrations, an MCP
+surface, and a daemon holding it all together) almost entirely in F#. Here's what I actually learned doing it,
+with real code from the codebase as the receipts.
 
 ---
 
@@ -48,7 +48,7 @@ stack frames away from where it actually went wrong.
 
 The `SageFsError` DU has cases across four categories (client/server/gateway/infra). An architecture test
 verifies every case has exactly one classification and a valid HTTP status code, so you cannot add a new error
-case without classifying it — the compiler and the test suite both hold you to it.
+case without classifying it. The compiler and the test suite both hold you to it.
 
 ---
 
@@ -105,7 +105,7 @@ You cannot accidentally add milliseconds to seconds. You cannot pass a raw `floa
 expected. The compiler catches unit mismatches that would be silent, "why is this eval taking 1000x longer
 than it should" runtime bugs in any other language.
 
-**Cost: zero.** Units of measure are erased at compile time. No runtime overhead, no boxing — just compile-time
+Cost: zero. Units of measure are erased at compile time. No runtime overhead, no boxing, just compile-time
 safety for a whole class of numerical mistakes I'd otherwise make eventually.
 
 ---
@@ -148,14 +148,14 @@ let result = pipeline {
 Each `stage` records timing and outcome. The CE short-circuits on failure automatically, with full trace
 context attached. It's the same pattern as `async { }` or `task { }`, just domain-specific to eval tracing.
 
-**You can build your own control-flow abstractions** that read like language features. No macros, no code
-generation — just the type system doing what it's there for.
+You can build your own control-flow abstractions that read like language features. No macros, no code
+generation, just the type system doing what it's there for.
 
 ---
 
 ## 7. The Module System Scales Without Ceremony
 
-SageFs.Core alone is organized into roughly 190 top-level modules — no class hierarchies, no
+SageFs.Core alone is organized into roughly 190 top-level modules, no class hierarchies, no
 dependency-injection containers, no abstract factory patterns in sight.
 
 ```fsharp
@@ -166,7 +166,7 @@ let buildTracedPipeline (middleware: NamedMiddleware list) (evalFn: MiddlewareNe
 ```
 
 Functions are the unit of abstraction. Modules are the unit of organization. No `ITracingMiddlewareFactory`.
-No `AbstractPipelineBuilderBase<T>`. That said — 190 files is also a lot of files, and a few of the biggest
+No `AbstractPipelineBuilderBase<T>`. That said, 190 files is also a lot of files, and a few of the biggest
 ones in this repo have grown past where I'd like them to be. Modules-not-classes buys you a lot, but it
 doesn't save you from writing a 5,000-line file if you're not paying attention. I'm not.
 
@@ -216,13 +216,13 @@ Same safety. A fraction of the noise. I'll take it.
 ## 10. The Ecosystem Effect
 
 Because SageFs is written in F#, it gets to:
-- **Hot-reload F# source files** into a live FSI session — the language's own REPL is first-class, so I'm not bolting one on
+- **Hot-reload F# source files** into a live FSI session. The language's own REPL is first-class, so I'm not bolting one on
 - **Use FSharp.Compiler.Service** directly for real-time diagnostics, completions, and symbol analysis
 - **Generate Fable JavaScript** for the VS Code extension from the same F# source
 - **Share types** between the CLI, dashboard, editor integrations, and test project with minimal translation
 
 None of that is a side effect of choosing F#. It's what made this specific project possible to build the way
-I built it — a language that hot-reloads its own source and compiles to JS for free is doing a lot of the
+I built it. A language that hot-reloads its own source and compiles to JS for free is doing a lot of the
 heavy lifting so I don't have to.
 
 ---
@@ -247,9 +247,9 @@ dotnet tool install --global SageFs
 sagefs
 ```
 
-That starts the daemon in the foreground — it's not a REPL by itself, it's the thing your editor, an MCP
+That starts the daemon in the foreground. It's not a REPL by itself, it's the thing your editor, an MCP
 client, or the dashboard talks to. Point one of them at `MyProject.fsproj` and it spins up a session for you.
 
 ---
 
-SageFs is open source. Tell me I'm wrong about any of this — that can be fun too.
+SageFs is open source. Tell me I'm wrong about any of this. That can be fun too.
