@@ -28,7 +28,7 @@ let tweakLogTests =
 
       testCase "a UserEditObserved counts as disk truth, not a pending tweak" <| fun _ ->
         let log = EventLog.empty
-        let log, _ = EventLog.append log 1L (TweakLogEvent.UserEditObserved(addr "x", "3.0", contentHash "3.0", None))
+        let log, _ = EventLog.append log 1L (TweakLogEvent.UserEditObserved(addr "x", "3.0", contentHash "3.0", FileContent.NotRecorded ReplayScope.SageFsWritesOnly))
         dirtySet log |> Expect.isEmpty "a direct file edit is never 'dirty against itself'"
 
       testCase "RolledBack restores the projection to what the target op recorded as textBefore" <| fun _ ->
@@ -141,7 +141,8 @@ let tweakLogTests =
         let afterEdit = baseSource.Replace("let x = 1.0", "let x = 9.0")
         let ev = observeUserEdit settings baseSource afterEdit (addr "x") "9.0"
         match ev with
-        | TweakLogEvent.UserEditObserved(_, _, _, snapshot) -> snapshot |> Expect.equal "no bytes stored" None
+        | TweakLogEvent.UserEditObserved(_, _, _, content) ->
+          content |> Expect.equal "no bytes stored, and it says why: SageFsWritesOnly" (FileContent.NotRecorded ReplayScope.SageFsWritesOnly)
         | other -> failtestf "expected UserEditObserved, got %A" other
 
       testCase "EverythingAsDiffs carries the whole file's new text on UserEditObserved" <| fun _ ->
@@ -149,8 +150,18 @@ let tweakLogTests =
         let afterEdit = baseSource.Replace("let x = 1.0", "let x = 9.0")
         let ev = observeUserEdit settings baseSource afterEdit (addr "x") "9.0"
         match ev with
-        | TweakLogEvent.UserEditObserved(_, _, _, snapshot) -> snapshot |> Expect.equal "the whole new file" (Some afterEdit)
+        | TweakLogEvent.UserEditObserved(_, _, _, content) -> content |> Expect.equal "the whole new file" (FileContent.Recorded afterEdit)
         | other -> failtestf "expected UserEditObserved, got %A" other
+
+      testCase "FileContent.NotRecorded is not an absence, it names the scope that skipped recording" <| fun _ ->
+        // No `Option` here: an unrecorded snapshot always says WHY, the same
+        // ReplayScope the caller's TweakLogSettings carried. Two NotRecorded
+        // values from two DIFFERENT scopes are not the same fact, so they
+        // must not compare equal, a bare `None` could never make that claim.
+        let notRecordedHere = FileContent.NotRecorded ReplayScope.SageFsWritesOnly
+        let notRecordedThere = FileContent.NotRecorded ReplayScope.EverythingAsDiffs
+        (notRecordedHere = notRecordedThere) |> Expect.isFalse "NotRecorded under different scopes carries different meaning"
+        (notRecordedHere = FileContent.Recorded "") |> Expect.isFalse "NotRecorded is never Recorded, even of empty text"
 
       testCase "replayWholeFile reproduces a user edit anywhere in the file, not just SageFs's own writes" <| fun _ ->
         let settings = { TweakLogSettings.defaults with ReplayScope = ReplayScope.EverythingAsDiffs }
@@ -163,7 +174,7 @@ let tweakLogTests =
 
       testCase "replayWholeFile refuses (never guesses) when SageFsWritesOnly events carry no snapshot" <| fun _ ->
         let log = EventLog.empty
-        let log, _ = EventLog.append log 1L (TweakLogEvent.UserEditObserved(addr "x", "9.0", contentHash "9.0", None))
+        let log, _ = EventLog.append log 1L (TweakLogEvent.UserEditObserved(addr "x", "9.0", contentHash "9.0", FileContent.NotRecorded ReplayScope.SageFsWritesOnly))
         replayWholeFile baseSource log.Events |> Expect.isError "no snapshot to replay from"
     ]
 
@@ -395,7 +406,7 @@ let tweakLogTests =
       testCase "a clean stream decodes back to the exact events, with no torn tail" <| fun _ ->
         let log = EventLog.empty
         let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
-        let log, _ = EventLog.append log 2L (TweakLogEvent.ReformatObserved(contentHash baseSource, contentHash baseSource, None))
+        let log, _ = EventLog.append log 2L (TweakLogEvent.ReformatObserved(contentHash baseSource, contentHash baseSource, FileContent.NotRecorded ReplayScope.SageFsWritesOnly))
         let log, _ = EventLog.append log 3L (TweakLogEvent.RolledBack 1)
         let bytes = TweakLogFormat.encodeStream log.Events
         let decoded, wasTorn = TweakLogFormat.decodeStream bytes
