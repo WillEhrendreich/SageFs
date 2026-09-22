@@ -97,6 +97,12 @@ let tweakSimDstTests =
         |> List.map (fun s -> let sc = scenarioOf s in sc, TweakSimInvariants.snapshotPlusTailMatchesFullHistory (realTrace sc))
         |> List.filter (fun (_, vs) -> not (List.isEmpty vs))
         |> expectNone "a compacted view disagreed with the full history"
+
+      testCase "UNDO-REDO-SOUND-ACROSS-COMPACTION across seeded schedules" <| fun _ ->
+        seeds
+        |> List.map (fun s -> let sc = scenarioOf s in sc, TweakSimInvariants.undoRedoSoundAcrossCompaction (realTrace sc))
+        |> List.filter (fun (_, vs) -> not (List.isEmpty vs))
+        |> expectNone "rollback of a compacted op disagreed with rollback of the same op via the full, never-compacted history"
     ]
 
     testList "TWIN: skipping the hash check on save clobbers a concurrent edit" [

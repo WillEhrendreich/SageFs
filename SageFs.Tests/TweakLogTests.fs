@@ -75,30 +75,32 @@ let tweakLogTests =
 
     testList "rollback resolves through a compacted snapshot boundary" [
 
-      testCase "a TweakApplied compacted into the snapshot still rolls back correctly" <| fun _ ->
+      testCase "a TweakSaved compacted into the snapshot still rolls back correctly" <| fun _ ->
+        // A standalone TweakSaved (no pending TweakApplied) is already
+        // clean (Known = Saved), so with UndoWindow=0 nothing protects it:
+        // it's genuinely compactable, and saved.Id moves into the
+        // snapshot's Origins.
         let source = "module M\nlet x = 2.0\n"
         let log = EventLog.empty
-        let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
-        // Aggressive retention: nothing stays in the tail, applied.Id moves
-        // into the snapshot's Origins.
+        let log, saved = EventLog.append log 1L (TweakLogEvent.TweakSaved(addr "x", "1.0", "2.0", contentHash "2.0", contentHash baseSource))
         let policy = { RetentionPolicy.defaults with UndoWindow = 0 }
         let snapshot, tail = compact Snapshot.empty log.Events policy Set.empty
-        tail |> Expect.isEmpty "the TweakApplied moved into the snapshot"
-        match rollback { log with Events = tail } snapshot applied.Id source with
+        tail |> Expect.isEmpty "the TweakSaved moved into the snapshot"
+        match rollback { log with Events = tail } snapshot saved.Id source with
         | Ok(RollbackOutcome.Applied newSource) ->
           newSource |> Expect.equal "still resolves before/after from Snapshot.Origins, not the (now-empty) tail" "module M\nlet x = 1.0\n"
         | other -> failtestf "expected Applied via the snapshot fallback, got %A" other
 
       testCase "a RolledBack in the tail whose OWN target was compacted still redoes correctly" <| fun _ ->
-        // TweakApplied (id 1) is compacted away; a RolledBack (id 2) in the
+        // TweakSaved (id 1) is compacted away; a RolledBack (id 2) in the
         // tail targets it. Redoing that RolledBack (rolling IT back) must
         // resolve id 1's before/after from Snapshot.Origins to know what to
         // reapply, `effectOf`'s own recursion is the thing under test here.
         let log = EventLog.empty
-        let log, applied = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, saved = EventLog.append log 1L (TweakLogEvent.TweakSaved(addr "x", "1.0", "2.0", contentHash "2.0", contentHash baseSource))
         let policy = { RetentionPolicy.defaults with UndoWindow = 0 }
         let snapshot, tail = compact Snapshot.empty log.Events policy Set.empty
-        let tailLog, rolledBack = EventLog.append { log with Events = tail } applied.Id (TweakLogEvent.RolledBack applied.Id)
+        let tailLog, rolledBack = EventLog.append { log with Events = tail } 2L (TweakLogEvent.RolledBack saved.Id)
         let sourceAfterUndo = "module M\nlet x = 1.0\n"
         match rollback tailLog snapshot rolledBack.Id sourceAfterUndo with
         | Ok(RollbackOutcome.Applied redoneSource) ->
@@ -108,11 +110,11 @@ let tweakLogTests =
       testCase "undo/redo gives the same answer on a compacted log as on the uncompacted log" <| fun _ ->
         let source = "module M\nlet x = 2.0\n"
         let uncompactedLog = EventLog.empty
-        let uncompactedLog, applied = EventLog.append uncompactedLog 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
-        let viaUncompacted = rollback uncompactedLog Snapshot.empty applied.Id source
+        let uncompactedLog, saved = EventLog.append uncompactedLog 1L (TweakLogEvent.TweakSaved(addr "x", "1.0", "2.0", contentHash "2.0", contentHash baseSource))
+        let viaUncompacted = rollback uncompactedLog Snapshot.empty saved.Id source
         let policy = { RetentionPolicy.defaults with UndoWindow = 0 }
         let snapshot, tail = compact Snapshot.empty uncompactedLog.Events policy Set.empty
-        let viaCompacted = rollback { uncompactedLog with Events = tail } snapshot applied.Id source
+        let viaCompacted = rollback { uncompactedLog with Events = tail } snapshot saved.Id source
         viaCompacted |> Expect.equal "compaction must never change what a still-resolvable rollback answers" viaUncompacted
     ]
 

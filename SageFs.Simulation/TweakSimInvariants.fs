@@ -206,6 +206,37 @@ module TweakSimInvariants =
               Why = sprintf "replayWholeFile produced %s but the actual final file is %s" replayed final.Source } ]
         | Error e -> [ { Index = states.Length - 1; Why = sprintf "replayWholeFile failed: %A" e } ]
 
+  /// Undo/redo resolution must never depend on whether compaction has
+  /// already moved an operation's own event out of the tail: for every
+  /// TweakApplied/TweakSaved id the never-compacted `ShadowLog` has ever
+  /// recorded, rolling it back through the REAL (possibly-compacted)
+  /// `Log`+`Snapshot` pair must give the exact same `Result` as rolling it
+  /// back through the full, never-compacted history. Checked at every
+  /// step, so this covers everything still inside retention (still
+  /// resolvable straight from the tail, where the two paths trivially
+  /// agree) and everything that's already crossed the snapshot boundary
+  /// (where they'd disagree if `effectOf`'s snapshot fallback were wrong),
+  /// under whichever `CompactionMode` the trace used.
+  let undoRedoSoundAcrossCompaction (states: State list) : Violation list =
+    states
+    |> List.indexed
+    |> List.collect (fun (i, s) ->
+      let operationIds =
+        s.ShadowLog.Events
+        |> List.choose (fun e ->
+          match e.Event with
+          | TweakLog.TweakLogEvent.TweakApplied _
+          | TweakLog.TweakLogEvent.TweakSaved _ -> Some e.Id
+          | _ -> None)
+      operationIds
+      |> List.choose (fun opId ->
+        let viaCompacted = TweakLog.rollback s.Log s.Snapshot opId s.Source
+        let viaFullHistory = TweakLog.rollback s.ShadowLog TweakLog.Snapshot.empty opId s.Source
+        match viaCompacted = viaFullHistory with
+        | true -> None
+        | false ->
+          violation i (sprintf "rollback of op %d disagreed: via compacted log+snapshot = %A, via full history = %A" opId viaCompacted viaFullHistory)))
+
   let all (scenario: Scenario) (states: State list) : Violation list =
     neverAppliedWithoutTypeCheck scenario states
     @ failureKeepsLastGoodValue states
@@ -216,3 +247,4 @@ module TweakSimInvariants =
     @ reformatNeverBreaksTheAddress scenario states
     @ logStaysWithinBudget states
     @ snapshotPlusTailMatchesFullHistory states
+    @ undoRedoSoundAcrossCompaction states

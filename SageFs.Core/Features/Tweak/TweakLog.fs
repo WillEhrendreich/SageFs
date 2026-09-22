@@ -286,48 +286,47 @@ let private addressOf (e: TweakLogEvent) : TweakAddress option =
   | TweakLogEvent.HotReloadObserved _
   | TweakLogEvent.RolledBack _ -> None
 
-/// The address, before and after of any mutating event ANYWHERE in
-/// `events`, resolved by id, RECURSIVELY: a `RolledBack targetId` is
-/// itself a state transition (it moved the address from the target's
-/// `after` back to its `before`), so its own effect is the target's
-/// effect FLIPPED. This is what makes redo possible with no new event
-/// case: redoing an undo is rolling back the ROLLBACK, and `effectOf`
-/// tells `rollback` what that means without it needing to know how many
-/// levels of undo/redo came before.
+/// The address, before and after of any mutating event, resolved by id,
+/// RECURSIVELY: a `RolledBack targetId` is itself a state transition (it
+/// moved the address from the target's `after` back to its `before`), so
+/// its own effect is the target's effect FLIPPED. This is what makes redo
+/// possible with no new event case: redoing an undo is rolling back the
+/// ROLLBACK, and `effectOf` tells `rollback` what that means without it
+/// needing to know how many levels of undo/redo came before.
 ///
-/// Scope limit, stated plainly (same shape as `whyKept`'s): this walks
-/// `events` as given. Called with `log.Events` (the whole in-memory log,
-/// what `rollback`/`performUndo`/`performRedo` always have), multi-level
-/// undo/redo resolves correctly. A `RolledBack` in a POST-COMPACTION tail
-/// whose target crossed the snapshot boundary only resolves one level
-/// (via `Snapshot.Origins`, address+before only), a second undo/redo
-/// cycle on something already compacted away is not this pass's problem
-/// to solve.
-let rec private effectOf (events: LoggedEvent list) (id: int) : (TweakAddress * string * string) option =
-  events
-  |> List.tryFind (fun e -> e.Id = id)
-  |> Option.bind (fun e ->
+/// `id` not found in `events` falls back to `fallback`, which is how this
+/// ONE function serves every caller that used to need two: given
+/// `log.Events` and `Snapshot.Origins.TryFind` as the fallback, a target
+/// that crossed the compaction boundary resolves exactly the way one still
+/// living in the tail does, recursively, however many `RolledBack` levels
+/// and however many compaction rounds separate the two. Called with the
+/// full in-memory log and `fun _ -> None` (nothing to fall back to, there
+/// is no snapshot), it's the same function `project` always used.
+let rec private effectOf
+  (fallback: int -> (TweakAddress * string * string) option)
+  (events: LoggedEvent list)
+  (id: int)
+  : (TweakAddress * string * string) option =
+  match events |> List.tryFind (fun e -> e.Id = id) with
+  | Some e ->
     match e.Event with
     | TweakLogEvent.TweakApplied(addr, before, after, _) -> Some(addr, before, after)
     | TweakLogEvent.TweakSaved(addr, before, after, _, _) -> Some(addr, before, after)
-    | TweakLogEvent.RolledBack targetId -> effectOf events targetId |> Option.map (fun (addr, before, after) -> addr, after, before)
-    | _ -> None)
-
-/// The (address, textBefore) a mutating event recorded, the piece a
-/// `RolledBack eventId` needs from whatever event it targets. One level
-/// only (see `effectOf` for the recursive version `rollback` itself uses).
-let private originOf (e: TweakLogEvent) : (TweakAddress * string) option =
-  match e with
-  | TweakLogEvent.TweakApplied(addr, before, _, _) -> Some(addr, before)
-  | TweakLogEvent.TweakSaved(addr, before, _, _, _) -> Some(addr, before)
-  | _ -> None
+    | TweakLogEvent.RolledBack targetId ->
+      effectOf fallback events targetId |> Option.map (fun (addr, before, after) -> addr, after, before)
+    | _ -> None
+  | None -> fallback id
 
 /// Fold `events` onto `seed`, resolving a `RolledBack eventId` by asking
-/// `lookupOrigin`, which lets the SAME fold serve both a full-history
-/// projection (look the id up in the whole log) and a snapshot+tail
-/// projection (look it up in the snapshot's own `Origins` first, falling
-/// back to the tail).
-let private foldEvents (lookupOrigin: int -> (TweakAddress * string) option) (seed: Projection) (events: LoggedEvent list) : Projection =
+/// `lookupEffect`, which lets the SAME fold serve both a full-history
+/// projection (look the id up in the whole log, no fallback) and a
+/// snapshot+tail projection (look it up in the tail first, falling back to
+/// the snapshot's own `Origins`, via `effectOf`).
+let private foldEvents
+  (lookupEffect: int -> (TweakAddress * string * string) option)
+  (seed: Projection)
+  (events: LoggedEvent list)
+  : Projection =
   events
   |> List.fold
     (fun p e ->
@@ -361,14 +360,16 @@ let private foldEvents (lookupOrigin: int -> (TweakAddress * string) option) (se
       | TweakLogEvent.ConflictRaised(addr, _, _, _) -> { p with OpenConflicts = p.OpenConflicts |> Set.add addr }
       | TweakLogEvent.ConflictResolved addr -> { p with OpenConflicts = p.OpenConflicts |> Set.remove addr }
       | TweakLogEvent.RolledBack targetId ->
-        match lookupOrigin targetId with
-        | Some(addr, before) -> { p with Known = p.Known |> Map.add addr before; Saved = p.Saved |> Map.add addr before }
+        match lookupEffect targetId with
+        | Some(addr, before, _after) -> { p with Known = p.Known |> Map.add addr before; Saved = p.Saved |> Map.add addr before }
         | None -> p)
     seed
 
-/// The full-history projection: every event, folded from empty.
+/// The full-history projection: every event, folded from empty. No
+/// fallback: `log.Events` is the whole history, there is nothing beyond it
+/// to consult.
 let project (log: EventLog) : Projection =
-  let lookup id = log.Events |> List.tryFind (fun e -> e.Id = id) |> Option.bind (fun e -> originOf e.Event)
+  let lookup id = effectOf (fun _ -> None) log.Events id
   foldEvents lookup Projection.empty log.Events
 
 let dirtySet (log: EventLog) : Set<TweakAddress> = project log |> Projection.dirtySet
@@ -423,6 +424,41 @@ let recoveryOffer (log: EventLog) : RecoverableTweak list =
 let hasOpenConflict (log: EventLog) (address: TweakAddress) : bool =
   (project log).OpenConflicts |> Set.contains address
 
+// ── the snapshot: what compaction folds a prefix of events into ──
+
+/// Versioned like an event, not a disposable cache: once compaction has
+/// run, `Snapshot` PLUS whatever tail follows it IS the truth for
+/// everything before the tail, not merely a speed-up over replaying from
+/// scratch. `Fingerprint` is what makes it upcastable, a caller can grade a
+/// persisted snapshot the exact same way it grades a log segment before
+/// trusting it. Defined ahead of `rollback` (rather than down by `compact`,
+/// where it's used) because `rollback`/`performUndo`/`performRedo` all take
+/// one now too, to resolve a target that crossed the compaction boundary.
+type Snapshot =
+  { UpToEventId: int
+    Fingerprint: Fingerprint
+    Projection: Projection
+    /// The full (address, textBefore, textAfter) EFFECT of every compacted
+    /// event `effectOf` can resolve one, TweakApplied/TweakSaved directly
+    /// and RolledBack via its own flipped recursion, at the moment it was
+    /// folded away. The `after` half is what makes this the actual fix for
+    /// `rollback`/`performUndo`/`performRedo` on a compacted target: an
+    /// (address, before) pair alone can restore a projection's belief about
+    /// `Known`/`Saved`, but it cannot tell a rollback whether the address
+    /// STILL hashes to what that operation wrote, only the full triple can.
+    /// Accretive across every compaction round (`compact` only ever adds to
+    /// this map, never drops an entry), so an id resolves here forever once
+    /// it's ever been compacted, however many rounds later a caller asks.
+    Origins: Map<int, TweakAddress * string * string> }
+
+[<RequireQualifiedAccess>]
+module Snapshot =
+  /// The starting snapshot before any compaction has happened. Its
+  /// fingerprint is never graded (nothing has decoded it from bytes), so
+  /// an empty target hash is a safe placeholder, not a real claim about
+  /// any file.
+  let empty = { UpToEventId = 0; Fingerprint = Fingerprint.current ""; Projection = Projection.empty; Origins = Map.empty }
+
 // ── rollback: an operation on top of the log, not itself an event ──
 
 [<RequireQualifiedAccess>]
@@ -452,21 +488,35 @@ type RollbackError =
 /// ordinary undo), OR a `RolledBack` (rolling back a rollback IS redo,
 /// `effectOf` already flips its before/after, so this function does not
 /// need to know which case it's looking at).
-let rollback (log: EventLog) (opId: int) (currentSource: string) : Result<RollbackOutcome, RollbackError> =
-  match log.Events |> List.tryFind (fun e -> e.Id = opId) with
-  | None -> Error(RollbackError.NoSuchOperation opId)
-  | Some _ ->
-    match effectOf log.Events opId with
-    | None -> Error(RollbackError.NotAnOperation opId)
-    | Some(addr, before, after) ->
-      match hasOpenConflict log addr with
-      | true -> Error(RollbackError.BlockedByOpenConflict addr)
-      | false ->
-        match resolve currentSource addr with
-        | Error e -> Error(RollbackError.AddressGone e)
-        | Ok resolved when resolved.Hash = contentHash after ->
-          Ok(RollbackOutcome.Applied(replaceRange currentSource resolved.Range before))
-        | Ok resolved -> Ok(RollbackOutcome.Conflict(after, resolved.Text, before))
+///
+/// `snapshot` is what makes this sound across a compaction boundary: `opId`
+/// (or, for a redo, the id a `RolledBack` in the tail targets) no longer
+/// needs to still be sitting in `log.Events`, `effectOf` falls back to
+/// `snapshot.Origins` and resolves it exactly the same way, however many
+/// compaction rounds moved it there. This can never resolve WRONGLY: it
+/// either finds the real (address, before, after) an operation recorded,
+/// wherever that's now kept, or it refuses honestly (`NoSuchOperation`/
+/// `NotAnOperation`), it never guesses at a stand-in answer.
+let rollback (log: EventLog) (snapshot: Snapshot) (opId: int) (currentSource: string) : Result<RollbackOutcome, RollbackError> =
+  let fallback id = snapshot.Origins |> Map.tryFind id
+  match effectOf fallback log.Events opId with
+  | Some(addr, before, after) ->
+    match hasOpenConflict log addr with
+    | true -> Error(RollbackError.BlockedByOpenConflict addr)
+    | false ->
+      match resolve currentSource addr with
+      | Error e -> Error(RollbackError.AddressGone e)
+      | Ok resolved when resolved.Hash = contentHash after ->
+        Ok(RollbackOutcome.Applied(replaceRange currentSource resolved.Range before))
+      | Ok resolved -> Ok(RollbackOutcome.Conflict(after, resolved.Text, before))
+  | None ->
+    // Not resolvable anywhere, tail or snapshot: either this id was never
+    // issued at all, or it names a real, still-visible event that just
+    // isn't an operation (a ConflictRaised/ConflictResolved/etc., nothing
+    // to invert). Both are honest refusals, never a guess.
+    match log.Events |> List.exists (fun e -> e.Id = opId) with
+    | true -> Error(RollbackError.NotAnOperation opId)
+    | false -> Error(RollbackError.NoSuchOperation opId)
 
 /// The guard a save has to consult before it writes a `TweakSaved`: refused
 /// while the address has an open, unresolved conflict.
@@ -553,12 +603,18 @@ type HistoryMoveError =
 /// compound action Ctrl+Z is, in one call. Storage stays append-only,
 /// this appends exactly one `RolledBack` event, it never rewrites
 /// anything already in the log.
-let performUndo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at: int64) : Result<EventLog * UndoCursor * string, HistoryMoveError> =
+let performUndo
+  (log: EventLog)
+  (snapshot: Snapshot)
+  (cursor: UndoCursor)
+  (currentSource: string)
+  (at: int64)
+  : Result<EventLog * UndoCursor * string, HistoryMoveError> =
   match UndoCursor.undo log cursor with
   | UndoCursor.AtHead -> Error HistoryMoveError.NothingToUndo
   | UndoCursor.Compacted oldest -> Error(HistoryMoveError.PastRetentionWindow oldest)
   | UndoCursor.At id as newCursor ->
-    match rollback log id currentSource with
+    match rollback log snapshot id currentSource with
     | Error e -> Error(HistoryMoveError.Blocked e)
     | Ok(RollbackOutcome.Conflict(wrote, now, before)) -> Error(HistoryMoveError.Diverged(wrote, now, before))
     | Ok(RollbackOutcome.Applied newSource) ->
@@ -571,7 +627,13 @@ let performUndo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at
 /// `effectOf` flips that rollback's own before/after, so "rolling back a
 /// rollback" already means "put the tweak back". Still append-only: this
 /// appends a SECOND `RolledBack`, on top of the first, never edits it.
-let performRedo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at: int64) : Result<EventLog * UndoCursor * string, HistoryMoveError> =
+let performRedo
+  (log: EventLog)
+  (snapshot: Snapshot)
+  (cursor: UndoCursor)
+  (currentSource: string)
+  (at: int64)
+  : Result<EventLog * UndoCursor * string, HistoryMoveError> =
   match cursor with
   | UndoCursor.At undoneId ->
     let mostRecentUndoOfIt =
@@ -581,7 +643,7 @@ let performRedo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at
     match mostRecentUndoOfIt with
     | None -> Error HistoryMoveError.NothingToRedo
     | Some rolledBackEvent ->
-      match rollback log rolledBackEvent.Id currentSource with
+      match rollback log snapshot rolledBackEvent.Id currentSource with
       | Error e -> Error(HistoryMoveError.Blocked e)
       | Ok(RollbackOutcome.Conflict(wrote, now, before)) -> Error(HistoryMoveError.Diverged(wrote, now, before))
       | Ok(RollbackOutcome.Applied newSource) ->
@@ -591,37 +653,11 @@ let performRedo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at
 
 // ── compaction: bounded growth ──
 
-/// Versioned like an event, not a disposable cache: once compaction has
-/// run, `Snapshot` PLUS whatever tail follows it IS the truth for
-/// everything before the tail, not merely a speed-up over replaying from
-/// scratch. `Fingerprint` is what makes it upcastable, a caller can grade a
-/// persisted snapshot the exact same way it grades a log segment before
-/// trusting it.
-type Snapshot =
-  { UpToEventId: int
-    Fingerprint: Fingerprint
-    Projection: Projection
-    /// Origin (address, textBefore) for each compacted `TweakApplied`/
-    /// `TweakSaved`, so a `RolledBack` in the tail that targets a
-    /// pre-snapshot id can still resolve without keeping that whole event.
-    Origins: Map<int, TweakAddress * string> }
-
-[<RequireQualifiedAccess>]
-module Snapshot =
-  /// The starting snapshot before any compaction has happened. Its
-  /// fingerprint is never graded (nothing has decoded it from bytes), so
-  /// an empty target hash is a safe placeholder, not a real claim about
-  /// any file.
-  let empty = { UpToEventId = 0; Fingerprint = Fingerprint.current ""; Projection = Projection.empty; Origins = Map.empty }
-
 /// The projection from a snapshot plus whatever tail comes after it, must
 /// equal `project` over the full, uncompacted stream for every address the
 /// snapshot+tail can still answer for.
 let projectFromSnapshot (snapshot: Snapshot) (tail: LoggedEvent list) : Projection =
-  let lookup id =
-    match snapshot.Origins |> Map.tryFind id with
-    | Some o -> Some o
-    | None -> tail |> List.tryFind (fun e -> e.Id = id) |> Option.bind (fun e -> originOf e.Event)
+  let lookup id = effectOf (fun oid -> snapshot.Origins |> Map.tryFind oid) tail id
   foldEvents lookup snapshot.Projection tail
 
 /// Named retention rules, as data, see `whyKept` for the query that
@@ -682,7 +718,7 @@ let whyKept
   match undoRetained.Contains e.Id with
   | true -> KeepReason.WithinUndoWindow
   | false ->
-    let p = foldEvents (fun id -> fullEvents |> List.tryFind (fun ev -> ev.Id = id) |> Option.bind (fun ev -> originOf ev.Event)) Projection.empty fullEvents
+    let p = foldEvents (fun id -> effectOf (fun _ -> None) fullEvents id) Projection.empty fullEvents
     match addressOf e.Event with
     | Some a when p.OpenConflicts.Contains a -> KeepReason.OpenConflict
     | Some a when (Projection.dirtySet p).Contains a -> KeepReason.UnsavedTweak
@@ -707,14 +743,12 @@ let compact
   | 0 -> snapshot, events
   | _ ->
     let compactedAway, tail = events |> List.splitAt splitIndex
-    let lookup id =
-      match snapshot.Origins |> Map.tryFind id with
-      | Some o -> Some o
-      | None -> compactedAway |> List.tryFind (fun e -> e.Id = id) |> Option.bind (fun e -> originOf e.Event)
+    let fallback id = snapshot.Origins |> Map.tryFind id
+    let lookup id = effectOf fallback compactedAway id
     let newProjection = foldEvents lookup snapshot.Projection compactedAway
     let newOrigins =
       compactedAway
-      |> List.choose (fun e -> originOf e.Event |> Option.map (fun o -> e.Id, o))
+      |> List.choose (fun e -> effectOf fallback compactedAway e.Id |> Option.map (fun o -> e.Id, o))
       |> List.fold (fun m (id, o) -> Map.add id o m) snapshot.Origins
     let newUpTo = compactedAway |> List.last |> _.Id
     { UpToEventId = newUpTo; Fingerprint = snapshot.Fingerprint; Projection = newProjection; Origins = newOrigins }, tail
@@ -828,7 +862,7 @@ let replayWholeFile (baseSource: string) (events: LoggedEvent list) : Result<str
         // direction) is itself a write, at THIS address, to THIS "after",
         // replayed the same way an ordinary saved tweak's write is.
         | TweakLogEvent.RolledBack _ ->
-          match effectOf events e.Id with
+          match effectOf (fun _ -> None) events e.Id with
           | None -> Error(WholeFileReplayError.UnresolvableRollback e.Id)
           | Some(addr, _before, after) ->
             match resolve src addr with
