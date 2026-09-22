@@ -317,6 +317,27 @@ let tweakLogTests =
         |> Expect.equal "within the default undo window" KeepReason.WithinUndoWindow
     ]
 
+    testList "compaction mode is configurable" [
+
+      testCase "OnSessionClose (the default) never triggers shouldCompact, however far over budget" <| fun _ ->
+        let settings = { TweakLogSettings.defaults with CompactionMode = CompactionMode.OnSessionClose }
+        shouldCompact settings 999_999_999L 999_999 |> Expect.isFalse "a live session stays fully event-sourced"
+
+      testCase "LiveOnBudget triggers exactly like the old budget check" <| fun _ ->
+        let settings = { TweakLogSettings.defaults with CompactionMode = CompactionMode.LiveOnBudget }
+        shouldCompact settings 0L 0 |> Expect.isFalse "well under budget"
+        shouldCompact settings 0L (settings.Retention.MaxEvents + 1) |> Expect.isTrue "over the event count budget"
+
+      testCase "closeSession compacts unconditionally, regardless of mode" <| fun _ ->
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let log, _ = EventLog.append log 2L (TweakLogEvent.TweakSaved(addr "x", "1.0", "2.0", contentHash "2.0", contentHash baseSource))
+        let settings = { TweakLogSettings.defaults with CompactionMode = CompactionMode.OnSessionClose; Retention = { RetentionPolicy.defaults with UndoWindow = 0 } }
+        let newSnapshot, tail = closeSession Snapshot.empty log.Events settings Set.empty
+        newSnapshot.UpToEventId |> Expect.equal "a saved, non-preset op compacts on close" 2
+        tail |> Expect.isEmpty "nothing left to keep raw"
+    ]
+
     testList "binary encoding" [
 
       testCase "a torn tail (a truncated write) is detected and never partially decoded" <| fun _ ->
