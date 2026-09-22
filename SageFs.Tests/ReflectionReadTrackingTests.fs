@@ -152,25 +152,50 @@ let private held (verdict: ValueVerdict) =
   | ValueVerdict.HeldBy(site, _) -> site
   | other -> failtestf "expected the value to be held, got %A" other
 
+/// This test process runs with tiered compilation on. A CoreLib method the
+/// watch is patched onto can be recompiled mid-test, and then the watch lapses
+/// (the hot-reload host turns tiering off so it can't). A lapse has one
+/// promise: the value fails closed. So when the watch lapsed, that's what
+/// gets checked; otherwise it's the behaviour under test.
+let private orFailClosed (app: App) (tracker: Tracker) (check: unit -> unit) =
+  match tracker.ReflectionReads.Watch with
+  | ReflectionWatchStatus.Lapsed why ->
+    match verdictFor app tracker with
+    | ValueVerdict.CannotTell _ -> printfn "reflection watch lapsed in this run (%s); checked it failed closed instead" why
+    | other -> failtestf "the watch lapsed (%s) but the value wasn't CannotTell: %A" why other
+  | ReflectionWatchStatus.Watching
+  | ReflectionWatchStatus.NotWatching _ -> check ()
+
+/// The runtime method the entry watch patches for `MethodBase.Invoke`.
+let private invokeEntryPoint () =
+  let invoke =
+    match <@ fun (m: MethodBase) -> m.Invoke(null, BindingFlags.Default, null, null, null) @> with
+    | Quotations.Patterns.Lambda(_, Quotations.Patterns.Call(_, m, _)) -> m
+    | other -> failtestf "unexpected quotation %A" other
+  invoke.GetType().GetMethods(BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.DeclaredOnly)
+  |> Array.find (fun m -> m.GetBaseDefinition() = invoke.GetBaseDefinition())
+
 [<Tests>]
 let reflectionReadTrackingTests =
   testSequenced <| testList "reflection reads after startup, on a real app" [
     testCase "WHY — the startup window closing no longer hides a reflective read: mark-on-reflect marks the value, and its edit restarts" <| fun _ ->
       let app, tracker, _ = started ReflectionReadMode.MarkOnReflect quiet
       app.ReadAndDrop.Invoke app.Greeting
-      let site = verdictFor app tracker |> held
-      site.Where |> Expect.equal "it has no read in anyone's code" SiteLocation.NotInItsCode
-      describeHolder site ReadSeen.AfterStartup |> Expect.stringContains "and the reason says which mode marked it" "mark-on-reflect"
+      orFailClosed app tracker (fun () ->
+        let site = verdictFor app tracker |> held
+        site.Where |> Expect.equal "it has no read in anyone's code" SiteLocation.NotInItsCode
+        describeHolder site ReadSeen.AfterStartup |> Expect.stringContains "and the reason says which mode marked it" "mark-on-reflect")
 
     testCase "WHY — probe-callers finds the caller and its reflection call, and a caller that throws the value away holds nothing" <| fun _ ->
       let app, tracker, _ = started ReflectionReadMode.ProbeCallers quiet
       app.ReadAndDrop.Invoke app.Greeting
-      match sightings app tracker with
-      | [ ReflectiveCaller.AtSite(reader, _, fate) ] ->
-        reader |> Expect.stringContains "names the caller" "Callers.ReadAndDrop"
-        fate |> Expect.equal "the caller popped it" ReadFate.Discarded
-      | other -> failtestf "expected one sighting at the caller's call site, got %A" other
-      verdictFor app tracker |> Expect.equal "so the value can still be patched" ValueVerdict.SafeToPatch
+      orFailClosed app tracker (fun () ->
+        match sightings app tracker with
+        | [ ReflectiveCaller.AtSite(reader, _, fate) ] ->
+          reader |> Expect.stringContains "names the caller" "Callers.ReadAndDrop"
+          fate |> Expect.equal "the caller popped it" ReadFate.Discarded
+        | other -> failtestf "expected one sighting at the caller's call site, got %A" other
+        verdictFor app tracker |> Expect.equal "so the value can still be patched" ValueVerdict.SafeToPatch)
 
     testCase "WHY — probe-callers rewires the caller, so its later reads are named from the slot without walking the stack" <| fun _ ->
       let app, tracker, _ = started ReflectionReadMode.ProbeCallers quiet
@@ -178,17 +203,19 @@ let reflectionReadTrackingTests =
       let walksAfterFirst = tracker.ReflectionReads.Walks
       for _ in 1 .. 50 do
         app.ReadAndDrop.Invoke app.Greeting
-      let report = tracker.ReflectionReads
-      report.Walks |> Expect.equal "no more walks once the caller is rewired" walksAfterFirst
-      (report.SiteHits, 50L) |> Expect.isGreaterThanOrEqual "every later read came from the slot"
+      orFailClosed app tracker (fun () ->
+        let report = tracker.ReflectionReads
+        report.Walks |> Expect.equal "no more walks once the caller is rewired" walksAfterFirst
+        (report.SiteHits, 50L) |> Expect.isGreaterThanOrEqual "every later read came from the slot")
 
     testCase "WHY — a caller that keeps what reflection handed it holds the value, and the restart reason names it and what it did" <| fun _ ->
       let app, tracker, _ = started ReflectionReadMode.ProbeCallers quiet
       app.ReadAndKeep.Invoke app.Greeting
       app.ReadAndKeep.Invoke app.Greeting
-      let site = verdictFor app tracker |> held
-      site.Reader |> Expect.stringContains "names the caller" "Callers.ReadAndKeep"
-      site.Fate |> Expect.equal "stored it in Callers.Sink" (ReadFate.Escaped(Escape.StoredInField "Callers.Sink"))
+      orFailClosed app tracker (fun () ->
+        let site = verdictFor app tracker |> held
+        site.Reader |> Expect.stringContains "names the caller" "Callers.ReadAndKeep"
+        site.Fate |> Expect.equal "stored it in Callers.Sink" (ReadFate.Escaped(Escape.StoredInField "Callers.Sink")))
 
     testCase "WHY — a rewired caller's slot is used up by its own call, so a reflective read INSIDE the target is pinned on the target's code, never on the outer caller" <| fun _ ->
       let app, tracker, _ = started ReflectionReadMode.ProbeCallers quiet
@@ -199,47 +226,52 @@ let reflectionReadTrackingTests =
       // that read on Outer (thrown away) and the value would look patchable.
       app.Outer.Invoke app.Greeting
       app.Outer.Invoke app.Relay
-      tracker.ReflectionReads.SiteHits |> Expect.equal "the relay read went through Outer's rewired call" 0L
-      let readers =
-        sightings app tracker
-        |> List.map (function
-          | ReflectiveCaller.AtSite(reader, _, _) -> reader
-          | ReflectiveCaller.Unattributed why -> why)
-      readers |> List.exists (fun r -> r.Contains "get_Relay") |> Expect.isTrue (sprintf "the relay's getter read it: %A" readers)
-      (verdictFor app tracker |> held).Reader |> Expect.stringContains "and kept it, so the value is held" "get_Relay"
+      orFailClosed app tracker (fun () ->
+        tracker.ReflectionReads.SiteHits |> Expect.equal "the relay's read was never named from Outer's slot" 0L
+        let readers =
+          sightings app tracker
+          |> List.map (function
+            | ReflectiveCaller.AtSite(reader, _, _) -> reader
+            | ReflectiveCaller.Unattributed why -> why)
+        readers |> List.exists (fun r -> r.Contains "get_Relay") |> Expect.isTrue (sprintf "the relay's getter read it: %A" readers)
+        (verdictFor app tracker |> held).Reader |> Expect.stringContains "and kept it, so the value is held" "get_Relay")
 
     testCase "WHY — exact-every-read keeps the getter's watch on past startup, and names a reflective caller at its call site" <| fun _ ->
       let app, tracker, _ = started ReflectionReadMode.ExactEveryRead quiet
       app.ReadAndKeep.Invoke app.Greeting
-      let site = verdictFor app tracker |> held
-      site.Reader |> Expect.stringContains "names the caller" "Callers.ReadAndKeep"
-      site.Where |> Expect.notEqual "at its reflection call" SiteLocation.NotInItsCode
+      orFailClosed app tracker (fun () ->
+        let site = verdictFor app tracker |> held
+        site.Reader |> Expect.stringContains "names the caller" "Callers.ReadAndKeep"
+        site.Where |> Expect.notEqual "at its reflection call" SiteLocation.NotInItsCode)
 
     testCase "WHY — a read of the backing field through FieldInfo.GetValue is a reflective read too" <| fun _ ->
       let app, tracker, _ = started ReflectionReadMode.MarkOnReflect quiet
       app.FieldAndDrop.Invoke app.GreetingField
-      verdictFor app tracker |> held |> ignore
+      orFailClosed app tracker (fun () -> verdictFor app tracker |> held |> ignore)
 
     testCase "WHY — a delegate made from the getter can run anywhere, so making one holds the value in every mode" <| fun _ ->
       for mode in ReflectionReadMode.all do
         let app, tracker, _ = started mode quiet
         app.Greeting.GetGetMethod().CreateDelegate(typeof<Func<string>>) |> ignore
-        (verdictFor app tracker |> held).Fate
-        |> Expect.equal (sprintf "%A: a delegate" mode) (ReadFate.Escaped(Escape.Untraced "its getter was turned into a delegate through reflection, and a delegate can run anywhere"))
+        orFailClosed app tracker (fun () ->
+          (verdictFor app tracker |> held).Fate
+          |> Expect.equal (sprintf "%A: a delegate" mode) (ReadFate.Escaped(Escape.Untraced "its getter was turned into a delegate through reflection, and a delegate can run anywhere")))
 
     testCase "WHY — switching modes takes effect on the next read, with no restart" <| fun _ ->
       let app, tracker, _ = started ReflectionReadMode.MarkOnReflect quiet
       tracker.SetMode ReflectionReadMode.ProbeCallers |> _.Mode |> Expect.equal "switched" ReflectionReadMode.ProbeCallers
       app.ReadAndDrop.Invoke app.Greeting
-      verdictFor app tracker |> Expect.equal "read the probe-callers way: thrown away, so patchable" ValueVerdict.SafeToPatch
+      orFailClosed app tracker (fun () ->
+        verdictFor app tracker |> Expect.equal "read the probe-callers way: thrown away, so patchable" ValueVerdict.SafeToPatch)
 
     testCase "WHY — switching to exact-every-read after startup puts the getter watch back, and switching off takes it off again" <| fun _ ->
       let app, tracker, _ = started ReflectionReadMode.ProbeCallers quiet
       tracker.SetMode ReflectionReadMode.ExactEveryRead |> ignore
       app.ReadAndKeep.Invoke app.Greeting
-      (verdictFor app tracker |> held).Reader |> Expect.stringContains "seen through the getter's watch" "Callers.ReadAndKeep"
-      tracker.SetMode ReflectionReadMode.MarkOnReflect |> ignore
-      tracker.ReflectionReads.Mode |> Expect.equal "and back" ReflectionReadMode.MarkOnReflect
+      orFailClosed app tracker (fun () ->
+        (verdictFor app tracker |> held).Reader |> Expect.stringContains "seen through the getter's watch" "Callers.ReadAndKeep"
+        tracker.SetMode ReflectionReadMode.MarkOnReflect |> ignore
+        tracker.ReflectionReads.Mode |> Expect.equal "and back" ReflectionReadMode.MarkOnReflect)
 
     testCase "WHY — a hot reflective loop raises one notice naming the value, the caller and the rate, and picking a mode answers it" <| fun _ ->
       let app, tracker, clock = started ReflectionReadMode.MarkOnReflect { Count = 5; Within = TimeSpan.FromSeconds 1.0 }
@@ -265,7 +297,20 @@ let reflectionReadTrackingTests =
         app.ReadAndDrop.Invoke app.Greeting
       tracker.ReflectionReads.Notices |> Expect.isEmpty "never hot"
 
-    testCase "WHY — the reflection entry watch is on, so the getters don't pay for startup's watch after the window" <| fun _ ->
-      let _, tracker, _ = started ReflectionReadMode.ProbeCallers quiet
-      tracker.ReflectionReads.Watch |> Expect.equal "watching the entry points" ReflectionWatchStatus.Watching
+    testCase "WHY — a watch that stops firing (the runtime recompiled what it was patched onto) is caught at the next checkpoint, every value fails closed, and the watch goes back on" <| fun _ ->
+      let app, tracker, _ = started ReflectionReadMode.ProbeCallers quiet
+      // Knock the prefix off, which is what a recompile does to it.
+      let entry = invokeEntryPoint ()
+      HarmonyLib.Harmony("sagefs.valuereads").Unpatch(entry :> MethodBase, HarmonyLib.HarmonyPatchType.Prefix, "sagefs.valuereads")
+      app.ReadAndKeep.Invoke app.Greeting
+      match verdictFor app tracker with
+      | ValueVerdict.CannotTell why -> why |> Expect.stringContains "says the watch lapsed" "stopped seeing reads"
+      | other -> failtestf "a read the watch may have missed must never look patchable, got %A" other
+      match tracker.ReflectionReads.Watch with
+      | ReflectionWatchStatus.Lapsed _ -> ()
+      | other -> failtestf "the report should say the watch lapsed, got %A" other
+      // A tracker started after the lapse is watched again.
+      let app2, tracker2, _ = started ReflectionReadMode.ProbeCallers quiet
+      app2.ReadAndKeep.Invoke app2.Greeting
+      orFailClosed app2 tracker2 (fun () -> (verdictFor app2 tracker2 |> held).Reader |> Expect.stringContains "seen again" "Callers.ReadAndKeep")
   ]

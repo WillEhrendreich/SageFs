@@ -854,3 +854,41 @@ module ReflectionNotices =
       (ReflectionReadMode.name notice.Mode)
       (ReflectionReadMode.cost notice.Mode)
       choices
+
+/// What a session starts its reflection watch with. Travels to the isolated
+/// host inside the agent's init.
+type ReflectionReadSettings =
+  { Mode: ReflectionReadMode
+    HotLoop: HotLoopThreshold }
+
+module ReflectionReadSettings =
+  let standard = { Mode = ReflectionReadMode.standard; HotLoop = HotLoopThreshold.standard }
+
+/// Whether the reflection entry points carry SageFs's watch.
+[<RequireQualifiedAccess>]
+type ReflectionWatchStatus =
+  | Watching
+  /// Harmony couldn't put the watch on. The getters keep their own watch for
+  /// the app's life instead (exact-every-read), whatever the mode says.
+  | NotWatching of why: string
+  /// The watch stopped seeing reads for a while (the runtime recompiled a
+  /// method it was patched onto). A read in that gap can't be ruled out, so
+  /// every value this session tracks restarts on its next edit, until the app
+  /// restarts. The getters carry the watch from here on.
+  | Lapsed of why: string
+
+/// Where one value's question stands.
+type ValueNotice =
+  { Value: string
+    State: NoticeState }
+
+/// A session's reflection reads, for the dashboard and MCP.
+type ReflectionReadsReport =
+  { Mode: ReflectionReadMode
+    Watch: ReflectionWatchStatus
+    /// Only values that have been asked about, oldest first.
+    Notices: ValueNotice list
+    /// How many reflective reads of a tracked value walked the stack.
+    Walks: int64
+    /// How many were named by a rewired caller's slot instead.
+    SiteHits: int64 }

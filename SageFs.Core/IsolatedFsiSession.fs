@@ -93,7 +93,7 @@ let start
               Dotnet = dotnet
               FsiArgs = fsiArgs
               WorkingDir = workingDir
-              Environment = RuntimeCompat.rollForwardEnv choice
+              Environment = RuntimeCompat.rollForwardEnv choice @ Middleware.ValueReadTracking.processEnvironment agent.ValueReads
               OnOutput =
                 fun stream text ->
                   match stream with
