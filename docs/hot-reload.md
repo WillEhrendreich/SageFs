@@ -77,6 +77,47 @@ and compares types, it never calls it), so `= 1` to `= "one"` gets caught
 without a `: int` anywhere. If that check can't get an answer, it's a restart.
 Nothing gets kept on a guess.
 
+### Values
+
+A plain `let` value you redefine (`let greeting = "hello"` to `"howdy"`) gets
+its new value, as long as nothing in the running app kept a copy of the old
+one. Re-pointing the value's getter is the easy part. The hard part is knowing
+nobody copied the old value, because if something did, "Patched" is a lie.
+
+So the running app tells me. When the session starts, before any of your code
+runs, SageFs reads the IL of every method in your project that reads a module
+value and works out what each read does with it: throws it away (`pop`, or a
+local nothing reads), or lets it go somewhere (a field, a closure, an argument,
+a return). Every method whose read goes somewhere gets a one-shot probe that
+records the first time it runs and then comes off. While the app starts, every
+getter also records who called it, which catches reads that don't show up in
+anyone's IL (reflection). On a save, a value is patched only if every read that
+has actually happened threw it away. After the patch it asks again, so a read
+that raced the patch still counts.
+
+| You redefine a public `let` value, and... | What happens | Pinned by |
+|---|---|---|
+| startup only computed it into a local it never used, and the function that returns it hasn't run yet | patched. The getter now returns the new value, the save says Patched, and the file's live state is left alone | rule 2, `greeting` (real app, net10 + net11) |
+| a `lazy` reads it, and nothing has forced the lazy yet | patched. The first request forces the lazy, and it reads the new value | rule 2, unforced lazy (real app, net10 + net11) |
+| startup copied it into a closure (`let atStartup = banner in fun () -> atStartup`) | restart needed, and the reason says who kept it: `the running app kept a copy of 'banner', and a patch can't reach a copy: <StartupCode$StateFixture>.$StateFixture.State..cctor (IL_0103) put it in a new StateFixture.State+handlers@88-10, while the app started`. The app still serves the old value until you restart, and the page isn't refreshed | rule 2 guard, `banner` (real app, net10 + net11) |
+| a `lazy` read it after startup (a request forced it) | restart needed, naming the lazy's thunk. The Lazy cached what it read, and no patch reaches that | rule 2, forced lazy (real app, net10 + net11) |
+| any code that hands it on (returns it, passes it along, stores it) has already run | restart needed. SageFs can't tell whether whoever got it kept it, so it doesn't guess | `ValueReadsTests`, and every interleaving in `ValueReadSimTests` (DST) |
+| it isn't public, its annotation changed, or its assembly was built with optimizations | restart needed | planner: `ReloadPlanningTests`; evidence: `ValueReadsTests` |
+
+That fourth row is where this falls short in practice, and it's worth saying
+plainly: a page handler that renders `greeting` hands it on, so once you've
+loaded that page, a save of `greeting` is a restart. Where rule 2 pays off is a
+value nothing has used yet, or one that's only read and thrown away.
+
+`ValueReadSimTests` is the deterministic simulation behind this. It runs the
+real classifier, the real ledger and the real save check through 4000 seeded
+interleavings of startup reads, requests, lazies forced late, the startup
+window closing, probes coming off and saves landing anywhere (during startup
+too), and checks that a Patched never lands on top of a copy of the old value.
+Four twins put the naive rules back (ignore reads after startup, treat a stored
+value like a dead local, check once and patch, record the caller after the read)
+and it catches every one.
+
 ### Restarts
 
 Anything that takes effect at **startup** can't be patched into a process
@@ -86,7 +127,7 @@ isn't the one running your app, tells you a restart is needed):
 | Shape | Why not | Pinned by |
 |---|---|---|
 | a value computed once at startup and closed over, like `let getHome : HttpHandler = Response.ofHtml (pageLayout [])` or `let h = let x = compute () in fun () -> x` | it ran at module initialisation and the route captured the result, so nothing is called per request | shape matrix `eager` (real app) |
-| an immutable value that startup copied, like a route that does `let atStartup = banner in fun () -> atStartup` | the route holds the copy, so no patch of `banner` reaches it. It's never reported as patched | rule 2 guard, `banner` (real app, net10 + net11) |
+| an immutable value the running app kept a copy of | see the values table. It's never reported as patched, and the reason names who kept it | rule 2 guard, `banner`, and the forced lazy (real app, net10 + net11) |
 | a `let mutable` whose type changed | see the state table | rule 4 (real app, net10 + net11) |
 | a function that uses a **private function, value or type** in its file | FSI would need that member's code, not just a field, and a patch can't see private members. Private `let mutable`s are fine (see above) | planner: `ReloadPlanningTests` "carried live state" |
 | a changed function or member **signature**, a new/removed declaration, a type whose fields, cases or members were added, removed or re-typed | the compiled assembly's shape no longer matches, and live instances were laid out by the old definition | planner: `ReloadPlanningTests`, `ReloadPlanningDecisionMutationTests` |
@@ -122,9 +163,18 @@ SageFs logs that it's doing so.
 
 I'd rather you hear this from me than find it at 11pm.
 
-- **Redefining an immutable value** (`let greeting = "hello"` to `"howdy"`)
-  still needs a restart, even when nothing captured it. It's reported as a
-  restart, never as a patch. See below for why.
+- **A redefined value restarts once anything that hands it on has run.**
+  Load the page that renders `greeting`, then edit `greeting`, and it's a
+  restart: the handler returned the value to something SageFs can't follow.
+  It never says Patched when it can't prove it, so you lose a restart, not the
+  truth.
+- **Reads through reflection are only seen while the app starts.** A value read
+  by reflection after that (no read of it in anyone's IL) isn't seen at all.
+  Module values read by reflection are rare, but if you do it, restart after
+  editing that value.
+- **Code you eval in the REPL that reads a value usually counts as a copy of it**
+  (an eval that runs code counts as having read it), so a
+  value you've poked at in the REPL restarts on its next edit.
 - **When SageFs isn't the one running your app and a save needs a restart**
   (a signature or type change, say), SageFs re-evaluates the whole file
   instead, and that re-declares every `let mutable` in it. Your live state in
@@ -140,28 +190,21 @@ I'd rather you hear this from me than find it at 11pm.
 In the order I'm doing them. None of them is done until a real-app test proves
 it on both .NET 10 and .NET 11.
 
-Done already: an app started by `.SageFs/init.fsx` `#load`ing your sources
+Done already: a redefined immutable value gets its new value when nothing in
+the running app kept a copy (the values table above). The running app says
+where every read of the value went, so a Patched is never a guess.
+
+Also done: an app started by `.SageFs/init.fsx` `#load`ing your sources
 used to restart on an edit (.NET 10) or get patched on the wrong copy while
 still saying "Patched" (.NET 11). The init script's `#load` skipped the
 hot-reload middleware, so SageFs never learned which copy of a function the
 app was holding. Now it tracks that, patches the copy the app holds, and never
 reports "Patched" when it couldn't find it.
 
-1. **A redefined value gets its new value**, as long as nothing captured it at
-   startup. Patching the value's getter is the easy part. Knowing that nothing
-   copied the old value while the app started is the hard part, and I thought
-   the capture tracking above would answer it. It doesn't. It records which
-   copy of each *function* the app holds, which is what a function patch
-   needs, and says nothing about where a *value* went. The compiled code
-   doesn't settle it either: for `let greeting = "hello"` the getter is just
-   the string, the file's own startup code calls that getter too, and a route
-   reaches `greet` through a function value that anything could have called
-   once at startup and kept the answer. Telling "reads it per request" from
-   "copied it at startup" needs evidence about where copies of the value
-   went, and I don't have a way to get that without guessing. Guessing here
-   means a fake patch, so it stays a restart until I do. The test for it is
-   written and red on purpose (`HotReloadStateOutcomeTests`, rule 2, run with
-   `--all`).
+1. **Handlers that render a value.** A value a handler hands on is a restart
+   once the handler has run (see above). Following the value past the
+   handler, into the response, would let those patch too. That needs to know
+   the response doesn't keep it, and I'd rather prove that than assume it.
 
 It's the same place Flutter, React Fast Refresh and Clojure's `defonce` ended
 up, and I think they got it right. The one thing people complain about in
