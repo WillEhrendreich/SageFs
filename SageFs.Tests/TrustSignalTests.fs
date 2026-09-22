@@ -120,52 +120,151 @@ let ciWiringTests =
       |> Expect.equal "a raw `run $\"dotnet {testDll} ...\"` bypasses the trust ledger and stops the pipeline on red" 0
   ]
 
-/// The repo is PUBLIC and main build runs on this developer machine through a
-/// self-hosted runner. A `pull_request` job is executed from the PR's OWN copy
-/// of the workflow, so a fork PR reaching a self-hosted job would run arbitrary
-/// code in this machine's home directory (tokens, keys, the daemon). The
-/// invariant: every job that targets the self-hosted runner excludes
-/// pull_request, and pull requests run only on GitHub-hosted runners.
+/// The repo is PUBLIC and both the main build and the release publish run on
+/// this developer machine through a self-hosted runner. A `pull_request` job is
+/// executed from the PR's OWN copy of the workflow, so a fork PR reaching a
+/// self-hosted job would run arbitrary code in this machine's home directory
+/// (tokens, keys, the daemon). `workflow_call` is the same hole one step
+/// removed: a PR-triggered workflow can call a reusable one.
+///
+/// The invariant, over EVERY workflow file rather than just main.yml: a job on
+/// the self-hosted runner is either guarded by its own
+/// `github.event_name != 'pull_request'`, or lives in a workflow a pull
+/// request cannot reach at all.
+module private SelfHostedSafety =
+  /// A job key's whole value: its own line plus any deeper-indented
+  /// continuation, so a block scalar (`if: |`) is read in full instead of
+  /// being mistaken for an empty guard.
+  let keyBlock (prefix: string) (body: string list) =
+    match body |> List.tryFindIndex (fun line -> line.StartsWith prefix) with
+    | None -> ""
+    | Some start ->
+      body
+      |> List.skip start
+      |> List.indexed
+      |> List.takeWhile (fun (i, line) -> i = 0 || line.Trim() = "" || line.StartsWith "      ")
+      |> List.map snd
+      |> String.concat "\n"
+
+  /// (job name, runs-on, if) for one workflow's text. Only the job's own keys
+  /// at job-body indentation count: comment text that merely MENTIONS
+  /// "self-hosted" must never decide anything.
+  let jobsIn (text: string) =
+    let lines = text.Replace("\r\n", "\n").Split('\n')
+    match lines |> Array.tryFindIndex (fun l -> l = "jobs:") with
+    | None -> []
+    | Some jobsAt ->
+      let jobKey = Regex("^  ([A-Za-z0-9_-]+):\\s*$")
+      lines[jobsAt + 1 ..]
+      |> Array.fold (fun (acc: (string * string list) list) line ->
+        match jobKey.Match line with
+        | m when m.Success -> (m.Groups[1].Value, []) :: acc
+        | _ ->
+          match acc with
+          | (name, body) :: rest -> (name, line :: body) :: rest
+          | [] -> acc) []
+      |> List.rev
+      |> List.map (fun (name, body) ->
+        let body = List.rev body
+        name, keyBlock "    runs-on:" body, keyBlock "    if:" body)
+
+  /// Whether a pull request can reach this workflow at all: a `pull_request`
+  /// trigger runs the fork's copy of it, and a `workflow_call` one lets a
+  /// PR-triggered workflow call it.
+  let reachableFromPullRequest (text: string) =
+    let lines = text.Replace("\r\n", "\n").Split('\n')
+    let on =
+      match lines |> Array.tryFindIndex (fun l -> l = "jobs:") with
+      | Some jobsAt -> lines[.. jobsAt - 1] |> String.concat "\n"
+      | None -> text
+    Regex.IsMatch(on, @"^\s{2,4}(pull_request|workflow_call):", RegexOptions.Multiline)
+
+  let isSelfHosted (_, runsOn: string, _) = runsOn.Contains "self-hosted"
+
+  /// The jobs that break the invariant, named file/job.
+  let breaches (workflows: (string * string) list) =
+    workflows
+    |> List.collect (fun (file, text) ->
+      match reachableFromPullRequest text with
+      | false -> []
+      | true ->
+        jobsIn text
+        |> List.filter isSelfHosted
+        |> List.filter (fun (_, _, guard) -> not (guard.Contains "github.event_name != 'pull_request'"))
+        |> List.map (fun (name, _, _) -> sprintf "%s/%s" file name))
+
 let selfHostedSafetyTests =
   let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, ".."))
-  let workflow = lazy (File.ReadAllText(Path.Combine(repoRoot, ".github", "workflows", "main.yml")))
 
-  /// (job name, its `runs-on:` line, its `if:` line) for every job under
-  /// `jobs:`. Only the job's own keys at job-body indentation count — comment
-  /// text that merely MENTIONS "self-hosted" must never decide anything.
-  let jobs () =
-    let lines = workflow.Value.Replace("\r\n", "\n").Split('\n')
-    let jobsAt = lines |> Array.findIndex (fun l -> l = "jobs:")
-    let jobKey = Regex("^  ([A-Za-z0-9_-]+):\\s*$")
-    let keyLine (prefix: string) (body: string list) =
-      body |> List.tryFind (fun l -> l.StartsWith prefix) |> Option.defaultValue ""
-    lines[jobsAt + 1 ..]
-    |> Array.fold (fun (acc: (string * string list) list) line ->
-      match jobKey.Match line with
-      | m when m.Success -> (m.Groups[1].Value, []) :: acc
-      | _ ->
-        match acc with
-        | (name, body) :: rest -> (name, line :: body) :: rest
-        | [] -> acc) []
-    |> List.rev
-    |> List.map (fun (name, body) ->
-      let body = List.rev body
-      name, keyLine "    runs-on:" body, keyLine "    if:" body)
+  let workflows =
+    lazy
+      (Directory.GetFiles(Path.Combine(repoRoot, ".github", "workflows"), "*.yml")
+       |> Array.sort
+       |> Array.map (fun path -> Path.GetFileName path, File.ReadAllText path)
+       |> Array.toList)
 
-  let selfHosted (_, runsOn: string, _) = runsOn.Contains "self-hosted"
+  /// A workflow shaped like the real ones, so the twin below breaks the same
+  /// parser the repo check uses.
+  let workflowText (triggers: string) (guard: string) (runsOn: string) =
+    String.concat "\n" [
+      "name: made up"
+      ""
+      "on:"
+      triggers
+      ""
+      "jobs:"
+      "  build:"
+      guard
+      sprintf "    runs-on: %s" runsOn
+      "    steps:"
+      "    - run: echo hi"
+    ]
+
+  let guardLine = "    if: github.event_name != 'pull_request'"
+  let blockGuard = "    if: |\n      github.event_name != 'pull_request' &&\n      github.event.workflow_run.conclusion == 'success'"
 
   testList "Self-hosted runner safety" [
-    testCase "every self-hosted job refuses pull_request events" <| fun _ ->
-      jobs ()
-      |> List.filter selfHosted
-      |> List.filter (fun (_, _, guard) -> not (guard.Contains "github.event_name != 'pull_request'"))
-      |> List.map (fun (name, _, _) -> name)
-      |> Expect.isEmpty "self-hosted jobs reachable from a pull_request (a fork PR would run on this machine)"
+    testCase "no self-hosted job in any workflow is reachable from a pull request" <| fun _ ->
+      SelfHostedSafety.breaches workflows.Value
+      |> Expect.isEmpty "self-hosted jobs a pull_request can reach (a fork PR would run on this machine)"
 
     testCase "some job targets the self-hosted runner, so the rule above is not vacuous" <| fun _ ->
-      jobs ()
-      |> List.exists selfHosted
-      |> Expect.isTrue "main build should run on this machine's self-hosted runner"
+      workflows.Value
+      |> List.collect (snd >> SelfHostedSafety.jobsIn)
+      |> List.exists SelfHostedSafety.isSelfHosted
+      |> Expect.isTrue "the main build should run on this machine's self-hosted runner"
+
+    testCase "every workflow file is read, not just main.yml" <| fun _ ->
+      workflows.Value
+      |> List.map fst
+      |> Expect.contains "publish.yml runs on this machine too, so it has to be checked" "publish.yml"
+
+    // The twins: each one is a workflow that MUST be reported, so a parser
+    // that quietly stops seeing breaches fails here instead of going green.
+    testCase "an unguarded self-hosted job on a pull_request trigger is reported" <| fun _ ->
+      [ "bad.yml", workflowText "  pull_request:" "" "[self-hosted, sagefs-local]" ]
+      |> SelfHostedSafety.breaches
+      |> Expect.equal "a fork PR could run this job on this machine" [ "bad.yml/build" ]
+
+    testCase "an unguarded self-hosted job on a workflow_call trigger is reported" <| fun _ ->
+      [ "bad.yml", workflowText "  workflow_call:" "" "[self-hosted, sagefs-local]" ]
+      |> SelfHostedSafety.breaches
+      |> Expect.equal "a PR-triggered workflow could call this one" [ "bad.yml/build" ]
+
+    testCase "a guard written as a block scalar counts, so the parser reads past `if: |`" <| fun _ ->
+      [ "ok.yml", workflowText "  pull_request:" blockGuard "[self-hosted, sagefs-local]" ]
+      |> SelfHostedSafety.breaches
+      |> Expect.isEmpty "the job excludes pull_request in its multi-line guard"
+
+    testCase "a hosted runner needs no guard" <| fun _ ->
+      [ "ok.yml", workflowText "  pull_request:" "" "ubuntu-latest" ]
+      |> SelfHostedSafety.breaches
+      |> Expect.isEmpty "nothing runs on this machine, so a fork PR is harmless"
+
+    testCase "a comment mentioning self-hosted is not a self-hosted job" <| fun _ ->
+      [ "ok.yml", workflowText "  pull_request:" "    # self-hosted was considered here" "ubuntu-latest" ]
+      |> SelfHostedSafety.breaches
+      |> Expect.isEmpty "only the job's own runs-on decides where it runs"
   ]
 
 [<Tests>]
