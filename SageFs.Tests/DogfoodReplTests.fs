@@ -49,28 +49,38 @@ let private evalIn (proxy: SessionProxy) (rid: string) (code: string) : Result<s
 /// this module): it only fires the first time an `--integration-host` case
 /// actually reads `.Value`. Mirrors `HttpApiIntegrationTests.fs`'s
 /// `sharedDaemon` lazy-plus-`ProcessExit` teardown pattern.
-let private cts = new CancellationTokenSource(240_000)
+///
+/// The setup budget starts when the session is created, not when the module
+/// loads. It used to be a module-level `CancellationTokenSource(240_000)`,
+/// which starts counting at process start: in a full `--integration-host` run
+/// this suite comes up several minutes in, the token had already fired, the
+/// SessionManager mailbox was cancelled before it got a message, and
+/// `PostAndAsyncReply` waited forever. Alone it passed in 28s, so it only ever
+/// hung the whole tier. Every wait below is bounded by the same budget, so a
+/// stuck setup fails the case instead of hanging the run.
+let private setupBudgetMs = 240_000
 
 let private sharedSession =
   lazy (
+    let cts = new CancellationTokenSource()
     let mgr, _ = SageFs.SessionManager.create cts.Token ignore (fun _ _ -> ()) (fun _ _ -> ()) ignore (fun _ _ -> ()) (fun _ _ -> ()) (fun _ _ -> ())
     let created =
       mgr.PostAndAsyncReply(fun reply ->
         SageFs.SessionManager.SessionCommand.CreateSession(
           [ testsProject ], testsDir, true, WorkflowTypes.SessionWorkflow.Interactive, reply))
-      |> Async.RunSynchronously
+      |> fun ask -> Async.RunSynchronously(ask, setupBudgetMs)
     match created with
     | Error err -> Error(sprintf "create failed: %s" (SageFsError.describe err))
     | Ok info ->
       let ready =
         mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.AwaitReady(info.Id, reply))
-        |> Async.RunSynchronously
+        |> fun ask -> Async.RunSynchronously(ask, setupBudgetMs)
       match ready with
       | Error err -> Error(sprintf "the SageFs.Tests session never reached Ready: %s" (SageFsError.describe err))
       | Ok() ->
         let session =
           mgr.PostAndAsyncReply(fun reply -> SageFs.SessionManager.SessionCommand.GetSession(info.Id, reply))
-          |> Async.RunSynchronously
+          |> fun ask -> Async.RunSynchronously(ask, setupBudgetMs)
         match session with
         | None -> Error "session vanished after Ready"
         | Some s -> Ok(mgr, info.Id, s))
