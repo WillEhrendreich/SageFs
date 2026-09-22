@@ -253,7 +253,7 @@ let hotReloadingMiddleware next (request, st: AppState) =
         match Map.tryFind "liveTestRediscover" request.Args with
         | Some v when v = box true -> SageFs.HostAgent.DiscoveryPolicy.Forced
         | _ -> SageFs.HostAgent.DiscoveryPolicy.WhenChanged
-      match st.Session.AfterEval { EvaluatedCode = response.EvaluatedCode; Detours = detours; Discovery = discovery } with
+      match st.Session.AfterEval { EvaluatedCode = response.EvaluatedCode; Detours = detours; Discovery = discovery; IsFileSave = Map.containsKey "hotReload" request.Args } with
       | SageFs.HostAgent.AgentUnavailable reason ->
         Log.warn "[HotReloading] the session's agent is unavailable, so this eval was not reloaded or scanned for tests: %s" reason
         response, st
@@ -308,6 +308,7 @@ let hotReloadingMiddleware next (request, st: AppState) =
               // watcher counts a method the canary already proved unchanged as
               // landed, and reports "Hot reloaded 1 of 1" for a save the
               // running process ignored.
+              .Add("hotReloadReachedRunningProcess", report.DetourReport.ReachedRunningProcess)
               .Add("hotReloadIneffectiveMethods", report.DetourReport.Ineffective)
               .Add("hotReloadRedirectedFromCompiled", report.DetourReport.RedirectedFromCompiled)
               .Add("hotReloadCompiledCandidates", report.DetourReport.CompiledCandidates)

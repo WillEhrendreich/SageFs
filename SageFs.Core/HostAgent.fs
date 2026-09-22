@@ -36,7 +36,14 @@ type DiscoveryPolicy =
 type AfterEval =
   { EvaluatedCode: string
     Detours: DetourPolicy
-    Discovery: DiscoveryPolicy }
+    Discovery: DiscoveryPolicy
+    /// Was this eval a file-watcher-triggered hot-reload save (WorkerMain's
+    /// own re-eval of an edited source file), as opposed to the startup/init
+    /// script or an interactive eval? A save is an ATTEMPT to reach whatever
+    /// the app already holds and must never redefine what "held" means;
+    /// everything else is the kind of eval that builds route tables and
+    /// handler closures, so it updates State.AppHolds.
+    IsFileSave: bool }
 
 /// What the agent found. `UpdatedMethods` are the dotted names of the methods that were redefined.
 /// `DetourReport` is the full picture behind that count: which mutable bindings
@@ -132,7 +139,8 @@ let startState (init: AgentInit) : State =
     LastAssembly = None
     ProjectAssemblies = assemblies
     AssemblyLoadErrors = errors
-    LiveTestInit = LiveTestInit.Pending }
+    LiveTestInit = LiveTestInit.Pending
+    AppHolds = Map.empty }
 
 /// The outcome of one step: the new registry, the methods it redefined, the
 /// full detour report behind that (bindings torn/declined included), and what
@@ -166,7 +174,7 @@ let afterEvalStep (executors: TestExecutor list) (logger: ILogger) (state: State
   let state, detourReport =
     state
     |> getOpenModules request.EvaluatedCode
-    |> handleNewAsmFromRepl logger apply asm
+    |> handleNewAsmFromRepl logger apply request.IsFileSave asm
   let updated = detourReport.Redirected
   let firstScan = state.LiveTestInit = LiveTestInit.Pending && not (List.isEmpty state.ProjectAssemblies)
   let forced =

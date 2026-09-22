@@ -2,6 +2,8 @@ module SageFs.Tests.HotReloadTests
 
 open System
 open System.IO
+open System.Reflection
+open System.Reflection.Emit
 open Expecto
 open SageFs.FileWatcher
 open SageFs.AppState
@@ -697,10 +699,11 @@ let handleNewAsmFromReplGatingTests =
         ProjectAssemblies = []
         AssemblyLoadErrors = []
         LiveTestInit = LiveTestInit.Pending
+        AppHolds = Map.empty
       }
       // Act: call with hotReloadEnabled=false
       let _, report =
-        handleNewAsmFromRepl (Log.asILogger()) false asm emptyState
+        handleNewAsmFromRepl (Log.asILogger()) false false asm emptyState
       // Assert: no methods should be reported as "updated" (no replacement pairs)
       report.Redirected
       |> Flip.Expect.isEmpty
@@ -722,9 +725,10 @@ let handleNewAsmFromReplGatingTests =
         ProjectAssemblies = []
         AssemblyLoadErrors = []
         LiveTestInit = LiveTestInit.Pending
+        AppHolds = Map.empty
       }
       let newState, _ =
-        handleNewAsmFromRepl (Log.asILogger()) false asm emptyState
+        handleNewAsmFromRepl (Log.asILogger()) false false asm emptyState
       newState.Methods.IsEmpty
       |> Flip.Expect.isFalse
         "method merge must still happen when hot-reload is disabled — live testing needs the method registry"
@@ -739,12 +743,99 @@ let handleNewAsmFromReplGatingTests =
         ProjectAssemblies = []
         AssemblyLoadErrors = []
         LiveTestInit = LiveTestInit.Pending
+        AppHolds = Map.empty
       }
       let newState, _ =
-        handleNewAsmFromRepl (Log.asILogger()) false asm emptyState
+        handleNewAsmFromRepl (Log.asILogger()) false false asm emptyState
       newState.LastAssembly
       |> Flip.Expect.isSome
         "LastAssembly must be set so duplicate assembly detection works on next eval"
+    }
+  ]
+
+/// WHY tests: the shared root cause behind BOTH the net11 "false Patched"
+/// bug and the net10 "SignatureChanged" misclassification bug was the SAME
+/// gap — the startup profile's own eval used to bypass handleNewAsmFromRepl
+/// entirely (see AppState.fs's evalFn, before the fix), so a name it defined
+/// via `#load` never entered `st.Methods` or `st.AppHolds`. A later
+/// file-watcher save then had ZERO candidates to pair against for that name
+/// — exactly the precondition `ReloadPlanning.confirmPatchAsOutcome` reads
+/// as "this declaration existed, but nothing reached it": `SignatureChanged`,
+/// even though the edit never touched the signature. Proven live on a
+/// pinned net10.0.12 host (repro-net10-pinned.fsx): before the fix, a
+/// body-only edit reported `RestartRequired`/`SignatureChanged`; after, it
+/// reports `Patched`, matching net11.
+let handleNewAsmFromReplAppHoldsTests =
+  testList "WHY — handleNewAsmFromRepl AppHolds registration closes the net10/net11 shared root cause" [
+
+    let buildGreetingAssembly (asmName: string) : Assembly =
+      let asmBuilder =
+        AssemblyBuilder.DefineDynamicAssembly(AssemblyName(asmName), AssemblyBuilderAccess.Run)
+      let modBuilder = asmBuilder.DefineDynamicModule("MainModule")
+      let typeBuilder =
+        modBuilder.DefineType(
+          "M",
+          TypeAttributes.Public ||| TypeAttributes.Class ||| TypeAttributes.Abstract ||| TypeAttributes.Sealed)
+      let methodBuilder =
+        typeBuilder.DefineMethod(
+          "greeting",
+          MethodAttributes.Public ||| MethodAttributes.Static,
+          typeof<string>,
+          [||])
+      let il = methodBuilder.GetILGenerator()
+      il.Emit(OpCodes.Ldstr, "hello")
+      il.Emit(OpCodes.Ret)
+      typeBuilder.CreateType() |> ignore
+      asmBuilder :> Assembly
+
+    test "WHY — a #load'ed name that was never registered leaves nothing for a later save to pair against (the net10 SignatureChanged precondition)" {
+      let st0: State = {
+        Methods = Map.empty
+        LastOpenModules = []
+        LastAssembly = None
+        ProjectAssemblies = []
+        AssemblyLoadErrors = []
+        LiveTestInit = LiveTestInit.Pending
+        AppHolds = Map.empty
+      }
+      // The #load's own eval is never simulated here — reproduces the
+      // bypassed startup-profile evalFn exactly (AppState.fs, before the fix).
+      let fileSaveAsm = buildGreetingAssembly "sagefs-test-net10-save"
+      let _, report = handleNewAsmFromRepl (Log.asILogger()) true true fileSaveAsm st0
+      report.Redirected
+      |> Flip.Expect.isEmpty
+        "with nothing registered for 'greeting', the file save has zero candidates to pair against — no detour can be attempted, let alone land"
+      report.ReachedRunningProcess
+      |> Flip.Expect.isEmpty "so it must not claim to have reached the running process either"
+    }
+
+    test "WHY — registering the #load's own eval first gives the later save a candidate to pair against, and it lands" {
+      let st0: State = {
+        Methods = Map.empty
+        LastOpenModules = []
+        LastAssembly = None
+        ProjectAssemblies = []
+        AssemblyLoadErrors = []
+        LiveTestInit = LiveTestInit.Pending
+        AppHolds = Map.empty
+      }
+      // The fix: the startup profile's own eval now goes through the same
+      // agent a file-watcher save uses (isFileSave = false), so AppHolds and
+      // Methods both learn about 'greeting' the moment the #load runs.
+      let loadAsm = buildGreetingAssembly "sagefs-test-net10-load"
+      let st1, _ = handleNewAsmFromRepl (Log.asILogger()) true false loadAsm st0
+      st1.AppHolds
+      |> Map.containsKey "greeting"
+      |> Flip.Expect.isTrue "the #load's eval must register AppHolds for a name it defines"
+
+      let fileSaveAsm = buildGreetingAssembly "sagefs-test-net10-save-2"
+      let _, report = handleNewAsmFromRepl (Log.asILogger()) true true fileSaveAsm st1
+      report.Redirected
+      |> Flip.Expect.isNonEmpty
+        "with the #load's copy registered, the file save finds a compatible candidate and redirects it"
+      report.ReachedRunningProcess
+      |> Flip.Expect.isNonEmpty
+        "and the redirect is confirmed to reach the copy the app actually holds, so the outcome can honestly say Patched"
     }
   ]
 
@@ -770,6 +861,7 @@ let allHotReloadTests =
     moduleScoringMaxTests
     endswithPrefilterTests
     handleNewAsmFromReplGatingTests
+    handleNewAsmFromReplAppHoldsTests
   ]
 
 [<Tests>]

@@ -1793,8 +1793,14 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
           // Evaluate startup profile if found
           let startupProfileResult =
             let workingDir = System.Environment.CurrentDirectory
+            // Registers with the file-watcher's own agent so AppHolds learns
+            // what a #load'ed app calls (evalFn used to skip middleware).
             let evalFn code =
               FsiSession.evalOrThrow fsiSession code CancellationToken.None
+              let detours = match hotReload with true -> HostAgent.DetourPolicy.ApplyDetours | false -> HostAgent.DetourPolicy.RegisterOnly
+              fsiSession.AfterEval
+                { EvaluatedCode = code; Detours = detours; Discovery = HostAgent.DiscoveryPolicy.WhenChanged; IsFileSave = false }
+              |> ignore
             let logFn msg = logger.LogInfo msg
             let outcome = StartupProfile.applyIfPresent workingDir evalFn logFn
 

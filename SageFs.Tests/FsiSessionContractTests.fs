@@ -119,7 +119,7 @@ let private expectoPath = typeof<Expecto.TestCode>.Assembly.Location
 let private probeTests = "open Expecto\n[<Tests>]\nlet probeTests = testList \"probe\" [ testCase \"passes\" (fun () -> ()); testCase \"fails\" (fun () -> failwith \"boom\") ]"
 
 let private afterEval (session: IFsiSession) (code: string) (detours: DetourPolicy) (discovery: DiscoveryPolicy) : AfterEvalReport =
-  match session.AfterEval { EvaluatedCode = code; Detours = detours; Discovery = discovery } with
+  match session.AfterEval { EvaluatedCode = code; Detours = detours; Discovery = discovery; IsFileSave = false } with
   | AgentAnswered report -> report
   | AgentUnavailable reason -> failtestf "the agent was unavailable: %s" reason
 

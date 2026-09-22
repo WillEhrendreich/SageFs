@@ -739,6 +739,22 @@ let run (sessionId: string) (port: int) = async {
           | :? (string list) as methods -> Some methods
           | _ -> None)
         |> Option.defaultValue []
+      /// The TRUE evidence, straight off `DetourReport.ReachedRunningProcess`:
+      /// the subset of `reloadedMethodsOf` whose re-pointed OLD entry point is
+      /// the exact copy `HotReloadCore.State.AppHolds` recorded the app as
+      /// holding. This is what `confirmPatchAsOutcome` must be given as its
+      /// reached-set — passing `reloadedMethodsOf response` again here (as if
+      /// every redirect reaches the app) is the exact bug that let a save
+      /// report "Hot reloaded 1 of 1" while the app kept serving the old body
+      /// (see FsiEmitSimTests.fs).
+      let reachedRunningProcessOf (response: EvalResponse) =
+        response.Metadata
+        |> Map.tryFind "hotReloadReachedRunningProcess"
+        |> Option.bind (fun v ->
+          match v with
+          | :? (string list) as methods -> Some methods
+          | _ -> None)
+        |> Option.defaultValue []
       // What HotReloading.fs's middleware forwarded from this eval's
       // DetourReport, straight off the metadata bag it wrote — see
       // `reloadedMethodsOf` above for the same pattern.
@@ -959,35 +975,22 @@ let run (sessionId: string) (port: int) = async {
                   // must not turn a working reload into a reported no-op.
                   let ineffectiveReasons : Features.ReloadOutcome.RestartReason list = []
                   // The evidence a NAME cannot carry: which redirects re-pointed
-                  // an entry point the RUNNING PROCESS calls. Under
+                  // an entry point the RUNNING PROCESS actually calls. Under
                   // `--multiemit-` the single FSI assembly accumulates every
                   // eval, so a same-named older copy is always available to
-                  // pair with — and re-pointing one changes nothing an app
-                  // running from the compiled project assembly will ever call.
-                  // confirmPatchAsOutcome decides with this rather than
-                  // counting any redirect as landed.
-                  // MEASURED, and the reason this is not yet narrowed: which
-                  // copy the running app holds is NOT derivable here.
-                  //
-                  // Two rules were tried against real hosts and both broke a
-                  // working reload. "A compiled entry point was re-pointed"
-                  // fails for a `#load`ed file, whose app holds an FSI copy.
-                  // "...or no compiled copy exists" fails too: a file can have
-                  // BOTH a compiled copy in the project assembly AND be
-                  // `#load`ed, and the app then holds the FSI one anyway. The
-                  // detour layer sees assemblies; it does not see which copy the
-                  // app captured at startup, and assembly kind is not a proxy
-                  // for it.
-                  //
-                  // So the reached-set stays the redirect-set — today's
-                  // behaviour, unchanged — rather than shipping a rule that
-                  // reports good reloads as no-ops. The gap is pinned as proof
-                  // of broken in SageFs.Tests/FsiEmitSimTests.fs, and closing it
-                  // needs the app's captured copy tracked at the point the
-                  // handler table is built, not inferred afterwards.
-                  // `redirectedFromCompiledOf`/`compiledCandidatesOf` carry the
-                  // evidence to whoever does that.
-                  let reachedRunningProcess = reloaded
+                  // pair with, and re-pointing the wrong one changes nothing an
+                  // app running from a `#load`ed or compiled copy will ever
+                  // call. `reachedRunningProcessOf` is the fix: `HotReloadCore`
+                  // now tracks, in `State.AppHolds`, the exact `MethodInfo` the
+                  // app captured the last time a non-file-save eval (the
+                  // startup/init script, or an interactive eval) defined it,
+                  // and reports a name as reached only when the SPECIFIC copy
+                  // that eval redirected is that recorded value, never by
+                  // assembly kind. A name with no `AppHolds` entry (the app has
+                  // not been observed to capture anything under it) is simply
+                  // absent here, so `confirmPatchAsOutcome` cannot count it as
+                  // landed: no evidence means never `Patched`, by construction.
+                  let reachedRunningProcess = reachedRunningProcessOf response
                   let outcome =
                     Features.ReloadPlanning.confirmPatchAsOutcome
                       baseline

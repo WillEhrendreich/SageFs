@@ -35,6 +35,14 @@ type State = {
   ProjectAssemblies: Assembly list
   AssemblyLoadErrors: AssemblyLoadError list
   LiveTestInit: LiveTestInit
+  /// The MethodInfo each name resolved to the last time a NON-file-save eval
+  /// ran (the startup/init script, or an interactive eval) rather than a
+  /// file-watcher-triggered save — i.e. the copy whatever code that eval
+  /// defined or ran is holding, such as a route closure a handler table
+  /// captured. Read at detour time to know whether a redirect reaches the
+  /// copy the app ACTUALLY calls, instead of inferring it from assembly kind
+  /// (see `handleNewAsmFromRepl`).
+  AppHolds: Map<string, MethodInfo>
 }
 
 type Event =
@@ -511,6 +519,21 @@ type BindingOutcome =
 type DetourReport = {
   /// Full names of the older methods whose entry points now jump to new code.
   Redirected: string list
+  /// The TRUE evidence, not a proxy: the subset of `Redirected` whose
+  /// re-pointed OLD entry point is the exact `MethodInfo` `State.AppHolds`
+  /// recorded for that name — the copy the running app is actually known to
+  /// call, tracked at the point the last non-file-save eval (the startup/init
+  /// script, or an interactive eval) defined it. `RedirectedFromCompiled`/
+  /// `CompiledCandidates` below were the old proxy for this ("assembly kind
+  /// stands in for what the app captured") and both broke a working `#load`ed
+  /// reload in practice, because an app can hold an FSI copy even when a
+  /// compiled copy of the same name also exists. This field replaces them as
+  /// the one `confirmPatchAsOutcome` should be given; when a name has no
+  /// `AppHolds` entry at all (the app has not been observed to capture
+  /// anything under that name yet), it is never included here, so a save can
+  /// never be reported as `Patched` without positive evidence — it falls back
+  /// to `RestartRequired`/`NoEffect` by construction.
+  ReachedRunningProcess: string list
   /// Full names of methods Harmony accepted a patch for and whose JIT-compiled
   /// bytes the canary then found UNCHANGED. Deliberately NOT in `Redirected`:
   /// the running process demonstrably still executes the old body, so counting
@@ -543,7 +566,7 @@ module DetourReport =
   /// The report of an eval that touched nothing — no new assembly, or hot
   /// reload disabled. Named so callers never hand-roll the all-empty record.
   let empty : DetourReport =
-    { Redirected = []; Ineffective = []; RedirectedFromCompiled = []; CompiledCandidates = []; Bindings = []; Declined = []; Failures = [] }
+    { Redirected = []; ReachedRunningProcess = []; Ineffective = []; RedirectedFromCompiled = []; CompiledCandidates = []; Bindings = []; Declined = []; Failures = [] }
 
 /// Forces everything a detour will touch to resolve BEFORE any leg is written:
 /// the parameter and return types (which throw `TypeLoadException` for a stale
@@ -607,13 +630,12 @@ let private applyBindingDetour (logger: ILogger) (unit: AccessorPairDetour) : Bi
       detourMethod logger older.MethodInfo newer.MethodInfo)
     |> classifyBindingApplication unit.Binding
 
-let applyDetourPlan (logger: ILogger) (plan: DetourPlan) : DetourReport =
+let applyDetourPlan (logger: ILogger) (appHolds: Map<string, MethodInfo>) (plan: DetourPlan) : DetourReport =
   let functionResults =
     plan.Functions
     |> List.map (fun (older, newer) ->
       logger.LogDebug("Updating method " + older.FullName)
       older, detourMethod logger older.MethodInfo newer.MethodInfo)
-
   // `Ineffective` IS still counted as redirected, and the comment on
   // `DetourApplied.Ineffective` calling the canary "a warning signal, not a
   // verdict" is load-bearing — MEASURED, after trying the opposite.
@@ -739,7 +761,30 @@ let applyDetourPlan (logger: ILogger) (plan: DetourPlan) : DetourReport =
       | BindingOutcome.NeitherLegRedirected(binding, reason)
       | BindingOutcome.Torn(binding, reason) -> Some(sprintf "%s: %s" binding reason))
 
+  // The evidence `confirmPatchAsOutcome` actually needs: of the function
+  // redirects that landed (Redirected/Ineffective/Superseded — a canary
+  // false negative must not un-count a real redirect), the ones whose
+  // OLDER, re-pointed entry point is the EXACT MethodInfo `appHolds` recorded
+  // for that name. `functionResults` (not the flattened name lists above) is
+  // the only place that still has both the per-pair MethodInfo and its own
+  // per-pair outcome, so this reads it directly instead of re-deriving
+  // "landed" from a name that could belong to a different, unrelated pair.
+  let reachedRunningProcess =
+    functionResults
+    |> List.choose (fun (older, applied) ->
+      let landed =
+        match applied with
+        | DetourApplied.Redirected
+        | DetourApplied.Ineffective _
+        | DetourApplied.Superseded _ -> true
+        | DetourApplied.Failed _ -> false
+      match landed, Map.tryFind older.MethodInfo.Name appHolds with
+      | true, Some held when held = older.MethodInfo -> Some older.FullName
+      | _ -> None)
+    |> List.distinct
+
   { Redirected = redirectedFunctions @ redirectedBindings
+    ReachedRunningProcess = reachedRunningProcess
     Ineffective = ineffectiveFunctions
     RedirectedFromCompiled = redirectedFromCompiled
     CompiledCandidates = compiledCandidates
@@ -788,7 +833,7 @@ let private compatibleForDetour (logger: ILogger) (existingMethod: Method) (newM
 /// tell "nothing changed" from "a mutable binding just tore": both look like
 /// an empty/short list. `DetourReport.Bindings` and `.Declined` are how a
 /// torn or orphaned accessor pair reaches anyone past this function.
-let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assembly) (st: State) : State * DetourReport =
+let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (isFileSave: bool) (asm: Assembly) (st: State) : State * DetourReport =
   // Chesterton's fence: the `prev = asm` dedup only applies to NON-dynamic
   // assemblies. In HotReload the FSI session runs with --multiemit- (single
   // assembly mode): EVERY eval lands in the SAME persistent FSI-ASSEMBLY, so
@@ -818,6 +863,9 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
     let mergedMethods =
       newMethodsByName |> Map.fold (fun acc k v -> Map.add k v acc) st.Methods
 
+    let known =
+      Collections.Generic.HashSet<MethodInfo>(st.Methods |> Map.toSeq |> Seq.collect snd |> Seq.map _.MethodInfo)
+
     // Chesterton's fence: replacementPairs computation accesses .ParameterType and
     // .ReturnType on MethodInfo — these trigger TypeLoadException when parameters
     // reference types from older FSI compilation units that were redefined.
@@ -830,22 +878,78 @@ let handleNewAsmFromRepl (logger: ILogger) (hotReloadEnabled: bool) (asm: Assemb
           MutableBindings = []
           Declined = [] }
       | true ->
-        let known =
-          Collections.Generic.HashSet<MethodInfo>(st.Methods |> Map.toSeq |> Seq.collect snd |> Seq.map _.MethodInfo)
+        let existingPairs =
+          planDetours (fun m -> not (known.Contains m.MethodInfo)) (compatibleForDetour logger) newMethods st.Methods
 
-        planDetours (fun m -> not (known.Contains m.MethodInfo)) (compatibleForDetour logger) newMethods st.Methods
+        // The fix for the shipped bug: pair the copy `AppHolds` says the app
+        // ACTUALLY holds against this eval's newest offering for that name,
+        // regardless of whether `st.Methods`'s own snapshot for the name
+        // still carries that held copy as a candidate. `st.Methods` is
+        // rebuilt per eval (the comment above: "the method merge is
+        // idempotent... overwrites"), so a name's older-copy history does not
+        // necessarily survive between evals — but the copy the app is
+        // holding must always get a chance to be re-pointed, or a save can
+        // land everywhere except the one place that matters. Measured against
+        // a real host: without this, `existingPairs` above only ever offers
+        // the ORIGINAL compiled entry point as the "older" side once a
+        // `#load`ed file's app has moved on to an FSI copy, so the app's own
+        // copy is silently never a detour target again.
+        let appHoldsPairs =
+          newMethodsByName
+          |> Map.toList
+          |> List.collect (fun (name, methods) ->
+            match Map.tryFind name st.AppHolds with
+            | None -> []
+            | Some held ->
+              methods
+              |> List.filter (fun m -> not (known.Contains m.MethodInfo) && m.MethodInfo <> held)
+              |> List.choose (fun newest ->
+                let heldMethod = { MethodInfo = held; FullName = newest.FullName }
+                match compatibleForDetour logger heldMethod newest with
+                | true -> Some(heldMethod, newest)
+                | false -> None))
+
+        (existingPairs @ appHoldsPairs)
+        |> List.distinctBy (fun (older, newer) -> older.MethodInfo, newer.MethodInfo)
         |> planDetourUnits (settableBindingsOf st.Methods)
 
     // Apply Harmony detours — already gated by an empty plan when disabled. Only
     // the detours that ACTUALLY landed are reported: a method that threw on the
     // way in used to be listed as reloaded, which made `confirmPatch` confirm a
-    // patch that never reached the running process.
-    let report = applyDetourPlan logger detourPlan
+    // patch that never reached the running process. `st.AppHolds` (the
+    // pre-this-eval value) is what turns "something with this name moved"
+    // into "the copy the app actually calls moved" — see
+    // `DetourReport.ReachedRunningProcess`.
+    let report = applyDetourPlan logger st.AppHolds detourPlan
+
+    // A file-save (`isFileSave`) is an ATTEMPT to reach whatever the app
+    // already holds — it must never redefine what "held" means, or a failed
+    // attempt would silently start passing next time for the wrong reason.
+    // Every other eval (the startup/init script, or an interactive
+    // evaluation) is exactly the kind of code that builds route tables and
+    // handler closures, so whatever it just (re)defined becomes the captured
+    // copy from here on. Only names with a genuinely NEW method this eval are
+    // touched — a name this eval's assembly-wide rescan re-offers unchanged
+    // keeps whatever was already captured, rather than guessing from
+    // re-scanned order.
+    let appHolds =
+      match isFileSave with
+      | true -> st.AppHolds
+      | false ->
+        newMethodsByName
+        |> Map.fold
+          (fun acc name methods ->
+            match methods |> List.filter (fun m -> not (known.Contains m.MethodInfo)) with
+            | [] -> acc
+            | fresh -> Map.add name (List.last fresh).MethodInfo acc)
+          st.AppHolds
 
     { st with
         LastAssembly = Some asm
-        Methods = mergedMethods },
+        Methods = mergedMethods
+        AppHolds = appHolds },
     report
+
 
 let getOpenModules (replCode: string) st =
   let modules =

@@ -150,15 +150,23 @@ module FsiEmitSim =
       |> List.filter (fun d -> redirectedOrigins |> Map.find d.Name |> List.isEmpty |> not)
       |> List.map (fun d -> d.Name)
 
-    // The evidence a NAME cannot carry: of those redirects, the ones whose old
-    // entry point lived in a COMPILED assembly. `HotReloadCore` reads this off
-    // `MethodInfo.DeclaringType.Assembly.IsDynamic`; the model reads it off the
-    // copy's origin, which is the same fact.
+    // The evidence a NAME cannot carry: of those redirects, the ones whose OLD
+    // entry point is the exact copy `AppHolds` says the app is holding. This
+    // is the FIXED design (`HotReloadCore.State.AppHolds`), not a proxy: a
+    // real product that tracks which copy the app captured when its handler
+    // table was built can know this directly, the same way this model does.
+    // The retired proxy read `MethodInfo.DeclaringType.Assembly.IsDynamic`
+    // ("was the old entry point compiled") instead, which is wrong for a
+    // `#load`ed file — the app then holds an FSI copy, and a compiled copy
+    // (if one exists at all) is never what it calls.
     let reachedRunningProcess =
       decls
       |> List.filter (fun d ->
-        redirectedOrigins |> Map.find d.Name |> List.contains Copy.Compiled)
+        match state.AppHolds |> Map.tryFind d.Name with
+        | None -> false
+        | Some held -> redirectedOrigins |> Map.find d.Name |> List.contains held)
       |> List.map (fun d -> d.Name)
+
 
     // GROUND TRUTH, tracked without consulting the decision under test: the app
     // executes new code for a decl iff the copy IT holds was among the
@@ -239,24 +247,13 @@ module FsiEmitSim =
               ClaimedChange = ReloadOutcome.processChanged outcome
               ActualChange = not (Set.isEmpty appChanged) } ]
 
-  /// The REAL decision wired exactly as `WorkerMain` wires it TODAY.
-  ///
-  /// The worker cannot tell which copy the running app holds — measured: a
-  /// `#load`ed file's app holds an FSI copy even when a compiled copy also
-  /// exists, so neither "a compiled entry point was re-pointed" nor "...or no
-  /// compiled copy exists" is a sound proxy; both turned working reloads into
-  /// reported no-ops against a real host. So it passes the redirect-set as the
-  /// reached-set, and this over-claims. That is the gap, pinned.
-  let run (scenario: Scenario) : Observation list =
-    runWith
-      (fun before patched reloaded _ -> confirmPatchAsOutcome before patched reloaded reloaded)
-      scenario
 
-  /// The same REAL decision GIVEN the evidence it now accepts — what the
-  /// product reports once the app's captured copy is recorded where the handler
-  /// table is BUILT rather than inferred at detour time.
-  ///
-  /// Kept beside `run` so the sim proves the designed fix is correct while the
-  /// product still shows the gap: only the evidence is missing, not the logic.
-  let runWithEvidence (scenario: Scenario) : Observation list =
+  /// The REAL decision, wired the way `WorkerMain`/`HotReloadCore` wire it
+  /// now that the fix has landed: `confirmPatchAsOutcome` is given the
+  /// model's own `reachedRunningProcess` (the AppHolds-based evidence
+  /// computed in `step`), not the redirect-set again. `FsiEmitInvariants.
+  /// nameOnlyConfirmTwin` is kept separately as the RETIRED shape (name-only,
+  /// "any redirect counts as reaching the process") so a regression back to
+  /// it is still something a test can catch — see FsiEmitSimTests.fs.
+  let run (scenario: Scenario) : Observation list =
     runWith confirmPatchAsOutcome scenario

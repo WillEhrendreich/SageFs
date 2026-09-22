@@ -14,7 +14,7 @@ let private nothingLoaded : AssemblySources = { Dynamic = noAssemblies; Loaded =
 let private emptyInit : AgentInit = { Projects = []; ResolveFrom = [] }
 
 let private request (detours: DetourPolicy) (discovery: DiscoveryPolicy) : AfterEval =
-  { EvaluatedCode = "let x = 1"; Detours = detours; Discovery = discovery }
+  { EvaluatedCode = "let x = 1"; Detours = detours; Discovery = discovery; IsFileSave = false }
 
 let private missingProject =
   Path.Combine(Path.GetTempPath(), "sagefs-host-agent-no-such-dir", "Missing.dll")
@@ -56,7 +56,7 @@ let tests =
       <| fun (code: string) ->
         let agent = Agent(emptyInit, nothingLoaded)
         let ask () =
-          agent.AfterEval { EvaluatedCode = code; Detours = DetourPolicy.RegisterOnly; Discovery = DiscoveryPolicy.WhenChanged }
+          agent.AfterEval { EvaluatedCode = code; Detours = DetourPolicy.RegisterOnly; Discovery = DiscoveryPolicy.WhenChanged; IsFileSave = false }
         ask () = ask ()
     ]
 
