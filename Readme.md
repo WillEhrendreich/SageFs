@@ -392,7 +392,7 @@ SageFs delivers that loop with a REPL-centered architecture, and goes past it: a
 
 | | VS Enterprise Live Testing | **SageFs** |
 |:---|:---|:---|
-| **Speed** | 5–30 sec (MSBuild rebuild) | **No MSBuild rebuild** — affected tests re-run through the warm FSI session. Sub-second in practice; unmeasured, see the pipeline note below |
+| **Speed** | 5–30 sec (MSBuild rebuild) | **No MSBuild rebuild** — affected tests re-run through the warm FSI session. It feels fast, but nothing measures it yet, see the pipeline note below |
 | **Broken code** | ✗ Must compile first | **✓ Tree-sitter works on incomplete code** |
 | **Editors** | Visual Studio only | **VS Code · Neovim · Web dashboard · MCP clients** |
 | **Frameworks** | MSTest · xUnit · NUnit | **+ Expecto · TUnit · xUnit v3** · extensible |
