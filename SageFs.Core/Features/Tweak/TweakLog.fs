@@ -56,6 +56,58 @@ module TweakLogLimits =
   /// one on the spot.
   let maxTotalBytesAcrossSessions = 64L * 1024L * 1024L
 
+// ── fingerprints: is a log/snapshot even readable by THIS build? ──
+
+/// How much a stored fingerprint can be trusted, the same three-way split
+/// Elm's time-travel debugger uses when it imports an old session:
+/// structurally readable and about the same target (`Fine`), structurally
+/// readable but something else has moved (`Risky`, proceed with a
+/// caveat), or not safely decodable at all (`Impossible`, never folded).
+[<RequireQualifiedAccess>]
+type LogGrade =
+  | Fine
+  | Risky
+  | Impossible
+
+/// Stamped on every log segment and every snapshot. `SchemaVersion` names
+/// the BYTE LAYOUT (bump it and old bytes may not even parse safely).
+/// `FoldVersion` names the FOLD SEMANTICS over that layout (bump it when
+/// `foldEvents`'s rules change meaning without the bytes themselves
+/// changing shape). `TargetHash` names the file/binding this log is
+/// actually about, so a log surviving from a DIFFERENT version of the
+/// target file is caught even when the bytes and the fold both still
+/// agree perfectly with each other.
+type Fingerprint =
+  { SchemaVersion: int
+    FoldVersion: int
+    TargetHash: string }
+
+[<RequireQualifiedAccess>]
+module Fingerprint =
+  /// Bump on a byte-layout change to `TweakLogFormat`.
+  let schemaVersion = 1
+
+  /// Bump on a change to what `foldEvents`'s rules MEAN, even if no byte
+  /// layout changed (the UserEditObserved dirty-preserving rule earlier in
+  /// this file is exactly the kind of change that would deserve a bump).
+  let foldVersion = 1
+
+  let current (targetHash: string) : Fingerprint =
+    { SchemaVersion = schemaVersion; FoldVersion = foldVersion; TargetHash = targetHash }
+
+  /// How much a stored fingerprint can be trusted against what THIS build
+  /// understands, in the order Elm's debugger import check uses: the byte
+  /// layout is either readable or it isn't (there is no partial credit for
+  /// schema), and everything else is a "proceed with the caveat shown"
+  /// grade rather than an outright refusal.
+  let grade (current: Fingerprint) (stored: Fingerprint) : LogGrade =
+    match stored.SchemaVersion = current.SchemaVersion with
+    | false -> LogGrade.Impossible
+    | true ->
+      match stored.FoldVersion = current.FoldVersion && stored.TargetHash = current.TargetHash with
+      | true -> LogGrade.Fine
+      | false -> LogGrade.Risky
+
 // ── the events ──
 
 [<RequireQualifiedAccess>]
@@ -385,8 +437,15 @@ module UndoCursor =
 
 // ── compaction: bounded growth ──
 
+/// Versioned like an event, not a disposable cache: once compaction has
+/// run, `Snapshot` PLUS whatever tail follows it IS the truth for
+/// everything before the tail, not merely a speed-up over replaying from
+/// scratch. `Fingerprint` is what makes it upcastable, a caller can grade a
+/// persisted snapshot the exact same way it grades a log segment before
+/// trusting it.
 type Snapshot =
   { UpToEventId: int
+    Fingerprint: Fingerprint
     Projection: Projection
     /// Origin (address, textBefore) for each compacted `TweakApplied`/
     /// `TweakSaved`, so a `RolledBack` in the tail that targets a
@@ -395,7 +454,11 @@ type Snapshot =
 
 [<RequireQualifiedAccess>]
 module Snapshot =
-  let empty = { UpToEventId = 0; Projection = Projection.empty; Origins = Map.empty }
+  /// The starting snapshot before any compaction has happened. Its
+  /// fingerprint is never graded (nothing has decoded it from bytes), so
+  /// an empty target hash is a safe placeholder, not a real claim about
+  /// any file.
+  let empty = { UpToEventId = 0; Fingerprint = Fingerprint.current ""; Projection = Projection.empty; Origins = Map.empty }
 
 /// The projection from a snapshot plus whatever tail comes after it, must
 /// equal `project` over the full, uncompacted stream for every address the
@@ -500,7 +563,7 @@ let compact
       |> List.choose (fun e -> originOf e.Event |> Option.map (fun o -> e.Id, o))
       |> List.fold (fun m (id, o) -> Map.add id o m) snapshot.Origins
     let newUpTo = compactedAway |> List.last |> _.Id
-    { UpToEventId = newUpTo; Projection = newProjection; Origins = newOrigins }, tail
+    { UpToEventId = newUpTo; Fingerprint = snapshot.Fingerprint; Projection = newProjection; Origins = newOrigins }, tail
 
 let shouldCompact (policy: RetentionPolicy) (encodedBytes: int64) (eventCount: int) : bool =
   eventCount > policy.MaxEvents || encodedBytes > policy.MaxBytes
@@ -767,3 +830,52 @@ module TweakLogFormat =
             | Some e -> loop (offset + recordLen) (e :: acc)
             | None -> List.rev acc, true
     loop 0 []
+
+  // ── segments: a fingerprint header in front of the event stream ──
+
+  let private writeFingerprint (bw: BinaryWriter) (fp: Fingerprint) =
+    BinaryPrimitives.writeU32 bw (uint32 fp.SchemaVersion)
+    BinaryPrimitives.writeU32 bw (uint32 fp.FoldVersion)
+    BinaryPrimitives.writeLpString bw fp.TargetHash
+
+  let private readFingerprint (br: BinaryReader) : Fingerprint =
+    { SchemaVersion = int (br.ReadUInt32())
+      FoldVersion = int (br.ReadUInt32())
+      TargetHash = BinaryPrimitives.readLpString br }
+
+  /// A fingerprint header, then the event stream, exactly what a real
+  /// `.SageFs/tweaks/<session>.events` file holds on disk.
+  let encodeSegment (fingerprint: Fingerprint) (events: LoggedEvent list) : byte[] =
+    use ms = new MemoryStream()
+    use bw = new BinaryWriter(ms)
+    writeFingerprint bw fingerprint
+    bw.Flush()
+    let header = ms.ToArray()
+    Array.append header (encodeStream events)
+
+  type DecodedSegment =
+    { Grade: LogGrade
+      Fingerprint: Fingerprint
+      Events: LoggedEvent list
+      TornTail: bool }
+
+  /// Read the fingerprint header first and grade it against `current`
+  /// before touching a single event byte. An `Impossible` grade is NEVER
+  /// folded: the header still decodes (so the grade itself is always
+  /// knowable, even for a totally foreign schema), but `Events` comes back
+  /// empty rather than risking a decode of bytes this build doesn't
+  /// understand the layout of.
+  let decodeSegment (current: Fingerprint) (bytes: byte[]) : Result<DecodedSegment, string> =
+    try
+      use ms = new MemoryStream(bytes)
+      use br = new BinaryReader(ms)
+      let fp = readFingerprint br
+      let grade = Fingerprint.grade current fp
+      match grade with
+      | LogGrade.Impossible -> Ok { Grade = grade; Fingerprint = fp; Events = []; TornTail = false }
+      | LogGrade.Fine
+      | LogGrade.Risky ->
+        let headerLength = int ms.Position
+        let events, tornTail = decodeStream bytes.[headerLength ..]
+        Ok { Grade = grade; Fingerprint = fp; Events = events; TornTail = tornTail }
+    with ex -> Error ex.Message
