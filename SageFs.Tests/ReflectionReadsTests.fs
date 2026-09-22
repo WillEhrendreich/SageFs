@@ -139,6 +139,23 @@ let rateTests =
       got = expected
   ]
 
+[<Tests>]
+let tieringChoiceTests =
+  testList "reflection reads: the tiering choice" [
+    testProperty "WHY — every choice round-trips through its name, and nothing outside the closed set parses" <| fun (keepTiering: bool) ->
+      let choice = if keepTiering then TieringChoice.KeepTiering else TieringChoice.TieringOffWhileWatching
+      match TieringChoice.parse (TieringChoice.name choice) with
+      | Result.Ok back -> back = choice
+      | Result.Error e -> failtestf "%A should parse back: %A" choice e
+
+    testCase "WHY — a name outside the closed set is refused, and it names what would have worked" <| fun _ ->
+      match TieringChoice.parse "off" with
+      | Result.Ok choice -> failtestf "'off' isn't a choice, got %A" choice
+      | Result.Error unknown ->
+        unknown.Known |> Expect.equal "the real choices" (TieringChoice.all |> List.map TieringChoice.name)
+        TieringChoice.describeUnknown unknown |> Expect.stringContains "names them" "keep-tiering"
+  ]
+
 let private notice mode =
   { Value = value; Caller = "App.Log.tick"; ReadsPerSecond = 12000; Mode = mode }
 

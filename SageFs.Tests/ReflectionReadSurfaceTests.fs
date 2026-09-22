@@ -47,6 +47,7 @@ let configTests =
       let settings = SessionAgent.reflectionSettingsAt { GlobalDir = dir; Repo = NoRepoCheckout }
       settings.Mode |> Expect.equal "probe-callers" ReflectionReadMode.standard
       settings.HotLoop |> Expect.equal "the named hot-loop threshold" HotLoopThreshold.standard
+      settings.Tiering |> Expect.equal "tiering off, so the watch can't lapse" TieringChoice.TieringOffWhileWatching
 
     testCase "WHY — a repo can pick its mode, and a new session starts in it" <| fun _ ->
       let root = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-reflect-%s" (Guid.NewGuid().ToString "N"))
@@ -57,6 +58,51 @@ let configTests =
       | Result.Ok _ -> ()
       | Result.Error e -> failtestf "the edit should persist: %A" e
       (SessionAgent.reflectionSettingsAt paths).Mode |> Expect.equal "the repo's mode" ReflectionReadMode.ExactEveryRead
+
+    testCase "WHY — the tiering choice is a setting whose values are exactly the choices' names" <| fun _ ->
+      let d = SessionAgent.tieredCompilationSetting
+      for choice in TieringChoice.all do
+        match d.Parse(TieringChoice.name choice) with
+        | Result.Ok v -> d.Render v |> Expect.equal "renders back to the name" (TieringChoice.name choice)
+        | Result.Error e -> failtestf "%A should parse: %A" choice e
+      match d.Parse "sometimes" with
+      | Result.Ok v -> failtestf "'sometimes' isn't a choice, got %A" v
+      | Result.Error _ -> ()
+
+    testCase "WHY — a bad persisted tiering value falls back to tiering-off-while-watching, not a session that won't start" <| fun _ ->
+      let root = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-reflect-%s" (Guid.NewGuid().ToString "N"))
+      let globalDir = IO.Path.Combine(root, "global")
+      IO.Directory.CreateDirectory globalDir |> ignore
+      let paths = { GlobalDir = globalDir; Repo = RepoRootAt root }
+      SettingsStore.setKey (SettingsStore.repoPath root) SessionAgent.tieredCompilationSetting.Key "sometimes" |> ignore
+      (SessionAgent.reflectionSettingsAt paths).Tiering |> Expect.equal "falls back to the safe default" TieringChoice.TieringOffWhileWatching
+
+    testCase "WHY — a repo can choose to keep tiering on, and a new session starts with it kept on" <| fun _ ->
+      let root = IO.Path.Combine(IO.Path.GetTempPath(), sprintf "sagefs-reflect-%s" (Guid.NewGuid().ToString "N"))
+      let globalDir = IO.Path.Combine(root, "global")
+      IO.Directory.CreateDirectory globalDir |> ignore
+      let paths = { GlobalDir = globalDir; Repo = RepoRootAt root }
+      match SettingsCatalog.edit paths LRepo (TieringChoice.name TieringChoice.KeepTiering) SessionAgent.tieredCompilationSetting with
+      | Result.Ok _ -> ()
+      | Result.Error e -> failtestf "the edit should persist: %A" e
+      (SessionAgent.reflectionSettingsAt paths).Tiering |> Expect.equal "the repo's choice" TieringChoice.KeepTiering
+  ]
+
+[<Tests>]
+let tieringEnvironmentTests =
+  testList "reflection reads: the process environment" [
+    testCase "WHY — no watch means no env at all" <| fun _ ->
+      SageFs.Middleware.ValueReadTracking.processEnvironment SageFs.Middleware.ValueReadTracking.ValueReadWatch.IgnoreValueReads
+      |> Expect.isEmpty "nothing to set when nothing is watched"
+
+    testCase "WHY — every (mode, tiering choice) combination sets exactly what the choice says, uniformly across modes" <| fun _ ->
+      for mode in ReflectionReadMode.all do
+        let watchWith tiering =
+          SageFs.Middleware.ValueReadTracking.ValueReadWatch.WatchValueReads { Mode = mode; HotLoop = HotLoopThreshold.standard; Tiering = tiering }
+        SageFs.Middleware.ValueReadTracking.processEnvironment (watchWith TieringChoice.TieringOffWhileWatching)
+        |> Expect.equal (sprintf "%A: tiering-off-while-watching turns tiering off" mode) [ "DOTNET_TieredCompilation", "0" ]
+        SageFs.Middleware.ValueReadTracking.processEnvironment (watchWith TieringChoice.KeepTiering)
+        |> Expect.isEmpty (sprintf "%A: keep-tiering sets nothing, so the runtime's default (on) stands" mode)
   ]
 
 [<Tests>]
