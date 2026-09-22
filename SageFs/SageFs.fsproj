@@ -112,6 +112,7 @@
         <Compile Include="JupyterDaemonBridge.fs" />
         <Compile Include="EnvCheck.fs" />
         <Compile Include="CohortPlay.fs" />
+        <Compile Include="McpStdioBridge.fs" />
         <Compile Include="Program.fs" />
         <None Include="..\Readme.md">
           <Pack>true</Pack>

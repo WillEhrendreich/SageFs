@@ -91,6 +91,7 @@ type CliCommand =
   | Daemon of args: string array
   | Jupyter of connectionFile: string
   | Play of ledgerPath: string
+  | Mcp of args: string array
 
 module CliCommand =
   let parse (args: string array) =
@@ -104,6 +105,7 @@ module CliCommand =
     | _ when args.Length > 0 && args.[0] = "sweep" -> Sweep (hasFlag "--kill")
     | _ when args.Length > 0 && args.[0] = "play" && args.Length > 1 -> Play args.[1]
     | _ when args.Length > 0 && args.[0] = "play" -> ShowHelp
+    | _ when args.Length > 0 && args.[0] = "mcp" -> Mcp args
     | _ when args.Length > 0 && args.[0] = "tui" -> DeprecatedClient "tui"
     | _ when args.Length > 0 && args.[0] = "gui" -> DeprecatedClient "gui"
     | _ when hasFlag "--jupyter" ->
@@ -382,10 +384,14 @@ let private fetchSessionCountHttp (info: DaemonInfo) : int option =
 
 [<EntryPoint>]
 let main args =
-  // Wrap Console.Out to normalize \n to \r\n on Windows console.
-  Console.SetOut(new NewlineNormalizingWriter(Console.Out))
+  let command = CliCommand.parse args
+  match command with
+  | Mcp _ -> () // stdout IS the JSON-RPC protocol stream: no CRLF-normalizing wrapper, ever.
+  | _ ->
+    // Wrap Console.Out to normalize \n to \r\n on Windows console.
+    Console.SetOut(new NewlineNormalizingWriter(Console.Out))
 
-  match CliCommand.parse args with
+  match command with
   | ShowHelp ->
     printfn "SageFs - F# Interactive daemon with MCP, hot reloading, and live dashboard"
     printfn ""
@@ -393,6 +399,7 @@ let main args =
     printfn "       SageFs check                    Check environment before first run"
     printfn "       SageFs --supervised [options]   Start with watchdog auto-restart"
     printfn "       SageFs --jupyter <conn.json>    Run as Jupyter kernel"
+    printfn "       SageFs mcp                      Speak MCP over stdio (spawns the daemon if needed)"
     printfn "       SageFs stop                     Stop running daemon"
     printfn "       SageFs status                   Show daemon info"
     printfn "       SageFs sweep [--kill]           Reap daemons whose owner process is gone"
@@ -483,6 +490,11 @@ let main args =
 
   | Sweep kill ->
     sweepCommand kill
+
+  | Mcp mcpArgs ->
+    let mcpPort = parseMcpPort mcpArgs
+    SageFs.Server.McpStdioBridge.runMcpStdio mcpPort
+    |> _.GetAwaiter() |> _.GetResult()
 
   | Play ledgerPath ->
     match CohortPlay.runPlay ledgerPath with
