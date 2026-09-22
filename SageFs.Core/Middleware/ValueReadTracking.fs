@@ -1216,6 +1216,8 @@ type Tracker(settings: ReflectionReadSettings, clock: unit -> int64) =
 
   /// The getter watch after startup (exact-every-read): every read walks.
   let onExactRead (value: string) (walked: Walked) =
+    // The getter watch walked the stack to get here.
+    Threading.Interlocked.Increment &walks |> ignore
     match walked with
     | Walked.Direct caller when knownReader caller value -> file (LedgerEvent.GetterRead(value, Caller.Known(readerIdOf caller)))
     | Walked.Direct caller -> file (LedgerEvent.GetterRead(value, Caller.Unknown(displayName caller)))
