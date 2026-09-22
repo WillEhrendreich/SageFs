@@ -45,7 +45,8 @@ let private mkCtxWithWorkerResponse (workerResponse: WorkerProtocol.WorkerRespon
     EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
     AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
     SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
-    GetAdoptedCore = fun _ -> Task.FromResult(None) }
+    GetAdoptedCore = fun _ -> Task.FromResult(None)
+    GetWarmupProgress = fun _ -> Task.FromResult(None) }
 
   { FrictionStore = None
     DiagnosticsChanged = result.DiagnosticsChanged

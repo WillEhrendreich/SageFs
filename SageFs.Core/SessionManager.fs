@@ -426,10 +426,53 @@ module SessionManager =
         hostCleanup |> Option.iter (fun cleanup -> try cleanup () with _ -> ()))
       Ok { Process = proc; AdoptedCore = launchPlan.AdoptedCore }
 
+  /// Run a blocking action on a dedicated background thread, never a
+  /// thread-pool thread. Returns a Task that completes when the action
+  /// returns, so a caller can `Async.AwaitTask` it exactly like a
+  /// `Task.Run` result — without pinning a pool thread for the action's
+  /// entire lifetime.
+  ///
+  /// WHY: a long-lived blocking `proc.StandardError/Output.ReadLine()` loop
+  /// wrapped in `Task.Run` pins a real thread-pool thread for as long as
+  /// the loop runs — for a live session's stderr/stdout reader, that is the
+  /// session's ENTIRE lifetime. `SessionManager.fs:1126-1145`'s old-worker
+  /// retirement already uses a dedicated thread for exactly this reason
+  /// (its own comment: "under pool saturation / memory pressure a
+  /// pool-queued retirement can be starved indefinitely"); this generalizes
+  /// the same fix to `awaitWorkerPort`'s two readers and
+  /// `SessionBuild.runOnce`'s two readers, which were the ones actually
+  /// observed starving the pool under 5 concurrent session warmups on
+  /// 2026-09-22 (`/health`/`/api/sessions` — lock-free, no I/O — timing out
+  /// for a full minute; Kestrel logging `heartbeat has been running for
+  /// "00:01:00"`). Two pool threads pinned per live session, scaling with
+  /// session count and bounded by nothing, is the actual mechanism behind
+  /// that lockup and very plausibly behind the onboarding trials' "stuck
+  /// for 20 minutes" / "stop_session timed out at 300s" reports too: the
+  /// daemon's own 120s safety-net timers are themselves pool continuations,
+  /// and a starved pool can delay the very watchdogs meant to catch a stuck
+  /// session.
+  let private runOnDedicatedThread (name: string) (action: unit -> unit) : System.Threading.Tasks.Task =
+    let tcs = System.Threading.Tasks.TaskCompletionSource()
+    let thread =
+      System.Threading.Thread(fun () ->
+        try
+          action ()
+          tcs.SetResult()
+        with ex ->
+          tcs.SetException(ex))
+    thread.IsBackground <- true
+    thread.Name <- name
+    thread.Start()
+    tcs.Task
+
   /// Read the worker's stdout until WORKER_PORT is reported, then post
   /// a WorkerReady (or WorkerSpawnFailed) message back to the agent.
   /// Runs completely off the agent loop — never blocks the MailboxProcessor.
-  /// Times out after SageFsConfig.WorkerStartupTimeoutMs if no port is reported.
+  /// Bounded by Timeouts.warmupInactivityLimit (reset on every
+  /// WARMUP_PROGRESS= line — silence, not slowness, is what trips this) and
+  /// Timeouts.warmupAbsoluteMax (the hard ceiling neither progress nor
+  /// silence can argue past). See WarmupSupervision.decidePoll for the pure
+  /// decision this mirrors.
   let awaitWorkerPort
     (sessionId: SessionId)
     (proc: Process)
@@ -439,12 +482,24 @@ module SessionManager =
     Async.Start(async {
       use cts =
         CancellationTokenSource.CreateLinkedTokenSource(ct)
-      cts.CancelAfter(SageFsConfig.WorkerStartupTimeoutMs)
+      // Inactivity-bounded, not flat-bounded: reset on every WARMUP_PROGRESS=
+      // line so a large repo that is genuinely still discovering/compiling
+      // projects gets to keep going, while a process that goes SILENT — the
+      // "20+ minutes, no error, no sign of life" failure three onboarding
+      // trials hit (fcs-trial-a/b/c, 2026-09-22) — is caught within
+      // Timeouts.warmupInactivityLimit of the moment it stopped talking, not
+      // after some flat ceiling that a big-but-healthy warmup could also
+      // trip. absoluteDeadline is the hard ceiling neither progress nor
+      // silence can argue past.
+      let started = DateTime.UtcNow
+      let absoluteDeadline = started + Timeouts.warmupAbsoluteMax
+      let mutable timeoutReason : string option = None
+      cts.CancelAfter(Timeouts.warmupInactivityLimit)
       let linkedCt = cts.Token
       try
         let stderrLines = System.Collections.Concurrent.ConcurrentQueue<string>()
         let stderrTask =
-          System.Threading.Tasks.Task.Run(fun () ->
+          runOnDedicatedThread "sagefs-worker-stderr-reader" (fun () ->
             try
               let mutable line = proc.StandardError.ReadLine()
               while not (isNull line) do
@@ -471,11 +526,20 @@ module SessionManager =
                 | true -> "Worker process exited before reporting port"
                 | false -> sprintf "Worker process exited before reporting port. stderr:\n%s" stderrSummary))
             found <- Some ""
+          | false when DateTime.UtcNow > absoluteDeadline ->
+            // The absolute ceiling tripped exactly as this line arrived —
+            // treat it the same as the OperationCanceledException path below
+            // rather than accepting one more line past the hard bound.
+            timeoutReason <- Some (WarmupSupervision.absoluteTimeoutReason (DateTime.UtcNow - started))
+            found <- Some ""
           | false ->
             match line.StartsWith("WARMUP_PROGRESS=", System.StringComparison.Ordinal) with
             | true ->
               let payload = line.Substring("WARMUP_PROGRESS=".Length)
               inbox.Post(SessionCommand.WorkerWarmupProgress(sessionId, payload))
+              // Progress observed — reset the inactivity clock so a slow-but-
+              // working large-repo discovery isn't killed for being slow.
+              try cts.CancelAfter(Timeouts.warmupInactivityLimit) with :? ObjectDisposedException -> ()
             | false ->
               match line.StartsWith("WORKER_PORT=", System.StringComparison.Ordinal) with
               | true ->
@@ -491,7 +555,7 @@ module SessionManager =
           // #82: keep reading stdout past the port line for a run_app'd app's
           // APP_OUTPUT= lines (to EOF; read errors/EOF swallowed, not a spawn fail).
           let appOutTask =
-            System.Threading.Tasks.Task.Run(fun () ->
+            runOnDedicatedThread "sagefs-worker-stdout-reader" (fun () ->
               try
                 let mutable l = proc.StandardOutput.ReadLine()
                 while not (isNull l) do
@@ -502,11 +566,31 @@ module SessionManager =
               with _ -> ())
           do! stderrTask |> Async.AwaitTask
           do! appOutTask |> Async.AwaitTask
-        | _ ->
+        | Some _ ->
+          // Absolute-deadline branch above: found <- Some "" with a reason
+          // parked in timeoutReason, distinct from "process exited" (which
+          // already posted its own WorkerSpawnFailed before setting found).
+          match timeoutReason with
+          | Some reason ->
+            try proc.Kill(entireProcessTree = true) with ex2 ->
+              Log.warn "[SessionManager] Kill on absolute warmup deadline: %s" ex2.Message
+            try proc.EnableRaisingEvents <- false with _ -> ()
+            try proc.Dispose() with _ -> ()
+            inbox.Post(SessionCommand.WorkerSpawnFailed(sessionId, proc.Id, reason))
+          | None -> ()
+          do! stderrTask |> Async.AwaitTask
+        | None ->
           do! stderrTask |> Async.AwaitTask
       with
       | :? OperationCanceledException when not ct.IsCancellationRequested ->
-        // Linked CTS fired: per-session startup timeout, NOT daemon shutdown.
+        // Linked CTS fired with no line arriving within the inactivity
+        // window: the worker has gone SILENT, not merely slow — a
+        // Progressed observation would have reset this timer (see
+        // WarmupSupervision.decidePoll's Invariant 4). This is the fix for
+        // "warmup on a big repo is unbounded and silent": a healthy big
+        // repo keeps resetting this clock by printing WARMUP_PROGRESS=
+        // lines; a stuck one goes quiet and is caught within
+        // Timeouts.warmupInactivityLimit of going quiet.
         let stderrSummary =
           try
             proc.StandardError.ReadToEnd()
@@ -520,9 +604,8 @@ module SessionManager =
             sessionId,
             proc.Id,
             sprintf
-              "Worker startup timed out after %dms waiting for WORKER_PORT= \
-               (set SAGEFS_WORKER_STARTUP_TIMEOUT_MS to adjust)%s"
-              SageFsConfig.WorkerStartupTimeoutMs
+              "%s (set SAGEFS_WARMUP_INACTIVITY_SECONDS to adjust)%s"
+              (WarmupSupervision.inactivityTimeoutReason Timeouts.warmupInactivityLimit)
               (match String.IsNullOrWhiteSpace stderrSummary with
                | true -> ""
                | false -> sprintf "\nstderr:\n%s" stderrSummary)))
@@ -1150,52 +1233,78 @@ module SessionManager =
                 // Poll worker until it reports Ready, then update snapshot.
                 // Uses while loop with CT check to stop cleanly on daemon shutdown
                 // or when the session terminates before becoming Ready.
-                // Watchdog: faults the session if it hasn't become Ready within the timeout.
+                // Watchdog: faults the session if it hasn't become Ready within
+                // the bound. Bound decision is WarmupSupervision.decidePoll (the
+                // pure core the DST scenarios in SageFs.Simulation exercise) —
+                // this loop only supplies the IO (the GetStatus round-trip) and
+                // classifies each reply as Ready / Faulted / Progressed /
+                // StillWarming / ProbeFailed. A CHANGED `StatusMessage` (e.g.
+                // "Building (FSharp.Compiler.Service)" → "Building (FSharp.Core)")
+                // counts as Progressed and resets the inactivity clock — the same
+                // "silence, not slowness, trips it" doctrine as awaitWorkerPort.
                 Async.Start(async {
                   let mutable done' = false
                   let started = DateTime.UtcNow
-                  let timeout = Timeouts.warmupReadyPollMax
+                  let mutable lastActivityAt = started
+                  let mutable lastStatusMessage : string option = None
+                  let bounds : WarmupSupervision.Bounds =
+                    { Absolute = Timeouts.warmupAbsoluteMax
+                      Inactivity = Timeouts.warmupInactivityLimit }
                   while not done' && not ct.IsCancellationRequested do
                     do! Async.Sleep 1000
-                    let elapsed = DateTime.UtcNow - started
-                    match elapsed > timeout with
-                    | true ->
-                      let reason = sprintf "Session warmup timed out after %.0fs — worker did not reach Ready state. Use hard_reset_fsi_session with rebuild=true to retry." elapsed.TotalSeconds
-                      Log.warn "[SessionManager] %s (session %s)" reason (SessionId.value id)
-                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionLifecycleStatus.Faulted (Some reason)))
-                      onSessionFaulted id reason
-                      done' <- true
-                    | false ->
+                    let now = DateTime.UtcNow
+                    let elapsed = now - started
+                    let sinceLastActivity = now - lastActivityAt
+                    let! observation = async {
                       try
                         let rid = Guid.NewGuid().ToString("N").[..7]
                         let! resp = proxy (WorkerMessage.GetStatus rid)
                         match resp with
                         | WorkerResponse.StatusResult(_, snapshot) ->
                           match snapshot.Status with
-                          | SessionStatus.Ready ->
-                            inbox.Post(SessionCommand.WorkerReportedReady(id, workerPid, snapshot.Projects))
-                            done' <- true
-                          | SessionStatus.Faulted
-                          | SessionStatus.Stopped ->
-                            let reason =
-                              snapshot.StatusMessage
-                              |> Option.defaultValue "The worker failed during warmup. → Check the daemon log, then hard-reset the session with rebuild=true."
-                            inbox.Post(SessionCommand.WorkerReportedFaulted(id, workerPid, reason))
-                            done' <- true
-                          // still warming up — keep polling.
+                          | SessionStatus.Ready -> return WarmupSupervision.PollObservation.Ready snapshot.Projects
+                          | SessionStatus.Faulted | SessionStatus.Stopped ->
+                            return WarmupSupervision.PollObservation.Faulted snapshot.StatusMessage
                           | SessionStatus.Starting
                           | SessionStatus.Evaluating
                           | SessionStatus.Building _
-                          | SessionStatus.Restarting -> ()
+                          | SessionStatus.Restarting ->
+                            // A changed StatusMessage (e.g. which project it's
+                            // building) is treated as forward motion regardless
+                            // of whether it actually changes — capture the new
+                            // baseline unconditionally so the NEXT tick compares
+                            // against what THIS tick just saw.
+                            let changed = snapshot.StatusMessage <> lastStatusMessage
+                            lastStatusMessage <- snapshot.StatusMessage
+                            match changed with
+                            | true -> return WarmupSupervision.PollObservation.Progressed
+                            | false -> return WarmupSupervision.PollObservation.StillWarming
                         // default policy: this poll only cares about a StatusResult
                         // reply to its own GetStatus request; WorkerResponse is an
                         // 18-case wire DU shared by every request/response pair in
                         // the protocol, and any other reply here is simply not what
                         // was asked for, whatever future cases it grows.
-                        | _ -> ()
+                        | _ -> return WarmupSupervision.PollObservation.StillWarming
                       with ex ->
-                          Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)\n%s" (SessionId.value id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
-                          done' <- true  // Transport error — WorkerExited event handles cleanup
+                        Log.warn "[SessionManager] Worker ready poll transport error for %s: %s (%s)\n%s" (SessionId.value id) ex.Message (ex.GetType().Name) (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")
+                        return WarmupSupervision.PollObservation.ProbeFailed ex.Message
+                    }
+                    match observation with
+                    | WarmupSupervision.PollObservation.Progressed -> lastActivityAt <- now
+                    | _ -> ()
+                    match WarmupSupervision.decidePoll bounds elapsed sinceLastActivity observation with
+                    | WarmupSupervision.PollDecision.MarkReady projects ->
+                      inbox.Post(SessionCommand.WorkerReportedReady(id, workerPid, projects))
+                      done' <- true
+                    | WarmupSupervision.PollDecision.MarkFaulted reason ->
+                      inbox.Post(SessionCommand.WorkerReportedFaulted(id, workerPid, reason))
+                      done' <- true
+                    | WarmupSupervision.PollDecision.TimedOut reason ->
+                      Log.warn "[SessionManager] %s (session %s)" reason (SessionId.value id)
+                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionLifecycleStatus.Faulted (Some reason)))
+                      onSessionFaulted id reason
+                      done' <- true
+                    | WarmupSupervision.PollDecision.KeepPolling -> ()
                 }, ct)
                 // Request initial test discovery from the worker
                 Async.Start(async {

@@ -239,7 +239,8 @@ let architectureTests =
             [ SageFsError.isClientError err
               SageFsError.isServerError err
               SageFsError.isGatewayError err
-              SageFsError.isInfraError err ]
+              SageFsError.isInfraError err
+              SageFsError.isOverloadError err ]
             |> List.filter id
           categories
           |> Expect.hasLength
@@ -1037,7 +1038,15 @@ let fileSizeBudgets =
       // creation, fail-fast on failure. A deliberate, reviewed fix, not
       // silent accretion. Ratchet back DOWN when this file is split; never
       // bump to paper over drift.
-      "SageFs/Mcp.fs", 4252
+      // 4252 -> 4337: a one-time bump for the fcs-onboarding-trial fix
+      // (fcs-trial-a/b/c, 2026-09-22): get_fsi_status now surfaces
+      // elapsed/bound/progress for a warming session and reconciles a
+      // Routable transport failure against the registry instead of a bare
+      // string (renderWarmingOrFaulted), and create_session warns before a
+      // large-repo auto-discovery instead of silently hanging. Deliberate,
+      // reviewed fixes, not silent accretion. Ratchet back DOWN when this
+      // file is split; never bump to paper over drift.
+      "SageFs/Mcp.fs", 4337
       // 850 -> 830: ratcheted DOWN (never up) after moving the
       // session-path-containment validator (resolveRealSessionPath/
       // isUncPath/validateSessionCreateRequest) out into its own
@@ -1094,7 +1103,16 @@ let fileSizeBudgets =
       // WorkerAppOutput command + the kept-alive stdout reader) — a deliberate,
       // reviewed feature, not silent accretion. Ratchet back DOWN when
       // SessionManager is split; never bump to paper over drift.
-      "SageFs.Core/SessionManager.fs", 1860 ]
+      // 1860 -> 1885: a one-time bump for the fcs-onboarding-trial fix
+      // (fcs-trial-a/b/c, 2026-09-22): the warmup-ready poll loop now folds
+      // through WarmupSupervision.decidePoll (inactivity + absolute bounds,
+      // replacing a flat elapsed check) and awaitWorkerPort's stderr/stdout
+      // readers moved off the thread pool onto dedicated threads
+      // (runOnDedicatedThread) after a real daemon lockup under 5 concurrent
+      // session warmups. Deliberate, reviewed fixes, not silent accretion.
+      // Ratchet back DOWN when this file is split; never bump to paper over
+      // drift.
+      "SageFs.Core/SessionManager.fs", 1885 ]
   testList "Architecture — file-size budgets (ratchet down, never raise)" [
     for (rel, budget) in budgets ->
       testCase (sprintf "WHY — %s stays within its line budget, so the accretion hub can't silently keep growing" rel) <| fun _ ->

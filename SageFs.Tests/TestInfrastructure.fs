@@ -707,7 +707,8 @@ let mkTestSessionOps (result: ActorResult) (sessionId: SageFs.WorkerProtocol.Ses
     EndAppRun = SageFs.SessionManagementOps.stub.EndAppRun
     AwaitReady = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
     SwitchWorkflow = fun _ _ -> System.Threading.Tasks.Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
-    GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None) }
+    GetAdoptedCore = fun _ -> System.Threading.Tasks.Task.FromResult(None)
+    GetWarmupProgress = fun _ -> System.Threading.Tasks.Task.FromResult(None) }
 
 /// Create a McpContext backed by the global shared actor
 let sharedCtx () =

@@ -137,6 +137,9 @@
         <Compile Include="StreamingProxySim.fs" />
         <Compile Include="StreamingProxyInvariants.fs" />
         <Compile Include="StreamingProxyGenerators.fs" />
+        <Compile Include="WarmupSim.fs" />
+        <Compile Include="WarmupInvariants.fs" />
+        <Compile Include="WarmupGenerators.fs" />
     </ItemGroup>
 
     <ItemGroup>

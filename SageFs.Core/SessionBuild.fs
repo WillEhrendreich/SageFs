@@ -15,6 +15,29 @@ open SageFs.Utils
 /// both restore when a project needs it.
 module SessionBuild =
 
+  /// Run a blocking action on a dedicated background thread, never a
+  /// thread-pool thread — see `SessionManager.fs`'s copy of this helper for
+  /// the full rationale (observed 2026-09-22: `Task.Run`+blocking
+  /// `ReadLine()` loops pinning pool threads for a build's whole duration,
+  /// contributing to a daemon-wide lockup under concurrent sessions).
+  /// `runOnce` below can run `cores/4` builds concurrently
+  /// (`buildConcurrencyLimit`), each holding two of these readers for the
+  /// build's full multi-minute duration on a large repo — worth moving off
+  /// the pool even though it is bounded, not per-session.
+  let private runOnDedicatedThread (name: string) (action: unit -> unit) : System.Threading.Tasks.Task =
+    let tcs = System.Threading.Tasks.TaskCompletionSource()
+    let thread =
+      System.Threading.Thread(fun () ->
+        try
+          action ()
+          tcs.SetResult()
+        with ex ->
+          tcs.SetException(ex))
+    thread.IsBackground <- true
+    thread.Name <- name
+    thread.Start()
+    tcs.Task
+
   /// Run `dotnet build` for the primary project.
   /// Called from the daemon process (worker is already stopped).
   /// Async so we don't block the MailboxProcessor during build.
@@ -179,7 +202,7 @@ module SessionBuild =
               let proc = Process.Start(psi)
               let stderrLines = System.Collections.Generic.List<string>()
               let stderrTask =
-                System.Threading.Tasks.Task.Run(fun () ->
+                runOnDedicatedThread "sagefs-build-stderr-reader" (fun () ->
                   let mutable line = proc.StandardError.ReadLine()
                   while not (isNull line) do
                     stderrLines.Add(line)
@@ -187,7 +210,7 @@ module SessionBuild =
               // dotnet build prints compiler errors on stdout, so both streams are kept.
               let stdoutLines = System.Collections.Generic.List<string>()
               let stdoutTask =
-                System.Threading.Tasks.Task.Run(fun () ->
+                runOnDedicatedThread "sagefs-build-stdout-reader" (fun () ->
                   let mutable line = proc.StandardOutput.ReadLine()
                   while not (isNull line) do
                     stdoutLines.Add(line)

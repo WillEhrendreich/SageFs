@@ -357,6 +357,26 @@ let sweepStaleSessionState
     System.Threading.Volatile.Write(&featureState.contents, SageFs.Features.FeatureHooks.FeaturePushState.empty)
   stale
 
+/// Admission gate for the SessionManager mailbox — mirrors ElmLoop's own
+/// 256-message high-watermark alarm (`ElmLoop.fs:104-131`) for the mailbox
+/// that didn't have an equivalent bound. `MailboxProcessor.CurrentQueueLength`
+/// is the real, already-maintained queue depth — no extra counter needed.
+/// Applied only to CreateSession/RestartSession (the ops that ADD work to an
+/// already-loaded daemon); StopSession is deliberately exempt — refusing a
+/// stop during overload would block the one thing that relieves it, and it
+/// already has its own bounded timeout (`Timeouts.stopSessionMailboxTimeout`).
+/// Checked and refused BEFORE posting, so an overloaded mailbox never grows
+/// its queue further — the refusal itself is O(1) and never touches the
+/// mailbox.
+let private checkMailboxAdmission (sessionManager: MailboxProcessor<SessionManager.SessionCommand>) : Result<unit, SageFsError> =
+  let pending = sessionManager.CurrentQueueLength
+  let capacity = SageFsConfig.SessionManagerQueueCapacity
+  let decision = SageFsError.admissionDecision pending capacity
+  match decision with
+  | Result.Error _ -> Log.warn "[SessionManager] Mailbox admission refused: %d pending >= capacity %d" pending capacity
+  | Result.Ok () -> ()
+  decision
+
 /// Build SessionManagementOps record from mailbox + snapshot reader.
 /// Session lifecycle events are recorded directly in the daemon.sagefm binary
 /// manifest (the sole source of truth for session resume) — there is no
@@ -369,6 +389,9 @@ let createSessionOps
   {
     CreateSession = fun projects workingDir workflow ->
       task {
+        match checkMailboxAdmission sessionManager with
+        | Result.Error busy -> return Result.Error busy
+        | Result.Ok () ->
         let autoOpenNamespaces = DirectoryConfig.autoOpenNamespacesForDirectory workingDir
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
@@ -385,14 +408,30 @@ let createSessionOps
       }
     StopSession = fun sessionId ->
       task {
-        let! result =
-          sessionManager.PostAndAsyncReply(fun reply ->
-            SessionManager.SessionCommand.StopSession(toSessionId sessionId, reply))
-          |> Async.StartAsTask
-        return
-          result
-          |> Result.map (fun () ->
-            sprintf "Session '%s' stopped." sessionId)
+        // Bounded — see Timeouts.stopSessionMailboxTimeout: "a stop always
+        // completes" must be true of stop_session itself, not just of the
+        // mailbox command it sends. A stale/never-answered reply channel
+        // (a future regression, not a known path today) fails loud and
+        // fast here instead of hanging until the MCP client's own external
+        // timeout does.
+        try
+          let! result =
+            sessionManager.PostAndAsyncReply(
+              (fun reply -> SessionManager.SessionCommand.StopSession(toSessionId sessionId, reply)),
+              timeout = int Timeouts.stopSessionMailboxTimeout.TotalMilliseconds)
+            |> Async.StartAsTask
+          return
+            result
+            |> Result.map (fun () ->
+              sprintf "Session '%s' stopped." sessionId)
+        with :? System.TimeoutException ->
+          return
+            Result.Error (
+              SageFsError.SessionStopFailed (
+                sessionId,
+                sprintf
+                  "The session supervisor did not respond within %.0fs. The daemon's session mailbox may be stuck — check the daemon log. (SAGEFS_STOP_SESSION_TIMEOUT_SECONDS to adjust)"
+                  Timeouts.stopSessionMailboxTimeout.TotalSeconds))
       }
     PurgeSession = fun sessionId ->
       task {
@@ -417,6 +456,9 @@ let createSessionOps
       }
     RestartSession = fun sessionId rebuild ->
       task {
+        match checkMailboxAdmission sessionManager with
+        | Result.Error busy -> return Result.Error busy
+        | Result.Ok () ->
         let! result =
           sessionManager.PostAndAsyncReply(fun reply ->
             SessionManager.SessionCommand.RestartSession(sessionId, rebuild, reply))
@@ -444,6 +486,8 @@ let createSessionOps
       task { return SessionManager.QuerySnapshot.allSessions (readSnapshot()) }
     GetAdoptedCore = fun sessionId ->
       task { return (readSnapshot()).AdoptedCore |> Map.tryFind sessionId }
+    GetWarmupProgress = fun sessionId ->
+      task { return (readSnapshot()).WarmupProgress |> Map.tryFind sessionId }
     UpdateSessionStatus = fun sessionId (status: WorkerProtocol.SessionLifecycleStatus) ->
       task {
         sessionManager.Post(

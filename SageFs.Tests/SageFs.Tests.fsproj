@@ -80,6 +80,10 @@
         <Compile Include="MultiAgentCoordinationTests.fs" />
         <Compile Include="AgentActivityTrackerTests.fs" />
         <Compile Include="RestartPolicyTests.fs" />
+        <Compile Include="WarmupSupervisionTests.fs" />
+        <Compile Include="WarmupSimTests.fs" />
+        <Compile Include="SessionManagerAdmissionTests.fs" />
+        <Compile Include="WarmupOutcomeIntegrationTests.fs" />
         <Compile Include="WorkerHealthProbeTests.fs" />
         <Compile Include="ResilientActorTests.fs" />
         <Compile Include="WatchdogTests.fs" />

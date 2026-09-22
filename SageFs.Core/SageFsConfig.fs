@@ -59,10 +59,25 @@ let DefaultDashboardPort = 37750
 // Runtime-derived configuration — evaluated once at module initialisation.
 // ---------------------------------------------------------------------------
 
-/// How long (ms) awaitWorkerPort waits for WORKER_PORT= before declaring startup failure.
-/// Default: 120 seconds — covers cold .NET startup on slow machines.
+/// Superseded by Timeouts.warmupInactivityLimit / Timeouts.warmupAbsoluteMax,
+/// which awaitWorkerPort now actually reads: a flat "no port within N ms"
+/// bound couldn't tell a stuck worker from a large repo genuinely still
+/// discovering projects (fcs-trial-a/b/c, 2026-09-22). Kept — not read by
+/// awaitWorkerPort any more — because SAGEFS_WORKER_STARTUP_TIMEOUT_MS may
+/// still be set in someone's environment; do not repurpose this name.
 let WorkerStartupTimeoutMs : int =
   envInt "SAGEFS_WORKER_STARTUP_TIMEOUT_MS" 120_000
+
+/// Admission ceiling for the SessionManager mailbox's queue
+/// (`MailboxProcessor<SessionCommand>.CurrentQueueLength`), mirroring
+/// ElmLoop's own 256-message high-watermark alarm (`ElmLoop.fs:104-131`) —
+/// the mailbox that didn't have an equivalent bound. Caller-facing ops
+/// (create/stop/restart session) check this BEFORE posting and refuse with
+/// `SageFsError.SupervisorBusy` instead of queueing indefinitely behind
+/// whatever is already backed up. Sized generously so it never engages
+/// under real usage — only under genuine overload.
+let SessionManagerQueueCapacity : int =
+  envInt "SAGEFS_SESSION_MANAGER_QUEUE_CAPACITY" 256
 
 /// The loopback interface the daemon's HTTP listeners (MCP, dashboard) bind.
 /// There is deliberately no non-loopback case: SageFs evaluates arbitrary F#

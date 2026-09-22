@@ -46,6 +46,13 @@ type SessionManagementOps = {
   /// build this session's worker adopted at spawn, or `None` when the session
   /// does not self-host SageFs.Core. Drives the self-host staleness affordance.
   GetAdoptedCore: SessionId -> Task<(string * System.DateTime) option>
+  /// The last warmup-progress line a warming worker's stdout reported (e.g.
+  /// "2/4 Scanned 12 files"), if any. `None` before the first line or once
+  /// the session has left Starting. get_fsi_status surfaces this so a
+  /// WarmingUp poll on a big repo shows real, moving evidence of progress
+  /// instead of a static "15-30s" estimate (fcs-trial-a/b: no progress
+  /// reporting was the single biggest complaint).
+  GetWarmupProgress: SessionId -> Task<string option>
 }
 
 module SessionManagementOps =
@@ -68,4 +75,5 @@ module SessionManagementOps =
     AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
     SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
     GetAdoptedCore = fun _ -> Task.FromResult(None)
+    GetWarmupProgress = fun _ -> Task.FromResult(None)
   }

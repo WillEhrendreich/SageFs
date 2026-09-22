@@ -257,6 +257,7 @@ let private mkContextForSession (status: SessionStatus) : McpContext * string =
     AwaitReady = fun _ _ -> Task.FromResult(Result.Error (SageFs.SageFsError.HardResetFailed "Not available"))
     SwitchWorkflow = fun _ _ -> Task.FromResult(Result.Error (SageFsError.HardResetFailed "Not available"))
     GetAdoptedCore = fun _ -> Task.FromResult(None)
+    GetWarmupProgress = fun _ -> Task.FromResult(None)
   }
   let ctx : McpContext = {
     FrictionStore = None

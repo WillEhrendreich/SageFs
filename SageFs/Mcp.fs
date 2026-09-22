@@ -1087,6 +1087,60 @@ module McpTools =
           return sprintf "Recent events (%d, oldest first):\n%s" events.Length (String.concat "\n" lines)
     })
 
+  /// Render a non-Routable resolution (WarmingUp, Unroutable, or
+  /// FaultedSession) as get_fsi_status's structured JSON. Shared by the
+  /// top-level resolution match AND by the Routable branch's own transport-
+  /// failure fallback, so a session that is ACTUALLY Faulted (per the
+  /// registry) is reported as Faulted — with its real faultReason — no
+  /// matter which path noticed. Before this was shared, a Routable session
+  /// whose worker died between the proxy lookup and the GetStatus call fell
+  /// through to a bare "Error getting status: ..." string that hid a
+  /// faultReason the registry already had, which is exactly the disagreement
+  /// three onboarding trials hit (2026-09-22): get_fsi_status reading
+  /// "Starting" while /api/sessions and the daemon log already knew Failed.
+  /// INVARIANT: called only with WarmingUp / Unroutable / FaultedSession —
+  /// Routable and Gone are handled by their own callers and never reach here.
+  let private renderWarmingOrFaulted (ctx: McpContext) (resolution: SessionResolution) : Task<string> =
+    task {
+      match resolution with
+      | WarmingUp (sid, status) | Unroutable (sid, status) ->
+        let availableTools = Affordances.availableTools SessionState.WarmingUp
+        let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+        let elapsedSeconds =
+          info |> Option.map (fun i -> (DateTime.UtcNow - i.CreatedAt).TotalSeconds)
+        let! progress = ctx.SessionOps.GetWarmupProgress (toSessionId sid)
+        return
+          System.Text.Json.JsonSerializer.Serialize(
+            {| state = "Rebuilding"
+               sessionId = sid
+               status = WorkerProtocol.SessionLifecycleStatus.label status
+               message = formatSessionResolution resolution
+               elapsedSeconds = elapsedSeconds
+               // The worst-case wall clock a warming session can take: the
+               // pre-port phase's absolute ceiling (Timeouts.warmupAbsoluteMax
+               // — silence trips it sooner, at warmupInactivityLimit since
+               // the last WARMUP_PROGRESS= line) plus the post-port
+               // ready-poll's own bound.
+               boundSeconds = Timeouts.warmupAbsoluteMax.TotalSeconds + Timeouts.warmupReadyPollMax.TotalSeconds
+               inactivityBoundSeconds = Timeouts.warmupInactivityLimit.TotalSeconds
+               progress = progress
+               available = availableTools |})
+      | FaultedSession (sid, cause) ->
+        let availableTools = Affordances.availableTools SessionState.Faulted
+        return
+          System.Text.Json.JsonSerializer.Serialize(
+            {| state = "Faulted"
+               sessionId = sid
+               faultReason = FaultCause.describe cause
+               message = formatSessionResolution resolution
+               available = availableTools |})
+      | Routable sid ->
+        // Defensive only — see INVARIANT above. Never expected in practice.
+        return System.Text.Json.JsonSerializer.Serialize({| state = "Rebuilding"; sessionId = sid; message = "" |})
+      | Gone msg ->
+        return System.Text.Json.JsonSerializer.Serialize({| state = "NoSession"; message = msg |})
+    }
+
   let getStatus (ctx: McpContext) (agent: string) (sessionId: string option) (workingDirectory: string option) : Task<string> =
     task {
       let! resolution = resolveSessionId ctx agent sessionId workingDirectory
@@ -1105,27 +1159,14 @@ module McpTools =
                  | 0 -> "No sessions exist. Create one with create_session (args are snake_case): working_directory=<dir> projects=[\"<path>.fsproj\"] to load a specific project, or projects=[] to let the worker auto-discover whatever project/solution sits directly in working_directory (this is NOT a guaranteed-empty REPL — it only comes out empty if the directory has nothing to discover). Use get_available_projects to discover .fsproj files (pass working_directory to narrow a large tree)."
                  | _ -> sprintf "%d session(s) exist but none matched the working directory. Use list_sessions to see them, or switch_session to select one." sessionCount
                available = availableTools |})
-      | WarmingUp (sid, status) | Unroutable (sid, status) ->
+      | WarmingUp _ | Unroutable _ | FaultedSession _ ->
         // INVARIANT (get_fsi_status is total): a session that exists but is
-        // starting, restarting, or not yet routable is reported as a structured
-        // "Rebuilding" state — never as a transport error and never as missing.
-        let availableTools = Affordances.availableTools SessionState.WarmingUp
-        return
-          System.Text.Json.JsonSerializer.Serialize(
-            {| state = "Rebuilding"
-               sessionId = sid
-               status = WorkerProtocol.SessionLifecycleStatus.label status
-               message = formatSessionResolution resolution
-               available = availableTools |})
-      | FaultedSession (sid, cause) ->
-        let availableTools = Affordances.availableTools SessionState.Faulted
-        return
-          System.Text.Json.JsonSerializer.Serialize(
-            {| state = "Faulted"
-               sessionId = sid
-               faultReason = FaultCause.describe cause
-               message = formatSessionResolution resolution
-               available = availableTools |})
+        // starting, restarting, faulted, or not yet routable is reported as
+        // one of these structured states — never as a transport error and
+        // never as missing. Shared with the Routable branch's own transport-
+        // failure fallback below (renderWarmingOrFaulted) so the two paths
+        // can never disagree about a session's real state.
+        return! renderWarmingOrFaulted ctx resolution
       | Routable sid ->
         let eventCount = 0  // EventTracking removed — event count not tracked
         let! routeResult =
@@ -1217,7 +1258,21 @@ module McpTools =
                  message = msg
                  available = availableTools |})
         | Error msg ->
-          return sprintf "Error getting status: %s" (routeErrorMessage msg)
+          // The proxy looked routable a moment ago but the round-trip itself
+          // failed (worker died between the proxy lookup and this call, or a
+          // transient transport error). Re-resolve against the registry
+          // instead of returning a bare, unstructured string: if the worker
+          // is now known to be Faulted, this must say so — with the real
+          // faultReason — through the SAME renderWarmingOrFaulted path
+          // WarmingUp/Unroutable/FaultedSession use above, so a routing
+          // failure can never hide a fault the registry already recorded.
+          let! info = ctx.SessionOps.GetSessionInfo (toSessionId sid)
+          let reResolved = classifySessionAvailability info false
+          match reResolved with
+          | Gone _ ->
+            return sprintf "Error getting status: %s" (routeErrorMessage msg)
+          | other ->
+            return! renderWarmingOrFaulted ctx other
     }
 
   let getStartupInfo (ctx: McpContext) (agent: string) (workingDirectory: string option) : Task<string> =
@@ -1866,6 +1921,26 @@ module McpTools =
     @ WorkflowTypes.PaketReferences.readForProject path
     @ WorkflowTypes.ProjectFileMarkers.read path
 
+  /// A repo where `projects=[]` would auto-discover more than this many
+  /// `.fsproj` files gets a heads-up instead of silence. Three onboarding
+  /// trials (fcs-trial-a/b/c, 2026-09-22) independently hit this exact wall
+  /// on FSharp.Compiler.Service (60+ projects): `projects=[]` warmed up for
+  /// 20+ minutes with nothing to show for it, while the SAME repo with ONE
+  /// named project was Ready in ~10s. The check is a plain filesystem walk
+  /// (`walkProjectFiles`, already used by get_available_projects) — not a
+  /// build, not MSBuild evaluation — so it costs milliseconds and lands in
+  /// the SAME reply an agent about to wait 20 minutes would read.
+  let largeRepoAutoDiscoveryWarningThreshold = 15
+
+  let private formatLargeRepoWarning (workingDir: string) (projectCount: int) : string option =
+    match projectCount > largeRepoAutoDiscoveryWarningThreshold with
+    | true ->
+      Some (
+        sprintf
+          "⚠️ %d .fsproj files found under %s and projects=[] was passed. The worker will try to auto-discover and load the project or solution it finds there — on a repo this size that can take minutes, with nothing shown until warmup ends or fails. Prefer naming one explicit project: create_session with projects=[\"path/to/One.fsproj\"]. Use get_available_projects to list candidates first."
+          projectCount workingDir)
+    | false -> None
+
   /// Create a new session and bind it to the requesting agent.
   let createSession (ctx: McpContext) (agent: string) (projects: string list) (workingDir: string) (workflowRaw: string) : Task<string> =
     task {
@@ -1911,8 +1986,19 @@ module McpTools =
           |> WorkflowTypes.WorkflowDetection.extractPackageNames
         // The hot-reload nudge, plus a truthful note for any project whose
         // toolchain means only part of it is SageFs's job (a Fable client).
+        let largeRepoWarning =
+          match projects with
+          | [] ->
+            try
+              walkProjectFiles workingDir
+              |> Seq.filter McpAdapter.isProjectFile
+              |> Seq.length
+              |> formatLargeRepoWarning workingDir
+            with _ -> None
+          | _ -> None
         let lines =
-          Option.toList (formatDetectionHint packageRefs workflow)
+          Option.toList largeRepoWarning
+          @ Option.toList (formatDetectionHint packageRefs workflow)
           @ ProjectCompatibility.formatToolchainAdvisories perProject
         let hint =
           match lines with

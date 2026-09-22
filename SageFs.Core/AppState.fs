@@ -1506,6 +1506,19 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
             | true ->
               // Build only the primary project — dotnet build resolves dependencies transitively.
               // Building each project separately is redundant and slow for multi-project solutions.
+              //
+              // This calls the SAME `SessionBuild.runBuildAsync` the daemon's
+              // cold-restart path uses (`SessionManager.fs`'s `RunBuildAsync`)
+              // instead of a second, independent process-spawn/output-drain
+              // implementation — there used to be two, formatting diagnostics
+              // differently and each carrying its own copy of the
+              // Task.Run+ReadLine pool-pinning pattern (see SessionBuild.fs's
+              // own doc comment, which claimed this sharing before it was
+              // actually true). The lock-retry-after-GC behavior below is
+              // this call site's own business rule (self-hosting SageFs.Core
+              // can hit a locked assembly mid-rebuild that shadow-copying on
+              // the daemon side doesn't apply to here) — it wraps the shared
+              // build function rather than reimplementing the process spawn.
               let primaryProject =
                 resetOriginalSolution.Projects
                 |> List.tryHead
@@ -1513,118 +1526,33 @@ let mkAppStateActor (sessionKind: SessionKinds.FsiSessionKind) (logger: ILogger)
               match primaryProject with
               | Some projFile ->
                 logger.LogInfo (sprintf "  Building %s..." (System.IO.Path.GetFileName projFile))
-                let runBuild (restore: bool) =
-                  // `dotnet` prints compile AND NETSDK errors on STDOUT, so both
-                  // streams are captured — a stderr-only read drops the actual
-                  // diagnostics and leaves a bare "Build failed (exit code 1)".
-                  let args =
-                    match restore with
-                    | false -> sprintf "build \"%s\" --no-restore" projFile
-                    | true  -> sprintf "build \"%s\"" projFile
-                  let psi =
-                    System.Diagnostics.ProcessStartInfo(
-                      "dotnet",
-                      args,
-                      RedirectStandardOutput = true,
-                      RedirectStandardError = true,
-                      UseShellExecute = false)
-                  use proc = System.Diagnostics.Process.Start(psi)
-                  // Activity-based timeout: restart clock on each output line.
-                  // Only kills truly hanging builds, not long-but-active ones.
-                  let inactivityLimitMs = 30_000  // 30s with no output = stuck
-                  let maxTotalMs = 600_000        // 10 min absolute max
-                  let mutable lastActivity = DateTime.UtcNow
-                  let startedAt = lastActivity
-                  let outputLines = System.Collections.Generic.List<string>()
-                  let addLine (l: string) = lock outputLines (fun () -> outputLines.Add(l))
-                  let stderrTask = System.Threading.Tasks.Task.Run(fun () ->
-                    let mutable line = proc.StandardError.ReadLine()
-                    while not (isNull line) do
-                      addLine line
-                      lastActivity <- DateTime.UtcNow
-                      line <- proc.StandardError.ReadLine())
-                  let stdoutTask = System.Threading.Tasks.Task.Run(fun () ->
-                    let mutable line = proc.StandardOutput.ReadLine()
-                    while not (isNull line) do
-                      addLine line
-                      lastActivity <- DateTime.UtcNow
-                      line <- proc.StandardOutput.ReadLine())
-                  // Poll for completion or inactivity timeout
-                  let mutable finished = false
-                  let mutable timedOut = false
-                  while not finished do
-                    match proc.WaitForExit(1000) with
+                let workingDir = System.Environment.CurrentDirectory
+                let! first = SessionBuild.runBuildAsync [ projFile ] workingDir
+                let! result =
+                  match first with
+                  | Error err ->
+                    let msg = SageFsError.describe err
+                    match msg.Contains("denied") || msg.Contains("locked") with
                     | true ->
-                      finished <- true
-                    | false ->
-                      let now = DateTime.UtcNow
-                      let totalMs = (now - startedAt).TotalMilliseconds
-                      let inactiveMs = (now - lastActivity).TotalMilliseconds
-                      match totalMs > float maxTotalMs with
-                      | true ->
-                        logger.LogWarning (sprintf "  ⚠️ Build exceeded %d min limit" (maxTotalMs / 60_000))
-                        timedOut <- true
-                        finished <- true
-                      | false ->
-                        match inactiveMs > float inactivityLimitMs with
-                        | true ->
-                          logger.LogWarning (sprintf "  ⚠️ Build inactive for %ds (no output)" (inactivityLimitMs / 1000))
-                          timedOut <- true
-                          finished <- true
-                        | false -> ()
-                  match timedOut with
-                  | true ->
-                    try proc.Kill(entireProcessTree = true) with ex -> logger.LogDebug (sprintf "Build kill failed: %s" ex.Message)
-                    -1, [ sprintf "Build timed out (inactive for %ds or exceeded %d min limit)" (inactivityLimitMs / 1000) (maxTotalMs / 60_000) ]
-                  | false ->
-                    try System.Threading.Tasks.Task.WaitAll([| stderrTask; stdoutTask |], 5000) |> ignore with ex -> logger.LogDebug (sprintf "Build output wait failed: %s" ex.Message)
-                    proc.ExitCode, (lock outputLines (fun () -> List.ofSeq outputLines))
-                // The failure message a hard-reset surfaces: the actual compiler/
-                // MSBuild diagnostics (each carries its own actionable wording),
-                // never a bare exit code.
-                let describeBuildFailure (exit: int) (output: string list) =
-                  let errors =
-                    SessionBuild.buildDiagnosticsOf output []
-                    |> List.map (fun (d: BuildDiagnostic) -> d.Message)
-                    |> String.concat "\n"
-                  match errors.Trim() with
-                  | "" -> sprintf "Build failed (exit code %d)." exit
-                  | e -> sprintf "Build failed (exit code %d):\n%s" exit e
-                // Fast path: no restore. Self-heal a fresh (NETSDK1004) or
-                // package-changed project that needs a NuGet restore instead of
-                // reporting the missing restore as a build failure.
-                let! exit0, out0 = System.Threading.Tasks.Task.Run(fun () -> runBuild false) |> Async.AwaitTask
-                let! exitCode, output =
-                  match exit0 <> 0 && SessionBuild.buildOutputNeedsRestore out0 with
-                  | true ->
-                    logger.LogInfo "  Restore needed — retrying build with a NuGet restore..."
-                    async {
-                      let! r = System.Threading.Tasks.Task.Run(fun () -> runBuild true) |> Async.AwaitTask
-                      return r }
-                  | false -> async { return exit0, out0 }
-                match exitCode <> 0 with
-                | true ->
-                  let joined = String.concat "\n" output
-                  match joined.Contains("denied") || joined.Contains("locked") with
-                  | true ->
-                    logger.LogWarning "  ⚠️ DLL lock detected, retrying after GC..."
-                    GC.Collect()
-                    GC.WaitForPendingFinalizers()
-                    GC.Collect()
-                    do! Async.Sleep 500
-                    let! retryCode, retryOut = System.Threading.Tasks.Task.Run(fun () -> runBuild false) |> Async.AwaitTask
-                    match retryCode <> 0 with
-                    | true ->
-                      // Mid-function exit to the handler's existing `with ex ->
-                      // Hard reset failed` recovery below (identical Faulted
-                      // publish + error reply + Faulted-phase continuation).
-                      raise (System.Exception (describeBuildFailure retryCode retryOut))
-                    | false ->
-                      logger.LogInfo "  ✅ Build succeeded on retry"
-                  | false ->
-                    raise (System.Exception (describeBuildFailure exitCode output))
-                | false ->
-                  logger.LogInfo "  ✅ Build succeeded"
+                      logger.LogWarning "  ⚠️ DLL lock detected, retrying after GC..."
+                      GC.Collect()
+                      GC.WaitForPendingFinalizers()
+                      GC.Collect()
+                      async {
+                        do! Async.Sleep 500
+                        return! SessionBuild.runBuildAsync [ projFile ] workingDir
+                      }
+                    | false -> async { return first }
+                  | Ok _ -> async { return first }
+                match result with
+                | Ok _ -> logger.LogInfo "  ✅ Build succeeded"
+                | Error err ->
+                  // Mid-function exit to the handler's existing `with ex ->
+                  // Hard reset failed` recovery below (identical Faulted
+                  // publish + error reply + Faulted-phase continuation). The
+                  // actual compiler/MSBuild diagnostics (each carries its own
+                  // actionable wording), never a bare exit code.
+                  raise (System.Exception (SageFsError.describe err))
               | None ->
                 logger.LogWarning "  ⚠️ No project to build"
             | false -> ()

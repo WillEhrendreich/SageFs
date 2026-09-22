@@ -129,6 +129,20 @@ module Timeouts =
   let scheduledGraceDelay = TimeSpan.FromSeconds(5.0)
   let startupDelay = TimeSpan.FromMilliseconds(200.0)
   let workerShutdownDelay = TimeSpan.FromSeconds(2.0)
+  /// Defense-in-depth bound on a `StopSession` mailbox round-trip
+  /// (`DaemonMode.createSessionOps.StopSession`). `stopWorker` itself is
+  /// already bounded (workerShutdownDelay + a WaitForExit + a Kill
+  /// fallback), and the SessionManager mailbox loop is supervised
+  /// (`superviseStep`/`supervise` in SessionManager.fs) so an unhandled
+  /// exception replies with an error instead of dropping the caller. This
+  /// timeout is the last line: if the reply STILL never arrives — a future
+  /// regression, not a known path today — `stop_session` fails with a
+  /// stated, actionable error at 20s instead of hanging until the MCP
+  /// client's own external timeout (300s in the three fcs-onboarding-trial
+  /// reports, 2026-09-22) makes the caller guess why. "A stop always
+  /// completes" is an invariant this bound exists to guarantee even if
+  /// everything upstream of it were somehow wrong.
+  let stopSessionMailboxTimeout = envOrDefault "SAGEFS_STOP_SESSION_TIMEOUT_SECONDS" 20.0
 
   // -- Persistence --
   /// Cadence of the daemon's periodic manifest save (`periodicManifestSave`,

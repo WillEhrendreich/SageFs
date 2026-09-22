@@ -232,6 +232,7 @@
         <Compile Include="SmartReset.fs" />
         <Compile Include="Watchdog.fs" />
         <Compile Include="SessionLifecycle.fs" />
+        <Compile Include="WarmupSupervision.fs" />
         <Compile Include="WorkerEventGuard.fs" />
         <Compile Include="WorkerHealthProbe.fs" />
         <Compile Include="SessionBuild.fs" />
