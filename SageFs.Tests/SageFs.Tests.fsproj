@@ -264,6 +264,7 @@
         <Compile Include="TweakSimDstTests.fs" />
         <Compile Include="RetentionSimDstTests.fs" />
         <Compile Include="LiveStateEmitTests.fs" />
+        <Compile Include="ValueReadsTests.fs" />
         <Compile Include="ReloadBroadcastTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />
         <Compile Include="IdentifierScanTests.fs" />
