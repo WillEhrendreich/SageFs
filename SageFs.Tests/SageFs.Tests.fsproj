@@ -155,6 +155,7 @@
         <Compile Include="FsiDiscoveryIdentitySimTests.fs" />
         <Compile Include="FsiEmitSimTests.fs" />
         <Compile Include="ValueReadSimTests.fs" />
+        <Compile Include="ReflectionReadSimTests.fs" />
         <Compile Include="EvalStoreMutationTests.fs" />
         <Compile Include="SessionDisplayMutationTests.fs" />
         <Compile Include="ReloadPlanningDecisionMutationTests.fs" />
