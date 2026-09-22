@@ -2269,7 +2269,7 @@ type EffectDeps = {
   GetProxy: SessionId -> SessionProxy option
   /// Get a streaming test execution proxy for a session.
   /// The proxy streams test results and IL coverage hits.
-  GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> (bool array -> unit) -> Async<HttpWorkerClient.StreamOutcome>) option
+  GetStreamingTestProxy: SessionId -> (Features.LiveTesting.TestCase array -> int -> (Features.LiveTesting.TestRunResult -> unit) -> (bool array -> unit) -> System.Threading.CancellationToken -> Async<HttpWorkerClient.StreamOutcome>) option
   /// Create a new session
   CreateSession: string list -> string -> WorkflowTypes.SessionWorkflow -> Async<Result<SessionInfo, SageFsError>>
   /// Ensure the working directory has warmup auto-open disabled.
@@ -2982,7 +2982,7 @@ module SageFsEffectHandler =
                         | false -> ()
                       | false -> ()
                     let parallelism = max 4 (Environment.ProcessorCount / 2)
-                    let! outcome = streamProxy tests parallelism onResult onCoverage
+                    let! outcome = streamProxy tests parallelism onResult onCoverage ct // ct explicit, not ambient — see HttpWorkerClient.fs's safeAwait
                     // Whichever way the stream ended — a clean end with gaps, a
                     // stall, a cancellation — every requested test that never
                     // reported gets a truthful NoResult saying why, so none is

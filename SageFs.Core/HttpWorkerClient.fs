@@ -217,15 +217,37 @@ module HttpWorkerClient =
         | false -> return StreamOutcome.TimedOut sw.Elapsed
     }
 
-  /// Run a stream under the caller's Async cancellation token, so cancelling the
-  /// run (a newer run superseding it, the daemon stopping) reaches the read.
-  let private underCallerToken
-    (run: System.Threading.CancellationToken -> System.Threading.Tasks.Task<StreamOutcome>)
-    : Async<StreamOutcome> =
-    async {
-      let! caller = Async.CancellationToken
-      return! run caller |> Async.AwaitTask
-    }
+  /// Wrap an already-cancellation-safe Task as an Async, WITHOUT reading the
+  /// ambient `Async.CancellationToken`. This used to be `async { let! caller
+  /// = Async.CancellationToken; return! run caller |> Async.AwaitTask }` —
+  /// which reads the SAME token object a caller hands to
+  /// `Async.StartAsTask(_, cancellationToken = ct)` / `Async.Start(_, ct)`.
+  /// That starter registers its OWN forced-cancellation callback against
+  /// `ct` the instant it is called — independent of whatever this
+  /// computation is doing — and that callback can complete the caller's
+  /// Task as Canceled (raising `TaskCanceledException` at the await site)
+  /// BEFORE `streamRun`'s own `with :? OperationCanceledException ->
+  /// return StreamOutcome.Cancelled` ever gets to run. Reproduced 600/600 in
+  /// the SageFs REPL by cancelling `run.Token` immediately after starting
+  /// `Async.StartAsTask(proxy, cancellationToken = run.Token)`: the task's
+  /// own graceful catch never got a chance to answer — the starter's
+  /// registration wins the race, every time cancellation lands before the
+  /// task's own handling has registered.
+  ///
+  /// Fix: `run` already carries its own CancellationToken as a plain VALUE
+  /// (threaded explicitly by the caller, not read from the ambient token),
+  /// and it already resolves cancellation to a normal `StreamOutcome.
+  /// Cancelled` VALUE via `streamRun`'s try/with — never throws. Wrapping
+  /// that already-resolved Task with `Async.AwaitTask` and nothing else
+  /// means there is no SECOND, independent cancellation source for a
+  /// starter to race against: whoever starts the returned Async must do so
+  /// WITHOUT also passing that same token to the starter's own
+  /// `cancellationToken` parameter (verified 0/400 throws in the REPL under
+  /// that calling convention, cancel-before-start and cancel-after-start
+  /// alike) — see StreamingProxyTests.fs and
+  /// SageFs.Simulation/StreamingProxySim.fs for the replayable contract.
+  let private safeAwait (task: System.Threading.Tasks.Task<StreamOutcome>) : Async<StreamOutcome> =
+    Async.AwaitTask task
 
   let private newStreamingClient (baseUrl: string) =
     let handler = new HttpClientHandler(AutomaticDecompression = System.Net.DecompressionMethods.All)
@@ -241,30 +263,42 @@ module HttpWorkerClient =
   /// Each test result is dispatched individually via the onResult callback.
   /// Returns how the stream ended so the caller can give every test that never
   /// reported a truthful NoResult — not silence, and not a fabricated failure.
+  ///
+  /// The caller's `CancellationToken` is a plain VALUE parameter, not the
+  /// ambient one — start the returned Async with `Async.StartAsTask(result)`
+  /// (no `cancellationToken` argument) or `Async.AwaitTask`/`await` it
+  /// directly. Handing that SAME token a second time to the starter's own
+  /// `cancellationToken` parameter reopens the pre-start-cancellation race
+  /// `safeAwait`'s doc comment describes — the contract this function makes
+  /// (a cancelled run always answers `StreamOutcome.Cancelled`, never
+  /// throws) only holds when the token is threaded this way.
   let streamingTestProxy (readTimeout: TimeSpan) (baseUrl: string)
     : Features.LiveTesting.TestCase array
       -> int
       -> (Features.LiveTesting.TestRunResult -> unit)
+      -> System.Threading.CancellationToken
       -> Async<StreamOutcome> =
     let client = newStreamingClient baseUrl
-    fun tests maxParallelism onResult ->
-      underCallerToken (
+    fun tests maxParallelism onResult ct ->
+      safeAwait (
         streamRun readTimeout client tests maxParallelism (fun data ->
           match data with
           | SseData.TestResult json -> deliverResult onResult json
           // Coverage is collected by streamingTestProxyWithCoverage.
-          | SseData.Coverage _ -> ()))
+          | SseData.Coverage _ -> ()) ct)
 
-  /// Streaming test proxy that also collects IL coverage hits.
+  /// Streaming test proxy that also collects IL coverage hits. Same
+  /// explicit-token contract as `streamingTestProxy` above.
   let streamingTestProxyWithCoverage (readTimeout: TimeSpan) (baseUrl: string)
     : Features.LiveTesting.TestCase array
       -> int
       -> (Features.LiveTesting.TestRunResult -> unit)
       -> (bool array -> unit)
+      -> System.Threading.CancellationToken
       -> Async<StreamOutcome> =
     let client = newStreamingClient baseUrl
-    fun tests maxParallelism onResult onCoverage ->
-      underCallerToken (
+    fun tests maxParallelism onResult onCoverage ct ->
+      safeAwait (
         streamRun readTimeout client tests maxParallelism (fun data ->
           match data with
           | SseData.TestResult json -> deliverResult onResult json
@@ -281,4 +315,4 @@ module HttpWorkerClient =
                 |> Features.LiveTesting.CoverageBitmap.toBoolArray
               onCoverage hits
             with ex ->
-              Utils.Log.warn "[HttpWorkerClient] Coverage data parse failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")))
+              Utils.Log.warn "[HttpWorkerClient] Coverage data parse failed: %s\n%s" ex.Message (ex.StackTrace |> Option.ofObj |> Option.defaultValue "")) ct)

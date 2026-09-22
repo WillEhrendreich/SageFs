@@ -147,7 +147,7 @@ let streamingProxyTests =
         try
           let proxy = streamingTestProxy (TimeSpan.FromMilliseconds 500.0) (sprintf "http://127.0.0.1:%d" port)
           let! outcome =
-            proxy [| sampleTestCase "a" |] 1 (fun _ -> ())
+            proxy [| sampleTestCase "a" |] 1 (fun _ -> ()) CancellationToken.None
             |> Async.StartAsTask
           outcome |> Expect.equal "completed on event: done" StreamOutcome.Completed
         finally
@@ -180,7 +180,7 @@ let streamingProxyTests =
         try
           let proxy = streamingTestProxy (TimeSpan.FromMilliseconds 150.0) (sprintf "http://127.0.0.1:%d" port)
           let work =
-            proxy [| sampleTestCase "a" |] 1 (fun _ -> ())
+            proxy [| sampleTestCase "a" |] 1 (fun _ -> ()) CancellationToken.None
             |> Async.StartAsTask
           let! _ = Task.WhenAny(work, Task.Delay 5000) :> Task
           if not work.IsCompleted then
@@ -193,24 +193,69 @@ let streamingProxyTests =
       }
 
       testTask "cancelling the run cancels the in-flight read instead of waiting out the read timeout" {
+        // Gated on a signal FROM THE SERVER that it is genuinely mid-read, not
+        // on a guessed wall-clock delay — a busy thread pool made a 200ms
+        // guess fire the cancel before the proxy's own async body had even
+        // started, which is exactly the pre-start race the fix below closes,
+        // not what THIS test means to exercise (mid-read cancellation).
+        let started = TaskCompletionSource<bool>()
         let url, listener =
           serveOnce (fun stream ->
             async {
               do! sendLine stream "event: start\n\n"
+              started.TrySetResult true |> ignore
               // A worker that is still busy: nothing more for a long time.
               do! Async.Sleep 10000
             })
         let run = new CancellationTokenSource()
         try
           let proxy = streamingTestProxy (TimeSpan.FromSeconds 10.0) url
-          let work =
-            Async.StartAsTask(proxy [| sampleTestCase "a" |] 1 ignore, cancellationToken = run.Token)
-          run.CancelAfter(200)
+          // ct is threaded explicitly into the proxy itself — NOT also handed
+          // to Async.StartAsTask's own cancellationToken parameter. Passing
+          // it to both is the double-token hazard: StartAsTask registers its
+          // own forced-cancellation against that token the instant it is
+          // called, independent of the proxy's own graceful handling, and
+          // races it — see HttpWorkerClient.fs's safeAwait doc comment.
+          let work = Async.StartAsTask(proxy [| sampleTestCase "a" |] 1 ignore run.Token)
+          let! _ = started.Task
+          run.Cancel()
           let! winner = Task.WhenAny(work :> Task, Task.Delay 3000)
           obj.ReferenceEquals(winner, work)
           |> Expect.isTrue "a cancelled run stops reading within the ceiling, not after the 10s read timeout"
           let! outcome = work
           outcome |> Expect.equal "the run says it was cancelled, not timed out" StreamOutcome.Cancelled
+        finally
+          run.Dispose()
+          listener.Stop()
+      }
+
+      testTask "cancelling before the run ever starts reading still reports Cancelled, never throws" {
+        // The reported bug: StreamingProxyTests errored with a raw
+        // TaskCanceledException after passing eleven gates the same day.
+        // Root cause (reproduced 600/600 in the SageFs REPL): the OLD code
+        // read the ambient Async.CancellationToken and was started via
+        // Async.StartAsTask(proxy, cancellationToken = run.Token) — the SAME
+        // token given to BOTH places. StartAsTask wires its own forced
+        // cancellation against that token the instant it is called; if the
+        // caller cancels before the .NET thread pool has actually begun
+        // running the proxy's body, that forced cancellation wins the race
+        // and the caller sees a thrown exception instead of the graceful
+        // StreamOutcome.Cancelled the proxy's own try/with was always ready
+        // to produce. This test cancels synchronously, before Async.StartAsTask
+        // is even called, so the body could not possibly have started yet —
+        // the sharpest form of the race.
+        let url, listener =
+          serveOnce (fun stream -> async { do! Async.Sleep 10000 })
+        let run = new CancellationTokenSource()
+        try
+          let proxy = streamingTestProxy (TimeSpan.FromSeconds 10.0) url
+          run.Cancel()
+          let work = Async.StartAsTask(proxy [| sampleTestCase "a" |] 1 ignore run.Token)
+          let! winner = Task.WhenAny(work :> Task, Task.Delay 3000)
+          obj.ReferenceEquals(winner, work)
+          |> Expect.isTrue "a run cancelled before it starts still resolves within the ceiling"
+          let! outcome = work
+          outcome |> Expect.equal "pre-start cancellation is Cancelled, never a thrown exception" StreamOutcome.Cancelled
         finally
           run.Dispose()
           listener.Stop()
@@ -229,7 +274,7 @@ let streamingProxyTests =
           // 6 x 100ms = 600ms of streaming, well past a 350ms window that is
           // re-armed on every line.
           let proxy = streamingTestProxy (TimeSpan.FromMilliseconds 350.0) url
-          let! outcome = proxy [| sampleTestCase "a" |] 1 ignore |> Async.StartAsTask
+          let! outcome = proxy [| sampleTestCase "a" |] 1 ignore CancellationToken.None |> Async.StartAsTask
           outcome |> Expect.equal "steady stream completes" StreamOutcome.Completed
         finally
           listener.Stop()
