@@ -85,6 +85,16 @@
         <Compile Include="ProjectLoading.fs" />
         <Compile Include="Features\ReloadOutcome.fs" />
         <Compile Include="Features\ReloadPlanning.fs" />
+        <!-- Phase 3 (live tweaking): pure address/edit/classification/transaction
+             modules. Self-contained, no dependency on ReloadPlanning/ReloadOutcome
+             above (deliberately, since those are owned by a parallel change),
+             placed here only because they share the same Fantomas.FCS parsing
+             technique. -->
+        <Compile Include="Features\Tweak\TweakAddress.fs" />
+        <Compile Include="Features\Tweak\LiteralEdit.fs" />
+        <Compile Include="Features\Tweak\ExpressionEdit.fs" />
+        <Compile Include="Features\Tweak\SideEffectClass.fs" />
+        <Compile Include="Features\Tweak\TweakTransaction.fs" />
         <Compile Include="Features\LiveStateEmit.fs" />
         <Compile Include="Features\KeptState.fs" />
         <Compile Include="ShadowCopy.fs" />

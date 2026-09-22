@@ -251,6 +251,12 @@
         <Compile Include="CellDependencyGraphTests.fs" />
         <Compile Include="TestSourceResolverTests.fs" />
         <Compile Include="ReloadOutcomeTests.fs" />
+        <!-- Phase 3 (live tweaking): pure module coverage, then the DST sim. -->
+        <Compile Include="TweakAddressTests.fs" />
+        <Compile Include="LiteralEditTests.fs" />
+        <Compile Include="ExpressionEditTests.fs" />
+        <Compile Include="SideEffectClassTests.fs" />
+        <Compile Include="TweakTransactionTests.fs" />
         <Compile Include="LiveStateEmitTests.fs" />
         <Compile Include="ReloadBroadcastTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />
