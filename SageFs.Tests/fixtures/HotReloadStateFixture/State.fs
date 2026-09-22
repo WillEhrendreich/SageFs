@@ -72,6 +72,28 @@ let motto = "carpe diem"
 /// of `motto`'s getter can't reach what it cached.
 let lazyMotto = lazy (motto.ToUpper())
 
+// ── rule 2 through reflection: a value only ever read by PropertyInfo ───────
+
+let reflected = "mirror"
+
+type private Anchor = class end
+
+/// The `reflected` property, looked up the way a serializer or a DI
+/// container would.
+let private reflectedProperty () = typeof<Anchor>.DeclaringType.GetProperty("reflected")
+
+/// A hot loop that reads `reflected` through reflection and throws each read
+/// away. Nothing in anyone's IL reads `reflected`.
+let reflectDrop () : string =
+  let p = reflectedProperty ()
+  for _ in 1 .. 2000 do
+    p.GetValue(null) |> ignore
+  "ok"
+
+/// Reads `reflected` through reflection and hands it back: that's a copy.
+/// Only called after a save, to see what the app serves.
+let reflectPeek () : string = string (reflectedProperty().GetValue(null))
+
 // ── the route table, captured BY VALUE at startup like a Falco route list ───
 
 let handlers : (string * (unit -> string)) list =
@@ -85,4 +107,6 @@ let handlers : (string * (unit -> string)) list =
     "shape", readShape
     "greet", greet
     "motto", (fun () -> lazyMotto.Value)
+    "reflectDrop", reflectDrop
+    "reflectPeek", reflectPeek
     "banner", (let atStartup = banner in fun () -> atStartup) ]

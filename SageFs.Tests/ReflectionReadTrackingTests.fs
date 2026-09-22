@@ -242,7 +242,8 @@ let reflectionReadTrackingTests =
       orFailClosed app tracker (fun () ->
         let site = verdictFor app tracker |> held
         site.Reader |> Expect.stringContains "names the caller" "Callers.ReadAndKeep"
-        site.Where |> Expect.notEqual "at its reflection call" SiteLocation.NotInItsCode)
+        site.Where |> Expect.notEqual "at its reflection call" SiteLocation.NotInItsCode
+        (tracker.ReflectionReads.Walks, 1L) |> Expect.isGreaterThanOrEqual "and the report counts the getter watch's walks")
 
     testCase "WHY — a read of the backing field through FieldInfo.GetValue is a reflective read too" <| fun _ ->
       let app, tracker, _ = started ReflectionReadMode.MarkOnReflect quiet

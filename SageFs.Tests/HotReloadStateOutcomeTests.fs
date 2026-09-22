@@ -242,6 +242,90 @@ let private lazyNotYetForcedGetsTheNewValue (runtime: HostRuntime) =
     })
   }
 
+// ── rule 2 through reflection ────────────────────────────────────────────────
+//
+// `reflected` is only ever read by PropertyInfo.GetValue, in a hot loop, after
+// the app started. Nothing in anyone's IL reads it, so only the reflection
+// watch can see those reads. What a save does next depends on the mode.
+
+let private reflectedBinding = "StateFixture.State.reflected"
+
+let private switchMode (app: RunningApp) (mode: SageFs.Middleware.ValueReads.ReflectionReadMode) = task {
+  let! status, body = post app "/hotreload/reflection-mode" (sprintf """{"mode":"%s"}""" (SageFs.Middleware.ValueReads.ReflectionReadMode.name mode))
+  status |> Expect.equal (sprintf "switching to %A should succeed: %s\nHost log:\n%s" mode body (RunningApp.log app)) 200
+}
+
+/// The reflection report the worker serves, parsed.
+let private reflectionReport (app: RunningApp) = task {
+  let! hotReload = HotReloadStateHarness.getWorker app "/hotreload"
+  match (json hotReload).TryGetProperty "reflectionReads" with
+  | true, el ->
+    match SageFs.Features.KeptState.ReflectionReadsJson.parse el with
+    | Result.Ok report -> return report
+    | Result.Error why -> return failtestf "the worker's reflection report didn't parse (%s): %s" (SageFs.Features.KeptState.ReflectionReadsError.describe why) hotReload
+  | false, _ -> return failtestf "the worker didn't report reflection reads: %s" hotReload
+}
+
+/// probe-callers (the default): the hot loop throws each read away, so the
+/// caller holds nothing and the value is patched. The loop also crosses the
+/// hot-loop threshold, and the app asks about it exactly once.
+let private probeCallersPatchesAThrownAwayReflectiveRead (runtime: HostRuntime) =
+  testTask (sprintf "[%s] rule 2, reflection, probe-callers: a hot loop that throws reflective reads away is patched, and asks once" (HostRuntime.moniker runtime)) {
+    do! withApp runtime (fun app -> task {
+      let! first = reflectionReport app
+      first.Mode |> Expect.equal "probe-callers by default" SageFs.Middleware.ValueReads.ReflectionReadMode.ProbeCallers
+      first.Watch |> Expect.equal (sprintf "the entry watch is on (tiering is off in the host).\nHost log:\n%s" (RunningApp.log app)) SageFs.Middleware.ValueReads.ReflectionWatchStatus.Watching
+      let! _ = get app "reflectDrop"
+      let! _ = get app "reflectDrop"
+      let! report = reflectionReport app
+      match report.Notices with
+      | [ { Value = value; State = SageFs.Middleware.ValueReads.NoticeState.Asked notice } ] ->
+        value |> Expect.equal "the notice names the value" reflectedBinding
+        notice.Caller |> Expect.stringContains "and the caller" "reflectDrop"
+        (notice.ReadsPerSecond, 1000) |> Expect.isGreaterThanOrEqual "and a hot rate"
+      | other -> failtestf "one hot loop, asked about exactly once, got %A" other
+      (report.SiteHits, 0L) |> Expect.isGreaterThan "the second call's reads were named by the rewired caller, not walked"
+      let! verdict = save app "let reflected = \"mirror\"" "let reflected = \"glass\""
+      str (json verdict) "outcome"
+      |> Expect.equal (sprintf "every reflective read was thrown away, so this is a patch.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
+      let! served = settle app "reflectPeek" "glass"
+      served |> Expect.equal "and reflection reads the new value" "glass"
+    })
+  }
+
+/// mark-on-reflect: the same loop marks the value, so its edit restarts. Same
+/// app, same reads: switching the mode is what changes the outcome.
+let private markOnReflectRestarts (runtime: HostRuntime) =
+  testTask (sprintf "[%s] rule 2, reflection, mark-on-reflect: the same hot loop marks the value, and its edit restarts" (HostRuntime.moniker runtime)) {
+    do! withApp runtime (fun app -> task {
+      do! switchMode app SageFs.Middleware.ValueReads.ReflectionReadMode.MarkOnReflect
+      let! _ = get app "reflectDrop"
+      let! verdict = save app "let reflected = \"mirror\"" "let reflected = \"glass\""
+      str (json verdict) "outcome"
+      |> Expect.notEqual (sprintf "a marked value is never patched.\nVerdict: %s" verdict) "Patched"
+      let case, message = firstReason verdict
+      case |> Expect.equal (sprintf "the app may hold a copy.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "ValueCopiedByApp"
+      message |> Expect.stringContains "and the reason says which mode marked it" "mark-on-reflect"
+    })
+  }
+
+/// exact-every-read: every read walks, and the walk finds the same thrown-away
+/// call site the probe does, so this patches too. Switching to it after the
+/// app started puts the getter watch back on.
+let private exactEveryReadPatches (runtime: HostRuntime) =
+  testTask (sprintf "[%s] rule 2, reflection, exact-every-read: switched to after startup, it names the caller and patches a thrown-away read" (HostRuntime.moniker runtime)) {
+    do! withApp runtime (fun app -> task {
+      do! switchMode app SageFs.Middleware.ValueReads.ReflectionReadMode.ExactEveryRead
+      let! _ = get app "reflectDrop"
+      let! report = reflectionReport app
+      report.Mode |> Expect.equal "switched" SageFs.Middleware.ValueReads.ReflectionReadMode.ExactEveryRead
+      (report.Walks, 1000L) |> Expect.isGreaterThanOrEqual "every one of the 2000 reads walked"
+      let! verdict = save app "let reflected = \"mirror\"" "let reflected = \"glass\""
+      str (json verdict) "outcome"
+      |> Expect.equal (sprintf "the walk found the thrown-away site, so this is a patch.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "Patched"
+    })
+  }
+
 [<Tests>]
 let hotReloadStateOutcomeTests =
   Integration.hostList "hot reload keeps live state across a save" [
@@ -255,4 +339,7 @@ let hotReloadStateOutcomeTests =
       capturedValueIsNeverPatched runtime
       lazyForcedAfterStartupIsNeverPatched runtime
       lazyNotYetForcedGetsTheNewValue runtime
+      probeCallersPatchesAThrownAwayReflectiveRead runtime
+      markOnReflectRestarts runtime
+      exactEveryReadPatches runtime
   ]
