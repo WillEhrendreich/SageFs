@@ -40,6 +40,9 @@ let reflectionReadSimTests =
     testCase "SAFETY — in every mode, and across mode switches, no save says Patched while a reflective read holds the old value" <| fun _ ->
       realTraces.Value |> List.collect ReflectionReadInvariants.neverPatchedOverAStaleCopy |> report "stale copy behind a Patched"
 
+    testCase "SAFETY — a lapse makes every tracked value can't-tell: no save says Patched while the entry watch is down, in any mode" <| fun _ ->
+      realTraces.Value |> List.collect ReflectionReadInvariants.neverPatchedWhileLapsed |> report "Patched while lapsed"
+
     testCase "ATTRIBUTION — a reflective read is only ever filed under the caller that made it, slot or walk, across threads" <| fun _ ->
       realTraces.Value |> List.collect ReflectionReadInvariants.slotNeverNamesTheWrongCaller |> report "wrong caller"
 
@@ -62,11 +65,14 @@ let reflectionReadSimTests =
       let walks = sum _.Walks
       let nested = sum _.NestedReads
       let switches = sum _.ModeSwitches
+      let lapses = sum _.Lapses
+      let refusedWhileLapsed =
+        realTraces.Value |> List.sumBy (fun t -> t.Saves |> List.filter (fun o -> o.Lapsed) |> List.length)
       let summary =
-        sprintf "patched exact=%d mark=%d probe=%d, refused exact=%d mark=%d probe=%d, slotHits=%d walks=%d nested=%d switches=%d"
+        sprintf "patched exact=%d mark=%d probe=%d, refused exact=%d mark=%d probe=%d, slotHits=%d walks=%d nested=%d switches=%d lapses=%d savesWhileLapsed=%d"
           (patchedIn ReflectionReadMode.ExactEveryRead) (patchedIn ReflectionReadMode.MarkOnReflect) (patchedIn ReflectionReadMode.ProbeCallers)
           (refusedIn ReflectionReadMode.ExactEveryRead) (refusedIn ReflectionReadMode.MarkOnReflect) (refusedIn ReflectionReadMode.ProbeCallers)
-          slotHits walks nested switches
+          slotHits walks nested switches lapses refusedWhileLapsed
       printfn "reflection reads DST coverage: %s" summary
       for mode in ReflectionReadMode.all do
         (patchedIn mode, 20) |> Expect.isGreaterThan (sprintf "%A patches sometimes (%s)" mode summary)
@@ -75,6 +81,8 @@ let reflectionReadSimTests =
       (walks, 100) |> Expect.isGreaterThan (sprintf "unknown callers walk (%s)" summary)
       (nested, 100) |> Expect.isGreaterThan (sprintf "reads happen inside other callers' reflective calls (%s)" summary)
       (switches, 100) |> Expect.isGreaterThan (sprintf "modes switch mid-run (%s)" summary)
+      (lapses, 20) |> Expect.isGreaterThan (sprintf "keep-tiering scenarios actually inject a lapse (%s)" summary)
+      (refusedWhileLapsed, 20) |> Expect.isGreaterThan (sprintf "a save is actually attempted while lapsed, so the invariant isn't vacuous (%s)" summary)
 
     testCase "TWIN — a slot held for the caller's whole call pins a read inside the target on the outer caller, and ATTRIBUTION catches it" <| fun _ ->
       match firstBroken ReflectionReadInvariants.staleSlotTwin ReflectionReadInvariants.slotNeverNamesTheWrongCaller with

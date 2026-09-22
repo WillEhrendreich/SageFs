@@ -55,12 +55,23 @@ module ReflectionReadSim =
     | SwitchMode of mode: ReflectionReadMode
     | CloseWindow
     | Save of value: string
+    /// The reflection entry watch stops seeing reads (tiering recompiled what
+    /// it was patched onto). Only ever generated when the scenario's
+    /// `Tiering` is `KeepTiering`.
+    | Lapse
+    /// The app restarts, the watch is back, and every value is trustworthy
+    /// again.
+    | Restart
 
   type Scenario =
     { Seed: int
       Values: string list
       Readers: Reader list
       StartMode: ReflectionReadMode
+      /// tiering-off-while-watching: no lapse is ever injected (that's the
+      /// whole point of turning tiering off). keep-tiering: `Intent.Lapse`
+      /// and `Intent.Restart` may turn up in `Intents`.
+      Tiering: TieringChoice
       Intents: Intent list }
 
   [<RequireQualifiedAccess>]
@@ -81,6 +92,8 @@ module ReflectionReadSim =
     | SaveQuery of save: int * value: string
     | SaveApply of save: int * value: string
     | SaveRecheck of save: int * value: string
+    | LoseEntryWatch
+    | AppRestarted
 
   [<RequireQualifiedAccess>]
   type SaveResult =
@@ -94,7 +107,9 @@ module ReflectionReadSim =
       Mode: ReflectionReadMode
       Result: SaveResult
       /// Ground truth: readers holding a copy older than what the getter returns now.
-      StaleHolders: string list }
+      StaleHolders: string list
+      /// Whether the entry watch had lapsed at the moment of this save.
+      Lapsed: bool }
 
   /// Every `AtSite` the ledger was told, against who really read.
   type Attribution =
@@ -109,6 +124,7 @@ module ReflectionReadSim =
       Walks: int
       NestedReads: int
       ModeSwitches: int
+      Lapses: int
       Steps: Step list }
 
   /// How the slot is trusted, so a twin can put the naive version back.
@@ -144,6 +160,10 @@ module ReflectionReadSim =
       Walks: int
       NestedReads: int
       ModeSwitches: int
+      /// The reflection entry watch has lapsed: every tracked value is
+      /// can't-tell until `Step.AppRestarted`, mirroring `Tracker.Evidence`.
+      Lapsed: bool
+      Lapses: int
       Log: Step list }
 
   let private fateOf (shape: Shape) = realClassify (ilOf shape)
@@ -167,26 +187,37 @@ module ReflectionReadSim =
         Walks = 0
         NestedReads = 0
         ModeSwitches = 0
+        Lapsed = false
+        Lapses = 0
         Log = [] }
     let pending = Collections.Generic.List<Step>()
     let file (event: LedgerEvent) = world <- { world with Ledger = Ledger.step world.Ledger event }
     let slotOn thread = Map.tryFind thread world.Slots
     let setSlot thread caller target = world <- { world with Slots = Map.add thread (caller, target) world.Slots }
     let clearSlot thread = world <- { world with Slots = Map.remove thread world.Slots }
-    /// The getter carries its own watch: during startup in every mode, and
-    /// after it in exact-every-read.
+    /// The getter carries its own watch: during startup in every mode, after
+    /// it in exact-every-read, and — same as production's
+    /// `gettersStayWatched` — in every mode once the entry watch has lapsed,
+    /// since it's the only other thing that can still see a reflective read.
     let getterWatched () =
-      match world.Window, world.Mode with
-      | StartupWindow.Open, _ -> true
-      | StartupWindow.Closed, ReflectionReadMode.ExactEveryRead -> true
-      | StartupWindow.Closed, ReflectionReadMode.MarkOnReflect
-      | StartupWindow.Closed, ReflectionReadMode.ProbeCallers -> false
+      match world.Lapsed, world.Window, world.Mode with
+      | true, _, _ -> true
+      | false, StartupWindow.Open, _ -> true
+      | false, StartupWindow.Closed, ReflectionReadMode.ExactEveryRead -> true
+      | false, StartupWindow.Closed, ReflectionReadMode.MarkOnReflect
+      | false, StartupWindow.Closed, ReflectionReadMode.ProbeCallers -> false
     let attribute (trueReader: Reader) (named: Reader) =
       world <-
         { world with
             Attributions = world.Attributions @ [ { TrueReader = trueReader.Id; NamedReader = named.Id } ] }
       file (LedgerEvent.ReflectiveRead(trueReader.Value, ReflectiveCaller.AtSite(named.Id, 0, fateOf named.Shape)))
-    let decide (value: string) = checkSave [ value, Ledger.evidence world.Ledger value |> verdictOf ]
+    /// A lapse poisons every tracked value the same way `Tracker.Evidence`
+    /// does: not by consulting the ledger, but by refusing outright, because
+    /// a reflective read in the gap can't be ruled out for any of them.
+    let decide (value: string) =
+      match world.Lapsed with
+      | true -> SaveCheck.Refused((value, ValueVerdict.CannotTell "the reflection entry watch lapsed"), [])
+      | false -> checkSave [ value, Ledger.evidence world.Ledger value |> verdictOf ]
     let staleHolders (value: string) =
       let now = Map.find value world.Version
       world.Held
@@ -196,7 +227,7 @@ module ReflectionReadSim =
     let record save value result =
       world <-
         { world with
-            Saves = world.Saves @ [ { Save = save; Value = value; Mode = world.Mode; Result = result; StaleHolders = staleHolders value } ] }
+            Saves = world.Saves @ [ { Save = save; Value = value; Mode = world.Mode; Result = result; StaleHolders = staleHolders value; Lapsed = world.Lapsed } ] }
     let perform (step: Step) =
       world <- { world with Log = step :: world.Log }
       match step with
@@ -279,6 +310,8 @@ module ReflectionReadSim =
         match decide value with
         | SaveCheck.Refused((_, verdict), _) -> record save value (SaveResult.RefusedAfterPatch verdict)
         | SaveCheck.AllSafe -> record save value SaveResult.Patched
+      | Step.LoseEntryWatch -> world <- { world with Lapsed = true; Lapses = world.Lapses + 1 }
+      | Step.AppRestarted -> world <- { world with Lapsed = false }
     /// One reflective read. Its steps run in order on one thread, and a thread
     /// runs one call at a time (a call is synchronous): two reads on the same
     /// thread never interleave. Everything on other threads does. Chains with
@@ -306,6 +339,8 @@ module ReflectionReadSim =
       | Intent.SwitchMode mode -> chains.Add(noThread, [ Step.Switch mode ])
       | Intent.CloseWindow -> chains.Add(noThread, [ Step.EndWindow ])
       | Intent.Save value -> chains.Add(noThread, [ Step.SaveQuery(saveNo, value) ])
+      | Intent.Lapse -> chains.Add(noThread, [ Step.LoseEntryWatch ])
+      | Intent.Restart -> chains.Add(noThread, [ Step.AppRestarted ])
     let mutable intents = scenario.Intents
     let mutable saves = 0
     let busy () = chains.Count > 0 || pending.Count > 0
@@ -353,6 +388,7 @@ module ReflectionReadSim =
       Walks = world.Walks
       NestedReads = world.NestedReads
       ModeSwitches = world.ModeSwitches
+      Lapses = world.Lapses
       Steps = List.rev world.Log }
 
   let run (scenario: Scenario) : Trace = runWith real scenario
@@ -382,11 +418,29 @@ module ReflectionReadSim =
           | 2 -> Intent.SwitchMode(mode ())
           | _ -> Intent.Read (pick rng readers).Id ]
     let closeAt = rng.Next(0, List.length body + 1)
+    let intents = List.take closeAt body @ [ Intent.CloseWindow ] @ List.skip closeAt body
+    // Tiering and any lapse/restart are decided on a rng of their own, so
+    // adding this dimension never perturbs which values, readers, modes or
+    // close-window point a given seed picks — every scenario that predates
+    // this stays byte-identical when tiering-off-while-watching is picked
+    // (never a lapse), and the other twins' seeds keep meaning what they
+    // meant.
+    let rng2 = Random(seed * 486187739 + 911)
+    let tiering = pick rng2 TieringChoice.all
+    let intents =
+      match tiering with
+      | TieringChoice.TieringOffWhileWatching -> intents
+      | TieringChoice.KeepTiering ->
+        let at1 = rng2.Next(0, List.length intents + 1)
+        let withLapse = List.take at1 intents @ [ Intent.Lapse ] @ List.skip at1 intents
+        let at2 = rng2.Next(0, List.length withLapse + 1)
+        List.take at2 withLapse @ [ Intent.Restart ] @ List.skip at2 withLapse
     { Seed = seed
       Values = values
       Readers = readers
       StartMode = mode ()
-      Intents = List.take closeAt body @ [ Intent.CloseWindow ] @ List.skip closeAt body }
+      Tiering = tiering
+      Intents = intents }
 
 /// Invariants over `ReflectionReadSim`, and the twin that proves the slot one bites.
 module ReflectionReadInvariants =
@@ -416,7 +470,20 @@ module ReflectionReadInvariants =
       { Seed = t.Scenario.Seed
         Why = sprintf "%s's read was filed as %s's" a.TrueReader a.NamedReader })
 
-  let all (t: Trace) = neverPatchedOverAStaleCopy t @ slotNeverNamesTheWrongCaller t
+  /// A lapse fails closed: no save reports Patched while the entry watch is
+  /// down, in any mode, because a reflective read in the gap can't be ruled
+  /// out for any tracked value.
+  let neverPatchedWhileLapsed (t: Trace) : Violation list =
+    t.Saves
+    |> List.choose (fun o ->
+      match o.Result, o.Lapsed with
+      | SaveResult.Patched, true ->
+        Some
+          { Seed = t.Scenario.Seed
+            Why = sprintf "save %d of %s (%A) said Patched while the entry watch had lapsed" o.Save o.Value o.Mode }
+      | _ -> None)
+
+  let all (t: Trace) = neverPatchedOverAStaleCopy t @ slotNeverNamesTheWrongCaller t @ neverPatchedWhileLapsed t
 
   /// The slot held for the caller's whole call, left alone by an entry for an
   /// untracked member: a read inside the target inherits the outer caller.
