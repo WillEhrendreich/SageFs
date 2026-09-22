@@ -136,9 +136,9 @@ module TweakSim =
     { UndoWindow = 2; MaxEvents = 6; MaxBytes = 100_000L }
 
   /// The sim's default settings: LiveOnBudget so a mid-run trace actually
-  /// exercises compaction the way the existing invariants expect: callers
-  /// that want to prove the OnSessionClose story pass their own settings
-  /// (see `defaultSettingsFor`) and call `closeSessionNow` at the end.
+  /// exercises compaction the way the existing invariants expect. Callers
+  /// that want to prove the OnSessionClose story build their own settings
+  /// record (see `traceWith`/`runWith`) and call `closeSessionNow` at the end.
   let defaultSettings : TweakLog.TweakLogSettings =
     { CompactionMode = TweakLog.CompactionMode.LiveOnBudget
       ReplayScope = TweakLog.ReplayScope.SageFsWritesOnly
@@ -233,7 +233,7 @@ module TweakSim =
         | SaveBehavior.Real, true ->
           appendEvent s (TweakLog.TweakLogEvent.ConflictRaised(address, string v, resolved.Text, resolved.Text))
         | SaveBehavior.Real, false when TweakLog.canSave s.Log address |> Result.isError ->
-          // An open conflict on this address blocks the save outright —
+          // An open conflict on this address blocks the save outright,
           // consulted the same way a real product's save path has to.
           s
         | _ ->
@@ -334,7 +334,7 @@ module TweakSim =
     scenario.Events
     |> List.scan (step saveBehavior rollbackBehavior compactionBehavior) (initial settings scenario.InitialX scenario.InitialOther)
 
-  /// `trace` under the sim's default settings (LiveOnBudget) — the shape
+  /// `trace` under the sim's default settings (LiveOnBudget), the shape
   /// every pre-existing invariant/twin was written against.
   let trace saveBehavior rollbackBehavior compactionBehavior scenario : State list =
     traceWith defaultSettings saveBehavior rollbackBehavior compactionBehavior scenario

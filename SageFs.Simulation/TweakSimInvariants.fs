@@ -171,6 +171,40 @@ module TweakSimInvariants =
       | None, Some b -> violation i (sprintf "snapshot+tail lost the address entirely; full history still has %s" b)
       | _ -> None)
 
+  /// An open conflict on the tweaked address blocks further saves AND
+  /// rollbacks on it, checked live in the trace: neither a `TweakSaved`
+  /// nor a `RolledBack` may land in a step where the address already had
+  /// an open conflict going in.
+  let openConflictBlocksSaveAndRollback (states: State list) : Violation list =
+    states
+    |> List.pairwise
+    |> List.indexed
+    |> List.choose (fun (i, (before, after)) ->
+      match justAppended before after with
+      | Some(TweakLog.TweakLogEvent.TweakSaved _)
+      | Some(TweakLog.TweakLogEvent.RolledBack _) when TweakLog.hasOpenConflict before.Log address ->
+        violation i "a save or rollback landed while the address had an open conflict"
+      | _ -> None)
+
+  /// Under `ReplayScope.EverythingAsDiffs`, `replayWholeFile` folded over
+  /// the FULL (never-compacted) event history must reproduce exactly the
+  /// file the trace actually ended on, including bytes SageFs itself never
+  /// wrote (user edits, reformats).
+  let everythingAsDiffsReplaysWholeFileExactly (initialSource: string) (states: State list) : Violation list =
+    match states with
+    | [] -> []
+    | first :: _ ->
+      match first.Settings.ReplayScope with
+      | TweakLog.ReplayScope.SageFsWritesOnly -> []
+      | TweakLog.ReplayScope.EverythingAsDiffs ->
+        let final = states |> List.last
+        match TweakLog.replayWholeFile initialSource final.ShadowLog.Events with
+        | Ok replayed when replayed = final.Source -> []
+        | Ok replayed ->
+          [ { Index = states.Length - 1
+              Why = sprintf "replayWholeFile produced %s but the actual final file is %s" replayed final.Source } ]
+        | Error e -> [ { Index = states.Length - 1; Why = sprintf "replayWholeFile failed: %s" e } ]
+
   let all (scenario: Scenario) (states: State list) : Violation list =
     neverAppliedWithoutTypeCheck scenario states
     @ failureKeepsLastGoodValue states

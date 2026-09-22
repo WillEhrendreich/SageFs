@@ -234,7 +234,7 @@ let private addressOf (e: TweakLogEvent) : TweakAddress option =
 /// what `rollback`/`performUndo`/`performRedo` always have), multi-level
 /// undo/redo resolves correctly. A `RolledBack` in a POST-COMPACTION tail
 /// whose target crossed the snapshot boundary only resolves one level
-/// (via `Snapshot.Origins`, address+before only) — a second undo/redo
+/// (via `Snapshot.Origins`, address+before only), a second undo/redo
 /// cycle on something already compacted away is not this pass's problem
 /// to solve.
 let rec private effectOf (events: LoggedEvent list) (id: int) : (TweakAddress * string * string) option =
@@ -322,7 +322,7 @@ type RecoverableTweak =
     WasInFlightAtCrash: bool }
 
 /// A pure function from the log to an ordered (log order) list of
-/// recoverable tweaks — exactly what `dirtySet` already tracks, restated
+/// recoverable tweaks, exactly what `dirtySet` already tracks, restated
 /// as an offer instead of a set. Uses the SAME projection/fold path
 /// everything else in this module does; there is no separate "recovery"
 /// logic to drift from replay or the dirty-set query. An unsettled drag is
@@ -337,7 +337,7 @@ let recoveryOffer (log: EventLog) : RecoverableTweak list =
       | TweakLogEvent.TweakApplied(addr, before, after, _) when dirty.Contains addr -> Some(e.Id, addr, before, after)
       | _ -> None)
     |> List.groupBy (fun (_, addr, _, _) -> addr)
-    // The LATEST Applied per address is the only one still relevant — an
+    // The LATEST Applied per address is the only one still relevant, an
     // earlier one for the same address was superseded before the crash,
     // not independently recoverable.
     |> List.map (fun (_, xs) -> xs |> List.maxBy (fun (id, _, _, _) -> id))
@@ -382,7 +382,7 @@ type RollbackError =
 /// Roll back the write `opId` made, against `currentSource` as it is RIGHT
 /// NOW. Only ever applies (or reports a conflict), never guesses, and
 /// refuses outright when the target address already has an open conflict.
-/// Rolls back whatever `opId` did — a `TweakApplied`/`TweakSaved` (an
+/// Rolls back whatever `opId` did, a `TweakApplied`/`TweakSaved` (an
 /// ordinary undo), OR a `RolledBack` (rolling back a rollback IS redo,
 /// `effectOf` already flips its before/after, so this function does not
 /// need to know which case it's looking at).
@@ -473,7 +473,7 @@ module UndoCursor =
     | _ -> cursor
 
 /// Move the cursor back one step AND perform the real rollback: the
-/// compound action Ctrl+Z is, in one call. Storage stays append-only —
+/// compound action Ctrl+Z is, in one call. Storage stays append-only,
 /// this appends exactly one `RolledBack` event, it never rewrites
 /// anything already in the log.
 let performUndo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at: int64) : Result<EventLog * UndoCursor * string, string> =
@@ -491,7 +491,7 @@ let performUndo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at
 
 /// Move the cursor forward one step AND perform the reapply: the compound
 /// action redo is. Implemented as rolling back the MOST RECENT
-/// `RolledBack` that targeted the op the cursor is currently sitting on —
+/// `RolledBack` that targeted the op the cursor is currently sitting on,
 /// `effectOf` flips that rollback's own before/after, so "rolling back a
 /// rollback" already means "put the tweak back". Still append-only: this
 /// appends a SECOND `RolledBack`, on top of the first, never edits it.
@@ -692,7 +692,7 @@ let shouldCompact (settings: TweakLogSettings) (encodedBytes: int64) (eventCount
   | CompactionMode.OnSessionClose -> false
   | CompactionMode.LiveOnBudget -> eventCount > settings.Retention.MaxEvents || encodedBytes > settings.Retention.MaxBytes
 
-/// Compact unconditionally, whatever `settings.CompactionMode` says — the
+/// Compact unconditionally, whatever `settings.CompactionMode` says, the
 /// one moment truth always becomes snapshot-plus-tail, a session ending.
 let closeSession
   (snapshot: Snapshot)
@@ -743,11 +743,27 @@ let replayWholeFile (baseSource: string) (events: LoggedEvent list) : Result<str
       acc
       |> Result.bind (fun src ->
         match e.Event with
-        | TweakLogEvent.TweakApplied(addr, _before, after, _)
+        // TweakApplied moves the LIVE value only, never the file, so it is
+        // NOT replayed here on purpose: replaying it would write to disk
+        // something that, in the real run, only ever lived in memory until
+        // (if ever) a later TweakSaved actually wrote it. Only TweakSaved
+        // and a rollback that legitimately touched disk (its hash check
+        // already proved that) are file-affecting.
+        | TweakLogEvent.TweakApplied _ -> Ok src
         | TweakLogEvent.TweakSaved(addr, _before, after, _, _) ->
           match resolve src addr with
           | Error err -> Error(sprintf "replayWholeFile: address no longer resolves (%A): %A" addr err)
           | Ok resolved -> Ok(replaceRange src resolved.Range after)
+        // A rollback (an undo OR a redo, effectOf already flips the
+        // direction) is itself a write, at THIS address, to THIS "after",
+        // replayed the same way an ordinary saved tweak's write is.
+        | TweakLogEvent.RolledBack _ ->
+          match effectOf events e.Id with
+          | None -> Error(sprintf "replayWholeFile: RolledBack event %d has no resolvable effect" e.Id)
+          | Some(addr, _before, after) ->
+            match resolve src addr with
+            | Error err -> Error(sprintf "replayWholeFile: address no longer resolves (%A): %A" addr err)
+            | Ok resolved -> Ok(replaceRange src resolved.Range after)
         | TweakLogEvent.UserEditObserved(_, _, _, Some fileAfter) -> Ok fileAfter
         | TweakLogEvent.ReformatObserved(_, _, Some fileAfter) -> Ok fileAfter
         | TweakLogEvent.UserEditObserved(addr, _, _, None) ->
@@ -1073,7 +1089,7 @@ module TweakLogFormat =
         Ok { Grade = grade; Fingerprint = fp; Events = events; TornTail = tornTail }
     with ex -> Error ex.Message
 
-  /// TWIN — never wired into any production path. Skips the fingerprint
+  /// TWIN: never wired into any production path. Skips the fingerprint
   /// header the same way `decodeSegment` does, but decodes the event
   /// stream regardless of grade: exactly the bug "Impossible is never
   /// folded" exists to prevent. Kept only so a DST invariant can be shown
