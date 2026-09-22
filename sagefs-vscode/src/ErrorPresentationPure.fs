@@ -64,7 +64,7 @@ let describeInline (e: StructuredError) : string =
 /// unlabelled.
 [<RequireQualifiedAccess>]
 type LogLevel =
-  | Error
+  | Failure
   | Info
   | Debug
 
@@ -75,12 +75,12 @@ module LogLevel =
   /// is most likely reaching for when they touch this setting at all.
   let ofSetting (s: string) : LogLevel =
     match (s |> Option.ofObj |> Option.defaultValue "").Trim().ToLowerInvariant() with
-    | "error" -> LogLevel.Error
+    | "error" -> LogLevel.Failure
     | "debug" -> LogLevel.Debug
     | _ -> LogLevel.Info
 
   let private rank = function
-    | LogLevel.Error -> 0
+    | LogLevel.Failure -> 0
     | LogLevel.Info -> 1
     | LogLevel.Debug -> 2
 
@@ -88,8 +88,8 @@ module LogLevel =
   let lineLevel (line: string) : LogLevel =
     let t = (line |> Option.ofObj |> Option.defaultValue "").TrimStart()
     match t with
-    | _ when t.StartsWith "[error]" || t.StartsWith "[err]" -> LogLevel.Error
-    | _ when t.StartsWith "[warn]" -> LogLevel.Error
+    | _ when t.StartsWith "[error]" || t.StartsWith "[err]" -> LogLevel.Failure
+    | _ when t.StartsWith "[warn]" -> LogLevel.Failure
     | _ when t.StartsWith "[debug]" || t.StartsWith "[trace]" -> LogLevel.Debug
     | _ -> LogLevel.Info
 

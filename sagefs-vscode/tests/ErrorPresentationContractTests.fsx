@@ -80,24 +80,24 @@ let tests =
     // ── sagefs.logLevel: a setting that was declared and read by nothing ──
 
     testCase "WHY - the setting parses, and an unrecognised value is Info, not silence" <| fun _ ->
-      LogLevel.ofSetting "error" |> Expect.equal "error" LogLevel.Error
+      LogLevel.ofSetting "error" |> Expect.equal "error" LogLevel.Failure
       LogLevel.ofSetting "DEBUG" |> Expect.equal "case-insensitive" LogLevel.Debug
       LogLevel.ofSetting "info" |> Expect.equal "info" LogLevel.Info
       LogLevel.ofSetting "wat" |> Expect.equal "the documented default" LogLevel.Info
       LogLevel.ofSetting null |> Expect.equal "null is not silence" LogLevel.Info
 
     testCase "WHY - the filter reads the extension's existing [level] prefix convention" <| fun _ ->
-      LogLevel.lineLevel "[warn] refreshStatus: boom" |> Expect.equal "warn counts as error-level" LogLevel.Error
+      LogLevel.lineLevel "[warn] refreshStatus: boom" |> Expect.equal "warn counts as error-level" LogLevel.Failure
       LogLevel.lineLevel "[debug] port probe" |> Expect.equal "debug" LogLevel.Debug
       LogLevel.lineLevel "[info] using daemon discovery hint" |> Expect.equal "info" LogLevel.Info
 
     testCase "WHY - an unlabelled line is INFO, never dropped silently for lacking a prefix" <| fun _ ->
       LogLevel.lineLevel "SageFs daemon is ready." |> Expect.equal "unlabelled is info" LogLevel.Info
       LogLevel.shouldLog LogLevel.Info "SageFs daemon is ready." |> Expect.isTrue "kept at the default level"
-      LogLevel.shouldLog LogLevel.Error "SageFs daemon is ready." |> Expect.isFalse "suppressed only at error level"
+      LogLevel.shouldLog LogLevel.Failure "SageFs daemon is ready." |> Expect.isFalse "suppressed only at error level"
 
     testCase "WHY - error lines survive every level, because they are the ones a user needs" <| fun _ ->
-      for lvl in [ LogLevel.Error; LogLevel.Info; LogLevel.Debug ] do
+      for lvl in [ LogLevel.Failure; LogLevel.Info; LogLevel.Debug ] do
         LogLevel.shouldLog lvl "[warn] refreshStatus: boom" |> Expect.isTrue "errors always reach the channel"
       LogLevel.shouldLog LogLevel.Info "[debug] chatty" |> Expect.isFalse "debug hidden at info"
       LogLevel.shouldLog LogLevel.Debug "[debug] chatty" |> Expect.isTrue "debug shown at debug"

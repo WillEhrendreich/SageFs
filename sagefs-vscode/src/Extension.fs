@@ -709,7 +709,7 @@ let updateTestStatusBar (summary: VscTestSummary) =
     sb.text <- view.Text
     sb.backgroundColor <-
       match view.Tone with
-      | VscStatusTone.Error -> Some (newThemeColor "statusBarItem.errorBackground")
+      | VscStatusTone.Failing -> Some (newThemeColor "statusBarItem.errorBackground")
       | VscStatusTone.Warning -> Some (newThemeColor "statusBarItem.warningBackground")
       | VscStatusTone.Plain -> None
     sb.tooltip <- Some view.Tooltip

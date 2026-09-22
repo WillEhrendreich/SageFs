@@ -27,18 +27,18 @@ let tests =
     testCase "WHY — statusBarView — a failed discovery is an error with its reason in the tooltip" <| fun _ ->
       let v = view { summary "discovery_failed" "Test discovery failed" "Could not discover tests: could not load Tests.dll" with Total = 0 }
       v.Text |> Expect.equal "failed" "$(error) Test discovery failed"
-      v.Tone |> Expect.equal "error" VscStatusTone.Error
+      v.Tone |> Expect.equal "error" VscStatusTone.Failing
       v.Tooltip.StartsWith "Could not discover tests: could not load Tests.dll" |> Expect.isTrue "tooltip gives the reason"
 
     testCase "WHY — statusBarView — a compile block is an error naming the file" <| fun _ ->
       let v = view (summary "blocked_by_compile_errors" "Math.fs: 2 errors" "Waiting for Math.fs to compile (2 errors) — showing the last good results: 3 passed")
       v.Text |> Expect.equal "blocked" "$(error) Math.fs: 2 errors"
-      v.Tone |> Expect.equal "error" VscStatusTone.Error
+      v.Tone |> Expect.equal "error" VscStatusTone.Failing
 
     testCase "WHY — statusBarView — a failed rebuild is an error" <| fun _ ->
       let v = view (summary "blocked_by_failed_rebuild" "Tests could not re-run" "Tests could not re-run: error FS0001")
       v.Text |> Expect.equal "rebuild failed" "$(error) Tests could not re-run"
-      v.Tone |> Expect.equal "error" VscStatusTone.Error
+      v.Tone |> Expect.equal "error" VscStatusTone.Failing
 
     testCase "WHY — statusBarView — work in progress spins" <| fun _ ->
       (view (summary "rebuilding" "Rebuilding 2 tests" "")).Text |> Expect.equal "rebuilding" "$(sync~spin) Rebuilding 2 tests"
@@ -48,7 +48,7 @@ let tests =
     testCase "WHY — statusBarView — settled results pick their icon and tone from the counts" <| fun _ ->
       let failed = view { summary "settled" "1 failed · 12 passed" "1 failed · 12 passed" with Failed = 1; Passed = 12 }
       failed.Text |> Expect.equal "failed" "$(testing-error-icon) 1 failed · 12 passed"
-      failed.Tone |> Expect.equal "failed is an error" VscStatusTone.Error
+      failed.Tone |> Expect.equal "failed is an error" VscStatusTone.Failing
       let stale = view { summary "settled" "10 passed · 2 stale" "" with Passed = 10; Stale = 2 }
       stale.Text |> Expect.equal "stale" "$(warning) 10 passed · 2 stale"
       stale.Tone |> Expect.equal "stale is a warning" VscStatusTone.Warning

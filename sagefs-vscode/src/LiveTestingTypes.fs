@@ -277,7 +277,7 @@ type VscLiveTestState = {
 type VscStatusTone =
   | Plain
   | Warning
-  | Error
+  | Failing
 
 type VscStatusBarView = {
   Text: string
@@ -296,7 +296,7 @@ module VscTestSummary =
       match s.DiscoveryState with
       | "ready_zero_tests" -> "$(beaker) No tests found", VscStatusTone.Plain
       | _ -> "$(sync~spin) Discovering tests...", VscStatusTone.Plain
-    | s when s.Failed > 0 -> sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total, VscStatusTone.Error
+    | s when s.Failed > 0 -> sprintf "$(testing-error-icon) %d/%d failed" s.Failed s.Total, VscStatusTone.Failing
     | s when s.Running > 0 -> sprintf "$(sync~spin) Running %d/%d" s.Running s.Total, VscStatusTone.Plain
     | s when s.Stale > 0 -> sprintf "$(warning) %d/%d stale" s.Stale s.Total, VscStatusTone.Warning
     | s -> sprintf "$(testing-passed-icon) %d/%d passed" s.Passed s.Total, VscStatusTone.Plain
@@ -304,7 +304,7 @@ module VscTestSummary =
   /// Settled results: the most urgent count picks the icon; never-run tests are not a pass.
   let private settledIcon (s: VscTestSummary) =
     match s with
-    | s when s.Failed > 0 -> "$(testing-error-icon)", VscStatusTone.Error
+    | s when s.Failed > 0 -> "$(testing-error-icon)", VscStatusTone.Failing
     | s when s.Stale > 0 -> "$(warning)", VscStatusTone.Warning
     | s when s.NotYetRun > 0 -> "$(circle-outline)", VscStatusTone.Plain
     | _ -> "$(testing-passed-icon)", VscStatusTone.Plain
@@ -321,7 +321,7 @@ module VscTestSummary =
       | "running" -> withIcon "$(sync~spin)" VscStatusTone.Plain
       | "discovery_failed"
       | "blocked_by_compile_errors"
-      | "blocked_by_failed_rebuild" -> withIcon "$(error)" VscStatusTone.Error
+      | "blocked_by_failed_rebuild" -> withIcon "$(error)" VscStatusTone.Failing
       | "settled" ->
         let icon, settledTone = settledIcon s
         withIcon icon settledTone
