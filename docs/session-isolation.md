@@ -1,12 +1,12 @@
 # Session Isolation Architecture
 
 > **Status note:** This document records the design that introduced
-> per-client session routing — I'm keeping it as a design record rather than
+> per-client session routing. I'm keeping it as a design record rather than
 > rewriting it as a live reference, because the "before" bug below is exactly
 > the kind of thing worth remembering how I fixed. What shipped matches this
 > design: the dashboard's SSE stream now tracks a per-connection viewing
 > session driven by a Datastar signal (`viewingSessionId`), not a URL query
-> parameter or a shared global — see `createStreamHandler` in
+> parameter or a shared global. See `createStreamHandler` in
 > `SageFs/Dashboard.fs` if you want to see the real thing instead of the plan
 > for it. Current product clients are editor integrations, dashboard tabs,
 > and MCP connections. The built-in TUI was part of the original
@@ -113,7 +113,7 @@ let switchSession ctx sessionId = task {
 
 Each browser tab opens an SSE connection via `/dashboard/stream`. At the
 time this was written, `pushState()` read the global `getSessionId()`
-closure — the fix was a per-connection session ID:
+closure. The fix was a per-connection session ID:
 
 **`createStreamHandler` changes**:
 ```fsharp
@@ -139,7 +139,7 @@ communicate which SSE connection to update. I weighed three options here:
 3. **Direct mutation**: SSE handler exposes a thread-safe slot; switch endpoint finds the right connection and mutates it
 
 Option 2 (signal-based) is the one that actually shipped, and it's the most
-natural fit for Datastar anyway — the switch POST includes the selected
+natural fit for Datastar anyway. The switch POST includes the selected
 session ID, and the SSE handler observes signal changes instead of me
 inventing a second identity scheme just for this.
 
@@ -168,8 +168,8 @@ let createEvalHandler evalCodeForSession : HttpHandler =
 
 Each supported editor integration keeps its selected session in client
 state and sends that session identity with commands. Switching a session in
-one editor must not change another editor, dashboard tab, or MCP connection
-— that's the whole rule, stated three times in three different subsystems
+one editor must not change another editor, dashboard tab, or MCP connection.
+That's the whole rule, stated three times in three different subsystems
 because I kept almost breaking it in the fourth.
 
 ## Dashboard Connectivity Banner
@@ -180,7 +180,7 @@ set server-side). The `Ds.show "!$serverConnected"` binding keeps the
 disconnect banner hidden.
 
 ### Design Principle
-**The banner is ONLY for problems.** When connected, it's invisible — no
+**The banner is ONLY for problems.** When connected, it's invisible: no
 "✅ Connected" message. Nobody needs to be told a thing that's supposed to
 work is working; that's just noise. The banner appears only when something
 is wrong (disconnected, reconnecting, error).
@@ -188,7 +188,7 @@ is wrong (disconnected, reconnecting, error).
 ### Fix
 Remove Datastar signal control from the banner. Use pure JS:
 
-1. **On page load**: Banner starts hidden (`display: none`) — assume things will work
+1. **On page load**: Banner starts hidden (`display: none`); assume things will work
 2. **On SSE stream failure/close**: JS shows the banner ("❌ Disconnected — reconnecting...")
 3. **On SSE stream success**: JS hides the banner (back to invisible)
 4. **Reconnection poller**: JS polls `/api/daemon-info` every 2s. On success, `location.reload()` to reinitialize Datastar
@@ -267,7 +267,7 @@ do! resumeSessions (Some (fun () ->
 
 ## Test Plan
 
-This is the plan I wrote before touching the code — tests first, contracts
+This is the plan I wrote before touching the code: tests first, contracts
 defined before implementation, same as everywhere else in this repo.
 
 ### Unit Tests (Expecto, in SageFs.Tests)
@@ -390,26 +390,26 @@ module SessionResumeTests
 
 ## Implementation Order
 
-1. **Tests first** — Write all unit tests (RED). They define the contracts.
-2. **MCP isolation** (Phase 1) — Simplest: remove 2 lines from `switchSession`
-3. **Dashboard connectivity** (Phase 0 in plan) — Pure JS, apply stashed changes
-4. **Incremental resume** (Phase 3) — Add callback parameter
-5. **Dashboard per-connection** (Phase 2) — Most complex, needs signal-based routing
+1. **Tests first**: write all unit tests (RED). They define the contracts.
+2. **MCP isolation** (Phase 1), the simplest one: remove 2 lines from `switchSession`
+3. **Dashboard connectivity** (Phase 0 in plan): pure JS, apply stashed changes
+4. **Incremental resume** (Phase 3): add callback parameter
+5. **Dashboard per-connection** (Phase 2), the most complex: needs signal-based routing
 
 ## Key Files
 
 | File | What Changes |
 |------|-------------|
-| `SageFs.Core/Mcp.fs:907-924` | `switchSession` — remove Elm dispatch |
-| `SageFs/Dashboard.fs:131-155` | Connection monitor JS — reconnection logic |
-| `SageFs/Dashboard.fs:266` | Banner HTML — remove `Ds.show` |
-| `SageFs/Dashboard.fs:907+` | `createStreamHandler` — per-connection session |
-| `SageFs/Dashboard.fs:1436+` | `createEndpoints` — eval/reset routing |
+| `SageFs.Core/Mcp.fs:907-924` | `switchSession`: remove Elm dispatch |
+| `SageFs/Dashboard.fs:131-155` | Connection monitor JS: reconnection logic |
+| `SageFs/Dashboard.fs:266` | Banner HTML: remove `Ds.show` |
+| `SageFs/Dashboard.fs:907+` | `createStreamHandler`: per-connection session |
+| `SageFs/Dashboard.fs:1436+` | `createEndpoints`: eval/reset routing |
 | `SageFs/DaemonMode.fs:33` | `activeSessionId` → `defaultSessionId` (semantic rename) |
-| `SageFs/DaemonMode.fs:126` | `resumeSessions` — add callback parameter |
-| `SageFs.Tests/McpSessionIsolationTests.fs` | NEW — MCP isolation tests |
-| `SageFs.Tests/DashboardSessionIsolationTests.fs` | NEW — Dashboard isolation tests |
+| `SageFs/DaemonMode.fs:126` | `resumeSessions`: add callback parameter |
+| `SageFs.Tests/McpSessionIsolationTests.fs` | NEW: MCP isolation tests |
+| `SageFs.Tests/DashboardSessionIsolationTests.fs` | NEW: Dashboard isolation tests |
 
-(File paths and line numbers above are as they were when this was designed
-— `Mcp.fs` in particular has since moved to `SageFs/Mcp.fs`. Treat this
+(File paths and line numbers above are as they were when this was designed.
+`Mcp.fs` in particular has since moved to `SageFs/Mcp.fs`. Treat this
 table as the historical map, not a live index.)

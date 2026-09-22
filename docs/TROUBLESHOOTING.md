@@ -2,7 +2,7 @@
 
 Quick fixes for common issues. If your problem isn't listed here, check the
 [GitHub Issues](https://github.com/WillEhrendreich/SageFs/issues) or run the
-health check in your editor — and if it's genuinely broken, file it. I'd
+health check in your editor. If it's genuinely broken, file it. I'd
 rather hear about it than have you quietly work around it.
 
 ## Editor Health Checks (Start Here)
@@ -28,16 +28,16 @@ found, make sure `~/.dotnet/tools` is on your `PATH`.
 
 **Requires**: .NET 10 SDK to install SageFs itself. Check with
 `dotnet --version`. Individual sessions can target either .NET 10 or .NET
-11 — each session's host builds with that project's own SDK and runs on
+11. Each session's host builds with that project's own SDK and runs on
 its own runtime, independent of what SageFs itself is installed with.
 
 ### Daemon won't start / times out
 
-1. **Check if another instance is running**: `sagefs status` — if it shows a
+1. **Check if another instance is running**: `sagefs status`. If it shows a
    running daemon, stop it with `sagefs stop` or use the existing one.
 2. **Port in use**: Default is 37749. Use `--mcp-port 8080` to pick a different
    port. In VS Code, set `sagefs.mcpPort` in settings.
-3. **Check the SageFs console window** — the daemon logs startup errors to its
+3. **Check the SageFs console window**: it logs startup errors to its
    own terminal window. Look for .NET SDK errors, missing project files, or
    compilation failures.
 4. **First-time JIT warmup**: The very first launch after install takes longer
@@ -123,12 +123,12 @@ Supported editor integrations include an **eval watchdog**. If the daemon become
    *"Evaluation interrupted — daemon may have crashed"*
 3. The notification offers **Restart Daemon** and **Show Output** actions
 
-The watchdog uses a monotonic generation ID to prevent race conditions — if you
+The watchdog uses a monotonic generation ID to prevent race conditions. If you
 start a new eval before the watchdog fires, the old timer is silently cancelled.
 
 **If you see phantom "interrupted" dialogs**, update to v0.6.50+, which
 included the monotonic ID fix. If you're on anything newer than that and
-still seeing it, that's a regression — file it.
+still seeing it, that's a regression. File it.
 
 ---
 
@@ -149,7 +149,7 @@ starting SageFs (or in your shell profile).
 | `SAGEFS_BIND_HOST` | `localhost` | Loopback bind address: `localhost`, `127.0.0.1` or `::1`. Any other value stops the daemon at startup (see [Docker / Remote Containers](#docker--remote-containers)) |
 | `SAGEFS_MCP_PORT` | `37749` | MCP server port |
 
-**Example** — slow CI machine with large project:
+**Example**: slow CI machine with large project:
 
 ```bash
 export SAGEFS_WARMUP_MAX_MINUTES=20
@@ -202,7 +202,7 @@ have no authentication, so binding all interfaces (`SAGEFS_BIND_HOST=0.0.0.0`)
 would hand code execution to anyone on the network. The daemon refuses to
 start with a non-loopback `SAGEFS_BIND_HOST`, and `sagefs check` reports it.
 I'm not going to make this configurable just so someone can trade an
-afternoon of convenience for handing out remote code execution — forward the
+afternoon of convenience for handing out remote code execution. Forward the
 ports instead.
 
 To reach a daemon in a container, forward ports 37749 and 37750 to the
@@ -233,13 +233,13 @@ must be sent as `Content-Type: application/json`.
 
 ## FSI Quirks & Rewrites
 
-- **`;;` is required** — every FSI transaction must end with `;;`
-- **"Operation could not be completed due to earlier error"** — a *previous*
+- **`;;` is required**: every FSI transaction must end with `;;`
+- **"Operation could not be completed due to earlier error"**: a *previous*
   submission had a compile error. Fix that code and resubmit it. The session
-  is fine — do NOT reset.
-- **Type changes need hard reset** — if you change a type definition (DU, record),
+  is fine, do NOT reset.
+- **Type changes need hard reset**: if you change a type definition (DU, record),
   the old version is cached in FSI. Use hard reset to pick up the new types.
-- **Order matters** — FSI evaluates in submission order. Define types before
+- **Order matters**: FSI evaluates in submission order. Define types before
   functions that use them.
 
 ---

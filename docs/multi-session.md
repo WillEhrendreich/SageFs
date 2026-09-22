@@ -46,12 +46,12 @@ this.
 | Action | HTTP | MCP tool |
 |:-------|:-----|:---------|
 | Create | `POST /api/sessions/create` | `create_session` |
-| List | — | `list_sessions` |
-| Switch | — | `switch_session` |
-| Stop | — | `stop_session` |
+| List | - | `list_sessions` |
+| Switch | - | `switch_session` |
+| Stop | - | `stop_session` |
 
-Each client keeps its own active session. Switching in one client does not
-move any other client — an editor forcing every other window and every
+Each client keeps its own active session. Switching in one client doesn't
+move any other client. An editor forcing every other window and every
 other agent onto whatever session it just switched to was the actual bug
 this whole design exists to not have. VS Code, Neovim, and the dashboard all
 expose these actions in their UIs.
