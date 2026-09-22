@@ -60,7 +60,7 @@ type FrictionReport = {
 }
 
 module Summaries =
-  let nonActionableTools = set [ "report_friction"; "get_friction_summary"; "get_friction_report" ]
+  let nonActionableTools = set [ "report_friction"; "get_friction_summary"; "get_friction_report"; "manage_local_data" ]
 
   let isActionableTool tool =
     nonActionableTools.Contains(ToolName.value tool) |> not

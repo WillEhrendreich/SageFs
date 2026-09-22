@@ -1332,6 +1332,42 @@ TRUST MODEL:
         logger.LogDebug("MCP-TOOL: targeted_verify called, behavior={Behavior}, exact_guard={ExactGuard}", behavior, exact_guard)
         targetedVerifyResult ctx "mcp" wd behavior guard |> withEchoOutcome ctx "targeted_verify"
 
+
+    [<McpServerTool>]
+    [<Description("""See what SageFs stores on disk under its data dir, and clear it.
+
+USE CASE:
+- Check how big friction.db and cohort.ledger.db have got, how old their oldest rows are, and how long they're kept.
+- Clear them.
+
+ACTIONS:
+- status (default): row counts, bytes, oldest row per table, and the retention rules with the env vars that change them.
+- clear: delete the stored rows. store=friction clears the friction tables, store=cohort clears the cohort ledger (refused while a cohort is running), store=all (default) does both.
+
+Retention runs on its own: friction keeps only the running version's rows, inside an age cap and a row cap; a finished cohort's ledger is cleared on daemon start once it's old enough.""")>]
+    member _.manage_local_data(
+        [<Description("status (default) or clear")>]
+        [<Optional; DefaultParameterValue("status")>]
+        action: string,
+        [<Description("For clear: friction, cohort or all (default)")>]
+        [<Optional; DefaultParameterValue("all")>]
+        store: string
+    ) : Task<string> =
+        logger.LogDebug("MCP-TOOL: manage_local_data called, action={Action}, store={Store}", action, store)
+        task {
+          let cohort = SageFs.LocalData.liveCohort ctx.CohortOwner
+          let dataDir = SageFs.DaemonState.SageFsDir
+          match SageFs.LocalData.LocalDataAction.parse action with
+          | Ok SageFs.LocalData.LocalDataAction.Status ->
+            return SageFs.LocalData.report ctx.FrictionStore cohort dataDir |> SageFs.LocalData.render
+          | Ok SageFs.LocalData.LocalDataAction.Clear ->
+            match SageFs.LocalData.ClearTarget.parse store with
+            | Ok target ->
+              return SageFs.LocalData.clear target ctx.FrictionStore cohort dataDir |> SageFs.LocalData.renderClear
+            | Error message -> return sprintf "Error: %s" message
+          | Error message -> return sprintf "Error: %s" message
+        } |> withEcho ctx "manage_local_data"
+
     [<McpServerTool>]
     [<Description("""Get a compact local summary of MCP friction recorded by SageFs.
 

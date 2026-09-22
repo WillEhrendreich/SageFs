@@ -78,3 +78,55 @@ VALUES ($seq, $clock_ticks, $entropy, $command_json, $events_json);"
       List.ofSeq entries
 
     { Append = append; ReadAll = readAll }
+
+  /// The ledger's footprint for the "what's stored" view.
+  type LedgerUsage = {
+    Bytes: int64
+    Rows: int64
+    /// Clock of the oldest entry, `NoRows` when the ledger is empty.
+    Oldest: SageFs.Features.FrictionSqlite.OldestRow
+  }
+
+  let usage (dbPath: string) : LedgerUsage =
+    use connection = openConnection dbPath
+    ensureSchema connection
+    let scalar (sql: string) =
+      use command = connection.CreateCommand()
+      command.CommandText <- sql
+      command.ExecuteScalar()
+    let bytes = System.Convert.ToInt64(scalar "PRAGMA page_count;") * System.Convert.ToInt64(scalar "PRAGMA page_size;")
+    let rows = System.Convert.ToInt64(scalar "SELECT count(*) FROM cohort_ledger;")
+    let oldest =
+      match scalar "SELECT min(clock_ticks) FROM cohort_ledger;" with
+      | :? int64 as ticks ->
+        SageFs.Features.FrictionSqlite.OldestRow.WrittenAt(System.DateTimeOffset(System.DateTime(ticks, System.DateTimeKind.Utc)))
+      | _ -> SageFs.Features.FrictionSqlite.OldestRow.NoRows
+    { Bytes = bytes; Rows = rows; Oldest = oldest }
+
+  /// Delete every ledger row and give the space back. Callers decide whether
+  /// that's allowed (`LocalDataRetention.decideLedger`); this just does it.
+  let clear (dbPath: string) : int64 =
+    use connection = openConnection dbPath
+    ensureSchema connection
+    let deleted =
+      use command = connection.CreateCommand()
+      command.CommandText <- "DELETE FROM cohort_ledger;"
+      int64 (command.ExecuteNonQuery())
+    use vacuum = connection.CreateCommand()
+    vacuum.CommandText <- "VACUUM;"
+    vacuum.ExecuteNonQuery() |> ignore
+    deleted
+
+  /// Run on daemon start, BEFORE the cohort owner replays the ledger: clear it
+  /// when the cohort it holds finished longer ago than `retention`. Doing it
+  /// before the replay means the owner's state and the ledger on disk never
+  /// disagree. An active cohort's rows are never touched.
+  let pruneFinished (retention: System.TimeSpan) (now: System.DateTime) (dbPath: string) : SageFs.Features.LocalDataRetention.LedgerDecision =
+    let port = create dbPath
+    let decision = SageFs.Features.LocalDataRetention.decideLedger retention now (port.ReadAll ())
+    match decision with
+    | SageFs.Features.LocalDataRetention.LedgerDecision.Clear _ -> clear dbPath |> ignore
+    | SageFs.Features.LocalDataRetention.LedgerDecision.NothingStored
+    | SageFs.Features.LocalDataRetention.LedgerDecision.KeepActive _
+    | SageFs.Features.LocalDataRetention.LedgerDecision.KeepRecent _ -> ()
+    decision

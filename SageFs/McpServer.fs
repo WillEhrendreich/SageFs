@@ -2366,6 +2366,31 @@ let mapDiagnosticsRoutes (app: WebApplication) (rctx: RouteContext) =
       SageFs.Instrumentation.sseConnectionsActive.Add(-1L)
     } :> Task
   ) |> ignore
+  // What SageFs keeps under its data dir. Same view as manage_local_data.
+  app.MapGet("/api/local-data", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      let cohort = SageFs.LocalData.liveCohort rctx.McpContext.CohortOwner
+      let report = SageFs.LocalData.report rctx.McpContext.FrictionStore cohort DaemonState.SageFsDir
+      do! jsonResponse ctx 200 (SageFs.LocalData.toJson report)
+    } :> Task
+  ) |> ignore
+  // ?store=friction|cohort|all (default all). A running cohort's ledger is left alone.
+  app.MapPost("/api/local-data/clear", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->
+    task {
+      match SageFs.LocalData.ClearTarget.parse (string ctx.Request.Query["store"]) with
+      | Error message -> do! jsonResponse ctx 400 {| success = false; error = message |}
+      | Ok target ->
+        let cohort = SageFs.LocalData.liveCohort rctx.McpContext.CohortOwner
+        let results = SageFs.LocalData.clear target rctx.McpContext.FrictionStore cohort DaemonState.SageFsDir
+        do! jsonResponse ctx 200
+              {| success = true
+                 results =
+                   results
+                   |> List.map (fun (store, outcome) ->
+                     {| store = SageFs.LocalData.LocalStore.fileName store
+                        outcome = SageFs.LocalData.renderClear [ store, outcome ] |}) |}
+    } :> Task
+  ) |> ignore
 
 let mapEventsRoute (app: WebApplication) (rctx: RouteContext) =
   app.MapGet("/events", fun (ctx: Microsoft.AspNetCore.Http.HttpContext) ->

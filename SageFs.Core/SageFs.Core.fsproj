@@ -132,6 +132,7 @@
         <Compile Include="Features\DaemonPersistence.fs" />
         <Compile Include="Features\ManifestOwner.fs" />
         <Compile Include="Features\CohortLedger.fs" />
+        <Compile Include="Features\LocalDataRetention.fs" />
         <Compile Include="Features\CohortOwner.fs" />
         <Compile Include="Features\CohortTestProjection.fs" />
         <Compile Include="Features\CohortMatrixRender.fs" />

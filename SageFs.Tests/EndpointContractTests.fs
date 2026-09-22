@@ -155,7 +155,7 @@ let endpointContractTests = testList "EndpointContracts" [
       |> List.length
       |> Expect.equal
         "endpoint count changed — update contracts and bump this number"
-        36
+        38
     }
   ]
 

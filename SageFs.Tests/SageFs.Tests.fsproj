@@ -261,6 +261,7 @@
         <Compile Include="TweakTransactionTests.fs" />
         <Compile Include="TweakLogTests.fs" />
         <Compile Include="TweakSimDstTests.fs" />
+        <Compile Include="RetentionSimDstTests.fs" />
         <Compile Include="LiveStateEmitTests.fs" />
         <Compile Include="ReloadBroadcastTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />
@@ -377,6 +378,8 @@
          <Compile Include="FrictionSummaryPropertyTests.fs" />
          <Compile Include="FrictionStorageScenarioTests.fs" />
          <Compile Include="FrictionSqlitePersistenceTests.fs" />
+         <Compile Include="LocalDataRetentionTests.fs" />
+         <Compile Include="LocalDataSqliteTests.fs" />
          <Compile Include="FrictionSqliteSummaryQueryTests.fs" />
          <Compile Include="FrictionOtelProjectionScenarioTests.fs" />
          <Compile Include="FrictionOtelProjectionTests.fs" />

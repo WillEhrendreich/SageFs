@@ -167,3 +167,51 @@ module Timeouts =
   /// Deadline for the hot-reload web-app sample to bind its port and report
   /// ready. Replaces the 120.0s literal.
   let webAppPortReady = envOrDefault "SAGEFS_TEST_WEBAPP_PORT_SECONDS" 120.0
+
+/// How long SageFs keeps the local data it writes under its data dir, and how
+/// much of it. Read once at startup; every value has an env var so a user (or
+/// a test) can change it without a rebuild. `LocalDataRetention` holds the
+/// decisions that use these.
+[<RequireQualifiedAccess>]
+module DataRetention =
+
+  let private envOrDefaultInt (varName: string) (defaultValue: int) =
+    match Environment.GetEnvironmentVariable(varName) with
+    | null | "" -> defaultValue
+    | value ->
+      match Int32.TryParse(value) with
+      | true, v when v > 0 -> v
+      | _ -> defaultValue
+
+  let private envOrDefaultDays (varName: string) (defaultDays: float) =
+    match Environment.GetEnvironmentVariable(varName) with
+    | null | "" -> TimeSpan.FromDays(defaultDays)
+    | value ->
+      match Double.TryParse(value) with
+      | true, v when v > 0.0 -> TimeSpan.FromDays(v)
+      | _ -> TimeSpan.FromDays(defaultDays)
+
+  let frictionMaxAgeEnvVar = "SAGEFS_FRICTION_MAX_AGE_DAYS"
+  let frictionMaxRowsEnvVar = "SAGEFS_FRICTION_MAX_ROWS"
+  let frictionMaxAggregateVersionsEnvVar = "SAGEFS_FRICTION_MAX_AGGREGATE_VERSIONS"
+  let cohortLedgerRetentionEnvVar = "SAGEFS_COHORT_LEDGER_RETENTION_DAYS"
+  let pruneIntervalEnvVar = "SAGEFS_DATA_PRUNE_INTERVAL_MINUTES"
+
+  /// Friction rows older than this are rolled into the per-version aggregate
+  /// and deleted.
+  let frictionMaxAge = envOrDefaultDays frictionMaxAgeEnvVar 30.0
+  /// Raw friction rows kept per table. The newest win.
+  let frictionMaxRows = envOrDefaultInt frictionMaxRowsEnvVar 5_000
+  /// How many SageFs versions keep their small aggregate (a count per kind).
+  let frictionMaxAggregateVersions = envOrDefaultInt frictionMaxAggregateVersionsEnvVar 20
+  /// A finished cohort's ledger rows are cleared once its last entry is older
+  /// than this. An active cohort is never touched.
+  let cohortLedgerRetention = envOrDefaultDays cohortLedgerRetentionEnvVar 7.0
+  /// How often a running daemon prunes friction again (it also prunes on start).
+  let pruneInterval =
+    match Environment.GetEnvironmentVariable(pruneIntervalEnvVar) with
+    | null | "" -> TimeSpan.FromHours(1.0)
+    | value ->
+      match Double.TryParse(value) with
+      | true, v when v > 0.0 -> TimeSpan.FromMinutes(v)
+      | _ -> TimeSpan.FromHours(1.0)

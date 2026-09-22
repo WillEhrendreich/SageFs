@@ -222,7 +222,9 @@ let descriptionPropertyTests =
       // cohort tool (set_integration_ref) + reset_hot_reload_state, the one
       // way an agent can see and reset live state a hot-reload save kept
       // (hot-reload-state-spec.md rule 3).
-      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 51
+      // + manage_local_data, the one way to see and clear what SageFs keeps
+      // under its data dir (friction.db, cohort.ledger.db).
+      registeredToolDescriptions.Length |> Expect.equal "tool count should stay intentionally small" 52
 
     testCase "every tool-shaped member is registered — no write-only MCP surface"
     <| fun _ ->

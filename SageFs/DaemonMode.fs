@@ -183,6 +183,22 @@ let sweepOrphanedTempDirs (log: ILogger) : unit =
   with ex ->
     log.LogWarning("Isolated test data dir sweep failed: {Error}", ex.Message)
 
+/// Friction retention: keep only the running version's rows, inside the age
+/// and row caps, and roll everything else into the per-version aggregate. Run
+/// on start and from `frictionPruneTimer`. Never throws; a failed prune just
+/// gets logged and tried again next time.
+let pruneFriction (log: ILogger) (store: SageFs.Features.FrictionSqlite.FrictionStore) =
+  let version = SageFs.Features.FrictionTelemetryTypes.SageFsVersion.current ()
+  match store.Prune (SageFs.Features.LocalDataRetention.defaultPolicy ()) DateTimeOffset.UtcNow version with
+  | Ok outcome ->
+    match outcome.EventsDropped + outcome.FeedbackDropped + outcome.AggregateVersionsDropped.Length with
+    | 0 -> ()
+    | _ ->
+      log.LogInformation(
+        "Friction pruned: {Events} events and {Feedback} feedback rows rolled into the per-version counts; dropped counts for {Versions} old versions",
+        outcome.EventsDropped, outcome.FeedbackDropped, outcome.AggregateVersionsDropped.Length)
+  | Error err -> log.LogWarning("Friction prune failed: {Error}", err)
+
 let createDaemonInfrastructure () : DaemonInfra =
   let otelConfigured = DaemonInfo.otelConfigured
   let loggerFactory =
@@ -244,12 +260,13 @@ let createDaemonInfrastructure () : DaemonInfra =
       // (SAGEFS_DATA_DIR). Harmless (and never a sweep target) on a real
       // ~/.SageFs.
       OrphanTempDirSweep.writeOwnerPid dataDirOwnerMarkerFileName dir Environment.ProcessId
-      let dbPath = System.IO.Path.Combine(dir, "friction.db")
+      let dbPath = LocalData.frictionPath dir
       let connStr = sprintf "Data Source=%s" dbPath
       let store = SageFs.Features.FrictionSqlite.Store.create connStr
       match store.Initialize() with
       | Ok () ->
         log.LogInformation("Friction store initialized at {Path}", dbPath)
+        pruneFriction log store
         Some store
       | Error err ->
         log.LogWarning("Friction store initialization failed: {Error}. Friction telemetry will not persist.", err)
@@ -2310,7 +2327,20 @@ let run
   // `Features/CohortLanes.fs`'s module doc), so the lane view reads this
   // port directly instead.
   let cohortLedgerPort =
-    Features.CohortLedgerSqlite.Sqlite.create (System.IO.Path.Combine(DaemonState.SageFsDir, "cohort.ledger.db"))
+    let ledgerPath = LocalData.cohortLedgerPath DaemonState.SageFsDir
+    // Before the owner replays it: clear the ledger if the cohort it holds
+    // finished longer ago than the retention window. Done here, not on a
+    // timer, so the owner's state and the ledger on disk never disagree.
+    try
+      match Features.CohortLedgerSqlite.Sqlite.pruneFinished DataRetention.cohortLedgerRetention DateTime.UtcNow ledgerPath with
+      | Features.LocalDataRetention.LedgerDecision.Clear(finishedAt, rows) ->
+        Log.info "[cohort] cleared %d ledger rows from a cohort that finished %s" rows (finishedAt.ToString "O")
+      | Features.LocalDataRetention.LedgerDecision.NothingStored
+      | Features.LocalDataRetention.LedgerDecision.KeepActive _
+      | Features.LocalDataRetention.LedgerDecision.KeepRecent _ -> ()
+    with ex ->
+      Log.warn "[cohort] ledger retention check failed, leaving it alone: %s" ex.Message
+    Features.CohortLedgerSqlite.Sqlite.create ledgerPath
 
   use cohortOwner =
     Features.CohortOwner.startWithPerformer
@@ -2669,6 +2699,28 @@ let run
       System.Threading.TimerCallback(cohortReaperCallback),
       null, 60_000, System.Threading.Timeout.Infinite)
     cohortReaperTimerRef <- t
+    t
+
+  // Friction retention, again every DataRetention.pruneInterval (it already
+  // ran once when the store was opened). One-shot pattern like the timers
+  // above, and disposed in the shutdown block below, which is also what keeps
+  // it alive: a Timer nothing references gets collected and stops firing.
+  let frictionPruneIntervalMs = int DataRetention.pruneInterval.TotalMilliseconds
+  let mutable frictionPruneTimerRef : System.Threading.Timer = Unchecked.defaultof<_>
+  let frictionPruneCallback _ =
+    try
+      match frictionStore with
+      | Some store -> pruneFriction log store
+      | None -> ()
+    finally
+      if not (isNull frictionPruneTimerRef) then
+        try frictionPruneTimerRef.Change(frictionPruneIntervalMs, System.Threading.Timeout.Infinite) |> ignore
+        with :? System.ObjectDisposedException -> ()
+  let frictionPruneTimer =
+    let t = new System.Threading.Timer(
+      System.Threading.TimerCallback(frictionPruneCallback),
+      null, frictionPruneIntervalMs, System.Threading.Timeout.Infinite)
+    frictionPruneTimerRef <- t
     t
 
   // Live testing file watcher manager — per-session directory watchers.
@@ -3551,6 +3603,9 @@ let run
   with :? System.ObjectDisposedException -> ()
   // Dispose the cohort lease reaper (best-effort — Tick/RenewLease are idempotent)
   try cohortReaperTimer.Dispose()
+  with :? System.ObjectDisposedException -> ()
+  // Also what roots frictionPruneTimer for the daemon's lifetime (see its def).
+  try frictionPruneTimer.Dispose()
   with :? System.ObjectDisposedException -> ()
   try watcherSyncTimer.Dispose()
   with :? System.ObjectDisposedException -> ()

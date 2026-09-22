@@ -83,6 +83,7 @@
              worker process doesn't link Microsoft.Data.Sqlite for nothing). -->
         <Compile Include="FrictionSqlite.fs" />
         <Compile Include="CohortLedger.fs" />
+        <Compile Include="LocalData.fs" />
         <Compile Include="CohortGit.fs" />
         <Compile Include="FrictionReviewView.fs" />
         <Compile Include="McpFrictionRecorder.fs" />

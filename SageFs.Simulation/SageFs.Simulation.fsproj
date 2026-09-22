@@ -95,6 +95,11 @@
              line-based undo, and a compaction that drops an unsaved tweak. -->
         <Compile Include="TweakSim.fs" />
         <Compile Include="TweakSimInvariants.fs" />
+        <!-- Local data retention: seeded months of upgrades, bursts, restarts
+             and cohort traffic through LocalDataRetention; a twin prunes by
+             age only and ignores the version. -->
+        <Compile Include="RetentionSim.fs" />
+        <Compile Include="RetentionSimInvariants.fs" />
     </ItemGroup>
 
     <ItemGroup>

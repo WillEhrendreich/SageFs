@@ -68,6 +68,7 @@ let mcpToolRegistrationTests = testList "MCP tool registration" [
       "list_runnable_projects"
       "list_sessions"
       "list_tests"
+      "manage_local_data"
       "manage_scratch_pad"
       "plan_ripple"
       "preview_what_if"

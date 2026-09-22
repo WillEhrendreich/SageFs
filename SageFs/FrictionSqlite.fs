@@ -15,6 +15,30 @@ type SentReport = {
   DestinationUrlHash: string
 }
 
+/// One table's footprint, for the "what's stored" view.
+type TableUsage = {
+  Table: string
+  Rows: int64
+  /// When the oldest row was written. `NoRows` when the table is empty.
+  Oldest: OldestRow
+}
+
+and [<RequireQualifiedAccess>] OldestRow =
+  | NoRows
+  | WrittenAt of DateTimeOffset
+
+type StoreUsage = {
+  Bytes: int64
+  Tables: TableUsage list
+}
+
+type FrictionPruneOutcome = {
+  EventsDropped: int
+  FeedbackDropped: int
+  /// Versions whose aggregate rows were dropped to stay under the version cap.
+  AggregateVersionsDropped: string list
+}
+
 type FrictionStore = {
   Initialize: unit -> Result<unit, string>
   AppendEvent: FrictionEvent -> Result<unit, string>
@@ -23,7 +47,28 @@ type FrictionStore = {
   ReadFeedback: unit -> Result<ExplicitFeedback list, string>
   RecordSentReport: SentReport -> Result<unit, string>
   ListSentReports: unit -> Result<SentReport list, string>
+  /// Roll rows from other versions, rows past the age cap and rows over the
+  /// row cap into the per-version aggregate, and delete them.
+  Prune: SageFs.Features.LocalDataRetention.FrictionPolicy -> DateTimeOffset -> string -> Result<FrictionPruneOutcome, string>
+  Usage: unit -> Result<StoreUsage, string>
+  /// Delete every row in every table. Returns how many rows went.
+  Clear: unit -> Result<int64, string>
 }
+
+/// Table names, in one place, so the prune, the usage view and the clear
+/// can't drift apart.
+[<RequireQualifiedAccess>]
+module FrictionTables =
+  let events = "friction_events"
+  let feedback = "explicit_feedback"
+  let sentReports = "sent_reports"
+  let aggregate = "friction_version_aggregate"
+  /// Every table, with the column that says when a row was written.
+  let all =
+    [ events, "occurred_at_utc"
+      feedback, "occurred_at_utc"
+      sentReports, "sent_at_utc"
+      aggregate, "last_seen_utc" ]
 
 module private Encoding =
   let outcomeParts outcome =
@@ -252,7 +297,14 @@ CREATE TABLE IF NOT EXISTS sent_reports (
   destination_kind TEXT NOT NULL,
   destination_url_hash TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_sent_reports_report_id ON sent_reports (report_id);"
+CREATE INDEX IF NOT EXISTS idx_sent_reports_report_id ON sent_reports (report_id);
+CREATE TABLE IF NOT EXISTS friction_version_aggregate (
+  sagefs_version TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  last_seen_utc TEXT NOT NULL,
+  PRIMARY KEY (sagefs_version, kind)
+);"
         command.ExecuteNonQuery() |> ignore
         // Schema versioning (mirrors CohortLedger): read PRAGMA user_version and
         // only run the one-time migration when the DB predates it, instead of
@@ -470,7 +522,137 @@ ORDER BY id DESC;"
         Ok (List.rev reports)
       with ex -> Error ex.Message
 
+    let parseStamp (text: string) =
+      DateTimeOffset.Parse(text, Globalization.CultureInfo.InvariantCulture, Globalization.DateTimeStyles.RoundtripKind)
+
+    let stamp (at: DateTimeOffset) = at.ToUniversalTime().ToString("O")
+
+    /// The four columns retention looks at. `kindSql` is how the table's rows
+    /// get counted in the aggregate.
+    let readRetained (connection: SqliteConnection) (transaction: SqliteTransaction) (table: string) (kindSql: string) =
+      use command = connection.CreateCommand()
+      command.Transaction <- transaction
+      command.CommandText <- sprintf "SELECT id, occurred_at_utc, sagefs_version, %s FROM %s;" kindSql table
+      use reader = command.ExecuteReader()
+      let rows = ResizeArray()
+      while reader.Read() do
+        rows.Add
+          ({ Id = reader.GetInt64 0
+             OccurredAt = parseStamp (reader.GetString 1)
+             Version = (if reader.IsDBNull 2 then "" else reader.GetString 2)
+             Kind = reader.GetString 3 } : SageFs.Features.LocalDataRetention.RetainedRow)
+      List.ofSeq rows
+
+    let applyDecision (connection: SqliteConnection) (transaction: SqliteTransaction) (table: string) (decision: SageFs.Features.LocalDataRetention.FrictionDecision) =
+      for KeyValue(key, count) in decision.Aggregated do
+        use upsert = connection.CreateCommand()
+        upsert.Transaction <- transaction
+        upsert.CommandText <- "
+INSERT INTO friction_version_aggregate (sagefs_version, kind, count, last_seen_utc)
+VALUES ($version, $kind, $count, $last_seen)
+ON CONFLICT (sagefs_version, kind) DO UPDATE SET
+  count = count + excluded.count,
+  last_seen_utc = max(last_seen_utc, excluded.last_seen_utc);"
+        upsert.Parameters.AddWithValue("$version", key.Version) |> ignore
+        upsert.Parameters.AddWithValue("$kind", key.Kind) |> ignore
+        upsert.Parameters.AddWithValue("$count", count) |> ignore
+        upsert.Parameters.AddWithValue("$last_seen", stamp (Map.find key.Version decision.LastSeen)) |> ignore
+        upsert.ExecuteNonQuery() |> ignore
+      use delete = connection.CreateCommand()
+      delete.Transaction <- transaction
+      delete.CommandText <- sprintf "DELETE FROM %s WHERE id = $id;" table
+      let idParam = delete.Parameters.Add("$id", SqliteType.Integer)
+      for row, _ in decision.Dropped do
+        idParam.Value <- row.Id
+        delete.ExecuteNonQuery() |> ignore
+      decision.Dropped.Length
+
+    let vacuum (connection: SqliteConnection) =
+      use command = connection.CreateCommand()
+      command.CommandText <- "VACUUM;"
+      command.ExecuteNonQuery() |> ignore
+
+    let prune (policy: SageFs.Features.LocalDataRetention.FrictionPolicy) (now: DateTimeOffset) (currentVersion: string) =
+      try
+        use connection = openConnection ()
+        let outcome =
+          use transaction = connection.BeginTransaction()
+          let decideFor table kindSql =
+            readRetained connection transaction table kindSql
+            |> SageFs.Features.LocalDataRetention.decide policy now currentVersion
+          let eventsDropped =
+            decideFor FrictionTables.events "tool_name || '/' || outcome_kind"
+            |> applyDecision connection transaction FrictionTables.events
+          let feedbackDropped =
+            decideFor FrictionTables.feedback "'feedback/' || feedback_kind"
+            |> applyDecision connection transaction FrictionTables.feedback
+          let lastSeen =
+            use command = connection.CreateCommand()
+            command.Transaction <- transaction
+            command.CommandText <- "SELECT sagefs_version, max(last_seen_utc) FROM friction_version_aggregate GROUP BY sagefs_version;"
+            use reader = command.ExecuteReader()
+            let seen = ResizeArray()
+            while reader.Read() do
+              seen.Add(reader.GetString 0, parseStamp (reader.GetString 1))
+            Map.ofSeq seen
+          let versionsDropped = SageFs.Features.LocalDataRetention.aggregateVersionsToDrop policy currentVersion lastSeen
+          for version in versionsDropped do
+            use delete = connection.CreateCommand()
+            delete.Transaction <- transaction
+            delete.CommandText <- "DELETE FROM friction_version_aggregate WHERE sagefs_version = $version;"
+            delete.Parameters.AddWithValue("$version", version) |> ignore
+            delete.ExecuteNonQuery() |> ignore
+          transaction.Commit()
+          { EventsDropped = eventsDropped; FeedbackDropped = feedbackDropped; AggregateVersionsDropped = versionsDropped }
+        // Deleting rows doesn't shrink the file; VACUUM does. Only worth it
+        // when something actually went.
+        match outcome.EventsDropped + outcome.FeedbackDropped + outcome.AggregateVersionsDropped.Length with
+        | 0 -> ()
+        | _ -> vacuum connection
+        Ok outcome
+      with ex -> Error ex.Message
+
+    let usage () =
+      try
+        use connection = openConnection ()
+        let scalar (sql: string) =
+          use command = connection.CreateCommand()
+          command.CommandText <- sql
+          command.ExecuteScalar()
+        let bytes = Convert.ToInt64(scalar "PRAGMA page_count;") * Convert.ToInt64(scalar "PRAGMA page_size;")
+        let tables =
+          [ for table, stampColumn in FrictionTables.all ->
+              let rows = Convert.ToInt64(scalar (sprintf "SELECT count(*) FROM %s;" table))
+              let oldest =
+                match scalar (sprintf "SELECT min(%s) FROM %s;" stampColumn table) with
+                | :? string as text -> OldestRow.WrittenAt (parseStamp text)
+                | _ -> OldestRow.NoRows
+              { Table = table; Rows = rows; Oldest = oldest } ]
+        Ok { Bytes = bytes; Tables = tables }
+      with ex -> Error ex.Message
+
+    let clear () =
+      try
+        use connection = openConnection ()
+        let deleted =
+          use transaction = connection.BeginTransaction()
+          let total =
+            FrictionTables.all
+            |> List.sumBy (fun (table, _) ->
+              use command = connection.CreateCommand()
+              command.Transaction <- transaction
+              command.CommandText <- sprintf "DELETE FROM %s;" table
+              int64 (command.ExecuteNonQuery()))
+          transaction.Commit()
+          total
+        vacuum connection
+        Ok deleted
+      with ex -> Error ex.Message
+
     { Initialize = initialize
+      Prune = prune
+      Usage = usage
+      Clear = clear
       AppendEvent = appendEvent
       AppendFeedback = appendFeedback
       ReadEvents = readEvents

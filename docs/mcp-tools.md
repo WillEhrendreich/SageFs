@@ -120,6 +120,7 @@ sounds like a chore anyway.
 | `get_friction_summary` | Compact summary of recorded MCP friction. |
 | `get_friction_report` | Structured JSON report of MCP pain points. |
 | `report_friction` | Record structured feedback about a confusing tool call. |
+| `manage_local_data` | See what SageFs stores under its data dir (rows, bytes, oldest row, retention rules), or clear it. |
 
 ## Cohort and multi-agent coordination
 

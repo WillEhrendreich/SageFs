@@ -218,7 +218,7 @@ let toolRegistrationTests =
         |> Expect.isTrue
           (sprintf "%A (%d) should have <= Ready (%d)" state count readyCount))
 
-    testCase "McpServerTool-attributed methods total exactly 51 (reflection)"
+    testCase "McpServerTool-attributed methods total exactly 52 (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -229,9 +229,9 @@ let toolRegistrationTests =
         // 42 (incl. switch_workflow, finally [<McpServerTool>]-registered) + the
         // 7 Claims v1 cohort tools (cohort-integration-plan.md Slice 2) + the 1
         // item-14c cohort tool (set_integration_ref) + reset_hot_reload_state
-        // (hot-reload-state-spec.md rule 3).
+        // (hot-reload-state-spec.md rule 3) + manage_local_data.
         methods.Length
-          |> Expect.equal "MCP tool method count" 51
+          |> Expect.equal "MCP tool method count" 52
 
     testCase
       "every McpServerTool method has a non-empty Description (reflection)"
@@ -383,7 +383,7 @@ let stateTransitionSafetyTests =
         | Ok _ ->
           failtestf "bogus tool must be rejected in %A" state)
 
-    testCase "255-combo safety: all MCP tools × all states never throw (reflection)"
+    testCase "260-combo safety: all MCP tools × all states never throw (reflection)"
     <| fun _ ->
       match tryGetMcpToolMethods () with
       | None ->
@@ -405,10 +405,10 @@ let stateTransitionSafetyTests =
                 state tool ex.Message))
         // 41 + the 7 Claims v1 cohort tools (cohort-integration-plan.md
         // Slice 2) + the 1 item-14c cohort tool (set_integration_ref) +
-        // reset_hot_reload_state = 51.
+        // reset_hot_reload_state + manage_local_data = 52.
         tested
         |> Expect.equal
-          "should test 5 states × 51 tools = 255" 255
+          "should test 5 states × 52 tools = 260" 260
   ]
 
 // ── Group 5: Affordance Superset/Subset Relationships ──
