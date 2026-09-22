@@ -43,6 +43,12 @@ type TweakState<'Value> =
   /// succeeded, so `live` is the value that landed and journaling merely
   /// failed to make it durable).
   | Failed of live: 'Value * step: TweakStep * reason: string
+  /// The last good value is still what's shown, but it isn't CURRENT: the
+  /// expression as typed is incomplete, or evaluation is lagging behind
+  /// the scrub. Distinct from `Failed` on purpose, nothing failed, the
+  /// pipeline just hasn't caught up, and a caller (a knob's UI) needs to
+  /// tell "still working, showing the old value" apart from "broken".
+  | Stale of live: 'Value * reason: string
 
 [<RequireQualifiedAccess>]
 type TweakEvent<'Value> =
@@ -60,6 +66,11 @@ type TweakEvent<'Value> =
   | ApplyFailed of reason: string
   | Journaled
   | JournalFailed of reason: string
+  /// The driver decided this attempt is behind (still typing, or the
+  /// evaluator hasn't reported back yet). Valid from ANY state, same as
+  /// `Started`, since staleness is a comment on timing, not on where the
+  /// pipeline happens to be.
+  | MarkStale of reason: string
 
 /// The value the app is showing right now, in every state.
 let liveOf (state: TweakState<'Value>) : 'Value =
@@ -72,6 +83,7 @@ let liveOf (state: TweakState<'Value>) : 'Value =
   | TweakState.Applied(live, _) -> live
   | TweakState.Journaled(live, _) -> live
   | TweakState.Failed(live, _, _) -> live
+  | TweakState.Stale(live, _) -> live
 
 let initial (live: 'Value) : TweakState<'Value> = TweakState.Idle live
 
@@ -85,6 +97,9 @@ let step (state: TweakState<'Value>) (event: TweakEvent<'Value>) : TweakState<'V
   // A fresh attempt is always allowed, from any state, and always keeps
   // whatever `live` currently is.
   | TweakEvent.Started text -> TweakState.Parsing(liveOf state, text)
+
+  // Same rule as Started: valid from any state, never touches `live`.
+  | TweakEvent.MarkStale reason -> TweakState.Stale(liveOf state, reason)
 
   | TweakEvent.Parsed ->
     match state with
