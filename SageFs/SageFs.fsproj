@@ -102,6 +102,7 @@
         <Compile Include="Mcp.fs" />
         <Compile Include="McpTools.fs" />
         <Compile Include="McpResources.fs" />
+        <Compile Include="AgentGuidance.fs" />
         <Compile Include="McpServer.fs" />
         <Compile Include="WorkerReloadRelay.fs" />
         <Compile Include="DaemonMode.fs" />

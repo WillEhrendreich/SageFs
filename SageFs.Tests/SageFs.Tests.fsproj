@@ -500,8 +500,10 @@
         <Compile Include="CohortOwnerTests.fs" />
         <Compile Include="CohortSseEventsTests.fs" />
         <Compile Include="McpResourcesTests.fs" />
+        <Compile Include="AgentGuidanceTests.fs" />
         <Compile Include="CohortLedgerSqliteTests.fs" />
         <Compile Include="CohortMcpToolsIntegrationTests.fs" />
+        <Compile Include="AgentGuidanceIntegrationTests.fs" />
         <Compile Include="CohortAffordancesTests.fs" />
         <Compile Include="CohortPanelTests.fs" />
         <Compile Include="CohortTerritoryPanelTests.fs" />

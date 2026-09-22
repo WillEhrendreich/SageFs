@@ -1855,28 +1855,18 @@ let configureMcpProtocol (builder: WebApplicationBuilder) (mcpContext: McpContex
   builder.Services.AddSingleton<McpServerTracker>(serverTracker) |> ignore
   builder.Services
     .AddMcpServer(fun options ->
-      options.ServerInstructions <- String.concat " " [
-        "SageFs is an affordance-driven F# Interactive (FSI) REPL with MCP integration."
-        "ALWAYS use SageFs MCP tools for ALL F# work \u2014 never shell out to dotnet build, dotnet run, or PowerShell commands."
-        "PowerShell is ONLY for process management: starting/stopping SageFs, dotnet pack, dotnet tool install/uninstall."
-        "SageFs runs as a VISIBLE terminal window \u2014 the user watches it."
-        "When starting or restarting SageFs, ALWAYS use Start-Process to launch in a visible console window, NEVER detach or run in background."
-        "You OWN the full development cycle: pack, stop, reinstall, restart, test. Never ask the user to do these steps."
-        "The MCP connection is SSE (push-based) \u2014 do not poll or sleep. Tools become available when SageFs is ready."
-        "SageFs pushes structured notifications (notifications/message) for important events: session faults, warmup completion, eval failures."
-        "Tool responses return only Result: or Error: with diagnostics \u2014 no code echo (you already know what you sent)."
-        "SageFs is affordance-driven: get_fsi_status shows available tools for the current session state. Only invoke listed tools."
-        "If a tool returns an error about session state, check get_fsi_status for available alternatives."
-        "Use send_fsharp_code for incremental, small code blocks. End statements with ';;' for evaluation."
-        "hard_reset_fsi_session with rebuild=true is ONLY needed when .fsproj changes (new files, packages) or warm-up fails."
-        "Use cancel_eval to stop a running evaluation. Use reset_fsi_session only if warm-up failed."
-      ]
+      // The always-on short form of skills/sagefs/SKILL.md. See AgentGuidance.fs.
+      options.ServerInstructions <- SageFs.Server.AgentGuidance.serverInstructions
     )
     .WithHttpTransport(fun opts ->
       opts.IdleTimeout <- SageFs.Timeouts.sseKeepAlive
       opts.MaxIdleSessionCount <- 1000
     )
     .WithTools<SageFs.Server.McpTools.SageFsTools>()
+    // back_to_the_repl and sagefs_loop. Claude Code shows MCP prompts as
+    // slash commands (/mcp__sagefs__back_to_the_repl), so a user can put a
+    // drifting agent back on the loop in one line.
+    .WithPrompts<SageFs.Server.AgentGuidance.SageFsPrompts>()
     // Item 12 (sagefs-multiagent-vision.md §5.6/§10): cohort/session state
     // as MCP resources with subscribe. `WithResources<T>` reflects the
     // `[<McpServerResource>]`-attributed members of `SageFsResources` into

@@ -122,7 +122,7 @@ let private textOf (result: CallToolResult) : string =
 /// Connect a fresh MCP client — a fresh client is a fresh transport session,
 /// which is a fresh bound cohort identity (Mcp.fs's memberIdFor). Returned
 /// as IAsyncDisposable so callers can `use!` it.
-let private connect (port: int) : Task<McpClient> =
+let connect (port: int) : Task<McpClient> =
   let opts = HttpClientTransportOptions(Endpoint = Uri(sprintf "http://localhost:%d/" port))
   let transport = HttpClientTransport(opts, (null: Microsoft.Extensions.Logging.ILoggerFactory))
   McpClient.CreateAsync(transport, null, null, CancellationToken.None)
@@ -170,7 +170,7 @@ let private claimIdFromAcquireResult (text: string) : string =
 
 /// Run `body` against a freshly spawned, isolated daemon; the daemon is
 /// killed afterwards even on failure.
-let private withDaemon (body: int -> Task<unit>) : Task<unit> = task {
+let withDaemon (body: int -> Task<unit>) : Task<unit> = task {
   let! proc, port = startIsolatedDaemon ()
   try
     do! body port
