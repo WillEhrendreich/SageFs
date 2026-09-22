@@ -132,7 +132,7 @@ let private readyProxy =
           EvalCount = 0
           AvgDurationMs = 0L
           MinDurationMs = 0L
-          MaxDurationMs = 0L; Projects = []
+          MaxDurationMs = 0L; Projects = []; CoreVersion = "0.0.0-test"
         }
         return WorkerResponse.StatusResult(rid, snap)
       | WorkerMessage.GetTestDiscovery rid ->
@@ -582,7 +582,7 @@ let sessionManagerProjectRolesTests =
               WorkerResponse.StatusResult(
                 rid,
                 { Status = SessionStatus.Ready; StatusMessage = None; EvalCount = 0
-                  AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = [ app ] })
+                  AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = [ app ]; CoreVersion = "0.0.0-test" })
           | _ -> return! readyProxy msg
         }
       let cancellation = new CancellationTokenSource()
@@ -706,7 +706,7 @@ let workerFaultReportTests =
               WorkerResponse.StatusResult(
                 rid,
                 { Status = SessionStatus.Faulted; StatusMessage = Some reason; EvalCount = 0
-                  AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = [] })
+                  AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = []; CoreVersion = "0.0.0-test" })
           | _ -> return! readyProxy msg
         }
       let cancellation = new CancellationTokenSource()

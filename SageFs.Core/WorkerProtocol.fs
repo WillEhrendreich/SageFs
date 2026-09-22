@@ -293,6 +293,17 @@ module WorkerProtocol =
     MaxDurationMs: int64
     /// The loaded projects as the worker classified them (only it has the MSBuild properties).
     Projects: ClassifiedProject list
+    /// The version of SageFs.Core the WORKER PROCESS actually has loaded —
+    /// reflected inside the worker itself (SageFs.Host/WorkerMain.fs), not
+    /// re-derived by the daemon. The daemon's own SageFs.Core.dll is a
+    /// SEPARATE process's assembly and can be older than what a freshly
+    /// rebuilt session's worker just loaded (the daemon isn't redeployed on
+    /// every `hard_reset_fsi_session rebuild=true` — only the worker is) —
+    /// get_fsi_status used to report the daemon's own version labeled as
+    /// "the session's" (Mcp.fs's old loadedCoreVersion(), reflecting
+    /// typeof<SageFsError>.Assembly from INSIDE the daemon process), which
+    /// told an agent to trust a number that was never the worker's.
+    CoreVersion: string
   }
 
   /// Wire-friendly symbol reference for TypeCheckWithSymbols response

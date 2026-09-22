@@ -219,7 +219,7 @@ let private mkStatusProxy (status: SessionStatus) : SessionProxy =
           EvalCount = 0
           AvgDurationMs = 0L
           MinDurationMs = 0L
-          MaxDurationMs = 0L; Projects = [] })
+          MaxDurationMs = 0L; Projects = []; CoreVersion = "0.0.0-test" })
     }
 
 let private mkContextForSession (status: SessionStatus) : McpContext * string =

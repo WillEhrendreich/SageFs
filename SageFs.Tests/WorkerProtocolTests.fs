@@ -263,6 +263,7 @@ let workerProtocolTests =
             [ { Path = "/src/App/App.fsproj"
                 Role = SageFs.ProjectLoading.ProjectRole.Executable
                 PackageRefs = [ "Falco" ] } ]
+          CoreVersion = "0.0.0-test"
         }
         let resp = WorkerResponse.StatusResult("r6", status)
         let _, result = roundTrip<WorkerResponse> resp

@@ -43,7 +43,8 @@ let private statusSnapshot (evalCount: int) (avgMs: int64) (minMs: int64) (maxMs
     AvgDurationMs = avgMs
     MinDurationMs = minMs
     MaxDurationMs = maxMs
-    Projects = [] }
+    Projects = []
+    CoreVersion = "0.0.0-test" }
 
 /// A `getProxy` that always answers with the given `WorkerResponse` for
 /// `GetStatus`, exactly as `SessionOps.GetProxy`'s `SessionProxy` would.

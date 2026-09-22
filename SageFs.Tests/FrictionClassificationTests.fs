@@ -28,7 +28,7 @@ open SageFs.WorkerProtocol
 open SageFs.Features.FrictionTelemetryTypes
 
 let private dummyProxy (_: WorkerMessage) =
-  async { return WorkerResponse.StatusResult("reply", { Status = SessionStatus.Ready; StatusMessage = None; EvalCount = 0; AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = [] }) }
+  async { return WorkerResponse.StatusResult("reply", { Status = SessionStatus.Ready; StatusMessage = None; EvalCount = 0; AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = []; CoreVersion = "0.0.0-test" }) }
 
 let private mkSessionInfo (id: SessionId) (workingDir: string) (status: SessionLifecycleStatus) : SessionInfo =
   { Id = id

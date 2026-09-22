@@ -65,25 +65,32 @@ let tests =
       |> Expect.stringContains "the description promises a post-reload version confirmation, matching RebuildOutcome.describe's Succeeded line" "confirms which"
     }
 
-    test "WHY — a successful rebuild's get_fsi_status line names the loaded SageFs.Core version, because a respawn an agent cannot see through is a respawn that might as well not have happened" {
+    test "WHY — a successful rebuild's get_fsi_status line names the WORKER's actually-loaded SageFs.Core version, not the daemon's own, because those two can legitimately differ and conflating them sent an agent comparing versions down the wrong path" {
       let finishedAt = DateTime(2026, 9, 15, 12, 0, 0, DateTimeKind.Utc)
-      let line = RebuildOutcome.describe (finishedAt.AddSeconds 1.0) (RebuildOutcome.Succeeded finishedAt)
-      // The loaded-version confirmation is the daemon's OWN SageFs.Core
-      // assembly version (reflected the same way HostCoreAdoption.fs's own
-      // doc comment does, via a type — not a module — from that assembly:
-      // typeof<SageFs.SageFsError>.Assembly). HostCoreAdoption.decide only
-      // ever adopts a session project's build when its version EQUALS the
-      // daemon's own, so this is exactly the version the freshly-respawned
-      // worker is now running, whether adoption applied (self-host case) or
-      // not (ordinary case, same shared host build).
-      let loadedVersion = typeof<SageFs.SageFsError>.Assembly.GetName().Version.ToString()
-      line |> Expect.stringContains "the confirmation names the loaded SageFs.Core version" (sprintf "SageFs.Core %s" loadedVersion)
+      // A session's worker can be running a DIFFERENT SageFs.Core build than
+      // the daemon process itself — a `rebuild=true` respawns and rebuilds
+      // the WORKER, not the daemon, so right after a rebuild the worker is
+      // routinely ahead of a not-yet-redeployed daemon (confirmed live:
+      // daemon reported 0.6.782.0 while the session's worker had already
+      // loaded 0.6.789+). This is deliberately a MADE-UP version, distinct
+      // from whatever this test process's own SageFs.Core assembly version
+      // happens to be, so the assertion cannot pass by accident if the code
+      // regresses to reporting the daemon's own version again.
+      let workerVersion = "9.9.999-worker-under-test"
+      let line = RebuildOutcome.describe (finishedAt.AddSeconds 1.0) (Some workerVersion) (RebuildOutcome.Succeeded finishedAt)
+      line |> Expect.stringContains "the confirmation names the WORKER's loaded SageFs.Core version" (sprintf "SageFs.Core %s" workerVersion)
       line |> Expect.stringContains "the confirmation states the build is now loaded" "now loaded"
+      // The daemon's own version is named too, separately and unambiguously
+      // — never silently substituted for the worker's, never omitted.
+      let daemonVersion = typeof<SageFs.SageFsError>.Assembly.GetName().Version.ToString()
+      line |> Expect.stringContains "the daemon's own SageFs.Core version is named separately" daemonVersion
+      (line.Contains workerVersion && line.Contains daemonVersion)
+      |> Expect.isTrue "both versions are present and distinguishable, never conflated into one unlabeled number"
     }
 
     test "WHY — a rebuild still InProgress never claims a loaded version, because nothing was adopted yet and claiming otherwise would lie to the agent polling get_fsi_status" {
       let startedAt = DateTime(2026, 9, 15, 12, 0, 0, DateTimeKind.Utc)
-      let line = RebuildOutcome.describe (startedAt.AddSeconds 2.0) (RebuildOutcome.InProgress startedAt)
+      let line = RebuildOutcome.describe (startedAt.AddSeconds 2.0) None (RebuildOutcome.InProgress startedAt)
       line.Contains "now loaded" |> Expect.isFalse "an in-progress rebuild must not claim a version is already loaded"
     }
   ]

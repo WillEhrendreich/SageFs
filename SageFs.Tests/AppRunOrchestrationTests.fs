@@ -251,7 +251,7 @@ let runAppTests =
               WorkerResponse.StatusResult(
                 rid,
                 { Status = SessionStatus.Ready; StatusMessage = None; EvalCount = 0
-                  AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = [ exe web ] })
+                  AvgDurationMs = 0L; MinDurationMs = 0L; MaxDurationMs = 0L; Projects = [ exe web ]; CoreVersion = "0.0.0-test" })
           }
         | other -> worker never.Task other
       let uncached = { session webLive [ exe web ] AppRunState.NotRunning with ProjectRoles = [] }

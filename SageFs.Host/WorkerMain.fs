@@ -46,6 +46,19 @@ module ParentMonitor =
   let getProcessById (pid: int) : System.Diagnostics.Process option =
     SageFs.OwnerMonitor.getProcessById pid
 
+/// The version of SageFs.Core THIS WORKER PROCESS has loaded, reflected from
+/// inside the process that actually loaded it — not the daemon's. Computed
+/// once: the assembly a running process has loaded cannot change under it.
+/// get_fsi_status (SageFs/Mcp.fs) reports this as the session's real loaded
+/// version, separately from the daemon's own — they can legitimately differ,
+/// since a `hard_reset_fsi_session rebuild=true` respawns and rebuilds THIS
+/// worker without redeploying the daemon.
+let workerCoreVersion : string =
+  typeof<SageFsError>.Assembly.GetName().Version
+  |> Option.ofObj
+  |> Option.map (fun v -> v.ToString())
+  |> Option.defaultValue "unknown"
+
 /// Convert internal Diagnostic to WorkerDiagnostic for transport.
 let toWorkerDiagnostic (d: Features.Diagnostics.Diagnostic) : WorkerDiagnostic =
   { Severity = d.Severity
@@ -80,7 +93,8 @@ let toStatusSnapshot
     AvgDurationMs = avg
     MinDurationMs = stats.MinDuration.TotalMilliseconds |> int64
     MaxDurationMs = stats.MaxDuration.TotalMilliseconds |> int64
-    Projects = projects }
+    Projects = projects
+    CoreVersion = workerCoreVersion }
 
 let mergeInitialDiscoveryResults
   (results: Features.LiveTesting.LiveTestHookResult array)

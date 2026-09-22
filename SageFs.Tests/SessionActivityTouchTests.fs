@@ -39,6 +39,7 @@ let private fakeWorker : SessionProxy =
           MinDurationMs = 0L
           MaxDurationMs = 0L
           Projects = []
+          CoreVersion = "0.0.0-test"
         }
         return WorkerResponse.StatusResult(rid, snap)
       | WorkerMessage.EvalCode(_, rid) ->

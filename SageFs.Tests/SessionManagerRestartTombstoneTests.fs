@@ -38,7 +38,7 @@ let private readyProxy =
           EvalCount = 0
           AvgDurationMs = 0L
           MinDurationMs = 0L
-          MaxDurationMs = 0L; Projects = []
+          MaxDurationMs = 0L; Projects = []; CoreVersion = "0.0.0-test"
         }
         return WorkerResponse.StatusResult(rid, snap)
       | WorkerMessage.GetTestDiscovery rid ->
