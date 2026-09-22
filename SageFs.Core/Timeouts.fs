@@ -122,6 +122,10 @@ module Timeouts =
 
   // -- Daemon / Server --
   let workerEndpointFetch = TimeSpan.FromMilliseconds(500.0)
+  /// How long the daemon waits before listening again after a worker's reload
+  /// stream closed on its own (WorkerReloadRelay). A worker that's gone by then
+  /// has no URL in the snapshot and the relay just stops.
+  let workerReloadRelayRetry = TimeSpan.FromSeconds(1.0)
   let scheduledGraceDelay = TimeSpan.FromSeconds(5.0)
   let startupDelay = TimeSpan.FromMilliseconds(200.0)
   let workerShutdownDelay = TimeSpan.FromSeconds(2.0)

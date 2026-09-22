@@ -2316,6 +2316,40 @@ let run
 
   // Partially applied worker helpers (capture httpClient + readSnapshot)
   let getWorkerBaseUrl = getWorkerBaseUrl readSnapshot
+
+  // Every event on a worker's reload stream means the worker's hot-reload
+  // state may have moved (a save patched, restarted, or kept live state), so
+  // it's a HotReloadChanged: the dashboard refetches the worker's panels and
+  // morphs if anything changed. Without this the only trigger was the
+  // daemon's own file event, which fires before the worker has decided.
+  let ensureReloadRelay =
+    WorkerReloadRelay.start getWorkerBaseUrl (fun sid -> stateChangedEvent.Trigger (HotReloadChanged sid)) cts.Token
+  // Anything that can mean a session got a worker, lost one, or got a new one.
+  // HotReloadChanged is left out on purpose: the relay raises it.
+  stateChangedEvent.Publish.Add(fun change ->
+    match change with
+    | SessionReady sid
+    | SessionSwitched sid
+    | FileReloaded (sid, _)
+    | SessionFaulted (sid, _) -> ensureReloadRelay sid
+    | SessionProgress
+    | HotReloadChanged _
+    | ModelChanged _
+    | WarmupProgress _
+    | SystemAlarm _
+    | WarmupContextSnapshot _
+    | HotReloadSnapshot _
+    | HotReloadFileToggled _
+    | SessionActivated _
+    | SessionCreated _
+    | SessionStopped _
+    | WorkflowSwitching _
+    | WorkflowSwitched _
+    | SessionHealthChanged _ -> ())
+  // Sessions that were ready before this line ran.
+  SessionManager.QuerySnapshot.allSessions (readSnapshot ())
+  |> List.iter (fun info -> ensureReloadRelay info.Id)
+
   let fetchWorkerEndpoint sessionId path timeout parse =
     fetchWorkerEndpoint httpClient readSnapshot sessionId path timeout parse
 
