@@ -52,6 +52,22 @@ jobs:
       with:
         fetch-depth: 0
 
+    # A job step's PATH is the runner service's (/usr/local/bin:/usr/bin), and
+    # /usr/bin/dotnet on this machine is the distro's dotnet-host: a runtime,
+    # no SDKs, so `dotnet fsi` dies with "No .NET SDKs were found". The SDKs
+    # live in DOTNET_ROOT. Put that first and say so, loudly, if it isn't there.
+    - name: Use this machine's .NET SDK
+      shell: bash
+      run: |
+        root="${DOTNET_ROOT:-$HOME/.dotnet}"
+        if [ ! -x "$root/dotnet" ]; then
+          echo "::error::No dotnet at $root. Set DOTNET_ROOT in the runner's .env, or install the SDK there."
+          exit 1
+        fi
+        echo "$root" >> "$GITHUB_PATH"
+        echo "DOTNET_ROOT=$root" >> "$GITHUB_ENV"
+        "$root/dotnet" --list-sdks
+
     - name: Enforce release Definition of Done
       if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.bypass_dod == 'true') }}
       shell: bash

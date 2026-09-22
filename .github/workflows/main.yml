@@ -57,6 +57,22 @@ jobs:
     steps:
     - uses: actions/checkout@v5
 
+    # Same reason as publish.yml: a step's PATH resolves dotnet to the distro's
+    # dotnet-host (a runtime, no SDKs). A gated commit never notices, because
+    # the gate is then only a file lookup, but an ungated one runs the whole
+    # pipeline and needs a real SDK.
+    - name: Use this machine's .NET SDK
+      shell: bash
+      run: |
+        root="${DOTNET_ROOT:-$HOME/.dotnet}"
+        if [ ! -x "$root/dotnet" ]; then
+          echo "::error::No dotnet at $root. Set DOTNET_ROOT in the runner's .env, or install the SDK there."
+          exit 1
+        fi
+        echo "$root" >> "$GITHUB_PATH"
+        echo "DOTNET_ROOT=$root" >> "$GITHUB_ENV"
+        "$root/dotnet" --list-sdks
+
     - name: Local gate (instant when this commit already passed on this machine)
       shell: bash
       env:
