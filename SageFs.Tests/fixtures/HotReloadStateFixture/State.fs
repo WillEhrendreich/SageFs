@@ -45,6 +45,12 @@ let bumpTuned () : string =
 
 let readTuned () : string = string tuned
 
+/// Rule 4: the test edits this initializer to a different TYPE. `string`
+/// takes anything, so the edited file still compiles.
+let mutable shape = 1
+
+let readShape () : string = string shape
+
 // ── rule 2: an immutable value nothing captured at startup ──────────────────
 
 let greeting = "hello"
@@ -62,4 +68,5 @@ let handlers : (string * (unit -> string)) list =
     "hiddenLabel", hiddenLabel
     "bumpTuned", bumpTuned
     "tuned", readTuned
+    "shape", readShape
     "greet", greet ]

@@ -345,6 +345,10 @@ let save (app: RunningApp) (find: string) (replace: string) : Task<string> = tas
   | v -> return v
 }
 
+/// GET a worker route, the same one the daemon proxies for the dashboard.
+let getWorker (app: RunningApp) (route: string) : Task<string> =
+  http.GetStringAsync(app.WorkerUrl + route)
+
 /// POST to a worker route, for the actions a user takes from the dashboard.
 let post (app: RunningApp) (route: string) (body: string) : Task<int * string> =
   postJson (app.WorkerUrl + route) body
