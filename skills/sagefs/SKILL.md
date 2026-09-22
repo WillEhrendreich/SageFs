@@ -77,9 +77,13 @@ you need the details, use `explain_test_failure`.
 - **"Operation could not be completed due to earlier error"** means a previous
   statement failed. Read the diagnostics and fix that statement. The session is
   fine, so don't reset it.
-- **`Ok` / `Error` may be shadowed** by something the session opens. If
-  `match r with Ok x -> ...` fails with a type mismatch about `EvalStatus`,
-  write `Result.Ok` / `Result.Error`.
+- **A bare `Error` or `Ok` that resolves to the wrong type.** If a match on a
+  `Result` fails with "This union case does not take arguments" or names some
+  other type, a union case in scope is shadowing `Result.Error` / `Result.Ok`.
+  Write `Result.Error` / `Result.Ok`. SageFs's own types can't do this anymore
+  (every SageFs union with an `Ok`/`Error`/`Some`/`None` case is
+  `RequireQualifiedAccess`, and a test enforces it), but a library you open
+  still might.
 - **Never `#r` a DLL the session already loaded from the project.** It creates a
   second copy of every type ("type X is not compatible with type X"). `#r` also
   locks the DLL, so a later rebuild can't overwrite it.
