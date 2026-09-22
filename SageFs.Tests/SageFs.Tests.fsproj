@@ -269,6 +269,7 @@
         <Compile Include="ValueReadsTests.fs" />
         <Compile Include="ReflectionReadsTests.fs" />
         <Compile Include="ReflectionReadTrackingTests.fs" />
+        <Compile Include="ReflectionReadSurfaceTests.fs" />
         <Compile Include="ReloadBroadcastTests.fs" />
         <Compile Include="BindingExplorerTests.fs" />
         <Compile Include="IdentifierScanTests.fs" />
