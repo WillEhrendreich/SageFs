@@ -82,6 +82,13 @@
         <Compile Include="FileReloadRoutingInvariants.fs" />
         <Compile Include="FsiEmitSim.fs" />
         <Compile Include="FsiEmitInvariants.fs" />
+        <!-- Rule 2 read-provenance DST: folds the real ValueReads classifier,
+             ledger and save check through every interleaving of reads, the
+             startup window closing, probes coming off and saves; twins put
+             back the naive rules (ignore reads after startup, treat a stored
+             value like a dead local, check once and patch). -->
+        <Compile Include="ValueReadSim.fs" />
+        <Compile Include="ValueReadInvariants.fs" />
         <Compile Include="FsiDiscoveryIdentitySim.fs" />
         <Compile Include="FsiDiscoveryIdentityInvariants.fs" />
         <Compile Include="FileReloadRoutingGenerators.fs" />
