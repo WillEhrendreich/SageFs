@@ -20,11 +20,9 @@ numbers can lag between restamps. If you spot a stale number, that's why.
 
 ```
 SageFs.Core/       — Shared engine, session, testing, persistence, and protocol logic
-SageFs/            — CLI tool, daemon, MCP server, dashboard, and retained deprecated TUI source
-SageFs.Gui/        — Deprecated Raylib product frontend retained as legacy source
+SageFs/            — CLI tool, daemon, MCP server, and dashboard
 SageFs.Tests/      — Expecto test project
 sagefs-vscode/     — VS Code extension (Fable F#→JS)
-sagefs-vs/         — Deprecated Visual Studio extension (C# + F#), retained as legacy source
 docs/              — GitHub Pages site
 ```
 
@@ -41,11 +39,8 @@ Editor / Dashboard / MCP command
       → structured result and SSE state updates
 ```
 
-The built-in SageTUI client, the legacy TUI, and the `SageFs.Gui` Raylib frontend are deprecated and are not
-current product interfaces; their rendering code stays in the repository as legacy history rather than getting
-deleted outright. Raylib application and game demos are still supported examples of using SageFs with game
-projects, and they don't depend on the deprecated GUI frontend. I kept those because they prove SageFs works
-for real projects outside web dev too.
+The Raylib application and game demos are there because they prove SageFs works for real projects
+outside web dev too.
 
 ## Session Lifecycle
 

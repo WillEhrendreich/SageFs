@@ -79,14 +79,6 @@ The active project is shown in the status bar.
 - **Long-running eval**: Some evaluations genuinely take time (large
   compilations, network calls). Check the daemon console for progress.
 
-### Deprecated frontend commands
-
-The built-in SageTUI client, legacy TUI, and `SageFs.Gui` Raylib frontend
-are deprecated. Use a supported editor integration, the web dashboard, or
-MCP instead. Raylib application and game projects remain fully supported;
-the deprecation is only about the old SageFs product frontend, not about
-you shipping a Raylib game.
-
 ### Stale REPL after code changes
 
 Use hard reset to pick up source file changes:

@@ -137,8 +137,6 @@ SageFs runs in the foreground, streaming daemon logs to that terminal. It's not 
 
 **AI agent** (Claude Code, Copilot, Codex, Cursor, anything that speaks MCP): point it at `http://localhost:37749/`, **then install the [SageFs skill](skills/sagefs/SKILL.md)**. Without the skill your agent will iterate with `dotnet build` and never touch the REPL. [docs/agents.md](docs/agents.md) has the one-line install, an `AGENTS.md` snippet for other agents, and what to do when an agent drifts.
 
-> The built-in SageTUI client, legacy TUI, `SageFs.Gui` Raylib frontend, and the Visual Studio extension are deprecated and no longer current product interfaces. Their source stays in the repo for historical context. This doesn't affect Raylib application and game projects built with SageFs. See the [Raylib demos](#-visual-demos).
-
 ### 5. Enable live testing
 
 > **Live testing runs as you type.** SageFs evals your edited buffer into the session and re-runs only the *affected* tests against the new code. An unsaved edit flips a failing test red and back to green when you fix it, without ever touching the file on disk. Results stream inline with source-mapped gutter markers and coverage. All five frameworks (Expecto, xUnit v2 and v3, NUnit, MSTest, TUnit) discover, run, and report with framework-specific messages.
@@ -438,14 +436,12 @@ Tests are automatically categorized (Unit, Integration, Browser, Property, Bench
 ### Repository Map — where things live
 
 - `SageFs.Core/`, the shared engine and runtime logic: session management, MCP/session operations, live testing, persistence, and shared rendering primitives
-- `SageFs/`, the CLI entrypoint, daemon host, MCP server, dashboard, and worker HTTP transport; deprecated terminal client source is retained for historical context
+- `SageFs/`, the CLI entrypoint, daemon host, MCP server, dashboard, and worker HTTP transport
 - `SageFs.Host/`, the worker process the daemon spawns per session: it owns the FSI session, the Harmony detours, and the worker HTTP transport the daemon talks to
 - `SageFs.FsiHost/`, the isolated FSI host, built and launched per session by `SageFs.Core/IsolatedFsiSession.fs`. Sessions run in it by default; it deliberately links no SageFs assembly and no Harmony, so a project's own dependency versions never collide with the daemon's
 - `SageFs.Simulation/`, deterministic simulation (DST) models that fold the real cores: file-reload routing, worker lifecycle, supervision, the manifest
-- `SageFs.Gui/`, deprecated Raylib product frontend retained as legacy source; it's separate from supported Raylib application and game projects
 - `SageFs.Tests/`, the Expecto suite: unit tests, property tests, snapshot tests, the DST drivers, and every real-daemon integration and browser journey
 - `sagefs-vscode/`, VS Code extension (F# via Fable → JavaScript)
-- `sagefs-vs/`, deprecated Visual Studio extension, retained as legacy source
 - `docs/`, user docs, architecture notes, troubleshooting, and feature references
 - `quality/`, the release Definition-of-Done matrix the publish workflow gates on
 - `samples/`, runnable sample apps and language-onramp projects

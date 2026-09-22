@@ -290,4 +290,3 @@ data: {"SessionId":"<id>", "Narratives": [{"TestId":"string", "TestName":"string
 
 - **VS Code**: `FileAnnotationsListener.fs` parses file_annotations. `Extension.fs` renders coverage gutter decorations + inline failures. `TestControllerAdapter.fs` enriches test items with failure narratives.
 - **Neovim**: lives in its own repo, [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) (not in this tree). Its `testing.lua` caches source_locations and failure_narratives, `telescope_picker.lua` jumps to source on `<CR>`, and `commands.lua` shows a narrative floating window on `<C-d>`.
-- **Visual Studio** *(deprecated, kept here as the historical record, not a current target)*: `CoverageGlyphTagger.cs` (MEF pipeline for gutter glyphs). `FileAnnotationTracker.cs` caches coverage + failure data. `TestStateTracker.cs` stores source locations for navigation. The `sagefs-vs/` extension isn't built, tested, or published anymore. Don't route new work there.

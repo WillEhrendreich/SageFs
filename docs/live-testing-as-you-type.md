@@ -6,9 +6,7 @@
 > **session-scoped buffer sync** via `POST /api/sessions/{sid}/buffer-changed` with
 > debounced unsaved buffer content from the current editors (VS Code and Neovim). The
 > `POST /api/live-testing/evaluate-scope` contract below never shipped as written. It's a
-> design exploration, and it isn't the current editor/daemon contract. Visual Studio appears in
-> some tables below as an original design target; that extension is now deprecated, so
-> treat those rows as historical design notes rather than current product.
+> design exploration, and it isn't the current editor/daemon contract.
 
 > **Priority**: #1. This feature is meant to outclass VS Enterprise's Live Unit Testing.
 > I don't say that to be cocky about it; I say it because it's the actual bar I'm
@@ -114,9 +112,8 @@ Each editor uses its native mechanism to find the enclosing function:
 |--------|-----------|---------------------|
 | **Neovim** | Tree-sitter `value_declaration` walk | Error-tolerant: works mid-keystroke |
 | **VS Code** | `vscode.executeDocumentSymbolProvider` (Ionide LSP) | Cached symbols from last successful parse |
-| **Visual Studio** | Indentation-based scan | F# indentation-sensitivity makes this 90%+ accurate |
 
-All three are 5-15 lines of editor-specific code. They don't need to share an
+Both are 5-15 lines of editor-specific code. They don't need to share an
 implementation; they just need to produce `{ scopeName, scopeText, startLine, endLine }`.
 
 When scope detection fails (for example, the cursor is between functions, or the syntax
@@ -221,13 +218,6 @@ Each editor implements:
 - `vscode.executeDocumentSymbolProvider` for scope extraction (Ionide provides this)
 - Fallback: indentation-based scan if Ionide not available
 - Existing `LiveTestingListener` + `TestDecorations` handle results
-
-### Visual Studio
-- `ITextViewChangedListener` from VS Extensibility SDK
-- Indentation-based scan for scope extraction (F# indentation-sensitivity makes this reliable)
-- Existing `LiveTestingSubscriber` + CodeLens handle results
-- (Historical: the VS extension is deprecated and no longer built. This row is here for
-  the record, not as a current target.)
 
 ## Decision Log
 

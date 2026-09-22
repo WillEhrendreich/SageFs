@@ -1,12 +1,9 @@
 # SageFs Feature Matrix
 
-Current product surfaces are the web dashboard, editor integrations (VS Code and Neovim), and MCP. The
-built-in SageTUI client, legacy TUI, `SageFs.Gui` Raylib frontend, and the Visual Studio extension are
-deprecated and excluded from this matrix. I'm not going to keep grading a frontend I've already stopped
-building.
+The product surfaces are the web dashboard, editor integrations (VS Code and Neovim), and MCP.
 
-Raylib application and game projects remain supported. The demos in `samples/demos/` show SageFs providing
-live development for Raylib projects, separate from the deprecated SageFs GUI frontend.
+Raylib application and game projects are supported too. The demos in `samples/demos/` show SageFs
+providing live development for Raylib projects.
 
 > **Legend**: Supported = dedicated client experience | Shared = available through the daemon or MCP | Partial = client support is incomplete | N/A = not meaningful for that client
 

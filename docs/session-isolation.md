@@ -8,9 +8,8 @@
 > session driven by a Datastar signal (`viewingSessionId`), not a URL query
 > parameter or a shared global. See `createStreamHandler` in
 > `SageFs/Dashboard.fs` if you want to see the real thing instead of the plan
-> for it. Current product clients are editor integrations, dashboard tabs,
-> and MCP connections. The built-in TUI was part of the original
-> implementation context but is now deprecated.
+> for it. The clients are editor integrations, dashboard tabs, and MCP
+> connections.
 
 ## Problem
 
