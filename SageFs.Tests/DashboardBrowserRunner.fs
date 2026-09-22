@@ -172,6 +172,7 @@ let runBrowserJourneys (cliArgs: string array) : int =
           exitWith 1
         else
           Environment.SetEnvironmentVariable("SAGEFS_DASHBOARD_PORT", string dashboardPort)
+          Environment.SetEnvironmentVariable("SAGEFS_BROWSER_MCP_PORT", string mcpPort)
           Environment.SetEnvironmentVariable(
             "SAGEFS_FRICTION_DB", Path.Combine(dataDir, "friction.db"))
           let browserArgv =

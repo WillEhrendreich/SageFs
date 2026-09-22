@@ -1073,6 +1073,119 @@ type DashboardSnapshot = {
   EvalToPixelP99Ms: float option
 }
 
+/// The sidebar panels that only show up when they're relevant. Everything
+/// else in the dashboard always renders; these four used to render all the
+/// time too, which put hot reload on a REPL session, a live-testing toggle on
+/// a session that never asked for it, and cohort lanes built from stale
+/// ledger rows in front of everyone.
+[<RequireQualifiedAccess>]
+type OptionalPanel =
+  | HotReload
+  | LiveTesting
+  /// The cohort panel and its lanes, together.
+  | Cohort
+  | Friction
+
+[<RequireQualifiedAccess>]
+type PanelVisibility =
+  | Shown
+  /// Carries why, for the View menu the redesign adds later.
+  | Hidden of reason: string
+
+/// What the viewed session is doing, as far as panel visibility cares.
+[<RequireQualifiedAccess>]
+type ViewedSession =
+  | NoSession
+  | Viewing of workflow: WorkflowTypes.SessionWorkflow * liveTesting: Features.LiveTestActivity.LiveTestActivity
+
+/// Whether a cohort is running right now: members actually present, never
+/// just rows sitting in the ledger.
+[<RequireQualifiedAccess>]
+type CohortPresence =
+  | NoActiveMembers
+  | ActiveMembers of count: int
+
+/// The friction panel is off by default until reporting has a real endpoint.
+/// A tab can still ask for it, deliberately, with `/dashboard?panels=friction`.
+[<RequireQualifiedAccess>]
+type FrictionPanelOptIn =
+  | NotOptedIn
+  | OptedIn
+
+type PanelFacts = {
+  Viewed: ViewedSession
+  Cohort: CohortPresence
+  Friction: FrictionPanelOptIn
+}
+
+module PanelFacts =
+  /// The query key and value that opt a tab into the friction panel.
+  let panelsQueryKey = "panels"
+  let frictionPanelValue = "friction"
+
+  /// `?panels=friction` (comma-separated, case-insensitive) opts in.
+  let frictionOptInOfQuery (panels: string) : FrictionPanelOptIn =
+    let requested =
+      (if isNull panels then "" else panels).Split([| ','; ' ' |], StringSplitOptions.RemoveEmptyEntries)
+      |> Array.exists (fun p -> String.Equals(p, frictionPanelValue, StringComparison.OrdinalIgnoreCase))
+    match requested with
+    | true -> FrictionPanelOptIn.OptedIn
+    | false -> FrictionPanelOptIn.NotOptedIn
+
+  let cohortPresence (frame: SageFs.Cohort.CohortFrame<'m>) : CohortPresence =
+    let present =
+      frame.MemberSeat
+      |> Array.filter (fun seat ->
+        match seat with
+        | SageFs.Cohort.SeatState.Present -> true
+        | SageFs.Cohort.SeatState.Departed _ -> false)
+      |> Array.length
+    match present with
+    | 0 -> CohortPresence.NoActiveMembers
+    | n -> CohortPresence.ActiveMembers n
+
+module PanelVisibility =
+  let decide (facts: PanelFacts) (panel: OptionalPanel) : PanelVisibility =
+    match panel with
+    | OptionalPanel.HotReload ->
+      match facts.Viewed with
+      | ViewedSession.NoSession -> PanelVisibility.Hidden "Hot reload: no session is open"
+      | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.HotReload _, _) -> PanelVisibility.Shown
+      | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.Interactive, _) ->
+        PanelVisibility.Hidden "Hot reload: this session is in REPL mode"
+      | ViewedSession.Viewing(WorkflowTypes.SessionWorkflow.LiveTesting, _) ->
+        PanelVisibility.Hidden "Hot reload: this session is in Live Testing mode"
+    | OptionalPanel.LiveTesting ->
+      match facts.Viewed with
+      | ViewedSession.NoSession -> PanelVisibility.Hidden "Live testing: no session is open"
+      | ViewedSession.Viewing(_, Features.LiveTestActivity.LiveTestActivity.Off) ->
+        PanelVisibility.Hidden "Live testing: it's off for this session"
+      | ViewedSession.Viewing _ -> PanelVisibility.Shown
+    | OptionalPanel.Cohort ->
+      match facts.Cohort with
+      | CohortPresence.ActiveMembers _ -> PanelVisibility.Shown
+      | CohortPresence.NoActiveMembers -> PanelVisibility.Hidden "Cohort: no cohort is running"
+    | OptionalPanel.Friction ->
+      match facts.Friction with
+      | FrictionPanelOptIn.OptedIn -> PanelVisibility.Shown
+      | FrictionPanelOptIn.NotOptedIn ->
+        PanelVisibility.Hidden "Friction: hidden until reporting has a real endpoint (open /dashboard?panels=friction to see it)"
+
+  /// A hidden panel renders nothing at all.
+  let private keep (facts: PanelFacts) (panel: OptionalPanel) (node: Falco.Markup.XmlNode) =
+    match decide facts panel with
+    | PanelVisibility.Shown -> node
+    | PanelVisibility.Hidden _ -> Text.raw ""
+
+  /// Drop the panels that aren't relevant from a built snapshot. Still one
+  /// snapshot and one fat morph; hidden panels just aren't in it.
+  let apply (facts: PanelFacts) (snap: DashboardSnapshot) : DashboardSnapshot =
+    { snap with
+        HotReloadPanel = keep facts OptionalPanel.HotReload snap.HotReloadPanel
+        LiveTestingPanel = keep facts OptionalPanel.LiveTesting snap.LiveTestingPanel
+        CohortPanel = keep facts OptionalPanel.Cohort snap.CohortPanel
+        FrictionPanel = keep facts OptionalPanel.Friction snap.FrictionPanel }
+
 
 type DaemonInfoContract = {
   Pid: int

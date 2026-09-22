@@ -2377,6 +2377,7 @@ let run
     | ModelChanged _
     | WarmupProgress _
     | SystemAlarm _
+    | CohortChanged
     | WarmupContextSnapshot _
     | HotReloadSnapshot _
     | HotReloadFileToggled _
@@ -2386,6 +2387,20 @@ let run
     | WorkflowSwitching _
     | WorkflowSwitched _
     | SessionHealthChanged _ -> ())
+  // Every applied cohort command tells the dashboard to redraw, so the cohort
+  // panel shows up when a member joins and goes when the last one leaves.
+  // Lease renewals are left out: the reaper renews every present member once
+  // a minute, and a redraw for that changes nothing anyone can see.
+  cohortOwner.Events.Add(fun events ->
+    let visible =
+      events
+      |> List.exists (fun ev ->
+        match ev with
+        | SageFs.Cohort.CohortEvent.LeaseRenewed _ -> false
+        | _ -> true)
+    match visible with
+    | true -> stateChangedEvent.Trigger CohortChanged
+    | false -> ())
   // Sessions that were ready before this line ran.
   SessionManager.QuerySnapshot.allSessions (readSnapshot ())
   |> List.iter (fun info -> ensureReloadRelay info.Id)

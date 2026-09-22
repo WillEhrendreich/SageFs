@@ -564,7 +564,10 @@ let invalidatesWorkerData (change: SseEvent) =
   | SseEvent.SessionSwitched _
   | SseEvent.SessionFaulted _ -> true
   | SseEvent.SessionProgress
-  | SseEvent.SystemAlarm _ -> false
+  | SseEvent.SystemAlarm _
+  // The cohort panel reads the owner's published frame on every push; no
+  // worker data is involved.
+  | SseEvent.CohortChanged -> false
   // The dashboard's own stateChangedEvent stream only ever carries "state"
   // channel cases (DaemonMode.fs triggers exactly the nine cases above) —
   // the "session" channel cases below are pushed on a separate broadcast
@@ -793,6 +796,35 @@ let private applyCohortViewing
 /// `ConnectionChannels`.
 let private previousSessionSortByClient =
   Collections.Concurrent.ConcurrentDictionary<string, PreviousSessionSort>()
+
+/// This tab's friction opt-in (`/dashboard?panels=friction`), keyed by page
+/// client id like the sort choice above: the GET records it, the stream reads
+/// it on every push, and it's removed when the connection closes. A tab that
+/// never asked gets the default layout, which has no friction panel.
+let private frictionOptInByClient =
+  Collections.Concurrent.ConcurrentDictionary<string, FrictionPanelOptIn>()
+
+/// Everything panel visibility needs, read fresh on every push, so the
+/// panels follow the session: switch to Hot Reload and its panel appears on
+/// the next morph, a cohort's last member leaves and the cohort panel goes.
+let private panelFactsFor
+  (q: DashboardQueries)
+  (infra: DashboardInfra)
+  (viewed: WorkerProtocol.SessionId option)
+  (clientId: string)
+  : PanelFacts =
+  { Viewed =
+      match viewed with
+      | None -> ViewedSession.NoSession
+      | Some sid -> ViewedSession.Viewing(q.GetSessionWorkflow sid, q.GetLiveTestActivity (WorkerProtocol.SessionId.value sid))
+    Cohort = PanelFacts.cohortPresence (infra.ReadCohortFrame ())
+    Friction =
+      match clientId with
+      | null | "" -> FrictionPanelOptIn.NotOptedIn
+      | id ->
+        match frictionOptInByClient.TryGetValue id with
+        | true, optIn -> optIn
+        | false, _ -> FrictionPanelOptIn.NotOptedIn }
 
 /// Build a complete DashboardSnapshot from the current daemon state.
 /// Independent of any HTTP/SSE context — called from both the initial GET render
@@ -1298,7 +1330,9 @@ let createStreamHandler
         // ever made one — defaults to Recent for a tab that hasn't.
         let previousSort = previousSessionSortByClient.GetOrAdd(clientId, PreviousSessionSort.Recent)
         let! snapRaw = buildNoSessionSnapshotWithSessionsSorted q infra liveSessions previousSort
-        let snap = applyCohortViewing infra currentCohortViewingSeq snapRaw
+        let snap =
+          applyCohortViewing infra currentCohortViewingSeq snapRaw
+          |> PanelVisibility.apply (panelFactsFor q infra None clientId)
         match SnapshotRenderGuard.decide renderMemory snap with
         | SnapshotRenderGuard.Decision.Skip -> () // unchanged tick — renderMainContent/renderNode never run
         | SnapshotRenderGuard.Decision.Render newMemory ->
@@ -1321,7 +1355,9 @@ let createStreamHandler
       // here instead of paying for a second GetAllSessions read.
       let! snapRaw, newSessionId, newThemeName, rawWorkerData =
         buildDashboardSnapshotWithSessions q infra sessionId lastSessionId lastWorkingDir lastThemeName cached liveSessions
-      let snap = applyCohortViewing infra currentCohortViewingSeq snapRaw
+      let snap =
+        applyCohortViewing infra currentCohortViewingSeq snapRaw
+        |> PanelVisibility.apply (panelFactsFor q infra (Some newSessionId) clientId)
       match cached with
       | None ->
         // This push performed the expensive fetches — record them so the next
@@ -1539,6 +1575,7 @@ let createStreamHandler
         AgentActivityTracker.forget tracker (MemberTable.MemberId.display (MemberTable.MemberId.Browser clientId)))
       infra.ConnectionChannels.TryRemove(clientId) |> ignore
       previousSessionSortByClient.TryRemove(clientId) |> ignore
+      frictionOptInByClient.TryRemove(clientId) |> ignore
   }
 
 /// Create the eval POST handler.
@@ -1579,8 +1616,11 @@ let createEvalHandler
           // The action response owns this interaction. Render the freshly
           // committed snapshot here so Datastar cannot drop an overlapping
           // long-lived stream morph while this POST is still resolving.
-          let! snap, _, _, _ =
+          let! snapRaw, _, _, _ =
             buildDashboardSnapshot q infra sessionId sessionId (q.GetSessionWorkingDir sessionId) defaultThemeName None
+          // Same panel visibility the stream uses, so this morph and the next
+          // stream push agree on which panels exist.
+          let snap = PanelVisibility.apply (panelFactsFor q infra (Some sessionId) (clientIdFromSignals doc)) snapRaw
           // DIAGNOSTIC: log output panel HTML to verify content is present.
           // Render once — the node built here is reused for the patch below.
           let mainNode = renderMainContent snap
@@ -2818,11 +2858,16 @@ let createEndpoints
         // parameter — deep links land on the picker and the signal drives
         // everything thereafter, synced with the backend.
         let clientId = Guid.NewGuid().ToString("N").[..7]
+        // `?panels=friction` is the deliberate way into the friction panel,
+        // which the default layout leaves out. Recorded per tab so the
+        // stream keeps honoring it.
+        frictionOptInByClient.[clientId] <- PanelFacts.frictionOptInOfQuery (string ctx.Request.Query.[PanelFacts.panelsQueryKey])
         // Default to the first LIVE session (never a Stopped/dead one); the
         // picker shows only when there are zero live sessions to display.
         match firstLiveSession sessions with
         | Some firstId ->
-          let! snap, resolvedId, _, _ = buildDashboardSnapshot q infra firstId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
+          let! snapRaw, resolvedId, _, _ = buildDashboardSnapshot q infra firstId (WorkerProtocol.SessionId.newId ()) "" defaultThemeName None
+          let snap = PanelVisibility.apply (panelFactsFor q infra (Some resolvedId) clientId) snapRaw
           let html = renderShell infra.Version clientId (WorkerProtocol.SessionId.value resolvedId) (resolveDefaultWorkingDir ()) (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
         | None ->
@@ -2832,12 +2877,14 @@ let createEndpoints
           // can resume/create a session). The stream's no-session push morphs
           // the same state, so the initial HTML must contain #session-picker
           // or Datastar fails the page with PatchElementsNoTargetsFound.
-          let! snap = buildNoSessionSnapshot q infra
+          let! snapRaw = buildNoSessionSnapshot q infra
+          let snap = PanelVisibility.apply (panelFactsFor q infra None clientId) snapRaw
           let html = renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContent snap)
           return! FalcoResponse.ofHtml html ctx
       with _ ->
         let clientId = Guid.NewGuid().ToString("N").[..7]
-        let! snap = buildNoSessionSnapshot q infra
+        let! snapRaw = buildNoSessionSnapshot q infra
+        let snap = PanelVisibility.apply (panelFactsFor q infra None clientId) snapRaw
         let html = renderShell infra.Version clientId "" (resolveDefaultWorkingDir ()) (renderMainContent snap)
         return! FalcoResponse.ofHtml html ctx
     })

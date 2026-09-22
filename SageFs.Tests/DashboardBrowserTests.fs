@@ -19,6 +19,20 @@ module PlaywrightExpect =
     Expect.isFalse visible msg
   }
 
+  /// Wait until exactly `expected` elements match, whether the matching
+  /// elements are visible or not. How a journey proves a panel is in the
+  /// page, or gone from it, rather than just scrolled or collapsed away.
+  let waitForCount (ms: int) (locator: ILocator) (expected: int) = task {
+    let sw = Diagnostics.Stopwatch.StartNew()
+    let mutable count = -1
+    while count <> expected && sw.ElapsedMilliseconds < int64 ms do
+      let! c = locator.CountAsync()
+      count <- c
+      if count <> expected then
+        do! Task.Delay(200)
+    Expect.equal count expected (sprintf "expected %d elements matching the locator within %dms, found %d" expected ms count)
+  }
+
   let waitForText (ms: int) (locator: ILocator) (text: string) = task {
     let sw = Diagnostics.Stopwatch.StartNew()
     let mutable found = false
@@ -89,6 +103,25 @@ module PlaywrightFixture =
       | null | "" -> "37750"
       | p -> p
     sprintf "http://localhost:%s" port
+
+  /// The daemon's MCP/API port. The browser runner exports it; a daemon
+  /// started by hand binds the dashboard at MCP port + 1, so fall back to that.
+  let mcpPort =
+    match Environment.GetEnvironmentVariable("SAGEFS_BROWSER_MCP_PORT") with
+    | null | "" ->
+      match Environment.GetEnvironmentVariable("SAGEFS_DASHBOARD_PORT") with
+      | null | "" -> 37749
+      | p -> int p - 1
+    | p -> int p
+
+  /// Where journeys save screenshots worth looking at.
+  let screenshotDir =
+    let dir =
+      match Environment.GetEnvironmentVariable("SAGEFS_BROWSER_SCREENSHOTS") with
+      | null | "" -> IO.Path.Combine(IO.Path.GetTempPath(), "sagefs-browser-screenshots")
+      | d -> d
+    IO.Directory.CreateDirectory dir |> ignore
+    dir
 
   /// Launch a fresh browser (per journey). A shared browser degrades over
   /// many journeys: SSE connections from closed contexts accumulate and later
@@ -799,6 +832,8 @@ let tests =
   // --- TS journey ports (friction-panel-journey.spec.ts) ---
 
   playwrightTest "friction panel renders honest empty state with no send form" (fun page -> task {
+    // The friction panel isn't in the default layout; this tab asks for it.
+    let! _ = page.GotoAsync(sprintf "%s/dashboard?panels=friction" PlaywrightFixture.dashboardUrl)
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
@@ -825,23 +860,23 @@ let tests =
 
   // --- TS journey ports (live-testing-journey.spec.ts) ---
 
-  playwrightTest "live testing panel enables and disables through SSE round-trip" (fun page -> task {
+  playwrightTest "live testing panel appears when it's turned on and goes when it's turned off" (fun page -> task {
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#live-testing-panel")
-    do! PlaywrightExpect.isVisibleAsync panel "live testing panel visible"
-    do! PlaywrightExpect.waitForText 15_000 panel "Live Testing: OFF"
-    do! PlaywrightExpect.waitForText 10_000 panel "keystroke"
-    // Enable
-    let enableBtn =
-      panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Enable"))
-    do! enableBtn.ClickAsync()
+    // Off: the panel isn't there at all.
+    do! PlaywrightExpect.waitForCount 15_000 panel 0
+    // Turn it on the way an editor or agent does, through the daemon API.
+    use http = new Net.Http.HttpClient()
+    let! enable = http.PostAsync(sprintf "http://localhost:%d/api/live-testing/enable" PlaywrightFixture.mcpPort, null)
+    Expect.isTrue enable.IsSuccessStatusCode (sprintf "enable live testing returned %d" (int enable.StatusCode))
+    do! PlaywrightExpect.waitForCount 30_000 panel 1
     do! PlaywrightExpect.waitForText 30_000 panel "Live Testing: ON"
-    // Disable and confirm round-trip back to OFF
+    // Disable from the panel's own button, and the panel goes away again.
     let disableBtn =
       panel.GetByRole(AriaRole.Button, LocatorGetByRoleOptions(Name = "Disable"))
     do! disableBtn.ClickAsync()
-    do! PlaywrightExpect.waitForText 30_000 panel "Live Testing: OFF"
+    do! PlaywrightExpect.waitForCount 30_000 panel 0
   })
 
   // --- FR-DASH: real friction capture through the local store (seeded via
@@ -851,6 +886,8 @@ let tests =
   // and this journey observes the real empty -> recorded transition. ---
 
   playwrightTest "friction feedback recorded locally reflects in the panel with the send form" (fun page -> task {
+    // The friction panel isn't in the default layout; this tab asks for it.
+    let! _ = page.GotoAsync(sprintf "%s/dashboard?panels=friction" PlaywrightFixture.dashboardUrl)
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
@@ -898,6 +935,8 @@ let tests =
   })
 
   playwrightTest "friction send validates the destination and surfaces the result inline" (fun page -> task {
+    // The friction panel isn't in the default layout; this tab asks for it.
+    let! _ = page.GotoAsync(sprintf "%s/dashboard?panels=friction" PlaywrightFixture.dashboardUrl)
     do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
     do! DashboardDom.ensureExpanded page
     let panel = page.Locator("#friction-panel")
@@ -926,5 +965,73 @@ let tests =
     })
     let status = page.Locator("#friction-send-status")
     do! PlaywrightExpect.waitForText 15_000 status "endpoint must be an absolute https URL"
+  })
+
+  // --- Contextual panels (dashboard-ux-redesign.md, suggested order item 2):
+  // a REPL session shows no hot reload, cohort, lanes or friction panel;
+  // switching to Hot Reload brings its panel; a cohort with a present member
+  // brings the cohort panel and its lanes. Last in the list because it
+  // restarts the shared session twice (two workflow switches). ---
+
+  playwrightTest "optional panels show only when they're relevant" (fun page -> task {
+    let shot (name: string) = task {
+      let path = IO.Path.Combine(PlaywrightFixture.screenshotDir, sprintf "panels-%s.png" name)
+      let! _ = page.ScreenshotAsync(PageScreenshotOptions(Path = path, FullPage = true))
+      eprintfn "screenshot: %s" path
+    }
+    let count (selector: string) expected ms = PlaywrightExpect.waitForCount ms (page.Locator(selector)) expected
+    do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+    do! DashboardDom.ensureExpanded page
+    // 1. A REPL session: none of them, even with the extra panels expanded.
+    for selector in [ "#hot-reload-panel"; "#cohort-panel"; "#cohort-lanes"; "#friction-panel"; "#live-testing-panel" ] do
+      do! count selector 0 15_000
+    do! shot "1-repl"
+
+    // 2. A cohort with a present member holding a claim: cohort and lanes.
+    let opts =
+      ModelContextProtocol.Client.HttpClientTransportOptions(
+        Endpoint = Uri(sprintf "http://localhost:%d/" PlaywrightFixture.mcpPort))
+    let transport = new ModelContextProtocol.Client.HttpClientTransport(opts, (null: Microsoft.Extensions.Logging.ILoggerFactory))
+    let! client = ModelContextProtocol.Client.McpClient.CreateAsync(transport, null, null, Threading.CancellationToken.None)
+    let call (name: string) (args: (string * obj) list) = task {
+      let! _ = client.CallToolAsync(name, readOnlyDict args, null, null, Threading.CancellationToken.None)
+      return ()
+    }
+    try
+      do! call "join_cohort" [ "agentName", box "panel-journey"; "role", box "Implementer" ]
+      do! call "acquire_claim" [ "agentName", box "panel-journey"; "scope", box "file:src/Panels.fs"; "purpose", box "panel journey" ]
+      do! count "#cohort-panel" 1 30_000
+      do! count "#cohort-lanes" 1 30_000
+      do! shot "2-cohort"
+      // The member leaves: nobody is present, so both go, whatever the ledger still holds.
+      do! call "leave_cohort" [ "agentName", box "panel-journey" ]
+      do! count "#cohort-panel" 0 30_000
+      do! count "#cohort-lanes" 0 30_000
+    finally
+      (client :> IAsyncDisposable).DisposeAsync().AsTask().GetAwaiter().GetResult()
+
+    // 3. Switch the session to Hot Reload through the daemon's workflow
+    // route, the one editors use. (The dashboard's own switcher can't carry
+    // its target yet: Datastar's @post takes request options as its second
+    // argument, not a payload, so `workflowTarget` never reaches the server.)
+    let! sessionId = page.Locator("#main").GetAttributeAsync("data-viewing-session-id")
+    use http = new Net.Http.HttpClient(Timeout = TimeSpan.FromMinutes 5.0)
+    let switchTo (workflow: string) = task {
+      use body = new Net.Http.StringContent(sprintf "{\"workflow\":\"%s\"}" workflow, Text.Encoding.UTF8, "application/json")
+      let! resp = http.PostAsync(sprintf "http://localhost:%d/api/sessions/%s/workflow" PlaywrightFixture.mcpPort sessionId, body)
+      Expect.isTrue resp.IsSuccessStatusCode (sprintf "switching to %s returned %d" workflow (int resp.StatusCode))
+    }
+    do! switchTo "hotreload"
+    do! count "#hot-reload-panel" 1 180_000
+    do! PlaywrightExpect.waitForSelectorText 180_000 page "#session-status" "Ready"
+    do! DashboardDom.ensureExpanded page
+    do! shot "3-hot-reload"
+    for selector in [ "#cohort-panel"; "#cohort-lanes"; "#friction-panel" ] do
+      do! count selector 0 5_000
+
+    // Put the shared session back the way the other journeys expect it.
+    do! switchTo "interactive"
+    do! count "#hot-reload-panel" 0 180_000
+    do! PlaywrightExpect.waitForSelectorText 180_000 page "#session-status" "Ready"
   })
   ]

@@ -511,6 +511,7 @@
         <Compile Include="AgentGuidanceIntegrationTests.fs" />
         <Compile Include="CohortAffordancesTests.fs" />
         <Compile Include="CohortPanelTests.fs" />
+        <Compile Include="DashboardPanelVisibilityTests.fs" />
         <Compile Include="CohortTerritoryPanelTests.fs" />
         <Compile Include="CohortInspectorTests.fs" />
         <Compile Include="CohortScrubberTests.fs" />

@@ -1118,7 +1118,9 @@ let wireSessionEventSubscription
       | SseEvent.SystemAlarm _ -> ()
       // No session-scoped follow-up needed for these.
       | SseEvent.SessionProgress
-      | SseEvent.SessionSwitched _ -> ()
+      | SseEvent.SessionSwitched _
+      // MCP clients get cohort changes from wireCohortEventSubscription.
+      | SseEvent.CohortChanged -> ()
       // Session-channel cases never arrive on this stream — DaemonMode.fs
       // only ever triggers the nine "state" channel cases above — but the
       // match stays exhaustive (no wildcard) so a future emitter of one of
@@ -1748,7 +1750,9 @@ let wireModelChangeHandlers
     | SseEvent.SessionFaulted _ -> ()
     // No model-change follow-up needed for these.
     | SseEvent.SessionProgress
-    | SseEvent.SessionSwitched _ -> ()
+    | SseEvent.SessionSwitched _
+    // MCP clients get cohort changes from wireCohortEventSubscription.
+    | SseEvent.CohortChanged -> ()
     // Session-channel cases never arrive on this stream (see the matching
     // note in wireSessionEventSubscription) — kept exhaustive, not a
     // wildcard, so a future rewire is forced to decide here too.

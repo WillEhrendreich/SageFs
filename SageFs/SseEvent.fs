@@ -33,6 +33,12 @@ type SseEvent =
   | ModelChanged of outputCount: int * diagCount: int
   | WarmupProgress of sessionId: WorkerProtocol.SessionId * step: int * total: int * message: string
   | SystemAlarm of phase: string * message: string
+  /// The daemon's cohort changed: someone joined, left, claimed, released or
+  /// landed. Global like `SystemAlarm`. The dashboard needs it to redraw the
+  /// cohort panel, which only shows while members are present; before this
+  /// nothing pushed on a cohort change, so the panel went stale until some
+  /// unrelated event happened to arrive.
+  | CohortChanged
   // ── Session channel (was SessionEvents.SessionEvent) — rich, session-scoped snapshots ──
   | WarmupContextSnapshot of sessionId: string * context: WarmupContext
   | HotReloadSnapshot of sessionId: string * watchedFiles: string list
@@ -64,7 +70,8 @@ module SseEvent =
     | SessionFaulted _
     | ModelChanged _
     | WarmupProgress _
-    | SystemAlarm _ -> SseChannel.State
+    | SystemAlarm _
+    | CohortChanged -> SseChannel.State
     | WarmupContextSnapshot _
     | HotReloadSnapshot _
     | HotReloadFileToggled _
@@ -172,6 +179,8 @@ module SseEvent =
       JsonSerializer.Serialize({| warmupProgress = true; sessionId = sid s; step = step; total = total |}, jsonOpts)
     | SystemAlarm (phase, message) ->
       JsonSerializer.Serialize({| systemAlarm = true; phase = phase; message = message |}, jsonOpts)
+    | CohortChanged ->
+      JsonSerializer.Serialize({| cohortChanged = true |}, jsonOpts)
     // ── Session channel ──
     | WarmupContextSnapshot (s, ctx) ->
       JsonSerializer.Serialize(
