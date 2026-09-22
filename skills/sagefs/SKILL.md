@@ -36,9 +36,11 @@ you" below.
    `.claude/worktrees/whatever`. Don't create a duplicate either: check
    `list_sessions` first.
 4. **Build once, then create the session.** A session loads your project's
-   compiled output. Create it before the first build and warmup fails with
-   "Not all DLLs are found". That's not a daemon bug; build first. This one
-   build is allowed. Then `create_session` with your working directory and
+   compiled output, so build first. This one build is allowed. If warmup
+   still says "Not all DLLs are found" after a build, that's a SageFs bug, not
+   you. Report it with the paths the message names. (Older versions got
+   multi-targeted project references wrong this way.) Then `create_session`
+   with your working directory and
    project, and call `get_fsi_status` until it says `Ready`. Don't sleep in a
    loop.
 

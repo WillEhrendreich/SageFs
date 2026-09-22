@@ -34,7 +34,7 @@ let loopSteps = [
 let firstMinute = [
   "Call get_fsi_status or list_sessions. Check the daemon's version against the repo. If it's behind, tell the user."
   "Sessions belong to a working directory, and a git worktree is its own boundary. Use your own session, and don't create a duplicate."
-  "Build once, then create_session for your directory, then get_fsi_status until Ready. Creating it before the first build fails warmup with \"Not all DLLs are found\"."
+  "Build once, then create_session for your directory, then get_fsi_status until Ready. If warmup says \"Not all DLLs are found\" after a build, that's a SageFs bug: report the paths it names."
 ]
 
 let gotchas = [

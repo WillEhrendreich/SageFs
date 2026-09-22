@@ -31,9 +31,11 @@ touching F#. The short version: the SageFs REPL (MCP) is the inner loop, and
 sub-agent, put the loop in the brief. Sub-agents don't inherit it.
 
 Working on SageFs itself has two extra catches:
-- **Build before `create_session`.** A session created before its project was
-  built fails warmup with "Not all DLLs are found". That's the order you did
-  things in, not a daemon bug.
+- **Build before `create_session`.** A session loads compiled output. If it
+  still fails with "Not all DLLs are found" after a build, treat it as a SageFs
+  bug and report the paths it names. SageFs.Core, SageFs.Host and SageFs
+  multi-target net10.0;net11.0, and 0.6.782 resolved those references wrong,
+  so a session on SageFs.Tests faulted even when everything was built.
 - **Self-hosting skew.** The pre-commit hook bumps the version on every commit,
   so a worktree's `SageFs.Core` is usually newer than the installed daemon. A
   session that loads Core can then refuse with a version mismatch, or a
