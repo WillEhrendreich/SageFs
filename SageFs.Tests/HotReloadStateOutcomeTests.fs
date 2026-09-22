@@ -53,9 +53,34 @@ let private publicStateSurvives (runtime: HostRuntime) =
     })
   }
 
+/// Rule 1, private state: the edited function reads `hidden`, which is
+/// private, so the patch can't name it from FSI. It still has to land, and it
+/// has to read and write the app's OWN `hidden`, not a fresh copy.
+let private privateStateSurvives (runtime: HostRuntime) =
+  testTask (sprintf "[%s] rule 1: a patch that reads a let mutable private lands and keeps using the app's live storage" (HostRuntime.moniker runtime)) {
+    do! withApp runtime (fun app -> task {
+      let! bumped = bumpTimes app "bumpHidden" 3
+      bumped |> Expect.equal "three bumps over HTTP should leave hidden at 3" "3"
+      let! before = get app "hiddenLabel"
+      before |> Expect.equal "the label reads the live private value" "A3"
+
+      let! verdict = save app "let hiddenLabel () : string = \"A\" + string hidden" "let hiddenLabel () : string = \"B\" + string hidden"
+
+      let! relabelled = settle app "hiddenLabel" "B3"
+      relabelled
+      |> Expect.equal (sprintf "the patched function should serve its new body AND the live private value.\nVerdict: %s\nHost log:\n%s" verdict (RunningApp.log app)) "B3"
+      verdict |> Expect.stringContains "the save should report a real patch" "\"type\":\"reload\""
+      let! next = get app "bumpHidden"
+      next |> Expect.equal "the app's own bump still lands in the same storage" "4"
+      let! after = get app "hiddenLabel"
+      after |> Expect.equal "and the patched reader sees that write, so reads and writes agree" "B4"
+    })
+  }
+
 [<Tests>]
 let hotReloadStateOutcomeTests =
   Integration.hostList "hot reload keeps live state across a save" [
     for runtime in HostRuntime.all do
       publicStateSurvives runtime
+      privateStateSurvives runtime
   ]
