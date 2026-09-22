@@ -124,15 +124,25 @@ module TweakSim =
       /// a crash, a user edit, a reformat, or a rollback of something else
       /// entirely must never flip it either way on their own.
       DirtyGroundTruth: bool
+      Settings: TweakLog.TweakLogSettings
       Clock: int64 }
 
   /// A small policy so a ~20-event scenario actually exercises compaction,
   /// production's real defaults (`RetentionPolicy.defaults`) are sized for
   /// thousands of events, which no seeded scenario here produces.
-  let simPolicy : TweakLog.RetentionPolicy =
+  let simRetention : TweakLog.RetentionPolicy =
     { UndoWindow = 2; MaxEvents = 6; MaxBytes = 100_000L }
 
-  let initial (x: int64) (other: int64) : State =
+  /// The sim's default settings: LiveOnBudget so a mid-run trace actually
+  /// exercises compaction the way the existing invariants expect: callers
+  /// that want to prove the OnSessionClose story pass their own settings
+  /// (see `defaultSettingsFor`) and call `closeSessionNow` at the end.
+  let defaultSettings : TweakLog.TweakLogSettings =
+    { CompactionMode = TweakLog.CompactionMode.LiveOnBudget
+      ReplayScope = TweakLog.ReplayScope.SageFsWritesOnly
+      Retention = simRetention }
+
+  let initial (settings: TweakLog.TweakLogSettings) (x: int64) (other: int64) : State =
     { X = x
       Source = fileOf x other
       Log = TweakLog.EventLog.empty
@@ -143,6 +153,7 @@ module TweakSim =
       PendingFailure = None
       TweakStartHash = None
       DirtyGroundTruth = false
+      Settings = settings
       Clock = 0L }
 
   /// Append one event to BOTH the real (compactable) log and the
@@ -155,16 +166,27 @@ module TweakSim =
 
   let private maybeCompact (behavior: CompactionBehavior) (s: State) : State =
     let bytes = int64 (TweakLog.TweakLogFormat.encodeStream s.Log.Events).Length
-    match TweakLog.shouldCompact simPolicy bytes s.Log.Events.Length with
+    match TweakLog.shouldCompact s.Settings bytes s.Log.Events.Length with
     | false -> s
     | true ->
       match behavior with
       | CompactionBehavior.Real ->
-        let newSnapshot, tail = TweakLog.compact s.Snapshot s.Log.Events simPolicy Set.empty
+        let newSnapshot, tail = TweakLog.compact s.Snapshot s.Log.Events s.Settings.Retention Set.empty
         { s with Snapshot = newSnapshot; Log = { s.Log with Events = tail } }
       | CompactionBehavior.DropsUnsavedTwin ->
-        let tail = s.Log.Events |> List.rev |> List.truncate simPolicy.UndoWindow |> List.rev
+        let tail = s.Log.Events |> List.rev |> List.truncate s.Settings.Retention.UndoWindow |> List.rev
         { s with Log = { s.Log with Events = tail } }
+
+  /// Simulates the session closing: compacts unconditionally (the
+  /// `closeSession` promise), whatever `CompactionMode` the run used.
+  let closeSessionNow (behavior: CompactionBehavior) (s: State) : State =
+    match behavior with
+    | CompactionBehavior.Real ->
+      let newSnapshot, tail = TweakLog.closeSession s.Snapshot s.Log.Events s.Settings Set.empty
+      { s with Snapshot = newSnapshot; Log = { s.Log with Events = tail } }
+    | CompactionBehavior.DropsUnsavedTwin ->
+      let tail = s.Log.Events |> List.rev |> List.truncate s.Settings.Retention.UndoWindow |> List.rev
+      { s with Log = { s.Log with Events = tail } }
 
   let private applyTweak (s: State) (value: int64) : State =
     let text = string value
@@ -291,14 +313,23 @@ module TweakSim =
   /// The full state trace, oldest first (including the initial state), so
   /// invariants can look at consecutive pairs and at every point in time,
   /// not just the end.
-  let trace
+  let traceWith
+    (settings: TweakLog.TweakLogSettings)
     (saveBehavior: SaveBehavior)
     (rollbackBehavior: RollbackBehavior)
     (compactionBehavior: CompactionBehavior)
     (scenario: Scenario)
     : State list =
     scenario.Events
-    |> List.scan (step saveBehavior rollbackBehavior compactionBehavior) (initial scenario.InitialX scenario.InitialOther)
+    |> List.scan (step saveBehavior rollbackBehavior compactionBehavior) (initial settings scenario.InitialX scenario.InitialOther)
+
+  /// `trace` under the sim's default settings (LiveOnBudget) — the shape
+  /// every pre-existing invariant/twin was written against.
+  let trace saveBehavior rollbackBehavior compactionBehavior scenario : State list =
+    traceWith defaultSettings saveBehavior rollbackBehavior compactionBehavior scenario
+
+  let runWith settings saveBehavior rollbackBehavior compactionBehavior scenario : State =
+    traceWith settings saveBehavior rollbackBehavior compactionBehavior scenario |> List.last
 
   let run saveBehavior rollbackBehavior compactionBehavior scenario : State =
     trace saveBehavior rollbackBehavior compactionBehavior scenario |> List.last

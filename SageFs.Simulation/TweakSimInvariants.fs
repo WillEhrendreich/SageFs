@@ -140,14 +140,21 @@ module TweakSimInvariants =
   /// `maybeCompact` runs every step, so two consecutive over-budget states
   /// in a row is the only thing that would mean growth isn't actually
   /// bounded.
+  /// Only meaningful under `LiveOnBudget`, mid-session, `OnSessionClose`
+  /// intentionally lets the log grow past budget until the session
+  /// closes, that's the whole point of the mode, so this only checks the
+  /// states where a compaction pass was actually allowed to run.
   let logStaysWithinBudget (states: State list) : Violation list =
     states
     |> List.indexed
     |> List.choose (fun (i, s) ->
-      let bytes = int64 (TweakLog.TweakLogFormat.encodeStream s.Log.Events).Length
-      match bytes <= simPolicy.MaxBytes with
-      | true -> None
-      | false -> violation i (sprintf "log grew to %d bytes, over the %d budget" bytes simPolicy.MaxBytes))
+      match s.Settings.CompactionMode with
+      | TweakLog.CompactionMode.OnSessionClose -> None
+      | TweakLog.CompactionMode.LiveOnBudget ->
+        let bytes = int64 (TweakLog.TweakLogFormat.encodeStream s.Log.Events).Length
+        match bytes <= s.Settings.Retention.MaxBytes with
+        | true -> None
+        | false -> violation i (sprintf "log grew to %d bytes, over the %d budget" bytes s.Settings.Retention.MaxBytes))
 
   /// Snapshot plus tail always folds to the same projection as the full,
   /// uncompacted history would, checked at every step against `ShadowLog`,

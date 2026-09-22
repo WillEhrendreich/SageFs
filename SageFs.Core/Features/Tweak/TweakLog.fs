@@ -639,8 +639,63 @@ let compact
     let newUpTo = compactedAway |> List.last |> _.Id
     { UpToEventId = newUpTo; Fingerprint = snapshot.Fingerprint; Projection = newProjection; Origins = newOrigins }, tail
 
-let shouldCompact (policy: RetentionPolicy) (encodedBytes: int64) (eventCount: int) : bool =
-  eventCount > policy.MaxEvents || encodedBytes > policy.MaxBytes
+/// When compaction is even allowed to run. `OnSessionClose` (the default):
+/// while a session is live, the events are the only truth, and it
+/// compacts to a versioned snapshot only when the session closes.
+/// `LiveOnBudget`: today's behavior, compacts as soon as the budget is
+/// crossed, even mid-session.
+[<RequireQualifiedAccess>]
+type CompactionMode =
+  | OnSessionClose
+  | LiveOnBudget
+
+/// What `replay` promises. `SageFsWritesOnly` (the default): replay
+/// reproduces exactly every range SageFs itself wrote; a user's own edits
+/// and reformats are observed (their hashes, and any conflict they cause)
+/// but their bytes are never stored, so the log stays small and never
+/// records a change SageFs didn't make. `EverythingAsDiffs`: `UserEditObserved`/
+/// `ReformatObserved` also carry the file's full text at that point, so
+/// replay can reproduce the WHOLE file byte for byte, at the cost of those
+/// events counting their full size toward the byte budget like anything
+/// else.
+[<RequireQualifiedAccess>]
+type ReplayScope =
+  | SageFsWritesOnly
+  | EverythingAsDiffs
+
+/// One named place for every tunable this module reads, instead of a
+/// value picked on the spot at each call site.
+type TweakLogSettings =
+  { CompactionMode: CompactionMode
+    ReplayScope: ReplayScope
+    Retention: RetentionPolicy }
+
+[<RequireQualifiedAccess>]
+module TweakLogSettings =
+  let defaults : TweakLogSettings =
+    { CompactionMode = CompactionMode.OnSessionClose
+      ReplayScope = ReplayScope.SageFsWritesOnly
+      Retention = RetentionPolicy.defaults }
+
+/// Whether THIS instant is due for a compaction pass, given `settings`.
+/// `OnSessionClose` never says yes, however far over budget the log is,
+/// a live session stays fully event-sourced by design; only
+/// `closeSession` ever compacts it. `LiveOnBudget` is the budget check
+/// this module always had.
+let shouldCompact (settings: TweakLogSettings) (encodedBytes: int64) (eventCount: int) : bool =
+  match settings.CompactionMode with
+  | CompactionMode.OnSessionClose -> false
+  | CompactionMode.LiveOnBudget -> eventCount > settings.Retention.MaxEvents || encodedBytes > settings.Retention.MaxBytes
+
+/// Compact unconditionally, whatever `settings.CompactionMode` says — the
+/// one moment truth always becomes snapshot-plus-tail, a session ending.
+let closeSession
+  (snapshot: Snapshot)
+  (events: LoggedEvent list)
+  (settings: TweakLogSettings)
+  (presetAddresses: Set<TweakAddress>)
+  : Snapshot * LoggedEvent list =
+  compact snapshot events settings.Retention presetAddresses
 
 // ── segment model: WHAT to write/delete. Real file IO plugs in behind this. ──
 
