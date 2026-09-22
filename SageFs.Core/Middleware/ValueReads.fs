@@ -163,10 +163,174 @@ type ReadFate =
   | Discarded
   | Escaped of escape: Escape
 
+[<RequireQualifiedAccess>]
+type private LocalUse =
+  | Load of index: int
+  | Address of index: int
+  | Store of index: int
+  | NotLocal
+
+let private localUse (i: Instr) : LocalUse =
+  match i.Operand with
+  | Operand.Variable n ->
+    let op = i.Op
+    if op = OpCodes.Ldloc_0 || op = OpCodes.Ldloc_1 || op = OpCodes.Ldloc_2 || op = OpCodes.Ldloc_3 || op = OpCodes.Ldloc_S || op = OpCodes.Ldloc then LocalUse.Load n
+    elif op = OpCodes.Ldloca_S || op = OpCodes.Ldloca then LocalUse.Address n
+    elif op = OpCodes.Stloc_0 || op = OpCodes.Stloc_1 || op = OpCodes.Stloc_2 || op = OpCodes.Stloc_3 || op = OpCodes.Stloc_S || op = OpCodes.Stloc then LocalUse.Store n
+    else LocalUse.NotLocal
+  | _ -> LocalUse.NotLocal
+
+/// What an instruction does to the evaluation stack.
+[<RequireQualifiedAccess>]
+type private StackEffect =
+  | Moves of pops: int * pushes: int
+  | Unknown of why: string
+
+let private fixedPops (b: StackBehaviour) : StackEffect =
+  match b with
+  | StackBehaviour.Pop0 -> StackEffect.Moves(0, 0)
+  | StackBehaviour.Pop1
+  | StackBehaviour.Popi
+  | StackBehaviour.Popref -> StackEffect.Moves(1, 0)
+  | StackBehaviour.Pop1_pop1
+  | StackBehaviour.Popi_pop1
+  | StackBehaviour.Popi_popi
+  | StackBehaviour.Popi_popi8
+  | StackBehaviour.Popi_popr4
+  | StackBehaviour.Popi_popr8
+  | StackBehaviour.Popref_pop1
+  | StackBehaviour.Popref_popi -> StackEffect.Moves(2, 0)
+  | StackBehaviour.Popi_popi_popi
+  | StackBehaviour.Popref_popi_popi
+  | StackBehaviour.Popref_popi_popi8
+  | StackBehaviour.Popref_popi_popr4
+  | StackBehaviour.Popref_popi_popr8
+  | StackBehaviour.Popref_popi_popref
+  | StackBehaviour.Popref_popi_pop1 -> StackEffect.Moves(3, 0)
+  | other -> StackEffect.Unknown(string other)
+
+let private fixedPushes (b: StackBehaviour) : StackEffect =
+  match b with
+  | StackBehaviour.Push0 -> StackEffect.Moves(0, 0)
+  | StackBehaviour.Push1
+  | StackBehaviour.Pushi
+  | StackBehaviour.Pushi8
+  | StackBehaviour.Pushr4
+  | StackBehaviour.Pushr8
+  | StackBehaviour.Pushref -> StackEffect.Moves(0, 1)
+  | StackBehaviour.Push1_push1 -> StackEffect.Moves(0, 2)
+  | other -> StackEffect.Unknown(string other)
+
+let private isCall (op: OpCode) = op = OpCodes.Call || op = OpCodes.Callvirt
+
+let private effectOf (tokens: Tokens) (i: Instr) : StackEffect =
+  match i.Operand with
+  | Operand.Token token when isCall i.Op || i.Op = OpCodes.Newobj ->
+    match tokens.Method token with
+    | Error why -> StackEffect.Unknown(sprintf "a call SageFs couldn't resolve (%s)" why)
+    | Ok callee ->
+      match i.Op = OpCodes.Newobj with
+      | true -> StackEffect.Moves(callee.Parameters, 1)
+      | false ->
+        let receiver =
+          match callee.Receiver with
+          | Receiver.Static -> 0
+          | Receiver.Instance -> 1
+        let pushes =
+          match callee.Returns with
+          | Returns.Nothing -> 0
+          | Returns.AValue -> 1
+        StackEffect.Moves(callee.Parameters + receiver, pushes)
+  | _ ->
+    match fixedPops i.Op.StackBehaviourPop, fixedPushes i.Op.StackBehaviourPush with
+    | StackEffect.Moves(pops, _), StackEffect.Moves(_, pushes) -> StackEffect.Moves(pops, pushes)
+    | StackEffect.Unknown why, _
+    | _, StackEffect.Unknown why -> StackEffect.Unknown(sprintf "%s (%s)" i.Op.Name why)
+
+/// Control leaves the straight line here, so the value's consumer isn't simply
+/// the next instruction that pops it. Not followed: the read counts as an escape.
+let private leavesTheLine (op: OpCode) =
+  match op.FlowControl with
+  | FlowControl.Branch
+  | FlowControl.Cond_Branch
+  | FlowControl.Return
+  | FlowControl.Throw -> true
+  | _ -> false
+
+/// How many locals deep a value is followed before the classifier gives up
+/// (and calls it an escape).
+[<Literal>]
+let private maxLocalHops = 8
+
 /// Follow the value a read instruction pushed (the one at `readIndex`) to
 /// whatever consumes it.
+///
+/// The stack is simulated forward from the read: every instruction pops some
+/// values and pushes some, and the first one that pops deeper than what was
+/// pushed after the read is the one that takes our value. A branch before that
+/// point, a call SageFs can't resolve, or running off the end all count as an
+/// escape. A `stloc` is followed through every load of that local.
 let fateAt (tokens: Tokens) (instrs: Instr[]) (readIndex: int) : ReadFate =
-  ReadFate.Escaped(Escape.Untraced "not implemented yet")
+  let loadsOf (local: int) =
+    instrs
+    |> Array.indexed
+    |> Array.choose (fun (j, i) ->
+      match localUse i with
+      | LocalUse.Load n when n = local -> Some(j, LocalUse.Load n)
+      | LocalUse.Address n when n = local -> Some(j, LocalUse.Address n)
+      | _ -> None)
+    |> Array.toList
+  let rec follow (hops: int) (following: Set<int>) (from: int) : ReadFate =
+    let rec walk (index: int) (above: int) =
+      match index >= instrs.Length with
+      | true -> ReadFate.Escaped(Escape.Untraced "the method ended with the value still on the stack")
+      | false ->
+        let i = instrs.[index]
+        match i.Op = OpCodes.Ret with
+        | true ->
+          match above with
+          | 0 -> ReadFate.Escaped Escape.Returned
+          | _ -> ReadFate.Escaped(Escape.Untraced "returned with other values on the stack")
+        | false ->
+          match effectOf tokens i with
+          | StackEffect.Unknown why -> ReadFate.Escaped(Escape.Untraced why)
+          | StackEffect.Moves(pops, _) when pops > above -> consume hops following i
+          | StackEffect.Moves _ when leavesTheLine i.Op ->
+            ReadFate.Escaped(Escape.Untraced(sprintf "%s before the value was used" i.Op.Name))
+          | StackEffect.Moves(pops, pushes) -> walk (index + 1) (above - pops + pushes)
+    walk (from + 1) 0
+  and consume (hops: int) (following: Set<int>) (i: Instr) : ReadFate =
+    match localUse i with
+    | LocalUse.Store local when following.Contains local ->
+      // Already following this local's loads further up; this store adds none.
+      ReadFate.Discarded
+    | LocalUse.Store _ when hops >= maxLocalHops -> ReadFate.Escaped(Escape.Untraced "followed through too many locals")
+    | LocalUse.Store local ->
+      loadsOf local
+      |> List.fold
+           (fun fate (j, load) ->
+             match fate, load with
+             | ReadFate.Escaped _, _ -> fate
+             | ReadFate.Discarded, LocalUse.Address _ -> ReadFate.Escaped Escape.AddressTaken
+             | ReadFate.Discarded, _ -> follow (hops + 1) (following.Add local) j)
+           ReadFate.Discarded
+    | _ ->
+      let token =
+        match i.Operand with
+        | Operand.Token t -> t
+        | _ -> 0
+      if i.Op = OpCodes.Pop then ReadFate.Discarded
+      elif i.Op = OpCodes.Stfld || i.Op = OpCodes.Stsfld then ReadFate.Escaped(Escape.StoredInField(tokens.Member token))
+      elif i.Op = OpCodes.Newobj then
+        match tokens.Method token with
+        | Ok callee -> ReadFate.Escaped(Escape.CapturedBy callee.DeclaringType)
+        | Error why -> ReadFate.Escaped(Escape.Untraced why)
+      elif isCall i.Op then
+        match tokens.Method token with
+        | Ok callee -> ReadFate.Escaped(Escape.PassedTo callee.Name)
+        | Error why -> ReadFate.Escaped(Escape.Untraced why)
+      else ReadFate.Escaped(Escape.Untraced i.Op.Name)
+  follow 0 Set.empty readIndex
 
 /// Which instructions are reads of the value being asked about.
 [<RequireQualifiedAccess>]
@@ -186,7 +350,18 @@ type ReadMatch =
   | NotARead
 
 /// Every read of one value in one method body, with where it went.
-let sitesIn (tokens: Tokens) (classify: Instr -> ReadMatch) (instrs: Instr[]) : (int * ReadFate) list = []
+let sitesIn (tokens: Tokens) (classify: Instr -> ReadMatch) (instrs: Instr[]) : (int * ReadFate) list =
+  instrs
+  |> Array.indexed
+  |> Array.choose (fun (index, i) ->
+    match classify i with
+    | ReadMatch.NotARead -> None
+    | ReadMatch.Reads ReadKind.GetterCall
+    | ReadMatch.Reads ReadKind.FieldLoad -> Some(i.Offset, fateAt tokens instrs index)
+    | ReadMatch.Reads ReadKind.FieldAddress -> Some(i.Offset, ReadFate.Escaped Escape.AddressTaken)
+    | ReadMatch.Reads ReadKind.GetterPointer ->
+      Some(i.Offset, ReadFate.Escaped(Escape.Untraced "its getter was turned into a delegate, which can run anywhere")))
+  |> Array.toList
 
 /// Token resolution for a real method body, through reflection.
 let tokensOf (m: MethodBase) : Tokens =
@@ -273,7 +448,21 @@ type ValueVerdict =
   | HeldBy of site: ReadSite * seen: ReadSeen
   | CannotTell of why: string
 
-let verdictOf (evidence: ValueEvidence) : ValueVerdict = ValueVerdict.SafeToPatch
+/// SafeToPatch only when no read of the value was kept. The first kept read is
+/// the one the restart reason names.
+let verdictOf (evidence: ValueEvidence) : ValueVerdict =
+  match evidence with
+  | ValueEvidence.Untracked(_, why) -> ValueVerdict.CannotTell why
+  | ValueEvidence.Tracked(_, reads) ->
+    let kept =
+      reads
+      |> List.choose (function
+        | ValueRead.Kept(site, seen) -> Some(site, seen)
+        | ValueRead.ThrownAway _
+        | ValueRead.NotRunYet _ -> None)
+    match kept with
+    | [] -> ValueVerdict.SafeToPatch
+    | (site, seen) :: _ -> ValueVerdict.HeldBy(site, seen)
 
 /// The value a piece of evidence is about.
 let valueOf (evidence: ValueEvidence) : string =
@@ -282,7 +471,26 @@ let valueOf (evidence: ValueEvidence) : string =
   | ValueEvidence.Tracked(value, _) -> value
 
 /// Where a copy went, in one clause a restart reason can carry.
-let describeHolder (site: ReadSite) (seen: ReadSeen) : string = ""
+let describeHolder (site: ReadSite) (seen: ReadSeen) : string =
+  let what =
+    match site.Fate with
+    | ReadFate.Discarded -> "read it and threw it away"
+    | ReadFate.Escaped(Escape.StoredInField field) -> sprintf "stored it in %s" field
+    | ReadFate.Escaped(Escape.CapturedBy typeName) -> sprintf "put it in a new %s" typeName
+    | ReadFate.Escaped(Escape.PassedTo methodName) -> sprintf "passed it to %s" methodName
+    | ReadFate.Escaped Escape.Returned -> "returned it to whatever called it"
+    | ReadFate.Escaped Escape.AddressTaken -> "took its address"
+    | ReadFate.Escaped(Escape.Untraced how) -> sprintf "used it in a way SageFs doesn't follow (%s)" how
+  let where =
+    match site.Where with
+    | SiteLocation.ILOffset offset -> sprintf " (IL_%04x)" offset
+    | SiteLocation.NotInItsCode -> " without a read of it in its own code (reflection, most likely)"
+  let whenText =
+    match seen with
+    | ReadSeen.AtStartup -> "while the app started"
+    | ReadSeen.AfterStartup -> "after the app started"
+    | ReadSeen.Unobservable why -> sprintf "and SageFs can't tell whether that has run yet, so it assumes it has: %s" why
+  sprintf "%s%s %s, %s" site.Reader where what whenText
 
 // ── the ledger: which readers have run ───────────────────────────────────────
 
@@ -348,10 +556,80 @@ module Ledger =
       Status = Map.empty
       UnknownReads = Map.empty }
 
-  let step (ledger: Ledger) (event: LedgerEvent) : Ledger = ledger
+  /// When a reader that just ran was seen: the window being open is what
+  /// makes it a startup read.
+  let private seenNow (ledger: Ledger) =
+    match ledger.Window with
+    | StartupWindow.Open -> ReadSeen.AtStartup
+    | StartupWindow.Closed -> ReadSeen.AfterStartup
 
+  /// A reader that ran. The first sighting sticks: once a reader has run it
+  /// may hold a copy, and nothing later makes that untrue.
+  let private ran (ledger: Ledger) (reader: ReaderId) : Ledger =
+    match Map.tryFind reader ledger.Status with
+    | Some(ReaderStatus.Ran _) -> ledger
+    | Some ReaderStatus.Armed
+    | Some(ReaderStatus.Unwatchable _)
+    | None -> { ledger with Status = Map.add reader (ReaderStatus.Ran(seenNow ledger)) ledger.Status }
+
+  let step (ledger: Ledger) (event: LedgerEvent) : Ledger =
+    match event with
+    | LedgerEvent.ValueTracked value -> { ledger with Values = Set.add value ledger.Values }
+    | LedgerEvent.ValueUntracked(value, why) -> { ledger with Untracked = Map.add value why ledger.Untracked }
+    | LedgerEvent.ReaderFound(reader, status) ->
+      let status =
+        // A probe can fire before the scan that found its reader is filed
+        // (the runtime races them). A sighting is never downgraded.
+        match Map.tryFind reader.Id ledger.Status, status with
+        | Some(ReaderStatus.Ran seen), _ -> ReaderStatus.Ran seen
+        | _, found -> found
+      { ledger with
+          Readers = Map.add reader.Id reader ledger.Readers
+          Status = Map.add reader.Id status ledger.Status }
+    | LedgerEvent.ReaderRan reader -> ran ledger reader
+    | LedgerEvent.GetterRead(_, Caller.Known reader) ->
+      // A getter read by a known reader is a sighting of that reader. It's
+      // recorded even after the window closed: a watch removed while a read
+      // was in flight still reports it, and more evidence never hurts.
+      ran ledger reader
+    | LedgerEvent.GetterRead(value, Caller.Unknown name) ->
+      let callers = Map.tryFind value ledger.UnknownReads |> Option.defaultValue []
+      match List.contains name callers with
+      | true -> ledger
+      | false -> { ledger with UnknownReads = Map.add value (callers @ [ name ]) ledger.UnknownReads }
+    | LedgerEvent.StartupEnded -> { ledger with Window = StartupWindow.Closed }
+
+  /// Everything the ledger knows about one value, read by read.
   let evidence (ledger: Ledger) (value: string) : ValueEvidence =
-    ValueEvidence.Untracked(value, "not implemented yet")
+    match Map.tryFind value ledger.Untracked, Set.contains value ledger.Values with
+    | Some why, _ -> ValueEvidence.Untracked(value, why)
+    | None, false ->
+      ValueEvidence.Untracked(value, "it isn't a public module value of a compiled project assembly that SageFs is watching")
+    | None, true ->
+      let fromReaders =
+        ledger.Readers
+        |> Map.toList
+        |> List.collect (fun (id, reader) ->
+          let status = Map.tryFind id ledger.Status |> Option.defaultValue ReaderStatus.Armed
+          reader.Reads
+          |> List.filter (fun (v, _, _) -> v = value)
+          |> List.map (fun (_, offset, fate) ->
+            let site = { Reader = reader.Name; Where = SiteLocation.ILOffset offset; Fate = fate }
+            match fate, status with
+            | ReadFate.Discarded, _ -> ValueRead.ThrownAway site
+            | ReadFate.Escaped _, ReaderStatus.Armed -> ValueRead.NotRunYet site
+            | ReadFate.Escaped _, ReaderStatus.Ran seen -> ValueRead.Kept(site, seen)
+            | ReadFate.Escaped _, ReaderStatus.Unwatchable why -> ValueRead.Kept(site, ReadSeen.Unobservable why)))
+      let fromUnknownCallers =
+        Map.tryFind value ledger.UnknownReads
+        |> Option.defaultValue []
+        |> List.map (fun caller ->
+          ValueRead.Kept(
+            { Reader = caller
+              Where = SiteLocation.NotInItsCode
+              Fate = ReadFate.Escaped(Escape.Untraced "it read the value without a read in its own code") },
+            ReadSeen.AtStartup))
+      ValueEvidence.Tracked(value, fromReaders @ fromUnknownCallers)
 
 // ── a save's decision ────────────────────────────────────────────────────────
 
@@ -364,4 +642,14 @@ type SaveCheck =
 /// Every verdict has to be SafeToPatch. The evidence is taken twice around a
 /// patch (before, to decide, and after, to catch a read that raced it), so this
 /// is asked of both.
-let checkSave (verdicts: (string * ValueVerdict) list) : SaveCheck = SaveCheck.AllSafe
+let checkSave (verdicts: (string * ValueVerdict) list) : SaveCheck =
+  let refused =
+    verdicts
+    |> List.filter (fun (_, verdict) ->
+      match verdict with
+      | ValueVerdict.SafeToPatch -> false
+      | ValueVerdict.HeldBy _
+      | ValueVerdict.CannotTell _ -> true)
+  match refused with
+  | [] -> SaveCheck.AllSafe
+  | first :: rest -> SaveCheck.Refused(first, rest)
