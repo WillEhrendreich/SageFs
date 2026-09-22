@@ -134,13 +134,25 @@ let startState (init: AgentInit) : State =
     |> List.collect getAllMethods
     |> List.groupBy (fun m -> m.MethodInfo.Name)
     |> Map.ofList
+  // A freshly-started session has run no #load and no interactive eval, so
+  // nothing else has ever redefined a name the loaded projects expose — the
+  // compiled copy is, by construction, the one and only copy anything calls.
+  // Seeding AppHolds with it here means a save that redirects it is honestly
+  // reported as reaching the running process from the very first save,
+  // instead of reading as `NoEffect`/`PatchIneffective` until some later
+  // non-file-save eval happens to touch the same name. Any subsequent
+  // #load/interactive eval still overwrites this per name (see
+  // `handleNewAsmFromRepl`'s AppHolds update), so a `#load`ed app's own copy
+  // wins the moment it is defined, exactly as before.
+  let appHolds =
+    methods |> Map.map (fun _ ms -> (List.last ms).MethodInfo)
   { Methods = methods
     LastOpenModules = []
     LastAssembly = None
     ProjectAssemblies = assemblies
     AssemblyLoadErrors = errors
     LiveTestInit = LiveTestInit.Pending
-    AppHolds = Map.empty }
+    AppHolds = appHolds }
 
 /// The outcome of one step: the new registry, the methods it redefined, the
 /// full detour report behind that (bindings torn/declined included), and what
