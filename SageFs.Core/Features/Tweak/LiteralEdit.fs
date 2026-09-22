@@ -154,7 +154,7 @@ let readLiteral (source: string) (address: TweakAddress) : Result<ResolvedLitera
   | Error e -> Error(LiteralError.Gone e)
   | Ok resolved ->
     match parseExpr resolved.Text with
-    | Error msg -> Error(LiteralError.NotALiteral msg)
+    | Error _ -> Error(LiteralError.NotALiteral resolved.Text)
     | Ok expr ->
       let valueAndStyle =
         match expr with
@@ -239,7 +239,7 @@ let private formatFloat (suffix: string) (trailingDot: bool) (v: float) : string
       | _ -> s
   core + suffix
 
-let rec formatLiteral (style: LiteralStyle) (value: LiteralValue) : Result<string, string> =
+let rec formatLiteral (style: LiteralStyle) (value: LiteralValue) : Result<string, SetLiteralError> =
   match style, value with
   | LiteralStyle.MeasureStyle(unitText, inner), _ ->
     formatLiteral inner value |> Result.map (fun s -> sprintf "%s<%s>" s unitText)
@@ -250,7 +250,7 @@ let rec formatLiteral (style: LiteralStyle) (value: LiteralValue) : Result<strin
   | LiteralStyle.IntStyle(numberBase, suffix, grouped), LiteralValue.Integer v ->
     Ok(formatInteger numberBase suffix grouped v)
   | LiteralStyle.FloatStyle(suffix, trailingDot), LiteralValue.Real v -> Ok(formatFloat suffix trailingDot v)
-  | _ -> Error "the new value's kind doesn't match this literal's own style"
+  | _ -> Error(SetLiteralError.KindMismatch "the new value's kind doesn't match this literal's own style")
 
 let private sameValue (a: LiteralValue) (b: LiteralValue) : bool =
   match a, b with
@@ -272,5 +272,5 @@ let setLiteral (source: string) (address: TweakAddress) (newValue: LiteralValue)
   | Ok resolved when sameValue resolved.Value newValue -> Ok source
   | Ok resolved ->
     match formatLiteral resolved.Style newValue with
-    | Error reason -> Error(SetLiteralError.KindMismatch reason)
+    | Error e -> Error e
     | Ok newText -> Ok(replaceRange source resolved.Range newText)

@@ -11,7 +11,7 @@ open SageFs.Features.Tweak.TweakAddress
 type ExpressionEditError =
   | Gone of ResolveError
   /// The replacement text doesn't parse as an expression at all.
-  | ParseFailed of message: string
+  | ParseFailed of reason: ResolveError
   /// The expression at `address` isn't the one the caller thinks it is,
   /// its content hash moved since `expectedHash` was captured. Both texts
   /// are carried so a caller can show them side by side; nothing is guessed.
@@ -67,7 +67,7 @@ let setExpression
       Error(ExpressionEditError.HashMismatch(expected, resolved.Hash, resolved.Text))
     | _ ->
       match parseExpr newExprText with
-      | Error msg -> Error(ExpressionEditError.ParseFailed msg)
+      | Error e -> Error(ExpressionEditError.ParseFailed e)
       | Ok _ ->
         let formatted = formatSnippet newExprText
         Ok(replaceRange source resolved.Range formatted)

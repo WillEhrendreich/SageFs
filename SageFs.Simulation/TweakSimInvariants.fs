@@ -203,7 +203,7 @@ module TweakSimInvariants =
         | Ok replayed ->
           [ { Index = states.Length - 1
               Why = sprintf "replayWholeFile produced %s but the actual final file is %s" replayed final.Source } ]
-        | Error e -> [ { Index = states.Length - 1; Why = sprintf "replayWholeFile failed: %s" e } ]
+        | Error e -> [ { Index = states.Length - 1; Why = sprintf "replayWholeFile failed: %A" e } ]
 
   let all (scenario: Scenario) (states: State list) : Violation list =
     neverAppliedWithoutTypeCheck scenario states

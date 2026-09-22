@@ -404,9 +404,9 @@ let rollback (log: EventLog) (opId: int) (currentSource: string) : Result<Rollba
 
 /// The guard a save has to consult before it writes a `TweakSaved`: refused
 /// while the address has an open, unresolved conflict.
-let canSave (log: EventLog) (address: TweakAddress) : Result<unit, string> =
+let canSave (log: EventLog) (address: TweakAddress) : Result<unit, RollbackError> =
   match hasOpenConflict log address with
-  | true -> Error(sprintf "%A has an open conflict; resolve it before saving again" address)
+  | true -> Error(RollbackError.BlockedByOpenConflict address)
   | false -> Ok()
 
 /// Reproduce a file from `baseSource` by replaying an ordered list of
@@ -414,14 +414,14 @@ let canSave (log: EventLog) (address: TweakAddress) : Result<unit, string> =
 /// `TweakSaved` carry. Re-resolves the address at each step against the
 /// EVOLVING source, so a write that landed after a reformat still finds its
 /// target the same way the real save did.
-let replay (baseSource: string) (ops: (TweakAddress * string) list) : Result<string, string> =
+let replay (baseSource: string) (ops: (TweakAddress * string) list) : Result<string, ResolveError> =
   ops
   |> List.fold
     (fun acc (addr, after) ->
       acc
       |> Result.bind (fun src ->
         match resolve src addr with
-        | Error e -> Error(sprintf "replay: address no longer resolves (%A): %A" addr e)
+        | Error e -> Error e
         | Ok resolved -> Ok(replaceRange src resolved.Range after)))
     (Ok baseSource)
 
@@ -472,19 +472,29 @@ module UndoCursor =
       | _ -> UndoCursor.AtHead
     | _ -> cursor
 
+/// Why `performUndo`/`performRedo` couldn't move.
+[<RequireQualifiedAccess>]
+type HistoryMoveError =
+  | NothingToUndo
+  | NothingToRedo
+  | PastRetentionWindow of oldestAvailable: int
+  | Blocked of RollbackError
+  /// The address changed since the op this move targets, the same
+  /// three-version shape `RollbackOutcome.Conflict` carries.
+  | Diverged of wrote: string * now: string * before: string
+
 /// Move the cursor back one step AND perform the real rollback: the
 /// compound action Ctrl+Z is, in one call. Storage stays append-only,
 /// this appends exactly one `RolledBack` event, it never rewrites
 /// anything already in the log.
-let performUndo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at: int64) : Result<EventLog * UndoCursor * string, string> =
+let performUndo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at: int64) : Result<EventLog * UndoCursor * string, HistoryMoveError> =
   match UndoCursor.undo log cursor with
-  | UndoCursor.AtHead -> Error "nothing to undo"
-  | UndoCursor.Compacted oldest -> Error(sprintf "can't undo past the retained window (oldest available id %d)" oldest)
+  | UndoCursor.AtHead -> Error HistoryMoveError.NothingToUndo
+  | UndoCursor.Compacted oldest -> Error(HistoryMoveError.PastRetentionWindow oldest)
   | UndoCursor.At id as newCursor ->
     match rollback log id currentSource with
-    | Error e -> Error(sprintf "%A" e)
-    | Ok(RollbackOutcome.Conflict(wrote, now, before)) ->
-      Error(sprintf "the address changed since (wrote %s, now %s, before %s)" wrote now before)
+    | Error e -> Error(HistoryMoveError.Blocked e)
+    | Ok(RollbackOutcome.Conflict(wrote, now, before)) -> Error(HistoryMoveError.Diverged(wrote, now, before))
     | Ok(RollbackOutcome.Applied newSource) ->
       let log', _ = EventLog.append log at (TweakLogEvent.RolledBack id)
       Ok(log', newCursor, newSource)
@@ -495,7 +505,7 @@ let performUndo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at
 /// `effectOf` flips that rollback's own before/after, so "rolling back a
 /// rollback" already means "put the tweak back". Still append-only: this
 /// appends a SECOND `RolledBack`, on top of the first, never edits it.
-let performRedo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at: int64) : Result<EventLog * UndoCursor * string, string> =
+let performRedo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at: int64) : Result<EventLog * UndoCursor * string, HistoryMoveError> =
   match cursor with
   | UndoCursor.At undoneId ->
     let mostRecentUndoOfIt =
@@ -503,16 +513,15 @@ let performRedo (log: EventLog) (cursor: UndoCursor) (currentSource: string) (at
       |> List.filter (fun e -> match e.Event with TweakLogEvent.RolledBack t -> t = undoneId | _ -> false)
       |> List.tryLast
     match mostRecentUndoOfIt with
-    | None -> Error "nothing to redo"
+    | None -> Error HistoryMoveError.NothingToRedo
     | Some rolledBackEvent ->
       match rollback log rolledBackEvent.Id currentSource with
-      | Error e -> Error(sprintf "%A" e)
-      | Ok(RollbackOutcome.Conflict(wrote, now, before)) ->
-        Error(sprintf "the address changed since (wrote %s, now %s, before %s)" wrote now before)
+      | Error e -> Error(HistoryMoveError.Blocked e)
+      | Ok(RollbackOutcome.Conflict(wrote, now, before)) -> Error(HistoryMoveError.Diverged(wrote, now, before))
       | Ok(RollbackOutcome.Applied newSource) ->
         let log', _ = EventLog.append log at (TweakLogEvent.RolledBack rolledBackEvent.Id)
         Ok(log', UndoCursor.redo log' cursor, newSource)
-  | _ -> Error "nothing to redo"
+  | _ -> Error HistoryMoveError.NothingToRedo
 
 // ── compaction: bounded growth ──
 
@@ -736,7 +745,16 @@ let observeReformat (settings: TweakLogSettings) (fileBefore: string) (fileAfter
 /// `ReformatObserved` replace the whole file with their carried
 /// `fileSnapshot` outright. Refuses, never guesses, the moment it meets
 /// an event with no snapshot to replay from (the `SageFsWritesOnly` shape).
-let replayWholeFile (baseSource: string) (events: LoggedEvent list) : Result<string, string> =
+/// Why `replayWholeFile` couldn't reproduce the file.
+[<RequireQualifiedAccess>]
+type WholeFileReplayError =
+  | AddressGone of address: TweakAddress * reason: ResolveError
+  | UnresolvableRollback of eventId: int
+  /// The event was observed under `ReplayScope.SageFsWritesOnly`, so it
+  /// carries no whole-file snapshot to replay from.
+  | NoSnapshot of address: TweakAddress option
+
+let replayWholeFile (baseSource: string) (events: LoggedEvent list) : Result<string, WholeFileReplayError> =
   events
   |> List.fold
     (fun acc e ->
@@ -752,24 +770,22 @@ let replayWholeFile (baseSource: string) (events: LoggedEvent list) : Result<str
         | TweakLogEvent.TweakApplied _ -> Ok src
         | TweakLogEvent.TweakSaved(addr, _before, after, _, _) ->
           match resolve src addr with
-          | Error err -> Error(sprintf "replayWholeFile: address no longer resolves (%A): %A" addr err)
+          | Error err -> Error(WholeFileReplayError.AddressGone(addr, err))
           | Ok resolved -> Ok(replaceRange src resolved.Range after)
         // A rollback (an undo OR a redo, effectOf already flips the
         // direction) is itself a write, at THIS address, to THIS "after",
         // replayed the same way an ordinary saved tweak's write is.
         | TweakLogEvent.RolledBack _ ->
           match effectOf events e.Id with
-          | None -> Error(sprintf "replayWholeFile: RolledBack event %d has no resolvable effect" e.Id)
+          | None -> Error(WholeFileReplayError.UnresolvableRollback e.Id)
           | Some(addr, _before, after) ->
             match resolve src addr with
-            | Error err -> Error(sprintf "replayWholeFile: address no longer resolves (%A): %A" addr err)
+            | Error err -> Error(WholeFileReplayError.AddressGone(addr, err))
             | Ok resolved -> Ok(replaceRange src resolved.Range after)
         | TweakLogEvent.UserEditObserved(_, _, _, Some fileAfter) -> Ok fileAfter
         | TweakLogEvent.ReformatObserved(_, _, Some fileAfter) -> Ok fileAfter
-        | TweakLogEvent.UserEditObserved(addr, _, _, None) ->
-          Error(sprintf "replayWholeFile: UserEditObserved at %A carries no snapshot (ReplayScope.SageFsWritesOnly was active when it was observed)" addr)
-        | TweakLogEvent.ReformatObserved(_, _, None) ->
-          Error "replayWholeFile: ReformatObserved carries no snapshot (ReplayScope.SageFsWritesOnly was active when it was observed)"
+        | TweakLogEvent.UserEditObserved(addr, _, _, None) -> Error(WholeFileReplayError.NoSnapshot(Some addr))
+        | TweakLogEvent.ReformatObserved(_, _, None) -> Error(WholeFileReplayError.NoSnapshot None)
         | _ -> Ok src))
     (Ok baseSource)
 
@@ -815,7 +831,8 @@ type SegmentIO = CompactionPlan -> bool
 /// onto the file as it stands now, given the common ancestor
 /// (ours -> theirs -> baseText -> merged-or-conflict). Real implementation
 /// is `git merge-file`; this module never calls it.
-type ThreeWayMerge = string -> string -> string -> Result<string, string>
+type MergeConflict = { ConflictMarkers: string }
+type ThreeWayMerge = string -> string -> string -> Result<string, MergeConflict>
 
 // ── binary encoding: length-prefixed, versioned, CRC per record ──
 //
@@ -1074,7 +1091,12 @@ module TweakLogFormat =
   /// knowable, even for a totally foreign schema), but `Events` comes back
   /// empty rather than risking a decode of bytes this build doesn't
   /// understand the layout of.
-  let decodeSegment (current: Fingerprint) (bytes: byte[]) : Result<DecodedSegment, string> =
+  /// The header itself couldn't be read at all (not enough bytes, not a
+  /// fingerprint-shaped prefix), distinct from a low `LogGrade`: a graded
+  /// result always decodes the header successfully first.
+  type SegmentDecodeError = { CorruptionReason: string }
+
+  let decodeSegment (current: Fingerprint) (bytes: byte[]) : Result<DecodedSegment, SegmentDecodeError> =
     try
       use ms = new MemoryStream(bytes)
       use br = new BinaryReader(ms)
@@ -1087,7 +1109,7 @@ module TweakLogFormat =
         let headerLength = int ms.Position
         let events, tornTail = decodeStream bytes.[headerLength ..]
         Ok { Grade = grade; Fingerprint = fp; Events = events; TornTail = tornTail }
-    with ex -> Error ex.Message
+    with ex -> Error { CorruptionReason = ex.Message }
 
   /// TWIN: never wired into any production path. Skips the fingerprint
   /// header the same way `decodeSegment` does, but decodes the event

@@ -247,7 +247,7 @@ let tweakLogTests =
           match log'.Events |> List.last with
           | { Event = TweakLogEvent.RolledBack id } -> id |> Expect.equal "targets the tweak it undid" applied.Id
           | other -> failtestf "expected a RolledBack event, got %A" other
-        | Error e -> failtestf "expected Ok, got %s" e
+        | Error e -> failtestf "expected Ok, got %A" e
 
       testCase "repeated performUndo walks sequentially back through two tweaks" <| fun _ ->
         let log = EventLog.empty

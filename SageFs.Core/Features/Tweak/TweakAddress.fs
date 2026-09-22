@@ -242,29 +242,29 @@ let rec private bindingsIn (modulePath: string list) (decls: SynModuleDecl list)
       bindingsIn (modulePath @ [ identText ids ]) inner
     | _ -> [])
 
-let private parse (source: string) : Result<string list * ModuleBinding list, string> =
+let private parse (source: string) : Result<string list * ModuleBinding list, ResolveError> =
   try
     let input, diagnostics = Fantomas.FCS.Parse.parseFile false (SourceText.ofString source) []
     match diagnostics |> List.tryFind (fun d -> d.Severity.IsError), input with
     | Some error, _ ->
       let line = error.Range |> Option.map (fun r -> string r.StartLine) |> Option.defaultValue "?"
-      Error(sprintf "the file does not parse (line %s: %s)" line error.Message)
+      Error(ResolveError.ParseFailed(sprintf "the file does not parse (line %s: %s)" line error.Message))
     | None, ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(longId = ids; kind = kind; decls = decls) ])) ->
       let modulePath =
         match kind with
         | SynModuleOrNamespaceKind.AnonModule -> []
         | _ -> ids |> List.map _.idText
       Ok(modulePath, bindingsIn modulePath decls)
-    | None, ParsedInput.ImplFile _ -> Error "the file declares several namespaces or modules at the top level"
-    | None, ParsedInput.SigFile _ -> Error "signature files have no tweakable expressions"
-  with ex -> Error(sprintf "the file could not be parsed: %s" ex.Message)
+    | None, ParsedInput.ImplFile _ -> Error(ResolveError.ParseFailed "the file declares several namespaces or modules at the top level")
+    | None, ParsedInput.SigFile _ -> Error(ResolveError.ParseFailed "signature files have no tweakable expressions")
+  with ex -> Error(ResolveError.ParseFailed(sprintf "the file could not be parsed: %s" ex.Message))
 
 /// Every tweakable leaf (numeric, bool, char, string, DU-case-like
 /// identifier) plus every record-field expression, for every binding in the
 /// file. A record field's own address is included even when its expression
 /// is not itself a leaf (a binop, an if), because that address is exactly
 /// what `ExpressionEdit` targets to replace the whole field's formula.
-let addressesOf (source: string) : Result<TweakAddress list, string> =
+let addressesOf (source: string) : Result<TweakAddress list, ResolveError> =
   parse source
   |> Result.map (fun (_, bindings) ->
     bindings
@@ -316,7 +316,7 @@ let rec private walkPath (expr: SynExpr) (path: PathStep list) : SynExpr option 
 /// hash of the expression it names right now.
 let resolve (source: string) (address: TweakAddress) : Result<ResolvedTweak, ResolveError> =
   match parse source with
-  | Error msg -> Error(ResolveError.ParseFailed msg)
+  | Error e -> Error e
   | Ok(_, bindings) ->
     match bindings |> List.tryFind (fun b -> b.ModulePath = address.ModulePath && b.Name = address.BindingName) with
     | None -> Error(ResolveError.BindingRemoved address)
@@ -331,7 +331,7 @@ let resolve (source: string) (address: TweakAddress) : Result<ResolvedTweak, Res
 /// `LiteralEdit`/`ExpressionEdit` need to: wrapped just enough to be legal
 /// top-level F#, offside-safe by indenting every line under the wrapper's
 /// `let`. Shared here so both modules parse a snippet identically.
-let parseExpr (text: string) : Result<SynExpr, string> =
+let parseExpr (text: string) : Result<SynExpr, ResolveError> =
   let indented =
     text.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n')
     |> Array.map (fun line -> "    " + line)
@@ -340,13 +340,13 @@ let parseExpr (text: string) : Result<SynExpr, string> =
   try
     let input, diagnostics = Fantomas.FCS.Parse.parseFile false (SourceText.ofString wrapped) []
     match diagnostics |> List.tryFind (fun d -> d.Severity.IsError) with
-    | Some err -> Error err.Message
+    | Some err -> Error(ResolveError.ParseFailed err.Message)
     | None ->
       match input with
       | ParsedInput.ImplFile(ParsedImplFileInput(contents = [ SynModuleOrNamespace(decls = [ SynModuleDecl.Let(bindings = [ SynBinding(expr = expr) ]) ]) ])) ->
         Ok expr
-      | _ -> Error "expected exactly one expression"
-  with ex -> Error ex.Message
+      | _ -> Error(ResolveError.ParseFailed "expected exactly one expression")
+  with ex -> Error(ResolveError.ParseFailed ex.Message)
 
 /// What `relocate` finds when a path stops resolving: the same expression,
 /// by content hash, living somewhere else in the same file now (a rename,
