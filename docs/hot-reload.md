@@ -1,12 +1,12 @@
 # Hot Reload — How It Works
 
 Save a `.fs` file and the change lands in the process that's already running your
-app — including apps whose route table was built once at startup, the Falco /
+app, including apps whose route table was built once at startup, the Falco /
 Giraffe / Saturn pattern (`module App.Program` + `let routes = [...]`). No
 restart. This is the thing I most wanted from a REPL and couldn't get anywhere
 else, so I built it.
 
-> **Prerequisite:** Hot reload requires the **Hot Reload workflow** —
+> **Prerequisite:** Hot reload requires the **Hot Reload workflow**:
 > `SessionWorkflow.HotReload`, which `switch_workflow` still spells `live` /
 > `weblive` / `web` for historical reasons (I renamed the workflow late and
 > didn't want to break anyone's muscle memory). It's off in the other two
@@ -19,8 +19,8 @@ else, so I built it.
 1. The file watcher detects `.fs`/`.fsx` changes (~500ms debounce).
 2. SageFs diffs the file against the source your loaded assembly was actually
    built from and emits only the **functions that changed**, against the
-   compiled module's own identity — so their parameter types stay the compiled
-   types.
+   compiled module's own identity. That keeps their parameter types as the
+   compiled types.
 3. [Harmony](https://github.com/pardeike/Harmony) re-points those methods at
    their new bodies at runtime. No restart.
 4. SSE pushes a reload signal to connected browsers.
@@ -29,7 +29,7 @@ Step 2 is the part that makes a startup-captured route table work. The route
 list holds function values created at startup, but each of those still
 dispatches to the handler's method entry point, so re-pointing the method
 changes what the captured route serves. Harmony doesn't care that the
-delegate was created six minutes ago — it cares where the call ends up.
+delegate was created six minutes ago. It cares where the call ends up.
 
 ## What reloads, and what needs a restart
 
@@ -38,7 +38,7 @@ A change reaches the running app when it's a change to a **function body**:
 | Shape | Reloads |
 |---|---|
 | `let handler (ctx: HttpContext) = ...` | yes |
-| `let handler : HttpHandler = fun ctx -> ...` — a value bound **directly** to a lambda | yes — F# compiles it to a method, exactly like the line above |
+| `let handler : HttpHandler = fun ctx -> ...`, a value bound **directly** to a lambda | yes, F# compiles it to a method, exactly like the line above |
 | a handler whose parameter type is declared in the same file | yes |
 | the **body** of a `static member Render x = ...` on a type | yes |
 | a small function with no `[<MethodImpl(NoInlining)>]` | yes |
@@ -50,8 +50,8 @@ isn't the one running your app, tells you a restart is needed):
 | Shape | Why not |
 |---|---|
 | `let getHome : HttpHandler = Response.ofHtml (pageLayout [])` | the HTML is computed once at module initialisation and captured by the route; nothing is called per request |
-| a value whose closure is built inside a `let` — `let h = let x = compute () in fun () -> x` | `compute ()` ran at startup and the closure captured its result |
-| `let mutable state = ...` whose value you changed | its value is your app's live data. I'm not going to carry the old value forward (that ignores your edit) and I'm not going to reset it either (that destroys live state) — so the running app is left exactly as it was and you get told a restart is needed |
+| a value whose closure is built inside a `let`, like `let h = let x = compute () in fun () -> x` | `compute ()` ran at startup and the closure captured its result |
+| `let mutable state = ...` whose value you changed | its value is your app's live data. I'm not going to carry the old value forward (that ignores your edit), and I'm not going to reset it either (that destroys live state). So the running app is left exactly as it was and you get told a restart is needed |
 | a changed function or member **signature**, a new/removed declaration, a type whose fields, cases or members were added, removed or re-typed | the compiled assembly's shape no longer matches, and live instances were laid out by the old definition |
 
 If a handler isn't picking up edits, check whether its value is **computed**
@@ -63,23 +63,23 @@ This trips people up constantly and it's almost always this.
 ### Build without optimizations
 
 Hot reload re-points **methods**. The F# compiler's Release optimizer inlines
-small functions into their callers — including into the closures a route
-table captures at startup — so in an optimized build there's often no call
+small functions into their callers (including into the closures a route
+table captures at startup), so in an optimized build there's often no call
 left to re-point: the patch lands on a method nothing calls anymore. SageFs
 builds your project with `-p:Optimize=false` for exactly this reason, so a
 session SageFs built is covered. **If you build Release by hand after
 starting the session**, that optimized assembly is what gets loaded and
-edits to inlined functions won't reach the running app — rebuild through
+edits to inlined functions won't reach the running app. Rebuild through
 SageFs (`hard_reset` with `rebuild: true`, or the dashboard's HARD_RESET).
 
 Every row above is pinned by an executable cell in the hot-reload shape
 matrix (`SageFs.Tests/WebAppHotReloadVerificationTests.fs`), which starts a
 real app, saves a real file, and asserts what the same process actually
 serves afterwards. I don't trust a claim in this table that isn't backed by
-a test that starts a real process — too easy to convince yourself something
+a test that starts a real process. It's too easy to convince yourself something
 works when it doesn't.
 
-**One requirement:** the baseline is the source your loaded assembly was
+One requirement: the baseline is the source your loaded assembly was
 built from, so build the project before starting the session. A source file
 edited after its last build gets re-evaluated whole instead of patched, and
 SageFs logs that it's doing so.

@@ -4,7 +4,7 @@ SAGEFS LIVE TESTING & COVERAGE SYSTEM - IMPLEMENTATION GUIDE
 
 STATUS: Live testing is functional but still being stabilized. Rough edges
 remain around session switching and test-discovery timing. Expecto has the
-best coverage — it's what I test against every day, so it's what gets
+best coverage. It's what I test against every day, so it's what gets
 exercised hardest. This guide describes the internal design for people who
 want to go spelunking in the source; line numbers are approximate and drift
 as the code changes, so treat them as "look near here," not "line X exactly."
@@ -84,7 +84,7 @@ QUICK REFERENCE - KEY FILES & FUNCTIONS
    - There is no run_tests, enable_live_testing, get_live_test_status,
      get_test_trace, explain_test_run, or get_file_coverage MCP tool. Live-testing
      enable/disable/status/run are HTTP API endpoints under /api/live-testing/...
-     used by editors and the dashboard, on purpose — this is machinery an editor
+     used by editors and the dashboard, on purpose. This is machinery an editor
      drives, not something an agent should be poking at directly.
 
 8. Per-Line Coverage Data:
@@ -254,7 +254,7 @@ To build on top of SageFs live testing:
    → Example: Generate HTML reports, integrations with issue tracking
 
 None of these extension points have an actual second implementation behind
-them yet — I've kept the seams open (interfaces, registries, extend-not-edit
+them yet. I've kept the seams open (interfaces, registries, extend-not-edit
 shapes) because I've been burned before by code that assumed it would only
 ever have one test framework, one language, one output format. Nobody's
 built a Pytest bridge. If you do, I'd love to hear about it.
@@ -289,5 +289,5 @@ data: {"SessionId":"<id>", "Narratives": [{"TestId":"string", "TestName":"string
 ## Editor Integrations
 
 - **VS Code**: `FileAnnotationsListener.fs` parses file_annotations. `Extension.fs` renders coverage gutter decorations + inline failures. `TestControllerAdapter.fs` enriches test items with failure narratives.
-- **Neovim**: lives in its own repo, [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) — not in this tree. Its `testing.lua` caches source_locations and failure_narratives, `telescope_picker.lua` jumps to source on `<CR>`, and `commands.lua` shows a narrative floating window on `<C-d>`.
-- **Visual Studio** *(deprecated — kept here as the historical record, not a current target)*: `CoverageGlyphTagger.cs` (MEF pipeline for gutter glyphs). `FileAnnotationTracker.cs` caches coverage + failure data. `TestStateTracker.cs` stores source locations for navigation. The `sagefs-vs/` extension isn't built, tested, or published anymore — don't route new work there.
+- **Neovim**: lives in its own repo, [`sagefs.nvim`](https://github.com/WillEhrendreich/sagefs.nvim) (not in this tree). Its `testing.lua` caches source_locations and failure_narratives, `telescope_picker.lua` jumps to source on `<CR>`, and `commands.lua` shows a narrative floating window on `<C-d>`.
+- **Visual Studio** *(deprecated, kept here as the historical record, not a current target)*: `CoverageGlyphTagger.cs` (MEF pipeline for gutter glyphs). `FileAnnotationTracker.cs` caches coverage + failure data. `TestStateTracker.cs` stores source locations for navigation. The `sagefs-vs/` extension isn't built, tested, or published anymore. Don't route new work there.
