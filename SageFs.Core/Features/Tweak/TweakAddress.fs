@@ -347,3 +347,31 @@ let parseExpr (text: string) : Result<SynExpr, string> =
         Ok expr
       | _ -> Error "expected exactly one expression"
   with ex -> Error ex.Message
+
+/// What `relocate` finds when a path stops resolving: the same expression,
+/// by content hash, living somewhere else in the same file now (a rename,
+/// a moved binding). An OFFER, never taken automatically, a caller has to
+/// choose to re-point to it.
+[<RequireQualifiedAccess>]
+type RelocationResult =
+  | Relocated of candidate: TweakAddress
+  | NoCandidate
+
+/// Look for `expectedHash` anywhere else in `source`. Never returns
+/// `address` itself as a candidate, and never writes anything, this only
+/// reads. Picks the first match `addressesOf` finds when there's more than
+/// one identical expression; a caller that wants to disambiguate further
+/// has the candidate's own address to inspect.
+let relocate (source: string) (address: TweakAddress) (expectedHash: string) : RelocationResult =
+  match addressesOf source with
+  | Error _ -> RelocationResult.NoCandidate
+  | Ok candidates ->
+    candidates
+    |> List.filter (fun a -> a <> address)
+    |> List.tryPick (fun a ->
+      match resolve source a with
+      | Ok r when r.Hash = expectedHash -> Some a
+      | _ -> None)
+    |> function
+      | Some a -> RelocationResult.Relocated a
+      | None -> RelocationResult.NoCandidate
