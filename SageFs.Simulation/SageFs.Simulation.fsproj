@@ -140,6 +140,12 @@
         <Compile Include="WarmupSim.fs" />
         <Compile Include="WarmupInvariants.fs" />
         <Compile Include="WarmupGenerators.fs" />
+        <!-- HealthAnomaly DST: seeded series shapes (flat, step, drift,
+             spike, sawtooth, recovery, legitimate scale change) folded
+             through the REAL HealthAnomaly.step; an AlwaysFineTwin behavior
+             proves the invariants have teeth by failing against it. -->
+        <Compile Include="HealthAnomalySim.fs" />
+        <Compile Include="HealthAnomalySimInvariants.fs" />
     </ItemGroup>
 
     <ItemGroup>
