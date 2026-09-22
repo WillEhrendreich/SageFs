@@ -121,3 +121,39 @@ module McpSessionRouting =
       |> String.concat "\n"
     sprintf "%s '%s'.\n\nUse switch_session to select one before calling other tools, or pass sessionId explicitly on every call.\n\nMatching sessions:\n%s"
       prefix workingDir matches
+
+  /// Why a session can't take work. Carried on FaultedSession so every tool
+  /// that refuses a faulted session can say WHY. Before this, get_fsi_status
+  /// and every other tool said "Session is faulted. Run reset..." and the real
+  /// reason ("Not all DLLs are found ...") only showed up in /api/sessions.
+  [<RequireQualifiedAccess>]
+  type FaultCause =
+    /// What the daemon recorded when the session faulted.
+    | Recorded of reason: string
+    /// Faulted, but whatever faulted it didn't say why.
+    | NoReasonRecorded
+    | Stopped
+
+  module FaultCause =
+    let ofStatus (status: WorkerProtocol.SessionLifecycleStatus) : FaultCause =
+      match status with
+      | WorkerProtocol.SessionLifecycleStatus.Faulted (Some reason) when not (System.String.IsNullOrWhiteSpace reason) ->
+        FaultCause.Recorded reason
+      | WorkerProtocol.SessionLifecycleStatus.Stopped -> FaultCause.Stopped
+      // default policy: this is only called for a status that's already been
+      // classified as faulted-or-stopped; anything else has no reason to give.
+      | _ -> FaultCause.NoReasonRecorded
+
+    /// The reason, in words an agent can act on.
+    let describe = function
+      | FaultCause.Recorded reason -> reason
+      | FaultCause.NoReasonRecorded -> "No reason was recorded for this fault. The daemon log has the details."
+      | FaultCause.Stopped -> "The session was stopped."
+
+  /// Convert a resolved session ID string to SessionId for SessionOps calls.
+  /// Pre-condition: sid came from resolveSessionId or session lookup (already valid format).
+  /// Moved here from Mcp.fs to keep that file under its line budget.
+  let toSessionId (sid: string) =
+    match WorkerProtocol.SessionId.validate sid with
+    | Ok id -> id
+    | Error e -> failwithf "Invalid resolved session ID '%s': %s" sid e

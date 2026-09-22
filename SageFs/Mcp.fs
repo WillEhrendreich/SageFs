@@ -249,12 +249,6 @@ module McpTools =
   /// Temporal dedup cache — prevents re-evaluating identical code within 2s window.
   let evalDedupCache = Features.EvalDedup.DedupCache.defaultCache ()
 
-  /// Convert a resolved session ID string to SessionId for SessionOps calls.
-  /// Pre-condition: sid came from resolveSessionId or session lookup (already valid format).
-  let private toSessionId (sid: string) =
-    match WorkerProtocol.SessionId.validate sid with
-    | Ok id -> id
-    | Error e -> failwithf "Invalid resolved session ID '%s': %s" sid e
 
   // Session working-directory routing/matching helpers moved to
   // SageFs/McpSessionRouting.fs (pure, testable; roast-8 §2 god-file split).
@@ -330,7 +324,7 @@ module McpTools =
                 return Error (RestartInProgress (sprintf "Session '%s' is %s — transport is temporarily unavailable by design. Poll get_fsi_status every 5-10s; do NOT retry hard_reset_fsi_session or create a new session." sessionId (WorkerProtocol.SessionLifecycleStatus.label i.Status)))
               | _ ->
                 ctx.SessionOps.NotifyWorkerDied validId
-                do! ctx.SessionOps.UpdateSessionStatus validId (WorkerProtocol.SessionLifecycleStatus.Faulted None)
+                do! ctx.SessionOps.UpdateSessionStatus validId (WorkerProtocol.SessionLifecycleStatus.Faulted (Some (routeErrorMessage transportError)))
                 return Result.Error transportError
             | None ->
               return raise ex
@@ -344,7 +338,7 @@ module McpTools =
     | Routable of sessionId: string
     | WarmingUp of sessionId: string * status: WorkerProtocol.SessionLifecycleStatus
     | Unroutable of sessionId: string * status: WorkerProtocol.SessionLifecycleStatus
-    | FaultedSession of sessionId: string
+    | FaultedSession of sessionId: string * cause: FaultCause
     | Gone of message: string
 
   /// Pure classification: decide the resolution from registry knowledge.
@@ -364,7 +358,7 @@ module McpTools =
         WarmingUp (WorkerProtocol.SessionId.value i.Id, i.Status)
       | WorkerProtocol.SessionLifecycleStatus.Faulted _
       | WorkerProtocol.SessionLifecycleStatus.Stopped ->
-        FaultedSession (WorkerProtocol.SessionId.value i.Id)
+        FaultedSession (WorkerProtocol.SessionId.value i.Id, FaultCause.ofStatus i.Status)
       | _ ->
         Unroutable (WorkerProtocol.SessionId.value i.Id, i.Status)
     | None ->
@@ -379,8 +373,8 @@ module McpTools =
       sprintf "Session '%s' is still warming up (%s). This typically takes 15-30s for test projects. Poll get_fsi_status every 5-10s to check readiness. Do NOT create a new session — it will compete for resources and make warmup slower." sid (WorkerProtocol.SessionLifecycleStatus.label status)
     | Unroutable (sid, status) ->
       sprintf "Session '%s' exists (status: %s) but its worker is not routable yet — it may be mid-restart. Check get_fsi_status or list_sessions and re-check shortly. Do NOT create a duplicate session." sid (WorkerProtocol.SessionLifecycleStatus.label status)
-    | FaultedSession sid ->
-      sprintf "Session '%s' is faulted. Run reset_fsi_session or hard_reset_fsi_session to recover." sid
+    | FaultedSession (sid, cause) ->
+      sprintf "Session '%s' is faulted. Why: %s\nRun reset_fsi_session or hard_reset_fsi_session to recover." sid (FaultCause.describe cause)
     | Gone msg -> msg
 
   /// Route to the active session or the specified session.
@@ -436,7 +430,7 @@ module McpTools =
                            | WorkerProtocol.SessionLifecycleStatus.Stopped -> true
                            | _ -> false) ->
               setActiveSessionId ctx agent ""
-              return FaultedSession candidate
+              return FaultedSession (candidate, FaultCause.ofStatus i.Status)
             | Some i ->
               setActiveSessionId ctx agent ""
               return Unroutable (candidate, i.Status)
@@ -509,7 +503,7 @@ module McpTools =
       let! resolution = resolveSessionId ctx agent sessionId workingDirectory
       match resolution with
       | Routable sid -> return! f sid
-      | FaultedSession sid -> return! f sid
+      | FaultedSession (sid, _) -> return! f sid
       | Unroutable (sid, _) -> return! f sid
       | other -> return sprintf "Error: %s" (formatSessionResolution other)
     }
@@ -521,7 +515,7 @@ module McpTools =
       let! resolution = resolveSessionId ctx agent sessionId workingDirectory
       match resolution with
       | Routable sid -> return! f sid
-      | FaultedSession sid -> return! f sid
+      | FaultedSession (sid, _) -> return! f sid
       | Unroutable (sid, _) -> return! f sid
       | other -> return Error (SageFsError.SessionNotRoutable (formatSessionResolution other))
     }
@@ -568,8 +562,8 @@ module McpTools =
         return Some (SageFsError.SessionNotRoutable (sprintf "session '%s' is warming up (%s)" sid (WorkerProtocol.SessionLifecycleStatus.label status)))
       | Unroutable (sid, status) ->
         return Some (SageFsError.SessionNotRoutable (sprintf "session '%s' is not yet routable (%s)" sid (WorkerProtocol.SessionLifecycleStatus.label status)))
-      | FaultedSession sid ->
-        return Some (SageFsError.WorkerCommunicationFailed (sid, "session is faulted"))
+      | FaultedSession (sid, cause) ->
+        return Some (SageFsError.WorkerCommunicationFailed (sid, sprintf "session is faulted: %s" (FaultCause.describe cause)))
       | Gone _ ->
         match sessionId with
         | Some sid -> return Some (SageFsError.SessionNotFound sid)
@@ -1124,12 +1118,13 @@ module McpTools =
                status = WorkerProtocol.SessionLifecycleStatus.label status
                message = formatSessionResolution resolution
                available = availableTools |})
-      | FaultedSession sid ->
+      | FaultedSession (sid, cause) ->
         let availableTools = Affordances.availableTools SessionState.Faulted
         return
           System.Text.Json.JsonSerializer.Serialize(
             {| state = "Faulted"
                sessionId = sid
+               faultReason = FaultCause.describe cause
                message = formatSessionResolution resolution
                available = availableTools |})
       | Routable sid ->
@@ -3959,7 +3954,7 @@ module McpTools =
         | Routable sid
         | WarmingUp(sid, _)
         | Unroutable(sid, _)
-        | FaultedSession sid -> Some sid
+        | FaultedSession(sid, _) -> Some sid
         | Gone _ -> None
     }
 

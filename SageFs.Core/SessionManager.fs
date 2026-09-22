@@ -1162,7 +1162,7 @@ module SessionManager =
                     | true ->
                       let reason = sprintf "Session warmup timed out after %.0fs — worker did not reach Ready state. Use hard_reset_fsi_session with rebuild=true to retry." elapsed.TotalSeconds
                       Log.warn "[SessionManager] %s (session %s)" reason (SessionId.value id)
-                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionLifecycleStatus.Faulted None))
+                      inbox.Post(SessionCommand.UpdateSessionStatus(id, SessionLifecycleStatus.Faulted (Some reason)))
                       onSessionFaulted id reason
                       done' <- true
                     | false ->

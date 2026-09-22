@@ -486,6 +486,7 @@
         <Compile Include="VscodeCommandProofTests.fs" />
         <Compile Include="CoverageTreemapTests.fs" />
         <Compile Include="FrictionClassificationTests.fs" />
+        <Compile Include="FaultReasonSurfacingTests.fs" />
         <Compile Include="PendingRunSummaryTests.fs" />
         <Compile Include="ErrorNumberClassificationTests.fs" />
         <Compile Include="CohortPropertyTests.fs" />

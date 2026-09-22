@@ -22,6 +22,7 @@ open Expecto
 open Expecto.Flip
 open SageFs
 open SageFs.McpTools
+open SageFs.McpSessionRouting
 open SageFs.Server.McpTools
 open SageFs.WorkerProtocol
 open SageFs.Features.FrictionTelemetryTypes
@@ -165,7 +166,7 @@ let sessionRoutingErrorTests =
     }
 
     testCaseTask "WHY — a faulted session classifies as TransportFailure" <| fun () -> task {
-      let resolution = SessionResolution.FaultedSession "sid9"
+      let resolution = SessionResolution.FaultedSession ("sid9", FaultCause.Recorded "warmup failed")
       let! blocker = sessionRoutingError noSessions None (Some @"C:\Repos\Proj") resolution
       match blocker with
       | Some err -> blockerKindOf err |> Expect.equal "a faulted session is a transport-level blocker" BlockerKind.TransportFailure
