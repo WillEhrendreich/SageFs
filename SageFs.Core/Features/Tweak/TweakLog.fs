@@ -222,6 +222,49 @@ let project (log: EventLog) : Projection =
 
 let dirtySet (log: EventLog) : Set<TweakAddress> = project log |> Projection.dirtySet
 
+/// One tweak a crash left unsaved, worth offering to re-apply. Pure data,
+/// same shape the log already carries, nothing re-derived by guessing.
+type RecoverableTweak =
+  { EventId: int
+    Address: TweakAddress
+    TextBefore: string
+    TextAfter: string
+    /// True for exactly one entry (if any exist at all): the single most
+    /// recent unsaved tweak in the log, the one that was live and unsaved
+    /// at the moment the process died. Offered UNCHECKED by default,
+    /// because it's the one least sure to still be what the user wanted;
+    /// everything else here defaults to checked.
+    WasInFlightAtCrash: bool }
+
+/// A pure function from the log to an ordered (log order) list of
+/// recoverable tweaks — exactly what `dirtySet` already tracks, restated
+/// as an offer instead of a set. Uses the SAME projection/fold path
+/// everything else in this module does; there is no separate "recovery"
+/// logic to drift from replay or the dirty-set query. An unsettled drag is
+/// never a candidate here, because `ScrubCoalescer` never journals one:
+/// only `settle`'s single `TweakApplied` reaches the log at all.
+let recoveryOffer (log: EventLog) : RecoverableTweak list =
+  let dirty = dirtySet log
+  let latestUnsavedPerAddress =
+    log.Events
+    |> List.choose (fun e ->
+      match e.Event with
+      | TweakLogEvent.TweakApplied(addr, before, after, _) when dirty.Contains addr -> Some(e.Id, addr, before, after)
+      | _ -> None)
+    |> List.groupBy (fun (_, addr, _, _) -> addr)
+    // The LATEST Applied per address is the only one still relevant — an
+    // earlier one for the same address was superseded before the crash,
+    // not independently recoverable.
+    |> List.map (fun (_, xs) -> xs |> List.maxBy (fun (id, _, _, _) -> id))
+    |> List.sortBy (fun (id, _, _, _) -> id)
+  let mostRecentId =
+    match latestUnsavedPerAddress with
+    | [] -> None
+    | xs -> xs |> List.map (fun (id, _, _, _) -> id) |> List.max |> Some
+  latestUnsavedPerAddress
+  |> List.map (fun (id, addr, before, after) ->
+    { EventId = id; Address = addr; TextBefore = before; TextAfter = after; WasInFlightAtCrash = Some id = mostRecentId })
+
 /// Is there an unresolved `ConflictRaised` on this address right now? An
 /// open conflict is exclusive: it blocks further saves and rollbacks on
 /// THAT address until a `ConflictResolved` closes it, so two
