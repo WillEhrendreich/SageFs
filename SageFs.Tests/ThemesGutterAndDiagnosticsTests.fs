@@ -82,13 +82,13 @@ let diagnosticsStoreTests = testList "DiagnosticsStore" [
     h1 |> Expect.notEqual "different inputs differ" h2
 
   testCase "add stores diagnostics" <| fun _ ->
-    let d = mkDiag "err1" DiagnosticSeverity.Error
+    let d = mkDiag "err1" DiagnosticSeverity.Blocking
     let store = DiagnosticsStore.add "code1" [| d |] DiagnosticsStore.empty
     DiagnosticsStore.forCode "code1" store
     |> Expect.hasLength "should have 1" 1
 
   testCase "add with empty array removes entry" <| fun _ ->
-    let d = mkDiag "err1" DiagnosticSeverity.Error
+    let d = mkDiag "err1" DiagnosticSeverity.Blocking
     let store =
       DiagnosticsStore.empty
       |> DiagnosticsStore.add "code1" [| d |]
@@ -101,7 +101,7 @@ let diagnosticsStoreTests = testList "DiagnosticsStore" [
     |> Expect.isEmpty "should be empty for unknown"
 
   testCase "allFlat collects all diagnostics" <| fun _ ->
-    let d1 = mkDiag "err1" DiagnosticSeverity.Error
+    let d1 = mkDiag "err1" DiagnosticSeverity.Blocking
     let d2 = mkDiag "warn1" DiagnosticSeverity.Warning
     let store =
       DiagnosticsStore.empty
@@ -111,14 +111,14 @@ let diagnosticsStoreTests = testList "DiagnosticsStore" [
     |> Expect.hasLength "should have 2 total" 2
 
   testCase "clear returns empty store" <| fun _ ->
-    let d = mkDiag "err1" DiagnosticSeverity.Error
+    let d = mkDiag "err1" DiagnosticSeverity.Blocking
     let store = DiagnosticsStore.add "code1" [| d |] DiagnosticsStore.empty
     DiagnosticsStore.clear store
     |> DiagnosticsStore.all
     |> Expect.isEmpty "should be empty after clear"
 
   testCase "DiagnosticSeverity.label maps all cases" <| fun _ ->
-    DiagnosticSeverity.label DiagnosticSeverity.Error |> Expect.equal "error" "error"
+    DiagnosticSeverity.label DiagnosticSeverity.Blocking |> Expect.equal "error" "error"
     DiagnosticSeverity.label DiagnosticSeverity.Warning |> Expect.equal "warning" "warning"
     DiagnosticSeverity.label DiagnosticSeverity.Info |> Expect.equal "info" "info"
     DiagnosticSeverity.label DiagnosticSeverity.Hidden |> Expect.equal "hidden" "hidden"

@@ -190,7 +190,7 @@ module AnsiCodes =
 
 /// Mouse button for cross-platform input events
 [<RequireQualifiedAccess>]
-type MouseButton = Left | Middle | Right | None
+type MouseButton = Left | Middle | Right | NoButton
 
 /// Mouse action type
 [<RequireQualifiedAccess>]

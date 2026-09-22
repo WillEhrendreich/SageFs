@@ -38,7 +38,7 @@ let extractDiagErrors (diagnostics: Map<string, Diagnostic list>) : (string * in
   |> Map.toList
   |> List.collect (fun (_, diags) ->
     diags
-    |> List.filter (fun d -> d.Severity = DiagnosticSeverity.Error)
+    |> List.filter (fun d -> d.Severity = DiagnosticSeverity.Blocking)
     |> List.map (fun d -> ("fsi", d.Range.StartLine, d.Message)))
 
 /// Pure diagnostics dirty-check: produces AccumulatePush when diagCount changes.

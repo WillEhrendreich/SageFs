@@ -822,7 +822,7 @@ let createFsiSession (kind: SessionKinds.FsiSessionKind) (logger: ILogger) (outS
         { Message = d.Message
           Severity =
             match d.Severity with
-            | Diagnostics.DiagnosticSeverity.Error -> "error"
+            | Diagnostics.DiagnosticSeverity.Blocking -> "error"
             | Diagnostics.DiagnosticSeverity.Warning -> "warning"
             | Diagnostics.DiagnosticSeverity.Info
             | Diagnostics.DiagnosticSeverity.Hidden -> "info"

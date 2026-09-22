@@ -5,7 +5,7 @@ open Microsoft.FSharp.Reflection
 
 [<RequireQualifiedAccess>]
 type BuildDiagnosticSeverity =
-  | Error
+  | Blocking
   | Warning
 
 /// One line of `dotnet build` output classified as a diagnostic. Location is
@@ -45,11 +45,11 @@ module BuildDiagnostic =
         Severity =
           match m.Groups.["severity"].Value with
           | "warning" -> BuildDiagnosticSeverity.Warning
-          | _ -> BuildDiagnosticSeverity.Error
+          | _ -> BuildDiagnosticSeverity.Blocking
         Code = Some m.Groups.["code"].Value
         Message = m.Groups.["message"].Value }
     | false ->
-      { File = None; Line = None; Column = None; Severity = BuildDiagnosticSeverity.Error; Code = None; Message = trimmed }
+      { File = None; Line = None; Column = None; Severity = BuildDiagnosticSeverity.Blocking; Code = None; Message = trimmed }
 
   /// Plain factual text — no call to action. Every surface (dashboard card,
   /// MCP tool response, HTTP body) words its own hint from this data instead
@@ -57,7 +57,7 @@ module BuildDiagnostic =
   /// MSBuild's own line shape for a parsed diagnostic.
   let describe (diagnostics: BuildDiagnostic list) : string =
     let severityWord = function
-      | BuildDiagnosticSeverity.Error -> "error"
+      | BuildDiagnosticSeverity.Blocking -> "error"
       | BuildDiagnosticSeverity.Warning -> "warning"
     diagnostics
     |> List.map (fun d ->

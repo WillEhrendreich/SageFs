@@ -11,7 +11,7 @@ let private makeTimeline (durationsMsAsc: int list) : Features.EvalTimeline.Time
   |> List.fold
       (fun st dur ->
         let e: Features.EvalTimeline.TimelineEntry =
-          { CellId = 0; StartMs = 0L; DurationMs = int64 dur; Status = Features.EvalTimeline.Success }
+          { CellId = 0; StartMs = 0L; DurationMs = int64 dur; Status = Features.EvalTimeline.Succeeded }
         Features.EvalTimeline.TimelineState.record e st)
       Features.EvalTimeline.TimelineState.empty
 

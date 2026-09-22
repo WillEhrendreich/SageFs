@@ -57,8 +57,8 @@ let journalFilterTests =
         Journal.create 100
         |> Journal.record JournalLevel.Debug "a" "debug msg"
         |> Journal.record JournalLevel.Info "b" "info msg"
-        |> Journal.record JournalLevel.Error "c" "error msg"
-      Journal.filterByLevel JournalLevel.Error j
+        |> Journal.record JournalLevel.Failure "c" "error msg"
+      Journal.filterByLevel JournalLevel.Failure j
       |> Expect.hasLength "only error" 1
 
     testCase "filter by source" <| fun _ ->
@@ -76,7 +76,7 @@ let journalFilterTests =
         |> Journal.record JournalLevel.Debug "a" "d"
         |> Journal.record JournalLevel.Info "b" "i"
         |> Journal.record JournalLevel.Warn "c" "w"
-        |> Journal.record JournalLevel.Error "d" "e"
+        |> Journal.record JournalLevel.Failure "d" "e"
       Journal.filterByMinLevel JournalLevel.Warn j
       |> Expect.hasLength "warn + error" 2
   ]
@@ -101,13 +101,13 @@ let journalFormatTests =
       JournalLevel.label JournalLevel.Debug |> Expect.equal "debug" "DEBUG"
       JournalLevel.label JournalLevel.Info |> Expect.equal "info" "INFO"
       JournalLevel.label JournalLevel.Warn |> Expect.equal "warn" "WARN"
-      JournalLevel.label JournalLevel.Error |> Expect.equal "error" "ERROR"
+      JournalLevel.label JournalLevel.Failure |> Expect.equal "error" "ERROR"
 
     testCase "formatAll produces multi-line output" <| fun _ ->
       let j =
         Journal.create 100
         |> Journal.record JournalLevel.Info "eval" "msg1"
-        |> Journal.record JournalLevel.Error "test" "msg2"
+        |> Journal.record JournalLevel.Failure "test" "msg2"
       let output = Journal.formatAll j
       output |> Expect.stringContains "has msg1" "msg1"
       output |> Expect.stringContains "has msg2" "msg2"
@@ -122,7 +122,7 @@ let journalStatsTests =
         Journal.create 100
         |> Journal.record JournalLevel.Info "a" "1"
         |> Journal.record JournalLevel.Info "b" "2"
-        |> Journal.record JournalLevel.Error "c" "3"
+        |> Journal.record JournalLevel.Failure "c" "3"
       let stats = Journal.stats j
       stats.InfoCount |> Expect.equal "2 info" 2
       stats.ErrorCount |> Expect.equal "1 error" 1

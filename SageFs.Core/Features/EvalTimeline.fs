@@ -1,6 +1,6 @@
 module SageFs.Features.EvalTimeline
 
-type EvalStatus = Success | Error | Cancelled
+type EvalStatus = Succeeded | Failed | Cancelled
 
 type TimelineEntry = {
   CellId: int

@@ -150,7 +150,7 @@ module SessionBuild =
   let private buildTimeoutError () =
     let timeoutDiagnostic =
       { File = None; Line = None; Column = None; Code = None
-        Severity = BuildDiagnosticSeverity.Error
+        Severity = BuildDiagnosticSeverity.Blocking
         Message = "Build timed out (10 min limit)" }
     SageFsError.BuildFailed(-1, [ timeoutDiagnostic ])
 

@@ -6,7 +6,7 @@ open FsCheck
 open SageFs.Features.EvalTimeline
 
 let mkEntry cellId durationMs =
-  { CellId = cellId; StartMs = 0L; DurationMs = durationMs; Status = Success }
+  { CellId = cellId; StartMs = 0L; DurationMs = durationMs; Status = Succeeded }
 
 [<Tests>]
 let evalTimelineTests = testList "EvalTimeline" [

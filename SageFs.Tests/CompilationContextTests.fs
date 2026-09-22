@@ -469,7 +469,7 @@ let responseDiagnosticTests =
 
     test "adjusts all line/column fields on EvalResult diagnostics" {
       let diag : WorkerDiagnostic =
-        { Severity = Features.Diagnostics.DiagnosticSeverity.Error
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Blocking
           Message = "type mismatch"
           StartLine = 7; StartColumn = 6
           EndLine = 7; EndColumn = 12
@@ -516,7 +516,7 @@ let responseDiagnosticTests =
 
     test "column clamped to zero" {
       let diag : WorkerDiagnostic =
-        { Severity = Features.Diagnostics.DiagnosticSeverity.Error
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Blocking
           Message = "err"
           StartLine = 3; StartColumn = 1
           EndLine = 3; EndColumn = 5

@@ -9,20 +9,20 @@ type JournalLevel =
   | Debug
   | Info
   | Warn
-  | Error
+  | Failure
 
 module JournalLevel =
   let label = function
     | JournalLevel.Debug -> "DEBUG"
     | JournalLevel.Info -> "INFO"
     | JournalLevel.Warn -> "WARN"
-    | JournalLevel.Error -> "ERROR"
+    | JournalLevel.Failure -> "ERROR"
 
   let severity = function
     | JournalLevel.Debug -> 0
     | JournalLevel.Info -> 1
     | JournalLevel.Warn -> 2
-    | JournalLevel.Error -> 3
+    | JournalLevel.Failure -> 3
 
 /// A single journal entry with timestamp, level, source, and message.
 type JournalEntry = {
@@ -104,5 +104,5 @@ module Journal =
       DebugCount = all |> List.filter (fun e -> e.Level = JournalLevel.Debug) |> List.length
       InfoCount = all |> List.filter (fun e -> e.Level = JournalLevel.Info) |> List.length
       WarnCount = all |> List.filter (fun e -> e.Level = JournalLevel.Warn) |> List.length
-      ErrorCount = all |> List.filter (fun e -> e.Level = JournalLevel.Error) |> List.length
+      ErrorCount = all |> List.filter (fun e -> e.Level = JournalLevel.Failure) |> List.length
       Evicted = RingBuffer.evictedCount journal.Buffer }

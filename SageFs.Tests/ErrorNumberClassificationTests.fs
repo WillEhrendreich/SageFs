@@ -41,7 +41,7 @@ let errorNumberClassificationTests =
           { Message = "The type 'Foo' was not found in the target project"
             Subcategory = "typecheck"
             Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-            Severity = DiagnosticSeverity.Error
+            Severity = DiagnosticSeverity.Blocking
             ErrorNumber = 1 }
         categorizeByNumber (Some diag.ErrorNumber) diag.Message
         |> Expect.equal "the Diagnostic's own ErrorNumber field must drive classification" ErrorCategory.TypeError
@@ -51,7 +51,7 @@ let errorNumberClassificationTests =
         // The converse hazard: a message containing "type" that a naive
         // fallback would call TypeError, but the number says FS0039.
         let wd : WorkerDiagnostic =
-          { Severity = DiagnosticSeverity.Error
+          { Severity = DiagnosticSeverity.Blocking
             Message = "the type-checker could not resolve this symbol"
             StartLine = 1
             StartColumn = 0
@@ -66,7 +66,7 @@ let errorNumberClassificationTests =
     testList "ErrorNumber round-trips across the worker<->daemon boundary" [
       test "WorkerDiagnostic.toDiagnostic preserves ErrorNumber" {
         let wd : WorkerDiagnostic =
-          { Severity = DiagnosticSeverity.Error
+          { Severity = DiagnosticSeverity.Blocking
             Message = "The value 'x' is not defined"
             StartLine = 2
             StartColumn = 3
@@ -82,7 +82,7 @@ let errorNumberClassificationTests =
           { Message = "This expression was expected to have type 'int'"
             Subcategory = "typecheck"
             Range = { StartLine = 5; StartColumn = 1; EndLine = 5; EndColumn = 9 }
-            Severity = DiagnosticSeverity.Error
+            Severity = DiagnosticSeverity.Blocking
             ErrorNumber = 1 }
         let wd = SageFs.Server.WorkerMain.toWorkerDiagnostic d
         wd.ErrorNumber |> Expect.equal "ErrorNumber should survive Diagnostic -> wd" 1
@@ -93,7 +93,7 @@ let errorNumberClassificationTests =
           { Message = "unexpected token in expression"
             Subcategory = "parse"
             Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 3 }
-            Severity = DiagnosticSeverity.Error
+            Severity = DiagnosticSeverity.Blocking
             ErrorNumber = 10 }
         let there = SageFs.Server.WorkerMain.toWorkerDiagnostic original
         let back = WorkerDiagnostic.toDiagnostic there

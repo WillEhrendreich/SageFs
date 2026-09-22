@@ -164,10 +164,10 @@ let compositionTests =
       let entries = [
         // 15 fast entries (10ms each) — establishes low P50
         for i in 0..14 do
-          mkTimelineEntry i 10L EvalStatus.Success
+          mkTimelineEntry i 10L EvalStatus.Succeeded
         // 5 slow entries (200ms each) — drives up P95
         for i in 15..19 do
-          mkTimelineEntry i 200L EvalStatus.Success
+          mkTimelineEntry i 200L EvalStatus.Succeeded
       ]
       let timeline = { Entries = entries }
 
@@ -183,7 +183,7 @@ let compositionTests =
     testCase "no P95 spike with uniform timings yields Info" <| fun _ ->
       let entries = [
         for i in 0..9 do
-          mkTimelineEntry i 10L EvalStatus.Success
+          mkTimelineEntry i 10L EvalStatus.Succeeded
       ]
       let timeline = { Entries = entries }
 
@@ -286,7 +286,7 @@ let propertyTests =
       let narrative = mkNarrative [ CausalChange.SymbolChanged "x" ] "changed"
       let failures = [ mkTestId "t1", "test1", narrative ]
       let scope = [ mkScopeBinding "x" "int" ]
-      let timeline = { Entries = [ mkTimelineEntry 0 10L EvalStatus.Success ] }
+      let timeline = { Entries = [ mkTimelineEntry 0 10L EvalStatus.Succeeded ] }
 
       let r1 = Diagnostician.compose graph failures scope timeline
       let r2 = Diagnostician.compose graph failures scope timeline
@@ -364,7 +364,7 @@ let integrationTests =
       let timeline = {
         Entries = [
           for i in 0..4 do
-            mkTimelineEntry i 15L EvalStatus.Success
+            mkTimelineEntry i 15L EvalStatus.Succeeded
         ]
       }
 

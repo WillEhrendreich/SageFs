@@ -653,7 +653,7 @@ let buildDiagnosticsOfTests =
       d.Line |> Expect.equal "the line" (Some 160)
       d.Column |> Expect.equal "the column" (Some 1)
       d.Code |> Expect.equal "the diagnostic code" (Some "FS0433")
-      d.Severity |> Expect.equal "an error, not a warning" BuildDiagnosticSeverity.Error
+      d.Severity |> Expect.equal "an error, not a warning" BuildDiagnosticSeverity.Blocking
       d.Message.Contains "[/src/Web/Web.fsproj]" |> Expect.isFalse "no project-path noise carried into the message"
       // No hint baked in here — that is a surface's job (SageFsError.suggestedAction,
       // or AppRun.fs's own dashboard-card wording), never the parsed diagnostic data.

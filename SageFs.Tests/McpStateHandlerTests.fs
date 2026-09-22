@@ -24,7 +24,7 @@ let extractDiagErrorsTests = testList "extractDiagErrors" [
     let diags = Map.ofList [
       "file1.fs", [
         mkDiag DiagnosticSeverity.Warning 1 "warn1"
-        mkDiag DiagnosticSeverity.Error 2 "err1"
+        mkDiag DiagnosticSeverity.Blocking 2 "err1"
         mkDiag DiagnosticSeverity.Info 3 "info1"
       ]
     ]
@@ -35,8 +35,8 @@ let extractDiagErrorsTests = testList "extractDiagErrors" [
 
   test "collects errors across multiple files" {
     let diags = Map.ofList [
-      "a.fs", [ mkDiag DiagnosticSeverity.Error 1 "errA" ]
-      "b.fs", [ mkDiag DiagnosticSeverity.Error 5 "errB" ]
+      "a.fs", [ mkDiag DiagnosticSeverity.Blocking 1 "errA" ]
+      "b.fs", [ mkDiag DiagnosticSeverity.Blocking 5 "errB" ]
     ]
     let errors = extractDiagErrors diags
     errors |> Expect.hasLength "should have 2 errors" 2
@@ -54,7 +54,7 @@ let processDiagnosticsChangeTests = testList "processDiagnosticsChange" [
   test "produces AccumulatePush when diagCount changes" {
     let state = ModelChangeState.empty
     let diags = Map.ofList [
-      "f.fs", [ mkDiag DiagnosticSeverity.Error 10 "type mismatch" ]
+      "f.fs", [ mkDiag DiagnosticSeverity.Blocking 10 "type mismatch" ]
     ]
     let state', effects = processDiagnosticsChange 1 diags state
     state'.LastDiagCount |> Expect.equal "updated count" 1

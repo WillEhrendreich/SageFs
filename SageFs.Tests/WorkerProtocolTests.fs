@@ -214,7 +214,7 @@ let workerProtocolTests =
       testCase "CheckResult round-trips"
       <| fun _ ->
         let diag = {
-          Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
+          Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Blocking
           Message = "undefined value"
           StartLine = 3
           StartColumn = 4
@@ -229,7 +229,7 @@ let workerProtocolTests =
       testCase "CheckResult diagnostic ErrorNumber round-trips"
       <| fun _ ->
         let diag = {
-          Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
+          Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Blocking
           Message = "undefined value"
           StartLine = 3
           StartColumn = 4

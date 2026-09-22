@@ -8,7 +8,7 @@ open SageFs
 // Build a diagnostic the way MSBuild's parser would (SageFs.BuildDiagnostic).
 let private diag file code message : BuildDiagnostic =
   { File = file; Line = Some 1; Column = Some 1
-    Severity = BuildDiagnosticSeverity.Error
+    Severity = BuildDiagnosticSeverity.Blocking
     Code = code; Message = message }
 
 // A defines→file lookup for the canonical shop scenario.

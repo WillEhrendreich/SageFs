@@ -24,7 +24,7 @@ let private severityOf (severity: DiagnosticSeverity) : Diagnostics.DiagnosticSe
   | DiagHidden -> Diagnostics.DiagnosticSeverity.Hidden
   | DiagInfo -> Diagnostics.DiagnosticSeverity.Info
   | DiagWarning -> Diagnostics.DiagnosticSeverity.Warning
-  | DiagError -> Diagnostics.DiagnosticSeverity.Error
+  | DiagError -> Diagnostics.DiagnosticSeverity.Blocking
 
 let private toDiagnostic (d: FsiDiagnostic) : Diagnostics.Diagnostic =
   { Message = d.Message

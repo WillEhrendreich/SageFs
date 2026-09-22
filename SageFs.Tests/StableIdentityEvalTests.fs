@@ -73,7 +73,7 @@ let stableIdentityEvalTests =
       let errorLine =
         source.Replace("\r\n", "\n").Split('\n') |> Array.findIndex (fun l -> l = "  xs.Length") |> (+) 1
       patched.Diagnostics
-      |> Array.filter (fun d -> d.Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error)
+      |> Array.filter (fun d -> d.Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Blocking)
       |> Array.map _.Range.StartLine
       |> Array.distinct
       |> Expect.equal "errors sit on the fixture's line" [| errorLine |]
@@ -85,7 +85,7 @@ let stableIdentityEvalTests =
       patched.EvaluationResult |> Result.isError |> Expect.isTrue "the patch cannot reach the private member"
       let reported =
         patched.Diagnostics
-        |> Array.filter (fun d -> d.Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error)
+        |> Array.filter (fun d -> d.Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Blocking)
         |> Array.map (fun d -> sprintf "%s %s" d.Subcategory d.Message)
       reported |> Array.exists (fun m -> m.Contains "secret") |> Expect.isTrue "the error names the private member"
     }

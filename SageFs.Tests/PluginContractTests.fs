@@ -181,7 +181,7 @@ let evalJsonTests =
     testCase "error result has success=false" <| fun _ ->
       let resp: EvalResponse =
         { EvaluationResult = Error (exn "type mismatch")
-          Diagnostics = [| mkDiag "expected int" DiagnosticSeverity.Error 1 5 |]
+          Diagnostics = [| mkDiag "expected int" DiagnosticSeverity.Blocking 1 5 |]
           EvaluatedCode = """let x: int = "no";;"""
           Metadata = Map.empty }
       let json = McpAdapter.formatEvalResultJson resp
@@ -192,7 +192,7 @@ let evalJsonTests =
     testCase "error result includes diagnostics array" <| fun _ ->
       let resp: EvalResponse =
         { EvaluationResult = Error (exn "type mismatch")
-          Diagnostics = [| mkDiag "expected int" DiagnosticSeverity.Error 1 5 |]
+          Diagnostics = [| mkDiag "expected int" DiagnosticSeverity.Blocking 1 5 |]
           EvaluatedCode = "bad code"
           Metadata = Map.empty }
       let json = McpAdapter.formatEvalResultJson resp
@@ -451,7 +451,7 @@ let diagnosticsJsonTests =
         Message = "Type mismatch"
         Subcategory = ""
         Range = { StartLine = 5; StartColumn = 10; EndLine = 5; EndColumn = 20 }
-        Severity = DiagnosticSeverity.Error
+        Severity = DiagnosticSeverity.Blocking
         ErrorNumber = 1
       }
       let result = McpAdapter.formatDiagnosticsResultJson [| diag |]

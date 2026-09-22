@@ -27,7 +27,7 @@ module JupyterKernel =
     | Status
     | Stream
     | ExecuteResult
-    | Error
+    | ExecutionError
     | ShutdownRequest
     | ShutdownReply
     | InterruptRequest
@@ -46,7 +46,7 @@ module JupyterKernel =
       "status", MessageType.Status
       "stream", MessageType.Stream
       "execute_result", MessageType.ExecuteResult
-      "error", MessageType.Error
+      "error", MessageType.ExecutionError
       "shutdown_request", MessageType.ShutdownRequest
       "shutdown_reply", MessageType.ShutdownReply
       "interrupt_request", MessageType.InterruptRequest

@@ -172,7 +172,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     (outputFor "s1" newModel).[0].Kind
-    |> Expect.equal "should be Error" OutputKind.Error
+    |> Expect.equal "should be Failure" OutputKind.Failure
 
   testCase "EvalCancelled adds info line" <| fun _ ->
     let event = TuiEvent.EvalCancelled "s1"
@@ -428,7 +428,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
       Message = "type error"
       Subcategory = "typecheck"
       Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-      Severity = DiagnosticSeverity.Error
+      Severity = DiagnosticSeverity.Blocking
       ErrorNumber = 1
     }
     let event = TuiEvent.DiagnosticsUpdated ("s1", [diag])
@@ -517,7 +517,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let newModel, _ =
       SageFsUpdate.update (SageFsMsg.Event event) (SageFsModel.initial())
     (activeOutput newModel).[0].Kind
-    |> Expect.equal "should be Error" OutputKind.Error
+    |> Expect.equal "should be Failure" OutputKind.Failure
 
   testCase "EvalStarted adds info output line" <| fun _ ->
     let event = TuiEvent.EvalStarted ("s1", "let x = 1")
@@ -624,7 +624,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
         RecentOutput = SessionOutputStore.ofLines [
           { Kind = OutputKind.Result; Text = "line1"
             Timestamp = DateTime.UtcNow; SessionId = "s1" }
-          { Kind = OutputKind.Error; Text = "line2"
+          { Kind = OutputKind.Failure; Text = "line2"
             Timestamp = DateTime.UtcNow; SessionId = "s1" }
         ] }
     let newModel, effects =
@@ -913,7 +913,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     |> Expect.equal "completion should add exactly one visible summary line" 1
     let summary = completed.RecentOutput.GetActiveBuffer(completed.Sessions.ActiveSessionId)
     summary.[0].Kind
-    |> Expect.equal "a failed run summary should be surfaced as an error" OutputKind.Error
+    |> Expect.equal "a failed run summary should be surfaced as an error" OutputKind.Failure
     summary.[0].Text
     |> Expect.equal "summary should reflect every prior batch in the run"
          "🧪 Test run complete: 1 passed, 1 failed, 1 skipped (15ms)"
@@ -1689,7 +1689,7 @@ let sageFsUpdateTests = testList "SageFsUpdate" [
     let diag1 = {
       Message = "first"; Subcategory = "a"
       Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 1 }
-      Severity = DiagnosticSeverity.Error
+      Severity = DiagnosticSeverity.Blocking
       ErrorNumber = 0 }
     let diag2 = {
       Message = "second"; Subcategory = "b"
@@ -2204,7 +2204,7 @@ let sageFsRenderTests = testList "SageFsRender" [
             Message = "type error"
             Subcategory = "typecheck"
             Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-            Severity = DiagnosticSeverity.Error
+            Severity = DiagnosticSeverity.Blocking
             ErrorNumber = 1
           }] ]
     }
@@ -2239,7 +2239,7 @@ let sageFsRenderTests = testList "SageFsRender" [
       { (SageFsModel.initial()) with
           RecentOutput = SessionOutputStore.ofLines [
             { Kind = OutputKind.Result; Text = "val x = 1"; Timestamp = now; SessionId = "" }
-            { Kind = OutputKind.Error; Text = "oops"; Timestamp = now; SessionId = "" }
+            { Kind = OutputKind.Failure; Text = "oops"; Timestamp = now; SessionId = "" }
             { Kind = OutputKind.Info; Text = "loaded"; Timestamp = now; SessionId = "" }
             { Kind = OutputKind.System; Text = "sys"; Timestamp = now; SessionId = "" }
           ] }

@@ -855,7 +855,7 @@ let run (sessionId: string) (port: int) = async {
         // complaint from the expert panel.
         let diagnostics =
           response.Diagnostics
-          |> Array.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Error || d.Severity = Features.Diagnostics.DiagnosticSeverity.Warning)
+          |> Array.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Blocking || d.Severity = Features.Diagnostics.DiagnosticSeverity.Warning)
           |> Array.map (fun d ->
             ({ File = fileName
                Line = Middleware.CompilationContext.mapDiagnosticLine lineOffset d.Range.StartLine

@@ -25,7 +25,7 @@ let formatDiagnosticsTests =
           Message = "The value 'x' is not defined"
           Subcategory = "typecheck"
           Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-          Severity = DiagnosticSeverity.Error
+          Severity = DiagnosticSeverity.Blocking
           ErrorNumber = 39
         }
       |]
@@ -56,7 +56,7 @@ let formatDiagnosticsTests =
           Message = "Incomplete value"
           Subcategory = "parse"
           Range = { StartLine = 5; StartColumn = 3; EndLine = 5; EndColumn = 8 }
-          Severity = DiagnosticSeverity.Error
+          Severity = DiagnosticSeverity.Blocking
           ErrorNumber = 10
         }
       |]
@@ -70,7 +70,7 @@ let formatDiagnosticsTests =
           Message = "first error"
           Subcategory = "typecheck"
           Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 5 }
-          Severity = DiagnosticSeverity.Error
+          Severity = DiagnosticSeverity.Blocking
           ErrorNumber = 0
         }
         {

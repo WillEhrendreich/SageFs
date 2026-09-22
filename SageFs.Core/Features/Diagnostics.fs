@@ -15,14 +15,14 @@ type Range = {
 
 [<RequireQualifiedAccess>]
 type DiagnosticSeverity =
-  | Error
+  | Blocking
   | Hidden
   | Info
   | Warning
 
 module DiagnosticSeverity =
   let label = function
-    | DiagnosticSeverity.Error -> "error"
+    | DiagnosticSeverity.Blocking -> "error"
     | DiagnosticSeverity.Hidden -> "hidden"
     | DiagnosticSeverity.Info -> "info"
     | DiagnosticSeverity.Warning -> "warning"
@@ -42,7 +42,7 @@ type Diagnostic = {
   static member mkDiagnostic(fsDiagnostic: FSharpDiagnostic) =
     let mapSeverity =
       function
-      | FSharpDiagnosticSeverity.Error -> DiagnosticSeverity.Error
+      | FSharpDiagnosticSeverity.Error -> DiagnosticSeverity.Blocking
       | FSharpDiagnosticSeverity.Hidden -> DiagnosticSeverity.Hidden
       | FSharpDiagnosticSeverity.Info -> DiagnosticSeverity.Info
       | FSharpDiagnosticSeverity.Warning -> DiagnosticSeverity.Warning
@@ -115,7 +115,7 @@ let getTypeCheckWithSymbols
     |> Seq.distinct
     |> Seq.toArray
   let hasErrors =
-    diagnostics |> Array.exists (fun d -> d.Severity = DiagnosticSeverity.Error)
+    diagnostics |> Array.exists (fun d -> d.Severity = DiagnosticSeverity.Blocking)
   let symbolRefs =
     match hasErrors with
     | true -> []

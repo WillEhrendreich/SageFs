@@ -53,7 +53,7 @@ let tests =
         PendingRunSummary.empty
         |> PendingRunSummary.addBatches [ [| passed "a" 10.0; failed "b" 5.0 |]; [| skipped "c" |] ]
         |> PendingRunSummary.toOutputLine
-      line.Kind |> Expect.equal "a failed run is surfaced as an error" OutputKind.Error
+      line.Kind |> Expect.equal "a failed run is surfaced as an error" OutputKind.Failure
       line.Text
       |> Expect.equal "summary reflects every batch"
            "🧪 Test run complete: 1 passed, 1 failed, 1 skipped (15ms)"
@@ -70,7 +70,7 @@ let tests =
         PendingRunSummary.empty
         |> PendingRunSummary.addBatch [| passed "a" 1.0; noResult "b" NoResultReason.StreamEnded |]
         |> PendingRunSummary.toOutputLine
-      line.Kind |> Expect.equal "a never-reported result flips the run to error" OutputKind.Error
+      line.Kind |> Expect.equal "a never-reported result flips the run to error" OutputKind.Failure
       line.Text.Contains "1 of 2 never reported"
       |> Expect.isTrue "summary names how many of how many never reported"
 

@@ -19,12 +19,12 @@ let w3SparklineWindowTests =
     testCase "outlier in old entries does not compress visible bars to minimum" <| fun _ ->
       let state = EvalTimeline.TimelineState.empty
       // Simulate an old outlier at 10_000 ms followed by many small evals at ~10 ms
-      let entry0: EvalTimeline.TimelineEntry = { CellId = 0; StartMs = 0L; DurationMs = 10_000L; Status = EvalTimeline.Success }
+      let entry0: EvalTimeline.TimelineEntry = { CellId = 0; StartMs = 0L; DurationMs = 10_000L; Status = EvalTimeline.Succeeded }
       let stateWithOutlier = EvalTimeline.TimelineState.record entry0 state
       let stateWith21Entries =
         List.fold
           (fun s i ->
-            let e: EvalTimeline.TimelineEntry = { CellId = i + 1; StartMs = 0L; DurationMs = 10L; Status = EvalTimeline.Success }
+            let e: EvalTimeline.TimelineEntry = { CellId = i + 1; StartMs = 0L; DurationMs = 10L; Status = EvalTimeline.Succeeded }
             EvalTimeline.TimelineState.record e s)
           stateWithOutlier
           [1..20]
@@ -38,7 +38,7 @@ let w3SparklineWindowTests =
       let state =
         List.fold
           (fun s i ->
-            let e: EvalTimeline.TimelineEntry = { CellId = i; StartMs = 0L; DurationMs = 100L; Status = EvalTimeline.Success }
+            let e: EvalTimeline.TimelineEntry = { CellId = i; StartMs = 0L; DurationMs = 100L; Status = EvalTimeline.Succeeded }
             EvalTimeline.TimelineState.record e s)
           EvalTimeline.TimelineState.empty
           [0..9]

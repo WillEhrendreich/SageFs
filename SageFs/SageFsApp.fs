@@ -37,19 +37,19 @@ module WarmupBanner =
     for f in w.FailedOpens do
       let kind = OpenableKind.label f.Kind
       lines.Add {
-        Kind = OutputKind.Error
+        Kind = OutputKind.Failure
         Text = sprintf "  ✖ Failed to open %s (%s) — %s" f.Name kind f.ErrorMessage
         Timestamp = now; SessionId = sid
       }
       for d in f.Diagnostics do
         lines.Add {
-          Kind = OutputKind.Error
+          Kind = OutputKind.Failure
           Text = sprintf "    %s" (WarmupFcsDiagnostic.formatLine d)
           Timestamp = now; SessionId = sid
         }
       WarmupOpenFailure.suggestedAction f
       |> Option.iter (fun action ->
-        lines.Add { Kind = OutputKind.Error; Text = sprintf "    → %s" action; Timestamp = now; SessionId = sid })
+        lines.Add { Kind = OutputKind.Failure; Text = sprintf "    → %s" action; Timestamp = now; SessionId = sid })
     match ctx.FileStatuses.Length > 0 with
     | true ->
       let loaded = ctx.FileStatuses |> List.filter (fun f -> f.Readiness = Loaded) |> List.length
@@ -88,7 +88,7 @@ module TestOutputFormatter =
         | TestFailure.AssertionFailed msg -> msg
         | TestFailure.ExceptionThrown (msg, _) -> msg
         | TestFailure.TimedOut after -> sprintf "Timed out after %s" (formatDuration after)
-      { Kind = OutputKind.Error
+      { Kind = OutputKind.Failure
         Text = sprintf "  ❌ %s (%s)\n     %s" r.TestName (formatDuration duration) failMsg
         Timestamp = now; SessionId = "" }
     | TestResult.Skipped reason ->
@@ -205,7 +205,7 @@ module PendingRunSummary =
     let kind =
       match agg.Failed, agg.NeverReportedCount with
       | 0, 0 -> OutputKind.Info
-      | _ -> OutputKind.Error
+      | _ -> OutputKind.Failure
     { Kind = kind
       Text =
         sprintf "🧪 Test run complete: %d passed, %d failed, %d skipped%s (%s)"
@@ -1058,7 +1058,7 @@ module SageFsUpdate =
 
       | TuiEvent.EvalFailed (sid, error) ->
         let line = {
-          Kind = OutputKind.Error
+          Kind = OutputKind.Failure
           Text = error
           Timestamp = DateTime.UtcNow
           SessionId = sid
@@ -1258,7 +1258,7 @@ module SageFsUpdate =
               Timestamp = DateTime.UtcNow
               SessionId = activeId }
           | Error err ->
-            { Kind = OutputKind.Error
+            { Kind = OutputKind.Failure
               Text = sprintf "Reload failed %s: %s" path err
               Timestamp = DateTime.UtcNow
               SessionId = activeId }
@@ -1287,7 +1287,7 @@ module SageFsUpdate =
         | false ->
           let lines =
             failures |> List.map (fun f ->
-              { Kind = OutputKind.Error
+              { Kind = OutputKind.Failure
                 Text = sprintf "Warmup failure: %s" f
                 Timestamp = DateTime.UtcNow
                 SessionId = activeId })
@@ -2671,12 +2671,12 @@ module SageFsEffectHandler =
                   match resp with
                   | WorkerResponse.TypeCheckWithSymbolsResult(_rid, diags, symRefs) ->
                     let hasErrors =
-                      diags |> List.exists (fun d -> d.Severity = DiagnosticSeverity.Error)
+                      diags |> List.exists (fun d -> d.Severity = DiagnosticSeverity.Blocking)
                     match hasErrors with
                     | true ->
                       let errors =
                         diags
-                        |> List.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Error)
+                        |> List.filter (fun d -> d.Severity = Features.Diagnostics.DiagnosticSeverity.Blocking)
                         |> List.map (fun d -> d.Message)
                       Features.LiveTesting.FcsTypeCheckResult.Failed(req.FilePath, errors)
                     | false ->

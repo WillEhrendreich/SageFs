@@ -33,7 +33,7 @@ let fromFeatureDiagTests =
   testList "Diagnostic.fromFeatureDiag" [
 
     test "Error severity maps to DiagError" {
-      let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Error "type mismatch" 5 3
+      let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Blocking "type mismatch" 5 3
       let result = Diagnostic.fromFeatureDiag d
       result.Severity |> Expect.equal "error severity should map to DiagError" DiagError
     }
@@ -58,19 +58,19 @@ let fromFeatureDiagTests =
 
     test "Message is preserved" {
       let msg = "The value 'foo' is not defined"
-      let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Error msg 1 0
+      let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Blocking msg 1 0
       let result = Diagnostic.fromFeatureDiag d
       result.Message |> Expect.equal "message should round-trip" msg
     }
 
     test "StartLine maps to Line" {
-      let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Error "err" 42 0
+      let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Blocking "err" 42 0
       let result = Diagnostic.fromFeatureDiag d
       result.Line |> Expect.equal "StartLine should map to Line" 42
     }
 
     test "StartColumn maps to Col" {
-      let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Error "err" 1 17
+      let d = makeFeatureDiag Features.Diagnostics.DiagnosticSeverity.Blocking "err" 1 17
       let result = Diagnostic.fromFeatureDiag d
       result.Col |> Expect.equal "StartColumn should map to Col" 17
     }

@@ -1975,7 +1975,7 @@ let mcpAdapterPureTests = testList "McpAdapter pure" [
     test "single diagnostic has required JSON fields" {
       let diag = {
         Diagnostic.Message = "test error"
-        Severity = DiagnosticSeverity.Error
+        Severity = DiagnosticSeverity.Blocking
         Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 10 }
         Subcategory = ""
         ErrorNumber = 1

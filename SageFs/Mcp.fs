@@ -3090,7 +3090,7 @@ module McpTools =
                 match lvl.ToLowerInvariant() with
                 | "debug" -> Features.MessageJournal.JournalLevel.Debug
                 | "warn" | "warning" -> Features.MessageJournal.JournalLevel.Warn
-                | "error" -> Features.MessageJournal.JournalLevel.Error
+                | "error" -> Features.MessageJournal.JournalLevel.Failure
                 | _ -> Features.MessageJournal.JournalLevel.Info
               Features.MessageJournal.Journal.filterByMinLevel level journal
             | None -> Features.MessageJournal.Journal.entries journal
@@ -3113,7 +3113,7 @@ module McpTools =
                      | Features.MessageJournal.JournalLevel.Debug -> "DBG"
                      | Features.MessageJournal.JournalLevel.Info -> "INF"
                      | Features.MessageJournal.JournalLevel.Warn -> "WRN"
-                     | Features.MessageJournal.JournalLevel.Error -> "ERR")
+                     | Features.MessageJournal.JournalLevel.Failure -> "ERR")
                     e.Source
                     (e.Message |> fun m -> match m.Length > 80 with | true -> m.[..77] + "..." | false -> m)) ]
             |> String.concat "\n"
@@ -3145,8 +3145,8 @@ module McpTools =
                 |> List.map (fun e ->
                   let icon =
                     match e.Status with
-                    | Features.EvalTimeline.Success -> "✓"
-                    | Features.EvalTimeline.Error -> "✗"
+                    | Features.EvalTimeline.Succeeded -> "✓"
+                    | Features.EvalTimeline.Failed -> "✗"
                     | Features.EvalTimeline.Cancelled -> "○"
                   sprintf "  [%d] %s %dms" e.CellId icon e.DurationMs) ]
             |> String.concat "\n"

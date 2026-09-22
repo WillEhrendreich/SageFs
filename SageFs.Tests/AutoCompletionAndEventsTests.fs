@@ -194,12 +194,12 @@ let diagnosticEventTests = testList "DiagnosticEvent" [
       Message = "test error"
       Subcategory = "parse"
       Range = { StartLine = 1; StartColumn = 2; EndLine = 3; EndColumn = 4 }
-      Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
+      Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Blocking
       ErrorNumber = 0
     }
     let event = DiagnosticEvent.fromDiagnostic diag
     event.Message |> Expect.equal "message should match" "test error"
-    event.Severity |> Expect.equal "severity should match" SageFs.Features.Diagnostics.DiagnosticSeverity.Error
+    event.Severity |> Expect.equal "severity should match" SageFs.Features.Diagnostics.DiagnosticSeverity.Blocking
     event.StartLine |> Expect.equal "start line" 1
     event.StartColumn |> Expect.equal "start col" 2
     event.EndLine |> Expect.equal "end line" 3
@@ -225,7 +225,7 @@ let diagnosticEventTests = testList "DiagnosticEvent" [
 
 let diagnosticSeverityTests = testList "DiagnosticSeverity" [
   test "label maps all severities" {
-    SageFs.Features.Diagnostics.DiagnosticSeverity.label SageFs.Features.Diagnostics.DiagnosticSeverity.Error
+    SageFs.Features.Diagnostics.DiagnosticSeverity.label SageFs.Features.Diagnostics.DiagnosticSeverity.Blocking
     |> Expect.equal "error label" "error"
     SageFs.Features.Diagnostics.DiagnosticSeverity.label SageFs.Features.Diagnostics.DiagnosticSeverity.Warning
     |> Expect.equal "warning label" "warning"

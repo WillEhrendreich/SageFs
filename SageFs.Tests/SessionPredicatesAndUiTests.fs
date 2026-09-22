@@ -59,14 +59,14 @@ let sessionStatusPredicateTests = testList "SessionStatus predicates" [
 let workerDiagnosticTests = testList "WorkerDiagnostic" [
   test "toDiagnostic preserves all fields" {
     let wd : WorkerDiagnostic = {
-      Severity = Features.Diagnostics.DiagnosticSeverity.Error
+      Severity = Features.Diagnostics.DiagnosticSeverity.Blocking
       Message = "boom"
       StartLine = 1; StartColumn = 2; EndLine = 3; EndColumn = 4
       ErrorNumber = 39
     }
     let d = WorkerDiagnostic.toDiagnostic wd
     d.Message |> Expect.equal "message" "boom"
-    d.Severity |> Expect.equal "severity" Features.Diagnostics.DiagnosticSeverity.Error
+    d.Severity |> Expect.equal "severity" Features.Diagnostics.DiagnosticSeverity.Blocking
     d.Range.StartLine |> Expect.equal "startLine" 1
     d.ErrorNumber |> Expect.equal "errorNumber" 39
     d.Range.StartColumn |> Expect.equal "startCol" 2

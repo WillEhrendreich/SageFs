@@ -345,7 +345,7 @@ module Diagnostic =
   let fromFeatureDiag (d: Features.Diagnostics.Diagnostic) : Diagnostic =
     { Severity =
         match d.Severity with
-        | Features.Diagnostics.DiagnosticSeverity.Error -> DiagError
+        | Features.Diagnostics.DiagnosticSeverity.Blocking -> DiagError
         | _ -> DiagWarning
       Message = d.Message
       Line = d.Range.StartLine

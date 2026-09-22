@@ -280,7 +280,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
   testTask "RequestEval converts worker diagnostics" {
     let log = TestDeps.createLog ()
     let diag : WorkerDiagnostic = {
-      Severity = DiagnosticSeverity.Error
+      Severity = DiagnosticSeverity.Blocking
       Message = "FS0001"
       StartLine = 1; StartColumn = 5
       EndLine = 1; EndColumn = 10
@@ -300,7 +300,7 @@ let effectHandlerTests = testList "SageFsEffectHandler" [
     | SageFsMsg.Event (TuiEvent.EvalCompleted (_, _, diags)) ->
       diags |> Expect.hasLength "1 diag" 1
       diags.[0].Message |> Expect.equal "msg" "FS0001"
-      diags.[0].Severity |> Expect.equal "sev" DiagnosticSeverity.Error
+      diags.[0].Severity |> Expect.equal "sev" DiagnosticSeverity.Blocking
     | other ->
       failtestf "expected EvalCompleted with diags, got %A" other
   }
@@ -1680,5 +1680,5 @@ let runEndTests = testList "SageFsEffectHandler — every requested test ends te
       |> PendingRunSummary.toOutputLine
     line.Text |> Expect.stringContains "counts the unreported tests against the run" "2 of 3 never reported"
     line.Text |> Expect.stringContains "says why" "the worker went silent for 30s"
-    line.Kind |> Expect.equal "an incomplete run is not reported as a clean one" OutputKind.Error
+    line.Kind |> Expect.equal "an incomplete run is not reported as a clean one" OutputKind.Failure
 ]

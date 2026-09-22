@@ -6,7 +6,7 @@ open System
 [<RequireQualifiedAccess>]
 type OutputKind =
   | Result
-  | Error
+  | Failure
   | Info
   | System
 
@@ -79,7 +79,7 @@ type OutputRingBuffer(capacity: int) =
         let kindLabel =
           match line.Kind with
           | OutputKind.Result -> "result"
-          | OutputKind.Error -> "error"
+          | OutputKind.Failure -> "error"
           | OutputKind.Info -> "info"
           | OutputKind.System -> "system"
         sb.Append('[').Append(line.Timestamp.ToString("HH:mm:ss")).Append("] [")
@@ -98,7 +98,7 @@ type OutputRingBuffer(capacity: int) =
       let kindLabel =
         match line.Kind with
         | OutputKind.Result -> "result"
-        | OutputKind.Error -> "error"
+        | OutputKind.Failure -> "error"
         | OutputKind.Info -> "info"
         | OutputKind.System -> "system"
       sb.Append('[').Append(line.Timestamp.ToString("HH:mm:ss")).Append("] [")

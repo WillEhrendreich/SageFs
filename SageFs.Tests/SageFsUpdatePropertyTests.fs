@@ -25,7 +25,7 @@ let private genOutputLine =
         ""
         "module Foo"
       ]
-    let! kind = Gen.elements [ OutputKind.Result; OutputKind.Error; OutputKind.Info; OutputKind.System ]
+    let! kind = Gen.elements [ OutputKind.Result; OutputKind.Failure; OutputKind.Info; OutputKind.System ]
     return {
       Kind = kind
       Text = text

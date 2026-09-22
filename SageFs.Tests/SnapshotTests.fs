@@ -121,7 +121,7 @@ let formatTests =
           { Message = "The value or constructor 'nonExistent' is not defined."
             Subcategory = "typecheck"
             Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 11 }
-            Severity = Features.Diagnostics.DiagnosticSeverity.Error
+            Severity = Features.Diagnostics.DiagnosticSeverity.Blocking
             ErrorNumber = 39 }
         |]
         EvaluatedCode = "let x = nonExistent();;"

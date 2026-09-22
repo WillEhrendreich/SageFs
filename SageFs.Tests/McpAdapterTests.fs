@@ -47,7 +47,7 @@ let tests =
         Message = "The type 'DataProtectionProvider' is not defined in 'Microsoft.AspNetCore.DataProtection'"
         Subcategory = "typecheck"
         Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 10 }
-        Severity = Features.Diagnostics.DiagnosticSeverity.Error
+        Severity = Features.Diagnostics.DiagnosticSeverity.Blocking
         ErrorNumber = 39
       }
       let response: EvalResponse = {
@@ -478,7 +478,7 @@ let structuredOutputTests =
         Message = "Undefined value"
         Subcategory = "typecheck"
         Range = { StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 3 }
-        Severity = Features.Diagnostics.DiagnosticSeverity.Error
+        Severity = Features.Diagnostics.DiagnosticSeverity.Blocking
         ErrorNumber = 39
       }
       let response: EvalResponse = {
@@ -701,7 +701,7 @@ let workerEvalJsonTests =
     testCase "diagnostics are included as array"
     <| fun _ ->
       let diag : WorkerProtocol.WorkerDiagnostic =
-        { Severity = Features.Diagnostics.DiagnosticSeverity.Error
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Blocking
           Message = "bad code"; StartLine = 1; StartColumn = 0; EndLine = 1; EndColumn = 8
           ErrorNumber = 0 }
       let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "done", [diag], Map.empty)
@@ -742,7 +742,7 @@ let workerEvalJsonTests =
     testCase "formatWorkerEvalResult TEXT includes the (line,col) span for a positioned diagnostic (dogfood F4)"
     <| fun _ ->
       let diag : WorkerProtocol.WorkerDiagnostic =
-        { Severity = Features.Diagnostics.DiagnosticSeverity.Error
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Blocking
           Message = "type mismatch"; StartLine = 3; StartColumn = 7; EndLine = 3; EndColumn = 9
           ErrorNumber = 1 }
       let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "ok", [diag], Map.empty)
@@ -752,7 +752,7 @@ let workerEvalJsonTests =
     testCase "formatWorkerEvalResult TEXT omits a spurious span for an unpositioned diagnostic (dogfood F4)"
     <| fun _ ->
       let diag : WorkerProtocol.WorkerDiagnostic =
-        { Severity = Features.Diagnostics.DiagnosticSeverity.Error
+        { Severity = Features.Diagnostics.DiagnosticSeverity.Blocking
           Message = "no position"; StartLine = 0; StartColumn = 0; EndLine = 0; EndColumn = 0
           ErrorNumber = 0 }
       let resp = WorkerProtocol.WorkerResponse.EvalResult("r1", Ok "ok", [diag], Map.empty)

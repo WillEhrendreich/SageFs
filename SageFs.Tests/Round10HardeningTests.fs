@@ -18,8 +18,8 @@ let w16PercentileRoundingTests =
 
     testCase "P99 of 2 samples returns maximum not minimum" <| fun _ ->
       let state =
-        [ { CellId = 0; StartMs = 0L; DurationMs = 50L; Status = Success }
-          { CellId = 1; StartMs = 0L; DurationMs = 2000L; Status = Success } ]
+        [ { CellId = 0; StartMs = 0L; DurationMs = 50L; Status = Succeeded }
+          { CellId = 1; StartMs = 0L; DurationMs = 2000L; Status = Succeeded } ]
         |> List.fold (fun s e -> TimelineState.record e s) TimelineState.empty
       let p99 = percentile 99.0 state
       // int(1 * 99/100) = int(0.99) = 0 (truncate) → returns 50ms (WRONG)
@@ -28,17 +28,17 @@ let w16PercentileRoundingTests =
 
     testCase "P95 of 2 samples returns maximum" <| fun _ ->
       let state =
-        [ { CellId = 0; StartMs = 0L; DurationMs = 10L; Status = Success }
-          { CellId = 1; StartMs = 0L; DurationMs = 500L; Status = Success } ]
+        [ { CellId = 0; StartMs = 0L; DurationMs = 10L; Status = Succeeded }
+          { CellId = 1; StartMs = 0L; DurationMs = 500L; Status = Succeeded } ]
         |> List.fold (fun s e -> TimelineState.record e s) TimelineState.empty
       let p95 = percentile 95.0 state
       p95 |> Expect.equal "P95 of [10ms, 500ms] should be 500ms" (Some 500.0)
 
     testCase "P50 of 3 samples returns median" <| fun _ ->
       let state =
-        [ { CellId = 0; StartMs = 0L; DurationMs = 10L; Status = Success }
-          { CellId = 1; StartMs = 0L; DurationMs = 50L; Status = Success }
-          { CellId = 2; StartMs = 0L; DurationMs = 100L; Status = Success } ]
+        [ { CellId = 0; StartMs = 0L; DurationMs = 10L; Status = Succeeded }
+          { CellId = 1; StartMs = 0L; DurationMs = 50L; Status = Succeeded }
+          { CellId = 2; StartMs = 0L; DurationMs = 100L; Status = Succeeded } ]
         |> List.fold (fun s e -> TimelineState.record e s) TimelineState.empty
       let p50 = percentile 50.0 state
       p50 |> Expect.equal "P50 of [10, 50, 100] should be 50" (Some 50.0)
@@ -49,7 +49,7 @@ let w16PercentileRoundingTests =
         [2..10]
         |> List.map (fun n ->
           let entries = [0..n-1] |> List.map (fun i ->
-            { CellId = i; StartMs = 0L; DurationMs = int64 (i + 1) * 100L; Status = Success })
+            { CellId = i; StartMs = 0L; DurationMs = int64 (i + 1) * 100L; Status = Succeeded })
           let state = entries |> List.fold (fun s e -> TimelineState.record e s) TimelineState.empty
           let p99 = percentile 99.0 state
           let minVal = entries |> List.map (fun e -> float e.DurationMs) |> List.min
@@ -62,7 +62,7 @@ let w16PercentileRoundingTests =
     testCase "P100 of any sample returns maximum" <| fun _ ->
       let state =
         [0..4]
-        |> List.map (fun i -> { CellId = i; StartMs = 0L; DurationMs = int64 (i + 1) * 10L; Status = Success })
+        |> List.map (fun i -> { CellId = i; StartMs = 0L; DurationMs = int64 (i + 1) * 10L; Status = Succeeded })
         |> List.fold (fun s e -> TimelineState.record e s) TimelineState.empty
       let p100 = percentile 100.0 state
       p100 |> Expect.equal "P100 should be maximum" (Some 50.0)

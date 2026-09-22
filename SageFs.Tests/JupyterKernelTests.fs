@@ -96,7 +96,7 @@ let jupyterKernelTests =
           MessageType.KernelInfoRequest; MessageType.KernelInfoReply
           MessageType.CompleteRequest; MessageType.CompleteReply
           MessageType.Status; MessageType.Stream
-          MessageType.ExecuteResult; MessageType.Error
+          MessageType.ExecuteResult; MessageType.ExecutionError
           MessageType.ShutdownRequest; MessageType.ShutdownReply
           MessageType.CheckCompleteRequest; MessageType.CheckCompleteReply
           MessageType.InterruptRequest; MessageType.InterruptReply
@@ -371,7 +371,7 @@ let jupyterKernelTests =
           MessageType.KernelInfoRequest; MessageType.KernelInfoReply
           MessageType.CompleteRequest; MessageType.CompleteReply
           MessageType.Status; MessageType.Stream
-          MessageType.ExecuteResult; MessageType.Error
+          MessageType.ExecuteResult; MessageType.ExecutionError
           MessageType.ShutdownRequest; MessageType.ShutdownReply
           MessageType.CheckCompleteRequest; MessageType.CheckCompleteReply
           MessageType.InterruptRequest; MessageType.InterruptReply
@@ -414,7 +414,7 @@ let jupyterKernelTests =
 
         testAsync "eval error maps to Jupyter Error with diagnostics as traceback" {
           let diag : WorkerProtocol.WorkerDiagnostic = {
-            Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Error
+            Severity = SageFs.Features.Diagnostics.DiagnosticSeverity.Blocking
             Message = "type mismatch"
             StartLine = 1; StartColumn = 5; EndLine = 1; EndColumn = 10
             ErrorNumber = 1

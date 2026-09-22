@@ -24,20 +24,20 @@ let w3TimelineStateTests =
 
     testCase "record adds entry (now newest-first)" <| fun _ ->
       let s0 = TimelineState.empty
-      let s1 = TimelineState.record (makeEntry 0 100L Success) s0
+      let s1 = TimelineState.record (makeEntry 0 100L Succeeded) s0
       s1.Entries |> Expect.hasLength "one entry after one record" 1
 
     testCase "newest entry is at the head after prepend" <| fun _ ->
       let s0 = TimelineState.empty
-      let s1 = s0 |> TimelineState.record (makeEntry 0 100L Success)
-      let s2 = s1 |> TimelineState.record (makeEntry 1 200L Success)
+      let s1 = s0 |> TimelineState.record (makeEntry 0 100L Succeeded)
+      let s2 = s1 |> TimelineState.record (makeEntry 1 200L Succeeded)
       s2.Entries.[0].CellId |> Expect.equal "head is most recent entry" 1
 
     testCase "entries capped at MaxEntries" <| fun _ ->
       let final =
         Seq.init (TimelineState.MaxEntries + 50) id
         |> Seq.fold (fun state i ->
-          TimelineState.record (makeEntry i (int64 i) Success) state
+          TimelineState.record (makeEntry i (int64 i) Succeeded) state
         ) TimelineState.empty
       final.Entries |> Expect.hasLength "entries capped at MaxEntries" TimelineState.MaxEntries
 
@@ -45,7 +45,7 @@ let w3TimelineStateTests =
       let final =
         Seq.init (TimelineState.MaxEntries + 5) id
         |> Seq.fold (fun state i ->
-          TimelineState.record (makeEntry i (int64 i) Success) state
+          TimelineState.record (makeEntry i (int64 i) Succeeded) state
         ) TimelineState.empty
       // Newest entries are at head; entry 0 (oldest) should have been dropped
       let cellIds = final.Entries |> List.map (fun e -> e.CellId)
@@ -55,7 +55,7 @@ let w3TimelineStateTests =
       let state =
         Seq.init 5 id
         |> Seq.fold (fun s i ->
-          TimelineState.record (makeEntry i (int64 (i + 1) * 10L) Success) s
+          TimelineState.record (makeEntry i (int64 (i + 1) * 10L) Succeeded) s
         ) TimelineState.empty
       let stats = timelineStats 20 state
       stats.Count |> Expect.equal "Count matches 5 entries" 5
@@ -64,7 +64,7 @@ let w3TimelineStateTests =
       let state =
         Seq.init 10 id
         |> Seq.fold (fun s i ->
-          TimelineState.record (makeEntry i (int64 (i + 1) * 50L) Success) s
+          TimelineState.record (makeEntry i (int64 (i + 1) * 50L) Succeeded) s
         ) TimelineState.empty
       let stats = timelineStats 20 state
       stats.Sparkline |> Expect.isNotEmpty "sparkline non-empty for non-empty timeline"
@@ -73,7 +73,7 @@ let w3TimelineStateTests =
       let state =
         Seq.init 50 id
         |> Seq.fold (fun s i ->
-          TimelineState.record (makeEntry i (int64 (i + 1) * 10L) Success) s
+          TimelineState.record (makeEntry i (int64 (i + 1) * 10L) Succeeded) s
         ) TimelineState.empty
       let stats = timelineStats 10 state
       stats.Sparkline.Length |> Expect.equal "sparkline limited to width=10" 10
