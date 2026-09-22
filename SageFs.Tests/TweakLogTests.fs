@@ -123,6 +123,48 @@ let tweakLogTests =
         // source AFTER x's write, not the original.
         let ops = [ addr "x", "100.0"; addr "y", "200.0" ]
         replay baseSource ops |> Expect.equal "second write resolves against the post-first-write source" (Ok "module M\nlet x = 100.0\nlet y = 200.0\n")
+
+      testCase "replay's own scope is every range SageFs wrote, exactly, never a whole-file promise" <| fun _ ->
+        // Restated per the HOLD decision: `replay` only ever takes the ops
+        // SageFs itself produced (TweakApplied/TweakSaved's own address+
+        // textAfter). A UserEditObserved/ReformatObserved is never one of
+        // these ops, so a stray user edit elsewhere in the file is simply
+        // outside what this function promises to reproduce.
+        let ops = [ addr "x", "9.0" ]
+        replay baseSource ops |> Expect.equal "only the range SageFs wrote moves" (Ok "module M\nlet x = 9.0\nlet y = 2.0\n")
+    ]
+
+    testList "ReplayScope.EverythingAsDiffs: whole-file byte-for-byte replay" [
+
+      testCase "SageFsWritesOnly (the default) never carries a file snapshot on UserEditObserved/ReformatObserved" <| fun _ ->
+        let settings = { TweakLogSettings.defaults with ReplayScope = ReplayScope.SageFsWritesOnly }
+        let afterEdit = baseSource.Replace("let x = 1.0", "let x = 9.0")
+        let ev = observeUserEdit settings baseSource afterEdit (addr "x") "9.0"
+        match ev with
+        | TweakLogEvent.UserEditObserved(_, _, _, snapshot) -> snapshot |> Expect.equal "no bytes stored" None
+        | other -> failtestf "expected UserEditObserved, got %A" other
+
+      testCase "EverythingAsDiffs carries the whole file's new text on UserEditObserved" <| fun _ ->
+        let settings = { TweakLogSettings.defaults with ReplayScope = ReplayScope.EverythingAsDiffs }
+        let afterEdit = baseSource.Replace("let x = 1.0", "let x = 9.0")
+        let ev = observeUserEdit settings baseSource afterEdit (addr "x") "9.0"
+        match ev with
+        | TweakLogEvent.UserEditObserved(_, _, _, snapshot) -> snapshot |> Expect.equal "the whole new file" (Some afterEdit)
+        | other -> failtestf "expected UserEditObserved, got %A" other
+
+      testCase "replayWholeFile reproduces a user edit anywhere in the file, not just SageFs's own writes" <| fun _ ->
+        let settings = { TweakLogSettings.defaults with ReplayScope = ReplayScope.EverythingAsDiffs }
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
+        let afterUserEdit = baseSource.Replace("let y = 2.0", "let y = 42.0")
+        let log, _ = EventLog.append log 2L (observeUserEdit settings baseSource afterUserEdit (addr "y") "42.0")
+        replayWholeFile baseSource log.Events
+        |> Expect.equal "the WHOLE file, byte for byte, including the part SageFs never wrote" (Ok afterUserEdit)
+
+      testCase "replayWholeFile refuses (never guesses) when SageFsWritesOnly events carry no snapshot" <| fun _ ->
+        let log = EventLog.empty
+        let log, _ = EventLog.append log 1L (TweakLogEvent.UserEditObserved(addr "x", "9.0", contentHash "9.0", None))
+        replayWholeFile baseSource log.Events |> Expect.isError "no snapshot to replay from"
     ]
 
     testList "crash recovery offer" [
