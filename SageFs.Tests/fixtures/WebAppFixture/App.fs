@@ -27,6 +27,13 @@ module App =
       app.MapGet("/shape/" + name, Func<_, _>(fun (ctx: HttpContext) ->
         ctx.Response.ContentType <- "text/plain"
         ctx.Response.WriteAsync(handler ()))) |> ignore
+    // Live state for the Reset journey: bump it, read it, never restart.
+    app.MapGet("/counter/bump", Func<_, _>(fun (ctx: HttpContext) ->
+      ctx.Response.ContentType <- "text/plain"
+      ctx.Response.WriteAsync(Counter.bump ()))) |> ignore
+    app.MapGet("/counter", Func<_, _>(fun (ctx: HttpContext) ->
+      ctx.Response.ContentType <- "text/plain"
+      ctx.Response.WriteAsync(Counter.read ()))) |> ignore
     let _serverTask =
       app.RunAsync(sprintf "http://127.0.0.1:%d" port)
       |> Async.AwaitTask

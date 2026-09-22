@@ -60,6 +60,8 @@ module HrEnv =
 
   let greetingFile = lazy Path.Combine(fixtureDir.Value, "Greeting.fs")
 
+  let counterFile = lazy Path.Combine(fixtureDir.Value, "Counter.fs")
+
 /// HTTP GET the running app's / route.
 // WHY this awaits rather than blocking: every caller is already inside a task,
 // so `.GetAwaiter().GetResult()` here bought nothing and spent a pool thread.
@@ -99,6 +101,55 @@ let private writeGreeting (content: string) =
     with :? IOException ->
       Threading.Thread.Sleep(200)
   Expect.isTrue written "Greeting.fs should be writable within 15s"
+
+/// GET one of the running app's routes, the body trimmed.
+let private appRoute (route: string) = task {
+  use client = new HttpClient()
+  client.Timeout <- TimeSpan.FromSeconds(10.0)
+  let! body = client.GetStringAsync(HrEnv.appUrl.Value + route)
+  return body.Trim()
+}
+
+/// Write a fixture file with retry (the host can briefly hold it).
+let private writeFixtureFile (path: string) (content: string) = task {
+  let sw = Diagnostics.Stopwatch.StartNew()
+  let mutable written = false
+  while not written && sw.ElapsedMilliseconds < 15000L do
+    try
+      do! File.WriteAllTextAsync(path, content)
+      written <- true
+    with :? IOException ->
+      do! Task.Delay 200
+  written |> Expecto.Flip.Expect.isTrue (sprintf "%s should be writable within 15s" path)
+}
+
+/// Does `locator`'s text contain `text` within `ms`? A bool, not an assertion,
+/// so the caller can decide what one miss means.
+let private showsWithin (ms: int) (locator: ILocator) (text: string) = task {
+  let sw = Diagnostics.Stopwatch.StartNew()
+  let mutable found = false
+  while not found && sw.ElapsedMilliseconds < int64 ms do
+    let! content = locator.TextContentAsync()
+    match content with
+    | null -> do! Task.Delay 200
+    | c when c.Contains text -> found <- true
+    | _ -> do! Task.Delay 200
+  return found
+}
+
+/// Read `route` until it serves `want`, for up to `ms`. The reset's HTTP
+/// answer and the app's own route travel on different sockets, so the last
+/// value read comes back and the caller's assertion says what it was.
+let private appServes (ms: int) (route: string) (want: string) = task {
+  let sw = Diagnostics.Stopwatch.StartNew()
+  let! first = appRoute route
+  let mutable served = first
+  while served <> want && sw.ElapsedMilliseconds < int64 ms do
+    do! Task.Delay 250
+    let! next = appRoute route
+    served <- next
+  return served
+}
 
 /// The original fixture content (value A).
 let private valueAGreeting = "let greeting () = \"hello from sagefs\""
@@ -240,5 +291,61 @@ let tests =
           "repair should hot-reload the new greeting from the running process"
       finally
         writeGreeting original
+    })
+
+    // Rule 3 of the state spec, through the real dashboard: a save that edits
+    // live state's initializer keeps the live value and says so in the Hot
+    // Reload panel, and the panel's Reset button runs the new initializer in
+    // the SAME running app. Last in the list: it leaves the counter at 101.
+    hrPlaywrightTest "an edited initializer keeps the live counter, and Reset in the panel runs the new one" (fun page -> task {
+      do! PlaywrightExpect.waitForSelectorText 30_000 page "#session-status" "Ready"
+      do! DashboardDom.ensureExpanded page
+      let panel = page.Locator("#hot-reload-panel")
+      do! PlaywrightExpect.isVisibleAsync panel "hot reload panel visible"
+      do! (watchAllButton panel).ClickAsync()
+      do! PlaywrightExpect.waitForText 30_000 panel "Hot Reload: ON"
+      // Same arming gap the other journeys give the watcher.
+      do! page.WaitForTimeoutAsync(1500.0f)
+
+      let! _ = appRoute "/counter/bump"
+      let! _ = appRoute "/counter/bump"
+      let! bumped = appRoute "/counter/bump"
+      bumped |> Expecto.Flip.Expect.equal "three bumps over HTTP leave the counter at 3" "3"
+
+      let counterFile = HrEnv.counterFile.Value
+      let original = File.ReadAllText counterFile
+      let initializer = "let mutable visits = 0"
+      original |> Expecto.Flip.Expect.stringContains "the fixture starts from the 0 initializer" initializer
+      let edited = original.Replace(initializer, "let mutable visits = 100")
+      let notice = "kept WebAppFixture.Counter.visits = 3, new initializer 100"
+      do! writeFixtureFile counterFile edited
+      try
+        // ONE save, no re-save and no page reload. The notice has to reach
+        // the open page by itself: the worker decides what it kept after the
+        // daemon's own file watcher has already fired, so a panel that only
+        // refreshes on the file event shows the state from before the save.
+        let! shown = showsWithin 30_000 panel notice
+        let! panelText = panel.TextContentAsync()
+        shown
+        |> Expecto.Flip.Expect.isTrue (sprintf "the open Hot Reload panel should say what the save kept, without a reload.\nPanel: %s" panelText)
+        let! kept = appRoute "/counter"
+        kept |> Expecto.Flip.Expect.equal "the save kept the live value, it didn't re-run the initializer" "3"
+
+        let reset =
+          panel.GetByRole(
+            AriaRole.Button,
+            LocatorGetByRoleOptions(NameRegex = Text.RegularExpressions.Regex("^Reset WebAppFixture\\.Counter\\.visits\\b")))
+        do! reset.ClickAsync()
+
+        let! served = appServes 15_000 "/counter" "100"
+        served |> Expecto.Flip.Expect.equal "Reset ran the new initializer in the running app" "100"
+        let! next = appRoute "/counter/bump"
+        next |> Expecto.Flip.Expect.equal "and the app counts on from the new value" "101"
+        // The notice goes away once nothing is waiting for a reset. This
+        // throws a TimeoutException naming the selector if it never does.
+        do! page.Locator("#hot-reload-panel .kept-state").WaitForAsync(
+              LocatorWaitForOptions(State = WaitForSelectorState.Detached, Timeout = 15_000.0f))
+      finally
+        File.WriteAllText(counterFile, original)
     })
   ]
