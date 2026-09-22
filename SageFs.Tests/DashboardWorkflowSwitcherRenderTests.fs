@@ -38,6 +38,14 @@ let switcherTests =
       out |> Expect.stringContains "sends the picked value as workflowTarget" "workflowTarget"
       Expect.isFalse "must not still claim to be read-only" (out.Contains "read-only")
 
+    testCase "WHY — the picked value is set as a SIGNAL before @post, not handed to @post as its (ignored) options argument — that was the actual bug: Datastar's @post destructures only known option keys (payload/headers/contentType/...) out of its second argument, so an arbitrary {workflowTarget: w} there never reaches the server" <| fun _ ->
+      let out = renderWorkflowSwitcher "REPL" "0a0b0c0d" |> html
+      out |> Expect.stringContains "the onchange handler assigns the workflowTarget signal" "$workflowTarget = event.target.value"
+      out |> Expect.stringContains "@post is called with no second argument, so its default payload is the current signal set" "@post('/dashboard/switch-workflow')"
+      Expect.isFalse
+        "must NOT pass the picked value as @post's options object — that argument is fetch-style request options, not a body, and a non-option key inside it is silently dropped"
+        (out.Contains "@post('/dashboard/switch-workflow', {workflowTarget")
+
     testCase "WHY — a no-session state renders an empty placeholder, never a picker with nothing to switch" <| fun _ ->
       let out = renderWorkflowSwitcher "Interactive" "" |> html
       Expect.isFalse "no <select> when there is no session" (out.Contains "<select")

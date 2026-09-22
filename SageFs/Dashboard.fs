@@ -1877,7 +1877,7 @@ let createWorkflowSwitchHandler
             | true, prop -> WorkerProtocol.SessionId.validate (prop.GetString())
             | _ -> Error "Missing viewingSessionId"
           let target =
-            match doc.RootElement.TryGetProperty("workflowTarget") with
+            match doc.RootElement.TryGetProperty(Signals.WorkflowTarget) with
             | true, prop when prop.ValueKind = Text.Json.JsonValueKind.String -> prop.GetString()
             | _ -> ""
           return sidResult, target

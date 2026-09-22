@@ -153,9 +153,18 @@ let renderWorkflowSwitcher (currentLabel: string) (sessionId: string) : XmlNode 
         Attr.create "aria-label" (attrEnc (sprintf "Workflow: %s — choose a workflow to switch (restarts the session)" currentLabel))
         Ds.indicator Signals.WorkflowSwitchLoading
         Ds.attr' ("disabled", sprintf "$%s" Signals.WorkflowSwitchLoading)
+        Ds.signal (Signals.WorkflowTarget, "")
         // event.target, not `this` — Datastar leaves `this` unbound (same
         // gotcha renderThemePicker's own onEvent comment documents above).
-        Ds.onEvent ("change", "var w=event.target.value; @post('/dashboard/switch-workflow', {workflowTarget: w})") ]
+        // Set the SIGNAL, don't hand the value to @post as an options object
+        // — @post's second argument is fetch-style request options
+        // (payload/headers/contentType/...), not a body. An arbitrary key
+        // there is silently dropped, which is the bug this control shipped
+        // with: picking a workflow never told the server what was picked.
+        // Setting `$workflowTarget` puts it in @post's default payload (the
+        // current signal set), the same way the cursor tracker's
+        // `$cursorPos = ...` already works.
+        Ds.onEvent ("change", sprintf "$%s = event.target.value; @post('/dashboard/switch-workflow')" Signals.WorkflowTarget) ]
       (WorkflowSwitch.options |> List.map (fun w ->
         let lbl = WorkflowTypes.SessionWorkflow.label w
         Elem.option

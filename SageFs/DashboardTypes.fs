@@ -110,6 +110,17 @@ module Signals =
   /// Datastar's data-bind can never leave the `<select>` showing an order
   /// the server didn't choose, mirroring `Signals.Theme`.
   let [<Literal>] PreviousSort = "previousSort"
+  /// The workflow picker's picked value, set directly by its onchange handler
+  /// (`$workflowTarget = event.target.value`) BEFORE `@post` fires — a real
+  /// Datastar signal, not a JS-local `var` inside the second argument to
+  /// `@post`. Datastar's action plugins destructure only known option keys
+  /// (`payload`/`headers`/`contentType`/...) out of that second argument, so
+  /// an arbitrary `{workflowTarget: w}` there is silently dropped and never
+  /// reaches the server. Setting the signal puts the value into `@post`'s
+  /// default payload (the current filtered signal set) instead — the same
+  /// `$sig = value` idiom the cursor-position tracker already uses
+  /// (`Signals.CursorPos`, the completions onEvent script).
+  let [<Literal>] WorkflowTarget = "workflowTarget"
   let [<Literal>] CursorPos = "cursorPos"
   let [<Literal>] TestFilter = "testFilter"
   let [<Literal>] ExpandedDashboard = "expandedDashboard"
