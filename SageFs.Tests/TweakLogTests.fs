@@ -201,7 +201,7 @@ let tweakLogTests =
       testCase "an unsettled drag is never journaled, so it was never a candidate to begin with" <| fun _ ->
         // Ticks never produce events (ScrubCoalescer), so there is nothing
         // for recoveryOffer to see until `settle` logs exactly one
-        // TweakApplied — this is the same guarantee, read from the other end.
+        // TweakApplied, this is the same guarantee, read from the other end.
         let s = ScrubCoalescer.start (addr "x") "1.0" 0L 2.0 "2.0"
         let s = ScrubCoalescer.tick s 1L 2.5 "2.5"
         let s = ScrubCoalescer.tick s 2L 3.0 "3.0"
@@ -443,7 +443,7 @@ let tweakLogTests =
         decoded.Grade |> Expect.equal "Impossible" LogGrade.Impossible
         decoded.Events |> Expect.isEmpty "never folded, whatever the bytes might have contained"
 
-      testCase "TWIN — a decoder that ignores the grade folds an Impossible segment anyway" <| fun _ ->
+      testCase "TWIN: a decoder that ignores the grade folds an Impossible segment anyway" <| fun _ ->
         let log = EventLog.empty
         let log, _ = EventLog.append log 1L (TweakLogEvent.TweakApplied(addr "x", "1.0", "2.0", contentHash "2.0"))
         let stored = Fingerprint.current (contentHash baseSource)
@@ -452,7 +452,7 @@ let tweakLogTests =
         let currentBuild = { stored with SchemaVersion = stored.SchemaVersion + 1 }
         (TweakLogFormat.decodeSegment currentBuild bytes |> Expect.wantOk "decodes").Events
         |> Expect.isEmpty "the real decoder never folds an Impossible segment"
-        // The twin doesn't check the grade at all, and folds it anyway —
+        // The twin doesn't check the grade at all, and folds it anyway,
         // this is exactly the bug "Impossible is never folded" exists to
         // prevent, kept here only so the DST invariant can be shown to
         // catch it.

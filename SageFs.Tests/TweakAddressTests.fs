@@ -153,7 +153,7 @@ let tuning =
       testCase "never returns the original address as its own candidate" <| fun _ ->
         let original = addrFor "tuning" [ PathStep.RecordField "Gravity" ]
         let hash = (resolve tuningFile original |> Expect.wantOk "resolves").Hash
-        // The address still resolves here (nothing renamed) — relocate must
+        // The address still resolves here (nothing renamed), relocate must
         // not just hand back the same address as a "candidate".
         match relocate tuningFile original hash with
         | RelocationResult.Relocated candidate -> candidate |> Expect.notEqual "never itself" original
