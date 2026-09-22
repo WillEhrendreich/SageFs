@@ -99,6 +99,21 @@ let order (durations: Map<string, float>) (tiers: Tier list) : Tier list =
     | Some seconds -> seconds
     | None -> infinity)
 
+/// How long a tier may run before the pipeline kills it. A hung tier used to
+/// sit silently until the whole stage's 90-minute budget ran out (2026-09-22,
+/// a spinner deadlock in the default tier). Four times the tier's recorded
+/// duration, never under ten minutes, and never over an hour. A tier with no
+/// recorded duration gets the hour, since it might just be long.
+let tierTimeoutFloorSeconds = 600.0
+let tierTimeoutCeilingSeconds = 3600.0
+
+let timeoutOf (durations: Map<string, float>) (tier: Tier) : System.TimeSpan =
+  let seconds =
+    match durations.TryFind tier.Name with
+    | Some recorded -> max tierTimeoutFloorSeconds (min tierTimeoutCeilingSeconds (recorded * 4.0))
+    | None -> tierTimeoutCeilingSeconds
+  System.TimeSpan.FromSeconds seconds
+
 /// Wall-clock seconds for running `ordered` greedily on `slots` slots (each
 /// tier takes the earliest free slot, in order). Pure model of the scheduler,
 /// used to report the expected speed-up and to test the ordering.

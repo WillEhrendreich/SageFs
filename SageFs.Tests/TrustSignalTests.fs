@@ -52,14 +52,23 @@ let verdictTests =
     // The AGENTS.md trap, through the real runner: a case filter that matches
     // nothing made Expecto print "0 failed" and exit 0. Measured before this
     // change; it must now exit non-zero.
+    // These two run a real Expecto run inside a test. --no-spinner, always: a
+    // nested spinner shares the outer run's console locks, and that deadlocked
+    // the whole tier once.
     testCase "a real run whose filter matches nothing exits 3, not 0" <| fun _ ->
       let tree = testList "trust-probe" [ testCase "only" ignore ]
-      runReporting ignore "probe" [| "--filter-test-case"; "no-such-case" |] tree
+      runReporting ignore "probe" [| "--no-spinner"; "--filter-test-case"; "no-such-case" |] tree
       |> Expect.equal "a filter matching nothing must not read as green" 3
 
     testCase "a real unfiltered run of everything registered is Trusted (exit 0)" <| fun _ ->
       let tree = testList "trust-probe" [ testCase "a" ignore; ptestCase "b" ignore ]
-      runReporting ignore "probe" [||] tree |> Expect.equal "pending cases count as ran-and-ignored" 0
+      runReporting ignore "probe" [| "--no-spinner" |] tree |> Expect.equal "pending cases count as ran-and-ignored" 0
+
+    testCase "a redirected run never starts Expecto's spinner" <| fun _ ->
+      spinnerArgs Redirected
+      |> List.exists (function Expecto.Tests.CLIArguments.No_Spinner -> true | _ -> false)
+      |> Expect.isTrue "the spinner's timer lock deadlocks against console writers"
+      spinnerArgs Interactive |> Expect.isEmpty "a terminal still gets its spinner"
   ]
 
 /// Every tier the test assembly can run must be invoked by CI, through the

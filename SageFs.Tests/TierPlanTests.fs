@@ -18,6 +18,19 @@ let planTests =
         let durations = known |> List.map (fun (n, s) -> n.Get, float s.Get) |> Map.ofList
         List.sort (order durations tiers) = List.sort tiers
 
+    testProperty "a tier's timeout stays between ten minutes and an hour, and never undercuts its own history" <|
+      fun (name: NonEmptyString) (recorded: PositiveInt) ->
+        let t = { Name = name.Get; Args = name.Get }
+        let seconds = float recorded.Get
+        let timeout = (timeoutOf (Map.ofList [ name.Get, seconds ]) t).TotalSeconds
+        timeout >= tierTimeoutFloorSeconds
+        && timeout <= tierTimeoutCeilingSeconds
+        && (seconds * 4.0 > tierTimeoutCeilingSeconds || timeout >= seconds * 4.0)
+
+    testCase "a tier nobody has timed gets the full hour" <| fun _ ->
+      (timeoutOf Map.empty { Name = "new"; Args = "new" }).TotalSeconds
+      |> Expect.equal "a first run might just be long" tierTimeoutCeilingSeconds
+
     testProperty "a tier with no recorded duration starts before every timed tier" <|
       fun (names: NonEmptyString list) (known: (NonEmptyString * PositiveInt) list) ->
         let tiers = tiersOf (names |> List.map (fun n -> n.Get))

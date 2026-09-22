@@ -253,8 +253,15 @@ let readDurations () = readJsonMap durationsFile
 
 /// Run argv to completion with output drained to `log` (files cannot deadlock
 /// a child the way an undrained pipe can). Returns the exit code.
-let execToLog (workingDir: string) (env: (string * string) list) (log: string) (argv: string list) =
+/// Exit code for a tier the pipeline had to kill (same number `timeout(1)` uses).
+let killedExitCode = 124
+
+/// Run argv, streaming both pipes to `log`. The whole process tree is killed
+/// on timeout or cancellation. It used to just stop waiting, and a hung tier
+/// kept running for an hour after the stage was cancelled.
+let execToLog (timeout: TimeSpan) (workingDir: string) (env: (string * string) list) (log: string) (argv: string list) =
   async {
+    let! ct = Async.CancellationToken
     let psi = Diagnostics.ProcessStartInfo(List.head argv)
     List.tail argv |> List.iter psi.ArgumentList.Add
     psi.WorkingDirectory <- workingDir
@@ -270,9 +277,19 @@ let execToLog (workingDir: string) (env: (string * string) list) (log: string) (
     p.Start() |> ignore
     p.BeginOutputReadLine()
     p.BeginErrorReadLine()
-    do! p.WaitForExitAsync() |> Async.AwaitTask
-    p.WaitForExit() // flush the async readers
-    return p.ExitCode
+    let killTree () = try p.Kill(entireProcessTree = true) with _ -> ()
+    use _ = ct.Register(fun () -> killTree ())
+    let exited = p.WaitForExitAsync()
+    let! finished = Threading.Tasks.Task.WhenAny(exited, Threading.Tasks.Task.Delay timeout) |> Async.AwaitTask
+    match obj.ReferenceEquals(finished, exited) with
+    | true ->
+      p.WaitForExit() // flush the async readers
+      return p.ExitCode
+    | false ->
+      killTree ()
+      p.WaitForExit()
+      write (sprintf "KILLED: no exit after %.0fs. Timed out, not failed; see the log above for where it stopped." timeout.TotalSeconds)
+      return killedExitCode
   }
 
 let private exitOf (argv: string list) =
@@ -346,16 +363,17 @@ let runTier (isolation: TierPlan.Isolation) (slots: int) (slotIndex: int) (t: Ti
         // make a cross-tier port collision structurally impossible.
         "SAGEFS_TEST_PORT_RANGE", $"{portLo}-{portHi}" ]
     let command = $"dotnet {testDll} {t.Args}"
+    let tierTimeout = TierPlan.timeoutOf (readDurations ()) t
     let sw = Diagnostics.Stopwatch.StartNew()
     let! code =
       match isolation with
-      | TierPlan.Shared -> execToLog rootDir env log [ "sh"; "-c"; command ]
+      | TierPlan.Shared -> execToLog tierTimeout rootDir env log [ "sh"; "-c"; command ]
       | TierPlan.CopyOnWrite ->
         async {
           match exitOf [ "cp"; "-a"; "--reflink=always"; rootDir; clone ] with
           | 0 ->
             let argv = TierPlan.isolatedArgv (procId "Uid") (procId "Gid") rootDir clone tmpDir command
-            return! execToLog rootDir env log argv
+            return! execToLog tierTimeout rootDir env log argv
           | failed ->
             File.WriteAllText(log, sprintf "could not clone the checkout for this tier (cp exit %d)" failed)
             return failed
@@ -388,7 +406,7 @@ let runTiers (tiers: TierPlan.Tier list) =
     // no shard pays a cold host build inside its own time.
     Directory.CreateDirectory sharedHostCache |> ignore
     let! prebuilt =
-      execToLog rootDir [ "SAGEFS_HOST_CACHE_DIR", sharedHostCache ] (Path.Combine(tierWork, "prebuild-host.log"))
+      execToLog (TimeSpan.FromMinutes 30.0) rootDir [ "SAGEFS_HOST_CACHE_DIR", sharedHostCache ] (Path.Combine(tierWork, "prebuild-host.log"))
         [ "dotnet"; testDll; "--prebuild-host" ]
     printfn "FSI host prebuild: exit %d" prebuilt
     let requested =
@@ -774,7 +792,7 @@ pipeline "sagefs" {
             let toolPath = Path.Combine(workDir, "tool")
             let log = Path.Combine(workDir, "smoke.log")
             let! installExit =
-              execToLog workDir [] log
+              execToLog (TimeSpan.FromMinutes 10.0) workDir [] log
                 [ "dotnet"; "tool"; "install"; "SageFs"; "--tool-path"; toolPath
                   "--version"; pkgJsonVersion ()
                   "--add-source"; releaseDir; "--no-cache" ]
@@ -787,7 +805,7 @@ pipeline "sagefs" {
               // semantics on a clean runner are not pinned, and a smoke stage
               // must never be the flaky one.
               let exe = Path.Combine(toolPath, "sagefs")
-              let! versionExit = execToLog workDir [] log [ exe; "--version" ]
+              let! versionExit = execToLog (TimeSpan.FromMinutes 2.0) workDir [] log [ exe; "--version" ]
               match versionExit with
               | 0 ->
                 printfn "OK: SageFs installs and runs under .NET SDK %s (%s build)" sdkVersion tfm

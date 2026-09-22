@@ -481,6 +481,28 @@ module TrustSignal =
 
   let registeredCount (tests: Expecto.Test) = tests |> Expecto.Test.toTestCodeList |> List.length
 
+  /// Where a run's output goes.
+  type ConsoleKind =
+    | Interactive
+    | Redirected
+
+  let consoleKind () =
+    match System.Console.IsOutputRedirected with
+    | true -> Redirected
+    | false -> Interactive
+
+  /// Expecto's spinner runs on a timer, holds its own lock and then writes to
+  /// the console. Other threads hold the console writer and wait on the
+  /// spinner's lock. That's a lock-order deadlock, and it hung the gate's
+  /// default tier for an hour with zero output (2026-09-22; a dump showed
+  /// ProgressIndicator.clear on one side, FSI warmup and a nested
+  /// TrustSignalTests run on the other). Nobody reads a spinner in a log file,
+  /// so a redirected run never starts one.
+  let spinnerArgs (console: ConsoleKind) : Expecto.Tests.CLIArguments list =
+    match console with
+    | Redirected -> [ Expecto.Tests.CLIArguments.No_Spinner ]
+    | Interactive -> []
+
   /// Run `tests` as `tier` and return the exit code the verdict demands.
   /// `--list-tests` executes nothing by design, so it bypasses judgement.
   let runObserved
@@ -491,7 +513,7 @@ module TrustSignal =
     (tests: Expecto.Test)
     : int =
     match argv |> Array.contains "--list-tests" with
-    | true -> Expecto.Tests.runTestsWithCLIArgs [] argv tests
+    | true -> Expecto.Tests.runTestsWithCLIArgs (spinnerArgs (consoleKind ())) argv tests
     | false ->
       let summary = ref None
       let handler =
@@ -499,7 +521,7 @@ module TrustSignal =
           Expecto.Tests.SummaryHandler(fun s ->
             summary.Value <- Some s
             observe s))
-      let expectoExit = Expecto.Tests.runTestsWithCLIArgs [ handler ] argv tests
+      let expectoExit = Expecto.Tests.runTestsWithCLIArgs (handler :: spinnerArgs (consoleKind ())) argv tests
       let tally =
         match summary.Value with
         | Some s ->
