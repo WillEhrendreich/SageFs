@@ -61,7 +61,7 @@ module SageFsBinary =
   let candidates =
     [ "Debug"; "Release" ]
     |> List.map (fun cfg ->
-      System.IO.Path.Combine(repoRoot, "SageFs", "bin", cfg, "net10.0", fileName))
+      System.IO.Path.Combine(repoRoot, "SageFs", "bin", cfg, "net11.0", fileName))
 
   /// The newest built executable. When none is built, the first candidate is
   /// returned so Process.Start fails naming the exact expected path.

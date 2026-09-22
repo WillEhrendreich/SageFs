@@ -3,9 +3,14 @@
     <PropertyGroup>
         <OutputType>Library</OutputType>
         <IsPackable>false</IsPackable>
-        <!-- Core targets net10.0 via Directory.Build.props. See the props file
-             for why NOT net11: Harmony/MonoMod do not support CoreCLR 11, and
-             Core is loaded into the FSI host which detours methods at runtime. -->
+        <!-- Core is part of the shipped tool closure (referenced by both SageFs
+             and SageFs.Host), so it multi-targets alongside them — see
+             Directory.Build.props for why (issue #131, dotnet tool TFM
+             selection). Clearing TargetFramework is required: it is set for
+             every project by Directory.Build.props, and TargetFramework/
+             TargetFrameworks cannot both be set. -->
+        <TargetFramework></TargetFramework>
+        <TargetFrameworks>$(SageFsTargetFrameworks)</TargetFrameworks>
     </PropertyGroup>
 
     <ItemGroup>

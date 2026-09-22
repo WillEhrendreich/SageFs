@@ -5,10 +5,16 @@
         <IsPackable>false</IsPackable>
         <AssemblyName>SageFs.Host</AssemblyName>
         <RootNamespace>SageFs.Host</RootNamespace>
-        <!-- The host process runs on net10.0 (repo default, via Directory.Build.props).
-             Hot reload uses Harmony method detouring, and Harmony 2.4.2 does not
-             support CoreCLR 11 — see Directory.Build.props for the upgrade gate. -->
-        <TargetFramework>net10.0</TargetFramework>
+        <!-- The host multi-targets alongside SageFs and SageFs.Core (see
+             Directory.Build.props): it is part of the shipped tool closure, and
+             the daemon's BuildHostForDaemon/PackHostForDaemon targets build it
+             per-TFM to match whichever inner build (net10.0 or net11.0) is
+             currently packing. Hot reload uses Harmony method detouring;
+             SageFs.Harmony 2.4.2-sagefs.1 is the patched fork that makes
+             detours work on CoreCLR 11 (verified by
+             WebAppHotReloadVerificationTests on net11 with no skips). -->
+        <TargetFramework></TargetFramework>
+        <TargetFrameworks>$(SageFsTargetFrameworks)</TargetFrameworks>
         <!-- *.runtimeconfig.dev.json is a Debug-only hot-reload artifact, not in
              the vetted manifest closure — disable its generation so the
              fail-closed startup check never sees an unexpected file. -->

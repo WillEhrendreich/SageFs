@@ -1,7 +1,7 @@
 {
   "version": 2,
   "dependencies": {
-    "net10.0": {
+    "net11.0": {
       "Fantomas.FCS": {
         "type": "Transitive",
         "resolved": "8.0.0-alpha-002",
@@ -9,11 +9,6 @@
         "dependencies": {
           "FSharp.Core": "9.0.300"
         }
-      },
-      "Microsoft.Extensions.DependencyInjection.Abstractions": {
-        "type": "Transitive",
-        "resolved": "9.0.1",
-        "contentHash": "Tr74eP0oQ3AyC24ch17N8PuEkrPbD0JqIfENCYqmgKYNOmL8wQKzLJu3ObxTUDrjnn4rHoR1qKa37/eQyHmCDA=="
       },
       "Microsoft.VisualStudio.SolutionPersistence": {
         "type": "Transitive",
@@ -46,7 +41,6 @@
           "FuzzySharp": "[2.0.2, )",
           "Ionide.ProjInfo": "[0.74.1, )",
           "Ionide.ProjInfo.FCS": "[0.74.1, )",
-          "Microsoft.Extensions.Logging.Abstractions": "[9.0.1, )",
           "Mono.Cecil": "[0.11.6, )",
           "SageFs.Harmony": "[2.4.2-sagefs.1, )",
           "System.Configuration.ConfigurationManager": "[10.0.3, )",
@@ -131,15 +125,6 @@
           "FSharp.Compiler.Service": "43.10.100",
           "FSharp.Core": "10.0.100",
           "Ionide.ProjInfo": "0.74.1"
-        }
-      },
-      "Microsoft.Extensions.Logging.Abstractions": {
-        "type": "CentralTransitive",
-        "requested": "[9.0.1, )",
-        "resolved": "9.0.1",
-        "contentHash": "w2gUqXN/jNIuvqYwX3lbXagsizVNXYyt6LlF57+tMve4JYCEgCMMAjRce6uKcDASJgpMbErRT1PfHy2OhbkqEA==",
-        "dependencies": {
-          "Microsoft.Extensions.DependencyInjection.Abstractions": "9.0.1"
         }
       },
       "Mono.Cecil": {

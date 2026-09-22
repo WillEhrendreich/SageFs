@@ -21,7 +21,7 @@ let resolveTestDll (dllName: string) =
               System.IO.Path.GetDirectoryName(
                 System.IO.Path.GetDirectoryName(
                   System.AppDomain.CurrentDomain.BaseDirectory))))),
-        "SageFs.Tests", "bin", "Debug", "net10.0", dllName)
+        "SageFs.Tests", "bin", "Debug", "net11.0", dllName)
     if System.IO.File.Exists projBinPath then projBinPath
     else
       // Last resort: find it among loaded assemblies

@@ -74,7 +74,7 @@ let mcpSdkAspNetCoreDir = mcpSdkProjectDir "ModelContextProtocol.AspNetCore"
 let releaseDir = Path.Combine(rootDir, "release")
 let vscodeDir = Path.Combine(rootDir, "sagefs-vscode")
 // Every downstream check runs against this ONE Release build (see "build" stage).
-let testBinDir = "SageFs.Tests/bin/Release/net10.0"
+let testBinDir = "SageFs.Tests/bin/Release/net11.0"
 let testDll = $"{testBinDir}/SageFs.Tests.dll"
 
 // ---- release helpers (faithful F# translations of the old pwsh steps) --------
@@ -109,7 +109,15 @@ let verifyVersionAlignment () =
   printfn "Versions aligned at %s" p
 
 /// issue #131: a tool packaged for the wrong TFM is uninstallable on net10 SDKs
-/// ("DotnetToolSettings.xml was not found"). Fail HERE so it can never ship.
+/// ("DotnetToolSettings.xml was not found"). SageFs now multi-targets
+/// net10.0;net11.0 (Directory.Build.props' SageFsTargetFrameworks) precisely so
+/// this can never recur in either direction: `dotnet pack` on a multi-targeted
+/// PackAsTool project emits one tools/<tfm>/any payload per TFM, and
+/// `dotnet tool install` picks the payload matching the CALLER's own SDK — a
+/// .NET 10 SDK user gets the net10.0 build, a .NET 11 SDK user gets the
+/// net11.0 build. Fail HERE, before anything ships, if either payload is
+/// missing or an unexpected extra TFM shows up.
+let requiredToolTfms = [ "net10.0"; "net11.0" ]
 let verifyToolInstallable () =
   match Directory.GetFiles(releaseDir, "SageFs.*.nupkg") |> Array.tryHead with
   | None -> failwith "No SageFs nupkg found in release/ — pack failed?"
@@ -122,14 +130,17 @@ let verifyToolInstallable () =
       |> Seq.map (fun n -> (n.Split('/')).[1])
       |> Seq.distinct
       |> Seq.toList
-    match tfms with
-    | [] ->
-      failwithf "DotnetToolSettings.xml not found in %s — net10 SDK installs will fail (issue #131)." (Path.GetFileName nupkg)
-    | tfms ->
-      for tfm in tfms do
-        if tfm <> "net10.0" then
-          failwithf "Tool package targets %s, but net10-SDK users cannot install it (issue #131). The repo must pack net10.0." tfm
-      printfn "OK %s is installable on net10 SDKs." (Path.GetFileName nupkg)
+    let missing = requiredToolTfms |> List.filter (fun t -> not (List.contains t tfms))
+    let unexpected = tfms |> List.filter (fun t -> not (List.contains t requiredToolTfms))
+    match missing, unexpected with
+    | [], [] ->
+      printfn "OK %s installs on both %s SDKs." (Path.GetFileName nupkg) (String.concat " and " requiredToolTfms)
+    | missing, [] ->
+      failwithf "DotnetToolSettings.xml missing for %s in %s — those SDK users' installs will fail (issue #131)." (String.concat ", " missing) (Path.GetFileName nupkg)
+    | [], unexpected ->
+      failwithf "Tool package also targets unexpected TFM(s) %s in %s — the repo must pack exactly %s." (String.concat ", " unexpected) (Path.GetFileName nupkg) (String.concat ", " requiredToolTfms)
+    | missing, unexpected ->
+      failwithf "Tool package TFM mismatch in %s: missing %s, unexpected %s." (Path.GetFileName nupkg) (String.concat ", " missing) (String.concat ", " unexpected)
 
 /// Write release/release-manifest.json in the exact shape publish.yml consumes
 /// (version + sourceSha + per-file sha256). The GitHub context comes in as env.
@@ -704,29 +715,58 @@ pipeline "sagefs" {
     // that exercises the SHIPPED, INSTALLED artifact rather than the build
     // output. Formerly smoke-test.yml (windows-latest); consolidated here on
     // Linux, cross-platform (no pwsh). Installs to a throwaway --tool-path so it
-    // never touches a developer's global tools, then runs `check` (SDK/FSI
-    // reachable) and `--version`. Runs after "pack release bundle", so it is
-    // gated on "release" (present on a master push). This preserves the
-    // packaging-regression guard (uninstallable / unlaunchable tool) that
-    // verifyToolInstallable's nupkg-structure check alone cannot catch.
+    // never touches a developer's global tools, then runs `--version`. Runs
+    // after "pack release bundle", so it is gated on "release" (present on a
+    // master push). This preserves the packaging-regression guard
+    // (uninstallable / unlaunchable tool) that verifyToolInstallable's
+    // nupkg-structure check alone cannot catch.
+    //
+    // SageFs now multi-targets net10.0;net11.0 (issue #131), so this smoke
+    // test runs TWICE — once per SDK the tool claims to support — each under
+    // its own throwaway working dir carrying a global.json PINNED (rollForward
+    // "disable") to that exact SDK, so `dotnet` resolution can't accidentally
+    // fall through to the other one. A single run under whichever SDK happens
+    // to be ambient would only ever prove ONE of the two payloads works.
     whenCmdArg "release"
     timeoutForStep 300
-    run (fun ctx ->
+    run (fun _ ->
       async {
-        let toolPath = Path.Combine(rootDir, ".smoke-tool")
-        if Directory.Exists toolPath then Directory.Delete(toolPath, true)
-        let! install =
-          ctx.RunCommand $"dotnet tool install SageFs --tool-path \"{toolPath}\" --add-source \"{releaseDir}\" --no-cache"
-        match install with
-        | Error e -> return Error e
-        | Ok () ->
-          // `--version` proves the packed tool installed and launches (catches
-          // the uninstallable-package / dropped-exe / missing-dll-at-startup
-          // class). We deliberately do NOT run `check` here: it probes daemon
-          // and port state, whose exit semantics on a clean runner are not
-          // pinned, and a smoke stage must never be the flaky one.
-          let exe = Path.Combine(toolPath, "sagefs")
-          return! ctx.RunCommand $"\"{exe}\" --version"
+        let sdks = [ "10.0.401", "net10.0"; "11.0.100-rc.1.26425.128", "net11.0" ]
+        let smokeOneSdk (sdkVersion: string, tfm: string) =
+          async {
+            let workDir = Path.Combine(rootDir, $".smoke-{tfm}")
+            if Directory.Exists workDir then Directory.Delete(workDir, true)
+            Directory.CreateDirectory workDir |> ignore
+            File.WriteAllText(
+              Path.Combine(workDir, "global.json"),
+              $"""{{"sdk":{{"version":"{sdkVersion}","rollForward":"disable"}}}}""")
+            let toolPath = Path.Combine(workDir, "tool")
+            let log = Path.Combine(workDir, "smoke.log")
+            let! installExit =
+              execToLog workDir [] log
+                [ "dotnet"; "tool"; "install"; "SageFs"; "--tool-path"; toolPath
+                  "--add-source"; releaseDir; "--no-cache" ]
+            match installExit with
+            | 0 ->
+              // `--version` proves the packed tool installed and launches
+              // (catches the uninstallable-package / dropped-exe /
+              // missing-dll-at-startup class). We deliberately do NOT run
+              // `check` here: it probes daemon and port state, whose exit
+              // semantics on a clean runner are not pinned, and a smoke stage
+              // must never be the flaky one.
+              let exe = Path.Combine(toolPath, "sagefs")
+              let! versionExit = execToLog workDir [] log [ exe; "--version" ]
+              match versionExit with
+              | 0 ->
+                printfn "OK: SageFs installs and runs under .NET SDK %s (%s build)" sdkVersion tfm
+                return Ok()
+              | code -> return Error $"'sagefs --version' under SDK {sdkVersion} (expected {tfm} build) exited {code}; see {log}"
+            | code -> return Error $"tool install under SDK {sdkVersion} (expected {tfm} build) exited {code}; see {log}"
+          }
+        let! results = sdks |> List.map smokeOneSdk |> Async.Sequential
+        match results |> Array.toList |> List.choose (function Error e -> Some e | Ok () -> None) with
+        | [] -> return Ok()
+        | errors -> return Error(String.concat "; " errors)
       })
   }
 

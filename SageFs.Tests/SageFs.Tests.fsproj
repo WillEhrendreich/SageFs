@@ -559,8 +559,8 @@
          freshly built host instead of failing on a missing host/ dir. -->
     <Target Name="CopyHostForInProcessSessionManager" AfterTargets="Build">
         <ItemGroup>
-            <TestHostFiles Include="..\SageFs.Host\bin\$(Configuration)\net10.0\**\*"
-                           Exclude="..\SageFs.Host\bin\$(Configuration)\net10.0\**\*.runtimeconfig.dev.json" />
+            <TestHostFiles Include="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*"
+                           Exclude="..\SageFs.Host\bin\$(Configuration)\$(TargetFramework)\**\*.runtimeconfig.dev.json" />
         </ItemGroup>
         <!-- Empty host/ first: the host refuses to start (fail-closed manifest
              check) if a retired file from a previous build is still here. -->

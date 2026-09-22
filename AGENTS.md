@@ -34,7 +34,7 @@ The Visual Studio extension (`sagefs-vs/`) is deprecated and no longer built, te
 ## Language & Stack
 
 - **Primary language**: F# (functional programming)
-- **Target framework**: `net10.0`
+- **Target framework**: `net11.0` (the shipped tool closure — SageFs, SageFs.Core, SageFs.Host — multi-targets `net10.0;net11.0`; see `Directory.Build.props`)
 - **Solution format**: `.slnx` (not `.sln`)
 - **Web framework**: Falco (functional web framework for ASP.NET Core)
 - **HTML rendering**: Falco.Markup

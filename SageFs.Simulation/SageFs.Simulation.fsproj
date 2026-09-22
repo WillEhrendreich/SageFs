@@ -4,9 +4,11 @@
         <OutputType>Library</OutputType>
         <IsPackable>false</IsPackable>
         <!-- Deterministic Simulation Testing (DST) harness for the pure
-             supervision core. Targets net10.0 like SageFs.Core (see
-             Directory.Build.props). Pure F#, no IO, no third-party deps —
-             only SageFs.Core, so the harness folds through the REAL policy. -->
+             supervision core. Only used by SageFs.Tests, so it takes the repo
+             default TargetFramework (net11.0, Directory.Build.props) rather
+             than multi-targeting like SageFs.Core does. Pure F#, no IO, no
+             third-party deps — only SageFs.Core, so the harness folds through
+             the REAL policy. -->
     </PropertyGroup>
 
     <ItemGroup>

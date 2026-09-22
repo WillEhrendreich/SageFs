@@ -55,13 +55,16 @@ let targetFrameworkXmlTests =
       |> Expect.equal "malformed XML is handled, not thrown" []
     }
 
-    test "the repo's own Directory.Build.props resolves to net10, not net11" {
-      // Regression pin for the exact defect: this file's comment names
-      // net11.0 (as something NOT to do yet); the real pin is net10.0.
+    test "the repo's own Directory.Build.props resolves to net11 (the default TargetFramework)" {
+      // Regression pin, updated for the net10 -> net11 bump: Directory.Build.props
+      // now sets <TargetFramework>net11.0</TargetFramework> as the repo default
+      // (the shipped tool closure overrides it with TargetFrameworks instead —
+      // see SageFsTargetFrameworks — which this raw-XML-major-scan intentionally
+      // does not need to see here).
       let path = IO.Path.Combine(__SOURCE_DIRECTORY__, "..", "Directory.Build.props")
       let xml = IO.File.ReadAllText path
       EnvCheck.targetFrameworkMajorsFromXml xml
-      |> Expect.equal "Directory.Build.props pins net10.0 only" [ 10 ]
+      |> Expect.equal "Directory.Build.props' default TargetFramework pins net11.0" [ 11 ]
     }
   ]
 

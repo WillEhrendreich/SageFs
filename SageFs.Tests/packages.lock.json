@@ -1,7 +1,7 @@
 {
   "version": 2,
   "dependencies": {
-    "net10.0": {
+    "net11.0": {
       "Expecto": {
         "type": "Direct",
         "requested": "[11.0.0-alpha8, )",
@@ -95,8 +95,7 @@
         "resolved": "1.58.0",
         "contentHash": "LYLB00NUTzdY3NEN+fOQcxNuVALoGJMMWZYQINGBs4MfsKcTvr6WKoAmSsT5D4pPOOnN8uAyushEzoQ8qUEb0w==",
         "dependencies": {
-          "Microsoft.Bcl.AsyncInterfaces": "6.0.0",
-          "System.ComponentModel.Annotations": "5.0.0"
+          "Microsoft.Bcl.AsyncInterfaces": "6.0.0"
         }
       },
       "SageFs.Harmony": {
@@ -374,11 +373,6 @@
         "resolved": "8.0.0",
         "contentHash": "WTlRjL6KWIMr/pAaq3rYqh0TJlzpouaQ/W1eelssHgtlwHAH25jXTkUphTYx9HaIIf7XA6qs/0+YhtLEQRkJ+Q=="
       },
-      "System.ComponentModel.Annotations": {
-        "type": "Transitive",
-        "resolved": "5.0.0",
-        "contentHash": "dMkqfy2el8A8/I76n2Hi1oBFEbG1SfxD2l5nhwXV3XjlnOmwxJlQbYpJH4W51odnU9sARCSAgv7S3CyAFMkpYg=="
-      },
       "System.IO.Hashing": {
         "type": "Transitive",
         "resolved": "9.0.0",
@@ -432,7 +426,7 @@
           "OpenTelemetry.Instrumentation.Http": "[1.18.0, )",
           "OpenTelemetry.Instrumentation.Runtime": "[1.18.0, )",
           "SQLitePCLRaw.lib.e_sqlite3": "[2.1.12, )",
-          "SageFs.Core": "[0.6.647, )",
+          "SageFs.Core": "[0.6.758, )",
           "Serilog.Extensions.Logging.File": "[9.0.0-dev-02303, )"
         }
       },
@@ -456,13 +450,13 @@
       "sagefs.host": {
         "type": "Project",
         "dependencies": {
-          "SageFs.Core": "[0.6.647, )"
+          "SageFs.Core": "[0.6.758, )"
         }
       },
       "sagefs.simulation": {
         "type": "Project",
         "dependencies": {
-          "SageFs.Core": "[0.6.647, )"
+          "SageFs.Core": "[0.6.758, )"
         }
       },
       "Falco.Datastar": {
